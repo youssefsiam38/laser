@@ -41,8 +41,10 @@ export interface HistoryWindow {
   /** First loaded entry, retained when refreshing an expanded window. */
   anchor?: string;
   userOffset: number;
-  /** All branches, not merely the complete active path, have arrived. */
+  /** All messages on the active branch are present (not necessarily other versions). */
   complete: boolean;
+  /** Alternate branches exist outside this window's active-branch scope. */
+  branchesUnloaded: boolean;
   /** Durable messages or goal records exist in any branch, even with a reset leaf. */
   hasHistory: boolean;
   context: unknown[];

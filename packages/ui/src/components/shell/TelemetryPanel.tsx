@@ -103,7 +103,7 @@ export function TelemetryPanel({ variant }: TelemetryPanelProps) {
       <div className="min-h-0 flex-1 overflow-y-auto">
         {view ? (
           <>
-            {view.history && !view.history.complete && <LoadedHistoryNotice />}
+            {view.history && (!view.history.complete || view.history.branchesUnloaded) && <LoadedHistoryNotice versionsOnly={view.history.complete} />}
             <ContextSection />
             <UsageSection />
             <ModelSection />
@@ -227,11 +227,11 @@ function ContextSection() {
   );
 }
 
-function LoadedHistoryNotice() {
+function LoadedHistoryNotice({ versionsOnly }: { versionsOnly: boolean }) {
   const { actions } = useLaserStable();
   const [loading, setLoading] = useState(false);
   return <div className="flex flex-col items-start gap-2 border-b border-line px-4 py-3 text-xs leading-5 text-ink-2">
-    <p>Earlier history is not loaded. Conversation-wide totals and older activity appear when it is.</p>
+    <p>{versionsOnly ? "Other versions are not loaded. Load them for conversation-wide totals and the complete tree." : "Earlier history is not loaded. Conversation-wide totals and older activity appear when it is."}</p>
     <Button variant="outline" size="sm" className="pointer-coarse:min-h-11" aria-disabled={loading} onClick={() => {
       if (loading) return;
       setLoading(true);
@@ -321,7 +321,7 @@ function UsageSection() {
     [background, entries],
   );
   const accountUsage = view?.state.accountUsage;
-  const partial = Boolean(view?.history && !view.history.complete);
+  const partial = Boolean(view?.history && (!view.history.complete || view.history.branchesUnloaded));
   if (partial) return <Section title="Usage" icon={isAccountProvider(view?.state.model?.provider) ? Landmark : CircleDollarSign}>
     {isAccountProvider(view?.state.model?.provider) ? <AccountUsage state={accountUsage} compact /> : <p className="text-xs leading-5 text-ink-2">Load complete history for conversation-wide totals.</p>}
   </Section>;
@@ -494,13 +494,11 @@ function FilesSection() {
 }
 
 /** Every tool call this session made, in order, with the running one live. */
-function ToolsSection() {
+export function ToolsSection() {
   const timeline = useThreadToolTimeline();
   const shell = useShell();
-  const { actions } = useLaserStable();
   const view = useLaserView();
   const partial = Boolean(view?.history && !view.history.complete);
-  useEffect(() => { if (shell.toolsOpen && partial) void actions.loadAllEntries(); }, [actions, shell.toolsOpen, partial]);
   const visibleSteps = timeline.steps.slice(-14);
   return (
     <Section
@@ -583,7 +581,7 @@ function HistorySection() {
               {rows.length > 0 && (
                 <span className="ms-auto flex items-center gap-1 font-mono text-xs text-ink-3 tnum">
                   <Clock3 className="size-3" aria-hidden="true" />
-                  {rows.length}{view?.history && !view.history.complete ? " loaded" : ""}
+                  {rows.length}{view?.history && (!view.history.complete || view.history.branchesUnloaded) ? " loaded" : ""}
                 </span>
               )}
             </button>

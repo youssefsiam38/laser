@@ -195,14 +195,14 @@ function HistoryControls() {
   const pending = useRef<{ viewport: HTMLElement; position: ReadingPosition; focused?: Element | null } | undefined>(undefined);
   const stopAnchor = useRef<(() => void) | undefined>(undefined);
   const busy = useRef(false);
-  const requestedAll = useRef(false);
+  const requestedHistory = useRef(false);
   const interacted = useRef(false);
   const [loading, setLoading] = useState<"earlier" | "all" | null>(null);
   const [announcement, setAnnouncement] = useState("");
   const load = useCallback(async (all = false) => {
-    if (busy.current || history?.complete) return;
+    if (busy.current || (history?.complete && (!all || !history.branchesUnloaded))) return;
     busy.current = true;
-    requestedAll.current ||= all;
+    requestedHistory.current = true;
     setLoading(all ? "all" : "earlier");
     const viewport = root.current?.closest<HTMLElement>("[data-slot=thread-viewport]");
     if (viewport) pending.current = { viewport, position: captureReadingPosition(viewport), focused: root.current?.contains(document.activeElement) ? document.activeElement : null };
@@ -213,7 +213,7 @@ function HistoryControls() {
       busy.current = false;
       setLoading(null);
     }
-  }, [actions, history?.complete]);
+  }, [actions, history?.complete, history?.branchesUnloaded]);
   useLayoutEffect(() => {
     const anchor = pending.current;
     if (!anchor) return;
@@ -245,13 +245,13 @@ function HistoryControls() {
       viewport.removeEventListener("scroll", scroll);
     };
   }, [history?.before, load]);
-  if (!history || (history.complete && !requestedAll.current)) return null;
+  if (!history || (history.complete && !requestedHistory.current)) return null;
   return <div ref={root} className="flex flex-wrap items-center justify-center gap-2 py-2 text-sm text-ink-2" aria-busy={loading !== null}>
     {history.before && <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" aria-disabled={loading !== null} onClick={() => void load()}>
       {loading === "earlier" ? "Loading earlier messages…" : "Load earlier messages"}
     </Button>}
-    <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" aria-disabled={loading !== null || history.complete} onClick={() => void load(true)}>
-      {history.complete ? "Complete history loaded" : loading === "all" ? "Loading history…" : "Load complete history"}
+    <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" aria-disabled={loading !== null || (history.complete && !history.branchesUnloaded)} onClick={() => void load(true)}>
+      {history.complete && !history.branchesUnloaded ? "Complete history loaded" : loading === "all" ? "Loading history…" : history.complete ? "Load other versions" : "Load complete history"}
     </Button>
     <span role="status" className="sr-only">{announcement}</span>
   </div>;

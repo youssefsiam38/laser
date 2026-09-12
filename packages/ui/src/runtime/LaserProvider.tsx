@@ -19,7 +19,7 @@ import { accountUsageRefreshError } from "./account-usage-error.js";
  * a small external store that this component keeps in sync, and reads no
  * closed-over state at all.
  */
-import { ErrorCodes, PRODUCT_NAME, storageKey } from "@lasercode/protocol";
+import { PRODUCT_NAME, storageKey } from "@lasercode/protocol";
 import {
   AssistantRuntimeProvider,
   AuiConfig,
@@ -33,7 +33,6 @@ import type { AssistantRuntime, RemoteThreadListAdapter, ThreadComposerRuntime, 
 import type {
   ContentBlock,
   GoalAction,
-  HistoryWindowRequest,
   HostNotificationMethod,
   HostNotifications,
   ModelRef,
@@ -88,6 +87,7 @@ import {
   type MainInitializationToken,
 } from "./main-destination-controller.js";
 import { createCatalogLoader } from "./catalog-loader.js";
+import { createHistoryLoader } from "./history-loader.js";
 import { sessionsList } from "../components/shell/session-groups.js";
 import { beamStore } from "../components/beam/beam-store.js";
 import { createMainLandingDraftStore, useMainLandingDrafts } from "./main-landing-drafts.js";
@@ -674,41 +674,14 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
    * The move re-hydrates when it lands, so the re-read has nothing to add.
    */
   const moving = useRef(new Set<string>());
-  const historyReads = useRef(new Map<string, Promise<void>>());
-  const historyToken = useRef(0);
-  const readHistory = useCallback(async (path: string, all = false, accepting: () => boolean = () => true, legacySeq?: number): Promise<void> => {
-    const pending = historyReads.current.get(path);
-    if (pending) {
-      await pending;
-      if (!all || readState().open[path]?.history?.complete) return;
-    }
-    const token = String(++historyToken.current);
-    const expectSeq = readState().open[path]?.lastSeq ?? 0;
-    dispatch({ type: "historyBegin", path, token });
-    const work = (async () => {
-      const anchor = readState().open[path]?.history?.anchor;
-      const requestWindow: HistoryWindowRequest = all ? { all: true } : anchor ? { from: anchor } : { tail: 40 };
-      const result = await client.request("pi/session/entries", { path, window: requestWindow }).catch(error => {
-        if (!("from" in requestWindow) || (error as { code?: number }).code !== ErrorCodes.InvalidParams) throw error;
-        return client.request("pi/session/entries", { path, window: { tail: 40 } });
-      });
-      if (!accepting() || !readState().open[path]) return;
-      const current = readState().open[path];
-      const epoch = current?.history?.epoch ?? current?.updateEpoch;
-      if (result.window && epoch && epoch !== result.window.epoch) {
-        client.resync(path, result.window.seq);
-        seenSeq.current.delete(path);
-      }
-      if (result.window) dispatch({ type: "historySnapshot", path, token, ...result, window: result.window });
-      else dispatch({ type: "hydrate", path, entries: result.entries, leafId: result.leafId, expectSeq, ...(legacySeq !== undefined ? { seq: legacySeq } : {}) });
-      client.track(path, readState().open[path]?.lastSeq ?? 0);
-    })();
-    historyReads.current.set(path, work);
-    try { await work; } finally {
-      dispatch({ type: "historyEnd", path, token });
-      if (historyReads.current.get(path) === work) historyReads.current.delete(path);
-    }
-  }, [client]);
+  const historyLoader = useMemo(() => createHistoryLoader({
+    get: path => readState().open[path],
+    request: params => client.request("pi/session/entries", params),
+    dispatch,
+    adoptEpoch: (path, seq) => { client.resync(path, seq); seenSeq.current.delete(path); },
+    track: (path, seq) => client.track(path, seq),
+  }), [client]);
+  const readHistory = historyLoader.read;
 
   /** Hydrate one cached view. Main-window selection belongs to the controller. */
   const openSession = useCallback(
@@ -1040,9 +1013,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     };
 
     const ensureEntry = async (path: string, entryId: string) => {
-      const hasEntry = () => readScoped().open[path]?.entries.some(entry => (entry as { id?: string }).id === entryId);
-      if (hasEntry() || !readScoped().open[path]?.history || readScoped().open[path]?.history?.complete) return;
-      await readHistory(path, true, () => readScoped().current === path);
+      await historyLoader.ensure(path, entryId, () => readScoped().current === path);
       if (requireCurrent() !== path) throw new Error("The conversation changed. Choose the message again.");
       // The engine, not a client-side tree projection, validates the target.
     };
@@ -1176,42 +1147,17 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           const epoch = openEpochs.current.get(path);
           const accepting = () => !moving.current.has(path) && openEpochs.current.get(path) === epoch;
           if (!options?.tail) { await readHistory(path, true, accepting); return; }
-          // Settlement needs new tree records, not another projection of every
-          // completed block. Fetch only from the last authoritative leaf.
-          const from = readState().open[path]?.leafId;
-          const result = await client.request("pi/session/entries", { path, window: from ? { from } : { all: true } }).catch(async error => {
-            if ((error as { code?: number }).code !== ErrorCodes.InvalidParams || !accepting()) throw error;
-            await readHistory(path, false, accepting);
-            return undefined;
-          });
-          if (!result || !accepting()) return;
-          const previousEpoch = readState().open[path]?.history?.epoch ?? readState().open[path]?.updateEpoch;
-          if (result.window && previousEpoch && previousEpoch !== result.window.epoch) { await readHistory(path, false, accepting); return; }
-          if (result.window) dispatch({ type: "historyMetadata", path, from, ...result, window: result.window });
-          else dispatch({ type: "entries", path, entries: result.entries, leafId: result.leafId });
+          await historyLoader.metadata(path, accepting);
         }).then(() => undefined),
       loadAllEntries: () => guard(async () => {
         const path = requireCurrent();
-        if (readState().open[path]?.history?.complete) return true;
-        if (moving.current.has(path)) return false;
         const epoch = openEpochs.current.get(path);
-        await readHistory(path, true, () => !moving.current.has(path) && openEpochs.current.get(path) === epoch);
-        return readState().open[path]?.history?.complete ?? readState().open[path]?.hydrated ?? false;
+        return historyLoader.all(path, () => !moving.current.has(path) && openEpochs.current.get(path) === epoch);
       }).then(Boolean),
       loadEarlierEntries: () => guard(async () => {
         const path = requireCurrent();
-        const before = readState().open[path]?.history?.before;
-        if (!before || moving.current.has(path)) return false;
         const epoch = openEpochs.current.get(path);
-        const accepting = () => !moving.current.has(path) && openEpochs.current.get(path) === epoch;
-        const result = await client.request("pi/session/entries", { path, window: { before, limit: 40 } }).catch(async error => {
-          if ((error as { code?: number }).code !== ErrorCodes.InvalidParams || !accepting()) throw error;
-          await readHistory(path, false, accepting);
-          return undefined;
-        });
-        if (!result || !accepting() || !result.window) return false;
-        dispatch({ type: "historyPrepend", path, before, entries: result.entries, window: result.window });
-        return readState().open[path]?.history?.before !== before;
+        return historyLoader.earlier(path, () => !moving.current.has(path) && openEpochs.current.get(path) === epoch);
       }).then(Boolean),
       refreshAccountUsage: () =>
         guard(async () => {
@@ -1339,6 +1285,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     openSession,
     readState,
     readHistory,
+    historyLoader,
     refreshProjects,
     refreshSessions,
   ]);

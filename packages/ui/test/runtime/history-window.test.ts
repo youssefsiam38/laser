@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { historyWindow, MESSAGE_METADATA_NS, type SessionState } from "@lasercode/protocol";
 import { initialState, reduce, type AppState } from "../../src/store.js";
 import { projectSessionView, shareProjectedMessages } from "../../src/runtime/projection.js";
@@ -28,6 +28,27 @@ describe("partial history integration", () => {
     expect(messages[0]?.metadata?.custom?.[MESSAGE_METADATA_NS]).toMatchObject({ userOrdinal: 20, entryId: "e40" });
     expect(projected[0]?.metadata?.custom?.[MESSAGE_METADATA_NS]).toMatchObject({ userOrdinal: 0, entryId: "e0" });
     expect(after.entries).toEqual(entries);
+    expect(after.history).toMatchObject({ complete: true, branchesUnloaded: false });
+    expect(after.history?.before).toBeUndefined();
+    const narrowed = hydrate(begin(app), tail()).open[session.path]!;
+    expect(narrowed.history?.complete).toBe(false);
+    expect(narrowed.blocks).toHaveLength(40);
+  });
+
+  it("shares image-bearing blocks without serializing their payloads", () => {
+    const source = { ...snapshot, entries: [{ ...entries[0]!, message: { ...entries[0]!.message,
+      content: [...entries[0]!.message.content, { type: "image", data: "a".repeat(1024 * 1024), mimeType: "image/png" }],
+    } }, ...entries.slice(1)] };
+    const page = historyWindow(source, { all: true }, scope);
+    const app = hydrate(begin(opened()), page);
+    const received = structuredClone(page);
+    const stringify = vi.spyOn(JSON, "stringify");
+    let next: AppState;
+    try {
+      next = hydrate(begin(app), received);
+      expect(stringify).not.toHaveBeenCalled();
+    } finally { stringify.mockRestore(); }
+    expect(next.open[session.path]!.blocks[0]).toBe(app.open[session.path]!.blocks[0]);
   });
 
   it("replays only updates newer than the snapshot, preserving the entire partial response and history", () => {
@@ -91,6 +112,7 @@ describe("partial history integration", () => {
       { kind: "tool_execution_start", toolCallId: "t", toolName: "bash", args: { command: "test" } },
     ] as const;
     updates.forEach((update, i) => { app = reduce(app, { type: "notification", method: "session/update", params: { sessionPath: session.path, seq: i + 1, update, at: "2026-01-01T00:00:00Z" } }); });
+    expect(app.open[session.path]!.blocks[0]?.id).toBe("entry:u");
     const before = projectSessionView(app.open[session.path]).messages.map(message => message.id);
     const page = historyWindow({ entries: [user, assistant], leafId: "a" }, { tail: 40 }, { ...scope, seq: updates.length, live: { running: true, tools: [{ toolCallId: "t", toolName: "bash", args: { command: "test" } }] } });
     app = hydrate(begin(app), page);

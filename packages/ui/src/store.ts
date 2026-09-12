@@ -33,6 +33,7 @@ import type {
 
 import { activePathIds } from "./components/thread/entries.js";
 import { initialMainDestination, mainPath, type MainDestination } from "./runtime/main-destination.js";
+import { receiveHistoryUpdate, reduceHistory, type HistoryAction } from "./runtime/history-loader.js";
 
 /**
  * A user message a parent agent put into this child session, rather than the
@@ -140,7 +141,7 @@ export interface SessionView {
    */
   openedAt: string;
   hydrated: boolean;
-  /** Loaded persisted entries; `history.complete` distinguishes a page from the full tree. */
+  /** Loaded entries; history distinguishes incomplete messages from unloaded versions. */
   entries: unknown[];
   history?: Omit<HistoryWindow, "live"> | undefined;
   /** Accepted updates buffered only while an authoritative window read is in flight. */
@@ -296,11 +297,7 @@ export type Action =
    */
   | { type: "hydrate"; path: string; entries: unknown[]; leafId?: string | null | undefined; expectSeq?: number; seq?: number }
   | { type: "entries"; path: string; entries: unknown[]; leafId?: string | null | undefined }
-  | { type: "historyBegin"; path: string; token: string }
-  | { type: "historyEnd"; path: string; token: string }
-  | { type: "historySnapshot"; path: string; token: string; entries: unknown[]; leafId?: string | null; window: HistoryWindow }
-  | { type: "historyPrepend"; path: string; before: string; entries: unknown[]; window: HistoryWindow }
-  | { type: "historyMetadata"; path: string; from?: string | null | undefined; entries: unknown[]; leafId?: string | null | undefined; window: HistoryWindow }
+  | HistoryAction
   | { type: "goal"; path: string; goal: SessionGoal | null }
   /** `session/pending/list`, applied only if no newer tray update replaced the captured reference. */
   | { type: "pending"; path: string; messages: PendingMessage[]; expectPending: PendingMessage[] }
@@ -353,6 +350,8 @@ const nextBlockId = () => `b${++blockCounter}`;
 export function newBlockId(): string {
   return nextBlockId();
 }
+
+const historyFold = { applyUpdate, blocksFromEntries, modelNamesOf, stampNewBlocks, textOf };
 
 export function reduce(state: AppState, action: Action): AppState {
   switch (action.type) {
@@ -414,64 +413,11 @@ export function reduce(state: AppState, action: Action): AppState {
       return { ...state, open: rest, sessionLoads };
     }
     case "historyBegin":
-      return updateView(state, action.path, v => ({ ...v, historyPending: { token: action.token, updates: [] } }));
     case "historyEnd":
-      return updateView(state, action.path, v => v.historyPending?.token === action.token ? { ...v, historyPending: undefined } : v);
     case "historySnapshot":
-      return updateView(state, action.path, v => {
-        if (v.historyPending?.token !== action.token) return v;
-        const { live, ...history } = action.window;
-        const oldEpoch = v.history?.epoch ?? v.updateEpoch;
-        const changedEpoch = oldEpoch !== undefined && oldEpoch !== history.epoch;
-        let next: SessionView = { ...v, entries: action.entries, leafId: action.leafId, history, hydrated: true,
-          blocks: blocksFromEntries(action.entries, action.leafId, modelNamesOf(v.state)),
-          running: live?.running ?? v.running, lastSeq: action.window.seq, updateEpoch: history.epoch, pendingSentBy: undefined, historyPending: undefined };
-        if (live?.message) {
-          const message = live.message.value as { content?: unknown };
-          const parts = Array.isArray(message.content) ? message.content as { type?: string; thinking?: string }[] : [];
-          next.blocks.push({ kind: "assistant", id: live.message.id, text: textOf(message.content),
-            thinking: parts.filter(p => p.type === "thinking").map(p => p.thinking ?? "").join(""), streaming: true,
-            ...(live.message.speaker ? { speaker: live.message.speaker } : {}) });
-        }
-        for (const tool of live?.tools ?? []) {
-          if (!next.blocks.some(b => b.kind === "tool" && b.id === tool.toolCallId)) next = applyUpdate(next, { kind: "tool_execution_start", ...tool });
-          if (tool.partial !== undefined) next = applyUpdate(next, { kind: "tool_execution_update", toolCallId: tool.toolCallId, partial: tool.partial });
-        }
-        // Snapshot seq covers both durable history and its partial work. Only
-        // newer accepted updates may be replayed, exactly once.
-        for (const update of v.historyPending.updates) {
-          if (update.epoch ? update.epoch !== history.epoch : changedEpoch) continue;
-          if (update.seq <= next.lastSeq) continue;
-          const applied = applyUpdate(next, update.update);
-          next = { ...applied, blocks: stampNewBlocks(next.blocks, applied.blocks, update.at), lastSeq: update.seq };
-        }
-        const optimistic = v.blocks.filter(b => b.kind === "user" && b.optimistic);
-        const existingIds = new Set(next.blocks.map(b => b.id));
-        next.blocks = [...next.blocks, ...optimistic.filter(b => !existingIds.has(b.id))];
-        return { ...next, blocks: shareHistoryBlocks(next.blocks, v.blocks), lastSeq: changedEpoch ? next.lastSeq : Math.max(next.lastSeq, v.lastSeq) };
-      });
     case "historyMetadata":
-      return updateView(state, action.path, v => {
-        if (v.history && v.history.epoch !== action.window.epoch) return v;
-        const index = action.from ? v.entries.findIndex(e => (e as { id?: string }).id === action.from) : -1;
-        if (action.from && index < 0) return v;
-        const prefix = v.entries.slice(0, index < 0 ? 0 : index);
-        const ids = new Set([...prefix, ...action.entries].map(e => (e as { id?: string }).id));
-        const later = v.entries.slice(index + 1).filter(e => !ids.has((e as { id?: string }).id));
-        const { live: _live, before: _before, ...history } = action.window;
-        return { ...v, entries: [...prefix, ...action.entries, ...later], leafId: action.leafId,
-          history: v.history ? { ...v.history, seq: history.seq, hasHistory: v.history.hasHistory || history.hasHistory } : { ...history, userOffset: 0, context: [], priorGoalIds: [], complete: true } };
-      });
     case "historyPrepend":
-      return updateView(state, action.path, v => {
-        if (v.history?.before !== action.before || v.history.epoch !== action.window.epoch) return v;
-        const ids = new Set(v.entries.map(e => (e as { id?: string }).id));
-        const entries = action.entries.filter(e => !ids.has((e as { id?: string }).id));
-        const { live: _live, ...history } = action.window;
-        // Older pages never replace the live suffix or advance its watermark.
-        return { ...v, history: { ...history, complete: false }, entries: [...entries, ...v.entries],
-          blocks: [...blocksFromEntries(entries, undefined, modelNamesOf(v.state)), ...v.blocks] };
-      });
+      return updateView(state, action.path, v => reduceHistory(v, action, historyFold));
     case "hydrate":
       return updateView(state, action.path, (v) => {
         // The snapshot came from the worker at `seq`; a live update that
@@ -709,14 +655,7 @@ function applyNotification(state: AppState, method: HostNotificationMethod, para
   switch (method) {
     case "session/update": {
       const p = params as HostNotifications["session/update"];
-      return updateView(state, p.sessionPath, (v) => {
-        const historyPending = v.historyPending ? { ...v.historyPending, updates: [...v.historyPending.updates, p] } : undefined;
-        const epoch = v.history?.epoch ?? v.updateEpoch;
-        if (p.seq <= v.lastSeq || (p.epoch && epoch && p.epoch !== epoch)) return historyPending ? { ...v, historyPending } : v;
-        const next = applyUpdate(v, p.update);
-        return { ...next, blocks: stampNewBlocks(v.blocks, next.blocks, p.at), lastSeq: p.seq,
-          ...(p.epoch ? { updateEpoch: p.epoch } : {}), ...(historyPending ? { historyPending } : {}) };
-      });
+      return updateView(state, p.sessionPath, v => receiveHistoryUpdate(v, p, historyFold));
     }
     case "pi/ui/request": {
       const p = params as HostNotifications["pi/ui/request"];
@@ -799,7 +738,7 @@ function applyNotification(state: AppState, method: HostNotificationMethod, para
  * only candidates are the ones past `before.length`; the common delta (same
  * length, same tail id) does no work at all.
  */
-function stampNewBlocks(before: Block[], after: Block[], at: string): Block[] {
+export function stampNewBlocks(before: Block[], after: Block[], at: string): Block[] {
   if (before === after || !at) return after;
   if (after.length <= before.length) return after;
   let changed = false;
@@ -963,7 +902,7 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
         const index = optimistic !== -1 ? optimistic : v.blocks.at(-1)?.kind === "user" ? v.blocks.length - 1 : -1;
         if (index === -1) return v;
         const block = v.blocks[index] as Extract<Block, { kind: "user" }>;
-        const blocks = replaceAt(v.blocks, index, { ...block, ...splitAttachedFiles(text), images: imagesOfContent(msg.content), optimistic: false, ...(u.entry ? { entryId: u.entry.id } : {}) });
+        const blocks = replaceAt(v.blocks, index, { ...block, ...splitAttachedFiles(text), images: imagesOfContent(msg.content), optimistic: false, ...(u.entry ? { id: `entry:${u.entry.id}`, entryId: u.entry.id } : {}) });
         // The prompt's place in the tree arrives with it, so its actions (fork,
         // jump, edit, versions, the request it produced) work while the turn
         // runs. The tree holds a copy until the next full read: the entry is
@@ -1247,29 +1186,6 @@ export function blocksFromEntries(entries: unknown[], leafId?: string | null, na
  * therefore recovered (or was superseded by the final failure). Keep only the
  * outcome a person can act on.
  */
-function shareHistoryBlocks(next: Block[], previous: Block[]): Block[] {
-  const byId = new Map(previous.map(block => [block.id, block]));
-  const turns = new Map<string, Block[]>();
-  let turn: Block[] | undefined;
-  for (const block of previous) {
-    if (block.kind === "user") {
-      turn = [];
-      if (block.entryId) turns.set(block.entryId, turn);
-    }
-    turn?.push(block);
-  }
-  let ordinal = 0;
-  turn = undefined;
-  return next.map(block => {
-    if (block.kind === "user") { turn = block.entryId ? turns.get(block.entryId) : undefined; ordinal = 0; }
-    const positional = turn?.[ordinal++];
-    const old = byId.get(block.id) ?? (positional?.kind === block.kind && block.kind !== "tool" ? positional : undefined);
-    if (!old || old.kind !== block.kind) return block;
-    const shared = { ...block, id: old.id };
-    return JSON.stringify(shared) === JSON.stringify(old) ? old : shared;
-  });
-}
-
 function hideRecoveredProviderErrors(blocks: Block[]): Block[] {
   const hidden = new Set<number>();
   let pendingError: number | undefined;

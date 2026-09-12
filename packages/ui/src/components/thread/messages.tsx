@@ -86,7 +86,10 @@ const useEntries = (): readonly unknown[] => useLaserState((s) => (s.current ? s
  */
 const useLeafId = (): string | null | undefined => useLaserState((s) => (s.current ? s.open[s.current]?.leafId : undefined));
 const useUserOffset = (): number => useLaserState(s => s.current ? s.open[s.current]?.history?.userOffset ?? 0 : 0);
-const usePartialHistory = (): boolean => useLaserState(s => Boolean(s.current && s.open[s.current]?.history && !s.open[s.current]?.history?.complete));
+const usePartialHistory = (): boolean => useLaserState(s => {
+  const history = s.current ? s.open[s.current]?.history : undefined;
+  return Boolean(history && (!history.complete || history.branchesUnloaded));
+});
 
 /** Text of every text part of the message in scope, for copying. */
 const useMessageText = (): string =>

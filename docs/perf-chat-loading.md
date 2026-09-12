@@ -2,9 +2,9 @@
 
 ## Recommendation
 
-Separate **catalog summaries**, **loaded history**, and **mounted rows**. Page the first two and virtualize the third. Keep the current conversation mounted until the destination is ready; never make an old composer send to a pending destination.
+**Tail-first history reduces the default 2,000-message mount to 40 rows and the measured warm switch from 4,133 to 186.1 ms.** Mounted work, not the ~6 ms of warm host RPCs, was the important axis. See the re-baseline and M16-T24 handoff below.
 
-This document contains research, a fresh baseline, and the implementation contract. **Catalog paging (A) and tail-first history (B) are implemented and validated below. C–E remain outstanding.** Baseline base: `a0690d36d600bbc3913a055abae1680dc5930f8f`, isolated branch `agents/chat-loading-9210c750`.
+**M16-T16 stops at catalog paging (A) and tail-first history (B). C/D/E were not started and are no longer this task's follow-on scope.** Their original proposals remain below as research, not authorization. M16-T24 owns further attribution and the decision whether more rendering work is justified. Baseline base: `a0690d36d600bbc3913a055abae1680dc5930f8f`; implementation branch: `agents/chat-loading-9210c750`.
 
 ## Research: established techniques, not guesses about competitors
 
@@ -113,7 +113,7 @@ Proposed request shape: `{path, window: {tail: 40}}`, older `{path, window: {bef
 
 **Tests:** real worker + host router, full-route compatibility, cursor validation, branch cuts and malformed IDs, tool call/result cut, custom/goal records, late pages after switch/rewrite, stream/tail/prepend races, replay gap/restart, settled refresh, live partial output remains artifact not terminal result, find/load-all cancellation, unloaded edit/fork/jump, no duplicate messages. **Invariants:** engine-neutral protocol (1/2), both driver seams if touched (3), one writer (8), transcript escaping (9), live activity guards and sequence ownership.
 
-### C. Preserve the previous transcript during switching
+### C. Preserve the previous transcript during switching — unimplemented proposal
 
 Represent requested destination and displayed ready destination separately in the existing destination controller. Retain the old runtime/DOM until the new tail is accepted, then atomically swap. Preserve the pending sidebar indication; do not acknowledge the new session as seen until it is genuinely displayed/focused.
 
@@ -121,9 +121,9 @@ Fence actions on the retained conversation while a different destination is pend
 
 **Tests:** DOM-node continuity through delayed tail, failed open/retry, rapid A/B/C, same-session refresh, drafts/attachments and send routing, seen/attention gating, Beam scope, reconnect, reduced motion. **Invariants:** destination identity, one acknowledged visible session, no accidental prompt/stop, pending optional reads remain independent.
 
-### D. Window mounted rows
+### D. Window mounted rows — unimplemented proposal
 
-Use a measured-height virtualizer around existing `ThreadPrimitive.MessageByIndex` (installed declarations are authoritative). Preserve the actual thread viewport and sticky composer, stable message-ID keys, padding spacers and token-derived sizing estimates. Start with roughly five rows of overscan; measure tall-tool/Markdown/image cases before tuning.
+If later justified, use a measured-height virtualizer around the identity-bound `ThreadPrimitive.Unstable_MessageById` renderer (B verified that index providers rebind local state on prepend). Preserve the actual thread viewport and sticky composer, stable message-ID keys, padding spacers and token-derived sizing estimates. Start with roughly five rows of overscan; measure tall-tool/Markdown/image cases before tuning.
 
 Keep all **loaded** messages in runtime state; only mount the visible window. Pin focused/editing/active approval rows until interaction finishes. Integrate scroll-to-message/find/conversation-map with a shared “ensure mounted, then measure” operation. Native DOM ranges cannot find unmounted text. Disclosure/image resize restores the message anchor unless the person is following the live tail; do not fight user scrolling. Reduced motion changes animation, not reachability.
 
@@ -131,7 +131,7 @@ Keep all **loaded** messages in runtime state; only mount the visible window. Pi
 
 **Tests:** bounded DOM count; first/last/distant row reachability; reverse scroll/page prepend; tall resizing content; keyboard focus/edit pinning; native find range after mounting; map/jump; version changes; disclosure anchoring after commit; bottom-follow during streaming and detached scroll position. **Invariants:** activity/approval ownership, keyboard/touch/theme parity, value-only search and token system.
 
-### E. Bounded speculative tail prefetch
+### E. Bounded speculative tail prefetch — unimplemented proposal
 
 After A–D settle, pointer hover and keyboard focus may prefetch one likely destination tail. Reuse the previous conversation's accepted tail. Bound to two cached conversations / one speculative request and a byte budget; use short dwell, deduplicate against actual open, and discard stale path/branch/epoch replies. Touch opens normally and never depends on hover.
 
@@ -159,7 +159,7 @@ python3 /tmp/chat-loading/clean.py node /tmp/chat-loading/catalog.mjs
 
 Evidence: `/tmp/chat-loading/{baseline-results,startup-results,tail-startup-results,rpc-results,catalog-results}.json`; scripts beside them. Build logs: `/tmp/chat-loading-build.log`, `/tmp/chat-loading-build-retry.log`. The baseline screenshot is inspection evidence only, not a four-layout acceptance matrix.
 
-Transcript implementation B–E is **outstanding**; A is recorded below. Each A–E is an independently testable commit boundary, with B requiring the largest lifecycle contract. After each implemented boundary run host/protocol/UI tests, touched worker seam tests and identity; finish with the required real 1360/390 × light/dark browser matrix, normal/reduced motion, keyboard/touch and before/after paired samples. Append after results here; do not compare a 154-session startup to a three-session switch or call a short complete transcript a proven paged implementation.
+At the Phase 1 checkpoint, transcript implementation B–E was outstanding; A and B are now recorded below. The earlier proposal gave each A–E a separate commit boundary; the review subsequently stopped this task at B. After each implemented boundary run host/protocol/UI tests, touched worker seam tests and identity; finish with the required real 1360/390 × light/dark browser matrix, normal/reduced motion, keyboard/touch and before/after paired samples. Append after results here; do not compare a 154-session startup to a three-session switch or call a short complete transcript a proven paged implementation.
 
 ## Implementation A — paged catalog
 
@@ -182,7 +182,7 @@ Final production UI/host built from this worktree, same isolated Node/Chrome rec
 
 **47.9% fewer bytes and 53.3% fewer initial rows**, at ~2.55 ms additional host RPC time. The <10 ms target passes; the provisional <30 KB target narrowly misses (30.3 KB). The earlier 54,398-byte baseline had different attention/seen fields, so the paired full route above is the byte comparator. Unread/attention exceptions can legitimately return every row; the synthetic fixture was explicitly marked seen before this comparison.
 
-The browser fixture additionally has five control sessions and fifteen Chat sessions. Its initial response is **82 rows / 36,151 bytes**, received **once** per fresh context rather than three identical initial reads observed during development. No transcript switch/open improvement is claimed at A: entries and mounted-message work are unchanged until B–D.
+The browser fixture additionally has five control sessions and fifteen Chat sessions. Its initial response is **82 rows / 36,151 bytes**, received **once** per fresh context rather than three identical initial reads observed during development. No transcript switch/open improvement is claimed at A: entries and mounted-message work were unchanged until B.
 
 ### A validation
 
@@ -202,10 +202,10 @@ Reproduce with `/tmp/chat-loading/catalog-browser.mjs` and `/tmp/chat-loading/ca
 
 - `pi/session/entries` accepts `window: {tail:40}`, `{before,limit}`, `{from:entryId}`, or `{all:true}`; omitting it retains the legacy full route. Cursors carry session path, serving epoch, leaf and boundary. They survive append-only growth, not a branch change or worker restart.
 - Windows walk the authoritative worker's actual parent chain, extend to a complete user turn and preceding attribution markers, and retain original user ordinals, goal context and prior goal markers. A long turn can exceed 40 records. Complete active-branch history is distinct from a complete tree containing alternate versions. `hasHistory` prevents a reset leaf from masquerading as a reusable empty session.
-- Window requests never read or install partial pages in the host's full `ViewCache`. The worker retries a yielded snapshot if its accepted sequence/pre-acceptance revision changed. Its live accumulator copies **accepted** deltas and the latest partial tool output, not Pi's mutable future streaming object.
+- Window requests never read or install partial pages in the host's full `ViewCache`. They reach a worker, including starting a retired worker; these are not side-effect-free speculative reads. The worker retries a yielded snapshot if its accepted sequence/pre-acceptance revision changed. Its live accumulator copies **accepted** deltas and the latest partial tool output, not Pi's mutable future streaming object.
 - Numbered updates now carry the serving epoch. The UI journals concurrent updates, installs a snapshot at its watermark, and replays only newer updates from that generation. New epochs reset the dedupe/client watermark; old generations cannot contaminate them. Reconnect retains the oldest loaded anchor where it remains valid; invalid branch anchors fall back to a new tail. Older pages neither replace the live suffix nor advance its watermark.
 - Initial uncached hydration reads 40 messages; Load earlier and upward reading prepend another page. Explicit full-history search, versions and tree actions load all records. Settlement reads only metadata since the known leaf rather than rehydrating the conversation. Usage/file/tool/history panels disclose their loaded scope; complete conversation totals wait for complete history.
-- Message IDs are entry-based and shared across snapshots. Tool-only assistant records retain their real empty assistant container, matching the live structure. **Installed `ThreadPrimitive.Messages` keys providers by index**: keeping its DOM nodes did not preserve message identity. The thread now uses `unstable_useThreadMessageIds` / `Unstable_MessageById`; a regression proves focus and disclosure stay on their original message after prepend. D will window this same identity-bound renderer.
+- Message IDs are entry-based and shared across snapshots. Tool-only assistant records retain their real empty assistant container, matching the live structure. **Installed `ThreadPrimitive.Messages` keys providers by index**: keeping its DOM nodes did not preserve message identity. The thread now uses `unstable_useThreadMessageIds` / `Unstable_MessageById`; a regression proves focus and disclosure stay on their original message after prepend. No mounted-row virtualizer is implemented.
 
 ### Paired wire measurements
 
@@ -227,3 +227,45 @@ The 2,000-message response is **97.9% smaller**, with **69.1% lower median RPC t
 - Two rejected browser checks were insufficient evidence: a delayed mobile installation guide legitimately took focus, and index-rebound nodes gave a false-positive identity/anchor assertion. The fixture now records installation guidance as dismissed, and tests original IDs/text plus disclosure ownership. These are not hidden as successful runs.
 - Live production browser **1360/390 × light/dark passes**: a real held bash partial remains running through prepend; pointer/keyboard disclosure closes and reopens after animations settle; 500 real provider deltas appear exactly once; the detached reading anchor survives settlement; a valid 256×256 PNG is absent from the initial window and decodes after full loading; restarting the isolated worker changes epoch without losing the response. `/tmp/chat-loading/b-live-results.json`, `b-live-browser.log`, `b-live-{tool,settled,image}-WIDTH-THEME.png`. Harness anchors are captured at the actual page-request boundary, not before a programmatic scroll has settled.
 - Final non-streaming startup samples (not repeated medians): desktop light/dark **1,112/726 ms**, phone light/dark **539/443 ms**. Initial DOM **2,678/2,729 desktop, 1,250/1,309 phone**. Loading all 2,000 messages still creates **57,679/57,687 desktop and 56,147 phone elements**. This explicitly does **not** satisfy D's bounded mounted-row criterion. Anchor comparisons wait for the restoration window to finish, then check the original node, ID, text and offset.
+
+## B review fixes and re-baseline — handoff to M16-T24
+
+The commit containing this section follows B `6cc8572`; it implements only the four requested review fixes:
+
+1. `HistoryWindow.complete` means all **active-branch messages** are loaded. The final prepend sets it true; a replacement tail sets it false again. `branchesUnloaded` separately tracks missing versions, preserving explicit tree/version loads and honest conversation-wide totals. Message find stops claiming earlier messages are missing at the branch root. Completion retains a focusable status control after requested paging.
+2. Opening Tools displays loaded activity only. It never calls `loadAllEntries`; the existing explicit history button remains the way to acquire everything.
+3. Accepted user `message_end` stamps `id: entry:${entry.id}`. Reconciliation uses ID lookup, assistant-only within-turn fallback, and the existing recursive `deepEqual`; no block is serialized for comparison. A regression checks a 1 MiB image-bearing block and retained reference identity.
+4. `runtime/history-loader.ts` owns request coalescing, cursor recovery, epoch adoption, settlement reads, and history reducer/journal lifecycle. Store event-fold functions are injected, avoiding a runtime import cycle. Request tokens remain distinct across client replacement; a stale client cannot settle or clear its successor's read. Provider/store retain wiring and ordinary session ownership. Tests exercise replacement/close/intent rejection, restart replay, invalid anchors, root paging and explicit version loading.
+
+### The renderer-relevant result
+
+Same three synthetic 4/240/2,000-message conversations, copied to an isolated three-session catalog so the larger A catalog does not contaminate the comparison. Same Node 24, Chrome, production UI, 1360×900 light layout, three Small → Architecture → Long cycles, 12-second warm-up and one-second settling intervals. The ready condition remains destination rows plus an enabled composer and next animation frame; it now additionally checks destination text because both larger tails contain 20 assistant bodies. No build/test from this worker was running during timing.
+
+| Messages | Mounted rows before → after | Total DOM before → after | Switch median before → after | History bytes full → tail |
+| ---: | ---: | ---: | ---: | ---: |
+| 4 | 4 → 4 | 615 → 615 | 1,390.1 → **97.2 ms** | 1,925 → 2,152 |
+| 240 | 240 → **40** | 7,220 → **1,524** | 639.7 → **158.1 ms** | 96,707 → 16,888 |
+| 2,000 | 2,000 → **40** | 56,512 → **1,524** | 4,133.0 → **186.1 ms** | 805,108 → 16,888 |
+
+The long switch is **95.5% shorter**, with **98% fewer mounted messages** and **97.3% fewer DOM elements**. Long samples: 204.9 / 186.1 / 178.1 ms. These are end-to-end warm switches, not attribution of individual React/store stages or cold engine measurements. The earlier small-switch teardown penalty also disappears.
+
+Before values are the Phase 1 measurements, not a new run of the old build. Before mounted counts follow the paired user/assistant fixture and measured assistant-body counts; after counts directly enumerate `[data-message-id]`. Full bytes are the paired B legacy-route samples; new first-tail wire values include the scope flag and copied fixture path. Warm repeated switches reuse the accepted tail: **all three timed Long switches issue zero entries reads** (its initial tail was loaded during setup). This is not a claim that 186.1 ms is RPC latency or that response bytes were the original bottleneck.
+
+Evidence: `/tmp/chat-loading/rebaseline.mjs`, `b-review-switch-results.json`, `b-review-switch.log`, `b-review-long-switch.png`. The follow-on real-wheel test reaches all 240 messages through older pages, removes the earlier-history/search warnings, finds checkpoint 1, and makes **zero all-history requests**. Its first harness attempt incorrectly assumed exactly one page per explicit control interaction; natural upward loading could finish before the next focus call. The corrected wheel-driven check passes.
+
+### Validation of the revised target
+
+- Production protocol/worker/host/UI builds and protocol **111**, host **237**, focused worker SDK/server **87** tests pass. Logs: `/tmp/chat-loading-b-review-{build,protocol,host,worker}.log`.
+- Focused UI request/reducer/identity/tool interaction tests: **18 pass / 4 files**; `/tmp/chat-loading-b-review-focused-final.log`. Final `pnpm verify` passes all builds, type checks, package suites and 42 release tests; UI **1,384 pass / one existing skip**, worker **679 pass / three existing skips**. Staged identity/diff checks pass. `/tmp/chat-loading-b-review-{verify,identity}-final.log`. The first full gate caught a test passing the tail helper instead of invoking it; that test was corrected, and the failed log remains at `/tmp/chat-loading-b-review-verify.log`.
+- Revised production browser **1360/390 × light/dark passes**: 40 initial mounted messages, one tail read, settled ID/text/anchor retention, keyboard/touch paging, explicit full-history find, focus, no page errors/overflow. Light uses reduced motion, dark normal. Four screenshots inspected. `/tmp/chat-loading/b-review-browser-results.json`, `b-review-browser.log`, `b-review-{tail,older,find}-WIDTH-THEME.png`. The earlier B live/PNG/restart matrix above was not repeated for these review fixes; current reducer/SDK regression suites cover the affected event boundary.
+
+### M16-T24: what remains worth profiling
+
+Handoff destination: `agents/session-open-forensics-45906d80`. Profile **on top of B and this review-fix commit**, not the obsolete default 2,000-row mount.
+
+- Default warm switching now mounts 40 rows and measures 186.1 ms on this long fixture. Do not repeat already-measured warm entries/catalog RPC work as the principal hypothesis.
+- Still unmeasured here: controlled cold worker spawn/engine load, hydration versus projection versus React commit, Markdown/Shiki, fonts/images/paint, and real input latency.
+- A full-history request or one huge complete turn can still mount thousands of rows. Decide whether that explicit/unusual path warrants a virtualizer; do not assume it remains the default switch bottleneck.
+- No retained-transcript controller (C), virtualizer (D), or prefetch (E) was implemented. A one-frame blank is a separate perceptual question. Window reads can start workers, so speculative reads are not harmless by default.
+
+Reproduce the new baseline with the allowlisted `/tmp/chat-loading/clean.py node /tmp/chat-loading/rebaseline-host.mjs`, then Node 24 `/tmp/chat-loading/rebaseline.mjs`. Fixtures/configuration remain under `/tmp/chat-loading/rebaseline-{sessions,state}`; services are stopped after validation. No personal session, credential, installed application or other worktree was used.

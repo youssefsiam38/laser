@@ -22,12 +22,14 @@ describe("history windows", () => {
     expect(historyWindow(snapshot, { all: true }, scope)).toMatchObject({ entries, window: { complete: true, userOffset: 0 } });
   });
 
-  it("follows the active leaf rather than append order, and does not call a partial tree complete", () => {
+  it("distinguishes a complete active branch from unloaded versions", () => {
     const entries = history(8);
     const sibling = { type: "message", id: "fork", parentId: "e1", message: { role: "user", content: "Other branch" } };
     const snapshot = { entries: [...entries, sibling], leafId: "e7" };
-    expect(historyWindow(snapshot, { tail: 40 }, scope)).toMatchObject({ entries, window: { complete: false } });
-    expect(historyWindow({ ...snapshot, leafId: null }, { tail: 40 }, scope).entries).toEqual([]);
+    expect(historyWindow(snapshot, { tail: 40 }, scope)).toMatchObject({ entries, window: { complete: true, branchesUnloaded: true } });
+    expect(historyWindow(snapshot, { tail: 4 }, scope)).toMatchObject({ window: { complete: false, branchesUnloaded: true } });
+    expect(historyWindow(snapshot, { all: true }, scope)).toMatchObject({ window: { complete: true, branchesUnloaded: false } });
+    expect(historyWindow({ ...snapshot, leafId: null }, { tail: 40 }, scope)).toMatchObject({ entries: [], window: { complete: true, branchesUnloaded: true } });
   });
 
   it("retains tool calls, results, attribution markers and goal context without exposing an earlier prompt body", () => {
