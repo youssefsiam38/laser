@@ -61,11 +61,19 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
     case "historyEnd": return v.historyPending?.token === action.token ? { ...v, historyPending: undefined } : v;
     case "historySnapshot": {
       if (v.historyPending?.token !== action.token) return v;
-      const { live, ...history } = action.window;
+      const { live, ...window } = action.window;
       const oldEpoch = v.history?.epoch ?? v.updateEpoch;
-      const changedEpoch = oldEpoch !== undefined && oldEpoch !== history.epoch;
-      let next: SessionView = { ...v, entries: action.entries, leafId: action.leafId, history, hydrated: true,
-        blocks: blocksFromEntries(action.entries, action.leafId, modelNamesOf(v.state)),
+      const changedEpoch = oldEpoch !== undefined && oldEpoch !== window.epoch;
+      // A branch read moves the leaf; it does not unload the immutable tree
+      // already fetched in this worker generation. Merge its fresh suffix
+      // into that tree so known siblings remain immediately navigable. A new
+      // epoch or an authoritative complete snapshot still replaces the cache.
+      const retainTree = oldEpoch === window.epoch && hasCompleteTree(v) && (!window.complete || window.branchesUnloaded);
+      const entries = retainTree ? [...new Map([...v.entries, ...action.entries].map(entry => [(entry as { id: string }).id, entry])).values()] : action.entries;
+      const history = retainTree ? { ...window, complete: true, branchesUnloaded: false, userOffset: 0, context: [], priorGoalIds: [] } : window;
+      if (retainTree) delete history.before;
+      let next: SessionView = { ...v, entries, leafId: action.leafId, history, hydrated: true,
+        blocks: blocksFromEntries(entries, action.leafId, modelNamesOf(v.state)),
         running: live?.running ?? v.running, lastSeq: action.window.seq, updateEpoch: history.epoch, pendingSentBy: undefined, historyPending: undefined };
       if (live?.message) {
         const message = live.message.value as { content?: unknown };
@@ -93,11 +101,13 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
       if (v.history && v.history.epoch !== action.window.epoch) return v;
       const index = action.from ? v.entries.findIndex(e => (e as { id?: string }).id === action.from) : -1;
       if (action.from && index < 0) return v;
-      const prefix = v.entries.slice(0, index < 0 ? 0 : index);
-      const ids = new Set([...prefix, ...action.entries].map(e => (e as { id?: string }).id));
-      const later = v.entries.slice(index + 1).filter(e => !ids.has((e as { id?: string }).id));
+      // Entries are an append-only tree, not a contiguous active branch.
+      // Splicing a new continuation at its parent would put it before older
+      // siblings abandoned by an edit, reversing their version numbers.
+      // Replace known records in place and append only newly persisted ids.
+      const entries = [...new Map([...v.entries, ...action.entries].map(entry => [(entry as { id: string }).id, entry])).values()];
       const { live: _live, before: _before, ...history } = action.window;
-      return { ...v, entries: [...prefix, ...action.entries, ...later], leafId: action.leafId,
+      return { ...v, entries, leafId: action.leafId,
         history: v.history ? { ...v.history, seq: history.seq, hasHistory: v.history.hasHistory || history.hasHistory } : { ...history, userOffset: 0, context: [], priorGoalIds: [], complete: true } };
     }
     case "historyPrepend": {

@@ -68,8 +68,30 @@ describe("history request ownership", () => {
     expect(f.view().history).toMatchObject({ complete: true, branchesUnloaded: false });
     expect(f.view().entries).toHaveLength(81);
     await f.loader.read(state.path);
-    expect(f.view().history).toMatchObject({ complete: true, branchesUnloaded: true });
-    expect(f.view().entries).toHaveLength(80);
+    expect(f.view().history).toMatchObject({ complete: true, branchesUnloaded: false });
+    expect(f.view().entries).toHaveLength(81);
+    expect(request).toHaveBeenLastCalledWith({ path: state.path, window: { from: "e0" } });
+  });
+
+  it("retains a known tree after an invalid branch anchor falls back to a tail, but drops it on epoch change", async () => {
+    let snapshot: { entries: unknown[]; leafId: string } = source;
+    let epoch = scope.epoch;
+    const request = vi.fn(async (params: Params) => historyWindow(snapshot, params.window!, { ...scope, epoch }));
+    const f = fixture(request);
+    await f.loader.read(state.path, true);
+    // A sibling before the old root makes that root an invalid active anchor.
+    const other = { type: "message", id: "root-sibling", parentId: null, message: { role: "user", content: "Other root" } };
+    snapshot = { entries: [...entries, other], leafId: other.id };
+    await f.loader.read(state.path);
+    expect(request.mock.calls.slice(1).map(([params]) => params.window)).toEqual([{ from: "e0" }, { tail: 40 }]);
+    expect(f.view().entries).toHaveLength(81);
+    expect(f.view().blocks).toHaveLength(1);
+    expect(f.view().history).toMatchObject({ complete: true, branchesUnloaded: false, userOffset: 0 });
+    expect(f.view().history?.before).toBeUndefined();
+    epoch = "replacement";
+    await f.loader.read(state.path);
+    expect(f.view().entries).toEqual([other]);
+    expect(f.view().history).toMatchObject({ epoch, complete: true, branchesUnloaded: true });
   });
 
   it("recovers an invalid retained anchor through a fresh tail", async () => {
