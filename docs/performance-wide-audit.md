@@ -499,3 +499,27 @@ These support the techniques, not Laser-specific performance estimates:
 - [Electron performance guide](https://www.electronjs.org/docs/latest/tutorial/performance) — avoid blocking critical processes and loading code before it is needed.
 - [MDN WebSocket](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket) and [bufferedAmount](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket/bufferedAmount) — no built-in incoming backpressure; queued outgoing bytes are observable but require an application policy.
 - Existing `docs/perf-chat-loading.md` — paging/virtualization research and the branch owner's measured baseline/acceptance contract.
+
+
+## Implemented — delivery and startup lane
+
+### F03 — retained captures, reference-only default delivery
+
+Reverified at `413c8e2`: CLI/desktop have no raw extension capture consumer;
+`ApiRequestDialog` already fetches `pi/logs/query` and `pi/logs/content`.
+Host broadcast now excludes only provider request/response capture envelopes,
+after observation/retention and before JSON serialization or relay listeners.
+Questions, capabilities and correlated live log rows are unchanged. No new RPC.
+
+Fresh two-WebSocket synthetic 4 MiB capture: **8,389,046 raw envelope bytes →
+2,136 bytes** including the small request/response log rows and a question.
+This is wire serialization size, not latency; the test injects at the real
+worker-notification observation boundary and uses a relay-listener test seam,
+not an encrypted-device benchmark. The real router returns the identical full
+retained JSON via the inspector's existing 8 MiB content route.
+
+Validation: protocol, host (234 tests), UI (1,377 tests, one benchmark skipped),
+identity and workspace build; logs `/tmp/f03-{protocol,host,ui,identity,build}.log`.
+Focused regression: `packages/host/test/provider-delivery.test.ts`; existing UI
+request-dialog content-reference and full-JSON tests pass. No visual change or
+new browser matrix claimed. Capture redaction/provenance storage is untouched.

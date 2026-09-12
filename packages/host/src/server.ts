@@ -32,7 +32,7 @@ import type { AddressInfo } from "node:net";
 import { basename, dirname, extname, join, normalize, resolve as resolvePath, sep } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { channelIdFor, type KeyPair } from "@lasercode/crypto";
-import { ENV, PRODUCT_NAME, decisionPushPayload, type ClientRequests, type HostNotifications, type JsonRpcNotification, type LogEntry, type NamerState, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
+import { ENV, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, type ClientRequests, type HostNotifications, type JsonRpcNotification, type LogEntry, type NamerState, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
 import { suggestBeamModel } from "./agents/models.js";
 import { AgentRunRegistry } from "./agents/runs.js";
 import { SkillsCheck } from "./agents/skills-check.js";
@@ -789,6 +789,14 @@ export class HostServer {
   // ------------------------------------------------------------- sockets
 
   private broadcast(notification: JsonRpcNotification): void {
+    // Captures have already reached LogStore in observe(). Views inspect the
+    // redacted retained body via logs/query + logs/content, not this raw event.
+    // Filter before serialization and before relay listeners/frame admission.
+    if (notification.method === "pi/extension/message") {
+      const { message } = notification.params as HostNotifications["pi/extension/message"];
+      const type = (message as { type?: unknown } | null)?.type;
+      if (type === `${WIRE_NAMESPACE}/provider/request` || type === `${WIRE_NAMESPACE}/provider/response`) return;
+    }
     const line = JSON.stringify(notification);
     for (const ws of this.clients) {
       if (ws.readyState !== ws.OPEN) continue;
