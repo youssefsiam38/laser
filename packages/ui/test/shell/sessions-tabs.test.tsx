@@ -38,13 +38,13 @@ vi.mock("@/runtime", async (importActual) => ({ ...(await importActual<typeof im
 const ROOT = "/one/root.jsonl";
 const CHILD = "/one/.worktrees/explorer/child.jsonl";
 const GRANDCHILD = "/one/.worktrees/digger/grandchild.jsonl";
-const DETACHED = "/one/.worktrees/orphan/orphan.jsonl";
+const PARENTLESS = "/one/.worktrees/orphan/orphan.jsonl";
 const sessions: SessionSummary[] = [
   summary({ path: ROOT, cwd: "/one", name: "Ship the release", modifiedAt: "2026-09-08T03:00:00Z", attention: "working" }),
   summary({ path: "/one/older.jsonl", cwd: "/one", name: "Older work", modifiedAt: "2026-09-07T03:00:00Z" }),
   summary({ path: CHILD, cwd: "/one/.worktrees/explorer", name: "Counting files", modifiedAt: "2026-09-08T03:05:00Z", agent: { agentName: "default", kind: "child", subagentName: "explorer", parentPath: ROOT, rootPath: ROOT, runId: "r1" } }),
   summary({ path: GRANDCHILD, cwd: "/one/.worktrees/digger", modifiedAt: "2026-09-08T03:06:00Z", agent: { agentName: "reviewer", kind: "child", subagentName: "digger", parentPath: CHILD, rootPath: ROOT, runId: "r2" } }),
-  summary({ path: DETACHED, cwd: "/one/.worktrees/orphan", name: "Orphan", modifiedAt: "2026-09-08T02:00:00Z", agent: { agentName: "default", kind: "child", subagentName: "orphan", parentPath: "/one/gone.jsonl", rootPath: "/one/gone.jsonl", runId: "r3" } }),
+  summary({ path: PARENTLESS, cwd: "/one/.worktrees/orphan", name: "Orphan", modifiedAt: "2026-09-08T02:00:00Z", agent: { agentName: "default", kind: "child", subagentName: "orphan", parentPath: "/one/gone.jsonl", rootPath: "/one/gone.jsonl", runId: "r3" } }),
   summary({ path: "/two/plain.jsonl", cwd: "/two", name: "Plain session", modifiedAt: "2026-09-06T03:00:00Z" }),
   summary({ path: "/state/beam/b1.jsonl", cwd: "/state/beam", name: "Why is the dock empty", modifiedAt: "2026-09-08T01:00:00Z", agent: { agentName: "beam", kind: "beam" } }),
   summary({ path: "/state/chat/c1.jsonl", cwd: "/state/chat/session-one", name: "Recipe ideas", modifiedAt: "2026-09-08T04:00:00Z", agent: { agentName: "chat", kind: "chat" } }),
@@ -53,7 +53,7 @@ const sessions: SessionSummary[] = [
 const runs = [
   run({ runId: "r1", sessionPath: CHILD, subagentName: "explorer", agentName: "default", projectCwd: "/one", rootSessionPath: ROOT, parent: { sessionPath: ROOT, sessionId: "root" }, status: "running", startedAt: "2026-09-08T03:04:00Z", updatedAt: "2026-09-08T03:04:00Z" }),
   run({ runId: "r2", sessionPath: GRANDCHILD, subagentName: "digger", projectCwd: "/one", rootSessionPath: ROOT, depth: 2, parent: { sessionPath: CHILD, sessionId: "child", runId: "r1" }, status: "completed", startedAt: "2026-09-08T03:05:30Z", updatedAt: "2026-09-08T03:06:00Z" }),
-  run({ runId: "r3", sessionPath: DETACHED, subagentName: "orphan", agentName: "default", projectCwd: "/one", rootSessionPath: "/one/gone.jsonl", parent: { sessionPath: "/one/gone.jsonl", sessionId: "gone" }, status: "queued", startedAt: "2026-09-08T01:30:00Z", updatedAt: "2026-09-08T01:30:00Z" }),
+  run({ runId: "r3", sessionPath: PARENTLESS, subagentName: "orphan", agentName: "default", projectCwd: "/one", rootSessionPath: "/one/gone.jsonl", parent: { sessionPath: "/one/gone.jsonl", sessionId: "gone" }, status: "queued", startedAt: "2026-09-08T01:30:00Z", updatedAt: "2026-09-08T01:30:00Z" }),
 ];
 
 const adapter: RemoteThreadListAdapter = {
@@ -231,7 +231,7 @@ describe("Beam and children in the Code tab", () => {
     expect(stable.setCurrentProject).not.toHaveBeenCalled();
   });
 
-  it("nests a child under its parent on a lineage rail with its run status, and detaches an orphan", async () => {
+  it("nests a child under its parent on a lineage rail with its run status, and lists a child with a deleted parent at its own recency", async () => {
     await mount();
     const parent = rowTitled("Ship the release")!;
     const branch = parent.closest('[data-slot="session-branch"]')!;
@@ -266,11 +266,14 @@ describe("Beam and children in the Code tab", () => {
     // Only finished work under the child: the fold says "1 finished", and the
     // row keeps its width for the name.
     expect(child.querySelector('[data-slot="session-children-chip"]')).toBeNull();
-    // A child whose parent is gone sits under Detached, in its project's group.
-    const detached = container.querySelector('[data-cwd="/one"] [data-slot="detached-sessions"]')!;
-    expect(detached.textContent).toContain("Detached");
-    expect(detached.querySelector('[data-slot="subagent-name"]')?.textContent).toBe("orphan");
-    expect(detached.querySelector('[aria-label="Why detached?"]')).not.toBeNull();
+    // A missing parent leaves an ordinary project row, retaining child identity.
+    const project = container.querySelector('[data-cwd="/one"]')!;
+    const projectRows = [...project.querySelectorAll('[data-depth="0"] > div > [data-slot="aui_thread-list-item"]')];
+    expect(projectRows.map(row => row.textContent)).toEqual(["Ship the release", "orphanOrphan", "Older work"]);
+    const orphan = rowTitled("Orphan")!;
+    expect(orphan.querySelector('[data-slot="subagent-name"]')?.textContent).toBe("orphan");
+    expect(orphan.querySelector('[data-slot="run-dot"]')?.getAttribute("aria-label")).toBe("Waiting");
+    expect(rows().filter(row => row.textContent?.includes("Orphan"))).toHaveLength(1);
     // The worktree directories never become groups of their own.
     expect(container.querySelector('[data-cwd="/one/.worktrees/explorer"]')).toBeNull();
   });
