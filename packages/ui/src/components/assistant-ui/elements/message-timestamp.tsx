@@ -17,7 +17,7 @@ const options = {
 } satisfies Record<string, Intl.DateTimeFormatOptions>;
 
 function formatter(kind: keyof typeof options, locales?: Intl.LocalesArgument): Intl.DateTimeFormat {
-  const key = JSON.stringify([kind, locales === undefined ? null : Intl.getCanonicalLocales(locales)]);
+  const key = JSON.stringify([kind, locales === undefined ? null : Array.isArray(locales) ? locales.map(String) : [String(locales)]]);
   let value = formatters.get(key);
   if (!value) formatters.set(key, value = new Intl.DateTimeFormat(locales, options[kind]));
   return value;
