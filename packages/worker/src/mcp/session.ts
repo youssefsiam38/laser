@@ -17,7 +17,7 @@
  */
 import type { ExtensionAPI, InlineExtension } from "@earendil-works/pi-coding-agent";
 import { getServerPrefix } from "pi-mcp-adapter/types";
-import { toAdapterConfig } from "./adapter-config.js";
+import { toAdapterConfig, type ProjectEnvDecorator } from "./adapter-config.js";
 import { loadMcpEngine, type McpConfig } from "./engine.js";
 import { McpStore } from "./store.js";
 import { mcpClientIdentity } from "./identity.js";
@@ -26,6 +26,11 @@ export interface McpSessionOptions {
   cwd: string;
   agentDir: string;
   projectTrusted?: boolean;
+  /**
+   * The project's environment (M16-T17). A stdio server is started by the
+   * engine, not by the shell tool, so it is decorated here or not at all.
+   */
+  projectEnv?: ProjectEnvDecorator;
 }
 
 export interface McpSessionSetup {
@@ -49,7 +54,7 @@ async function resolveConfig(store: McpStore, servers: Awaited<ReturnType<McpSto
   const resolved = await Promise.all(
     servers.map(async ({ scope, config }) => ({ config, secrets: await store.secretsFor(scope, cwd, config.name) })),
   );
-  return toAdapterConfig(resolved);
+  return toAdapterConfig(resolved, options.projectEnv);
 }
 
 /** Build the session's MCP extension, or nothing when no server is enabled. */

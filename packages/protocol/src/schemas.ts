@@ -601,6 +601,24 @@ export const clientParamsSchemas = {
     .strict(),
   "pi/project/git": z.object({ cwd: z.string().min(1), path: sessionPath.optional() }).strict(),
   "pi/project/browse": z.object({ path: z.string().min(1).max(4096).optional() }).strict(),
+  "pi/project/env/status": z.object({ cwd: z.string().min(1) }).strict(),
+  "pi/project/env/set": z
+    .object({
+      cwd: z.string().min(1),
+      config: z
+        .object({
+          enabled: z.boolean(),
+          command: z.string().min(1).max(4096),
+          args: z.array(z.string().max(4096)).max(64).optional(),
+          required: z.boolean().optional(),
+          allowProviderKeys: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).max(256)).max(64).optional(),
+        })
+        .strict()
+        .nullable(),
+    })
+    .strict(),
+  "pi/project/env/test": z.object({ cwd: z.string().min(1) }).strict(),
+  "pi/project/env/refresh": z.object({ cwd: z.string().min(1) }).strict(),
 
   "pi/worker/list": z.object({}).strict(),
   "pi/worker/restart": z.object({ cwd: z.string().min(1) }).strict(),

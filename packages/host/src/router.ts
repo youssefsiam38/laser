@@ -24,7 +24,7 @@
  *   pi/ui/response       every live worker (the worker that owns the dialog id
  *                        answers; the others ignore it)
  */
-import { ErrorCodes, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, PRODUCT_VERSION, ProtocolError, decisionPushPayload, isTerminalRunStatus, parseClientRequest, type AgentRun, type AgentWorktreeStatus, type JsonRpcError, type JsonRpcResponse, type NamerState, type SessionAttention, type SessionState, type SessionSummary, type TypedClientRequest } from "@lasercode/protocol";
+import { ErrorCodes, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, PRODUCT_VERSION, ProtocolError, decisionPushPayload, isTerminalRunStatus, parseClientRequest, type AgentRun, type AgentWorktreeStatus, type JsonRpcError, type JsonRpcResponse, type NamerState, type ProjectEnvStatus, type SessionAttention, type SessionState, type SessionSummary, type TypedClientRequest } from "@lasercode/protocol";
 import { existsSync, statSync, unlinkSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { HOST_ENVIRONMENT_METHOD, applyHostEnvironment, guardHostEnvironment } from "./environment.js";
@@ -34,6 +34,7 @@ import { removeRunWorktree, worktreeStatus } from "./agents/worktrees.js";
 import type { AgentStore } from "./agents/store.js";
 import type { AttentionTracker } from "./attention.js";
 import type { SessionCatalog } from "./catalog.js";
+import type { ProjectEnvStore } from "./project-env.js";
 import { searchSessions } from "./session-search.js";
 import type { SearchCancellation } from "./search-cancellation.js";
 import type { LogStore } from "./logstore.js";
@@ -63,6 +64,7 @@ const DEFAULT_INBOX_LIMIT = 50;
 export interface RouterDeps {
   attention: AttentionTracker;
   projects: ProjectRegistry;
+  projectEnv: ProjectEnvStore;
   views: ViewCache;
   /** M4 log store. Absent when the host could not open it (see LogStore). */
   logs?: LogStore | undefined;
@@ -450,6 +452,39 @@ export class Router {
 
       case "pi/project/browse":
         return browseDirectories(req.params.path);
+
+      // --------------------------------- project environment (M16-T17) ---
+      // Configuration and trust live here; the worker runs the hook and owns
+      // the values. Every answer carries names, never values.
+      case "pi/project/env/status":
+        return { status: await this.projectEnvStatus(req.params.cwd) };
+
+      case "pi/project/env/set": {
+        const root = projectRootOf(req.params.cwd);
+        // Saving is the approval: the person is looking at the command.
+        this.deps.projectEnv.set(root, req.params.config);
+        const status = await this.projectEnvStatus(root);
+        this.deps.projectEnv.emit(status);
+        return { status };
+      }
+
+      case "pi/project/env/test":
+      case "pi/project/env/refresh": {
+        const root = projectRootOf(req.params.cwd);
+        const base = this.projectEnvBase(root);
+        // Never start a worker only to test a hook, and never run one for a
+        // project that is not trusted or not approved.
+        if (base.state !== "failed" && base.state !== "ready") return { status: base };
+        const worker = await this.deps.projects.ensureTrusted(root).then(
+          () => this.pool.get(root),
+          () => undefined,
+        );
+        if (!worker) return { status: base };
+        const answer = (await worker.request(req.method, { cwd: root })) as { status: ProjectEnvStatus };
+        const status = { ...base, ...answer.status, cwd: root };
+        this.deps.projectEnv.emit(status);
+        return { status };
+      }
 
       // Package management is deliberately not part of Laser's product API.
       // These old wire methods remain parseable for a clear breaking-change
@@ -964,6 +999,37 @@ export class Router {
       );
     }
     return this.deps.logs;
+  }
+
+  /**
+   * What a person sees before any worker is asked: configured, approved,
+   * trusted. A project with no worker running still has a truthful status.
+   */
+  private projectEnvBase(cwd: string): ProjectEnvStatus {
+    const root = projectRootOf(cwd);
+    const { trust } = this.deps.projects.trustOf(root);
+    return this.deps.projectEnv.baseStatus(root, trust);
+  }
+
+  /**
+   * The base status, enriched by the worker when one is already up.
+   *
+   * A worker is never started just to answer a status question: starting one
+   * runs the project's hook, and looking at a settings screen should not.
+   */
+  private async projectEnvStatus(cwd: string): Promise<ProjectEnvStatus> {
+    const root = projectRootOf(cwd);
+    const base = this.projectEnvBase(root);
+    if (base.state === "not-configured" || base.state === "off") return base;
+    const live = this.pool.liveClients().find((entry) => entry.cwd === root);
+    if (!live) return base;
+    try {
+      const answer = (await live.client.request("pi/project/env/status", { cwd: root })) as { status: ProjectEnvStatus };
+      return { ...base, ...answer.status, cwd: root };
+    } catch {
+      // An older worker without the method is still a working worker.
+      return base;
+    }
   }
 
   /**
