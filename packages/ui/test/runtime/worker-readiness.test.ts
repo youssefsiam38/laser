@@ -20,12 +20,12 @@ describe("worker readiness intent", () => {
     expect(expandedProject(before, sessionsList.get())).toBe("/q");
   });
 
-  it("requires a present trusted project with an unarchived session", () => {
+  it("requires a present unarchived project but leaves trust admission to the host", () => {
     const project = { cwd: "/p", trust: "trusted" } as ProjectInfo;
     const sessions = [{ cwd: "/p", path: "/s" }] as SessionSummary[];
     expect(canPrepareProject("/p", [project], sessions, () => false)).toBe(true);
     expect(canPrepareProject("/p", [{ ...project, trust: "not_required" }], sessions, () => false)).toBe(true);
-    for (const trust of ["unknown", "declined"] as const) expect(canPrepareProject("/p", [{ ...project, trust }], sessions, () => false)).toBe(false);
+    for (const trust of ["unknown", "declined"] as const) expect(canPrepareProject("/p", [{ ...project, trust }], sessions, () => false)).toBe(true);
     expect(canPrepareProject("/p", [], sessions, () => false)).toBe(false);
     expect(canPrepareProject("/p", [project], [], () => false)).toBe(false);
     expect(canPrepareProject("/p", [project], sessions, () => true)).toBe(false);

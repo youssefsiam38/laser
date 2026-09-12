@@ -159,9 +159,9 @@ export class WorkerPool {
     return Object.keys(overlay).length;
   }
 
-  /** Directories with a live or starting worker. */
+  /** User-requested directories with a live or starting worker. */
   cwds(): string[] {
-    return [...this.entries.values()].filter((e) => e.client?.alive || e.starting).map((e) => e.cwd);
+    return [...this.entries.values()].filter((e) => !e.warm && (e.client?.alive || e.starting)).map((e) => e.cwd);
   }
 
   /** User-requested workers, live or not, for `pi/worker/list`. */
@@ -214,6 +214,8 @@ export class WorkerPool {
       const key = canonical(cwd);
       if (!this.options.prepareTrust?.(key)) return;
       const existing = this.entries.get(key);
+      // Recovery and attached/session-owned entries are never speculation.
+      if (existing && (!this.unused(existing) || existing.retryTimer || existing.status === "crashed")) return;
       if (existing?.warm) existing.wantedAt = this.now();
       if (existing?.client?.alive || existing?.starting || existing?.stopped) return;
       if ([...this.entries.values()].some((entry) => entry.starting)) return;
@@ -225,7 +227,7 @@ export class WorkerPool {
       // A real open may have arrived while an eviction was finishing.
       if (this.closed || [...this.entries.values()].some((entry) => entry.starting)) return;
       const entry = this.ensure(key);
-      if (entry.client?.alive || entry.stopped) return;
+      if (entry.client?.alive || entry.stopped || !this.unused(entry) || entry.retryTimer || entry.status === "crashed") return;
       entry.warm = true;
       entry.wantedAt = this.now();
       const promise = this.spawn(entry);
@@ -237,6 +239,22 @@ export class WorkerPool {
     } finally {
       this.preparing = false;
     }
+  }
+
+  /** Feature changes invalidate speculative startup configuration, never promote it. */
+  async discardPrepared(): Promise<boolean> {
+    let complete = true;
+    for (const entry of this.entries.values()) {
+      if (!entry.warm) continue;
+      await entry.starting?.catch(() => {});
+      // A real open may have adopted it meanwhile; the caller's normal worker
+      // inventory owns that process now.
+      if (!entry.warm) continue;
+      if (!this.unused(entry)) { complete = false; continue; }
+      try { await this.retire(entry, "readiness configuration changed"); }
+      catch { complete = false; }
+    }
+    return complete;
   }
 
   private unused(entry: Entry): boolean {

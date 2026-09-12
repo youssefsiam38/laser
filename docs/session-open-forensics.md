@@ -303,8 +303,9 @@ short open), untouched by any stage of M16-T16. That is M16-T26.
 ## Implemented — worker readiness
 
 M16-T26, branch `agents/session-readiness-9c8dce6f`, based on
-`7942fb5bfd1451af175f92180fcd3a11936f18ca`. **The cold short-session open is
-729 → 176 ms; worker admission on that click is 543 → 0.43 ms.** The process
+`7942fb5bfd1451af175f92180fcd3a11936f18ca`. **With the readiness hint completed
+before the click (signal → ready: 726.9 ms median), the cold short-session open
+is 729 → 176 ms; worker admission on that click is 543 → 0.43 ms.** The process
 still takes about 537 ms to prepare; that work now precedes the click.
 
 ### Admission and lifecycle
@@ -442,3 +443,25 @@ idle seconds consumed 30 ms additional child CPU (one sample, not a median).
 `unused-proof.json` and the complete spawn trace retain that evidence; the
 shared-harness script is `/tmp/session-readiness-unused.mjs`. Cleanup reports
 no owned survivors.
+
+### Review corrections
+
+Speculative admission now refuses session-owned, attached, retrying or crashed
+entries, including a recheck after asynchronous eviction. The regression
+crashes an attached real worker, issues a readiness hint, and proves the
+original retry still reloads its saved session and publishes recovery.
+`cwds()` excludes speculation; a global feature change silently retires unused
+prepared processes rather than promoting them or retaining stale startup
+configuration. Live-run and attachment guards also protect that invalidation.
+The provider's readiness effect and refs now live in `useWorkerReadiness`;
+archive/catalog visibility stays in the UI, while the host alone owns trust
+admission. N2/N3 were deliberately left unchanged.
+
+Revised validation: host **270 passed**; UI **1,412 passed, 1 existing skipped**;
+workspace build and identity check passed. The timing table remains the
+measurement of `00da6ba`, independently reproduced during review; it was not
+re-benchmarked for these recovery/inventory fixes. Its headline now carries
+the measured **726.9-ms signal-to-ready** condition explicitly. Keyboard/pointer
+and touch browser matrices also pass on the revised build at
+`accept/run-G3f2CI` and `accept/run-o60mcD` (both widths/themes, reduced motion,
+no owned process survivors).

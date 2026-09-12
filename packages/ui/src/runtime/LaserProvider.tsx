@@ -86,8 +86,7 @@ import {
 } from "./main-destination-controller.js";
 import { createShellSnapshot } from "./presentation-state.js";
 import { startVisiblePoll } from "./visible-poll.js";
-import { sessionsList } from "../components/shell/session-groups.js";
-import { canPrepareProject, createWorkerReadiness, expandedProject } from "./worker-readiness.js";
+import { useWorkerReadiness } from "./worker-readiness.js";
 import { createMainLandingDraftStore, useMainLandingDrafts } from "./main-landing-drafts.js";
 import { sessionKindTab } from "./session-tab-memory.js";
 import { useThemeSync } from "./prefs.js";
@@ -504,9 +503,6 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   const state = useSyncExternalStore(store.subscribe, shellSnapshot, shellSnapshot);
 
   const currentProject = mainCodeProject(state.destination);
-  // Capture actual restored memory before the catalog's default-project fallback.
-  const readinessMemory = useRef(currentProject);
-  const readinessController = useRef<ReturnType<typeof createWorkerReadiness> | undefined>(undefined);
   const [projectList, setProjectList] = useState<ProjectInfo[]>([]);
   const [trustRequests, setTrustRequests] = useState<TrustRequest[]>([]);
   const landingDrafts = useMemo(() => createMainLandingDraftStore(), []);
@@ -1266,13 +1262,11 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   const actionsRef = useRef<LaserActions>(actions);
   actionsRef.current = actions;
 
+  const prepareProject = useWorkerReadiness({ currentProject, connection: state.connection, sessionsLoaded: state.sessionsLoaded, projects: projectList, client, readState, archive });
   const setCurrentProject = useCallback((cwd: string | undefined) => {
     destination.setCodeProject(cwd);
-    if (cwd) {
-      if (readinessController.current) readinessController.current.want(cwd);
-      else readinessMemory.current = cwd;
-    }
-  }, [destination.setCodeProject]);
+    prepareProject(cwd);
+  }, [destination.setCodeProject, prepareProject]);
 
   // The host owns the list; a session opened before the list arrives (or in a
   // directory the host has not indexed yet) still gets a rail icon. Via a
@@ -1288,27 +1282,6 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     for (const project of projectList) map[project.cwd] = project;
     return map;
   }, [projectList]);
-
-  useEffect(() => {
-    if (state.connection !== "open" || !state.sessionsLoaded || projectList.length === 0) return;
-    const readiness = createWorkerReadiness(
-      (cwd) => client.request("pi/worker/prepare", { cwd }),
-      (cwd) => canPrepareProject(cwd, projectList, readState().sessions, (path) => archive.has(path)),
-    );
-    readinessController.current = readiness;
-    if (readinessMemory.current) {
-      readiness.want(readinessMemory.current);
-      readinessMemory.current = undefined;
-    }
-    let previous = sessionsList.get();
-    const unsubscribe = sessionsList.subscribe(() => {
-      const next = sessionsList.get();
-      const cwd = expandedProject(previous, next);
-      previous = next;
-      if (cwd) readiness.want(cwd);
-    });
-    return () => { unsubscribe(); readiness.dispose(); readinessController.current = undefined; };
-  }, [archive, client, projectList, readState, state.connection, state.sessionsLoaded]);
 
   // Default Code memory to the first project without selecting an unrelated session.
   useEffect(() => {

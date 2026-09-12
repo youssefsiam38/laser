@@ -137,13 +137,24 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("host end to end", () => {
       await client.request("pi/project/trust", { cwd, trusted: true });
       const before = client.inbound.length;
       await client.request("pi/worker/prepare", { cwd });
-      expect(host.pool.cwds()).toEqual([cwd]);
+      expect(host.pool.cwds()).toEqual([]);
+      expect(host.pool.liveClients().map((entry) => entry.cwd)).toEqual([cwd]);
       expect(await client.request("pi/worker/list", {})).toEqual({ workers: [] });
       expect(host.pool.openSessions(cwd)).toEqual([]);
       expect(client.inbound.slice(before).filter((m) => "method" in m)).toEqual([]);
       expect(client.inbound.some((m) => "method" in m && m.method === "pi/project/trust_request")).toBe(false);
       expect(stub.requests).toEqual([]);
+      const unused = host.pool.liveClients()[0]!.client;
+      await client.request("feature/set", { id: "goals", enabled: false, scope: "global" });
+      expect(unused.alive).toBe(false); // stale config retired, not promoted/restarted
+      expect(host.pool.liveClients()).toEqual([]);
+      expect(host.pool.cwds()).toEqual([]);
+      expect(await client.request("pi/worker/list", {})).toEqual({ workers: [] });
+      expect(client.inbound.slice(before).some((m) => "method" in m && m.method === "pi/worker/status")).toBe(false);
+      // A later explicit intent prepares the new configuration normally.
+      await client.request("pi/worker/prepare", { cwd });
       const pid = host.pool.liveClients()[0]!.client.pid;
+      expect(pid).not.toBe(unused.pid);
       const { state } = await client.request<{ state: SessionState }>("session/new", { cwd });
       expect(state.cwd).toBe(cwd);
       expect(host.pool.workerInfo(cwd)?.pid).toBe(pid);
