@@ -526,3 +526,11 @@ Confirmed the repeated `isSessionDirectory` calls and `list().find` lookups. Lis
 Same existing 5,000-row/one-cwd/four-root fixture, 20 warmed samples (`containment.mjs`): **40,000 → 8 realpath calls**, median **138.99 → 21.96 ms**, p95 order statistic **158.59 → 37.92 ms**. This is synthetic route work, not client latency. Regression tests assert one classification per distinct cwd per operation and fresh decisions next operation; known-path admission refuses deeper/outside paths and notices deletion without a list scan. Existing containment/trust tests remain green. Many-project timing and live symlink-swap-under-load profiling are not claimed.
 
 `pnpm -F @lasercode/host test` (236), worker test (682, 3 skipped), identity check and recursive build pass (`f02-*.log`). No wire methods changed.
+
+### F08 — bounded Git new-file reads
+
+Confirmed allocation-before-admission in `worker/src/git.ts`. Now canonical containment, regular-file metadata and same-device/inode handle checks precede reading; no-follow/nonblocking opens avoid final symlinks/FIFOs. Reads use one reusable 8 KiB buffer, a per-file sentinel, and a 16 MiB aggregate budget (including binary headers). A budget-cut/growing file contributes no partial line count. Sequential file admission intentionally bounds concurrency to one and keeps budget selection deterministic; baseline exclusions and newline semantics remain unchanged.
+
+Twenty samples of the same 32 MiB new file: median **16.41 → 0.047 ms**, p95 order statistic **18.73 → 0.495 ms** (`git-large.mjs`). The original read allocated/read 32 MiB; the new path opens/reads **zero content bytes** (regression spies on open after metadata admission). Tests also cover a 2 GiB sparse file, binary, symlink, missing file, FIFO, growth after handle stat, accurate small files and aggregate exhaustion. Fixed the initial test spy setup (native ESM namespace is nonconfigurable); the corrected fixture wraps the real filesystem module, not fake reads.
+
+Host (236), worker (683, 3 skipped), identity and recursive build pass (`f08-*.log`). No protocol changes; slow-disk/host-heartbeat measurements remain outstanding integration evidence.
