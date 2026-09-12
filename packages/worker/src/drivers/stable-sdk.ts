@@ -454,14 +454,17 @@ export class StableSdkDriver implements SessionDriver {
     const overrides = savedOverrides && typeof savedOverrides === "object" ? savedOverrides as SessionFirstTurnOverrides : undefined;
     this.explicitModelOverride = overrides?.model;
     this.explicitThinkingOverride = overrides?.thinkingLevel;
-    // A durable empty is an existing session, not another invocation of the
-    // selected agent's current defaults. Restore the exact saved runtime tuple.
-    const savedEmptyRuntime = !openingEntries.some((entry) => entry.type === "message")
-      && openingEntries.some((entry) => entry.type === "model_change" || entry.type === "thinking_level_change");
-    if (options.sessionPath && savedEmptyRuntime) {
+    // A saved session (including a durable empty) is not another invocation
+    // of the selected agent's defaults. Restore its active branch's tuple,
+    // including the current fallback model rather than the opening model.
+    if (options.sessionPath) {
       const context = sessionManager.buildSessionContext();
       if (context.model) this.runtimeModelOverride = { provider: context.model.provider, id: context.model.modelId };
-      this.runtimeThinkingOverride = context.thinkingLevel as ThinkingLevel;
+      // An agent definition is an opening default, not a load-time override.
+      // Pi's active branch owns the durable choice, including model clamping.
+      if (sessionManager.getBranch().some((entry) => entry.type === "thinking_level_change")) {
+        this.runtimeThinkingOverride = context.thinkingLevel as ThinkingLevel;
+      }
     }
     this.runtimeFactory = createRuntime;
     const runtime = await createAgentSessionRuntime(createRuntime, {
@@ -1076,6 +1079,7 @@ export class StableSdkDriver implements SessionDriver {
   async setThinkingLevel(level: ThinkingLevel): Promise<SessionState> {
     this.session().setThinkingLevel(level);
     this.explicitThinkingOverride = level;
+    this.runtimeThinkingOverride = this.session().thinkingLevel as ThinkingLevel;
     this.persistExplicitOverrides();
     return this.state();
   }
@@ -1384,6 +1388,7 @@ export class StableSdkDriver implements SessionDriver {
   private fallbackEngine(): FallbackEngine {
     return createFallbackEnginePort({
       session: () => this.session(),
+      explicitThinkingLevel: () => this.explicitThinkingOverride,
       agentDir: this.agentDir,
       cwd: this.cwd,
       projectTrusted: this.projectTrusted,
