@@ -6,7 +6,7 @@
  */
 
 import type { SessionGoal } from "./features.js";
-import { PRODUCT } from "./identity.js";
+import { PRODUCT_DISPLAY_NAME } from "./identity.js";
 import type { BackgroundTaskUpdate } from "./tasks.js";
 import type { McpRuntimeSnapshot } from "./mcp.js";
 
@@ -65,17 +65,33 @@ export interface ProviderRequestContext {
   instructionSources?: InstructionSourceMap[];
 }
 
-export const INSTRUCTION_APP_ORIGIN = PRODUCT.name;
-export type InstructionOrigin = "engine" | "project" | "skill" | "agent" | "variable" | typeof INSTRUCTION_APP_ORIGIN | "extension" | "environment" | "unrecorded";
+/** Stable wire identities, canonical display order and editable token names. */
+export const ORIGINS = [
+  { id: "engine", label: "Engine", token: "provenance-engine" },
+  { id: "project", label: "Project", token: "provenance-project" },
+  { id: "skill", label: "Skills", token: "provenance-skill" },
+  { id: "agent", label: "Agent", token: "provenance-agent" },
+  { id: "variable", label: "Variables", token: "provenance-variable" },
+  { id: "app", label: PRODUCT_DISPLAY_NAME, token: "provenance-app" },
+  { id: "extension", label: "Extensions", token: "provenance-extension" },
+  { id: "environment", label: "Environment", token: "provenance-environment" },
+  { id: "unrecorded", label: "Not recorded", token: "provenance-unrecorded" },
+] as const;
+export const INSTRUCTION_APP_ORIGIN = "app";
+export type InstructionOrigin = (typeof ORIGINS)[number]["id"];
 export interface InstructionSource {
-  kind: "agent" | "file" | "skill" | "variable" | typeof INSTRUCTION_APP_ORIGIN | "extension" | "environment" | "unrecorded";
+  /** Legacy classification; new consumers use origin. */
+  kind?: InstructionOrigin | "file" | undefined;
   /** Absent only in captures made before origin identities were recorded. */
-  origin?: InstructionOrigin;
+  origin?: InstructionOrigin | undefined;
   label: string;
-  detail?: string;
-  path?: string;
+  agentName?: string | undefined;
+  fieldKey?: string | undefined;
+  module?: string | undefined;
+  reason?: "template-ranges-unavailable" | "verification-unavailable" | undefined;
+  path?: string | undefined;
   /** A named contribution with no source file to open. */
-  inline?: true;
+  inline?: true | undefined;
 }
 export interface InstructionSourceSpan {
   /** UTF-16 offsets, matching browser text ranges. */

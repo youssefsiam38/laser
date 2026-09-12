@@ -13,6 +13,11 @@ it("attributes the actual rendered agent definition, tools, loaded project files
   expect(spans.find(span => span.source.path === "/project/AGENTS.md")).toMatchObject({ source: { origin: "project" } });
   expect(spans.find(span => span.source.path === "/skills/testing/SKILL.md")).toMatchObject({ source: { origin: "skill" } });
   expect(spans.find(span => text.slice(span.start, span.end) === values.availableTools)?.source).toMatchObject({ kind: "variable", origin: "variable", label: "Variable · Available tools", inline: true });
+  expect(spans[0]?.source.agentName).toBe("orchestrator");
+  expect(spans.find(span => span.source.origin === "variable")?.source).toMatchObject({
+    agentName: "orchestrator", fieldKey: "availableTools",
+  });
+  expect(spans.every(span => !("detail" in span.source))).toBe(true);
   expect(spans.some(span => span.source.origin === INSTRUCTION_APP_ORIGIN)).toBe(false);
   expect(spans.some(span => span.source.kind === "unrecorded")).toBe(false);
 });

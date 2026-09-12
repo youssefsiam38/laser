@@ -16,6 +16,16 @@ it("rejects redacted text, gaps, out-of-range offsets and wrong hashes", async (
     expect((await requestSourceSpans({ path: "instructions", value: text }, [{ ...map, spans }]))[0]?.source.kind).toBe("unrecorded");
   }
 });
+it("rejects malformed wire identities before digest-valid ranges reach the renderer", async () => {
+  for (const invalid of [
+    { ...map, path: null },
+    { ...map, spans: null },
+    { ...map, spans: [{ ...map.spans[0], source: { origin: "invented", label: "Unknown" } }] },
+  ]) {
+    const spans = await requestSourceSpans({ path: "instructions", value: text }, [invalid as unknown as InstructionSourceMap]);
+    expect(spans[0]?.source.origin).toBe("unrecorded");
+  }
+});
 it("projects Anthropic blocks, role messages and Gemini parts without duplicating text", async () => {
   for (const [value, path] of [[[{ type: "text", text }], ["system", 0, "text"]], [{ role: "system", content: [{ type: "text", text }] }, ["system", "content", 0, "text"]], [{ parts: [{ text }] }, ["system", "parts", 0, "text"]]] as const) {
     expect(await requestSourceSpans({ path: "system", value }, [{ ...map, path: [...path] }])).toEqual(map.spans);

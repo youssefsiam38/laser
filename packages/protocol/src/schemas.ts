@@ -7,19 +7,7 @@
  * refuse a new method in messages.ts that has no schema here.
  */
 import { z } from "zod";
-import { INSTRUCTION_APP_ORIGIN } from "./pi-extension.js";
-
-/** Legacy captures omit origin; new captures always include it. */
-export const instructionSourceSchema = z.object({
-  kind: z.enum(["agent", "file", "skill", "variable", INSTRUCTION_APP_ORIGIN, "extension", "environment", "unrecorded"]),
-  origin: z.enum(["engine", "project", "skill", "agent", "variable", INSTRUCTION_APP_ORIGIN, "extension", "environment", "unrecorded"]).optional(),
-  label: z.string(), detail: z.string().optional(), path: z.string().optional(), inline: z.literal(true).optional(),
-});
-export const instructionSourceMapSchema = z.object({
-  path: z.array(z.union([z.string(), z.number().int().nonnegative()])),
-  sha256: z.string().regex(/^[a-f0-9]{64}$/),
-  spans: z.array(z.object({ start: z.number().int().nonnegative(), end: z.number().int().positive(), source: instructionSourceSchema })),
-});
+import { ORIGINS, type InstructionOrigin } from "./pi-extension.js";
 import { WEB_SEARCH_PROVIDER_IDS } from "./web-search.js";
 import { MCP_IMPORT_SOURCES, MCP_PROTOCOL_VERSIONS, MCP_STARTUP_MODES, MCP_TOOL_EXPOSURES } from "./mcp.js";
 import {
@@ -39,6 +27,21 @@ import { ErrorCodes, type JsonRpcRequest } from "./jsonrpc.js";
 import { PREFS_MAX_BYTES } from "./messages.js";
 import type { ClientMethod, ClientRequests } from "./messages.js";
 import { TASK_COMMAND_MAX, TASK_LINE_MAX } from "./tasks.js";
+
+const originIds = ORIGINS.map(origin => origin.id) as [InstructionOrigin, ...InstructionOrigin[]];
+/** Legacy captures omit origin; new captures always include it. */
+export const instructionSourceSchema = z.object({
+  kind: z.enum(["file", ...originIds]).optional(),
+  origin: z.enum(originIds).optional(),
+  label: z.string(), path: z.string().optional(), inline: z.literal(true).optional(),
+  agentName: z.string().optional(), fieldKey: z.string().optional(), module: z.string().optional(),
+  reason: z.enum(["template-ranges-unavailable", "verification-unavailable"]).optional(),
+});
+export const instructionSourceMapSchema = z.object({
+  path: z.array(z.union([z.string(), z.number().int().nonnegative()])),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  spans: z.array(z.object({ start: z.number().int().nonnegative(), end: z.number().int().positive(), source: instructionSourceSchema })),
+});
 
 // ---------- the product's identity ----------
 

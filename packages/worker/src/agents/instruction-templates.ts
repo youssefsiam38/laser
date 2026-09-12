@@ -114,7 +114,7 @@ export function createInstructionTemplateExtension(options: TemplateExtensionOpt
         try {
           return recordInstructionWrite({ systemPrompt }, templateProvenance(template, target, values, systemPrompt, options.agent.definition.name, event.systemPromptOptions));
         } catch {
-          return recordInstructionWrite({ systemPrompt }, { kind: "agent", origin: "agent", inline: true, label: `Agent · ${options.agent.definition.name}`, detail: "The saved instruction template rendered with its selected variables; detailed field ranges could not be recorded." });
+          return recordInstructionWrite({ systemPrompt }, { kind: "agent", origin: "agent", inline: true, label: `Agent · ${options.agent.definition.name}`, agentName: options.agent.definition.name, reason: "template-ranges-unavailable" });
         }
       });
     },

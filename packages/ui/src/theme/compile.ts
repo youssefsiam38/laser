@@ -8,10 +8,13 @@
  * properties (see `globals.css`, `@theme inline reference`), so `text-sm`,
  * `p-3`, `rounded-lg` and `duration-(--motion-fast)` all move with the theme.
  */
-import { pickOnColor, raiseContrast, toHex } from "./color.js";
+import { ORIGINS } from "@lasercode/protocol";
+import { oklch, pickOnColor, raiseContrast, toHex } from "./color.js";
 import { fontStack } from "./fonts.js";
 import {
   ANSI,
+  PROVENANCE_HUES,
+  PROVENANCE_SCALE,
   CONTENT_MEASURE,
   DURATIONS,
   EASE_MORPH,
@@ -106,15 +109,11 @@ export function resolveTokens(theme: Theme): Required<ThemeTokens> {
     "syntax-type": t["syntax-type"] ?? syntax.type,
     "syntax-variable": t["syntax-variable"] ?? syntax.variable,
     "syntax-punctuation": t["syntax-punctuation"] ?? syntax.punctuation,
-    "provenance-engine": t["provenance-engine"] ?? syntax.comment,
-    "provenance-project": t["provenance-project"] ?? syntax.string,
-    "provenance-skill": t["provenance-skill"] ?? syntax.type,
-    "provenance-agent": t["provenance-agent"] ?? syntax.function,
-    "provenance-variable": t["provenance-variable"] ?? syntax.number,
-    "provenance-app": t["provenance-app"] ?? text.live,
-    "provenance-extension": t["provenance-extension"] ?? syntax.keyword,
-    "provenance-environment": t["provenance-environment"] ?? syntax.number,
-    "provenance-unrecorded": t["provenance-unrecorded"] ?? text["ink-3"],
+    ...Object.fromEntries(ORIGINS.map(({ id, token }) => {
+      const scale = PROVENANCE_SCALE[base];
+      const neutral = id === "unrecorded";
+      return [token, t[token] ?? oklch(neutral ? scale.neutral : scale.lightness, neutral ? 0 : scale.chroma, PROVENANCE_HUES[id])];
+    })),
     "shadow-float": t["shadow-float"] ?? shadows.float,
     "shadow-float-sm": t["shadow-float-sm"] ?? shadows.floatSm,
   } as Required<ThemeTokens>;

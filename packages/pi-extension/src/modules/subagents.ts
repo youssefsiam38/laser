@@ -569,7 +569,7 @@ export const subagentsModule: LaserModule = {
       if (!block) return undefined;
       return recordInstructionWrite({ systemPrompt: `${event.systemPrompt}\n\n${block}` }, {
         kind: INSTRUCTION_APP_ORIGIN, origin: INSTRUCTION_APP_ORIGIN, label: `${PRODUCT_DISPLAY_NAME} · Agent role`, inline: true,
-        detail: "The session's role, delegation rules and working directory, supplied by the agent harness.",
+        module: "agent-role",
       });
     });
 

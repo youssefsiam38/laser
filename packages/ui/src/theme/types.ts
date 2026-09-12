@@ -4,6 +4,8 @@
  * store persists it, `compileTheme` turns it into the properties.
  */
 
+import type { ORIGINS } from "@lasercode/protocol";
+
 export type ThemeBase = "dark" | "light";
 export type Density = "comfortable" | "compact";
 export type Radius = "sharp" | "soft" | "round";
@@ -55,7 +57,7 @@ export type OptionalColorTokenName =
   | "syntax-type"
   | "syntax-variable"
   | "syntax-punctuation"
-  | `provenance-${"engine" | "project" | "skill" | "agent" | "app" | "variable" | "extension" | "environment" | "unrecorded"}`
+  | (typeof ORIGINS)[number]["token"]
   | "shadow-float"
   | "shadow-float-sm";
 

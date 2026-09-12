@@ -232,13 +232,15 @@ function RequestBody({entry}:{entry:LogEntry}) {
         {/* Full search indexes the payload ONCE, never a concatenation of tabs.
             Section cards index their main text, not previews or duplicate JSON. */}
         {fullSearch||section==="json"?<RequestJson value={payload} search={searching} literalText={truncated&&typeof payload==="string"?payload:undefined}/>
-          : fields.length ? <div className="flex flex-col gap-3">{fields.map(field=><RequestFieldCard key={`${entry.id}:${field.path}`} field={field} expanded={section==="instructions"} reveal={searching} markdown={(section==="instructions"||section==="conversation")&&contentView==="markdown"} sources={section==="instructions"?entry.requestContext?.instructionSources:undefined}/>)}</div>
+          : fields.length ? <div className="flex flex-col gap-3">{fields.map(field=><RequestFieldCard key={`${entry.id}:${field.path}`} field={field} expanded={section==="instructions"} reveal={searching} markdown={(section==="instructions"||section==="conversation")&&contentView==="markdown"} sources={section==="instructions"?entry.requestContext?.instructionSources ?? EMPTY_SOURCES:undefined}/>)}</div>
           : <p className="py-8 text-center text-sm text-ink-3">No fields recorded in this section. Provider-specific fields remain in Parameters and Full JSON.</p>}
       </div>
       <p className="shrink-0 border-t border-line px-4 py-2 text-xs text-ink-3">Captured at the engine's pre-request hook, not a network trace.{entry.requestContext?.instructionSources ? " Includes registered extension rewrites; transport-added headers are not represented." : " Instruction sources were not recorded for this capture."} A message may trigger several calls and retries.</p>
     </div>
   </div>;
 }
+
+const EMPTY_SOURCES: InstructionSourceMap[] = [];
 
 function RequestFieldCard({field,expanded,markdown,reveal,sources}:{field:RequestField;expanded:boolean;markdown:boolean;reveal:boolean;sources?:InstructionSourceMap[]|undefined}) {
   const [open,setOpen]=useState(expanded);
@@ -247,8 +249,8 @@ function RequestFieldCard({field,expanded,markdown,reveal,sources}:{field:Reques
   useEffect(()=>{
     let live=true;
     setSpans(undefined);
-    void requestSourceSpans(field,sources ?? []).then(value=>{if(live)setSpans(value);}).catch(()=>{
-      if(live&&text)setSpans([{start:0,end:text.length,source:{kind:"unrecorded",label:"Source verification unavailable on this connection"}}]);
+    if(sources) void requestSourceSpans(field,sources).then(value=>{if(live)setSpans(value);}).catch(()=>{
+      if(live&&text)setSpans([{start:0,end:text.length,source:{kind:"unrecorded",origin:"unrecorded",reason:"verification-unavailable",label:"Source verification unavailable on this connection"}}]);
     });
     return()=>{live=false;};
   },[field,sources,text]);

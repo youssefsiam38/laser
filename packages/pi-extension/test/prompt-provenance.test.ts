@@ -81,7 +81,7 @@ it("observes ordered prompt and in-place request changes, captures once at the e
     expect(capture).toHaveBeenCalledTimes(turn + 1);
     const map = capture.mock.calls.at(-1)![2][0];
     expect(map.sha256).toBe(createHash("sha256").update(payload.instructions).digest("hex"));
-    expect(map.spans.at(-1).source.label).toBe("first.ts");
+    expect(map.spans.at(-1).source.label).toBe("first");
     expect(map.spans.some((span: { source: { path?: string } }) => span.source.path === "/project/AGENTS.md")).toBe(true);
   }
 });

@@ -6,17 +6,18 @@
  * closed, rather than assigning somebody else's words to an AGENTS.md file.
  */
 import { createHash } from "node:crypto";
-import { basename, dirname } from "node:path";
+import { basename, dirname, extname } from "node:path";
 import { formatSkillsForPrompt, type BeforeAgentStartEvent, type BeforeProviderRequestEvent, type ExtensionContext, type LoadExtensionsResult, type ResourceLoader } from "@earendil-works/pi-coding-agent";
 import type { InstructionSource, InstructionSourceMap, InstructionSourceSpan } from "@lasercode/protocol";
 
 type Trace = { text: string; spans: InstructionSourceSpan[] };
 type Sources = Pick<ResourceLoader, "getSystemPromptSource" | "getAppendSystemPrompt" | "getAppendSystemPromptSources">;
 type Capture = (event: BeforeProviderRequestEvent, ctx: ExtensionContext, sources: InstructionSourceMap[]) => void;
-const agent: InstructionSource = { kind: "agent", origin: "engine", label: "Engine", inline: true, detail: "Base instructions and tool guidance assembled by the engine." };
-const unknown: InstructionSource = { kind: "unrecorded", origin: "unrecorded", label: "Not recorded", inline: true, detail: "This part was written by something the app could not observe (an engine override or an older capture)." };
+const agent: InstructionSource = { kind: "agent", origin: "engine", label: "Engine", inline: true };
+const unknown: InstructionSource = { kind: "unrecorded", origin: "unrecorded", label: "Not recorded", inline: true };
 /** Out-of-band identity supplied by the writer; never added to the engine event
- * or provider request. Weak keys keep sessions and completed writes isolated. */
+ * or provider request. Weak keys keep sessions and completed writes isolated.
+ * Writer and observer must resolve this same module instance. */
 const writes = new WeakMap<object, InstructionSource | InstructionSourceSpan[]>();
 export function recordInstructionWrite<T extends { systemPrompt: string }>(result: T, source: InstructionSource | InstructionSourceSpan[]): T {
   writes.set(result, source);
@@ -24,9 +25,12 @@ export function recordInstructionWrite<T extends { systemPrompt: string }>(resul
 }
 function extensionSource(path: string, baseDir?: string): InstructionSource {
   if (path.startsWith("<")) return unknown;
-  const directory = basename(baseDir ?? dirname(path));
-  return { kind: "extension", origin: "extension", label: directory && directory !== "/" ? directory : basename(path), path,
-    detail: "Instructions contributed by this extension." };
+  let folder = dirname(path);
+  const stem = basename(path, extname(path));
+  const standalone = basename(folder) === "extensions" && stem !== "index";
+  while (["src", "extensions"].includes(basename(folder)) && dirname(folder) !== folder) folder = dirname(folder);
+  const directory = baseDir ? basename(baseDir) : standalone ? stem : basename(folder);
+  return { kind: "extension", origin: "extension", label: directory || stem, path };
 }
 const whole = (text: string, source: InstructionSource): Trace => ({ text, spans: text ? [{ start: 0, end: text.length, source }] : [] });
 
@@ -51,7 +55,7 @@ export function recordBasePrompt(event: BeforeAgentStartEvent, loader?: Sources)
     append("\n\n<project_context>\n\nProject-specific instructions and guidelines:\n\n", agent);
     for (const file of options.contextFiles) {
       append(`<project_instructions path="${file.path}">\n`, agent);
-      append(file.content, { kind: "file", origin: "project", label: basename(file.path), path: file.path, detail: "Project instructions loaded for this request." });
+      append(file.content, { kind: "file", origin: "project", label: basename(file.path), path: file.path });
       append("\n</project_instructions>\n\n", agent);
     }
     append("</project_context>\n", agent);
@@ -68,7 +72,7 @@ export function recordBasePrompt(event: BeforeAgentStartEvent, loader?: Sources)
       const at = catalog.indexOf(block, cursor);
       if (start < 0 || at < cursor) return whole(event.systemPrompt, unknown);
       append(catalog.slice(cursor, at), { ...agent, label: "Engine · Skill discovery" });
-      append(block, { kind: "skill", origin: "skill", label: `Skill · ${skill.name}`, path: skill.filePath, detail: "The skill's catalog entry. Its full instructions are read separately when used." });
+      append(block, { kind: "skill", origin: "skill", label: `Skill · ${skill.name}`, path: skill.filePath });
       cursor = at + block.length;
     }
     append(catalog.slice(cursor), { ...agent, label: "Engine · Skill discovery" });

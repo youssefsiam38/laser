@@ -4,7 +4,13 @@ import type { BeforeAgentStartEvent, Extension, ExtensionContext, LoadExtensions
 import { createPromptProvenanceObserver, recordInstructionWrite } from "../src/prompt-provenance.js";
 const { buildSystemPrompt } = await import(new URL("../node_modules/@earendil-works/pi-coding-agent/dist/core/system-prompt.js", import.meta.url).href);
 
-it("attributes inline writes by explicit identity, third-party writes by package directory, and unobserved overrides honestly", async () => {
+it.each([
+  ["/packages/reviewer/src/index.ts", "/packages/reviewer", "reviewer"],
+  ["/custom/reviewer/src/index.ts", undefined, "reviewer"],
+  ["/custom/extensions/reviewer.ts", undefined, "reviewer"],
+  ["/custom/reviewer/index.ts", undefined, "reviewer"],
+  ["/custom/reviewer/extensions/src/index.ts", undefined, "reviewer"],
+])("attributes the loaded writer %s without generic folder labels or invented overrides", async (path, baseDir, label) => {
   const observer = createPromptProvenanceObserver();
   const capture = vi.fn(); observer.onRequest(capture);
   const extension = (path: string, handler: (event: BeforeAgentStartEvent) => unknown, baseDir?: string) => ({ path, resolvedPath: path, sourceInfo: { baseDir }, handlers: new Map([["before_agent_start", [handler]]]) }) as unknown as Extension;
@@ -13,7 +19,7 @@ it("attributes inline writes by explicit identity, third-party writes by package
     { start: 21, end: 39, source: { kind: "variable", origin: "variable", label: "Variable · Tool guidance", inline: true } },
   ]));
   const role = extension(`<inline:${WIRE_NAMESPACE}>`, event => recordInstructionWrite({ systemPrompt: event.systemPrompt + "\nRole block." }, { kind: INSTRUCTION_APP_ORIGIN, origin: INSTRUCTION_APP_ORIGIN, label: `${PRODUCT_DISPLAY_NAME} · Agent role`, inline: true }));
-  const external = extension("/packages/reviewer/src/index.ts", event => ({ systemPrompt: event.systemPrompt + "\nReview carefully." }), "/packages/reviewer");
+  const external = extension(path!, event => ({ systemPrompt: event.systemPrompt + "\nReview carefully." }), baseDir);
   const extensions = [template, role, external];
   observer.extensionsOverride({ extensions } as LoadExtensionsResult);
   for (const handler of external.handlers.get("session_start") ?? []) await handler();
@@ -29,10 +35,10 @@ it("attributes inline writes by explicit identity, third-party writes by package
     return capture.mock.calls.at(-1)![2][0];
   };
   const map = await request(event.systemPrompt);
-  expect(map.spans.map((span: { source: { label: string } }) => span.source.label)).toEqual(["Agent · coordinator", "Variable · Tool guidance", `${PRODUCT_DISPLAY_NAME} · Agent role`, "reviewer"]);
+  expect(map.spans.map((span: { source: { label: string } }) => span.source.label)).toEqual(["Agent · coordinator", "Variable · Tool guidance", `${PRODUCT_DISPLAY_NAME} · Agent role`, label]);
   expect(map.spans.map((span: { start: number; end: number }) => event.systemPrompt.slice(span.start, span.end)).join("")).toBe(event.systemPrompt);
   expect(map.spans.every((span: { source: { origin?: string } }) => span.source.origin)).toBe(true);
   const override = await request("Unobserved direct override");
   expect(override.spans[0].source).toMatchObject({ origin: "unrecorded", label: "Not recorded" });
-  expect(override.spans[0].source.detail).toContain("could not observe");
+  expect(override.spans[0].source).not.toHaveProperty("detail");
 });

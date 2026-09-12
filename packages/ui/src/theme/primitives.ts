@@ -6,6 +6,17 @@
  * imports from here; it reads the semantic tokens the compiler writes.
  */
 import { oklch } from "./color.js";
+import type { InstructionOrigin } from "@lasercode/protocol";
+
+/** Categorical hues, distinct from the status ramp; unrecorded stays neutral. */
+export const PROVENANCE_HUES = {
+  engine: 245, project: 145, skill: 195, agent: 285, variable: 55,
+  app: 345, extension: 15, environment: 100, unrecorded: 0,
+} satisfies Record<InstructionOrigin, number>;
+export const PROVENANCE_SCALE = {
+  dark: { lightness: 0.76, chroma: 0.14, neutral: 0.58 },
+  light: { lightness: 0.51, chroma: 0.13, neutral: 0.62 },
+};
 
 /* ----------------------------------------------------------------------------
  * Neutral ramps. One lightness ladder, tinted per family. Step 0 is darkest.
