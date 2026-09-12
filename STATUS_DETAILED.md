@@ -2223,6 +2223,9 @@ lane T's own if both were written.
 | M16-T15 | No "Detached" group | in-progress | worker no-detached | — | the person: remove the idea; the tree goes with its parent |
 | M16-T16 | Conversations load like a chat app | in-progress | worker chat-loading | — | research first, then paging + tail-first hydration; numbers required |
 | M16-T17 | Per-project environment command | in-progress | workenv-2026-09-12-a | — | see notes |
+| M16-T20 | Wide audit, host and worker lane | in-progress | worker perf-host-worker | — | F01/F02/F08/F09/F10/F11/F20/F21 |
+| M16-T21 | Wide audit, renderer lane | in-progress | worker perf-renderer | — | F04/F05/F13/F14/F15/F17/F23/F24; F06 belongs to M16-T16 |
+| M16-T22 | Wide audit, protocol/delivery/startup lane | in-progress | worker perf-delivery | — | F03/F07/F12/F16/F18/F19/F22 |
 | M16-T19 | Open any file on the machine | in-progress | worker open-any-file | — | `files.ts` read refuses outside `cwd`; the person: Laser must open any file on the machine |
 | M16-T18 | Release 0.5.4 | done | orchestrator | v0.5.4 public: source `d5dec9c`; verified; https://github.com/youssefsiam38/laser/releases/tag/v0.5.4 | provenance, RTL, worktrees know no stack, find bar closed |
 | M16-T12 | Release 0.5.3 | done | orchestrator | v0.5.3 public: candidate `c572029` from source `cd2a7b0`; verified; https://github.com/youssefsiam38/laser/releases/tag/v0.5.3 | live check `/tmp/m16b/REPORT.md` |
@@ -2288,7 +2291,6 @@ lane T's own if both were written.
 | MX-T5 | Accessibility pass | todo | — | — | — |
 | MX-T6 | Element inventory reconciliation | done | five lanes + integrator | `pnpm -r build` / `-r typecheck` / `-r test` all exit 0, 686 tests; every row of `docs/ux-elements.md` names either the file that implements it or the reason it does not apply; no element file in `packages/ui/src/components/assistant-ui/elements/` is unimported | Five lanes adopted the catalog; integration wired the twelve elements they had adopted but left unmounted, and deleted eight whose data does not exist rather than leave unmountable files standing in the tree. See the wave-3 notes below |
 | MX-T7 | One module defines the product's identity | done | claude-2026-09-05-identity | `product.json` at the repository root; `pnpm identity:generate` rewrites 14 files; `pnpm identity:check` runs inside `pnpm -r build` and `pnpm -r test`; renaming to `wavelet` and back proved end to end — see notes | The rename is one edit plus one command. A frozen `wireNamespace` is the deliberate exception (D-48) |
-
 | MX-T8 | Cross-package performance audit | done | perf-wide-audit | `docs/performance-wide-audit.md`; isolated `probes.mts` and `extra-probes.mts` exit 0 | 24 findings; report only; see notes; D-229 |
 
 #### MX-T8 notes
