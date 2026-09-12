@@ -644,6 +644,8 @@ Dependencies: M8 (companion extension), M13-T3 (worker harness and stub-provider
 | M14-T6 | Live end-to-end proof with Playwright | a real session drives Playwright over stdio and over HTTP from the installed app; sign-in proven against one OAuth server; findings recorded in `docs/mcp.md` |
 | M14-T7 | Release M14 as its own release (D-222) | T1–T6 done; the routine release orchestrator runs from the reviewed source with release notes; exact-source CI, immutable tag, both-architecture public assets verified through digests, provenance and notes |
 
+| M14-T8 | Shell environment and product-owned MCP client identity | desktop/CLI host startup resolves the user shell environment without logging secrets or stopping existing work; inheritance and explicit isolation are tested through real MCP subprocesses; every inspector/session MCP handshake derives its client identity from product metadata, over stdio/HTTP/SSE, with packaged regression coverage |
+
 ## M15 · After the MCP release: artifacts, dictation language, model fallback chains, two sidebar and composer fixes
 
 Goal: the batch the person queued behind M14. It starts only after M14 ships
