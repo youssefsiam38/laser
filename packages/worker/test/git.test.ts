@@ -54,6 +54,32 @@ describe("bounded new-file admission", () => {
   });
 });
 
+it("starts baseline diff independently and overlaps upstream counts with URL lookup", async () => {
+  const pending = new Map<string, (value: string) => void>();
+  let measuring = false;
+  const service = new GitService({ cwd: tmpdir(), ttlMs: 0, run: async (args) => {
+    if (args.includes("--is-inside-work-tree")) return "true";
+    if (args[0] === "stash") return "baseline";
+    if (args.includes("@{upstream}")) return "origin/main";
+    if (args[0] === "symbolic-ref") return "main";
+    if (measuring && ["diff", "rev-list", "remote"].includes(args[0]!)) {
+      return new Promise<string>((resolve) => pending.set(args[0]!, resolve));
+    }
+    return "";
+  } });
+  await service.baseline("s");
+  measuring = true;
+  const result = service.status("s");
+  try {
+    await vi.waitFor(() => expect([...pending.keys()].sort()).toEqual(["diff", "remote", "rev-list"]));
+  } finally {
+    pending.get("diff")?.("3\t1\tf\n");
+    pending.get("rev-list")?.("2\t4");
+    pending.get("remote")?.("url");
+  }
+  expect(await result).toMatchObject({ branch: "main", added: 3, removed: 1, ahead: 4, behind: 2, remoteUrl: "url" });
+});
+
 describe("git parsers", () => {
   it("sums numstat and skips binaries", () => {
     expect(parseNumstat("3\t1\tsrc/a.ts\n-\t-\timg.png\n10\t0\tb.md\n")).toEqual({ added: 13, removed: 1, files: 3 });

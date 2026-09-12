@@ -534,3 +534,11 @@ Confirmed allocation-before-admission in `worker/src/git.ts`. Now canonical cont
 Twenty samples of the same 32 MiB new file: median **16.41 → 0.047 ms**, p95 order statistic **18.73 → 0.495 ms** (`git-large.mjs`). The original read allocated/read 32 MiB; the new path opens/reads **zero content bytes** (regression spies on open after metadata admission). Tests also cover a 2 GiB sparse file, binary, symlink, missing file, FIFO, growth after handle stat, accurate small files and aggregate exhaustion. Fixed the initial test spy setup (native ESM namespace is nonconfigurable); the corrected fixture wraps the real filesystem module, not fake reads.
 
 Host (236), worker (683, 3 skipped), identity and recursive build pass (`f08-*.log`). No protocol changes; slow-disk/host-heartbeat measurements remain outstanding integration evidence.
+
+### F09 — overlap independent Git reads
+
+Confirmed serial upstream/counts/URL/diff stages and delayed untracked discovery. Baseline diff and new-file counting now start beside upstream discovery; counts and remote URL overlap after upstream resolution, and detached-HEAD fallback is independent. The three project-file `ls-files` reads start together but still merge tracked first. Baseline capture, index-lock policy, existing caches and error fallbacks are unchanged.
+
+Twenty TTL misses with a deterministic 5 ms asynchronous Git-runner delay per subprocess: median **32.13 → 20.88 ms**, p95 order statistic **36.94 → 22.95 ms** (`git-dag.mjs`). This measures dependency scheduling, **not real Git subprocess speedup**. A barrier regression requires diff, counts and URL requests to all start before any is released; real-repository baseline and file discovery tests remain green. An early after probe ran before worker compilation finished and was discarded; the recorded after sample ran after the complete build gate.
+
+Host (236), worker (684, 3 skipped), identity and recursive build pass (`f09-*.log`). Real cold-cache filesystem/subprocess traces remain integration follow-up.

@@ -182,22 +182,17 @@ export class ProjectFilesService {
   private async git(): Promise<Scan | undefined> {
     let cached: string;
     let deleted: string;
+    let others: string;
     try {
-      [cached, deleted] = await Promise.all([
+      [cached, deleted, others] = await Promise.all([
         run("git", ["ls-files", "-z", "--cached"], this.options.cwd),
         run("git", ["ls-files", "-z", "--deleted"], this.options.cwd),
+        // Failure still yields a useful tracked-only list.
+        run("git", ["ls-files", "-z", "--others", "--exclude-standard"], this.options.cwd).catch(() => ""),
       ]);
     } catch {
       // Not a repository, or no git on this machine. The walk answers instead.
       return undefined;
-    }
-    // Files git would track but has not been told to yet. A failure here is not
-    // fatal: a tracked-only list is still a useful list.
-    let others = "";
-    try {
-      others = await run("git", ["ls-files", "-z", "--others", "--exclude-standard"], this.options.cwd);
-    } catch {
-      others = "";
     }
     const files: ProjectFile[] = [];
     const removed = new Set(deleted.split("\0"));

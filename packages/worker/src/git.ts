@@ -221,9 +221,15 @@ export class GitService {
       this.run(["symbolic-ref", "--quiet", "--short", "HEAD"]).catch(() => ""),
       this.run(["status", "--porcelain=v1", "-z", "--untracked-files=all"]).catch(() => ""),
     ]);
-    const branch =
-      branchName.trim() || (await this.run(["rev-parse", "--short", "HEAD"]).catch(() => "")).trim() || "(no commits)";
+    const branchResult = branchName.trim()
+      ? Promise.resolve(branchName.trim())
+      : this.run(["rev-parse", "--short", "HEAD"]).catch(() => "").then((name) => name.trim() || "(no commits)");
     const { dirty, untracked } = parsePorcelain(porcelain);
+    // These reads share no mutable state. Baseline capture remains ordered.
+    const changes = baseline ? Promise.all([
+      this.run(["diff", "--numstat", baseline.snapshot]).catch(() => ""),
+      this.linesOfNewFiles(untracked.filter((p) => !baseline.untracked.has(p))),
+    ]) : Promise.resolve(["", 0] as const);
 
     // Upstream first; a branch that was never pushed compares against the
     // remote's default branch, which is what a pull request would target.
@@ -235,19 +241,18 @@ export class GitService {
     let behind = 0;
     let remoteUrl = "";
     if (upstream) {
-      const counts = await this.run(["rev-list", "--left-right", "--count", `${upstream}...HEAD`]).catch(() => "");
-      ({ ahead, behind } = parseAheadBehind(counts));
       const remote = upstream.split("/")[0] ?? "";
-      remoteUrl = remote ? (await this.run(["remote", "get-url", remote]).catch(() => "")).trim() : "";
+      const [counts, url] = await Promise.all([
+        this.run(["rev-list", "--left-right", "--count", `${upstream}...HEAD`]).catch(() => ""),
+        remote ? this.run(["remote", "get-url", remote]).catch(() => "") : Promise.resolve(""),
+      ]);
+      ({ ahead, behind } = parseAheadBehind(counts));
+      remoteUrl = url.trim();
     }
 
-    let added = 0;
-    let removed = 0;
-    if (baseline) {
-      const numstat = await this.run(["diff", "--numstat", baseline.snapshot]).catch(() => "");
-      ({ added, removed } = parseNumstat(numstat));
-      added += await this.linesOfNewFiles(untracked.filter((p) => !baseline.untracked.has(p)));
-    }
+    const [[numstat, newLines], branch] = await Promise.all([changes, branchResult]);
+    const { added: trackedAdded, removed } = parseNumstat(numstat);
+    const added = trackedAdded + newLines;
 
     return {
       isRepo: true,
