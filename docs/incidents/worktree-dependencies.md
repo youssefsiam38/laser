@@ -27,7 +27,25 @@ Additionally children lack `pnpm` on PATH (exit 127) because the host is launche
 
 It makes a child usable instantly for projects with a single flat `node_modules` (most apps), costs nothing, and "a missing link costs an install, never a run". It was never validated against a pnpm workspace — this repository.
 
-## Options
+## The principle (decided by the person)
+
+Laser is a coding agent for every stack — including languages that do not exist yet. The harness therefore **knows nothing about package managers**. It never symlinks, installs, or guesses. What it owes the child is the truth about its environment, and what it owes the person is that a child can never damage the parent checkout.
+
+## The design that follows
+
+1. **No symlink, no install.** A worktree is a clean git checkout of the parent's commit — exactly what `git worktree add` produces. Nothing else is copied or linked. (Removes `linkNodeModules` and the parent-corruption path entirely.)
+2. **Tell the child the truth, in its role block**, generated from facts the harness can observe without knowing any stack:
+   - "You are in a fresh worktree at `<path>` on branch `<branch>`. It is a clean checkout of `<commit>`: build outputs, dependency directories and caches from the parent checkout are **not** here."
+   - "The parent checkout is at `<path>`; do not modify it."
+   - "Untracked/ignored directories present in the parent but absent here: `node_modules/`, `target/`, `.venv/`, `dist/` …" — read from `git status --ignored` of the parent, listed verbatim, no interpretation.
+   - "Project instructions (`AGENTS.md`, `CLAUDE.md`, `README`) describe how this project installs and builds; follow them inside this worktree."
+3. **The project says how to set up a worktree, if it wants to.** One optional, stack-neutral hook: `<project>/.laser/worktree-setup` (an executable) or a `worktreeSetup` command in `.laser/config`. When present, the harness runs it inside the new worktree before the child's first turn (bounded time, output captured, failure reported to the child and the parent — never fatal). Laser's own repo would put `pnpm install --frozen-lockfile --offline && pnpm -r build` there. A Rust project puts nothing (cargo just works). A language from 2031 puts whatever it needs.
+4. **The parent's brief can add specifics** (the orchestrator already knows the stack); the harness does not.
+5. **`start_agent`'s result and `inspect_agent`** carry the same environment facts and the setup hook's outcome, so the parent can brief and diagnose without guessing.
+
+This is one worker milestone: `packages/worker/src/agents/worktrees.ts` (drop the link; run the hook), the role block (`session-config.ts`/harness), protocol result fields, `docs/agents.md`, tests with a git fixture that has an ignored directory and a setup hook that succeeds/fails/times out.
+
+## Options considered before the principle was set
 
 | | Option | Child sees | Cost per worktree | Risks |
 | --- | --- | --- | --- | --- |
