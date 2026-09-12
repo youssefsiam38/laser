@@ -8,7 +8,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 export type StubAnswer =
-  | { text: string; delayMs?: number }
+  | { text: string; reasoning?: string; delayMs?: number }
   | { toolCall: { name: string; args: Record<string, unknown>; id?: string }; delayMs?: number }
   /**
    * A failure, answered before any stream frame: an HTTP status with the
@@ -68,6 +68,7 @@ export function startStubProvider(respond: (request: StubRequest, index: number)
       const base = { id: `chatcmpl-${++calls}`, object: "chat.completion.chunk", created: 1, model: "stub-1" };
       res.write(sse({ ...base, choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }] }));
       if ("text" in answer) {
+        if (answer.reasoning) res.write(sse({ ...base, choices: [{ index: 0, delta: { reasoning_content: answer.reasoning }, finish_reason: null }] }));
         res.write(sse({ ...base, choices: [{ index: 0, delta: { content: answer.text }, finish_reason: null }] }));
         res.write(sse({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 5, completion_tokens: 4, total_tokens: 9 } }));
       } else {
