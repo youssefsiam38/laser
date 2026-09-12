@@ -8,6 +8,8 @@ import {
   ErrorCodes,
   HARNESS_TOOL_NAMES,
   ProtocolError,
+  MCP_KNOWN_SERVERS,
+  type McpCatalogOption,
   agentMessageModeSchema,
   agentQuestionAnswerHint,
   agentRunStatusSchema,
@@ -36,6 +38,22 @@ const agentSample = {
   scopedSkills: true,
   skills: [{ name: "code-review", path: "/home/me/.agents/skills/code-review/SKILL.md", scope: "global" }],
 };
+
+describe("catalog browser choices", () => {
+  it("keeps toggles backwards compatible and every browser choice saveable without changing saved args", () => {
+    const toggle: McpCatalogOption = { id: "legacy", label: "Legacy toggle", description: "Still supported", arg: "--legacy", default: true };
+    expect(toggle.kind).toBeUndefined();
+    const entry = MCP_KNOWN_SERVERS.find((candidate) => candidate.id === "playwright")!;
+    const option = entry.options!.find((candidate) => candidate.kind === "choice")!;
+    if (option.kind !== "choice") throw new Error("Expected browser choice");
+    expect(option.default).toBe("isolated");
+    expect(option.choices.map((choice) => choice.args)).toEqual([["--isolated"], ["--extension"], ["--cdp-endpoint=chrome"]]);
+    for (const args of [...option.choices.map((choice) => choice.args), [], ["--headless", "--user-data-dir=/custom"]]) {
+      const params = { cwd: "/project", scope: "global", server: { name: "browser", catalogId: entry.id, transport: { kind: "stdio", command: "npx", args: ["-y", "@playwright/mcp@latest", ...args] } } };
+      expect(clientParamsSchemas["mcp/save"].parse(params)).toEqual(params);
+    }
+  });
+});
 
 describe("agent parent-message modes", () => {
   it("accepts exactly D-204's four modes and defaults only omission to interrupt", () => {

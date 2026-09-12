@@ -63,9 +63,9 @@ async function mount() {
 it("tests the gallery definition it composed, then saves it direct for 24 tools", async () => {
   await mount();
   await click("Add Playwright");
-  expect(text()).toContain("Fresh browser per conversation");
+  expect(text()).toContain("Where the browser runs");
   // The catalog's own defaults: isolated on, headless off.
-  expect(document.querySelector<HTMLElement>('[aria-label="Fresh browser per conversation"]')?.getAttribute("aria-checked")).toBe("true");
+  expect(document.querySelector<HTMLElement>('[aria-label="A window of its own"]')?.getAttribute("aria-checked")).toBe("true");
   expect(document.querySelector<HTMLElement>('[aria-label="Hide the browser window"]')?.getAttribute("aria-checked")).toBe("false");
 
   await click("Test");
@@ -95,6 +95,36 @@ it("tests the gallery definition it composed, then saves it direct for 24 tools"
   expect(saved).toHaveLength(1);
   expect(saved[0]!.server.tools).toEqual({ exposure: "direct" });
   expect(mocks.toast).toHaveBeenCalledWith("info", expect.stringContaining("playwright is saved"));
+});
+
+it("chooses each own-Chrome mode, omits headless, and keeps unrelated form edits", async () => {
+  await mount();
+  await click("Add Playwright");
+  await click("Hide the browser window");
+  await click("All settings");
+  await typeInto("Run it in", "/my/project");
+  await click("Your Chrome, through the Playwright extension");
+  expect(findButton("Hide the browser window")).toBeUndefined();
+  expect(text()).toContain("Hiding the window is only available with a window of its own.");
+  expect(document.querySelector('a[href^="https://chromewebstore.google.com/"]')).not.toBeNull();
+  await click("Test");
+  expect(inspected[0]?.server?.transport).toMatchObject({ args: ["-y", "@playwright/mcp@latest", "--extension"], cwd: "/my/project" });
+  await click("Your Chrome, through remote debugging");
+  await click("Test");
+  expect(inspected[1]?.server?.transport).toMatchObject({ args: ["-y", "@playwright/mcp@latest", "--cdp-endpoint=chrome"] });
+  await click("A window of its own");
+  await click("Test");
+  expect(inspected[2]?.server?.transport).toMatchObject({ args: ["-y", "@playwright/mcp@latest", "--isolated", "--headless"] });
+});
+
+it("shows a distinct failed browser test without offering a successful tool exposure", async () => {
+  inspectResult = inspection({ name: "playwright", status: "failed", detail: "Connected, but the browser could not open a page: Extension unavailable. Check the extension token." });
+  await mount();
+  await click("Add Playwright");
+  await click("Test");
+  expect(text()).toContain("The browser test failed");
+  expect(text()).toContain("Check the extension token.");
+  expect(document.querySelector('[data-slot="mcp-exposure"]')).toBeNull();
 });
 
 it("chooses on demand above the threshold and says why", async () => {

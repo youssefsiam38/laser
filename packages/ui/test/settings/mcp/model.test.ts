@@ -193,7 +193,7 @@ describe("the form", () => {
   it("composes the gallery definition with the options a person chose", () => {
     const playwright = MCP_KNOWN_SERVERS.find((entry) => entry.id === "playwright")!;
     const chosen = defaultCatalogOptions(playwright);
-    expect([...chosen]).toEqual(["isolated"]);
+    expect([...chosen]).toEqual(["browser:isolated"]);
     const config = formToConfig(catalogForm(playwright, chosen));
     expect(config).toMatchObject({
       name: "playwright",
@@ -202,6 +202,16 @@ describe("the form", () => {
       transport: { kind: "stdio", command: "npx", args: ["-y", "@playwright/mcp@latest", "--isolated"] },
       tools: { exposure: "direct" },
     });
+  });
+
+  it("composes exclusive browser args and ignores headless outside the isolated choice", () => {
+    const entry = MCP_KNOWN_SERVERS.find((candidate) => candidate.id === "playwright")!;
+    for (const [mode, expected] of [["isolated", ["--isolated", "--headless"]], ["extension", ["--extension"]], ["cdp", ["--cdp-endpoint=chrome"]]] as const) {
+      const form = catalogForm(entry, new Set([`browser:${mode}`, "headless"]));
+      expect(parseCommandLine(form.commandLine).args).toEqual(["-y", "@playwright/mcp@latest", ...expected]);
+    }
+    const saved: McpServerConfig = { name: "custom-browser", catalogId: "playwright", transport: { kind: "stdio", command: "npx", args: ["@playwright/mcp", "--user-data-dir=/custom"] } };
+    expect(formToConfig(configToForm(saved)).transport).toEqual(saved.transport);
   });
 
   it("keeps a stored secret as a reference and sends a typed one as a value", () => {

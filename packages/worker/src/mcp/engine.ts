@@ -55,7 +55,7 @@ export interface McpEnginePrompt {
 }
 
 export interface McpClient {
-  callTool(params: { name: string; arguments?: Record<string, unknown> }, resultSchema?: unknown, options?: unknown): Promise<unknown>;
+  callTool(params: { name: string; arguments?: Record<string, unknown> }, options?: { signal?: AbortSignal | undefined }): Promise<unknown>;
   ping(options?: unknown): Promise<unknown>;
   getServerVersion(): { name?: string; version?: string; title?: string } | undefined;
   getServerCapabilities(): Record<string, unknown> | undefined;

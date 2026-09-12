@@ -6,6 +6,7 @@
  * and what a person is shown. Secrets never travel in a status response.
  */
 
+import { PRODUCT_DISPLAY_NAME } from "./identity.js";
 import type { FeatureScope } from "./features.js";
 
 export type McpScope = FeatureScope;
@@ -299,14 +300,24 @@ export interface McpImportSource {
 // ---------------------------------------------------------------------------
 // Curated catalog
 
-export interface McpCatalogOption {
-  id: string;
-  label: string;
-  description: string;
-  /** Appended to `args` when on. */
-  arg: string;
-  default: boolean;
-}
+export type McpCatalogOption =
+  | {
+      kind?: "toggle";
+      id: string;
+      label: string;
+      description: string;
+      /** Appended to `args` when on and its choice requirement is met. */
+      arg: string;
+      default: boolean;
+      requiresChoice?: { id: string; value: string; reason: string };
+    }
+  | {
+      kind: "choice";
+      id: string;
+      label: string;
+      choices: Array<{ id: string; label: string; description: string; args: string[] }>;
+      default: string;
+    };
 
 export interface McpCatalogEntry {
   id: string;
@@ -335,11 +346,30 @@ export const MCP_KNOWN_SERVERS: readonly McpCatalogEntry[] = [
     },
     options: [
       {
-        id: "isolated",
-        label: "Fresh browser per conversation",
-        description: "Each conversation gets its own browser profile, so several can drive a browser at once. Turn off to keep logins between conversations, which also means one conversation at a time.",
-        arg: "--isolated",
-        default: true,
+        kind: "choice",
+        id: "browser",
+        label: "Where the browser runs",
+        default: "isolated",
+        choices: [
+          {
+            id: "isolated",
+            label: "A window of its own",
+            description: `${PRODUCT_DISPLAY_NAME} opens its own browser window. Several conversations can browse at once; logins do not carry over.`,
+            args: ["--isolated"],
+          },
+          {
+            id: "extension",
+            label: "Your Chrome, through the Playwright extension",
+            description: "Recommended for your own Chrome. Uses the Chrome you are signed into. Needs the Playwright Extension from the Chrome Web Store; the first connection asks you to pick a tab, unless the extension’s token is in your environment. Only the tabs in the Playwright tab group are visible to the model.",
+            args: ["--extension"],
+          },
+          {
+            id: "cdp",
+            label: "Your Chrome, through remote debugging",
+            description: "Uses the Chrome you are signed into, without an extension, but is slower. Once, in Chrome, open chrome://inspect/#remote-debugging and turn on ‘Allow remote debugging for this browser instance’.",
+            args: ["--cdp-endpoint=chrome"],
+          },
+        ],
       },
       {
         id: "headless",
@@ -347,6 +377,7 @@ export const MCP_KNOWN_SERVERS: readonly McpCatalogEntry[] = [
         description: "Run the browser without a window. Leave off to watch the model work.",
         arg: "--headless",
         default: false,
+        requiresChoice: { id: "browser", value: "isolated", reason: "Hiding the window is only available with a window of its own." },
       },
     ],
   },
