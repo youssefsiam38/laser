@@ -8,7 +8,7 @@
  * Everything here goes through `mcp/*` on the project's worker. The list is
  * the truth; `mcp/changed` says when to read it again.
  */
-import { PRODUCT_DISPLAY_NAME, type McpCatalogEntry, type McpImportSource, type McpScope, type McpServerConfig, type McpServerState } from "@lasercode/protocol";
+import { PRODUCT_DISPLAY_NAME, type ClientRequests, type McpCatalogEntry, type McpImportSource, type McpScope, type McpServerConfig, type McpServerState } from "@lasercode/protocol";
 import { FolderSearch, Plus, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -33,6 +33,7 @@ type ScopeFilter = McpScope | "all";
 export function McpServersTab({ cwd, projectOpen = true }: { cwd: string; projectOpen?: boolean }) {
   const { client, actions } = useLaserStable();
   const [servers, setServers] = useState<McpServerState[]>();
+  const [conversations, setConversations] = useState<NonNullable<ClientRequests["mcp/list"]["result"]["conversations"]>>([]);
   const [sources, setSources] = useState<McpImportSource[]>([]);
   const [detectFailed, setDetectFailed] = useState(false);
   const [error, setError] = useState<string>();
@@ -51,6 +52,7 @@ export function McpServersTab({ cwd, projectOpen = true }: { cwd: string; projec
       const list = await client.request("mcp/list", { cwd });
       if (request !== generation.current) return;
       setServers(list.servers);
+      setConversations(list.conversations ?? []);
     } catch (failure) {
       if (request === generation.current) {
         setError(failure instanceof Error ? failure.message : String(failure));
@@ -79,6 +81,7 @@ export function McpServersTab({ cwd, projectOpen = true }: { cwd: string; projec
 
   useEffect(() => {
     setServers(undefined);
+    setConversations([]);
     void load();
     void detect();
     return () => {
@@ -274,6 +277,7 @@ export function McpServersTab({ cwd, projectOpen = true }: { cwd: string; projec
       />
 
       <McpInspector
+        conversations={conversations}
         cwd={cwd}
         state={selected}
         globalEntry={globalEntry}

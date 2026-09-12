@@ -182,9 +182,22 @@ const mcpAuthInputSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
 ]);
+export const mcpConversationContextSchema = z.object({
+  title: z.string().optional(),
+  contextWindow: z.number().positive().nullable(),
+  budget: z.number().nonnegative().nullable(),
+  share: z.number().positive().max(1),
+  measurement: z.literal("utf8-upper-bound"),
+  preloaded: z.array(z.string()),
+  preloadedTokens: z.number().nonnegative(),
+  lastDiscoveryTokens: z.number().nonnegative(),
+  discoveries: z.array(z.object({ server: z.string(), name: z.string(), detail: z.enum(["names", "summary", "full"]), revision: z.string() })),
+});
+
 const mcpToolPolicySchema = z
   .object({
     exposure: z.enum(MCP_TOOL_EXPOSURES),
+    alwaysLoad: z.boolean().optional(),
     only: z.array(mcpNamePattern).max(1000).optional(),
     include: z.array(mcpNamePattern).max(1000).optional(),
     exclude: z.array(mcpNamePattern).max(1000).optional(),

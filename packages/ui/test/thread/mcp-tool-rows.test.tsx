@@ -196,9 +196,9 @@ describe("recognising an MCP call", () => {
     expect(mcpServerLabel("chrome-devtools")).toBe("Chrome Devtools");
     expect(mcpToolLabel("browser_navigate", "playwright")).toBe("browser navigate");
     expect(mcpToolLabel("playwright_browser_navigate", "playwright")).toBe("browser navigate");
-    expect(mcpGatewaySummary(mcpGatewayView({ search: "navigate" }, undefined))).toBe("Search “navigate”");
+    expect(mcpGatewaySummary(mcpGatewayView({ search: "navigate" }, undefined))).toBe("Find tools · navigate");
     expect(mcpGatewaySummary(mcpGatewayView({}, { mode: "status" }))).toBe("Status");
-    expect(mcpGatewaySummary(mcpGatewayView({ connect: "playwright" }, undefined))).toBe("Connect playwright");
+    expect(mcpGatewaySummary(mcpGatewayView({ connect: "playwright" }, undefined))).toBe("Connect to playwright");
     expect(mcpGatewaySummary(mcpGatewayView({ action: "auth-start", server: "linear" }, undefined))).toBe("Sign in linear");
   });
 });
@@ -370,7 +370,7 @@ describe("a gateway row", () => {
     };
     const trigger = await render(toolProps("g1", "mcp", { search: "navigate" }, result));
     expect(trigger.textContent).toContain("MCP");
-    expect(trigger.textContent).toContain("Search “navigate”");
+    expect(trigger.textContent).toContain("Find tools · navigate");
 
     await expand(trigger);
     const matches = [...container.querySelectorAll('[data-slot="tool-fallback-content"] li')].map((li) => li.textContent);

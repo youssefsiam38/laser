@@ -23,7 +23,6 @@ import { SettingsSwitch } from "@/components/assistant-ui/elements/settings-pane
 import { SearchInput } from "../SettingsScreen.js";
 
 import {
-  allToolsDirect,
   allToolsOff,
   allToolsOn,
   PATTERN_POLICY_NOTE,
@@ -31,7 +30,6 @@ import {
   policyPatternLocks,
   schemaToShape,
   setToolApproved,
-  setToolDirect,
   setToolEnabled,
   toolState,
   toolVisibilityNote,
@@ -56,7 +54,6 @@ export function McpToolsPanel({
   const shown = inspection.tools.filter(
     (tool) => !query || `${tool.originalName} ${tool.name} ${tool.description}`.toLowerCase().includes(query),
   );
-  const onDemand = policy.exposure !== "direct";
   // A policy written with patterns (or an `include` list) cannot be edited one
   // tool at a time without quietly replacing it with literal names.
   const locks = policyPatternLocks(policy);
@@ -76,9 +73,7 @@ export function McpToolsPanel({
         <Button type="button" size="sm" variant="secondary" disabled={busy || locks.enabled} onClick={() => onPolicy(allToolsOff(policy, names))}>
           All off
         </Button>
-        <Button type="button" size="sm" variant="secondary" disabled={busy || locks.direct} onClick={() => onPolicy(allToolsDirect(policy))}>
-          All direct
-        </Button>
+
       </div>
 
       {policy.approve === true && (
@@ -128,21 +123,6 @@ export function McpToolsPanel({
                   busy={busy}
                   disabled={locks.enabled}
                   onChange={(next) => onPolicy(setToolEnabled(policy, tool.originalName, next))}
-                  name={tool.originalName}
-                />
-                <ToolSwitch
-                  label="Direct"
-                  hint={
-                    locks.direct
-                      ? PATTERN_POLICY_NOTE
-                      : onDemand
-                        ? "This server is set to on demand, so nothing is in the model’s list."
-                        : "In the model’s own list."
-                  }
-                  checked={state.direct}
-                  busy={busy}
-                  disabled={locks.direct || onDemand || !state.enabled}
-                  onChange={(next) => onPolicy(setToolDirect(policy, tool.originalName, next, names))}
                   name={tool.originalName}
                 />
                 <ToolSwitch

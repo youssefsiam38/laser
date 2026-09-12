@@ -64,7 +64,7 @@ describe("McpInspector", () => {
     expect(inspection.latencyMs).toBeGreaterThanOrEqual(0);
 
     const echo = inspection.tools.find((tool) => tool.originalName === "echo");
-    expect(echo).toMatchObject({ name: "fixture_echo", visibility: "direct", approval: false, title: "Echo" });
+    expect(echo).toMatchObject({ name: "fixture_echo", visibility: "on-demand", approval: false, title: "Echo" });
     expect(echo?.description).toContain("Return the text");
     expect((echo?.inputSchema as { properties?: Record<string, unknown> })?.properties).toHaveProperty("text");
     expect(echo?.annotations).toMatchObject({ readOnly: true });
@@ -79,12 +79,12 @@ describe("McpInspector", () => {
   it("applies the server's tool policy to what the model would see", async () => {
     const inspection = await inspector.inspect({
       scope: "global",
-      config: { ...stdioConfig(), tools: { exposure: "direct", only: ["echo"], exclude: ["explode"], approve: ["snap*"] } },
+      config: { ...stdioConfig(), tools: { exposure: "direct", alwaysLoad: true, only: ["echo"], exclude: ["explode"], approve: ["snap*"] } },
       secrets: new Map(),
     });
     const byName = new Map(inspection.tools.map((tool) => [tool.originalName, tool]));
     expect(byName.get("echo")).toMatchObject({ visibility: "direct", approval: false });
-    expect(byName.get("snapshot")).toMatchObject({ visibility: "on-demand", approval: true });
+    expect(byName.get("snapshot")).toMatchObject({ visibility: "direct", approval: true });
     expect(byName.get("explode")).toMatchObject({ visibility: "excluded" });
   }, 60_000);
 

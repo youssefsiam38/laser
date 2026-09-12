@@ -67,7 +67,7 @@ export class McpService {
   /** A snapshot a session reported. An empty one carries no information. */
   observeSnapshot(sessionPath: string, snapshot: McpRuntimeSnapshot): void {
     if (snapshot.servers.length === 0) {
-      this.snapshots.delete(sessionPath);
+      if (this.snapshots.delete(sessionPath)) this.options.changed();
       return;
     }
     // The engine republishes on every connect, catalogue refresh and tool-list
@@ -79,7 +79,7 @@ export class McpService {
   }
 
   sessionClosed(sessionPath: string): void {
-    this.snapshots.delete(sessionPath);
+    if (this.snapshots.delete(sessionPath)) this.options.changed();
   }
 
   async dispose(): Promise<void> {
@@ -89,7 +89,10 @@ export class McpService {
   // -------------------------------------------------------------- methods
 
   async list(): Promise<ClientRequests["mcp/list"]["result"]> {
-    return { servers: await this.states() };
+    return {
+      servers: await this.states(),
+      conversations: [...this.snapshots].flatMap(([sessionPath, { snapshot }]) => snapshot.context ? [{ sessionPath, context: snapshot.context }] : []),
+    };
   }
 
   async save(params: ClientRequests["mcp/save"]["params"]): Promise<ClientRequests["mcp/save"]["result"]> {

@@ -86,10 +86,12 @@ describe("toServerEntry", () => {
   });
 
   it("maps every exposure and the tool lists", () => {
-    expect(toServerEntry(stdio({ tools: { exposure: "direct" } })).directTools).toBe(true);
-    expect(toServerEntry(stdio({ tools: { exposure: "direct", only: ["echo"] } })).directTools).toEqual(["echo"]);
+    expect(toServerEntry(stdio({ tools: { exposure: "direct" } })).directTools).toBe(false);
+    expect(toServerEntry(stdio({ tools: { exposure: "direct", alwaysLoad: true } })).directTools).toBe(true);
+    expect(toServerEntry(stdio({ tools: { exposure: "direct", only: ["echo"] } })).directTools).toBe(false);
+    expect(toServerEntry(stdio({ tools: { exposure: "direct", alwaysLoad: true, only: ["echo"] } })).directTools).toBe(true);
     expect(toServerEntry(stdio({ tools: { exposure: "on-demand" } })).directTools).toBe(false);
-    expect(toServerEntry(stdio({ tools: { exposure: "search" } })).directTools).toBe("search");
+    expect(toServerEntry(stdio({ tools: { exposure: "search" } })).directTools).toBe(false);
     expect(toServerEntry(stdio({ tools: { exposure: "direct", include: ["a*"], exclude: ["ab"], approve: ["danger*"] } }))).toMatchObject({
       includeTools: ["a*"],
       excludeTools: ["ab"],
@@ -122,6 +124,7 @@ describe("toServerEntry", () => {
       sampling: true,
       elicitation: true,
       scriptMode: true,
+      freezeDirectTools: true,
       // Never the engine's default, which tells the person to run its own
       // terminal commands (docs/mcp.md; AGENTS.md §6b).
       authRequiredMessage: 'Sign in to "${server}" in Settings → MCP servers, then try again.',

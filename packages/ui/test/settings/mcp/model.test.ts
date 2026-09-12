@@ -86,9 +86,9 @@ describe("names and command lines", () => {
 });
 
 describe("exposure", () => {
-  it("is direct at the threshold and on demand above it", () => {
-    expect(defaultExposure(24)).toBe("direct");
-    expect(defaultExposure(40)).toBe("direct");
+  it("is progressive regardless of legacy tool count", () => {
+    expect(defaultExposure(24)).toBe("on-demand");
+    expect(defaultExposure(40)).toBe("on-demand");
     expect(defaultExposure(41)).toBe("on-demand");
     expect(defaultExposure(60)).toBe("on-demand");
   });
@@ -200,7 +200,7 @@ describe("the form", () => {
       label: "Playwright",
       catalogId: "playwright",
       transport: { kind: "stdio", command: "npx", args: ["-y", "@playwright/mcp@latest", "--isolated"] },
-      tools: { exposure: "direct" },
+      tools: { exposure: "on-demand", alwaysLoad: false },
     });
   });
 

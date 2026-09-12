@@ -47,9 +47,37 @@ Adapter settings Laser fixes (never exposed): `toolPrefix: "server"`,
 `showStatusIcon: false`, `mcpFooterStatus: "off"`, `notifyOnStartupConnect:
 false`, `hostConfigDiscovery: "off"`, `autoAuth: false`, `sampling` and
 `elicitation` on (they render through the inline dialog cards), `outputGuard`
-default, `scriptMode` on. Direct tools are registered from the cache, so a
-server that has connected once has its tools in the model's list from the
-first turn of the next session.
+default, `scriptMode` on, `freezeDirectTools: true`. Every server uses
+progressive discovery unless its saved policy explicitly sets `alwaysLoad`.
+Legacy `exposure: direct/search` is not evidence of that choice. The adapter's
+registration surface freezes at the first provider request; discovery returns
+conversation results, never new provider definitions. Namespace gateways are
+not registered. Connections remain available until the session runtime closes.
+
+### Conversation context
+
+`mcp({ search, detail: names|summary|full })` and script discovery share one
+ranked projection. Summary is the default; complete schemas are returned only
+when requested. Pages include server groups and a catalog revision; a changed
+continuation refuses and asks for a fresh search rather than skipping entries.
+The adapter retains its weighted keyword ranker and exposes an optional ranking
+strategy over the authorized catalog. No embedding service is required.
+
+The automatic discovery target is **2% of the active model's context window**,
+aggregated with MCP provider definitions. The byte-based token bound is deliberately
+conservative and labelled, not presented as billed usage. Full schemas are
+atomic; oversized automatic detail asks for explicit inspection. An explicit
+single-tool description may exceed the soft share, not the known window;
+unknown windows remain unknown. Provider-sized preload bounds stop the request
+before send. Smallest useful summary responses may exceed the soft target.
+
+Advanced → **Put every tool in the conversation** is off by default. It applies
+to new session runtimes; running ones retain their captured configuration and
+definitions. Existing exclusions and approval rules survive; legacy `only` data is retained
+without restricting the new explicit override. The inspector separately shows saved policy and explicitly selected
+running-conversation evidence. This is not a claim of provider cache hits or
+permanent discovery history after reload/compaction. See [the design and
+requirements matrix](mcp-client.md).
 
 | Runtime | Contract |
 | --- | --- |
@@ -112,14 +140,14 @@ names.
 - **Auth** is `none`, `bearer` (a secret token) or `oauth` (optional
   pre-registered client id and secret, scope, redirect URI, metadata URL,
   grant type). HTTP only; the schema refuses it elsewhere.
-- **Startup** is `on-demand` (default: connect on first use, disconnect when
-  idle), `on-demand-keep`, `at-start` and `always`.
-- **Tools** carry `exposure` — `direct` (each tool is its own tool in the
-  model's list), `on-demand` (through the one search-and-call tool) or
-  `search` (registered inactive, activated by a search) — plus `only`
-  (direct exposure restricted to named tools), `include`/`exclude`
-  (which tools exist at all, as names or globs) and `approve` (call-time
-  approval for all or for matching tools).
+- **Startup** is `on-demand` (default: connect on first use),
+  `on-demand-keep`, `at-start` and `always`. Session connections do not idle out
+  between turns; legacy idle timing is retained in configuration but not offered
+  as a conversation control.
+- **Tools** carry explicit `alwaysLoad` (default false), legacy `exposure`
+  (retained for lossless migration), `only` (legacy selection data, not a filter),
+  `include`/`exclude` (which tools exist at all, as names or globs) and `approve`
+  (call-time approval for all or for matching tools).
 - **Status** for a person is one of: `connected`, `ready` (tools known from
   the cache, not connected right now), `starting`, `needs-auth`, `failed`,
   `off`, `unknown`. The adapter's `cached`/`not-connected` collapse into
@@ -132,7 +160,7 @@ contract; the schemas in `schemas.ts` and the round-trip sample in
 
 | Method | What it does |
 | --- | --- |
-| `mcp/list` | every server visible to this project, both scopes, with its effective status and counts |
+| `mcp/list` | every server visible to this project, both scopes, with its effective status and counts; separate conversation context snapshots keyed by session path |
 | `mcp/save` | create or replace one server in one scope; validates; stores secrets; never connects |
 | `mcp/remove` | delete one server from one scope, and its secrets |
 | `mcp/inspect` | connect to one server outside any session and return what it is: server name and version, protocol version, capabilities, instructions, every tool with its description and input schema, resources and templates, prompts with arguments; the connection latency |
@@ -208,9 +236,9 @@ that transport has. The URL door detects the need for sign-in on test and
 offers OAuth; the Command door checks that the executable resolves and says
 which PATH it looked in when it does not. Both doors end in **Test**, which is
 `mcp/inspect`: the person sees the server's name and version, its tools with
-descriptions, and chooses how the tools reach the model before saving. The
-default exposure is `direct` when the server has forty tools or fewer and
-`on-demand` above that, and the page says which it chose and why.
+descriptions, and saves it with tools found when needed. No tool-count cutoff
+changes that default. The page explains the choice and points to Advanced for
+the explicit preload override.
 
 **Inspecting.** Selecting a row opens the inspector, a full-height sheet on a
 wide screen and a page on a phone:
@@ -223,10 +251,11 @@ wide screen and a page on a phone:
   tail of its stderr, written for a person.
 - *Tools*: every tool the server advertises, searchable, with description and
   input schema rendered as a compact shape. Per tool: **On/Off** (exclude),
-  **Direct** (the `only` list when exposure is direct), **Ask first**
-  (approval). Bulk: all on, all off, all direct. Each change is one
-  `mcp/save`. A tool that the model cannot see says why (excluded, or
-  on-demand only).
+  **Ask first** (approval). Bulk: all on, all off. Each change is one
+  `mcp/save`; no per-tool control silently changes preload policy. A separate
+  conversation selector shows the model window, 2% target, conservative MCP
+  definition cost, included tool names, and tools found/inspected with their
+  revision. Inspector connections are never reported as model discoveries.
 - *Run*: pick a tool, fill its arguments (a form from the schema; JSON for
   the rest), run it on the inspector connection, see the result — text,
   images, structured content — and how long it took. This is the

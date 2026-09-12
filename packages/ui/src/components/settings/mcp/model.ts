@@ -12,7 +12,6 @@
  *     typed), and only one of them ever reaches `mcp/save`.
  */
 import {
-  MCP_DIRECT_EXPOSURE_MAX_TOOLS,
   MCP_SERVER_NAME_PATTERN,
   type McpAuthKind,
   type McpCatalogEntry,
@@ -234,14 +233,14 @@ export function nameIssue(name: string): string | undefined {
 // ---------------------------------------------------------------------------
 // Exposure
 
-export function defaultExposure(toolCount: number): McpToolExposure {
-  return toolCount <= MCP_DIRECT_EXPOSURE_MAX_TOOLS ? "direct" : "on-demand";
+export function defaultExposure(_toolCount: number): McpToolExposure {
+  return "on-demand";
 }
 
 export const EXPOSURE_LABEL: Record<McpToolExposure, string> = {
-  direct: "Each tool on its own",
-  "on-demand": "On demand",
-  search: "Found by searching",
+  direct: "Included from the start",
+  "on-demand": "Found when needed",
+  search: "Found when needed",
 };
 
 export function exposureExplanation(exposure: McpToolExposure, toolCount: number | undefined): string {
@@ -251,11 +250,9 @@ export function exposureExplanation(exposure: McpToolExposure, toolCount: number
       : `${toolCount} ${toolCount === 1 ? "tool is" : "tools are"} in the model’s list from the start, so it can call them without looking first.`;
   }
   if (exposure === "on-demand") {
-    return toolCount === undefined
-      ? "The model looks the tools up and calls them through one tool, which keeps its list short."
-      : `${toolCount} tools would be a long list for every turn, so the model looks them up and calls them through one tool instead.`;
+    return "Tools are found when needed, leaving more room for your conversation.";
   }
-  return "The tools stay out of the list until the model searches for one.";
+  return "Tools are found when needed, leaving more room for your conversation.";
 }
 
 // ---------------------------------------------------------------------------
@@ -408,7 +405,7 @@ export function contentDataUri(block: { data: string; mimeType: string }): strin
 // Tool policy arithmetic. Every change is one whole `tools` object.
 
 export function policyOf(config: Pick<McpServerConfig, "tools">): McpToolPolicy {
-  return config.tools ?? { exposure: "direct" };
+  return { ...config.tools, exposure: config.tools?.alwaysLoad === true ? "direct" : "on-demand" };
 }
 
 function withList(policy: McpToolPolicy, key: "only" | "exclude", list: string[] | undefined): McpToolPolicy {
@@ -589,7 +586,7 @@ export function emptyForm(): ServerForm {
     protocolVersion: "auto",
     resourcesAsTools: true,
     debug: false,
-    exposure: "direct",
+    exposure: "on-demand",
   };
 }
 
@@ -619,7 +616,7 @@ export function configToForm(config: McpServerConfig): ServerForm {
   form.protocolVersion = config.protocolVersion ?? "auto";
   form.resourcesAsTools = config.resourcesAsTools !== false;
   form.debug = config.debug === true;
-  form.exposure = config.tools?.exposure ?? "direct";
+  form.exposure = config.tools?.alwaysLoad === true ? "direct" : "on-demand";
   form.tools = config.tools;
   form.catalogId = config.catalogId;
   form.disabled = config.disabled;
@@ -721,7 +718,7 @@ export function formToConfig(form: ServerForm): McpServerConfigInput {
     ...(form.label.trim() && form.label.trim() !== form.name.trim() ? { label: form.label.trim() } : {}),
     transport,
     startup: form.startup,
-    tools: { ...(form.tools ?? {}), exposure: form.exposure },
+    tools: { ...(form.tools ?? {}), exposure: form.exposure, alwaysLoad: form.exposure === "direct" },
   };
   if (form.kind === "http" && form.authKind !== "none") {
     if (form.authKind === "bearer") {

@@ -2,17 +2,18 @@
 
 ## Status and scope
 
-M16-T25, milestone 1: **research and proposed implementation contract, not shipped
-behaviour**. Source baseline: `8c92c7b946ec98f134fc87d54cf9e244fe758cbc`.
-Research retrieved on 2026-09-12. The implementation milestones below require
-separate assignments and verification. Until then, [mcp.md](mcp.md) describes the
-current product; this document does not claim its old defaults have changed.
+M16-T25: milestone 1's design is reviewed; milestone 2 implements progressive
+discovery, the 2% policy, a frozen request surface and conversation diagnostics.
+[mcp.md](mcp.md) describes that implementation. Cache correctness, dynamic
+connections and script isolation remain separately assigned milestones, not
+completed capabilities. The baseline matrix below remains historical evidence:
+`8c92c7b946ec98f134fc87d54cf9e244fe758cbc`, research retrieved on 2026-09-12.
 
 The design follows every recommendation in the [client best-practices guide][guide].
 Where the guide offers alternative strategies or runtimes, implementing the
 recommendation means choosing and justifying one, not installing every alternative.
 
-**Decisions proposed for review:**
+**Accepted design:**
 
 - Every server uses progressive discovery by default, regardless of tool count.
   Only a person's explicit per-server Advanced override preloads tools.
@@ -35,6 +36,31 @@ Here, **host-side cache/broker** means the MCP host application's trusted worker
 not `packages/host`. The latter still only routes protocol requests. Only worker
 and companion may import adapter code (AGENTS.md invariant 6b). Any companion
 integration belongs in its existing MCP module, not a new extension/package.
+
+## Milestone 2 implementation evidence
+
+- Prompt-contract module: `packages/worker/src/mcp/prompt-context.ts`.
+- Dedicated contract tests: `packages/worker/test/mcp/prompt-context.test.ts`.
+  The exact test **“keeps the entire tools array stable across connect, discover,
+  inspect, script search and execution (preload=%s)”** captures seven real SDK
+  HTTP requests through a deterministic provider, with both preload choices.
+  It compares the complete serialized tools array and system/developer prefix,
+  including the next user turn—not just tool counts. It proves stable outgoing
+  inputs, not a provider cache hit or a billing claim. The HTTP fixture uses the
+  OpenAI request shape; source-shaped unit cases separately pin flat/function,
+  Google, Bedrock and Pi relay envelopes without changing their payloads.
+- The same file covers unknown windows, atomic input/output schemas, size-based
+  admission, grouped/capped pages, scoped continuations, authorized ranking,
+  late registration/activation fences and a new-session boundary. Oversized
+  request prevention is tested through the real engine: throwing from Pi's
+  pre-request handler is isolated, so prevention uses its abort control instead.
+- Protocol round trips, existing host routing, companion validation and service
+  snapshot lifecycle tests pin the inspector boundary. Inspector-only connections
+  cannot invent conversation evidence.
+- `scripts/browser-check/test/mcp-discovery.mjs` drives the built host/worker/UI:
+  legacy defaults, names/summary/describe/script/call discovery, keyboard and
+  pointer preload controls, and two explicitly selected session snapshots.
+  Run with the shared MCP matrix, with mouse/full motion and touch/reduced motion.
 
 ## Evidence and citation conventions
 

@@ -84,7 +84,9 @@ export type McpToolExposure = (typeof MCP_TOOL_EXPOSURES)[number];
 
 export interface McpToolPolicy {
   exposure: McpToolExposure;
-  /** With `direct`: only these original tool names are direct; the rest stay on demand. */
+  /** Explicit preload override. Legacy exposure alone never implies consent to preload. */
+  alwaysLoad?: boolean;
+  /** Legacy direct selection retained for round trips; not an exclusion or preload limit. */
   only?: string[];
   /** Names or globs; tools not matched do not exist for this server. */
   include?: string[];
@@ -342,7 +344,7 @@ export const MCP_KNOWN_SERVERS: readonly McpCatalogEntry[] = [
     config: {
       transport: { kind: "stdio", command: "npx", args: ["-y", "@playwright/mcp@latest"] },
       startup: "on-demand",
-      tools: { exposure: "direct" },
+      tools: { exposure: "on-demand" },
     },
     options: [
       {
@@ -390,7 +392,7 @@ export const MCP_KNOWN_SERVERS: readonly McpCatalogEntry[] = [
     config: {
       transport: { kind: "stdio", command: "npx", args: ["-y", "chrome-devtools-mcp@latest"] },
       startup: "on-demand",
-      tools: { exposure: "direct" },
+      tools: { exposure: "on-demand" },
     },
   },
   {
@@ -401,7 +403,7 @@ export const MCP_KNOWN_SERVERS: readonly McpCatalogEntry[] = [
     config: {
       transport: { kind: "http", url: "https://mcp.context7.com/mcp" },
       startup: "on-demand",
-      tools: { exposure: "direct" },
+      tools: { exposure: "on-demand" },
     },
   },
   {
@@ -412,7 +414,7 @@ export const MCP_KNOWN_SERVERS: readonly McpCatalogEntry[] = [
     config: {
       transport: { kind: "http", url: "https://mcp.deepwiki.com/mcp" },
       startup: "on-demand",
-      tools: { exposure: "direct" },
+      tools: { exposure: "on-demand" },
     },
   },
   {
@@ -438,7 +440,7 @@ export const MCP_KNOWN_SERVERS: readonly McpCatalogEntry[] = [
       transport: { kind: "http", url: "https://mcp.notion.com/mcp" },
       auth: { kind: "oauth" },
       startup: "on-demand",
-      tools: { exposure: "direct" },
+      tools: { exposure: "on-demand" },
     },
   },
   {
@@ -451,7 +453,7 @@ export const MCP_KNOWN_SERVERS: readonly McpCatalogEntry[] = [
       transport: { kind: "http", url: "https://mcp.linear.app/mcp" },
       auth: { kind: "oauth" },
       startup: "on-demand",
-      tools: { exposure: "direct" },
+      tools: { exposure: "on-demand" },
     },
   },
   {
@@ -469,8 +471,21 @@ export const MCP_KNOWN_SERVERS: readonly McpCatalogEntry[] = [
   },
 ] as const;
 
-/** Direct exposure is the default for a server with this many tools or fewer. */
-export const MCP_DIRECT_EXPOSURE_MAX_TOOLS = 40;
+/** Aggregate soft budget for MCP discovery; explicit preload overrides remain explicit. */
+export const MCP_CONTEXT_SHARE = 0.02;
+
+export interface McpConversationContext {
+  title?: string | undefined;
+  /** Unknown until an actual model request; bytes are a conservative token upper bound. */
+  contextWindow: number | null;
+  budget: number | null;
+  share: number;
+  measurement: "utf8-upper-bound";
+  preloaded: string[];
+  preloadedTokens: number;
+  lastDiscoveryTokens: number;
+  discoveries: Array<{ server: string; name: string; detail: "names" | "summary" | "full"; revision: string }>;
+}
 
 // ---------------------------------------------------------------------------
 // Runtime snapshot from the companion module (engine-neutral copy)
@@ -484,6 +499,7 @@ export interface McpRuntimeServer {
   failedAgoSeconds?: number;
 }
 export interface McpRuntimeSnapshot {
+  context?: McpConversationContext;
   servers: McpRuntimeServer[];
   totalTools: number;
   connectedCount: number;
@@ -495,7 +511,7 @@ export interface McpRuntimeSnapshot {
 declare module "./messages.js" {
   interface ClientRequests {
     /** Both scopes for this project. Changes apply to sessions started afterwards (D-221). */
-    "mcp/list": { params: { cwd: string }; result: { servers: McpServerState[] } };
+    "mcp/list": { params: { cwd: string }; result: { servers: McpServerState[]; conversations?: Array<{ sessionPath: string; context: McpConversationContext }> } };
     "mcp/save": {
       params: { cwd: string; scope: McpScope; server: McpServerConfigInput; /** Rename: the entry this replaces. */ originalName?: string };
       result: { servers: McpServerState[] };

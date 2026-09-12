@@ -11,13 +11,11 @@
  * but a row that says "Not seen yet".
  */
 import {
-  MCP_DIRECT_EXPOSURE_MAX_TOOLS,
   type McpCatalogEntry,
   type McpInspection,
   type McpScope,
   type McpServerConfig,
   type McpServerState,
-  type McpToolExposure,
 } from "@lasercode/protocol";
 import { AlertTriangle, Check, KeyRound, Plug, Wrench } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -39,9 +37,6 @@ import {
   catalogOptionReason,
   configToForm,
   defaultCatalogOptions,
-  defaultExposure,
-  EXPOSURE_LABEL,
-  exposureExplanation,
   emptyForm,
   formIssues,
   formToConfig,
@@ -73,7 +68,6 @@ export function McpAddDialog({ cwd, open, onOpenChange, entry, edit, defaultScop
   const [showIssues, setShowIssues] = useState(false);
   const [testing, setTesting] = useState(false);
   const [inspection, setInspection] = useState<McpInspection>();
-  const [exposure, setExposure] = useState<McpToolExposure>();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -83,7 +77,6 @@ export function McpAddDialog({ cwd, open, onOpenChange, entry, edit, defaultScop
     if (!open) return;
     setShowIssues(false);
     setInspection(undefined);
-    setExposure(undefined);
     setError(undefined);
     setTesting(false);
     setSaving(false);
@@ -130,7 +123,6 @@ export function McpAddDialog({ cwd, open, onOpenChange, entry, edit, defaultScop
     try {
       const result = await client.request("mcp/inspect", { cwd, scope, server: formToConfig(form) });
       setInspection(result);
-      setExposure(defaultExposure(result.tools.length));
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
     } finally {
@@ -143,7 +135,7 @@ export function McpAddDialog({ cwd, open, onOpenChange, entry, edit, defaultScop
     if (hasIssues(issues)) return;
     setSaving(true);
     setError(undefined);
-    const chosen = exposure ?? form.exposure;
+    const chosen = form.exposure;
     try {
       const { servers } = await client.request("mcp/save", {
         cwd,
@@ -160,7 +152,6 @@ export function McpAddDialog({ cwd, open, onOpenChange, entry, edit, defaultScop
     }
   };
 
-  const exposureChoice = exposure ?? form.exposure;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -253,14 +244,9 @@ export function McpAddDialog({ cwd, open, onOpenChange, entry, edit, defaultScop
             )}
 
             {inspection && <TestResult inspection={inspection} />}
+            <p className="text-sm leading-6 text-ink-2">{form.exposure === "direct" ? "Every enabled tool is included when a new conversation starts." : "Tools are found when needed, leaving more room for your conversation."} Change this in Advanced.</p>
 
-            {inspection && inspection.status !== "failed" && (
-              <ExposureChoice
-                exposure={exposureChoice}
-                toolCount={inspection.tools.length}
-                onChange={(next) => setExposure(next)}
-              />
-            )}
+
           </div>
         </ScrollArea>
 
@@ -339,44 +325,6 @@ function TestResult({ inspection }: { inspection: McpInspection }) {
           ))}
         </ul>
       )}
-    </section>
-  );
-}
-
-function ExposureChoice({
-  exposure,
-  toolCount,
-  onChange,
-}: {
-  exposure: McpToolExposure;
-  toolCount: number;
-  onChange: (exposure: McpToolExposure) => void;
-}) {
-  const chosen = useMemo(() => defaultExposure(toolCount), [toolCount]);
-  return (
-    <section data-slot="mcp-exposure" className="flex flex-col gap-2 rounded-xl border border-line bg-surface p-3">
-      <p className="text-sm font-medium text-ink">How the model reaches these tools</p>
-      <div role="group" aria-label="How the model reaches these tools" className="flex flex-wrap gap-2">
-        {(["direct", "on-demand"] as const).map((option) => (
-          <Button
-            key={option}
-            type="button"
-            aria-pressed={exposure === option}
-            variant="ghost"
-            size="sm"
-            onClick={() => onChange(option)}
-            className={cn("border border-line", exposure === option && "border-live text-ink")}
-          >
-            {EXPOSURE_LABEL[option]}
-          </Button>
-        ))}
-      </div>
-      <p className="text-xs leading-5 text-ink-3">
-        {exposureExplanation(exposure, toolCount)}
-        {exposure === chosen
-          ? ` Chosen for you because ${toolCount <= MCP_DIRECT_EXPOSURE_MAX_TOOLS ? `${toolCount} tools fit comfortably in the model’s list` : `more than ${MCP_DIRECT_EXPOSURE_MAX_TOOLS} tools would crowd every turn`}.`
-          : ""}
-      </p>
     </section>
   );
 }

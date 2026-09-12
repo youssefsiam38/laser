@@ -24,10 +24,10 @@ index 0000000000000000000000000000000000000000..57005cea6b80f6153c994bafd0c21d0a
 +  };
 +}
 diff --git a/dist/types.d.ts b/dist/types.d.ts
-index f957e9320a0569c0c0050c08c9a5e5d9215993ce..0bc1d18295866329b5ec8cf25744c628825c8999 100644
+index f957e9320a0569c0c0050c08c9a5e5d9215993ce..dd28207a5b939f1b0f9043c019a289359708c4ea 100644
 --- a/dist/types.d.ts
 +++ b/dist/types.d.ts
-@@ -456,7 +456,17 @@ export interface McpConfig {
+@@ -456,7 +456,23 @@ export interface McpConfig {
      settings?: McpSettings;
      claudePlugins?: ClaudePluginConfig[];
  }
@@ -40,13 +40,19 @@ index f957e9320a0569c0c0050c08c9a5e5d9215993ce..0bc1d18295866329b5ec8cf25744c628
 +  oauthClientUri?: string;
 +}
 +
++export interface McpDiscoveryPolicy {
++    rank?: (catalog: Array<{ server: string; tool: ToolMetadata }>, query: string) => Array<{ server: string; name: string; score: number }>;
++    search(matches: Array<{ server: string; tool: ToolMetadata; score: number }>, input: { query: string; server?: string; detail?: string; limit?: number; offset?: number }): Record<string, unknown>;
++    describe(server: string, tool: ToolMetadata): Record<string, unknown>;
++}
  export interface McpAdapterOptions {
++  discovery?: McpDiscoveryPolicy;
 +  clientIdentity?: McpClientIdentity;
      config?: McpConfig;
      configPath?: string;
  }
 diff --git a/index.ts b/index.ts
-index f655b4fe49bb747741dd4dda7759ad37a17eb992..927a6469aa083b38c0822d320d389f86533e7d53 100644
+index f655b4fe49bb747741dd4dda7759ad37a17eb992..dc219b4c35cf1606721a66edfe3591b1e5b41e20 100644
 --- a/index.ts
 +++ b/index.ts
 @@ -188,7 +188,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
@@ -66,7 +72,15 @@ index f655b4fe49bb747741dd4dda7759ad37a17eb992..927a6469aa083b38c0822d320d389f86
      });
      initPromise = promise;
  
-@@ -754,7 +755,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+@@ -688,6 +689,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+         return;
+       }
+ 
++      nextState.discovery = options.discovery;
+       state = nextState;
+       // Re-read after asynchronous startup so navigation during initialization
+       // cannot restore a stale branch.
+@@ -754,7 +756,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
        if (lifecycleGeneration !== 0 || state || initPromise) return;
        const generation = ++lifecycleGeneration;
        const owner = createMcpRuntimeOwner();
@@ -75,7 +89,7 @@ index f655b4fe49bb747741dd4dda7759ad37a17eb992..927a6469aa083b38c0822d320d389f86
        currentOwner = owner;
        currentOAuthRuntime = oauthRuntime;
        startInitialization({
-@@ -782,7 +783,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+@@ -782,7 +784,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
      const previousOwner = currentOwner;
      const previousOAuthRuntime = currentOAuthRuntime;
      const owner = createMcpRuntimeOwner();
@@ -84,10 +98,38 @@ index f655b4fe49bb747741dd4dda7759ad37a17eb992..927a6469aa083b38c0822d320d389f86
      currentOwner = owner;
      currentOAuthRuntime = oauthRuntime;
      state = null;
-@@ -1623,6 +1624,7 @@ export function createMcpAdapter(options: McpAdapterOptions = {}) {
+@@ -1397,7 +1399,8 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+         instructions: Type.Optional(Type.String({ description: "Server name to show that server's usage instructions" })),
+         search: Type.Optional(Type.String({ description: "Search tools by name/description" })),
+         regex: Type.Optional(Type.Boolean({ description: "Treat search as regex (default: substring match)" })),
+-        includeSchemas: Type.Optional(Type.Boolean({ description: "Include parameter schemas in search results (default: true)" })),
++        includeSchemas: Type.Optional(Type.Boolean({ description: "Include parameter schemas in search results" })),
++        ...(options.discovery ? { detail: Type.Optional(Type.Union([Type.Literal("names"), Type.Literal("summary"), Type.Literal("full")], { description: "Search detail level (default: summary)" })) } : {}),
+         limit: optionalNumber({ minimum: 1, description: "Maximum search results to return (default: 12)" }),
+         offset: optionalNumber({ minimum: 0, description: "Search result offset (default: 0)" }),
+         server: Type.Optional(Type.String({ description: "Server name (filters/disambiguates calls and optionally names an install)" })),
+@@ -1413,6 +1416,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+         describe?: string;
+         instructions?: string;
+         search?: string;
++        detail?: "names" | "summary" | "full";
+         regex?: boolean;
+         includeSchemas?: boolean;
+         limit?: number;
+@@ -1543,7 +1547,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+           return executeInstructions(state, params.instructions);
+         }
+         if (params.search !== undefined) {
+-          const result = executeSearch(state, params.search, params.regex, params.server, params.includeSchemas, params.limit, params.offset);
++          const result = executeSearch(state, params.search, params.regex, params.server, params.includeSchemas, params.limit, params.offset, params.detail);
+           if (lazyDirectTools.size === 0) return result;
+           holdLazyToolsInactive();
+           const matches = (result.details as { matches?: Array<{ server: string; tool: string }> } | undefined)?.matches ?? [];
+@@ -1623,6 +1627,8 @@ export function createMcpAdapter(options: McpAdapterOptions = {}) {
      : undefined;
    return function mcpAdapter(pi: ExtensionAPI) {
      installMcpAdapter(pi, {
++      ...(options.discovery !== undefined ? { discovery: options.discovery } : {}),
 +      ...(options.clientIdentity !== undefined ? { clientIdentity: { ...options.clientIdentity } } : {}),
        ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
        ...(factoryConfig !== undefined ? { config: cloneMcpConfig(factoryConfig) } : {}),
@@ -209,6 +251,38 @@ index 1f1e1bedf9d0232ec3fffaa7cae4adf2bc826b1c..d071d5484c1785618c2286fa71d5a11b
          throwIfAborted(signal)
          const result = await abortable(runSdkAuth(authProvider, {
            serverUrl,
+diff --git a/mcp-code.ts b/mcp-code.ts
+index b337813c119c61a3b216fc4b18609ab66035fa59..61b009861433a86e146c7a284367e1324fdc7949 100644
+--- a/mcp-code.ts
++++ b/mcp-code.ts
+@@ -22,7 +22,7 @@ class McpScriptTimeoutError extends Error {
+   }
+ }
+ 
+-type SearchInput = { query?: unknown; server?: unknown; limit?: unknown; offset?: unknown };
++type SearchInput = { query?: unknown; server?: unknown; limit?: unknown; offset?: unknown; detail?: unknown };
+ type DescribeInput = { path?: unknown };
+ type WorkerMessage =
+   | { type: "emit"; block: unknown }
+@@ -197,7 +197,9 @@ export async function runMcpScript(
+       const server = typeof input?.server === "string" ? input.server : undefined;
+       const limit = typeof input?.limit === "number" ? input.limit : 12;
+       const offset = typeof input?.offset === "number" ? input.offset : 0;
+-      const page = paginate(rankToolMatches(state, query, server), offset, limit);
++      const matches = rankToolMatches(state, query, server);
++      if (state.discovery) return state.discovery.search(matches, { query, limit, offset, ...(server ? { server } : {}), ...(typeof input?.detail === "string" ? { detail: input.detail } : {}) });
++      const page = paginate(matches, offset, limit);
+       return {
+         ...page,
+         items: page.items.map(({ server: matchServer, tool, score }) => ({
+@@ -227,6 +229,7 @@ export async function runMcpScript(
+         if (isServerInActiveFailureBackoff(state, server)) continue;
+         const tool = findToolByName(metadata, path);
+         if (!tool) continue;
++        if (state.discovery) return state.discovery.describe(server, tool);
+         const inputShape = tool.inputSchema ? renderTsShape(tool.inputSchema) : null;
+         const inputTypeScript = inputShape ?? (tool.inputSchema ? formatSchema(tool.inputSchema) : null);
+         return {
 diff --git a/mcp-oauth-provider.ts b/mcp-oauth-provider.ts
 index 0d34d2dad2b1ce6e796076f59c0a12583bc2af9a..89e5ab2515fa55381389ef2976b65682e1fa9b76 100644
 --- a/mcp-oauth-provider.ts
@@ -339,6 +413,75 @@ index 644f032f3aa78b5b182d263314723004d95eb560..1a2414c46c5206cc107b7138b9b69aca
      "index.ts",
      "error-signal.ts",
      "state.ts",
+diff --git a/proxy-modes.ts b/proxy-modes.ts
+index 49f1b4eccfbee9a14ef6e71db8d8392dcba6ed23..c3afdecf08c2c10af343f9dbd961c2d62d4b9e81 100644
+--- a/proxy-modes.ts
++++ b/proxy-modes.ts
+@@ -648,6 +648,11 @@ export function executeDescribe(state: McpExtensionState, toolName: string): Pro
+     };
+   }
+ 
++  if (state.discovery) {
++    const descriptor = state.discovery.describe(serverName, toolMeta);
++    return { content: [{ type: "text", text: JSON.stringify(descriptor) }], details: { mode: "describe", tool: toolMeta, server: serverName, ...(descriptor.error ? { error: "description_unavailable", message: JSON.stringify(descriptor.error) } : {}) } };
++  }
++
+   const approvalMarker = isToolCallApprovalRequired(state.config, serverName, toolMeta, state.toolMetadata)
+     ? " (requires approval)"
+     : "";
+@@ -681,6 +686,7 @@ export function executeSearch(
+   includeSchemas?: boolean,
+   limit = 12,
+   offset = 0,
++  detail?: string,
+ ): ProxyToolResult {
+   const showSchemas = includeSchemas !== false;
+   if (server && isServerDisabled(state.config.mcpServers[server])) return disabledResult("search", server);
+@@ -748,6 +754,10 @@ export function executeSearch(
+     matches = rankToolMatches(state, query, server);
+   }
+ 
++  if (state.discovery) {
++    const page = state.discovery.search(matches, { query, ...(server ? { server } : {}), detail: detail ?? (includeSchemas === true ? "full" : includeSchemas === false ? "summary" : undefined), limit, offset });
++    return { content: [{ type: "text", text: JSON.stringify(page) }], details: { mode: "search", ...page } };
++  }
+   const page = paginate(matches, offset, limit);
+   if (page.total === 0) {
+     const connectingServers = server
+@@ -814,6 +824,7 @@ export function executeSearch(
+ }
+ 
+ export function executeList(state: McpExtensionState, server: string): ProxyToolResult {
++  if (state.discovery) return executeSearch(state, "", false, server);
+   const definition = state.config.mcpServers[server];
+   if (!definition) {
+     return {
+diff --git a/search-ranking.ts b/search-ranking.ts
+index beb2a048db1fc2b66786d2031dcba0a452b26aac..916b0f2b1f01d82348a5046d24da80e6b95b0b29 100644
+--- a/search-ranking.ts
++++ b/search-ranking.ts
+@@ -235,6 +235,21 @@ export function rankToolMatches(
+   includeKeywords = true,
+ ): RankedToolMatch[] {
+   const matches: RankedToolMatch[] = [];
++  if (state.discovery?.rank) {
++    const catalog = [...state.toolMetadata].flatMap(([name, tools]) =>
++      (server && server !== name) || isServerDisabled(state.config.mcpServers[name]) || isServerInActiveFailureBackoff(state, name)
++        ? [] : tools.map(tool => ({ server: name, tool })));
++    const allowed = new Map(catalog.map(item => [JSON.stringify([item.server, item.tool.name]), item]));
++    const seen = new Set<string>();
++    for (const hit of state.discovery.rank(catalog, query)) {
++      const key = JSON.stringify([hit.server, hit.name]);
++      const item = allowed.get(key);
++      if (!item || seen.has(key) || !Number.isFinite(hit.score)) continue;
++      seen.add(key);
++      matches.push({ ...item, score: hit.score });
++    }
++    return matches.sort((a, b) => b.score - a.score || a.tool.name.localeCompare(b.tool.name));
++  }
+   const normalizedQuery = normalizeSearchText(query).trim();
+   const queryTokens = tokenize(query);
+   if (queryTokens.length === 0) return matches;
 diff --git a/server-manager.ts b/server-manager.ts
 index 94154fde19245139887270efd4d500b5d1a96653..708e90e1b8767dbdd1406a88ac30a943b8883df0 100644
 --- a/server-manager.ts
@@ -388,11 +531,23 @@ index 94154fde19245139887270efd4d500b5d1a96653..708e90e1b8767dbdd1406a88ac30a943
        );
        provider.setAuthFetch(createOAuthFetch(serverUrl, () => serviceHeaders,
          combineAbortSignals(this.oauthRuntime?.signal, signal), {
+diff --git a/state.ts b/state.ts
+index e2d825c62fb0600efe3fed042d4292c5dd10e82f..59f762a112eb005db9a2a302a3a91986d3a08e97 100644
+--- a/state.ts
++++ b/state.ts
+@@ -29,6 +29,7 @@ export type SendMessageFn = (
+ ) => void;
+ 
+ export interface McpExtensionState {
++  discovery?: import("./types.ts").McpDiscoveryPolicy;
+   owner: McpRuntimeOwner;
+   manager: McpServerManager;
+   lifecycle: McpLifecycleManager;
 diff --git a/types.ts b/types.ts
-index 023ee643494b8c669b7b479d590181a9c1b016f8..0d18bd23ef9b7d37e23f7a2918a9c5978fede5d6 100644
+index 023ee643494b8c669b7b479d590181a9c1b016f8..fd0223c984de5f05ae852d99adcc16123cc82c44 100644
 --- a/types.ts
 +++ b/types.ts
-@@ -666,7 +666,17 @@ export interface McpConfig {
+@@ -666,7 +666,25 @@ export interface McpConfig {
    claudePlugins?: ClaudePluginConfig[];
  }
  
@@ -405,7 +560,15 @@ index 023ee643494b8c669b7b479d590181a9c1b016f8..0d18bd23ef9b7d37e23f7a2918a9c597
 +  oauthClientUri?: string;
 +}
 +
++export interface McpDiscoveryPolicy {
++  /** Optional ranking over the authorized catalog; omitted uses built-in keyword retrieval. */
++  rank?: (catalog: Array<{ server: string; tool: ToolMetadata }>, query: string) => Array<{ server: string; name: string; score: number }>;
++  search(matches: Array<{ server: string; tool: ToolMetadata; score: number }>, input: { query: string; server?: string; detail?: string; limit?: number; offset?: number }): Record<string, unknown>;
++  describe(server: string, tool: ToolMetadata): Record<string, unknown>;
++}
++
  export interface McpAdapterOptions {
++  discovery?: McpDiscoveryPolicy;
 +  clientIdentity?: McpClientIdentity;
    config?: McpConfig;
    configPath?: string;
