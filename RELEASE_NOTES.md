@@ -1,16 +1,24 @@
-## A faster app, measured
+## Opening a conversation is fast now
 
-A cross-package audit found the app doing large amounts of work nobody could see. This release removes it.
+Clicking a session used to mean waiting — longest on the conversations you care about most, the long ones. Two things were wrong, and both are fixed.
 
-- **Opening a project with many sessions.** Reading the session catalog copied the same bytes over and over: a project holding one very large conversation took about a second of frozen work; it is now about fifty milliseconds. Classifying project directories asked the filesystem forty thousand times for a five-thousand-session list; it now asks eight.
-- **While the model streams.** Settled messages no longer re-render on every token, the sidebar, fleet and telemetry no longer react to text they do not show, and the conversation map no longer measures the whole transcript as you scroll.
-- **What crosses the wire.** A captured provider request — sometimes megabytes — was broadcast to every open view that had no use for it; the inspector now fetches it when you open it. Transcript traffic for conversations nobody is looking at is no longer sent.
-- **Searching, Git and logs.** A search you have replaced is cancelled instead of finishing; Git reads no longer load a huge file before deciding to skip it and run their independent reads together; large provider captures no longer block the host.
-- **Memory.** Session and replay caches are now bounded by bytes rather than by a count, so one enormous conversation cannot crowd out the rest.
+**A conversation opens on its most recent messages.** It no longer builds the entire history before showing you anything: the latest messages appear, and older ones load as you scroll up, with your reading position kept. A 2,000-message conversation now holds 40 messages on screen instead of 2,000, and 1,524 page elements instead of 56,512. Everything still reaches the whole conversation — search, jumping to a message, editing, forking, versions — and "Load complete history" is there when you want all of it at once.
 
-Installing the app on your phone no longer downloads every optional part of the interface up front.
+**The project is ready before you click.** Starting the process that runs your project used to happen after the click, and it cost more than reading the conversation did. Laser now prepares it when you show intent — selecting the project, opening its group, returning to where you left off — for projects you have already trusted, one at a time, released again within a minute and a half if you do not use it.
 
-## Files and sessions
+Measured on the finished build, ten samples per case, both widths and both themes:
 
-- **Laser opens any file on the machine.** The viewer is no longer limited to the project: a file the model refers to anywhere on your computer opens, with its absolute path shown so you always know what you are looking at. When a file cannot be opened, the reason is the real one — a folder, a missing file, no permission — not "check that it still exists in the project".
-- **No more "Detached" group.** A child agent's session whose parent is not listed now sits in its project like any other session.
+| Conversation | Before | After |
+| --- | ---: | ---: |
+| Short, project not yet started | 729 ms | **174 ms** |
+| 240 messages, project not yet started | — | **224 ms** |
+| 2,000 messages, project not yet started | — | **227 ms** |
+| 2,000 messages, switching back | 4,133 ms | **152 ms** |
+
+A two-thousand-message conversation now opens in about the same time as a four-message one.
+
+## Also
+
+- The sidebar asks the app for the sessions it shows rather than every session on your machine.
+- Forking from an older message hands that message to the new conversation's composer, switching between versions of a prompt keeps its version controls, and versions are numbered in the order they were written.
+- A project's environment command no longer risks starting a project with a half-read environment when the machine is busy.
