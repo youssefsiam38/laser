@@ -188,8 +188,12 @@ export function useHandedBackText(): void {
   const view = useLaserView();
   const handedBack = view?.editorText;
   const handedBackPath = view?.path;
+  const composerPath = useAuiState(s => s.threadListItem.externalId ?? s.threadListItem.remoteId);
   useEffect(() => {
-    if (handedBack === undefined || handedBackPath === undefined) return;
+    // The destination store commits before assistant-ui's controlled thread
+    // selection settles. Never consume the new session's text in the old
+    // thread's composer: that draft stays behind when the runtime switches.
+    if (handedBack === undefined || handedBackPath === undefined || composerPath !== handedBackPath) return;
     const draft = aui.composer.getState();
     if (handedBack !== "" && draft.text.trim() === "" && draft.attachments.length === 0 && !draft.quote) {
       const parsed = splitAttachedFiles(handedBack);
@@ -197,7 +201,7 @@ export function useHandedBackText(): void {
       for (const file of parsed.files) void aui.composer.addAttachment({ id: crypto.randomUUID(), type: "document", name: file.name, contentType: file.mediaType, content: [{ type: "text", text: wrapFileAttachment(file) }] });
     }
     actions.takeEditorText(handedBackPath);
-  }, [handedBack, handedBackPath, aui, actions]);
+  }, [handedBack, handedBackPath, composerPath, aui, actions]);
 }
 
 function setComposerStreamingBehavior(aui: ReturnType<typeof useAui>, streamingBehavior: "prompt" | "pending" | "steer" | "followUp"): void {

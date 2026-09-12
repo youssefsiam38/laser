@@ -30,9 +30,11 @@ describe("partial history integration", () => {
     expect(after.entries).toEqual(entries);
     expect(after.history).toMatchObject({ complete: true, branchesUnloaded: false });
     expect(after.history?.before).toBeUndefined();
-    const narrowed = hydrate(begin(app), tail()).open[session.path]!;
-    expect(narrowed.history?.complete).toBe(false);
-    expect(narrowed.blocks).toHaveLength(40);
+    const refreshed = hydrate(begin(app), tail()).open[session.path]!;
+    expect(refreshed.history?.complete).toBe(true);
+    expect(refreshed.history?.userOffset).toBe(0);
+    expect(refreshed.blocks).toHaveLength(80);
+    expect(projectSessionView(refreshed).messages[0]?.metadata?.custom?.[MESSAGE_METADATA_NS]).toMatchObject({ userOrdinal: 0, entryId: "e0" });
   });
 
   it("shares image-bearing blocks without serializing their payloads", () => {
