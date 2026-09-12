@@ -65,7 +65,7 @@ export function TaskEventNotice({ data }: { data: unknown }) {
       <SquareTerminal aria-hidden="true" className="size-3.5 shrink-0" />
       <span className="min-w-0 flex-1 truncate">
         Background task{" "}
-        <code data-search-content="command" className="typed text-ink" title={task.command}>
+        <code dir="ltr" data-search-content="command" className="typed text-ink" title={task.command}>
           {oneLine(task.command, 60)}
         </code>{" "}
         {outcome.text}

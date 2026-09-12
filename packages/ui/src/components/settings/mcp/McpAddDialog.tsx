@@ -291,7 +291,7 @@ function TestResult({ inspection }: { inspection: McpInspection }) {
         {/* A failure names paths (the executable, the PATH it looked in): let them break anywhere so the card holds them on a phone. */}
         {inspection.detail && <p className="text-sm leading-6 text-ink-2 break-words [overflow-wrap:anywhere]">{inspection.detail}</p>}
         {inspection.stderr?.length ? (
-          <pre className="typed max-h-40 overflow-auto rounded-lg bg-surface p-2 whitespace-pre-wrap text-ink-2">
+          <pre dir="ltr" className="typed max-h-40 overflow-auto rounded-lg bg-surface p-2 whitespace-pre-wrap text-ink-2">
             {inspection.stderr.join("\n")}
           </pre>
         ) : null}

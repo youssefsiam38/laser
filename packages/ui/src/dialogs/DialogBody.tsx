@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { useLogicalArrowKeys } from "@/hooks/use-direction";
 
 import { ApprovalCard } from "@/components/assistant-ui/elements/approval-card";
 import { ElicitationForm, type FieldValues } from "@/components/assistant-ui/elements/elicitation-form";
@@ -42,6 +43,7 @@ export interface DialogBodyProps {
  * ⌘/Ctrl+Enter a long one, Esc cancels, arrows move between choices.
  */
 export function DialogBody({ form, onAnswer, variant = "card", touch = false, initialDeclining = false, autoFocus = true, className }: DialogBodyProps) {
+  const logicalKey = useLogicalArrowKeys();
   const id = useId();
   const [values, setValues] = useState<FieldValues>(() => defaults(form.fields));
   const [declining, setDeclining] = useState(initialDeclining);
@@ -103,7 +105,7 @@ export function DialogBody({ form, onAnswer, variant = "card", touch = false, in
       if (buttons.length === 0) return;
       e.preventDefault();
       const current = buttons.findIndex((b) => b === document.activeElement);
-      const forward = e.key === "ArrowRight" || e.key === "ArrowDown";
+      const forward = logicalKey(e.key) === "ArrowRight" || e.key === "ArrowDown";
       buttons[current < 0 ? 0 : (current + (forward ? 1 : buttons.length - 1)) % buttons.length]?.focus();
     }
   };

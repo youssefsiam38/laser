@@ -87,7 +87,7 @@ export function ConversationSkeleton() {
     <div data-slot="conversation-skeleton" role="status" aria-label="Loading the conversation" aria-busy="true" className="flex flex-col gap-8 pt-6 pb-8">
       <span className="sr-only">Loading the conversation</span>
       <div aria-hidden="true" className="conversation-breathe motion-reduce:animate-none flex flex-col gap-8">
-        <div className="ml-auto w-3/5 rounded-xl bg-surface-2 p-4">
+        <div className="ms-auto w-3/5 rounded-xl bg-surface-2 p-4">
           <div className="h-2 w-full rounded-full bg-line" />
           <div className="mt-2.5 h-2 w-2/3 rounded-full bg-line" />
         </div>
@@ -96,7 +96,7 @@ export function ConversationSkeleton() {
           <div className="h-2 w-11/12 rounded-full bg-line" />
           <div className="h-2 w-3/4 rounded-full bg-line" />
         </div>
-        <div className="ml-auto w-2/5 rounded-xl bg-surface-2 p-4">
+        <div className="ms-auto w-2/5 rounded-xl bg-surface-2 p-4">
           <div className="h-2 w-full rounded-full bg-line" />
         </div>
       </div>

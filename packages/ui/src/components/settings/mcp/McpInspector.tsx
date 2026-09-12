@@ -1,4 +1,5 @@
 "use client";
+import { useLogicalArrowKeys } from "@/hooks/use-direction";
 /**
  * The inspector (docs/mcp.md "Inspecting"): a full-height sheet on a wide
  * screen, the whole screen on a phone. It connects when it opens — that is
@@ -76,6 +77,7 @@ export function McpInspector({
   onError,
   onNotice,
 }: McpInspectorProps) {
+  const logicalKey = useLogicalArrowKeys();
   const { client } = useLaserStable();
   const [tab, setTab] = useState<InspectorTab>("overview");
   const [inspection, setInspection] = useState<McpInspection>();
@@ -279,7 +281,7 @@ export function McpInspector({
 
   const moveTab = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const keys = { ArrowRight: 1, ArrowLeft: -1 } as const;
-    const step = keys[event.key as keyof typeof keys];
+    const step = keys[logicalKey(event.key) as keyof typeof keys];
     if (step === undefined && event.key !== "Home" && event.key !== "End") return;
     event.preventDefault();
     const index = tabs.findIndex((entry) => entry.id === tab);
@@ -516,7 +518,7 @@ function Overview({
       {failedAgo && <p className="text-sm leading-6 text-ink-2">It failed {failedAgo}.</p>}
       {(state.detail || inspection?.detail) && <p className="text-sm leading-6 text-ink-2">{state.detail ?? inspection?.detail}</p>}
       {inspection?.stderr?.length ? (
-        <pre className="typed max-h-40 overflow-auto rounded-lg bg-surface-2 p-2 whitespace-pre-wrap text-ink-2">{inspection.stderr.join("\n")}</pre>
+        <pre dir="ltr" className="typed max-h-40 overflow-auto rounded-lg bg-surface-2 p-2 whitespace-pre-wrap text-ink-2">{inspection.stderr.join("\n")}</pre>
       ) : null}
 
       <div className="flex flex-wrap gap-2">

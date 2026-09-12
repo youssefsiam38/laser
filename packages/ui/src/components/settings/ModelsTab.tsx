@@ -407,7 +407,7 @@ function ModelConnectionsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
               >
                 <ChevronRight
                   aria-hidden="true"
-                  className={cn("size-3.5 shrink-0 text-ink-3 transition-transform duration-(--motion-fast) motion-reduce:transition-none", patternsOpen && "rotate-90")}
+                  className={cn("rtl:-scale-x-100", "size-3.5 shrink-0 text-ink-3 transition-transform duration-(--motion-fast) motion-reduce:transition-none", patternsOpen && "rotate-90 rtl:-rotate-90")}
                 />
                 <span className="eyebrow text-ink-3">Advanced</span>
                 <span className="min-w-0 truncate text-sm font-medium text-ink">Allow-list patterns</span>
@@ -418,7 +418,7 @@ function ModelConnectionsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
             </CollapsibleTrigger>
             <CollapsibleContent className="hairline-t flex flex-col gap-2 px-3 py-3">
               <p className="text-xs leading-5 text-ink-2">
-                Patterns in <code className="font-mono">enabledModels</code> are an allow-list: when set, only what matches is offered, and a
+                Patterns in <code dir="ltr" className="font-mono">enabledModels</code> are an allow-list: when set, only what matches is offered, and a
                 pattern written before a model existed hides every newer one. The switches never edit this list. Leave it empty to offer
                 every model. Written to your {listScope} settings.
               </p>
@@ -505,7 +505,7 @@ function ModelConnectionsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
           {models.length === 0 && !loading && (
             <p className="rounded-lg border border-line px-3 py-6 text-center text-sm text-ink-2">
               No models are available. Add a provider credential above, or point{" "}
-              <code className="font-mono">models.json</code> at a local server.
+              <code dir="ltr" className="font-mono">models.json</code> at a local server.
             </p>
           )}
 
@@ -543,7 +543,7 @@ function ModelConnectionsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
                     >
                       <ChevronRight
                         aria-hidden="true"
-                        className={cn("size-3.5 shrink-0 text-ink-3 transition-transform duration-(--motion-fast) motion-reduce:transition-none", open && "rotate-90")}
+                        className={cn("rtl:-scale-x-100", "size-3.5 shrink-0 text-ink-3 transition-transform duration-(--motion-fast) motion-reduce:transition-none", open && "rotate-90 rtl:-rotate-90")}
                       />
                       <ProviderLogo provider={provider} className="size-4 shrink-0" />
                       <h3 className="min-w-0 truncate text-sm font-semibold text-ink">{provider}</h3>

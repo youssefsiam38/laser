@@ -319,11 +319,12 @@ export const STARTUP_SCREEN_CSS = `.startup-restoration {
 
 .startup-aperture-halo {
   position: absolute;
-  left: 50%;
+  inset-inline: 0;
+  margin-inline: auto;
   top: 0;
   width: var(--startup-aperture-size);
   aspect-ratio: 1;
-  transform: translate(-50%, -38%);
+  transform: translateY(-38%);
   background: radial-gradient(circle, color-mix(in oklab, var(--live) 20%, transparent), transparent 68%);
   filter: blur(calc(var(--space-unit) * 3));
   animation: startup-halo var(--startup-signal-duration) var(--motion-ease) infinite;

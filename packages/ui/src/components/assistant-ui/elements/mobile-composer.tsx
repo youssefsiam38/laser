@@ -54,6 +54,7 @@ export function MobileComposer({ above, leading, inline, trailing, placeholder, 
       {leading}
       <div className={cn(field, "flex min-h-11 min-w-0 flex-1 items-end gap-1 rounded-full py-1.5 ps-4 pe-1.5")}>
         <ComposerPrimitive.Input
+          dir="auto"
           rows={1}
           maxRows={6}
           aria-label="Message"

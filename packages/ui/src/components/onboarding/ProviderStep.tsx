@@ -218,7 +218,7 @@ export function ProviderStep({ cwd, onConfigured, onBusyChange }: ProviderStepPr
                       : "models appear after sign-in"}
                 </span>
               </span>
-              <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-ink-3" />
+              <ChevronRight aria-hidden="true" className="rtl:-scale-x-100 size-4 shrink-0 text-ink-3" />
             </button>
           </li>
         ))}
@@ -251,7 +251,7 @@ function MethodButton({ icon, title, detail, onClick }: { icon: React.ReactNode;
         <span className="block text-sm font-medium text-ink">{title}</span>
         <span className="block text-xs leading-4 text-ink-2">{detail}</span>
       </span>
-      <ChevronRight aria-hidden="true" />
+      <ChevronRight aria-hidden="true" className="rtl:-scale-x-100" />
     </button>
   );
 }

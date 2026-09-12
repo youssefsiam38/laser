@@ -4,6 +4,8 @@ import { Dialog as SheetPrimitive } from "radix-ui";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useDirection } from "@/hooks/use-direction";
+import { logicalSide } from "@/theme/direction";
 
 function Sheet({ ...props }: React.ComponentProps<typeof SheetPrimitive.Root>) {
   return <SheetPrimitive.Root data-slot="sheet" {...props} />;
@@ -52,19 +54,23 @@ function SheetContent({
   side?: "top" | "right" | "bottom" | "left";
   showCloseButton?: boolean;
 }) {
+  const direction = useDirection();
+  const physicalSide = logicalSide(side, direction);
   return (
     <SheetPortal>
       <SheetOverlay />
       <SheetPrimitive.Content
         data-slot="sheet-content"
-        data-side={side}
+        data-side={physicalSide}
         className={cn(
           "fixed z-50 flex flex-col bg-surface text-sm text-ink shadow-float outline-none",
           "duration-(--motion-slow) ease-out animate-in data-[state=closed]:animate-out",
           side === "right" &&
-            "inset-y-0 end-0 h-full w-[min(88vw,320px)] border-s border-line pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] slide-in-from-right data-[state=closed]:slide-out-to-right",
+            "inset-y-0 end-0 h-full w-[min(88vw,320px)] border-s border-line pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]",
           side === "left" &&
-            "inset-y-0 start-0 h-full w-[min(88vw,320px)] border-e border-line pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] slide-in-from-left data-[state=closed]:slide-out-to-left",
+            "inset-y-0 start-0 h-full w-[min(88vw,320px)] border-e border-line pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]",
+          physicalSide === "left" && "slide-in-from-left data-[state=closed]:slide-out-to-left",
+          physicalSide === "right" && "slide-in-from-right data-[state=closed]:slide-out-to-right",
           side === "top" &&
             "inset-x-0 top-0 h-auto max-h-[min(85dvh,calc(var(--vvh,100dvh)-24px))] rounded-b-2xl border-b border-line pt-[env(safe-area-inset-top)] slide-in-from-top data-[state=closed]:slide-out-to-top",
           side === "bottom" &&

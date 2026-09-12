@@ -178,7 +178,7 @@ export function TopBar() {
       <span ref={markerRef} data-slot="topbar-room-marker" aria-hidden="true" className="absolute hidden @3xl/topbar:block" />
       {shell.layout === "mobile" ? (
         <TooltipIconButton tooltip="Sessions" size="icon" onClick={() => shell.setSessionsOpen(true)}>
-          <ChevronLeft />
+          <ChevronLeft className="rtl:-scale-x-100" />
         </TooltipIconButton>
       ) : (
         <TooltipIconButton
@@ -187,7 +187,7 @@ export function TopBar() {
           aria-pressed={shell.sessionsOpen}
           onClick={shell.toggleSessions}
         >
-          {shell.sessionsOpen ? <PanelLeftClose /> : <PanelLeft />}
+          {shell.sessionsOpen ? <PanelLeftClose className="rtl:-scale-x-100" /> : <PanelLeft className="rtl:-scale-x-100" />}
         </TooltipIconButton>
       )}
 
@@ -430,7 +430,7 @@ function ParentCrumb({ path, title }: { path: string; title: string }) {
         <CornerUpLeft aria-hidden="true" className="size-3.5 @3xl/topbar:hidden" />
         <span className="hidden min-w-0 truncate @3xl/topbar:inline">{title}</span>
       </button>
-      <ChevronRight className="hidden size-3 shrink-0 text-ink-3 @3xl/topbar:block" aria-hidden="true" />
+      <ChevronRight className="rtl:-scale-x-100 hidden size-3 shrink-0 text-ink-3 @3xl/topbar:block" aria-hidden="true" />
     </span>
   );
 }

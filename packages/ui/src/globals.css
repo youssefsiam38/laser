@@ -319,11 +319,12 @@
 
 .startup-aperture-halo {
   position: absolute;
-  left: 50%;
+  inset-inline: 0;
+  margin-inline: auto;
   top: 0;
   width: var(--startup-aperture-size);
   aspect-ratio: 1;
-  transform: translate(-50%, -38%);
+  transform: translateY(-38%);
   background: radial-gradient(circle, color-mix(in oklab, var(--live) 20%, transparent), transparent 68%);
   filter: blur(calc(var(--space-unit) * 3));
   animation: startup-halo var(--startup-signal-duration) var(--motion-ease) infinite;
@@ -778,6 +779,8 @@
 
 /* Typed value: the mono face at the 12px floor, tabular. */
 @utility typed {
+  direction: ltr;
+  unicode-bidi: isolate;
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   line-height: var(--leading-xs);
@@ -785,6 +788,8 @@
 }
 
 @utility tnum {
+  direction: ltr;
+  unicode-bidi: isolate;
   font-variant-numeric: tabular-nums;
 }
 
@@ -801,6 +806,18 @@
   box-shadow: var(--shadow-float-sm);
 }
 
+/** Geometry on the inline axis, shared by every dialog and switch. */
+@utility center-inline {
+  inset-inline-start: 50%;
+  --tw-translate-x: -50%;
+  translate: var(--tw-translate-x) var(--tw-translate-y);
+  &:dir(rtl) { --tw-translate-x: 50%; }
+}
+@utility switch-thumb-on {
+  translate: calc(var(--spacing) * 4) 0;
+  &:dir(rtl) { translate: calc(var(--spacing) * -4) 0; }
+}
+
 /* Hairline dividers instead of boxes. */
 @utility hairline-t {
   border-top: 1px solid var(--line);
@@ -808,15 +825,24 @@
 @utility hairline-b {
   border-bottom: 1px solid var(--line);
 }
-@utility hairline-l {
-  border-left: 1px solid var(--line);
+@utility hairline-s {
+  border-inline-start: 1px solid var(--line);
 }
-@utility hairline-r {
-  border-right: 1px solid var(--line);
+@utility hairline-e {
+  border-inline-end: 1px solid var(--line);
+}
+
+/* Source text has intrinsic ordering, even inside an auto-direction prose block. */
+:where(pre, code, [data-file-path], [data-slot="file-name"]) {
+  direction: ltr;
+  unicode-bidi: isolate;
+  text-align: start;
 }
 
 /* Terminal ground: dark in both themes. */
 @utility terminal {
+  direction: ltr;
+  text-align: start;
   background: var(--terminal-bg);
   color: var(--terminal-ink);
   font-family: var(--font-mono);
@@ -867,7 +893,7 @@
 .activity-beam > span {
   position: absolute;
   inset-block: 0;
-  left: 0;
+  inset-inline-start: 0;
   width: 60%;
   background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--live) 22%, transparent), transparent);
   animation: activity-beam-travel calc(var(--motion-slow) * 14) var(--motion-ease) infinite;
@@ -880,6 +906,9 @@
   height: calc(var(--spacing) / 4);
   background: linear-gradient(90deg, transparent, var(--live), transparent);
 }
+.activity-beam:dir(rtl) { scale: -1 1; }
+/* Mirror the travelling material as a unit; its child's start is physical LTR. */
+.activity-beam:dir(rtl) > span { inset-inline-start: auto; inset-inline-end: 0; }
 @keyframes activity-beam-travel {
   0% { transform: translateX(-110%); opacity: 0; }
   20% { opacity: 1; }
@@ -897,7 +926,7 @@
     display: inline-block;
     width: 2px;
     height: 1.05em;
-    margin-left: 2px;
+    margin-inline-start: 2px;
     vertical-align: -0.15em;
     background: var(--live);
     border-radius: 1px;

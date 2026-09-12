@@ -11,6 +11,8 @@ export type UseTheme = {
   /** The custom properties currently on the page. */
   compiled: CompiledTheme;
   followSystem: boolean;
+  textDirection: ThemeState["textDirection"];
+  setTextDirection: typeof themeStore.setTextDirection;
   pair: ThemeState["pair"];
   presets: readonly ThemePreset[];
   setTheme: typeof themeStore.setTheme;
@@ -38,6 +40,8 @@ export function useTheme(): UseTheme {
     base: state.theme.base,
     compiled,
     followSystem: state.followSystem,
+    textDirection: state.textDirection,
+    setTextDirection: themeStore.setTextDirection,
     pair: state.pair,
     presets: PRESETS,
     setTheme,

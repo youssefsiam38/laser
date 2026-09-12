@@ -22,7 +22,10 @@ import { isApplicable } from "./guard.js";
 import { DEFAULT_LIGHT_PRESET_ID, DEFAULT_PRESET, DEFAULT_PRESET_ID, getPreset, presetsFor } from "./presets.js";
 import type { CompiledTheme, Theme, ThemeBase, ThemePreset } from "./types.js";
 
+import { resolveDirection, type TextDirection } from "./direction.js";
+
 export type ThemeState = {
+  textDirection: TextDirection;
   theme: Theme;
   followSystem: boolean;
   pair: { dark: string; light: string };
@@ -36,6 +39,7 @@ export type ThemeState = {
  * off (`setPreset`), which is the moment they *did* answer it here.
  */
 export const DEFAULT_STATE: ThemeState = {
+  textDirection: "system",
   theme: stripTagline(DEFAULT_PRESET),
   followSystem: true,
   pair: { dark: DEFAULT_PRESET_ID, light: DEFAULT_LIGHT_PRESET_ID },
@@ -92,7 +96,8 @@ function withKnobs(preset: ThemePreset, from: Theme, adoptFonts: boolean): Theme
 function isThemeState(x: unknown): x is ThemeState {
   if (!x || typeof x !== "object") return false;
   const s = x as Partial<ThemeState>;
-  return !!s.theme && typeof s.theme === "object" && typeof s.followSystem === "boolean" && !!s.pair;
+  return !!s.theme && typeof s.theme === "object" && typeof s.followSystem === "boolean" && !!s.pair &&
+    (s.textDirection === undefined || s.textDirection === "system" || s.textDirection === "ltr" || s.textDirection === "rtl");
 }
 
 function emit(): void {
@@ -104,7 +109,8 @@ function commit(next: ThemeState, persist = true): void {
     ? { ...next, theme: withKnobs(pairedPreset(next, systemBase()), next.theme, false) }
     : next;
   if (!isApplicable(resolved.theme)) return; // an editor shows the issue; the page keeps the last good theme
-  state = resolved;
+  state = { ...resolved, textDirection: resolved.textDirection ?? "system" };
+  if (typeof document !== "undefined") document.documentElement.dir = resolveDirection(state.textDirection);
   compiled = compileTheme(state.theme);
   // The compiled theme is written to `:root[data-theme]`, which outranks the
   // `@media (prefers-reduced-motion)` block on bare `:root` — so the OS
@@ -135,6 +141,9 @@ function wireGlobalListeners(): void {
     // Toggling the OS switch re-applies the tokens immediately, both ways.
     window.matchMedia(REDUCED_MOTION_QUERY).addEventListener("change", () => commit(state, false));
   }
+  window.addEventListener("languagechange", () => {
+    if (state.textDirection === "system") commit(state, false);
+  });
   window.addEventListener("storage", (e) => {
     if (e.key !== null && e.key !== THEME_STORAGE_KEY) return;
     const blob = readBootBlob();
@@ -215,6 +224,10 @@ export const themeStore = {
     const preset = pairedPreset(state, base);
     commit({ ...state, followSystem: false, theme: withKnobs(preset, state.theme, false) });
     return base;
+  },
+
+  setTextDirection(textDirection: TextDirection): void {
+    commit({ ...state, textDirection });
   },
 
   setFollowSystem(on: boolean): void {

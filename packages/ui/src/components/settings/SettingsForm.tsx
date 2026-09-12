@@ -133,7 +133,7 @@ export function SettingsForm({ audience, cwd, catalog, snapshot, onApply }: Sett
       ) : (
         <div className="flex min-h-0 flex-1">
           {!searching && (
-            <nav aria-label="Setting sections" className="hidden w-56 shrink-0 hairline-r md:block">
+            <nav aria-label="Setting sections" className="hidden w-56 shrink-0 hairline-e md:block">
               <ScrollArea className="h-full">
                 <ul className="flex flex-col gap-0.5 p-2">
                   {sections.map((entry) => (
@@ -153,7 +153,7 @@ export function SettingsForm({ audience, cwd, catalog, snapshot, onApply }: Sett
                       >
                         <span className="min-w-0 flex-1 truncate">{entry.title}</span>
                         <ChevronRight
-                          className={cn("size-3.5 shrink-0 text-ink-3", entry.id !== activeSection && "opacity-0")}
+                          className={cn("rtl:-scale-x-100", "size-3.5 shrink-0 text-ink-3", entry.id !== activeSection && "opacity-0")}
                         />
                       </button>
                     </li>
@@ -542,7 +542,7 @@ function ValueChip({ value }: { value: unknown }) {
   if (value === undefined) return <span className="font-mono text-ink-3">—</span>;
   const text = typeof value === "string" ? value : JSON.stringify(value);
   return (
-    <code className="rounded bg-surface-2 px-1 font-mono text-xs text-ink-2">
+    <code dir="ltr" className="rounded bg-surface-2 px-1 font-mono text-xs text-ink-2">
       {text.length > 60 ? `${text.slice(0, 59)}…` : text}
     </code>
   );

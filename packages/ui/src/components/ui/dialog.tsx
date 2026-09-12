@@ -56,10 +56,9 @@ function DialogContent({
           // takes the min-content width of its widest child, so one long unbroken
           // string — an absolute path, a URL — pushes the dialog wider than the
           // window and carries its own buttons off-screen with it.
-          "fixed top-1/2 start-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] grid-cols-[minmax(0,1fr)] -translate-x-1/2 -translate-y-1/2 gap-4 sm:max-w-sm",
+          "fixed top-1/2 center-inline z-50 grid w-full max-w-[calc(100%-2rem)] grid-cols-[minmax(0,1fr)] -translate-y-1/2 gap-4 sm:max-w-sm",
           "rounded-2xl border border-line bg-surface p-5 text-sm text-ink shadow-float outline-none",
           "animate-in fade-in-0 duration-(--motion-instant) data-[state=closed]:animate-out data-[state=closed]:fade-out-0",
-          "rtl:translate-x-1/2",
           className,
         )}
         {...props}

@@ -108,7 +108,7 @@ export function PlainCodeDiffRows({ hunks, inset = "px-3", stickyHeaders = false
   const end = inset === "px-4" ? "pe-4" : "pe-3";
   let tokenOffset = 0;
   return (
-    <table data-slot="code-diff-rows" className={cn("w-full border-collapse font-mono text-xs leading-sm", className)}>
+    <table dir="ltr" data-slot="code-diff-rows" className={cn("w-full border-collapse font-mono text-xs leading-sm", className)}>
       <tbody>
         {hunks.map((hunk, i) => (
           <Hunk

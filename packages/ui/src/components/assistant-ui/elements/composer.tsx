@@ -141,8 +141,8 @@ export function ComposerAttachmentChip({ attachment, remove, className, ...props
         {attachment.src ? <img src={attachment.src} alt="" className="size-full object-cover" /> : <Icon aria-hidden="true" className="size-4" />}
       </span>
       <span className="flex min-w-0 flex-col">
-        <span className="max-w-40 truncate text-xs font-medium text-ink">{attachment.name}</span>
-        <span className={cn("truncate text-xs", attachment.state === "error" ? "text-danger" : "text-ink-3")}>{attachment.meta}</span>
+        <span dir="ltr" className="max-w-40 truncate text-xs font-medium text-ink">{attachment.name}</span>
+        <span dir="auto" className={cn("truncate text-xs tabular-nums", attachment.state === "error" ? "text-danger" : "text-ink-3")}>{attachment.meta}</span>
       </span>
       <span className="ms-1 flex w-6 shrink-0 items-center justify-end pointer-coarse:w-11">
         {attachment.state === "uploading" ? (

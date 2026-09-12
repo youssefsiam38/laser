@@ -179,7 +179,7 @@ export function InspectorBody({ node, header = true, className }: { node: AgentT
 /** The right column in the full composition. */
 export function InspectorColumn({ node, nodes, className }: { node: AgentTreeNode | undefined; nodes: readonly AgentTreeNode[]; className?: string | undefined }) {
   return (
-    <aside data-slot="agent-map-inspector-column" aria-label="Agent details" className={cn("flex w-80 shrink-0 flex-col overflow-y-auto bg-bg hairline-l", className)}>
+    <aside data-slot="agent-map-inspector-column" aria-label="Agent details" className={cn("flex w-80 shrink-0 flex-col overflow-y-auto bg-bg hairline-s", className)}>
       {node ? (
         <InspectorBody node={node} className="p-4" />
       ) : (

@@ -173,7 +173,7 @@ export function LogsScreen({ cwd }: { cwd: string | undefined }) {
   }, [client, section, actions, reload, refreshStats]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div dir="ltr" className="flex h-full min-h-0 flex-col text-start">
       <Toolbar
         section={section}
         onSection={setSection}
@@ -230,7 +230,7 @@ export function LogsScreen({ cwd }: { cwd: string | undefined }) {
             list to zero width the first time this ran in a browser. */}
         <aside
           aria-label="Log entry detail"
-          className="min-h-0 min-w-0 shrink-0 basis-1/2 hairline-t lg:basis-[440px] lg:hairline-l xl:basis-[520px]"
+          className="min-h-0 min-w-0 shrink-0 basis-1/2 hairline-t lg:basis-[440px] lg:hairline-s xl:basis-[520px]"
         >
           <LogDetail entry={selected} />
         </aside>

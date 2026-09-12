@@ -259,6 +259,7 @@ function ComposerInput() {
   const placeholder = usePlaceholder();
   return (
     <ComposerPrimitive.Input
+      dir="auto"
       rows={1}
       maxRows={8}
       autoFocus

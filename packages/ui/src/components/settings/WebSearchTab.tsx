@@ -105,7 +105,7 @@ export function WebSearchTab({ cwd }: { cwd: string }) {
             const connection = status.providers.find((entry) => entry.id === provider.id)!;
             return <Collapsible key={provider.id} open={expanded === provider.id} onOpenChange={(open) => setExpanded(open ? provider.id : undefined)}>
               <CollapsibleTrigger className="flex w-full items-center gap-3 rounded-lg p-3 text-start transition-colors duration-(--motion-fast) hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-live">
-                <ChevronRight className={cn("size-4 shrink-0 text-ink-3 transition-transform duration-(--motion-fast)", expanded === provider.id && "rotate-90")} />
+                <ChevronRight className={cn("rtl:-scale-x-100", "size-4 shrink-0 text-ink-3 transition-transform duration-(--motion-fast)", expanded === provider.id && "rotate-90 rtl:-rotate-90")} />
                 <span className="min-w-0 flex-1"><span className="block text-sm font-medium">{provider.name}</span><span className="block text-xs text-ink-2">{connection.source === "shared" ? `Shared · ${connection.sharedProvider}` : connection.hasKey ? "Search-only key saved" : provider.key === "none" ? provider.endpoint ? "Self-hosted instance" : "No key needed" : provider.key === "optional" ? "Key optional" : "API key or connection required"}</span></span>
                 {status.selectedProvider === provider.id && <Badge variant="outline"><Check className="size-3" /> Selected</Badge>}
                 {pending?.provider === provider.id && <Loader2 aria-label={pending.label} className="size-4 shrink-0 text-live motion-safe:animate-busy" />}

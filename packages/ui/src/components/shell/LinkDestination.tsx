@@ -59,7 +59,7 @@ export function LinkDestination() {
 
   return destination ? createPortal(
     <div data-slot="link-destination" aria-hidden="true" dir="ltr"
-      className="pointer-events-none fixed bottom-0 left-0 z-[200] max-w-full truncate rounded-tr-md border border-line bg-surface-2 px-2 py-1 text-xs text-ink-2 shadow-sm"
+      className="pointer-events-none fixed bottom-0 start-0 z-[200] max-w-full truncate rounded-se-md border border-line bg-surface-2 px-2 py-1 text-xs text-ink-2 shadow-sm"
       style={{ maxWidth: "min(100%, var(--measure-prose))", unicodeBidi: "isolate" }}>
       {destination}
     </div>, document.body,

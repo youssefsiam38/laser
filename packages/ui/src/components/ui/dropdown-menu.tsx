@@ -3,6 +3,8 @@ import { CheckIcon, ChevronRightIcon, CircleIcon } from "lucide-react";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 
 import { cn } from "@/lib/utils";
+import { useDirection } from "@/hooks/use-direction";
+import { logicalSide } from "@/theme/direction";
 
 const itemBase = [
   "relative flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-sm leading-4 outline-hidden select-none",
@@ -30,14 +32,17 @@ function DropdownMenuTrigger({
 function DropdownMenuContent({
   className,
   sideOffset = 6,
+  side = "bottom",
   collisionPadding = 8,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Content>) {
+  const direction = useDirection();
   return (
     <DropdownMenuPrimitive.Portal>
       <DropdownMenuPrimitive.Content
         data-slot="dropdown-menu-content"
         sideOffset={sideOffset}
+        side={logicalSide(side, direction)}
         collisionPadding={collisionPadding}
         className={cn(
           "z-50 max-h-(--radix-dropdown-menu-content-available-height) min-w-[10rem] origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto p-1",
@@ -195,7 +200,7 @@ function DropdownMenuSubTrigger({
       {...props}
     >
       {children}
-      <ChevronRightIcon className="ms-auto size-3.5 rtl:rotate-180" />
+      <ChevronRightIcon className="ms-auto size-3.5 rtl:-scale-x-100" />
     </DropdownMenuPrimitive.SubTrigger>
   );
 }

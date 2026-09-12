@@ -16,7 +16,8 @@
     "identity:generate": "node scripts/identity/generate.mjs",
     "identity:check": "node scripts/identity/check.mjs",
     "sandbox": "node scripts/sandbox.mjs",
-    "verify": "pnpm -r build && pnpm -r typecheck && pnpm -r test && pnpm test:release",
+    "direction:check": "node --test scripts/check-direction.test.mjs && node scripts/check-direction.mjs",
+    "verify": "pnpm direction:check && pnpm -r build && pnpm -r typecheck && pnpm -r test && pnpm test:release",
     "test:release": "node --test scripts/release/test/*.test.mjs",
     "verify:install": "bash scripts/release/verify-install.sh",
     "version:set": "bash scripts/release/set-version.sh"

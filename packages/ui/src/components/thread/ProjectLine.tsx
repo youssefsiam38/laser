@@ -184,13 +184,13 @@ function CreatePrDialog({ git, open, onOpenChange }: { git: ProjectGitStatus; op
               {copied ? <Check className="text-ok" /> : <Copy />}
             </TooltipIconButton>
           </div>
-          <pre className="terminal overflow-x-auto rounded-lg px-3 py-2">
+          <pre dir="ltr" className="terminal overflow-x-auto rounded-lg px-3 py-2">
             {commands.map((cmd) => (
               <div key={cmd} className="flex gap-2">
                 <span aria-hidden="true" className="select-none text-terminal-ink-2">
                   $
                 </span>
-                <code>{cmd}</code>
+                <code dir="ltr">{cmd}</code>
               </div>
             ))}
           </pre>

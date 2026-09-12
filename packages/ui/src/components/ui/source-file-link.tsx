@@ -21,7 +21,7 @@ export async function openSourcePath(path: string): Promise<void> {
 export function SourceFileLink({ href = "", children, title: _title, ...props }: ComponentProps<"a">) {
   const cwd = useContext(FileLinkDirectory);
   const path = fileLinkPath(href, cwd);
-  if (path) return <a {...props} href={href} data-file-path={path} onClick={event => {
+  if (path) return <a {...props} dir="ltr" href={href} data-file-path={path} onClick={event => {
     event.preventDefault(); void openSourcePath(path);
   }} onAuxClick={event => { event.preventDefault(); }} onContextMenu={event => event.preventDefault()}>{children}</a>;
   // Unresolved relative links must not silently become host HTTP routes.

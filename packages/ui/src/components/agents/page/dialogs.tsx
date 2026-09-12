@@ -132,7 +132,7 @@ export function BuiltinModelDialog({
         )}
         <DialogFooter>
           {onClear && current ? (
-            <Button type="button" variant="ghost" className="w-full sm:mr-auto sm:w-auto" disabled={busy} onClick={onClear}>
+            <Button type="button" variant="ghost" className="w-full sm:me-auto sm:w-auto" disabled={busy} onClick={onClear}>
               {copy.clear}
             </Button>
           ) : null}

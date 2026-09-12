@@ -53,7 +53,7 @@ export function MapHeader({ rootPath, nodes, visible, composition, showEnded, ph
     >
       {fullscreen && phone && (
         <TooltipIconButton tooltip="Back to the session" size="icon" onClick={host.closeFullscreen}>
-          <ChevronLeft />
+          <ChevronLeft className="rtl:-scale-x-100" />
         </TooltipIconButton>
       )}
       {variant === "full" && (

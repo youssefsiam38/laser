@@ -147,7 +147,7 @@ export function CommandPalette({
                       command.disabled && "opacity-45",
                     )}
                   >
-                    {Icon ? <Icon aria-hidden="true" className="size-4 shrink-0 text-ink-3" /> : null}
+                    {Icon ? <Icon aria-hidden="true" className="size-4 shrink-0 text-ink-3 rtl:[&.lucide-panel-left]:-scale-x-100" /> : null}
                     <span className="flex min-w-0 flex-1 flex-col">
                       <span className="truncate text-sm text-ink">{command.label}</span>
                       {command.detail && <span className="truncate text-xs text-ink-3">{command.detail}</span>}

@@ -1,4 +1,5 @@
 "use client";
+import { useDirection } from "@/hooks/use-direction";
 /**
  * The React Flow canvas (docs/agents.md §5). Read-only on purpose: nothing
  * drags, connects or deletes; panning, zooming and selecting are the whole
@@ -73,6 +74,7 @@ export function MapCanvas(props: MapCanvasProps) {
 }
 
 function CanvasInner({ rootPath, visible, composition, size, touch = false, className }: MapCanvasProps) {
+  const rtl = useDirection() === "rtl";
   const { selected } = useMapRootState(rootPath);
   const host = useMapHost();
   const flow = useReactFlow<AgentFlowNode, AgentFlowEdge>();
@@ -251,10 +253,10 @@ function CanvasInner({ rootPath, visible, composition, size, touch = false, clas
       }}
     >
       <Background variant={BackgroundVariant.Dots} gap={20} size={1.25} />
-      <Panel position="top-left">
+      <Panel position={rtl ? "top-right" : "top-left"}>
         <Legend />
       </Panel>
-      {minimap && <MiniMap position="top-right" pannable zoomable={false} nodeColor={minimapColor} nodeBorderRadius={6} />}
+      {minimap && <MiniMap position={rtl ? "top-left" : "top-right"} pannable zoomable={false} nodeColor={minimapColor} nodeBorderRadius={6} />}
       {empty && (
         <Panel position="bottom-center" className="pointer-events-none">
           <p data-slot="agent-map-empty" className="max-w-72 text-center text-sm leading-sm text-ink-3">
@@ -262,7 +264,7 @@ function CanvasInner({ rootPath, visible, composition, size, touch = false, clas
           </p>
         </Panel>
       )}
-      <Panel position="bottom-right">
+      <Panel position={rtl ? "bottom-left" : "bottom-right"}>
         <MapControls touch={touch} onFit={refit} />
       </Panel>
     </ReactFlow>

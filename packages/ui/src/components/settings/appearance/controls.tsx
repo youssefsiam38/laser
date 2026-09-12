@@ -20,6 +20,7 @@ import { ChevronRight, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
+import { useLogicalArrowKeys } from "@/hooks/use-direction";
 
 export interface GroupProps {
   title: string;
@@ -80,6 +81,7 @@ export interface SegmentedProps<T extends string> {
 }
 
 export function Segmented<T extends string>({ label, value, options, onChange, children }: SegmentedProps<T>) {
+  const logicalKey = useLogicalArrowKeys();
   const labelId = useId();
   const container = useRef<HTMLDivElement>(null);
 
@@ -118,7 +120,7 @@ export function Segmented<T extends string>({ label, value, options, onChange, c
         aria-labelledby={labelId}
         className="flex w-fit max-w-full flex-wrap items-center gap-0.5 rounded-lg bg-surface-2 p-0.5"
         onKeyDown={(event) => {
-          const key = event.key;
+          const key = logicalKey(event.key);
           if (key === "ArrowRight" || key === "ArrowDown") {
             event.preventDefault();
             move(1);
@@ -189,9 +191,9 @@ export function Disclosure({ label, value, valueStyle, open, onOpenChange, child
       >
         <ChevronRight
           aria-hidden="true"
-          className={cn(
+          className={cn("rtl:-scale-x-100",
             "size-3.5 shrink-0 text-ink-3 transition-transform duration-(--motion-fast) motion-reduce:transition-none",
-            open && "rotate-90",
+            open && "rotate-90 rtl:-rotate-90",
           )}
         />
         <span className="shrink-0 text-xs font-medium text-ink-2">{label}</span>

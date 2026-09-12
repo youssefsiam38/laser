@@ -120,7 +120,7 @@ function originOf(theme: Theme): ThemePreset {
 }
 
 export function AppearanceTab() {
-  const { theme, base, followSystem, pair, presets, setPreset, setFollowSystem, updateTheme, setTheme, reset } =
+  const { theme, base, followSystem, pair, presets, setPreset, setFollowSystem, updateTheme, setTheme, reset, textDirection, setTextDirection } =
     useTheme();
 
   const origin = originOf(theme);
@@ -318,6 +318,19 @@ export function AppearanceTab() {
           />
         </Group>
 
+        <Group title="Text direction" detail="Arrange the interface for the way you read. Messages keep their own text direction.">
+          <Segmented
+            label="Text direction"
+            value={textDirection}
+            options={[
+              { value: "system", label: "Follow system" },
+              { value: "ltr", label: "Left to right" },
+              { value: "rtl", label: "Right to left" },
+            ]}
+            onChange={setTextDirection}
+          />
+        </Group>
+
         {/* ------------------------------------------------------ colour -- */}
         <Group
           title="Colour"
@@ -440,9 +453,9 @@ export function AppearanceTab() {
           >
             <ChevronRight
               aria-hidden="true"
-              className={cn(
+              className={cn("rtl:-scale-x-100",
                 "size-3.5 text-ink-3 transition-transform duration-(--motion-fast) motion-reduce:transition-none",
-                tokensOpen && "rotate-90",
+                tokensOpen && "rotate-90 rtl:-rotate-90",
               )}
             />
             <span className="text-sm font-semibold text-ink">Custom colours</span>
@@ -488,7 +501,7 @@ export function AppearanceTab() {
                 setTransfer(`Back to ${DEFAULT_PRESET.name}.`);
               }}
               onBlur={() => setConfirmReset(false)}
-              disabled={themeIsDefault && coloursAreOrigin && typeIsOrigin && layoutIsOrigin}
+              disabled={themeIsDefault && coloursAreOrigin && typeIsOrigin && layoutIsOrigin && textDirection === "system"}
             >
               <RotateCcw aria-hidden="true" />
               {confirmReset ? "Discard my theme" : "Reset everything"}

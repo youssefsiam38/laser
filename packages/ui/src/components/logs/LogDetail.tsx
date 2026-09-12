@@ -180,13 +180,13 @@ function Detail({ entry }: { entry: LogEntry }) {
                 (a JSON body, a request record) stays on the surface ground,
                 where it is structured data rather than a console. */}
             {terminalOutput ? (
-              <pre className="terminal max-h-[60vh] w-full min-w-0 overflow-auto rounded-lg border border-terminal-line p-3 whitespace-pre">
+              <pre dir="ltr" className="terminal max-h-[60vh] w-full min-w-0 overflow-auto rounded-lg border border-terminal-line p-3 whitespace-pre">
                 <AnsiText text={body} />
               </pre>
             ) : jsonBody !== undefined ? (
               <JsonViewer value={jsonBody} />
             ) : (
-              <pre className={cn("max-h-[60vh] w-full min-w-0 overflow-auto rounded-lg bg-surface-2 p-3", "font-mono text-xs leading-sm whitespace-pre text-ink-2")}>{body}</pre>
+              <pre dir="ltr" className={cn("max-h-[60vh] w-full min-w-0 overflow-auto rounded-lg bg-surface-2 p-3", "font-mono text-xs leading-sm whitespace-pre text-ink-2")}>{body}</pre>
             )}
           </div>
         )}
@@ -211,7 +211,7 @@ function ProviderCeilingNote() {
       <p>
         <span className="font-medium text-ink">There is no response body here, and there cannot be.</span> The current engine gives
         {PRODUCT_NAME} the complete provider <em>request</em>, but its{" "}
-        <code className="font-mono text-xs">after_provider_response</code> hook carries only the HTTP status and the
+        <code dir="ltr" className="font-mono text-xs">after_provider_response</code> hook carries only the HTTP status and the
         response headers — it exposes no hook for the raw stream. The model's actual output is reconstructed from
         session events and shown in the transcript.
       </p>

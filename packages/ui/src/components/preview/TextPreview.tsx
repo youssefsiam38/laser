@@ -34,7 +34,7 @@ export function TextPreview({ text, truncated, className }: TextPreviewProps) {
   return (
     <div data-slot="text-preview" className={cn("flex min-h-0 flex-col", className)}>
       <div data-island-scroll className="min-h-0 flex-1 overflow-auto">
-        <pre
+        <pre dir="ltr"
           className={cn(
             "px-4 py-3 font-mono text-xs leading-sm text-ink",
             wrap ? "whitespace-pre-wrap wrap-break-word" : "whitespace-pre",

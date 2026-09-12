@@ -25,13 +25,13 @@ const LazyInstructionTemplateSource = lazy(() =>
 
 function PlainSource({ value, ariaLabel, invalid, className }: Pick<InstructionTemplateSourceProps, "value" | "ariaLabel" | "invalid" | "className">) {
   return (
-    <pre
+    <pre dir="ltr"
       data-slot="instruction-template-source"
       data-highlighted="false"
       aria-label={ariaLabel}
       aria-invalid={invalid || undefined}
       className={cn("min-h-40 max-h-120 overflow-auto rounded-lg border border-line bg-surface-2 p-3 font-mono text-sm leading-code whitespace-pre-wrap wrap-break-word text-ink aria-invalid:border-danger", className)}
-    ><code>{value}</code></pre>
+    ><code dir="ltr">{value}</code></pre>
   );
 }
 
@@ -198,12 +198,12 @@ export function InstructionTemplateEditor({ target, context, value, ariaLabel, p
               <PopoverDescription>Choose what belongs at the cursor. No field names to remember.</PopoverDescription>
             </PopoverHeader>
             <div className="relative">
-              <Search aria-hidden className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-ink-3" />
+              <Search aria-hidden className="pointer-events-none absolute top-1/2 start-3 size-4 -translate-y-1/2 text-ink-3" />
               <Input
                 value={query}
                 aria-label="Find an instruction field"
                 placeholder="Find a field"
-                className="pl-9"
+                className="ps-9"
                 autoFocus
                 onChange={(event) => setQuery(event.target.value)}
               />
@@ -217,7 +217,7 @@ export function InstructionTemplateEditor({ target, context, value, ariaLabel, p
                     type="button"
                     role="listitem"
                     disabled={!available}
-                    className="flex min-h-11 w-full flex-col items-start rounded-lg px-3 py-2 text-left outline-none hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-live disabled:cursor-not-allowed disabled:opacity-60"
+                    className="flex min-h-11 w-full flex-col items-start rounded-lg px-3 py-2 text-start outline-none hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-live disabled:cursor-not-allowed disabled:opacity-60"
                     onClick={() => insert(field)}
                   >
                     <span className="text-sm font-medium text-ink">{field.label}</span>

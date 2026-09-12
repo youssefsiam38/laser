@@ -159,6 +159,34 @@ with bottom inset `max(env(safe-area-inset-bottom), var(--kb))` where `--kb`
 is driven by `visualViewport` resize+scroll (never `+`). Body never scrolls;
 the thread viewport scrolls. Inputs are 16px on touch to avoid iOS zoom.
 
+## Direction
+
+- Settings → Appearance → **Text direction** offers Follow system (default),
+  Left to right and Right to left. It persists with the machine's appearance
+  preferences. `<html dir>` and Radix's direction provider update live; changing
+  language while following the system re-resolves the direction.
+- Layout descriptions in this document name the **LTR reference**. Read left
+  as inline-start and right as inline-end in RTL: rail and sessions start the
+  row, fleet and telemetry end it. Use `ms/me`, `ps/pe`, `start/end`,
+  `text-start/end`, `rounded-s/e/ss/se/es/ee`, `border-s/e`, `hairline-s/e`
+  and `gap`. Symmetric `inset-x`, `mx` and `px` stay symmetric.
+- Directional icons alone use `rtl:-scale-x-100`. A disclosure's open chevron
+  also uses `rtl:-rotate-90`, so it still points down. Never mirror play,
+  refresh, checkmarks or branding. `logicalSide` resolves legacy left/right
+  overlay props **once**, inside shared primitives. `useLogicalArrowKeys`
+  normalizes custom horizontal navigation; Radix menus and tabs consume the
+  root provider. Pointer coordinates and the agent graph's canvas remain
+  Cartesian; controls and panel placement mirror around them.
+- User bubbles and composer inputs use `dir="auto"`. Markdown resolves direction
+  per prose block. Code, paths, JSON and diagnostic captures stay isolated LTR
+  with start alignment and tabular numbers. Text direction must not reorder
+  the message's outer layout or the page's columns.
+- `pnpm direction:check` runs in `pnpm verify` and rejects physical directional
+  utilities and CSS properties in `src/`. A genuine physical coordinate may
+  use a same-line or preceding `// bidi-allow-physical: <reason>` comment
+  (`/* … */` in CSS); never use an exception for ordinary layout. Dialog
+  centering and switch motion use the shared logical geometry utilities.
+
 ## Status language
 
 One vocabulary everywhere (sidebar dot, rail ring, top bar, tab title):

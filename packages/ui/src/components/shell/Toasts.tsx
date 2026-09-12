@@ -6,6 +6,7 @@ import { Toaster, toast } from "sonner";
 
 import { useIsMobile, useTheme } from "@/hooks";
 import { useToasts } from "@/runtime";
+import { useDirection } from "@/hooks/use-direction";
 
 /**
  * Bridges the reducer's toast queue (extension `notify`, failed requests,
@@ -17,6 +18,7 @@ export function Toasts() {
   const { toasts, dismiss } = useToasts();
   const { theme } = useTheme();
   const isMobile = useIsMobile();
+  const direction = useDirection();
   const shown = useRef(new Set<number>());
 
   useEffect(() => {
@@ -32,7 +34,8 @@ export function Toasts() {
   return (
     <Toaster
       theme={theme}
-      position={isMobile ? "top-center" : "bottom-right"}
+      position={isMobile ? "top-center" : direction === "rtl" ? "bottom-left" : "bottom-right"}
+      dir={direction}
       closeButton
       visibleToasts={4}
       gap={8}

@@ -208,7 +208,7 @@ function CallResult({ result }: { result: McpCallResult }) {
               {block.uri}
             </span>
             {block.mimeType && <span className="text-xs text-ink-3">{block.mimeType}</span>}
-            {block.text && <pre className="typed max-h-40 overflow-auto whitespace-pre-wrap text-ink-2">{block.text}</pre>}
+            {block.text && <pre dir="ltr" className="typed max-h-40 overflow-auto whitespace-pre-wrap text-ink-2">{block.text}</pre>}
           </div>
         );
       })}

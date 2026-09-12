@@ -158,8 +158,8 @@ export type SyntaxHighlighterProps = Omit<ShikiHighlighterProps, "children" | "t
 };
 
 const PlainCode: FC<{ code: string }> = ({ code }) => (
-  <pre>
-    <code>{code}</code>
+  <pre dir="ltr">
+    <code dir="ltr">{code}</code>
   </pre>
 );
 
@@ -195,7 +195,7 @@ export const SyntaxHighlighter: FC<SyntaxHighlighterProps> = ({
 }) => {
   const trimmed = code.replace(/\n$/, "");
   return (
-    <div className={cn(fenceClassName, streaming && "aui-shiki-streaming", className)} style={style}>
+    <div dir="ltr" className={cn(fenceClassName, streaming && "aui-shiki-streaming", className)} style={style}>
       {streaming ? (
         <PlainCode code={trimmed} />
       ) : (

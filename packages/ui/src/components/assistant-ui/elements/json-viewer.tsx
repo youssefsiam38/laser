@@ -20,8 +20,9 @@ export function JsonViewer({ value, className, expandedDepth = 2, tone = "surfac
   return (
     <div
       data-slot="json-viewer"
+      dir="ltr"
       className={cn(
-        "max-h-[60vh] min-w-0 overflow-auto rounded-lg border p-3 font-mono text-xs leading-sm",
+        "max-h-[60vh] min-w-0 overflow-auto rounded-lg border p-3 font-mono text-xs leading-sm text-start",
         tone === "terminal" ? "border-terminal-line bg-terminal text-terminal-ink-2" : "border-line bg-surface-2 text-ink-2",
         className,
       )}
@@ -62,7 +63,7 @@ function JsonNode({ name, value, depth, expandedDepth, tone, comma = false }: { 
         onClick={() => setOpen((current) => !current)}
         className="flex max-w-full cursor-pointer items-center rounded-sm text-start outline-none hover:text-ink focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-live"
       >
-        <ChevronRight aria-hidden="true" className={cn("me-1 size-3 shrink-0 transition-transform duration-(--motion-instant)", open && "rotate-90")} />
+        <ChevronRight aria-hidden="true" className={cn("rtl:-scale-x-100", "me-1 size-3 shrink-0 transition-transform duration-(--motion-instant)", open && "rotate-90 rtl:-rotate-90")} />
         <span className="min-w-0 truncate">{key}{opener}{!open && <span className="text-ink-3"> {entries.length} {array ? "items" : "keys"} </span>}{!open && closer}{!open && comma ? "," : ""}</span>
       </button>
       {open && (
