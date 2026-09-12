@@ -23,7 +23,9 @@ export function findTextMatches(root: HTMLElement, query: string, mode: "convers
     const content = mode === "conversation" ? parent?.closest("[data-search-content]") ?? null : null;
     // Tool bodies are opt-in. JSON keys, status labels, gutters and transport
     // wrappers must never consume the occurrence assigned to a real value.
-    if (!parent || parent.closest("button, [hidden], [aria-hidden=true], [data-search-exclude], textarea, script, style") ||
+    const button = parent?.closest("button");
+    const authoredFileLabel = mode === "conversation" && content && button?.matches('[data-slot="file-chip"]');
+    if (!parent || (button && !authoredFileLabel) || parent.closest("[hidden], [aria-hidden=true], [data-search-exclude], textarea, script, style") ||
       (mode === "conversation" && parent.closest('[data-search-tool], [data-slot="json-viewer"]') && !content)) {
       run = undefined;
       continue;

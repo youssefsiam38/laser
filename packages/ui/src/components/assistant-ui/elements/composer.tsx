@@ -44,6 +44,7 @@ import {
 import { useEffect, useRef, useState, type ComponentProps } from "react";
 
 import { StatusDot } from "@/components/status";
+import { describeMediaType } from "@/components/preview/media";
 import { TooltipIconButton, type TooltipIconButtonProps } from "@/components/ui/tooltip-icon-button";
 import { duration } from "@/format";
 import { cn } from "@/lib/utils";
@@ -143,7 +144,7 @@ export function ComposerAttachmentChip({ attachment, remove, className, ...props
         <span className="max-w-40 truncate text-xs font-medium text-ink">{attachment.name}</span>
         <span className={cn("truncate text-xs", attachment.state === "error" ? "text-danger" : "text-ink-3")}>{attachment.meta}</span>
       </span>
-      <span className="ms-1 flex w-6 shrink-0 items-center justify-end">
+      <span className="ms-1 flex w-6 shrink-0 items-center justify-end pointer-coarse:w-11">
         {attachment.state === "uploading" ? (
           <StatusDot status="working" size="sm" label="Attaching" />
         ) : (
@@ -203,7 +204,7 @@ export function ComposerAttachmentTile() {
       : "Cancelled"
     : file
       ? formatBytes(file.size)
-      : (type ?? "file");
+      : type ? describeMediaType(type) : "File";
 
   return (
     <AttachmentPrimitive.Root asChild>
@@ -217,7 +218,7 @@ export function ComposerAttachmentTile() {
         }}
         remove={
           <AttachmentPrimitive.Remove asChild>
-            <TooltipIconButton tooltip="Remove" size="icon-xs" side="top" className="text-ink-3">
+            <TooltipIconButton tooltip="Remove" size="icon-xs" side="top" className="text-ink-3 pointer-coarse:size-11">
               <XIcon />
             </TooltipIconButton>
           </AttachmentPrimitive.Remove>

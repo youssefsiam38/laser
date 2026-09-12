@@ -7,10 +7,13 @@
 import type { ImageMessagePart, ImageMessagePartComponent } from "@assistant-ui/react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { Copy, Download, Image as ImageIcon, ImageOff, ShieldAlert, X } from "lucide-react";
-import { memo, useCallback, useEffect, useRef, useState, type ComponentProps, type PropsWithChildren } from "react";
+import { memo, useCallback, useContext, useEffect, useRef, useState, type ComponentProps, type PropsWithChildren } from "react";
 import { createPortal } from "react-dom";
 
 import { StatusDot } from "@/components/status";
+import { FileViewer } from "@/components/thread/FileViewer";
+import { FileLinkDirectory } from "@/components/ui/source-file-link";
+import { projectReferencePath, useProjectFile } from "@/components/ui/project-file-link";
 import { cn } from "@/lib/utils";
 
 const extensionForMimeType = (mimeType?: string): string => {
@@ -325,3 +328,25 @@ Image.Generating = ImageGenerating;
 Image.ContentFilterError = ImageContentFilterError;
 
 export { Image, ImageRoot, ImagePreview, ImageFilename, ImageZoom, ImageActions, ImageGenerating, ImageContentFilterError, imageVariants };
+
+/** Markdown's project-image form of this element: retained bytes, existing viewer. */
+export function ProjectMarkdownImage({ src, alt = "", interactive = true, ...props }: Omit<ComponentProps<"img">, "src"> & { src?: string | undefined; interactive?: boolean }) {
+  const cwd = useContext(FileLinkDirectory);
+  if (src && /^(?:https?:)?\/\//i.test(src)) return <img {...props} src={src} alt={alt} />;
+  const path = projectReferencePath(src ?? "", cwd);
+  if (!cwd || !path) return <>{alt}</>;
+  return <LocalMarkdownImage key={`${cwd}:${path}`} cwd={cwd} path={path} alt={alt} interactive={interactive} />;
+}
+function LocalMarkdownImage({ cwd, path, alt, interactive }: { cwd: string; path: string; alt: string; interactive: boolean }) {
+  const { file } = useProjectFile(cwd, path, true);
+  const [broken, setBroken] = useState(false);
+  const [open, setOpen] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
+  if (!file || broken || file.truncated || file.encoding !== "base64" || !file.mediaType.startsWith("image/")) return <>{alt}</>;
+  const image = <img data-slot="project-image" src={`data:${file.mediaType};base64,${file.content}`} alt={alt} onError={() => setBroken(true)} className="block max-h-96 max-w-full rounded-lg object-contain" />;
+  if (!interactive) return image;
+  return <>
+    <button ref={trigger} type="button" aria-label={`Open ${alt || file.name}`} onClick={() => setOpen(true)} className="my-2 inline-block max-w-full overflow-hidden rounded-lg align-middle pointer-coarse:min-h-11 pointer-coarse:min-w-11 outline-none hover:opacity-90 active:opacity-80 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-live">{image}</button>
+    {open ? <FileViewer source={{ request: { cwd, path }, file }} open onOpenChange={setOpen} returnFocus={trigger.current} /> : null}
+  </>;
+}

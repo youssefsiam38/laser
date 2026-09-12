@@ -11,7 +11,7 @@ import type { GoalRecord as GoalRecordData } from "@/runtime/goal-history";
 import { memo, useContext, useMemo, useRef, useState } from "react";
 import { FileViewer, type FileViewerSource } from "./FileViewer.js";
 import { attachmentFile, describeMediaType } from "@/components/preview/media";
-import { attachedFileContent, wrapFileAttachment, type AttachedFile } from "@/runtime/attachments";
+import { attachedFileContent, splitAttachedFiles, wrapFileAttachment, type AttachedFile } from "@/runtime/attachments";
 import { formatBytes } from "@/format";
 import { FindSelectionContext, SearchMessageContext, useSearchReveal } from "./search-state.js";
 
@@ -112,7 +112,12 @@ function useSessionPath(): string | undefined {
 const clearHandedBackPrompt = (aui: ReturnType<typeof useAui>, sent: string) => {
   try {
     const composer = aui.thread.composer();
-    if (composer.getState().text.trim() === sent.trim()) composer.setText("");
+    const draft = composer.getState();
+    const original = splitAttachedFiles(sent);
+    if (draft.text.trim() !== original.text.trim() || draft.quote || draft.attachments.length !== original.files.length) return;
+    if (!draft.attachments.every((attachment, index) => attachment.content?.length === 1 && attachment.content[0]?.type === "text" && attachment.content[0].text === wrapFileAttachment(original.files[index]!))) return;
+    composer.setText("");
+    void composer.clearAttachments();
   } catch {
     // No thread composer on this surface.
   }
@@ -223,7 +228,7 @@ export function UserMessage() {
       setEditing(false);
       await actions.fork(entryId, move);
       await actions.send(editContent(), "prompt");
-      clearHandedBackPrompt(aui, text);
+      clearHandedBackPrompt(aui, [text, ...files.map(wrapFileAttachment)].filter(Boolean).join("\n\n"));
     } finally {
       setSending(false);
     }
@@ -408,13 +413,13 @@ export function AssistantMessage() {
               case "text":
                 return (
                   <StreamingText streaming={part.status.type === "running"} className="my-2 first:mt-0 last:mb-0">
-                    <MarkdownText />
+                    <MarkdownText nativeFiles />
                   </StreamingText>
                 );
               case "reasoning":
                 return (
                   <ActivityReasoning running={part.status.type === "running"}>
-                    <MarkdownText className="text-sm text-ink-2" />
+                    <MarkdownText nativeFiles className="text-sm text-ink-2" />
                   </ActivityReasoning>
                 );
               case "tool-call":

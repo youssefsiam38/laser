@@ -18,11 +18,13 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AssistantRuntimeProvider, ThreadPrimitive, useExternalStoreRuntime } from "@assistant-ui/react";
+import { AssistantRuntimeProvider, ThreadPrimitive, useExternalStoreRuntime, type AssistantRuntime } from "@assistant-ui/react";
 import type { HostNotifications, SessionUpdate } from "@lasercode/protocol";
 
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { LaserStoreProvider, createStateStore, useLaserState, type StateStore } from "../../src/runtime/LaserProvider.js";
+import { wrapFileAttachment } from "../../src/runtime/attachments.js";
+import { restoreUnsentMessage } from "../../src/runtime/adapter.js";
 import { projectMessages } from "../../src/runtime/projection.js";
 import { initialState, reduce, type AppState } from "../../src/store.js";
 import { sessionState } from "../agents/fixtures.js";
@@ -78,6 +80,7 @@ let container: HTMLDivElement;
 let root: Root;
 let store: StateStore;
 let seq = 0;
+let mountedRuntime: AssistantRuntime;
 
 /** What the host sends: one `session/update` per engine event, in order. */
 const update = (u: SessionUpdate) => {
@@ -121,6 +124,7 @@ const mount = () => {
     const view = useLaserState((s) => s.open[SESSION]);
     const { messages } = projectMessages({ blocks: view?.blocks ?? [], running: view?.running ?? false, dialogs: view?.dialogs ?? [] });
     const runtime = useExternalStoreRuntime({ messages, isRunning: view?.running ?? false, onNew: async () => {} });
+    mountedRuntime = runtime;
     return (
       <AssistantRuntimeProvider runtime={runtime}>
         <ThreadPrimitive.Root>
@@ -376,4 +380,20 @@ describe("the newest prompt while its turn runs", () => {
     await dispatch(() => store.dispatch({ type: "entries", path: SESSION, entries: [msg("u1", null, "user", "explore the repo"), msg("a1", "u1", "assistant", "three packages"), msg("u2", "a1", "user", "list the tests")], leafId: "u2" }));
     expect(control(userRoots().at(-1)!, "Edit")).toBeDefined();
   });
+});
+
+it("clears only the exact handed-back file draft after sending an edit in a fork", async () => {
+  const file = { name: "notes.md", mediaType: "text/markdown", content: "# Notes", size: 7 };
+  const prompt = `Read this\n\n${wrapFileAttachment(file)}`;
+  open([msg("u1", null, "user", prompt), msg("a1", "u1", "assistant", "Read it")], "a1");
+  await mount();
+  stable.actions.fork.mockImplementationOnce(async () => {
+    await restoreUnsentMessage(mountedRuntime.thread.composer, { content: [{ type: "text", text: prompt }], attachments: [] } as Parameters<typeof restoreUnsentMessage>[1]);
+  });
+  await act(async () => control(userRoots()[0]!, "Edit")!.click());
+  const forkSend = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "In a new session")!;
+  await act(async () => forkSend.click());
+  expect(stable.actions.send).toHaveBeenCalledWith([{ type: "text", text: prompt }], "prompt");
+  expect(mountedRuntime.thread.composer.getState().text).toBe("");
+  expect(mountedRuntime.thread.composer.getState().attachments).toHaveLength(0);
 });

@@ -20,7 +20,7 @@ import { useCopy } from "@/hooks/use-copy";
 import { useLaserStable } from "@/runtime";
 import type { DiffView } from "./diff.js";
 
-export type FileViewerSource = { request: { cwd: string; path: string }; file?: never } | { request?: never; file: ProjectFileContent };
+export type FileViewerSource = { request: { cwd: string; path: string }; file?: ProjectFileContent } | { request?: never; file: ProjectFileContent };
 
 export function FileViewer({ source, open, onOpenChange, returnFocus }: {
   source: FileViewerSource; open: boolean; onOpenChange(open: boolean): void; returnFocus?: HTMLElement | null | undefined;
@@ -47,14 +47,14 @@ function ViewerContents({ source }: { source: FileViewerSource }) {
   const file = preview?.file;
   const name = file?.name ?? path?.split(/[\\/]/).at(-1) ?? "File";
   useEffect(() => {
-    if (cwd === undefined || path === undefined) return;
+    if (source.file || cwd === undefined || path === undefined) return;
     let current = true;
     setFile(undefined); setError(undefined);
     void client.request("pi/project/read", { cwd, path }).then(result => { if (current) setFile(result); }, failure => {
       if (current) setError(failure instanceof Error ? failure.message : "That file could not be read. Try opening it again.");
     });
     return () => { current = false; };
-  }, [client, cwd, path, attempt]);
+  }, [client, cwd, path, attempt, source.file]);
   const editor = absolute && hasSourceEditor() ? () => void openSourcePath(absolute) : undefined;
   return <>
     <DialogHeader className="shrink-0 border-b border-line p-4 pe-12">
