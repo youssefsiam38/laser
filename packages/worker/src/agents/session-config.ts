@@ -9,7 +9,7 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
-import { SESSION_AGENT_ENTRY_TYPE, WORKTREES_DIR_NAME, type AgentDefinition, type SessionAgentKind, type SessionAgentRecord } from "@lasercode/protocol";
+import { worktreeEnvironmentSchema, worktreeSetupSchema, SESSION_AGENT_ENTRY_TYPE, WORKTREES_DIR_NAME, type AgentDefinition, type SessionAgentKind, type SessionAgentRecord } from "@lasercode/protocol";
 import type { HarnessSessionRole } from "./bridge.js";
 
 /**
@@ -81,7 +81,14 @@ export function parseSessionAgentRecord(data: unknown): SessionAgentRecord | und
     const branch = str(w["branch"]);
     const baseCommit = str(w["baseCommit"]);
     const removedAt = str(w["removedAt"]);
-    if (path && branch && baseCommit) record.worktree = { path, branch, baseCommit, ...(removedAt ? { removedAt } : {}) };
+    if (path && branch && baseCommit) {
+      const environment = worktreeEnvironmentSchema.safeParse(w["environment"]);
+      const setup = worktreeSetupSchema.safeParse(w["setup"]);
+      record.worktree = { path, branch, baseCommit, ...(removedAt ? { removedAt } : {}),
+        ...(environment.success ? { environment: environment.data } : {}),
+        ...(setup.success ? { setup: setup.data } : {}),
+      };
+    }
   }
   return record;
 }

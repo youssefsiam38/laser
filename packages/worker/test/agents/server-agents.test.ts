@@ -159,10 +159,12 @@ describe("WorkerServer agents", () => {
 
   it("recovers a stored child session's agent from its record and decorates state updates", async () => {
     const h = harness();
+    const environment = { path: "/w", branch: "agents/fixer", baseCommit: "abc", parentCheckout: join(base, "project"), absentDirectories: ["build-cache/"] };
+    const setup = { status: "failed", exitCode: 2, logPath: "/w/setup.log" };
     const parentPath = join(base, "sessions", "parent.jsonl");
     const childPath = join(base, "sessions", "child.jsonl");
     writeFileSync(parentPath, `${JSON.stringify({ type: "session", id: "p" })}\n${JSON.stringify({ type: "custom", customType: SESSION_AGENT_ENTRY_TYPE, data: { agentName: "default", kind: "root" } })}\n`);
-    writeFileSync(childPath, `${JSON.stringify({ type: "session", id: "c" })}\n${JSON.stringify({ type: "custom", customType: SESSION_AGENT_ENTRY_TYPE, data: { agentName: "default", kind: "child", subagentName: "fixer", parentPath, parentSessionId: "p", rootPath: parentPath, runId: "run_old", worktree: { path: "/w", branch: "agents/fixer", baseCommit: "abc" } } })}\n`);
+    writeFileSync(childPath, `${JSON.stringify({ type: "session", id: "c" })}\n${JSON.stringify({ type: "custom", customType: SESSION_AGENT_ENTRY_TYPE, data: { agentName: "default", kind: "child", subagentName: "fixer", parentPath, parentSessionId: "p", rootPath: parentPath, runId: "run_old", worktree: { path: "/w", branch: "agents/fixer", baseCommit: "abc", environment, setup } } })}\n`);
     const loaded = await h.call(1, "session/load", { path: childPath });
     expect(loaded.result).toMatchObject({ state: { agent: { agentName: "default", kind: "child", subagentName: "fixer", parentPath, rootPath: parentPath } } });
     const state = (loaded.result as { state: SessionState }).state;
@@ -179,6 +181,7 @@ describe("WorkerServer agents", () => {
     expect(h.drivers[0]!.prompted[0]?.options?.onAccepted).toBeTypeOf("function");
     const runs = h.notifications("agents/run").map((n) => (n.params as { run: AgentRun }).run);
     expect(runs.at(-1)).toMatchObject({ origin: "user", status: "running", sessionPath: childPath, parent: { sessionPath: parentPath, sessionId: "p" }, task: "what changed?" });
+    expect(runs.at(-1)?.worktree).toMatchObject({ environment, setup });
     // State updates carry the agent info, including the live run.
     h.drivers[0]!.emit({ type: "update", update: { kind: "state", state: h.drivers[0]!.state() } });
     const update = h.notifications("session/update").map((n) => n.params as { update: { kind: string; state?: SessionState } }).find((u) => u.update.kind === "state")!;

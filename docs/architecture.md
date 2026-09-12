@@ -173,4 +173,8 @@ in-memory engine overrides.
   a nonempty transcript and builds its runtime directly; the engine's permissive
   missing-file create behavior is not a resume feature, including after recovery.
 - Keychain: root identity key, relay credentials.
-- `<project>/.laser/settings.json`: project-scoped product settings.
+- `<project>/.laser/settings.json`: project-scoped product settings, including the
+  optional positive `worktreeSetupTimeoutSeconds` for child checkout setup.
+- `<project>/.laser/worktree-setup`: optional executable run inside a new child
+  checkout before its first turn; setup is asynchronous and never installs or
+  links anything unless the project's own program chooses to. See `docs/agents.md`.

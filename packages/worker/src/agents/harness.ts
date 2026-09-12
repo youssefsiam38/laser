@@ -37,6 +37,8 @@ import {
   AGENT_TASK_EXCERPT,
   AGENT_TASK_MAX,
   SESSION_RUN_ENTRY_TYPE,
+  SESSION_AGENT_ENTRY_TYPE,
+  type WorktreeSetup,
   SUBAGENT_NAME_MAX,
   agentQuestionAnswerHint,
   isTerminalRunStatus,
@@ -95,7 +97,7 @@ import { buildFleetTree } from "./fleet.js";
 import { assistantMessagesOf, readSessionEntries } from "./inspect.js";
 import { readLogTail, type IndexedTask } from "./tasks.js";
 import { SessionLifecycle, type InvocationBoundary, type InvocationControlTicket } from "./session-lifecycle.js";
-import type { CreateWorktreeInput, Worktree, WorktreeFacts } from "./worktrees.js";
+import { runWorktreeSetup, type CreateWorktreeInput, type Worktree, type WorktreeFacts } from "./worktrees.js";
 
 /** What the harness needs from `WorktreeManager`; an interface so lifecycle tests run without git. */
 export interface WorktreeProvider {
@@ -181,6 +183,7 @@ interface Entry {
   bridge: AgentHarnessBridge;
   eventListeners: Set<(event: AgentModelEvent) => void>;
   roleListeners: Set<(role: HarnessSessionRole) => void>;
+  setupGate?: { controller: AbortController; promise: Promise<WorktreeSetup> };
   /** Events for this session's model that arrived before its module registered a listener. */
   pendingEvents: AgentModelEvent[];
   /** One explicit owner/fence and one ordered successor inbox per child session. */
@@ -338,7 +341,9 @@ export class AgentHarness {
     const entry: Entry = {
       path: undefined,
       sessionId: undefined,
-      role: input.role,
+      role: { ...input.role, ...(input.record.worktree && !input.record.worktree.removedAt && input.role.isolated !== false ? {
+        environment: input.record.worktree.environment, setup: input.record.worktree.setup,
+      } : {}) },
       definition: input.definition,
       record: input.record,
       projectCwd: input.projectCwd,
@@ -420,6 +425,7 @@ export class AgentHarness {
   detachSession(sessionPath: string): void {
     const entry = this.byPath.get(sessionPath);
     if (!entry) return;
+    entry.setupGate?.controller.abort();
     this.diagnose(entry, "warn", "session-closed", { owner: entry.lifecycle.owner(), successor: entry.lifecycle.successor(), phase: entry.lifecycle.phase().kind });
     for (const state of this.runStates.values()) {
       if (state.run.sessionPath !== sessionPath || isTerminalRunStatus(state.run.status)) continue;
@@ -1051,7 +1057,7 @@ export class AgentHarness {
       parentSessionId: parent.sessionId,
       rootPath,
       runId,
-      ...(worktree ? { worktree: { path: worktree.path, branch: worktree.branch, baseCommit: worktree.baseCommit } } : {}),
+      ...(worktree ? { worktree: { path: worktree.path, branch: worktree.branch, baseCommit: worktree.baseCommit, ...(worktree.environment ? { environment: worktree.environment } : {}), ...(worktree.setup ? { setup: worktree.setup } : {}) } } : {}),
     };
     const role: HarnessSessionRole = {
       agentName,
@@ -1117,6 +1123,21 @@ export class AgentHarness {
       counterpart: { sessionPath: state.path, label: subagentName },
       summary: `Sent the task to ${subagentName}`,
     });
+    if (worktree?.setup?.status === "pending") {
+      const controller = new AbortController();
+      const promise = runWorktreeSetup(parent.projectCwd, worktree, controller.signal)
+        .catch((): WorktreeSetup => ({ status: "failed", exitCode: null, logPath: worktree.setup!.status === "not-present" ? "" : worktree.setup!.logPath }))
+        .then(async (setup) => {
+          worktree.setup = setup;
+          if (entry.record.worktree) entry.record.worktree = { ...entry.record.worktree, setup };
+          entry.role = { ...entry.role, setup };
+          this.touch(runState, (run) => ({ ...run, worktree: run.worktree ? { ...run.worktree, setup } : null }));
+          for (const listener of [...entry.roleListeners]) { try { listener(entry.role); } catch { /* Observers are isolated. */ } }
+          await childDriver?.appendEntry?.(SESSION_AGENT_ENTRY_TYPE, entry.record).catch(() => undefined);
+          return setup;
+        });
+      entry.setupGate = { controller, promise };
+    }
     void this.kick(runState, task);
     return {
       agentName,
@@ -1125,7 +1146,7 @@ export class AgentHarness {
       runId,
       status: "running",
       cwd: childCwd,
-      ...(worktree ? { branch: worktree.branch } : {}),
+      ...(worktree ? { branch: worktree.branch, environment: worktree.environment, setup: worktree.setup } : {}),
     };
   }
 
@@ -1407,6 +1428,8 @@ export class AgentHarness {
       ...(run.cwd !== undefined ? { cwd: run.cwd } : {}),
       ...(run.worktree && !run.worktree.removedAt ? { branch: run.worktree.branch } : {}),
       worktree: await this.worktreeStatus(parent, run),
+      ...(run.worktree?.environment ? { environment: run.worktree.environment } : {}),
+      ...(run.worktree?.setup ? { setup: run.worktree.setup } : {}),
       ...(run.activity ? { activity: run.activity } : {}),
       updatedAt: run.updatedAt,
       messages,
@@ -1886,6 +1909,16 @@ export class AgentHarness {
       options?.onAccepted?.();
     };
     try {
+      const gate = entry.setupGate;
+      if (gate) {
+        const setup = await gate.promise;
+        if (entry.setupGate === gate) delete entry.setupGate;
+        if (setup.status === "cancelled" || entry.lifecycle.control(state.run.runId) || isTerminalRunStatus(state.run.status) || this.byPath.get(state.run.sessionPath) !== entry) {
+          const result = { accepted: false, queued: false };
+          await this.withEntry(entry, () => this.afterInvocation(entry, state, result, undefined, false));
+          return result;
+        }
+      }
       result = await driver.prompt(content, driver.setExtensionModelWorkHandler
         ? {
             ...options,
@@ -2011,6 +2044,7 @@ export class AgentHarness {
         reason: attempt === "execution" ? "controlled-invocation-started" : control?.kind === "stop" ? "stop" : "parent-interrupt",
         token,
       });
+      entry.setupGate?.controller.abort();
       await driver.abort();
     } catch (error) {
       failure = error instanceof Error ? error.message : String(error);

@@ -312,6 +312,29 @@ export interface AgentRunIdentity {
 export type AgentRunOrigin = "agent" | "user";
 export type AgentRunInitiator = "parent" | "user" | "harness";
 
+export interface WorktreeEnvironment {
+  path: string;
+  branch: string;
+  baseCommit: string;
+  parentCheckout: string;
+  absentDirectories: string[];
+}
+
+export type WorktreeSetup =
+  | { status: "not-present" }
+  | { status: "pending" | "ok" | "timed-out" | "cancelled"; logPath: string }
+  | { status: "failed"; logPath: string; exitCode: number | null };
+
+export interface AgentWorktree {
+  path: string;
+  branch: string;
+  baseCommit: string;
+  removedAt?: string;
+  /** Absent only in records created before environment capture. */
+  environment?: WorktreeEnvironment;
+  setup?: WorktreeSetup;
+}
+
 export interface AgentRun extends AgentRunIdentity {
   /** The child session's wire identity (session files are the stable key). */
   sessionPath: string;
@@ -329,7 +352,7 @@ export interface AgentRun extends AgentRunIdentity {
    * branch or a path that is no longer there (M13-T42). The names stay: what
    * the run worked on is history, and history is not deleted.
    */
-  worktree: { path: string; branch: string; baseCommit: string; removedAt?: string } | null;
+  worktree: AgentWorktree | null;
   /**
    * The directory this run actually works in: its worktree when it has one,
    * otherwise the checkout its parent is working in. Absent only on a run
@@ -439,7 +462,7 @@ export interface SessionAgentRecord {
   rootPath?: string;
   runId?: string;
   /** Absent when the parent started this child without a worktree of its own. */
-  worktree?: { path: string; branch: string; baseCommit: string; removedAt?: string };
+  worktree?: AgentWorktree;
 }
 
 /** The custom entry type the worker writes `SessionAgentRecord` under. */

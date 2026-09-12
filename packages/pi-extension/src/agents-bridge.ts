@@ -19,6 +19,8 @@ import type {
   AgentRunQuestion,
   AgentRunStatus,
   BackgroundTask,
+  WorktreeEnvironment,
+  WorktreeSetup,
   SessionAgentKind,
 } from "@lasercode/protocol";
 
@@ -54,6 +56,8 @@ export interface HarnessSessionRole {
    * `isolated !== false`, so nothing ever names a branch that does not exist.
    */
   branch?: string;
+  environment?: WorktreeEnvironment;
+  setup?: WorktreeSetup;
 }
 
 export interface StartAgentInput {
@@ -78,6 +82,8 @@ export interface StartAgentResult {
   cwd: string;
   /** The branch its worktree is on; absent when it shares its parent's checkout. */
   branch?: string;
+  environment?: WorktreeEnvironment;
+  setup?: WorktreeSetup;
 }
 
 export interface SendAgentMessageInput {
@@ -165,6 +171,8 @@ export interface FleetAgentRow extends FleetRowBase {
   sessionId: string;
   /** The newest run in that session; `inspect_agent { runId }` reads it. */
   runId: string;
+  environment?: WorktreeEnvironment;
+  setup?: WorktreeSetup;
 }
 
 /** One background command, under the row for the session whose agent ran it. */
@@ -244,6 +252,8 @@ export interface InspectAgentResult extends AgentRunSummary {
   /** Where it works; the branch only when it has a worktree of its own. */
   cwd?: string;
   branch?: string;
+  environment?: WorktreeEnvironment;
+  setup?: WorktreeSetup;
   /**
    * `null` when it was started without one. `exists` is the directory on
    * disk right now; the two counts are what git could say about the branch,

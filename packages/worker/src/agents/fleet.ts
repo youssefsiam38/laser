@@ -162,6 +162,8 @@ function agentRow(run: AgentRun, depth: number, now: number): FleetAgentRow {
     sessionId: run.sessionId,
     runId: run.runId,
     title: run.subagentName,
+    ...(run.worktree?.environment ? { environment: run.worktree.environment } : {}),
+    ...(run.worktree?.setup ? { setup: run.worktree.setup } : {}),
     state,
     status: FLEET_STATUS_WORD[state],
     ...(when !== undefined ? { elapsed: when } : {}),
