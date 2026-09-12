@@ -395,6 +395,7 @@ const turnMessage = (
   isTail: boolean,
   input: ProjectionInput,
   toolDialogs: ReadonlyMap<string, UiDialogRequest>,
+  prompt: { ordinal: number; entryId?: string } | undefined,
 ): ThreadMessageLike => {
   const running = isTail && input.running;
   const parts: ProjectedContentPart[] = [];
@@ -484,6 +485,7 @@ const turnMessage = (
       custom: {
         [MESSAGE_METADATA_NS]: {
           kind: "turn",
+          ...(prompt ? { prompt } : {}),
           blockIds: group.map((b) => b.id),
           ...(usageCustom ? { usage: usageCustom } : {}),
           ...(speaker ? { speaker } : {}),
@@ -502,11 +504,12 @@ export function projectMessages(input: ProjectionInput): ProjectionResult {
   const messages: ThreadMessageLike[] = [];
   let group: Extract<Block, { kind: "assistant" | "tool" }>[] = [];
   let userOrdinal = 0;
+  let prompt: { ordinal: number; entryId?: string } | undefined;
   const shownGoals = new Set<string>();
 
   const flush = (isTail: boolean): void => {
     if (group.length === 0) return;
-    messages.push(turnMessage(group, isTail, input, toolAssociated));
+    messages.push(turnMessage(group, isTail, input, toolAssociated, prompt));
     group = [];
   };
 
@@ -517,6 +520,9 @@ export function projectMessages(input: ProjectionInput): ProjectionResult {
       if (goal && shownGoals.has(goal.id)) continue;
       flush(false);
       if (goal) shownGoals.add(goal.id);
+      // Hidden goal continuations consume an ordinal but never replace the
+      // rendered prompt that Try again must return to.
+      prompt = { ordinal, ...(block.entryId ? { entryId: block.entryId } : {}) };
       messages.push(userMessage(goal ? { ...block, text: goal.moments[0]!.objective } : block, ordinal, goal));
       continue;
     }

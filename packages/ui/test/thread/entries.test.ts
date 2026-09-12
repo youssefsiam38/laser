@@ -126,3 +126,15 @@ describe("quote-reply: splitLeadingQuote", () => {
     expect(splitLeadingQuote("x\n> not leading")).toEqual({ quote: undefined, rest: "x\n> not leading" });
   });
 });
+
+it("caches per entries identity and distinguishes every leaf key", () => {
+  const latest = userEntryIds(tree);
+  expect(latest).toEqual(["u1", "u3"]);
+  expect(userEntryIds(tree)).toBe(latest);
+  expect(userEntryIds(tree, null)).toEqual([]);
+  expect(userEntryIds(tree, "a2")).toEqual(["u1", "u2"]);
+  expect(userEntryIds(tree, "a3")).toEqual(["u1", "u3"]);
+  expect(userEntryIds([...tree])).not.toBe(latest);
+  expect(activePathIds(tree, "a2")).toBe(activePathIds(tree, "a2"));
+  expect(activePathIds(tree, null)).not.toBe(activePathIds(tree));
+});

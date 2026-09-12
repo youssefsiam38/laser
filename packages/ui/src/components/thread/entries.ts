@@ -36,7 +36,20 @@ const isUserEntry = (e: EntryLike): boolean => e.type === "message" && e.message
  * a file with a single branch is its own conversation, so it costs no
  * filtering and asks nothing of entries that carry no parent at all.
  */
+type LeafKey = string | null | undefined;
+const pathCache = new WeakMap<readonly unknown[], Map<LeafKey, Set<string> | undefined>>();
+const userCache = new WeakMap<readonly unknown[], Map<LeafKey, string[]>>();
+
 export function activePathIds(entries: readonly unknown[], leafId?: string | null): Set<string> | undefined {
+  let cache = pathCache.get(entries);
+  if (!cache) pathCache.set(entries, cache = new Map());
+  if (cache.has(leafId)) return cache.get(leafId);
+  const path = computeActivePathIds(entries, leafId);
+  cache.set(leafId, path);
+  return path;
+}
+
+function computeActivePathIds(entries: readonly unknown[], leafId?: string | null): Set<string> | undefined {
   // A leaf reset to before the first entry: the person is editing the opening
   // message, and nothing in the file is live until they send it.
   if (leafId === null) return new Set();
@@ -87,12 +100,17 @@ function isBranched(entries: readonly unknown[]): boolean {
 
 /** Ids of user message entries on the live branch, in order. */
 export function userEntryIds(entries: readonly unknown[], leafId?: string | null): string[] {
+  let cache = userCache.get(entries);
+  if (!cache) userCache.set(entries, cache = new Map());
+  const cached = cache.get(leafId);
+  if (cached) return cached;
   const path = activePathIds(entries, leafId);
   const out: string[] = [];
   for (const raw of entries) {
     const e = asEntry(raw);
     if (isUserEntry(e) && (!path || path.has(e.id!))) out.push(e.id!);
   }
+  cache.set(leafId, out);
   return out;
 }
 

@@ -16,6 +16,7 @@ import { AssistantRuntimeProvider, ThreadPrimitive, useAui, useExternalStoreRunt
 
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { LaserStoreProvider, createStateStore, type StateStore } from "../../src/runtime/LaserProvider.js";
+import { goalRecords } from "../../src/runtime/goal-history.js";
 import { projectMessages } from "../../src/runtime/projection.js";
 import { blocksFromEntries, initialState, reduce, type AppState } from "../../src/store.js";
 import { sessionState } from "../agents/fixtures.js";
@@ -116,14 +117,15 @@ afterEach(async () => {
 /** The thread's own composer, reached the way a message reaches it. */
 let threadComposer: { getState(): { text: string }; setText(text: string): void } | undefined;
 
-const mount = () => {
+const mount = (history: readonly unknown[] = entries, leafId: string | undefined = LEAF) => {
   function Probe() {
     const aui = useAui();
     threadComposer = aui.thread.composer();
     return null;
   }
   function Fixture() {
-    const { messages } = projectMessages({ blocks: blocksFromEntries(entries, LEAF), running: false, dialogs: [] });
+    const blocks = blocksFromEntries(history, leafId);
+    const { messages } = projectMessages({ blocks, running: false, dialogs: [], goals: goalRecords(history, blocks) });
     const runtime = useExternalStoreRuntime({ convertMessage: (message: ThreadMessageLike) => message, messages, isRunning: false, onNew: async () => {} });
     return (
       <AssistantRuntimeProvider runtime={runtime}>
@@ -293,6 +295,22 @@ describe("the version picker", () => {
 });
 
 describe("running a reply again", () => {
+  it("returns to the visible goal setter rather than its hidden continuation", async () => {
+    const text = "Goal mode is active.\n<goal_objective>\nVisible objective\n</goal_objective>\n<goal_id>\ng1\n</goal_id>\n<!-- pi-goal-prompt:test-g1 -->";
+    const history = [
+      { id: "goal", type: "custom", customType: "goal-state", data: { goal: { id: "g1", text: "Visible objective", status: "active", startedAt: 1, updatedAt: 1, iteration: 0 } } },
+      msg("visible", "goal", "user", text),
+      msg("reply", "visible", "assistant", "Working"),
+      msg("hidden", "reply", "user", text),
+      msg("final", "hidden", "assistant", "Done"),
+    ];
+    store.dispatch({ type: "hydrate", path: SESSION, entries: history, leafId: "final" });
+    stable.actions.navigate.mockResolvedValue({});
+    await mount(history, "final");
+    await click(byTitle("Try again").at(-1));
+    expect(stable.actions.navigate).toHaveBeenCalledWith("visible");
+    expect(stable.actions.send).toHaveBeenCalledWith([{ type: "text", text: "Visible objective" }], "prompt");
+  });
   it("answers again in this session, from the prompt the engine hands back", async () => {
     await mount();
     const footer = [...container.querySelectorAll('[data-role="assistant"]')].at(-1)!;
