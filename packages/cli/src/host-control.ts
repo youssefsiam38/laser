@@ -6,7 +6,8 @@
  * host attaches to it and prints the URL, which is what a person means when
  * they type it a second time.
  */
-import { PRODUCT_NAME } from "@lasercode/protocol";
+import { PRODUCT_NAME, environmentOverlay } from "@lasercode/protocol";
+import { HostRpc } from "./rpc.js";
 import { spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { sep } from "node:path";
@@ -66,7 +67,10 @@ export interface StartResult {
  */
 export async function startHost(paths: LaserPaths, timeoutMs = 30_000): Promise<StartResult> {
   const existing = await inspectHost(paths);
-  if (existing.state === "running") return { record: existing.record, started: false };
+  if (existing.state === "running") {
+    await refreshHostEnvironment(existing.record);
+    return { record: existing.record, started: false };
+  }
   if (existing.state === "unreachable") {
     throw new CliError(`a ${PRODUCT_NAME} host is recorded as running but is not answering`, {
       details: [existing.reason],
@@ -119,6 +123,28 @@ export async function startHost(paths: LaserPaths, timeoutMs = 30_000): Promise<
     details: logTail(paths.logFile),
     fix: `Check ${paths.logFile}, then try \`${PRODUCT_NAME} up --foreground\` to watch it start.`,
   });
+}
+
+/** A terminal already resolved its shell; adoption must not discard those exports. */
+export async function refreshHostEnvironment(record: HostRecord, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  let rpc: HostRpc | undefined;
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(record.host)) throw new Error("not local");
+    const hostname = record.host === "::1" ? "[::1]" : record.host;
+    rpc = await HostRpc.connect({ url: `ws://${hostname}:${record.port}/ws` });
+    await Promise.race([
+      rpc.request("pi/host/environment", { variables: environmentOverlay(env) }),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("timeout")), 5000); }),
+    ]);
+  } catch {
+    throw new CliError("Could not confirm the running host's environment refresh. The host was not restarted.", {
+      fix: "Try the command again. If an update was installed, restart the app and host together when your work is finished.",
+    });
+  } finally {
+    if (timer) clearTimeout(timer);
+    rpc?.close();
+  }
 }
 
 /** The arguments a daemon needs to reproduce this CLI's path resolution. */

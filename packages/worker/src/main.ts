@@ -17,6 +17,7 @@ import { StableSdkDriver } from "./drivers/stable-sdk.js";
 import { alignEngineAgentDir, extendRuntimePath } from "./runtime-env.js";
 import { AgentResolutionError, assertBundledAgent } from "./resolve-pi.js";
 import { WorkerServer } from "./server.js";
+import { applyEnvironment } from "./environment.js";
 
 const PROTOCOL_FD = Number(process.env[ENV.workerFd] ?? 3);
 
@@ -113,6 +114,11 @@ async function main(): Promise<void> {
         raw = parseJsonLine(line);
       } catch (error) {
         send({ jsonrpc: "2.0", id: 0, error: { code: -32700, message: (error as Error).message } });
+        continue;
+      }
+      const notification = raw as { method?: unknown; params?: unknown; id?: unknown } | null;
+      if (notification?.method === "pi/host/environment" && notification.id === undefined) {
+        applyEnvironment(notification.params);
         continue;
       }
       void server.handle(raw);

@@ -517,6 +517,12 @@ export const clientParamsSchemas = {
   "session/set_mode": z.object({ path: sessionPath, mode: z.string().min(1) }).strict(),
 
   "pi/host/version": z.object({}).strict(),
+  "pi/host/environment": z.object({ variables: z.record(
+    z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/),
+    z.string().max(131_072).refine((value) => !value.includes("\0"), "invalid environment value"),
+  ).refine((variables) => Object.keys(variables).length <= 4096
+    && Object.entries(variables).reduce((size, [key, value]) => size + key.length + value.length + 2, 0) <= 1_048_576,
+  "environment is too large") }).strict(),
   "pi/session/list": z.object({ cwd: z.string().min(1).optional() }).strict(),
   "session/search": z.object({ query: z.string().trim().min(1).max(200), cwd: z.string().min(1).optional(), after: z.string().datetime().optional(), before: z.string().datetime().optional(), cursor: z.number().int().nonnegative().optional() }).strict(),
   "pi/session/inbox": z

@@ -163,9 +163,13 @@ export class Router {
     private readonly deps: RouterDeps,
   ) {}
 
-  async handle(raw: unknown): Promise<JsonRpcResponse> {
+  async handle(raw: unknown, access: { localEnvironment?: boolean } = {}): Promise<JsonRpcResponse> {
     const id = (raw as { id?: string | number } | null)?.id ?? 0;
     try {
+      // Check transport authorization before parsing a potentially secret map.
+      if ((raw as { method?: unknown } | null)?.method === "pi/host/environment" && !access.localEnvironment) {
+        throw new ProtocolError(ErrorCodes.Unsupported, "Environment updates are only accepted from a local app or terminal.");
+      }
       const req = parseClientRequest(raw);
       const clientVersion = (raw as { clientVersion?: string }).clientVersion;
       if (req.method !== "pi/host/version" && clientVersion && clientVersion !== PRODUCT_VERSION) {
@@ -256,6 +260,8 @@ export class Router {
     switch (req.method) {
       case "pi/host/version":
         return { version: PRODUCT_VERSION };
+      case "pi/host/environment":
+        return { applied: this.pool.applyEnvironment(req.params.variables) };
       case "pi/session/list":
         return { sessions: this.sessions(req.params.cwd) };
 
