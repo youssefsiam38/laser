@@ -117,7 +117,7 @@ afterEach(async () => {
 /** The thread's own composer, reached the way a message reaches it. */
 let threadComposer: { getState(): { text: string }; setText(text: string): void } | undefined;
 
-const mount = (history: readonly unknown[] = entries, leafId: string | undefined = LEAF) => {
+const mount = (history: unknown[] = entries, leafId: string | undefined = LEAF) => {
   function Probe() {
     const aui = useAui();
     threadComposer = aui.thread.composer();
@@ -172,6 +172,22 @@ const startEdit = async () => {
 };
 
 describe("streaming footer subscriptions", () => {
+  it.skipIf(!process.env.PERF_BENCH)("benchmarks 12 settled footers across 500 irrelevant deltas", async () => {
+    const history = Array.from({ length: 24 }, (_, index) => msg(`bench-${index}`, index ? `bench-${index - 1}` : null, index % 2 ? "assistant" : "user", `Message ${index}`));
+    store.dispatch({ type: "hydrate", path: SESSION, entries: history, leafId: "bench-23" });
+    await mount(history, "bench-23");
+    stable.footerRenders.clear();
+    const start = performance.now();
+    const cpu = process.cpuUsage();
+    for (let seq = 1; seq <= 500; seq++) {
+      await act(async () => store.dispatch({ type: "notification", method: "session/update", params: {
+        sessionPath: SESSION, seq, at: "2026-09-12T00:00:00Z",
+        update: { kind: "text_delta", contentIndex: 0, delta: "x" },
+      } }));
+    }
+    const elapsed = process.cpuUsage(cpu);
+    console.log("PERF_BATCH_1", JSON.stringify({ footers: 12, deltas: 500, executions: [...stable.footerRenders.values()].reduce((a, b) => a + b, 0), wallMs: performance.now() - start, cpuMs: (elapsed.user + elapsed.system) / 1000 }));
+  });
   it("does not execute settled footers for 500 text deltas", async () => {
     await mount();
     stable.footerRenders.clear();

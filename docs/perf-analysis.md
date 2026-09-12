@@ -280,3 +280,50 @@ Defer optional math/map/highlighter code; examine lightweight model capability d
 `/tmp/perf/cleanup.json` records zero remaining processes with the isolated HOME after cleanup, including the test host/worker/provider, Electron and Xvfb. Scratch artifacts remain for inspection; no test service is intentionally left running. `git diff --no-index --check /dev/null docs/perf-analysis.md` passed. The report is untracked/uncommitted; other checkout changes belong to other work. Replaying scripts requires aligning their recorded client version with a newly built isolated host, not bypassing the handshake.
 
 **Next maintainer action:** reproduce batch-1 baseline in an isolated, fully built checkout at one frozen SHA. The measured hotspots are actionable, but this shared checkout's changing build identity prevents treating the investigation as an exact-current-release performance certification.
+
+
+## After batch 1
+
+Paired **Node 24.11.1 / happy-dom** subscription benchmark, not an end-to-end
+browser rerun: 24 displayed messages, 12 settled assistant footers, 500 separately
+flushed real `session/update` text deltas. The assistant-ui transcript is held
+settled deliberately, isolating the irrelevant Laser store notifications that
+caused footer fan-out. Real footer children, reducer, store and subscriptions run;
+no mocked timing or selector. Mount and teardown are excluded from measured time.
+
+| Measurement / 500 deltas | Before (`5da8871` source) | After (`b192318` source) |
+| --- | ---: | ---: |
+| Settled footer executions | 6,000 | **0** |
+| Node process CPU (user + system; scripting proxy, not browser scripting) | 12,686.922 ms | **13.862 ms** |
+| Loop wall time | 11,890.622 ms | **7.080 ms** |
+
+Single samples, subject to machine contention. These figures must **not** be
+compared numerically with the earlier browser's 12,325 executions / 10.89 s:
+that workload includes live projection, different history length, scheduling,
+layout, provider transport and settlement. No browser scripting improvement
+percentage is claimed. The original harness uses shared-checkout imports and
+fixed mutable `/tmp/perf` state; this isolated benchmark avoids reusing those
+outputs or running its old worker generation. Initial 120-footer baseline trials
+exceeded 5 s and 60 s test limits; their incomplete counts are discarded. Reducing
+the paired fixture to 12 footers let both 500-delta samples finish normally.
+
+Reproduce the after sample (benchmark is skipped in ordinary suites):
+
+```sh
+PATH=$HOME/.nvm/versions/node/v24.11.1/bin:$PATH PERF_BENCH=1   pnpm -F @lasercode/ui exec vitest run test/thread/edit-in-place.test.tsx   -t 'benchmarks 12 ' --testTimeout 60000
+```
+
+Raw outputs: `/tmp/perf-batch-1-before.txt`, `/tmp/perf-batch-1-after.txt`.
+The before run substituted only the six batch-owned source files from `5da8871`
+inside the isolated worktree, ran the identical fixture, then restored the exact
+after sources. The render guard also fails when only the broad thinking hook is
+restored and passes with the narrow state-reference subscription.
+
+Implementation limits: the authorized minimal selector route retains catalog
+listeners in closed footers; lazy popover subscription mounting remains a future
+mount-cost optimization. Only formatter objects are cached: language changes
+clear them; day descriptions recalculate on render. OS time-zone changes require
+reload, and settled rows do not gain a midnight timer. The timing namespace fix
+renders supplied timing/usage metadata correctly; separately, current entry
+hydration does not preserve usage and projection does not manufacture elapsed
+measurements. Those missing producers are not repaired by this namespace change.
