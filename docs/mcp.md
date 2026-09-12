@@ -21,13 +21,23 @@ dynamic client registration, bearer tokens, lazy lifecycles, a metadata cache
 that keeps tool definitions available without live connections, direct and
 proxied tool exposure, per-call approvals, elicitation through the four stock
 dialogs, sampling, and an output guard. Laser drives it **only through its
-programmatic entry** — `createMcpAdapter({ config })` — with an in-memory
+programmatic entry** — `createMcpAdapter({ config, clientIdentity })` — with an in-memory
 configuration the worker builds from Laser's own files. The adapter's file
 discovery (`.mcp.json`, `~/.config/mcp/mcp.json`, `.pi/mcp.json`, host-config
 imports) is never active: `config` mode is an isolated snapshot by upstream's
 own contract, and `.pi` is neither a migration source nor supported Laser
 configuration (invariant 6b). The adapter's terminal surfaces (`/mcp`,
 `/mcp setup`, the panel) are not offered; Laser's Settings is the surface.
+
+Client identity belongs to the product, not the adapter. The exact-version
+`pi-mcp-adapter@2.33.0` pnpm patch adds an optional `clientIdentity` seam;
+`packages/worker/src/mcp/identity.ts` supplies product-derived name, title,
+version and OAuth registration defaults. Session and inspector connections use
+`<product>-mcp-<server>` over every transport; endpoint probes and OAuth discovery
+use `<product>-mcp`. OAuth registration uses the product display name and
+homepage unless the server explicitly supplies `oauth.clientName`/`clientUri`.
+No engine environment variable or agent-directory lookup is changed. See
+[`upstream.md`](upstream.md) for the patch and its regression coverage.
 
 The adapter is loaded into a session **only when that project has at least one
 enabled server**. With no servers the model sees no `mcp` tool and no

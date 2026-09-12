@@ -9,6 +9,7 @@
  * to disk the way a session's tool call may.
  */
 import { delimiter } from "node:path";
+import { mcpClientIdentity } from "./identity.js";
 import type {
   McpCallResult,
   McpInspection,
@@ -88,12 +89,19 @@ export class McpInspector {
     return this.engine;
   }
 
+  /** Every auth operation owns the same identity-bearing runtime, even before a connection. */
+  private async runtime(): Promise<unknown> {
+    const engine = await this.engineOrLoad();
+    this.oauthRuntime ??= engine.auth.createOAuthRuntime(undefined, mcpClientIdentity());
+    return this.oauthRuntime;
+  }
+
   private async managerOrCreate(): Promise<McpManager> {
     const engine = await this.engineOrLoad();
+    const runtime = await this.runtime();
     if (!this.manager) {
-      const manager = new engine.Manager(this.cwd);
-      this.oauthRuntime ??= engine.auth.createOAuthRuntime();
-      manager.setOAuthRuntime?.(this.oauthRuntime);
+      const manager = new engine.Manager(this.cwd, mcpClientIdentity());
+      manager.setOAuthRuntime?.(runtime);
       this.manager = manager;
     }
     return this.manager;
@@ -227,10 +235,9 @@ export class McpInspector {
     if (!url || !engine.auth.supportsOAuth(entry)) {
       throw new Error(`"${config.name}" does not sign in with OAuth. It is reached over ${config.transport.kind === "http" ? "HTTP without sign-in" : "a command"}.`);
     }
-    await this.managerOrCreate();
     // Both callbacks are ours and both do nothing: the app opens the URL, and
     // upstream's own logger prints it when no `onAuthorizationUrl` is supplied.
-    const options = { runtime: this.oauthRuntime, authStorageOptions: {}, openAuthorizationUrl: () => {}, onAuthorizationUrl: () => {} };
+    const options = { runtime: await this.runtime(), authStorageOptions: {}, openAuthorizationUrl: () => {}, onAuthorizationUrl: () => {} };
     const { authorizationUrl } = await engine.auth.startAuth(config.name, url, entry, options);
     if (!authorizationUrl) return { authorizationUrl: "", callbackListening: false, alreadyAuthorized: true };
     const callbackListening = isLoopbackRedirect(authorizationUrl);
@@ -256,8 +263,7 @@ export class McpInspector {
   /** Finish sign-in from a pasted callback URL or code. */
   async authComplete(scope: McpScope, config: McpConfiguredServer, input: string): Promise<{ status: McpInspection["status"]; detail?: string }> {
     const engine = await this.engineOrLoad();
-    await this.managerOrCreate();
-    const status = await engine.auth.completeAuthFromInput(config.name, input, { runtime: this.oauthRuntime, authStorageOptions: {} });
+    const status = await engine.auth.completeAuthFromInput(config.name, input, { runtime: await this.runtime(), authStorageOptions: {} });
     await this.close(McpInspector.key(scope, config.name)).catch(() => {});
     if (status !== "authenticated") {
       return { status: "needs-auth", detail: `Sign-in for "${config.name}" did not complete. Start it again and paste the full address the browser landed on.` };
@@ -271,7 +277,7 @@ export class McpInspector {
   /** Forget stored credentials for a server. */
   async authLogout(scope: McpScope, config: McpConfiguredServer): Promise<void> {
     const engine = await this.engineOrLoad();
-    await engine.auth.removeAuth(config.name, { runtime: this.oauthRuntime, authStorageOptions: {} });
+    await engine.auth.removeAuth(config.name, { runtime: await this.runtime(), authStorageOptions: {} });
     await this.close(McpInspector.key(scope, config.name)).catch(() => {});
   }
 

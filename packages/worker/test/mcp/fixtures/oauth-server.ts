@@ -17,6 +17,8 @@ export interface FixtureOAuthServer {
   issuedCodes: string[];
   /** How many times a token was minted, so a refresh is visible. */
   tokenGrants: number;
+  clientInfos: unknown[];
+  registrations: Array<Record<string, unknown>>;
   close(): Promise<void>;
 }
 
@@ -48,6 +50,8 @@ function mcpAnswer(method: string, params: Record<string, unknown> | undefined):
 
 export function startFixtureOAuthServer(): Promise<FixtureOAuthServer> {
   const issuedCodes: string[] = [];
+  const clientInfos: unknown[] = [];
+  const registrations: Array<Record<string, unknown>> = [];
   let tokenGrants = 0;
   let base = "";
 
@@ -89,6 +93,7 @@ export function startFixtureOAuthServer(): Promise<FixtureOAuthServer> {
             return {};
           }
         })();
+        registrations.push(parsed);
         json(201, {
           client_id: "fixture-client",
           client_id_issued_at: Math.floor(Date.now() / 1000),
@@ -119,14 +124,12 @@ export function startFixtureOAuthServer(): Promise<FixtureOAuthServer> {
       response.writeHead(404).end();
       return;
     }
-    if (request.headers.authorization !== `Bearer ${ACCESS_TOKEN}`) {
-      json(401, { error: "unauthorized" }, {
-        "www-authenticate": `Bearer resource_metadata="${base}/.well-known/oauth-protected-resource"`,
-      });
-      return;
-    }
+    const challenge = () => json(401, { error: "unauthorized" }, {
+      "www-authenticate": `Bearer resource_metadata="${base}/.well-known/oauth-protected-resource"`,
+    });
     if (request.method !== "POST") {
-      response.writeHead(405).end();
+      if (request.headers.authorization !== `Bearer ${ACCESS_TOKEN}`) challenge();
+      else response.writeHead(405).end();
       return;
     }
     let body = "";
@@ -140,6 +143,13 @@ export function startFixtureOAuthServer(): Promise<FixtureOAuthServer> {
         return;
       }
       const messages = Array.isArray(parsed) ? parsed : [parsed];
+      for (const message of messages as Array<{ method?: string; params?: Record<string, unknown> }>) {
+        if (message.method === "initialize") clientInfos.push(message.params?.["clientInfo"]);
+      }
+      if (request.headers.authorization !== `Bearer ${ACCESS_TOKEN}`) {
+        challenge();
+        return;
+      }
       const replies: unknown[] = [];
       for (const message of messages as Array<{ id?: unknown; method?: string; params?: Record<string, unknown> }>) {
         if (message.id === undefined) continue;
@@ -162,6 +172,8 @@ export function startFixtureOAuthServer(): Promise<FixtureOAuthServer> {
       base = `http://127.0.0.1:${port}`;
       resolve({
         url: `${base}/mcp`,
+        clientInfos,
+        registrations,
         get issuedCodes() {
           return issuedCodes;
         },

@@ -6,10 +6,12 @@
  *
  * Arguments:
  *   --name <n>     the server name reported in `initialize` (default fixture)
+ *   --client-info <path> append received initialize clientInfo as JSONL
  *   --fail-tools   answer `tools/list` with an error, to exercise a failure
  *   --stderr <s>   write a line to stderr at start (for the stderr tail)
  */
 import { createInterface } from "node:readline";
+import { appendFileSync } from "node:fs";
 
 const args = process.argv.slice(2);
 const option = (flag, fallback) => {
@@ -61,6 +63,7 @@ export function handle(request) {
   const { id, method, params } = request;
   switch (method) {
     case "initialize":
+      if (option("--client-info", undefined)) appendFileSync(option("--client-info"), `${JSON.stringify(params?.clientInfo)}\n`);
       return {
         protocolVersion: typeof params?.protocolVersion === "string" ? params.protocolVersion : "2025-06-18",
         capabilities: { tools: { listChanged: true }, resources: {}, prompts: {}, logging: {} },

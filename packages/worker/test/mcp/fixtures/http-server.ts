@@ -1,9 +1,9 @@
 /**
- * The same fixture server over Streamable HTTP: one POST per JSON-RPC
- * message, answered with a JSON body. No SSE, no session resumption — enough
- * for the transport negotiation the engine performs and for a real tool call.
+ * The same fixture server over Streamable HTTP or legacy SSE, with received
+ * initialize identities retained for real transport regression tests.
  */
-import { createServer, type Server } from "node:http";
+import { createServer, type Server, type ServerResponse } from "node:http";
+import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -19,6 +19,7 @@ const TOOLS = [
 
 export interface FixtureHttpServer {
   url: string;
+  clientInfos: unknown[];
   close(): Promise<void>;
 }
 
@@ -53,9 +54,20 @@ function answer(method: string, params: Record<string, unknown> | undefined): un
   }
 }
 
-export function startFixtureHttpServer(): Promise<FixtureHttpServer> {
+export function startFixtureHttpServer(mode: "streamable-http" | "sse" = "streamable-http"): Promise<FixtureHttpServer> {
+  const clientInfos: unknown[] = [];
+  const streams = new Map<string, ServerResponse>();
   const server: Server = createServer((request, response) => {
-    if (request.method !== "POST") {
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    if (mode === "sse" && request.method === "GET" && url.pathname === "/mcp") {
+      const session = randomUUID();
+      streams.set(session, response);
+      response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+      response.write(`event: endpoint\ndata: /messages?session=${session}\n\n`);
+      response.on("close", () => streams.delete(session));
+      return;
+    }
+    if (request.method !== "POST" || (mode === "sse" && url.pathname !== "/messages")) {
       response.writeHead(405).end();
       return;
     }
@@ -73,6 +85,7 @@ export function startFixtureHttpServer(): Promise<FixtureHttpServer> {
       const replies: unknown[] = [];
       for (const message of messages as Array<{ id?: unknown; method?: string; params?: Record<string, unknown> }>) {
         if (message.id === undefined) continue;
+        if (message.method === "initialize") clientInfos.push(message.params?.["clientInfo"]);
         try {
           const value = answer(message.method ?? "", message.params);
           replies.push(value === undefined
@@ -81,6 +94,13 @@ export function startFixtureHttpServer(): Promise<FixtureHttpServer> {
         } catch (error) {
           replies.push({ jsonrpc: "2.0", id: message.id, error: { code: -32000, message: (error as Error).message } });
         }
+      }
+      if (mode === "sse") {
+        const stream = streams.get(url.searchParams.get("session") ?? "");
+        if (!stream) { response.writeHead(404).end(); return; }
+        for (const reply of replies) stream.write(`event: message\ndata: ${JSON.stringify(reply)}\n\n`);
+        response.writeHead(202).end();
+        return;
       }
       if (replies.length === 0) {
         response.writeHead(202, { "mcp-session-id": "fixture" }).end();
@@ -95,7 +115,12 @@ export function startFixtureHttpServer(): Promise<FixtureHttpServer> {
       const { port } = server.address() as AddressInfo;
       resolve({
         url: `http://127.0.0.1:${port}/mcp`,
-        close: () => new Promise<void>((done) => server.close(() => done())),
+        clientInfos,
+        close: () => new Promise<void>((done) => {
+          for (const stream of streams.values()) stream.end();
+          server.closeAllConnections();
+          server.close(() => done());
+        }),
       });
     });
   });

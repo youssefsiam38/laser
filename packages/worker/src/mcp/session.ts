@@ -20,6 +20,7 @@ import { getServerPrefix } from "pi-mcp-adapter/types";
 import { toAdapterConfig } from "./adapter-config.js";
 import { loadMcpEngine, type McpConfig } from "./engine.js";
 import { McpStore } from "./store.js";
+import { mcpClientIdentity } from "./identity.js";
 
 export interface McpSessionOptions {
   cwd: string;
@@ -55,7 +56,7 @@ export async function mcpSessionSetup(options: McpSessionOptions): Promise<McpSe
   const config = await mcpSessionConfig(options);
   if (!config) return undefined;
   const engine = await loadMcpEngine();
-  const factory = engine.createMcpAdapter({ config }) as unknown as (pi: ExtensionAPI) => void | Promise<void>;
+  const factory = engine.createMcpAdapter({ config, clientIdentity: mcpClientIdentity() }) as unknown as (pi: ExtensionAPI) => void | Promise<void>;
   return {
     extension: { name: "mcp", factory: (pi: ExtensionAPI) => factory(quietEngineUi(pi)) },
     statusEvent: engine.statusEvent,
