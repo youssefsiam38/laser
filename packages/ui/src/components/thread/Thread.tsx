@@ -1,5 +1,5 @@
-import { AuiConfig, AuiIf, AuiProvider, Suggestions, ThreadPrimitive, useAui } from "@assistant-ui/react";
-import { useEffect, useMemo, type ReactNode } from "react";
+import { AuiConfig, AuiIf, AuiProvider, Suggestions, ThreadPrimitive, useAui, unstable_useThreadMessageIds } from "@assistant-ui/react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { ConversationMapAui } from "@/components/assistant-ui/elements/conversation-map.aui";
 import { ThreadFollowupSuggestions } from "@/components/assistant-ui/elements/follow-up-suggestions.aui";
@@ -9,6 +9,7 @@ import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import { SelectionToolbar } from "@/components/assistant-ui/elements/quote.aui";
 import { ScrollAnchor } from "@/components/assistant-ui/elements/scroll-anchor";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { Button } from "@/components/ui/button";
 import { ThreadDialogCards, WaitingNotice } from "@/dialogs";
 import { useLaserStable, useLaserState, useLaserView } from "@/runtime";
 import { sessionOpenPhase, sameSessionOpenPhase } from "@/runtime/main-destination";
@@ -21,6 +22,7 @@ import { ThreadMessage } from "./messages.js";
 import { ThreadSlotsProvider, type ThreadSlots } from "./thread-slots.js";
 import { useConversationFind } from "./use-conversation-find.js";
 import { FindSelectionContext } from "./search-state.js";
+import { captureReadingPosition, preserveReadingPosition, type ReadingPosition } from "./preserve-reading-position.js";
 
 /**
  * The assistant-ui thread column (DESIGN.md "Layout" 3): transcript at max
@@ -71,7 +73,7 @@ export function Thread({ statusSlot, emptyState, followUps }: ThreadProps = {}) 
   const loadError = open.phase === "failed";
   const slots: ThreadSlots = statusSlot !== undefined ? { statusLine: statusSlot } : {};
   const aui = useAui();
-  const find = useConversationFind();
+  const find = useConversationFind({ partial: Boolean(view?.history && !view.history.complete), loadAll: actions.loadAllEntries });
   return (
     <FindSelectionContext value={find.selectedMessage}>
     <ThreadSlotsProvider slots={slots}>
@@ -104,8 +106,9 @@ export function Thread({ statusSlot, emptyState, followUps }: ThreadProps = {}) 
                   <AuiIf condition={(s) => s.thread.isEmpty}>
                     {(open.phase === "idle" || (open.phase === "ready" && !open.expectsTranscript)) && (emptyState ?? <EmptyState />)}
                   </AuiIf>
+                  <HistoryControls key={view?.path} />
                   <div data-slot="thread-messages" className="flex flex-col gap-5 pt-5 pb-5 empty:hidden">
-                    <ThreadPrimitive.Messages>{() => <ThreadMessage />}</ThreadPrimitive.Messages>
+                    <HistoryMessages />
                   </div>
                 </ConversationLoadingGate>
                 <ThreadPrimitive.ViewportFooter
@@ -159,7 +162,7 @@ function TrustGuardrail() {
 
 /**
  * The message actions read Pi's persisted entries (versions, the leaf a
- * version ends at). The store re-reads the whole tree when the session
+ * version ends at). The store reads new records when the session
  * settles; a prompt's own entry arrives on its `message_end` while the turn
  * runs, so the newest message never waits for this read.
  */
@@ -167,8 +170,89 @@ function EntriesRefresh() {
   const { actions } = useLaserStable();
   const path = useLaserState((s) => s.current);
   const running = useLaserState((s) => (s.current ? s.open[s.current]?.running ?? false : false));
+  const previous = useRef({ path, running });
   useEffect(() => {
-    if (path && !running) void actions.refreshEntries();
+    const old = previous.current;
+    previous.current = { path, running };
+    if (path && old.path === path && old.running && !running) void actions.refreshEntries({ tail: true });
   }, [actions, path, running]);
   return null;
+}
+
+const MESSAGE_COMPONENTS = { Message: ThreadMessage };
+
+/** Index providers rebind existing rows on prepend; identity providers keep their state. */
+export function HistoryMessages() {
+  const ids = unstable_useThreadMessageIds();
+  return ids.map(messageId => <ThreadPrimitive.Unstable_MessageById key={messageId} messageId={messageId} components={MESSAGE_COMPONENTS} />);
+}
+
+/** History is explicit, and upward reading fetches the next complete turn page. */
+function HistoryControls() {
+  const { actions } = useLaserStable();
+  const history = useLaserState(s => s.current ? s.open[s.current]?.history : undefined);
+  const root = useRef<HTMLDivElement>(null);
+  const pending = useRef<{ viewport: HTMLElement; position: ReadingPosition; focused?: Element | null } | undefined>(undefined);
+  const stopAnchor = useRef<(() => void) | undefined>(undefined);
+  const busy = useRef(false);
+  const requestedAll = useRef(false);
+  const interacted = useRef(false);
+  const [loading, setLoading] = useState<"earlier" | "all" | null>(null);
+  const [announcement, setAnnouncement] = useState("");
+  const load = useCallback(async (all = false) => {
+    if (busy.current || history?.complete) return;
+    busy.current = true;
+    requestedAll.current ||= all;
+    setLoading(all ? "all" : "earlier");
+    const viewport = root.current?.closest<HTMLElement>("[data-slot=thread-viewport]");
+    if (viewport) pending.current = { viewport, position: captureReadingPosition(viewport), focused: root.current?.contains(document.activeElement) ? document.activeElement : null };
+    try {
+      const loaded = all ? await actions.loadAllEntries() : await actions.loadEarlierEntries();
+      if (loaded) setAnnouncement(all ? "Complete history loaded." : "Earlier messages loaded.");
+    } finally {
+      busy.current = false;
+      setLoading(null);
+    }
+  }, [actions, history?.complete]);
+  useLayoutEffect(() => {
+    const anchor = pending.current;
+    if (!anchor) return;
+    pending.current = undefined;
+    stopAnchor.current?.();
+    stopAnchor.current = preserveReadingPosition(anchor.viewport, anchor.position);
+    if (anchor.focused && !anchor.focused.isConnected && document.activeElement === document.body) root.current?.querySelector("button")?.focus({ preventScroll: true });
+  }, [history?.anchor, history?.complete]);
+  useEffect(() => () => { stopAnchor.current?.(); }, []);
+  useEffect(() => {
+    const viewport = root.current?.closest<HTMLElement>("[data-slot=thread-viewport]");
+    if (!viewport || !history?.before) return;
+    let lastTop = viewport.scrollTop;
+    const note = () => { interacted.current = true; };
+    const scroll = () => {
+      const top = viewport.scrollTop;
+      const upwards = top < lastTop;
+      lastTop = top;
+      if (upwards && interacted.current && top < viewport.clientHeight / 2) void load();
+    };
+    viewport.addEventListener("wheel", note, { passive: true });
+    viewport.addEventListener("touchmove", note, { passive: true });
+    viewport.addEventListener("keydown", note);
+    viewport.addEventListener("scroll", scroll, { passive: true });
+    return () => {
+      viewport.removeEventListener("wheel", note);
+      viewport.removeEventListener("touchmove", note);
+      viewport.removeEventListener("keydown", note);
+      viewport.removeEventListener("scroll", scroll);
+    };
+  }, [history?.before, load]);
+  if (!history || (history.complete && !requestedAll.current)) return null;
+  return <div ref={root} className="flex flex-wrap items-center justify-center gap-2 py-2 text-sm text-ink-2" aria-busy={loading !== null}>
+    {history.before && <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" aria-disabled={loading !== null} onClick={() => void load()}>
+      {loading === "earlier" ? "Loading earlier messages…" : "Load earlier messages"}
+    </Button>}
+    <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" aria-disabled={loading !== null || history.complete} onClick={() => void load(true)}>
+      {history.complete ? "Complete history loaded" : loading === "all" ? "Loading history…" : "Load complete history"}
+    </Button>
+    <span role="status" className="sr-only">{announcement}</span>
+  </div>;
 }

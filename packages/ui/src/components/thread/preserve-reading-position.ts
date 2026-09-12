@@ -1,7 +1,12 @@
 import { motionMs } from "@/motion";
 
-/** Hold a visible transcript landmark while a batch of disclosures changes. */
-export function preserveReadingPosition(viewport: HTMLElement): () => void {
+export interface ReadingPosition {
+  anchors: { node: HTMLElement; offset: number }[];
+  scrollTop: number;
+}
+
+/** Capture before an asynchronous page read; apply after React commits it. */
+export function captureReadingPosition(viewport: HTMLElement): ReadingPosition {
   const top = viewport.getBoundingClientRect().top;
   const messages = [...viewport.querySelectorAll<HTMLElement>("[data-message-id]")];
   const message = messages.find(node => node.getBoundingClientRect().bottom > top);
@@ -11,7 +16,12 @@ export function preserveReadingPosition(viewport: HTMLElement): () => void {
     .find(node => node.getBoundingClientRect().top >= top && node.getBoundingClientRect().height > 0);
   const anchors = [landmark, message].filter((node): node is HTMLElement => Boolean(node))
     .map(node => ({ node, offset: node.getBoundingClientRect().top - top }));
-  const initialScroll = viewport.scrollTop;
+  return { anchors, scrollTop: viewport.scrollTop };
+}
+
+/** Hold a visible transcript landmark while a batch of disclosures changes. */
+export function preserveReadingPosition(viewport: HTMLElement, captured = captureReadingPosition(viewport)): () => void {
+  const { anchors, scrollTop: initialScroll } = captured;
   const previousAnchor = viewport.style.overflowAnchor;
   const previousBehavior = viewport.style.scrollBehavior;
   viewport.style.overflowAnchor = "none";
@@ -52,6 +62,7 @@ export function preserveReadingPosition(viewport: HTMLElement): () => void {
   };
   viewport.addEventListener("scroll", restore);
   for (const event of ["wheel", "touchstart", "pointerdown", "keydown"]) viewport.addEventListener(event, stop, { passive: true });
+  restore();
   frame = requestAnimationFrame(tick);
   return stop;
 }

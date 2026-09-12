@@ -21,6 +21,35 @@ import type { PendingMessage } from "./pending.js";
 
 // ---------- Shared value types (no Pi types allowed here) ----------
 
+export type HistoryWindowRequest =
+  | { tail: number }
+  | { before: string; limit?: number }
+  | { from: string }
+  | { all: true };
+
+/** Accepted, nonterminal work beside a persisted history snapshot. */
+export interface HistoryLiveSnapshot {
+  running: boolean;
+  message?: { id: string; value: unknown; speaker?: MessageSpeaker };
+  tools: { toolCallId: string; toolName: string; args: unknown; partial?: unknown }[];
+}
+
+export interface HistoryWindow {
+  epoch: string;
+  seq: number;
+  before?: string;
+  /** First loaded entry, retained when refreshing an expanded window. */
+  anchor?: string;
+  userOffset: number;
+  /** All branches, not merely the complete active path, have arrived. */
+  complete: boolean;
+  /** Durable messages or goal records exist in any branch, even with a reset leaf. */
+  hasHistory: boolean;
+  context: unknown[];
+  priorGoalIds: string[];
+  live?: HistoryLiveSnapshot;
+}
+
 export interface ImageContent {
   type: "image";
   mimeType: string;
@@ -308,6 +337,8 @@ export type SessionUpdate =
 
 export interface SessionUpdateParams {
   sessionPath: string;
+  /** The serving generation, shared with windowed history snapshots. */
+  epoch?: string;
   seq: number;
   update: SessionUpdate;
   at: string;
@@ -1024,7 +1055,7 @@ export interface ClientRequests {
    * not carry one — read the last entry as the leaf, which is what the engine
    * itself does when it re-opens a file.
    */
-  "pi/session/entries": { params: { path: string }; result: { entries: unknown[]; leafId?: string | null } };
+  "pi/session/entries": { params: { path: string; window?: HistoryWindowRequest }; result: { entries: unknown[]; leafId?: string | null; window?: HistoryWindow } };
   "pi/session/compact": { params: { path: string; instructions?: string }; result: {} };
   "pi/model/list": { params: { path: string }; result: { models: ModelRef[] } };
   "pi/model/set": { params: { path: string; model: ModelRef }; result: { state: SessionState } };

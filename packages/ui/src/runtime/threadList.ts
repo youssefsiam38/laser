@@ -83,7 +83,7 @@ export function sessionTitle(summary: SessionSummary, view?: SessionView | undef
 
 /** The transcript's own first user line, for a session opened before the catalog scanned it. */
 function firstUserText(view: SessionView | undefined): string | undefined {
-  if (!view) return undefined;
+  if (!view || (view.history?.userOffset ?? 0) > 0) return undefined;
   for (const block of view.blocks) if (block.kind === "user") return block.text;
   return undefined;
 }

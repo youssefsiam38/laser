@@ -103,6 +103,7 @@ export function TelemetryPanel({ variant }: TelemetryPanelProps) {
       <div className="min-h-0 flex-1 overflow-y-auto">
         {view ? (
           <>
+            {view.history && !view.history.complete && <LoadedHistoryNotice />}
             <ContextSection />
             <UsageSection />
             <ModelSection />
@@ -226,6 +227,19 @@ function ContextSection() {
   );
 }
 
+function LoadedHistoryNotice() {
+  const { actions } = useLaserStable();
+  const [loading, setLoading] = useState(false);
+  return <div className="flex flex-col items-start gap-2 border-b border-line px-4 py-3 text-xs leading-5 text-ink-2">
+    <p>Earlier history is not loaded. Conversation-wide totals and older activity appear when it is.</p>
+    <Button variant="outline" size="sm" className="pointer-coarse:min-h-11" aria-disabled={loading} onClick={() => {
+      if (loading) return;
+      setLoading(true);
+      void actions.loadAllEntries().finally(() => setLoading(false));
+    }}>{loading ? "Loading history…" : "Load complete history"}</Button>
+  </div>;
+}
+
 const TOKEN_TONES = ["bg-live", "bg-ok", "bg-attention", "bg-ink-3"] as const;
 
 function TokenComposition({ usage }: { usage: UsageTotals }) {
@@ -307,6 +321,10 @@ function UsageSection() {
     [background, entries],
   );
   const accountUsage = view?.state.accountUsage;
+  const partial = Boolean(view?.history && !view.history.complete);
+  if (partial) return <Section title="Usage" icon={isAccountProvider(view?.state.model?.provider) ? Landmark : CircleDollarSign}>
+    {isAccountProvider(view?.state.model?.provider) ? <AccountUsage state={accountUsage} compact /> : <p className="text-xs leading-5 text-ink-2">Load complete history for conversation-wide totals.</p>}
+  </Section>;
 
   return (
     <Section
@@ -435,6 +453,8 @@ function ModelSection() {
  * can see, not a second source of truth.
  */
 function FilesSection() {
+  const view = useLaserView();
+  const partial = Boolean(view?.history && !view.history.complete);
   const changes = useSessionFileChanges();
   const added = changes.reduce((sum, change) => sum + change.additions, 0);
   const removed = changes.reduce((sum, change) => sum + change.deletions, 0);
@@ -448,7 +468,7 @@ function FilesSection() {
               <FileCode2 className="size-5" aria-hidden="true" />
             </span>
             <div className="min-w-0 flex-1">
-              <p className="text-xs leading-4 text-ink-3">Session footprint</p>
+              <p className="text-xs leading-4 text-ink-3">{partial ? "Loaded history footprint" : "Session footprint"}</p>
               <NumberTicker
                 value={`${changes.length} ${changes.length === 1 ? "file" : "files"}`}
                 label="Files changed"
@@ -468,7 +488,7 @@ function FilesSection() {
           ) : null}
         </InstrumentCard>
       ) : null}
-      <FileTree changes={changes} />
+      {partial && changes.length === 0 ? <p className="text-xs leading-5 text-ink-2">No file changes in the loaded history.</p> : <FileTree changes={changes} />}
     </Section>
   );
 }
@@ -477,19 +497,23 @@ function FilesSection() {
 function ToolsSection() {
   const timeline = useThreadToolTimeline();
   const shell = useShell();
+  const { actions } = useLaserStable();
+  const view = useLaserView();
+  const partial = Boolean(view?.history && !view.history.complete);
+  useEffect(() => { if (shell.toolsOpen && partial) void actions.loadAllEntries(); }, [actions, shell.toolsOpen, partial]);
   const visibleSteps = timeline.steps.slice(-14);
   return (
     <Section
       title="Tools"
       icon={Wrench}
-      signal={timeline.steps.length > 0 ? <Badge variant={timeline.streaming ? "live" : "mono"}>{timeline.steps.length} calls</Badge> : undefined}
+      signal={timeline.steps.length > 0 ? <Badge variant={timeline.streaming ? "live" : "mono"}>{timeline.steps.length} {partial ? "loaded" : "calls"}</Badge> : undefined}
     >
       {timeline.steps.length > 0 ? (
         <InstrumentCard className="mb-3">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <Activity className={cn("size-4", timeline.streaming ? "text-live" : "text-ink-3")} aria-hidden="true" />
-              <span className="text-xs font-medium text-ink">Run activity</span>
+              <span className="text-xs font-medium text-ink">{partial ? "Loaded activity" : "Run activity"}</span>
             </div>
             <span className="font-mono text-xs text-ink-3 tnum">
               {timeline.streaming ? "live" : "settled"}
@@ -498,7 +522,7 @@ function ToolsSection() {
           <div
             className="mt-3 flex h-2 items-center gap-1"
             role="img"
-            aria-label={`${timeline.steps.length} tool calls; ${timeline.streaming ? "one running" : "all settled"}`}
+            aria-label={`${timeline.steps.length} ${partial ? "loaded " : ""}tool calls; ${timeline.streaming ? "one running" : "all settled"}`}
           >
             {visibleSteps.map((step) => (
               <span
@@ -513,7 +537,7 @@ function ToolsSection() {
           </div>
         </InstrumentCard>
       ) : null}
-      <ToolTimeline timeline={timeline} open={shell.toolsOpen} onOpenChange={shell.setToolsOpen} />
+      {partial && timeline.steps.length === 0 ? <p className="text-xs leading-5 text-ink-2">No tools in the loaded history.</p> : <ToolTimeline timeline={timeline} open={shell.toolsOpen} onOpenChange={shell.setToolsOpen} />}
     </Section>
   );
 }
@@ -559,7 +583,7 @@ function HistorySection() {
               {rows.length > 0 && (
                 <span className="ms-auto flex items-center gap-1 font-mono text-xs text-ink-3 tnum">
                   <Clock3 className="size-3" aria-hidden="true" />
-                  {rows.length}
+                  {rows.length}{view?.history && !view.history.complete ? " loaded" : ""}
                 </span>
               )}
             </button>

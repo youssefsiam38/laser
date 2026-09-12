@@ -348,6 +348,12 @@ export class Router {
 
       case "pi/session/entries": {
         const { path } = req.params;
+        if (req.params.window) {
+          // A page is not a full ViewCache snapshot. The serving worker owns
+          // the actual branch pointer and its matching live-update watermark.
+          const worker = await this.workerFor(path);
+          return worker.request(req.method, req.params);
+        }
         const cached = this.deps.views.get(path);
         // The leaf travels with the entries: a navigation moves it without
         // appending anything, so a cache that kept only the entries would

@@ -31,6 +31,7 @@ import { composerSendPlan, mainCodeProject, mainError, mainTab, useLaserStable, 
 import { mergeRunConfigCustom } from "@/runtime/first-turn";
 import { completeLeadingSlash, matchLeadingSlash, rankSlashCommandMatches } from "./slash-completion.js";
 import { StatusLine } from "./StatusLine.js";
+import { userEntryIds } from "./entries.js";
 import { SessionPreparationProvider, useSessionPreparation } from "./session-preparation.js";
 import { useProjectFileSearch } from "./use-project-file-search.js";
 
@@ -423,11 +424,8 @@ function useSlashCommands() {
 
   async function forkFromLastPrompt() {
     if (!view) return;
-    const entries = view.entries;
-    for (let i = entries.length - 1; i >= 0; i--) {
-      const e = entries[i] as { type?: string; id?: string; message?: { role?: string } };
-      if (e.type === "message" && e.message?.role === "user" && e.id) return actions.fork(e.id);
-    }
+    const entryId = userEntryIds(view.entries, view.leafId).at(-1);
+    if (entryId) return actions.fork(entryId);
     await actions.refreshEntries();
     actions.toast("warning", "Nothing to fork yet: this session has no prompt.");
   }

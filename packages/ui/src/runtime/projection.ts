@@ -105,6 +105,8 @@ export interface ProjectionInput {
   readonly running: boolean;
   readonly dialogs: readonly UiDialogRequest[];
   readonly goals?: readonly GoalRecord[];
+  readonly userOffset?: number;
+  readonly priorGoalIds?: readonly string[];
 }
 
 export interface ProjectionResult {
@@ -503,9 +505,10 @@ export function projectMessages(input: ProjectionInput): ProjectionResult {
 
   const messages: ThreadMessageLike[] = [];
   let group: Extract<Block, { kind: "assistant" | "tool" }>[] = [];
-  let userOrdinal = 0;
+  let userOrdinal = input.userOffset ?? 0;
   let prompt: { ordinal: number; entryId?: string } | undefined;
-  const shownGoals = new Set<string>();
+  const priorGoals = new Set(input.priorGoalIds ?? []);
+  const shownGoals = new Set((input.goals ?? []).filter(goal => goal.ids.some(id => priorGoals.has(id))).map(goal => goal.id));
 
   const flush = (isTail: boolean): void => {
     if (group.length === 0) return;
@@ -551,7 +554,10 @@ export function projectMessages(input: ProjectionInput): ProjectionResult {
 /** Convenience wrapper over a `SessionView`; an absent view projects to nothing. */
 export function projectSessionView(view: SessionView | undefined): ProjectionResult {
   if (!view) return EMPTY_RESULT;
-  return projectMessages({ blocks: view.blocks, running: view.running, dialogs: view.dialogs, goals: goalRecords(view.entries, view.blocks) });
+  return projectMessages({ blocks: view.blocks, running: view.running, dialogs: view.dialogs,
+    goals: goalRecords([...(view.history?.context ?? []), ...view.entries], view.blocks),
+    userOffset: view.history?.userOffset ?? 0, priorGoalIds: view.history?.priorGoalIds ?? [],
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -586,8 +592,10 @@ export function shareProjectedMessages(
   previous: readonly ThreadMessageLike[],
 ): readonly ThreadMessageLike[] {
   let changed = next.length !== previous.length;
+  const byId = new Map(previous.map(message => [message.id, message]));
   const shared = next.map((message, index) => {
-    const prev = previous[index];
+    const prev = message.id ? byId.get(message.id) : previous[index];
+    if (prev !== previous[index]) changed = true;
     if (prev && deepEqual(message, prev)) return prev;
     changed = true;
     return message;

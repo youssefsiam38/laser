@@ -55,6 +55,7 @@ export interface MessageActionsProps extends Omit<ComponentProps<"div">, "childr
   /** Copy the session file's path. */
   onCopyPath?: (() => void) | undefined;
   onViewRequest?: (() => void) | undefined;
+  onLoadHistory?: (() => void) | undefined;
   /** A `RegenerateMenu`, when the message can be re-run. */
   regenerate?: ReactNode;
   /**
@@ -67,9 +68,9 @@ export interface MessageActionsProps extends Omit<ComponentProps<"div">, "childr
 /** What the tree actions mean while a turn runs, said once. */
 const STOPS_REPLY = "stops the reply";
 
-export function MessageActions({ copied, onCopy, onEdit, onRegenerate, onRegenerateFork, onFork, onJump, onCopyPath, onViewRequest, regenerate, busy = false, className, ...props }: MessageActionsProps) {
+export function MessageActions({ copied, onCopy, onEdit, onRegenerate, onRegenerateFork, onFork, onJump, onCopyPath, onViewRequest, onLoadHistory, regenerate, busy = false, className, ...props }: MessageActionsProps) {
   const hasMenu =
-    onFork !== undefined || onJump !== undefined || onCopyPath !== undefined || onViewRequest !== undefined || onRegenerateFork !== undefined;
+    onFork !== undefined || onJump !== undefined || onCopyPath !== undefined || onViewRequest !== undefined || onRegenerateFork !== undefined || onLoadHistory !== undefined;
   return (
     <div data-slot="message-actions" className={cn("flex items-center", className)} {...props}>
       <TooltipIconButton tooltip={copied ? "Copied" : "Copy"} size="icon-xs" onClick={onCopy} className={cn("grid place-items-center text-ink-3", copied && "text-ok hover:text-ok")}>
@@ -102,7 +103,8 @@ export function MessageActions({ copied, onCopy, onEdit, onRegenerate, onRegener
                 Try again in a new session
               </DropdownMenuItem>
             ) : null}
-            {onFork || onJump ? <DropdownMenuLabel>Session tree</DropdownMenuLabel> : null}
+            {onFork || onJump || onLoadHistory ? <DropdownMenuLabel>Session tree</DropdownMenuLabel> : null}
+            {onLoadHistory && <DropdownMenuItem onSelect={onLoadHistory}><GitFork />Load history and versions</DropdownMenuItem>}
             {onFork ? (
               <DropdownMenuItem onSelect={onFork}>
                 <GitFork />

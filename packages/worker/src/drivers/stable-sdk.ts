@@ -50,6 +50,7 @@ import type {
   ContentBlock,
   FeatureId,
   GoalAction,
+  HistoryLiveSnapshot,
   ImageContent,
   MessageSpeaker,
   ModelRef,
@@ -69,6 +70,7 @@ import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { supportedThinkingLevels } from "../packages.js";
+import { HistorySnapshotAccumulator } from "../history-snapshot.js";
 import { disabledModelRefs, engineSettingsOnly, modelSwitchedOff, readEffectiveProductSettings, readFallbackChains, readLaserProjectSettings } from "../settings.js";
 import { applyDurableOverrides, type EngineSettingsOverrides } from "../settings-overrides.js";
 import { WebSearchService } from "../web-search.js";
@@ -126,6 +128,7 @@ export class StableSdkDriver implements SessionDriver {
   private readonly ui: UiBridge;
   /** Fallback for `AgentState.pendingToolCalls`, derived from the event stream. */
   private readonly toolCalls = new PendingToolCallTracker();
+  private readonly historySnapshot = new HistorySnapshotAccumulator();
   /** Worker → companion extension. `deliver` answers whether a module took it. */
   private readonly extensionBus = createCommandBus();
   private accountUsage: SessionState["accountUsage"];
@@ -511,6 +514,7 @@ export class StableSdkDriver implements SessionDriver {
     this.unsubscribe?.();
     // A replaced runtime carries none of the old session's in-flight tool calls.
     this.toolCalls.clear();
+    this.historySnapshot.reset();
     const generation = this.extensionAdmission.install(session);
     await session.bindExtensions({
       mode: "rpc",
@@ -760,6 +764,7 @@ export class StableSdkDriver implements SessionDriver {
     this.extensionAdmission.invalidate();
     this.unsubscribe = undefined;
     this.toolCalls.clear();
+    this.historySnapshot.reset();
     if (this.firstTurn.active) this.retirePreparedFirstTurnDialogs();
     this.ui.dispose();
     await this.runtime?.dispose();
@@ -830,13 +835,16 @@ export class StableSdkDriver implements SessionDriver {
     };
   }
 
-  async entries(): Promise<{ entries: unknown[]; leafId: string | null }> {
-    const manager = this.session().sessionManager;
+  async entries(options?: { live?: boolean }): Promise<{ entries: unknown[]; leafId: string | null; live?: HistoryLiveSnapshot }> {
+    const session = this.session();
+    const manager = session.sessionManager;
     // Every branch, plus the pointer that says which one is the conversation.
     // The leaf is in-memory only — the engine rebuilds it as the last entry in
     // the file — so a navigation that has appended nothing yet is visible here
     // and nowhere else.
-    return { entries: manager.getEntries(), leafId: manager.getLeafId() };
+    const snapshot = { entries: manager.getEntries(), leafId: manager.getLeafId() };
+    if (!options?.live) return snapshot;
+    return { ...snapshot, live: this.historySnapshot.snapshot() };
   }
 
   async goalState(): Promise<SessionGoal | null> {
@@ -1332,6 +1340,7 @@ export class StableSdkDriver implements SessionDriver {
 
   private emit(event: DriverEvent): void {
     if (this.firstTurn.defer(event)) return;
+    if (event.type === "update") this.historySnapshot.note(event.update);
     for (const listener of this.listeners) listener(event);
   }
 

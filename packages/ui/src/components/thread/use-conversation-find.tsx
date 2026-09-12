@@ -2,6 +2,7 @@ import { useAuiState } from "@assistant-ui/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConversationSearch, type SearchHit } from "@/components/assistant-ui/elements/conversation-search";
 import { motionMs } from "@/motion";
+import { Button } from "@/components/ui/button";
 import { matchExcerpt, partSearchContent, textMatches } from "./search-text.js";
 import type { SearchSource } from "./search-state.js";
 
@@ -47,19 +48,40 @@ export function findTextMatches(root: HTMLElement, query: string, mode: "convers
   }));
 }
 
-export function useConversationFind() {
+export function useConversationFind({ partial = false, loadAll }: { partial?: boolean; loadAll?: () => Promise<boolean> } = {}) {
   const messages = useAuiState(s => s.thread.messages);
   const threadId = useAuiState(s => s.threads.mainThreadId);
+  const [loadingAll, setLoadingAll] = useState(false);
+  const loadingRef = useRef(false);
+  const focusAfterLoad = useRef<Element | null>(null);
+  const currentThread = useRef(threadId);
+  currentThread.current = threadId;
+  const loadHistory = useCallback(async () => {
+    if (!partial || loadingRef.current) return;
+    loadingRef.current = true;
+    setLoadingAll(true);
+    focusAfterLoad.current = document.activeElement;
+    try { await loadAll?.(); }
+    finally { if (currentThread.current === threadId) {
+      loadingRef.current = false; setLoadingAll(false);
+    } }
+  }, [loadAll, partial, threadId]);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState(0);
   const input = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (loadingAll) return;
+    const focused = focusAfterLoad.current;
+    focusAfterLoad.current = null;
+    if (focused && !focused.isConnected && document.activeElement === document.body) input.current?.focus({ preventScroll: true });
+  }, [loadingAll, partial]);
   const restoreFocus = useRef<HTMLElement | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const previousThread = useRef(threadId);
   const preferredSource = useRef<SearchSource | undefined>(undefined);
   const hits = useMemo(() => {
-    if (!open || !query.trim()) return [];
+    if (!open || !query.trim() || loadingAll) return [];
     return messages.flatMap(message => {
       let occurrence = 0;
       return message.content.flatMap((part, partIndex) => {
@@ -68,7 +90,7 @@ export function useConversationFind() {
         return content.flatMap((text, fieldIndex) => textMatches(text, query).map((m): SearchHit => ({ id: `${message.id}:${partIndex}:${fieldIndex}:${m.start}`, messageId: message.id, source, occurrence: occurrence++, ...matchExcerpt(text, m) })));
       });
     });
-  }, [messages, query, open]);
+  }, [messages, query, open, loadingAll]);
   useEffect(() => {
     if (!preferredSource.current || !hits.length) return;
     const preferred = hits.findIndex(hit => hit.source === preferredSource.current);
@@ -82,13 +104,13 @@ export function useConversationFind() {
     (restoreFocus.current?.isConnected ? restoreFocus.current : root.current?.querySelector<HTMLElement>("textarea"))?.focus({ preventScroll: true });
   }, []);
   useEffect(() => {
-    if (previousThread.current !== threadId) { setOpen(false); setQuery(""); setIndex(0); previousThread.current = threadId; }
+    if (previousThread.current !== threadId) { setOpen(false); setQuery(""); setIndex(0); setLoadingAll(false); loadingRef.current = false; previousThread.current = threadId; }
   }, [threadId]);
   useEffect(() => {
     const show = (value?: string, source?: SearchSource) => {
       if (!root.current?.getClientRects().length || document.querySelector('[aria-label="Workbench screens"]')) return;
       if (!open) restoreFocus.current = document.activeElement as HTMLElement;
-      if (value !== undefined) { setQuery(value); setIndex(0); }
+      if (value !== undefined) { setQuery(value); setIndex(0); void loadHistory(); }
       preferredSource.current = source;
       setOpen(true);
       requestAnimationFrame(() => { input.current?.focus(); input.current?.select(); });
@@ -106,7 +128,7 @@ export function useConversationFind() {
     window.addEventListener("keydown", key);
     window.addEventListener("conversation-find", event);
     return () => { window.removeEventListener("keydown", key); window.removeEventListener("conversation-find", event); };
-  }, [open]);
+  }, [open, loadHistory]);
   // Update highlights as Markdown/Shiki and streaming content settle. Navigating
   // scrolls only this viewport, never the sidebar, composer or page.
   useEffect(() => {
@@ -148,6 +170,11 @@ export function useConversationFind() {
   return {
     root, open, selectedMessage: active?.messageId,
     bar: open ? <ConversationSearch inputRef={input} query={query} hits={hits} activeIndex={activeIndex}
+      aria-busy={loadingAll} status={loadingAll ? "Loading…" : undefined}
+      toolbar={partial ? <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-3 py-2 text-xs text-ink-2">
+        <span>Only loaded messages are searched.</span>
+        <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" aria-disabled={loadingAll} onClick={() => void loadHistory()}>{loadingAll ? "Loading messages…" : "Load all messages"}</Button>
+      </div> : undefined}
       onQueryChange={value => { setQuery(value); setIndex(0); }}
       onStep={delta => setIndex(hits.length ? (activeIndex + delta + hits.length) % hits.length : 0)} onClose={close} /> : null,
   };

@@ -32,6 +32,7 @@ import type {
   ThinkingLevel,
   FeatureId,
   GoalAction,
+  HistoryLiveSnapshot,
   SessionGoal,
   UiDialogRequest,
   UiDialogResponse,
@@ -250,7 +251,7 @@ export interface SessionDriver {
    * is the path from the root to that entry. `null` is a leaf reset to before
    * the first entry (`SessionManager.resetLeaf`).
    */
-  entries(): Promise<{ entries: unknown[]; leafId: string | null }>;
+  entries(options?: { live?: boolean }): Promise<{ entries: unknown[]; leafId: string | null; live?: HistoryLiveSnapshot }>;
 
   /** Durable goal control. Optional for engines that do not implement Goals. */
   goalState?(): Promise<SessionGoal | null>;

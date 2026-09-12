@@ -10,6 +10,7 @@ import { AGENT_EVENT_MESSAGE_TYPE, SESSION_FALLBACK_ENTRY_TYPE, SESSION_RUN_ENTR
 import { imagesOfContent, splitAttachedFiles, type AttachedFile } from "./runtime/attachments.js";
 import type {
   ImageContent,
+  HistoryWindow,
   AgentEvent,
   BackgroundTask,
   AgentModelChoice,
@@ -116,6 +117,7 @@ export interface SessionView {
   state: SessionState;
   blocks: Block[];
   lastSeq: number;
+  updateEpoch?: string | undefined;
   running: boolean;
   queue: { steering: string[]; followUp: string[] };
   /**
@@ -138,8 +140,11 @@ export interface SessionView {
    */
   openedAt: string;
   hydrated: boolean;
-  /** Raw persisted entries (for the history/tree panel): every branch of the tree. */
+  /** Loaded persisted entries; `history.complete` distinguishes a page from the full tree. */
   entries: unknown[];
+  history?: Omit<HistoryWindow, "live"> | undefined;
+  /** Accepted updates buffered only while an authoritative window read is in flight. */
+  historyPending?: { token: string; updates: HostNotifications["session/update"][] } | undefined;
   /**
    * The entry the session is sitting on. The conversation is the path from the
    * root to it; anything off that path is a version the person can go back to
@@ -291,6 +296,11 @@ export type Action =
    */
   | { type: "hydrate"; path: string; entries: unknown[]; leafId?: string | null | undefined; expectSeq?: number; seq?: number }
   | { type: "entries"; path: string; entries: unknown[]; leafId?: string | null | undefined }
+  | { type: "historyBegin"; path: string; token: string }
+  | { type: "historyEnd"; path: string; token: string }
+  | { type: "historySnapshot"; path: string; token: string; entries: unknown[]; leafId?: string | null; window: HistoryWindow }
+  | { type: "historyPrepend"; path: string; before: string; entries: unknown[]; window: HistoryWindow }
+  | { type: "historyMetadata"; path: string; from?: string | null | undefined; entries: unknown[]; leafId?: string | null | undefined; window: HistoryWindow }
   | { type: "goal"; path: string; goal: SessionGoal | null }
   /** `session/pending/list`, applied only if no newer tray update replaced the captured reference. */
   | { type: "pending"; path: string; messages: PendingMessage[]; expectPending: PendingMessage[] }
@@ -390,8 +400,9 @@ export function reduce(state: AppState, action: Action): AppState {
       // The old view's live state moved to a new path; carry the transcript over.
       const old = state.open[action.from];
       const { [action.from]: _gone, ...rest } = state.open;
-      const view: SessionView = old
-        ? { ...old, path: action.state.path, state: action.state, lastSeq: 0, hydrated: false, entries: [], goal: null }
+      const prepared = state.open[action.state.path];
+      const view: SessionView = prepared?.hydrated ? { ...prepared, state: action.state } : old
+        ? { ...old, path: action.state.path, state: action.state, lastSeq: 0, hydrated: false, entries: [], history: undefined, historyPending: undefined, goal: null }
         : { path: action.state.path, state: action.state, blocks: [], lastSeq: 0, running: false, queue: { steering: [], followUp: [] }, pending: [], dialogs: [], statuses: {}, widgets: {}, openedAt: new Date().toISOString(), hydrated: false, entries: [], capabilities: [], goal: null, namerLabels: {} };
       return { ...state, open: { ...rest, [view.path]: view } };
     }
@@ -402,6 +413,65 @@ export function reduce(state: AppState, action: Action): AppState {
       const { [action.path]: _load, ...sessionLoads } = state.sessionLoads;
       return { ...state, open: rest, sessionLoads };
     }
+    case "historyBegin":
+      return updateView(state, action.path, v => ({ ...v, historyPending: { token: action.token, updates: [] } }));
+    case "historyEnd":
+      return updateView(state, action.path, v => v.historyPending?.token === action.token ? { ...v, historyPending: undefined } : v);
+    case "historySnapshot":
+      return updateView(state, action.path, v => {
+        if (v.historyPending?.token !== action.token) return v;
+        const { live, ...history } = action.window;
+        const oldEpoch = v.history?.epoch ?? v.updateEpoch;
+        const changedEpoch = oldEpoch !== undefined && oldEpoch !== history.epoch;
+        let next: SessionView = { ...v, entries: action.entries, leafId: action.leafId, history, hydrated: true,
+          blocks: blocksFromEntries(action.entries, action.leafId, modelNamesOf(v.state)),
+          running: live?.running ?? v.running, lastSeq: action.window.seq, updateEpoch: history.epoch, pendingSentBy: undefined, historyPending: undefined };
+        if (live?.message) {
+          const message = live.message.value as { content?: unknown };
+          const parts = Array.isArray(message.content) ? message.content as { type?: string; thinking?: string }[] : [];
+          next.blocks.push({ kind: "assistant", id: live.message.id, text: textOf(message.content),
+            thinking: parts.filter(p => p.type === "thinking").map(p => p.thinking ?? "").join(""), streaming: true,
+            ...(live.message.speaker ? { speaker: live.message.speaker } : {}) });
+        }
+        for (const tool of live?.tools ?? []) {
+          if (!next.blocks.some(b => b.kind === "tool" && b.id === tool.toolCallId)) next = applyUpdate(next, { kind: "tool_execution_start", ...tool });
+          if (tool.partial !== undefined) next = applyUpdate(next, { kind: "tool_execution_update", toolCallId: tool.toolCallId, partial: tool.partial });
+        }
+        // Snapshot seq covers both durable history and its partial work. Only
+        // newer accepted updates may be replayed, exactly once.
+        for (const update of v.historyPending.updates) {
+          if (update.epoch ? update.epoch !== history.epoch : changedEpoch) continue;
+          if (update.seq <= next.lastSeq) continue;
+          const applied = applyUpdate(next, update.update);
+          next = { ...applied, blocks: stampNewBlocks(next.blocks, applied.blocks, update.at), lastSeq: update.seq };
+        }
+        const optimistic = v.blocks.filter(b => b.kind === "user" && b.optimistic);
+        const existingIds = new Set(next.blocks.map(b => b.id));
+        next.blocks = [...next.blocks, ...optimistic.filter(b => !existingIds.has(b.id))];
+        return { ...next, blocks: shareHistoryBlocks(next.blocks, v.blocks), lastSeq: changedEpoch ? next.lastSeq : Math.max(next.lastSeq, v.lastSeq) };
+      });
+    case "historyMetadata":
+      return updateView(state, action.path, v => {
+        if (v.history && v.history.epoch !== action.window.epoch) return v;
+        const index = action.from ? v.entries.findIndex(e => (e as { id?: string }).id === action.from) : -1;
+        if (action.from && index < 0) return v;
+        const prefix = v.entries.slice(0, index < 0 ? 0 : index);
+        const ids = new Set([...prefix, ...action.entries].map(e => (e as { id?: string }).id));
+        const later = v.entries.slice(index + 1).filter(e => !ids.has((e as { id?: string }).id));
+        const { live: _live, before: _before, ...history } = action.window;
+        return { ...v, entries: [...prefix, ...action.entries, ...later], leafId: action.leafId,
+          history: v.history ? { ...v.history, seq: history.seq, hasHistory: v.history.hasHistory || history.hasHistory } : { ...history, userOffset: 0, context: [], priorGoalIds: [], complete: true } };
+      });
+    case "historyPrepend":
+      return updateView(state, action.path, v => {
+        if (v.history?.before !== action.before || v.history.epoch !== action.window.epoch) return v;
+        const ids = new Set(v.entries.map(e => (e as { id?: string }).id));
+        const entries = action.entries.filter(e => !ids.has((e as { id?: string }).id));
+        const { live: _live, ...history } = action.window;
+        // Older pages never replace the live suffix or advance its watermark.
+        return { ...v, history: { ...history, complete: false }, entries: [...entries, ...v.entries],
+          blocks: [...blocksFromEntries(entries, undefined, modelNamesOf(v.state)), ...v.blocks] };
+      });
     case "hydrate":
       return updateView(state, action.path, (v) => {
         // The snapshot came from the worker at `seq`; a live update that
@@ -410,8 +480,8 @@ export function reduce(state: AppState, action: Action): AppState {
         // Live updates landed while the snapshot was in flight: they already
         // carry what the snapshot has, plus what it does not.
         return action.expectSeq !== undefined && v.lastSeq !== action.expectSeq
-          ? { ...v, entries: action.entries, leafId: action.leafId, hydrated: true, lastSeq }
-          : { ...v, blocks: blocksFromEntries(action.entries, action.leafId, modelNamesOf(v.state)), entries: action.entries, leafId: action.leafId, hydrated: true, pendingSentBy: undefined, lastSeq };
+          ? { ...v, entries: action.entries, leafId: action.leafId, history: undefined, historyPending: undefined, hydrated: true, lastSeq }
+          : { ...v, blocks: blocksFromEntries(action.entries, action.leafId, modelNamesOf(v.state)), entries: action.entries, leafId: action.leafId, history: undefined, historyPending: undefined, hydrated: true, pendingSentBy: undefined, lastSeq };
       });
     case "entries":
       return updateView(state, action.path, (v) => ({ ...v, entries: action.entries, leafId: action.leafId }));
@@ -640,9 +710,12 @@ function applyNotification(state: AppState, method: HostNotificationMethod, para
     case "session/update": {
       const p = params as HostNotifications["session/update"];
       return updateView(state, p.sessionPath, (v) => {
-        if (p.seq <= v.lastSeq) return v; // replayed duplicate
+        const historyPending = v.historyPending ? { ...v.historyPending, updates: [...v.historyPending.updates, p] } : undefined;
+        const epoch = v.history?.epoch ?? v.updateEpoch;
+        if (p.seq <= v.lastSeq || (p.epoch && epoch && p.epoch !== epoch)) return historyPending ? { ...v, historyPending } : v;
         const next = applyUpdate(v, p.update);
-        return { ...next, blocks: stampNewBlocks(v.blocks, next.blocks, p.at), lastSeq: p.seq };
+        return { ...next, blocks: stampNewBlocks(v.blocks, next.blocks, p.at), lastSeq: p.seq,
+          ...(p.epoch ? { updateEpoch: p.epoch } : {}), ...(historyPending ? { historyPending } : {}) };
       });
     }
     case "pi/ui/request": {
@@ -1087,7 +1160,7 @@ export function blocksFromEntries(entries: unknown[], leafId?: string | null, na
     // persisted as its own entry type, with the message fields at the top.
     if (e.type === "custom_message") {
       const block = customBlock(raw as { customType?: unknown; content?: unknown; details?: unknown }, entryTimestamp(e.timestamp));
-      if (block) blocks.push(block);
+      if (block) blocks.push(typeof e.id === "string" ? { ...block, id: `entry:${e.id}` } : block);
       continue;
     }
     // The harness's run marker is a plain custom entry, not a message: it
@@ -1101,7 +1174,7 @@ export function blocksFromEntries(entries: unknown[], leafId?: string | null, na
       // A model fallback wrote its own record here (M15-T3). Reading a session
       // back must show the same line the person saw when it happened.
       const record = fallbackRecord(raw, entryTimestamp(e.timestamp), names);
-      if (record) blocks.push(record);
+      if (record) blocks.push(typeof e.id === "string" ? { ...record, id: `entry:${e.id}` } : record);
       continue;
     }
     if (e.type !== "message" || !e.message) continue;
@@ -1113,7 +1186,7 @@ export function blocksFromEntries(entries: unknown[], leafId?: string | null, na
     if (m.role === "user") {
       blocks.push({
         kind: "user",
-        id: nextBlockId(),
+        id: typeof e.id === "string" ? `entry:${e.id}` : nextBlockId(),
         ...(at ? { at } : {}),
         ...splitAttachedFiles(textOf(m.content)),
         images: imagesOfContent(m.content),
@@ -1134,10 +1207,10 @@ export function blocksFromEntries(entries: unknown[], leafId?: string | null, na
       // The engine writes the turn's token counts on the entry; a reloaded
       // footer shows the same accounting the live one did.
       const usage = usageOfEntry((m as { usage?: unknown }).usage);
-      if (text || thinking || stopReason) {
+      if (text || thinking || stopReason || parts.some(part => part.type === "toolCall")) {
         blocks.push({
           kind: "assistant",
-          id: nextBlockId(),
+          id: typeof e.id === "string" ? `entry:${e.id}` : nextBlockId(),
           ...(at ? { at } : {}),
           text,
           thinking,
@@ -1174,6 +1247,29 @@ export function blocksFromEntries(entries: unknown[], leafId?: string | null, na
  * therefore recovered (or was superseded by the final failure). Keep only the
  * outcome a person can act on.
  */
+function shareHistoryBlocks(next: Block[], previous: Block[]): Block[] {
+  const byId = new Map(previous.map(block => [block.id, block]));
+  const turns = new Map<string, Block[]>();
+  let turn: Block[] | undefined;
+  for (const block of previous) {
+    if (block.kind === "user") {
+      turn = [];
+      if (block.entryId) turns.set(block.entryId, turn);
+    }
+    turn?.push(block);
+  }
+  let ordinal = 0;
+  turn = undefined;
+  return next.map(block => {
+    if (block.kind === "user") { turn = block.entryId ? turns.get(block.entryId) : undefined; ordinal = 0; }
+    const positional = turn?.[ordinal++];
+    const old = byId.get(block.id) ?? (positional?.kind === block.kind && block.kind !== "tool" ? positional : undefined);
+    if (!old || old.kind !== block.kind) return block;
+    const shared = { ...block, id: old.id };
+    return JSON.stringify(shared) === JSON.stringify(old) ? old : shared;
+  });
+}
+
 function hideRecoveredProviderErrors(blocks: Block[]): Block[] {
   const hidden = new Set<number>();
   let pendingError: number | undefined;

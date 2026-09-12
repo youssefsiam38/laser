@@ -10,7 +10,8 @@
  * Pending extension dialogs are re-emitted on load for the same reason.
  */
 
-import { AGENT_MAX_DEPTH_LIMIT, ErrorCodes, PRODUCT_NAME, ProtocolError, parseClientRequest, type AgentDefinition, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type SettingsScope, type TypedClientRequest } from "@lasercode/protocol";
+import { AGENT_MAX_DEPTH_LIMIT, ErrorCodes, PRODUCT_NAME, ProtocolError, historyWindow, parseClientRequest, type AgentDefinition, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type SettingsScope, type TypedClientRequest } from "@lasercode/protocol";
+import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import type {
   DriverAgentOptions,
@@ -73,6 +74,7 @@ interface PreAcceptanceHydration {
 
 interface Live {
   driver: SessionDriver;
+  historyEpoch: string;
   seq: number;
   buffer: SessionUpdateParams[];
   /** Read-only hydration baseline while a first turn is speculative/restoring. */
@@ -353,6 +355,22 @@ export class WorkerServer {
       }
       case "pi/session/entries": {
         const live = this.live(req.params.path);
+        if (req.params.window) {
+          // The driver captures persisted entries and current partial work in
+          // one synchronous read. If an awaited driver yields to an update,
+          // retry rather than assigning that update an incorrect watermark.
+          for (;;) {
+            const seq = live.seq;
+            const baseline = live.preAcceptance;
+            const snapshot = baseline ?? await live.driver.entries({ live: !("before" in req.params.window) });
+            if (this.sessions.get(live.path) !== live) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation was closed. Open it again.");
+            if (seq !== live.seq || baseline !== live.preAcceptance) continue;
+            const active = "live" in snapshot ? snapshot.live : undefined;
+            return historyWindow(snapshot, req.params.window, { path: live.path, epoch: live.historyEpoch, seq,
+              ...("before" in req.params.window ? {} : { live: active ?? { running: baseline?.state.isStreaming ?? live.driver.state().isStreaming, tools: [] } }),
+            });
+          }
+        }
         const baseline = live.preAcceptance;
         if (baseline) return { entries: baseline.entries, leafId: baseline.leafId } satisfies Result<"pi/session/entries">;
         // A normal prompt holds the admission lease through engine preflight but
@@ -991,7 +1009,7 @@ export class WorkerServer {
    */
   private async openAndAttach(openOptions: Parameters<SessionDriver["open"]>[0], handle?: SessionHandle): Promise<Live> {
     const driver = this.options.createDriver();
-    const live: Live = { driver, seq: 0, buffer: [], unsubscribe: () => {}, path: "" };
+    const live: Live = { driver, historyEpoch: randomUUID(), seq: 0, buffer: [], unsubscribe: () => {}, path: "" };
     driver.setExtensionModelWorkHandler?.((request) => this.admitExtensionModelWork(live, request));
     const queued: DriverEvent[] = [];
     let ready = false;
@@ -1348,6 +1366,7 @@ export class WorkerServer {
         const update = event.update.kind === "state" ? { kind: "state" as const, state: this.decorate(live, event.update.state) } : event.update;
         const params: SessionUpdateParams = {
           sessionPath: live.path,
+          epoch: live.historyEpoch,
           seq: ++live.seq,
           update,
           at: new Date().toISOString(),

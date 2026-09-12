@@ -577,7 +577,12 @@ export const clientParamsSchemas = {
   // `worktree` is optional and defaults to keeping it: a caller that omits the
   // field never destroys a child agent's checkout (M13-T42).
   "pi/session/delete": z.object({ path: sessionPath, worktree: z.enum(["keep", "delete"]).optional() }).strict(),
-  "pi/session/entries": z.object({ path: sessionPath }).strict(),
+  "pi/session/entries": z.object({ path: sessionPath, window: z.union([
+    z.object({ tail: z.number().int().min(1).max(200) }).strict(),
+    z.object({ before: z.string().min(1).max(8192), limit: z.number().int().min(1).max(200).optional() }).strict(),
+    z.object({ from: z.string().min(1).max(1024) }).strict(),
+    z.object({ all: z.literal(true) }).strict(),
+  ]).optional() }).strict(),
   "pi/session/compact": z.object({ path: sessionPath, instructions: z.string().optional() }).strict(),
   "pi/model/list": z.object({ path: sessionPath }).strict(),
   "pi/model/set": z.object({ path: sessionPath, model: modelRefSchema }).strict(),

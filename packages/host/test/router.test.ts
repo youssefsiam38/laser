@@ -114,7 +114,8 @@ function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string
   const agents = options.agents ? new AgentStore({ agentDir: join(dir, "agent"), workspaces: options.workspaces ?? WORKSPACES }) : undefined;
   // Fixtures date from June; a fixed clock keeps retention from pruning them.
   const runs = options.agents ? new AgentRunRegistry({ now: () => new Date("2026-06-02T00:00:00.000Z") }) : undefined;
-  const router = new Router(pool, catalog, { attention, projects, views: new ViewCache(2), agents, runs });
+  const views = new ViewCache(2);
+  const router = new Router(pool, catalog, { attention, projects, views, agents, runs });
 
   // The Router only records a stub from inside `dispatch`; reach the private
   // recorder the same way `session/new` does, without standing up a worker.
@@ -127,6 +128,7 @@ function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string
     catalogRows,
     open,
     workerRequests,
+    views,
     agents,
     runs,
     projects,
@@ -161,6 +163,30 @@ describe("Router · paged catalog", () => {
       expect(full).toHaveProperty("result.sessions.length", 150);
       expect(h.workerRequests).toEqual([]);
     } finally { h.cleanup(); }
+  });
+});
+
+describe("Router · history windows", () => {
+  it("routes pages to the serving worker without reading or poisoning the full snapshot cache", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "history-window-"));
+    const path = join(directory, "session.jsonl");
+    writeFileSync(path, "session fixture");
+    const full = { entries: [{ id: "old" }, { id: "tail" }], leafId: "tail" };
+    const page = { entries: [{ id: "tail" }], leafId: "tail", window: { epoch: "one", seq: 12 } };
+    const h = harness({ workerRequest: async (_method, params) => (params as { window?: unknown }).window ? page : full });
+    h.bind(path, CWD_A);
+    h.open[CWD_A]!.push(path);
+    const call = (id: number, window?: { tail: number }) => h.router.handle({ jsonrpc: "2.0", id, method: "pi/session/entries", params: { path, ...(window ? { window } : {}) } });
+    try {
+      expect(await call(1, { tail: 40 })).toMatchObject({ result: page });
+      expect(h.views.get(path)).toBeUndefined();
+      expect(await call(2)).toMatchObject({ result: full });
+      expect(await call(3, { tail: 40 })).toMatchObject({ result: page });
+      expect(h.views.get(path)).toEqual(full);
+      expect(await call(4)).toMatchObject({ result: full });
+      expect(h.workerRequests).toHaveLength(3);
+      expect(h.workerRequests[0]?.params).toEqual({ path, window: { tail: 40 } });
+    } finally { h.cleanup(); rmSync(directory, { recursive: true, force: true }); }
   });
 });
 

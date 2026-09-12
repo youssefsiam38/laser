@@ -19,7 +19,7 @@ import { accountUsageRefreshError } from "./account-usage-error.js";
  * a small external store that this component keeps in sync, and reads no
  * closed-over state at all.
  */
-import { PRODUCT_NAME, storageKey } from "@lasercode/protocol";
+import { ErrorCodes, PRODUCT_NAME, storageKey } from "@lasercode/protocol";
 import {
   AssistantRuntimeProvider,
   AuiConfig,
@@ -33,6 +33,7 @@ import type { AssistantRuntime, RemoteThreadListAdapter, ThreadComposerRuntime, 
 import type {
   ContentBlock,
   GoalAction,
+  HistoryWindowRequest,
   HostNotificationMethod,
   HostNotifications,
   ModelRef,
@@ -177,7 +178,9 @@ export interface LaserActions {
   loadMoreSessions(cwd: string): Promise<boolean>;
   allSessionSummaries(): Promise<SessionSummary[]>;
   expandCatalog(): () => void;
-  refreshEntries(): Promise<void>;
+  refreshEntries(options?: { tail?: boolean }): Promise<void>;
+  loadEarlierEntries(): Promise<boolean>;
+  loadAllEntries(): Promise<boolean>;
   /** Refresh cross-app allowance for the session's account provider. */
   refreshAccountUsage(): Promise<void>;
   goal(action: GoalAction): Promise<void>;
@@ -671,6 +674,41 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
    * The move re-hydrates when it lands, so the re-read has nothing to add.
    */
   const moving = useRef(new Set<string>());
+  const historyReads = useRef(new Map<string, Promise<void>>());
+  const historyToken = useRef(0);
+  const readHistory = useCallback(async (path: string, all = false, accepting: () => boolean = () => true, legacySeq?: number): Promise<void> => {
+    const pending = historyReads.current.get(path);
+    if (pending) {
+      await pending;
+      if (!all || readState().open[path]?.history?.complete) return;
+    }
+    const token = String(++historyToken.current);
+    const expectSeq = readState().open[path]?.lastSeq ?? 0;
+    dispatch({ type: "historyBegin", path, token });
+    const work = (async () => {
+      const anchor = readState().open[path]?.history?.anchor;
+      const requestWindow: HistoryWindowRequest = all ? { all: true } : anchor ? { from: anchor } : { tail: 40 };
+      const result = await client.request("pi/session/entries", { path, window: requestWindow }).catch(error => {
+        if (!("from" in requestWindow) || (error as { code?: number }).code !== ErrorCodes.InvalidParams) throw error;
+        return client.request("pi/session/entries", { path, window: { tail: 40 } });
+      });
+      if (!accepting() || !readState().open[path]) return;
+      const current = readState().open[path];
+      const epoch = current?.history?.epoch ?? current?.updateEpoch;
+      if (result.window && epoch && epoch !== result.window.epoch) {
+        client.resync(path, result.window.seq);
+        seenSeq.current.delete(path);
+      }
+      if (result.window) dispatch({ type: "historySnapshot", path, token, ...result, window: result.window });
+      else dispatch({ type: "hydrate", path, entries: result.entries, leafId: result.leafId, expectSeq, ...(legacySeq !== undefined ? { seq: legacySeq } : {}) });
+      client.track(path, readState().open[path]?.lastSeq ?? 0);
+    })();
+    historyReads.current.set(path, work);
+    try { await work; } finally {
+      dispatch({ type: "historyEnd", path, token });
+      if (historyReads.current.get(path) === work) historyReads.current.delete(path);
+    }
+  }, [client]);
 
   /** Hydrate one cached view. Main-window selection belongs to the controller. */
   const openSession = useCallback(
@@ -715,19 +753,9 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         // These reads are independent once the worker has loaded the session.
         // Capture each race watermark before issuing them. Only history is
         // required for readiness; a missing goal or tray must never hide it.
-        const seqBefore = readState().open[path]?.lastSeq ?? 0;
         const expectPending = readState().open[path]?.pending;
         const history = (!hydrated || needsResync || options.refreshHistory)
-          ? client.request("pi/session/entries", { path }).then(({ entries, leafId }) => {
-          if (!accepting()) return;
-          // The snapshot is the transcript as the worker held it at `loadedSeq`,
-          // so that — not 0 — is the watermark this view now carries. Leaving it
-          // at 0 makes the next open ask for `fromSeq: 0` and receive the whole
-          // replay buffer on top of the transcript it already shows. `expectSeq`
-          // still owns the race: an update that landed while the snapshot was in
-          // flight keeps the live blocks, and its higher seq wins the stamp.
-          dispatch({ type: "hydrate", path, entries, leafId, expectSeq: seqBefore, seq: loadedSeq });
-        }) : Promise.resolve();
+          ? readHistory(path, false, accepting, loadedSeq) : Promise.resolve();
         void client.request("session/goal/get", { path }).then(({ goal }) => {
           if (accepting()) dispatch({ type: "goal", path, goal });
         }).catch(() => {});
@@ -755,7 +783,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       openInFlight.current.set(path, entry);
       return entry.promise;
     },
-    [client, refreshSessions],
+    [client, refreshSessions, readHistory],
   );
 
   // A worker can restart at the same zero watermark. Its reopen notification
@@ -1011,13 +1039,20 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       }
     };
 
+    const ensureEntry = async (path: string, entryId: string) => {
+      const hasEntry = () => readScoped().open[path]?.entries.some(entry => (entry as { id?: string }).id === entryId);
+      if (hasEntry() || !readScoped().open[path]?.history || readScoped().open[path]?.history?.complete) return;
+      await readHistory(path, true, () => readScoped().current === path);
+      if (requireCurrent() !== path) throw new Error("The conversation changed. Choose the message again.");
+      // The engine, not a client-side tree projection, validates the target.
+    };
+
     const fork = async (entryId: string, options?: MoveOptions) => {
       const path = requireCurrent();
+      await ensureEntry(path, entryId);
       moving.current.add(path);
       let session: SessionState;
       let editorText: string | undefined;
-      let entries: unknown[];
-      let leafId: string | null | undefined;
       try {
         // A stop asked for here reaches this store as the original session's
         // own updates (the aborted reply, then settled) before the reply
@@ -1025,17 +1060,15 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         ({ state: session, editorText } = await client.request("pi/session/fork", { path, entryId, ...(options?.stopFirst ? { stopFirst: true } : {}) }));
         client.untrack(path);
         client.track(session.path, 0);
-        // Read the fork's transcript before putting it on screen. Switching
-        // first and hydrating after an await shows an empty transcript for a
-        // frame and rebuilds the thread runtime twice; both dispatches land in
-        // one task instead.
-        ({ entries, leafId } = await client.request("pi/session/entries", { path: session.path }));
+        // Prepare the fork in its own cached view; the visible source survives
+        // until this tail (and any intervening live updates) is ready.
+        dispatch({ type: "opened", state: session });
+        await readHistory(session.path);
       } finally {
         moving.current.delete(path);
       }
       dispatch({ type: "forked", from: path, state: session });
       if (readScoped === readState) destination.replaceMainSession(path, session);
-      dispatch({ type: "hydrate", path: session.path, entries, leafId });
       if (editorText) {
         dispatch({
           type: "notification",
@@ -1053,6 +1086,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
      */
     const navigate = async (entryId: string, options?: MoveOptions): Promise<{ editorText?: string } | false> => {
       const path = requireCurrent();
+      await ensureEntry(path, entryId);
       moving.current.add(path);
       try {
         // The worker owns stop-then-move: a failure after the stop leaves the
@@ -1062,8 +1096,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           dispatch({ type: "toast", level: "warning", text: "A feature stopped that change." });
           return false;
         }
-        const { entries, leafId } = await client.request("pi/session/entries", { path });
-        dispatch({ type: "hydrate", path, entries, leafId });
+        await readHistory(path);
         return editorText !== undefined ? { editorText } : {};
       } finally {
         moving.current.delete(path);
@@ -1136,15 +1169,50 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         void catalogLoader.refresh().catch(onError);
         return () => { release(); void refreshSessions(); };
       },
-      refreshEntries: () =>
+      refreshEntries: (options) =>
         guard(async () => {
           const path = requireCurrent();
-          // A move in flight re-hydrates this session itself; a read now
-          // could land after it with the leaf as it was.
           if (moving.current.has(path)) return;
-          const { entries, leafId } = await client.request("pi/session/entries", { path });
-          dispatch({ type: "entries", path, entries, leafId });
+          const epoch = openEpochs.current.get(path);
+          const accepting = () => !moving.current.has(path) && openEpochs.current.get(path) === epoch;
+          if (!options?.tail) { await readHistory(path, true, accepting); return; }
+          // Settlement needs new tree records, not another projection of every
+          // completed block. Fetch only from the last authoritative leaf.
+          const from = readState().open[path]?.leafId;
+          const result = await client.request("pi/session/entries", { path, window: from ? { from } : { all: true } }).catch(async error => {
+            if ((error as { code?: number }).code !== ErrorCodes.InvalidParams || !accepting()) throw error;
+            await readHistory(path, false, accepting);
+            return undefined;
+          });
+          if (!result || !accepting()) return;
+          const previousEpoch = readState().open[path]?.history?.epoch ?? readState().open[path]?.updateEpoch;
+          if (result.window && previousEpoch && previousEpoch !== result.window.epoch) { await readHistory(path, false, accepting); return; }
+          if (result.window) dispatch({ type: "historyMetadata", path, from, ...result, window: result.window });
+          else dispatch({ type: "entries", path, entries: result.entries, leafId: result.leafId });
         }).then(() => undefined),
+      loadAllEntries: () => guard(async () => {
+        const path = requireCurrent();
+        if (readState().open[path]?.history?.complete) return true;
+        if (moving.current.has(path)) return false;
+        const epoch = openEpochs.current.get(path);
+        await readHistory(path, true, () => !moving.current.has(path) && openEpochs.current.get(path) === epoch);
+        return readState().open[path]?.history?.complete ?? readState().open[path]?.hydrated ?? false;
+      }).then(Boolean),
+      loadEarlierEntries: () => guard(async () => {
+        const path = requireCurrent();
+        const before = readState().open[path]?.history?.before;
+        if (!before || moving.current.has(path)) return false;
+        const epoch = openEpochs.current.get(path);
+        const accepting = () => !moving.current.has(path) && openEpochs.current.get(path) === epoch;
+        const result = await client.request("pi/session/entries", { path, window: { before, limit: 40 } }).catch(async error => {
+          if ((error as { code?: number }).code !== ErrorCodes.InvalidParams || !accepting()) throw error;
+          await readHistory(path, false, accepting);
+          return undefined;
+        });
+        if (!result || !accepting() || !result.window) return false;
+        dispatch({ type: "historyPrepend", path, before, entries: result.entries, window: result.window });
+        return readState().open[path]?.history?.before !== before;
+      }).then(Boolean),
       refreshAccountUsage: () =>
         guard(async () => {
           const { delivered } = await client.request("pi/account-usage/refresh", { path: requireCurrent() }).catch(error => { throw accountUsageRefreshError(error); });
@@ -1270,6 +1338,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     markSeen,
     openSession,
     readState,
+    readHistory,
     refreshProjects,
     refreshSessions,
   ]);
@@ -1499,7 +1568,7 @@ function useThreadRuntime(store: SnapshotStore<RuntimeSnapshot>): AssistantRunti
 
   // These are the four inputs projectSessionView consumes. Metadata, optional
   // goal/tray reads and transaction changes neither blank nor re-project history.
-  const projection = useMemo(() => projectSessionView(view), [view?.blocks, view?.entries, view?.running, view?.dialogs]);
+  const projection = useMemo(() => projectSessionView(view), [view?.blocks, view?.entries, view?.history, view?.running, view?.dialogs]);
   const sharedRef = useRef<readonly ThreadMessageLike[]>([]);
   const messages = useMemo(() => {
     const shared = shareProjectedMessages(projection.messages, sharedRef.current);

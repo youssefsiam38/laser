@@ -4,7 +4,7 @@
 
 Separate **catalog summaries**, **loaded history**, and **mounted rows**. Page the first two and virtualize the third. Keep the current conversation mounted until the destination is ready; never make an old composer send to a pending destination.
 
-This document contains research, a fresh baseline, and the implementation contract. **Catalog paging (A) is implemented below; transcript stages B–E remain outstanding.** Baseline base: `a0690d36d600bbc3913a055abae1680dc5930f8f`, isolated branch `agents/chat-loading-9210c750`.
+This document contains research, a fresh baseline, and the implementation contract. **Catalog paging (A) and tail-first history (B) are implemented and validated below. C–E remain outstanding.** Baseline base: `a0690d36d600bbc3913a055abae1680dc5930f8f`, isolated branch `agents/chat-loading-9210c750`.
 
 ## Research: established techniques, not guesses about competitors
 
@@ -194,4 +194,36 @@ The browser fixture additionally has five control sessions and fifteen Chat sess
 - Real browser **1360/390 × light/dark passes**: both Project and Chat go 7 → 14 → 15 → 7, four actual cursor requests per case, original project-row DOM retained, final-page/fold focus retained, no horizontal page overflow or page errors. Desktop uses keyboard Enter; phone exercises touch; light cases use reduced motion, dark normal motion. Screenshots inspected at every width/theme. Evidence: `/tmp/chat-loading/a-browser-results.json`, `a-browser-final.log`, `a-{catalog,chat}-{1360,390}-{light,dark}.png`.
 - Browser harness corrections: `data-base` is the theme mode (`data-theme` is the preset ID), and phone navigation must finish closing its sheet before reopening it. The rejected runs were harness errors, not successful matrix evidence.
 
-Reproduce with `/tmp/chat-loading/catalog-browser.mjs` and `/tmp/chat-loading/catalog.mjs` through the allowlisted wrapper. The latter temporarily parks only its own synthetic controls, measures the exact-150 catalog, then restores them in `finally`. Raw route samples: `/tmp/chat-loading/a-catalog-results.json`. Remaining acceptance: B–E and their long-history/live/find/scroll/switch browser proofs.
+Reproduce with `/tmp/chat-loading/catalog-browser.mjs` and `/tmp/chat-loading/catalog.mjs` through the allowlisted wrapper. The latter temporarily parks only its own synthetic controls, measures the exact-150 catalog, then restores them in `finally`. Raw route samples: `/tmp/chat-loading/a-catalog-results.json`. At the A checkpoint, remaining acceptance was B–E and their long-history/live/find/scroll/switch browser proofs.
+
+## B — tail-first history
+
+### Contract and integration
+
+- `pi/session/entries` accepts `window: {tail:40}`, `{before,limit}`, `{from:entryId}`, or `{all:true}`; omitting it retains the legacy full route. Cursors carry session path, serving epoch, leaf and boundary. They survive append-only growth, not a branch change or worker restart.
+- Windows walk the authoritative worker's actual parent chain, extend to a complete user turn and preceding attribution markers, and retain original user ordinals, goal context and prior goal markers. A long turn can exceed 40 records. Complete active-branch history is distinct from a complete tree containing alternate versions. `hasHistory` prevents a reset leaf from masquerading as a reusable empty session.
+- Window requests never read or install partial pages in the host's full `ViewCache`. The worker retries a yielded snapshot if its accepted sequence/pre-acceptance revision changed. Its live accumulator copies **accepted** deltas and the latest partial tool output, not Pi's mutable future streaming object.
+- Numbered updates now carry the serving epoch. The UI journals concurrent updates, installs a snapshot at its watermark, and replays only newer updates from that generation. New epochs reset the dedupe/client watermark; old generations cannot contaminate them. Reconnect retains the oldest loaded anchor where it remains valid; invalid branch anchors fall back to a new tail. Older pages neither replace the live suffix nor advance its watermark.
+- Initial uncached hydration reads 40 messages; Load earlier and upward reading prepend another page. Explicit full-history search, versions and tree actions load all records. Settlement reads only metadata since the known leaf rather than rehydrating the conversation. Usage/file/tool/history panels disclose their loaded scope; complete conversation totals wait for complete history.
+- Message IDs are entry-based and shared across snapshots. Tool-only assistant records retain their real empty assistant container, matching the live structure. **Installed `ThreadPrimitive.Messages` keys providers by index**: keeping its DOM nodes did not preserve message identity. The thread now uses `unstable_useThreadMessageIds` / `Unstable_MessageById`; a regression proves focus and disclosure stay on their original message after prepend. D will window this same identity-bound renderer.
+
+### Paired wire measurements
+
+Same three synthetic files as the baseline, warm host/worker, ten alternating full/tail samples each; `/tmp/chat-loading/history-rpc.mjs`, `b-rpc-results.json`, `b-rpc.log`.
+
+| Messages | Full bytes / median | Tail bytes / median | Tail records |
+| --- | --- | --- | --- |
+| 4 | 1,925 / 0.094 ms | 2,127 / 0.385 ms | 6 |
+| 240 | 96,707 / 1.089 ms | 16,852 / 1.055 ms | 42 |
+| 2,000 | 805,108 / 5.321 ms | 16,853 / 1.643 ms | 42 |
+
+The 2,000-message response is **97.9% smaller**, with **69.1% lower median RPC time**. The smallest response grows by window metadata; this is not claimed as a universal latency win. Record counts include non-message metadata. All-history requests still transfer the full tree. Goal context, a single long turn, and images inside the selected page remain outside a strict byte cap.
+
+### Validation and corrections
+
+- Protocol/worker/host/UI production builds pass. Protocol **111/11**, host **237/31**, UI **1,376/166 plus one existing skip**, focused worker `vitest run stable-sdk test/server.test.ts` **87/7** pass. Logs: `/tmp/chat-loading-b-{build,protocol,host,ui,worker,identity}-final.log`; UI's latest build: `/tmp/chat-loading-b-ui-build-final.log`.
+- The row-identity regression fails with the former index renderer and passes with the identity renderer: `/tmp/chat-loading-b-row-identity-{before,after}.log`. The SDK integration caught a mutable streaming snapshot containing future text; the accepted-event accumulator fixes it. Epoch replay, stale requests, reset branches, goal markers, original action ordinals and terminal-vs-partial tool channels have focused tests.
+- Production browser **1360/390 × light/dark** passes initial 40 rendered messages, one tail read, explicit older paging, full-history find, focus, no page errors/overflow. Light uses reduced motion; dark normal. The corrected prepend assertion captures **ID and text before the request**, not a mutable node's identity afterward; the same old message stays at 64 px desktop / 80 px phone. `/tmp/chat-loading/b-browser-results.json`, `b-browser.log`, `b-{tail,older,find}-WIDTH-THEME.png`.
+- Two rejected browser checks were insufficient evidence: a delayed mobile installation guide legitimately took focus, and index-rebound nodes gave a false-positive identity/anchor assertion. The fixture now records installation guidance as dismissed, and tests original IDs/text plus disclosure ownership. These are not hidden as successful runs.
+- Live production browser **1360/390 × light/dark passes**: a real held bash partial remains running through prepend; pointer/keyboard disclosure closes and reopens after animations settle; 500 real provider deltas appear exactly once; the detached reading anchor survives settlement; a valid 256×256 PNG is absent from the initial window and decodes after full loading; restarting the isolated worker changes epoch without losing the response. `/tmp/chat-loading/b-live-results.json`, `b-live-browser.log`, `b-live-{tool,settled,image}-WIDTH-THEME.png`. Harness anchors are captured at the actual page-request boundary, not before a programmatic scroll has settled.
+- Final non-streaming startup samples (not repeated medians): desktop light/dark **1,112/726 ms**, phone light/dark **539/443 ms**. Initial DOM **2,678/2,729 desktop, 1,250/1,309 phone**. Loading all 2,000 messages still creates **57,679/57,687 desktop and 56,147 phone elements**. This explicitly does **not** satisfy D's bounded mounted-row criterion. Anchor comparisons wait for the restoration window to finish, then check the original node, ID, text and offset.

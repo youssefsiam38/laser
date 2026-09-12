@@ -6,7 +6,7 @@ import { isWorkspaceCwd } from "../agents/model.js";
 /** Draft text and model choices are deliberately not work: reuse keeps them. */
 export function isUnstartedSession(view: SessionView): boolean {
   return view.hydrated && view.state.messageCount === 0 && view.state.pendingMessageCount === 0
-    && !view.running && !view.state.isStreaming && !view.state.isCompacting && !view.goal
+    && !view.running && !view.state.isStreaming && !view.state.isCompacting && !view.goal && !view.history?.hasHistory
     && view.queue.steering.length === 0 && view.queue.followUp.length === 0 && view.dialogs.length === 0
     && view.blocks.every((block) => block.kind === "notice")
     && !view.entries.some((entry) => {

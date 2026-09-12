@@ -318,10 +318,12 @@ describe("StableSdkDriver.prompt", () => {
 
   it("streams a reply from a stub provider as ordered session updates", async () => {
     const updates: SessionUpdate[] = [];
+    const snapshots: Array<ReturnType<StableSdkDriver["entries"]>> = [];
     const settled = new Promise<void>((resolve) => {
       driver.subscribe((e: DriverEvent) => {
         if (e.type !== "update") return;
         updates.push(e.update);
+        if (e.update.kind === "text_delta") snapshots.push(driver.entries({ live: true }));
         if (e.update.kind === "agent_settled") resolve();
       });
     });
@@ -338,6 +340,11 @@ describe("StableSdkDriver.prompt", () => {
     const result = await driver.prompt([{ type: "text", text: "say hello" }]);
     expect(result).toEqual({ accepted: true, queued: false });
     await settled;
+    const captured = await Promise.all(snapshots);
+    expect(captured[0]?.live?.message?.value).toMatchObject({ content: [{ type: "text", text: REPLY[0] }] });
+    expect(captured.at(-1)?.live?.message?.value).toMatchObject({ content: [{ type: "text", text: REPLY.join("") }] });
+    expect(new Set(captured.map(snapshot => snapshot.live?.message?.id)).size).toBe(1);
+    expect((await driver.entries({ live: true })).live).toEqual({ running: false, tools: [] });
 
     // The provider saw our prompt.
     expect(stub.requests).toHaveLength(1);

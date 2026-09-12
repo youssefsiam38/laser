@@ -145,7 +145,7 @@ class FakeDriver implements SessionDriver {
   extensionWork: ExtensionModelWorkHandler | undefined;
   setExtensionModelWorkHandler(handler: ExtensionModelWorkHandler | undefined) { this.extensionWork = handler; }
   pendingUi() { return this.pending; }
-  async entries() { this.routed.push({ route: "entries", generation: this.generation }); return { entries: [], leafId: null }; }
+  async entries(_options?: { live?: boolean }): Promise<Awaited<ReturnType<SessionDriver["entries"]>>> { this.routed.push({ route: "entries", generation: this.generation }); return { entries: [], leafId: null }; }
   async goalState() { return null; }
   async commands() { return [{ name: "skill:test", source: "skill" as const, description: "Test skill" }]; }
   async prompts() { return []; }
@@ -222,6 +222,37 @@ describe("WorkerServer", () => {
     } finally {
       FakeDriver.openingEvent = undefined;
     }
+  });
+
+  it("windows the actual branch and retries a yielded snapshot before assigning its live watermark", async () => {
+    const h = harness();
+    await h.call(1, "session/new", { cwd: "/tmp/fake" });
+    const driver = h.drivers[0]!;
+    const rows = Array.from({ length: 12 }, (_, i) => ({ type: "message", id: `e${i}`, parentId: i ? `e${i - 1}` : null, message: { role: i % 2 ? "assistant" : "user", content: [{ type: "text", text: String(i) }] } }));
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    let reads = 0;
+    let text = "before";
+    driver.entries = async options => {
+      const snapshot = { entries: rows, leafId: "e11", ...(options?.live ? { live: { running: true, tools: [], message: { id: "active", value: { content: [{ type: "text", text }] } } } } : {}) };
+      if (++reads === 1) { entered.resolve(); await release.promise; }
+      return snapshot;
+    };
+    try {
+      const loading = h.call(2, "pi/session/entries", { path: "/tmp/fake/s1.jsonl", window: { tail: 4 } });
+      await entered.promise;
+      text = "before after";
+      driver.emit({ type: "update", update: { kind: "text_delta", delta: " after", contentIndex: 0 } });
+      release.resolve();
+      const response = await loading;
+      expect(reads).toBe(2);
+      expect(response.result).toMatchObject({ entries: rows.slice(8), leafId: "e11", window: { seq: 1, userOffset: 4, live: { message: { value: { content: [{ text: "before after" }] } } } } });
+      const { before, epoch } = (response.result as { window: { before: string; epoch: string } }).window;
+      expect(h.notifications("session/update").at(-1)?.params).toMatchObject({ seq: 1, epoch });
+      const older = await h.call(3, "pi/session/entries", { path: "/tmp/fake/s1.jsonl", window: { before, limit: 4 } });
+      expect(older.result).toMatchObject({ entries: rows.slice(4, 8), window: { seq: 1, userOffset: 2 } });
+      expect(older.result).not.toHaveProperty("window.live");
+    } finally { await h.server.dispose(); }
   });
 
   it("opens a session, numbers updates, and answers requests", async () => {
