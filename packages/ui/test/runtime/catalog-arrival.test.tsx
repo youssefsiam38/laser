@@ -17,9 +17,13 @@
  * These run the real `LaserProvider`, the real runtime and the real project
  * screen against the fake host, with React's own scheduler rather than `act`,
  * because the failure is an ordering between the host's replies and React's
- * commits, and `act` would batch it away.
+ * commits, and `act` would batch it away. Assertions rendezvous with the host
+ * request and a committed probe separately: initialization adopts the remote
+ * id in microtasks but publishes the main destination on the next macrotask.
+ * A fixed sleep can expire before that macrotask is even scheduled, leaving
+ * routing successful and `data-current` temporarily empty (M16-T27).
  */
-import { Component, useEffect, type ReactNode } from "react";
+import { Component, useEffect, useLayoutEffect, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -47,8 +51,14 @@ function Probe() {
   // runtime's own id for a thread born on this page.
   const rows = threadIds.map((id) => threadItems.find((item) => item.id === id)?.remoteId ?? id);
   const current = useLaserState((s) => s.current);
+  const ready = useLaserState((s) => s.connection === "open" && s.sessionsLoaded);
+  const catalog = useLaserState((s) => s.sessions);
   // The imperative face too: the shell resolves rows this way.
   const viaItem = aui.threads.item("main").getState().remoteId;
+  useLayoutEffect(() => {
+    committed = { ready, current, mainThreadId, remoteId: mainRemoteId, viaItem, rows, catalog: catalog.map((row) => row.path) };
+    for (const listener of commitListeners) listener();
+  });
   return (
     <span
       data-slot="probe"
@@ -111,6 +121,50 @@ let container: HTMLDivElement;
 let root: Root;
 let world: World;
 let created = 0;
+interface CommittedProbe {
+  ready: boolean;
+  current: string | undefined;
+  mainThreadId: string;
+  remoteId: string | undefined;
+  viaItem: string | undefined;
+  rows: string[];
+  catalog: string[];
+}
+let committed: CommittedProbe | undefined;
+let promptRequested: ReturnType<typeof Promise.withResolvers<void>>;
+const commitListeners = new Set<() => void>();
+
+/** Rendezvous with a real React commit, not a timer presumed to follow it. */
+function onCommit(matches: (value: CommittedProbe) => boolean): Promise<void> {
+  if (committed && matches(committed)) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const cleanup = () => { clearTimeout(timeout); commitListeners.delete(check); };
+    const check = () => {
+      if (!committed || !matches(committed)) return;
+      cleanup();
+      resolve();
+    };
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error(`Expected a destination commit; last probe: ${JSON.stringify(committed)}`));
+    }, 1_000);
+    commitListeners.add(check);
+  });
+}
+
+const screenOn = (path: string) => onCommit((value) =>
+  value.current === path && value.remoteId === path && value.viaItem === path && value.rows.includes(path));
+const sentTo = (path: string) => Promise.all([screenOn(path), promptRequested.promise]);
+
+/** Expire the old 100ms test timer before the load continuation can schedule adoption. */
+function stallLoad(path: string): void {
+  world.overrides["session/load"] = async () => {
+    await Promise.resolve();
+    const until = performance.now() + 180;
+    while (performance.now() < until) { /* deterministic event-loop contention, no fake React scheduler */ }
+    return { state: world.states[path], replayFrom: 0, seq: 0 };
+  };
+}
 let consoleError: ReturnType<typeof vi.spyOn>;
 
 const cliPath = () => `${PROJECT_CWD}/cli-${created}.jsonl`;
@@ -134,7 +188,7 @@ const cliCreates = async (extra: Partial<SessionSummary> = {}, options: { wait?:
   world.sessions = [...world.sessions, summary({ path, cwd: PROJECT_CWD, messageCount: 0, attention: "finished_unread", ...extra })];
   world.states[path] = sessionState({ path, cwd: PROJECT_CWD, messageCount: 0 });
   FakeHostClient.current.notify("pi/session/attention", { path, cwd: PROJECT_CWD, attention: "finished_unread", at: "2026-09-09T00:00:00.000Z" });
-  if (options.wait !== false) await settle(320);
+  if (options.wait !== false) await onCommit((value) => value.rows.includes(path));
   return path;
 };
 
@@ -143,14 +197,17 @@ beforeEach(async () => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = false;
   localStorage.clear();
   created = 0;
+  committed = undefined;
   world = createWorld();
+  promptRequested = Promise.withResolvers<void>();
+  world.overrides["session/prompt"] = () => { promptRequested.resolve(); return { accepted: true }; };
   FakeHostClient.reset(world);
   consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
   root.render(<Harness />);
-  await settle(50);
+  await onCommit((value) => value.ready && value.mainThreadId.startsWith("__LOCALID_") && suggestion() !== null);
 });
 afterEach(async () => {
   root.unmount();
@@ -189,10 +246,11 @@ describe("a session created from outside while the project screen is up", () => 
     expect(errorsLike("useClientLookup")).toEqual([]);
   });
 
-  it("survives a suggestion pressed after the row arrived, reusing that session", async () => {
+  it.each([false, true])("survives a suggestion pressed after the row arrived, reusing that session (stalled load: %s)", async (stalled) => {
     const path = await cliCreates();
+    if (stalled) stallLoad(path);
     suggestion().click();
-    await settle(100);
+    await sentTo(path);
     expect(crash()).toBeUndefined();
     expect(errorsLike("useClientLookup")).toEqual([]);
     // The launcher's rule: an unstarted session in the project is the one to use.
@@ -208,7 +266,7 @@ describe("a session created from outside while the project screen is up", () => 
   it("survives a suggestion pressed the instant the row arrives", async () => {
     const path = await cliCreates({}, { wait: false });
     suggestion().click();
-    await settle(400);
+    await sentTo(path);
     expect(crash()).toBeUndefined();
     expect(errorsLike("useClientLookup")).toEqual([]);
     expect(calls("session/prompt").map((c) => (c.params as { path: string }).path)).toEqual([path]);
@@ -219,11 +277,27 @@ describe("a session created from outside while the project screen is up", () => 
   });
 
   it("survives a row that arrives while the first send is creating its own session", async () => {
+    const creating = Promise.withResolvers<void>();
+    const reply = Promise.withResolvers<void>();
+    const ownPath = `${PROJECT_CWD}/own.jsonl`;
+    world.overrides["session/new"] = async () => {
+      creating.resolve();
+      await reply.promise;
+      const state = sessionState({ path: ownPath, cwd: PROJECT_CWD, messageCount: 0 });
+      world.states[ownPath] = state;
+      world.sessions = [...world.sessions, summary({ path: ownPath, cwd: PROJECT_CWD, messageCount: 0 })];
+      return { state };
+    };
     suggestion().click();
-    // The row lands between `session/new` and the reply's adoption.
-    await settle(0);
+    // Hold the actual host reply: a zero-delay sleep did not guarantee this window.
+    await creating.promise;
     const path = await cliCreates({}, { wait: false });
-    await settle(400);
+    // Catalog state can arrive now; runtime row reload is deliberately held during adoption.
+    await onCommit((value) => value.catalog.includes(path));
+    expect(probe()?.dataset["current"]).toBe("");
+    reply.resolve();
+    await sentTo(ownPath);
+    await onCommit((value) => value.rows.includes(path) && value.rows.includes(ownPath));
     expect(crash()).toBeUndefined();
     expect(errorsLike("useClientLookup")).toEqual([]);
     expect(calls("session/new")).toHaveLength(1);
@@ -235,11 +309,12 @@ describe("a session created from outside while the project screen is up", () => 
     expect(new Set(probe()?.dataset["threads"]?.split("|").filter(Boolean))).toEqual(new Set([own, path]));
   });
 
-  it("survives the row being clicked in the sessions panel while a send is reusing it", async () => {
+  it.each([false, true])("survives the row being clicked in the sessions panel while a send is reusing it (stalled load: %s)", async (stalled) => {
     const path = await cliCreates();
+    if (stalled) stallLoad(path);
     suggestion().click();
     container.querySelector<HTMLButtonElement>('[data-slot="click-row"]')!.click();
-    await settle(100);
+    await sentTo(path);
     expect(crash()).toBeUndefined();
     expect(errorsLike("useClientLookup")).toEqual([]);
     expect(calls("session/prompt").map((c) => (c.params as { path: string }).path)).toEqual([path]);
@@ -253,7 +328,7 @@ describe("a session created from outside while the project screen is up", () => 
     const path = await cliCreates();
     suggestion().click();
     container.querySelector<HTMLButtonElement>('[data-slot="open-row"]')!.click();
-    await settle(100);
+    await sentTo(path);
     expect(crash()).toBeUndefined();
     expect(errorsLike("useClientLookup")).toEqual([]);
     expect(calls("session/prompt").map((c) => (c.params as { path: string }).path)).toEqual([path]);
