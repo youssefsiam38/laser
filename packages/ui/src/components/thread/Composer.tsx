@@ -426,7 +426,7 @@ function useSlashCommands() {
     if (!view) return;
     const entryId = userEntryIds(view.entries, view.leafId).at(-1);
     if (entryId) return actions.fork(entryId);
-    await actions.refreshEntries();
+    await actions.refreshEntries({ tail: true });
     actions.toast("warning", "Nothing to fork yet: this session has no prompt.");
   }
 

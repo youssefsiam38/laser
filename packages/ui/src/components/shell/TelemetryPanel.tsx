@@ -544,7 +544,7 @@ export function ToolsSection() {
 // arrives in the tool call that produced it; what it has to *ask* is answered
 // inline in the transcript (docs/ux-fleet.md, "Questions").
 
-function HistorySection() {
+export function HistorySection() {
   const { actions } = useLaserStable();
   const view = useLaserView();
   const meta = useSessionMeta();
@@ -558,7 +558,7 @@ function HistorySection() {
   const path = view?.path;
   const running = view?.running ?? false;
   useEffect(() => {
-    if (shell.historyOpen && path) void refresh.current();
+    if (shell.historyOpen && path) void refresh.current({ tail: true });
   }, [shell.historyOpen, path, running]);
 
   return (
