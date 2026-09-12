@@ -628,3 +628,28 @@ engine-module loads for path labels/streaming and one on settlement, preserving
 literal escaped text. Existing full-language and map status/selection/layout tests
 pass; map tests now await real lazy-canvas settlement before measuring nodes,
 not an assumed synchronous mount. Browser acceptance remains outstanding.
+
+### F17 — stopped at the host capability seam (no renderer workaround)
+
+Reverified: `protocol/src/messages.ts:38–45` gives `ModelRef` only an optional
+reasoning boolean, not accepted thinking levels or per-model defaults.
+`pi/model/list` (`:1026`) returns that same insufficient type. Only
+`ModelCatalogEntry` (`:628–651`) plus `pi/models/catalog` supplies the capability
+and configuration defaults consumed by `reasoning-effort.tsx:204–241`.
+
+**Rejected as a renderer-only optimization:** dropping the catalog request or
+substituting `reasoning: true` would guess supported levels and break first-turn
+agent/model/default clamping. A small host-owned capability response for the
+requested/effective model (including accepted levels and configured defaults) is
+required first. No host/protocol mutation was made. Startup catalog traffic is
+**unchanged**; no byte/latency reduction or implementation completion is claimed.
+Caches keyed by client/configuration generation should be addressed with that
+method rather than creating a second provisional lookup contract here.
+
+Validation of the unchanged renderer: TypeScript and identity pass; final UI
+recheck **168 files / 1,393 passed, one skipped**. One preceding broad run failed
+`catalog-arrival.test.tsx:246` after its fixed 100ms wait (destination still blank);
+focused reproduction and the full-suite recheck passed without source changes.
+This is recorded, not labeled proven flaky. Logs `/tmp/perf-renderer/f17-*` retain
+both runs. No new regression test is claimed for an intentionally unimplemented
+host seam. Coordinator/host-method ownership is the next action for F17.
