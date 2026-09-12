@@ -2222,7 +2222,8 @@ lane T's own if both were written.
 | M16-T14 | Worktrees know no stack | done | worker worktree-truth (01a0952e-782d-7513-89ef-8a74364ec4bd) | merged `29faafc` (`2a3c62d`, `4981158`); review `/tmp/review-worktree-truth.md` REQUEST CHANGES (trust gate, interrupt must not cancel setup) → fixed; agents 233, host 233 | `docs/incidents/worktree-dependencies.md` — the person's principle: every stack, no package-manager knowledge in the harness |
 | M16-T15 | No "Detached" group | in-progress | worker no-detached | — | the person: remove the idea; the tree goes with its parent |
 | M16-T16 | Conversations load like a chat app | in-progress | worker chat-loading | — | research first, then paging + tail-first hydration; numbers required |
-| M16-T17 | Per-project environment command | todo | — | — | discovery handoff `/tmp/workenv/REPORT.md` (instance URL, explicit switching, clean-start default, proposed private-pipe contract); the person ended that worker and will assign another agent |
+| M16-T17 | Per-project environment command | in-progress | workenv-2026-09-12-a | — | see notes |
+| M16-T19 | Open any file on the machine | in-progress | worker open-any-file | — | `files.ts` read refuses outside `cwd`; the person: Laser must open any file on the machine |
 | M16-T18 | Release 0.5.4 | done | orchestrator | v0.5.4 public: source `d5dec9c`; verified; https://github.com/youssefsiam38/laser/releases/tag/v0.5.4 | provenance, RTL, worktrees know no stack, find bar closed |
 | M16-T12 | Release 0.5.3 | done | orchestrator | v0.5.3 public: candidate `c572029` from source `cd2a7b0`; verified; https://github.com/youssefsiam38/laser/releases/tag/v0.5.3 | live check `/tmp/m16b/REPORT.md` |
 | M16-T7 | Release 0.5.2 | done | orchestrator | v0.5.2 public: candidate `0259844` from source `981ff74`; CI 34686382218; release run 34686599279; 12 assets; verified; https://github.com/youssefsiam38/laser/releases/tag/v0.5.2 | T8/T9/T10 + perf batch 1 → 0.5.3 |
@@ -2270,6 +2271,12 @@ lane T's own if both were written.
 #### M15-T5 notes
 - 2026-09-11 typing `/compa` and pressing Tab completed to `/compact` and sent it. Expected: complete only. Audit Tab, Enter on a highlighted row, click and touch, and `@` file completion.
 
+#### M16-T17 notes
+- 2026-09-12 claimed: generic per-project environment command. Prior discovery `/tmp/workenv/REPORT.md` reused; the person approved the contract below.
+- 2026-09-12 contract approved by the person: machine-local host-side config per canonical project root (`{ enabled, command, args[], approvedFingerprint }`), **never** `.laser/settings.json` — a checked-in file must not be able to point credentials at an arbitrary binary. Helper runs with cwd = project root, stdin closed, 20 s / 1 MiB bound, and writes `{"version":1,"set":{},"unset":[]}` on **fd 3**; stdout/stderr are sensitive (never rendered, logged or in diagnostics). Worker holds the resolved map in memory and injects at spawn points (engine `spawnHook`, background tasks, worktree setup, git); it never writes `process.env`, so Laser's own model authentication cannot be repointed.
+- 2026-09-12 hazard that shaped the validation rule: the person's own `~/projects/kwentra/*/project.env` set `ANTHROPIC_API_KEY` with two distinct values. Provider-auth keys are therefore refused by default on top of `isProtectedEnvironmentKey`, with per-project opt-in.
+- 2026-09-12 no Infisical-specific code enters Laser (invariant 6b). The Infisical-aware helper lives in the person's `machine-setup` repository and is configured as the executable.
+
 ## MX · Cross-cutting
 
 | ID | Task | State | Owner | Evidence | Notes |
@@ -2281,6 +2288,13 @@ lane T's own if both were written.
 | MX-T5 | Accessibility pass | todo | — | — | — |
 | MX-T6 | Element inventory reconciliation | done | five lanes + integrator | `pnpm -r build` / `-r typecheck` / `-r test` all exit 0, 686 tests; every row of `docs/ux-elements.md` names either the file that implements it or the reason it does not apply; no element file in `packages/ui/src/components/assistant-ui/elements/` is unimported | Five lanes adopted the catalog; integration wired the twelve elements they had adopted but left unmounted, and deleted eight whose data does not exist rather than leave unmountable files standing in the tree. See the wave-3 notes below |
 | MX-T7 | One module defines the product's identity | done | claude-2026-09-05-identity | `product.json` at the repository root; `pnpm identity:generate` rewrites 14 files; `pnpm identity:check` runs inside `pnpm -r build` and `pnpm -r test`; renaming to `wavelet` and back proved end to end — see notes | The rename is one edit plus one command. A frozen `wireNamespace` is the deliberate exception (D-48) |
+
+| MX-T8 | Cross-package performance audit | done | perf-wide-audit | `docs/performance-wide-audit.md`; isolated `probes.mts` and `extra-probes.mts` exit 0 | 24 findings; report only; see notes; D-229 |
+
+#### MX-T8 notes
+- 2026-09-12 claimed: report-only audit against the live chat-loading worktree; leave ongoing implementation and installed processes untouched.
+- 2026-09-12 checkpoint: catalog, router containment, projection, oversized Git reads, provider logging/broadcast and diff microprobes completed under isolated `/tmp/laser-wide-perf-audit`; no credentials or personal transcripts used. History-window protocol implementation appeared during inspection and is treated as M16-T16 overlap, not missing work.
+- 2026-09-12 done: `docs/performance-wide-audit.md` records 24 prioritized findings, safe/unsafe parallelism, measured synthetic costs, existing optimizations and regression gates. Final reinspection includes the active host/worker/UI history-window wiring; evidence `/tmp/laser-wide-perf-audit/{results,extra-results,final-worktree-check}.json`. No runtime implementation, installed process change, stage/commit, full build/test or browser acceptance claim. Existing unrelated planning edits remain intact.
 
 #### M4-T8 notes
 - 2026-09-06 done: regular and advanced settings now use product-language
@@ -4349,3 +4363,8 @@ Next: T111 finishes routing; T108 completes its single review correction. Only t
 **Decision.** Add M5-T6. Replace the Linux native-update restart path that uses Electron's relaunch helper with an orderly stock-Node handoff that preserves the caller's configuration and OS restrictions. Keep renderer sandboxing and non-Linux update behavior unchanged.
 **Why.** The installed app's update-restored process tree has `NoNewPrivs=1`, which irreversibly disables ordinary sudo privilege elevation for every worker command. A tool approval setting cannot undo this kernel property.
 **Consequences.** Prove the actual restart and child-process flags in isolation. Never clear an inherited administrator restriction, grant root, change sudoers, or restart the live installation during development. A generation already carrying the restriction may require one full quit and launch from the desktop.
+
+### D-229 · 2026-09-12 · Cross-package performance report without competing implementation
+**Decision.** Add MX-T8 for the requested report-only performance audit. Read the live chat-loading worktree, distinguish active M16-T16 work from additional opportunities, and keep synthetic probes isolated.
+**Why.** Historical performance reports and a branch HEAD alone do not describe a worktree being edited concurrently.
+**Consequences.** No runtime changes, release, or installed-process restart. Recommendations require their own ownership and correctness/performance evidence before implementation.
