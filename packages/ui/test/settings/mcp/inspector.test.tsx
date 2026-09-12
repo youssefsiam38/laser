@@ -9,7 +9,7 @@ import { act, type ReactNode } from "react";
 import { AssistantRuntimeProvider, useExternalStoreRuntime } from "@assistant-ui/react";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { McpCallResult, McpInspection, McpServerConfigInput, McpServerState } from "@lasercode/protocol";
+import type { ClientRequests, McpCallResult, McpInspection, McpServerConfigInput, McpServerState } from "@lasercode/protocol";
 
 const mocks = vi.hoisted(() => ({ request: vi.fn(), toast: vi.fn() }));
 vi.mock("../../../src/runtime/index.js", () => {
@@ -27,6 +27,7 @@ let inspectResult: McpInspection;
 let callResult: McpCallResult;
 let saved: Array<{ scope: string; server: McpServerConfigInput }>;
 let calls: string[];
+let conversations: NonNullable<ClientRequests["mcp/list"]["result"]["conversations"]>;
 
 const TOOLS = [tool("navigate"), tool("click"), tool("screenshot")];
 
@@ -34,6 +35,7 @@ beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   saved = [];
   calls = [];
+  conversations = [];
   servers = [
     serverState({
       scope: "global",
@@ -45,7 +47,7 @@ beforeEach(() => {
         name: "playwright",
         label: "Playwright",
         transport: { kind: "stdio", command: "npx", args: ["-y", "@playwright/mcp@latest"] },
-        tools: { exposure: "direct" },
+        tools: { alwaysLoad: false },
       },
     }),
   ];
@@ -67,7 +69,7 @@ beforeEach(() => {
   };
   mocks.request.mockReset().mockImplementation(async (method: string, params: Record<string, unknown>) => {
     calls.push(method);
-    if (method === "mcp/list") return { servers };
+    if (method === "mcp/list") return { servers, conversations };
     if (method === "mcp/import/detect") return { sources: [] };
     if (method === "mcp/inspect") return inspectResult;
     if (method === "mcp/save") {
@@ -138,17 +140,14 @@ it("connects on open and shows what the server is", async () => {
   expect(text()).toContain("url");
 });
 
-it("maintains exclude, only and approve, one whole save per change", async () => {
+it("maintains exclusions and approvals without turning legacy direct exposure into preload", async () => {
   await open();
   await click("Tools");
   expect(document.querySelectorAll('[data-slot="mcp-tool-row"]').length).toBe(3);
   expect(toolRow("navigate").textContent).toContain("{ url: string; fullPage?: boolean }");
 
   await clickElement(toolSwitch("On", "click"));
-  expect(saved.at(-1)!.server.tools).toEqual({ exposure: "direct", exclude: ["click"] });
-
-  await clickElement(toolSwitch("Direct", "screenshot"));
-  expect(saved.at(-1)!.server.tools).toMatchObject({ exposure: "direct", only: ["click", "navigate"] });
+  expect(saved.at(-1)!.server.tools).toEqual({ alwaysLoad: false, exclude: ["click"] });
 
   await clickElement(toolSwitch("Ask first", "navigate"));
   expect(saved.at(-1)!.server.tools).toMatchObject({ approve: ["navigate"] });
@@ -157,13 +156,11 @@ it("maintains exclude, only and approve, one whole save per change", async () =>
   expect(saved.at(-1)!.server.tools).not.toHaveProperty("exclude");
   await click("All off");
   expect(saved.at(-1)!.server.tools).toMatchObject({ exclude: ["click", "navigate", "screenshot"] });
-  await click("All direct");
-  expect(saved.at(-1)!.server.tools).not.toHaveProperty("only");
+  expect(saved.at(-1)!.server.tools?.alwaysLoad).not.toBe(true);
 });
 
 it.each([
   ["On", "false", "true", { visibility: "excluded" }, "Switched off", "exclude"],
-  ["Direct", "false", "true", { visibility: "on-demand" }, "Reached on demand", "only"],
   ["Ask first", "true", "false", { approval: true }, undefined, "approve"],
 ] as const)("updates %s from the saved inspection and reverses on the second click", async (label, first, second, changed, note, key) => {
   await open();
@@ -224,36 +221,42 @@ it("rolls a failed change back and says what went wrong", async () => {
   expect(toolSwitch("On", "click").getAttribute("aria-checked")).toBe("true");
 });
 
-it("cannot make a tool direct while the server answers on demand, and says why", async () => {
-  servers = servers.map((entry) => ({ ...entry, config: { ...entry.config, tools: { exposure: "on-demand" as const } } }));
-  // The worker's effective answer for every tool, which is what the switches read.
-  inspectResult = inspection({ name: "playwright", tools: TOOLS.map((entry) => ({ ...entry, visibility: "on-demand" as const })) });
-  await open();
-  await click("Tools");
-  expect((toolSwitch("Direct", "navigate") as HTMLButtonElement).disabled).toBe(true);
-  expect(toolSwitch("Direct", "navigate").getAttribute("aria-checked")).toBe("false");
-  expect(toolRow("navigate").textContent).toContain("Reached on demand");
+it("shows only the explicitly selected conversation's actual tools and discoveries", async () => {
+  const context = { contextWindow: 200000, budget: 4000, share: 0.02, measurement: "utf8-upper-bound" as const, preloaded: ["playwright_navigate"], preloadedTokens: 4500, lastDiscoveryTokens: 222, discoveries: [{ server: "playwright", name: "playwright_click", detail: "full" as const, revision: "one" }] };
+  conversations = [{ sessionPath: "/sessions/one", context: { ...context, title: "Browser work" } }, { sessionPath: "/sessions/two", context: { ...context, title: "Other work", contextWindow: null, budget: null, preloaded: [], discoveries: [], preloadedTokens: 300 } }, { sessionPath: "/sessions/three", context: { ...context, title: "Discovery only", preloaded: [] } }];
+  await open(); await click("Tools");
+  expect(text()).toContain("Choose a conversation to see its tools");
+  const select = document.querySelector<HTMLSelectElement>('select[aria-label="Conversation"]')!;
+  await act(async () => { select.value = "/sessions/one"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+  const section = document.querySelector('[aria-label="Conversation tools"]')!;
+  expect(section.textContent).toContain("4,000 tokens");
+  expect(section.textContent).toContain("playwright_click · Details opened");
+  expect(section.textContent).toContain("do not reduce the lookup allowance");
+  await act(async () => { select.value = "/sessions/two"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(section.textContent).toContain("No tools discovered");
+  expect(section.textContent).toContain("share unavailable");
+  expect(section.textContent).toContain("bounded names and summaries");
+  expect(section.textContent).not.toContain("playwright_click");
+  await act(async () => { select.value = "/sessions/three"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(section.textContent).toContain("4,500 tokens");
+  expect(section.textContent).not.toContain("Turn off");
+  expect(saved).toHaveLength(0);
 });
 
-it("switching the last direct tool off moves the server to on demand, and says so", async () => {
-  servers = servers.map((entry) => ({ ...entry, config: { ...entry.config, tools: { exposure: "direct" as const, only: ["navigate"] } } }));
-  inspectResult = inspection({
-    name: "playwright",
-    tools: TOOLS.map((entry) => ({ ...entry, visibility: entry.originalName === "navigate" ? ("direct" as const) : ("on-demand" as const) })),
-  });
-  await open();
-  await click("Tools");
-  await clickElement(toolSwitch("Direct", "navigate"));
-  // Never `{ exposure: "direct" }` with no `only`, which would have made every
-  // tool direct — the opposite of what the switch says.
-  expect(saved.at(-1)!.server.tools).toEqual({ exposure: "on-demand" });
-  expect(mocks.toast).toHaveBeenCalledWith("info", expect.stringContaining("answers on demand"));
+it("preloads only through the Advanced override while preserving exclusions and approvals", async () => {
+  servers[0]!.config.tools = { alwaysLoad: false, exclude: ["screenshot"], approve: ["click"] };
+  await open(); await click("Edit"); await click("Advanced");
+  const toggle = document.querySelector<HTMLElement>('[aria-label="Put every tool in the conversation"]')!;
+  expect(toggle.getAttribute("aria-checked")).toBe("false");
+  await clickElement(toggle);
+  await click("Save changes");
+  expect(saved.at(-1)!.server.tools).toMatchObject({ alwaysLoad: true, exclude: ["screenshot"], approve: ["click"] });
 });
 
 it("does not rewrite a tool list written with patterns", async () => {
   servers = servers.map((entry) => ({
     ...entry,
-    config: { ...entry.config, tools: { exposure: "direct" as const, exclude: ["browser_*"] } },
+    config: { ...entry.config, tools: { alwaysLoad: false, exclude: ["browser_*"] } },
   }));
   inspectResult = inspection({
     name: "playwright",
@@ -271,7 +274,7 @@ it("does not rewrite a tool list written with patterns", async () => {
 it("an include list is the server's own tool list, and is not edited one tool at a time", async () => {
   servers = servers.map((entry) => ({
     ...entry,
-    config: { ...entry.config, tools: { exposure: "direct" as const, include: ["navigate"] } },
+    config: { ...entry.config, tools: { alwaysLoad: false, include: ["navigate"] } },
   }));
   inspectResult = inspection({ name: "playwright", tools: [TOOLS[0]!] });
   await open();
@@ -282,7 +285,7 @@ it("an include list is the server's own tool list, and is not edited one tool at
 
 it("says what a ping answered, and a failed one changes the status line", async () => {
   mocks.request.mockImplementation(async (method: string) => {
-    if (method === "mcp/list") return { servers };
+    if (method === "mcp/list") return { servers, conversations };
     if (method === "mcp/import/detect") return { sources: [] };
     if (method === "mcp/inspect") return inspectResult;
     if (method === "mcp/ping") return { status: "failed", detail: "The browser could not start." };
@@ -360,7 +363,7 @@ it("keeps a stored secret untouched when an edit saves without retyping it", asy
         name: "docs",
         transport: { kind: "http", url: "https://example.com/mcp", headers: { "X-Key": { secret: true, present: true } } },
         auth: { kind: "bearer", token: { secret: true, present: true } },
-        tools: { exposure: "direct" },
+        tools: { alwaysLoad: false },
       },
     }),
   ];
@@ -399,7 +402,7 @@ it("reads an entry that only switches an every-project server off, and turns it 
       scope: "global",
       status: "connected",
       shadowed: true,
-      config: { name: "playwright", label: "Playwright", transport: { kind: "stdio", command: "npx" }, tools: { exposure: "direct" } },
+      config: { name: "playwright", label: "Playwright", transport: { kind: "stdio", command: "npx" }, tools: { alwaysLoad: false } },
     }),
     serverState({
       scope: "project",

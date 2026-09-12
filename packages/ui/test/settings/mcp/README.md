@@ -37,7 +37,7 @@ connected (`Not seen yet`). Check:
 - **Gallery**: click *Add Playwright*. The two options are switches with their
   descriptions (fresh browser on, hidden window off). *Test* connects — watch the
   "Connecting to the server" loader — then shows the server name, version,
-  latency, the tool list with descriptions and shapes, and the exposure choice
+  latency, the tool list with descriptions and shapes, and the progressive default
   with the sentence that says why it was chosen. *Add* saves.
 - **Custom**: *Add a server* → the transport picker. Check each transport shows
   only its own fields (Command / URL / Socket), that pasting

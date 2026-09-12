@@ -93,7 +93,7 @@ export async function checkPackagedSession(fixture: string): Promise<PackagedSes
     mkdirSync(join(root, "agent", DATA_DIR_NAME), { recursive: true });
     writeFileSync(join(root, "agent", DATA_DIR_NAME, "mcp.json"), JSON.stringify({ version: 1, servers: [{
       name: "packaged", transport: { kind: "stdio", command: "node", args: [fixture] },
-      tools: { exposure: "direct" }, startup: "at-start",
+      tools: { alwaysLoad: true }, startup: "at-start",
     }] }));
     probe = await startProbeServer();
     const { baseUrl } = probe;

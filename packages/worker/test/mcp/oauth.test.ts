@@ -52,7 +52,7 @@ function config(): McpServerConfig & { transport: { kind: "http"; url: string } 
     name: "gated",
     transport: { kind: "http", url: server.url },
     auth: { kind: "oauth" },
-    tools: { exposure: "direct" },
+    tools: { alwaysLoad: false },
   };
 }
 

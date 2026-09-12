@@ -24,10 +24,19 @@ index 0000000000000000000000000000000000000000..57005cea6b80f6153c994bafd0c21d0a
 +  };
 +}
 diff --git a/dist/types.d.ts b/dist/types.d.ts
-index f957e9320a0569c0c0050c08c9a5e5d9215993ce..0bc1d18295866329b5ec8cf25744c628825c8999 100644
+index f957e9320a0569c0c0050c08c9a5e5d9215993ce..79eea6017dab0313305b3751506aed4e3c848e70 100644
 --- a/dist/types.d.ts
 +++ b/dist/types.d.ts
-@@ -456,7 +456,17 @@ export interface McpConfig {
+@@ -408,6 +408,8 @@ export interface McpSettings {
+      * and explicit reconnects won't rebuild the system prompt, preserving the
+      * prompt-cache prefix. Proxy/search/cache metadata still refreshes. Default: false. */
+     freezeDirectTools?: boolean;
++  /** Disable per-server gateway registration for hosts with one stable gateway. */
++  namespaceTools?: boolean;
+     autoAuth?: boolean;
+     sampling?: boolean;
+     samplingAutoApprove?: boolean;
+@@ -456,7 +458,23 @@ export interface McpConfig {
      settings?: McpSettings;
      claudePlugins?: ClaudePluginConfig[];
  }
@@ -40,15 +49,30 @@ index f957e9320a0569c0c0050c08c9a5e5d9215993ce..0bc1d18295866329b5ec8cf25744c628
 +  oauthClientUri?: string;
 +}
 +
++export interface McpDiscoveryPolicy {
++    rank?: (catalog: Array<{ server: string; tool: ToolMetadata }>, query: string) => Array<{ server: string; name: string; score: number }>;
++    search(matches: Array<{ server: string; tool: ToolMetadata; score: number }>, input: { query: string; server?: string; guidance?: string[]; detail?: string; limit?: number; offset?: number }): Record<string, unknown>;
++    describe(server: string, tool: ToolMetadata): Record<string, unknown>;
++}
  export interface McpAdapterOptions {
++  discovery?: McpDiscoveryPolicy;
 +  clientIdentity?: McpClientIdentity;
      config?: McpConfig;
      configPath?: string;
  }
 diff --git a/index.ts b/index.ts
-index f655b4fe49bb747741dd4dda7759ad37a17eb992..927a6469aa083b38c0822d320d389f86533e7d53 100644
+index f655b4fe49bb747741dd4dda7759ad37a17eb992..12dd6264806f1188f0e1229b19d93776592966af 100644
 --- a/index.ts
 +++ b/index.ts
+@@ -21,7 +21,7 @@ import { toolErrorOverride } from "./error-signal.ts";
+ import { createMcpRuntimeOwner, createOwnedUi, isAbortError, type McpRuntimeOwner } from "./runtime-owner.ts";
+ import { publishMcpStatusShutdown } from "./mcp-status.ts";
+ import { runMcpScript } from "./mcp-code.ts";
+-import { cleanupMaterializedBinaryResources } from "./tool-registrar.ts";
++import { cleanupMaterializedBinaryResources, deactivateDirectTools } from "./tool-registrar.ts";
+ import { syncNamespaceProxyTools } from "./namespace-tools.ts";
+ import { restoreSessionApprovalState } from "./session-approvals.ts";
+ import { canonicalMcpServerUrl, normalizeMcpInstallRequest } from "./mcp-install.ts";
 @@ -188,7 +188,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
    function startGatewayRetryInitialization(ctx: ExtensionContext): void {
      const generation = ++lifecycleGeneration;
@@ -58,7 +82,43 @@ index f655b4fe49bb747741dd4dda7759ad37a17eb992..927a6469aa083b38c0822d320d389f86
      currentOwner = owner;
      currentOAuthRuntime = oauthRuntime;
      state = null;
-@@ -675,6 +675,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+@@ -401,22 +401,11 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+   }
+ 
+   function deactivateTools(toolNames: string[]): string[] {
+-    if (toolNames.length === 0) return [];
+-    const unregisterTool = (pi as ExtensionAPI & { unregisterTool?: (name: string) => boolean }).unregisterTool;
+-    const unregistered = toolNames.filter((toolName) => unregisterTool?.(toolName) === true);
+-    const fallbackNames = toolNames.filter((toolName) => !unregistered.includes(toolName));
+-    const remove = new Set(toolNames);
+-    const activeTools = getActiveToolsIfReady();
+-    if (!activeTools || activeTools.length === 0) {
+-      for (const toolName of fallbackNames) fallbackDeactivatedTools.add(toolName);
+-      return unregistered;
+-    }
+-    const nextActiveTools = activeTools.filter((name) => !remove.has(name));
+-    if (nextActiveTools.length !== activeTools.length) {
+-      for (const toolName of fallbackNames) fallbackDeactivatedTools.add(toolName);
+-      pi.setActiveTools(nextActiveTools);
+-    }
+-    return unregistered;
++    return deactivateDirectTools(toolNames, {
++      unregisterTool: (pi as ExtensionAPI & { unregisterTool?: (name: string) => boolean }).unregisterTool?.bind(pi),
++      getActiveTools: getActiveToolsIfReady,
++      setActiveTools: names => pi.setActiveTools(names),
++    }, fallbackDeactivatedTools);
+   }
+ 
+   function syncDirectTools(config: McpConfig, cache: MetadataCache | null): {
+@@ -521,6 +510,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+     reservedDirectNames: Set<string> = new Set(registeredDirectTools.keys()),
+     activeDirectNames: Set<string> = new Set(registeredDirectTools.keys()),
+   ): void {
++    if (config.settings?.namespaceTools === false) return;
+     const result = syncNamespaceProxyTools({
+       config,
+       cache,
+@@ -675,6 +665,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
            }
          : {}),
        oauthRuntime,
@@ -66,7 +126,15 @@ index f655b4fe49bb747741dd4dda7759ad37a17eb992..927a6469aa083b38c0822d320d389f86
      });
      initPromise = promise;
  
-@@ -754,7 +755,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+@@ -688,6 +679,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+         return;
+       }
+ 
++      nextState.discovery = options.discovery;
+       state = nextState;
+       // Re-read after asynchronous startup so navigation during initialization
+       // cannot restore a stale branch.
+@@ -754,7 +746,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
        if (lifecycleGeneration !== 0 || state || initPromise) return;
        const generation = ++lifecycleGeneration;
        const owner = createMcpRuntimeOwner();
@@ -75,7 +143,7 @@ index f655b4fe49bb747741dd4dda7759ad37a17eb992..927a6469aa083b38c0822d320d389f86
        currentOwner = owner;
        currentOAuthRuntime = oauthRuntime;
        startInitialization({
-@@ -782,7 +783,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+@@ -782,7 +774,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
      const previousOwner = currentOwner;
      const previousOAuthRuntime = currentOAuthRuntime;
      const owner = createMcpRuntimeOwner();
@@ -84,10 +152,38 @@ index f655b4fe49bb747741dd4dda7759ad37a17eb992..927a6469aa083b38c0822d320d389f86
      currentOwner = owner;
      currentOAuthRuntime = oauthRuntime;
      state = null;
-@@ -1623,6 +1624,7 @@ export function createMcpAdapter(options: McpAdapterOptions = {}) {
+@@ -1397,7 +1389,8 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+         instructions: Type.Optional(Type.String({ description: "Server name to show that server's usage instructions" })),
+         search: Type.Optional(Type.String({ description: "Search tools by name/description" })),
+         regex: Type.Optional(Type.Boolean({ description: "Treat search as regex (default: substring match)" })),
+-        includeSchemas: Type.Optional(Type.Boolean({ description: "Include parameter schemas in search results (default: true)" })),
++        includeSchemas: Type.Optional(Type.Boolean({ description: "Include parameter schemas in search results" })),
++        ...(options.discovery ? { detail: Type.Optional(Type.Union([Type.Literal("names"), Type.Literal("summary"), Type.Literal("full")], { description: "Search detail level (default: summary)" })) } : {}),
+         limit: optionalNumber({ minimum: 1, description: "Maximum search results to return (default: 12)" }),
+         offset: optionalNumber({ minimum: 0, description: "Search result offset (default: 0)" }),
+         server: Type.Optional(Type.String({ description: "Server name (filters/disambiguates calls and optionally names an install)" })),
+@@ -1413,6 +1406,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+         describe?: string;
+         instructions?: string;
+         search?: string;
++        detail?: "names" | "summary" | "full";
+         regex?: boolean;
+         includeSchemas?: boolean;
+         limit?: number;
+@@ -1543,7 +1537,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+           return executeInstructions(state, params.instructions);
+         }
+         if (params.search !== undefined) {
+-          const result = executeSearch(state, params.search, params.regex, params.server, params.includeSchemas, params.limit, params.offset);
++          const result = executeSearch(state, params.search, params.regex, params.server, params.includeSchemas, params.limit, params.offset, params.detail);
+           if (lazyDirectTools.size === 0) return result;
+           holdLazyToolsInactive();
+           const matches = (result.details as { matches?: Array<{ server: string; tool: string }> } | undefined)?.matches ?? [];
+@@ -1623,6 +1617,8 @@ export function createMcpAdapter(options: McpAdapterOptions = {}) {
      : undefined;
    return function mcpAdapter(pi: ExtensionAPI) {
      installMcpAdapter(pi, {
++      ...(options.discovery !== undefined ? { discovery: options.discovery } : {}),
 +      ...(options.clientIdentity !== undefined ? { clientIdentity: { ...options.clientIdentity } } : {}),
        ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
        ...(factoryConfig !== undefined ? { config: cloneMcpConfig(factoryConfig) } : {}),
@@ -209,6 +305,47 @@ index 1f1e1bedf9d0232ec3fffaa7cae4adf2bc826b1c..d071d5484c1785618c2286fa71d5a11b
          throwIfAborted(signal)
          const result = await abortable(runSdkAuth(authProvider, {
            serverUrl,
+diff --git a/mcp-code.ts b/mcp-code.ts
+index b337813c119c61a3b216fc4b18609ab66035fa59..569b157238777f38b83b94429b92e9e65013c60c 100644
+--- a/mcp-code.ts
++++ b/mcp-code.ts
+@@ -3,7 +3,7 @@ import { formatWithOptions } from "node:util";
+ import { Worker } from "node:worker_threads";
+ import { throwIfAborted } from "./abort.ts";
+ import { guardMcpOutput, guardedMcpDetails, resolveMcpOutputGuardOptions } from "./mcp-output-guard.ts";
+-import { executeCall } from "./proxy-modes.ts";
++import { discoveryGuidance, executeCall } from "./proxy-modes.ts";
+ import { combineAbortSignals } from "./runtime-owner.ts";
+ import { paginate, rankSuggestions, rankToolMatches } from "./search-ranking.ts";
+ import { isServerInActiveFailureBackoff } from "./failure-backoff.ts";
+@@ -22,7 +22,7 @@ class McpScriptTimeoutError extends Error {
+   }
+ }
+ 
+-type SearchInput = { query?: unknown; server?: unknown; limit?: unknown; offset?: unknown };
++type SearchInput = { query?: unknown; server?: unknown; limit?: unknown; offset?: unknown; detail?: unknown };
+ type DescribeInput = { path?: unknown };
+ type WorkerMessage =
+   | { type: "emit"; block: unknown }
+@@ -197,7 +197,9 @@ export async function runMcpScript(
+       const server = typeof input?.server === "string" ? input.server : undefined;
+       const limit = typeof input?.limit === "number" ? input.limit : 12;
+       const offset = typeof input?.offset === "number" ? input.offset : 0;
+-      const page = paginate(rankToolMatches(state, query, server), offset, limit);
++      const matches = rankToolMatches(state, query, server);
++      if (state.discovery) return state.discovery.search(matches, { query, guidance: discoveryGuidance(state, server, matches), limit, offset, ...(server ? { server } : {}), ...(typeof input?.detail === "string" ? { detail: input.detail } : {}) });
++      const page = paginate(matches, offset, limit);
+       return {
+         ...page,
+         items: page.items.map(({ server: matchServer, tool, score }) => ({
+@@ -227,6 +229,7 @@ export async function runMcpScript(
+         if (isServerInActiveFailureBackoff(state, server)) continue;
+         const tool = findToolByName(metadata, path);
+         if (!tool) continue;
++        if (state.discovery) return state.discovery.describe(server, tool);
+         const inputShape = tool.inputSchema ? renderTsShape(tool.inputSchema) : null;
+         const inputTypeScript = inputShape ?? (tool.inputSchema ? formatSchema(tool.inputSchema) : null);
+         return {
 diff --git a/mcp-oauth-provider.ts b/mcp-oauth-provider.ts
 index 0d34d2dad2b1ce6e796076f59c0a12583bc2af9a..89e5ab2515fa55381389ef2976b65682e1fa9b76 100644
 --- a/mcp-oauth-provider.ts
@@ -339,6 +476,112 @@ index 644f032f3aa78b5b182d263314723004d95eb560..1a2414c46c5206cc107b7138b9b69aca
      "index.ts",
      "error-signal.ts",
      "state.ts",
+diff --git a/proxy-modes.ts b/proxy-modes.ts
+index 49f1b4eccfbee9a14ef6e71db8d8392dcba6ed23..aebfaad04f7e6140daed1a408ec8aaaec824a26e 100644
+--- a/proxy-modes.ts
++++ b/proxy-modes.ts
+@@ -648,6 +648,11 @@ export function executeDescribe(state: McpExtensionState, toolName: string): Pro
+     };
+   }
+ 
++  if (state.discovery) {
++    const descriptor = state.discovery.describe(serverName, toolMeta);
++    return { content: [{ type: "text", text: JSON.stringify(descriptor) }], details: { mode: "describe", tool: toolMeta, server: serverName, ...(descriptor.error ? { error: "description_unavailable", message: JSON.stringify(descriptor.error) } : {}) } };
++  }
++
+   const approvalMarker = isToolCallApprovalRequired(state.config, serverName, toolMeta, state.toolMetadata)
+     ? " (requires approval)"
+     : "";
+@@ -673,6 +678,31 @@ export function executeDescribe(state: McpExtensionState, toolName: string): Pro
+   };
+ }
+ 
++/** Status/instructions remain available even when discovery has no matches. */
++export function discoveryGuidance(state: McpExtensionState, server?: string, matches: readonly { server: string }[] = []): string[] {
++  const noMatches = matches.length === 0;
++  const addressed = new Set(matches.map(match => match.server));
++  const names = server ? [server] : Object.keys(state.config.mcpServers)
++    .filter(name => !isServerDisabled(state.config.mcpServers[name]))
++    .filter(name => noMatches || addressed.has(name)).sort().slice(0, 12);
++  return names.flatMap(name => {
++    if (!state.config.mcpServers[name]) return [`Server "${name}" not found. Use mcp({}) to see available servers.`];
++    const connection = state.manager.getConnection(name);
++    const messages: string[] = [];
++    if (state.manager.isConnecting(name)) messages.push(`Server "${name}" is still connecting; retry in a moment.`);
++    else if (connection?.status === "needs-auth") messages.push(`Server "${name}" needs auth. Use mcp({ action: "auth-start", server: "${name}" }).`);
++    else if (connection?.status !== "connected") {
++      const cached = state.toolMetadata.get(name);
++      const stateText = cached === undefined ? "is configured but not connected"
++        : cached.length ? "has cached tools, not connected" : "has no cached tools (not connected)";
++      messages.push(`Server "${name}" ${stateText}. Use mcp({ connect: "${name}" }) to connect.`);
++    }
++    const instructions = state.serverInstructions.get(name);
++    if (instructions && noMatches) messages.push(`Server "${name}" instructions: ${truncateAtWord(instructions, INSTRUCTIONS_PREVIEW_LENGTH)}\nUse mcp({ instructions: "${name}" }) for full instructions.`);
++    return messages;
++  });
++}
++
+ export function executeSearch(
+   state: McpExtensionState,
+   query: string,
+@@ -681,6 +711,7 @@ export function executeSearch(
+   includeSchemas?: boolean,
+   limit = 12,
+   offset = 0,
++  detail?: string,
+ ): ProxyToolResult {
+   const showSchemas = includeSchemas !== false;
+   if (server && isServerDisabled(state.config.mcpServers[server])) return disabledResult("search", server);
+@@ -748,6 +779,12 @@ export function executeSearch(
+     matches = rankToolMatches(state, query, server);
+   }
+ 
++  if (state.discovery) {
++    const guidance = discoveryGuidance(state, server, matches);
++    if (matches.length === 0) guidance.unshift(`No tools matching "${query}"${server ? ` in "${server}"` : ""}.`);
++    const page = state.discovery.search(matches, { query, guidance, ...(server ? { server } : {}), detail: detail ?? (includeSchemas === true ? "full" : includeSchemas === false ? "summary" : undefined), limit, offset });
++    return { content: [{ type: "text", text: JSON.stringify(page) }], details: { mode: "search", ...page } };
++  }
+   const page = paginate(matches, offset, limit);
+   if (page.total === 0) {
+     const connectingServers = server
+@@ -814,6 +851,10 @@ export function executeSearch(
+ }
+ 
+ export function executeList(state: McpExtensionState, server: string): ProxyToolResult {
++  if (state.discovery) {
++    const result = executeSearch(state, "", false, server);
++    return { ...result, details: { ...result.details, mode: "list", server } };
++  }
+   const definition = state.config.mcpServers[server];
+   if (!definition) {
+     return {
+diff --git a/search-ranking.ts b/search-ranking.ts
+index beb2a048db1fc2b66786d2031dcba0a452b26aac..916b0f2b1f01d82348a5046d24da80e6b95b0b29 100644
+--- a/search-ranking.ts
++++ b/search-ranking.ts
+@@ -235,6 +235,21 @@ export function rankToolMatches(
+   includeKeywords = true,
+ ): RankedToolMatch[] {
+   const matches: RankedToolMatch[] = [];
++  if (state.discovery?.rank) {
++    const catalog = [...state.toolMetadata].flatMap(([name, tools]) =>
++      (server && server !== name) || isServerDisabled(state.config.mcpServers[name]) || isServerInActiveFailureBackoff(state, name)
++        ? [] : tools.map(tool => ({ server: name, tool })));
++    const allowed = new Map(catalog.map(item => [JSON.stringify([item.server, item.tool.name]), item]));
++    const seen = new Set<string>();
++    for (const hit of state.discovery.rank(catalog, query)) {
++      const key = JSON.stringify([hit.server, hit.name]);
++      const item = allowed.get(key);
++      if (!item || seen.has(key) || !Number.isFinite(hit.score)) continue;
++      seen.add(key);
++      matches.push({ ...item, score: hit.score });
++    }
++    return matches.sort((a, b) => b.score - a.score || a.tool.name.localeCompare(b.tool.name));
++  }
+   const normalizedQuery = normalizeSearchText(query).trim();
+   const queryTokens = tokenize(query);
+   if (queryTokens.length === 0) return matches;
 diff --git a/server-manager.ts b/server-manager.ts
 index 94154fde19245139887270efd4d500b5d1a96653..708e90e1b8767dbdd1406a88ac30a943b8883df0 100644
 --- a/server-manager.ts
@@ -388,11 +631,71 @@ index 94154fde19245139887270efd4d500b5d1a96653..708e90e1b8767dbdd1406a88ac30a943
        );
        provider.setAuthFetch(createOAuthFetch(serverUrl, () => serviceHeaders,
          combineAbortSignals(this.oauthRuntime?.signal, signal), {
+diff --git a/state.ts b/state.ts
+index e2d825c62fb0600efe3fed042d4292c5dd10e82f..59f762a112eb005db9a2a302a3a91986d3a08e97 100644
+--- a/state.ts
++++ b/state.ts
+@@ -29,6 +29,7 @@ export type SendMessageFn = (
+ ) => void;
+ 
+ export interface McpExtensionState {
++  discovery?: import("./types.ts").McpDiscoveryPolicy;
+   owner: McpRuntimeOwner;
+   manager: McpServerManager;
+   lifecycle: McpLifecycleManager;
+diff --git a/tool-registrar.ts b/tool-registrar.ts
+index 217e52c1cd4cc99cbd9117219c4546fb146c2d01..49b0358eceae74b37058be80f48be76cb0c405a0 100644
+--- a/tool-registrar.ts
++++ b/tool-registrar.ts
+@@ -251,3 +251,34 @@ function stringifyStructuredContent(value: unknown): string {
+     return String(value);
+   }
+ }
++
++/** Keep the adapter's fallback ledger, not an assertion of engine state.
++ * An embedding host may fence these mutations during a conversation. In that
++ * case names enter the fallback ledger while remaining registered and active;
++ * a later registration consumes the ledger entry and reconciles activation.
++ */
++export function deactivateDirectTools(
++  toolNames: string[],
++  api: {
++    unregisterTool?: ((name: string) => boolean | void) | undefined;
++    getActiveTools(): string[] | undefined;
++    setActiveTools(names: string[]): void;
++  },
++  fallbackDeactivatedTools: Set<string>,
++): string[] {
++  if (toolNames.length === 0) return [];
++  const unregistered = toolNames.filter(name => api.unregisterTool?.(name) === true);
++  const fallbackNames = toolNames.filter(name => !unregistered.includes(name));
++  const remove = new Set(toolNames);
++  const activeTools = api.getActiveTools();
++  if (!activeTools || activeTools.length === 0) {
++    for (const name of fallbackNames) fallbackDeactivatedTools.add(name);
++    return unregistered;
++  }
++  const nextActiveTools = activeTools.filter(name => !remove.has(name));
++  if (nextActiveTools.length !== activeTools.length) {
++    for (const name of fallbackNames) fallbackDeactivatedTools.add(name);
++    api.setActiveTools(nextActiveTools);
++  }
++  return unregistered;
++}
 diff --git a/types.ts b/types.ts
-index 023ee643494b8c669b7b479d590181a9c1b016f8..0d18bd23ef9b7d37e23f7a2918a9c5978fede5d6 100644
+index 023ee643494b8c669b7b479d590181a9c1b016f8..fba2e63d4778ff981a2a6f87e639eff938d0ad55 100644
 --- a/types.ts
 +++ b/types.ts
-@@ -666,7 +666,17 @@ export interface McpConfig {
+@@ -614,6 +614,8 @@ export interface McpSettings {
+    * and explicit reconnects won't rebuild the system prompt, preserving the
+    * prompt-cache prefix. Proxy/search/cache metadata still refreshes. Default: false. */
+   freezeDirectTools?: boolean;
++  /** Disable per-server gateway registration for hosts with one stable gateway. */
++  namespaceTools?: boolean;
+   autoAuth?: boolean;
+   sampling?: boolean;
+   samplingAutoApprove?: boolean;
+@@ -666,7 +668,25 @@ export interface McpConfig {
    claudePlugins?: ClaudePluginConfig[];
  }
  
@@ -405,7 +708,15 @@ index 023ee643494b8c669b7b479d590181a9c1b016f8..0d18bd23ef9b7d37e23f7a2918a9c597
 +  oauthClientUri?: string;
 +}
 +
++export interface McpDiscoveryPolicy {
++  /** Optional ranking over the authorized catalog; omitted uses built-in keyword retrieval. */
++  rank?: (catalog: Array<{ server: string; tool: ToolMetadata }>, query: string) => Array<{ server: string; name: string; score: number }>;
++  search(matches: Array<{ server: string; tool: ToolMetadata; score: number }>, input: { query: string; server?: string; guidance?: string[]; detail?: string; limit?: number; offset?: number }): Record<string, unknown>;
++  describe(server: string, tool: ToolMetadata): Record<string, unknown>;
++}
++
  export interface McpAdapterOptions {
++  discovery?: McpDiscoveryPolicy;
 +  clientIdentity?: McpClientIdentity;
    config?: McpConfig;
    configPath?: string;

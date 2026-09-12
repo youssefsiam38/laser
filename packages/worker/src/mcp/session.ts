@@ -18,6 +18,7 @@
 import type { ExtensionAPI, InlineExtension } from "@earendil-works/pi-coding-agent";
 import { getServerPrefix } from "pi-mcp-adapter/types";
 import { toAdapterConfig, type ProjectEnvDecorator } from "./adapter-config.js";
+import { McpPromptFreeze } from "./prompt-freeze.js";
 import { loadMcpEngine, type McpConfig } from "./engine.js";
 import { McpStore } from "./store.js";
 import { mcpClientIdentity } from "./identity.js";
@@ -71,9 +72,10 @@ export async function mcpSessionSetup(options: McpSessionOptions): Promise<McpSe
   // even if the person saves a changed server while secrets are resolving.
   const config = await resolveConfig(store, servers, options.cwd, options.projectEnv);
   const engine = await loadMcpEngine();
-  const factory = engine.createMcpAdapter({ config, clientIdentity: mcpClientIdentity() }) as unknown as (pi: ExtensionAPI) => void | Promise<void>;
+  const discovery = new McpPromptFreeze(engine.renderSchema);
+  const factory = engine.createMcpAdapter({ config, clientIdentity: mcpClientIdentity(), discovery }) as unknown as (pi: ExtensionAPI) => void | Promise<void>;
   return {
-    extension: { name: "mcp", factory: (pi: ExtensionAPI) => factory(quietEngineUi(pi)) },
+    extension: { name: "mcp", factory: (pi: ExtensionAPI) => factory(quietEngineUi(discovery.wrap(pi, engine.statusEvent))) },
     statusEvent: engine.statusEvent,
     servers: servers.map(({ config: server }) => ({ name: server.name, ...(server.label ? { label: server.label } : {}) })),
   };

@@ -16,7 +16,7 @@ describe("translate", () => {
       env: { API_TOKEN: { secret: true }, LOG: "debug" },
     });
     expect(server?.inlineSecrets).toEqual(["transport.env.API_TOKEN"]);
-    expect(server?.config.tools).toEqual({ exposure: "direct" });
+    expect(server?.config.tools).toEqual({ alwaysLoad: false });
     expect(inlineSecretValues({ command: "npx", env: { API_TOKEN: "abc" } }, "claude-code").get("transport.env.API_TOKEN")).toBe("abc");
   });
 

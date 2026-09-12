@@ -60,7 +60,7 @@ async function mount() {
   ));
 }
 
-it("tests the gallery definition it composed, then saves it direct for 24 tools", async () => {
+it("tests the gallery definition it composed, then saves progressive discovery for 24 tools", async () => {
   await mount();
   await click("Add Playwright");
   expect(text()).toContain("Where the browser runs");
@@ -79,21 +79,21 @@ it("tests the gallery definition it composed, then saves it direct for 24 tools"
         catalogId: "playwright",
         startup: "on-demand",
         transport: { kind: "stdio", command: "npx", args: ["-y", "@playwright/mcp@latest", "--isolated"] },
-        tools: { exposure: "direct" },
+        tools: { alwaysLoad: false },
       },
     },
   ]);
   expect(text()).toContain("Playwright");
   expect(text()).toContain("24 tools");
   expect(text()).toContain("navigate something");
-  expect(text()).toContain("in the model’s list from the start");
+  expect(text()).toContain("Tools are found when needed");
   const viewport = document.querySelector<HTMLElement>('[data-slot="mcp-add-dialog"] [data-slot="scroll-area-viewport"]')!;
   expect(getComputedStyle(viewport).overflowY).toBe("auto");
   expect(getComputedStyle(viewport).height).not.toContain("%");
 
   await click("Add");
   expect(saved).toHaveLength(1);
-  expect(saved[0]!.server.tools).toEqual({ exposure: "direct" });
+  expect(saved[0]!.server.tools).toEqual({ alwaysLoad: false });
   expect(mocks.toast).toHaveBeenCalledWith("info", expect.stringContaining("playwright is saved"));
 });
 
@@ -127,14 +127,14 @@ it("shows a distinct failed browser test without offering a successful tool expo
   expect(document.querySelector('[data-slot="mcp-exposure"]')).toBeNull();
 });
 
-it("chooses on demand above the threshold and says why", async () => {
+it("keeps progressive discovery for large servers too", async () => {
   inspectResult = inspection({ name: "big", tools: manyTools(60) });
   await mount();
   await click("Add Playwright");
   await click("Test");
-  expect(text()).toContain("60 tools would be a long list");
+  expect(text()).toContain("Tools are found when needed");
   await click("Add");
-  expect(saved[0]!.server.tools).toEqual({ exposure: "on-demand" });
+  expect(saved[0]!.server.tools).toEqual({ alwaysLoad: false });
 });
 
 it("keeps a rejected name out of the host and only offers sign-in for a URL", async () => {

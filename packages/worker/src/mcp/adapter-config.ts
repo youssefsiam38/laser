@@ -7,7 +7,7 @@
  * otherwise discover — host configs, imports, its own terminal affordances —
  * is fixed off here, and the fixed settings are the ones docs/mcp.md names.
  */
-import type { McpServerConfig, McpStartup, McpToolExposure, McpValue } from "@lasercode/protocol";
+import type { McpServerConfig, McpStartup, McpValue } from "@lasercode/protocol";
 // The adapter compiles its shared tool-name helpers to a public subpath, so
 // the prefix a tool is registered under is the engine's own answer, not a
 // second implementation that can drift from it.
@@ -44,12 +44,6 @@ const LIFECYCLE: Record<McpStartup, NonNullable<ServerEntry["lifecycle"]>> = {
   always: "keep-alive",
 };
 
-function directTools(exposure: McpToolExposure, only: string[] | undefined): ServerEntry["directTools"] {
-  if (exposure === "search") return "search";
-  if (exposure === "on-demand") return false;
-  return only && only.length > 0 ? only : true;
-}
-
 /**
  * One server. `secrets` maps a field path to its value; a missing one is left
  * unset. Only a configured server is mapped: the project entry that merely
@@ -72,7 +66,7 @@ export function toServerEntry(config: McpConfiguredServer, secrets: ResolvedSecr
     return Object.keys(out).length > 0 ? out : undefined;
   };
 
-  const entry: ServerEntry = {};
+  const entry: ServerEntry = { directTools: config.tools?.alwaysLoad === true };
   const transport = config.transport;
   if (transport.kind === "stdio") {
     entry.command = transport.command;
@@ -114,8 +108,6 @@ export function toServerEntry(config: McpConfiguredServer, secrets: ResolvedSecr
   if (config.startup) entry.lifecycle = LIFECYCLE[config.startup];
   const tools = config.tools;
   if (tools) {
-    const direct = directTools(tools.exposure, tools.only);
-    if (direct !== undefined) entry.directTools = direct;
     if (tools.include?.length) entry.includeTools = [...tools.include];
     if (tools.exclude?.length) entry.excludeTools = [...tools.exclude];
     if (tools.approve !== undefined && tools.approve !== false) {
@@ -181,7 +173,11 @@ export function toAdapterConfig(
 ): McpConfig {
   const mcpServers: Record<string, ServerEntry> = {};
   for (const { config, secrets } of servers) {
-    mcpServers[config.name] = withProjectEnvironment(toServerEntry(config, secrets ?? new Map()), projectEnv);
+    const entry = withProjectEnvironment(toServerEntry(config, secrets ?? new Map()), projectEnv);
+    // Conversation-owned connections close with the session, not at an idle turn.
+    if (entry.lifecycle === undefined || entry.lifecycle === "lazy") entry.lifecycle = "lazy-keep-alive";
+    if (entry.lifecycle === "eager") entry.lifecycle = "keep-alive";
+    mcpServers[config.name] = entry;
   }
   return {
     mcpServers,
@@ -195,6 +191,8 @@ export function toAdapterConfig(
       sampling: true,
       elicitation: true,
       scriptMode: true,
+      freezeDirectTools: true,
+      namespaceTools: false,
       // The engine's default tells the model and the person to run its own
       // terminal commands, which Laser does not offer (AGENTS.md §6b).
       authRequiredMessage: 'Sign in to "${server}" in Settings → MCP servers, then try again.',

@@ -18,9 +18,9 @@ import { createRequire } from "node:module";
 import { accessSync, constants, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
-import type { McpClientIdentity, McpConfig, ServerEntry } from "pi-mcp-adapter/types";
+import type { McpClientIdentity, McpConfig, McpDiscoveryPolicy, ServerEntry } from "pi-mcp-adapter/types";
 
-export type { McpConfig, ServerEntry } from "pi-mcp-adapter/types";
+export type { McpConfig, McpDiscoveryPolicy, ServerEntry } from "pi-mcp-adapter/types";
 
 /** One live connection the inspector holds, as much of it as the worker uses. */
 export interface McpConnection {
@@ -105,7 +105,8 @@ export interface McpCachedServer {
 
 export interface McpEngine {
   /** The adapter extension factory, for `extensionFactories` (never file discovery). */
-  createMcpAdapter(options: { config: McpConfig; clientIdentity: McpClientIdentity }): InlineExtension;
+  createMcpAdapter(options: { config: McpConfig; clientIdentity: McpClientIdentity; discovery?: McpDiscoveryPolicy }): InlineExtension;
+  renderSchema: (schema: unknown) => string | null;
   Manager: new (defaultCwd: string | undefined, clientIdentity: McpClientIdentity) => McpManager;
   auth: McpAuthFlow;
   /** Channel the adapter publishes its status snapshots on. */
@@ -154,8 +155,10 @@ export function loadMcpEngine(): Promise<McpEngine> {
     const manager = await load<{ McpServerManager: McpEngine["Manager"] }>("server-manager.ts");
     const auth = await load<McpAuthFlow>("mcp-auth-flow.ts");
     const cache = await import("pi-mcp-adapter/metadata-cache");
+    const shapes = await load<{ renderTsShape: McpEngine["renderSchema"] }>("ts-shape.ts");
     return {
       createMcpAdapter: index.createMcpAdapter,
+      renderSchema: shapes.renderTsShape,
       Manager: manager.McpServerManager,
       auth,
       statusEvent: index.MCP_STATUS_EVENT,

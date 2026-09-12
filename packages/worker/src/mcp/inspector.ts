@@ -423,14 +423,13 @@ function toPrompt(prompt: { name: string; title?: string; description?: string; 
 
 /** Effective visibility and approval under the server's own tool policy. */
 export function toolInfos(config: McpServerConfig, connection: Pick<McpConnection, "tools">): McpToolInfo[] {
-  const policy: McpToolPolicy = config.tools ?? { exposure: "direct" };
+  const policy: McpToolPolicy = config.tools ?? { alwaysLoad: false };
   return connection.tools.map((tool) => {
     const candidates = getToolNameCandidates(tool.name, config.name, "server", false);
     const allowed = isToolAllowed(tool.name, config.name, "server", policy.include, policy.exclude);
-    const onlyListed = policy.only && policy.only.length > 0 ? matchesToolPattern(candidates, policy.only) : true;
     const visibility: McpToolInfo["visibility"] = !allowed
       ? "excluded"
-      : policy.exposure === "direct" && onlyListed
+      : policy.alwaysLoad === true
         ? "direct"
         : "on-demand";
     const approval = policy.approve === true

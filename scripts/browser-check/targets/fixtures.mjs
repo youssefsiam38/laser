@@ -20,6 +20,19 @@ export function answer(request) {
   const prompt = textOf(user);
   const system = textOf(request.messages.find(message => message.role === 'system' || message.role === 'developer'));
   const names = (request.tools ?? []).map(tool => tool.function.name);
+  if (prompt === 'Discover fixture tools') {
+    const turn = request.messages.slice(request.messages.findLastIndex(message => message.role === 'user') + 1);
+    const step = turn.filter(message => message.role === 'tool').length;
+    const calls = [
+      { name: 'mcp', args: { connect: 'fixture' } },
+      { name: 'mcp', args: { search: 'echo', detail: 'names' } },
+      { name: 'mcp', args: { search: 'echo' } },
+      { name: 'mcp', args: { describe: 'fixture_echo' } },
+      { name: 'mcpScript', args: { code: 'emit(await tools.search({query:"echo",detail:"names"}));' } },
+      { name: 'mcp', args: { tool: 'fixture_echo', args: { text: 'discovery acceptance' } } },
+    ];
+    return calls[step] ? { toolCall: calls[step] } : { text: 'Discovery fixture complete.' };
+  }
   if (system.includes('fixture-failed')) return { status: 400, body: { error: { message: 'Deterministic fixture failure', type: 'invalid_request_error' } } };
   if (system.includes('fixture-asking') || prompt.startsWith('fixture-asking:')) {
     const echo = names.find(name => name.endsWith('_echo'));
@@ -50,7 +63,7 @@ export async function fixture(target, runtime, name) {
     await target.rpc('pi/project/add', { cwd });
     await target.rpc('pi/project/trust', { cwd, trusted: true, remember: true });
     if (name === 'mcp' || name === 'agents') {
-      await target.rpc('mcp/save', { cwd, scope: 'global', server: { name: 'fixture', transport: { kind: 'stdio', command: runtime.node, args: [fileURLToPath(new URL('../../../packages/worker/test/mcp/fixtures/stdio-server.mjs', import.meta.url))] }, tools: { exposure: 'direct', approve: name === 'agents' }, startup: 'on-demand' } });
+      await target.rpc('mcp/save', { cwd, scope: 'global', server: { name: 'fixture', transport: { kind: 'stdio', command: runtime.node, args: [fileURLToPath(new URL('../../../packages/worker/test/mcp/fixtures/stdio-server.mjs', import.meta.url))] }, tools: { alwaysLoad: name === 'agents', approve: name === 'agents' }, startup: 'on-demand' } });
       await target.rpc('mcp/inspect', { cwd, scope: 'global', name: 'fixture' });
     }
     for (const session of project.sessions) {

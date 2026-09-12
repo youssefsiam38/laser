@@ -225,15 +225,15 @@ export function mcpActiveLabel(
 export function mcpGatewaySummary(view: McpGatewayView): string {
   switch (view.mode) {
     case "search":
-      return view.query !== undefined ? `Search “${oneLine(view.query, 60)}”` : "Search";
+      return view.query !== undefined ? `Find tools · ${oneLine(view.query, 60)}` : "Find tools";
     case "call":
       return ["Call", [view.server, view.tool].filter(Boolean).join(" · ")].filter(Boolean).join(" ");
     case "connect":
-      return ["Connect", view.server].filter(Boolean).join(" ");
+      return ["Connect to", view.server].filter(Boolean).join(" ");
     case "list":
       return ["List", view.server].filter(Boolean).join(" ");
     case "describe":
-      return ["Describe", view.tool ?? view.server].filter(Boolean).join(" ");
+      return ["View tool details", view.tool ?? view.server].filter(Boolean).join(" · ");
     case "instructions":
       return ["Instructions", view.server].filter(Boolean).join(" ");
     case "auth":

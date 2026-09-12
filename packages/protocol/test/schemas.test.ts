@@ -9,6 +9,7 @@ import {
   HARNESS_TOOL_NAMES,
   ProtocolError,
   MCP_KNOWN_SERVERS,
+  mcpConversationContextSchema,
   type McpCatalogOption,
   agentMessageModeSchema,
   agentQuestionAnswerHint,
@@ -154,7 +155,7 @@ const samples: Record<ClientMethod, unknown> = {
       name: "playwright",
       transport: { kind: "stdio", command: "npx", args: ["-y", "@playwright/mcp@latest", "--isolated"], env: { TOKEN: { secret: true, value: "abc" }, MODE: "test" } },
       startup: "on-demand",
-      tools: { exposure: "direct", exclude: ["browser_install"], approve: ["browser_file_upload"] },
+      tools: { alwaysLoad: true, exclude: ["browser_install"], approve: ["browser_file_upload"] },
       catalogId: "playwright",
     },
   },
@@ -578,4 +579,20 @@ describe("run status vocabulary", () => {
     expect([...BACKGROUND_TOOL_NAMES]).not.toContain("task_list");
     expect(AGENT_FLEET_ROWS_MAX).toBe(50);
   });
+});
+
+
+it("round-trips session MCP context without guessing an unknown window", () => {
+  const context = { contextWindow: null, budget: null, share: 0.02, measurement: "utf8-upper-bound", preloaded: [], preloadedTokens: 0, lastDiscoveryTokens: 321, discoveries: [{ server: "docs", name: "docs_read", detail: "full", revision: "abc" }] };
+  const result: ClientRequests["mcp/list"]["result"] = { servers: [], conversations: [{ sessionPath: "/session/one", context: mcpConversationContextSchema.parse(context) }] };
+  expect(JSON.parse(JSON.stringify(result)).conversations[0].context).toEqual(context);
+  expect(mcpConversationContextSchema.safeParse({ ...context, contextWindow: -1 }).success).toBe(false);
+  expect(mcpConversationContextSchema.safeParse({ ...context, measurement: "exact" }).success).toBe(false);
+});
+
+// Legacy disk fields migrate in the worker store; they are not a second RPC API.
+it.each([{ exposure: "direct", alwaysLoad: false }, { only: ["echo"], alwaysLoad: true }])("rejects legacy tool-policy writes: %j", tools => {
+  expect(clientParamsSchemas["mcp/save"].safeParse({
+    cwd: "/p", scope: "project", server: { name: "fixture", transport: { kind: "stdio", command: "node" }, tools },
+  }).success).toBe(false);
 });

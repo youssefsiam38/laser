@@ -8,7 +8,7 @@
  * file, and never names the engine: the worker passes the channel in, so this
  * package takes no dependency on the adapter.
  */
-import type { McpRuntimeServer, McpRuntimeSnapshot, McpServerStatus } from "@lasercode/protocol";
+import { mcpConversationContextSchema, type McpRuntimeServer, type McpRuntimeSnapshot, type McpServerStatus } from "@lasercode/protocol";
 import type { LaserModule, ModuleContext } from "./index.js";
 
 /** What the worker hands over when the engine is loaded for this session. */
@@ -42,7 +42,7 @@ interface EngineServer {
 
 /** One engine snapshot in Laser's vocabulary, or undefined if it is not one. */
 export function toRuntimeSnapshot(raw: unknown): McpRuntimeSnapshot | undefined {
-  const snapshot = raw as { servers?: unknown; totalTools?: unknown; connectedCount?: unknown } | null;
+  const snapshot = raw as { servers?: unknown; totalTools?: unknown; connectedCount?: unknown; context?: unknown } | null;
   if (!snapshot || typeof snapshot !== "object" || !Array.isArray(snapshot.servers)) return undefined;
   const servers: McpRuntimeServer[] = [];
   for (const entry of snapshot.servers as EngineServer[]) {
@@ -58,7 +58,9 @@ export function toRuntimeSnapshot(raw: unknown): McpRuntimeSnapshot | undefined 
       ...(entry.failedAgoSeconds !== undefined ? { failedAgoSeconds: count(entry.failedAgoSeconds) } : {}),
     });
   }
+  const context = mcpConversationContextSchema.safeParse(snapshot.context);
   return {
+    ...(context.success ? { context: context.data } : {}),
     servers,
     totalTools: typeof snapshot.totalTools === "number" ? snapshot.totalTools : servers.reduce((sum, server) => sum + server.toolCount, 0),
     connectedCount: typeof snapshot.connectedCount === "number"

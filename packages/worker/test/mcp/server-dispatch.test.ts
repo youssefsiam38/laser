@@ -122,7 +122,7 @@ function changed(): number {
 const fixture = {
   name: "fixture",
   transport: { kind: "stdio" as const, command: process.execPath, args: [FIXTURE] },
-  tools: { exposure: "direct" as const },
+  tools: { alwaysLoad: false },
 };
 
 describe("WorkerServer · mcp/*", () => {
@@ -170,7 +170,7 @@ describe("WorkerServer · mcp/*", () => {
     const listedWhileInspecting = await call<{ servers: McpServerState[] }>("mcp/list", { cwd });
     // The counts come from the connection the inspector is holding, not from a
     // cache or a snapshot of some other session.
-    expect(listedWhileInspecting.result?.servers[0]).toMatchObject({ status: "connected", inspecting: true, toolCount: 3, directToolCount: 3, promptCount: 1 });
+    expect(listedWhileInspecting.result?.servers[0]).toMatchObject({ status: "connected", inspecting: true, toolCount: 3, directToolCount: 0, promptCount: 1 });
 
     const pinged = await call<{ status: string; latencyMs?: number }>("mcp/ping", { cwd, scope: "global", name: "fixture" });
     expect(pinged.result?.status).toBe("connected");

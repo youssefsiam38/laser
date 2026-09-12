@@ -23,7 +23,7 @@ const live = process.env[ENV.mcpLive] === "1";
 const PLAYWRIGHT: McpServerConfig = {
   name: "playwright",
   transport: { kind: "stdio", command: "npx", args: ["-y", "@playwright/mcp@0.0.80", "--headless", "--isolated"] },
-  tools: { exposure: "direct" },
+  tools: { alwaysLoad: true },
   startup: "on-demand",
 };
 

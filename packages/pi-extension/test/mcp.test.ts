@@ -96,6 +96,13 @@ describe("mcp companion module", () => {
     expect(h.send.mock.calls.filter(([value]) => (value as { type: string }).type === "lasercode/mcp/status")).toHaveLength(1);
   });
 
+  it("preserves validated conversation evidence without trusting malformed context", () => {
+    const context = { contextWindow: null, share: 0.02, budget: null, measurement: "utf8-upper-bound", preloaded: [], preloadedTokens: 200, lastDiscoveryTokens: 80, discoveries: [{ server: "docs", name: "search", detail: "summary", revision: "r1" }] };
+    expect(toRuntimeSnapshot({ ...engineSnapshot, context })?.context).toEqual(context);
+    expect(toRuntimeSnapshot({ ...engineSnapshot, context: { ...context, contextWindow: -1 } })?.context).toBeUndefined();
+    expect(toRuntimeSnapshot({ ...engineSnapshot, context: { ...context, measurement: "exact" } })?.servers).toHaveLength(engineSnapshot.servers.length);
+  });
+
   it("ignores anything that is not a snapshot, and an unknown state is unknown", () => {
     expect(toRuntimeSnapshot(undefined)).toBeUndefined();
     expect(toRuntimeSnapshot({ servers: "no" })).toBeUndefined();

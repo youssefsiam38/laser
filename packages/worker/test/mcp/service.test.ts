@@ -8,7 +8,7 @@ import { inspectionDefinition, McpService } from "../../src/mcp/service.js";
 import { startFixtureOAuthServer } from "./fixtures/oauth-server.js";
 
 const FIXTURE = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "stdio-server.mjs");
-const fixture = { name: "fixture", transport: { kind: "stdio" as const, command: process.execPath, args: [FIXTURE] }, tools: { exposure: "direct" as const } };
+const fixture = { name: "fixture", transport: { kind: "stdio" as const, command: process.execPath, args: [FIXTURE] }, tools: { alwaysLoad: false } };
 let root: string;
 let cwd: string;
 let service: McpService;
@@ -32,7 +32,7 @@ describe("inspection status in the saved list", () => {
     const result = await service.inspect({ cwd, scope: "project", server: fixture });
     expect(result.status).toBe("connected");
     expect(changed).not.toHaveBeenCalled();
-    const saved = await service.save({ cwd, scope: "project", server: { ...fixture, tools: { exposure: "on-demand" } } });
+    const saved = await service.save({ cwd, scope: "project", server: { ...fixture, tools: { alwaysLoad: false } } });
     expect(saved.servers[0]).toMatchObject({ status: "ready", toolCount: 3, directToolCount: 0, resourceCount: 1, promptCount: 1 });
     expect(saved.servers[0]?.latencyMs).toBeGreaterThanOrEqual(0);
     expect(changed).toHaveBeenCalledTimes(1);
@@ -78,6 +78,26 @@ describe("inspection status in the saved list", () => {
     expect((await service.list()).servers[0]).toMatchObject({ status: "ready", toolCount: 7 });
     service.sessionClosed("session");
     expect((await service.list()).servers[0]).toMatchObject({ status: "ready", toolCount: 3 });
+  }, 60_000);
+
+  it("keeps conversation evidence separate from inspection and withdraws it on close", async () => {
+    await service.save({ cwd, scope: "project", server: fixture });
+    await service.inspect(named());
+    expect((await service.list()).conversations).toEqual([]);
+    const context = { contextWindow: 100_000, share: 0.02, budget: 2000, measurement: "utf8-upper-bound" as const, preloaded: [], preloadedTokens: 200, lastDiscoveryTokens: 100, discoveries: [{ server: "fixture", name: "fixture_echo", detail: "summary" as const, revision: "r1" }] };
+    const snapshot = { servers: [{ name: "fixture", status: "ready" as const, toolCount: 3, directToolCount: 0 }], totalTools: 3, connectedCount: 0, context };
+    service.observeSnapshot("one", snapshot);
+    service.observeSnapshot("two", { ...snapshot, context: { ...context, discoveries: [] } });
+    expect((await service.list()).conversations).toEqual([{ sessionPath: "one", context }, { sessionPath: "two", context: { ...context, discoveries: [] } }]);
+    changed.mockClear();
+    service.observeSnapshot("one", snapshot);
+    expect(changed).not.toHaveBeenCalled();
+    service.sessionClosed("one");
+    expect(changed).toHaveBeenCalledOnce();
+    expect((await service.list()).conversations?.map(item => item.sessionPath)).toEqual(["two"]);
+    service.observeSnapshot("two", { servers: [], totalTools: 0, connectedCount: 0 });
+    expect(changed).toHaveBeenCalledTimes(2);
+    expect((await service.list()).conversations).toEqual([]);
   }, 60_000);
 
   it("does not inherit a Test for a different transport, nor keep memory across removal", async () => {

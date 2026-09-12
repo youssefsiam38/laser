@@ -18,7 +18,7 @@ import type { WorkerPool } from "../src/worker-pool.js";
 
 const CWD = "/projects/mcp";
 
-function harness() {
+function harness(reply?: unknown) {
   const dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-router-mcp-`));
   const requests: Array<{ cwd: string; method: string; params: unknown }> = [];
   const catalog = {
@@ -35,7 +35,7 @@ function harness() {
     get: async (cwd: string) => ({
       request: async (method: string, params: unknown) => {
         requests.push({ cwd, method, params });
-        return { answered: method };
+        return reply ?? { answered: method };
       },
     }),
   } as unknown as WorkerPool;
@@ -49,7 +49,7 @@ function harness() {
 
 const CALLS: Array<[string, Record<string, unknown>]> = [
   ["mcp/list", {}],
-  ["mcp/save", { scope: "global", server: { name: "fixture", transport: { kind: "stdio", command: "node" } } }],
+  ["mcp/save", { scope: "global", server: { name: "fixture", transport: { kind: "stdio", command: "node" }, tools: { alwaysLoad: true } } }],
   ["mcp/remove", { scope: "global", name: "fixture" }],
   ["mcp/inspect", { scope: "global", name: "fixture" }],
   ["mcp/ping", { scope: "global", name: "fixture" }],
@@ -103,4 +103,14 @@ describe("a cwd under a child's worktree", () => {
       cleanup();
     }
   });
+});
+
+
+it("routes session-scoped discovery diagnostics unchanged without opening another worker", async () => {
+  const result = { servers: [], conversations: [{ sessionPath: "/sessions/one", context: { contextWindow: null, budget: null, share: 0.02, measurement: "utf8-upper-bound", preloaded: [], preloadedTokens: 0, lastDiscoveryTokens: 123, discoveries: [] } }] };
+  const h = harness(result);
+  try {
+    expect(await h.router.handle({ jsonrpc: "2.0", id: 1, method: "mcp/list", params: { cwd: CWD } })).toMatchObject({ result });
+    expect(h.requests).toEqual([{ cwd: CWD, method: "mcp/list", params: { cwd: CWD } }]);
+  } finally { h.cleanup(); }
 });

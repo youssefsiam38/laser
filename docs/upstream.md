@@ -22,6 +22,30 @@ small and self-contained (`AGENTS.md` §6).
 
 ## Prepared patches
 
+### pi-mcp-adapter · embedded discovery policy (M16-T25, milestone 2)
+
+Local exact-version patch: `patches/pi-mcp-adapter@2.33.0.patch`; proposal prepared
+for parent review, **not filed upstream**. Existing identity/auth patches remain
+intact. No cache or executor-isolation correction is claimed by this addition.
+
+An embedding application needs discovery responses sized for its model without
+forking tool lookup, execution or approval. Optional `createMcpAdapter({ discovery })`
+provides `search` and `describe` projections shared by gateway/list and script
+helpers. The gateway exposes `names|summary|full` only when that policy is present.
+An optional `rank` strategy receives the authorized catalog; unknown, disabled,
+duplicate and non-finite ranked entries cannot enter the result. Omitting the
+policy retains standalone behaviour and the existing weighted keyword ranker.
+The application, not this generic patch, chooses its context-share policy.
+Discovery retains connection/auth/connecting guidance and server instructions,
+including zero-match responses. `settings.namespaceTools: false` suppresses
+namespace registration at its source; the host does not drop registrations by name.
+
+Regression evidence: `packages/worker/test/mcp/prompt-context.test.ts` exercises
+the installed patched dependency and real engine request path. Source plus public
+`dist/types.d.ts` are patched together. The embedding host reuses `ts-shape.ts`
+for compact shapes while retaining atomic full input/output schemas.
+
+
 ### pi-goal · host-owned usage policy and literal objectives (M12-T67)
 
 Local exact-version patch: `patches/@narumitw__pi-goal@0.54.4.patch`, applied

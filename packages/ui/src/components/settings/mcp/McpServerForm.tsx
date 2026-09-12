@@ -241,7 +241,7 @@ const AUTH: Array<{ kind: McpAuthKind; label: string }> = [
 ];
 
 const STARTUP_LABEL: Record<McpStartup, string> = {
-  "on-demand": "When a tool is first used, then let it idle out",
+  "on-demand": "When a tool is first used",
   "on-demand-keep": "When a tool is first used, then keep it running",
   "at-start": "When a conversation starts",
   always: "Keep it running at all times",
@@ -481,17 +481,17 @@ export function McpServerForm({
       <Collapsible>
         <CollapsibleTrigger className="text-start text-sm text-live underline-offset-4 hover:underline">Advanced</CollapsibleTrigger>
         <CollapsibleContent className="flex flex-col gap-4 pt-3">
-          <Field label="Stop it after this many idle minutes" hint="Leave empty to use the app’s own timing.">
-            {(id) => (
-              <Input
-                id={id}
-                inputMode="numeric"
-                value={form.idleMinutes}
-                placeholder="10"
-                onChange={(event) => set({ idleMinutes: event.target.value })}
-              />
-            )}
-          </Field>
+          <p className="text-sm leading-6 text-ink-2">Older per-tool preload selections are not carried forward. This switch includes every enabled tool; tools you have turned off stay off.</p>
+          <SwitchRow
+            label="Put every tool in the conversation"
+            detail={form.alwaysLoad
+              ? "Every enabled tool is included when a new conversation starts. This can exceed the usual 2% discovery target; the model’s context limit still applies."
+              : "Tools are found when needed, leaving more room for your conversation."}
+            checked={form.alwaysLoad}
+            onChange={(preload) => set({ alwaysLoad: preload })}
+          />
+          <p className="text-xs leading-5 text-ink-3">Applies to new conversations. Conversations already running keep their current tools. Tools you've turned off stay off.</p>
+          <p className="text-sm leading-6 text-ink-2">Conversation connections stay available until the conversation closes. An idle timer does not remove its tools between turns.</p>
           <Field label="Give up on a call after this many milliseconds" hint="Leave empty to use the app’s own timing.">
             {(id) => (
               <Input

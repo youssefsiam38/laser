@@ -10,7 +10,7 @@ import { useLogicalArrowKeys } from "@/hooks/use-direction";
  * Five tabs: what it is, what it can do, proof that it does it, and the
  * documents and prompts it offers besides tools.
  */
-import type { McpInspection, McpScope, McpServerConfig, McpServerState, McpServerStatus, McpToolPolicy } from "@lasercode/protocol";
+import type { ClientRequests, McpInspection, McpScope, McpServerConfig, McpServerState, McpServerStatus, McpToolPolicy } from "@lasercode/protocol";
 import { KeyRound, LogOut, Pencil, Power, RefreshCw, Trash2, Waves } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 
@@ -24,12 +24,11 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { cn } from "@/lib/utils";
 import { useLaserStable } from "@/runtime";
 
+import { selectClass } from "../fields.js";
 import { McpRunPanel } from "./McpRunPanel.js";
 import { McpToolsPanel } from "./McpToolsPanel.js";
 import {
-  EXPOSURE_LABEL,
   failedAgoPhrase,
-  LAST_DIRECT_TOOL_NOTE,
   policyOf,
   scopeLabel,
   serverTitle,
@@ -49,6 +48,7 @@ const TABS: Array<{ id: InspectorTab; label: string }> = [
 
 export interface McpInspectorProps {
   cwd: string;
+  conversations?: ClientRequests["mcp/list"]["result"]["conversations"];
   /** The selected row; `undefined` keeps the sheet closed. */
   state: McpServerState | undefined;
   /** The every-project entry this project row switches off, when there is one. */
@@ -66,6 +66,7 @@ export interface McpInspectorProps {
 
 export function McpInspector({
   cwd,
+  conversations = [],
   state,
   globalEntry,
   onOpenChange,
@@ -75,7 +76,6 @@ export function McpInspector({
   onSignOut,
   scopeFilter,
   onError,
-  onNotice,
 }: McpInspectorProps) {
   const logicalKey = useLogicalArrowKeys();
   const { client } = useLaserStable();
@@ -178,10 +178,6 @@ export function McpInspector({
 
   const changePolicy = (next: McpToolPolicy) => {
     const previous = policy;
-    const before = state ? policyOf({ ...state.config, ...(policy ? { tools: policy } : {}) }) : undefined;
-    // Switching the last direct tool off leaves nothing in the model's list,
-    // which is what on demand means — so the server moves, and says so.
-    if (before?.exposure === "direct" && next.exposure === "on-demand") onNotice(LAST_DIRECT_TOOL_NOTE);
     void save({ tools: next }, () => setPolicy(next), () => setPolicy(previous));
   };
 
@@ -380,7 +376,10 @@ export function McpInspector({
                   )}
                   {tab === "tools" &&
                     (inspection ? (
-                      <McpToolsPanel config={config} inspection={inspection} busy={busy} onPolicy={changePolicy} />
+                      <>
+                        <ConversationTools conversations={conversations} server={config.name} />
+                        <McpToolsPanel config={config} inspection={inspection} busy={busy} onPolicy={changePolicy} />
+                      </>
                     ) : (
                       <WaitingForConnection connecting={connecting} />
                     ))}
@@ -614,7 +613,7 @@ function Overview({
             {state.config.auth?.kind === "bearer" ? "A token, kept in the app’s secret store" : oauth ? "Your account, through your browser" : "None"}
           </dd>
           <dt className="text-ink-3">Tools reach the model</dt>
-          <dd className="text-ink-2">{EXPOSURE_LABEL[policy.exposure]}</dd>
+          <dd className="text-ink-2">{policy.alwaysLoad ? "Included from the start" : "Found when needed"}</dd>
           <dt className="text-ink-3">Saved for</dt>
           <dd className="text-ink-2">{scopeLabel(state.scope)}</dd>
         </dl>
@@ -664,5 +663,45 @@ function Prompts({ inspection }: { inspection: McpInspection }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+
+function ConversationTools({ conversations, server }: {
+  conversations: NonNullable<ClientRequests["mcp/list"]["result"]["conversations"]>;
+  server: string;
+}) {
+  const [selected, setSelected] = useState("");
+  const conversation = conversations.find((entry) => entry.sessionPath === selected);
+  const context = conversation?.context;
+  const discoveries = context?.discoveries.filter((tool) => tool.server === server) ?? [];
+  return (
+    <section aria-label="Conversation tools" className="mb-4 flex min-w-0 flex-col gap-3 rounded-xl border border-line bg-surface p-3">
+      <h3 className="text-sm font-medium text-ink">Tools in a conversation</h3>
+      <label className="flex min-w-0 flex-col gap-2 text-sm text-ink-2">
+        Conversation
+        <select aria-label="Conversation" value={conversation ? selected : ""} onChange={(event) => setSelected(event.target.value)}
+          className={selectClass}>
+          <option value="">Choose a conversation</option>
+          {conversations.map((entry) => <option key={entry.sessionPath} value={entry.sessionPath}>{entry.context.title ?? entry.sessionPath.split("/").at(-1)}</option>)}
+        </select>
+      </label>
+      {!context ? <p className="text-sm text-ink-2">Choose a conversation to see its tools. Conversations appear after their first model request.</p> : <>
+        <p className="text-sm text-ink-2">{context.budget === null
+          ? "Model context-window share unavailable. Discovery still provides bounded names and summaries."
+          : `Per-lookup allowance: ${context.budget.toLocaleString()} tokens · ${(context.share * 100).toLocaleString()}% of the model’s space, shared across servers for one lookup, not the conversation total.`}</p>
+        <p className="text-xs leading-5 text-ink-3">Estimates use UTF-8 byte counts as token upper bounds, not billed tokens. Discovery figures describe lookup results, which scripts may keep internal.</p>
+        <dl className="grid grid-cols-1 gap-1 text-sm text-ink-2">
+          <dt>Included from the start across all servers</dt><dd className="typed text-ink">{context.preloaded.length} server tools</dd>
+          <dt>All MCP definitions, including connection tools</dt><dd className="typed text-ink">{context.preloadedTokens.toLocaleString()} tokens</dd>
+          <dt>Last discovery response only</dt><dd className="typed text-ink">{context.lastDiscoveryTokens.toLocaleString()} tokens</dd>
+        </dl>
+        {context.preloaded.length > 0 && context.budget !== null && context.preloadedTokens > context.budget && <p className="text-sm text-attention">Preloaded definitions exceed the per-lookup target, but do not reduce the lookup allowance. Turn off “Put every tool in the conversation” in Advanced to leave more room in new conversations.</p>}
+        {context.preloaded.length > 0 && <ul aria-label="Included tools" className="max-h-40 overflow-auto text-xs leading-5 text-ink-2">{context.preloaded.map((name) => <li className="break-all" key={name}>{name}</li>)}</ul>}
+        <p className="text-sm font-medium text-ink">Discovered from this server</p>
+        {discoveries.length === 0 ? <p className="text-sm text-ink-2">No tools discovered from this server in this conversation yet.</p> : <ul className="max-h-40 overflow-auto text-sm text-ink-2">{discoveries.map((tool) => <li key={tool.name} className="break-all">{tool.name} · {tool.detail === "full" ? "Details opened" : "Found"}</li>)}</ul>}
+        <p className="text-xs leading-5 text-ink-3">Discovery records show what was opened in this running conversation, not what remains after history is shortened. Inspecting a server here does not add its tools to the conversation.</p>
+      </>}
+    </section>
   );
 }
