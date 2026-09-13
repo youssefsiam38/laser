@@ -3114,6 +3114,11 @@ Consequences: the buffer is bounded (2000 lines per section) and client-local; i
 
 ---
 
+### D-230 · 2026-09-18 · MCP server management belongs to the person, never the model
+Decision: **Do not implement dynamic server management from the model. Ever.** The model must not search for, enable, disable, install or remove MCP servers. Server configuration and connection state belong exclusively to the person's Settings UI. M16-T25 milestone 4 (trusted session-scoped dynamic servers) is **dropped**. Tool discovery *within servers the person has configured and enabled* stays: that is progressive discovery (milestone 2), not server management.
+Why: the person's explicit direction: “we will not include the Dynamic server management (model searches/enables/disables servers) ever.”
+Consequences: remove milestone 4 from M16-T25's release scope and implementation plan; do not build registries, connection-authority seams or enable/disable verbs for a future model-facing feature. Milestones 3 (cache correctness/revocation) and 5 (code-mode safety) remain. This is a permanent product decision, not a deferral.
+
 ## Open questions
 
 | ID | Question | Blocks | Asked of |
