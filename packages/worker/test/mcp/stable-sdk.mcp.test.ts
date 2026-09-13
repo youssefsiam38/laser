@@ -15,17 +15,20 @@ import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import { DATA_DIR_NAME, PRODUCT_NAME, type FeatureId, type McpRuntimeSnapshot, type McpServerConfig } from "@lasercode/protocol";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import * as fs from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fallbackDefaultAgent, fallbackPolicy } from "../../src/agents/definitions.js";
 import { rootRecord, rootRole } from "../../src/agents/session-config.js";
 import { StableSdkDriver } from "../../src/drivers/stable-sdk.js";
-import { McpAuthorizationRegistry, mcpAuthorizationIdentity } from "../../src/mcp/authorization.js";
+import { McpAuthorizationRegistry, mcpAuthorizationIdentity, mcpAuthorizationIdentities } from "../../src/mcp/authorization.js";
 import type { DriverAgentOptions, DriverEvent } from "../../src/driver.js";
 import { startStubProvider, toolNamesOf, type StubAnswer, type StubProvider } from "../agents/stub-provider.js";
 import { writeStubModels } from "../agents/stub-provider.js";
 import { expectedClientInfo, IDENTITY_TRANSPORTS, identityFixture } from "./fixtures/client-identity.js";
+
+vi.mock("node:fs/promises", async importOriginal => ({ ...await importOriginal<typeof import("node:fs/promises")>() }));
 
 const FIXTURE = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "stdio-server.mjs");
 
@@ -46,6 +49,7 @@ afterEach(async () => {
   for (const driver of drivers.splice(0)) await driver.dispose().catch(() => {});
   await stub?.close();
   rmSync(base, { recursive: true, force: true });
+  vi.restoreAllMocks();
 });
 
 function writeServers(servers: McpServerConfig[]): void {
@@ -108,8 +112,71 @@ it("explains that setup refusal needs a new conversation, not a retry in the too
   });
 }, 60_000);
 
+it.each(["EIO", "deadline"] as const)("retains MCP discovery after an advisory registry read failure (%s)", async fault => {
+  const config = fixtureServer({ tools: { alwaysLoad: false } });
+  writeServers([config]);
+  const registry = new McpAuthorizationRegistry(join(base, "agent"));
+  const snapshots = await Promise.all((await mcpAuthorizationIdentities("global", join(base, "project"), config as Parameters<typeof mcpAuthorizationIdentities>[2])).map(id => registry.establish(id)));
+  const snapshot = snapshots[0]!;
+  const path = join(registry.directory, `${snapshot.identity}.json`);
+  const before = await fs.readFile(path, "utf8");
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const drained = Promise.withResolvers<void>();
+  const open = fs.open;
+  let injected = false;
+  let observedLockedPreflight = false;
+  const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+    if (args[0] !== path || args[1] !== "r") return open(...args);
+    if (injected) {
+      observedLockedPreflight ||= await fs.lstat(`${path}.lock`).then(() => true, () => false);
+      return open(...args);
+    }
+    injected = true;
+    if (fault === "EIO") throw Object.assign(new Error("synthetic advisory read failure"), { code: "EIO" });
+    entered.resolve();
+    await release.promise;
+    try {
+      const handle = await open(...args);
+      const close = handle.close.bind(handle);
+      vi.spyOn(handle, "close").mockImplementation(async () => {
+        try { await close(); } finally { drained.resolve(); }
+      });
+      return handle;
+    } catch (error) { drained.resolve(); throw error; }
+  });
+  if (fault === "deadline") vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  let driver: StableSdkDriver;
+  try {
+    const opening = openSession([
+      { toolCall: { name: "mcp", args: { search: "echo", server: "fixture" } } },
+      { text: "done" },
+    ], { features: ["mcp"] });
+    if (fault === "deadline") {
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(101);
+      release.resolve();
+      await drained.promise;
+    }
+    driver = await opening;
+  } finally {
+    release.resolve();
+    spy.mockRestore();
+    vi.useRealTimers();
+  }
+  await promptAndSettle(driver);
+  expect(toolNamesOf(stub.requests[0]!)).toContain("mcp");
+  const results = stub.requests.flatMap(request => request.messages.filter(message => message.role === "tool"));
+  expect(results.length).toBeGreaterThan(0);
+  expect(JSON.stringify(results)).toContain("fixture_echo");
+  expect(observedLockedPreflight).toBe(true);
+  expect(await fs.readFile(path, "utf8")).toBe(before);
+  expect(await registry.current(snapshot)).toBe(true);
+}, 60_000);
+
 it("keeps MCP on concurrent first opens with target aliases and while another project opens", async () => {
-  writeServers([fixtureServer({ tools: { alwaysLoad: false } }), fixtureServer({ name: "alias", tools: { alwaysLoad: false } })]);
+  const transport = { kind: "stdio" as const, command: process.execPath, args: [FIXTURE] };
+  writeServers([fixtureServer({ transport, tools: { alwaysLoad: false } }), fixtureServer({ transport, name: "alias", tools: { alwaysLoad: false } })]);
   stub = await startStubProvider(request => {
     const turn = request.messages.slice(request.messages.findLastIndex(message => message.role === "user") + 1);
     return turn.some(message => message.role === "tool") ? { text: "done" }
@@ -131,7 +198,7 @@ it("keeps MCP on concurrent first opens with target aliases and while another pr
     expect(toolNamesOf(request)).toContain("mcp");
     for (const message of request.messages.filter(message => message.role === "tool")) {
       expect(JSON.stringify(message)).toContain("fixture_echo");
-      expect(JSON.stringify(message)).not.toMatch(/Access to .* changed|being updated/);
+      expect(JSON.stringify(message)).not.toMatch(/Access to .* changed|being updated|could not be checked/);
     }
   }
 }, 60_000);
