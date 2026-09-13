@@ -121,7 +121,7 @@ import { dateTime, shortCwd } from "@/format";
 import { useCopy } from "@/hooks";
 import { cn } from "@/lib/utils";
 import { mergeSessions, useLaserStable, useLaserState } from "@/runtime";
-import { pendingSessionPath, sessionOpenPhase } from "@/runtime/main-destination";
+import { mainPath, pendingSessionPath, sessionOpenPhase } from "@/runtime/main-destination";
 import { sessionSubtreePaths } from "@/runtime/threadList";
 import type { AppState } from "@/store";
 
@@ -1185,12 +1185,15 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
   const id = useAuiState((s) => s.threadListItem.id);
   const path = useAuiState((s) => s.threadListItem.externalId ?? s.threadListItem.remoteId);
   const title = useAuiState((s) => s.threadListItem.title);
-  const runtimeActive = useAuiState((s) => s.threads.mainThreadId === s.threadListItem.id);
+  const committed = useLaserState((s) => mainPath(s.destination));
   // Intent precedes both the loaded view and assistant-ui's runtime switch.
-  const active = useLaserState((s) => {
-    const pending = pendingSessionPath(s.destination);
-    return pending !== undefined ? pending === path : runtimeActive;
-  });
+  const active = useLaserState((s) => !!path && (pendingSessionPath(s.destination) ?? mainPath(s.destination)) === path);
+  const openSession = actions.openSession;
+  const openRow = useCallback(() => {
+    // Only an accepted destination is a no-op; pending/failed rows can retry.
+    if (path && path !== committed) void openSession(path);
+    onOpen?.();
+  }, [path, committed, openSession, onOpen]);
   const opening = useLaserState((s) => !!path && sessionOpenPhase(s, path).phase === "opening");
   const row = useRowModel(path);
   const { pinned } = useSessionsList();
@@ -1245,6 +1248,7 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
     <ThreadListItemPrimitive.Root
       data-slot="aui_thread-list-item"
       data-active={active || undefined}
+      aria-current={active ? "page" : undefined}
       data-pinned={isPinned || undefined}
       data-child={row.child || undefined}
       data-run-status={row.runStatus}
@@ -1266,11 +1270,8 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
           onClick={(event) => {
             // The main destination owns acceptance. Suppress the primitive's
             // optimistic switch, which would mount this chat before resolving it.
-            if (path) {
-              event.preventDefault();
-              void actions.openSession(path);
-            }
-            onOpen?.();
+            if (path) event.preventDefault();
+            openRow();
           }}
           onDoubleClick={(e) => {
             e.preventDefault();
@@ -1319,7 +1320,7 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
           endable={activeRun ? row.runId : undefined}
           movable={movable}
           onRename={() => onEdit(id)}
-          onOpen={onOpen}
+          onOpen={openRow}
         />
       )}
     </ThreadListItemPrimitive.Root>
@@ -1412,9 +1413,8 @@ function ThreadListItemMore({
   /** A Chat conversation: it can move into a project (M13-T58). */
   movable?: boolean | undefined;
   onRename(): void;
-  onOpen?: (() => void) | undefined;
+  onOpen(): void;
 }) {
-  const aui = useAui();
   const { actions } = useLaserStable();
   const { copy } = useCopy();
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -1442,10 +1442,7 @@ function ThreadListItemMore({
           {child && !archived && (
             <ThreadListItemMorePrimitive.Item
               className={menuItemClass}
-              onSelect={() => {
-                aui.threadListItem.switchTo();
-                onOpen?.();
-              }}
+              onSelect={onOpen}
             >
               <MessageSquare />
               Open

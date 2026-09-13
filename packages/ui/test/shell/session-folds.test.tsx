@@ -28,6 +28,7 @@ import { ThreadList } from "../../src/components/assistant-ui/elements/thread-li
 import { SESSION_FOLDS_STORAGE_KEY, sessionFolds } from "../../src/components/assistant-ui/elements/session-folds.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { LaserStoreProvider, createStateStore, type StateStore } from "../../src/runtime/LaserProvider.js";
+import type { MainDestination } from "../../src/runtime/main-destination.js";
 import { toThreadMetadata } from "../../src/runtime/threadList.js";
 import { initialState, reduce, type AppState } from "../../src/store.js";
 import { run, snapshot, summary } from "../agents/fixtures.js";
@@ -104,14 +105,17 @@ const shell: ShellContextValue = {
 /** Selects a session the way the app does, by the path the row carries. */
 let select: (path: string) => void = () => {};
 let mainPath = "";
-function SelectProbe() {
+function SelectProbe({ store }: { store: StateStore }) {
   const aui = useAui();
   const items = useAuiState((s) => s.threads.threadItems);
   const main = useAuiState((s) => s.threads.mainThreadId);
   useEffect(() => {
     select = (path) => {
       const item = items.find((candidate) => (candidate.externalId ?? candidate.remoteId) === path);
-      if (item) aui.threads.item({ id: item.id }).switchTo();
+      if (item) {
+        store.dispatch({ type: "destination", destination: { phase: "ready-code", intent: store.getSnapshot().destination.intent + 1, code: { kind: "project-session", project: "/one", path } } satisfies MainDestination });
+        aui.threads.item({ id: item.id }).switchTo();
+      }
     };
     mainPath = items.find((candidate) => candidate.id === main)?.externalId ?? "";
   });
@@ -126,7 +130,7 @@ function Fixture({ store, children }: { store: StateStore; children: ReactNode }
         <TooltipProvider>
           <ShellContext.Provider value={shell}>
             {children}
-            <SelectProbe />
+            <SelectProbe store={store} />
           </ShellContext.Provider>
         </TooltipProvider>
       </AssistantRuntimeProvider>

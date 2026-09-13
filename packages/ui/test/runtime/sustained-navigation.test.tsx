@@ -96,6 +96,14 @@ function SelectionHarness() {
 }
 const row = (name: string) => [...container.querySelectorAll<HTMLButtonElement>('[data-slot="aui_thread-list-item-trigger"]')].find(button => button.textContent?.includes(name))!;
 
+async function childOpenItem() {
+  const more = row("Conversation C").closest('[data-slot="aui_thread-list-item"]')!.querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')!;
+  await act(async () => { more.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })); await settle(5); });
+  const open = [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent?.trim() === "Open")!;
+  expect(open).toBeDefined();
+  return open;
+}
+
 async function mountSelection() {
   const world = createWorld();
   addSession(world, A, PROJECT_CWD, { name: "Conversation A" });
@@ -117,6 +125,60 @@ async function mountSelection() {
 }
 
 describe("main sidebar accepted selection", () => {
+  it("closes the sidebar without refreshing the accepted row", async () => {
+    const world = await mountSelection();
+    const before = world.calls.length;
+    await act(async () => { row("Conversation A").click(); await settle(40); });
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(world.calls.slice(before).filter(call => ["session/load", "session/goal/get", "session/pending/list", "pi/session/entries"].some(method => call.method === method || call.method === `pi/${method}`))).toEqual([]);
+    expect(mounts).toEqual([]);
+  });
+
+  it("opens a child through More once, fencing and restoring the outgoing draft", async () => {
+    const world = await mountSelection();
+    await act(async () => { await actions.openSession(C); await actions.openSession(A); await settle(20); });
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    world.overrides["session/load"] = (async ({ path }: { path: string }) => {
+      if (path === C) await held;
+      return { state: world.states[path], replayFrom: 0, seq: 0 };
+    }) as never;
+    const quote = { text: "Menu quote", messageId: `entry:${A}` };
+    await act(async () => { aui.composer.setText("A's menu draft"); aui.composer.setQuote(quote); });
+    mounts.length = 0;
+    const open = await childOpenItem();
+    await act(async () => { open.click(); await settle(10); });
+    expect(container.querySelector("output")?.getAttribute("data-phase")).toBe("resolving");
+    expect(row("Conversation A").closest('[data-slot="aui_thread-list-item"]')?.hasAttribute("aria-current")).toBe(false);
+    expect(row("Conversation A").hasAttribute("aria-current")).toBe(false);
+    expect(row("Conversation C").closest('[data-slot="aui_thread-list-item"]')?.getAttribute("aria-current")).toBe("page");
+    expect(mounts.filter(id => id.includes(C))).toHaveLength(0);
+    await act(async () => { release(); await settle(40); });
+    expect(mounts.filter(id => id.includes(C))).toHaveLength(1);
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(world.calls.filter(call => call.method === "session/prompt")).toHaveLength(0);
+    expect(aui.composer.getState()).toMatchObject({ text: "", quote: undefined });
+    await act(async () => { row("Conversation A").click(); await settle(40); });
+    expect(aui.composer.getState()).toMatchObject({ text: "A's menu draft", quote });
+  });
+
+  it("can switch back to the outgoing runtime while another row resolves", async () => {
+    const world = await mountSelection();
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    world.overrides["session/load"] = (async ({ path }: { path: string }) => {
+      if (path === C) await held;
+      return { state: world.states[path], replayFrom: 0, seq: 0 };
+    }) as never;
+    await act(async () => { row("Conversation C").click(); await settle(10); });
+    expect(container.querySelector("output")?.getAttribute("data-phase")).toBe("resolving");
+    await act(async () => { row("Conversation A").click(); await settle(40); });
+    expect(row("Conversation A").getAttribute("aria-current")).toBe("page");
+    await act(async () => { release(); await settle(40); });
+    expect(mounts.filter(id => id.includes(C))).toHaveLength(0);
+    expect(onOpen).toHaveBeenCalledTimes(2);
+  });
+
   it("mounts resident B once, calls onOpen once, and preserves A's composer ownership", async () => {
     const world = await mountSelection();
     // Warm both histories through the existing guarded provider route.
@@ -171,11 +233,12 @@ describe("main sidebar accepted selection", () => {
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
-  it("fences a send from the outgoing composer in the same event turn as a row click", async () => {
+  it.each(["row", "child menu"])("fences a send from the outgoing composer in the same event turn as %s Open", async (route) => {
     const world = await mountSelection();
+    const open = route === "row" ? row("Conversation C") : await childOpenItem();
     await act(async () => {
       aui.composer.setText("This draft belongs only to A");
-      row("Conversation C").click();
+      open.click();
       aui.composer.send();
       await settle(40);
     });
