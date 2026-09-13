@@ -111,7 +111,6 @@ function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
                     }} />
                 )}
                 <ConversationLoadingGate key={open.path} active={loading} hasContent={open.hasTranscript || loadError || !open.expectsTranscript}>
-
                   {/* The welcome is for a conversation that has nothing in it —
                       decided from the session (its view is hydrated and holds
                       no history, or no session is open at all), never from the
