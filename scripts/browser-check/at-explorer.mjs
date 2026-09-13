@@ -2,8 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-
-let installPromptDismissed = false;
+import { storageKey } from '../../packages/protocol/dist/index.js';
 
 /** M16-T28: real machine listing and viewer. Only synthetic fixture files are read.
  * The shared harness supplies a private HOME, project parent and agent state.
@@ -29,18 +28,17 @@ export default async function checkExplorer(check) {
   const option = name => popup.getByRole('option', { name, exact: true });
   const fill = async value => { await input.fill(value); await input.press('End'); };
   const choose = async row => { if (check.state.touch) await row.tap(); else await row.click(); };
-  // Pointer capability is cached at app boot. The harness establishes touch
-  // after initial navigation, so reload once with that capability already set.
-  // Then dismiss the real delayed first-use prompt through its supported UI.
-  if (!installPromptDismissed && check.state.touch) {
-    await page.reload({ waitUntil: 'domcontentloaded' });
-    await input.waitFor();
-    const install = page.getByRole('dialog', { name: /works best installed/ });
-    await install.waitFor();
-    await choose(install.getByRole('button', { name: 'Not now', exact: true }));
-    await install.waitFor({ state: 'hidden' });
-    installPromptDismissed = true;
-  }
+  // Synthetic existing-user fixture, NOT install-prompt acceptance. Apply only
+  // this dismissal, only at the isolated app origin, before every case hydrates.
+  // No module-global state assumes that cases share a browser context.
+  const origin = new URL(page.url()).origin;
+  const installKey = storageKey('mobile-install-dismissed');
+  await page.addInitScript(({ origin, key }) => {
+    if (location.origin === origin) localStorage.setItem(key, 'forever');
+  }, { origin, key: installKey });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await input.waitFor();
+  assert.equal(await page.evaluate(key => localStorage.getItem(key), installKey), 'forever');
   for (const [text, names] of [
     ['@/', ['/tmp']],
     ['@node', ['node-one', 'node-two', 'node_modules']],
