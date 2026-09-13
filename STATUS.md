@@ -1,6 +1,6 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-13T12:45:49Z · orchestrator · HEAD: a5239ef
+**Last updated:** 2026-09-13T12:48:22Z · orchestrator · HEAD: 5e77d08
 **Current focus:** Environment restored after user-chosen restart; zero stale private-worktree processes. Two recovery owners admitted: MCP registry-integrity regression and bounded transcript acceptance. Existing code/WIP preserved and backed up; release remains authorized after acceptance.
 
 | Milestone | State |
