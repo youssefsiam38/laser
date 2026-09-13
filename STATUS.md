@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-13T08:53:35Z · orchestrator · HEAD: 2efc1e0
-**Current focus:** Resumed two failed owners from preserved private worktrees. M16 next release: MCP cache/revocation merged after review (integration gate running), global `@` merged (workspace verification passed), bounded transcript/map implementation (B merged). Release authorized after acceptance; model-managed MCP servers permanently excluded (D-230).
+**Last updated:** 2026-09-13T08:55:31Z · orchestrator · HEAD: 0149e23
+**Current focus:** Resumed two failed owners from preserved private worktrees. M16 next release: MCP concurrent-open integration failure under diagnosis, global `@` merged (workspace verification passed), bounded transcript/map implementation (B merged). Release authorized after acceptance; model-managed MCP servers permanently excluded (D-230).
 
 | Milestone | State |
 | --- | --- |
@@ -25,7 +25,7 @@
 | M16 Conversation experience | in-progress |
 | MX Cross-cutting | in-progress |
 
-**Blockers:** No task explicitly marked blocked. M16-T29 attribution complete; B merged/verified, C bounded viewport active; MCP code-mode safety remains outstanding.
+**Blockers:** Release gate failed M16-T25 concurrent MCP session-open test; root-cause diagnosis/fix required. M16-T29 attribution complete; B merged/verified, C bounded viewport active; MCP code-mode safety remains outstanding.
 **Next up:** M13-T99 keystroke/draft regression; M13-T100 Beam/touch follow-ups; M13-T117 remembered-Chat recovery. Active release work takes priority.
 **Recently done:** M16-T28 global explorer (`5193fc9`, review fixes verified); M16-T27 catalog-arrival (`961aeb8`); M16-T16 tail-first/actions (`d6e5ebd`, `402de75`); M16-T26 readiness (`f8b0d34`); M16-T24 forensics (`d9b7b7a`, `7942fb5`).
 
