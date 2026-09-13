@@ -15,7 +15,7 @@ import { mapUi } from "../../../src/components/agents/map/map-state.js";
 import { TooltipProvider } from "../../../src/components/ui/tooltip.js";
 import { LaserStoreProvider, createStateStore, type StateStore } from "../../../src/runtime/LaserProvider.js";
 import { initialState, reduce, type AppState } from "../../../src/store.js";
-import { run, snapshot, summary } from "../fixtures.js";
+import { run, snapshot, summary, view } from "../fixtures.js";
 
 export const ROOT = "/p/root.jsonl";
 
@@ -141,10 +141,12 @@ export function family(): { runs: AgentRun[]; sessions: ReturnType<typeof summar
   return { runs, sessions };
 }
 
-export function seededStore(options: { runs?: AgentRun[]; sessions?: ReturnType<typeof summary>[] } = {}): StateStore {
+export function seededStore(options: { runs?: AgentRun[]; sessions?: ReturnType<typeof summary>[]; current?: string } = {}): StateStore {
   let state: AppState = reduce(initialState, { type: "agents/loaded", snapshot: snapshot() });
   state = { ...state, sessions: options.sessions ?? [summary({ path: ROOT, name: "Ship the feature", attention: "working" })] };
   if (options.runs) state = reduce(state, { type: "agents/runs/loaded", runs: options.runs });
+  // A surface that reads the shown session (the fullscreen map) needs one open.
+  if (options.current) state = { ...state, current: options.current, open: { [options.current]: view({ path: options.current }) } };
   return createStateStore(state);
 }
 

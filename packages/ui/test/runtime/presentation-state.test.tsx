@@ -5,7 +5,7 @@ import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 import { buildFleet, createFleetSelector, type FleetInput } from "../../src/fleet/model.js";
 import { createStateStore, LaserStoreProvider, useSessionMeta } from "../../src/runtime/LaserProvider.js";
-import { createShellSnapshot, samePresentationViews } from "../../src/runtime/presentation-state.js";
+import { createShellSnapshot, currentView, samePresentationView, samePresentationViews } from "../../src/runtime/presentation-state.js";
 import { useFleet } from "../../src/fleet/hooks.js";
 import { initialState, type AppState } from "../../src/store.js";
 import { view, summary, run } from "../agents/fixtures.js";
@@ -88,5 +88,26 @@ describe("presentation subscriptions", () => {
     expect(read()).toBe(current);
     current = { ...a, agents: { ...a.agents, runs: { r: run({ runId: "r", status: "needs_input" }) } } };
     expect(read()).toBe(current);
+  });
+
+  it("reads one shown session without following its stream (M16-T32)", () => {
+    const original = view({ path: "/p/root", blocks: [{ kind: "user", id: "u", text: "First prompt" }] });
+    const state: AppState = { ...initialState, current: "/p/root", open: { "/p/root": original } };
+    expect(currentView(state)).toBe(original);
+    expect(currentView({ ...initialState, open: { "/p/root": original } })).toBeUndefined();
+
+    // What a streamed token moves, and what the surfaces that use this read.
+    const streamed = { ...original, lastSeq: 12, blocks: [...original.blocks, { kind: "assistant" as const, id: "a", text: "token", thinking: "", streaming: true }], entries: [{}] };
+    expect(samePresentationView(original, streamed)).toBe(true);
+    for (const next of [
+      undefined,
+      { ...original, path: "/p/other" },
+      { ...original, running: !original.running },
+      { ...original, title: "Renamed" },
+      { ...original, state: { ...original.state, name: "Renamed" } },
+      { ...original, dialogs: [...original.dialogs] },
+      { ...original, openedAt: "2026-01-01T00:00:00.000Z" },
+      { ...original, blocks: [{ kind: "user" as const, id: "new", text: "Another prompt" }] },
+    ]) expect(samePresentationView(original, next)).toBe(false);
   });
 });

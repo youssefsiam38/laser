@@ -17,7 +17,8 @@ import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { useLaserView } from "@/runtime";
+import { useLaserState } from "@/runtime";
+import type { AppState } from "@/store";
 import { useTranscriptViewport, type TranscriptViewport } from "@/components/thread/transcript-viewport";
 
 import { isRenderableDialog } from "./model.js";
@@ -27,11 +28,13 @@ const VIEWPORT = '[data-slot="thread-viewport"]';
 const FOOTER = '[data-slot="thread-footer"]';
 
 /** The tool row of a question that is asked but not on screen, if there is one. */
+/** One stable selector: the questions, not the session that is streaming into. */
+const sessionDialogs = (state: AppState) => (state.current ? state.open[state.current]?.dialogs : undefined);
+
 function useOffscreenQuestion(): { toolCallId: string; title: string } | undefined {
   const controller = useTranscriptViewport();
-  const view = useLaserView();
   const toolRows = useToolRowIds();
-  const dialogs = view?.dialogs;
+  const dialogs = useLaserState(sessionDialogs);
   const [offscreen, setOffscreen] = useState<{ toolCallId: string; title: string } | undefined>(undefined);
 
   useEffect(() => {

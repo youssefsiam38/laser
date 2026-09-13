@@ -8,7 +8,10 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { useWorkbench } from "@/components/workbench";
 import { relativeTime, shortCwd, shortcutLabel } from "@/format";
 import { useTheme } from "@/hooks";
-import { useLaserStable, useLaserState, useLaserView, useSessionMeta } from "@/runtime";
+import { useLaserStable, useLaserState, useSessionMeta } from "@/runtime";
+import { currentView, samePresentationView } from "@/runtime/presentation-state";
+
+import type { AppState } from "@/store";
 
 import { errorText, useShell } from "./shell-context.js";
 import { sessionGroups, sessionsList } from "./session-groups.js";
@@ -22,7 +25,7 @@ import { sessionGroups, sessionsList } from "./session-groups.js";
 export function CommandPaletteDialog({ open, onOpenChange }: { open: boolean; onOpenChange(open: boolean): void }) {
   const [query, setQuery] = useState("");
   const [activeId, setActiveId] = useState("");
-  const commands = usePaletteCommands();
+  const commands = usePaletteCommands(open);
   const { actions } = useLaserStable();
   useEffect(() => open ? actions.expandCatalog?.() : undefined, [actions, open]);
 
@@ -62,17 +65,31 @@ export function CommandPaletteDialog({ open, onOpenChange }: { open: boolean; on
 
 type RunnableCommand = PaletteCommand & { run(): void };
 
-function usePaletteCommands(): RunnableCommand[] {
+const NO_VIEW = () => undefined;
+const EMPTY_SESSIONS: never[] = [];
+const EMPTY_OPEN = {};
+const NO_SESSIONS = () => EMPTY_SESSIONS;
+const NO_OPEN = () => EMPTY_OPEN;
+const allSessions = (state: AppState) => state.sessions;
+const allOpen = (state: AppState) => state.open;
+
+/**
+ * `active` is the dialog's own `open`. Closed, the palette is not on screen and
+ * Radix has unmounted its content, so it reads nothing that moves: the session
+ * map alone changes identity with every streamed token, and building this list
+ * behind a closed dialog re-rendered the palette for each batch (M16-T32).
+ */
+function usePaletteCommands(active: boolean): RunnableCommand[] {
   const { actions, currentProject, projects } = useLaserStable();
-  const view = useLaserView();
+  const view = useLaserState(active ? currentView : NO_VIEW, samePresentationView);
   const meta = useSessionMeta();
   const shell = useShell();
   const workbench = useWorkbench();
   const { theme, toggle } = useTheme();
   // Not a selector closing over `projects`: `useLaserState` caches by store
   // state, and `projects` is React state (see SessionsPanel).
-  const sessions = useLaserState((s) => s.sessions);
-  const open = useLaserState((s) => s.open);
+  const sessions = useLaserState(active ? allSessions : NO_SESSIONS);
+  const open = useLaserState(active ? allOpen : NO_OPEN);
   const workers = useLaserState((s) => s.workers);
   const groups = useMemo(() => sessionGroups(projects, sessions, open, workers), [projects, sessions, open, workers]);
   const busy = meta.running || meta.compacting;

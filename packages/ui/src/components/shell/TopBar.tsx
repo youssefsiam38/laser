@@ -61,11 +61,11 @@ import {
   useActivityDetailLevel,
   useLaserStable,
   useLaserState,
-  useLaserView,
   useSessionMeta,
   type ActivityDetailLevel,
 } from "@/runtime";
 import { pendingSessionPath, sessionOpenPhase, sameSessionOpenPhase } from "@/runtime/main-destination";
+import { currentView, samePresentationView } from "@/runtime/presentation-state";
 
 import { InlineRename } from "./InlineRename.js";
 import { lastPromptEntryId, sessionStateLabel, sessionStatus, workerChip } from "./model.js";
@@ -102,7 +102,11 @@ function useRoomyTopBar(): { roomy: boolean; markerRef: RefObject<HTMLSpanElemen
 
 export function TopBar() {
   const { actions, client, currentProject, destination } = useLaserStable();
-  const view = useLaserView();
+  // The session as this bar reads it: its name, its agent, its status and the
+  // first line of the conversation. Identity is held while those are unchanged,
+  // so a streamed token does not re-render the bar (M16-T32). The bar draws no
+  // transcript; `forkFromLastPrompt` reads the entries from the host, not here.
+  const view = useLaserState(currentView, samePresentationView);
   const sessions = useLaserState((s) => s.sessions);
   const meta = useSessionMeta();
   const shell = useShell();

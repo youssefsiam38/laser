@@ -31,7 +31,7 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { isUnstartedSession, useLaserStable, useLaserState, useLaserView, useSessionMeta } from "@/runtime";
+import { isUnstartedSession, useLaserStable, useLaserState, useSessionMeta } from "@/runtime";
 import { useSessionPreparation } from "@/components/thread/session-preparation";
 import { effectiveFirstTurnModel } from "@/runtime/first-turn";
 
@@ -260,7 +260,14 @@ const THINKING_EFFORTS: readonly EffortLevel[] = [
  */
 export function ThinkingEffort({ className, allowProjectLanding = true }: { className?: string | undefined; allowProjectLanding?: boolean | undefined }) {
   const { actions, currentProject } = useLaserStable();
-  const view = useLaserView();
+  // One derived answer instead of the session view: `undefined` when no session
+  // is open, otherwise whether it is still unstarted. A streamed token changes
+  // neither, so the composer's thinking control does not re-render with the
+  // reply (M16-T32).
+  const unstarted = useLaserState(s => {
+    const view = s.current ? s.open[s.current] : undefined;
+    return view ? isUnstartedSession(view) : undefined;
+  });
   const { begin, firstTurn, chooseThinking, pending: preparingSession } = useSessionPreparation();
   const { thinkingLevel: sessionThinkingLevel, session } = useSessionMeta();
   const defaults = useThinkingDefaults();
@@ -280,8 +287,8 @@ export function ThinkingEffort({ className, allowProjectLanding = true }: { clas
   const select = (key: string) => {
     const level = key as ThinkingLevel;
     if (disabled || saving) return;
-    if (!view || isUnstartedSession(view)) {
-      if (!currentProject && !view) return;
+    if (unstarted !== false) {
+      if (!currentProject && unstarted === undefined) return;
       chooseThinking(level);
       return;
     }

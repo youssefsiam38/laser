@@ -17,7 +17,7 @@ import { useMemo } from "react";
 
 import { agentDisplayName, isBuiltinAgent, useAgentsSnapshot, useAgentsStatus } from "@/agents";
 import { cn } from "@/lib/utils";
-import { isUnstartedSession, useLaserStable, useLaserView } from "@/runtime";
+import { isUnstartedSession, useLaserStable, useLaserState } from "@/runtime";
 import { useSessionPreparation } from "@/components/thread/session-preparation";
 import { workspaceKindOf } from "@/components/shell/session-groups";
 
@@ -38,17 +38,24 @@ import {
 
 export function SessionAgentSelector({ className, allowProjectLanding = true }: { className?: string | undefined; allowProjectLanding?: boolean | undefined }) {
   const { actions, currentProject } = useLaserStable();
-  const view = useLaserView();
+  // The session's own state and one answer derived from it ("is this session
+  // still unstarted?"), rather than the whole view: a streamed token changes
+  // neither, and this control sits in the composer (M16-T32).
+  const session = useLaserState(s => (s.current ? s.open[s.current]?.state : undefined));
+  const unstarted = useLaserState(s => {
+    const view = s.current ? s.open[s.current] : undefined;
+    return view ? isUnstartedSession(view) : undefined;
+  });
   const snapshot = useAgentsSnapshot();
   const status = useAgentsStatus();
   const { firstTurn, chooseAgent, pending: preparingSession } = useSessionPreparation();
 
-  const sessionKind = view?.state.agent?.kind ?? workspaceKindOf(view?.state.cwd, snapshot?.workspaces ?? {});
-  const canChoose = view
-    ? (sessionKind === "root" || (sessionKind == null && snapshot !== null)) && isUnstartedSession(view)
+  const sessionKind = session?.agent?.kind ?? workspaceKindOf(session?.cwd, snapshot?.workspaces ?? {});
+  const canChoose = session
+    ? (sessionKind === "root" || (sessionKind == null && snapshot !== null)) && unstarted === true
     : allowProjectLanding && currentProject !== undefined;
-  const cwd = view?.state.cwd ?? currentProject;
-  const selected = firstTurn?.agentName ?? view?.state.agent?.agentName ?? snapshot?.defaultAgent;
+  const cwd = session?.cwd ?? currentProject;
+  const selected = firstTurn?.agentName ?? session?.agent?.agentName ?? snapshot?.defaultAgent;
 
   const options = useMemo<ModelOption[]>(
     () => (snapshot?.agents ?? [])

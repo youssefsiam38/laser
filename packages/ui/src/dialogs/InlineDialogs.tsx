@@ -24,8 +24,9 @@ import { useEffect, useMemo, useState } from "react";
 import { useIsTouch } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
 import { consumeDecisionLink, usePendingDecisionLink } from "@/pwa";
-import { useLaserStable, useLaserView } from "@/runtime";
+import { useLaserStable, useLaserState } from "@/runtime";
 import { useTranscriptPresentation } from "@/runtime/LaserProvider";
+import type { AppState } from "@/store";
 
 import { DialogBody } from "./DialogBody.js";
 import { cancelResponse, dialogFormOf, isRenderableDialog, uiResponseFor } from "./model.js";
@@ -38,10 +39,18 @@ import { useToolRowIds } from "./tool-rows.js";
  * "inline, in its tool row" from meaning "nowhere". A question we cannot draw
  * appears in neither list: it has already been cancelled.
  */
+/**
+ * The two slices these questions live on. Module scope, so each is one stable
+ * selector: the session's own view carries `lastSeq` and its blocks, which
+ * change with every streamed token, and reading it here re-rendered the cards
+ * and the tool rows for every batch of a reply (M16-T32).
+ */
+const sessionPath = (state: AppState) => (state.current ? state.open[state.current]?.path : undefined);
+const sessionDialogs = (state: AppState) => (state.current ? state.open[state.current]?.dialogs : undefined);
+
 function useDialogs(): { cards: UiDialogRequest[]; byToolCall: Map<string, UiDialogRequest> } {
-  const view = useLaserView();
+  const dialogs = useLaserState(sessionDialogs);
   const toolRows = useToolRowIds();
-  const dialogs = view?.dialogs;
   return useMemo(() => {
     const cards: UiDialogRequest[] = [];
     const byToolCall = new Map<string, UiDialogRequest>();
@@ -60,9 +69,8 @@ function useDialogs(): { cards: UiDialogRequest[]; byToolCall: Map<string, UiDia
  * the cards, so the rule holds wherever the question was raised.
  */
 function useCancelUnrenderable(): void {
-  const view = useLaserView();
+  const dialogs = useLaserState(sessionDialogs);
   const { actions } = useLaserStable();
-  const dialogs = view?.dialogs;
   useEffect(() => {
     for (const dialog of dialogs ?? []) {
       if (isRenderableDialog(dialog)) continue;
@@ -88,7 +96,7 @@ export function useWaitingDialogCount(): number {
  */
 export function ToolRowDialog({ toolCallId }: { toolCallId: string }) {
   const { actions } = useLaserStable();
-  const path = useLaserView()?.path;
+  const path = useLaserState(sessionPath);
   const presentation = useTranscriptPresentation();
   const touch = useIsTouch();
   const { byToolCall } = useDialogs();
@@ -117,7 +125,7 @@ export function ToolRowDialog({ toolCallId }: { toolCallId: string }) {
  */
 export function ThreadDialogCards({ className }: { className?: string | undefined }) {
   const { actions } = useLaserStable();
-  const path = useLaserView()?.path;
+  const path = useLaserState(sessionPath);
   const presentation = useTranscriptPresentation();
   const touch = useIsTouch();
   const { cards } = useDialogs();
@@ -165,7 +173,7 @@ export function ThreadDialogCards({ className }: { className?: string | undefine
 function useDialogLink(dialog: UiDialogRequest | undefined): boolean {
   const link = usePendingDecisionLink();
   const { actions } = useLaserStable();
-  const path = useLaserView()?.path;
+  const path = useLaserState(sessionPath);
   const presentation = useTranscriptPresentation();
   const [declineFirst, setDeclineFirst] = useState<{ id: string; path: string | undefined } | undefined>(undefined);
 

@@ -11,6 +11,30 @@ function titleInputs(view: SessionView): readonly unknown[] {
   return [first, nonempty];
 }
 
+/**
+ * Two readings of one session that a title, a status or a lifecycle control
+ * cannot tell apart. Everything a streamed token moves — the blocks, the
+ * sequence, the loaded entries — is deliberately absent, which is the point:
+ * a surface that compares views with this one does not re-render for a token.
+ *
+ * Only a surface that draws none of the transcript may use it. A surface that
+ * reads `blocks`, `entries`, `lastSeq` or the queue must read those fields
+ * itself, or it will draw one batch behind.
+ */
+export function samePresentationView(a: SessionView | undefined, b: SessionView | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.path !== b.path || a.state !== b.state || a.running !== b.running
+    || a.title !== b.title || a.dialogs !== b.dialogs || a.openedAt !== b.openedAt
+    || a.history?.userOffset !== b.history?.userOffset || a.history?.hasHistory !== b.history?.hasHistory) return false;
+  const l = titleInputs(a), r = titleInputs(b);
+  return l[0] === r[0] && l[1] === r[1];
+}
+
+/** The session a surface is showing; pair it with {@link samePresentationView}. */
+export function currentView(state: AppState): SessionView | undefined {
+  return state.current ? state.open[state.current] : undefined;
+}
+
 export function samePresentationViews(
   a: Readonly<Record<string, SessionView | undefined>>,
   b: Readonly<Record<string, SessionView | undefined>>,
@@ -21,11 +45,9 @@ export function samePresentationViews(
   return paths.every((path) => {
     const left = a[path], right = b[path];
     if (left === right) return true;
-    if (!left || !right || left.state !== right.state || left.running !== right.running
-      || left.title !== right.title || left.dialogs !== right.dialogs || left.openedAt !== right.openedAt
-      || left.history?.userOffset !== right.history?.userOffset || left.history?.hasHistory !== right.history?.hasHistory) return false;
-    const l = titleInputs(left), r = titleInputs(right);
-    return l[0] === r[0] && l[1] === r[1];
+    // `samePresentationView` also compares the path; inside one map the key is
+    // the path, so an entry that differs only there cannot occur.
+    return samePresentationView(left, right);
   });
 }
 

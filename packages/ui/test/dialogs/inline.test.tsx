@@ -25,6 +25,9 @@ const fixture = vi.hoisted(() => ({
 vi.mock("@/runtime", async (importActual) => ({
   ...(await importActual<typeof import("../../src/runtime/index.js")>()),
   useLaserView: () => ({ path: PATH, dialogs: fixture.dialogs }),
+  // The cards read narrow slices, so the mock runs the real selectors.
+  useLaserState: (selector: (state: unknown) => unknown) =>
+    selector({ current: PATH, open: { [PATH]: { path: PATH, dialogs: fixture.dialogs } } }),
   useLaserStable: () => ({ actions: fixture.actions }),
 }));
 vi.mock("@/pwa", () => ({ usePendingDecisionLink: () => undefined, consumeDecisionLink: () => {} }));

@@ -14,6 +14,8 @@ import { AssistantRuntimeProvider, useAuiState, useExternalStoreRuntime, type Th
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { TranscriptViewportProvider, WindowedMessages } from "../../src/components/thread/transcript-viewport.js";
 import { useConversationFind } from "../../src/components/thread/use-conversation-find.js";
+import { useThreadToolTimeline } from "../../src/components/assistant-ui/elements/tool-timeline.js";
+import { useSessionFileChanges } from "../../src/components/assistant-ui/elements/file-tree.js";
 import { createStateStore, LaserStoreProvider } from "../../src/runtime/LaserProvider.js";
 import { initialState } from "../../src/store.js";
 
@@ -61,11 +63,23 @@ const FindProbe = memo(function FindProbe() {
   return <div ref={find.root} />;
 });
 
-function Fixture({ count, live, withFind = false }: { count: number; live: string; withFind?: boolean }) {
-  const messages: ThreadMessageLike[] = [...settled(count), { id: "live", role: "assistant", content: live, status: { type: "running" } }];
+let monitorRenders = 0;
+let monitorSteps = 0;
+let monitorFiles = 0;
+/** The monitor's two message-derived sections, memoised like the real column. */
+const MonitorProbe = memo(function MonitorProbe() {
+  monitorRenders++;
+  monitorSteps = useThreadToolTimeline().steps.length;
+  monitorFiles = useSessionFileChanges().length;
+  return null;
+});
+
+function Fixture({ count, live, withFind = false, withMonitor = false, tool }: { count: number; live: string; withFind?: boolean; withMonitor?: boolean; tool?: ThreadMessageLike | undefined }) {
+  const messages: ThreadMessageLike[] = [...settled(count), ...(tool ? [tool] : []), { id: "live", role: "assistant", content: live, status: { type: "running" } }];
   const runtime = useExternalStoreRuntime({ messages, convertMessage: convert, isRunning: true, onNew: async () => {} });
   return <AssistantRuntimeProvider runtime={runtime}><TranscriptViewportProvider>
     {withFind ? <FindProbe /> : null}
+    {withMonitor ? <MonitorProbe /> : null}
     <WindowedMessages />
   </TranscriptViewportProvider></AssistantRuntimeProvider>;
 }
@@ -97,6 +111,28 @@ it("re-renders the streaming row and no settled row for each delta", async () =>
   }
   expect(renders.get("live")).toBeGreaterThan(before.get("live")!);
   expect(host.querySelector('[data-window-message="live"]')?.textContent).toBe(live);
+});
+
+it("leaves the monitor's tool and file sections still through a reply, and moves them for a tool call", async () => {
+  const store = createStateStore({ ...initialState, current: "/streaming" });
+  const render = (live: string, tool?: ThreadMessageLike) => act(async () =>
+    root.render(<LaserStoreProvider store={store}><Fixture count={4} live={live} withMonitor tool={tool} /></LaserStoreProvider>));
+  await render("Reviewing");
+  await frames();
+  const before = monitorRenders;
+
+  let live = "Reviewing";
+  for (let delta = 0; delta < 8; delta++) { live += ` step ${delta},`; await render(live); }
+  await frames();
+  expect(monitorRenders).toBe(before);
+  expect(monitorSteps).toBe(0);
+
+  const call: ThreadMessageLike = { id: "tool", role: "assistant", content: [{ type: "tool-call", toolCallId: "call-1", toolName: "write", args: { path: "src/app.ts" }, argsText: '{"path":"src/app.ts"}', status: { type: "running" } }] };
+  await render(live, call);
+  await frames();
+  expect(monitorRenders).toBeGreaterThan(before);
+  expect(monitorSteps).toBe(1);
+  expect(monitorFiles).toBe(0);
 });
 
 it("holds no transcript subscription while find is closed, and reads the live transcript once it is open", async () => {

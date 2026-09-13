@@ -195,7 +195,7 @@ describe("the live map", () => {
 
   it("opens fullscreen, closes it with Escape, and keeps the selection across the switch", async () => {
     const { runs, sessions } = family();
-    const store = seededStore({ runs, sessions: [...sessions, summary({ path: "/p/c.jsonl", agent: { agentName: "reader", kind: "child", subagentName: "reader-1", parentPath: "/p/a.jsonl", rootPath: ROOT } })] });
+    const store = seededStore({ runs, current: ROOT, sessions: [...sessions, summary({ path: "/p/c.jsonl", agent: { agentName: "reader", kind: "child", subagentName: "reader-1", parentPath: "/p/a.jsonl", rootPath: ROOT } })] });
     mounted = await mountMap({
       store,
       size: PANEL,

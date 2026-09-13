@@ -32,6 +32,12 @@ vi.mock("@/pwa", async (importActual) => {
 vi.mock("../../src/runtime/index.js", async (importActual) => ({
   ...(await importActual<typeof import("../../src/runtime/index.js")>()),
   useLaserView: () => mocks.view,
+  useLaserState: (selector: (state: unknown) => unknown) => selector({
+    current: mocks.view?.path,
+    open: mocks.view ? { [mocks.view.path]: mocks.view } : {},
+    agents: { snapshot: undefined, runs: {}, events: [] },
+    sessions: [], workers: {}, connection: "open",
+  }),
   useLaserStable: () => ({ actions, client, currentProject: mocks.currentProject, destination: { phase: "ready-code", code: mocks.currentProject ? { kind: "project-landing", project: mocks.currentProject } : { kind: "no-project-landing" } } }),
 }));
 vi.mock("@assistant-ui/react", async (importActual) => {

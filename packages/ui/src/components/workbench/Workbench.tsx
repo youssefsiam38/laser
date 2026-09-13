@@ -13,7 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { shortCwd } from "@/format";
 import { cn } from "@/lib/utils";
-import { useLaserStable, useLaserView } from "@/runtime";
+import { useLaserStable, useLaserState } from "@/runtime";
 
 import { useWorkbench, type WorkbenchPage } from "./workbench-context.js";
 
@@ -37,8 +37,10 @@ const PAGE_LABEL: Record<WorkbenchPage, string> = { settings: "Settings", agents
 export function Workbench() {
   const { page, tab: settingsTab, agents: agentsTarget, open, close } = useWorkbench();
   const { currentProject } = useLaserStable();
-  const view = useLaserView();
-  const cwd = currentProject ?? view?.state.cwd;
+  // The project directory, not the session: reading the view re-rendered the
+  // workbench for every streamed token (M16-T32).
+  const sessionCwd = useLaserState(s => (s.current ? s.open[s.current]?.state.cwd : undefined));
+  const cwd = currentProject ?? sessionCwd;
 
   if (!page) return null;
 

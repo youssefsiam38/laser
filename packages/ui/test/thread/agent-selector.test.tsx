@@ -89,7 +89,11 @@ vi.mock("@/runtime", () => ({
     currentProject: "/project",
   }),
   useLaserView: () => mocks.view,
-  useLaserState: () => undefined,
+  // The selector decides: the session's own state, and whether it is unstarted.
+  useLaserState: (selector: (state: unknown) => unknown) => selector({
+    current: mocks.view?.path,
+    open: mocks.view ? { [mocks.view.path]: mocks.view } : {},
+  }),
   useSessionMeta: () => ({ session: undefined, model: null }),
 }));
 
