@@ -1,4 +1,5 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile, symlink } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -9,6 +10,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PRODUCT_NAME } from "@lasercode/protocol";
 import { McpAuthorizationRegistry, mcpAuthorizationIdentity, mcpAuthorizationIdentities, mcpAuthorizationAccount, mcpAuthorizationPartition, mcpAuthorizationRevision } from "../../src/mcp/authorization.js";
 import type { McpConfiguredServer } from "../../src/mcp/store.js";
+
+// Keep real filesystem behavior, with configurable exports for scoped faults.
+vi.mock("node:fs/promises", async importOriginal => ({ ...await importOriginal<typeof import("node:fs/promises")>() }));
 
 let root: string;
 const server: McpConfiguredServer = { name: "notion", transport: { kind: "http", url: "https://example.test/mcp" } };
@@ -184,6 +188,260 @@ describe("MCP authorization identities and durable generations", () => {
     expect(repaired.generation.epoch).not.toBe(old.generation.epoch);
     expect(await registry.current(old)).toBe(false);
     expect(await registry.current(repaired)).toBe(true);
+  });
+
+  it.each(["establish", "establish-first-read", "bump", "cas", "credential-account"] as const)("preserves an existing record when %s reads are unavailable", async operation => {
+    const registry = new McpAuthorizationRegistry(root);
+    const snapshot = await registry.establish(await mcpAuthorizationIdentity("global", root, server));
+    const path = join(registry.directory, `${snapshot.identity}.json`);
+    const before = await readFile(path, "utf8");
+    const save = vi.fn(async () => undefined);
+    const open = fs.open;
+    let reads = 0;
+    const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      if (args[0] === path && args[1] === "r" && (++reads === 1 || operation !== "establish-first-read")) {
+        throw Object.assign(new Error("private-path-and-credential-sentinel"), { code: "EIO" });
+      }
+      return open(...args);
+    });
+    const execute = () => operation === "bump" ? registry.bump(snapshot.identity)
+      : operation === "cas" ? registry.revoke([snapshot.identity], save, new Map([[snapshot.identity, snapshot]]))
+      : operation === "credential-account" ? registry.credentialAccount(snapshot.identity)
+      : registry.establish(snapshot.identity);
+    let error: unknown;
+    try { await execute().catch(value => { error = value; }); }
+    finally { spy.mockRestore(); }
+    expect(await readFile(path, "utf8")).toBe(before);
+    expect(error).toMatchObject({ code: "MCP_AUTHORIZATION_UNAVAILABLE", reason: "unavailable" });
+    expect(String(error)).not.toContain("private-path-and-credential-sentinel");
+    expect(save).not.toHaveBeenCalled();
+    expect(await registry.current(snapshot)).toBe(true);
+  });
+
+  it.each((["establish", "bump", "cas", "credential-account"] as const).flatMap(operation =>
+    (["open", "close"] as const).map(phase => ({ operation, phase }))))("preserves raw bytes when $operation exceeds the bounded filesystem deadline ($phase)", async ({ operation, phase }) => {
+    const registry = new McpAuthorizationRegistry(root);
+    const snapshot = await registry.establish(await mcpAuthorizationIdentity("global", root, server));
+    const path = join(registry.directory, `${snapshot.identity}.json`);
+    const before = await readFile(path, "utf8");
+    const save = vi.fn(async () => undefined);
+    const entered = Array.from({ length: 4 }, () => Promise.withResolvers<void>());
+    const release = Promise.withResolvers<void>();
+    const drained: Promise<void>[] = [];
+    const open = fs.open;
+    let reads = 0;
+    const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      if (args[0] !== path || args[1] !== "r") return open(...args);
+      const closed = Promise.withResolvers<void>(); drained.push(closed.promise);
+      const signal = entered[reads++]!;
+      if (phase === "open") { signal.resolve(); await release.promise; }
+      try {
+        const handle = await open(...args);
+        const close = handle.close.bind(handle);
+        vi.spyOn(handle, "close").mockImplementation(async () => {
+          if (phase === "close") { signal.resolve(); await release.promise; }
+          try { await close(); } finally { closed.resolve(); }
+        });
+        return handle;
+      } catch (error) { closed.resolve(); throw error; }
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const execute = () => operation === "bump" ? registry.bump(snapshot.identity)
+      : operation === "cas" ? registry.revoke([snapshot.identity], save, new Map([[snapshot.identity, snapshot]]))
+      : operation === "credential-account" ? registry.credentialAccount(snapshot.identity)
+      : registry.establish(snapshot.identity);
+    let error: unknown;
+    try {
+      const outcome = execute().catch(value => { error = value; });
+      // Advance only after each real filesystem operation reaches its gate.
+      // Old code proceeds to another unavailable read under the write lock;
+      // corrected code refuses on the first one without acquiring that lock.
+      for (const signal of entered) {
+        if (!await Promise.race([signal.promise.then(() => true), outcome.then(() => false)])) break;
+        await vi.advanceTimersByTimeAsync(101);
+      }
+      await outcome;
+    } finally {
+      release.resolve(); spy.mockRestore();
+      try { await Promise.all(drained); } finally { vi.useRealTimers(); }
+    }
+    expect(await readFile(path, "utf8")).toBe(before);
+    expect(error).toMatchObject({ code: "MCP_AUTHORIZATION_UNAVAILABLE", reason: "unavailable" });
+    expect(save).not.toHaveBeenCalled();
+    expect(await registry.current(snapshot)).toBe(true);
+  });
+
+  it("does not repair an unreadable record published after the initial missing observation", async () => {
+    const registry = new McpAuthorizationRegistry(root);
+    const snapshot = await registry.establish(await mcpAuthorizationIdentity("global", root, server));
+    const path = join(registry.directory, `${snapshot.identity}.json`);
+    const before = await readFile(path, "utf8");
+    await fs.unlink(path);
+    const open = fs.open;
+    let reads = 0;
+    const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      if (args[0] !== path || args[1] !== "r") return open(...args);
+      if (++reads === 1) {
+        try { return await open(...args); }
+        catch (error) {
+          expect(error).toMatchObject({ code: "ENOENT" });
+          // Another worker publishes the valid record before we acquire its lock.
+          await writeFile(path, before);
+          throw error;
+        }
+      }
+      throw Object.assign(new Error("synthetic storage unavailable"), { code: "EACCES" });
+    });
+    try { await expect(registry.establish(snapshot.identity)).rejects.toMatchObject({ code: "MCP_AUTHORIZATION_UNAVAILABLE" }); }
+    finally { spy.mockRestore(); }
+    expect(reads).toBe(2);
+    expect(await readFile(path, "utf8")).toBe(before);
+    expect(await registry.current(snapshot)).toBe(true);
+  });
+
+  it.each(["lock-before", "lock-after", "read", "close"] as const)("does not mistake a %s I/O refusal for a missing or corrupt record", async phase => {
+    const registry = new McpAuthorizationRegistry(root);
+    const snapshot = await registry.establish(await mcpAuthorizationIdentity("global", root, server));
+    const path = join(registry.directory, `${snapshot.identity}.json`);
+    const before = await readFile(path, "utf8");
+    const unavailable = Object.assign(new Error("private-storage-sentinel"), { code: "EACCES" });
+    const lstat = fs.lstat, open = fs.open;
+    let probes = 0;
+    const lockSpy = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      if (args[0] === `${path}.lock` && ++probes === (phase === "lock-before" ? 1 : phase === "lock-after" ? 2 : -1)) throw unavailable;
+      return lstat(...args);
+    });
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (args[0] === path && args[1] === "r") {
+        if (phase === "read") vi.spyOn(handle, "read").mockRejectedValue(unavailable);
+        if (phase === "close") {
+          const close = handle.close.bind(handle);
+          vi.spyOn(handle, "close").mockImplementation(async () => { await close(); throw unavailable; });
+        }
+      }
+      return handle;
+    });
+    try { await expect(registry.establish(snapshot.identity)).rejects.toMatchObject({ code: "MCP_AUTHORIZATION_UNAVAILABLE" }); }
+    finally { lockSpy.mockRestore(); openSpy.mockRestore(); }
+    expect(await readFile(path, "utf8")).toBe(before);
+    expect(await registry.current(snapshot)).toBe(true);
+  });
+
+  async function transactionFixture(count = 2) {
+    const registry = new McpAuthorizationRegistry(root);
+    const ids = Array.from({ length: count }, (_, index) => String(index + 1).repeat(64));
+    const snapshots = await Promise.all(ids.map(id => registry.establish(id)));
+    const paths = ids.map(id => join(registry.directory, `${id}.json`));
+    const bytes = () => Promise.all(paths.map(path => readFile(path, "utf8")));
+    const expectReleased = async () => {
+      for (const path of paths) await expect(fs.lstat(`${path}.lock`)).rejects.toMatchObject({ code: "ENOENT" });
+      // A healthy mutation must actually reacquire every released lock.
+      return registry.revoke(ids, async next => next);
+    };
+    return { registry, ids, snapshots, paths, bytes, expectReleased };
+  }
+
+  it.each((["unavailable", "cas-mismatch", "held-lock"] as const).flatMap(fault =>
+    [false, true].map(reverse => ({ fault, reverse }))))("preflights all identities before changing any bytes ($fault, reverse=$reverse)", async ({ fault, reverse }) => {
+    const f = await transactionFixture();
+    const expected = new Map(f.snapshots.map(snapshot => [snapshot.identity, snapshot]));
+    if (fault === "cas-mismatch") await f.registry.bump(f.ids[1]!);
+    const before = await f.bytes();
+    const save = vi.fn(async () => undefined);
+    const open = fs.open;
+    const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      if (fault === "unavailable" && args[0] === f.paths[1] && args[1] === "r") throw Object.assign(new Error("synthetic later read failure"), { code: "EIO" });
+      return open(...args);
+    });
+    const releaseOther = fault === "held-lock" ? await lockfile.lock(f.paths[1]!, { realpath: false, retries: 0 }) : undefined;
+    let error: unknown;
+    try {
+      await f.registry.revoke(reverse ? f.ids.toReversed() : f.ids, save, fault === "cas-mismatch" ? expected : undefined).catch(value => { error = value; });
+    } finally { spy.mockRestore(); await releaseOther?.(); }
+    expect(await f.bytes()).toEqual(before);
+    expect(error).toMatchObject({ code: fault === "unavailable" ? "MCP_AUTHORIZATION_UNAVAILABLE" : fault === "held-lock" ? "MCP_AUTHORIZATION_UPDATING" : "MCP_AUTHORIZATION_CHANGED" });
+    expect(save).not.toHaveBeenCalled();
+    await f.expectReleased();
+  });
+
+  it.each((["missing", "corrupt"] as const).flatMap(state => [false, true].map(compare => ({ state, compare }))))("recovers known $state data only without a forbidden expected generation (compare=$compare)", async ({ state, compare }) => {
+    const f = await transactionFixture();
+    if (state === "missing") await fs.unlink(f.paths[1]!);
+    else await writeFile(f.paths[1]!, "{torn");
+    const bytes = () => Promise.all(f.paths.map(path => readFile(path, "utf8").catch(error => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    })));
+    const before = await bytes();
+    const save = vi.fn(async (next: ReadonlyMap<string, typeof f.snapshots[number]>) => next);
+    if (compare) {
+      await expect(f.registry.revoke(f.ids, save, new Map(f.snapshots.map(snapshot => [snapshot.identity, snapshot])))).rejects.toMatchObject({ code: "MCP_AUTHORIZATION_CHANGED" });
+      expect(await bytes()).toEqual(before);
+      expect(save).not.toHaveBeenCalled();
+    } else {
+      const next = await f.registry.revoke(f.ids, save);
+      expect(next.get(f.ids[1]!)?.generation.epoch).not.toBe(f.snapshots[1]!.generation.epoch);
+      expect(save).toHaveBeenCalledTimes(1);
+    }
+    await f.expectReleased();
+  });
+
+  it("holds and validates the complete deduplicated set before one successful callback", async () => {
+    const f = await transactionFixture(3);
+    const before = await f.bytes();
+    const expected = new Map(f.snapshots.map(snapshot => [snapshot.identity, snapshot]));
+    const save = vi.fn(async (next: ReadonlyMap<string, typeof f.snapshots[number]>) => {
+      expect([...next.keys()]).toEqual(f.ids);
+      for (const id of f.ids) {
+        expect(await f.registry.current(next.get(id)!)).toBe(false);
+        expect(JSON.parse(await readFile(join(f.registry.directory, `${id}.json`), "utf8"))).toEqual(next.get(id));
+      }
+      return next;
+    });
+    // Third identity participates only through CAS and must not be rewritten.
+    const committed = await f.registry.revoke([f.ids[1]!, f.ids[0]!, f.ids[1]!], save, expected);
+    expect(save).toHaveBeenCalledTimes(1);
+    expect((await f.bytes())[2]).toBe(before[2]);
+    for (const snapshot of f.snapshots.slice(0, 2)) expect(committed.get(snapshot.identity)?.generation).toEqual({ ...snapshot.generation, counter: snapshot.generation.counter + 1 });
+    expect(committed.get(f.ids[2]!)).toEqual(f.snapshots[2]);
+    for (const snapshot of committed.values()) expect(await f.registry.current(snapshot)).toBe(true);
+    await f.expectReleased();
+  });
+
+  it("keeps all committed revocations when the external callback fails", async () => {
+    const f = await transactionFixture();
+    const failure = new Error("synthetic external persistence failure");
+    const save = vi.fn(async () => { throw failure; });
+    await expect(f.registry.revoke(f.ids, save)).rejects.toBe(failure);
+    expect(save).toHaveBeenCalledTimes(1);
+    for (const snapshot of f.snapshots) {
+      expect(await f.registry.current(snapshot)).toBe(false);
+      expect((await f.registry.read(snapshot.identity))?.generation).toEqual({ ...snapshot.generation, counter: snapshot.generation.counter + 1 });
+    }
+    await f.expectReleased();
+  });
+
+  it("does not roll back an earlier rename when a later write fails, and never calls the callback", async () => {
+    const f = await transactionFixture();
+    const before = await f.bytes();
+    const save = vi.fn(async () => undefined);
+    const failure = Object.assign(new Error("synthetic later rename failure"), { code: "EIO" });
+    const rename = fs.rename;
+    const spy = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+      if (args[1] === f.paths[1]) throw failure;
+      return rename(...args);
+    });
+    try { await expect(f.registry.revoke(f.ids, save)).rejects.toBe(failure); }
+    finally { spy.mockRestore(); }
+    const after = await f.bytes();
+    expect(after[0]).not.toBe(before[0]);
+    expect(after[1]).toBe(before[1]);
+    expect(await f.registry.current(f.snapshots[0]!)).toBe(false);
+    expect(await f.registry.current(f.snapshots[1]!)).toBe(true);
+    expect(save).not.toHaveBeenCalled();
+    expect((await fs.readdir(f.registry.directory)).some(name => name.endsWith(".tmp"))).toBe(false);
+    await f.expectReleased();
   });
 
   it("does not wait for a contended writer and treats its cache snapshots as stale", async () => {

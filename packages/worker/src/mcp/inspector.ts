@@ -651,7 +651,7 @@ class McpCatalogChangedError extends Error {
 function controlCode(error: unknown): string | undefined {
   for (let value: unknown = error, depth = 0; value && typeof value === "object" && depth < 8; depth += 1) {
     const candidate = value as { code?: unknown; cause?: unknown };
-    if (["MCP_AUTHORIZATION_CHANGED", "MCP_AUTHORIZATION_UPDATING", "MCP_CATALOG_CHANGED", "MCP_SDK_CONTRACT"].includes(String(candidate.code))) return String(candidate.code);
+    if (["MCP_AUTHORIZATION_CHANGED", "MCP_AUTHORIZATION_UPDATING", "MCP_AUTHORIZATION_UNAVAILABLE", "MCP_CATALOG_CHANGED", "MCP_SDK_CONTRACT"].includes(String(candidate.code))) return String(candidate.code);
     value = candidate.cause;
   }
   return undefined;
@@ -662,6 +662,7 @@ export function describeFailure(error: unknown, name: string, command?: string, 
   const control = controlCode(error);
   if (control === "MCP_AUTHORIZATION_CHANGED") return { status: "needs-auth", detail: "Access to this server changed. Check Settings → MCP servers, then reconnect." };
   if (control === "MCP_AUTHORIZATION_UPDATING") return { status: "unknown", detail: "MCP settings or sign-in information are being updated. Try again after the change finishes." };
+  if (control === "MCP_AUTHORIZATION_UNAVAILABLE") return { status: "unknown", detail: "MCP sign-in information could not be checked. Try again." };
   if (control === "MCP_CATALOG_CHANGED") return { status: "unknown", detail: "Tool information changed while it was being read. Open Tools again to refresh it." };
   if (control === "MCP_SDK_CONTRACT") return { status: "failed", detail: `The MCP client is incompatible: ${messageOf(error, redact)}. Update the app before reconnecting.` };
   if (isAbort(error)) {

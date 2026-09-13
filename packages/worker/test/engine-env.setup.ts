@@ -22,6 +22,53 @@
  * A test that wants any of these sets it itself, to its own sandbox or stub.
  */
 
+import { channel } from "node:diagnostics_channel";
+import { createHash } from "node:crypto";
+import { beforeEach, vi } from "vitest";
+import * as engineModule from "../src/mcp/engine.js";
+
+// Observe every test's real lazy load, including inspector-only callers. Never
+// load jiti early or alter concurrent opening/connection ordering.
+if (process.env.MCP_READ_DIAGNOSTICS === "1") {
+  const load = engineModule.loadMcpEngine;
+  const observed = new WeakSet<object>();
+  beforeEach(() => {
+    vi.spyOn(engineModule, "loadMcpEngine").mockImplementation(async () => {
+      const engine = await load();
+      const prototype = engine.Manager.prototype;
+      if (!observed.has(prototype)) {
+        observed.add(prototype);
+        const connect = prototype.connect;
+        prototype.connect = async function (...args) {
+          const server = createHash("sha256").update(args[0]).digest("hex").slice(0, 12);
+          const started = performance.now();
+          try {
+            const connection = await connect.apply(this, args);
+            console.error("MCP manager diagnostic", JSON.stringify({ server, phase: "settled", status: connection.status, elapsedMs: performance.now() - started }));
+            return connection;
+          } catch (error) {
+            // Definition values may include synthetic secrets; remove those
+            // before bounding a diagnostic. Never print the definition itself.
+            let message = error instanceof Error ? error.message : String(error);
+            const redact = (value: unknown): void => {
+              if (typeof value === "string" && value.length > 2) message = message.split(value).join("[redacted]");
+              else if (value && typeof value === "object") for (const part of Object.values(value)) redact(part);
+            };
+            redact(args[1]);
+            console.error("MCP manager diagnostic", JSON.stringify({ server, phase: "rejected", elapsedMs: performance.now() - started, message: message.slice(0, 2000), code: (error as { code?: unknown })?.code }));
+            throw error;
+          }
+        };
+      }
+      return engine;
+    });
+  });
+}
+if (process.env.MCP_READ_DIAGNOSTICS === "1") channel("mcp.authorization.read").subscribe(value => {
+  const diagnostic = value as { reason?: string; code?: string };
+  if (diagnostic.code !== "ENOENT") console.error("MCP read diagnostic", JSON.stringify(value));
+});
+
 /** Every variable the pinned engine reads as a credential or a directory. */
 const ENGINE_PATTERNS = [
   // The engine's own namespace: both agent directories, offline and package

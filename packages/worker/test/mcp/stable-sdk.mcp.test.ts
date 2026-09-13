@@ -13,11 +13,13 @@
  */
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import { DATA_DIR_NAME, PRODUCT_NAME, type FeatureId, type McpRuntimeSnapshot, type McpServerConfig } from "@lasercode/protocol";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { channel } from "node:diagnostics_channel";
+import * as engineModule from "../../src/mcp/engine.js";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fallbackDefaultAgent, fallbackPolicy } from "../../src/agents/definitions.js";
 import { rootRecord, rootRole } from "../../src/agents/session-config.js";
 import { StableSdkDriver } from "../../src/drivers/stable-sdk.js";
@@ -46,6 +48,7 @@ afterEach(async () => {
   for (const driver of drivers.splice(0)) await driver.dispose().catch(() => {});
   await stub?.close();
   rmSync(base, { recursive: true, force: true });
+  vi.restoreAllMocks();
 });
 
 function writeServers(servers: McpServerConfig[]): void {
@@ -109,7 +112,34 @@ it("explains that setup refusal needs a new conversation, not a retry in the too
 }, 60_000);
 
 it("keeps MCP on concurrent first opens with target aliases and while another project opens", async () => {
-  writeServers([fixtureServer({ tools: { alwaysLoad: false } }), fixtureServer({ name: "alias", tools: { alwaysLoad: false } })]);
+  const trace: unknown[] = [];
+  const record = (entry: unknown) => { if (trace.length < 1000) trace.push({ at: performance.now(), entry }); };
+  const reads = channel("mcp.authorization.read");
+  reads.subscribe(record);
+  const clientInfos = join(base, "concurrent-client-info.jsonl");
+  const transport = { kind: "stdio" as const, command: process.execPath, args: [FIXTURE, "--client-info", clientInfos, "--stderr", "synthetic fixture process ready"] };
+  const originalLoad = engineModule.loadMcpEngine;
+  let instrumented = false;
+  vi.spyOn(engineModule, "loadMcpEngine").mockImplementation(async () => {
+    const engine = await originalLoad(); // Observe the real lazy load; never prewarm it.
+    if (!instrumented) {
+      instrumented = true;
+      const connect = engine.Manager.prototype.connect;
+      vi.spyOn(engine.Manager.prototype, "connect").mockImplementation(async function (...args) {
+        record({ connect: args[0], phase: "start" });
+        try {
+          const connection = await connect.apply(this, args);
+          record({ connect: args[0], phase: "settled", status: connection.status, tools: connection.tools.length });
+          return connection;
+        } catch (error) {
+          record({ connect: args[0], phase: "rejected", error: error instanceof Error ? error.message.slice(0, 1500) : String(error), code: (error as { code?: unknown }).code });
+          throw error;
+        }
+      });
+    }
+    return engine;
+  });
+  writeServers([fixtureServer({ transport, tools: { alwaysLoad: false } }), fixtureServer({ transport, name: "alias", tools: { alwaysLoad: false } })]);
   stub = await startStubProvider(request => {
     const turn = request.messages.slice(request.messages.findLastIndex(message => message.role === "user") + 1);
     return turn.some(message => message.role === "tool") ? { text: "done" }
@@ -119,9 +149,15 @@ it("keeps MCP on concurrent first opens with target aliases and while another pr
   const open = async (project: string) => {
     const cwd = join(base, project); mkdirSync(cwd, { recursive: true });
     const driver = new StableSdkDriver(); drivers.push(driver);
+    const driverIndex = drivers.length;
+    driver.subscribe(event => {
+      events.push(event);
+      if (event.type === "extension" || (event.type === "update" && event.update.kind === "extension_error")) record({ driverIndex, event });
+    });
     await driver.open({ cwd, agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), projectTrusted: true, features: ["mcp"], agent: agentOptions() });
     return driver;
   };
+  try {
   const initial = await Promise.all(Array.from({ length: 4 }, () => open("project")));
   await Promise.all(initial.map(driver => promptAndSettle(driver)));
   const next = open("other-project");
@@ -134,6 +170,10 @@ it("keeps MCP on concurrent first opens with target aliases and while another pr
       expect(JSON.stringify(message)).not.toMatch(/Access to .* changed|being updated/);
     }
   }
+  } catch (error) {
+    console.error("MCP concurrent first-cause diagnostics", JSON.stringify({ trace, fixtureHandshakes: existsSync(clientInfos) ? readFileSync(clientInfos, "utf8") : "no fixture handshake" }));
+    throw error;
+  } finally { reads.unsubscribe(record); }
 }, 60_000);
 
 function snapshots(): McpRuntimeSnapshot[] {

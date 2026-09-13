@@ -13,6 +13,15 @@
 import { createInterface } from "node:readline";
 import { appendFileSync } from "node:fs";
 
+// Opt-in synthetic lifecycle evidence only; no requests, arguments or secrets.
+const diagnostic = (phase, extra = {}) => {
+  if (process.env.MCP_FIXTURE_DIAGNOSTICS) {
+    try { appendFileSync(process.env.MCP_FIXTURE_DIAGNOSTICS, `${JSON.stringify({ pid: process.pid, at: Date.now(), phase, ...extra })}\n`); } catch { /* observation never changes fixture behavior */ }
+  }
+};
+diagnostic("started");
+process.on("exit", code => diagnostic("exit", { code }));
+process.on("uncaughtExceptionMonitor", error => diagnostic("uncaught", { name: error.name }));
 const args = process.argv.slice(2);
 const option = (flag, fallback) => {
   const index = args.indexOf(flag);
@@ -28,7 +37,7 @@ const callsFile = option("--calls-file", undefined);
 const NO_RESPONSE = Symbol("no response");
 let navigated = false;
 const stderrLine = option("--stderr", undefined);
-if (stderrLine) process.stderr.write(`${stderrLine}\n`);
+if (stderrLine) { diagnostic("stderr", { bytes: Buffer.byteLength(stderrLine) }); process.stderr.write(`${stderrLine}\n`); }
 if (args.includes("--exit-early")) process.exit(3);
 
 /** One tiny transparent PNG, so an image content block is a real image. */
@@ -74,6 +83,7 @@ export function handle(request) {
   const { id, method, params } = request;
   switch (method) {
     case "initialize":
+      diagnostic("initialize");
       if (option("--client-info", undefined)) appendFileSync(option("--client-info"), `${JSON.stringify(params?.clientInfo)}\n`);
       return {
         protocolVersion: typeof params?.protocolVersion === "string" ? params.protocolVersion : "2025-06-18",
