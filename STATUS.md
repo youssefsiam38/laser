@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-13T08:10:45Z · orchestrator · HEAD: ff6bc26
-**Current focus:** Resumed two failed owners from preserved private worktrees. M16 next release: MCP full-milestone independent review (implementation/gates complete), global `@` merged (workspace verification passed), bounded transcript/map implementation (B merged). Release authorized after acceptance; model-managed MCP servers permanently excluded (D-230).
+**Last updated:** 2026-09-13T08:53:35Z · orchestrator · HEAD: 2efc1e0
+**Current focus:** Resumed two failed owners from preserved private worktrees. M16 next release: MCP cache/revocation merged after review (integration gate running), global `@` merged (workspace verification passed), bounded transcript/map implementation (B merged). Release authorized after acceptance; model-managed MCP servers permanently excluded (D-230).
 
 | Milestone | State |
 | --- | --- |
