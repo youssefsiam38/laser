@@ -80,7 +80,7 @@ const allOpen = (state: AppState) => state.open;
  * behind a closed dialog re-rendered the palette for each batch (M16-T32).
  */
 function usePaletteCommands(active: boolean): RunnableCommand[] {
-  const { actions, currentProject, projects } = useLaserStable();
+  const { actions, client, currentProject, projects } = useLaserStable();
   const view = useLaserState(active ? currentView : NO_VIEW, samePresentationView);
   const meta = useSessionMeta();
   const shell = useShell();
@@ -98,7 +98,7 @@ function usePaletteCommands(active: boolean): RunnableCommand[] {
     const session: RunnableCommand[] = view
       ? [
           { id: "compact", group: "This session", label: "Compact context", detail: busy ? "Waits for the turn to finish" : undefined, icon: Shrink, disabled: busy, run: () => void actions.compact() },
-          { id: "fork", group: "This session", label: "Fork from last prompt", icon: GitFork, disabled: meta.running, run: () => void forkFromLastPrompt(view.entries, actions, view.leafId) },
+          { id: "fork", group: "This session", label: "Fork from last prompt", icon: GitFork, disabled: meta.running, run: () => void forkFromLastPrompt(view.path, client, actions) },
           { id: "history", group: "This session", label: "Open history", keys: ["]"], icon: GitBranch, run: () => shell.openHistory() },
         ]
       : [];
@@ -137,14 +137,26 @@ function usePaletteCommands(active: boolean): RunnableCommand[] {
       })),
     );
     return [...session, ...app, ...sessionRows, ...projectRows];
-  }, [actions, busy, currentProject, groups, meta.running, shell, theme, toggle, view, workbench]);
+  }, [actions, busy, client, currentProject, groups, meta.running, shell, theme, toggle, view, workbench]);
 }
 
-async function forkFromLastPrompt(entries: readonly unknown[], actions: ReturnType<typeof useLaserStable>["actions"], leafId?: string | null): Promise<void> {
-  const entryId = userEntryIds(entries, leafId).at(-1);
-  if (entryId) {
-    await actions.fork(entryId);
-    return;
+/**
+ * The entries and the leaf come from the host at the moment of the command,
+ * not from the view the palette rendered with: that view compares by
+ * `samePresentationView`, which deliberately ignores entries and leaf so the
+ * palette does not re-render per streamed token (M16-T32) — reading them
+ * from it here would fork one batch behind.
+ */
+async function forkFromLastPrompt(path: string, client: ReturnType<typeof useLaserStable>["client"], actions: ReturnType<typeof useLaserStable>["actions"]): Promise<void> {
+  try {
+    const { entries, leafId } = await client.request("pi/session/entries", { path });
+    const entryId = userEntryIds(entries, leafId).at(-1);
+    if (entryId) {
+      await actions.fork(entryId);
+      return;
+    }
+    actions.toast("warning", "Nothing to fork yet: this session has no prompt.");
+  } catch (error) {
+    actions.toast("error", errorText(error));
   }
-  actions.toast("warning", "Nothing to fork yet: this session has no prompt.");
 }
