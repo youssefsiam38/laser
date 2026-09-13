@@ -4,6 +4,12 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useDirectoryPage } from "../../src/components/thread/use-directory-page.js";
 
+// The explorer's reply validator is a chunk of its own (M16-T31), asked for
+// beside the first listing request. These tests drive fake timers, which cannot
+// advance a module load, so it is here once instead of mid-assertion; the cold
+// path — nothing fetched until `@` — is proved in the browser check.
+await import("../../src/components/thread/explorer-listing.js");
+
 const request = vi.hoisted(() => vi.fn());
 const client = { request };
 vi.mock('@/runtime', () => ({ useLaserStable: () => ({ client }) }));

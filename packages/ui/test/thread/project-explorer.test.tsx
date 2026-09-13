@@ -8,6 +8,10 @@ import { useDirectoryPage } from "../../src/components/thread/use-directory-page
 import { matchProjectMention } from "../../src/components/thread/project-path.js";
 import { explorerItems, explorerNavigation, explorerPageItem, mentionFormatter } from "../../src/components/thread/project-explorer-model.js";
 
+// The listing validator is a lazy chunk (M16-T31) and these tests run on fake
+// timers, which cannot advance a module load: load it once, here.
+await import("../../src/components/thread/explorer-listing.js");
+
 const request = vi.hoisted(() => vi.fn());
 const client = { request };
 vi.mock('@/runtime', () => ({ useLaserStable: () => ({ client }) }));

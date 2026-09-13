@@ -164,6 +164,14 @@ const closeMenu = async () => {
   await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   await act(async () => settle(10));
 };
+/** The API request inspector's body is a chunk (M16-T31): the dialog opens on
+ * the click, and asks the host for the capture once the body has landed. */
+const inspectorLoaded = async () => {
+  await vi.waitFor(async () => {
+    await act(async () => settle(0));
+    expect(stable.client.request).toHaveBeenCalledWith("pi/logs/query", expect.anything());
+  }, { timeout: 10_000, interval: 10 });
+};
 const choose = async (label: string) => {
   const el = item(label)!;
   expect(el).toBeDefined();
@@ -197,6 +205,7 @@ describe("the newest prompt while its turn runs", () => {
     // The request went out at turn start; the dialog asks for it by the
     // prompt's own entry, not by a time window that would miss it.
     await choose("View API request");
+    await inspectorLoaded();
     expect(stable.client.request).toHaveBeenCalledWith("pi/logs/query", expect.objectContaining({ sessionPath: SESSION, promptEntryId: "u2", kind: "provider_request" }));
     expect(document.body.textContent).toContain("No captured request for this message");
     // Nothing above asked for the tree to be re-read.
