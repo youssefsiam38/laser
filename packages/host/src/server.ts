@@ -94,7 +94,15 @@ export interface HostServerOptions {
   /** M4 log store file. Defaults to `<stateDir>/logs.db`; `false` disables logging. */
   logFile?: string | false;
   /** Retention for the log store, and how much of a provider round-trip it keeps. */
-  logRetention?: { maxRows?: number; maxAgeDays?: number; providerPayloads?: "full" | "summary" };
+  logRetention?: {
+    maxRows?: number;
+    maxAgeDays?: number;
+    providerPayloads?: "full" | "summary";
+    /** Bytes of retained request bodies before the oldest are released (D-245). */
+    bodyBudgetBytes?: number;
+    /** Provider requests per session whose body is kept in full (D-245). */
+    bodiesPerSession?: number;
+  };
   /**
    * Remote access through a relay (M6). **Absent means off**, which is the
    * default: with no `relay` the host makes no outbound connection and is
@@ -262,7 +270,12 @@ export class HostServer {
           ...(options.logRetention?.providerPayloads !== undefined
             ? { providerPayloads: options.logRetention.providerPayloads }
             : {}),
+          ...(options.logRetention?.bodyBudgetBytes !== undefined ? { bodyBudgetBytes: options.logRetention.bodyBudgetBytes } : {}),
+          ...(options.logRetention?.bodiesPerSession !== undefined ? { bodiesPerSession: options.logRetention.bodiesPerSession } : {}),
           onAppend: (entries) => this.queueLogAppend(entries),
+          // A one-time compaction of an older store holds the host; the log is
+          // where it says so, before and after.
+          log: (message) => this.log(message),
         });
         this.logsUnavailable = undefined;
       } catch (error) {
