@@ -56,6 +56,8 @@ export class TranscriptViewport {
   private ownsLocation = false;
   private tail: (() => void) | undefined;
   private expectedTop: number | undefined;
+  /** The person is moving the viewport right now; layout may shift it, never re-place it. */
+  private reading: ReturnType<typeof setTimeout> | undefined;
   private disposed = false;
   getSnapshot = () => this.revision;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
@@ -180,6 +182,11 @@ export class TranscriptViewport {
     const row = this.nodes.get(anchor.messageId);
     if (!row) {
       const index = this.positions.get(anchor.messageId);
+      // While the person is reading upwards, the anchor's row is often not
+      // mounted yet and the index above it is still estimates. Placing it
+      // from those estimates moved the viewport back down under their wheel.
+      // Leave the position alone; measure() shifts by exactly what changes.
+      if (this.reading) return;
       if (index !== undefined) { this.scroll(viewport.scrollTop + this.heights.offset(index) - this.top() - anchor.messageOffset); return; }
       // The transcript this place belonged to is not loaded here any more —
       // a reloaded recent tail, or a branch that dropped the message. Latest
@@ -211,6 +218,11 @@ export class TranscriptViewport {
     this.frame = 0;
     if (this.disposed) return;
     let changed = this.layout();
+    // Where the anchor sits before this pass. When measured rows replace
+    // estimates above it, the person must not feel it: shift by exactly what
+    // changed above the anchor, never re-place it from a fresh absolute.
+    const anchorIndex = !this.place.following && this.place.anchor ? this.positions.get(this.place.anchor.messageId) : undefined;
+    const anchorBefore = anchorIndex !== undefined ? this.heights.offset(anchorIndex) : undefined;
     for (const [id, node] of this.nodes) {
       const index = this.positions.get(id);
       if (index === undefined) continue;
@@ -224,7 +236,15 @@ export class TranscriptViewport {
     }
     // A global measurement budget, including layouts and previously visited sessions.
     while (this.measured.size > 20_000) this.measured.delete(this.measured.keys().next().value!);
-    if (changed || this.windowDirty) { this.windowDirty = false; this.restore(); this.publish(); }
+    if (changed || this.windowDirty) {
+      this.windowDirty = false;
+      const mounted = this.reading && anchorIndex !== undefined && anchorBefore !== undefined && this.viewport && !this.target && this.nodes.has(this.place.anchor!.messageId);
+      if (mounted) {
+        const shift = this.heights.offset(anchorIndex) - anchorBefore;
+        if (Math.abs(shift) >= 0.5) this.scroll(this.viewport!.scrollTop + shift);
+      } else this.restore();
+      this.publish();
+    }
     this.capture();
   };
   schedule = () => { if (!this.frame && !this.disposed) this.frame = requestAnimationFrame(this.measure); };
@@ -326,7 +346,11 @@ export class TranscriptViewport {
       this.place.following = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop <= 2;
       this.capture(); this.publish(); this.schedule();
     };
-    const user = () => { this.cancel(); this.arriving = false; this.place.following = false; this.expectedTop = undefined; };
+    const user = () => {
+      this.cancel(); this.arriving = false; this.place.following = false; this.expectedTop = undefined;
+      if (this.reading) clearTimeout(this.reading);
+      this.reading = setTimeout(() => { this.reading = undefined; this.schedule(); }, 400);
+    };
     const selection = () => {
       const selected = document.getSelection();
       if (selected && !selected.isCollapsed && selected.anchorNode === this.content && selected.focusNode === this.content && this.ids.length) {
@@ -403,7 +427,7 @@ export class TranscriptViewport {
     document.fonts?.addEventListener("loadingdone", this.schedule);
     this.schedule();
     return () => {
-      this.cancel(); this.disposed = true; cancelAnimationFrame(this.frame); this.frame = 0;
+      this.cancel(); this.disposed = true; cancelAnimationFrame(this.frame); this.frame = 0; if (this.reading) { clearTimeout(this.reading); this.reading = undefined; }
       this.observer?.disconnect(); this.observer = undefined; theme.disconnect();
       viewport.removeEventListener("scroll", scroll); viewport.removeEventListener("wheel", user); viewport.removeEventListener("touchstart", user);
       viewport.removeEventListener("pointerdown", this.cancel);
