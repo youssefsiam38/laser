@@ -16,10 +16,39 @@ export function sinceLaunch(): number {
   return Math.round(performance.now());
 }
 
+/**
+ * Every line the startup timeline can contain, in the order they happen.
+ *
+ * A closed vocabulary on purpose: the timeline is written to a file people
+ * send to us when a launch felt slow, so nothing that could carry a path, a
+ * URL, a token or a word of somebody's conversation may reach it. The type
+ * makes that a compile error rather than a review note — `milestone()` takes
+ * one of these names and nothing else, not even a template string.
+ *
+ *  - `process entered` — this file started running; everything before it is
+ *    Electron's own boot.
+ *  - `app ready` — Chromium is up and a window may be opened.
+ *  - `window created` / `window ready to show` — the shell's own window.
+ *  - `opening screen painted` — the waiting screen, shown while the host starts.
+ *  - `host ready` — the agent host answered; the app can connect.
+ *  - `app loaded` — the real UI finished loading in the window.
+ */
+export const STARTUP_MILESTONES = [
+  "process entered",
+  "app ready",
+  "window created",
+  "window ready to show",
+  "opening screen painted",
+  "host ready",
+  "app loaded",
+] as const;
+
+export type StartupMilestone = (typeof STARTUP_MILESTONES)[number];
+
 export class DesktopLog {
   private failed = false;
   /** Startup milestones already recorded; each one is a first, not a repeat. */
-  private readonly milestones = new Set<string>();
+  private readonly milestones = new Set<StartupMilestone>();
 
   constructor(private readonly file: string) {
     try {
@@ -53,7 +82,7 @@ export class DesktopLog {
    * rather than a running commentary (a re-created window or a restarted host
    * says so in its own lines already).
    */
-  milestone(name: string): void {
+  milestone(name: StartupMilestone): void {
     if (this.milestones.has(name)) return;
     this.milestones.add(name);
     this.line(`startup: ${name} at ${sinceLaunch()}ms`);

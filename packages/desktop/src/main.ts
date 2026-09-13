@@ -75,6 +75,11 @@ const environment = desktopEnv(process.env);
 const home = agentHome(process.env);
 const paths: LaserPaths = resolvePaths(NO_ARGS, environment);
 const log = new DesktopLog(join(paths.stateDir, "desktop.log"));
+// The first line of the startup timeline, and the only one that measures
+// something this code did not do: everything before it is Electron's own boot
+// (unpacking, V8, Chromium's initialisation), which is invisible from inside
+// the app unless this number is written down.
+log.milestone("process entered");
 for (const line of migration.lines) log.line(line);
 log.line(
   `${PRODUCT_NAME} data directory: ${home.dataDir}${home.chosenByPerson ? ` (set by ${ENV.agentDir})` : ""}` +
