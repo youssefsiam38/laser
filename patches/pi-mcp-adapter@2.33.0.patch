@@ -1537,7 +1537,7 @@ index beb2a04..916b0f2 100644
    const queryTokens = tokenize(query);
    if (queryTokens.length === 0) return matches;
 diff --git a/server-manager.ts b/server-manager.ts
-index 94154fd..975a5f7 100644
+index 94154fd..af62540 100644
 --- a/server-manager.ts
 +++ b/server-manager.ts
 @@ -1,4 +1,6 @@
@@ -1621,7 +1621,7 @@ index 94154fd..975a5f7 100644
      validateCaFile(definition);
      if (isServerDisabled(definition)) throw new Error(`MCP server "${name}" is disabled`);
      if (this.stopped) throw new Error("MCP server manager is closed");
-@@ -365,7 +393,10 @@ export class McpServerManager {
+@@ -365,9 +393,12 @@ export class McpServerManager {
      const generation = this.closeGenerations.get(name) ?? 0;
      const attemptController = new AbortController();
      const attemptSignal = combineAbortSignals(ownedSignal, attemptController.signal);
@@ -1631,8 +1631,11 @@ index 94154fd..975a5f7 100644
 +      catch (error) { await this.disposeConnection(connection); throw error; }
 +    });
      const promise = definition.url
-       ? connectionAttempt.catch(async error => { throw await this.enrichHttpConnectionError(definition, error); })
+-      ? connectionAttempt.catch(async error => { throw await this.enrichHttpConnectionError(definition, error); })
++      ? connectionAttempt.catch(async error => { await this.assertAuthorized(name); throwIfAborted(attemptSignal); throw await this.enrichHttpConnectionError(definition, error); })
        : connectionAttempt;
+     this.connectPromises.set(name, promise);
+     this.connectAttempts.set(name, attemptController);
 @@ -434,6 +465,7 @@ export class McpServerManager {
      name: string,
      expectedConnection: ServerConnection,

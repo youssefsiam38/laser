@@ -310,7 +310,9 @@ describe("pinned MCP cache contract over HTTP", () => {
     const refused = expect(pending).rejects.toThrow("Access changed");
     await entered.promise;
     await registry.bump(snapshot.identity);
+    const discoveryRequests = f.requests.filter(request => request.method === "server/discover").length;
     release.resolve(); await refused;
+    expect(f.requests.filter(request => request.method === "server/discover")).toHaveLength(discoveryRequests);
     expect(manager.getConnection("cold")).toBeUndefined();
     expect(published).not.toHaveBeenCalled();
     expect(f.requests.filter(request => request.method === "tools/call")).toHaveLength(0);
