@@ -154,21 +154,15 @@ function stats(samples, field) {
 async function navigationPairs(check, entries, turns) {
   const page = check.page, title = `${check.fixture.name} conversation 1`;
   await companions(check, entries, turns);
-  const anchor = () => page.evaluate(() => {
-    const view = document.querySelector('[data-slot="thread-viewport"]');
-    const node = [...view.querySelectorAll('[data-message-id] p')].find(n => n.textContent === 'Checkpoint 12 is complete.');
-    return node ? node.getBoundingClientRect().top - view.getBoundingClientRect().top : null;
-  });
-  const before = await anchor(); assert.notEqual(before, null);
+  // D-236: an ordinary return opens at the recent tail, so what is measured is
+  // a tail load after a history of this size — not a restored deep position.
   await open(check, 'C short', 'Checkpoint 900002 is complete.');
-  await open(check, title, 'Checkpoint 12 is complete.');
-  await page.waitForFunction(expected => {
+  await open(check, title, `Checkpoint ${turns} is complete.`);
+  const latest = await page.evaluate(() => {
     const view = document.querySelector('[data-slot="thread-viewport"]');
-    const node = [...view.querySelectorAll('[data-message-id] p')].find(n => n.textContent === 'Checkpoint 12 is complete.');
-    return node && Math.abs(node.getBoundingClientRect().top - view.getBoundingClientRect().top - expected) <= 2;
-  }, before);
-  const after = await anchor();
-  await page.getByRole('button', { name: 'Jump to latest', exact: true }).click();
+    return view.scrollHeight - view.clientHeight - view.scrollTop;
+  });
+  assert(latest <= 4, `the return opens at the end of the conversation (${latest}px short of it)`);
   await open(check, 'C mirror', `Checkpoint ${turns} is complete.`);
   await loadAll(check);
   await open(check, title, `Checkpoint ${turns} is complete.`);
@@ -180,7 +174,7 @@ async function navigationPairs(check, entries, turns) {
     longLong.push(await open(check, 'C mirror', `Checkpoint ${turns} is complete.`, true));
     longLong.push(await open(check, title, `Checkpoint ${turns} is complete.`, true));
   }
-  const result = { canonical: turns * 2, pairs, anchor: { before, after, error: Math.abs(before - after) }, shortLong: { resident: stats(shortLong, 'resident'), interactive: stats(shortLong, 'interactive'), actualInput: stats(shortLong, 'actualInput'), samples: shortLong }, longLong: { resident: stats(longLong, 'resident'), interactive: stats(longLong, 'interactive'), actualInput: stats(longLong, 'actualInput'), samples: longLong } };
+  const result = { canonical: turns * 2, pairs, latest, shortLong: { resident: stats(shortLong, 'resident'), interactive: stats(shortLong, 'interactive'), actualInput: stats(shortLong, 'actualInput'), samples: shortLong }, longLong: { resident: stats(longLong, 'resident'), interactive: stats(longLong, 'interactive'), actualInput: stats(longLong, 'actualInput'), samples: longLong } };
   await writeFile(join(check.root, `switches-${check.state.width}-${check.state.theme}.json`), JSON.stringify(result, null, 2));
   if (process.env.TRANSCRIPT_SWITCH_PROFILE === '1' && turns >= 1000 && check.state.width === 1360 && check.state.theme === 'light' && (result.longLong.resident.median > 250 || result.longLong.resident.p95 > 400)) {
     // Explicit one-off attribution, after all samples; ordinary reruns never
