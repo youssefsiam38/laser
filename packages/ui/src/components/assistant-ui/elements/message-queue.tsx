@@ -39,7 +39,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { useIsTouch } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
-import { isSteerQueueItemId, pendingIdOfQueueItemId, useLaserStable, useLaserView } from "@/runtime";
+import { isSteerQueueItemId, pendingIdOfQueueItemId, useLaserStable, useLaserState } from "@/runtime";
 
 export type QueueLane = "steer" | "waiting" | "sending" | "failed";
 
@@ -243,9 +243,10 @@ export function QueuedRow({ text, lane, error, onSteer, onRemove, onEdit, onClea
 export function ComposerQueue() {
   const aui = useAui();
   const { actions } = useLaserStable();
-  const view = useLaserView();
+  // The tray, not the transcript it waits behind (M16-T32).
+  const pending = useLaserState(s => (s.current ? s.open[s.current]?.pending : undefined));
   const count = useAuiState((s) => s.composer.queue.length);
-  const waiting = view?.pending ?? [];
+  const waiting = pending ?? [];
 
   /** Put text back where it can be read and rewritten, without losing a draft. */
   const intoComposer = (content: string | readonly ContentBlock[]) => appendAttachedPrompt(aui.composer, content);

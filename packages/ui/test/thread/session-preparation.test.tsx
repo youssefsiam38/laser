@@ -16,7 +16,14 @@ const composer = vi.hoisted(() => ({
 
 vi.mock("../../src/runtime/LaserProvider.js", () => ({
   useLaserView: () => laser.view,
-  useLaserState: () => laser.defaultAgent,
+  // The provider reads narrow slices (the session's agent, whether canonical
+  // history has started), so the mock runs the real selectors over a store
+  // shaped like the app's.
+  useLaserState: (selector: (state: unknown) => unknown) => selector({
+    current: laser.view?.path,
+    open: laser.view ? { [laser.view.path]: laser.view } : {},
+    agents: { snapshot: laser.defaultAgent ? { defaultAgent: laser.defaultAgent } : undefined },
+  }),
 }));
 
 vi.mock("@assistant-ui/react", async (original) => {

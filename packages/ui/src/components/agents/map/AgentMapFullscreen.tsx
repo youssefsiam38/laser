@@ -8,15 +8,17 @@
  */
 import { useEffect, useRef } from "react";
 
-import { useLaserView } from "@/runtime";
+import { useLaserState } from "@/runtime";
 
 import { AgentMapConnected, useMapRoot } from "./AgentMapView.js";
 import { mapUi, useMapUi } from "./map-state.js";
 
 export function AgentMapFullscreen() {
   const { fullscreen } = useMapUi();
-  const view = useLaserView();
-  const rootPath = useMapRoot(view?.path);
+  // The session's path, not the session: the map is not redrawn by a token
+  // arriving in the conversation behind it (M16-T32).
+  const path = useLaserState(s => (s.current ? s.open[s.current]?.path : undefined));
+  const rootPath = useMapRoot(path);
   const ref = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -42,7 +44,7 @@ export function AgentMapFullscreen() {
     if (fullscreen) ref.current?.focus({ preventScroll: true });
   }, [fullscreen]);
 
-  if (!fullscreen || !view || !rootPath) return null;
+  if (!fullscreen || !path || !rootPath) return null;
   return (
     <section
       ref={ref}
@@ -51,7 +53,7 @@ export function AgentMapFullscreen() {
       aria-label="Agent map, fullscreen"
       className="absolute inset-0 z-30 flex min-w-0 flex-col bg-bg outline-none"
     >
-      <AgentMapConnected rootPath={rootPath} frame="fullscreen" focusPath={view.path} />
+      <AgentMapConnected rootPath={rootPath} frame="fullscreen" focusPath={path} />
     </section>
   );
 }

@@ -11,7 +11,7 @@
  * from `diff.ts`), the icon follows the tool's kind, and the live step
  * shimmers while it runs. `useThreadToolTimeline` reads the current thread.
  */
-import { useAuiState, type ToolCallMessagePart, type ToolCallMessagePartStatus } from "@assistant-ui/react";
+import { useAui, useAuiState, type ToolCallMessagePart, type ToolCallMessagePartStatus } from "@assistant-ui/react";
 import { ChevronRight } from "lucide-react";
 import { useMemo, type ComponentProps } from "react";
 
@@ -84,10 +84,32 @@ export function toolTimelineFromParts(messages: readonly MessageLike[]): ToolTim
   return { steps, stats: [...churn.values()], streaming };
 }
 
+/**
+ * What this timeline can see of a message list: one line per tool call, with
+ * the fields the timeline reads. Streamed prose is absent on purpose — the
+ * monitor's Tools section must not re-render for a token that changes no tool
+ * call (M16-T32). Live tool work still moves it: a call appearing, its
+ * arguments arriving, its status settling and its error flag are all here.
+ */
+export function toolTimelineKey(messages: readonly MessageLike[]): string {
+  const parts: string[] = [];
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (part.type !== "tool-call") continue;
+      const p = part as ToolPart & { argsText?: string };
+      parts.push(`${p.toolCallId}:${p.status.type}:${p.status.type === "incomplete" ? p.status.reason : ""}:${p.isError === true ? 1 : 0}:${p.argsText?.length ?? 0}`);
+    }
+  }
+  return parts.join("|");
+}
+
 /** The current thread's timeline; the run the person is looking at. */
 export function useThreadToolTimeline(): ToolTimeline {
-  const messages = useAuiState((s) => s.thread.messages) as readonly MessageLike[];
-  return useMemo(() => toolTimelineFromParts(messages), [messages]);
+  const aui = useAui();
+  const key = useAuiState((s) => toolTimelineKey(s.thread.messages as readonly MessageLike[]));
+  // The messages are read imperatively for the same commit the key describes:
+  // subscribing to them would re-render this timeline for every streamed token.
+  return useMemo(() => toolTimelineFromParts(aui.thread.getState().messages as unknown as readonly MessageLike[]), [aui, key]);
 }
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;

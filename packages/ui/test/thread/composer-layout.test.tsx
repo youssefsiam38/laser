@@ -65,6 +65,15 @@ vi.mock("@/agents", () => ({ useRunsForRoot: () => [] }));
 vi.mock("@/runtime", async (importActual) => ({
   ...(await importActual<typeof import("../../src/runtime/index.js")>()),
   useLaserView: () => mocks.view,
+  // The composer reads narrow slices of app state, so the mock runs real selectors.
+  useLaserState: (selector: (state: unknown) => unknown) => selector({
+    current: mocks.view?.path,
+    open: mocks.view ? { [mocks.view.path]: mocks.view } : {},
+    sessions: [],
+    connection: "open",
+    workers: {},
+    agents: { snapshot: undefined, runs: {}, events: [] },
+  }),
   useLaserStable: () => ({
     currentProject: mocks.currentProject,
     client: mocks.client,

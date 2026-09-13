@@ -6,7 +6,27 @@ import { artifactTreeSha256 } from '../../review-env/artifacts.mjs';
 export const checkout = fileURLToPath(new URL('../../../', import.meta.url));
 const self = fileURLToPath(import.meta.url);
 
-export async function target(runtime) {
+/**
+ * Point the sandboxed agent directory at a stub provider and record its URL.
+ * Shared with sibling targets that supply their own provider process (the
+ * streaming profiler's chunked provider), so provider startup stays one recipe.
+ */
+export function configureStubProvider(root, url) {
+  const modelsPath = join(root, 'agent/models.json');
+  const models = JSON.parse(readFileSync(modelsPath, 'utf8'));
+  models.providers.stub.models[0].contextWindow = 1000000;
+  writeFileSync(modelsPath, JSON.stringify(models));
+  writeFileSync(join(root, 'agent/settings.json'), JSON.stringify({ defaultProvider: 'stub', defaultModel: 'stub-1', compaction: { enabled: false } }));
+  writeFileSync(join(root, 'provider.json'), JSON.stringify({ url }));
+}
+
+/**
+ * `options.provider` is the module that runs the stub provider process; it must
+ * accept `--provider <root>` and write `provider.json` as this file does.
+ * Everything else — host, fixtures, theme, RPC — is identical for every target
+ * built on this one.
+ */
+export async function target(runtime, options = {}) {
   for (const path of ['packages/cli/dist/main.js', 'packages/host/dist/index.js', 'packages/worker/dist/main.js', 'packages/ui/dist/index.html']) {
     if (!existsSync(join(checkout, path))) throw new Error('The app is not built; run pnpm -r build from the target checkout.');
   }
@@ -15,7 +35,7 @@ export async function target(runtime) {
   const agentDir = join(runtime.root, 'agent'), sessionDir = join(runtime.root, 'sessions'), stateDir = join(runtime.root, 'state');
   for (const path of [agentDir, sessionDir, stateDir]) mkdirSync(path, { recursive: true });
   const env = { ...runtime.env, [ENV.agentDir]: agentDir, [ENV.sessionDir]: sessionDir, [ENV.stateDir]: stateDir, [ENV.node]: runtime.node, [PI_AGENT_DIR_ENV]: agentDir, [PI_SESSION_DIR_ENV]: sessionDir, PI_MCP_ADAPTER_TEST_AUTH_STORE: 'memory' };
-  runtime.spawn(runtime.node, [self, '--provider', runtime.root], { name: 'provider', env });
+  runtime.spawn(runtime.node, [options.provider ?? self, '--provider', runtime.root], { name: 'provider', env });
   await runtime.until(() => existsSync(join(runtime.root, 'provider.json')), 'stub provider (see logs/provider.log)', runtime.timeout);
   const port = await runtime.freePort();
   runtime.spawn(runtime.node, [join(checkout, 'packages/cli/dist/main.js'), 'up', '--foreground', '--no-open', '--port', String(port), '--agent-dir', agentDir, '--session-dir', sessionDir, '--state-dir', stateDir], { name: 'host', env });
@@ -63,12 +83,7 @@ if (process.argv[1] && resolve(process.argv[1]) === self && process.argv[2] === 
   const { answer } = await import('./fixtures.mjs');
   const provider = await startStubProvider(answer);
   writeStubModels(join(root, 'agent'), provider.url);
-  const modelsPath = join(root, 'agent/models.json');
-  const models = JSON.parse(readFileSync(modelsPath, 'utf8'));
-  models.providers.stub.models[0].contextWindow = 1000000;
-  writeFileSync(modelsPath, JSON.stringify(models));
-  writeFileSync(join(root, 'agent/settings.json'), JSON.stringify({ defaultProvider: 'stub', defaultModel: 'stub-1', compaction: { enabled: false } }));
-  writeFileSync(join(root, 'provider.json'), JSON.stringify({ url: provider.url }));
+  configureStubProvider(root, provider.url);
   process.once('SIGTERM', () => void provider.close().then(() => process.exit(0)));
 }
 export { fixture } from './fixtures.mjs';

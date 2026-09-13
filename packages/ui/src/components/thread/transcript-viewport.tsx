@@ -1,5 +1,5 @@
 import { ThreadPrimitive, useThreadViewport, unstable_useThreadMessageIds } from "@assistant-ui/react";
-import { createContext, useContext, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { createContext, memo, useContext, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useLaserState } from "@/runtime";
 import { activityDetailLevel } from "@/runtime/sessionPreferences";
 import { motionMs } from "@/motion";
@@ -493,9 +493,16 @@ export function WindowedMessages() {
     {cursor < ids.length && <div aria-hidden="true" data-slot="transcript-spacer" style={{ height: controller.heights.total - controller.heights.offset(cursor), flexShrink: 0 }} />}
   </div>;
 }
-function WindowRow({ id, controller }: { id: string; controller: TranscriptViewport }) {
+/**
+ * Memoised on purpose. The window republishes whenever a row is measured, a
+ * pin changes or the transcript grows — several times per streamed batch — and
+ * every one of those rebuilt this list. A settled row's props (its id and this
+ * surface's controller) do not change, so it must not re-render with the list:
+ * its own message subscription is what tells it that its content moved.
+ */
+const WindowRow = memo(function WindowRow({ id, controller }: { id: string; controller: TranscriptViewport }) {
   const register = useRef<(node: HTMLDivElement | null) => void>(node => controller.register(id, node));
   return <div ref={register.current} data-window-message={id} className="pb-5 [&_[data-message-id]]:[content-visibility:visible]">
     <ThreadPrimitive.Unstable_MessageById messageId={id} components={COMPONENTS} />
   </div>;
-}
+});

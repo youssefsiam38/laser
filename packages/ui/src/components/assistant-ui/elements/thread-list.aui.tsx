@@ -65,6 +65,7 @@ import {
   ThreadListPrimitive,
   useAui,
   useAuiState,
+  type AssistantState,
 } from "@assistant-ui/react";
 import type { AgentRun, AgentRunStatus, SessionSummary } from "@lasercode/protocol";
 import {
@@ -225,6 +226,24 @@ function latestRunsBySession(runs: Readonly<Record<string, AgentRun>>): Readonly
 }
 
 /**
+ * assistant-ui rebuilds `threadIds` and `threadItems` on every publication of
+ * its store, so a plain selector hands back an equal array with a new identity
+ * for every streamed token and re-renders the whole sessions panel (M16-T32).
+ * This keeps the previous array while its entries are the same objects, per
+ * component instance: the list re-renders when the list changes.
+ */
+function useStableAuiList<T>(select: (state: AssistantState) => readonly T[]): readonly T[] {
+  const held = useRef<readonly T[] | undefined>(undefined);
+  return useAuiState((state) => {
+    const next = select(state);
+    const previous = held.current;
+    if (previous && previous.length === next.length && previous.every((item, index) => item === next[index])) return previous;
+    held.current = next;
+    return next;
+  });
+}
+
+/**
  * Every project as a group, in rail order, newest first inside; a session
  * whose cwd is not a known project still gets a group at the end, so nothing
  * on disk is unreachable. `filter` narrows to one project (the rail's
@@ -239,8 +258,8 @@ export function useThreadListGroups(
   workspaces: Workspaces = {},
   archived = false,
 ): ThreadListGroup[] {
-  const threadIds = useAuiState((s) => archived ? s.threads.archivedThreadIds : s.threads.threadIds);
-  const threadItems = useAuiState((s) => s.threads.threadItems);
+  const threadIds = useStableAuiList((s) => archived ? s.threads.archivedThreadIds : s.threads.threadIds);
+  const threadItems = useStableAuiList((s) => s.threads.threadItems);
   const runs = useLaserState((s) => s.agents.runs);
   const { pinned } = useSessionsList();
   const needle = query.trim().toLowerCase();
@@ -909,7 +928,7 @@ interface BranchProps {
  */
 function SessionBranch({ node, editing, onEdit, onOpen }: BranchProps) {
   const archived = useContext(ArchivedContext);
-  const threadIds = useAuiState((s) => archived ? s.threads.archivedThreadIds : s.threads.threadIds);
+  const threadIds = useStableAuiList((s) => archived ? s.threads.archivedThreadIds : s.threads.threadIds);
   const layout = useContext(LayoutContext);
   const info = useContext(TreeContext).get(node.path);
   const live = archived ? 0 : (info?.live.length ?? 0);
@@ -1037,7 +1056,7 @@ function branchDomId(path: string): string {
 }
 
 function ArchivedGroup({ editing, onEdit, onOpen }: { editing: string | undefined; onEdit(id: string | undefined): void; onOpen?: (() => void) | undefined }) {
-  const archivedIds = useAuiState((s) => s.threads.archivedThreadIds);
+  const archivedIds = useStableAuiList((s) => s.threads.archivedThreadIds);
   const archivedCount = useLaserState(s => s.archivedSessionCount) ?? archivedIds.length;
   const { actions } = useLaserStable();
   const groups = useThreadListGroups(EMPTY_PROJECTS, undefined, "", "code", EMPTY_WORKSPACES, true);

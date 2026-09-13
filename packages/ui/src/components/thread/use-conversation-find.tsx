@@ -1,4 +1,4 @@
-import { useAuiState } from "@assistant-ui/react";
+import { useAuiState, type ThreadMessage } from "@assistant-ui/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConversationSearch } from "@/components/assistant-ui/elements/conversation-search";
 import { motionMs } from "@/motion";
@@ -58,10 +58,18 @@ export function findTextMatches(root: HTMLElement, query: string, mode: "convers
   }));
 }
 
+const NO_MESSAGES: readonly ThreadMessage[] = [];
+
 export function useConversationFind({ partial = false, loadAll }: { partial?: boolean; loadAll?: () => Promise<boolean> } = {}) {
   const controller = useTranscriptViewport();
   const highlightScope = useMemo(() => Symbol("conversation-find"), []);
-  const messages = useAuiState(s => s.thread.messages);
+  const [open, setOpen] = useState(false);
+  // Find reads the whole transcript, and the transcript changes with every
+  // streamed token. Subscribing to it while the bar is closed re-rendered this
+  // hook's owner — the thread column, its footer and every mounted row — once
+  // per streamed batch (M16-T32: `ThreadContent#23 array(42) of message`).
+  // Closed, the value is one constant and nothing here wakes.
+  const messages = useAuiState(s => (open ? s.thread.messages : NO_MESSAGES));
   const threadId = useAuiState(s => s.threads.mainThreadId);
   const [loadingAll, setLoadingAll] = useState(false);
   const loadingRef = useRef(false);
@@ -78,7 +86,6 @@ export function useConversationFind({ partial = false, loadAll }: { partial?: bo
       loadingRef.current = false; setLoadingAll(false);
     } }
   }, [loadAll, partial, threadId]);
-  const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState(0);
   const input = useRef<HTMLInputElement>(null);

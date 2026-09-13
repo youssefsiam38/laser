@@ -9,13 +9,15 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
-import { useLaserStable, useLaserView } from "@/runtime";
+import { useLaserStable, useLaserState } from "@/runtime";
 
 /** Persistent session objective, directly below the run/panel row. */
 export function GoalBar() {
-  const view = useLaserView();
+  // The goal, not the session: reading the whole view re-rendered this bar (and
+  // its dialogs) on every streamed batch, for a value that changes when the
+  // goal does (M16-T32).
+  const goal = useLaserState(s => (s.current ? s.open[s.current]?.goal : undefined));
   const { actions } = useLaserStable();
-  const goal = view?.goal;
   const [editing, setEditing] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [objective, setObjective] = useState("");

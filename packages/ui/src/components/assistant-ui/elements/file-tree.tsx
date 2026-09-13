@@ -11,7 +11,7 @@
  * thread's edit and write calls. Folders are structure, not controls: the
  * tree is short (what one session touched), so nothing collapses.
  */
-import { useAuiState, type ToolCallMessagePart, type ToolCallMessagePartStatus } from "@assistant-ui/react";
+import { useAui, useAuiState, type ToolCallMessagePart, type ToolCallMessagePartStatus } from "@assistant-ui/react";
 import { File, Folder } from "lucide-react";
 import { useMemo, type ComponentProps } from "react";
 
@@ -20,6 +20,7 @@ import { resultDetails, toolKind } from "@/components/thread/tool-summary";
 import { cn } from "@/lib/utils";
 
 import { DiffStat } from "./code-diff.js";
+import { toolTimelineKey } from "./tool-timeline.js";
 import { mono } from "./surfaces.js";
 
 export interface FileChange {
@@ -114,8 +115,12 @@ export function fileChangesFromParts(messages: readonly MessageLike[]): FileChan
 }
 
 export function useSessionFileChanges(): FileChange[] {
-  const messages = useAuiState((s) => s.thread.messages) as readonly MessageLike[];
-  return useMemo(() => fileChangesFromParts(messages), [messages]);
+  const aui = useAui();
+  // A file footprint changes when a tool call does, not when a token arrives:
+  // the timeline's key describes exactly the tool state this reads, so the
+  // monitor's Files section stays still through a streamed reply (M16-T32).
+  const key = useAuiState((s) => toolTimelineKey(s.thread.messages as readonly MessageLike[]));
+  return useMemo(() => fileChangesFromParts(aui.thread.getState().messages as unknown as readonly MessageLike[]), [aui, key]);
 }
 
 export interface FileTreeProps extends Omit<ComponentProps<"div">, "children"> {

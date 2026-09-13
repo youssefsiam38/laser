@@ -22,7 +22,7 @@ import {
   useDictationPhase,
   useEnvironment,
 } from "@/pwa";
-import { useLaserStable, useLaserView } from "@/runtime";
+import { useLaserStable, useLaserState } from "@/runtime";
 import type { TranscribeScope } from "@/pwa/dictation";
 import { useTranscriptionAvailable } from "@/pwa/transcription-availability";
 
@@ -55,17 +55,21 @@ interface DictateButtonProps {
 
 export function DictateButton({ className, size, touchSized = false }: DictateButtonProps) {
   const env = useEnvironment();
-  const view = useLaserView();
+  // Three narrow reads instead of the session view: a streamed token changes
+  // none of them, and the microphone must not re-render with the reply (M16-T32).
+  const path = useLaserState(s => (s.current ? s.open[s.current]?.path : undefined));
+  const sessionCwd = useLaserState(s => (s.current ? s.open[s.current]?.state.cwd : undefined));
+  const transcribes = useLaserState(s => Boolean(s.current && s.open[s.current]?.capabilities.includes("transcribe")));
   const { client, destination } = useLaserStable();
   const supported = env.microphone && PhraseDictationAdapter.isSupported();
   const landingCwd = destination?.phase === "ready-code" && destination.code.kind === "project-landing"
     ? destination.code.project : undefined;
-  const cwd = view?.state.cwd ?? landingCwd;
-  const landingAvailable = useTranscriptionAvailable(client, supported && !view ? landingCwd : undefined);
-  const available = view ? view.capabilities.includes("transcribe") : landingAvailable;
+  const cwd = sessionCwd ?? landingCwd;
+  const landingAvailable = useTranscriptionAvailable(client, supported && !path ? landingCwd : undefined);
+  const available = path ? transcribes : landingAvailable;
 
   if (!supported || !available || !cwd) return null;
-  return <DictateControls className={className} size={size} touchSized={touchSized} cwd={cwd} path={view?.path} />;
+  return <DictateControls className={className} size={size} touchSized={touchSized} cwd={cwd} path={path} />;
 }
 
 function DictateControls({ className, size, touchSized, cwd, path }: DictateButtonProps & TranscribeScope) {

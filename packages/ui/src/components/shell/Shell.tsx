@@ -19,7 +19,8 @@ import { EndAgentDialog } from "@/components/agents/EndAgentDialog";
 import { RemoveWorktreeDialog } from "@/components/agents/RemoveWorktreeDialog";
 // Beam: the bubble and its model choice, mounted once (docs/agents.md "Beam").
 import { BeamBubble, BeamModelDialog } from "@/components/beam";
-import { mergeSessions, sessionTitle, useLaserStable, useLaserState, useLaserView } from "@/runtime";
+import { mergeSessions, sessionTitle, useLaserStable, useLaserState } from "@/runtime";
+import { currentView, samePresentationView } from "@/runtime/presentation-state";
 
 import { AddProjectDialog } from "./AddProjectDialog.js";
 import { MoveSessionDialog } from "./MoveSessionDialog.js";
@@ -85,7 +86,11 @@ const writePrefs = (prefs: ColumnPrefs): void => {
  * `Shell` passes the real frame; a test passes a stub and drives the host.
  */
 export function StartupShell({ children }: { children: ReactNode }) {
-  const view = useLaserView();
+  // The frame draws no transcript, so it reads the session with its identity
+  // held across everything a streamed token moves. Reading the view itself put
+  // the whole app — rail, sidebar, top bar, fleet, monitor and thread — through
+  // a render for every batch of a reply (M16-T32).
+  const view = useLaserState(currentView, samePresentationView);
   const versionMismatch = useLaserState((state) => state.versionMismatch);
   const { startupRestoring } = useLaserStable();
   const connection = useLaserState((state) => state.connection);
@@ -135,7 +140,7 @@ function ShellFrame() {
   const isWide = useIsWide();
   const desktop = layout === "desktop";
   const { currentProject, actions } = useLaserStable();
-  const view = useLaserView();
+  const view = useLaserState(currentView, samePresentationView);
   const connection = useLaserState((s) => s.connection);
   const sessions = useLaserState((s) => s.sessions);
 
