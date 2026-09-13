@@ -444,6 +444,9 @@ export interface ThreadAdapterDeps {
 }
 
 const attachmentAdapter = new ConversationAttachmentAdapter();
+// assistant-ui invalidates its message cache when this callback changes.
+// Metadata-only adapter publications must retain unchanged message identities.
+const convertMessage = (message: ThreadMessageLike): ThreadMessageLike => message;
 
 export function createThreadAdapter(deps: ThreadAdapterDeps): ExternalStoreAdapter<ThreadMessageLike> {
   const projection = deps.projection ?? projectSessionView(deps.view);
@@ -552,7 +555,7 @@ export function createThreadAdapter(deps: ThreadAdapterDeps): ExternalStoreAdapt
 
   return {
     messages: projection.messages,
-    convertMessage: (message) => message,
+    convertMessage,
     isRunning: projection.isRunning,
     isLoading: deps.openPhase?.phase === "opening" && !deps.openPhase.hasTranscript && deps.openPhase.expectsTranscript,
     // Background refreshes never disable a bound composer. The destination

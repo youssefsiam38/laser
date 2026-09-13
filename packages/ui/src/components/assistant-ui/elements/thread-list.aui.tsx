@@ -1181,6 +1181,7 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
   onOpen,
   archived = false,
 }) => {
+  const { actions } = useLaserStable();
   const id = useAuiState((s) => s.threadListItem.id);
   const path = useAuiState((s) => s.threadListItem.externalId ?? s.threadListItem.remoteId);
   const title = useAuiState((s) => s.threadListItem.title);
@@ -1262,7 +1263,15 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
           data-slot="aui_thread-list-item-trigger"
           aria-current={active ? "page" : undefined}
           title={[childLabel ? `${childLabel} · ${shownTitle}` : shownTitle, row.cwd, row.runStatus && row.child ? runStatusLabel(row.runStatus) : "", info?.total ? branchSummary(info) : "", row.sub.text, row.modifiedAt ? dateTime(row.modifiedAt) : ""].filter(Boolean).join("\n")}
-          onClick={onOpen}
+          onClick={(event) => {
+            // The main destination owns acceptance. Suppress the primitive's
+            // optimistic switch, which would mount this chat before resolving it.
+            if (path) {
+              event.preventDefault();
+              void actions.openSession(path);
+            }
+            onOpen?.();
+          }}
           onDoubleClick={(e) => {
             e.preventDefault();
             onEdit(id);
