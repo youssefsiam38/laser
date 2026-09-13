@@ -21,6 +21,7 @@ import { shortCwd, shortcutLabel } from "@/format";
 import { useTheme } from "@/hooks";
 import { cn } from "@/lib/utils";
 import { mainTab, useLaserStable, useLaserState } from "@/runtime";
+import { onVisible } from "@/runtime/visible-poll";
 import type { AppState } from "@/store";
 
 import { SESSIONS_TABS, groupsFor, sameGroups, sessionsList, useSessionsList, workspacesOf, type SessionsTab } from "./session-groups.js";
@@ -35,12 +36,15 @@ export interface SessionsPanelProps {
   variant: "panel" | "sheet";
 }
 
-/** Re-render every 30s so relative times stay honest. */
+/** Re-render every 30s so relative times stay honest — and immediately when the
+ * window comes back, because a hidden window's timers are throttled to a minute
+ * and "just now" on a session last touched an hour ago is a lie. */
 function useClock(ms = 30_000): void {
   const [, tick] = useReducer((n: number) => n + 1, 0);
   useEffect(() => {
     const t = setInterval(tick, ms);
-    return () => clearInterval(t);
+    const stopWatching = onVisible(tick);
+    return () => { clearInterval(t); stopWatching(); };
   }, [ms]);
 }
 

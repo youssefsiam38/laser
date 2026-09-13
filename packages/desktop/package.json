@@ -21,7 +21,7 @@
     "pretest": "pnpm run linux:assets",
     "test": "vitest run",
     "clean": "rm -rf dist *.tsbuildinfo out build/icon.png build/icons build/linux/generated",
-    "dev": "tsc -p tsconfig.json && electron dist/main.js --dev",
+    "dev": "tsc -p tsconfig.json && electron . --dev",
     "icons": "node scripts/make-icons.mjs",
     "linux:assets": "node scripts/make-linux-assets.mjs",
     "runtime": "node scripts/fetch-node.mjs",
@@ -31,6 +31,13 @@
     "dist": "pnpm run prepack:app && electron-builder",
     "dist:linux": "node scripts/build-linux.mjs"
   },
+  "//dev": [
+    "`electron .`, not `electron dist/main.js`: Electron reads the app's version",
+    "from the package.json of the *app path*, and a path to a file has none. It",
+    "then reports 0.0 to the preload, the renderer's release handshake sees a",
+    "version that is not its own, and a development run sits on 'waiting for the",
+    "update before reconnecting' forever."
+  ],
   "//optionalDependencies": [
     "@napi-rs/keyring resolves its native binding with a bare `require()` of a",
     "per-platform sibling package, declared as an optionalDependency of the",
