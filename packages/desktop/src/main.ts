@@ -36,6 +36,7 @@ import type { AttentionChange, FleetSnapshot } from "./fleet.js";
 import { HostLink } from "./host-link.js";
 import { HostProcess } from "./host-process.js";
 import { resolveShellEnvironment } from "./shell-environment.js";
+import { resolveStartupInputs } from "./startup.js";
 import { connectedGpuVendors, linuxDisplayDecision, probeWaylandGlobals } from "./linux-display.js";
 import { loadSecrets } from "./keychain.js";
 import { DesktopLog } from "./log.js";
@@ -332,7 +333,10 @@ function onHostChanged(info: DesktopHostInfo): void {
   hostInfo = info;
   windows.broadcast(IPC.hostChanged, info);
   tray.setHostMessage(info.state === "ready" ? undefined : (info.message ?? "starting the agent host…"));
-  if (info.state === "ready") link.connect(info.wsUrl);
+  if (info.state === "ready") {
+    log.milestone("host ready");
+    link.connect(info.wsUrl);
+  }
   routeMainWindow();
 }
 
@@ -617,6 +621,7 @@ function installMenu(): void {
 async function start(): Promise<void> {
   registerProtocolHandler();
   await app.whenReady();
+  log.milestone("app ready");
   if (process.platform === "linux") {
     // What Chromium actually did with the display decision, for support logs.
     // Only once `gpu-info-update` has fired: before that every feature reads
@@ -648,18 +653,17 @@ async function start(): Promise<void> {
   // A link that launched the app (Windows and Linux pass it in argv).
   dispatchDeepLink(deepLinkFromArgv(process.argv));
 
-  // Secrets before the host, so a keychain prompt is the first thing a person
-  // sees rather than something that interrupts a running session later.
-  try {
-    const secrets = await loadSecrets({ stateDir: paths.stateDir, log });
-    identity = secrets.summary;
-    log.line(`identity ${secrets.summary.deviceId} from ${secrets.summary.storage}`);
-  } catch (error) {
-    log.error(`could not load the ${PRODUCT_NAME} identity`, error);
-    identity = undefined;
-  }
-
-  const shellEnvironment = await resolveShellEnvironment({ log: (line) => log.line(line) });
+  // Both before the host, together: the keychain first so its prompt is the
+  // first thing a person sees, the login shell alongside it rather than after
+  // it (see `startup.ts`). The host needs the resolved environment whether it
+  // is spawned or adopted, so it still waits for both.
+  const startupInputs = await resolveStartupInputs({
+    secrets: () => loadSecrets({ stateDir: paths.stateDir, log }),
+    shellEnvironment: () => resolveShellEnvironment({ log: (line) => log.line(line) }),
+    log,
+  });
+  identity = startupInputs.identity;
+  const shellEnvironment = startupInputs.shellEnvironment;
   Object.assign(process.env, shellEnvironment);
   Object.assign(environment, shellEnvironment);
   await host.start();

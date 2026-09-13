@@ -24,3 +24,15 @@ export function startVisiblePoll(refresh: () => void, intervalMs: number, doc: D
   doc.addEventListener("visibilitychange", reconcile);
   return () => { stop(); doc.removeEventListener("visibilitychange", reconcile); };
 }
+
+/** Run `catchUp` each time the document becomes visible again. Returns a stop function.
+ * For state a hidden window may hold stale: a hidden page's timers are throttled to a
+ * second, and to a minute once it has been hidden for five (Chromium's intensive
+ * wake-up throttling), so the first paint after returning must not wait for a timer.
+ * The desktop window is hidden, not closed, whenever a person puts the app away.
+ */
+export function onVisible(catchUp: () => void, doc: Document = document): () => void {
+  const handler = () => { if (doc.visibilityState === "visible") catchUp(); };
+  doc.addEventListener("visibilitychange", handler);
+  return () => doc.removeEventListener("visibilitychange", handler);
+}

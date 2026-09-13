@@ -157,6 +157,37 @@ function launchArgument(name: string, value: unknown): string {
 }
 
 /**
+ * What the page is allowed to do, and what it costs when nobody is looking.
+ *
+ * Exported because both halves of it are load-bearing and a test should be
+ * able to read them without opening a window: the isolation flags, and the
+ * *absence* of `backgroundThrottling: false`.
+ *
+ * Closing the window hides it — the tray keeps laser running — so a hidden
+ * window is this app's normal resting state, not an edge case. Opting out of
+ * Chromium's background throttling would keep every timer and animation frame
+ * in the renderer running at full rate for as long as the app sits in the
+ * tray, which is a laptop's battery spent on frames nobody sees. Throttling
+ * slows timers and stops animation frames; it does not touch WebSocket
+ * delivery, so everything the host says still arrives. What the renderer has
+ * to be right about the moment it is shown again catches up on
+ * `visibilitychange` (`runtime/visible-poll.ts`, `pwa/reconnect.ts`,
+ * `components/thread/timing.ts`) rather than by spinning behind the person's
+ * back.
+ */
+export function windowWebPreferences(bootstrap: WindowBootstrap): Electron.WebPreferences {
+  return {
+    additionalArguments: [launchArgument("env", bootstrap)],
+    preload: preloadPath(),
+    sandbox: true,
+    contextIsolation: true,
+    nodeIntegration: false,
+    webviewTag: false,
+    spellcheck: true,
+  };
+}
+
+/**
  * Two `data:` URLs both have an opaque origin, so this deliberately treats them
  * as the same place: the waiting screen must not reload itself every time the
  * host reports that it is still starting.
@@ -220,18 +251,26 @@ export class WindowManager {
       show: false,
       title: PRODUCT_NAME,
       backgroundColor: this.options.frame().background,
-      webPreferences: this.webPreferences(),
+      webPreferences: windowWebPreferences(this.options.bootstrap),
     });
     this.main = window;
     if (stored?.maximized) window.maximize();
 
     this.harden(window);
+    this.options.log.milestone("window created");
     window.once("ready-to-show", () => {
+      this.options.log.milestone("window ready to show");
       window.show();
       if (stored?.maximized) window.maximize();
     });
 
     window.webContents.on("did-start-loading", () => this.options.onMainNavigating());
+    // Two different documents can be the first one to finish: the opening
+    // screen while the host is still starting, and the app itself. Both are
+    // worth one line each, once, so a slow launch can be read back later.
+    window.webContents.on("did-finish-load", () => {
+      this.options.log.milestone(window.webContents.getURL().startsWith("data:") ? "opening screen painted" : "app loaded");
+    });
     const save = (): void => this.scheduleSave(window);
     window.on("resize", save);
     window.on("move", save);
@@ -323,21 +362,6 @@ export class WindowManager {
       };
     }
     return LINUX_WINDOW_FRAME;
-  }
-
-  private webPreferences(): Electron.WebPreferences {
-    return {
-      additionalArguments: [launchArgument("env", this.options.bootstrap)],
-      preload: preloadPath(),
-      sandbox: true,
-      contextIsolation: true,
-      nodeIntegration: false,
-      webviewTag: false,
-      spellcheck: true,
-      // The renderer is served over http from loopback; nothing here should
-      // ever reach the network on its own.
-      backgroundThrottling: false,
-    };
   }
 
   /**

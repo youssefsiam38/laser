@@ -11,8 +11,15 @@ import { dirname } from "node:path";
 
 const MAX_BYTES = 1_000_000;
 
+/** Milliseconds since this process started. `performance.now()`'s origin. */
+export function sinceLaunch(): number {
+  return Math.round(performance.now());
+}
+
 export class DesktopLog {
   private failed = false;
+  /** Startup milestones already recorded; each one is a first, not a repeat. */
+  private readonly milestones = new Set<string>();
 
   constructor(private readonly file: string) {
     try {
@@ -35,6 +42,21 @@ export class DesktopLog {
       // A log that cannot be written must not take the app down with it.
       this.failed = true;
     }
+  }
+
+  /**
+   * One line of the startup timeline: what happened, and how long after launch.
+   *
+   * A launch that felt slow is otherwise unanswerable — the log has the host's
+   * own timings and nothing about the shell around them. Each milestone is
+   * written once, so this stays a handful of lines at the top of the file
+   * rather than a running commentary (a re-created window or a restarted host
+   * says so in its own lines already).
+   */
+  milestone(name: string): void {
+    if (this.milestones.has(name)) return;
+    this.milestones.add(name);
+    this.line(`startup: ${name} at ${sinceLaunch()}ms`);
   }
 
   /** What went wrong, on one line, with the cause when there is one. */
