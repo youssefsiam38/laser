@@ -22,6 +22,7 @@ import { useCopy } from "@/hooks";
 import { cn } from "@/lib/utils";
 import { useLaserStable } from "@/runtime";
 import { ApiRequestCaptureBar, ApiRequestLoading } from "./api-request-frame.js";
+import { adoptCaptures, NO_SHOWN_CAPTURES } from "./captures.js";
 import { inspectRequest, requestFieldLabel, requestFieldText, type RequestField } from "./request-model.js";
 import { ConversationSearch } from "@/components/assistant-ui/elements/conversation-search";
 import { SyntaxHighlighter } from "@/components/assistant-ui/elements/shiki-highlighter";
@@ -48,43 +49,51 @@ type ContentView = "plain" | "markdown";
 const REQUEST_INSPECTOR_PREFS = "request-inspector";
 
 /** Both entry points mount this same inspector; nothing sends a model request. */
-export function ApiRequestDialogBody({ target }: { target: ApiRequestTarget }) {
+export function ApiRequestDialogBody({ target: opened }: { target: ApiRequestTarget }) {
   const { client } = useLaserStable();
-  const [entries, setEntries] = useState<LogEntry[]>([]);
-  const [selected, setSelected] = useState<number>();
+  // The inspector answers for the request a person opened it on. In the
+  // transcript its parent is a live row: `at`, `beforeAt` and `entryId` all
+  // move while a turn streams — a later prompt closes the window, and the
+  // settled turn's entries are re-read — and none of that is somebody asking
+  // for a different capture. So the target is resolved once, when the dialog
+  // opens, and kept for its lifetime; opening the inspector on another
+  // message mounts another inspector, with that message's target (M16-T35).
+  const [target] = useState(opened);
+  const [shown, setShown] = useState(NO_SHOWN_CAPTURES);
   const [loading, setLoading] = useState(true);
   const [legacy, setLegacy] = useState(false);
   const [more, setMore] = useState(false);
   const [error, setError] = useState<string>();
   const [refresh, setRefresh] = useState(0);
-  const targetKey = target.kind === "log" ? `log:${target.entry.id}` : `message:${target.path}:${target.entryId}:${target.at}:${target.beforeAt}`;
   useEffect(() => {
     let live = true;
-    setLoading(true); setError(undefined); setLegacy(false); setMore(false);
-    const load = async () => {
+    setLoading(true); setError(undefined);
+    const load = async (): Promise<RequestPage> => {
       if (target.kind === "log") return { entries:[target.entry],hasMore:false };
       return loadMessageRequests(client, target);
     };
     void load().then(page=> {
       if (!live) return;
+      // Additive: a re-read offers what it found without taking away the
+      // capture on screen, so Refresh fills the picker, it does not reset it.
       setLegacy(Boolean(page.legacy));
-      setEntries(page.entries); setMore(page.hasMore);
-      setSelected(current=>page.entries.some(entry=>entry.id===current)?current:page.entries[0]?.id);
+      setMore(page.hasMore);
+      setShown(current=>adoptCaptures(current,page.entries));
     }).catch(()=>{if(live)setError("Could not load the captured requests. Check the host connection and try again.");})
       .finally(()=>{if(live)setLoading(false);});
     return ()=>{live=false;};
-    // Target identity is stable even when its parent's live state rerenders.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[client,targetKey,refresh]);
-  const entry = entries.find(item=>item.id===selected);
-  const captures=useMemo(()=>entries.map(row=>({id:row.id,at:row.at,label:row.requestContext?.model ?? row.summary})),[entries]);
+  },[client,target,refresh]);
+  const entry = shown.entries.find(item=>item.id===shown.selected);
+  const captures=useMemo(()=>shown.entries.map(row=>({id:row.id,at:row.at,label:row.requestContext?.model ?? row.summary})),[shown.entries]);
   return <>
-    <ApiRequestCaptureBar captures={captures} selected={selected} onSelect={setSelected} loading={loading} onRefresh={()=>setRefresh(n=>n+1)} />
-    {legacy && entries.length>0 && <p className="flex shrink-0 items-start gap-2 border-b border-line px-5 py-2 text-xs text-attention"><Info className="size-4 shrink-0" />Legacy captures matched by timestamp, not a recorded message link. These are requests between this message and the next; attribution may be incomplete.</p>}
+    <ApiRequestCaptureBar captures={captures} selected={shown.selected} onSelect={id=>setShown(current=>({...current,selected:id}))} loading={loading} onRefresh={()=>setRefresh(n=>n+1)} />
+    {legacy && shown.entries.length>0 && <p className="flex shrink-0 items-start gap-2 border-b border-line px-5 py-2 text-xs text-attention"><Info className="size-4 shrink-0" />Legacy captures matched by timestamp, not a recorded message link. These are requests between this message and the next; attribution may be incomplete.</p>}
     {more && <p className="px-5 py-2 text-xs text-attention">Showing the latest retained page. More requests are available in Logs.</p>}
-    {loading ? <ApiRequestLoading label="Loading captured requests" />
+    {/* A failed re-read is a line above the capture, not the loss of it. */}
+    {error && entry && <p role="alert" className="flex shrink-0 items-start gap-2 border-b border-line px-5 py-2 text-xs text-danger"><Info className="size-4 shrink-0" />{error}</p>}
+    {entry ? <FileLinkDirectory.Provider value={entry.cwd}><RequestBody key={entry.id} entry={entry} /></FileLinkDirectory.Provider>
+      : loading ? <ApiRequestLoading label="Loading captured requests" />
       : error ? <div role="alert" className="p-5 text-danger">{error}</div>
-      : entry ? <FileLinkDirectory.Provider value={entry.cwd}><RequestBody key={`${entry.id}:${refresh}`} entry={entry} /></FileLinkDirectory.Provider>
       : <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center"><FileText className="size-8 text-ink-3" /><h3 className="text-base font-medium">No captured request for this message</h3><p className="max-w-prose text-sm text-ink-2">It may not have reached a provider yet, or its logs were cleared or expired. Older versions did not record message links. Retained requests can also be inspected from Logs.</p></div>}
   </>;
 }
@@ -148,10 +157,13 @@ function RequestBody({entry}:{entry:LogEntry}) {
     setContentView(mode);
     void client.request("pi/prefs/set",{namespace:REQUEST_INSPECTOR_PREFS,value:{contentView:mode}}).catch(()=>{});
   };
+  // A payload is content-addressed, and a capture's id names one request: a
+  // second read of the same row is the same bytes, never a second fetch.
+  const detailRef=entry.detailRef?.ref;
   useEffect(()=>{
-    if(!entry.detailRef)return;
+    if(!detailRef)return;
     let live=true;
-    void client.request("pi/logs/content",{ref:entry.detailRef.ref,maxBytes:8*1024*1024}).then(result=>{
+    void client.request("pi/logs/content",{ref:detailRef,maxBytes:8*1024*1024}).then(result=>{
       if(!live)return;
       setReleased(result.released);
       if(result.released)return;
@@ -160,7 +172,7 @@ function RequestBody({entry}:{entry:LogEntry}) {
     }).catch(()=>{if(live)setError("This payload could not be loaded. It may have expired under log retention.");})
       .finally(()=>{if(live)setLoading(false);});
     return ()=>{live=false;};
-  },[client,entry]);
+  },[client,entry.id,detailRef]);
   const view=useMemo(()=>inspectRequest(payload),[payload]);
   const jsonText=useMemo(()=>createRequestJsonText(payload),[payload]);
   const fields=section==="json"?[]:view[section];
