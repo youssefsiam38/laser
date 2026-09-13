@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-13T05:01:44Z · orchestrator · HEAD: 5193fc9
-**Current focus:** M16 next release: MCP cache/revocation implementation, global `@` merged (workspace gate running), sustained-navigation conversion/selection fixes. Release authorized after acceptance; model-managed MCP servers permanently excluded (D-230).
+**Last updated:** 2026-09-13T05:04:16Z · orchestrator · HEAD: 5db11e9
+**Current focus:** M16 next release: MCP cache/revocation implementation, global `@` merged (workspace verification passed), sustained-navigation conversion/selection fixes. Release authorized after acceptance; model-managed MCP servers permanently excluded (D-230).
 
 | Milestone | State |
 | --- | --- |
