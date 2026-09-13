@@ -66,6 +66,150 @@ files:
   # dependency of that package precisely so a consumer can leave it out.
   - "!**/node_modules/{decibri,@decibri}/**"
 
+  # ------------------------------------------------ M16-T33: only what runs ----
+  #
+  # Everything below was proved unreachable by reading the loader that would
+  # have to reach it, and each rule says which one. The measurements and the
+  # before/after inventory are in docs/perf-package.md. The gate for all of
+  # them is the same: `scripts/clean-machine.mjs` against a real packaged
+  # session, with an empty PATH. Nothing here removes a file type by
+  # extension, and nothing here touches an engine or provider package's
+  # executable source (AGENTS.md §5a).
+
+  # This workspace's own packages ship built output and their TypeScript
+  # sources side by side, because they are linked, not published. Every one of
+  # them resolves through `exports`/`main`/`bin` into `dist/`, and nothing
+  # reads a sibling `src/`: the host serves `@lasercode/ui/dist` (it resolves
+  # the package manifest and then requires `dist/index.html` to exist —
+  # `defaultUiDir` in packages/host/src/server.ts), the worker imports
+  # `@lasercode/pi-extension` as a normal module, so the engine loads the
+  # extension's `dist`, never its source. `*.map` is already excluded above,
+  # so the sources cannot even serve a debugger. `public/` is vite's input,
+  # copied into `dist/` at build time; the root `index.html` is vite's
+  # template, and `dist/index.html` is the one that is served.
+  - "!**/node_modules/@lasercode/*/{src,public}/**"
+  - "!**/node_modules/@lasercode/*/{tsconfig*.json,*.tsbuildinfo,vite.config.ts,vitest.config.ts,components.json,index.html}"
+
+  # A 22 MB JVM archive that is the *second* choice of a checker used for one
+  # thing: pi-mcp-adapter's ReDoS guard on a person's regex search over MCP
+  # tools, through `checkSync` (proxy-modes.ts:741, params at :32). Read the
+  # loader (recheck/lib/main.js): `checkSync` runs the analysis either in a
+  # synckit worker (the default) or, with RECHECK_SYNC_BACKEND=pure, in the
+  # pure-JS engine that is compiled into lib/main.js itself. The worker takes
+  # the `auto` path, which tries the native `recheck-<os>-<arch>` binary, then
+  # `java -jar` this archive, and falls back to that same pure engine when
+  # neither answers. The jar's path comes from
+  # `require.resolve("recheck-jar/package.json")`, which the loader wraps in a
+  # try/catch that returns null on MODULE_NOT_FOUND — so removing the package
+  # is a fallthrough, not a crash.
+  #
+  # The jar can therefore only ever be chosen where there is no native binary
+  # AND the machine has a JVM. recheck 4.5.0's optionalDependencies publish a
+  # binary for linux-x64, macos-x64, macos-arm64 and windows-x64 only — so on
+  # our two arm64 targets (Linux and Windows) there is no native binary and the
+  # pure engine is already what most people get, because most machines have no
+  # `java`. The pure engine gives the same answers: `checkSync` with the
+  # adapter's own parameters returns vulnerable for `^(a|a)*$`, vulnerable for
+  # `get_.*_tool` and safe for `^[a-z]+(foo|bar)?$` under both backends, in
+  # milliseconds — well inside the adapter's 250 ms analysis budget. The
+  # numbers are in docs/perf-package.md, and `scripts/clean-machine.mjs` runs
+  # that comparison on every packaged build, so a change that leaves the guard
+  # unable to answer (which would reject every regex search) fails the gate.
+  # Never make this a reason to drop the native binary too: that one is the
+  # first choice and stays.
+  - "!**/node_modules/recheck-jar/**"
+  # The same package's browser bundle, a second copy of the engine reached only
+  # through the `browser` field, which Node's resolver does not implement and
+  # no bundler runs here.
+  - "!**/node_modules/recheck/lib/browser.js"
+
+  # Published TypeScript sources whose package `exports` do not map them, so
+  # Node refuses them: `require.resolve("zod/src/index.ts")` inside the
+  # packaged tree throws ERR_PACKAGE_PATH_NOT_EXPORTED, and so do the other
+  # two. zod lists `./src/*.ts` only under its opt-in `@zod/source` condition,
+  # which nothing in the package sets; the SDKs publish `files: ["**/*"]` and
+  # build to sibling directories, and none of their shipped JavaScript
+  # references `../src/`. With `*.map` already gone they are not even a
+  # debugging aid. These are sources beside built output, not the executable
+  # source packages §5a is about — those export their `.ts` entry point.
+  - "!**/node_modules/zod/src/**"
+  - "!**/node_modules/{openai,@anthropic-ai/sdk}/src/**"
+
+  # highlight.js's CSS themes and their SCSS sources: ~2 MB of stylesheets for
+  # a browser. Nothing in the package imports them — the only importer of
+  # highlight.js here is the engine, and it requires `highlight.js/lib/…`
+  # (core plus one file per language) — and no Node process can execute a
+  # stylesheet. The UI's own styling is compiled into `@lasercode/ui/dist`.
+  - "!**/node_modules/highlight.js/{styles,scss}/**"
+
+  # handlebars's AMD and browser bundles. `require("handlebars")` resolves to
+  # lib/index.js, which requires `../dist/cjs/handlebars` — that directory
+  # stays. `dist/amd/**` and the concatenated `dist/handlebars*.js` are the
+  # script-tag and RequireJS builds of the same code; nothing in the tree
+  # names them.
+  - "!**/node_modules/handlebars/dist/amd/**"
+  - "!**/node_modules/handlebars/dist/*.js"
+
+  # A 1 MB Yarn plugin release that was published inside the package by
+  # accident. domino's `main` is `./lib`; `.yarn/` is that project's own
+  # package-manager cache.
+  - "!**/node_modules/@mixmark-io/domino/.yarn/**"
+
+  # 6.1 MB of README artwork in one extension: a demo video and a banner
+  # image. They appear nowhere but their own package's `files` list (the npm
+  # publish manifest) and, for the video, a `pi.video` field that is a
+  # github.com URL, not this copy. The package's engine entry point is
+  # `pi.extensions: ["./index.ts"]`, which is executable source and stays; no
+  # code in the tree names the artwork, the README that embedded it is already
+  # excluded with the other Markdown, and neither the engine nor anything here
+  # reads an image out of a dependency. Named file by file on purpose: an
+  # extension may legitimately ship an image it serves, so this must never
+  # become an exclusion by file type.
+  #
+  # pi-mcp-adapter's own 1.1 MB banner is deliberately NOT excluded. That
+  # package's published `files` list is a contract the packaged gate already
+  # enforces — `scripts/check-mcp-artifact.mjs` requires every non-Markdown
+  # entry of it to exist, because that is how lazily loaded OAuth and
+  # script-mode assets are protected — and a megabyte is not worth teaching a
+  # gate to make exceptions.
+  - "!**/node_modules/pi-web-access/{banner.png,pi-web-fetch-demo.mp4}"
+
+  # A minifier that only a command-line tool can reach. handlebars declares
+  # uglify-js as an *optional* dependency and requires it from one file,
+  # `lib/precompiler.js` (and its `dist/cjs` twin) — the implementation behind
+  # `bin/handlebars --min`. That file calls `require.resolve('uglify-js')`
+  # first and, on MODULE_NOT_FOUND, prints "Code minimization is disabled due
+  # to missing uglify-js dependency" and carries on. The only importer of
+  # handlebars in this tree is @lasercode/protocol's instruction templates,
+  # which call `Handlebars.compile` through `lib/index.js`; nothing here runs
+  # the CLI, and no other file in the packaged tree names uglify-js.
+  - "!**/node_modules/uglify-js/**"
+
+  # The Google SDK's browser build and its condition-neutral bundle. Its
+  # `exports` for "." lists "browser" first, then "node", then a bare default;
+  # Node never sets "browser", so the specifier always lands in dist/node/.
+  # Proved in the packaged tree with the bundled Node and an empty PATH, from
+  # the file that actually imports it
+  # (@earendil-works/pi-ai/dist/api/google-generative-ai.js):
+  # `require.resolve` gives dist/node/index.cjs and `import.meta.resolve`
+  # gives dist/node/index.mjs, for both `@google/genai` and
+  # `@google/genai/node` — the only two specifiers any file here uses.
+  # dist/index.* and dist/web/** are the bundler-facing copies of that same
+  # SDK; dist/node, dist/tokenizer and dist/vertex_internal stay.
+  - "!**/node_modules/@google/genai/dist/{index.mjs,index.cjs}"
+  - "!**/node_modules/@google/genai/dist/web/**"
+
+  # Fourteen of the fifteen builds of a streams polyfill this runtime never
+  # needs. The package has no `exports`, so the proof is its importers: one
+  # file in the whole packaged tree names it — fetch-blob/streams.cjs requires
+  # `web-streams-polyfill/dist/ponyfill.es2018.js`, and only inside
+  # `if (!globalThis.ReadableStream)`, which is false on every Node we ship.
+  # Nothing imports the package root, so `main` is unreachable too. That one
+  # required file stays; the globals-patching `polyfill.*` builds, the es6 and
+  # unsuffixed ponyfills and the minified copies have no requirer.
+  - "!**/node_modules/web-streams-polyfill/dist/polyfill*"
+  - "!**/node_modules/web-streams-polyfill/dist/ponyfill.{js,mjs,es6.js,es6.mjs,es2018.mjs}"
+
 extraResources:
   # Offline stdio server used by the real packaged-session acceptance gate.
   - from: scripts/fixtures/packaged-mcp-server.mjs
