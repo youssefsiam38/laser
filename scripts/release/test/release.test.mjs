@@ -1,13 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { EventEmitter } from "node:events";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { constants as osConstants, tmpdir } from "node:os";
 import {
   ReleaseError,
   assertRecordedTag,
+  assertRemoteMainCarriesCandidate,
   ensureTag,
+  installInterruptGuard,
+  runRelease,
   loadReleaseNotes,
   assertVersionOnlyContent,
   validateCandidate,
@@ -322,8 +326,7 @@ test("ordinary candidate push leaves caller ref, index and unrelated files untou
   rmSync(root, { recursive: true, force: true });
 });
 
-function publicReleaseFixture(version = "0.3.8") {
-  const source = "c".repeat(40);
+function publicReleaseFixture(version = "0.3.8", source = "c".repeat(40)) {
   const directory = temp("release-public-fixture");
   const names = ["install.sh"];
   for (const arch of ["x86_64", "arm64"]) names.push(`${identity.displayName}-${version}-${arch}.AppImage`);
@@ -591,4 +594,240 @@ test("annotated tag ownership is checkpointed before remote push", () => {
   assert.equal(git(root, "tag", "-l", "--format=%(contents:subject)", "v0.3.8"), `${identity.displayName} 0.3.8`);
   assert.equal(`${git(root, "tag", "-l", "--format=%(contents:body)", "v0.3.8")}\n`, notes);
   rmSync(root, { recursive: true, force: true });
+});
+
+/**
+ * A repository shaped like the one a release runs against: a reviewed source
+ * commit, its version-only child (the candidate), and HEAD detached on the
+ * source, exactly where the caller stands when it resumes.
+ */
+function releaseLineageRepo(from, to) {
+  const root = temp("release-resume");
+  git(root, "init", "-b", "main");
+  git(root, "config", "user.email", "fixture@example.invalid");
+  git(root, "config", "user.name", "Fixture");
+  mkdirSync(join(root, ".github", "workflows"), { recursive: true });
+  mkdirSync(join(root, "scripts", "release"), { recursive: true });
+  mkdirSync(join(root, "packages", "protocol", "src"), { recursive: true });
+  for (const name of ["ci.yml", "release.yml"]) writeFileSync(join(root, ".github", "workflows", name), "fixture\n");
+  for (const name of ["release.mjs", "set-version.sh"]) writeFileSync(join(root, "scripts", "release", name), "fixture\n");
+  const setVersion = (version) => {
+    for (const path of ["package.json", "packages/protocol/package.json"]) {
+      writeFileSync(join(root, path), `${JSON.stringify({ version }, null, 2)}\n`);
+    }
+    writeFileSync(join(root, "packages/protocol/src/product.generated.ts"), `export const PRODUCT_VERSION: string = "${version}";\n`);
+  };
+  setVersion(from);
+  git(root, "add", ".");
+  git(root, "commit", "-m", "reviewed source");
+  const source = git(root, "rev-parse", "HEAD");
+  setVersion(to);
+  git(root, "add", ".");
+  git(root, "commit", "-m", `chore(release): prepare ${to}`);
+  const candidate = git(root, "rev-parse", "HEAD");
+  writeFileSync(join(root, "later.txt"), "work that landed after the release\n");
+  git(root, "add", "later.txt");
+  git(root, "commit", "-m", "later work");
+  const descendant = git(root, "rev-parse", "HEAD");
+  git(root, "checkout", "--detach", source);
+  return { root, source, candidate, descendant };
+}
+
+/** The remote-side answers a post-tag resume needs; `calls` records every command. */
+function resumeExec(repo, fixture, state, calls = []) {
+  const tag = `v${fixture.version}`;
+  const ciRun = {
+    id: 501, path: ".github/workflows/ci.yml", event: "push", head_branch: "main", head_sha: repo.candidate,
+    run_attempt: 1, status: "completed", conclusion: "success", html_url: "https://example.invalid/ci",
+  };
+  const releaseRun = {
+    id: 777, path: ".github/workflows/release.yml", event: "push", head_branch: tag, head_sha: repo.candidate,
+    run_attempt: 1, status: "completed", conclusion: "success", html_url: "https://example.invalid/release",
+  };
+  return (command, args, options = {}) => {
+    calls.push([command, ...args]);
+    if (command === "git" && args[0] === "remote" && args[1] === "get-url") return ok(`git@github.com:${identity.repository}.git`);
+    if (command === "git" && args[0] === "ls-remote" && args.includes("--heads")) return ok(`${state.remoteMain}\trefs/heads/main\n`);
+    if (command === "git" && args[0] === "ls-remote") return ok(`${state.tagObject}\trefs/tags/${tag}\n${repo.candidate}\trefs/tags/${tag}^{}\n`);
+    if (command === "git") return systemExec(command, args, { ...options, cwd: options.cwd ?? repo.root });
+    if (command === "gh" && args[0] === "release" && args[1] === "view") return ok(JSON.stringify({ databaseId: fixture.release.id }));
+    if (command === "gh" && args[0] === "attestation") { fixture.verified = args; return ok("[]"); }
+    if (command === "gh" && args[0] === "api" && args[1] === "-H") {
+      const asset = fixture.release.assets.find((item) => item.id === Number(args[3].split("/").pop()));
+      return asset ? ok(readFileSync(join(fixture.directory, asset.name), "utf8")) : { code: 1, stdout: "", stderr: "HTTP 404" };
+    }
+    if (command === "gh" && args[0] === "api") {
+      const endpoint = args[1];
+      if (endpoint.includes("/actions/workflows/ci.yml/runs")) return ok(JSON.stringify({ workflow_runs: [ciRun] }));
+      if (endpoint.includes("/actions/workflows/release.yml/runs")) return ok(JSON.stringify({ workflow_runs: [releaseRun] }));
+      if (endpoint.endsWith("/actions/runs/501")) return ok(JSON.stringify(ciRun));
+      if (endpoint.endsWith("/actions/runs/777")) return ok(JSON.stringify(releaseRun));
+      if (endpoint.endsWith(`/releases/${fixture.release.id}`)) return ok(JSON.stringify(fixture.release));
+      if (endpoint.endsWith("/releases/latest")) return ok(JSON.stringify({ id: fixture.release.id }));
+    }
+    throw new Error(`unexpected command: ${command} ${args.join(" ")}`);
+  };
+}
+
+function postTagCheckpoint(repo, fixture, state) {
+  const commonDir = join(repo.root, ".git");
+  const journalPath = join(commonDir, `${identity.dirName}-release`, `v${fixture.version}.json`);
+  const journal = {
+    id: "checkpoint-resume",
+    version: fixture.version,
+    source: repo.source,
+    commonDir,
+    repoRoot: repo.root,
+    origin: identity.repository,
+    tag: `v${fixture.version}`,
+    frozenRemoteMain: repo.source,
+    stage: "tag-pushed",
+    createdAt: "2026-09-13T16:10:10.123Z",
+    notes: fixture.notes,
+    notesDigest: createHash("sha256").update(fixture.notes.trim()).digest("hex"),
+    // Reaped since the tag was pushed, as the 0.6.1 checkpoint's was.
+    worktree: join(tmpdir(), `${identity.dirName}-release-${fixture.version}-gone`),
+    candidate: repo.candidate,
+    metadataCommit: repo.candidate,
+    mainPushPerformed: true,
+    ciRunId: 501,
+    ciRunAttempt: 1,
+    tagObject: state.tagObject,
+    tagPushPerformed: true,
+  };
+  mkdirSync(join(commonDir, `${identity.dirName}-release`), { recursive: true });
+  writeFileSync(journalPath, `${JSON.stringify(journal, null, 2)}\n`);
+  return journalPath;
+}
+
+test("a resume after the tag verifies although remote main advanced onto the candidate", async () => {
+  const repo = releaseLineageRepo("0.3.7", "0.3.8");
+  const fixture = publicReleaseFixture("0.3.8", repo.candidate);
+  const state = { remoteMain: repo.candidate, tagObject: "d".repeat(40) };
+  const journalPath = postTagCheckpoint(repo, fixture, state);
+  const options = { version: "0.3.8", source: repo.source, publish: true, resume: true, notesFile: "", ciTimeoutMinutes: 1, releaseTimeoutMinutes: 1 };
+  const signals = new EventEmitter();
+  const calls = [];
+  const dependencies = { exec: resumeExec(repo, fixture, state, calls), repoRoot: repo.root, sleep: async () => {}, signals };
+
+  // Remote main is the candidate this release created: the reviewed source is
+  // behind it by exactly the version-only commit the release made.
+  const result = await runRelease(options, dependencies);
+  assert.equal(result.status, "published");
+  assert.equal(result.publication.assets, fixture.release.assets.length);
+  const verified = JSON.parse(readFileSync(journalPath, "utf8"));
+  assert.equal(verified.stage, "verified");
+  assert.equal(verified.publication.releaseId, fixture.release.id);
+  assert.ok(verified.completedAt);
+  assert.ok(fixture.verified, "the provenance bundle was verified against the tag's source");
+  // Nothing was pushed, tagged or edited: a post-tag resume only reads.
+  const writes = calls.filter((call) =>
+    (call[0] === "git" && ["push", "tag", "commit", "worktree", "reset", "clean", "stash"].includes(call[1])) ||
+    (call[0] === "gh" && call[1] === "release" && call[2] !== "view"));
+  assert.deepEqual(writes, []);
+  assert.equal(signals.listenerCount("SIGTERM"), 0);
+
+  // Remote main may also have moved past the candidate, as long as it still
+  // contains it: the tag and the published bytes are what is being verified.
+  postTagCheckpoint(repo, fixture, state);
+  state.remoteMain = repo.descendant;
+  assert.equal((await runRelease(options, dependencies)).status, "published");
+  assert.equal(JSON.parse(readFileSync(journalPath, "utf8")).stage, "verified");
+
+  // Remote main that lost the candidate (a rewind or force-push) is still refused.
+  postTagCheckpoint(repo, fixture, state);
+  state.remoteMain = repo.source;
+  await assert.rejects(runRelease(options, dependencies), /does not carry checkpoint candidate/);
+  assert.equal(JSON.parse(readFileSync(journalPath, "utf8")).stage, "tag-pushed");
+  rmSync(repo.root, { recursive: true, force: true });
+  rmSync(fixture.directory, { recursive: true, force: true });
+});
+
+/** `merge-base --is-ancestor A B` is true only for the pairs given. */
+function ancestryExec({ main, tagObject = null, tagCommit = null, ancestry = [] }) {
+  const contains = new Set(ancestry.map(([a, b]) => `${a}->${b}`));
+  return (command, args) => {
+    if (command === "git" && args[0] === "rev-parse") return ok(SHA);
+    if (command === "git" && args[0] === "cat-file") return ok();
+    if (command === "git" && args[0] === "remote") return ok(`https://github.com/${identity.repository}.git`);
+    if (command === "git" && args[0] === "merge-base") {
+      return contains.has(`${args[2]}->${args[3]}`) ? ok() : { code: 1, stdout: "", stderr: "" };
+    }
+    if (command === "git" && args[0] === "ls-remote" && args.includes("--heads")) return ok(`${main}\trefs/heads/main\n`);
+    if (command === "git" && args[0] === "ls-remote") {
+      return tagObject ? ok(`${tagObject}\trefs/tags/v0.3.8\n${tagCommit}\trefs/tags/v0.3.8^{}\n`) : ok();
+    }
+    if (command === "gh" && args[0] === "release") return { code: 1, stdout: "", stderr: "HTTP 404: Not Found" };
+    if (command === "gh" && args[0] === "api") return ok(JSON.stringify({ workflow_runs: [] }));
+    throw new Error(`unexpected command: ${command} ${args.join(" ")}`);
+  };
+}
+
+test("the pre-push fast-forward check still refuses a source behind remote main", () => {
+  const candidate = "e".repeat(40);
+  const ahead = { main: MAIN, ancestry: [[SHA, MAIN]] };
+  // No tag yet: this is an unreleased source behind remote main, refused even
+  // on a resume — nothing has been published that could excuse it.
+  assert.throws(() => preflight({ exec: ancestryExec(ahead), repoRoot: "/fixture", version: "0.3.8", source: SHA, allowRemoteAhead: true }),
+    /is not a fast-forward of remote main/);
+  // A tag that does not descend from this source proves nothing about it.
+  assert.throws(() => preflight({
+    exec: ancestryExec({ ...ahead, tagObject: "d".repeat(40), tagCommit: candidate, ancestry: [[SHA, MAIN], [candidate, MAIN]] }),
+    repoRoot: "/fixture", version: "0.3.8", source: SHA, allowRemoteAhead: true,
+  }), /is not a fast-forward of remote main/);
+  // Nor does a tag remote main no longer carries.
+  assert.throws(() => preflight({
+    exec: ancestryExec({ ...ahead, tagObject: "d".repeat(40), tagCommit: candidate, ancestry: [[SHA, MAIN], [SHA, candidate]] }),
+    repoRoot: "/fixture", version: "0.3.8", source: SHA, allowRemoteAhead: true,
+  }), /is not a fast-forward of remote main/);
+  const published = {
+    ...ahead, tagObject: "d".repeat(40), tagCommit: candidate,
+    ancestry: [[SHA, MAIN], [SHA, candidate], [candidate, MAIN]],
+  };
+  // A publication that is not being resumed gets the unchanged refusal, and is
+  // told what the person actually wanted: the tag exists, so this is a resume.
+  assert.throws(() => preflight({ exec: ancestryExec(published), repoRoot: "/fixture", version: "0.3.8", source: SHA }),
+    /is not a fast-forward of remote main .* continued with --publish --resume/s);
+  // Only the resume of that released source is tolerated.
+  const resumed = preflight({ exec: ancestryExec(published), repoRoot: "/fixture", version: "0.3.8", source: SHA, allowRemoteAhead: true });
+  assert.equal(resumed.frozenRemoteMain, MAIN);
+  assert.equal(resumed.remoteTagSha, candidate);
+
+  // Before the tag, remote main must still be exactly the candidate.
+  const journal = { repoRoot: "/fixture", candidate: SHA, stage: "main-pushed" };
+  const moved = (command, args) => {
+    if (command === "git" && args[0] === "ls-remote") return ok(`${MAIN}\trefs/heads/main\n`);
+    if (command === "git" && args[0] === "merge-base") return ok();
+    throw new Error(`unexpected: ${command} ${args.join(" ")}`);
+  };
+  assert.throws(() => assertRemoteMainCarriesCandidate(moved, journal, "Remote main moved after source CI; refusing to tag"),
+    /refusing to tag: remote main .* does not carry checkpoint candidate/);
+  assert.equal(assertRemoteMainCarriesCandidate(moved, { ...journal, stage: "tag-pushed" }, "after"), MAIN);
+});
+
+test("an interrupted release records the interruption and frees its lock", () => {
+  const commonDir = temp("release-interrupt");
+  const lock = acquireReleaseLock({ commonDir, version: "0.3.8", source: SHA, resume: false, recoverStaleLock: false });
+  const journal = { id: lock.checkpointId, version: "0.3.8", source: SHA, stage: "tag-pushed" };
+  const signals = new EventEmitter();
+  const exits = [];
+  const reports = [];
+  const remove = installInterruptGuard({
+    journalPath: lock.journalPath, journal, lock, signals,
+    exit: (code) => exits.push(code), report: (text) => reports.push(text),
+  });
+  // 0.6.1: the process was killed inside the release-workflow wait, so the
+  // checkpoint kept `tag-pushed` and said nothing about why, and its lock
+  // outlived it. The stage it reached is recorded; the lock is not inherited.
+  signals.emit("SIGTERM");
+  const recorded = JSON.parse(readFileSync(lock.journalPath, "utf8"));
+  assert.equal(recorded.stage, "tag-pushed");
+  assert.match(recorded.lastError, /Interrupted by SIGTERM at stage tag-pushed/);
+  assert.ok(recorded.interruptedAt);
+  assert.deepEqual(exits, [128 + osConstants.signals.SIGTERM]);
+  assert.match(reports.join(""), /--publish --resume --source/);
+  assert.equal(existsSync(join(commonDir, `${identity.dirName}-release`, "lock")), false);
+  remove();
+  assert.equal(signals.listenerCount("SIGINT"), 0);
+  rmSync(commonDir, { recursive: true, force: true });
 });

@@ -44,6 +44,37 @@ SHA's `ci.yml` push run, and only then creates the immutable tag. If interrupted
 inspect the printed checkpoint and rerun with `--publish --resume`; a crashed
 lock additionally requires the explicit, validated `--recover-stale-lock`.
 
+A signal the process can catch (Ctrl-C, `SIGTERM`, a closed terminal) is
+recorded before it exits: the checkpoint keeps the stage it reached and gains an
+`interruptedAt` and a `lastError` saying which signal ended it, the lock is
+released, and the printed line is the resume command. A process killed outright
+(`SIGKILL`, a lost machine) still records nothing and leaves its lock behind —
+that is the case `--recover-stale-lock` exists for.
+
+### Resuming, and what remote `main` may look like
+
+The stages are `created`, `prepared`, `main-pushed`, `ci-passed`, `tag-pushed`,
+`release-passed`, `verified`; `--publish --resume` continues from the last one
+recorded. Which history the resume accepts depends on whether the tag exists:
+
+| | Reviewed source vs remote `main` | Remote `main` vs candidate |
+| --- | --- | --- |
+| Before the tag | must be a fast-forward — a source behind `main` is unreviewed history and is refused | must be exactly the candidate |
+| After `tag-pushed` | the source may be behind `main`, but only when the release's own tag exists, descends from that source, and is still contained in `main` | must be the candidate **or** a commit that contains it |
+
+That is the ordering a real release produces: its own candidate becomes remote
+`main`, so the reviewed source it was told to verify is one version-only commit
+behind, and ordinary work lands on top while the release workflow builds. After
+the tag the release is irreversible and every remaining stage only reads the
+remote, so a resume verifies the publication instead of refusing it. What stays
+refused, at every stage, is remote `main` losing the candidate — a rewind or a
+force-push — and any source that is not a fast-forward before the push stages.
+The isolated worktree is not needed after the tag either: a temporary directory
+reaped in the meantime does not strand a published release short of `verified`.
+
+A `--publish` without `--resume` whose tag already exists is refused and says so,
+pointing at `--publish --resume`.
+
 `pnpm install --frozen-lockfile` is the isolated default. `--offline` is
 available when the pnpm store is already complete. A version already synchronized
 at the reviewed source is a no-op: no extra commit is made, and an existing
