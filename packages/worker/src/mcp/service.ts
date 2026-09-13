@@ -259,6 +259,9 @@ export class McpService {
     const { servers } = await this.store.effective(this.options.cwd, this.options.projectTrusted);
     const previous = servers.find(server => server.scope === scope && server.config.name === name)
       ?? (scope === "project" ? servers.find(server => server.scope === "global" && server.config.name === name) : undefined);
+    // A project's off-only override observes the global definition but does not
+    // own its credential target: revoke the project slot, never other projects'
+    // shared global account, when this override is changed or removed.
     const owned = previous?.scope === scope && !previous.overridesGlobal ? previous.config : undefined;
     const definitions = [credentialsOnly ? previous?.config : owned, replacement].filter((config): config is McpConfiguredServer => config !== undefined && isConfigured(config));
     const identities = await Promise.all(definitions.map(config => mcpAuthorizationIdentity(scope, this.options.cwd, config)));

@@ -21,6 +21,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { fallbackDefaultAgent, fallbackPolicy } from "../../src/agents/definitions.js";
 import { rootRecord, rootRole } from "../../src/agents/session-config.js";
 import { StableSdkDriver } from "../../src/drivers/stable-sdk.js";
+import { McpAuthorizationRegistry, mcpAuthorizationIdentity } from "../../src/mcp/authorization.js";
 import type { DriverAgentOptions, DriverEvent } from "../../src/driver.js";
 import { startStubProvider, toolNamesOf, type StubAnswer, type StubProvider } from "../agents/stub-provider.js";
 import { writeStubModels } from "../agents/stub-provider.js";
@@ -90,6 +91,50 @@ async function promptAndSettle(driver: StableSdkDriver, text = "go"): Promise<vo
   await driver.prompt([{ type: "text", text }]);
   await settled;
 }
+
+it("explains that setup refusal needs a new conversation, not a retry in the tool-less one", async () => {
+  const config = fixtureServer(); writeServers([config]);
+  const registry = new McpAuthorizationRegistry(join(base, "agent"));
+  const id = await mcpAuthorizationIdentity("global", join(base, "project"), config as Parameters<typeof mcpAuthorizationIdentity>[2]);
+  await registry.establish(id);
+  await registry.revoke([id], async () => {
+    const driver = await openSession([{ text: "done" }], { features: ["mcp"] });
+    await promptAndSettle(driver);
+    expect(toolNamesOf(stub.requests[0]!)).not.toContain("mcp");
+    const errors = events.filter(event => event.type === "update" && event.update.kind === "extension_error");
+    expect(JSON.stringify(errors)).toContain("This conversation started without MCP tools");
+    expect(JSON.stringify(errors)).toContain("start a new conversation");
+    expect(JSON.stringify(errors)).not.toContain("Try again");
+  });
+}, 60_000);
+
+it("keeps MCP on concurrent first opens with target aliases and while another project opens", async () => {
+  writeServers([fixtureServer({ tools: { alwaysLoad: false } }), fixtureServer({ name: "alias", tools: { alwaysLoad: false } })]);
+  stub = await startStubProvider(request => {
+    const turn = request.messages.slice(request.messages.findLastIndex(message => message.role === "user") + 1);
+    return turn.some(message => message.role === "tool") ? { text: "done" }
+      : { toolCall: { name: "mcp", args: { search: "echo", server: "fixture" } } };
+  });
+  writeStubModels(join(base, "agent"), stub.url);
+  const open = async (project: string) => {
+    const cwd = join(base, project); mkdirSync(cwd, { recursive: true });
+    const driver = new StableSdkDriver(); drivers.push(driver);
+    await driver.open({ cwd, agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), projectTrusted: true, features: ["mcp"], agent: agentOptions() });
+    return driver;
+  };
+  const initial = await Promise.all(Array.from({ length: 4 }, () => open("project")));
+  await Promise.all(initial.map(driver => promptAndSettle(driver)));
+  const next = open("other-project");
+  await Promise.all([next, ...initial.map(driver => promptAndSettle(driver, "discover again"))]);
+  await promptAndSettle(await next);
+  for (const request of stub.requests) {
+    expect(toolNamesOf(request)).toContain("mcp");
+    for (const message of request.messages.filter(message => message.role === "tool")) {
+      expect(JSON.stringify(message)).toContain("fixture_echo");
+      expect(JSON.stringify(message)).not.toMatch(/Access to .* changed|being updated/);
+    }
+  }
+}, 60_000);
 
 function snapshots(): McpRuntimeSnapshot[] {
   return events

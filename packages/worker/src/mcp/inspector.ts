@@ -10,7 +10,7 @@
  */
 import { delimiter } from "node:path";
 import { mcpClientIdentity } from "./identity.js";
-import { McpAuthorizationRegistry, mcpAuthorizationIdentity, mcpAuthorizationIdentities, mcpAuthorizationRevision, type McpAuthorizationGeneration } from "./authorization.js";
+import { McpAuthorizationRegistry, McpAuthorizationError, mcpAuthorizationAccount, mcpAuthorizationPartition, mcpAuthorizationIdentity, mcpAuthorizationIdentities, mcpAuthorizationRevision, type McpAuthorizationGeneration } from "./authorization.js";
 import type {
   McpCallResult,
   McpInspection,
@@ -72,7 +72,7 @@ export class McpInspector {
     const snapshots = this.authorizations.get(name);
     const registry = new McpAuthorizationRegistry(this.agentDir);
     if (!snapshots?.length || !(await Promise.all(snapshots.map(snapshot => registry.current(snapshot)))).every(Boolean)) {
-      throw new Error("Access to this server changed. Reconnect in Settings → MCP servers.");
+      throw new McpAuthorizationError("revoked", "Access to this server changed. Reconnect in Settings → MCP servers.");
     }
   }
 
@@ -140,14 +140,14 @@ export class McpInspector {
       ...(registry ? {
         checkCredentials: async () => {
           if (!expected.has(fullIdentity) || !(await Promise.all([...expected.values()].map(value => registry.current(value)))).every(Boolean)) {
-            throw new Error("Sign-in information changed. Start sign-in again in Settings → MCP servers.");
+            throw new McpAuthorizationError("revoked", "Sign-in information changed. Start sign-in again in Settings → MCP servers.");
           }
         },
         commitTokens: async (_name: string, save: () => void): Promise<string> => {
-          if (!expected.has(fullIdentity)) throw new Error("Sign-in information changed. Start sign-in again in Settings → MCP servers.");
+          if (!expected.has(fullIdentity)) throw new McpAuthorizationError("revoked", "Sign-in information changed. Start sign-in again in Settings → MCP servers.");
           const committed = await registry.revoke([fullIdentity], async next => { save(); return next; }, expected);
           expected = new Map(committed);
-          return JSON.stringify([...committed.values()]);
+          return mcpAuthorizationPartition([...committed.values()]);
         },
       } : {}),
     } };
@@ -176,12 +176,12 @@ export class McpInspector {
         });
         manager.setCredentialCommitter?.(async (name, save) => {
           const snapshots = this.authorizations.get(name);
-          if (!snapshots?.length) throw new Error("Access to this server changed. Reconnect in Settings → MCP servers.");
+          if (!snapshots?.length) throw new McpAuthorizationError("revoked", "Access to this server changed. Reconnect in Settings → MCP servers.");
           const expected = new Map(snapshots.map(snapshot => [snapshot.identity, snapshot]));
           const next = await new McpAuthorizationRegistry(this.agentDir!).revoke([snapshots[0]!.identity], async committed => { save(); return committed; }, expected);
           const committed = snapshots.map(snapshot => next.get(snapshot.identity)!);
           this.authorizations.set(name, committed);
-          return JSON.stringify(committed);
+          return mcpAuthorizationPartition(committed);
         });
       }
       this.manager = manager;
@@ -270,7 +270,7 @@ export class McpInspector {
       if (target.ephemeral) await this.close(key);
       return inspection;
     } catch (error) {
-      await this.close(key);
+      if (target.ephemeral || controlCode(error) !== "MCP_CATALOG_CHANGED") await this.close(key);
       const failure = this.failure(error, config, target.secrets);
       return { ...base, status: failure.status, detail: failure.detail, ...(failure.stderr ? { stderr: failure.stderr } : {}) };
     }
@@ -295,7 +295,7 @@ export class McpInspector {
       if (held) held.latencyMs = latencyMs;
       return { status: "connected", latencyMs };
     } catch (error) {
-      await this.close(key);
+      if (controlCode(error) !== "MCP_CATALOG_CHANGED") await this.close(key);
       const failure = this.failure(error, config, secrets);
       return { status: failure.status, detail: failure.detail };
     }
@@ -330,14 +330,23 @@ export class McpInspector {
 
   private async refreshTools(connection: McpConnection, name: string, signal?: AbortSignal): Promise<McpToolCatalogState | undefined> {
     if (!connection.client.getServerCapabilities()?.tools) return undefined;
-    const revision = connection.toolsRevision;
-    const result = await connection.client.listTools(undefined, signal ? { signal } : undefined);
-    const checkedAt = Date.now();
-    await this.assertAuthorized(name);
-    if (connection.toolsRevision !== revision) throw new Error("Tool information changed while it was being read. Refresh this server and try again.");
-    if (result.resultType === "input_required" || !Array.isArray(result.tools)) throw new Error("The server needs more input before its tools can be listed. Reconnect to try again.");
-    connection.tools = result.tools;
-    return this.manager?.getToolCatalog?.(name) ?? { checkedAt, expiresAt: checkedAt };
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const revision = connection.toolsRevision;
+        const result = await connection.client.listTools(undefined, signal ? { signal } : undefined);
+        const checkedAt = Date.now();
+        await this.assertAuthorized(name);
+        if (connection.toolsRevision !== revision) throw new McpCatalogChangedError();
+        if (result.resultType === "input_required" || !Array.isArray(result.tools)) throw new Error("The server needs more input before its tools can be listed. Reconnect to try again.");
+        connection.tools = result.tools;
+        return this.manager?.getToolCatalog?.(name) ?? { checkedAt, expiresAt: checkedAt };
+      } catch (error) {
+        if (controlCode(error) !== "MCP_CATALOG_CHANGED" || attempt !== 0) throw error;
+        await this.assertAuthorized(name);
+        signal?.throwIfAborted();
+      }
+    }
+    throw new McpCatalogChangedError();
   }
 
   /** Run and Test use the same connection, tool-name resolution and result guard. */
@@ -436,7 +445,11 @@ export class McpInspector {
 
   private failure(error: unknown, config: McpConfiguredServer, secrets: ResolvedSecrets) {
     const entry = toServerEntry(config, secrets);
-    return describeFailure(error, config.name, entry.command, entry.env?.["PATH"] ?? process.env["PATH"] ?? "");
+    const sensitive = [...secrets.values(), entry.bearerToken, entry.oauth && entry.oauth.clientSecret, ...Object.values(entry.headers ?? {})].filter((value): value is string => typeof value === "string" && value.length > 0);
+    const redact = (text: string) => sensitive.reduce((value, secret) => value.split(secret).join("[redacted]"), text);
+    // Redact before truncation: otherwise a long credential's partial prefix
+    // could survive after the full value no longer fits the bounded message.
+    return describeFailure(error, config.name, entry.command, entry.env?.["PATH"] ?? process.env["PATH"] ?? "", redact);
   }
 
   private async connect(key: string, config: McpConfiguredServer, secrets: ResolvedSecrets, scope: McpScope, signal?: AbortSignal, authorization?: readonly McpAuthorizationGeneration[]): Promise<McpConnection> {
@@ -449,11 +462,11 @@ export class McpInspector {
       const snapshots = authorization ?? await Promise.all((await mcpAuthorizationIdentities(scope, this.cwd, config)).map(identity => registry.establish(identity)));
       const snapshot = snapshots.find(value => value.identity === fullIdentity);
       if (!snapshot || !(await Promise.all(snapshots.map(value => registry.current(value)))).every(Boolean)) {
-        throw new Error("Access to this server changed. Reconnect in Settings → MCP servers.");
+        throw new McpAuthorizationError("revoked", "Access to this server changed. Reconnect in Settings → MCP servers.");
       }
       this.authorizations.set(config.name, snapshots);
-      entry.authorizationIdentity = `${snapshot.identity}:${snapshot.generation.epoch}`;
-      entry.authorizationPartition = JSON.stringify([...snapshots].sort((a, b) => a.identity.localeCompare(b.identity)));
+      entry.authorizationIdentity = mcpAuthorizationAccount(snapshot);
+      entry.authorizationPartition = mcpAuthorizationPartition(snapshots);
     } else entry.authorizationIdentity = fullIdentity;
     const existing = manager.getConnection(config.name);
     const held = this.held.get(key);
@@ -629,13 +642,33 @@ function signInDetail(name: string): string {
   return `"${name}" needs you to sign in before it will answer. Choose Sign in, then finish in your browser.`;
 }
 
+class McpCatalogChangedError extends Error {
+  readonly code = "MCP_CATALOG_CHANGED";
+  constructor() { super("Tool information changed while it was being read. Open Tools again to refresh it."); }
+}
+
+/** Local control tags also survive the adapter's Error.cause wrappers. */
+function controlCode(error: unknown): string | undefined {
+  for (let value: unknown = error, depth = 0; value && typeof value === "object" && depth < 8; depth += 1) {
+    const candidate = value as { code?: unknown; cause?: unknown };
+    if (["MCP_AUTHORIZATION_CHANGED", "MCP_AUTHORIZATION_UPDATING", "MCP_CATALOG_CHANGED", "MCP_SDK_CONTRACT"].includes(String(candidate.code))) return String(candidate.code);
+    value = candidate.cause;
+  }
+  return undefined;
+}
+
 /** A failure as a person should read it: the server's own words, no stack. */
-export function describeFailure(error: unknown, name: string, command?: string, path = process.env["PATH"] ?? ""): { status: McpInspection["status"]; detail: string; stderr?: string[] } {
+export function describeFailure(error: unknown, name: string, command?: string, path = process.env["PATH"] ?? "", redact: (text: string) => string = text => text): { status: McpInspection["status"]; detail: string; stderr?: string[] } {
+  const control = controlCode(error);
+  if (control === "MCP_AUTHORIZATION_CHANGED") return { status: "needs-auth", detail: "Access to this server changed. Check Settings → MCP servers, then reconnect." };
+  if (control === "MCP_AUTHORIZATION_UPDATING") return { status: "unknown", detail: "MCP settings or sign-in information are being updated. Try again after the change finishes." };
+  if (control === "MCP_CATALOG_CHANGED") return { status: "unknown", detail: "Tool information changed while it was being read. Open Tools again to refresh it." };
+  if (control === "MCP_SDK_CONTRACT") return { status: "failed", detail: `The MCP client is incompatible: ${messageOf(error, redact)}. Update the app before reconnecting.` };
   if (isAbort(error)) {
     return { status: "failed", detail: `"${name}" did not answer within 30 seconds. Check the command or address, then try again.` };
   }
-  const message = messageOf(error);
-  const stderr = stderrOf(error);
+  const message = messageOf(error, redact);
+  const stderr = stderrOf(error, redact);
   // Upstream may wrap the spawn error as plain text, losing errno/syscall.
   const spawnFailure = command && new RegExp(`\\bspawn ${escapeRegExp(command)} (ENOENT|EACCES)\\b`).exec(message);
   if (spawnFailure) {
@@ -679,12 +712,12 @@ function isAbort(error: unknown): boolean {
   return name === "AbortError" || name === "TimeoutError";
 }
 
-function messageOf(error: unknown): string {
+function messageOf(error: unknown, redact: (text: string) => string = text => text): string {
   if (error instanceof AggregateError) {
-    const parts = error.errors.map((inner) => messageOf(inner)).filter(Boolean);
-    return parts.length > 0 ? parts.join("; ") : cleanMessage(error.message);
+    const parts = error.errors.map((inner) => messageOf(inner, redact)).filter(Boolean);
+    return parts.length > 0 ? parts.join("; ") : cleanMessage(redact(error.message));
   }
-  return cleanMessage(error instanceof Error ? error.message : String(error));
+  return cleanMessage(redact(error instanceof Error ? error.message : String(error)));
 }
 
 /** Everything before the first stack frame, on one line, bounded. */
@@ -695,8 +728,8 @@ function cleanMessage(raw: string): string {
 }
 
 /** The tail the engine appends in brackets when a stdio server wrote to stderr. */
-function stderrOf(error: unknown): string[] | undefined {
-  const message = error instanceof Error ? error.message : "";
+function stderrOf(error: unknown, redact: (text: string) => string): string[] | undefined {
+  const message = error instanceof Error ? redact(error.message) : "";
   const match = /\(([^()]*)\)\s*$/.exec(message);
   if (!match?.[1]) return undefined;
   const lines = match[1].split(" — ").map((line) => line.trim()).filter(Boolean);

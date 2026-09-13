@@ -22,7 +22,7 @@ import { McpPromptFreeze } from "./prompt-freeze.js";
 import { loadMcpEngine, type McpConfig } from "./engine.js";
 import { McpStore } from "./store.js";
 import { mcpClientIdentity } from "./identity.js";
-import { McpAuthorizationRegistry, mcpAuthorizationIdentity, mcpAuthorizationIdentities, mcpAuthorizationRevision } from "./authorization.js";
+import { McpAuthorizationRegistry, mcpAuthorizationAccount, mcpAuthorizationPartition, mcpAuthorizationIdentities, mcpAuthorizationRevision } from "./authorization.js";
 
 export interface McpSessionOptions {
   cwd: string;
@@ -61,11 +61,7 @@ async function resolveConfig(
   const resolved = await Promise.all(
     servers.map(async ({ scope, config }) => ({ config, secrets: await store.secretsFor(scope, cwd, config.name) })),
   );
-  const mapped = toAdapterConfig(resolved, projectEnv);
-  await Promise.all(servers.map(async ({ scope, config }) => {
-    mapped.mcpServers[config.name]!.authorizationIdentity = await mcpAuthorizationIdentity(scope, cwd, config);
-  }));
-  return mapped;
+  return toAdapterConfig(resolved, projectEnv);
 }
 
 /** Build the session's MCP extension, or nothing when no server is enabled. */
@@ -92,13 +88,13 @@ export async function mcpSessionSetup(options: McpSessionOptions): Promise<McpSe
   })));
   const current = await store.enabled(options.cwd, options.projectTrusted);
   if (JSON.stringify(current) !== JSON.stringify(servers)) {
-    throw new Error("MCP server settings changed while opening this conversation. Try again.");
+    throw new Error("MCP server settings changed while opening this conversation.");
   }
   const config = await resolveConfig(store, servers, options.cwd, options.projectEnv);
   for (const [name, snapshots] of generations) {
     const primary = snapshots[0]!;
-    config.mcpServers[name]!.authorizationIdentity = `${primary.identity}:${primary.generation.epoch}`;
-    config.mcpServers[name]!.authorizationPartition = JSON.stringify(snapshots);
+    config.mcpServers[name]!.authorizationIdentity = mcpAuthorizationAccount(primary);
+    config.mcpServers[name]!.authorizationPartition = mcpAuthorizationPartition(snapshots);
   }
   const authorization = async (name: string): Promise<string | undefined> => {
     const snapshots = generations.get(name);
@@ -113,7 +109,7 @@ export async function mcpSessionSetup(options: McpSessionOptions): Promise<McpSe
     const expected = new Map(snapshots!.map(value => [value.identity, value]));
     const committed = await registry.revoke([primary.identity], async next => { save(); return next; }, expected);
     generations.set(name, snapshots!.map(value => committed.get(value.identity)!));
-    return JSON.stringify(generations.get(name));
+    return mcpAuthorizationPartition(generations.get(name) ?? []);
   };
   const engine = await loadMcpEngine();
   const discovery = new McpPromptFreeze(engine.renderSchema);

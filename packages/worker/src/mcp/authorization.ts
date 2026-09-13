@@ -63,11 +63,35 @@ function valid(value: unknown, identity: string): value is McpAuthorizationGener
     && Number.isSafeInteger(v.updatedAt) && v.updatedAt >= 0;
 }
 
+/** Credential accounts exclude configuration guards and counters; repairs rotate the epoch. */
+export function mcpAuthorizationAccount(snapshot: McpAuthorizationGeneration): string {
+  return `${snapshot.identity}:${snapshot.generation.epoch}`;
+}
+
+/** Stable logical scope; observation timestamps and caller order are not authority. */
+export function mcpAuthorizationPartition(snapshots: readonly (McpAuthorizationGeneration | undefined)[]): string {
+  return JSON.stringify(snapshots.filter((value): value is McpAuthorizationGeneration => value !== undefined)
+    .map(({ identity, generation }) => ({ identity, generation: { epoch: generation.epoch, counter: generation.counter } }))
+    .sort((a, b) => a.identity.localeCompare(b.identity)));
+}
+
 /** Opaque status attribution, not a capability or a credential account. */
 export function mcpAuthorizationRevision(snapshots: readonly (McpAuthorizationGeneration | undefined)[]): string {
-  return createHash("sha256").update(JSON.stringify(snapshots.filter((value): value is McpAuthorizationGeneration => value !== undefined)
-    .map(({ identity, generation }) => ({ identity, generation })).sort((a, b) => a.identity.localeCompare(b.identity)))).digest("hex");
+  return createHash("sha256").update(mcpAuthorizationPartition(snapshots)).digest("hex");
 }
+
+export class McpAuthorizationError extends Error {
+  override readonly name = "McpAuthorizationError";
+  readonly code: "MCP_AUTHORIZATION_UPDATING" | "MCP_AUTHORIZATION_CHANGED";
+  constructor(readonly reason: "updating" | "revoked", message: string) {
+    super(message);
+    this.code = reason === "updating" ? "MCP_AUTHORIZATION_UPDATING" : "MCP_AUTHORIZATION_CHANGED";
+  }
+}
+
+// Only first-use establishment coalesces, across registry instances in this worker.
+// Mutations never join this map and reads never wait for a mutation lock.
+const establishments = new Map<string, Promise<McpAuthorizationGeneration>>();
 
 /**
  * One small atomic file per identity, shared by project workers. Reads never take
@@ -127,12 +151,20 @@ export class McpAuthorizationRegistry {
    */
   async credentialAccount(identity: string): Promise<string> {
     const snapshot = await this.readBounded(identity, true) ?? await this.establish(identity);
-    return `${snapshot.identity}:${snapshot.generation.epoch}`;
+    return mcpAuthorizationAccount(snapshot);
   }
 
   /** Fresh authorization/setup only; never called by a stale runtime's guard. */
-  establish(identity: string): Promise<McpAuthorizationGeneration> {
-    return this.write(identity, false);
+  async establish(identity: string): Promise<McpAuthorizationGeneration> {
+    const current = await this.read(identity);
+    if (current) return current;
+    const key = this.path(identity);
+    const existing = establishments.get(key);
+    if (existing) return existing;
+    const pending = this.write(identity, false);
+    establishments.set(key, pending);
+    try { return await pending; }
+    finally { if (establishments.get(key) === pending) establishments.delete(key); }
   }
 
   /** Revoke before returning success from a credential/configuration mutation. */
@@ -161,13 +193,13 @@ export class McpAuthorizationRegistry {
     // Atomic directory lock; no retry queue on a model/person hot path. A crashed
     // owner is reclaimable after proper-lockfile's stale interval.
     const release = await lockfile.lock(path, { realpath: false, retries: 0, stale: 5_000 }).catch(() => {
-      throw new Error("MCP sign-in information is being updated. Try again.");
+      throw new McpAuthorizationError("updating", "MCP sign-in information is being updated. Try again after the Settings change finishes.");
     });
     let temporary: string | undefined;
     try {
       const previous = await this.readBounded(identity, true);
       if (expected && (!previous || previous.generation.epoch !== expected.generation.epoch || previous.generation.counter !== expected.generation.counter)) {
-        throw new Error("MCP access changed while sign-in information was being refreshed. Sign in again in Settings → MCP servers.");
+        throw new McpAuthorizationError("revoked", "MCP access changed while sign-in information was being refreshed. Check Settings → MCP servers before reconnecting.");
       }
       if (previous && !increment) {
         await operation?.(previous);

@@ -21,7 +21,7 @@ const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures/stdio-se
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 
-async function run(preload: boolean, window?: number, transport?: NonNullable<McpServerConfig["transport"]>, cold?: "gateway" | "script" | "management", extra: McpServerConfig[] = []) {
+async function run(preload: boolean, window?: number, transport?: NonNullable<McpServerConfig["transport"]>, cold?: "gateway" | "script" | "management" | "empty", extra: McpServerConfig[] = []) {
   const base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-mcp-prefix-`));
   cleanups.push(() => rmSync(base, { recursive: true, force: true }));
   const cwd = join(base, "project");
@@ -42,6 +42,10 @@ async function run(preload: boolean, window?: number, transport?: NonNullable<Mc
       : { toolCall: { name: "mcp", args: { tool: "fixture_echo", args: { text: "discovered-call" } } } },
     { text: "done" },
   ];
+  if (cold === "empty") answers.splice(0, answers.length,
+    { toolCall: { name: "mcp", args: { search: "   " } } },
+    { toolCall: { name: "mcpScript", args: { code: 'emit(await tools.search({query:"   "}));' } } },
+    { text: "done" });
   if (cold === "management") {
     const forbidden = [{ connect: "fixture" }, { action: "install", url: "http://127.0.0.1:1/mcp" }, { action: "auth-start", server: "fixture" }, { action: "auth-complete", server: "fixture", args: { code: "synthetic" } }, { enable: "fixture" }, { disable: "fixture" }, { remove: "fixture" }];
     answers.splice(0, answers.length, ...forbidden.flatMap(args => [
@@ -76,6 +80,14 @@ function snapshots(events: DriverEvent[]): McpRuntimeSnapshot[] {
 }
 
 describe("MCP prompt contract through real provider requests", () => {
+  it("does not establish cold transports for empty gateway or script searches", async () => {
+    const remote = await startFixtureHttpServer("sse"); cleanups.push(() => remote.close());
+    const { stub } = await run(false, undefined, { kind: "http", url: remote.url, stream: "sse" }, "empty");
+    expect(stub.requests.at(-1)!.messages.filter(message => message.role === "tool")).toHaveLength(2);
+    expect(remote.clientInfos).toHaveLength(0);
+    expect(remote.toolListRequests()).toBe(0);
+  }, 60_000);
+
   it("refuses model management before a cold server has any transport or auth side effects", async () => {
     const remote = await startFixtureHttpServer("sse"); cleanups.push(() => remote.close());
     const { stub } = await run(false, undefined, { kind: "http", url: remote.url, stream: "sse" }, "management");

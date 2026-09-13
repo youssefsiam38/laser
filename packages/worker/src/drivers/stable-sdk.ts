@@ -294,7 +294,7 @@ export class StableSdkDriver implements SessionDriver {
           this.push({
             kind: "extension_error",
             extension: "mcp",
-            message: `MCP servers could not be started for this conversation: ${error instanceof Error ? error.message : String(error)}`,
+            message: "This conversation started without MCP tools. Check Settings → MCP servers, then start a new conversation to use them.",
           });
           return undefined;
         })

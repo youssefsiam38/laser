@@ -267,7 +267,7 @@ index f957e93..a66d03e 100644
      configPath?: string;
  }
 diff --git a/index.ts b/index.ts
-index f655b4f..0517ffe 100644
+index f655b4f..178c63c 100644
 --- a/index.ts
 +++ b/index.ts
 @@ -10,9 +10,10 @@ import { cloneMcpConfig, discoverConfiguredClaudePluginSkills, getPiGlobalConfig
@@ -453,7 +453,7 @@ index f655b4f..0517ffe 100644
            };
          }
          executeOwner?.throwIfInactive();
-+        await prepareAuthorizedCatalog(state, { server: params.server, tool: params.tool ?? params.describe, discover: params.search !== undefined, signal });
++        await prepareAuthorizedCatalog(state, { server: params.server, tool: params.tool ?? params.describe, discover: Boolean(params.search?.trim()), signal });
 +        const refused = authorizationRefusal(state, params.server ?? params.connect, params.tool ?? params.describe);
 +        if (refused) return refused;
  
@@ -1360,11 +1360,55 @@ index 49f1b4e..03e10b6 100644
    let autoAuthAttempted = false;
 diff --git a/sdk-cache-contract.ts b/sdk-cache-contract.ts
 new file mode 100644
-index 0000000..d00bdbf
+index 0000000..01b681d
 --- /dev/null
 +++ b/sdk-cache-contract.ts
-@@ -0,0 +1,146 @@
+@@ -0,0 +1,189 @@
 +import type { Client } from "@modelcontextprotocol/client";
++
++type Payload = Record<string, unknown> & { ttlMs?: number; nextCursor?: string };
++type Options = Record<string, unknown> | undefined;
++type List = (params?: Payload, options?: Options) => Promise<Payload>;
++const listMethods = ["listTools", "listPrompts", "listResources", "listResourceTemplates", "readResource"] as const;
++interface PinnedCache {
++  read(method: string, params?: Payload): Promise<Payload | undefined>;
++  write(method: string, result: Payload, generation: number, freshness: { expiresAt: number; scope: unknown }): Promise<void>;
++  _probe(method: string, params?: Payload): Promise<{ expiresAt: number } | undefined>;
++  now(): number;
++  captureGeneration(method: string): number;
++  evict(method: string): Promise<void>;
++  _store: { evict(method: string): Promise<void> };
++  _evictionGeneration: Map<string, number>;
++  _cachePartition?: string;
++}
++interface PinnedClient extends Record<(typeof listMethods)[number], List> {
++  _cache: PinnedCache;
++  _listMaxPages: number;
++  _resolveNonCompleteResult(decoded: unknown, flow: { request: { method: string } }): unknown;
++  _serveFromCache(method: string, params?: Payload, options?: Options): Promise<Payload | undefined>;
++  _listAllPages(method: string, params: Payload | undefined, options: Options, append: (acc: Payload, page: Payload) => void, finalize?: (acc: Payload) => void): Promise<Payload | undefined>;
++  request(request: { method: string; params?: Payload }, options?: Options): Promise<Payload>;
++  discover(options?: Options): Promise<Payload>;
++  _discoverResult?: Payload;
++  _onnotification(notification: { method?: unknown }, extra: unknown): unknown;
++}
++
++/** Fail before installing any wrappers, particularly before losing the page bound. */
++function pinnedClient(client: unknown): PinnedClient {
++  const fail = (member: string): never => { throw Object.assign(new Error(`Incompatible pi-mcp-adapter 2.33.0 / MCP client 3b205e7 cache contract: ${member}.`), { code: "MCP_SDK_CONTRACT" }); };
++  const object = (value: unknown, member: string): Record<string, unknown> => value !== null && typeof value === "object" ? value as Record<string, unknown> : fail(member);
++  const sdk = object(client, "client");
++  const cache = object(sdk._cache, "_cache");
++  for (const member of ["_resolveNonCompleteResult", "_serveFromCache", "_listAllPages", "_onnotification", "request", "discover", ...listMethods]) if (typeof sdk[member] !== "function") fail(member);
++  for (const member of ["read", "write", "_probe", "now", "captureGeneration", "evict"]) if (typeof cache[member] !== "function") fail(`_cache.${member}`);
++  if (typeof object(cache._store, "_cache._store").evict !== "function") fail("_cache._store.evict");
++  if (!(cache._evictionGeneration instanceof Map)) fail("_cache._evictionGeneration");
++  if (cache._cachePartition !== undefined && typeof cache._cachePartition !== "string") fail("_cache._cachePartition");
++  if (typeof sdk._listMaxPages !== "number" || !Number.isSafeInteger(sdk._listMaxPages) || sdk._listMaxPages <= 0) fail("_listMaxPages must be a finite positive integer");
++  return client as PinnedClient;
++}
++
++const catalogChanged = (message: string) => Object.assign(new Error(message), { code: "MCP_CATALOG_CHANGED" });
 +
 +/**
 + * Narrow workaround for the pinned SDK's aggregate page clock/cursor defects.
@@ -1372,11 +1416,11 @@ index 0000000..d00bdbf
 + * does not introduce another cache or transport. Pinned by embedding wire tests.
 + */
 +export function installCacheContract(client: Client, invalidated: (method: string) => void) {
-+  const sdk = client as any;
++  const sdk = pinnedClient(client);
 +  const cache = sdk._cache;
-+  const interactive = (params: any) => params !== null && typeof params === "object" && ("inputResponses" in params || "requestState" in params);
-+  const ttl = (page: any) => Number.isSafeInteger(page.ttlMs) && page.ttlMs >= 0 ? page.ttlMs : 0;
-+  const scope = (page: any) => page.cacheScope === "public" ? "public" : "private";
++  const interactive = (params: Payload | undefined) => params !== null && typeof params === "object" && ("inputResponses" in params || "requestState" in params);
++  const ttl = (page: Payload) => typeof page.ttlMs === "number" && Number.isSafeInteger(page.ttlMs) && page.ttlMs >= 0 ? page.ttlMs : 0;
++  const scope = (page: Payload) => page.cacheScope === "public" ? "public" : "private";
 +  const hints: { tools?: { ttlMs: number; cacheScope: "private" | "public"; checkedAt: number; expiresAt: number } } = {};
 +  // A client that auto-fulfilled an interactive response must not publish its
 +  // conditioned result as reusable metadata. Conservatively disable that method's
@@ -1384,19 +1428,19 @@ index 0000000..d00bdbf
 +  const conditioned = new Set<string>();
 +  const observed = new WeakMap<object, { checkedAt: number; expiresAt: number }>();
 +  const resolveInput = sdk._resolveNonCompleteResult.bind(client);
-+  sdk._resolveNonCompleteResult = (decoded: any, flow: any) => {
++  sdk._resolveNonCompleteResult = (decoded, flow) => {
 +    conditioned.add(flow.request.method);
 +    return resolveInput(decoded, flow);
 +  };
 +  const read = cache.read.bind(cache);
-+  cache.read = (method: string, params: any) => conditioned.has(method) ? Promise.resolve(undefined) : read(method, params);
++  cache.read = (method, params) => conditioned.has(method) ? Promise.resolve(undefined) : read(method, params);
 +  const write = cache.write.bind(cache);
-+  cache.write = (method: string, result: any, generation: number, freshness: any) => {
++  cache.write = (method, result, generation, freshness) => {
 +    if (conditioned.has(method) || result?.resultType === "input_required") return Promise.resolve();
 +    return write(method, result, generation, freshness);
 +  };
 +  const serve = sdk._serveFromCache.bind(client);
-+  sdk._serveFromCache = async (method: string, params: any, options: any) => {
++  sdk._serveFromCache = async (method, params, options) => {
 +    if (interactive(params)) return undefined;
 +    const value = await serve(method, params, options);
 +    if (value === undefined) return value;
@@ -1408,7 +1452,7 @@ index 0000000..d00bdbf
 +    return result;
 +  };
 +
-+  sdk._listAllPages = async (method: string, params: any, options: any, append: (acc: any, page: any) => void, finalize?: (acc: any) => void) => {
++  sdk._listAllPages = async (method, params, options, append, finalize) => {
 +    // Restart an invalid cursor exactly once. Never silently return a prefix of
 +    // the list, or publish a walk that straddled an invalidation generation.
 +    for (let attempt = 0; attempt < 2; attempt++) {
@@ -1417,17 +1461,17 @@ index 0000000..d00bdbf
 +      let commonScope: string | undefined;
 +      let complete = true;
 +      let cursor: string | undefined;
-+      let acc: any;
++      let acc: Payload | undefined;
 +      const seen = new Set<string>();
 +      let pages = 0;
 +      try {
 +        do {
 +          if (cursor !== undefined && seen.has(cursor)) throw new Error(`${method}: the server repeated a page cursor. Refresh tool information and try again.`);
 +          if (cursor !== undefined) seen.add(cursor);
-+          if (sdk._listMaxPages !== 0 && pages >= sdk._listMaxPages) throw new Error(`${method}: the server's paginated list did not finish.`);
++          if (pages >= sdk._listMaxPages) throw new Error(`${method}: the server's paginated list did not finish.`);
 +          const page = await sdk.request({ method, ...(params || cursor !== undefined ? { params: { ...params, ...(cursor !== undefined ? { cursor } : {}) } } : {}) }, options);
 +          const receivedAt = cache.now();
-+          if (cache.captureGeneration(method) !== generation) throw new Error(`${method}: tool information changed while it was being read. Try again.`);
++          if (cache.captureGeneration(method) !== generation) throw catalogChanged(`${method}: tool information changed while it was being read. Try again.`);
 +          if (page.resultType === "input_required") { complete = false; return page; }
 +          expiresAt = Math.min(expiresAt, receivedAt + ttl(page));
 +          const pageScope = scope(page);
@@ -1444,7 +1488,7 @@ index 0000000..d00bdbf
 +        if (complete && options?.cacheMode !== "bypass" && !interactive(params)) {
 +          await cache.write(method, acc, generation, { expiresAt, scope: acc.cacheScope });
 +        }
-+        if (cache.captureGeneration(method) !== generation) throw new Error(`${method}: tool information changed while it was being read. Try again.`);
++        if (cache.captureGeneration(method) !== generation) throw catalogChanged(`${method}: tool information changed while it was being read. Try again.`);
 +        const checkedAt = cache.now();
 +        const reusable = !conditioned.has(method) && !interactive(params);
 +        const expiry = reusable ? Math.max(checkedAt, expiresAt) : checkedAt;
@@ -1458,10 +1502,9 @@ index 0000000..d00bdbf
 +    }
 +  };
 +
-+  for (const method of ["listTools", "listPrompts", "listResources", "listResourceTemplates", "readResource"]) {
-+    const original = sdk[method]?.bind(client);
-+    if (!original) continue;
-+    sdk[method] = async (params: any, options: any) => {
++  for (const method of listMethods) {
++    const original = sdk[method].bind(client);
++    sdk[method] = async (params, options) => {
 +      const result = await original(params, interactive(params) ? { ...options, cacheMode: "bypass" } : options);
 +      if (method === "listTools" && params?.cursor === undefined) {
 +        const checkedAt = cache.now();
@@ -1472,7 +1515,7 @@ index 0000000..d00bdbf
 +  }
 +
 +  const discover = sdk.discover.bind(client);
-+  sdk.discover = async (options: any) => {
++  sdk.discover = async (options) => {
 +    const method = "server/discover";
 +    const generation = cache.captureGeneration(method);
 +    const hit = await sdk._serveFromCache(method, undefined, options);
@@ -1481,12 +1524,12 @@ index 0000000..d00bdbf
 +    if (result.resultType !== "input_required" && options?.cacheMode !== "bypass") {
 +      await cache.write(method, result, generation, { expiresAt: cache.now() + ttl(result), scope: scope(result) });
 +    }
-+    if (cache.captureGeneration(method) !== generation) throw new Error("Server information changed while it was being read. Try again.");
++    if (cache.captureGeneration(method) !== generation) throw catalogChanged("Server information changed while it was being read. Try again.");
 +    return result;
 +  };
 +
 +  const notify = sdk._onnotification.bind(client);
-+  sdk._onnotification = (notification: any, extra: any) => {
++  sdk._onnotification = (notification, extra) => {
 +    const method = notification?.method;
 +    if (typeof method === "string" && /^notifications\/(tools|resources|prompts)\/list_changed$/.test(method)) {
 +      // SDK invalidation starts synchronously; metadata consumers must stop
@@ -1537,7 +1580,7 @@ index beb2a04..916b0f2 100644
    const queryTokens = tokenize(query);
    if (queryTokens.length === 0) return matches;
 diff --git a/server-manager.ts b/server-manager.ts
-index 94154fd..af62540 100644
+index 94154fd..c3cd53b 100644
 --- a/server-manager.ts
 +++ b/server-manager.ts
 @@ -1,4 +1,6 @@
@@ -1607,7 +1650,7 @@ index 94154fd..af62540 100644
 +
 +  private async assertAuthorized(server: string): Promise<void> {
 +    const refusal = await this.authorizationGuard?.(server);
-+    if (refusal) throw new Error(refusal);
++    if (refusal) throw Object.assign(new Error(refusal), { code: "MCP_AUTHORIZATION_CHANGED" });
 +  }
 +
    setAuthStorageOptions(options: AuthStorageOptions): void {

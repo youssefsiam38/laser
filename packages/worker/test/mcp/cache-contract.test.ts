@@ -1,4 +1,5 @@
 import { createServer, type ServerResponse } from "node:http";
+import { createJiti } from "jiti";
 import type { AddressInfo } from "node:net";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -7,7 +8,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { PRODUCT_NAME } from "@lasercode/protocol";
-import { adapterRoot, loadMcpEngine } from "../../src/mcp/engine.js";
+import { adapterRoot, loadMcpEngine, type McpManager } from "../../src/mcp/engine.js";
 import { McpAuthorizationRegistry, mcpAuthorizationIdentity } from "../../src/mcp/authorization.js";
 import { McpInspector } from "../../src/mcp/inspector.js";
 import { mcpClientIdentity } from "../../src/mcp/identity.js";
@@ -28,6 +29,29 @@ beforeAll(async () => {
     rmSync(base, { recursive: true, force: true });
   }
 }, 30_000);
+
+it.each(["_listMaxPages", "_cache", "_cache._probe", "_cache._store.evict", "_onnotification", "listTools"])("refuses incompatible pinned SDK member %s before installing wrappers", async member => {
+  const require = createRequire(join(adapterRoot(), "index.ts"));
+  const { Client } = await import(pathToFileURL(join(dirname(require.resolve("@modelcontextprotocol/client")), "index.mjs")).href);
+  const { installCacheContract } = await createJiti(import.meta.url, { fsCache: false }).import<{ installCacheContract: (client: unknown, invalidated: () => void) => unknown }>(join(adapterRoot(), "sdk-cache-contract.ts"));
+  const client = new Client({ name: "fixture", version: "1" });
+  const original = client._serveFromCache;
+  const keys = member.split(".");
+  let target = client;
+  for (const key of keys.slice(0, -1)) target = target[key];
+  target[keys.at(-1)!] = undefined;
+  expect(() => installCacheContract(client, () => {})).toThrow(`Incompatible pi-mcp-adapter 2.33.0 / MCP client 3b205e7 cache contract: ${member}`);
+  expect(client._serveFromCache).toBe(original);
+});
+
+it.each([0, -1, Infinity, NaN])("refuses an unsafe SDK pagination bound %s", async bound => {
+  const require = createRequire(join(adapterRoot(), "index.ts"));
+  const { Client } = await import(pathToFileURL(join(dirname(require.resolve("@modelcontextprotocol/client")), "index.mjs")).href);
+  const { installCacheContract } = await createJiti(import.meta.url, { fsCache: false }).import<{ installCacheContract: (client: unknown, invalidated: () => void) => unknown }>(join(adapterRoot(), "sdk-cache-contract.ts"));
+  const client = new Client({ name: "fixture", version: "1" });
+  client._listMaxPages = bound;
+  expect(() => installCacheContract(client, () => {})).toThrow("_listMaxPages must be a finite positive integer");
+});
 
 const CACHE_METHODS = new Set(["tools/list", "resources/list", "resources/templates/list", "prompts/list", "resources/read", "server/discover"]);
 
@@ -316,6 +340,68 @@ describe("pinned MCP cache contract over HTTP", () => {
     expect(manager.getConnection("cold")).toBeUndefined();
     expect(published).not.toHaveBeenCalled();
     expect(f.requests.filter(request => request.method === "tools/call")).toHaveLength(0);
+  });
+
+  it("rereads one notification race without dropping the inspector connection", async () => {
+    const f = await fixture();
+    const inspector = new McpInspector(f.base, f.base); cleanups.push(() => inspector.dispose());
+    const config = { name: "inspected", transport: { kind: "http" as const, url: f.url }, auth: { kind: "none" as const } };
+    const target = { scope: "global" as const, config, secrets: new Map<string, string>() };
+    expect((await inspector.inspect(target)).status).toBe("connected");
+    await vi.waitFor(() => expect(f.streamCount()).toBe(2));
+    const before = f.requests.filter(request => request.method === "initialize").length;
+    const connection = (inspector as unknown as { manager: McpManager }).manager.getConnection(config.name)!;
+    const list = vi.spyOn(connection.client, "listTools");
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), refreshed = Promise.withResolvers<void>();
+    let reads = 0;
+    f.set(async method => {
+      if (method !== "tools/list") return undefined;
+      if (++reads === 1) { entered.resolve(); await release.promise; return { tools: [tool("old")], ttlMs: 0 }; }
+      refreshed.resolve(); return { tools: [tool("replacement")], ttlMs: 60_000 };
+    });
+    const pending = inspector.inspect(target);
+    await entered.promise; f.notify(); await refreshed.promise; release.resolve();
+    const result = await pending;
+    // Invalidation and successful notification publication are two revisions.
+    // If both race the bounded reread, report retryable unknown, not failure.
+    expect(["connected", "unknown"], JSON.stringify(result)).toContain(result.status);
+    // The SDK also makes its own refresh-mode notification read; only the
+    // inspector's signal-less reads count against its one-reread allowance.
+    expect(list.mock.calls.filter(([, options]) => options === undefined)).toHaveLength(2);
+    expect(list.mock.calls.filter(([, options]) => options !== undefined)).toHaveLength(1);
+    expect(inspector.inspecting("global", config.name)).toBe(true);
+    await vi.waitFor(() => expect(connection.tools.map(tool => tool.name)).toEqual(["replacement"]));
+    const settled = await inspector.inspect(target);
+    expect(settled.status, JSON.stringify(settled)).toBe("connected");
+    expect(settled.tools.map(tool => tool.originalName)).toEqual(["replacement"]);
+    expect(f.requests.filter(request => request.method === "initialize")).toHaveLength(before);
+  });
+
+  it("keeps useful unexpected failure details without exposing configured secrets", async () => {
+    const f = await fixture();
+    const inspector = new McpInspector(f.base, f.base); cleanups.push(() => inspector.dispose());
+    const token = `private-fixture-token-${"x".repeat(700)}`;
+    f.set(method => { if (method === "tools/list") throw new Error(`synthetic list failure with ${token}`); return undefined; });
+    const result = await inspector.inspect({ scope: "global", config: {
+      name: "inspected", transport: { kind: "http", url: f.url }, auth: { kind: "bearer", token: { secret: true } },
+    }, secrets: new Map([["auth.token", token]]) });
+    expect(result.status).toBe("failed");
+    expect(result.detail).toContain("synthetic list failure");
+    expect(result.detail).toContain("[redacted]");
+    expect(JSON.stringify(result)).not.toContain("private-fixture-token");
+  });
+
+  it("reports a revoked inspector as needing attention, not a transport failure", async () => {
+    const f = await fixture();
+    const inspector = new McpInspector(f.base, f.base); cleanups.push(() => inspector.dispose());
+    const config = { name: "inspected", transport: { kind: "http" as const, url: f.url }, auth: { kind: "none" as const } };
+    const target = { scope: "global" as const, config, secrets: new Map<string, string>() };
+    expect((await inspector.inspect(target)).status).toBe("connected");
+    await new McpAuthorizationRegistry(f.base).bump(await mcpAuthorizationIdentity("global", f.base, config));
+    const result = await inspector.inspect(target);
+    expect(result.status).toBe("needs-auth");
+    expect(result.detail).toContain("Access to this server changed");
+    expect(inspector.inspecting("global", config.name)).toBe(false);
   });
 
   it("revalidates inspector tools at expiry and refuses a removed tool without forwarding it", async () => {

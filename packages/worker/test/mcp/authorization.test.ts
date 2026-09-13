@@ -7,7 +7,7 @@ import { join } from "node:path";
 import lockfile from "proper-lockfile";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PRODUCT_NAME } from "@lasercode/protocol";
-import { McpAuthorizationRegistry, mcpAuthorizationIdentity, mcpAuthorizationIdentities } from "../../src/mcp/authorization.js";
+import { McpAuthorizationRegistry, mcpAuthorizationIdentity, mcpAuthorizationIdentities, mcpAuthorizationAccount, mcpAuthorizationPartition, mcpAuthorizationRevision } from "../../src/mcp/authorization.js";
 import type { McpConfiguredServer } from "../../src/mcp/store.js";
 
 let root: string;
@@ -85,6 +85,29 @@ describe("MCP authorization identities and durable generations", () => {
     }
     expect(identities[0]).not.toBe(identities[1]);
   }, 30_000);
+
+  it("canonicalizes logical partitions independently of order and observation time", async () => {
+    const registry = new McpAuthorizationRegistry(root);
+    const snapshots = await Promise.all((await mcpAuthorizationIdentities("global", root, server)).map(id => registry.establish(id)));
+    const reordered = snapshots.toReversed().map(value => ({ ...value, updatedAt: value.updatedAt + 1 }));
+    expect(mcpAuthorizationPartition(reordered)).toBe(mcpAuthorizationPartition(snapshots));
+    expect(mcpAuthorizationRevision(reordered)).toBe(mcpAuthorizationRevision(snapshots));
+    const primary = snapshots[0]!;
+    expect(mcpAuthorizationAccount(primary)).toBe(`${primary.identity}:${primary.generation.epoch}`);
+    for (const generation of [{ ...primary.generation, counter: primary.generation.counter + 1 }, { ...primary.generation, epoch: "00000000-0000-0000-0000-000000000000" }]) {
+      expect(mcpAuthorizationPartition([{ ...primary, generation }, ...snapshots.slice(1)])).not.toBe(mcpAuthorizationPartition(snapshots));
+    }
+  });
+
+  it.each([false, true])("coalesces fresh setup without locking established reads (established=%s)", async established => {
+    const registry = new McpAuthorizationRegistry(root);
+    const id = await mcpAuthorizationIdentity("global", root, server);
+    const before = established ? await registry.establish(id) : undefined;
+    const snapshots = await Promise.all(Array.from({ length: 12 }, () => new McpAuthorizationRegistry(root).establish(id)));
+    expect(snapshots.every(snapshot => JSON.stringify(snapshot) === JSON.stringify(snapshots[0]))).toBe(true);
+    if (before) expect(snapshots[0]).toEqual(before);
+    expect(await registry.current(snapshots[0]!)).toBe(true);
+  });
 
   it("locks configuration guards during a credential write without advancing their generations", async () => {
     const registry = new McpAuthorizationRegistry(root);
@@ -170,6 +193,7 @@ describe("MCP authorization identities and durable generations", () => {
     const release = await lockfile.lock(join(registry.directory, `${id}.json`), { realpath: false, retries: 0 });
     try {
       await expect(registry.bump(id)).rejects.toThrow("being updated");
+      await expect(registry.establish(id)).rejects.toThrow("being updated");
       expect(await registry.current(snapshot)).toBe(false);
     } finally { await release(); }
     expect(await registry.current(await registry.bump(id))).toBe(true);
