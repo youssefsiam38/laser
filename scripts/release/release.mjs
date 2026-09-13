@@ -17,7 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { tmpdir } from "node:os";
+import { constants as osConstants, tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { identity } from "../identity/identity.mjs";
 import { inspectReleaseByTag, isExplicitMissingRelease, releaseInventory, verifyInventory } from "./publish-github.mjs";
@@ -245,6 +245,16 @@ export function assertRecordedTag(tag, journal) {
   }
 }
 
+/**
+ * Whether `ancestor` is contained in `descendant`, as a question rather than a
+ * failure: an object this checkout does not have (exit 128) is "cannot prove",
+ * which every caller treats as no.
+ */
+function isAncestor(exec, cwd, ancestor, descendant) {
+  if (!FULL_SHA_RE.test(ancestor ?? "") || !FULL_SHA_RE.test(descendant ?? "")) return false;
+  return exec("git", ["merge-base", "--is-ancestor", ancestor, descendant], { cwd, allowCodes: [0, 1, 128] }).code === 0;
+}
+
 function remoteMain(exec, repoRoot) {
   const output = checked(exec, "git", ["ls-remote", "--heads", "origin", MAIN_REF], { cwd: repoRoot });
   const rows = output ? output.split("\n") : [];
@@ -298,17 +308,28 @@ export function preflight({ exec = systemExec, repoRoot, version, source, allowR
   assertSource(exec, root, exactSource);
   const origin = checked(exec, "git", ["remote", "get-url", "origin"], { cwd: root });
   if (normalizeOrigin(origin) !== identity.repository) fail(`origin does not match the configured repository ${identity.repository}.`);
+  const tag = `v${version}`;
+  const tagSha = remoteRef(exec, root, `refs/tags/${tag}`);
   const main = remoteMain(exec, root);
   const ancestor = exec("git", ["merge-base", "--is-ancestor", main, exactSource], { cwd: root, allowCodes: [0, 1] });
   if (ancestor.code !== 0) {
-    const remoteAhead = allowRemoteAhead && exec("git", ["merge-base", "--is-ancestor", exactSource, main], {
-      cwd: root,
-      allowCodes: [0, 1],
-    }).code === 0;
-    if (!remoteAhead) fail(`Reviewed source ${exactSource} is not a fast-forward of remote main ${main}.`);
+    // A source behind remote main is unreviewed history and is refused — that
+    // is the check that stops a release from anything but the reviewed commit.
+    // The one exception is a resume of a release that already pushed its tag:
+    // its own candidate (this source, or its version-only child) became remote
+    // main, so the source it was told to verify is legitimately behind, and
+    // every stage that is left only reads the remote. The tag must exist, it
+    // must descend from this source, and remote main must still carry it.
+    const resumingPublished = allowRemoteAhead && Boolean(tagSha) &&
+      isAncestor(exec, root, exactSource, tagSha) &&
+      isAncestor(exec, root, tagSha, main);
+    if (!resumingPublished) {
+      const hint = tagSha && isAncestor(exec, root, exactSource, tagSha)
+        ? ` Tag ${tag} already exists at ${tagSha}: a release that has pushed its tag is continued with --publish --resume.`
+        : "";
+      fail(`Reviewed source ${exactSource} is not a fast-forward of remote main ${main}.${hint}`);
+    }
   }
-  const tag = `v${version}`;
-  const tagSha = remoteRef(exec, root, `refs/tags/${tag}`);
   const release = releaseByTag(exec, tag, true);
   return {
     repoRoot: root,
@@ -540,6 +561,23 @@ export function pushMain(exec, journal) {
   return true;
 }
 
+/**
+ * Remote main must carry the candidate this checkpoint is releasing.
+ *
+ * Before the tag exists that means exactly the candidate: anything else is a
+ * race with another push, and the release stops rather than tag history it did
+ * not verify. Once the tag is pushed the release is irreversible and ordinary
+ * work legitimately lands on top of it, so remote main may be the candidate or
+ * any commit that contains it. What must never happen — main losing the
+ * candidate to a force-push or a rewrite — is what this still refuses.
+ */
+export function assertRemoteMainCarriesCandidate(exec, journal, context) {
+  const main = remoteMain(exec, journal.repoRoot);
+  if (main === journal.candidate) return main;
+  if (stageAtLeast(journal, "tag-pushed") && isAncestor(exec, journal.repoRoot, journal.candidate, main)) return main;
+  fail(`${context}: remote main ${main} does not carry checkpoint candidate ${journal.candidate}.`);
+}
+
 export async function waitForWorkflow({ exec, sleep, now, journal, workflow, workflowPath, branch, timeoutMinutes, onObserved }) {
   const deadline = now() + timeoutMinutes * 60_000;
   const timedExec = (command, args, options = {}) => {
@@ -752,6 +790,48 @@ export function publicationState(exec, journal) {
   }
 }
 
+const INTERRUPT_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
+
+/**
+ * A release that is killed writes nothing. 0.6.1 published correctly, but the
+ * process that was waiting for the release workflow was terminated four minutes
+ * after the tag push: the checkpoint kept the last stage it had recorded
+ * (`tag-pushed`), carried no `lastError` to say why, and the lock outlived the
+ * process, so the resume additionally demanded `--recover-stale-lock`. The
+ * stages themselves were never skipped — the run simply ended inside the wait.
+ *
+ * On a catchable signal we now record the interruption in the checkpoint and
+ * release the lock, so the next command sees what happened and resumes.
+ */
+export function installInterruptGuard({
+  journalPath,
+  journal,
+  lock,
+  signals = process,
+  exit = (code) => process.exit(code),
+  report = (text) => process.stderr.write(text),
+}) {
+  const handlers = INTERRUPT_SIGNALS.map((signal) => {
+    const handler = () => {
+      journal.interruptedAt = new Date().toISOString();
+      journal.lastError = `Interrupted by ${signal} at stage ${journal.stage}; nothing after that stage ran.`;
+      try {
+        writeJournal(journalPath, journal);
+      } finally {
+        lock.release();
+      }
+      report(`release: interrupted by ${signal} at stage ${journal.stage}.\nCheckpoint: ${journalPath}\n` +
+        `Resume with: node scripts/release/release.mjs ${journal.version} --publish --resume --source ${journal.source}\n`);
+      exit(128 + (osConstants.signals[signal] ?? 15));
+    };
+    signals.on(signal, handler);
+    return [signal, handler];
+  });
+  return () => {
+    for (const [signal, handler] of handlers) signals.removeListener(signal, handler);
+  };
+}
+
 function help() {
   return `Release a reviewed source through the existing CI and release workflows.\n\n` +
     `  node scripts/release/release.mjs VERSION [--source FULL_SHA] [--notes FILE]\n` +
@@ -794,6 +874,7 @@ export async function runRelease(options, dependencies = {}) {
     recoverStaleLock: options.recoverStaleLock,
   });
   let journal;
+  let removeInterruptGuard = () => {};
   try {
     const identityFields = {
       id: lock.checkpointId,
@@ -831,7 +912,18 @@ export async function runRelease(options, dependencies = {}) {
       };
       writeJournal(lock.journalPath, journal);
     }
-    if (!existsSync(journal.worktree) && !stageAtLeast(journal, "verified")) {
+    removeInterruptGuard = installInterruptGuard({
+      journalPath: lock.journalPath,
+      journal,
+      lock,
+      ...(dependencies.signals ? { signals: dependencies.signals } : {}),
+      ...(dependencies.exit ? { exit: dependencies.exit } : {}),
+      ...(dependencies.report ? { report: dependencies.report } : {}),
+    });
+    // Everything from the tag onwards reads the remote only; the isolated
+    // worktree has done its work and a temporary directory reaped since then
+    // must not strand a published release short of verification.
+    if (!existsSync(journal.worktree) && !stageAtLeast(journal, "tag-pushed")) {
       fail(`Checkpoint worktree is missing: ${journal.worktree}`);
     }
     if (existsSync(journal.worktree)) validateOwnedWorktree(exec, journal);
@@ -853,8 +945,8 @@ export async function runRelease(options, dependencies = {}) {
       journal.mainPushPerformed = pushMain(exec, journal);
       journal.mainPushedAt = new Date().toISOString();
       writeJournal(lock.journalPath, journal, "main-pushed");
-    } else if (remoteMain(exec, journal.repoRoot) !== journal.candidate) {
-      fail(`Remote main no longer equals checkpoint candidate ${journal.candidate}.`);
+    } else {
+      assertRemoteMainCarriesCandidate(exec, journal, "Remote main moved after the candidate push");
     }
     if (!stageAtLeast(journal, "ci-passed")) {
       const run = await waitForWorkflow({
@@ -874,7 +966,7 @@ export async function runRelease(options, dependencies = {}) {
     }
     validateWorkflowProof(exec, journal, "ci");
     writeJournal(lock.journalPath, journal);
-    if (remoteMain(exec, journal.repoRoot) !== journal.candidate) fail("Remote main moved after source CI; refusing to tag.");
+    assertRemoteMainCarriesCandidate(exec, journal, "Remote main moved after source CI; refusing to tag");
     if (!stageAtLeast(journal, "tag-pushed")) {
       journal.tagPushPerformed = ensureTag(exec, journal, () => writeJournal(lock.journalPath, journal));
       journal.tagPushedAt = new Date().toISOString();
@@ -930,6 +1022,7 @@ export async function runRelease(options, dependencies = {}) {
     }
     throw error;
   } finally {
+    removeInterruptGuard();
     lock.release();
   }
 }
