@@ -4,9 +4,9 @@
 
 M16-T25: milestone 1's design is reviewed; milestone 2 implements progressive
 discovery, the 2% policy, a frozen request surface and conversation diagnostics.
-[mcp.md](mcp.md) describes that implementation. Cache correctness, dynamic
-connections and script isolation remain separately assigned milestones, not
-completed capabilities. The baseline matrix below remains historical evidence:
+[mcp.md](mcp.md) describes that implementation. Cache correctness and script isolation remain separately assigned milestones,
+not completed capabilities. Model-managed servers are permanently rejected
+(D-230); milestone 4 is dropped, not deferred. The baseline matrix below remains historical evidence:
 `8c92c7b946ec98f134fc87d54cf9e244fe758cbc`, research retrieved on 2026-09-12.
 
 The design follows every recommendation in the [client best-practices guide][guide].
@@ -26,9 +26,11 @@ recommendation means choosing and justifying one, not installing every alternati
 - Reuse the pinned adapter's keyword retrieval, execution, approval, lifecycle,
   schema rendering and SDK cache. Fix upstream internals with tracked patches;
   do not implement a second MCP client in the UI or host process.
-- Separate durable configuration from a session's connection choices. The model
-  may use only configured, trusted, person-enabled servers. It cannot turn a
-  person's disabled server back on or write configuration.
+- Server configuration and connection state belong exclusively to the person's
+  Settings UI (D-230). The model cannot search for, enable, disable, install or
+  remove servers. Progressive tool discovery within configured, trusted,
+  person-enabled servers remains supported. No future model-facing server registry
+  or connection-authority interface is planned.
 - Replace the script executor's Node `vm` isolation before claiming safe execution
   of model-generated code. Retain its broker and evaluate authorization per call.
 
@@ -524,7 +526,7 @@ phone, dark/light, touch and reduced motion; ensure no horizontal overflow.
 #### Approved identity and revocation decisions
 
 These are requirements for implementation, not claims about the current client.
-Milestones 4 and 5 inherit them.
+Milestone 5 inherits them; milestone 4 is permanently dropped (D-230).
 
 - **Full server identity:** configuration scope (global or a specific project)
   plus the stable fingerprint of the actual transport kind and target
@@ -579,26 +581,21 @@ Browser: matrix script drives changed tools and failed refresh while inspector i
 open, verifies stale copy/retry and that an inspector refresh does not manufacture
 session discoveries. No UI changes beyond this truthful cache state.
 
-### 4 · Trusted session-scoped dynamic servers
+### 4 · Dropped: model-managed servers (D-230)
 
-Depends on 2 and 3. Registry, enable/disable verbs, lease/status protocol, person
-override and safe boundary disconnect. Resolve descriptions without connecting or
-exposing secret configuration. Skills use the same verbs, not a separate loader.
+Permanently rejected, not deferred. The person alone manages server configuration
+and connection state in Settings. The model must never search for, enable, disable,
+install or remove servers. Do not build a server registry, connection-authority
+interface or enable/disable verbs for future model use. This does not remove
+progressive **tool** discovery within person-configured/enabled servers.
 
-Tests: untrusted project cannot spawn servers/helpers; person-disabled cannot be
-model-enabled; configured-but-unconnected search; concurrent enable coalescing;
-connect failure/auth refusal/retry; person revoke racing model enable; disable
-while call/question active; cancellation and safe closure; two sessions cannot
-revoke each other's lease; no config writes; no new project worker; session reload
-and explicit direct override keep prompt snapshot semantics.
-
-Browser: matrix script observes model connection origin, disables from the selected
-conversation, verifies race-safe status and actionable auth/failure text, and
-checks the server remains enabled in saved settings unless explicitly changed.
+Earlier research rows describing model-managed server catalogs or leases are
+historical proposals superseded by D-230, not implementation requirements.
 
 ### 5 · Script isolation + per-call approval
 
-Depends on 2–4 so the guest sees the same trusted catalog and dispatch contract.
+Depends on 2 and 3 so the guest sees the same trusted tool catalog and dispatch
+contract. There is no dependency on dropped milestone 4.
 Patch executor to restricted runtime, bounded bridge/output, typed schema descriptors,
 throwing errors and run-scoped grants. Preserve existing MCP broker, cancellation,
 output guard and one companion module.
@@ -626,9 +623,9 @@ load Wasm/runtime assets and execute the same brokered script without downloads.
 
 ### 6 · Integrated acceptance and documentation reconciliation
 
-Depends on 2–5. Real-engine scenario: discover configured server → enable → search
-summaries → inspect full schemas → script chaining/filtering → list-change refresh
-→ person revoke → safe boundary disconnect → reload/new conversation. Assert stable
+Depends on 2, 3 and 5. Real-engine scenario: person configures/enables a server in
+Settings → search tool summaries → inspect full schemas → script chaining/filtering
+→ list-change refresh → person revoke → reload/new conversation. Assert stable
 provider prefix, accurate context diagnostics, per-call approvals and bounded output.
 Reconcile `docs/mcp.md`, this document and `docs/upstream.md` with what actually ships.
 

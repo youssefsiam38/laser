@@ -10,6 +10,7 @@
  */
 import { delimiter } from "node:path";
 import { mcpClientIdentity } from "./identity.js";
+import { mcpAuthorizationIdentity } from "./authorization.js";
 import type {
   McpCallResult,
   McpInspection,
@@ -51,14 +52,12 @@ export interface InspectTarget {
 export class McpInspector {
   private engine: McpEngine | undefined;
   private manager: McpManager | undefined;
-  private oauthRuntime: unknown;
+  private readonly oauthRuntimes = new Map<string, unknown>();
   /**
    * The connections held, by the inspector's own scoped key. `name` is the key
-   * the engine manager (and, with it, the OS credential store) uses: upstream
-   * accounts OAuth credentials by the name it is handed, so a connection keyed
-   * by anything else can never find the credential sign-in stored. One project
-   * has one definition per name (`store.effective()` shadows the other), so
-   * the plain name is unambiguous here.
+   * the engine manager uses. Credentials are separately partitioned by each
+   * definition's authorizationIdentity. One project has one effective definition
+   * per name; inspecting a replacement closes the previous connection.
    */
   private readonly held = new Map<string, { name: string; entry: ServerEntry; latencyMs?: number; counts?: LiveCounts }>();
   private ephemeralCounter = 0;
@@ -90,10 +89,25 @@ export class McpInspector {
   }
 
   /** Every auth operation owns the same identity-bearing runtime, even before a connection. */
-  private async runtime(): Promise<unknown> {
+  private async runtime(identity = "connections"): Promise<unknown> {
     const engine = await this.engineOrLoad();
-    this.oauthRuntime ??= engine.auth.createOAuthRuntime(undefined, mcpClientIdentity());
-    return this.oauthRuntime;
+    if (!this.oauthRuntimes.has(identity)) this.oauthRuntimes.set(identity, engine.auth.createOAuthRuntime(undefined, mcpClientIdentity()));
+    return this.oauthRuntimes.get(identity);
+  }
+
+  private async authOptions(scope: McpScope, config: McpConfiguredServer) {
+    const identity = await mcpAuthorizationIdentity(scope, this.cwd, config);
+    return { runtime: await this.runtime(identity), authStorageOptions: { identities: { [config.name]: identity } } };
+  }
+
+  /** Unknown legacy ownership is reported per server, never silently adopted. */
+  async migrationDetail(scope: McpScope, config: McpConfiguredServer): Promise<string | undefined> {
+    if (config.transport.kind !== "http" || config.auth?.kind === "none" || config.auth?.kind === "bearer") return undefined;
+    const engine = await this.engineOrLoad();
+    const scoped = await this.authOptions(scope, config);
+    if (await engine.auth.getAuthStatus(config.name, scoped) !== "not_authenticated") return undefined;
+    const legacy = await engine.auth.getAuthStatus(config.name, { runtime: await this.runtime(), authStorageOptions: {} });
+    return legacy === "not_authenticated" ? undefined : "Sign in again: this saved sign-in can't be matched to a server safely.";
   }
 
   private async managerOrCreate(): Promise<McpManager> {
@@ -127,7 +141,9 @@ export class McpInspector {
     const base: McpInspection = { name: config.name, scope, status: "unknown", tools: [], resources: [], prompts: [] };
     if (config.disabled) return { ...base, status: "off", detail: OFF_DETAIL };
     try {
-      const connection = await this.connect(key, config, target.secrets, signal);
+      const migration = await this.migrationDetail(scope, config);
+      if (migration) return { ...base, status: "needs-auth", detail: migration };
+      const connection = await this.connect(key, config, target.secrets, scope, signal);
       if (connection.status === "needs-auth") {
         await this.close(key);
         return { ...base, status: "needs-auth", detail: signInDetail(config.name) };
@@ -205,7 +221,9 @@ export class McpInspector {
     const key = McpInspector.key(scope, config.name);
     if (config.disabled) return { status: "off", detail: OFF_DETAIL };
     try {
-      const connection = await this.connect(key, config, secrets, signal);
+      const migration = await this.migrationDetail(scope, config);
+      if (migration) return { status: "needs-auth", detail: migration };
+      const connection = await this.connect(key, config, secrets, scope, signal);
       if (connection.status === "needs-auth") {
         await this.close(key);
         return { status: "needs-auth", detail: signInDetail(config.name) };
@@ -236,7 +254,9 @@ export class McpInspector {
     const started = Date.now();
     if (config.disabled) return { ok: false, durationMs: 0, content: [], error: OFF_DETAIL };
     try {
-      const connection = await this.connect(key, config, secrets, signal);
+      const migration = await this.migrationDetail(scope, config);
+      if (migration) return { ok: false, durationMs: Date.now() - started, content: [], error: migration };
+      const connection = await this.connect(key, config, secrets, scope, signal);
       if (connection.status === "needs-auth") {
         return { ok: false, durationMs: Date.now() - started, content: [], error: signInDetail(config.name) };
       }
@@ -270,7 +290,7 @@ export class McpInspector {
     }
     // Both callbacks are ours and both do nothing: the app opens the URL, and
     // upstream's own logger prints it when no `onAuthorizationUrl` is supplied.
-    const options = { runtime: await this.runtime(), authStorageOptions: {}, openAuthorizationUrl: () => {}, onAuthorizationUrl: () => {} };
+    const options = { ...await this.authOptions(scope, config), openAuthorizationUrl: () => {}, onAuthorizationUrl: () => {} };
     const { authorizationUrl } = await engine.auth.startAuth(config.name, url, entry, options);
     if (!authorizationUrl) return { authorizationUrl: "", callbackListening: false, alreadyAuthorized: true };
     const callbackListening = isLoopbackRedirect(authorizationUrl);
@@ -296,7 +316,7 @@ export class McpInspector {
   /** Finish sign-in from a pasted callback URL or code. */
   async authComplete(scope: McpScope, config: McpConfiguredServer, input: string): Promise<{ status: McpInspection["status"]; detail?: string }> {
     const engine = await this.engineOrLoad();
-    const status = await engine.auth.completeAuthFromInput(config.name, input, { runtime: await this.runtime(), authStorageOptions: {} });
+    const status = await engine.auth.completeAuthFromInput(config.name, input, await this.authOptions(scope, config));
     await this.close(McpInspector.key(scope, config.name)).catch(() => {});
     if (status !== "authenticated") {
       return { status: "needs-auth", detail: `Sign-in for "${config.name}" did not complete. Start it again and paste the full address the browser landed on.` };
@@ -310,7 +330,7 @@ export class McpInspector {
   /** Forget stored credentials for a server. */
   async authLogout(scope: McpScope, config: McpConfiguredServer): Promise<void> {
     const engine = await this.engineOrLoad();
-    await engine.auth.removeAuth(config.name, { runtime: await this.runtime(), authStorageOptions: {} });
+    await engine.auth.removeAuth(config.name, await this.authOptions(scope, config));
     await this.close(McpInspector.key(scope, config.name)).catch(() => {});
   }
 
@@ -333,8 +353,8 @@ export class McpInspector {
     this.manager = undefined;
     await manager?.closeAll().catch(() => {});
     const engine = this.engine;
-    if (engine && this.oauthRuntime) await Promise.resolve(engine.auth.shutdownOAuth(this.oauthRuntime)).catch(() => {});
-    this.oauthRuntime = undefined;
+    if (engine) await Promise.all([...this.oauthRuntimes.values()].map(runtime => Promise.resolve(engine.auth.shutdownOAuth(runtime)).catch(() => {})));
+    this.oauthRuntimes.clear();
   }
 
   private failure(error: unknown, config: McpConfiguredServer, secrets: ResolvedSecrets) {
@@ -342,9 +362,10 @@ export class McpInspector {
     return describeFailure(error, config.name, entry.command, entry.env?.["PATH"] ?? process.env["PATH"] ?? "");
   }
 
-  private async connect(key: string, config: McpConfiguredServer, secrets: ResolvedSecrets, signal?: AbortSignal): Promise<McpConnection> {
+  private async connect(key: string, config: McpConfiguredServer, secrets: ResolvedSecrets, scope: McpScope, signal?: AbortSignal): Promise<McpConnection> {
     const manager = await this.managerOrCreate();
     const entry = toServerEntry(config, secrets);
+    entry.authorizationIdentity = await mcpAuthorizationIdentity(scope, this.cwd, config);
     const existing = manager.getConnection(config.name);
     const held = this.held.get(key);
     if (existing && existing.status === "connected" && held && sameDefinition(held.entry, entry)) return existing;

@@ -22,6 +22,7 @@ import { McpPromptFreeze } from "./prompt-freeze.js";
 import { loadMcpEngine, type McpConfig } from "./engine.js";
 import { McpStore } from "./store.js";
 import { mcpClientIdentity } from "./identity.js";
+import { mcpAuthorizationIdentity } from "./authorization.js";
 
 export interface McpSessionOptions {
   cwd: string;
@@ -60,7 +61,11 @@ async function resolveConfig(
   const resolved = await Promise.all(
     servers.map(async ({ scope, config }) => ({ config, secrets: await store.secretsFor(scope, cwd, config.name) })),
   );
-  return toAdapterConfig(resolved, projectEnv);
+  const mapped = toAdapterConfig(resolved, projectEnv);
+  await Promise.all(servers.map(async ({ scope, config }) => {
+    mapped.mcpServers[config.name]!.authorizationIdentity = await mcpAuthorizationIdentity(scope, cwd, config);
+  }));
+  return mapped;
 }
 
 /** Build the session's MCP extension, or nothing when no server is enabled. */

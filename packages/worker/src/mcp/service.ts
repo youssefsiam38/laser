@@ -380,6 +380,10 @@ export class McpService {
     };
     if (config.disabled) return { ...state, status: "off" };
     if (server.shadowed) return { ...state, status: "off", detail: "This project uses its own server of the same name." };
+    if (isConfigured(config)) {
+      const migration = await this.inspector.migrationDetail(scope, config);
+      if (migration) return { ...state, status: "needs-auth", detail: migration };
+    }
 
     if (this.inspector.inspecting(scope, config.name)) {
       const latencyMs = this.inspector.latency(scope, config.name);

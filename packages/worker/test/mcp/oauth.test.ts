@@ -6,11 +6,8 @@
  * — against a fixture server that demands a bearer token. Only the credential
  * store is swapped for the engine's in-memory one, so no OS keyring is touched.
  *
- * This is the test that pins the defect it was written for: the credential is
- * accounted under the *server's name*, so the inspector must connect the engine
- * manager under that same name. Connecting under anything else (a scoped key,
- * say) leaves a signed-in server stuck on `needs-auth` and makes sign-out
- * remove nothing.
+ * Sign-in and connections share the same scoped transport identity. Names alone
+ * must never transfer a credential between projects, scopes or destinations.
  */
 import { HOMEPAGE, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, type McpServerConfig } from "@lasercode/protocol";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -88,8 +85,7 @@ describe("signing in to an MCP server", () => {
     expect(completed.detail).toContain("Conversations already running keep the servers they started with");
     expect(server.tokenGrants).toBeGreaterThan(0);
 
-    // The credential the flow stored is the one the connection finds: this is
-    // the whole point of keying the engine manager by the server's own name.
+    // The connection uses the same scoped credential identity as sign-in.
     const after = await inspector.inspect({ scope: "global", config: server_, secrets: new Map() });
     expect(after.status).toBe("connected");
     expect(after.server).toMatchObject({ name: "fixture-oauth" });
@@ -113,6 +109,41 @@ describe("signing in to an MCP server", () => {
     await inspector.authLogout("global", server_);
     const afterLogout = await inspector.inspect({ scope: "global", config: server_, secrets: new Map() });
     expect(afterLogout.status).toBe("needs-auth");
+  }, 60_000);
+
+  it("does not lend credentials to a same-name server in another project or scope", async () => {
+    const other = new McpInspector(join(base, "other-project"));
+    try {
+      const started = await inspector.authStart("project", config(), new Map(), () => {});
+      await inspector.authComplete("project", config(), callbackUrl(started.authorizationUrl, "project-code"));
+      expect((await inspector.inspect({ scope: "project", config: config(), secrets: new Map() })).status).toBe("connected");
+      expect((await other.inspect({ scope: "project", config: config(), secrets: new Map() })).status).toBe("needs-auth");
+      expect((await inspector.inspect({ scope: "global", config: config(), secrets: new Map() })).status).toBe("needs-auth");
+      await other.authLogout("project", config());
+      expect((await inspector.inspect({ scope: "project", config: config(), secrets: new Map() })).status).toBe("connected");
+    } finally { await other.dispose(); }
+  }, 60_000);
+
+  it("retains unknown legacy credentials until scoped sign-in succeeds and does not repeat migration on restart", async () => {
+    const engine = await engineModule.loadMcpEngine();
+    const runtime = engine.auth.createOAuthRuntime(undefined, mcpClientIdentity());
+    const options = { runtime, openAuthorizationUrl: () => {}, onAuthorizationUrl: () => {} };
+    try {
+      const legacy = await engine.auth.startAuth("gated", server.url, { url: server.url, auth: "oauth" }, options);
+      expect(await engine.auth.completeAuthFromInput("gated", callbackUrl(legacy.authorizationUrl, "legacy-code"), options)).toBe("authenticated");
+      const migration = await inspector.inspect({ scope: "global", config: config(), secrets: new Map() });
+      expect(migration.status).toBe("needs-auth");
+      expect(migration.detail).toBe("Sign in again: this saved sign-in can't be matched to a server safely.");
+      expect(await engine.auth.getAuthStatus("gated", options)).toBe("authenticated");
+      const started = await inspector.authStart("global", config(), new Map(), () => {});
+      expect(await engine.auth.getAuthStatus("gated", options)).toBe("authenticated");
+      await inspector.authComplete("global", config(), callbackUrl(started.authorizationUrl, "scoped-code"));
+      expect(await engine.auth.getAuthStatus("gated", options)).toBe("not_authenticated");
+      await inspector.dispose();
+      inspector = new McpInspector(base);
+      expect(await inspector.migrationDetail("global", config())).toBeUndefined();
+      expect((await inspector.inspect({ scope: "global", config: config(), secrets: new Map() })).status).toBe("connected");
+    } finally { await engine.auth.shutdownOAuth(runtime); }
   }, 60_000);
 
   it("owns an identity-bearing runtime even when logout is the first operation", async () => {

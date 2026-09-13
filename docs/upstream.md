@@ -22,6 +22,25 @@ small and self-contained (`AGENTS.md` §6).
 
 ## Prepared patches
 
+### pi-mcp-adapter · scoped OAuth identities (M16-T25, milestone 3 checkpoint)
+
+Extends `patches/pi-mcp-adapter@2.33.0.patch`; **not filed upstream**.
+`ServerEntry.authorizationIdentity` lets an embedding application partition OAuth
+storage independently of a display/configuration name. `AuthStorageOptions.identities`
+uses that identity for secure-store accounts and legacy file paths. Scoped reads
+bypass the process-local credential cache, so another worker's credential changes
+cannot be hidden by it. Connections and standalone sign-in receive the same map;
+native callers without the option retain their original accounts.
+
+An unresolved name-only credential is never used in the scoped account. It remains
+until scoped tokens have been successfully stored, then its old account is removed.
+Product migration guidance belongs to the existing per-server needs-auth surface.
+Worker OAuth regressions exercise real discovery/registration/code exchange with
+the adapter's in-memory test credential store: cross-project/scope isolation,
+legacy retention through pending sign-in, successful replacement, and restart.
+This checkpoint does **not** claim live-runtime revocation or complete cache
+freshness/pagination correctness; those require the remaining milestone 3 work.
+
 ### pi-mcp-adapter · embedded discovery policy (M16-T25, milestone 2)
 
 Local exact-version patch: `patches/pi-mcp-adapter@2.33.0.patch`; proposal prepared
