@@ -11,8 +11,13 @@
  *
  * The loading and error states are drawn here too, so the map itself only ever
  * receives a tree.
+ *
+ * The map is also where this module's weight is: the canvas, its inspector,
+ * the lineage list and React Flow's stylesheet. A conversation never draws
+ * one, so the map arrives with the tree it needs (M16-T31) — behind the same
+ * loader this view already shows while it asks the host for that tree.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 
 import { useAgentTree, useLatestRun, useSessionAgent } from "@/agents";
 // Ending a run goes through the shell's one dialog (Lane U2, `components/agents`).
@@ -22,9 +27,19 @@ import { GenerationLoader } from "@/components/assistant-ui/elements/loading-sta
 import { useShellOptional } from "@/components/shell/shell-context";
 import { useLaserStable, useLaserState, useLaserView } from "@/runtime";
 
-import { AgentMap } from "./AgentMap.js";
 import { MapHostProvider, type MapHost } from "./map-context.js";
 import { mapUi } from "./map-state.js";
+
+const AgentMap = lazy(() => import("./AgentMap.js").then((module) => ({ default: module.AgentMap })));
+
+/** The map's box while there is nothing to draw in it yet: one loader, centred. */
+function MapWaiting({ label }: { label: string }) {
+  return (
+    <div data-slot="agent-map-loading" className="flex h-full min-h-0 w-full items-center justify-center bg-bg p-6">
+      <GenerationLoader label={label} />
+    </div>
+  );
+}
 
 /** The top-level session `path` belongs to: its own attribution, its run's root, or itself. */
 export function useMapRoot(path: string | undefined): string | undefined {
@@ -80,13 +95,7 @@ export function AgentMapConnected({ rootPath, frame, focusPath, chrome = true }:
   );
 
   if (!tree) return null;
-  if (pending && tree.nodes.length === 1) {
-    return (
-      <div data-slot="agent-map-loading" className="flex h-full min-h-0 w-full items-center justify-center bg-bg p-6">
-        <GenerationLoader label="Finding this session’s agents" />
-      </div>
-    );
-  }
+  if (pending && tree.nodes.length === 1) return <MapWaiting label="Finding this session’s agents" />;
   const notice = error ? (
     <div className="px-3 pt-3">
       <ErrorState title="The map may be behind" detail={error} onRetry={load} retryLabel="Try again" />
@@ -94,7 +103,9 @@ export function AgentMapConnected({ rootPath, frame, focusPath, chrome = true }:
   ) : undefined;
   return (
     <MapHostProvider value={host}>
-      <AgentMap rootPath={rootPath} tree={tree} focusPath={focusPath} chrome={chrome} notice={notice} />
+      <Suspense fallback={<MapWaiting label="Drawing the map" />}>
+        <AgentMap rootPath={rootPath} tree={tree} focusPath={focusPath} chrome={chrome} notice={notice} />
+      </Suspense>
     </MapHostProvider>
   );
 }
