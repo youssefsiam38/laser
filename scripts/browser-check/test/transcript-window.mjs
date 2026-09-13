@@ -5,7 +5,9 @@ import { join } from 'node:path';
 export default async function sustainedNavigation(check) {
   const page = check.page;
   await check.touch(check.state.touch || check.state.width === 390);
-  await check.reducedMotion(check.state.theme === 'light');
+  // Theme and motion travel together in the matrix; this switch separates them
+  // so a phone case can be measured with motion off without changing theme.
+  await check.reducedMotion(process.env.TRANSCRIPT_REDUCED_MOTION === '1' || check.state.theme === 'light');
   const install = page.getByRole('dialog', { name: /works best installed/ });
   await page.addLocatorHandler(install, async () => { await install.getByRole('button', { name: 'Not now', exact: true }).click(); });
   const { entries } = await check.rpc('pi/session/entries', { path: check.fixture.path });
