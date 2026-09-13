@@ -313,6 +313,61 @@ record(
   "Preserve the adapter's published files, skills and native prebuilds; verify its own keyring version and platform binding, not the desktop's.",
 );
 
+// 6a ── the ReDoS guard still answers, on every backend we ship -----------
+//
+// The MCP adapter refuses a regex search whose pattern it cannot prove safe,
+// and it proves it with `checkSync` (proxy-modes.ts). That call runs either in
+// a synckit worker — which prefers the native `recheck-<os>-<arch>` binary,
+// then a JVM archive, then the library's own pure-JS engine — or, with
+// RECHECK_SYNC_BACKEND=pure, in that pure engine directly. We ship the native
+// binary where one exists and never the 22 MB archive, so on a target with no
+// published binary (both arm64 ones) the pure engine is the only backend left.
+// This asks the default backend and the pure engine the same three questions
+// and requires the same three answers from both, so a packaging change that
+// leaves the guard unable to answer — which would reject every regex search a
+// person makes — fails the gate here instead of on their machine.
+const REDOS_CASES = [
+  { source: "^(a|a)*$", expect: "vulnerable" },
+  { source: "get_.*_tool", expect: "vulnerable" },
+  { source: "^[a-z]+(foo|bar)?$", expect: "safe" },
+];
+const redosScript =
+  `const { createRequire } = require("node:module");` +
+  `const req = createRequire(${JSON.stringify(join(modules, "clean-machine-probe.cjs"))});` +
+  `const { checkSync } = req("recheck");` +
+  `const cases = ${JSON.stringify(REDOS_CASES)};` +
+  `const out = [];` +
+  `for (const c of cases) { const t = Date.now(); const r = checkSync(c.source, "i", { attackTimeout: 50, incubationTimeout: 50, timeout: 250 });` +
+  ` out.push({ source: c.source, expect: c.expect, status: r.status, ms: Date.now() - t }); }` +
+  `console.log(JSON.stringify({ backend: process.env.RECHECK_SYNC_BACKEND || "default", results: out }));`;
+const redosRuns = [
+  runBare(nodeBinary, ["-e", redosScript], bareEnv, 60_000),
+  runBare(nodeBinary, ["-e", redosScript], { ...bareEnv, RECHECK_SYNC_BACKEND: "pure" }, 60_000),
+].map((run) => lastJsonLine(run.stdout) ?? { backend: "?", results: [], error: run.stderr.trim() || "no answer" });
+const redosOk = redosRuns.every(
+  (run) => run.results.length === REDOS_CASES.length && run.results.every((row) => row.status === row.expect),
+);
+// The archive must be gone (that is the exclusion this check defends) and the
+// engine that answers when nothing else can must be present.
+const redosJarPresent = existsSync(join(modules, "recheck-jar"));
+const redosPureEngine = existsSync(join(modules, "recheck", "lib", "main.js"));
+const redosNative = packageNames.filter((name) => name.startsWith("recheck-") && name !== "recheck-jar");
+record(
+  "the regex safety guard answers the same on every backend the package ships",
+  redosOk && !redosJarPresent && redosPureEngine,
+  [
+    ...redosRuns.map((run) =>
+      run.results.length > 0
+        ? `${run.backend}: ${run.results.map((row) => `${row.status}${row.status === row.expect ? "" : ` (expected ${row.expect})`} in ${row.ms}ms`).join(", ")}`
+        : `${run.backend}: ${run.error ?? "no answer"}`,
+    ),
+    `native binding: ${redosNative.join(", ") || "none published for this platform"}`,
+    `JVM archive: ${redosJarPresent ? "present (it should not be)" : "absent"}`,
+  ].join("; "),
+  "The MCP adapter's regex search rejects every pattern it cannot prove safe. Keep the checker's native binary and its " +
+    "pure-JS engine in the package (electron-builder.yml excludes only the JVM archive).",
+);
+
 // 7 ── a real session loads every bundled feature --------------------------
 const sessionProbe = join(modules, "@lasercode", "worker", "dist", "check-packaged-session.js");
 const mcpFixture = join(resources, "checks", "mcp-server.mjs");
