@@ -99,78 +99,106 @@ bodies (`logstore.ts:493`, capped at 4 MiB per read).
 
 ---
 
-## P2 — The Logs page flickers while a session streams (cause unconfirmed)
+## P2 — The API request modal's data flickers while the session streams
 
-**Reported by the person; not reproduced.** One real defect on that path was
-found and fixed (`068be78`); it is *not* proven to be what they see.
+**Reported by the person, corrected by them: it is the API request inspector
+modal, not the Logs page.** The cause below is read from the code and is
+strongly indicated, but it is **not yet reproduced in the harness** — reproduce
+it before and after any change.
 
 ### What happens
 
-With the Logs page open while work streams in the same session, the page
-flickers. The reporter is unsure of the exact trigger ("maybe with streaming
-happening in the same session but not sure"). Their store is the 27 GB one from
-P1 — that is the main difference from any synthetic reproduction.
+Open a message's ⋯ menu → **View API request**, leave that modal open, and let
+work stream in the same session. The modal's contents flicker: the capture
+picker and the body blink back to their loading state and repopulate.
 
-### Already fixed (do not redo)
+### Why (read from the code, not yet proven by a repro)
 
-`packages/ui/src/components/logs/LogsScreen.tsx` built its `filters` identity
-from the current session's `cwd` even when "This project only" was off. A
-streaming turn changes that value, so `filters` changed identity, `reload()`
-re-ran, and the rows were replaced and the view snapped to the bottom with
-nothing about the filter changed. Fixed by deriving the identity from the
-scoped project only.
+`packages/ui/src/components/logs/ApiRequestDialogBody.tsx:59` builds the
+identity its load effect depends on:
 
-### What is already known and measured
+```ts
+const targetKey = target.kind === "log" ? `log:${target.entry.id}`
+  : `message:${target.path}:${target.entryId}:${target.at}:${target.beforeAt}`;
+```
 
-- The live tail appends and is correct: `LogsScreen.tsx:125` subscribes to
-  `pi/logs/append` and merges with `appendRows` (`components/logs/model.ts:55`),
-  capped at `ROW_CAP = 5000` (`:47`).
-- `refreshStats()` (`:90`) runs on a 1500 ms debounce while following
-  (`STATS_REFRESH_MS`, `:53`). On the 27 GB store the three statements behind
-  `pi/logs/stats` (`logstore.ts:518`) measure **4 ms + 13 ms + 22 ms**, and
-  `SELECT SUM(bytes) FROM content` is **40 ms** — all synchronous on the host
-  loop. This is a candidate, not a proven cause.
-- The rows are windowed by a hand-rolled virtual list (`LogsScreen.tsx:534`,
-  `translateY(start * ROW_HEIGHT)`); `entries` changing re-slices it, and a
-  `useEffect` (`:454`) pins the viewport to the bottom while following.
+Every part of that after `path` comes from **live thread state** in
+`packages/ui/src/components/thread/messages.tsx`:
 
-### Reproduction attempts that came back clean
+- `:194` `at` ← `s.message.createdAt`
+- `:195` `beforeAt` ← the `createdAt` of the next **user** message, found by
+  slicing `s.thread.messages` on every render
+- `:209-211` `entryId` ← `laserMeta(s.message).entryId`, or a lookup through
+  `entries`/`leafId`/`ordinal`/`userOffset` when the prompt has no recorded
+  entry yet
 
-`scripts/browser-check/test/logs-flicker.mjs` (new, keep it) opens Logs over a
-session that is *really* streaming — a long answer sent from the composer,
-arriving in ~120 deltas — and counts list replacements, loader appearances,
-self-inflicted scroll jumps, row removals, detail-pane removals and
-`pi/logs/query` re-queries. Zero of each, on both the old and the fixed build.
-The stub provider gained `chunks` / `chunkDelayMs`
-(`packages/worker/test/agents/stub-provider.ts`) and the fixture answer
-`fixture-stream` (`scripts/browser-check/targets/fixtures.mjs`) for this.
+The dialog is mounted from that same component (`messages.tsx:344`), so while a
+turn streams — and especially when the turn settles and `EntriesRefresh`
+(`Thread.tsx:173`) re-reads entries, moving `entryId` from a lookup to a
+persisted id, or when a new user message appears and `beforeAt` stops being
+`undefined` — `targetKey` changes. The effect at `:60` then re-runs and starts
+with `setLoading(true); setError(undefined); setLegacy(false); setMore(false)`,
+which puts the capture bar and the body back into `ApiRequestLoading`
+(`api-request-frame.tsx:85`) until the query returns. The comment at `:75-76`
+("Target identity is stable even when its parent's live state rerenders")
+asserts exactly what the key does not guarantee.
 
-### How to actually pin it
+There is a second, smaller one: the payload effect at `:147` depends on the
+whole `entry` object, so a re-queried row with identical content is a new
+object and refetches up to 8 MiB of body through `pi/logs/content`.
 
-1. **Read the log.** Since 0.6.1 the desktop copies renderer console errors into
-   `~/.local/share/lasercode/state/desktop.log`
-   (`packages/desktop/src/windows.ts`, the `console-message` handler). Ask the
-   person for the minute it last flickered and read that window.
-2. Reproduce against a store of the reporter's *shape*: ~140k rows, ~25k
-   provider requests with ~1 MB bodies. Build it synthetically (do not copy
-   their file) and then open Logs while streaming. If the flicker appears, it is
-   P1's store size expressing itself here and the fix belongs with P1.
-3. Profile the page with the React profiler in the harness, as
-   `docs/perf-streaming.md`-style work does, and name the committing component
-   rather than inferring it.
+### How to reproduce (do this first)
+
+Extend the harness. The pieces already exist:
+
+- `scripts/browser-check/test/logs-flicker.mjs` — the pattern to copy: it
+  installs a `MutationObserver` and counts loader appearances, list
+  replacements, self-inflicted scroll jumps and `pi/logs/query` re-queries.
+- The stub provider streams on demand: `chunks` / `chunkDelayMs`
+  (`packages/worker/test/agents/stub-provider.ts`) and the `fixture-stream`
+  answer (`scripts/browser-check/targets/fixtures.mjs`) give a long turn that
+  really arrives in many deltas.
+- Send from the composer with `pressSequentially` and click **Send**;
+  `fill()` + `Enter` does not submit (the composer needs the keystrokes).
+
+The check should: seed `tools`, open a message's ⋯ → **View API request**, wait
+for the body, then stream a turn (and let it settle, which is when
+`EntriesRefresh` fires) while asserting that inside the open dialog the loader
+never reappears, the selected capture does not change under the person, and
+`pi/logs/query` / `pi/logs/content` are not re-issued for an unchanged capture.
 
 ### Done when
 
-The flicker is either reproduced and fixed at its cause, or shown not to exist
-on a store of that shape — with evidence either way. `logs-flicker.mjs` must
-still pass, extended with whatever the reproduction needed.
+- With the modal open and the session streaming and settling, nothing in it
+  blinks: no loader, no capture-selection change, no refetch of the same body.
+- The modal still follows a **deliberate** change: a new capture arriving for
+  the message it is showing is offered (the Refresh control at `:81` exists for
+  that), and opening it on a different message shows that message.
+- Reproduced red first, then green, on the same build.
+
+### Likely shape of the fix (verify, do not assume)
+
+Freeze the target the dialog was opened with — resolve `at` / `beforeAt` /
+`entryId` once when it opens and keep that identity for its lifetime — and make
+the load additive: keep the current entries and selection on a re-query, showing
+the loader only when there is nothing to show yet. Key the payload effect on
+`entry.id` + `detailRef.ref` rather than the object.
 
 ### Do not
 
-- Do not "fix" it by throttling renders or adding a transition that hides it.
-- Do not claim the `cwd` fix above is the cause without a reproduction.
+- Do not fix it by debouncing or by hiding the loader behind a delay.
+- Do not drop the Refresh control or stop new captures being offered.
+- Do not weaken the request inspector's search/JSON fidelity
+  (`docs/search-content.md`: the inspector deliberately searches every key,
+  value and syntax character, unlike the conversation).
 
----
+### Related, already fixed — different component, do not confuse them
+
+The **Logs page** (`LogsScreen.tsx`) had its own version of this: it rebuilt its
+`filters` identity from the current session's `cwd` even with "This project
+only" off, so a streaming turn reloaded the page from scratch. Fixed in
+`068be78`, guarded by `logs-flicker.mjs`. That fix is **not** the modal bug
+above.
 
 ## P3 — Phone, dark theme, huge conversation: typing readiness misses its budget
 
