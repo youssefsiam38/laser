@@ -1,6 +1,6 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-13T13:46:09Z · orchestrator · HEAD: 2a69455
+**Last updated:** 2026-09-13T16:09:26Z · orchestrator · HEAD: 1859e4a
 **Current focus:** Environment restored after user-chosen restart; zero stale private-worktree processes. Two recovery owners admitted: MCP registry-integrity regression and bounded transcript acceptance. Existing code/WIP preserved and backed up; release remains authorized after acceptance.
 
 | Milestone | State |
@@ -25,7 +25,7 @@
 | M16 Conversation experience | in-progress |
 | MX Cross-cutting | in-progress |
 
-**Blockers:** No task explicitly marked blocked. Release gates remain: MCP historical failures unexplained after bounded green reproductions; MCP integrity merged a0dc6c4 and full verify passed; MCP5 backend reviewed, corrected and verified, held off main until its renderer and packaged/arm64 proof (D-240); transcript actions pass; transcript area reviewed, corrected, merged a3f19f9 and verified; releasing 0.6.0 with the agreed scope; final acceptance/review pending; MCP code-mode safety outstanding.
+**Blockers:** No task explicitly marked blocked. Release gates remain: MCP historical failures unexplained after bounded green reproductions; MCP integrity merged a0dc6c4 and full verify passed; MCP5 backend reviewed, corrected and verified, held off main until its renderer and packaged/arm64 proof (D-240); transcript actions pass; transcript area reviewed, corrected, merged a3f19f9 and verified; 0.6.0 published; hotfix 0.6.1 for the scroll-up black window (D-241) releasing; final acceptance/review pending; MCP code-mode safety outstanding.
 **Next up:** Publish 0.6.0, then the MCP approval renderer and packaged/arm64 gates for the script runtime (D-240). Queued: M13-T99 keystroke/draft regression; M13-T100 Beam/touch; M13-T117 remembered-Chat recovery.
 **Recently done:** M16-T28 global explorer (`5193fc9`); M16-T27 catalog-arrival (`961aeb8`); M16-T16 tail-first/actions (`d6e5ebd`, `402de75`); M16-T26 readiness (`f8b0d34`); M16-T24 forensics (`d9b7b7a`, `7942fb5`).
 
