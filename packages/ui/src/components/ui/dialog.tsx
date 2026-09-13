@@ -31,6 +31,9 @@ function DialogOverlay({
       className={cn(
         "fixed inset-0 isolate z-50 bg-[color-mix(in_oklab,var(--ink)_28%,transparent)]",
         "animate-in fade-in-0 duration-(--motion-instant) data-[state=closed]:animate-out data-[state=closed]:fade-out-0",
+        // A dismissed overlay keeps fading but stops taking taps; the primitive
+        // sets `pointer-events: auto` inline (same rule as the sheet, M16-T36).
+        "data-[state=closed]:pointer-events-none!",
         className,
       )}
       {...props}
