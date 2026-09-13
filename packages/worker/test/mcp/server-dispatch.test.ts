@@ -165,7 +165,7 @@ describe("WorkerServer · mcp/*", () => {
     expect(listed.result?.servers[0]).toMatchObject({ scope: "global", status: "unknown" });
 
     const inspected = await call<McpInspection>("mcp/inspect", { cwd, scope: "global", name: "fixture" });
-    expect(inspected.result?.status).toBe("connected");
+    expect(inspected.result?.status, JSON.stringify(inspected)).toBe("connected");
     expect(inspected.result?.tools.map((tool) => tool.name)).toContain("fixture_echo");
 
     const listedWhileInspecting = await call<{ servers: McpServerState[] }>("mcp/list", { cwd });
