@@ -10,6 +10,8 @@
  */
 import { useEffect, useState } from "react";
 
+import { onVisible } from "@/runtime/visible-poll";
+
 interface Mark {
   start: number;
   end?: number;
@@ -60,13 +62,24 @@ export function resetTiming(): void {
   marks.clear();
 }
 
-/** Re-render every `intervalMs` while `active`. */
+/**
+ * Re-render every `intervalMs` while `active`, and once more on the way back
+ * from a hidden window.
+ *
+ * The elapsed value itself is read from the clock, never accumulated, so being
+ * throttled while hidden cannot make it wrong — only late. A window in the
+ * tray has its timers clamped to a second, then to a minute, so without the
+ * catch-up a running tool would show a minute-old duration for as long as it
+ * took the next throttled tick to arrive after the window came back.
+ */
 export function useTick(active: boolean, intervalMs = 100): number {
   const [tick, setTick] = useState(0);
   useEffect(() => {
     if (!active) return;
-    const id = setInterval(() => setTick((t) => t + 1), intervalMs);
-    return () => clearInterval(id);
+    const bump = () => setTick((t) => t + 1);
+    const id = setInterval(bump, intervalMs);
+    const stopWatching = onVisible(bump);
+    return () => { clearInterval(id); stopWatching(); };
   }, [active, intervalMs]);
   return tick;
 }

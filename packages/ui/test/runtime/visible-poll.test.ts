@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, expect, it, vi } from "vitest";
-import { startVisiblePoll } from "../../src/runtime/visible-poll.js";
+import { onVisible, startVisiblePoll } from "../../src/runtime/visible-poll.js";
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
@@ -32,6 +32,24 @@ it("pauses hidden polling, reconciles immediately once on return, and releases a
     vi.advanceTimersByTime(60_000);
     expect(refresh).toHaveBeenCalledTimes(2);
   } finally { stop(); clearInterval(old); }
+});
+
+it("catches up every time the page comes back, and never while it is away", () => {
+  let visible: DocumentVisibilityState = "visible";
+  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visible);
+  const catchUp = vi.fn();
+  const stop = onVisible(catchUp);
+  const visibility = (next: DocumentVisibilityState) => { visible = next; document.dispatchEvent(new Event("visibilitychange")); };
+  try {
+    visibility("hidden");
+    expect(catchUp).not.toHaveBeenCalled();
+    visibility("visible");
+    expect(catchUp).toHaveBeenCalledTimes(1);
+    visibility("hidden"); visibility("visible");
+    expect(catchUp).toHaveBeenCalledTimes(2);
+  } finally { stop(); }
+  visibility("hidden"); visibility("visible");
+  expect(catchUp).toHaveBeenCalledTimes(2);
 });
 
 it("starts hidden without an interval and fences a tick before the hidden event is delivered", () => {
