@@ -630,7 +630,7 @@ export const clientParamsSchemas = {
     path: z.string().min(1).max(4096).optional(),
     explorer: z.object({
       mode: z.literal("explorer"),
-      root: z.string().min(1).max(4096),
+      cwd: z.string().min(1).max(4096),
       prefix: z.string().max(4096).refine((value) => !value.includes("/") && !value.includes("\\") && !value.includes("\0")),
       offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
       limit: z.number().int().min(1).max(100).optional(),

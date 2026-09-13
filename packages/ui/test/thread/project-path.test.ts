@@ -3,19 +3,23 @@ import { matchProjectMention, parentProjectQuery, replaceProjectQuery, resolvePr
 import { explorerItems, explorerNavigation } from "../../src/components/thread/project-explorer-model.js";
 
 it.each([
-  ["@", "/project", "", ""], ["@/", "/project", "", ""], ["@./", "/project", "", "./"],
+  ["@", "/project", "", ""], ["@/", "/", "", "/"], ["@./", "/project", "", "./"],
   ["@node", "/project", "node", ""], ["@./node", "/project", "node", "./"],
   ["@server/", "/project/server", "", "server/"], ["@server/ind", "/project/server", "ind", "server/"],
   ["@a/b/c", "/project/a/b", "c", "a/b/"], ["@server\\ind", "/project/server", "ind", "server/"],
-  ["@a/../server/", "/project/server", "", "a/../server/"], ["@/project/server/ind", "/project/server", "ind", "server/"],
+  ["@a/../server/", "/project/server", "", "a/../server/"], ["@/project/server/ind", "/project/server", "ind", "/project/server/"],
+  ["@..", "/", "", "../"], ["@../", "/", "", "../"], ["@a/../../", "/", "", "a/../../"],
+  ["@../sibling/", "/sibling", "", "../sibling/"], ["@/elsewhere/file", "/elsewhere", "file", "/elsewhere/"],
+  ["@C:\\elsewhere", "C:/", "elsewhere", "C:/"],
 ])("resolves %s", (query, directory, prefix, head) => {
   expect(resolveProjectPath(query, "/project")).toEqual({ directory, prefix, head });
 });
-it.each(["@..", "@../", "@a/../../", "@~", "@~/code", "@/elsewhere/file", "@C:\\elsewhere", "@server/ "])("refuses %s deliberately", (query) => {
+it.each(["@~", "@~/code", "@C:relative", "@server/ "])("refuses %s deliberately", (query) => {
   expect(resolveProjectPath(query, "/project").error).toBeTruthy();
 });
 it("resolves hand-typed Windows separators against a Windows project", () => {
-  expect(resolveProjectPath("@C:\\code\\server\\ind", "C:\\code")).toEqual({ directory: "C:/code/server", prefix: "ind", head: "server/" });
+  expect(resolveProjectPath("@C:\\code\\server\\ind", "C:\\code")).toEqual({ directory: "C:/code/server", prefix: "ind", head: "C:/code/server/" });
+  expect(resolveProjectPath("@..\\sibling\\ind", "C:\\code\\project")).toEqual({ directory: "C:/code/sibling", prefix: "ind", head: "../sibling/" });
 });
 it("preserves surrounding text and closes at trailing whitespace", () => {
   expect(matchProjectMention("Read @server/ind then", "@", 16)).toMatchObject({ query: "server/ind" });
@@ -24,13 +28,18 @@ it("preserves surrounding text and closes at trailing whitespace", () => {
   expect(parentProjectQuery("a/b/")).toBe("a/");
   expect(parentProjectQuery("server/")).toBe("");
   expect(parentProjectQuery("./server/")).toBe("./");
+  expect(parentProjectQuery("../", "/home/project")).toBe("../../");
+  expect(parentProjectQuery("a/../server/", "/home/project")).toBe("");
+  expect(parentProjectQuery("/", "/home/project")).toBe("/");
+  expect(parentProjectQuery("/sibling/", "/home/project")).toBe("/");
 });
 it("projects a bounded host page without reordering, inserting directory directives, or losing chip identities", () => {
   const items = explorerItems([
     { name: "server", path: "/project/server", project: false, kind: "directory" },
     { name: "a.txt", path: "/project/a.txt", project: false, kind: "file" },
+    { name: "outside.txt", path: "/project-other/outside.txt", project: false, kind: "file" },
   ], "/project");
-  expect(items.map((item) => [item.id, item.type])).toEqual([["server", "directory"], ["a.txt", "file"]]);
+  expect(items.map((item) => [item.id, item.type])).toEqual([["server", "directory"], ["a.txt", "file"], ["/project-other/outside.txt", "file"]]);
   const nav = explorerNavigation({ head: "", commonPrefix: "", loading: false });
   expect(nav.select(items[0]!, "@ser", 4)).toEqual({ text: "@server/", caret: 8 });
   expect(nav.select(items[1]!, "@a", 2)).toBeNull(); // the primitive owns file directive insertion

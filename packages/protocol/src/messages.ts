@@ -652,8 +652,8 @@ export interface DirectoryEntry {
 
 export interface DirectoryExplorerOptions {
   mode: "explorer";
-  /** Absolute project directory; every resolved path must remain inside it. */
-  root: string;
+  /** Absolute session directory used to resolve relative paths; not a sandbox. */
+  cwd: string;
   prefix: string;
   offset?: number;
   limit?: number;
@@ -1114,7 +1114,7 @@ export interface ClientRequests {
   /**
    * Subdirectories of `path` (the home directory when omitted), for picking a
    * project without typing a path (M10-T6). Directories only, hidden ones
-   * excluded. Opt-in `explorer` adds project-contained files, hidden entries,
+   * excluded. Opt-in `explorer` lists machine files and directories, hidden entries,
    * host prefix filtering and bounded pagination. Answered by the host.
    */
   "pi/project/browse": { params: { path?: string; explorer?: DirectoryExplorerOptions }; result: DirectoryListing };

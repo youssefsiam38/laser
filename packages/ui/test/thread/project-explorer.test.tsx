@@ -47,9 +47,9 @@ async function type(text: string) {
 }
 async function tick() { await act(async () => { await vi.advanceTimersByTimeAsync(150); }); }
 async function key(key: string) { await act(async () => { input().dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })); }); }
-it.each([['@/', '/project', ''], ['@node', '/project', 'node'], ['@./node', '/project', 'node'], ['@server/', '/project/server', ''], ['@server/ind', '/project/server', 'ind']])('typing %s reads the correct directory and prefix', async (text, path, prefix) => {
+it.each([['@/', '/', ''], ['@..', '/', ''], ['@../', '/', ''], ['@/outside/ind', '/outside', 'ind'], ['@node', '/project', 'node'], ['@./node', '/project', 'node'], ['@server/', '/project/server', ''], ['@server/ind', '/project/server', 'ind']])('typing %s reads the correct directory and prefix', async (text, path, prefix) => {
   await type(text); await tick();
-  expect(request).toHaveBeenLastCalledWith('pi/project/browse', { path, explorer: { mode: 'explorer', root: '/project', prefix, offset: 0, limit: 80 } });
+  expect(request).toHaveBeenLastCalledWith('pi/project/browse', { path, explorer: { mode: 'explorer', cwd: '/project', prefix, offset: 0, limit: 80 } });
   expect(options().length).toBeGreaterThan(0); expect(document.activeElement).toBe(input());
 });
 it('Enter on a folder continues, Backspace goes up, a file inserts the existing directive', async () => {
@@ -73,6 +73,12 @@ it('a slow read leaves typing and Escape responsive and never chooses stale resu
   await type('@node'); await tick(); await key('Escape'); expect(input().value).toBe('@node');
   await act(async () => settle({ entries: [{ name: 'stale', path: '/project/server/stale', kind: 'file' }], truncated: false }));
   expect(container.querySelector('[role="listbox"]')).toBeNull(); expect(sent).not.toHaveBeenCalled();
+});
+it('continues an absolute directory and inserts an outside file with its absolute identity', async () => {
+  request.mockResolvedValueOnce({ path: '/', home: '/home/test', entries: [{ name: 'outside', path: '/outside', kind: 'directory', project: false }], truncated: false, commonPrefix: 'outside' });
+  await type('@/out'); await tick(); await key('Enter');
+  expect(input().value).toBe('@/outside/'); await tick(); await key('Enter');
+  expect(input().value).toBe(':file[/outside/index.ts] '); expect(sent).not.toHaveBeenCalled();
 });
 it('does not hijack deletion or Tab traversal of a selected text range', async () => {
   await type('@server/'); await tick();

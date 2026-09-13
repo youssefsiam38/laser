@@ -20,7 +20,7 @@ export function useProjectFileSearch(cwd: string | undefined, query: string, act
     if (!cwd || !active || resolution.error) { setResponse(undefined); return; }
     let cancelled = false;
     const timer = setTimeout(() => {
-      void client.request("pi/project/browse", { path: resolution.directory!, explorer: { mode: "explorer", root: cwd, prefix: resolution.prefix!, offset, limit: PAGE_SIZE } }).then(
+      void client.request("pi/project/browse", { path: resolution.directory!, explorer: { mode: "explorer", cwd, prefix: resolution.prefix!, offset, limit: PAGE_SIZE } }).then(
         (result) => { if (!cancelled) setResponse({ key, offset, attempt, result }); },
         () => { if (!cancelled) setResponse({ key, offset, attempt, failed: true }); },
       );
@@ -30,6 +30,7 @@ export function useProjectFileSearch(cwd: string | undefined, query: string, act
   const current = response?.key === key && response.offset === offset && response.attempt === attempt ? response : undefined;
   const error = resolution.error ?? current?.result?.error ?? (current?.failed ? "Couldn’t read this folder. Try again." : undefined);
   return {
+    cwd,
     query,
     files: current?.result?.entries ?? EMPTY,
     loading: active && !!cwd && !error && !current,

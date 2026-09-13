@@ -1,37 +1,35 @@
 import type { Unstable_TriggerMatcher } from "@assistant-ui/react";
 
 export type ProjectPath = { directory: string; prefix: string; head: string; error?: never } | { error: string; directory?: never; prefix?: never; head?: never };
+const absolute = (path: string) => path.startsWith("/") || /^[a-z]:\//iu.test(path);
 
-/** `/` alone means project root. Other absolute paths must name this project.
- * Backslashes are typed separators, not escapes. Home expansion is deliberately
- * unavailable: this picker never leaves the project. Whitespace ends a query.
- */
-export function resolveProjectPath(text: string, root: string): ProjectPath {
-  let query = text.startsWith("@") ? text.slice(1) : text;
-  query = query.replaceAll("\\", "/");
-  root = root.replaceAll("\\", "/").replace(/\/$/, "") || "/";
-  if (/\s$/u.test(query) || /[\n\r\t\0]/u.test(query)) return { error: "Finish the path before adding a space." };
-  if (query.startsWith("~")) return { error: "Choose a path inside this project; home paths are not available here." };
-  if (query === "/") query = "";
-  else if (query.startsWith("/") || /^[a-z]:/iu.test(query)) {
-    if (root === "/" && query.startsWith("/")) query = query.slice(1);
-    else if (query === root) query = "";
-    else if (query.startsWith(root + "/")) query = query.slice(root.length + 1);
-    else return { error: "Choose a path inside this project." };
+/** Renderer-safe path arithmetic. The host still owns IO and permissions. */
+function normalized(path: string): string {
+  const anchor = /^[a-z]:\//iu.exec(path)?.[0] ?? /^\/\/[^/]+\/[^/]+\//u.exec(path)?.[0] ?? "/";
+  const parts: string[] = [];
+  for (const part of path.slice(anchor.length).split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") parts.pop(); else parts.push(part);
   }
+  return anchor + parts.join("/");
+}
+
+/** Absolute paths are machine paths; relative paths use the session directory.
+ * Backslashes are typed separators, not escapes. Home expansion is deliberately
+ * unsupported rather than guessing the host's home in the renderer.
+ */
+export function resolveProjectPath(text: string, cwd: string): ProjectPath {
+  let query = (text.startsWith("@") ? text.slice(1) : text).replaceAll("\\", "/");
+  cwd = normalized(cwd.replaceAll("\\", "/") || "/");
+  if (/\s$/u.test(query) || /[\n\r\t\0]/u.test(query)) return { error: "Finish the path before adding a space." };
+  if (query.startsWith("~")) return { error: "Home shortcuts aren’t supported here. Type an absolute path instead." };
+  if (/^[a-z]:(?!\/)/iu.test(query)) return { error: "Use an absolute drive path, such as C:/." };
+  // Dot segments name directories even before their following separator.
+  if (/(?:^|\/)\.{1,2}$/u.test(query)) query += "/";
   const slash = query.lastIndexOf("/");
   const head = query.slice(0, slash + 1);
   const prefix = query.slice(slash + 1);
-  const parts: string[] = [];
-  for (const part of head.split("/")) {
-    if (!part || part === ".") continue;
-    if (part === "..") {
-      if (!parts.length) return { error: "Choose a path inside this project." };
-      parts.pop();
-    } else parts.push(part);
-  }
-  if (prefix === ".." && !parts.length) return { error: "Choose a path inside this project." };
-  return { directory: root + (parts.length ? (root.endsWith("/") ? "" : "/") + parts.join("/") : ""), prefix, head };
+  return { directory: normalized(absolute(head) ? head : cwd + (cwd.endsWith("/") ? "" : "/") + head), prefix, head };
 }
 
 export const matchProjectMention: Unstable_TriggerMatcher = (text, char, caret) => {
@@ -50,9 +48,17 @@ export function replaceProjectQuery(text: string, caret: number, query: string) 
   return { text: before + text.slice(caret), caret: before.length };
 }
 
-export function parentProjectQuery(query: string): string | null {
+export function parentProjectQuery(query: string, cwd = "/"): string | null {
   query = query.replaceAll("\\", "/");
-  if (!query.endsWith("/") || query === "/" || query === "./") return null;
-  const without = query.slice(0, -1);
-  return without.slice(0, without.lastIndexOf("/") + 1);
+  if (!query.endsWith("/")) return null;
+  const current = resolveProjectPath(query, cwd);
+  if (current.error) return null;
+  const parent = normalized(current.directory! + "/..");
+  if (absolute(query)) return parent.endsWith("/") ? parent : parent + "/";
+  const base = normalized(cwd.replaceAll("\\", "/")).split("/");
+  const target = parent.split("/");
+  let shared = 0;
+  while (shared < base.length && shared < target.length && base[shared] === target[shared]) shared++;
+  const path = [...base.slice(shared).filter(Boolean).map(() => ".."), ...target.slice(shared).filter(Boolean)].join("/");
+  return (query.startsWith("./") ? "./" : "") + (path ? path + "/" : "");
 }

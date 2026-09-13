@@ -21,7 +21,7 @@ const tick = async () => { await act(async () => { await vi.advanceTimersByTimeA
 it('sends the debounced directory and prefix to host browse', async () => {
   request.mockResolvedValue(result('deep/file-9999.ts'));
   await render('d'); await render('deep'); expect(request).not.toHaveBeenCalled();
-  await tick(); expect(request).toHaveBeenCalledExactlyOnceWith('pi/project/browse', { path: '/project', explorer: { mode: 'explorer', root: '/project', prefix: 'deep', offset: 0, limit: 80 } });
+  await tick(); expect(request).toHaveBeenCalledExactlyOnceWith('pi/project/browse', { path: '/project', explorer: { mode: 'explorer', cwd: '/project', prefix: 'deep', offset: 0, limit: 80 } });
   expect(container.textContent).toContain('deep/file-9999.ts');
 });
 it('ignores stale replies after query and project changes and never shows the old files as current', async () => {

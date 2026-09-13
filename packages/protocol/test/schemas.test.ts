@@ -127,7 +127,7 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/project/remove": { cwd: "/p" },
   "pi/project/trust": { cwd: "/p", trusted: true, remember: true },
   "pi/project/git": { cwd: "/p", path: "/s.jsonl" },
-  "pi/project/browse": { path: "/home/me/code", explorer: { mode: "explorer", root: "/home/me/code", prefix: "node", offset: 80, limit: 80 } },
+  "pi/project/browse": { path: "/home/me/code", explorer: { mode: "explorer", cwd: "/home/me/code", prefix: "node", offset: 80, limit: 80 } },
   "pi/project/env/status": { cwd: "/home/me/code/app" },
   "pi/project/env/set": {
     cwd: "/home/me/code/app",
@@ -601,7 +601,7 @@ it.each([{ exposure: "direct", alwaysLoad: false }, { only: ["echo"], alwaysLoad
 it("browse remains strict and explorer requires explicit opt-in", () => {
   const request = { jsonrpc: "2.0", id: 1, method: "pi/project/browse", params: { path: "/project" } };
   expect(parseClientRequest(request)).toEqual(request);
-  for (const explorer of [{ root: "/project", prefix: "" }, { mode: "explorer", root: "/project", prefix: "", extra: true }, { mode: "explorer", root: "/project", prefix: "", limit: 101 }, { mode: "explorer", root: "/project", prefix: "../" }]) {
+  for (const explorer of [{ cwd: "/project", prefix: "" }, { mode: "explorer", cwd: "/project", prefix: "", extra: true }, { mode: "explorer", cwd: "/project", prefix: "", limit: 101 }, { mode: "explorer", cwd: "/project", prefix: "../" }, { mode: "explorer", root: "/project", prefix: "" }]) {
     expect(() => parseClientRequest({ ...request, params: { ...request.params, explorer } })).toThrow();
   }
   expect(() => parseClientRequest({ ...request, params: { path: "/project", prefix: "node" } })).toThrow();

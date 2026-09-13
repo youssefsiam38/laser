@@ -3,8 +3,8 @@ import type { Unstable_TriggerItem } from "@assistant-ui/react";
 import type { PickerNavigation } from "../assistant-ui/elements/composer-trigger-popover.aui.js";
 import { matchProjectMention, parentProjectQuery, replaceProjectQuery } from "./project-path.js";
 
-export function explorerItems(entries: readonly DirectoryEntry[], root: string): Unstable_TriggerItem[] {
-  const base = root.replaceAll("\\", "/").replace(/\/$/, "") + "/";
+export function explorerItems(entries: readonly DirectoryEntry[], cwd: string): Unstable_TriggerItem[] {
+  const base = cwd.replaceAll("\\", "/").replace(/\/$/, "") + "/";
   return entries.map((entry) => {
     const absolute = entry.path.replaceAll("\\", "/");
     const path = absolute.startsWith(base) ? absolute.slice(base.length) : absolute;
@@ -13,7 +13,7 @@ export function explorerItems(entries: readonly DirectoryEntry[], root: string):
   });
 }
 
-export function explorerNavigation(options: { query?: string; head: string; commonPrefix: string; loading: boolean; next?: (() => void) | undefined; previous?: (() => void) | undefined }): PickerNavigation {
+export function explorerNavigation(options: { cwd?: string | undefined; query?: string; head: string; commonPrefix: string; loading: boolean; next?: (() => void) | undefined; previous?: (() => void) | undefined }): PickerNavigation {
   const select: PickerNavigation["select"] = (item, text, caret) => {
     if (item.type === "page") {
       if (item.id === "next") options.next?.(); else options.previous?.();
@@ -26,10 +26,10 @@ export function explorerNavigation(options: { query?: string; head: string; comm
     const match = matchProjectMention(text, "@", caret);
     if (!match) return null;
     if (key === "Backspace") {
-      const parent = parentProjectQuery(match.query);
+      const parent = parentProjectQuery(match.query, options.cwd);
       return parent === null ? null : replaceProjectQuery(text, caret, parent);
     }
-    if (key === "/" && selected?.type === "directory" && match.query && !/[\\/]$/u.test(match.query)) return select(selected, text, caret);
+    if (key === "/" && selected?.type === "directory" && match.query && !/(?:[\\/]$|(?:^|[\\/])\.{1,2}$)/u.test(match.query)) return select(selected, text, caret);
     if (key !== "Tab") return null;
     if (options.loading || (options.query !== undefined && options.query !== match.query)) return { text, caret }; // a slow listing must never select an old row
     let prefix = options.commonPrefix;
