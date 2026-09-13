@@ -255,3 +255,25 @@ it("the archive action moves a parent and its descendants into a folded archived
   expect(stable.archive.has(path(1))).toBe(false);
   expect(aui.threads.getState().archivedThreadIds).toHaveLength(2);
 });
+
+it("keeps the batch at seven, lets only live work exceed it, and collapses again by itself", async () => {
+  const visible = () => [...container.querySelectorAll<HTMLElement>('[data-slot="aui_thread-list-item"]')];
+  const busy = ["/busy-a.jsonl", "/busy-b.jsonl"].map(name => `${PROJECT_CWD}${name}`);
+  busy.forEach((old, index) => addSession(world, old, PROJECT_CWD, { name: `Older busy ${index}`, attention: "idle", modifiedAt: "2026-09-01T00:00:00Z" }));
+  await render();
+  expect(visible()).toHaveLength(7);
+  // Work that is still going outranks the fold, however old the row is.
+  for (const old of busy) {
+    await act(async () => FakeHostClient.current.notify("pi/session/attention", { path: old, cwd: PROJECT_CWD, attention: "working", at: "2026-09-08T01:00:00Z" }));
+  }
+  expect(visible()).toHaveLength(9);
+  // A finished outcome is not live work: it reads in place, it does not unfold.
+  await act(async () => FakeHostClient.current.notify("pi/session/attention", { path: path(8), cwd: PROJECT_CWD, attention: "finished_unread", at: "2026-09-08T01:00:01Z" }));
+  expect(row("Conversation 8")).toBeUndefined();
+  // Nobody has to press anything to get the short list back.
+  for (const old of busy) {
+    await act(async () => FakeHostClient.current.notify("pi/session/attention", { path: old, cwd: PROJECT_CWD, attention: "idle", at: "2026-09-08T01:00:02Z" }));
+  }
+  expect(visible()).toHaveLength(7);
+  expect(row("Older busy 0")).toBeUndefined();
+});
