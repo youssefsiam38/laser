@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { PRODUCT_NAME } from "@lasercode/protocol";
 import { adapterRoot, loadMcpEngine } from "../../src/mcp/engine.js";
 import { McpInspector } from "../../src/mcp/inspector.js";
@@ -14,6 +14,19 @@ import { mcpClientIdentity } from "../../src/mcp/identity.js";
 const tool = (name: string) => ({ name, inputSchema: { type: "object", properties: {} } });
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
+
+// Cold adapter transpilation is setup, not the cache operation's five-second
+// deadline. Load it under a disposable agent root before timing individual cases.
+beforeAll(async () => {
+  const base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-mcp-cache-bootstrap-`));
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = base;
+  try { await loadMcpEngine(); }
+  finally {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous;
+    rmSync(base, { recursive: true, force: true });
+  }
+}, 30_000);
 
 const CACHE_METHODS = new Set(["tools/list", "resources/list", "resources/templates/list", "prompts/list", "resources/read", "server/discover"]);
 
