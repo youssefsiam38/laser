@@ -38,7 +38,8 @@ async function run(preload: boolean, window?: number, transport?: NonNullable<Mc
     { toolCall: { name: "mcp", args: { search: "echo", server: "fixture" } } },
     { toolCall: { name: "mcp", args: { describe: "fixture_echo" } } },
     { toolCall: { name: "mcpScript", args: { code: 'const page = await tools.search({query:"echo",server:"fixture",detail:"names"}); emit(page);' } } },
-    { toolCall: { name: "mcp", args: { tool: "fixture_echo", args: { text: "discovered-call" } } } },
+    cold === "script" ? { toolCall: { name: "mcpScript", args: { code: 'emit(await tools.call("fixture_echo", {text:"discovered-call"}));' } } }
+      : { toolCall: { name: "mcp", args: { tool: "fixture_echo", args: { text: "discovered-call" } } } },
     { text: "done" },
   ];
   if (cold === "management") {
