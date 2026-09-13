@@ -83,7 +83,9 @@ describe("the byte budget", () => {
     const newest = store.query({ sections: ["provider"], limit: 1 }).entries[0]!;
     expect(newest.detailRef?.released).toBeUndefined();
     expect(store.content(newest.detailRef!.ref).released).toBeUndefined();
-  });
+    // Three hundred megabyte-sized bodies through a real file: ~2 s here, ~6 s
+    // on a CI runner. The burst is the point of the test, so the time is too.
+  }, 30_000);
 
   it("settles on its own timer, with no administrative call at all", async () => {
     const budget = 6 * 1024 * 1024;
