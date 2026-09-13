@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { DATA_DIR_NAME, PRODUCT_NAME, type McpRuntimeSnapshot } from "@lasercode/protocol";
-import { afterEach, describe, expect, it } from "vitest";
+import { DATA_DIR_NAME, PRODUCT_NAME, type McpRuntimeSnapshot, type McpServerConfig } from "@lasercode/protocol";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createJiti } from "jiti";
 import { fallbackDefaultAgent, fallbackPolicy } from "../../src/agents/definitions.js";
 import { rootRecord, rootRole } from "../../src/agents/session-config.js";
@@ -14,13 +14,14 @@ import type { DriverEvent } from "../../src/driver.js";
 import { McpService } from "../../src/mcp/service.js";
 import { McpPromptFreeze } from "../../src/mcp/prompt-freeze.js";
 import { adapterRoot } from "../../src/mcp/engine.js";
+import { startFixtureHttpServer } from "./fixtures/http-server.js";
 import { startStubProvider, toolNamesOf, writeStubModels, type StubAnswer } from "../agents/stub-provider.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures/stdio-server.mjs");
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 
-async function run(preload: boolean, window?: number) {
+async function run(preload: boolean, window?: number, transport?: NonNullable<McpServerConfig["transport"]>) {
   const base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-mcp-prefix-`));
   cleanups.push(() => rmSync(base, { recursive: true, force: true }));
   const cwd = join(base, "project");
@@ -30,7 +31,7 @@ async function run(preload: boolean, window?: number) {
   process.env.PI_CODING_AGENT_DIR = agentDir;
   cleanups.push(() => { if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous; });
   // Legacy direct is intentionally present in both cases: it is not an override.
-  writeFileSync(join(agentDir, DATA_DIR_NAME, "mcp.json"), JSON.stringify({ version: 1, servers: [{ name: "fixture", startup: "at-start", transport: { kind: "stdio", command: process.execPath, args: [fixture] }, tools: { exposure: "direct", ...(preload ? { alwaysLoad: true } : {}) } }] }));
+  writeFileSync(join(agentDir, DATA_DIR_NAME, "mcp.json"), JSON.stringify({ version: 1, servers: [{ name: "fixture", startup: "at-start", transport: transport ?? { kind: "stdio", command: process.execPath, args: [fixture] }, ...(transport ? { auth: { kind: "none" } } : {}), tools: { exposure: "direct", ...(preload ? { alwaysLoad: true } : {}) } }] }));
   const answers: StubAnswer[] = [
     { toolCall: { name: "mcp", args: { server: "fixture" } } },
     { toolCall: { name: "mcp", args: { search: "echo" } } },
@@ -66,6 +67,27 @@ function snapshots(events: DriverEvent[]): McpRuntimeSnapshot[] {
 }
 
 describe("MCP prompt contract through real provider requests", () => {
+  it.each([false, true])("re-indexes script discovery after one notification refresh while provider tools remain frozen (preload=%s)", async preload => {
+    const remote = await startFixtureHttpServer("sse", 60_000);
+    cleanups.push(() => remote.close());
+    const { stub, driver, answers, events } = await run(preload, undefined, { kind: "http", url: remote.url, stream: "sse" });
+    const frozen = JSON.stringify(stub.requests[0]!.tools);
+    const checked = snapshots(events).at(-1)?.servers[0]?.toolCatalog?.checkedAt ?? 0;
+    const lists = remote.toolListRequests();
+    const calls = remote.toolCalls.length;
+    remote.replaceTools(["replacement", "snapshot"]);
+    await vi.waitFor(() => expect(snapshots(events).at(-1)?.servers[0]?.toolCatalog?.checkedAt).toBeGreaterThan(checked), { timeout: 5000 });
+    answers.push({ toolCall: { name: "mcpScript", args: { code: 'emit(await tools.search({query:"replacement",detail:"names"})); emit(await tools.call("fixture_replacement",{text:"fresh-call"})); emit(await tools.call("fixture_echo",{text:"must-not-forward"}));' } } }, { text: "done" });
+    const settled = new Promise<void>(resolve => driver.subscribe(event => { if (event.type === "update" && event.update.kind === "agent_settled") resolve(); }));
+    await driver.prompt([{ type: "text", text: "Use the changed tool list" }]); await settled;
+    expect(remote.toolCalls.slice(calls)).toEqual(["replacement"]);
+    expect(remote.toolListRequests()).toBe(lists + 1);
+    const result = stub.requests.at(-1)!.messages.filter(message => message.role === "tool").at(-1);
+    expect(JSON.stringify(result)).toContain("fresh-call");
+    expect(JSON.stringify(result)).toContain("fixture_replacement");
+    for (const request of stub.requests) expect(JSON.stringify(request.tools)).toBe(frozen);
+  }, 60_000);
+
   it("refuses server management through both gateway and script dispatch without changing the frozen surface", async () => {
     const { stub, driver, answers, cwd, agentDir } = await run(false);
     const tools = JSON.stringify(stub.requests[0]!.tools);
