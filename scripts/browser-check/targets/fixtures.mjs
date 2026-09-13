@@ -39,6 +39,12 @@ export function answer(request) {
   }
   if (last?.role === 'user' && prompt === 'Start fixture-failed') return { toolCall: { name: 'start_agent', args: { agent_name: 'default', subagent_name: 'fixture-failed', task: 'fixture-failed: demonstrate a provider error.', worktree: false } } };
   if (last?.role === 'user' && prompt === 'Start fixture-asking') return { toolCall: { name: 'start_agent', args: { agent_name: 'default', subagent_name: 'fixture-asking', task: 'fixture-asking: call the fixture echo tool.', worktree: false } } };
+  // A long answer that really streams: many small deltas over a few seconds,
+  // for watching another surface while a turn is in flight.
+  if (prompt.startsWith('fixture-stream')) {
+    const paragraph = Array.from({ length: 40 }, (_, i) => `Streaming line ${i + 1}: the implementation follows the project boundaries.`).join('\n\n');
+    return { text: paragraph, chunks: 120, chunkDelayMs: 40 };
+  }
   if (last?.role === 'user' && prompt === 'Run fixture tools') return { toolCall: { name: 'bash', args: { command: "printf 'fixture tool output\\n'" } } };
   const goal = /<goal_id>\s*([^\s<>]+)\s*<\/goal_id>/.exec(prompt)?.[1];
   if (last?.role === 'user' && goal && names.includes('goal_complete')) return { toolCall: { name: 'goal_complete', args: { goal_id: goal, summary: 'Verified the fixture implementation and its focused checks.' } } };

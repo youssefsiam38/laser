@@ -8,7 +8,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 export type StubAnswer =
-  | { text: string; reasoning?: string; delayMs?: number }
+  | { text: string; reasoning?: string; delayMs?: number; chunks?: number; chunkDelayMs?: number }
   | { toolCall: { name: string; args: Record<string, unknown>; id?: string }; delayMs?: number }
   /**
    * A failure, answered before any stream frame: an HTTP status with the
@@ -69,7 +69,14 @@ export function startStubProvider(respond: (request: StubRequest, index: number)
       res.write(sse({ ...base, choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }] }));
       if ("text" in answer) {
         if (answer.reasoning) res.write(sse({ ...base, choices: [{ index: 0, delta: { reasoning_content: answer.reasoning }, finish_reason: null }] }));
-        res.write(sse({ ...base, choices: [{ index: 0, delta: { content: answer.text }, finish_reason: null }] }));
+        // A real stream arrives in many small deltas over time. `chunks` splits
+        // the answer so a caller can watch a turn actually stream.
+        const chunks = Math.max(1, answer.chunks ?? 1);
+        const size = Math.ceil(answer.text.length / chunks);
+        for (let at = 0; at < answer.text.length; at += size) {
+          res.write(sse({ ...base, choices: [{ index: 0, delta: { content: answer.text.slice(at, at + size) }, finish_reason: null }] }));
+          if (answer.chunkDelayMs) await new Promise((resolve) => setTimeout(resolve, answer.chunkDelayMs));
+        }
         res.write(sse({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 5, completion_tokens: 4, total_tokens: 9 } }));
       } else {
         const id = answer.toolCall.id ?? `call_${calls}`;

@@ -97,6 +97,64 @@ describe("scoped transcript destinations", () => {
       expect(controller.capture().following).toBe(true);
     } finally { detach(); viewport.remove(); clock.mockRestore(); vi.unstubAllGlobals(); }
   });
+  it("never moves the viewport back under a person's wheel while their anchor is not mounted", async () => {
+    // 0.6.0 fought the reader: scrolling up landed the anchor on a row that
+    // was not mounted yet, and the next commit re-placed it from estimated
+    // heights, pushing the viewport back down under the wheel, page after page.
+    vi.useFakeTimers();
+    const frames = new Map<number, FrameRequestCallback>(); let frameId = 0;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { frames.set(++frameId, callback); return frameId; });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => { frames.delete(id); });
+    const step = async () => { const pending = [...frames.values()]; frames.clear(); for (const callback of pending) callback(0); await Promise.resolve(); };
+    const controller = new TranscriptViewport(), viewport = document.createElement("div"), content = document.createElement("div");
+    const ids = Array.from({ length: 200 }, (_, i) => `row-${i}`);
+    const total = 200 * 100;
+    Object.defineProperties(viewport, { clientHeight: { value: 600 }, scrollHeight: { value: total } });
+    viewport.getBoundingClientRect = () => new DOMRect(0, 0, 600, 600);
+    content.getBoundingClientRect = () => new DOMRect(0, -viewport.scrollTop, 600, total);
+    content.style.fontSize = "14px"; content.style.lineHeight = "21px";
+    viewport.append(content); document.body.append(viewport); controller.content = content;
+    controller.configure("/reading"); controller.setIds(ids);
+    // Only the tail is mounted, as after opening a conversation.
+    // Geometry follows the index, as the spacers do in the browser: a row sits
+    // where the estimates above it say, and measuring it to 100px shrinks
+    // everything below by the difference.
+    const mount = (index: number) => {
+      const row = document.createElement("div"); row.dataset.windowMessage = ids[index]!;
+      row.getBoundingClientRect = () => new DOMRect(0, controller.heights.offset(index) - viewport.scrollTop, 600, 100);
+      content.append(row); controller.register(ids[index]!, row); return row;
+    };
+    for (let i = 190; i < 200; i++) mount(i);
+    const detach = controller.attach(viewport, () => { viewport.scrollTop = total - 600; });
+    try {
+      viewport.scrollTop = total - 600; viewport.dispatchEvent(new Event("scroll")); await step();
+      // The person wheels up a long way: the anchor is now an unmounted row.
+      viewport.dispatchEvent(new Event("wheel"));
+      viewport.scrollTop = 4000; viewport.dispatchEvent(new Event("scroll"));
+      const anchor = controller.capture().anchor?.messageId;
+      expect(controller.capture().following).toBe(false);
+      expect(anchor).toBeDefined();
+      expect(content.querySelector(`[data-window-message="${anchor}"]`)).toBeNull();
+      // A commit lands (the window is catching up) before any of those rows exist.
+      controller.committed(); await step();
+      expect(viewport.scrollTop).toBe(4000);
+      // Rows around the anchor mount and measure smaller than their estimates.
+      // The content above the anchor shrinks; the anchor must stay where the
+      // person left it on screen, so scrollTop moves by exactly that shrink.
+      const index = ids.indexOf(anchor!);
+      const screenTop = controller.heights.offset(index) - viewport.scrollTop;
+      for (let i = Math.max(0, index - 5); i < index + 5; i++) mount(i);
+      controller.committed(); await step();
+      expect(controller.heights.offset(index) - viewport.scrollTop).toBeCloseTo(screenTop, 0);
+      expect(viewport.scrollTop).toBeLessThan(4000);
+      // Once the person has stopped, a commit is allowed to place the anchor
+      // from the DOM — which, with nothing changed, is exactly where it is.
+      const rested = viewport.scrollTop;
+      vi.advanceTimersByTime(500); await step();
+      controller.committed(); await step();
+      expect(viewport.scrollTop).toBeCloseTo(rested, 0);
+    } finally { detach(); viewport.remove(); vi.unstubAllGlobals(); vi.useRealTimers(); }
+  });
   it("does not alternate mounted windows when a phone version target evicts the old reading anchor", async () => {
     const controller = new TranscriptViewport(), viewport = document.createElement("div"), content = document.createElement("div");
     const ids = Array.from({ length: 100 }, (_, i) => `row-${i}`), nodes = new Map<string, HTMLElement>();
