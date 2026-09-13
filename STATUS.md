@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-13T05:04:16Z · orchestrator · HEAD: 5db11e9
-**Current focus:** M16 next release: MCP cache/revocation implementation, global `@` merged (workspace verification passed), sustained-navigation conversion/selection fixes. Release authorized after acceptance; model-managed MCP servers permanently excluded (D-230).
+**Last updated:** 2026-09-13T05:51:36Z · orchestrator · HEAD: a5923a2
+**Current focus:** M16 next release: MCP final identity correction/validation, global `@` merged (workspace verification passed), sustained-navigation B independent review. Release authorized after acceptance; model-managed MCP servers permanently excluded (D-230).
 
 | Milestone | State |
 | --- | --- |
@@ -25,7 +25,7 @@
 | M16 Conversation experience | in-progress |
 | MX Cross-cutting | in-progress |
 
-**Blockers:** No task explicitly marked blocked. M16-T29 attribution complete; B conversion/selection fixes active, C viewport awaits B review; MCP code-mode safety remains outstanding.
+**Blockers:** No task explicitly marked blocked. M16-T29 attribution complete; B conversion/selection committed and under review, C viewport follows; MCP code-mode safety remains outstanding.
 **Next up:** M13-T99 keystroke/draft regression; M13-T100 Beam/touch follow-ups; M13-T117 remembered-Chat recovery. Active release work takes priority.
 **Recently done:** M16-T28 global explorer (`5193fc9`, review fixes verified); M16-T27 catalog-arrival (`961aeb8`); M16-T16 tail-first/actions (`d6e5ebd`, `402de75`); M16-T26 readiness (`f8b0d34`); M16-T24 forensics (`d9b7b7a`, `7942fb5`).
 
