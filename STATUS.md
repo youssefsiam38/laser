@@ -1,6 +1,6 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-13T11:35:53Z · orchestrator · HEAD: 7ed2136
+**Last updated:** 2026-09-13T12:08:26Z · orchestrator · HEAD: 24a57ad
 **Current focus:** Environment restored after user-chosen restart; zero stale private-worktree processes. Two recovery owners admitted: MCP registry-integrity regression and bounded transcript acceptance. Existing code/WIP preserved and backed up; release remains authorized after acceptance.
 
 | Milestone | State |
@@ -25,7 +25,7 @@
 | M16 Conversation experience | in-progress |
 | MX Cross-cutting | in-progress |
 
-**Blockers:** No task explicitly marked blocked. Release gates remain: MCP historical failures unexplained after bounded green reproductions; MCP integrity merged a0dc6c4 and full verify passed; MCP5 portable script runtime resumed with person authorization (D-237); approval UI still follows C handoff; transcript actions pass; recent-tail owner-window integration active (D-236/238), preserving independent same-session main/Beam views; final acceptance/review pending; MCP code-mode safety outstanding.
+**Blockers:** No task explicitly marked blocked. Release gates remain: MCP historical failures unexplained after bounded green reproductions; MCP integrity merged a0dc6c4 and full verify passed; MCP5 backend built privately and under dedicated review (D-237/239); approval UI, packaged and arm64 gates still outstanding; transcript actions pass; recent-tail owner-window integration active (D-236/238), preserving independent same-session main/Beam views; final acceptance/review pending; MCP code-mode safety outstanding.
 **Next up:** Active MCP integrity and C acceptance milestones first. Queued: M13-T99 keystroke/draft regression; M13-T100 Beam/touch; M13-T117 remembered-Chat recovery.
 **Recently done:** M16-T28 global explorer (`5193fc9`); M16-T27 catalog-arrival (`961aeb8`); M16-T16 tail-first/actions (`d6e5ebd`, `402de75`); M16-T26 readiness (`f8b0d34`); M16-T24 forensics (`d9b7b7a`, `7942fb5`).
 
