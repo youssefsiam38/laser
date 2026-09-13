@@ -360,8 +360,13 @@ describe("pinned MCP cache contract over HTTP", () => {
       if (++reads === 1) { entered.resolve(); await release.promise; return { tools: [tool("old")], ttlMs: 0 }; }
       refreshed.resolve(); return { tools: [tool("replacement")], ttlMs: 60_000 };
     });
+    const revision = connection.toolsRevision;
     const pending = inspector.inspect(target);
-    await entered.promise; f.notify(); await refreshed.promise; release.resolve();
+    await entered.promise; f.notify();
+    // The fixture also owns a separate client; its refresh starting is not
+    // evidence that the inspector has processed its own notification yet.
+    await vi.waitFor(() => expect(connection.toolsRevision).not.toBe(revision));
+    await refreshed.promise; release.resolve();
     const result = await pending;
     // Invalidation and successful notification publication are two revisions.
     // If both race the bounded reread, report retryable unknown, not failure.
