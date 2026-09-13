@@ -1,4 +1,61 @@
-diff --git a/tmp/mcp-cache-fe11b683-adapter/next/client-identity.ts b/client-identity.ts
+diff --git a/authorization.ts b/authorization.ts
+new file mode 100644
+index 0000000..537b8a4
+--- /dev/null
++++ b/authorization.ts
+@@ -0,0 +1,51 @@
++import type { McpExtensionState } from "./state.ts";
++import { updateServerMetadata } from "./init.ts";
++import { isServerDisabled } from "./types.ts";
++
++export function managementRefusal(params: Record<string, unknown>) {
++  const forbidden = ["connect", "install", "enable", "disable", "remove", "disconnect", "enable_server", "disable_server", "url", "target"]
++    .some(key => params[key] !== undefined) || (params.action !== undefined && params.action !== "ui-messages");
++  return forbidden ? { content: [{ type: "text" as const, text: "Server connections and sign-in are managed by the person in Settings → MCP servers. You can discover and call tools from enabled servers." }],
++    isError: true, details: { error: "person_managed_servers" } } : undefined;
++}
++
++/** Embedding-owned refusal only; never grants connection or configuration authority. */
++export async function prepareAuthorizedCatalog(state: McpExtensionState): Promise<void> {
++  state.authorizationFailures ??= new Map();
++  state.authorizationToolNames ??= new Map();
++  state.catalogFailures ??= new Map();
++  await Promise.all(Object.keys(state.config.mcpServers).map(async server => {
++    if (isServerDisabled(state.config.mcpServers[server])) { state.toolMetadata.delete(server); return; }
++    const refusal = await state.authorization?.(server);
++    if (refusal) {
++      state.authorizationFailures!.set(server, refusal);
++      const tools = state.toolMetadata.get(server);
++      if (tools) state.authorizationToolNames!.set(server, tools.flatMap(tool => [tool.name, tool.originalName]));
++      state.toolMetadata.delete(server);
++      state.serverInstructions.delete(server);
++      return;
++    }
++    state.authorizationFailures!.delete(server);
++    const connection = state.manager.getConnection(server);
++    if (connection?.status === "connected") {
++      try {
++        const result = await state.manager.refreshTools(server, connection, undefined, "use");
++        if (result === "superseded" || result === "refresh-timeout") throw new Error("refresh unavailable");
++        updateServerMetadata(state, server);
++        state.catalogFailures!.delete(server);
++      } catch {
++        state.toolMetadata.delete(server);
++        state.catalogFailures!.set(server, `Tool information for "${server}" could not be refreshed. Try again.`);
++      }
++    } else if (!(state.catalogExpiresAt?.get(server)! > Date.now())) {
++      state.toolMetadata.delete(server);
++    }
++  }));
++}
++
++export function authorizationRefusal(state: McpExtensionState, server?: string, tool?: string) {
++  const match = server ?? [...state.authorizationToolNames ?? []].find(([, names]) => tool !== undefined && names.includes(tool))?.[0];
++  const message = match ? state.authorizationFailures?.get(match) : undefined;
++  return message ? { content: [{ type: "text" as const, text: message }], isError: true,
++    details: { error: "needs_auth", server: match, message } } : undefined;
++}
+diff --git a/client-identity.ts b/client-identity.ts
 new file mode 100644
 index 0000000..57005ce
 --- /dev/null
@@ -23,32 +80,106 @@ index 0000000..57005ce
 +    version: value.version,
 +  };
 +}
+diff --git a/direct-tools.ts b/direct-tools.ts
+index f8e68c4..03489ed 100644
+--- a/direct-tools.ts
++++ b/direct-tools.ts
+@@ -172,6 +172,7 @@ export function resolveDirectTools(
+   envOverride?: string[],
+   unavailableServers: ReadonlySet<string> = new Set(),
+   reservedNames?: Set<string>,
++  liveServers: ReadonlySet<string> = new Set(),
+ ): DirectToolSpec[] {
+   const specs: DirectToolSpec[] = [];
+   if (!cache) return specs;
+@@ -184,7 +185,7 @@ export function resolveDirectTools(
+   for (const [serverName, definition] of Object.entries(config.mcpServers)) {
+     if (isServerDisabled(definition)) continue;
+     const serverCache = cache.servers[serverName];
+-    if (!serverCache || !isServerCacheValid(serverCache, definition)) continue;
++    if (!serverCache || (!liveServers.has(serverName) && !isServerCacheValid(serverCache, definition))) continue;
+ 
+     let toolFilter: true | string[] | false = false;
+     let lazy = false;
+@@ -217,7 +218,7 @@ export function resolveDirectTools(
+       const candidates = new Set<string>();
+       for (const [otherServerName, otherDefinition] of Object.entries(config.mcpServers)) {
+         const otherCache = cache.servers[otherServerName];
+-        if (!otherCache || !isServerCacheValid(otherCache, otherDefinition) || isServerDisabled(otherDefinition)) continue;
++        if (!otherCache || (!liveServers.has(otherServerName) && !isServerCacheValid(otherCache, otherDefinition)) || isServerDisabled(otherDefinition)) continue;
+         const otherPrefix = resolveToolPrefix(otherDefinition, prefix);
+         for (const otherTool of otherCache.tools ?? []) {
+           if (!isUiToolVisibleToModel(otherTool.uiVisibility)) continue;
+@@ -388,6 +389,9 @@ export function createDirectToolExecutor(
+       };
+     }
+ 
++    const refusal = await state.authorization?.(spec.serverName);
++    if (refusal) return { content: [{ type: "text" as const, text: refusal }], isError: true,
++      details: { error: "needs_auth", server: spec.serverName, message: refusal } };
+     const definition = state.config.mcpServers[spec.serverName];
+     if (isServerDisabled(definition)) {
+       const message = `MCP server "${spec.serverName}" is disabled. Run /mcp enable ${spec.serverName} and /reload to enable it.`;
 diff --git a/dist/metadata-cache.js b/dist/metadata-cache.js
-index 48821d0..26687b4 100644
+index 48821d0..f09e0b7 100644
 --- a/dist/metadata-cache.js
 +++ b/dist/metadata-cache.js
-@@ -58,6 +58,7 @@ export function computeServerHash(definition, environment = process.env) {
+@@ -9,7 +9,7 @@ import { resourceNameToToolName } from "./resource-tools.js";
+ import { extractToolUiStreamMode, interpolateEnvRecord, interpolateEnvVars, resolveBearerToken, resolveConfigPath, resolveServerUrl, stableStringify, } from "./utils.js";
+ import { extractUiToolVisibility, isUiToolVisibleToModel } from "./ui-tool-visibility.js";
+ const CACHE_VERSION = 1;
+-const CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
++const CACHE_MAX_AGE_MS = 0;
+ export function getMetadataCachePath() {
+     return getAgentPath("mcp-cache.json");
+ }
+@@ -58,6 +58,8 @@ export function computeServerHash(definition, environment = process.env) {
      // Exclude lifecycle, idleTimeout, requestTimeoutMs, debug — those are runtime behavior settings
      // that don't change which tools a server exposes.
      const identity = {
 +        authorizationIdentity: definition.authorizationIdentity,
++        authorizationPartition: definition.authorizationPartition,
          command: definition.command,
          args: definition.args,
          socket: resolveConfigPath(definition.socket, environment),
+@@ -92,7 +94,7 @@ export function isServerCacheValid(entry, definition, maxAgeMs = CACHE_MAX_AGE_M
+     catch {
+         return false;
+     }
+-    if (!entry || entry.configHash !== configHash)
++    if (isServerDisabled(definition) || !entry || entry.configHash !== configHash)
+         return false;
+     if (!entry.cachedAt || typeof entry.cachedAt !== "number")
+         return false;
+@@ -102,11 +104,9 @@ export function isServerCacheValid(entry, definition, maxAgeMs = CACHE_MAX_AGE_M
+             return false;
+         const ageMs = Date.now() - entry.cachedAt;
+         const effectiveMaxAge = maxAgeMs > 0 ? Math.min(maxAgeMs, declaredTtlMs) : declaredTtlMs;
+-        return ageMs < effectiveMaxAge;
++        return ageMs >= 0 && ageMs < effectiveMaxAge;
+     }
+-    if (maxAgeMs > 0 && Date.now() - entry.cachedAt > maxAgeMs)
+-        return false;
+-    return true;
++    return false;
+ }
+ export function parseDirectToolSelectors(selectors) {
+     const servers = new Set();
 diff --git a/dist/types.d.ts b/dist/types.d.ts
-index f957e93..f34302e 100644
+index f957e93..1b4638d 100644
 --- a/dist/types.d.ts
 +++ b/dist/types.d.ts
-@@ -263,6 +263,8 @@ export interface HttpRequestHeadersCommand {
+@@ -263,6 +263,9 @@ export interface HttpRequestHeadersCommand {
      timeoutMs?: number;
  }
  export interface ServerEntry {
 +    /** Opaque host-owned scope/transport identity for credentials and cache partitions. */
 +    authorizationIdentity?: string;
++    authorizationPartition?: string;
      command?: string;
      args?: string[];
      /** Explicit rmcp-mux Unix-domain socket path. Mutually exclusive with command and url. */
-@@ -408,6 +410,8 @@ export interface McpSettings {
+@@ -408,6 +411,8 @@ export interface McpSettings {
       * and explicit reconnects won't rebuild the system prompt, preserving the
       * prompt-cache prefix. Proxy/search/cache metadata still refreshes. Default: false. */
      freezeDirectTools?: boolean;
@@ -57,7 +188,7 @@ index f957e93..f34302e 100644
      autoAuth?: boolean;
      sampling?: boolean;
      samplingAutoApprove?: boolean;
-@@ -456,7 +460,23 @@ export interface McpConfig {
+@@ -456,7 +461,26 @@ export interface McpConfig {
      settings?: McpSettings;
      claudePlugins?: ClaudePluginConfig[];
  }
@@ -76,16 +207,31 @@ index f957e93..f34302e 100644
 +    describe(server: string, tool: ToolMetadata): Record<string, unknown>;
 +}
  export interface McpAdapterOptions {
++  personManaged?: boolean;
++  authorization?: (server: string) => Promise<string | undefined>;
++  commitCredentials?: (server: string, save: () => void) => Promise<string>;
 +  discovery?: McpDiscoveryPolicy;
 +  clientIdentity?: McpClientIdentity;
      config?: McpConfig;
      configPath?: string;
  }
 diff --git a/index.ts b/index.ts
-index f655b4f..12dd626 100644
+index f655b4f..b063a72 100644
 --- a/index.ts
 +++ b/index.ts
-@@ -21,7 +21,7 @@ import { toolErrorOverride } from "./error-signal.ts";
+@@ -10,9 +10,10 @@ import { cloneMcpConfig, discoverConfiguredClaudePluginSkills, getPiGlobalConfig
+ import { buildProxyDescription, createDirectToolExecutor, getMissingConfiguredDirectToolServers, prepareDirectToolArguments, resolveDirectTools } from "./direct-tools.ts";
+ import { clearFailure, flushMetadataCache, initializeMcp, updateMetadataCache, updateStatusBar } from "./init.ts";
+ import { isServerInActiveFailureBackoff } from "./failure-backoff.ts";
+-import { loadMetadataCache, parseDirectToolSelectors, type MetadataCache } from "./metadata-cache.ts";
++import { computeServerHash, serializeTools, serializeResources, loadMetadataCache, parseDirectToolSelectors, type MetadataCache } from "./metadata-cache.ts";
+ import { createPromptCommand, resolveCachedPrompts } from "./prompts.ts";
+ import { logger } from "./logger.ts";
++import { prepareAuthorizedCatalog, authorizationRefusal, managementRefusal } from "./authorization.ts";
+ import { executeAuthComplete, executeAuthStart, executeCall, executeConnect, executeDescribe, executeInstructions, executeList, executeSearch, executeStatus, executeUiMessages } from "./proxy-modes.ts";
+ import { formatTerminalError, getConfigPathFromArgv, normalizeDirectToolInputSchema, truncateAtWord } from "./utils.ts";
+ import { createOAuthRuntime, shutdownOAuth } from "./mcp-auth-flow.ts";
+@@ -21,7 +22,7 @@ import { toolErrorOverride } from "./error-signal.ts";
  import { createMcpRuntimeOwner, createOwnedUi, isAbortError, type McpRuntimeOwner } from "./runtime-owner.ts";
  import { publishMcpStatusShutdown } from "./mcp-status.ts";
  import { runMcpScript } from "./mcp-code.ts";
@@ -94,7 +240,7 @@ index f655b4f..12dd626 100644
  import { syncNamespaceProxyTools } from "./namespace-tools.ts";
  import { restoreSessionApprovalState } from "./session-approvals.ts";
  import { canonicalMcpServerUrl, normalizeMcpInstallRequest } from "./mcp-install.ts";
-@@ -188,7 +188,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+@@ -188,7 +189,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
    function startGatewayRetryInitialization(ctx: ExtensionContext): void {
      const generation = ++lifecycleGeneration;
      const owner = createMcpRuntimeOwner();
@@ -103,7 +249,25 @@ index f655b4f..12dd626 100644
      currentOwner = owner;
      currentOAuthRuntime = oauthRuntime;
      state = null;
-@@ -401,22 +401,11 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+@@ -387,7 +388,16 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+   function resolveCurrentDirectTools(config: McpConfig, cache: MetadataCache | null, reservedNames?: Set<string>): DirectToolSpec[] {
+     if (envRaw === "__none__") return [];
+     const prefix = config.settings?.toolPrefix ?? "server";
+-    return resolveDirectTools(config, cache, prefix, envDirectToolOverride, activeFailureServers(), reservedNames);
++    const currentCache: MetadataCache = { version: 1, servers: { ...cache?.servers } };
++    const liveServers = new Set<string>();
++    for (const [name, definition] of Object.entries(config.mcpServers)) {
++      const connection = state?.manager.getConnection(name);
++      if (connection?.status !== "connected" || state?.authorizationFailures?.has(name)) continue;
++      currentCache.servers[name] = { configHash: computeServerHash(definition), cachedAt: Date.now(),
++        tools: serializeTools(connection.tools), resources: serializeResources(connection.resources) };
++      liveServers.add(name);
++    }
++    return resolveDirectTools(config, currentCache, prefix, envDirectToolOverride, activeFailureServers(), reservedNames, liveServers);
+   }
+ 
+   function getActiveToolsIfReady(): string[] | undefined {
+@@ -401,22 +411,11 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
    }
  
    function deactivateTools(toolNames: string[]): string[] {
@@ -131,7 +295,7 @@ index f655b4f..12dd626 100644
    }
  
    function syncDirectTools(config: McpConfig, cache: MetadataCache | null): {
-@@ -521,6 +510,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+@@ -521,6 +520,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
      reservedDirectNames: Set<string> = new Set(registeredDirectTools.keys()),
      activeDirectNames: Set<string> = new Set(registeredDirectTools.keys()),
    ): void {
@@ -139,15 +303,18 @@ index f655b4f..12dd626 100644
      const result = syncNamespaceProxyTools({
        config,
        cache,
-@@ -675,6 +665,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+@@ -675,6 +675,10 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
            }
          : {}),
        oauthRuntime,
++      authorization: options.authorization,
++      commitCredentials: options.commitCredentials,
++      personManaged: options.personManaged,
 +      clientIdentity: options.clientIdentity,
      });
      initPromise = promise;
  
-@@ -688,6 +679,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+@@ -688,6 +692,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
          return;
        }
  
@@ -155,7 +322,7 @@ index f655b4f..12dd626 100644
        state = nextState;
        // Re-read after asynchronous startup so navigation during initialization
        // cannot restore a stale branch.
-@@ -754,7 +746,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+@@ -754,7 +759,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
        if (lifecycleGeneration !== 0 || state || initPromise) return;
        const generation = ++lifecycleGeneration;
        const owner = createMcpRuntimeOwner();
@@ -164,7 +331,7 @@ index f655b4f..12dd626 100644
        currentOwner = owner;
        currentOAuthRuntime = oauthRuntime;
        startInitialization({
-@@ -782,7 +774,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+@@ -782,7 +787,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
      const previousOwner = currentOwner;
      const previousOAuthRuntime = currentOAuthRuntime;
      const owner = createMcpRuntimeOwner();
@@ -173,7 +340,24 @@ index f655b4f..12dd626 100644
      currentOwner = owner;
      currentOAuthRuntime = oauthRuntime;
      state = null;
-@@ -1397,7 +1389,8 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+@@ -1379,8 +1384,8 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+     (pi.registerTool as (tool: unknown) => unknown)({
+       name: "mcp",
+       label: "MCP",
+-      description,
+-      promptSnippet: "MCP gateway — install by URL, status, search, describe, auth, and single MCP tool calls",
++      description: options.personManaged ? "Discover, describe and call tools from person-configured, enabled MCP servers. Use search for tool names/descriptions, server to filter tool inventory, describe for one full definition, and tool with args to call it. Server connections and sign-in belong to the person's Settings → MCP servers." : description,
++      promptSnippet: options.personManaged ? "Discover, describe and call tools from enabled MCP servers" : "MCP gateway — install by URL, status, search, describe, auth, and single MCP tool calls",
+       renderShell: toolRenderShell,
+       renderCall: createMcpProxyToolCallRenderer(toolRenderOptions),
+       parameters: Type.Object({
+@@ -1392,18 +1397,21 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+             description: 'Arguments as a JSON object (e.g., { "key": "value" })',
+           }),
+         ], { description: "Tool arguments as a JSON object, or as a JSON string encoding one" })),
+-        connect: Type.Optional(Type.String({ description: "Server name to connect (lazy connect + metadata refresh)" })),
++        ...(!options.personManaged ? { connect: Type.Optional(Type.String({ description: "Server name to connect (lazy connect + metadata refresh)" })) } : {}),
+         describe: Type.Optional(Type.String({ description: "Tool name to describe (shows parameters)" })),
          instructions: Type.Optional(Type.String({ description: "Server name to show that server's usage instructions" })),
          search: Type.Optional(Type.String({ description: "Search tools by name/description" })),
          regex: Type.Optional(Type.Boolean({ description: "Treat search as regex (default: substring match)" })),
@@ -182,8 +366,20 @@ index f655b4f..12dd626 100644
 +        ...(options.discovery ? { detail: Type.Optional(Type.Union([Type.Literal("names"), Type.Literal("summary"), Type.Literal("full")], { description: "Search detail level (default: summary)" })) } : {}),
          limit: optionalNumber({ minimum: 1, description: "Maximum search results to return (default: 12)" }),
          offset: optionalNumber({ minimum: 0, description: "Search result offset (default: 0)" }),
-         server: Type.Optional(Type.String({ description: "Server name (filters/disambiguates calls and optionally names an install)" })),
-@@ -1413,6 +1406,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+-        server: Type.Optional(Type.String({ description: "Server name (filters/disambiguates calls and optionally names an install)" })),
+-        action: Type.Optional(Type.String({ description: "Action: 'install', 'ui-messages', 'auth-start', or 'auth-complete'" })),
+-        url: Type.Optional(Type.String({ description: "MCP endpoint URL for action: 'install'" })),
+-        target: Type.Optional(Type.String({ description: "Install target: 'global' (default) or 'project'" })),
++        server: Type.Optional(Type.String({ description: "Filter tool inventory or disambiguate a tool call by configured server name" })),
++        ...(!options.personManaged ? {
++          action: Type.Optional(Type.String({ description: "Action: 'install', 'ui-messages', 'auth-start', or 'auth-complete'" })),
++          url: Type.Optional(Type.String({ description: "MCP endpoint URL for action: 'install'" })),
++          target: Type.Optional(Type.String({ description: "Install target: 'global' (default) or 'project'" })),
++        } : {}),
+       }),
+       renderResult: renderMcpToolResult,
+       async execute(_toolCallId: string, params: {
+@@ -1413,6 +1421,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
          describe?: string;
          instructions?: string;
          search?: string;
@@ -191,7 +387,28 @@ index f655b4f..12dd626 100644
          regex?: boolean;
          includeSchemas?: boolean;
          limit?: number;
-@@ -1543,7 +1537,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+@@ -1422,6 +1431,10 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+         url?: string;
+         target?: string;
+       }, signal: AbortSignal | undefined, _onUpdate: AgentToolUpdateCallback<Record<string, unknown>> | undefined, _ctx: ExtensionContext) {
++        if (options.personManaged) {
++          const refusal = managementRefusal(params);
++          if (refusal) return refusal;
++        }
+         let executeOwner = currentOwner;
+         const parseArgs = (value: string | Record<string, unknown> | undefined): Record<string, unknown> | undefined => {
+           if (value === undefined || value === "") return undefined;
+@@ -1494,6 +1507,9 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+           };
+         }
+         executeOwner?.throwIfInactive();
++        await prepareAuthorizedCatalog(state);
++        const refused = authorizationRefusal(state, params.server ?? params.connect, params.tool ?? params.describe);
++        if (refused) return refused;
+ 
+         if (params.action === "install") {
+           return executeInstall(state, params.url, params.server, params.target, _ctx.cwd, signal);
+@@ -1543,7 +1559,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
            return executeInstructions(state, params.instructions);
          }
          if (params.search !== undefined) {
@@ -200,20 +417,23 @@ index f655b4f..12dd626 100644
            if (lazyDirectTools.size === 0) return result;
            holdLazyToolsInactive();
            const matches = (result.details as { matches?: Array<{ server: string; tool: string }> } | undefined)?.matches ?? [];
-@@ -1623,6 +1617,8 @@ export function createMcpAdapter(options: McpAdapterOptions = {}) {
+@@ -1623,6 +1639,11 @@ export function createMcpAdapter(options: McpAdapterOptions = {}) {
      : undefined;
    return function mcpAdapter(pi: ExtensionAPI) {
      installMcpAdapter(pi, {
++      ...(options.personManaged !== undefined ? { personManaged: options.personManaged } : {}),
++      ...(options.authorization !== undefined ? { authorization: options.authorization } : {}),
++      ...(options.commitCredentials !== undefined ? { commitCredentials: options.commitCredentials } : {}),
 +      ...(options.discovery !== undefined ? { discovery: options.discovery } : {}),
 +      ...(options.clientIdentity !== undefined ? { clientIdentity: { ...options.clientIdentity } } : {}),
        ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
        ...(factoryConfig !== undefined ? { config: cloneMcpConfig(factoryConfig) } : {}),
      });
 diff --git a/init.ts b/init.ts
-index 6766d0e..6c1c3c5 100644
+index 6766d0e..e2dbb59 100644
 --- a/init.ts
 +++ b/init.ts
-@@ -142,10 +142,12 @@ export async function initializeMcp(
+@@ -142,15 +142,19 @@ export async function initializeMcp(
      ? resolveConfiguredClaudePluginMcp(cloneMcpConfig(options.config), cwd)
      : loadMcpConfig(configPath, cwd);
    const authStorageOptions = getAuthStorageOptions(config.settings?.oauthDir, cwd);
@@ -228,6 +448,51 @@ index 6766d0e..6c1c3c5 100644
    manager.setRuntimeSignal?.(owner.signal);
    manager.setOAuthRuntime?.(oauthRuntime);
    manager.setDefaultRequestTimeoutMs(config.settings?.requestTimeoutMs);
+   manager.setTraceConfig?.(config.settings?.trace);
+   manager.setAuthStorageOptions(authStorageOptions);
++  manager.setAuthorizationGuard(options.authorization);
++  manager.setCredentialCommitter(options.commitCredentials);
+   const samplingAutoApprove = config.settings?.samplingAutoApprove === true;
+   if (config.settings?.sampling !== false && (hasUI || samplingAutoApprove)) {
+     manager.setSamplingConfig({
+@@ -193,6 +197,8 @@ export async function initializeMcp(
+     : undefined;
+   const consentManager = new ConsentManager("once-per-server", persistSessionApproval);
+   const state: McpExtensionState = {
++    personManaged: options.personManaged,
++    authorization: options.authorization,
+     owner,
+     manager,
+     lifecycle,
+@@ -304,7 +310,7 @@ export async function initializeMcp(
+     }
+ 
+     const cachedEntry = cache?.servers?.[name];
+-    if (cachedEntry && isServerCacheValid(cachedEntry, definition)) {
++    if (cachedEntry && isServerCacheValid(cachedEntry, definition) && !await options.authorization?.(name)) {
+       const hasToolFilters =
+         (Array.isArray(definition.includeTools) && definition.includeTools.length > 0) ||
+         (Array.isArray(definition.excludeTools) && definition.excludeTools.length > 0);
+@@ -312,6 +318,8 @@ export async function initializeMcp(
+         cachedSelectorCandidateIndex = createCachedToolSelectorCandidateIndex(config.mcpServers, cache, prefix);
+       }
+       const metadata = reconstructToolMetadata(name, cachedEntry, prefix, definition, config.mcpServers, cache ?? undefined, cachedSelectorCandidateIndex);
++      state.catalogExpiresAt ??= new Map();
++      state.catalogExpiresAt.set(name, cachedEntry.cachedAt + (cachedEntry.ttlMs ?? 0));
+       toolMetadata.set(name, metadata);
+       if (Array.isArray(cachedEntry.resources)) {
+         resourceCounts.set(name, cachedEntry.resources.length);
+@@ -329,7 +337,9 @@ export async function initializeMcp(
+     ? serverEntries
+     : serverEntries.filter(([, definition]) => {
+         const mode = definition.lifecycle ?? "lazy";
+-        return mode === "keep-alive" || mode === "eager";
++        // Explicit preload must obtain current definitions before freezing the
++        // request surface; an expired persistent cache is not a preload source.
++        return definition.directTools === true || mode === "keep-alive" || mode === "eager";
+       });
+ 
+   if (ui && startupServers.length > 0) {
 diff --git a/mcp-auth-flow.ts b/mcp-auth-flow.ts
 index 1f1e1be..d071d54 100644
 --- a/mcp-auth-flow.ts
@@ -331,19 +596,22 @@ index 1f1e1be..d071d54 100644
          const result = await abortable(runSdkAuth(authProvider, {
            serverUrl,
 diff --git a/mcp-auth.ts b/mcp-auth.ts
-index 6a45941..8a67f2f 100644
+index 6a45941..6a291ff 100644
 --- a/mcp-auth.ts
 +++ b/mcp-auth.ts
-@@ -84,6 +84,8 @@ export interface AuthEntry {
+@@ -84,6 +84,11 @@ export interface AuthEntry {
  export interface AuthStorageOptions {
    /** Legacy plaintext import directory. Persistent secrets no longer use this as their store. */
    baseDir?: string;
 +  /** Opaque embedding-owned identities, never credentials. Missing names fail closed. */
 +  identities?: Readonly<Record<string, string>>;
++  /** Host transaction around an actual token save; receives no credential values. */
++  commitTokens?: (server: string, save: () => void) => Promise<string | void>;
++  checkCredentials?: (server: string) => Promise<void>;
  }
  
  export class OAuthCredentialStoreError extends Error {
-@@ -428,15 +430,17 @@ function getServerDir(serverName: string, options?: AuthStorageOptions): string
+@@ -428,15 +433,17 @@ function getServerDir(serverName: string, options?: AuthStorageOptions): string
    if (typeof serverName !== 'string') {
      throw new Error(`Invalid MCP server name: ${JSON.stringify(serverName)}`);
    }
@@ -364,7 +632,7 @@ index 6a45941..8a67f2f 100644
  }
  
  /**
-@@ -649,8 +653,8 @@ function removeLegacyAuthEntry(serverName: string, options?: AuthStorageOptions)
+@@ -649,8 +656,8 @@ function removeLegacyAuthEntry(serverName: string, options?: AuthStorageOptions)
    }
  }
  
@@ -375,7 +643,7 @@ index 6a45941..8a67f2f 100644
    const payload = JSON.stringify(entry);
    const previousManifest = readExistingChunkManifest(store, serverName, account);
    const manifest = payload.length > AUTH_SECRET_CHUNK_SIZE ? createChunkManifest(payload) : undefined;
-@@ -678,7 +682,7 @@ function writeSecureAuthEntryToStore(store: AuthSecretStore, serverName: string,
+@@ -678,7 +685,7 @@ function writeSecureAuthEntryToStore(store: AuthSecretStore, serverName: string,
      );
    }
  
@@ -384,7 +652,7 @@ index 6a45941..8a67f2f 100644
  }
  
  function publishAuthEntryToCache(serverName: string, payload: string): void {
-@@ -692,12 +696,12 @@ function publishAuthEntryToCache(serverName: string, payload: string): void {
+@@ -692,12 +699,12 @@ function publishAuthEntryToCache(serverName: string, payload: string): void {
    authEntryCache.set(serverName, cloneAuthEntry(normalized));
  }
  
@@ -400,7 +668,7 @@ index 6a45941..8a67f2f 100644
    }
  }
  
-@@ -711,7 +715,7 @@ function readAuthEntryFromStore(
+@@ -711,7 +718,7 @@ function readAuthEntryFromStore(
    options?: AuthStorageOptions,
    behavior: { migrateLegacy?: boolean } = {},
  ): AuthEntry | undefined {
@@ -409,7 +677,7 @@ index 6a45941..8a67f2f 100644
    let payload: string | undefined;
    try {
      payload = store.read(account);
-@@ -735,7 +739,7 @@ function readAuthEntryFromStore(
+@@ -735,7 +742,7 @@ function readAuthEntryFromStore(
    const legacyEntry = readLegacyAuthEntry(serverName, options);
    if (!legacyEntry) return undefined;
    if (behavior.migrateLegacy === false) return legacyEntry;
@@ -418,7 +686,7 @@ index 6a45941..8a67f2f 100644
    removeLegacyAuthEntry(serverName, options);
    return legacyEntry;
  }
-@@ -747,9 +751,12 @@ function readAuthEntry(
+@@ -747,9 +754,12 @@ function readAuthEntry(
  ): AuthEntry | undefined {
    // Status-only reads deliberately bypass the cache because they do not
    // migrate legacy entries.
@@ -434,7 +702,7 @@ index 6a45941..8a67f2f 100644
    }
  
    let entry: AuthEntry | undefined;
-@@ -760,7 +767,7 @@ function readAuthEntry(
+@@ -760,7 +770,7 @@ function readAuthEntry(
      entry = readAuthEntryFromStore(linuxKeyringRecoveryAuthSecretStore, serverName, options, behavior);
    }
  
@@ -443,7 +711,7 @@ index 6a45941..8a67f2f 100644
    return entry;
  }
  
-@@ -816,15 +823,20 @@ export function saveAuthEntry(serverName: string, entry: AuthEntry, serverUrl?:
+@@ -816,15 +826,20 @@ export function saveAuthEntry(serverName: string, entry: AuthEntry, serverUrl?:
    if (serverUrl) {
      entry.serverUrl = serverUrl;
    }
@@ -467,7 +735,7 @@ index 6a45941..8a67f2f 100644
    try {
      const payload = store.read(account);
      const manifest = payload === undefined ? undefined : readChunkManifestFromPayload(serverName, payload, 'OS secure credential store');
-@@ -841,12 +853,12 @@ function removeAuthEntryFromStore(store: AuthSecretStore, serverName: string): v
+@@ -841,12 +856,12 @@ function removeAuthEntryFromStore(store: AuthSecretStore, serverName: string): v
  
  export function removeAuthEntry(serverName: string, options?: AuthStorageOptions): void {
    try {
@@ -483,7 +751,7 @@ index 6a45941..8a67f2f 100644
    removeLegacyAuthEntry(serverName, options);
  }
  
-@@ -854,7 +866,7 @@ export function removeAuthEntry(serverName: string, options?: AuthStorageOptions
+@@ -854,7 +869,7 @@ export function removeAuthEntry(serverName: string, options?: AuthStorageOptions
   * Forget a cached entry so the next ordinary read reloads secure storage.
   */
  export function invalidateAuthEntryCache(serverName: string): void {
@@ -493,19 +761,20 @@ index 6a45941..8a67f2f 100644
  
  const authTransactions = new AsyncLocalStorage<{ signal: AbortSignal | undefined }>();
 diff --git a/mcp-code.ts b/mcp-code.ts
-index b337813..569b157 100644
+index b337813..ffd2a6f 100644
 --- a/mcp-code.ts
 +++ b/mcp-code.ts
-@@ -3,7 +3,7 @@ import { formatWithOptions } from "node:util";
+@@ -3,7 +3,8 @@ import { formatWithOptions } from "node:util";
  import { Worker } from "node:worker_threads";
  import { throwIfAborted } from "./abort.ts";
  import { guardMcpOutput, guardedMcpDetails, resolveMcpOutputGuardOptions } from "./mcp-output-guard.ts";
 -import { executeCall } from "./proxy-modes.ts";
++import { prepareAuthorizedCatalog, authorizationRefusal } from "./authorization.ts";
 +import { discoveryGuidance, executeCall } from "./proxy-modes.ts";
  import { combineAbortSignals } from "./runtime-owner.ts";
  import { paginate, rankSuggestions, rankToolMatches } from "./search-ranking.ts";
  import { isServerInActiveFailureBackoff } from "./failure-backoff.ts";
-@@ -22,7 +22,7 @@ class McpScriptTimeoutError extends Error {
+@@ -22,7 +23,7 @@ class McpScriptTimeoutError extends Error {
    }
  }
  
@@ -514,7 +783,17 @@ index b337813..569b157 100644
  type DescribeInput = { path?: unknown };
  type WorkerMessage =
    | { type: "emit"; block: unknown }
-@@ -197,7 +197,9 @@ export async function runMcpScript(
+@@ -186,7 +187,8 @@ export async function runMcpScript(
+     return { dataJson };
+   };
+ 
+-  const searchTools = (input?: SearchInput) => {
++  const searchTools = async (input?: SearchInput) => {
++    await prepareAuthorizedCatalog(state);
+     const startedAt = Date.now();
+     const query = typeof input?.query === "string" ? input.query : "";
+     let error: unknown;
+@@ -197,7 +199,9 @@ export async function runMcpScript(
        const server = typeof input?.server === "string" ? input.server : undefined;
        const limit = typeof input?.limit === "number" ? input.limit : 12;
        const offset = typeof input?.offset === "number" ? input.offset : 0;
@@ -525,7 +804,19 @@ index b337813..569b157 100644
        return {
          ...page,
          items: page.items.map(({ server: matchServer, tool, score }) => ({
-@@ -227,6 +229,7 @@ export async function runMcpScript(
+@@ -218,7 +222,10 @@ export async function runMcpScript(
+     }
+   };
+ 
+-  const describeTool = (input?: DescribeInput) => {
++  const describeTool = async (input?: DescribeInput) => {
++    await prepareAuthorizedCatalog(state);
++    const refused = authorizationRefusal(state, undefined, input?.path);
++    if (refused) return { path: input?.path, error: { code: "needs_auth", message: refused.details.message } };
+     const startedAt = Date.now();
+     const path = typeof input?.path === "string" ? input.path : "";
+     let error: unknown;
+@@ -227,6 +234,7 @@ export async function runMcpScript(
          if (isServerInActiveFailureBackoff(state, server)) continue;
          const tool = findToolByName(metadata, path);
          if (!tool) continue;
@@ -533,8 +824,20 @@ index b337813..569b157 100644
          const inputShape = tool.inputSchema ? renderTsShape(tool.inputSchema) : null;
          const inputTypeScript = inputShape ?? (tool.inputSchema ? formatSchema(tool.inputSchema) : null);
          return {
+@@ -309,9 +317,9 @@ export async function runMcpScript(
+           if (message.type === "call") {
+             payload = await callTool(message.path, message.args as Record<string, unknown> | undefined);
+           } else if (message.type === "search") {
+-            payload = { envelope: searchTools(message.input as SearchInput | undefined) };
++            payload = { envelope: await searchTools(message.input as SearchInput | undefined) };
+           } else {
+-            payload = { envelope: describeTool(message.input as DescribeInput | undefined) };
++            payload = { envelope: await describeTool(message.input as DescribeInput | undefined) };
+           }
+           if (completed || callSignal?.aborted) return;
+           const response: WorkerResultMessage = { type: "result", id: message.id, ...payload };
 diff --git a/mcp-oauth-provider.ts b/mcp-oauth-provider.ts
-index 0d34d2d..89e5ab2 100644
+index 0d34d2d..016e849 100644
 --- a/mcp-oauth-provider.ts
 +++ b/mcp-oauth-provider.ts
 @@ -34,6 +34,7 @@ import {
@@ -580,6 +883,37 @@ index 0d34d2d..89e5ab2 100644
        ...(this.clientUri !== undefined ? { client_uri: this.clientUri } : {}),
        ...(this.config.logoUri !== undefined ? { logo_uri: this.config.logoUri } : {}),
        grant_types: ["authorization_code", "refresh_token"],
+@@ -415,6 +417,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
+    * Returns undefined if no client info exists or if the server URL has changed.
+    */
+   async clientInformation(ctx?: OAuthClientInformationContext): Promise<OAuthClientInformationMixed | undefined> {
++    await this.storageOptions?.checkCredentials?.(this.serverName)
+     if (this.invalidatedClientId !== undefined) {
+       invalidateAuthEntryCache(this.serverName)
+     }
+@@ -557,6 +560,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
+    * Returns undefined if no tokens exist or if the server URL has changed.
+    */
+   async tokens(ctx?: OAuthClientInformationContext): Promise<OAuthTokens | undefined> {
++    await this.storageOptions?.checkCredentials?.(this.serverName)
+     // Once this provider rejects a token, bypass its process-local cache until
+     // another process replaces that token in shared secure storage.
+     if (this.invalidatedAccessToken !== undefined) {
+@@ -599,11 +603,13 @@ export class McpOAuthProvider implements OAuthClientProvider {
+     // Persist its response while the transaction still owns the credential lock.
+     if (!this.authTransaction.getStore()?.active) this.throwIfInactive()
+     const entry = getAuthForUrl(this.serverName, this.serverUrl, this.storageOptions) ?? {}
+-    saveAuthEntry(this.serverName, {
++    const save = () => saveAuthEntry(this.serverName, {
+       ...entry,
+       tokens: storedTokens,
+       ...(this.flowClientInfo ? { clientInfo: this.flowClientInfo } : {}),
+     }, this.serverUrl, this.storageOptions)
++    if (this.storageOptions?.commitTokens) await this.storageOptions.commitTokens(this.serverName, save)
++    else save()
+     this.invalidatedAccessToken = undefined
+     this.lastSavedAccessToken = storedTokens.accessToken
+     // Discovery must survive the browser redirect so the callback can verify
 diff --git a/mcp-probe.ts b/mcp-probe.ts
 index 7af4215..0584c15 100644
 --- a/mcp-probe.ts
@@ -652,17 +986,49 @@ index 7af4215..0584c15 100644
    ambiguousResult ??= ambiguousNotMcp(postResponse);
    if (!POST_ENDPOINT_MISMATCH_STATUSES.has(postResponse.status)) return ambiguousNotMcp(postResponse) ?? ambiguousResult ?? notMcp(postResponse);
 diff --git a/metadata-cache.ts b/metadata-cache.ts
-index 269b4db..d2ac56f 100644
+index 269b4db..acb1c7b 100644
 --- a/metadata-cache.ts
 +++ b/metadata-cache.ts
-@@ -85,6 +85,7 @@ export function computeServerHash(definition: ServerEntry, environment: NodeJS.P
+@@ -33,7 +33,7 @@ import {
+ import { extractUiToolVisibility, isUiToolVisibleToModel } from "./ui-tool-visibility.ts";
+ 
+ const CACHE_VERSION = 1;
+-const CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
++const CACHE_MAX_AGE_MS = 0;
+ 
+ export type { CachedPrompt, CachedResource, CachedTool, MetadataCache, ServerCacheEntry } from "./types.ts";
+ 
+@@ -85,6 +85,8 @@ export function computeServerHash(definition: ServerEntry, environment: NodeJS.P
    // Exclude lifecycle, idleTimeout, requestTimeoutMs, debug — those are runtime behavior settings
    // that don't change which tools a server exposes.
    const identity: Record<string, unknown> = {
 +    authorizationIdentity: definition.authorizationIdentity,
++    authorizationPartition: definition.authorizationPartition,
      command: definition.command,
      args: definition.args,
      socket: resolveConfigPath(definition.socket, environment),
+@@ -124,17 +126,17 @@ export function isServerCacheValid(
+   } catch {
+     return false;
+   }
+-  if (!entry || entry.configHash !== configHash) return false;
++  if (isServerDisabled(definition) || !entry || entry.configHash !== configHash) return false;
+   if (!entry.cachedAt || typeof entry.cachedAt !== "number") return false;
+   const declaredTtlMs = entry.ttlMs;
+   if (typeof declaredTtlMs === "number" && Number.isSafeInteger(declaredTtlMs) && declaredTtlMs >= 0) {
+     if (declaredTtlMs === 0) return false;
+     const ageMs = Date.now() - entry.cachedAt;
+     const effectiveMaxAge = maxAgeMs > 0 ? Math.min(maxAgeMs, declaredTtlMs) : declaredTtlMs;
+-    return ageMs < effectiveMaxAge;
++    return ageMs >= 0 && ageMs < effectiveMaxAge;
+   }
+-  if (maxAgeMs > 0 && Date.now() - entry.cachedAt > maxAgeMs) return false;
+-  return true;
++  // Missing/invalid server hints never authorize seven days of reuse.
++  return false;
+ }
+ 
+ export function parseDirectToolSelectors(selectors: string[]): {
 diff --git a/package.json b/package.json
 index 644f032..1a2414c 100644
 --- a/package.json
@@ -676,10 +1042,18 @@ index 644f032..1a2414c 100644
      "error-signal.ts",
      "state.ts",
 diff --git a/proxy-modes.ts b/proxy-modes.ts
-index 49f1b4e..aebfaad 100644
+index 49f1b4e..902e4e0 100644
 --- a/proxy-modes.ts
 +++ b/proxy-modes.ts
-@@ -648,6 +648,11 @@ export function executeDescribe(state: McpExtensionState, toolName: string): Pro
+@@ -14,6 +14,7 @@ import { resolveMcpResultContent, transformMcpContent, transformMcpResourceConte
+ import { guardMcpOutput, guardedMcpDetails, resolveMcpOutputGuardOptions } from "./mcp-output-guard.ts";
+ import { maybeStartUiSession, summarizeUiSessionResult, type UiSessionRuntime } from "./ui-session.ts";
+ import { formatAuthRequiredMessage, formatMcpStatus, normalizeToolArguments, resolveServerUrl, truncateAtWord } from "./utils.ts";
++import { managementRefusal } from "./authorization.ts";
+ import { authenticate, completeAuthFromInput, getAuthStatus, startAuth, supportsOAuth } from "./mcp-auth-flow.ts";
+ import { SessionRecoveryAuthRequiredError, withSessionRecovery } from "./session-recovery.ts";
+ import { paginate, rankSuggestions, rankToolMatches, resolveSearchKeywords } from "./search-ranking.ts";
+@@ -648,6 +649,11 @@ export function executeDescribe(state: McpExtensionState, toolName: string): Pro
      };
    }
  
@@ -691,7 +1065,7 @@ index 49f1b4e..aebfaad 100644
    const approvalMarker = isToolCallApprovalRequired(state.config, serverName, toolMeta, state.toolMetadata)
      ? " (requires approval)"
      : "";
-@@ -673,6 +678,31 @@ export function executeDescribe(state: McpExtensionState, toolName: string): Pro
+@@ -673,6 +679,35 @@ export function executeDescribe(state: McpExtensionState, toolName: string): Pro
    };
  }
  
@@ -704,6 +1078,10 @@ index 49f1b4e..aebfaad 100644
 +    .filter(name => noMatches || addressed.has(name)).sort().slice(0, 12);
 +  return names.flatMap(name => {
 +    if (!state.config.mcpServers[name]) return [`Server "${name}" not found. Use mcp({}) to see available servers.`];
++    const refusal = state.authorizationFailures?.get(name);
++    if (refusal) return [`Server "${name}" needs auth. ${refusal}`];
++    const failure = state.catalogFailures?.get(name);
++    if (failure) return [failure];
 +    const connection = state.manager.getConnection(name);
 +    const messages: string[] = [];
 +    if (state.manager.isConnecting(name)) messages.push(`Server "${name}" is still connecting; retry in a moment.`);
@@ -723,7 +1101,7 @@ index 49f1b4e..aebfaad 100644
  export function executeSearch(
    state: McpExtensionState,
    query: string,
-@@ -681,6 +711,7 @@ export function executeSearch(
+@@ -681,6 +716,7 @@ export function executeSearch(
    includeSchemas?: boolean,
    limit = 12,
    offset = 0,
@@ -731,7 +1109,7 @@ index 49f1b4e..aebfaad 100644
  ): ProxyToolResult {
    const showSchemas = includeSchemas !== false;
    if (server && isServerDisabled(state.config.mcpServers[server])) return disabledResult("search", server);
-@@ -748,6 +779,12 @@ export function executeSearch(
+@@ -748,6 +784,12 @@ export function executeSearch(
      matches = rankToolMatches(state, query, server);
    }
  
@@ -744,7 +1122,7 @@ index 49f1b4e..aebfaad 100644
    const page = paginate(matches, offset, limit);
    if (page.total === 0) {
      const connectingServers = server
-@@ -814,6 +851,10 @@ export function executeSearch(
+@@ -814,6 +856,10 @@ export function executeSearch(
  }
  
  export function executeList(state: McpExtensionState, server: string): ProxyToolResult {
@@ -755,6 +1133,157 @@ index 49f1b4e..aebfaad 100644
    const definition = state.config.mcpServers[server];
    if (!definition) {
      return {
+@@ -1013,6 +1059,10 @@ export async function executeCall(
+   // Internal consumers own successful data delivery; origin remains approval metadata only.
+   internalDelivery?: { onSuccess: (data: unknown) => void },
+ ): Promise<ProxyToolResult> {
++  if (state.personManaged && toolName === "mcp") {
++    const refusal = managementRefusal(args ?? {});
++    if (refusal) return refusal;
++  }
+   const ownedSignal = combineAbortSignals(state.owner?.signal, signal);
+   throwIfAborted(ownedSignal);
+   let serverName: string | undefined = serverOverride;
+diff --git a/sdk-cache-contract.ts b/sdk-cache-contract.ts
+new file mode 100644
+index 0000000..976744d
+--- /dev/null
++++ b/sdk-cache-contract.ts
+@@ -0,0 +1,134 @@
++import type { Client } from "@modelcontextprotocol/client";
++
++/**
++ * Narrow workaround for the pinned SDK's aggregate page clock/cursor defects.
++ * Uses its response cache, partitions, generation fences and schema request path;
++ * does not introduce another cache or transport. Pinned by embedding wire tests.
++ */
++export function installCacheContract(client: Client, invalidated: (method: string) => void) {
++  const sdk = client as any;
++  const cache = sdk._cache;
++  const interactive = (params: any) => params !== null && typeof params === "object" && ("inputResponses" in params || "requestState" in params);
++  const ttl = (page: any) => Number.isSafeInteger(page.ttlMs) && page.ttlMs >= 0 ? page.ttlMs : 0;
++  const scope = (page: any) => page.cacheScope === "public" ? "public" : "private";
++  const hints: { tools?: { ttlMs: number; cacheScope: "private" | "public" } } = {};
++  // A client that auto-fulfilled an interactive response must not publish its
++  // conditioned result as reusable metadata. Conservatively disable that method's
++  // cache for this client thereafter; this is bounded by the method inventory.
++  const conditioned = new Set<string>();
++  const resolveInput = sdk._resolveNonCompleteResult.bind(client);
++  sdk._resolveNonCompleteResult = (decoded: any, flow: any) => {
++    conditioned.add(flow.request.method);
++    return resolveInput(decoded, flow);
++  };
++  const read = cache.read.bind(cache);
++  cache.read = (method: string, params: any) => conditioned.has(method) ? Promise.resolve(undefined) : read(method, params);
++  const write = cache.write.bind(cache);
++  cache.write = (method: string, result: any, generation: number, freshness: any) => {
++    if (conditioned.has(method) || result?.resultType === "input_required") return Promise.resolve();
++    return write(method, result, generation, freshness);
++  };
++  const serve = sdk._serveFromCache.bind(client);
++  sdk._serveFromCache = async (method: string, params: any, options: any) => {
++    if (interactive(params)) return undefined;
++    const value = await serve(method, params, options);
++    if (value === undefined) return value;
++    const entry = await cache._probe(method, params);
++    if (!entry || entry.expiresAt <= cache.now()) return undefined;
++    return { ...value, ttlMs: Math.max(0, entry.expiresAt - cache.now()) };
++  };
++
++  sdk._listAllPages = async (method: string, params: any, options: any, append: (acc: any, page: any) => void, finalize?: (acc: any) => void) => {
++    // Restart an invalid cursor exactly once. Never silently return a prefix of
++    // the list, or publish a walk that straddled an invalidation generation.
++    for (let attempt = 0; attempt < 2; attempt++) {
++      const generation = cache.captureGeneration(method);
++      let expiresAt = Infinity;
++      let commonScope: string | undefined;
++      let complete = true;
++      let cursor: string | undefined;
++      let acc: any;
++      const seen = new Set<string>();
++      let pages = 0;
++      try {
++        do {
++          if (cursor !== undefined && seen.has(cursor)) throw new Error(`${method}: the server repeated a page cursor. Refresh tool information and try again.`);
++          if (cursor !== undefined) seen.add(cursor);
++          if (sdk._listMaxPages !== 0 && pages >= sdk._listMaxPages) throw new Error(`${method}: the server's paginated list did not finish.`);
++          const page = await sdk.request({ method, ...(params || cursor !== undefined ? { params: { ...params, ...(cursor !== undefined ? { cursor } : {}) } } : {}) }, options);
++          const receivedAt = cache.now();
++          if (cache.captureGeneration(method) !== generation) throw new Error(`${method}: tool information changed while it was being read. Try again.`);
++          if (page.resultType === "input_required") { complete = false; return page; }
++          expiresAt = Math.min(expiresAt, receivedAt + ttl(page));
++          const pageScope = scope(page);
++          if (commonScope !== undefined && commonScope !== pageScope) throw new Error(`${method}: page cache scopes disagree. Refresh tool information and try again.`);
++          commonScope = pageScope;
++          if (acc === undefined) acc = structuredClone(page); else append(acc, page);
++          cursor = page.nextCursor;
++          pages++;
++        } while (cursor !== undefined);
++        delete acc.nextCursor;
++        acc.ttlMs = conditioned.has(method) || interactive(params) ? 0 : Math.max(0, expiresAt - cache.now());
++        acc.cacheScope = commonScope ?? "private";
++        finalize?.(acc);
++        if (complete && options?.cacheMode !== "bypass" && !interactive(params)) {
++          await cache.write(method, acc, generation, { expiresAt, scope: acc.cacheScope });
++        }
++        if (cache.captureGeneration(method) !== generation) throw new Error(`${method}: tool information changed while it was being read. Try again.`);
++        return acc;
++      } catch (error) {
++        const invalidCursor = cursor !== undefined && (error as { code?: number }).code === -32602;
++        if (!invalidCursor || attempt !== 0) throw error;
++      }
++    }
++  };
++
++  for (const method of ["listTools", "listPrompts", "listResources", "listResourceTemplates", "readResource"]) {
++    const original = sdk[method]?.bind(client);
++    if (!original) continue;
++    sdk[method] = async (params: any, options: any) => {
++      const result = await original(params, interactive(params) ? { ...options, cacheMode: "bypass" } : options);
++      if (method === "listTools" && params?.cursor === undefined) hints.tools = { ttlMs: ttl(result), cacheScope: scope(result) };
++      return result;
++    };
++  }
++
++  const discover = sdk.discover.bind(client);
++  sdk.discover = async (options: any) => {
++    const method = "server/discover";
++    const generation = cache.captureGeneration(method);
++    const hit = await sdk._serveFromCache(method, undefined, options);
++    if (hit !== undefined) { sdk._discoverResult = hit; return hit; }
++    const result = await discover(options);
++    if (result.resultType !== "input_required" && options?.cacheMode !== "bypass") {
++      await cache.write(method, result, generation, { expiresAt: cache.now() + ttl(result), scope: scope(result) });
++    }
++    if (cache.captureGeneration(method) !== generation) throw new Error("Server information changed while it was being read. Try again.");
++    return result;
++  };
++
++  const notify = sdk._onnotification.bind(client);
++  sdk._onnotification = (notification: any, extra: any) => {
++    const method = notification?.method;
++    if (typeof method === "string" && /^notifications\/(tools|resources|prompts)\/list_changed$/.test(method)) {
++      // SDK invalidation starts synchronously; metadata consumers must stop
++      // offering the old list before its asynchronous replacement completes.
++      void cache.evict("server/discover");
++      hints.tools = undefined;
++      invalidated(method);
++    }
++    return notify(notification, extra);
++  };
++  return Object.assign(hints, {
++    async rotatePartition(partition: string) {
++      // The manager creates a private SDK store for each Client (never a shared
++      // supplied store). Fence every retained key, including resource URIs, before
++      // changing the principal partition; old public entries must not survive.
++      for (const [key, generation] of cache._evictionGeneration) cache._evictionGeneration.set(key, generation + 1);
++      cache._cachePartition = partition;
++      hints.tools = undefined;
++      await Promise.all(["tools/list", "resources/list", "resources/templates/list", "prompts/list", "resources/read", "server/discover"]
++        .map(method => cache._store.evict(method)));
++    },
++  });
++}
 diff --git a/search-ranking.ts b/search-ranking.ts
 index beb2a04..916b0f2 100644
 --- a/search-ranking.ts
@@ -782,10 +1311,15 @@ index beb2a04..916b0f2 100644
    const queryTokens = tokenize(query);
    if (queryTokens.length === 0) return matches;
 diff --git a/server-manager.ts b/server-manager.ts
-index 94154fd..93ed9bf 100644
+index 94154fd..f637d5d 100644
 --- a/server-manager.ts
 +++ b/server-manager.ts
-@@ -23,6 +23,8 @@ import {
+@@ -1,3 +1,4 @@
++import { installCacheContract } from "./sdk-cache-contract.ts";
+ import { mkdirSync, statSync } from "node:fs";
+ import { BlockList, isIP } from "node:net";
+ import { isDeepStrictEqual } from "node:util";
+@@ -23,6 +24,8 @@ import {
  } from "@modelcontextprotocol/client";
  import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
  import { UnixSocketClientTransport } from "./unix-socket-transport.ts";
@@ -794,7 +1328,7 @@ index 94154fd..93ed9bf 100644
  import { probeMcpEndpoint } from "./mcp-probe.ts";
  import {
    isServerDisabled,
-@@ -253,7 +255,7 @@ export class McpServerManager {
+@@ -253,7 +256,7 @@ export class McpServerManager {
    private stopped = false;
  
    /** Default cwd for stdio servers without an explicit config `cwd`. */
@@ -803,7 +1337,56 @@ index 94154fd..93ed9bf 100644
  
    setSamplingConfig(config: ServerSamplingConfig | undefined): void {
      this.samplingConfig = config;
-@@ -1028,7 +1030,7 @@ export class McpServerManager {
+@@ -302,6 +305,23 @@ export class McpServerManager {
+     this.traceSettings = settings;
+   }
+ 
++  private cacheContracts = new WeakMap<Client, ReturnType<typeof installCacheContract>>();
++  private authorizationGuard?: (server: string) => Promise<string | undefined>;
++  private credentialCommitter?: (server: string, save: () => void) => Promise<string>;
++
++  setCredentialCommitter(commit: ((server: string, save: () => void) => Promise<string>) | undefined): void {
++    this.credentialCommitter = commit;
++  }
++
++  setAuthorizationGuard(guard: ((server: string) => Promise<string | undefined>) | undefined): void {
++    this.authorizationGuard = guard;
++  }
++
++  private async assertAuthorized(server: string): Promise<void> {
++    const refusal = await this.authorizationGuard?.(server);
++    if (refusal) throw new Error(refusal);
++  }
++
+   setAuthStorageOptions(options: AuthStorageOptions): void {
+     this.authStorageOptions = options;
+   }
+@@ -340,6 +360,7 @@ export class McpServerManager {
+   }
+ 
+   async connect(name: string, definition: ServerDefinition, signal?: AbortSignal): Promise<ServerConnection> {
++    await this.assertAuthorized(name);
+     validateCaFile(definition);
+     if (isServerDisabled(definition)) throw new Error(`MCP server "${name}" is disabled`);
+     if (this.stopped) throw new Error("MCP server manager is closed");
+@@ -434,6 +455,7 @@ export class McpServerManager {
+     name: string,
+     expectedConnection: ServerConnection,
+     signal?: AbortSignal,
++    cacheMode: "use" | "refresh" = "refresh",
+   ): Promise<ToolRefreshResult> {
+     if (this.stopped) throw new Error("MCP server manager is closed");
+     const ownedSignal = combineAbortSignals(this.runtimeSignal, signal);
+@@ -469,7 +491,7 @@ export class McpServerManager {
+       toolResult = await this.fetchAllTools(expectedConnection.client, {
+         ...healthOptions,
+         ...(refreshSignal ? { signal: refreshSignal } : {}),
+-        cacheMode: "refresh",
++        cacheMode,
+       });
+     } catch (error) {
+       throwIfAborted(ownedSignal);
+@@ -1028,7 +1050,7 @@ export class McpServerManager {
        return new Error(`${originalMessage} — endpoint is temporarily unavailable (HTTP 503)`, { cause: error });
      }
      try {
@@ -812,7 +1395,7 @@ index 94154fd..93ed9bf 100644
        return new Error(`${originalMessage} — probe: ${probe.classification}`, { cause: error });
      } catch {
        return error instanceof Error ? error : new Error(originalMessage);
-@@ -1089,9 +1091,10 @@ export class McpServerManager {
+@@ -1089,9 +1111,10 @@ export class McpServerManager {
      const versionNegotiation = resolveVersionNegotiation(definition);
      let client: Client;
      client = new Client(
@@ -820,17 +1403,68 @@ index 94154fd..93ed9bf 100644
 +      resolveClientInfo(this.clientIdentity, "server", serverName),
        {
          jsonSchemaValidator: createJsonSchemaValidator(),
-+        ...(definition.authorizationIdentity ? { cachePartition: definition.authorizationIdentity } : {}),
++        ...(definition.authorizationIdentity ? { cachePartition: definition.authorizationPartition ?? definition.authorizationIdentity } : {}),
          ...(versionNegotiation ? { versionNegotiation } : {}),
          ...(Object.keys(capabilities).length > 0 ? { capabilities } : {}),
          listChanged: {
-@@ -1272,14 +1275,19 @@ export class McpServerManager {
+@@ -1113,6 +1136,34 @@ export class McpServerManager {
+         },
+       },
+     );
++    this.cacheContracts.set(client, installCacheContract(client, method => {
++      const connection = this.connections.get(serverName);
++      if (!connection || connection.client !== client) return;
++      if (method === "notifications/tools/list_changed") {
++        connection.tools = [];
++        connection.toolListHints = { ttlMs: 0, cacheScope: "private" };
++        connection.toolsRevision = (connection.toolsRevision ?? 0) + 1;
++        this.metadataListChangedListener?.(serverName, "tools-list-changed");
++      }
++    }));
++    if (this.authorizationGuard) {
++      const methods = client as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
++      for (const method of ["listTools", "listPrompts", "listResources", "listResourceTemplates", "discover", "readResource"]) {
++        const original = methods[method]?.bind(client);
++        if (!original) continue;
++        methods[method] = async (...args) => {
++          await this.assertAuthorized(serverName);
++          const result = await original(...args);
++          await this.assertAuthorized(serverName);
++          return result;
++        };
++      }
++      const request = methods.request!.bind(client);
++      methods.request = async (...args) => {
++        if ((args[0] as { method?: string } | undefined)?.method === "tools/call") await this.assertAuthorized(serverName);
++        return request(...args);
++      };
++    }
+     if (this.samplingConfig) {
+       registerSamplingHandler(client, { ...this.samplingConfig, serverName });
+     }
+@@ -1151,6 +1202,7 @@ export class McpServerManager {
+     const connection = this.connections.get(serverName);
+     if (!connection || connection.client !== client || connection.status !== "connected") return;
+     connection.tools = tools;
++    connection.toolListHints = this.cacheContracts.get(client)?.tools ?? { ttlMs: 0, cacheScope: "private" };
+     connection.toolsRevision = (connection.toolsRevision ?? 0) + 1;
+     this.metadataListChangedListener?.(serverName, "tools-list-changed");
+     this.pendingMetadataPublications.delete(serverName);
+@@ -1272,14 +1324,27 @@ export class McpServerManager {
      const serviceHeaders = oauthEnabled ? new Headers(headers) : new Headers();
      let caFetch = createCaFetch(definition);
      try {
-+    const authStorageOptions = definition.authorizationIdentity
++    const authStorageOptions: AuthStorageOptions = definition.authorizationIdentity
 +      ? { ...this.authStorageOptions, identities: { [serverName]: definition.authorizationIdentity } }
-+      : this.authStorageOptions;
++      : { ...this.authStorageOptions };
++    if (this.authorizationGuard) authStorageOptions.checkCredentials = name => this.assertAuthorized(name);
++    if (this.credentialCommitter) authStorageOptions.commitTokens = async (name, save) => {
++      const partition = await this.credentialCommitter!(name, save);
++      definition.authorizationPartition = partition;
++      const current = this.connections.get(name);
++      if (current) await this.cacheContracts.get(current.client)?.rotatePartition(partition);
++      return partition;
++    };
      const createAuthProvider = (): McpOAuthProvider => {
        const provider = new McpOAuthProvider(
          serverName,
@@ -845,7 +1479,7 @@ index 94154fd..93ed9bf 100644
        );
        provider.setAuthFetch(createOAuthFetch(serverUrl, () => serviceHeaders,
          combineAbortSignals(this.oauthRuntime?.signal, signal), {
-@@ -1294,7 +1302,7 @@ export class McpServerManager {
+@@ -1294,7 +1359,7 @@ export class McpServerManager {
      let implicitStoredAuth: ReturnType<typeof inspectAuthForUrl> | undefined;
      if (definition.auth === undefined && supportsOAuth(definition)) {
        try {
@@ -855,13 +1489,19 @@ index 94154fd..93ed9bf 100644
          // Implicit preflight is opportunistic; malformed records must not block
          // an otherwise anonymous-capable server from connecting.
 diff --git a/state.ts b/state.ts
-index e2d825c..59f762a 100644
+index e2d825c..13a841b 100644
 --- a/state.ts
 +++ b/state.ts
-@@ -29,6 +29,7 @@ export type SendMessageFn = (
+@@ -29,6 +29,13 @@ export type SendMessageFn = (
  ) => void;
  
  export interface McpExtensionState {
++  personManaged?: boolean;
++  authorization?: (server: string) => Promise<string | undefined>;
++  authorizationFailures?: Map<string, string>;
++  authorizationToolNames?: Map<string, string[]>;
++  catalogExpiresAt?: Map<string, number>;
++  catalogFailures?: Map<string, string>;
 +  discovery?: import("./types.ts").McpDiscoveryPolicy;
    owner: McpRuntimeOwner;
    manager: McpServerManager;
@@ -906,19 +1546,21 @@ index 217e52c..49b0358 100644
 +  return unregistered;
 +}
 diff --git a/types.ts b/types.ts
-index 023ee64..d72e7a7 100644
+index 023ee64..0ab8e6a 100644
 --- a/types.ts
 +++ b/types.ts
-@@ -424,6 +424,8 @@ export interface HttpRequestHeadersCommand {
+@@ -424,6 +424,10 @@ export interface HttpRequestHeadersCommand {
  
  // Server configuration
  export interface ServerEntry {
 +  /** Opaque host-owned scope/transport identity for credentials and cache partitions. */
 +  authorizationIdentity?: string;
++  /** Authorization generation, distinct from the durable credential account. */
++  authorizationPartition?: string;
    command?: string;
    args?: string[];
    /** Explicit rmcp-mux Unix-domain socket path. Mutually exclusive with command and url. */
-@@ -614,6 +616,8 @@ export interface McpSettings {
+@@ -614,6 +618,8 @@ export interface McpSettings {
     * and explicit reconnects won't rebuild the system prompt, preserving the
     * prompt-cache prefix. Proxy/search/cache metadata still refreshes. Default: false. */
    freezeDirectTools?: boolean;
@@ -927,7 +1569,7 @@ index 023ee64..d72e7a7 100644
    autoAuth?: boolean;
    sampling?: boolean;
    samplingAutoApprove?: boolean;
-@@ -666,7 +670,25 @@ export interface McpConfig {
+@@ -666,7 +672,30 @@ export interface McpConfig {
    claudePlugins?: ClaudePluginConfig[];
  }
  
@@ -948,6 +1590,11 @@ index 023ee64..d72e7a7 100644
 +}
 +
  export interface McpAdapterOptions {
++  /** Embedded clients whose Settings UI exclusively owns server management. */
++  personManaged?: boolean;
++  /** Checks current credentials/configuration; a message refuses, never reconnects. */
++  authorization?: (server: string) => Promise<string | undefined>;
++  commitCredentials?: (server: string, save: () => void) => Promise<string>;
 +  discovery?: McpDiscoveryPolicy;
 +  clientIdentity?: McpClientIdentity;
    config?: McpConfig;

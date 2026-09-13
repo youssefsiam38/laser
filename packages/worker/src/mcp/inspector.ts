@@ -10,7 +10,7 @@
  */
 import { delimiter } from "node:path";
 import { mcpClientIdentity } from "./identity.js";
-import { mcpAuthorizationIdentity } from "./authorization.js";
+import { McpAuthorizationRegistry, mcpAuthorizationIdentity, type McpAuthorizationGeneration } from "./authorization.js";
 import type {
   McpCallResult,
   McpInspection,
@@ -45,6 +45,8 @@ export interface InspectTarget {
   scope: McpScope;
   config: McpConfiguredServer;
   secrets: ResolvedSecrets;
+  /** Captured before resolving credentials by the saved-server service. */
+  authorization?: readonly McpAuthorizationGeneration[];
   /** An unsaved definition from the add flow; closed as soon as it is answered. */
   ephemeral?: boolean;
 }
@@ -61,8 +63,18 @@ export class McpInspector {
    */
   private readonly held = new Map<string, { name: string; entry: ServerEntry; latencyMs?: number; counts?: LiveCounts }>();
   private ephemeralCounter = 0;
+  private readonly authorizations = new Map<string, readonly McpAuthorizationGeneration[]>();
 
-  constructor(private readonly cwd: string) {}
+  private async assertAuthorized(name: string): Promise<void> {
+    if (!this.agentDir) return;
+    const snapshots = this.authorizations.get(name);
+    const registry = new McpAuthorizationRegistry(this.agentDir);
+    if (!snapshots?.length || !(await Promise.all(snapshots.map(snapshot => registry.current(snapshot)))).every(Boolean)) {
+      throw new Error("Access to this server changed. Reconnect in Settings → MCP servers.");
+    }
+  }
+
+  constructor(private readonly cwd: string, private readonly agentDir?: string) {}
 
   static key(scope: McpScope, name: string): string {
     return `${scope}:${name}`;
@@ -95,9 +107,28 @@ export class McpInspector {
     return this.oauthRuntimes.get(identity);
   }
 
-  private async authOptions(scope: McpScope, config: McpConfiguredServer) {
-    const identity = await mcpAuthorizationIdentity(scope, this.cwd, config);
-    return { runtime: await this.runtime(identity), authStorageOptions: { identities: { [config.name]: identity } } };
+  private async authOptions(scope: McpScope, config: McpConfiguredServer, authorization?: readonly McpAuthorizationGeneration[]) {
+    const fullIdentity = await mcpAuthorizationIdentity(scope, this.cwd, config);
+    const registry = this.agentDir ? new McpAuthorizationRegistry(this.agentDir) : undefined;
+    const identity = registry ? await registry.credentialAccount(fullIdentity) : fullIdentity;
+    const snapshot = await registry?.read(fullIdentity);
+    let expected = new Map((authorization ?? (snapshot ? [snapshot] : [])).map(value => [value.identity, value]));
+    return { runtime: await this.runtime(identity), authStorageOptions: {
+      identities: { [config.name]: identity },
+      ...(registry ? {
+        checkCredentials: async () => {
+          if (!expected.has(fullIdentity) || !(await Promise.all([...expected.values()].map(value => registry.current(value)))).every(Boolean)) {
+            throw new Error("Sign-in information changed. Start sign-in again in Settings → MCP servers.");
+          }
+        },
+        commitTokens: async (_name: string, save: () => void): Promise<string> => {
+          if (!expected.has(fullIdentity)) throw new Error("Sign-in information changed. Start sign-in again in Settings → MCP servers.");
+          const committed = await registry.revoke([...expected.keys()], async next => { save(); return next; }, expected);
+          expected = new Map(committed);
+          return JSON.stringify([...committed.values()]);
+        },
+      } : {}),
+    } };
   }
 
   /** Unknown legacy ownership is reported per server, never silently adopted. */
@@ -116,6 +147,19 @@ export class McpInspector {
     if (!this.manager) {
       const manager = new engine.Manager(this.cwd, mcpClientIdentity());
       manager.setOAuthRuntime?.(runtime);
+      if (this.agentDir) {
+        manager.setAuthorizationGuard?.(async name => {
+          try { await this.assertAuthorized(name); return undefined; } catch (error) { return messageOf(error); }
+        });
+        manager.setCredentialCommitter?.(async (name, save) => {
+          const snapshots = this.authorizations.get(name);
+          if (!snapshots?.length) throw new Error("Access to this server changed. Reconnect in Settings → MCP servers.");
+          const expected = new Map(snapshots.map(snapshot => [snapshot.identity, snapshot]));
+          const next = await new McpAuthorizationRegistry(this.agentDir!).revoke([...expected.keys()], async committed => { save(); return committed; }, expected);
+          this.authorizations.set(name, [...next.values()]);
+          return JSON.stringify([...next.values()]);
+        });
+      }
       this.manager = manager;
     }
     return this.manager;
@@ -143,7 +187,7 @@ export class McpInspector {
     try {
       const migration = await this.migrationDetail(scope, config);
       if (migration) return { ...base, status: "needs-auth", detail: migration };
-      const connection = await this.connect(key, config, target.secrets, scope, signal);
+      const connection = await this.connect(key, config, target.secrets, scope, signal, target.authorization);
       if (connection.status === "needs-auth") {
         await this.close(key);
         return { ...base, status: "needs-auth", detail: signInDetail(config.name) };
@@ -217,13 +261,13 @@ export class McpInspector {
   }
 
   /** One `ping` round trip; connects first when nothing is held. */
-  async ping(scope: McpScope, config: McpConfiguredServer, secrets: ResolvedSecrets, signal?: AbortSignal): Promise<{ status: McpInspection["status"]; latencyMs?: number; detail?: string }> {
+  async ping(scope: McpScope, config: McpConfiguredServer, secrets: ResolvedSecrets, signal?: AbortSignal, authorization?: readonly McpAuthorizationGeneration[]): Promise<{ status: McpInspection["status"]; latencyMs?: number; detail?: string }> {
     const key = McpInspector.key(scope, config.name);
     if (config.disabled) return { status: "off", detail: OFF_DETAIL };
     try {
       const migration = await this.migrationDetail(scope, config);
       if (migration) return { status: "needs-auth", detail: migration };
-      const connection = await this.connect(key, config, secrets, scope, signal);
+      const connection = await this.connect(key, config, secrets, scope, signal, authorization);
       if (connection.status === "needs-auth") {
         await this.close(key);
         return { status: "needs-auth", detail: signInDetail(config.name) };
@@ -249,6 +293,7 @@ export class McpInspector {
     tool: string,
     args: Record<string, unknown>,
     signal?: AbortSignal,
+    authorization?: readonly McpAuthorizationGeneration[],
   ): Promise<McpCallResult> {
     const key = McpInspector.key(scope, config.name);
     const started = Date.now();
@@ -256,7 +301,7 @@ export class McpInspector {
     try {
       const migration = await this.migrationDetail(scope, config);
       if (migration) return { ok: false, durationMs: Date.now() - started, content: [], error: migration };
-      const connection = await this.connect(key, config, secrets, scope, signal);
+      const connection = await this.connect(key, config, secrets, scope, signal, authorization);
       if (connection.status === "needs-auth") {
         return { ok: false, durationMs: Date.now() - started, content: [], error: signInDetail(config.name) };
       }
@@ -281,6 +326,7 @@ export class McpInspector {
     config: McpConfiguredServer,
     secrets: ResolvedSecrets,
     onComplete: () => void,
+    authorization?: readonly McpAuthorizationGeneration[],
   ): Promise<{ authorizationUrl: string; callbackListening: boolean; manualHint?: string; alreadyAuthorized?: boolean }> {
     const engine = await this.engineOrLoad();
     const entry = toServerEntry(config, secrets);
@@ -290,7 +336,7 @@ export class McpInspector {
     }
     // Both callbacks are ours and both do nothing: the app opens the URL, and
     // upstream's own logger prints it when no `onAuthorizationUrl` is supplied.
-    const options = { ...await this.authOptions(scope, config), openAuthorizationUrl: () => {}, onAuthorizationUrl: () => {} };
+    const options = { ...await this.authOptions(scope, config, authorization), openAuthorizationUrl: () => {}, onAuthorizationUrl: () => {} };
     const { authorizationUrl } = await engine.auth.startAuth(config.name, url, entry, options);
     if (!authorizationUrl) return { authorizationUrl: "", callbackListening: false, alreadyAuthorized: true };
     const callbackListening = isLoopbackRedirect(authorizationUrl);
@@ -350,6 +396,7 @@ export class McpInspector {
   async dispose(): Promise<void> {
     const manager = this.manager;
     this.held.clear();
+    this.authorizations.clear();
     this.manager = undefined;
     await manager?.closeAll().catch(() => {});
     const engine = this.engine;
@@ -362,10 +409,22 @@ export class McpInspector {
     return describeFailure(error, config.name, entry.command, entry.env?.["PATH"] ?? process.env["PATH"] ?? "");
   }
 
-  private async connect(key: string, config: McpConfiguredServer, secrets: ResolvedSecrets, scope: McpScope, signal?: AbortSignal): Promise<McpConnection> {
+  private async connect(key: string, config: McpConfiguredServer, secrets: ResolvedSecrets, scope: McpScope, signal?: AbortSignal, authorization?: readonly McpAuthorizationGeneration[]): Promise<McpConnection> {
     const manager = await this.managerOrCreate();
     const entry = toServerEntry(config, secrets);
-    entry.authorizationIdentity = await mcpAuthorizationIdentity(scope, this.cwd, config);
+    const fullIdentity = await mcpAuthorizationIdentity(scope, this.cwd, config);
+    if (this.agentDir) {
+      const registry = new McpAuthorizationRegistry(this.agentDir);
+      if (this.held.has(key)) await this.assertAuthorized(config.name);
+      const snapshots = authorization ?? [await registry.establish(fullIdentity)];
+      const snapshot = snapshots.find(value => value.identity === fullIdentity);
+      if (!snapshot || !(await Promise.all(snapshots.map(value => registry.current(value)))).every(Boolean)) {
+        throw new Error("Access to this server changed. Reconnect in Settings → MCP servers.");
+      }
+      this.authorizations.set(config.name, snapshots);
+      entry.authorizationIdentity = `${snapshot.identity}:${snapshot.generation.epoch}`;
+      entry.authorizationPartition = JSON.stringify([...snapshots].sort((a, b) => a.identity.localeCompare(b.identity)));
+    } else entry.authorizationIdentity = fullIdentity;
     const existing = manager.getConnection(config.name);
     const held = this.held.get(key);
     if (existing && existing.status === "connected" && held && sameDefinition(held.entry, entry)) return existing;

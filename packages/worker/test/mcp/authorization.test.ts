@@ -1,5 +1,8 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import lockfile from "proper-lockfile";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -55,6 +58,33 @@ describe("MCP authorization identities and durable generations", () => {
     expect(await new McpAuthorizationRegistry(root).establish(id)).toEqual(second);
     const persisted = JSON.parse(await readFile(join(workerA.directory, `${id}.json`), "utf8"));
     expect(Object.keys(persisted).sort()).toEqual(["generation", "identity", "updatedAt"]);
+  });
+
+  it("fences another process before token persistence settles and refuses a stale refresh transaction", async () => {
+    const registry = new McpAuthorizationRegistry(root);
+    const id = await mcpAuthorizationIdentity("global", root, server);
+    const snapshot = await registry.establish(id);
+    const source = fileURLToPath(new URL("../../src/mcp/authorization.ts", import.meta.url));
+    const readFromProcess = async () => {
+      const script = `import {createJiti} from "jiti";
+        const {McpAuthorizationRegistry}=await createJiti(import.meta.url,{fsCache:false}).import(${JSON.stringify(source)});
+        console.log(JSON.stringify(await new McpAuthorizationRegistry(${JSON.stringify(root)}).current(${JSON.stringify(snapshot)})));`;
+      const result = await promisify(execFile)(process.execPath, ["--input-type=module", "-e", script], { cwd: fileURLToPath(new URL("../../", import.meta.url)) });
+      return JSON.parse(result.stdout.trim());
+    };
+    expect(await readFromProcess()).toBe(true);
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const write = registry.revoke([id], async committed => { entered.resolve(); await release.promise; return committed.get(id)!; }, new Map([[id, snapshot]]));
+    await entered.promise;
+    try { expect(await readFromProcess()).toBe(false); } finally { release.resolve(); }
+    const committed = await write;
+    expect(await registry.current(committed)).toBe(true);
+    expect(await readFromProcess()).toBe(false);
+    let saved = false;
+    await expect(registry.revoke([id], async () => { saved = true; }, new Map([[id, snapshot]]))).rejects.toThrow("access changed");
+    expect(saved).toBe(false);
+    expect(await registry.current(committed)).toBe(true);
   });
 
   it.each(["{torn", "{}", "x".repeat(1_024)])("fails stale on corrupt state and repairs only for fresh authorization (%s)", async (contents) => {

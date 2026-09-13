@@ -21,6 +21,7 @@ import type {
   McpServerStatus,
 } from "@lasercode/protocol";
 import { ErrorCodes, ProtocolError } from "@lasercode/protocol";
+import { McpAuthorizationRegistry, mcpAuthorizationIdentity, type McpAuthorizationGeneration } from "./authorization.js";
 import { secretFieldPaths, type ResolvedSecrets } from "./adapter-config.js";
 import { detectImportSources, inlineSecretValues, markConflicts, readSourceEntries } from "./import.js";
 import { McpInspector, toolInfos } from "./inspector.js";
@@ -56,7 +57,7 @@ export class McpService {
 
   constructor(private readonly options: McpServiceOptions) {
     this.store = new McpStore(options.agentDir);
-    this.inspector = new McpInspector(options.cwd);
+    this.inspector = new McpInspector(options.cwd, options.agentDir);
   }
 
   /** The store, for the driver's "does this project have any server" question. */
@@ -96,7 +97,8 @@ export class McpService {
   }
 
   async save(params: ClientRequests["mcp/save"]["params"]): Promise<ClientRequests["mcp/save"]["result"]> {
-    await this.store.save(params.scope, this.options.cwd, params.server, params.originalName);
+    await this.revoke(params.scope, params.originalName ?? params.server.name,
+      () => this.store.save(params.scope, this.options.cwd, params.server, params.originalName), params.server as McpServerConfig);
     await this.inspector.closeServer(params.scope, params.originalName ?? params.server.name);
     if (params.originalName && params.originalName !== params.server.name) {
       await this.inspector.closeServer(params.scope, params.server.name);
@@ -115,7 +117,7 @@ export class McpService {
   }
 
   async remove(params: ClientRequests["mcp/remove"]["params"]): Promise<ClientRequests["mcp/remove"]["result"]> {
-    await this.store.remove(params.scope, this.options.cwd, params.name);
+    await this.revoke(params.scope, params.name, () => this.store.remove(params.scope, this.options.cwd, params.name));
     await this.inspector.closeServer(params.scope, params.name);
     this.inspections.delete(McpInspector.key(params.scope, params.name));
     this.options.changed();
@@ -137,7 +139,8 @@ export class McpService {
       }
       if (!params.name) throw new ProtocolError(ErrorCodes.InvalidParams, "Name the server to inspect, or send the definition to test.");
       const found = await this.find(params.scope, params.name);
-      const result = await this.inspector.inspect({ scope: found.scope, config: found.config, secrets: await this.secretsFor(found.config, found.scope) });
+      const authorization = await this.capture(found);
+      const result = await this.inspector.inspect({ scope: found.scope, config: found.config, authorization, secrets: await this.secretsFor(found.config, found.scope) });
       this.inspections.set(McpInspector.key(found.scope, found.config.name), this.remember(found.config, result));
       return result;
     });
@@ -146,7 +149,8 @@ export class McpService {
   async ping(params: ClientRequests["mcp/ping"]["params"]): Promise<ClientRequests["mcp/ping"]["result"]> {
     return this.reportChanges(async () => {
       const found = await this.find(params.scope, params.name);
-      const result = await this.inspector.ping(found.scope, found.config, await this.secretsFor(found.config, found.scope));
+      const authorization = await this.capture(found);
+      const result = await this.inspector.ping(found.scope, found.config, await this.secretsFor(found.config, found.scope), undefined, authorization);
       const key = McpInspector.key(found.scope, found.config.name);
       const previous = this.inspections.get(key);
       const { detail: _detail, ...previousState } = previous?.state ?? {};
@@ -162,7 +166,8 @@ export class McpService {
 
   async call(params: ClientRequests["mcp/call"]["params"]): Promise<ClientRequests["mcp/call"]["result"]> {
     const found = await this.find(params.scope, params.name);
-    return this.inspector.call(found.scope, found.config, await this.secretsFor(found.config, found.scope), params.tool, params.args);
+    const authorization = await this.capture(found);
+    return this.inspector.call(found.scope, found.config, await this.secretsFor(found.config, found.scope), params.tool, params.args, undefined, authorization);
   }
 
   async disconnect(params: ClientRequests["mcp/disconnect"]["params"]): Promise<ClientRequests["mcp/disconnect"]["result"]> {
@@ -175,11 +180,14 @@ export class McpService {
   async authStart(params: ClientRequests["mcp/auth/start"]["params"]): Promise<ClientRequests["mcp/auth/start"]["result"]> {
     const found = await this.find(params.scope, params.name);
     const before = await this.reported();
+    const authorization = await this.capture(found);
     const started = await this.inspector.authStart(found.scope, found.config, await this.secretsFor(found.config, found.scope), () => {
       // Loopback completion happens outside the request; inspect through the
       // normal path so its notification and reported status agree.
+      // The inspector's token-save transaction has already revoked old runtimes
+      // before the credential was written, for loopback and manual completion.
       void this.inspect({ cwd: this.options.cwd, scope: found.scope, name: found.config.name }).catch(() => {});
-    });
+    }, authorization);
     if (started.alreadyAuthorized) {
       this.rememberAuth(found.scope, found.config, { status: "ready" });
       if (before !== await this.reported()) this.options.changed();
@@ -206,7 +214,7 @@ export class McpService {
   async authLogout(params: ClientRequests["mcp/auth/logout"]["params"]): Promise<ClientRequests["mcp/auth/logout"]["result"]> {
     const found = await this.find(params.scope, params.name);
     const before = await this.reported();
-    await this.inspector.authLogout(found.scope, found.config);
+    await this.revoke(found.scope, found.config.name, () => this.inspector.authLogout(found.scope, found.config));
     this.rememberAuth(found.scope, found.config, { status: "needs-auth" });
     if (before !== await this.reported()) this.options.changed();
     return { status: "needs-auth" };
@@ -235,7 +243,9 @@ export class McpService {
       }
       const values = inlineSecretValues(entries[name], params.source as McpImportSourceId);
       const withSecrets = structuredClone(server.config) as McpServerConfig;
-      await this.store.save(params.scope, this.options.cwd, withInlineSecrets(withSecrets, values) as never, conflicts ? name : undefined);
+      const replacement = withInlineSecrets(withSecrets, values);
+      await this.revoke(params.scope, name,
+        () => this.store.save(params.scope, this.options.cwd, replacement as never, conflicts ? name : undefined), replacement);
       imported.push(name);
     }
     if (imported.length > 0) this.options.changed();
@@ -243,6 +253,15 @@ export class McpService {
   }
 
   // ------------------------------------------------------------ internals
+
+  private async revoke<T>(scope: McpScope, name: string, operation: () => Promise<T>, replacement?: McpServerConfig): Promise<T> {
+    const { servers } = await this.store.effective(this.options.cwd, this.options.projectTrusted);
+    const previous = servers.find(server => server.scope === scope && server.config.name === name)
+      ?? (scope === "project" ? servers.find(server => server.scope === "global" && server.config.name === name) : undefined);
+    const definitions = [previous?.config, replacement].filter((config): config is McpConfiguredServer => config !== undefined && isConfigured(config));
+    const identities = await Promise.all(definitions.map(config => mcpAuthorizationIdentity(scope, this.options.cwd, config)));
+    return new McpAuthorizationRegistry(this.options.agentDir).revoke(identities, operation);
+  }
 
   private rememberAuth(scope: McpScope, config: McpServerConfig, result: { status: McpServerStatus; detail?: string }): void {
     const key = McpInspector.key(scope, config.name);
@@ -285,6 +304,17 @@ export class McpService {
     const fallback = servers.find((server) => server.config.name === name && isConfigured(server.config));
     if (fallback && isConfigured(fallback.config)) return { scope: fallback.scope, config: fallback.config };
     throw new ProtocolError(ErrorCodes.InvalidParams, `No MCP server named "${name}" is saved for this project.`);
+  }
+
+  private async capture(found: { scope: McpScope; config: McpConfiguredServer }): Promise<readonly McpAuthorizationGeneration[]> {
+    const registry = new McpAuthorizationRegistry(this.options.agentDir);
+    const scopes: McpScope[] = found.scope === "global" ? ["global", "project"] : ["project"];
+    const snapshots = await Promise.all(scopes.map(async scope => registry.establish(await mcpAuthorizationIdentity(scope, this.options.cwd, found.config))));
+    const current = await this.find(found.scope, found.config.name);
+    if (JSON.stringify(current) !== JSON.stringify(found)) {
+      throw new ProtocolError(ErrorCodes.InvalidParams, "Server settings changed. Reopen this server in Settings → MCP servers.");
+    }
+    return snapshots;
   }
 
   private async secretsFor(config: McpServerConfig, scope?: McpScope): Promise<ResolvedSecrets> {

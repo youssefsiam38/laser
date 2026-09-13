@@ -20,6 +20,8 @@ import * as engineModule from "../../src/mcp/engine.js";
 import type { McpAuthFlow } from "../../src/mcp/engine.js";
 import { expectedClientInfo } from "./fixtures/client-identity.js";
 import { mcpClientIdentity } from "../../src/mcp/identity.js";
+import { McpStore } from "../../src/mcp/store.js";
+import { mcpSessionSetup } from "../../src/mcp/session.js";
 import { startFixtureOAuthServer, type FixtureOAuthServer } from "./fixtures/oauth-server.js";
 
 let base: string;
@@ -109,6 +111,44 @@ describe("signing in to an MCP server", () => {
     await inspector.authLogout("global", server_);
     const afterLogout = await inspector.inspect({ scope: "global", config: server_, secrets: new Map() });
     expect(afterLogout.status).toBe("needs-auth");
+  }, 60_000);
+
+  it("rotates authorization on a real automatic refresh without revoking itself or letting a peer forward", async () => {
+    await inspector.dispose();
+    inspector = new McpInspector(base, base);
+    const store = new McpStore(base);
+    await store.save("global", base, config());
+    const started = await inspector.authStart("global", config(), new Map(), () => {});
+    await inspector.authComplete("global", config(), callbackUrl(started.authorizationUrl, "refresh-code"));
+    const engine = await engineModule.loadMcpEngine();
+    const captured: Array<Parameters<typeof engine.createMcpAdapter>[0]> = [];
+    const load = vi.spyOn(engineModule, "loadMcpEngine").mockResolvedValue({ ...engine,
+      createMcpAdapter(options) { captured.push(options); return engine.createMcpAdapter(options); },
+    });
+    const managers = [new engine.Manager(), new engine.Manager()];
+    try {
+      await mcpSessionSetup({ cwd: base, agentDir: base });
+      await mcpSessionSetup({ cwd: base, agentDir: base });
+      const connections = await Promise.all(managers.map((manager, index) => {
+        const options = captured[index]!;
+        manager.setAuthorizationGuard!(options.authorization);
+        manager.setCredentialCommitter!(options.commitCredentials);
+        return manager.connect("gated", options.config.mcpServers["gated"]!);
+      }));
+      expect(connections.map(connection => connection.status)).toEqual(["connected", "connected"]);
+      const grants = server.tokenGrants;
+      server.rotateToken();
+      expect(await connections[0]!.client.callTool!({ name: "whoami", arguments: {} })).toMatchObject({ content: [{ text: "signed in" }] });
+      expect(server.tokenGrants).toBe(grants + 1);
+      expect(await captured[0]!.authorization!("gated")).toBeUndefined();
+      expect(await captured[1]!.authorization!("gated")).toContain("changed");
+      await connections[0]!.client.callTool!({ name: "whoami", arguments: {} });
+      expect(server.tokenGrants).toBe(grants + 1);
+      const calls = server.wireCalls;
+      await expect(connections[1]!.client.callTool!({ name: "whoami", arguments: {} })).rejects.toThrow("changed");
+      expect(server.wireCalls).toBe(calls);
+      expect(server.tokenGrants).toBe(grants + 1);
+    } finally { load.mockRestore(); await Promise.all(managers.map(manager => manager.closeAll())); }
   }, 60_000);
 
   it("does not lend credentials to a same-name server in another project or scope", async () => {

@@ -70,6 +70,8 @@ export interface McpManager {
   close(name: string): Promise<void>;
   closeAll(): Promise<void>;
   getConnection(name: string): McpConnection | undefined;
+  setAuthorizationGuard?(guard: ((server: string) => Promise<string | undefined>) | undefined): void;
+  setCredentialCommitter?(commit: ((server: string, save: () => void) => Promise<string>) | undefined): void;
   setOAuthRuntime?(runtime: unknown): void;
   setAuthStorageOptions?(options: Record<string, unknown>): void;
   setRuntimeSignal?(signal: AbortSignal | undefined): void;
@@ -105,7 +107,7 @@ export interface McpCachedServer {
 
 export interface McpEngine {
   /** The adapter extension factory, for `extensionFactories` (never file discovery). */
-  createMcpAdapter(options: { config: McpConfig; clientIdentity: McpClientIdentity; discovery?: McpDiscoveryPolicy }): InlineExtension;
+  createMcpAdapter(options: { config: McpConfig; clientIdentity: McpClientIdentity; discovery?: McpDiscoveryPolicy; personManaged?: boolean; authorization?: (server: string) => Promise<string | undefined>; commitCredentials?: (server: string, save: () => void) => Promise<string> }): InlineExtension;
   renderSchema: (schema: unknown) => string | null;
   Manager: new (defaultCwd: string | undefined, clientIdentity: McpClientIdentity) => McpManager;
   auth: McpAuthFlow;

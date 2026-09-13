@@ -551,6 +551,15 @@ Milestone 5 inherits them; milestone 4 is permanently dropped (D-230).
   visible to every worker using it. Credential save, sign-out, disable and removal
   revoke affected runtimes. Store identities, generations and timestamps only,
   never credentials or secret values.
+- **Automatic OAuth refresh:** the actual token-save callback holds affected
+  generation locks across persistence, including manual and loopback completion.
+  A compare-and-swap against the initiating runtime's captured identities prevents
+  a late refresh from resurrecting sign-out. Only that still-authorized runtime
+  adopts the committed generations; its SDK cache partition rotates and its old
+  response entries are evicted. Peers retain their old snapshots and refuse.
+  A second call from the refreshing runtime does not refresh or revoke again.
+  Credential reads used by an HTTP retry check the same forwarding authority.
+  The registry never receives token values, only a bounded save callback.
 - **Exactly two authorization guard points:** before serving a cached list or
   definition, and before forwarding a call. A stale runtime refuses; it never retries
   with captured credentials. Discovery gives existing needs-auth guidance. A call

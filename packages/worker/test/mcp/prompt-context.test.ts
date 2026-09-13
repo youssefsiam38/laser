@@ -11,6 +11,7 @@ import { fallbackDefaultAgent, fallbackPolicy } from "../../src/agents/definitio
 import { rootRecord, rootRole } from "../../src/agents/session-config.js";
 import { StableSdkDriver } from "../../src/drivers/stable-sdk.js";
 import type { DriverEvent } from "../../src/driver.js";
+import { McpService } from "../../src/mcp/service.js";
 import { McpPromptFreeze } from "../../src/mcp/prompt-freeze.js";
 import { adapterRoot } from "../../src/mcp/engine.js";
 import { startStubProvider, toolNamesOf, writeStubModels, type StubAnswer } from "../agents/stub-provider.js";
@@ -29,9 +30,9 @@ async function run(preload: boolean, window?: number) {
   process.env.PI_CODING_AGENT_DIR = agentDir;
   cleanups.push(() => { if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous; });
   // Legacy direct is intentionally present in both cases: it is not an override.
-  writeFileSync(join(agentDir, DATA_DIR_NAME, "mcp.json"), JSON.stringify({ version: 1, servers: [{ name: "fixture", transport: { kind: "stdio", command: process.execPath, args: [fixture] }, tools: { exposure: "direct", ...(preload ? { alwaysLoad: true } : {}) } }] }));
+  writeFileSync(join(agentDir, DATA_DIR_NAME, "mcp.json"), JSON.stringify({ version: 1, servers: [{ name: "fixture", startup: "at-start", transport: { kind: "stdio", command: process.execPath, args: [fixture] }, tools: { exposure: "direct", ...(preload ? { alwaysLoad: true } : {}) } }] }));
   const answers: StubAnswer[] = [
-    { toolCall: { name: "mcp", args: { connect: "fixture" } } },
+    { toolCall: { name: "mcp", args: { server: "fixture" } } },
     { toolCall: { name: "mcp", args: { search: "echo" } } },
     { toolCall: { name: "mcp", args: { describe: "fixture_echo" } } },
     { toolCall: { name: "mcpScript", args: { code: 'const page = await tools.search({query:"echo",detail:"names"}); emit(page);' } } },
@@ -57,7 +58,7 @@ async function run(preload: boolean, window?: number) {
   } });
   const settled = new Promise<void>((resolve) => driver.subscribe((event) => { if (event.type === "update" && event.update.kind === "agent_settled") resolve(); }));
   await driver.prompt([{ type: "text", text: "Discover then call echo" }]); await settled;
-  return { stub, events, driver };
+  return { stub, events, driver, answers, cwd, agentDir };
 }
 
 function snapshots(events: DriverEvent[]): McpRuntimeSnapshot[] {
@@ -65,6 +66,50 @@ function snapshots(events: DriverEvent[]): McpRuntimeSnapshot[] {
 }
 
 describe("MCP prompt contract through real provider requests", () => {
+  it("refuses server management through both gateway and script dispatch without changing the frozen surface", async () => {
+    const { stub, driver, answers, cwd, agentDir } = await run(false);
+    const tools = JSON.stringify(stub.requests[0]!.tools);
+    const configPath = join(agentDir, DATA_DIR_NAME, "mcp.json");
+    const saved = readFileSync(configPath, "utf8");
+    const forbidden = [{ connect: "fixture" }, { action: "install", url: "http://127.0.0.1:1/mcp" },
+      { action: "auth-start", server: "fixture" }, { action: "auth-complete", server: "fixture", args: { code: "synthetic" } },
+      { enable: "fixture" }, { disable: "fixture" }, { remove: "fixture" }];
+    for (const args of forbidden) {
+      answers.push({ toolCall: { name: "mcp", args } },
+        { toolCall: { name: "mcpScript", args: { code: `emit(await tools.call("mcp", ${JSON.stringify(args)}));` } } });
+    }
+    answers.push({ text: "done" });
+    const settled = new Promise<void>(resolve => driver.subscribe(event => { if (event.type === "update" && event.update.kind === "agent_settled") resolve(); }));
+    await driver.prompt([{ type: "text", text: `Do not change server configuration in ${cwd}` }]); await settled;
+    for (const request of stub.requests) expect(JSON.stringify(request.tools)).toBe(tools);
+    const results = stub.requests.at(-1)!.messages.filter(message => message.role === "tool").slice(-forbidden.length * 2);
+    expect(results).toHaveLength(forbidden.length * 2);
+    for (const result of results) expect(JSON.stringify(result.content)).toContain("managed by the person in Settings");
+    expect(readFileSync(configPath, "utf8")).toBe(saved);
+    const gateway = stub.requests[0]!.tools!.find(tool => tool.function.name === "mcp") as unknown as { function: { parameters: { properties: Record<string, unknown> } } };
+    for (const name of ["connect", "action", "url", "target"]) expect(gateway.function.parameters.properties).not.toHaveProperty(name);
+  }, 60_000);
+  it.each([false, true])("refuses the next call after sign-out without changing any serialized provider tool (preload=%s)", async preload => {
+    const previous = process.env.PI_MCP_ADAPTER_TEST_AUTH_STORE;
+    process.env.PI_MCP_ADAPTER_TEST_AUTH_STORE = "memory";
+    cleanups.push(() => { if (previous === undefined) delete process.env.PI_MCP_ADAPTER_TEST_AUTH_STORE; else process.env.PI_MCP_ADAPTER_TEST_AUTH_STORE = previous; });
+    const { stub, driver, answers, cwd, agentDir } = await run(preload);
+    const before = JSON.stringify(stub.requests[0]!.tools);
+    const service = new McpService({ cwd, agentDir, projectTrusted: true, changed: () => {} });
+    cleanups.push(() => service.dispose());
+    await service.authLogout({ cwd, scope: "global", name: "fixture" });
+    answers.push(
+      { toolCall: preload ? { name: "fixture_echo", args: { text: "revoked-call" } }
+        : { name: "mcp", args: { tool: "fixture_echo", args: { text: "revoked-call" } } } },
+      { text: "stopped" },
+    );
+    const settled = new Promise<void>(resolve => driver.subscribe(event => { if (event.type === "update" && event.update.kind === "agent_settled") resolve(); }));
+    await driver.prompt([{ type: "text", text: "Try the same tool again" }]); await settled;
+    expect(stub.requests.length).toBe(8);
+    for (const request of stub.requests) expect(JSON.stringify(request.tools)).toBe(before);
+    expect(JSON.stringify(stub.requests.at(-1))).toContain("Access to fixture changed. Sign in again in Settings → MCP servers.");
+  }, 60_000);
+
   it.each(["flat", "function", "google", "bedrock", "relay"])("reads the pinned %s provider payload without rewriting it", (format) => {
     const context = new McpPromptFreeze();
     const events = new EventEmitter();
@@ -158,7 +203,7 @@ describe("MCP prompt contract through real provider requests", () => {
     expect(JSON.stringify(events)).toContain("Preloaded MCP tools may exceed");
     expect(events.filter(event => event.type === "update" && event.update.kind === "extension_error")).toEqual([]);
   }, 120_000);
-  it.each([false, true])("keeps the entire tools array stable across connect, discover, inspect, script search and execution (preload=%s)", async (preload) => {
+  it.each([false, true])("keeps the entire tools array stable across person-owned startup, discover, inspect, script search and execution (preload=%s)", async (preload) => {
     const { stub, events, driver } = await run(preload);
     expect(stub.requests).toHaveLength(6);
     const first = JSON.stringify((stub.requests[0] as { tools?: unknown }).tools);

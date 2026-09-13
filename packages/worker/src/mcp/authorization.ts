@@ -89,6 +89,15 @@ export class McpAuthorizationRegistry {
       && now.generation.counter === snapshot.generation.counter;
   }
 
+  /**
+   * Account lookup for explicit sign-in/sign-out only. Reading the epoch is not
+   * an authorization check and grants no cached data or call forwarding rights.
+   */
+  async credentialAccount(identity: string): Promise<string> {
+    const snapshot = await this.readBounded(identity, true) ?? await this.establish(identity);
+    return `${snapshot.identity}:${snapshot.generation.epoch}`;
+  }
+
   /** Fresh authorization/setup only; never called by a stale runtime's guard. */
   establish(identity: string): Promise<McpAuthorizationGeneration> {
     return this.write(identity, false);
@@ -99,7 +108,21 @@ export class McpAuthorizationRegistry {
     return this.write(identity, true);
   }
 
-  private async write(identity: string, increment: boolean): Promise<McpAuthorizationGeneration> {
+  /** Hold all affected identities stale until a configuration mutation settles. */
+  async revoke<T>(identities: readonly string[], operation: (snapshots: ReadonlyMap<string, McpAuthorizationGeneration>) => Promise<T>, expected?: ReadonlyMap<string, McpAuthorizationGeneration>): Promise<T> {
+    const snapshots = new Map<string, McpAuthorizationGeneration>();
+    const ordered = [...new Set(identities)].sort();
+    let result: T;
+    const next = async (index: number): Promise<void> => {
+      const identity = ordered[index];
+      if (identity === undefined) { result = await operation(snapshots); return; }
+      await this.write(identity, true, snapshot => { snapshots.set(identity, snapshot); return next(index + 1); }, expected?.get(identity));
+    };
+    await next(0);
+    return result!;
+  }
+
+  private async write(identity: string, increment: boolean, operation?: (snapshot: McpAuthorizationGeneration) => Promise<void>, expected?: McpAuthorizationGeneration): Promise<McpAuthorizationGeneration> {
     const path = this.path(identity);
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     // Atomic directory lock; no retry queue on a model/person hot path. A crashed
@@ -110,6 +133,9 @@ export class McpAuthorizationRegistry {
     let temporary: string | undefined;
     try {
       const previous = await this.readBounded(identity, true);
+      if (expected && (!previous || previous.generation.epoch !== expected.generation.epoch || previous.generation.counter !== expected.generation.counter)) {
+        throw new Error("MCP access changed while sign-in information was being refreshed. Sign in again in Settings → MCP servers.");
+      }
       if (previous && !increment) return previous;
       const next: McpAuthorizationGeneration = {
         identity,
@@ -130,6 +156,7 @@ export class McpAuthorizationRegistry {
         const directory = await open(this.directory, "r");
         try { await directory.sync(); } finally { await directory.close(); }
       }
+      await operation?.(next);
       return next;
     } finally {
       if (temporary) await unlink(temporary).catch(() => {});
