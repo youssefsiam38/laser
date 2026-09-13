@@ -1,19 +1,19 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile, symlink } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import lockfile from "proper-lockfile";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PRODUCT_NAME } from "@lasercode/protocol";
-import { McpAuthorizationRegistry, mcpAuthorizationIdentity } from "../../src/mcp/authorization.js";
+import { McpAuthorizationRegistry, mcpAuthorizationIdentity, mcpAuthorizationIdentities } from "../../src/mcp/authorization.js";
 import type { McpConfiguredServer } from "../../src/mcp/store.js";
 
 let root: string;
 const server: McpConfiguredServer = { name: "notion", transport: { kind: "http", url: "https://example.test/mcp" } };
 beforeEach(async () => { root = await mkdtemp(join(tmpdir(), `${PRODUCT_NAME}-mcp-authorization-`)); });
-afterEach(async () => { await rm(root, { recursive: true, force: true }); });
+afterEach(async () => { vi.unstubAllEnvs(); await rm(root, { recursive: true, force: true }); });
 
 describe("MCP authorization identities and durable generations", () => {
   it("separates scopes, projects and endpoints, not display names or credentials", async () => {
@@ -40,6 +40,70 @@ describe("MCP authorization identities and durable generations", () => {
     const b = await mcpAuthorizationIdentity("global", root, { ...command, transport: { kind: "stdio", command: "node", args: ["server-b.mjs"] } });
     expect(a).not.toBe(b);
     expect(a).not.toBe(await mcpAuthorizationIdentity("global", root, server));
+  });
+
+  it("fingerprints the SDK's expanded URLs, arguments and relative transport paths", async () => {
+    vi.stubEnv("MCP_IDENTITY_HOST", "EXAMPLE.test:443");
+    const expanded = { ...server, transport: { kind: "http" as const, url: "https://${MCP_IDENTITY_HOST}/mcp" } };
+    const first = await mcpAuthorizationIdentity("global", root, expanded);
+    expect(first).toBe(await mcpAuthorizationIdentity("global", root, server));
+    vi.stubEnv("MCP_IDENTITY_HOST", "other.test");
+    expect(await mcpAuthorizationIdentity("global", root, expanded)).not.toBe(first);
+    vi.stubEnv("MCP_IDENTITY_ARG", "first");
+    const command = { name: "x", transport: { kind: "stdio" as const, command: "node", args: ["${MCP_IDENTITY_ARG}"], cwd: "sub" } };
+    expect(await mcpAuthorizationIdentity("global", root, command)).toBe(await mcpAuthorizationIdentity("global", root, { ...command, transport: { ...command.transport, args: ["first"], cwd: join(root, "sub") } }));
+    expect(await mcpAuthorizationIdentity("global", join(root, "other"), command)).not.toBe(await mcpAuthorizationIdentity("global", root, command));
+    const socket = { name: "x", transport: { kind: "socket" as const, path: "~/fixture.sock" } };
+    expect(await mcpAuthorizationIdentity("global", root, socket)).toBe(await mcpAuthorizationIdentity("global", root, { ...socket, transport: { ...socket.transport, path: join(homedir(), "fixture.sock") } }));
+  });
+
+  it("uses the same relative cwd and expanded argument on real stdio transports in two projects", async () => {
+    vi.stubEnv("MCP_IDENTITY_ARG", "expanded-argument");
+    const script = join(root, "server.mjs");
+    await writeFile(script, `import { createInterface } from "node:readline";
+      createInterface({ input: process.stdin }).on("line", line => {
+        const q = JSON.parse(line); if (q.id === undefined) return;
+        let result;
+        if (q.method === "initialize") result = { protocolVersion: q.params.protocolVersion, capabilities: {tools:{}}, serverInfo: {name:process.cwd(),version:"1"} };
+        else if (q.method === "tools/list") result = {tools:[{name:"where",description:"Working directory",inputSchema:{type:"object"}}]};
+        else if (q.method === "tools/call") result = {content:[{type:"text",text:process.cwd()+"|"+process.argv[2]}]};
+        else if (q.method === "ping") result = {};
+        process.stdout.write(JSON.stringify(result === undefined ? {jsonrpc:"2.0",id:q.id,error:{code:-32601,message:"Unsupported"}} : {jsonrpc:"2.0",id:q.id,result})+"\\n");
+      });`);
+    const { McpInspector } = await import("../../src/mcp/inspector.js");
+    const config: McpConfiguredServer = { name: "where", protocolVersion: "legacy", transport: { kind: "stdio", command: process.execPath, args: [script, "${MCP_IDENTITY_ARG}"], cwd: "nested" } };
+    const identities: string[] = [];
+    for (const project of [join(root, "a"), join(root, "b")]) {
+      await mkdir(join(project, "nested"), { recursive: true });
+      const inspector = new McpInspector(project, root);
+      try {
+        identities.push(await mcpAuthorizationIdentity("global", project, config));
+        const result = await inspector.inspect({ scope: "global", config, secrets: new Map() });
+        expect(result.server?.name).toBe(join(project, "nested"));
+        expect(await inspector.call("global", config, new Map(), "where", {})).toMatchObject({ ok: true, content: [{ type: "text", text: `${join(project, "nested")}|expanded-argument` }] });
+      } finally { await inspector.dispose(); }
+    }
+    expect(identities[0]).not.toBe(identities[1]);
+  }, 30_000);
+
+  it("locks configuration guards during a credential write without advancing their generations", async () => {
+    const registry = new McpAuthorizationRegistry(root);
+    const ids = await mcpAuthorizationIdentities("global", root, server);
+    const snapshots = await Promise.all(ids.map(id => registry.establish(id)));
+    const expected = new Map(snapshots.map(snapshot => [snapshot.identity, snapshot]));
+    const committed = await registry.revoke([ids[0]!], async next => {
+      expect((await Promise.all(snapshots.map(snapshot => registry.current(snapshot)))).every(value => !value)).toBe(true);
+      return next;
+    }, expected);
+    expect(await registry.current(snapshots[0]!)).toBe(false);
+    for (const guard of snapshots.slice(1)) {
+      expect(committed.get(guard.identity)).toEqual(guard);
+      expect(await registry.current(guard)).toBe(true);
+    }
+    await registry.bump(ids[1]!);
+    let saved = false;
+    await expect(registry.revoke([ids[0]!], async () => { saved = true; }, committed)).rejects.toThrow("access changed");
+    expect(saved).toBe(false);
   });
 
   it("revokes snapshots held by independent worker registries without changing other identities", async () => {

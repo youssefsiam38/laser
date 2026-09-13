@@ -22,7 +22,7 @@ import { McpPromptFreeze } from "./prompt-freeze.js";
 import { loadMcpEngine, type McpConfig } from "./engine.js";
 import { McpStore } from "./store.js";
 import { mcpClientIdentity } from "./identity.js";
-import { McpAuthorizationRegistry, mcpAuthorizationIdentity, mcpAuthorizationRevision } from "./authorization.js";
+import { McpAuthorizationRegistry, mcpAuthorizationIdentity, mcpAuthorizationIdentities, mcpAuthorizationRevision } from "./authorization.js";
 
 export interface McpSessionOptions {
   cwd: string;
@@ -87,48 +87,39 @@ export async function mcpSessionSetup(options: McpSessionOptions): Promise<McpSe
   // Capture before resolving credentials. A save racing resolution must make this
   // runtime stale, never pair old credentials with the new generation.
   const generations = new Map(await Promise.all(servers.map(async ({ scope, config }) => {
-    const identity = await mcpAuthorizationIdentity(scope, options.cwd, config);
-    return [config.name, await capture(identity)] as const;
-  })));
-  // A project can turn an inherited global definition off without revoking that
-  // same global server in other projects. Its person-owned override has a fence
-  // under the project's full target identity, not a model-controlled lease.
-  const overrides = new Map(await Promise.all(servers.filter(server => server.scope === "global").map(async ({ config }) => {
-    const identity = await mcpAuthorizationIdentity("project", options.cwd, config);
-    return [config.name, await capture(identity)] as const;
+    const identities = await mcpAuthorizationIdentities(scope, options.cwd, config);
+    return [config.name, await Promise.all(identities.map(capture))] as const;
   })));
   const current = await store.enabled(options.cwd, options.projectTrusted);
   if (JSON.stringify(current) !== JSON.stringify(servers)) {
     throw new Error("MCP server settings changed while opening this conversation. Try again.");
   }
   const config = await resolveConfig(store, servers, options.cwd, options.projectEnv);
-  for (const [name, snapshot] of generations) {
-    config.mcpServers[name]!.authorizationIdentity = `${snapshot.identity}:${snapshot.generation.epoch}`;
-    const override = overrides.get(name);
-    config.mcpServers[name]!.authorizationPartition = JSON.stringify([snapshot, override]);
+  for (const [name, snapshots] of generations) {
+    const primary = snapshots[0]!;
+    config.mcpServers[name]!.authorizationIdentity = `${primary.identity}:${primary.generation.epoch}`;
+    config.mcpServers[name]!.authorizationPartition = JSON.stringify(snapshots);
   }
   const authorization = async (name: string): Promise<string | undefined> => {
-    const snapshot = generations.get(name);
-    const override = overrides.get(name);
-    if (snapshot && await registry.current(snapshot) && (!override || await registry.current(override))) return undefined;
+    const snapshots = generations.get(name);
+    if (snapshots?.length && (await Promise.all(snapshots.map(snapshot => registry.current(snapshot)))).every(Boolean)) return undefined;
     const label = servers.find(server => server.config.name === name)?.config.label ?? name;
     return `Access to ${label} changed. Sign in again in Settings → MCP servers.`;
   };
   const commitCredentials = async (name: string, save: () => void): Promise<string> => {
-    const snapshot = generations.get(name);
-    if (!snapshot) throw new Error("This server is no longer authorized. Sign in again in Settings → MCP servers.");
-    const override = overrides.get(name);
-    const expected = new Map([snapshot, ...(override ? [override] : [])].map(value => [value.identity, value]));
-    const committed = await registry.revoke([...expected.keys()], async next => { save(); return next; }, expected);
-    generations.set(name, committed.get(snapshot.identity)!);
-    if (override) overrides.set(name, committed.get(override.identity)!);
-    return JSON.stringify([generations.get(name), overrides.get(name)]);
+    const snapshots = generations.get(name);
+    const primary = snapshots?.[0];
+    if (!primary) throw new Error("This server is no longer authorized. Sign in again in Settings → MCP servers.");
+    const expected = new Map(snapshots!.map(value => [value.identity, value]));
+    const committed = await registry.revoke([primary.identity], async next => { save(); return next; }, expected);
+    generations.set(name, snapshots!.map(value => committed.get(value.identity)!));
+    return JSON.stringify(generations.get(name));
   };
   const engine = await loadMcpEngine();
   const discovery = new McpPromptFreeze(engine.renderSchema);
   const factory = engine.createMcpAdapter({ config, clientIdentity: mcpClientIdentity(), discovery, authorization, commitCredentials, personManaged: true }) as unknown as (pi: ExtensionAPI) => void | Promise<void>;
   return {
-    extension: { name: "mcp", factory: (pi: ExtensionAPI) => factory(quietEngineUi(discovery.wrap(pi, engine.statusEvent, name => mcpAuthorizationRevision([generations.get(name), overrides.get(name)])))) },
+    extension: { name: "mcp", factory: (pi: ExtensionAPI) => factory(quietEngineUi(discovery.wrap(pi, engine.statusEvent, name => mcpAuthorizationRevision(generations.get(name) ?? [])))) },
     statusEvent: engine.statusEvent,
     servers: servers.map(({ config: server }) => ({ name: server.name, ...(server.label ? { label: server.label } : {}) })),
   };

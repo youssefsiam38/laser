@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { McpAuthorizationRegistry, mcpAuthorizationIdentity, mcpAuthorizationRevision } from "../../src/mcp/authorization.js";
+import { McpAuthorizationRegistry, mcpAuthorizationIdentities, mcpAuthorizationRevision } from "../../src/mcp/authorization.js";
 import { WorkerServer } from "../../src/server.js";
 import type { DriverEvent, DriverListener, SessionDriver } from "../../src/driver.js";
 
@@ -210,7 +210,7 @@ describe("WorkerServer · mcp/*", () => {
     await call("session/new", { cwd });
     const driver = drivers[0]!;
     const registry = new McpAuthorizationRegistry(agentDir);
-    const generations = await Promise.all((["global", "project"] as const).map(async scope => registry.establish(await mcpAuthorizationIdentity(scope, cwd, fixture))));
+    const generations = await Promise.all((await mcpAuthorizationIdentities("global", cwd, fixture)).map(id => registry.establish(id)));
     const authorizationRevision = mcpAuthorizationRevision(generations);
     driver.emit({
       type: "extension",

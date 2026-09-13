@@ -3,18 +3,44 @@ import { open, mkdir, rename, unlink, realpath, lstat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import lockfile from "proper-lockfile";
 import { DATA_DIR_NAME, type McpScope } from "@lasercode/protocol";
+import { interpolateEnvVars, resolveConfigPath, resolveServerUrl } from "pi-mcp-adapter/utils";
 import type { McpConfiguredServer } from "./store.js";
 
 /** Names and credentials are deliberately not authorization identities. */
 export async function mcpAuthorizationIdentity(scope: McpScope, cwd: string, config: McpConfiguredServer): Promise<string> {
   const project = scope === "global" ? "global" : await realpath(cwd).catch(() => resolve(cwd));
   const transport = config.transport;
-  const target = transport.kind === "http"
-    ? ["http", transport.url]
-    : transport.kind === "stdio"
-      ? ["stdio", transport.command, transport.args ?? []]
-      : ["socket", resolve(cwd, transport.path)];
+  const launchDirectory = await realpath(cwd).catch(() => resolve(cwd));
+  let target: unknown;
+  try {
+    if (transport.kind === "http") target = ["http", new URL(resolveServerUrl({ url: transport.url })!).href];
+    else if (transport.kind === "stdio") {
+      const directory = resolve(launchDirectory, resolveConfigPath(transport.cwd) ?? launchDirectory);
+      const workingDirectory = await realpath(directory).catch(() => directory);
+      // Even an explicit cwd receives its invoking project's environment overlay.
+      target = ["stdio", transport.command, (transport.args ?? []).map(argument => interpolateEnvVars(argument)), workingDirectory, launchDirectory];
+    } else target = ["socket", resolve(launchDirectory, resolveConfigPath(transport.path)!)];
+  } catch {
+    // Broken/missing environment references must remain removable in Settings.
+    // Such definitions cannot connect; this fallback never grants execution.
+    target = ["unresolved", transport];
+  }
   return createHash("sha256").update(JSON.stringify([scope, project, target])).digest("hex");
+}
+
+/** A configuration slot is a revocation guard, never a credential/cache account. */
+export async function mcpConfigurationIdentity(scope: McpScope, cwd: string, name: string): Promise<string> {
+  const project = scope === "global" ? "global" : await realpath(cwd).catch(() => resolve(cwd));
+  return createHash("sha256").update(JSON.stringify(["configuration", scope, project, name])).digest("hex");
+}
+
+/** Primary target first; a global definition also observes this project's override. */
+export async function mcpAuthorizationIdentities(scope: McpScope, cwd: string, config: McpConfiguredServer): Promise<string[]> {
+  return Promise.all([
+    mcpAuthorizationIdentity(scope, cwd, config),
+    mcpConfigurationIdentity(scope, cwd, config.name),
+    ...(scope === "global" ? [mcpConfigurationIdentity("project", cwd, config.name)] : []),
+  ]);
 }
 
 /** An epoch prevents a repaired/torn file from ever validating an old generation. */
@@ -117,12 +143,13 @@ export class McpAuthorizationRegistry {
   /** Hold all affected identities stale until a configuration mutation settles. */
   async revoke<T>(identities: readonly string[], operation: (snapshots: ReadonlyMap<string, McpAuthorizationGeneration>) => Promise<T>, expected?: ReadonlyMap<string, McpAuthorizationGeneration>): Promise<T> {
     const snapshots = new Map<string, McpAuthorizationGeneration>();
-    const ordered = [...new Set(identities)].sort();
+    const affected = new Set(identities);
+    const ordered = [...new Set([...identities, ...(expected?.keys() ?? [])])].sort();
     let result: T;
     const next = async (index: number): Promise<void> => {
       const identity = ordered[index];
       if (identity === undefined) { result = await operation(snapshots); return; }
-      await this.write(identity, true, snapshot => { snapshots.set(identity, snapshot); return next(index + 1); }, expected?.get(identity));
+      await this.write(identity, affected.has(identity), snapshot => { snapshots.set(identity, snapshot); return next(index + 1); }, expected?.get(identity));
     };
     await next(0);
     return result!;
@@ -142,7 +169,10 @@ export class McpAuthorizationRegistry {
       if (expected && (!previous || previous.generation.epoch !== expected.generation.epoch || previous.generation.counter !== expected.generation.counter)) {
         throw new Error("MCP access changed while sign-in information was being refreshed. Sign in again in Settings → MCP servers.");
       }
-      if (previous && !increment) return previous;
+      if (previous && !increment) {
+        await operation?.(previous);
+        return previous;
+      }
       const next: McpAuthorizationGeneration = {
         identity,
         generation: previous && previous.generation.counter < Number.MAX_SAFE_INTEGER

@@ -22,6 +22,25 @@ small and self-contained (`AGENTS.md` §6).
 
 ## Prepared patches
 
+### pi-mcp-adapter · SDK cache and embedded authorization (M16-T25, milestone 3)
+
+Extends the exact `2.33.0` patch; **not filed upstream**. The pinned SDK remains
+responsible for response storage and notification refresh. The bridge preserves
+absolute aggregate expiry, prevents interactive-envelope reuse, rejects invalid
+pagination scopes/cursors and invalidated in-flight walks, and partitions cache
+and OAuth state by embedding-owned authorization context. Token persistence has
+a guarded commit callback; stale clients refuse before cache reads or forwarding.
+Inspector observations expose clocks, not credentials. Model-management fields
+are omitted only for a person-managed embedding before its tools are frozen.
+
+The existing compiled `utils` module is exposed so the embedding uses the same
+URL, argument and path expansion rather than a second resolver. Relative stdio
+cwd and socket paths resolve against the manager's configured working directory.
+The embedding separates effective-target accounts from named configuration guards;
+a credential commit checks every guard but advances only its own target. Evidence
+and remaining acceptance gates are in the milestone handoff report; this is not an
+upstream acceptance or release claim.
+
 ### pi-mcp-adapter · scoped OAuth identities (M16-T25, milestone 3 checkpoint)
 
 Extends `patches/pi-mcp-adapter@2.33.0.patch`; **not filed upstream**.

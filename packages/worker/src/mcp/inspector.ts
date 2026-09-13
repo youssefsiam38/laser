@@ -10,7 +10,7 @@
  */
 import { delimiter } from "node:path";
 import { mcpClientIdentity } from "./identity.js";
-import { McpAuthorizationRegistry, mcpAuthorizationIdentity, mcpAuthorizationRevision, type McpAuthorizationGeneration } from "./authorization.js";
+import { McpAuthorizationRegistry, mcpAuthorizationIdentity, mcpAuthorizationIdentities, mcpAuthorizationRevision, type McpAuthorizationGeneration } from "./authorization.js";
 import type {
   McpCallResult,
   McpInspection,
@@ -131,7 +131,10 @@ export class McpInspector {
     const registry = this.agentDir ? new McpAuthorizationRegistry(this.agentDir) : undefined;
     const identity = registry ? await registry.credentialAccount(fullIdentity) : fullIdentity;
     const snapshot = await registry?.read(fullIdentity);
-    let expected = new Map((authorization ?? (snapshot ? [snapshot] : [])).map(value => [value.identity, value]));
+    const guards = authorization ?? (registry && snapshot
+      ? await Promise.all((await mcpAuthorizationIdentities(scope, this.cwd, config)).map(async id => await registry.read(id) ?? registry.establish(id)))
+      : []);
+    let expected = new Map(guards.map(value => [value.identity, value]));
     return { runtime: await this.runtime(identity), authStorageOptions: {
       identities: { [config.name]: identity },
       ...(registry ? {
@@ -142,7 +145,7 @@ export class McpInspector {
         },
         commitTokens: async (_name: string, save: () => void): Promise<string> => {
           if (!expected.has(fullIdentity)) throw new Error("Sign-in information changed. Start sign-in again in Settings → MCP servers.");
-          const committed = await registry.revoke([...expected.keys()], async next => { save(); return next; }, expected);
+          const committed = await registry.revoke([fullIdentity], async next => { save(); return next; }, expected);
           expected = new Map(committed);
           return JSON.stringify([...committed.values()]);
         },
@@ -175,9 +178,10 @@ export class McpInspector {
           const snapshots = this.authorizations.get(name);
           if (!snapshots?.length) throw new Error("Access to this server changed. Reconnect in Settings → MCP servers.");
           const expected = new Map(snapshots.map(snapshot => [snapshot.identity, snapshot]));
-          const next = await new McpAuthorizationRegistry(this.agentDir!).revoke([...expected.keys()], async committed => { save(); return committed; }, expected);
-          this.authorizations.set(name, [...next.values()]);
-          return JSON.stringify([...next.values()]);
+          const next = await new McpAuthorizationRegistry(this.agentDir!).revoke([snapshots[0]!.identity], async committed => { save(); return committed; }, expected);
+          const committed = snapshots.map(snapshot => next.get(snapshot.identity)!);
+          this.authorizations.set(name, committed);
+          return JSON.stringify(committed);
         });
       }
       this.manager = manager;
@@ -442,7 +446,7 @@ export class McpInspector {
     if (this.agentDir) {
       const registry = new McpAuthorizationRegistry(this.agentDir);
       if (this.held.has(key)) await this.assertAuthorized(config.name);
-      const snapshots = authorization ?? [await registry.establish(fullIdentity)];
+      const snapshots = authorization ?? await Promise.all((await mcpAuthorizationIdentities(scope, this.cwd, config)).map(identity => registry.establish(identity)));
       const snapshot = snapshots.find(value => value.identity === fullIdentity);
       if (!snapshot || !(await Promise.all(snapshots.map(value => registry.current(value)))).every(Boolean)) {
         throw new Error("Access to this server changed. Reconnect in Settings → MCP servers.");

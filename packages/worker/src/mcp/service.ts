@@ -21,7 +21,7 @@ import type {
   McpServerStatus,
 } from "@lasercode/protocol";
 import { ErrorCodes, ProtocolError } from "@lasercode/protocol";
-import { McpAuthorizationRegistry, mcpAuthorizationIdentity, mcpAuthorizationRevision, type McpAuthorizationGeneration } from "./authorization.js";
+import { McpAuthorizationRegistry, mcpAuthorizationIdentity, mcpAuthorizationIdentities, mcpConfigurationIdentity, mcpAuthorizationRevision, type McpAuthorizationGeneration } from "./authorization.js";
 import { secretFieldPaths, type ResolvedSecrets } from "./adapter-config.js";
 import { detectImportSources, inlineSecretValues, markConflicts, readSourceEntries } from "./import.js";
 import { McpInspector, toolInfos } from "./inspector.js";
@@ -215,7 +215,7 @@ export class McpService {
   async authLogout(params: ClientRequests["mcp/auth/logout"]["params"]): Promise<ClientRequests["mcp/auth/logout"]["result"]> {
     const found = await this.find(params.scope, params.name);
     const before = await this.reported();
-    await this.revoke(found.scope, found.config.name, () => this.inspector.authLogout(found.scope, found.config));
+    await this.revoke(found.scope, found.config.name, () => this.inspector.authLogout(found.scope, found.config), undefined, true);
     this.rememberAuth(found.scope, found.config, { status: "needs-auth" });
     if (before !== await this.reported()) this.options.changed();
     return { status: "needs-auth" };
@@ -255,12 +255,16 @@ export class McpService {
 
   // ------------------------------------------------------------ internals
 
-  private async revoke<T>(scope: McpScope, name: string, operation: () => Promise<T>, replacement?: McpServerConfig): Promise<T> {
+  private async revoke<T>(scope: McpScope, name: string, operation: () => Promise<T>, replacement?: McpServerConfig, credentialsOnly = false): Promise<T> {
     const { servers } = await this.store.effective(this.options.cwd, this.options.projectTrusted);
     const previous = servers.find(server => server.scope === scope && server.config.name === name)
       ?? (scope === "project" ? servers.find(server => server.scope === "global" && server.config.name === name) : undefined);
-    const definitions = [previous?.config, replacement].filter((config): config is McpConfiguredServer => config !== undefined && isConfigured(config));
+    const owned = previous?.scope === scope && !previous.overridesGlobal ? previous.config : undefined;
+    const definitions = [credentialsOnly ? previous?.config : owned, replacement].filter((config): config is McpConfiguredServer => config !== undefined && isConfigured(config));
     const identities = await Promise.all(definitions.map(config => mcpAuthorizationIdentity(scope, this.options.cwd, config)));
+    if (!credentialsOnly) {
+      for (const slot of new Set([name, ...(replacement ? [replacement.name] : [])])) identities.push(await mcpConfigurationIdentity(scope, this.options.cwd, slot));
+    }
     return new McpAuthorizationRegistry(this.options.agentDir).revoke(identities, operation);
   }
 
@@ -310,8 +314,8 @@ export class McpService {
 
   private async capture(found: { scope: McpScope; config: McpConfiguredServer }): Promise<readonly McpAuthorizationGeneration[]> {
     const registry = new McpAuthorizationRegistry(this.options.agentDir);
-    const scopes: McpScope[] = found.scope === "global" ? ["global", "project"] : ["project"];
-    const snapshots = await Promise.all(scopes.map(async scope => registry.establish(await mcpAuthorizationIdentity(scope, this.options.cwd, found.config))));
+    const identities = await mcpAuthorizationIdentities(found.scope, this.options.cwd, found.config);
+    const snapshots = await Promise.all(identities.map(identity => registry.establish(identity)));
     const current = await this.find(found.scope, found.config.name);
     if (JSON.stringify(current) !== JSON.stringify(found)) {
       throw new ProtocolError(ErrorCodes.InvalidParams, "Server settings changed. Reopen this server in Settings → MCP servers.");
@@ -427,8 +431,8 @@ export class McpService {
     let authorizationRevision: string | undefined;
     if (isConfigured(config)) {
       const registry = new McpAuthorizationRegistry(this.options.agentDir);
-      const scopes: McpScope[] = scope === "global" ? ["global", "project"] : ["project"];
-      const snapshots = await Promise.all(scopes.map(async target => registry.read(await mcpAuthorizationIdentity(target, this.options.cwd, config))));
+      const identities = await mcpAuthorizationIdentities(scope, this.options.cwd, config);
+      const snapshots = await Promise.all(identities.map(identity => registry.read(identity)));
       if (snapshots.every(Boolean)) authorizationRevision = mcpAuthorizationRevision(snapshots);
     }
     const runtime = this.runtimeStatus(config.name, authorizationRevision);

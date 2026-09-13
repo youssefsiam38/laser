@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { inspectionDefinition, McpService } from "../../src/mcp/service.js";
-import { McpAuthorizationRegistry, mcpAuthorizationIdentity, mcpAuthorizationRevision } from "../../src/mcp/authorization.js";
+import { McpAuthorizationRegistry, mcpAuthorizationIdentity, mcpAuthorizationIdentities, mcpAuthorizationRevision } from "../../src/mcp/authorization.js";
 import { startFixtureOAuthServer } from "./fixtures/oauth-server.js";
 
 const FIXTURE = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "stdio-server.mjs");
@@ -78,7 +78,7 @@ describe("inspection status in the saved list", () => {
     await service.inspect(named());
     const registry = new McpAuthorizationRegistry(join(root, "agent"));
     const generation = await registry.read(await mcpAuthorizationIdentity("project", cwd, fixture));
-    const authorizationRevision = mcpAuthorizationRevision([generation]);
+    const authorizationRevision = mcpAuthorizationRevision(await Promise.all((await mcpAuthorizationIdentities("project", cwd, fixture)).map(id => registry.read(id))));
     const toolCatalog = { checkedAt: Date.now(), expiresAt: Date.now() + 60_000 };
     service.observeSnapshot("session", { servers: [{ name: "fixture", status: "ready", toolCount: 7, directToolCount: 2, authorizationRevision, toolCatalog }], totalTools: 7, connectedCount: 0 });
     expect((await service.list()).servers[0]).toMatchObject({ status: "connected", toolCount: 3 });

@@ -1093,10 +1093,22 @@ index 269b4db..acb1c7b 100644
  
  export function parseDirectToolSelectors(selectors: string[]): {
 diff --git a/package.json b/package.json
-index 644f032..1a2414c 100644
+index 644f032..32233a8 100644
 --- a/package.json
 +++ b/package.json
-@@ -79,6 +79,7 @@
+@@ -25,6 +25,11 @@
+       "import": "./dist/config.js",
+       "default": "./dist/config.js"
+     },
++    "./utils": {
++      "types": "./dist/utils.d.ts",
++      "import": "./dist/utils.js",
++      "default": "./dist/utils.js"
++    },
+     "./metadata-cache": {
+       "types": "./dist/metadata-cache.d.ts",
+       "import": "./dist/metadata-cache.js",
+@@ -79,6 +84,7 @@
    "files": [
      "cli.js",
      "agent-dir.ts",
@@ -1386,15 +1398,17 @@ index beb2a04..916b0f2 100644
    const queryTokens = tokenize(query);
    if (queryTokens.length === 0) return matches;
 diff --git a/server-manager.ts b/server-manager.ts
-index 94154fd..866d16c 100644
+index 94154fd..471ff66 100644
 --- a/server-manager.ts
 +++ b/server-manager.ts
-@@ -1,3 +1,4 @@
+@@ -1,4 +1,6 @@
 +import { installCacheContract } from "./sdk-cache-contract.ts";
  import { mkdirSync, statSync } from "node:fs";
++import { resolve } from "node:path";
  import { BlockList, isIP } from "node:net";
  import { isDeepStrictEqual } from "node:util";
-@@ -23,6 +24,8 @@ import {
+ import {
+@@ -23,6 +25,8 @@ import {
  } from "@modelcontextprotocol/client";
  import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
  import { UnixSocketClientTransport } from "./unix-socket-transport.ts";
@@ -1403,7 +1417,7 @@ index 94154fd..866d16c 100644
  import { probeMcpEndpoint } from "./mcp-probe.ts";
  import {
    isServerDisabled,
-@@ -170,7 +173,7 @@ export interface ServerConnection {
+@@ -170,7 +174,7 @@ export interface ServerConnection {
    definition: ServerDefinition;
    tools: McpTool[];
    /** Cache hints from the server's aggregated tools/list result. */
@@ -1412,7 +1426,7 @@ index 94154fd..866d16c 100644
    /** Monotonic guard against older refresh responses replacing newer notifications. */
    toolsRevision?: number;
    resources: McpResource[];
-@@ -205,7 +208,7 @@ type ResourceUpdatedListener = (serverName: string, uri: string) => void;
+@@ -205,7 +209,7 @@ type ResourceUpdatedListener = (serverName: string, uri: string) => void;
  
  export type ToolRefreshResult = "updated" | "unchanged" | "superseded" | "refresh-timeout";
  
@@ -1421,7 +1435,7 @@ index 94154fd..866d16c 100644
  type ToolListResult = { tools: McpTool[]; hints?: ToolListCacheHints };
  
  const KEEP_ALIVE_REFRESH_TIMEOUT_MS = 5_000;
-@@ -253,7 +256,7 @@ export class McpServerManager {
+@@ -253,7 +257,7 @@ export class McpServerManager {
    private stopped = false;
  
    /** Default cwd for stdio servers without an explicit config `cwd`. */
@@ -1430,7 +1444,7 @@ index 94154fd..866d16c 100644
  
    setSamplingConfig(config: ServerSamplingConfig | undefined): void {
      this.samplingConfig = config;
-@@ -302,6 +305,29 @@ export class McpServerManager {
+@@ -302,6 +306,29 @@ export class McpServerManager {
      this.traceSettings = settings;
    }
  
@@ -1460,7 +1474,7 @@ index 94154fd..866d16c 100644
    setAuthStorageOptions(options: AuthStorageOptions): void {
      this.authStorageOptions = options;
    }
-@@ -340,6 +366,7 @@ export class McpServerManager {
+@@ -340,6 +367,7 @@ export class McpServerManager {
    }
  
    async connect(name: string, definition: ServerDefinition, signal?: AbortSignal): Promise<ServerConnection> {
@@ -1468,7 +1482,7 @@ index 94154fd..866d16c 100644
      validateCaFile(definition);
      if (isServerDisabled(definition)) throw new Error(`MCP server "${name}" is disabled`);
      if (this.stopped) throw new Error("MCP server manager is closed");
-@@ -434,6 +461,7 @@ export class McpServerManager {
+@@ -434,6 +462,7 @@ export class McpServerManager {
      name: string,
      expectedConnection: ServerConnection,
      signal?: AbortSignal,
@@ -1476,7 +1490,7 @@ index 94154fd..866d16c 100644
    ): Promise<ToolRefreshResult> {
      if (this.stopped) throw new Error("MCP server manager is closed");
      const ownedSignal = combineAbortSignals(this.runtimeSignal, signal);
-@@ -469,7 +497,7 @@ export class McpServerManager {
+@@ -469,7 +498,7 @@ export class McpServerManager {
        toolResult = await this.fetchAllTools(expectedConnection.client, {
          ...healthOptions,
          ...(refreshSignal ? { signal: refreshSignal } : {}),
@@ -1485,7 +1499,25 @@ index 94154fd..866d16c 100644
        });
      } catch (error) {
        throwIfAborted(ownedSignal);
-@@ -1028,7 +1056,7 @@ export class McpServerManager {
+@@ -832,7 +861,7 @@ export class McpServerManager {
+       client = this.createClient(name, definition);
+       let command = definition.command;
+       let args = (definition.args ?? []).map((argument) => interpolateEnvVars(argument));
+-      const cwd = resolveConfigPath(definition.cwd) ?? this.defaultCwd;
++      const cwd = resolve(this.defaultCwd ?? process.cwd(), resolveConfigPath(definition.cwd) ?? ".");
+       if (cwd !== undefined) {
+         const cwdStats = statSync(cwd, { throwIfNoEntry: false });
+         if (!cwdStats) throw new Error(`MCP server "${name}" configured cwd does not exist: "${cwd}"`);
+@@ -901,7 +930,7 @@ export class McpServerManager {
+       transportAlreadyTraced = traceObserver !== undefined;
+     } else {
+       client = this.createClient(name, definition);
+-      transport = new UnixSocketClientTransport(resolveConfigPath(definition.socket!)!);
++      transport = new UnixSocketClientTransport(resolve(this.defaultCwd ?? process.cwd(), resolveConfigPath(definition.socket!)!));
+     }
+ 
+     if (traceObserver && !transportAlreadyTraced) {
+@@ -1028,7 +1057,7 @@ export class McpServerManager {
        return new Error(`${originalMessage} — endpoint is temporarily unavailable (HTTP 503)`, { cause: error });
      }
      try {
@@ -1494,7 +1526,7 @@ index 94154fd..866d16c 100644
        return new Error(`${originalMessage} — probe: ${probe.classification}`, { cause: error });
      } catch {
        return error instanceof Error ? error : new Error(originalMessage);
-@@ -1089,9 +1117,10 @@ export class McpServerManager {
+@@ -1089,9 +1118,10 @@ export class McpServerManager {
      const versionNegotiation = resolveVersionNegotiation(definition);
      let client: Client;
      client = new Client(
@@ -1506,7 +1538,7 @@ index 94154fd..866d16c 100644
          ...(versionNegotiation ? { versionNegotiation } : {}),
          ...(Object.keys(capabilities).length > 0 ? { capabilities } : {}),
          listChanged: {
-@@ -1113,6 +1142,34 @@ export class McpServerManager {
+@@ -1113,6 +1143,34 @@ export class McpServerManager {
          },
        },
      );
@@ -1541,7 +1573,7 @@ index 94154fd..866d16c 100644
      if (this.samplingConfig) {
        registerSamplingHandler(client, { ...this.samplingConfig, serverName });
      }
-@@ -1151,6 +1208,7 @@ export class McpServerManager {
+@@ -1151,6 +1209,7 @@ export class McpServerManager {
      const connection = this.connections.get(serverName);
      if (!connection || connection.client !== client || connection.status !== "connected") return;
      connection.tools = tools;
@@ -1549,7 +1581,7 @@ index 94154fd..866d16c 100644
      connection.toolsRevision = (connection.toolsRevision ?? 0) + 1;
      this.metadataListChangedListener?.(serverName, "tools-list-changed");
      this.pendingMetadataPublications.delete(serverName);
-@@ -1272,14 +1330,27 @@ export class McpServerManager {
+@@ -1272,14 +1331,27 @@ export class McpServerManager {
      const serviceHeaders = oauthEnabled ? new Headers(headers) : new Headers();
      let caFetch = createCaFetch(definition);
      try {
@@ -1578,7 +1610,7 @@ index 94154fd..866d16c 100644
        );
        provider.setAuthFetch(createOAuthFetch(serverUrl, () => serviceHeaders,
          combineAbortSignals(this.oauthRuntime?.signal, signal), {
-@@ -1294,7 +1365,7 @@ export class McpServerManager {
+@@ -1294,7 +1366,7 @@ export class McpServerManager {
      let implicitStoredAuth: ReturnType<typeof inspectAuthForUrl> | undefined;
      if (definition.auth === undefined && supportsOAuth(definition)) {
        try {
@@ -1587,7 +1619,7 @@ index 94154fd..866d16c 100644
        } catch {
          // Implicit preflight is opportunistic; malformed records must not block
          // an otherwise anonymous-capable server from connecting.
-@@ -1468,6 +1539,7 @@ export class McpServerManager {
+@@ -1468,6 +1540,7 @@ export class McpServerManager {
        cursor = result.nextCursor;
      } while (cursor);
  

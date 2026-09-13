@@ -136,7 +136,12 @@ immediately fence old runtimes before cached discovery or another forwarded call
 without rewriting their serialized provider tools or history. They refuse rather
 than silently reconnecting with captured credentials. An authorized OAuth refresh
 advances only its initiating runtime and rotates its response-cache partition;
-peer runtimes remain stale. The token-save transaction covers manual, loopback
+peer runtimes remain stale. Effective identities use the adapter's expanded URLs,
+arguments and paths; stdio includes its project launch context. Named configuration
+slots are separate guards, not credential accounts: global edits fence every worker,
+while project overrides fence only that project. Credential saves lock all guards
+for their comparison but advance only the credential target.
+The token-save transaction covers manual, loopback
 and automatic refresh paths; a late refresh cannot undo sign-out.
 
 ## The vocabulary (`packages/protocol/src/mcp.ts`)
