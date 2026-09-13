@@ -398,6 +398,14 @@ export class WindowManager {
       if (/^https?:/i.test(url)) this.openInBrowser(window, url);
       else log.line(`refused navigation to ${url.slice(0, 120)}`);
     });
+    // A page that throws inside React stays a live, blank renderer: no process
+    // dies, so nothing below fires. The only trace is what the page logged.
+    // Keep errors, bounded, so the next black window can be read from here.
+    window.webContents.on("console-message", (details) => {
+      if (details.level !== "error") return;
+      const source = details.sourceId ? ` (${details.sourceId.slice(-60)}:${details.lineNumber})` : "";
+      log.line(`renderer error${source}: ${details.message.replace(/\s+/g, " ").slice(0, 600)}`);
+    });
     // Reload a crashed renderer, but only once in a while: a page that crashes
     // on load would otherwise spin forever, and a window flickering through an
     // infinite reload is worse than a window that stopped.

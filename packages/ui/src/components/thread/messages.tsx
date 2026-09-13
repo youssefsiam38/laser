@@ -8,7 +8,7 @@ import { AgentEventMessage } from "./AgentEventMessage.js";
 import { TaskEventNotice } from "./TaskEventNotice.js";
 import { AGENT_COMPLETION_DATA_PART, AGENT_EVENT_DATA_PART, GOAL_DATA_PART, TASK_EVENT_DATA_PART, type AgentCompletionData } from "@/runtime/projection";
 import type { GoalRecord as GoalRecordData } from "@/runtime/goal-history";
-import { memo, useContext, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { memo, useContext, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentPropsWithoutRef } from "react";
 import { useTranscriptViewport } from "./transcript-viewport.js";
 import { useTranscriptPresentation } from "@/runtime/LaserProvider";
 import { MessageEditPresentation } from "@/runtime/transcript-presentation";
@@ -74,6 +74,22 @@ const laserMeta = (message: MessageState): LaserMeta =>
   ((message.metadata as { custom?: Record<string, unknown> } | undefined)?.custom?.[MESSAGE_METADATA_NS] as LaserMeta | undefined) ?? {};
 
 const MESSAGE_ROOT = "[content-visibility:auto] [contain-intrinsic-size:auto_320px]";
+
+/**
+ * The row's root: a plain element carrying the message id the viewport
+ * controller looks up, and nothing more. It deliberately is not
+ * `MessagePrimitive.Root`: that primitive tracks the pointer for action-bar
+ * autohide, which this transcript does not use (hover is CSS, `group/message`),
+ * and it reports "not hovering" into the thread's state as it unmounts. The
+ * bounded transcript unmounts many rows in one commit while reading upwards;
+ * that many state dispatches during one cleanup exceeded React's nested-update
+ * limit and took the whole tree down with it — a black window until the app
+ * was quit. A row that leaves the window is gone, not un-hovered.
+ */
+export function MessageRoot(props: ComponentPropsWithoutRef<"div">) {
+  const messageId = useAuiState((s) => s.message.id);
+  return <div {...props} data-message-id={messageId} />;
+}
 
 const EMPTY_ENTRIES: readonly unknown[] = [];
 const EMPTY_IMAGES: readonly ImageContent[] = [];
@@ -255,7 +271,7 @@ export function UserMessage() {
   };
 
   return (
-    <MessagePrimitive.Root data-role="user" data-optimistic={optimistic || undefined} data-search-selected={searchReveal || undefined} className={cn("group/message flex flex-col items-end gap-1", MESSAGE_ROOT)}>
+    <MessageRoot data-role="user" data-optimistic={optimistic || undefined} data-search-selected={searchReveal || undefined} className={cn("group/message flex flex-col items-end gap-1", MESSAGE_ROOT)}>
       <div className={cn("flex min-w-0 flex-col items-end gap-1", editing ? "w-full" : "max-w-[85%]")}>
         {editing ? (
           <EditMessage
@@ -326,7 +342,7 @@ export function UserMessage() {
         </MessageFooter>
       </div>
       {requestOpen && path && <ApiRequestDialog target={{ kind: "message", path, ...(entryId ? { entryId } : {}), ...(requestAt ? { at: requestAt } : {}), ...(nextRequestAt ? { beforeAt: nextRequestAt } : {}) }} onClose={() => setRequestOpen(false)} />}
-    </MessagePrimitive.Root>
+    </MessageRoot>
   );
 }
 
@@ -426,7 +442,7 @@ export function AssistantMessage() {
   const stopped = stoppedReason !== undefined ? stopReason(stoppedReason, stoppedError) : undefined;
 
   return (
-    <MessagePrimitive.Root data-role="assistant" data-search-selected={searchReveal || undefined} data-streaming={streaming || undefined} className={cn("group/message flex flex-col", MESSAGE_ROOT)}>
+    <MessageRoot data-role="assistant" data-search-selected={searchReveal || undefined} data-streaming={streaming || undefined} className={cn("group/message flex flex-col", MESSAGE_ROOT)}>
       {speaker ? <SpeakerIdentity {...speaker} /> : null}
       <AssistantBody streaming={streaming}>
         <MessagePrimitive.GroupedParts groupBy={groupBy} indicator="empty">
@@ -498,7 +514,7 @@ export function AssistantMessage() {
           <MessageTimestamp className={hoverReveal} />
         </MessageFooter>
       ) : null}
-    </MessagePrimitive.Root>
+    </MessageRoot>
   );
 }
 
