@@ -34,6 +34,8 @@ import { StatusLine } from "./StatusLine.js";
 import { userEntryIds } from "./entries.js";
 import { SessionPreparationProvider, useSessionPreparation } from "./session-preparation.js";
 import { useProjectFileSearch } from "./use-project-file-search.js";
+import { matchProjectMention } from "./project-path.js";
+import { explorerItems, explorerNavigation } from "./project-explorer-model.js";
 
 /**
  * The composer (DESIGN.md "Composer"), composed from the catalog: the
@@ -129,7 +131,7 @@ function ComposerBody() {
         )}
         {/* `/` runs a laser command; `@` addresses a running subagent by handle. */}
         <ComposerTriggerPopover char="/" title="Commands & skills" matcher={matchLeadingSlash} adapter={slash.adapter} action={slash.action} onComplete={completeSlashDraft} {...(slash.iconMap ? { iconMap: slash.iconMap } : {})} fallbackIcon={SlashSquare} />
-        <ComposerTriggerPopover char="@" title="Files & agents" adapter={mention.adapter} directive={mention.directive} iconMap={MENTION_ICONS} fallbackIcon={AtSign} emptyItemsLabel="No project files or agents to mention yet." isLoading={mention.loading} onQueryChange={mention.setQuery} onOpenChange={mention.setOpen} notice={mention.failed ? <>Couldn’t search project files. <button type="button" className="underline underline-offset-2" onClick={mention.retry}>Try again</button></> : mention.truncated ? 'Showing the best 80 files. Keep typing to narrow the search.' : undefined} />
+        <ComposerTriggerPopover char="@" title="Files & agents" matcher={matchProjectMention} adapter={mention.adapter} directive={mention.directive} navigation={mention.navigation} iconMap={MENTION_ICONS} fallbackIcon={AtSign} emptyItemsLabel="This folder is empty." loadingLabel="Reading this folder…" isLoading={mention.loading} onQueryChange={mention.setQuery} onOpenChange={mention.setOpen} notice={mention.failed ? <>{mention.error} <button type="button" className="min-h-11 rounded-md px-2 underline underline-offset-2 focus-visible:outline focus-visible:outline-live" onClick={mention.retry}>Try again</button></> : <span className="block truncate" dir="ltr">{mention.directory ?? 'Choose a project to browse its files.'}</span>} />
       </ComposerPrimitive.Root>
     </ComposerPrimitive.Unstable_TriggerPopoverRoot>
   );
@@ -453,16 +455,11 @@ function useSlashCommands() {
 }
 
 // ---------------------------------------------------------------------------
-// `@` — a running subagent's handle where the package provides one, then the
-// project's files from `pi/project/files`.
-//
-// One flat list rather than two categories: `@` is nearly always reaching for
-// a file, and a drill-down would put a keystroke in front of the common case.
-// Handles come first because there are a handful of them and thousands of
-// files, so they never get buried.
+// `@` — child handles first, then one host-sorted directory page. Folders
+// continue the path; only files and handles use the primitive's directive.
 // ---------------------------------------------------------------------------
 
-const MENTION_ICONS = { agent: Bot, file: FileText } as const;
+const MENTION_ICONS = { agent: Bot, file: FileText, directory: FolderOpen } as const;
 
 function useHandleMentions() {
   const view = useLaserView();
@@ -470,7 +467,8 @@ function useHandleMentions() {
   const childRuns = useRunsForRoot(view?.path);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
-  const search = useProjectFileSearch(view?.state.cwd ?? currentProject, query, open);
+  const cwd = view?.state.cwd ?? currentProject;
+  const search = useProjectFileSearch(cwd, query, open);
   const files = search.files;
   const items = useMemo(
     () => [
@@ -479,30 +477,25 @@ function useHandleMentions() {
       ...childRuns.flatMap((run) =>
         run.subagentName ? [{ id: run.subagentName, type: "agent", label: run.subagentName, description: run.task, icon: "agent" }] : [],
       ),
-      ...files.map((file) => ({
-        id: file.path,
-        type: "file",
-        label: file.path,
-        // The directory is already in the label, so the second line carries the
-        // one thing the path does not say: whether git knows about it yet.
-        description: file.tracked ? undefined : "Not tracked by git yet",
-        icon: "file",
-      })),
     ],
-    [childRuns, files],
+    [childRuns],
   );
   const mention = unstable_useMentionAdapter({ items, includeModelContextTools: false, iconMap: MENTION_ICONS });
   const adapter = useMemo(() => ({
     ...mention.adapter,
     search: (nextQuery: string) => {
       const all = mention.adapter.search?.("") ?? [];
-      const handles = rankSlashCommandMatches(all.filter((item) => item.type === "agent"), nextQuery);
-      // The service already ranks fuzzy path matches across the entire index.
-      // Applying the registry's substring filter again would discard them.
-      return [...handles, ...(nextQuery === query ? all.filter((item) => item.type === "file") : [])];
+      const handles = /[/\\\\~]/u.test(nextQuery) ? [] : all.filter((item) => item.label.toLocaleLowerCase().startsWith(nextQuery.toLocaleLowerCase()));
+      if (nextQuery !== query) return handles;
+      return [...handles,
+        ...(search.previous ? [{ id: "previous", type: "page", label: "Previous entries" }] : []),
+        ...explorerItems(files, cwd ?? ""),
+        ...(search.next ? [{ id: "next", type: "page", label: "More entries…" }] : []),
+      ];
     },
-  }), [mention.adapter, query]);
-  return { ...mention, ...search, adapter, setQuery, setOpen };
+  }), [mention.adapter, query, files, cwd, search.next, search.previous]);
+  const navigation = explorerNavigation(search);
+  return { ...mention, ...search, adapter, navigation, setQuery, setOpen };
 }
 
 /**

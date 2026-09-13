@@ -626,7 +626,16 @@ export const clientParamsSchemas = {
     .object({ cwd: z.string().min(1), trusted: z.boolean(), remember: z.boolean().optional() })
     .strict(),
   "pi/project/git": z.object({ cwd: z.string().min(1), path: sessionPath.optional() }).strict(),
-  "pi/project/browse": z.object({ path: z.string().min(1).max(4096).optional() }).strict(),
+  "pi/project/browse": z.object({
+    path: z.string().min(1).max(4096).optional(),
+    explorer: z.object({
+      mode: z.literal("explorer"),
+      root: z.string().min(1).max(4096),
+      prefix: z.string().max(4096).refine((value) => !value.includes("/") && !value.includes("\\") && !value.includes("\0")),
+      offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+      limit: z.number().int().min(1).max(100).optional(),
+    }).strict().optional(),
+  }).strict(),
   "pi/project/env/status": z.object({ cwd: z.string().min(1) }).strict(),
   "pi/project/env/set": z
     .object({

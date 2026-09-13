@@ -10,18 +10,18 @@ vi.mock('@/runtime', () => ({ useLaserStable: () => ({ client }) }));
 let root: Root, container: HTMLDivElement;
 function Harness({ cwd = '/project', query = '', active = true }: { cwd?: string; query?: string; active?: boolean }) {
   const search = useProjectFileSearch(cwd, query, active);
-  return <div>{search.loading ? 'Loading' : search.failed ? 'Failed' : search.files.map(file => file.path).join(',')}{search.truncated && ' · More results'}<button onClick={search.retry}>Retry</button></div>;
+  return <div>{search.loading ? 'Loading' : search.failed ? 'Failed' : search.files.map(file => file.path).join(',')}{search.truncated && ' · More results'}<button onClick={search.retry}>Retry</button>{search.next && <button onClick={search.next}>More</button>}</div>;
 }
 beforeEach(() => { globalThis.IS_REACT_ACT_ENVIRONMENT = true; vi.useFakeTimers(); request.mockReset(); container = document.createElement('div'); document.body.append(container); root = createRoot(container); });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.useRealTimers(); });
-const result = (path: string) => ({ cwd: '/project', files: [{ path, name: path, tracked: true }], source: 'git', truncated: false });
+const result = (path: string) => ({ path: '/project', home: '/home/test', entries: [{ path, name: path, kind: 'file', project: false }], truncated: false });
 const render = async (query: string, cwd = '/project') => { await act(async () => root.render(<Harness query={query} cwd={cwd} />)); };
 const tick = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(150); }); };
 
-it('sends each debounced query to the project index, including files outside the first page', async () => {
+it('sends the debounced directory and prefix to host browse', async () => {
   request.mockResolvedValue(result('deep/file-9999.ts'));
   await render('d'); await render('deep'); expect(request).not.toHaveBeenCalled();
-  await tick(); expect(request).toHaveBeenCalledExactlyOnceWith('pi/project/files', { cwd: '/project', query: 'deep', limit: 80 });
+  await tick(); expect(request).toHaveBeenCalledExactlyOnceWith('pi/project/browse', { path: '/project', explorer: { mode: 'explorer', root: '/project', prefix: 'deep', offset: 0, limit: 80 } });
   expect(container.textContent).toContain('deep/file-9999.ts');
 });
 it('ignores stale replies after query and project changes and never shows the old files as current', async () => {
@@ -39,6 +39,14 @@ it('reports a failure, supports retry and exposes truncated results honestly', a
   request.mockResolvedValue({ ...result('x.ts'), truncated: true });
   await act(async () => container.querySelector('button')!.click()); await tick();
   expect(container.textContent).toContain('x.ts · More results');
+});
+it('starts at the first page after navigating away and back', async () => {
+  request.mockResolvedValue({ ...result('x.ts'), truncated: true, nextOffset: 80 });
+  await render('x'); await tick();
+  await act(async () => container.querySelectorAll('button')[1]!.click()); await tick();
+  expect(request.mock.calls.at(-1)?.[1].explorer.offset).toBe(80);
+  await render('server/'); await tick(); await render('x'); await tick();
+  expect(request.mock.calls.at(-1)?.[1].explorer.offset).toBe(0);
 });
 it('does not query a closed picker and refreshes when reopened', async () => {
   request.mockResolvedValue(result('new.ts'));

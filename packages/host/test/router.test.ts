@@ -728,3 +728,20 @@ describe("Router · agents (docs/agents-leap)", () => {
     });
   });
 });
+
+
+it("routes explorer opt-in without opening workers and keeps legacy browse shape", async () => {
+  const h = harness();
+  const root = mkdtempSync(join(tmpdir(), "browse-router-"));
+  writeFileSync(join(root, ".hidden.txt"), "");
+  writeFileSync(join(root, "node.txt"), "");
+  try {
+    const legacy = await h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/project/browse", params: { path: root } });
+    expect(legacy).toMatchObject({ result: { entries: [], truncated: false } });
+    const explorer = await h.router.handle({ jsonrpc: "2.0", id: 2, method: "pi/project/browse", params: {
+      path: root, explorer: { mode: "explorer", root, prefix: "node", limit: 1 },
+    } });
+    expect(explorer).toMatchObject({ result: { entries: [{ name: "node.txt", kind: "file" }], commonPrefix: "node.txt", truncated: false } });
+    expect(h.workerRequests).toHaveLength(0);
+  } finally { h.cleanup(); rmSync(root, { recursive: true, force: true }); }
+});

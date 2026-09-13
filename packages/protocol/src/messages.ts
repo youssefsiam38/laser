@@ -640,12 +640,23 @@ export interface SetupState {
   completedAt?: string;
 }
 
-/** One directory in a `pi/project/browse` listing. */
+/** A browse entry; legacy listings contain directories only. */
 export interface DirectoryEntry {
   name: string;
   path: string;
   /** Looks like a code project (has `.git`, `.pi`, or a manifest). Display hint only. */
   project: boolean;
+  /** Present only for opt-in explorer listings. */
+  kind?: "directory" | "file";
+}
+
+export interface DirectoryExplorerOptions {
+  mode: "explorer";
+  /** Absolute project directory; every resolved path must remain inside it. */
+  root: string;
+  prefix: string;
+  offset?: number;
+  limit?: number;
 }
 
 export interface DirectoryListing {
@@ -655,6 +666,9 @@ export interface DirectoryListing {
   home: string;
   entries: DirectoryEntry[];
   truncated: boolean;
+  /** Explorer-only continuation and common name prefix across all matches. */
+  nextOffset?: number;
+  commonPrefix?: string;
   /** Set when the directory could not be read; `entries` is then empty. */
   error?: string;
 }
@@ -1100,9 +1114,10 @@ export interface ClientRequests {
   /**
    * Subdirectories of `path` (the home directory when omitted), for picking a
    * project without typing a path (M10-T6). Directories only, hidden ones
-   * excluded. Answered by the host.
+   * excluded. Opt-in `explorer` adds project-contained files, hidden entries,
+   * host prefix filtering and bounded pagination. Answered by the host.
    */
-  "pi/project/browse": { params: { path?: string }; result: DirectoryListing };
+  "pi/project/browse": { params: { path?: string; explorer?: DirectoryExplorerOptions }; result: DirectoryListing };
   /**
    * The project's environment command (M16-T17, docs/project-environment.md).
    * Status carries variable **names** only; a value never crosses the protocol.

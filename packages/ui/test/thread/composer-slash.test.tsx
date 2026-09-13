@@ -47,13 +47,13 @@ vi.mock("@/components/thread/session-preparation.js", () => ({
   useSessionPreparation: () => ({ pending: false }),
 }));
 vi.mock("@/components/thread/use-project-file-search.js", () => ({
-  useProjectFileSearch: () => ({ files: [{ path: "src/app.ts", tracked: true }], loading: false, failed: false, truncated: false, retry: vi.fn() }),
+  useProjectFileSearch: () => ({ files: [{ path: "src/app.ts", name: "app.ts", kind: "file", project: false }], head: "src/", commonPrefix: "app.ts", loading: false, failed: false, truncated: false, retry: vi.fn() }),
 }));
 vi.mock("@/components/shell/session-groups", () => ({ useSessionsList: () => ({ tab: "code" }) }));
 vi.mock("@/components/shell/shell-context", () => ({
   useShell: () => ({ newSession: mocks.newSession, openHistory: mocks.openHistory, setAddProjectOpen: mocks.setAddProjectOpen }),
 }));
-vi.mock("@/agents", () => ({ useRunsForRoot: () => [] }));
+vi.mock("@/agents", () => ({ useRunsForRoot: () => [{ subagentName: "audit", task: "Review the changes" }] }));
 vi.mock("@/runtime", async (importActual) => ({
   ...(await importActual<typeof import("../../src/runtime/index.js")>()),
   useLaserView: () => mocks.view,
@@ -299,14 +299,19 @@ describe("completing a slash command", () => {
 });
 
 describe("completing an @ mention", () => {
-  it("inserts the file and sends nothing, on Tab and on Enter", async () => {
+  it("still inserts a child agent handle without sending", async () => {
+    await mount(); await type("@aud"); await key("Enter");
+    expect(input().value).toBe(":agent[audit] ");
+    expect(mocks.sent).not.toHaveBeenCalled();
+  });
+  it("Tab completes the path without a chip; Enter inserts the file and neither sends", async () => {
     await mount();
-    await type("@app");
+    await type("@src/app");
     await key("Tab");
-    expect(input().value).toContain("src/app.ts");
+    expect(input().value).toBe("@src/app.ts");
     expect(mocks.sent).not.toHaveBeenCalled();
 
-    await type("@app");
+    await type("@src/app");
     await key("Enter");
     expect(input().value).toContain("src/app.ts");
     expect(mocks.sent).not.toHaveBeenCalled();
