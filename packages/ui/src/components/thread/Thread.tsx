@@ -65,26 +65,35 @@ export function Thread(props: ThreadProps = {}) {
 }
 
 function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
-  const view = useLaserView();
+  // Narrow reads only. The session's own view carries `lastSeq` and its blocks,
+  // which change with every streamed token; reading it here re-rendered the
+  // whole column — viewport, map, footer, composer and every mounted row — per
+  // streamed batch. What this component draws changes far more rarely, and the
+  // two things that do follow the stream (the seen watermark, the entries
+  // refresh) subscribe for themselves below and render nothing.
+  const path = useLaserState(s => (s.current ? s.open[s.current]?.path : undefined));
+  const partialHistory = useLaserState(s => {
+    const history = s.current ? s.open[s.current]?.history : undefined;
+    return Boolean(history && !history.complete);
+  });
   const suggestions = useMemo(() => (followUps ? AuiConfig({ suggestions: Suggestions([...followUps]) }) : FOLLOW_UPS), [followUps]);
   const { actions, destination } = useLaserStable();
   const open = useLaserState(s => sessionOpenPhase(s, s.current), sameSessionOpenPhase);
   const connected = useLaserState(s => s.connection === "open");
   const { page } = useWorkbench();
-  useSessionSeen({ path: view?.path, seq: view?.lastSeq ?? 0, running: view?.running ?? false,
-    dialogs: view?.dialogs.map(dialog => dialog.id).join("\0") ?? "",
-    ready: connected && open.phase === "ready", covered: page !== null, markSeen: actions.markSeen });
   const loading = open.phase === "opening" && !open.hasTranscript && open.expectsTranscript;
   const loadError = open.phase === "failed";
   const slots: ThreadSlots = statusSlot !== undefined ? { statusLine: statusSlot } : {};
   const aui = useAui();
-  const find = useConversationFind({ partial: Boolean(view?.history && !view.history.complete), loadAll: actions.loadAllEntries });
+  const find = useConversationFind({ partial: partialHistory, loadAll: actions.loadAllEntries });
   return (
+    <>
+    <SessionSeenBridge ready={connected && open.phase === "ready"} covered={page !== null} />
     <FindSelectionContext value={find.selectedMessage}>
     <ThreadSlotsProvider slots={slots}>
       <TooltipProvider>
         <AuiProvider extends={aui} config={suggestions}>
-          <FileOpenerProvider scope={view?.path}>
+          <FileOpenerProvider scope={path}>
           <ThreadPrimitive.Root ref={find.root} data-slot="thread" className="relative flex h-full min-h-0 flex-col bg-bg">
             {find.bar}
             <ThreadPrimitive.Viewport autoScroll={false} scrollToBottomOnRunStart={false} scrollToBottomOnInitialize={false} scrollToBottomOnThreadSwitch={false} data-slot="thread-viewport" className="flex flex-1 flex-col overflow-x-hidden overflow-y-auto overscroll-contain">
@@ -102,6 +111,7 @@ function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
                     }} />
                 )}
                 <ConversationLoadingGate key={open.path} active={loading} hasContent={open.hasTranscript || loadError || !open.expectsTranscript}>
+
                   {/* The welcome is for a conversation that has nothing in it —
                       decided from the session (its view is hydrated and holds
                       no history, or no session is open at all), never from the
@@ -112,7 +122,7 @@ function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
                   <AuiIf condition={(s) => s.thread.isEmpty}>
                     {(open.phase === "idle" || (open.phase === "ready" && !open.expectsTranscript)) && (emptyState ?? <EmptyState />)}
                   </AuiIf>
-                  <HistoryControls key={view?.path} />
+                  <HistoryControls key={path} />
                   <WindowedMessages />
                 </ConversationLoadingGate>
                 <ThreadPrimitive.ViewportFooter
@@ -142,7 +152,23 @@ function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
       </TooltipProvider>
     </ThreadSlotsProvider>
     </FindSelectionContext>
+    </>
   );
+}
+
+/**
+ * The seen watermark follows the stream (`lastSeq` moves with every batch of
+ * updates), so it subscribes here and draws nothing: the column above it does
+ * not re-render for a token that only moved the watermark.
+ */
+function SessionSeenBridge({ ready, covered }: { ready: boolean; covered: boolean }) {
+  const { actions } = useLaserStable();
+  const path = useLaserState(s => (s.current ? s.open[s.current]?.path : undefined));
+  const seq = useLaserState(s => (s.current ? s.open[s.current]?.lastSeq ?? 0 : 0));
+  const running = useLaserState(s => (s.current ? s.open[s.current]?.running ?? false : false));
+  const dialogs = useLaserState(s => (s.current ? s.open[s.current]?.dialogs.map(dialog => dialog.id).join("\0") ?? "" : ""));
+  useSessionSeen({ path, seq, running, dialogs, ready, covered, markSeen: actions.markSeen });
+  return null;
 }
 
 /**

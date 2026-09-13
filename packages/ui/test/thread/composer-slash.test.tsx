@@ -31,7 +31,18 @@ const mocks = vi.hoisted(() => ({
   openHistory: vi.fn(),
   setAddProjectOpen: vi.fn(),
   sent: vi.fn(),
+  view: undefined as ReturnType<typeof makeView> | undefined,
 }));
+
+/** The composer reads narrow slices of app state, so the mock runs real selectors. */
+const mockState = () => ({
+  current: mocks.view?.path,
+  open: mocks.view ? { [mocks.view.path]: mocks.view } : {},
+  sessions: [],
+  connection: "open",
+  workers: {},
+  agents: { snapshot: undefined, runs: {}, events: [] },
+});
 
 vi.mock("@/hooks/use-mobile", () => ({ useIsMobile: () => mocks.mobile, useIsTouch: () => mocks.touch }));
 vi.mock("@/components/assistant-ui/elements/agent-selector", () => ({ SessionAgentSelector: () => null }));
@@ -57,6 +68,7 @@ vi.mock("@/agents", () => ({ useRunsForRoot: () => [{ runId: 'audit-1', subagent
 vi.mock("@/runtime", async (importActual) => ({
   ...(await importActual<typeof import("../../src/runtime/index.js")>()),
   useLaserView: () => mocks.view,
+  useLaserState: (selector: (state: ReturnType<typeof mockState>) => unknown) => selector(mockState()),
   useLaserStable: () => ({
     currentProject: "/project",
     client: mocks.client,

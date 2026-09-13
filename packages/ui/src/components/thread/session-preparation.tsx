@@ -2,7 +2,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useAui, useAuiState } from "@assistant-ui/react";
 import type { ModelRef, ThinkingLevel } from "@lasercode/protocol";
-import { useLaserState, useLaserView } from "../../runtime/LaserProvider.js";
+import { useLaserState } from "../../runtime/LaserProvider.js";
 import { firstTurnFromRunConfig, mergeRunConfigCustom, withFirstTurn, type TentativeFirstTurn } from "../../runtime/first-turn.js";
 
 interface SessionPreparationValue {
@@ -38,11 +38,27 @@ const SessionPreparationContext = createContext<SessionPreparationValue>({
 export function SessionPreparationProvider({ children }: { children: ReactNode }) {
   const [count, setCount] = useState(0);
   const aui = useAui();
-  const view = useLaserView();
   const defaultAgent = useLaserState((state) => state.agents.snapshot?.defaultAgent);
+  // Two narrow reads instead of the session view: this provider wraps the
+  // composer, and reading the view re-rendered it on every streamed batch
+  // (M16-T32). Both answers change when the session's agent or its first
+  // persisted message does, not when a token arrives.
+  const sessionAgent = useLaserState((state) => (state.current ? state.open[state.current]?.state.agent?.agentName : undefined));
+  /** `undefined`: no session here. Otherwise: has canonical history started? */
+  const started = useLaserState((state) => {
+    const view = state.current ? state.open[state.current] : undefined;
+    if (!view) return undefined;
+    // Optimistic bubbles appear before the worker answers. Read only canonical
+    // persisted history so a refused first-turn send remains retryable.
+    return view.state.messageCount > 0 || view.history?.hasHistory === true || view.entries.some((entry) => {
+      if (!entry || typeof entry !== "object") return false;
+      const item = entry as { type?: unknown };
+      return item.type === "message" || item.type === "custom_message";
+    });
+  });
   const runConfig = useAuiState((state) => state.composer.runConfig);
   const firstTurn = firstTurnFromRunConfig(runConfig);
-  const persistedAgent = view?.state.agent?.agentName ?? defaultAgent;
+  const persistedAgent = sessionAgent ?? defaultAgent;
 
   const begin = useCallback(() => {
     let released = false;
@@ -87,18 +103,10 @@ export function SessionPreparationProvider({ children }: { children: ReactNode }
   }, [commit, firstTurn, persistedAgent]);
 
   useEffect(() => {
-    if (!view || !firstTurn) return;
-    // Optimistic bubbles appear before the worker answers. Clear only from
-    // canonical persisted history so a refused first-turn send remains retryable.
-    const started = view.state.messageCount > 0 || view.history?.hasHistory === true || view.entries.some((entry) => {
-      if (!entry || typeof entry !== "object") return false;
-      const item = entry as { type?: unknown };
-      return item.type === "message" || item.type === "custom_message";
-    });
-    if (!started) return;
+    if (started !== true || !firstTurn) return;
     const current = aui.composer.getState().runConfig;
     aui.composer.setRunConfig(mergeRunConfigCustom(current, { firstTurn: undefined }));
-  }, [aui, firstTurn, view]);
+  }, [aui, firstTurn, started]);
 
   const value = useMemo(() => ({
     pending: count > 0,

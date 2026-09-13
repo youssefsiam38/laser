@@ -27,7 +27,7 @@ import { useShell } from "@/components/shell/shell-context";
 import { useIsMobile, useIsTouch } from "@/hooks/use-mobile";
 import { finishActiveDictation } from "@/pwa";
 import { appendAttachedPrompt, splitAttachedFiles, wrapFileAttachment } from "@/runtime/attachments";
-import { composerSendPlan, mainCodeProject, mainError, mainTab, useLaserStable, useLaserView, useSessionMeta } from "@/runtime";
+import { composerSendPlan, mainCodeProject, mainError, mainTab, useLaserStable, useLaserState, useSessionMeta } from "@/runtime";
 import { mergeRunConfigCustom } from "@/runtime/first-turn";
 import { completeLeadingSlash, matchLeadingSlash, rankSlashCommandMatches } from "./slash-completion.js";
 import { StatusLine } from "./StatusLine.js";
@@ -152,7 +152,9 @@ function ComposerBody() {
  */
 function useNothingToSendTo(): string | undefined {
   const { destination, currentProject } = useLaserStable();
-  const view = useLaserView();
+  // Whether a session is open here, not what is in it: the composer must not
+  // re-render for a streamed token (M16-T32).
+  const view = useLaserState(s => Boolean(s.current && s.open[s.current]));
   if (destination?.phase === "resolving") {
     return mainTab(destination) === "chat" ? "Preparing Chat…" : "Opening this conversation…";
   }
@@ -187,9 +189,8 @@ function usePlaceholder(): string {
 export function useHandedBackText(): void {
   const aui = useAui();
   const { actions } = useLaserStable();
-  const view = useLaserView();
-  const handedBack = view?.editorText;
-  const handedBackPath = view?.path;
+  const handedBack = useLaserState(s => (s.current ? s.open[s.current]?.editorText : undefined));
+  const handedBackPath = useLaserState(s => (s.current ? s.open[s.current]?.path : undefined));
   const composerPath = useAuiState(s => s.threadListItem.externalId ?? s.threadListItem.remoteId);
   useEffect(() => {
     // The destination store commits before assistant-ui's controlled thread
@@ -364,7 +365,7 @@ const SLASH_ICONS = {
 /** What the agent can run here. Empty until a session is open, and on any failure. */
 function useAgentCommands(): CommandInfo[] {
   const { client, currentProject } = useLaserStable();
-  const path = useLaserView()?.path;
+  const path = useLaserState(s => (s.current ? s.open[s.current]?.path : undefined));
   const [commands, setCommands] = useState<CommandInfo[]>([]);
   useEffect(() => {
     const target = path ? { path } : currentProject ? { cwd: currentProject } : undefined;
@@ -393,7 +394,10 @@ function useAgentCommands(): CommandInfo[] {
 function useSlashCommands() {
   const aui = useAui();
   const { actions } = useLaserStable();
-  const view = useLaserView();
+  // `/fork` needs the loaded tree and the branch it sits on — both change when
+  // history is read, not when a token arrives.
+  const entries = useLaserState(s => (s.current ? s.open[s.current]?.entries : undefined));
+  const leafId = useLaserState(s => (s.current ? s.open[s.current]?.leafId : undefined));
   const shell = useShell();
   const { running, compacting } = useSessionMeta();
   const busy = running || compacting;
@@ -429,8 +433,8 @@ function useSlashCommands() {
   );
 
   async function forkFromLastPrompt() {
-    if (!view) return;
-    const entryId = userEntryIds(view.entries, view.leafId).at(-1);
+    if (!entries) return;
+    const entryId = userEntryIds(entries, leafId).at(-1);
     if (entryId) return actions.fork(entryId);
     await actions.refreshEntries({ tail: true });
     actions.toast("warning", "Nothing to fork yet: this session has no prompt.");
@@ -462,12 +466,13 @@ function useSlashCommands() {
 const MENTION_ICONS = { agent: Bot, file: FileText, directory: FolderOpen, next: ChevronRight, previous: ChevronLeft } as const;
 
 function useHandleMentions() {
-  const view = useLaserView();
+  const path = useLaserState(s => (s.current ? s.open[s.current]?.path : undefined));
+  const sessionCwd = useLaserState(s => (s.current ? s.open[s.current]?.state.cwd : undefined));
   const { currentProject } = useLaserStable();
-  const childRuns = useRunsForRoot(view?.path);
+  const childRuns = useRunsForRoot(path);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
-  const cwd = view?.state.cwd ?? currentProject;
+  const cwd = sessionCwd ?? currentProject;
   const page = useDirectoryPage(cwd, query, open);
   const items = useMemo(
     () => [
