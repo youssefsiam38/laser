@@ -1,6 +1,6 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-13T12:48:22Z · orchestrator · HEAD: 5e77d08
+**Last updated:** 2026-09-13T13:00:39Z · orchestrator · HEAD: 391742e
 **Current focus:** Environment restored after user-chosen restart; zero stale private-worktree processes. Two recovery owners admitted: MCP registry-integrity regression and bounded transcript acceptance. Existing code/WIP preserved and backed up; release remains authorized after acceptance.
 
 | Milestone | State |
@@ -25,7 +25,7 @@
 | M16 Conversation experience | in-progress |
 | MX Cross-cutting | in-progress |
 
-**Blockers:** No task explicitly marked blocked. Release gates remain: MCP historical failures unexplained after bounded green reproductions; MCP integrity merged a0dc6c4 and full verify passed; MCP5 backend reviewed, corrected and verified, held off main until its renderer and packaged/arm64 proof (D-240); transcript actions pass; transcript area under one integrated review (bounded viewport, linear History, recent-tail re-entry); desktop budgets met, phone dark 2000 input median missed; final acceptance/review pending; MCP code-mode safety outstanding.
+**Blockers:** No task explicitly marked blocked. Release gates remain: MCP historical failures unexplained after bounded green reproductions; MCP integrity merged a0dc6c4 and full verify passed; MCP5 backend reviewed, corrected and verified, held off main until its renderer and packaged/arm64 proof (D-240); transcript actions pass; transcript review found two re-entry defects; one correction batch running, all timings void until re-measured; final acceptance/review pending; MCP code-mode safety outstanding.
 **Next up:** Active MCP integrity and C acceptance milestones first. Queued: M13-T99 keystroke/draft regression; M13-T100 Beam/touch; M13-T117 remembered-Chat recovery.
 **Recently done:** M16-T28 global explorer (`5193fc9`); M16-T27 catalog-arrival (`961aeb8`); M16-T16 tail-first/actions (`d6e5ebd`, `402de75`); M16-T26 readiness (`f8b0d34`); M16-T24 forensics (`d9b7b7a`, `7942fb5`).
 
