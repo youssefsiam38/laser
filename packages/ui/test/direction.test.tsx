@@ -93,13 +93,15 @@ it("navigates versions and map ticks with logical horizontal arrows", async () =
     expect(change).toHaveBeenLastCalledWith(2);
     await act(async () => previous.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
     expect(change).toHaveBeenLastCalledWith(0);
-    const ticks = container.querySelectorAll<HTMLButtonElement>('[data-slot="conversation-map-tick"]');
-    await act(async () => ticks[0]!.focus());
-    await act(async () => ticks[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })));
-    expect(document.activeElement).toBe(ticks[1]);
+    const map = container.querySelector<HTMLButtonElement>('[role="slider"]')!;
+    await act(async () => map.focus());
+    await act(async () => map.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })));
+    expect(map.getAttribute("aria-valuenow")).toBe("2");
+    expect(document.activeElement).toBe(map);
     await act(async () => themeStore.setTextDirection("ltr"));
-    await act(async () => ticks[1]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })));
-    expect(document.activeElement).toBe(ticks[0]);
+    await act(async () => map.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })));
+    expect(map.getAttribute("aria-valuenow")).toBe("1");
+    expect(document.activeElement).toBe(map);
   } finally { await act(async () => root.unmount()); container.remove(); }
 });
 

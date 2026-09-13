@@ -25,6 +25,7 @@ import { useIsTouch } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
 import { consumeDecisionLink, usePendingDecisionLink } from "@/pwa";
 import { useLaserStable, useLaserView } from "@/runtime";
+import { useTranscriptPresentation } from "@/runtime/LaserProvider";
 
 import { DialogBody } from "./DialogBody.js";
 import { cancelResponse, dialogFormOf, isRenderableDialog, uiResponseFor } from "./model.js";
@@ -87,6 +88,8 @@ export function useWaitingDialogCount(): number {
  */
 export function ToolRowDialog({ toolCallId }: { toolCallId: string }) {
   const { actions } = useLaserStable();
+  const path = useLaserView()?.path;
+  const presentation = useTranscriptPresentation();
   const touch = useIsTouch();
   const { byToolCall } = useDialogs();
   const dialog = byToolCall.get(toolCallId);
@@ -96,6 +99,7 @@ export function ToolRowDialog({ toolCallId }: { toolCallId: string }) {
     <div data-slot="tool-dialog" data-tool-call={toolCallId} className="mb-2 ms-6 border-s-2 border-attention py-1 ps-3">
       <DialogBody
         form={form}
+        presentation={path ? presentation?.question(path, form) : undefined}
         touch={touch}
         onAnswer={(values) => actions.answerDialog(uiResponseFor(dialog.id, dialog.method, values))}
       />
@@ -113,6 +117,8 @@ export function ToolRowDialog({ toolCallId }: { toolCallId: string }) {
  */
 export function ThreadDialogCards({ className }: { className?: string | undefined }) {
   const { actions } = useLaserStable();
+  const path = useLaserView()?.path;
+  const presentation = useTranscriptPresentation();
   const touch = useIsTouch();
   const { cards } = useDialogs();
   useCancelUnrenderable();
@@ -138,6 +144,7 @@ export function ThreadDialogCards({ className }: { className?: string | undefine
       <DialogBody
         key={`${dialog.id}:${declineFirst ? "decline" : "ask"}`}
         form={form}
+        presentation={path ? presentation?.question(path, form, declineFirst) : undefined}
         touch={touch}
         initialDeclining={declineFirst}
         onAnswer={(values) => actions.answerDialog(uiResponseFor(dialog.id, dialog.method, values))}

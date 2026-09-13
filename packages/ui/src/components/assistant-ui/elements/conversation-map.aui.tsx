@@ -14,6 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
 import { visibleMessageGeometry } from "@/components/thread/visible-message-geometry.js";
+import { useTranscriptViewport } from "@/components/thread/transcript-viewport.js";
 
 import { ConversationMap, type ConversationMapEntry } from "./conversation-map.js";
 
@@ -104,6 +105,7 @@ export interface ConversationMapAuiProps {
 }
 
 export function ConversationMapAui({ side = "right", minTurns = 4, className }: ConversationMapAuiProps) {
+  const controller = useTranscriptViewport();
   const messages = useAuiState((s) => s.thread.messages);
   const viewport = useThreadViewport((s) => s.element.viewport);
   const viewportHeight = useThreadViewport((s) => s.height.viewport);
@@ -170,6 +172,7 @@ export function ConversationMapAui({ side = "right", minTurns = 4, className }: 
 
   const select = useCallback(
     (id: string) => {
+      if (controller) { void controller.ensureVisible({ messageId: id }, { reason: "map" }); return; }
       if (!viewport) return;
       for (const element of viewport.querySelectorAll<HTMLElement>("[data-message-id]")) {
         if (element.dataset["messageId"] !== id) continue;
@@ -179,7 +182,7 @@ export function ConversationMapAui({ side = "right", minTurns = 4, className }: 
         return;
       }
     },
-    [viewport],
+    [viewport, controller],
   );
 
   if (entries.length < minTurns) return null;

@@ -18,6 +18,7 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useLaserView } from "@/runtime";
+import { useTranscriptViewport, type TranscriptViewport } from "@/components/thread/transcript-viewport";
 
 import { isRenderableDialog } from "./model.js";
 import { useToolRowIds } from "./tool-rows.js";
@@ -27,6 +28,7 @@ const FOOTER = '[data-slot="thread-footer"]';
 
 /** The tool row of a question that is asked but not on screen, if there is one. */
 function useOffscreenQuestion(): { toolCallId: string; title: string } | undefined {
+  const controller = useTranscriptViewport();
   const view = useLaserView();
   const toolRows = useToolRowIds();
   const dialogs = view?.dialogs;
@@ -41,13 +43,13 @@ function useOffscreenQuestion(): { toolCallId: string; title: string } | undefin
       return;
     }
     const check = (): void => {
-      const viewport = document.querySelector<HTMLElement>(VIEWPORT);
+      const viewport = controller?.viewport ?? document.querySelector<HTMLElement>(VIEWPORT);
       if (!viewport) return;
       const footer = viewport.querySelector<HTMLElement>(FOOTER)?.getBoundingClientRect().height ?? 0;
       const box = viewport.getBoundingClientRect();
       const visibleBottom = box.bottom - footer;
       for (const dialog of asked) {
-        const node = elementFor(dialog.toolCallId!);
+        const node = elementFor(dialog.toolCallId!, viewport);
         if (!node) continue;
         const rect = node.getBoundingClientRect();
         if (rect.bottom > box.top && rect.top < visibleBottom) {
@@ -59,25 +61,26 @@ function useOffscreenQuestion(): { toolCallId: string; title: string } | undefin
       setOffscreen({ toolCallId: first.toolCallId!, title: first.title });
     };
     check();
-    const viewport = document.querySelector<HTMLElement>(VIEWPORT);
+    const viewport = controller?.viewport ?? document.querySelector<HTMLElement>(VIEWPORT);
     viewport?.addEventListener("scroll", check, { passive: true });
     const timer = window.setInterval(check, 500);
     return () => {
       viewport?.removeEventListener("scroll", check);
       clearInterval(timer);
     };
-  }, [dialogs, toolRows]);
+  }, [dialogs, toolRows, controller]);
 
   return offscreen;
 }
 
 /** The mounted question footer for a tool call, in the live DOM. */
-function elementFor(toolCallId: string): HTMLElement | null {
-  return document.querySelector<HTMLElement>(`[data-slot="tool-dialog"][data-tool-call="${CSS.escape(toolCallId)}"]`);
+function elementFor(toolCallId: string, root: ParentNode = document): HTMLElement | null {
+  return root.querySelector<HTMLElement>(`[data-slot="tool-dialog"][data-tool-call="${CSS.escape(toolCallId)}"]`);
 }
 
 export function WaitingNotice({ className }: { className?: string | undefined }) {
   const question = useOffscreenQuestion();
+  const controller = useTranscriptViewport();
   if (!question) return null;
   return (
     <div
@@ -88,7 +91,7 @@ export function WaitingNotice({ className }: { className?: string | undefined })
       <span className="min-w-0 flex-1 truncate text-xs leading-xs text-ink-2">
         A question is waiting further up: <span className="font-medium text-ink">{question.title}</span>
       </span>
-      <Button size="xs" variant="outline" data-slot="waiting-notice-go" onClick={() => scrollToQuestion(question.toolCallId)}>
+      <Button size="xs" variant="outline" data-slot="waiting-notice-go" onClick={() => scrollToQuestion(question.toolCallId, controller)}>
         <ArrowDown className="rotate-180" />
         Take me there
       </Button>
@@ -97,9 +100,16 @@ export function WaitingNotice({ className }: { className?: string | undefined })
 }
 
 /** The same move find makes: the target a third of the way down the readable area. */
-function scrollToQuestion(toolCallId: string): void {
-  const viewport = document.querySelector<HTMLElement>(VIEWPORT);
-  const node = elementFor(toolCallId);
+function scrollToQuestion(toolCallId: string, controller?: TranscriptViewport): void {
+  const viewport = controller?.viewport ?? document.querySelector<HTMLElement>(VIEWPORT);
+  const node = viewport ? elementFor(toolCallId, viewport) : null;
+  if (controller && node) {
+    const messageId = node.closest<HTMLElement>("[data-message-id]")?.dataset.messageId;
+    if (messageId) void controller.ensureVisible({ messageId, toolCallId }, { reason: "question" }).then(result => {
+      if (result === "visible" && controller.viewport) elementFor(toolCallId, controller.viewport)?.querySelector<HTMLElement>("[data-autofocus], button, input, textarea")?.focus({ preventScroll: true });
+    });
+    return;
+  }
   if (!viewport || !node) return;
   const footer = viewport.querySelector<HTMLElement>(FOOTER)?.getBoundingClientRect().height ?? 0;
   const rect = node.getBoundingClientRect();

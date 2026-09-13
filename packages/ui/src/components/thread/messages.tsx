@@ -8,7 +8,10 @@ import { AgentEventMessage } from "./AgentEventMessage.js";
 import { TaskEventNotice } from "./TaskEventNotice.js";
 import { AGENT_COMPLETION_DATA_PART, AGENT_EVENT_DATA_PART, GOAL_DATA_PART, TASK_EVENT_DATA_PART, type AgentCompletionData } from "@/runtime/projection";
 import type { GoalRecord as GoalRecordData } from "@/runtime/goal-history";
-import { memo, useContext, useMemo, useRef, useState } from "react";
+import { memo, useContext, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useTranscriptViewport } from "./transcript-viewport.js";
+import { useTranscriptPresentation } from "@/runtime/LaserProvider";
+import { MessageEditPresentation } from "@/runtime/transcript-presentation";
 import { useFileOpener } from "@/lib/file-opener";
 import { attachmentFile, describeMediaType } from "@/components/preview/media";
 import { attachedFileContent, splitAttachedFiles, wrapFileAttachment, type AttachedFile } from "@/runtime/attachments";
@@ -159,10 +162,19 @@ export function UserMessage() {
   const userOffset = useUserOffset();
   const partialHistory = usePartialHistory();
   const { copied, copy } = useCopy();
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(text);
-  const [sending, setSending] = useState(false);
+  const id = useAuiState(s => s.message.id);
+  const presentation = useTranscriptPresentation();
+  const viewport = useTranscriptViewport();
+  const editOwner = useMemo(() => (path ? presentation?.edit(path, id) : undefined) ?? new MessageEditPresentation(text), [presentation, path, id]);
+  const { editing, draft, sending } = useSyncExternalStore(editOwner.subscribe, editOwner.getSnapshot, editOwner.getSnapshot);
+  const setDraft = (draft: string) => editOwner.update({ draft });
+  const setEditing = (editing: boolean) => {
+    editOwner.update({ editing });
+    if (path) { if (editing) presentation?.rememberEdit(path, id, editOwner); else presentation?.releaseEdit(path, id); }
+  };
+  const setSending = (sending: boolean) => editOwner.update({ sending });
   const [requestOpen, setRequestOpen] = useState(false);
+  useLayoutEffect(() => editing || requestOpen ? viewport?.pin(id) : undefined, [viewport, id, editing, requestOpen]);
   const requestAt = useAuiState(s => s.message.createdAt?.toISOString());
   const nextRequestAt = useAuiState(s => s.thread.messages.slice(s.message.index + 1).find(m => m.role === "user")?.createdAt?.toISOString());
 
@@ -227,13 +239,13 @@ export function UserMessage() {
         // worker has stopped the reply by then, so the send below goes out,
         // it does not wait in the tray (D-149).
         if (!(await actions.navigate(entryId, move))) return;
-        setEditing(false);
         await actions.send(editContent(), "prompt");
+        setEditing(false);
         return;
       }
-      setEditing(false);
       await actions.fork(entryId, move);
       await actions.send(editContent(), "prompt");
+      setEditing(false);
       clearHandedBackPrompt(aui, [text, ...files.map(wrapFileAttachment)].filter(Boolean).join("\n\n"));
     } finally {
       setSending(false);

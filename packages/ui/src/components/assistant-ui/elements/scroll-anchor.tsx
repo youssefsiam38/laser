@@ -15,6 +15,7 @@ import { ArrowDown } from "lucide-react";
 import type { ComponentProps } from "react";
 
 import { cn } from "@/lib/utils";
+import { useTranscriptViewport } from "@/components/thread/transcript-viewport";
 
 import { floating } from "./surfaces.js";
 
@@ -23,8 +24,9 @@ export interface ScrollAnchorProps extends Omit<ComponentProps<"button">, "child
 }
 
 export function ScrollAnchor({ label = "Jump to latest", className, ...props }: ScrollAnchorProps) {
+  const viewport = useTranscriptViewport();
   return (
-    <ThreadPrimitive.ScrollToBottom asChild>
+    <ThreadPrimitive.ScrollToBottom asChild onClick={() => viewport?.latest()}>
       <button
         type="button"
         data-slot="scroll-anchor"

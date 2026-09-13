@@ -11,6 +11,7 @@ import { ScrollAnchor } from "@/components/assistant-ui/elements/scroll-anchor";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { ThreadDialogCards, WaitingNotice } from "@/dialogs";
+import { ToolRowScope } from "@/dialogs/tool-rows";
 import { useLaserStable, useLaserState, useLaserView } from "@/runtime";
 import { sessionOpenPhase, sameSessionOpenPhase } from "@/runtime/main-destination";
 import { useWorkbench } from "@/components/workbench/workbench-context";
@@ -23,6 +24,7 @@ import { ThreadSlotsProvider, type ThreadSlots } from "./thread-slots.js";
 import { useConversationFind } from "./use-conversation-find.js";
 import { FindSelectionContext } from "./search-state.js";
 import { captureReadingPosition, preserveReadingPosition, type ReadingPosition } from "./preserve-reading-position.js";
+import { TranscriptViewportProvider, TranscriptViewportBinding, WindowedMessages, useTranscriptViewport } from "./transcript-viewport.js";
 
 /**
  * The assistant-ui thread column (DESIGN.md "Layout" 3): transcript at max
@@ -59,7 +61,11 @@ const FOLLOW_UPS = AuiConfig({
   ]),
 });
 
-export function Thread({ statusSlot, emptyState, followUps }: ThreadProps = {}) {
+export function Thread(props: ThreadProps = {}) {
+  return <TranscriptViewportProvider><ToolRowScope><ThreadContent {...props} /></ToolRowScope></TranscriptViewportProvider>;
+}
+
+function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
   const view = useLaserView();
   const suggestions = useMemo(() => (followUps ? AuiConfig({ suggestions: Suggestions([...followUps]) }) : FOLLOW_UPS), [followUps]);
   const { actions, destination } = useLaserStable();
@@ -82,7 +88,8 @@ export function Thread({ statusSlot, emptyState, followUps }: ThreadProps = {}) 
           <FileOpenerProvider scope={view?.path}>
           <ThreadPrimitive.Root ref={find.root} data-slot="thread" className="relative flex h-full min-h-0 flex-col bg-bg">
             {find.bar}
-            <ThreadPrimitive.Viewport autoScroll={!find.open} scrollToBottomOnRunStart={!find.open} data-slot="thread-viewport" className="flex flex-1 flex-col overflow-x-hidden overflow-y-auto overscroll-contain">
+            <ThreadPrimitive.Viewport autoScroll={false} scrollToBottomOnRunStart={false} scrollToBottomOnInitialize={false} scrollToBottomOnThreadSwitch={false} data-slot="thread-viewport" className="flex flex-1 flex-col overflow-x-hidden overflow-y-auto overscroll-contain">
+              <TranscriptViewportBinding />
               {/* A long transcript gets a rail of ticks at the viewport's edge, on a wide screen only. */}
               <ConversationMapAui side="right" className="hidden lg:block" />
               <div className="mx-auto flex w-full max-w-(--measure-thread) flex-1 flex-col px-4 md:px-6">
@@ -107,9 +114,7 @@ export function Thread({ statusSlot, emptyState, followUps }: ThreadProps = {}) 
                     {(open.phase === "idle" || (open.phase === "ready" && !open.expectsTranscript)) && (emptyState ?? <EmptyState />)}
                   </AuiIf>
                   <HistoryControls key={view?.path} />
-                  <div data-slot="thread-messages" className="flex flex-col gap-5 pt-5 pb-5 empty:hidden">
-                    <HistoryMessages />
-                  </div>
+                  <WindowedMessages />
                 </ConversationLoadingGate>
                 <ThreadPrimitive.ViewportFooter
                   data-slot="thread-footer"
@@ -190,6 +195,7 @@ export function HistoryMessages() {
 /** History is explicit, and upward reading fetches the next complete turn page. */
 function HistoryControls() {
   const { actions } = useLaserStable();
+  const controller = useTranscriptViewport();
   const history = useLaserState(s => s.current ? s.open[s.current]?.history : undefined);
   const root = useRef<HTMLDivElement>(null);
   const pending = useRef<{ viewport: HTMLElement; position: ReadingPosition; focused?: Element | null } | undefined>(undefined);
@@ -205,6 +211,7 @@ function HistoryControls() {
     requestedHistory.current = true;
     setLoading(all ? "all" : "earlier");
     const viewport = root.current?.closest<HTMLElement>("[data-slot=thread-viewport]");
+    controller?.capture();
     if (viewport) pending.current = { viewport, position: captureReadingPosition(viewport), focused: root.current?.contains(document.activeElement) ? document.activeElement : null };
     try {
       const loaded = all ? await actions.loadAllEntries() : await actions.loadEarlierEntries();
@@ -213,15 +220,16 @@ function HistoryControls() {
       busy.current = false;
       setLoading(null);
     }
-  }, [actions, history?.complete, history?.branchesUnloaded]);
+  }, [actions, controller, history?.complete, history?.branchesUnloaded]);
   useLayoutEffect(() => {
     const anchor = pending.current;
     if (!anchor) return;
     pending.current = undefined;
     stopAnchor.current?.();
-    stopAnchor.current = preserveReadingPosition(anchor.viewport, anchor.position);
+    if (controller) controller.committed();
+    else stopAnchor.current = preserveReadingPosition(anchor.viewport, anchor.position);
     if (anchor.focused && !anchor.focused.isConnected && document.activeElement === document.body) root.current?.querySelector("button")?.focus({ preventScroll: true });
-  }, [history?.anchor, history?.complete]);
+  }, [controller, history?.anchor, history?.complete]);
   useEffect(() => () => { stopAnchor.current?.(); }, []);
   useEffect(() => {
     const viewport = root.current?.closest<HTMLElement>("[data-slot=thread-viewport]");

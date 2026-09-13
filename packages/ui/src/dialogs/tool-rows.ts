@@ -1,58 +1,35 @@
 "use client";
-/**
- * Which tool rows are on screen right now.
- *
- * A question raised while one tool runs belongs in that tool's row — but only
- * when the row is actually rendered. A tool call scrolled out of a virtualised
- * transcript, or a question naming a call from an earlier turn, has no row to
- * live in and must fall back to the card above the composer rather than
- * disappear.
- *
- * So rows register themselves here as they mount, and the question is placed
- * with the answer. A tiny external store rather than context: a tool row is a
- * leaf far below everything, and re-rendering the whole dialog surface on
- * every tool mount would be worse than the problem.
- */
-import { useEffect, useSyncExternalStore } from "react";
+import { createContext, createElement, useContext, useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 
-const counts = new Map<string, number>();
-let snapshot: ReadonlySet<string> = new Set();
-const listeners = new Set<() => void>();
-
-function publish(): void {
-  snapshot = new Set(counts.keys());
-  for (const listener of [...listeners]) listener();
+/** Mounted placement belongs to a rendered scope, not to the canonical request. */
+class ToolRows {
+  counts = new Map<string, number>();
+  snapshot: ReadonlySet<string> = new Set();
+  listeners = new Set<() => void>();
+  publish() { this.snapshot = new Set(this.counts.keys()); for (const listener of this.listeners) listener(); }
+  subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
+  getSnapshot = () => this.snapshot;
 }
-
-function subscribe(listener: () => void): () => void {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
+const standalone = new ToolRows();
+const Context = createContext(standalone);
+export function ToolRowScope({ children }: { children: ReactNode }) {
+  const [store] = useState(() => new ToolRows());
+  return createElement(Context.Provider, { value: store }, children);
 }
-
-/** Mounted tool-call ids. Stable identity while nothing mounted or unmounted. */
 export function useToolRowIds(): ReadonlySet<string> {
-  return useSyncExternalStore(subscribe, () => snapshot, () => snapshot);
+  const store = useContext(Context);
+  return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
 }
-
-/** A tool row declares itself while it is on screen. Reference-counted: React may mount twice in strict mode. */
 export function useRegisterToolRow(toolCallId: string | undefined): void {
+  const store = useContext(Context);
   useEffect(() => {
     if (!toolCallId) return;
-    counts.set(toolCallId, (counts.get(toolCallId) ?? 0) + 1);
-    publish();
+    store.counts.set(toolCallId, (store.counts.get(toolCallId) ?? 0) + 1); store.publish();
     return () => {
-      const next = (counts.get(toolCallId) ?? 1) - 1;
-      if (next <= 0) counts.delete(toolCallId);
-      else counts.set(toolCallId, next);
-      publish();
+      const next = (store.counts.get(toolCallId) ?? 1) - 1;
+      if (next <= 0) store.counts.delete(toolCallId); else store.counts.set(toolCallId, next);
+      store.publish();
     };
-  }, [toolCallId]);
+  }, [store, toolCallId]);
 }
-
-/** Test seam. */
-export function resetToolRows(): void {
-  counts.clear();
-  publish();
-}
+export function resetToolRows(): void { standalone.counts.clear(); standalone.publish(); }

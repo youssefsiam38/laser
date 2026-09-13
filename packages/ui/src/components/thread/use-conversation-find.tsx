@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { matchExcerpt, textMatches } from "./search-text.js";
 import { createConversationSearch, createMessageRangeCache } from "./conversation-search-cache.js";
 import type { SearchSource } from "./search-state.js";
+import { useTranscriptViewport } from "./transcript-viewport.js";
 
 /** Build ranges across markup boundaries without changing React-owned DOM. */
 export function findTextRanges(root: HTMLElement, query: string): Range[] {
@@ -50,6 +51,7 @@ export function findTextMatches(root: HTMLElement, query: string, mode: "convers
 }
 
 export function useConversationFind({ partial = false, loadAll }: { partial?: boolean; loadAll?: () => Promise<boolean> } = {}) {
+  const controller = useTranscriptViewport();
   const messages = useAuiState(s => s.thread.messages);
   const threadId = useAuiState(s => s.threads.mainThreadId);
   const [loadingAll, setLoadingAll] = useState(false);
@@ -95,9 +97,10 @@ export function useConversationFind({ partial = false, loadAll }: { partial?: bo
   activeRef.current = active;
   const schedulePaint = useRef<(() => void) | undefined>(undefined);
   const close = useCallback(() => {
+    controller?.cancel();
     setOpen(false);
     (restoreFocus.current?.isConnected ? restoreFocus.current : root.current?.querySelector<HTMLElement>("textarea"))?.focus({ preventScroll: true });
-  }, []);
+  }, [controller]);
   useEffect(() => {
     if (previousThread.current !== threadId) { setOpen(false); setQuery(""); setIndex(0); setLoadingAll(false); loadingRef.current = false; previousThread.current = threadId; }
   }, [threadId]);
@@ -113,6 +116,8 @@ export function useConversationFind({ partial = false, loadAll }: { partial?: bo
     const key = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "f" && !document.querySelector('[role="dialog"]')) {
         if (!root.current?.getClientRects().length || document.querySelector('[aria-label="Workbench screens"]')) return;
+        const focusedThread = document.activeElement?.closest('[data-slot="thread"]');
+        if (focusedThread && focusedThread !== root.current) return;
         e.preventDefault(); show();
       }
     };
@@ -156,6 +161,14 @@ export function useConversationFind({ partial = false, loadAll }: { partial?: bo
   useEffect(() => { schedulePaint.current?.(); }, [active?.id, active?.messageId, active?.occurrence]);
   useEffect(() => {
     if (!active) return;
+    if (controller) {
+      const abort = new AbortController();
+      void controller.ensureVisible({ messageId: active.messageId }, { reason: "find", signal: abort.signal, rect: message => {
+        const ranges = findTextRanges(message, query);
+        return (ranges[active.occurrence] ?? ranges[0])?.getBoundingClientRect();
+      } });
+      return () => abort.abort();
+    }
     const timer = window.setTimeout(() => {
       const viewport = root.current?.querySelector<HTMLElement>('[data-slot="thread-viewport"]');
       const message = [...(viewport?.querySelectorAll<HTMLElement>("[data-message-id]") ?? [])].find(n => n.dataset.messageId === active.messageId);
@@ -166,7 +179,7 @@ export function useConversationFind({ partial = false, loadAll }: { partial?: bo
       viewport.scrollTop += rect.top - viewport.getBoundingClientRect().top - Math.max(0, viewport.clientHeight - footer) / 3;
     }, motionMs("--motion-fast") + 32);
     return () => clearTimeout(timer);
-  }, [active?.id, query]);
+  }, [active?.id, query, controller]);
   return {
     root, open, selectedMessage: active?.messageId,
     bar: open ? <ConversationSearch inputRef={input} query={query} hits={hits} activeIndex={activeIndex}

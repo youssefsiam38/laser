@@ -1,5 +1,11 @@
 import { motionMs } from "@/motion";
 
+const controllers = new WeakMap<HTMLElement, () => () => void>();
+export function registerReadingController(viewport: HTMLElement, preserve: () => () => void) {
+  controllers.set(viewport, preserve);
+  return () => { controllers.delete(viewport); };
+}
+
 export interface ReadingPosition {
   anchors: { node: HTMLElement; offset: number }[];
   scrollTop: number;
@@ -21,6 +27,8 @@ export function captureReadingPosition(viewport: HTMLElement): ReadingPosition {
 
 /** Hold a visible transcript landmark while a batch of disclosures changes. */
 export function preserveReadingPosition(viewport: HTMLElement, captured = captureReadingPosition(viewport)): () => void {
+  const controller = controllers.get(viewport);
+  if (controller) return controller();
   const { anchors, scrollTop: initialScroll } = captured;
   const previousAnchor = viewport.style.overflowAnchor;
   const previousBehavior = viewport.style.scrollBehavior;

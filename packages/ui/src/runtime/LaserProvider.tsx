@@ -1,5 +1,6 @@
 "use client";
 import { accountUsageRefreshError } from "./account-usage-error.js";
+import { TranscriptPresentation } from "./transcript-presentation.js";
 /**
  * The one stateful shell of the UI: owns the `HostClient`, the reducer, the
  * selected project, and the assistant-ui runtime.
@@ -329,6 +330,11 @@ export function LaserStoreProvider({ store, children }: { store: StateStore; chi
   return <LaserStateContext.Provider value={store}>{children}</LaserStateContext.Provider>;
 }
 
+/** The canonical presentation owner is shared by main and Beam, not their DOM placement. */
+export function useTranscriptPresentation(): TranscriptPresentation | undefined {
+  return useContext(LaserStateContext)?.presentation;
+}
+
 /** The currently open session view. Identity is stable while it does not change. */
 export function useLaserView(): SessionView | undefined {
   return useLaserState((s) => (s.current ? s.open[s.current] : undefined));
@@ -351,6 +357,7 @@ export function useLaser(): LaserContextValue {
 // ---------------------------------------------------------------------------
 
 export interface StateStore {
+  presentation?: TranscriptPresentation;
   getSnapshot(): AppState;
   subscribe(listener: () => void): () => void;
   dispatch(action: Action): void;
@@ -358,15 +365,18 @@ export interface StateStore {
 
 export function createStateStore(initial: AppState = initialState): StateStore & { batch(deliver: () => void): void } {
   let current = initial;
+  const presentation = new TranscriptPresentation();
   let depth = 0;
   let dirty = false;
   const listeners = new Set<() => void>();
   const publish = () => {
     if (depth || !dirty) return;
     dirty = false;
+    presentation.reconcile(current);
     for (const listener of [...listeners]) listener();
   };
   return {
+    presentation,
     getSnapshot: () => current,
     subscribe(listener) {
       listeners.add(listener);
@@ -1633,6 +1643,7 @@ function createScopedStateStore(store: StateStore, path: string | undefined, des
   let source: AppState | undefined;
   let derived: AppState | undefined;
   return {
+    ...(store.presentation ? { presentation: store.presentation } : {}),
     getSnapshot: () => {
       const state = store.getSnapshot();
       if (state !== source || derived === undefined) {
