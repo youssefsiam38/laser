@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-13T17:08:24Z · orchestrator · HEAD: 068be78
-**Current focus:** Environment restored after user-chosen restart; zero stale private-worktree processes. Two recovery owners admitted: MCP registry-integrity regression and bounded transcript acceptance. Existing code/WIP preserved and backed up; release remains authorized after acceptance.
+**Last updated:** 2026-09-14T00:30:00Z · orchestrator `01a09b3e` · HEAD: b8f5d79
+**Current focus:** Releasing 0.6.2: the Electron performance lanes (M16-T30..T33) and the open-problem fixes (M16-T34..T37) are merged, reviewed (D-246) and gated — verify, browser matrix, inspector flicker check and packaged clean-machine all green on the final bytes.
 
 | Milestone | State |
 | --- | --- |
@@ -25,8 +25,8 @@
 | M16 Conversation experience | in-progress |
 | MX Cross-cutting | in-progress |
 
-**Blockers:** No task explicitly marked blocked. Release gates remain: MCP historical failures unexplained after bounded green reproductions; MCP integrity merged a0dc6c4 and full verify passed; MCP5 backend reviewed, corrected and verified, held off main until its renderer and packaged/arm64 proof (D-240); transcript actions pass; transcript area reviewed, corrected, merged a3f19f9 and verified; 0.6.0 published; 0.6.1 published and verified (D-241); next: the 27 GB log store (D-242); final acceptance/review pending; MCP code-mode safety outstanding.
-**Next up:** Bound the log store in bytes with a VACUUM and a Settings size/Clear (D-242); phone dark input latency; then the MCP approval renderer and packaged/arm64 gates for the script runtime (D-240). Queued: M13-T99 keystroke/draft regression; M13-T100 Beam/touch; M13-T117 remembered-Chat recovery.
-**Recently done:** M16-T28 global explorer (`5193fc9`); M16-T27 catalog-arrival (`961aeb8`); M16-T16 tail-first/actions (`d6e5ebd`, `402de75`); M16-T26 readiness (`f8b0d34`); M16-T24 forensics (`d9b7b7a`, `7942fb5`).
+**Blockers:** none. MCP5 stays on its branch (D-240).
+**Next up:** publish 0.6.2; then M16-T38 (split logstore/release.mjs), M16-T39 (selector family), MCP5 approval renderer and packaged/arm64 gates (D-240). Q-9 (Electron-served shell; long-hidden renderer disposal) awaits the person.
+**Recently done:** M16-T34 log store bounded (`949d617`); M16-T35 inspector flicker (`0010cfd`); M16-T32/T36 streaming isolation + phone re-entry (`4a22d77`, `9b0ee04`); M16-T30 hidden window (`f8b4b7d`); M16-T31/T33 bundle + package (`dec848e`, `932d4f3`); M16-T37 release resume (`de67821`).
 
 Ownership: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`. New owner identities, private write scopes and WIP backups recorded in the detailed ledger. No source/settings changes during recovery.
