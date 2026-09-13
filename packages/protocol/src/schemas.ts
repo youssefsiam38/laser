@@ -28,6 +28,14 @@ import { PREFS_MAX_BYTES } from "./messages.js";
 import type { ClientMethod, ClientRequests } from "./messages.js";
 import { TASK_COMMAND_MAX, TASK_LINE_MAX } from "./tasks.js";
 
+/** Opt-in browse replies must not silently reinterpret legacy folders as files. */
+export const explorerListingSchema = z.object({
+  path: z.string(), home: z.string(), parent: z.string().optional(),
+  entries: z.array(z.object({ name: z.string(), path: z.string(), project: z.boolean(), kind: z.enum(["directory", "file"]) }).strict()).max(100),
+  commonPrefix: z.string(), truncated: z.boolean(),
+  nextOffset: z.number().int().nonnegative().optional(), error: z.string().optional(),
+}).strict();
+
 const originIds = ORIGINS.map(origin => origin.id) as [InstructionOrigin, ...InstructionOrigin[]];
 /** Legacy captures omit origin; new captures always include it. */
 export const instructionSourceSchema = z.object({
@@ -631,7 +639,16 @@ export const clientParamsSchemas = {
     .object({ cwd: z.string().min(1), trusted: z.boolean(), remember: z.boolean().optional() })
     .strict(),
   "pi/project/git": z.object({ cwd: z.string().min(1), path: sessionPath.optional() }).strict(),
-  "pi/project/browse": z.object({ path: z.string().min(1).max(4096).optional() }).strict(),
+  "pi/project/browse": z.object({
+    path: z.string().min(1).max(4096).optional(),
+    explorer: z.object({
+      mode: z.literal("explorer"),
+      cwd: z.string().min(1).max(4096),
+      prefix: z.string().max(4096).refine((value) => !value.includes("/") && !value.includes("\\") && !value.includes("\0")),
+      offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+      limit: z.number().int().min(1).max(100).optional(),
+    }).strict().optional(),
+  }).strict(),
   "pi/project/env/status": z.object({ cwd: z.string().min(1) }).strict(),
   "pi/project/env/set": z
     .object({

@@ -40,6 +40,7 @@ import { pageCatalog } from "./catalog-page.js";
 import type { SearchCancellation } from "./search-cancellation.js";
 import type { LogStore } from "./logstore.js";
 import { browseDirectories, type PackageService, type SetupService } from "./packages.js";
+import { browseExplorer } from "./directory-explorer.js";
 import type { TaskRegister } from "./tasks/register.js";
 import { createPrivateSessionWorkspace, ensureWorkspace, isWithinDirectory, projectRootOf, workspaceAgentFor } from "./paths.js";
 import type { PrefsStore } from "./prefs.js";
@@ -474,7 +475,7 @@ export class Router {
         };
 
       case "pi/project/browse":
-        return browseDirectories(req.params.path);
+        return req.params.explorer ? browseExplorer(req.params.path, req.params.explorer) : browseDirectories(req.params.path);
 
       // --------------------------------- project environment (M16-T17) ---
       // Configuration and trust live here; the worker runs the hook and owns

@@ -19,6 +19,11 @@ import { ChevronLeftIcon, ChevronRightIcon, SearchIcon, SparklesIcon, XIcon, Ext
 import { cn } from "@/lib/utils";
 
 type IconComponent = FC<{ className?: string }>;
+type PickerDraft = { text: string; caret: number };
+export type PickerNavigation = {
+  select: (item: Unstable_TriggerItem, text: string, caret: number) => PickerDraft | null;
+  key: (key: string, items: readonly Unstable_TriggerItem[], selected: Unstable_TriggerItem | undefined, text: string, caret: number) => PickerDraft | null;
+};
 
 type DirectiveBehaviorProps = {
   /** Formatter used to serialize the selected item into composer text. */
@@ -53,10 +58,13 @@ type ComposerTriggerPopoverBaseProps = Omit<
   emptyCategoriesLabel?: string;
   /** Label shown when no items match. @default "No matching items" */
   emptyItemsLabel?: string;
+  /** Why results are unavailable, instead of empty/no-match advice. */
+  unavailableLabel?: string | undefined;
   /** Label shown while an async adapter is resolving items. @default "Loading…" */
   loadingLabel?: string;
   title?: string;
   notice?: ReactNode;
+  navigation?: PickerNavigation | undefined;
   onQueryChange?: ((query: string) => void) | undefined;
   onOpenChange?: ((open: boolean) => void) | undefined;
   /**
@@ -127,14 +135,16 @@ function SourceFileDetails({ item, onDetails }: { item: Unstable_TriggerItem; on
   </div>;
 }
 
-function PickerSurface({ title, notice, onQueryChange, onOpenChange, onComplete, children }: {
+function PickerSurface({ title, notice, onQueryChange, onOpenChange, onComplete, navigation, children }: {
   title: string; notice: ReactNode; onQueryChange: ((query: string) => void) | undefined; onOpenChange: ((open: boolean) => void) | undefined;
-  onComplete: ComposerTriggerPopoverBaseProps["onComplete"]; children: ReactNode;
+  onComplete: ComposerTriggerPopoverBaseProps["onComplete"]; navigation: PickerNavigation | undefined; children: ReactNode;
 }) {
   const scope = unstable_useTriggerPopoverScopeContext();
   const aui = useAui();
   const completeRef = useRef(onComplete);
   completeRef.current = onComplete;
+  const navigationRef = useRef(navigation);
+  navigationRef.current = navigation;
   const listRef = useRef<HTMLDivElement>(null);
   const [details, setDetails] = useState(false);
   const detailsRef = useRef(details);
@@ -144,6 +154,29 @@ function PickerSurface({ title, notice, onQueryChange, onOpenChange, onComplete,
   useLayoutEffect(() => { latest.current = scope; });
   useEffect(() => { if (scope.open) onQueryChange?.(scope.query); }, [scope.open, scope.query, onQueryChange]);
   useEffect(() => { onOpenChange?.(scope.open); }, [scope.open, onOpenChange]);
+
+  const writeDraft = (draft: PickerDraft, input: HTMLTextAreaElement) => {
+    aui.composer.setText(draft.text);
+    latest.current.setCursorPosition(draft.caret);
+    const place = () => {
+      if (input.value !== draft.text) return false;
+      input.setSelectionRange(draft.caret, draft.caret);
+      return true;
+    };
+    queueMicrotask(() => { if (!place()) requestAnimationFrame(place); });
+  };
+  const hasNavigation = navigation !== undefined;
+  useEffect(() => {
+    if (!hasNavigation) return;
+    return scope.registerSelectItemOverride((item) => {
+      const input = listRef.current?.closest('form')?.querySelector('textarea');
+      if (!input) return false;
+      const draft = navigationRef.current?.select(item, aui.composer.getState().text, input.selectionStart);
+      if (!draft) return false;
+      writeDraft(draft, input);
+      return true;
+    });
+  }, [scope.registerSelectItemOverride, hasNavigation]);
 
   useLayoutEffect(() => {
     const list = listRef.current;
@@ -183,6 +216,13 @@ function PickerSurface({ title, notice, onQueryChange, onOpenChange, onComplete,
         if (action) { event.preventDefault(); event.stopPropagation(); action.click(); }
         return;
       }
+      if (navigationRef.current && event.key === 'Tab' && input.selectionStart !== input.selectionEnd) {
+        state.close(); event.stopPropagation(); return;
+      }
+      if (!event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey && input.selectionStart === input.selectionEnd) {
+        const draft = navigationRef.current?.key(event.key, state.items, state.items[state.highlightedIndex], aui.composer.getState().text, input.selectionStart);
+        if (draft) { event.preventDefault(); event.stopPropagation(); writeDraft(draft, input); return; }
+      }
       // Shift+Tab, a chorded Tab, or a Tab with nothing to choose from: the
       // picker gets out of the way. `stopPropagation` matters as much as
       // closing does — the popover is a composer-input plugin, so an event
@@ -203,21 +243,7 @@ function PickerSurface({ title, notice, onQueryChange, onOpenChange, onComplete,
         if (completed) {
           event.preventDefault();
           event.stopPropagation();
-          aui.composer.setText(completed.text);
-          state.setCursorPosition(completed.caret);
-          // The primitive's cursor is its own detection state; nothing moves
-          // the caret the person can see, and React does not restore a
-          // selection when focus did not change, so assigning the new value
-          // leaves it at the end — past the arguments the completion kept.
-          // Put it back once the textarea actually holds the new draft.
-          const place = (): boolean => {
-            if (input.value !== completed.text) return false;
-            input.setSelectionRange(completed.caret, completed.caret);
-            return true;
-          };
-          queueMicrotask(() => {
-            if (!place()) requestAnimationFrame(place);
-          });
+          writeDraft(completed, input);
           return;
         }
       }
@@ -278,13 +304,13 @@ function PickerSurface({ title, notice, onQueryChange, onOpenChange, onComplete,
     };
   }, [scope.open]);
   if (!scope.open) return null;
-  const count = scope.isSearchMode || scope.activeCategoryId ? scope.items.length : scope.categories.length;
+  const count = scope.isSearchMode || scope.activeCategoryId ? scope.items.filter((item) => item.metadata?.countable !== false).length : scope.categories.length;
   const selected = scope.items[scope.highlightedIndex];
   return <>
     <div className="flex shrink-0 items-center gap-2 px-3 py-2 hairline-b">
       {details ? <button type="button" aria-label="Back to results" onClick={() => setDetails(false)} className="flex size-8 shrink-0 items-center justify-center rounded-md text-ink-3 hover:bg-surface-2 pointer-coarse:size-11"><ChevronLeftIcon className="rtl:-scale-x-100 size-4" /></button> : <SearchIcon aria-hidden className="size-4 shrink-0 text-ink-3" />}
       <span className="min-w-0 flex-1 truncate text-sm font-medium">{details ? selected?.label : title}</span>
-      <span role="status" aria-live="polite" className="text-xs tabular-nums text-ink-3">{scope.isLoading ? 'Searching…' : `${count} ${count === 1 ? 'result' : 'results'}`}</span>
+      <span role="status" aria-live="polite" className="text-xs tabular-nums text-ink-3">{scope.isLoading ? (navigation ? 'Reading…' : 'Searching…') : `${count} ${count === 1 ? 'result' : 'results'}`}</span>
       <button type="button" tabIndex={-1} aria-label="Close suggestions" onClick={() => scope.close()} className="flex size-8 shrink-0 items-center justify-center rounded-md text-ink-3 hover:bg-surface-2 hover:text-ink pointer-coarse:size-11"><XIcon aria-hidden className="size-4" /></button>
     </div>
     <div ref={listRef} data-slot="composer-picker-results" className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain p-1 [overflow-anchor:none]" aria-busy={scope.isLoading}>
@@ -292,7 +318,7 @@ function PickerSurface({ title, notice, onQueryChange, onOpenChange, onComplete,
     </div>
     {selected && typeof selected.metadata?.filePath === 'string' && <SourceFileDetails key={selected.id} item={selected} onDetails={details ? undefined : () => setDetails(true)} />}
     {notice && <div className="shrink-0 px-3 py-2 text-xs text-ink-2 hairline-t">{notice}</div>}
-    <div aria-hidden className="flex shrink-0 items-center gap-3 px-3 py-2 text-xs text-ink-3 hairline-t pointer-coarse:hidden group-data-[compact=true]/picker:hidden">{details ? <span>Esc back to results</span> : <><span>↑ ↓ navigate</span><span>{onComplete ? 'Tab complete · ↵ select' : 'Tab / ↵ select'}</span><span className="ms-auto">Esc close</span></>}</div>
+    <div aria-hidden className="flex shrink-0 items-center gap-3 px-3 py-2 text-xs text-ink-3 hairline-t pointer-coarse:hidden group-data-[compact=true]/picker:hidden">{details ? <span>Esc back to results</span> : <><span>{navigation ? '↑ ↓ · / open · ⌫ up' : '↑ ↓ navigate'}</span><span>{onComplete || navigation ? 'Tab complete · ↵ select' : 'Tab / ↵ select'}</span><span className="ms-auto">Esc close</span></>}</div>
   </>;
 }
 
@@ -369,6 +395,7 @@ type ItemsProps = {
   backLabel: string;
   emptyLabel: string;
   loadingLabel: string;
+  unavailableLabel: string | undefined;
 };
 
 const Items: FC<ItemsProps> = ({
@@ -377,6 +404,7 @@ const Items: FC<ItemsProps> = ({
   backLabel,
   emptyLabel,
   loadingLabel,
+  unavailableLabel,
 }) => {
   const { isLoading, query } = unstable_useTriggerPopoverScopeContext();
   return (
@@ -427,7 +455,7 @@ const Items: FC<ItemsProps> = ({
             })}
             {items.length === 0 && (
               <div className="px-3 py-5 text-sm text-ink-2">
-                {isLoading ? loadingLabel : query ? 'No matches. Try a shorter name or path.' : emptyLabel}
+                {unavailableLabel ?? (isLoading ? loadingLabel : query ? 'No matches. Try a shorter name or path.' : emptyLabel)}
               </div>
             )}
           </div>
@@ -447,12 +475,14 @@ const ComposerTriggerPopoverImpl: FC<ComposerTriggerPopoverProps> = ({
   backLabel = "Back",
   emptyCategoriesLabel = "No items available",
   emptyItemsLabel = "No matching items",
+  unavailableLabel,
   loadingLabel = "Loading…",
   title = "Suggestions",
   notice,
   onQueryChange,
   onOpenChange,
   onComplete,
+  navigation,
   className,
   directive,
   action,
@@ -494,7 +524,7 @@ const ComposerTriggerPopoverImpl: FC<ComposerTriggerPopoverProps> = ({
           removeOnExecute={action.removeOnExecute}
         />
       ) : null}
-      <PickerSurface title={title} notice={notice} onQueryChange={onQueryChange} onOpenChange={onOpenChange} onComplete={onComplete}>
+      <PickerSurface title={title} notice={notice} onQueryChange={onQueryChange} onOpenChange={onOpenChange} onComplete={onComplete} navigation={navigation}>
       <Categories
         iconMap={iconMap}
         fallbackIcon={fallbackIcon}
@@ -506,6 +536,7 @@ const ComposerTriggerPopoverImpl: FC<ComposerTriggerPopoverProps> = ({
         backLabel={backLabel}
         emptyLabel={emptyItemsLabel}
         loadingLabel={loadingLabel}
+        unavailableLabel={unavailableLabel}
       />
       </PickerSurface>
     </ComposerPrimitive.Unstable_TriggerPopover>

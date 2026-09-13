@@ -728,3 +728,51 @@ describe("Router · agents (docs/agents-leap)", () => {
     });
   });
 });
+
+
+it('serves another host RPC between bounded sorting steps, not only during filesystem IO', async () => {
+  const h = harness(), root = mkdtempSync(join(tmpdir(), 'browse-responsive-'));
+  for (let i = 0; i < 4096; i++) writeFileSync(join(root, `entry-${(i * 7919) % 4096}`), '');
+  const getter = Object.getOwnPropertyDescriptor(Intl.Collator.prototype, 'compare')!.get!;
+  let comparisons = 0, atReply = 0;
+  let answer: unknown;
+  let finish!: () => void;
+  const replied = new Promise<void>(resolve => { finish = resolve; });
+  const spy = vi.spyOn(Intl.Collator.prototype, 'compare', 'get').mockImplementation(function (this: Intl.Collator) {
+    const compare = getter.call(this) as (a: string, b: string) => number;
+    return (a: string, b: string) => {
+      if (++comparisons === 1) setImmediate(() => {
+        void rpc(h.router, 'pi/project/list', {}).then(reply => {
+          answer = reply; atReply = comparisons; finish();
+        });
+      });
+      return compare(a, b);
+    };
+  });
+  try {
+    await rpc(h.router, 'pi/project/browse', { path: '.', explorer: { mode: 'explorer', cwd: root, prefix: '' } });
+    const atEnd = comparisons;
+    expect(atEnd).toBeGreaterThan(0); await replied;
+    expect(answer).toMatchObject({ result: { projects: [] } });
+    expect(atReply).toBeGreaterThan(0); expect(atReply).toBeLessThan(atEnd);
+    expect(h.workerRequests).toHaveLength(0);
+  } finally { spy.mockRestore(); h.cleanup(); rmSync(root, { recursive: true, force: true }); }
+});
+
+it("routes explorer opt-in without opening workers and keeps legacy browse shape", async () => {
+  const h = harness();
+  const root = mkdtempSync(join(tmpdir(), "browse-router-"));
+  writeFileSync(join(root, ".hidden.txt"), "");
+  writeFileSync(join(root, "node.txt"), "");
+  try {
+    const legacy = await h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/project/browse", params: { path: root } });
+    expect(legacy).toMatchObject({ result: { entries: [], truncated: false } });
+    const explorer = await h.router.handle({ jsonrpc: "2.0", id: 2, method: "pi/project/browse", params: {
+      path: root, explorer: { mode: "explorer", cwd: root, prefix: "node", limit: 1 },
+    } });
+    expect(explorer).toMatchObject({ result: { entries: [{ name: "node.txt", kind: "file" }], commonPrefix: "node.txt", truncated: false } });
+    const relative = await rpc(h.router, 'pi/project/browse', { path: '.', explorer: { mode: 'explorer', cwd: root, prefix: '.hidden' } });
+    expect(relative).toMatchObject({ result: { path: root, entries: [{ name: '.hidden.txt', path: join(root, '.hidden.txt'), kind: 'file' }] } });
+    expect(h.workerRequests).toHaveLength(0);
+  } finally { h.cleanup(); rmSync(root, { recursive: true, force: true }); }
+});

@@ -690,15 +690,20 @@ const ProjectGroup = memo(function ProjectGroup({ group, collapsed, isCurrent, s
   const summaries = useMemo(() => new Map(sessions.map(session => [session.path, session])), [sessions]);
   // Keep live work, questions and unread outcomes reachable even outside the
   // recent batch. Read each descendant too: a quiet root can hold a question.
+  // Seven rows is the rule. The one thing allowed to break it is work that is
+  // still going: a session that is working, or waiting for the person, is never
+  // put behind "Load more". A finished one — read or unread, ended well or
+  // badly — is history and waits its turn like the rest.
   const protectedPaths = useLaserState((state) => {
     const runs = latestRunsBySession(state.agents.runs);
-    const important = (node: ThreadListNode): boolean => {
+    const live = (node: ThreadListNode): boolean => {
       const summary = summaries.get(node.path);
       const run = runs.get(node.path);
-      return sessionStatus(state.open[node.path], summary) !== "idle"
-        || (run !== undefined && ACTIVE_RUN.has(run.status)) || node.children.some(important);
+      const status = sessionStatus(state.open[node.path], summary);
+      return status === "working" || status === "waiting_for_input"
+        || (run !== undefined && ACTIVE_RUN.has(run.status)) || node.children.some(live);
     };
-    return JSON.stringify(group.roots.filter(important).map(node => node.path));
+    return JSON.stringify(group.roots.filter(live).map(node => node.path));
   });
   const protectedSet = useMemo(() => new Set<string>(JSON.parse(protectedPaths) as string[]), [protectedPaths]);
   let ordinaryRoots = 0;
@@ -839,7 +844,9 @@ function ChatGroup({ group, searching, openPath, editing, onEdit, onOpen }: { gr
     const runs = latestRunsBySession(state.agents.runs);
     const important = (node: ThreadListNode): boolean => {
       const run = runs.get(node.path);
-      return node.empty === true || sessionStatus(state.open[node.path], summaries.get(node.path)) !== "idle"
+      const status = sessionStatus(state.open[node.path], summaries.get(node.path));
+      // Same rule as the project group: only work still going outranks the fold.
+      return node.empty === true || status === "working" || status === "waiting_for_input"
         || (run !== undefined && ACTIVE_RUN.has(run.status)) || node.children.some(important);
     };
     return JSON.stringify(group.roots.filter(important).map(node => node.path));

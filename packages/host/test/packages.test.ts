@@ -342,8 +342,18 @@ describe("browseDirectories", () => {
       ["a-repo", true],
       ["b-plain", false],
     ]);
-    expect(listing.parent).toBe(join(base, ".."));
-    expect(listing.home).toBe("/home/someone");
+    expect(JSON.stringify(listing)).toBe(JSON.stringify({ path: base, home: "/home/someone", parent: join(base, ".."), entries: [
+      { name: "a-repo", path: join(base, "a-repo"), project: true },
+      { name: "b-plain", path: join(base, "b-plain"), project: false },
+    ], truncated: false }));
+  });
+  it("preserves the legacy 500-directory cap without continuation or discriminator", () => {
+    for (let i = 0; i < 510; i++) mkdirSync(join(base, `folder-${i}`));
+    const listing = browseDirectories(base);
+    expect(listing.entries).toHaveLength(500);
+    expect(listing.truncated).toBe(true);
+    expect(listing).not.toHaveProperty("nextOffset");
+    expect(listing.entries.every((entry) => Object.keys(entry).join(",") === "name,path,project")).toBe(true);
   });
   it("expands ~ and explains a folder it cannot open without a stack trace", () => {
     expect(browseDirectories("~", base).path).toBe(base);
