@@ -82,9 +82,14 @@ export function LogsScreen({ cwd }: { cwd: string | undefined }) {
     return () => clearTimeout(timer);
   }, [searchInput, search]);
 
+  // Only the project that is actually filtering belongs in the identity: the
+  // current session's cwd moves every time work streams in from an agent, and
+  // a new filters object on each move reloaded this page from scratch — the
+  // rows replaced, the view snapped to the bottom — while nothing had changed.
+  const scopedCwd = scoped ? cwd : undefined;
   const filters: LogFilters = useMemo(
-    () => ({ section, search, levels, ...(scoped && cwd ? { cwd } : {}) }),
-    [section, search, levels, scoped, cwd],
+    () => ({ section, search, levels, ...(scopedCwd ? { cwd: scopedCwd } : {}) }),
+    [section, search, levels, scopedCwd],
   );
 
   const refreshStats = useCallback(() => {

@@ -230,14 +230,32 @@ function HistoryControls() {
       lastTop = top;
       if (upwards && interacted.current && top < viewport.clientHeight / 2) void load();
     };
-    viewport.addEventListener("wheel", note, { passive: true });
-    viewport.addEventListener("touchmove", note, { passive: true });
-    viewport.addEventListener("keydown", note);
+    // Already at the top, the viewport cannot scroll, so no scroll event
+    // arrives: reading upwards there produces only the wheel (or a swipe, or
+    // the keys). That is the person asking for what comes before.
+    const wheel = (event: WheelEvent) => { note(); if (event.deltaY < 0 && viewport.scrollTop <= 0) void load(); };
+    let touchY: number | undefined;
+    const touchstart = (event: TouchEvent) => { touchY = event.touches?.[0]?.clientY; };
+    const touchmove = (event: TouchEvent) => {
+      note();
+      const y = event.touches?.[0]?.clientY;
+      if (y !== undefined && touchY !== undefined && y > touchY + 8 && viewport.scrollTop <= 0) void load();
+      touchY = y;
+    };
+    const keydown = (event: KeyboardEvent) => {
+      note();
+      if ((event.key === "ArrowUp" || event.key === "PageUp" || event.key === "Home") && viewport.scrollTop <= 0) void load();
+    };
+    viewport.addEventListener("wheel", wheel, { passive: true });
+    viewport.addEventListener("touchstart", touchstart, { passive: true });
+    viewport.addEventListener("touchmove", touchmove, { passive: true });
+    viewport.addEventListener("keydown", keydown);
     viewport.addEventListener("scroll", scroll, { passive: true });
     return () => {
-      viewport.removeEventListener("wheel", note);
-      viewport.removeEventListener("touchmove", note);
-      viewport.removeEventListener("keydown", note);
+      viewport.removeEventListener("wheel", wheel);
+      viewport.removeEventListener("touchstart", touchstart);
+      viewport.removeEventListener("touchmove", touchmove);
+      viewport.removeEventListener("keydown", keydown);
       viewport.removeEventListener("scroll", scroll);
     };
   }, [history?.before, load]);

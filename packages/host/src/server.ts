@@ -29,7 +29,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
-import { basename, dirname, extname, join, normalize, resolve as resolvePath, sep } from "node:path";
+import { basename, dirname, extname, join, normalize, relative, resolve as resolvePath, sep } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { channelIdFor, type KeyPair } from "@lasercode/crypto";
 import { ENV, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, projectEnvWorkerConfig, type ClientRequests, type HostNotifications, type JsonRpcNotification, type LogEntry, type NamerState, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
@@ -148,6 +148,9 @@ const PERSISTING_UPDATES = new Set(["message_end", "compaction_end", "entry_appe
 
 /** New log rows are batched for this long before one notification goes out. */
 const LOG_APPEND_FLUSH_MS = 120;
+
+/** Vite's emitted `assets/<name>-<hash>.<ext>`; mirrors the service worker's `hashedAsset`. */
+const HASHED_ASSET = /^assets[/\\][^/\\]+-[\w-]{8,}\.(?:m?js|css|woff2?)$/;
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -1049,7 +1052,15 @@ export class HostServer {
     }
     try {
       const body = readFileSync(file);
-      res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream" }).end(body);
+      // Vite writes a content hash into every `assets/*` name, so a stale copy
+      // is impossible: telling Chromium so lets it keep the compiled bytecode
+      // of the app bundle between launches instead of parsing it every time.
+      // `index.html` and the service worker stay unhinted and are re-read
+      // on every navigation, which is how a new build is noticed.
+      res.writeHead(200, {
+        "content-type": MIME[extname(file)] ?? "application/octet-stream",
+        ...(HASHED_ASSET.test(relative(root, file)) ? { "cache-control": "public, max-age=31536000, immutable" } : {}),
+      }).end(body);
     } catch {
       res.writeHead(404).end();
     }
