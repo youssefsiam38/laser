@@ -521,6 +521,43 @@ phone, dark/light, touch and reduced motion; ensure no horizontal overflow.
 
 ### 3 · Cache correctness
 
+#### Approved identity and revocation decisions
+
+These are requirements for implementation, not claims about the current client.
+Milestones 4 and 5 inherit them.
+
+- **Full server identity:** configuration scope (global or a specific project)
+  plus the stable fingerprint of the actual transport kind and target
+  (command and arguments, URL, or socket path). A matching name is never sufficient
+  to share OAuth credentials, cache entries or revocation. Identically named servers
+  in different projects, or directed at different endpoints, remain isolated.
+- **Legacy OAuth migration:** silently migrate a name-only entry only when exactly
+  one configured server anywhere matches the name and it has never been ambiguous.
+  Never guess a former project owner. Known ambiguity requires sign-in again with
+  one-line guidance, for example: “Sign in again: two servers on this machine are
+  called Notion”. Current uniqueness alone does not establish historical uniqueness.
+  The old configuration store deletes removed entries and the old OAuth store has
+  no scope/ambiguity history; treatment of this unknown-history case must be resolved
+  before migration can be implemented safely.
+- **Durable authorization generations:** worker-owned, locked registry; no new host
+  RPC or host hot-path dependency. One monotonic generation per full server identity,
+  visible to every worker using it. Credential save, sign-out, disable and removal
+  revoke affected runtimes. Store identities, generations and timestamps only,
+  never credentials or secret values.
+- **Exactly two authorization guard points:** before serving a cached list or
+  definition, and before forwarding a call. A stale runtime refuses; it never retries
+  with captured credentials. Discovery gives existing needs-auth guidance. A call
+  gives a person-facing sentence such as “You signed out of Notion. Sign in again
+  in Settings → MCP servers”. Revocation never changes the frozen provider tools
+  array, enables/disables a connection on the model's behalf, or reconnects it.
+- **Recovery and bounded access:** registry reads must be cheap and time-bounded.
+  A torn/unreadable registry means all retained authorization/cache state is stale,
+  not permanently unusable. Refresh and fresh authorization must remain possible;
+  uncertainty cannot authorize a call with captured credentials. If a lock cannot
+  be acquired quickly, treat cached state as stale instead of waiting indefinitely.
+  Mutation/repair must be crash-safe and cannot announce revocation that was not
+  durably recorded. Never fail closed for the person's ability to sign in again.
+
 Depends on 2's catalog revision contract. Reuse/fix SDK cache, adapter persistence
 and notification publication; all TTL/scope/page/auth rules above. No second cache
 service. Update upstream patch documentation with exact dependency targets.
