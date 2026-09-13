@@ -182,7 +182,7 @@ it("keeps an older working root and a quiet root with a child's question outside
   expect(row("Asking child")).toBeDefined();
 });
 
-it.each(["archived", "deleted", "search"] as const)("places a child with a %s parent among ordinary project rows", async (reason) => {
+it.each(["deleted", "search"] as const)("places a child with a %s parent among ordinary project rows", async (reason) => {
   const child = `${PROJECT_CWD}/child.jsonl`;
   addSession(world, child, PROJECT_CWD);
   Object.assign(world.sessions.find(session => session.path === child)!, {
@@ -192,11 +192,6 @@ it.each(["archived", "deleted", "search"] as const)("places a child with a %s pa
   if (reason === "deleted") world.sessions = world.sessions.filter(session => session.path !== path(1));
   if (reason === "search") world.sessions.find(session => session.path === path(1))!.name = "Parent objective";
   await render();
-  if (reason === "archived") {
-    // A persisted archive from before tree-wide archiving can contain only the parent.
-    await act(async () => { stable.archive.add(path(1)); await aui.threads.reload(); });
-    await act(async () => settle(60));
-  }
   if (reason === "search") await render("Conversation");
   const visible = () => [...container.querySelectorAll<HTMLElement>('[data-slot="aui_thread-list-item"]')];
   expect(visible()[0]?.textContent).toContain("Conversation child");
@@ -210,6 +205,27 @@ it.each(["archived", "deleted", "search"] as const)("places a child with a %s pa
     expect(visible()).toHaveLength(8);
     expect(row("Conversation 8")).toBeDefined();
   }
+});
+
+it("keeps a child out of the project list when its parent is archived, however the archive was written", async () => {
+  const child = `${PROJECT_CWD}/child.jsonl`;
+  addSession(world, child, PROJECT_CWD);
+  Object.assign(world.sessions.find(session => session.path === child)!, {
+    name: "Conversation child", attention: "idle", modifiedAt: "2026-09-08T00:00:06.500Z",
+    agent: { kind: "child", agentName: "default", subagentName: "explorer", parentPath: path(1) },
+  });
+  await render();
+  // Only the parent is archived — a persisted archive from before tree-wide
+  // archiving, or a child started after its parent was put away.
+  await act(async () => { stable.archive.add(path(1)); await aui.threads.reload(); });
+  await act(async () => settle(60));
+  const visible = () => [...container.querySelectorAll<HTMLElement>('[data-slot="aui_thread-list-item"]')];
+  expect(row("Conversation child")).toBeUndefined();
+  expect(row("Conversation 1")).toBeUndefined();
+  // Seven of the project's own conversations remain: the archived pair is gone
+  // from the list entirely rather than one of them taking a top-level row.
+  expect(visible()).toHaveLength(7);
+  expect(visible().every(row => /Conversation [2-8]$/.test(row.textContent ?? ""))).toBe(true);
 });
 
 it("the archive action moves a parent and its descendants into a folded archived tree and unarchive restores them", async () => {

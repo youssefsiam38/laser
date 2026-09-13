@@ -374,6 +374,27 @@ describe("createThreadListAdapter", () => {
     expect(archive.has("/a.jsonl")).toBe(false);
   });
 
+  it("keeps a child of an archived session archived, even when it was never seen at archive time", async () => {
+    const sessions = [
+      summary({ path: "/parent", id: "parent" }),
+      summary({ path: "/child", id: "child", agent: { kind: "child", agentName: "default", parentPath: "/parent" } }),
+      summary({ path: "/other", id: "other" }),
+    ];
+    // Only the parent is in the archive set: the child was started after the
+    // branch was put away, or its row had not been loaded when it was archived.
+    const { adapter, archive } = deps({ sessions: () => sessions });
+    archive.add("/parent");
+    const listed = await adapter.list();
+    const status = (path: string) => listed.threads.find((thread) => thread.remoteId === path)?.status;
+    expect(status("/parent")).toBe("archived");
+    expect(status("/child")).toBe("archived");
+    expect(status("/other")).toBe("regular");
+    // Unarchiving the parent brings the branch back with it.
+    await adapter.unarchive("/parent");
+    const back = await adapter.list();
+    expect(back.threads.find((thread) => thread.remoteId === "/child")?.status).toBe("regular");
+  });
+
   it("archives and restores the whole lineage, while a child alone leaves its parent alone", async () => {
     const sessions = [
       summary({ path: "/parent", id: "parent" }),

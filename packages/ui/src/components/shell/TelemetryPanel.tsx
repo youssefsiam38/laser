@@ -230,15 +230,11 @@ function ContextSection() {
 }
 
 function LoadedHistoryNotice({ versionsOnly }: { versionsOnly: boolean }) {
-  const { actions } = useLaserStable();
-  const [loading, setLoading] = useState(false);
+  // No button here: the conversation loads more of itself as the person scrolls
+  // up through it, so a control that downloads everything at once would be a
+  // second way to do the same thing — and the slow one.
   return <div className="flex flex-col items-start gap-2 border-b border-line px-4 py-3 text-xs leading-5 text-ink-2">
-    <p>{versionsOnly ? "Other versions are not loaded. Load them for conversation-wide totals and the complete tree." : "Earlier history is not loaded. Conversation-wide totals and older activity appear when it is."}</p>
-    <Button variant="outline" size="sm" className="pointer-coarse:min-h-11" aria-disabled={loading} onClick={() => {
-      if (loading) return;
-      setLoading(true);
-      void actions.loadAllEntries().finally(() => setLoading(false));
-    }}>{loading ? "Loading history…" : "Load complete history"}</Button>
+    <p>{versionsOnly ? "Other versions are not loaded yet, so these totals cover the messages loaded so far." : "These totals cover the messages loaded so far. Scroll up in the conversation to load more of it."}</p>
   </div>;
 }
 
@@ -326,7 +322,7 @@ function UsageSection() {
   const accountUsage = session?.accountUsage;
   const partial = Boolean(history && (!history.complete || history.branchesUnloaded));
   if (partial) return <Section title="Usage" icon={isAccountProvider(session?.model?.provider) ? Landmark : CircleDollarSign}>
-    {isAccountProvider(session?.model?.provider) ? <AccountUsage state={accountUsage} compact /> : <p className="text-xs leading-5 text-ink-2">Load complete history for conversation-wide totals.</p>}
+    {isAccountProvider(session?.model?.provider) ? <AccountUsage state={accountUsage} compact /> : <p className="text-xs leading-5 text-ink-2">Totals cover the messages loaded so far.</p>}
   </Section>;
 
   return (

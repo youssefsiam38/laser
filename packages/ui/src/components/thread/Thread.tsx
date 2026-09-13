@@ -208,7 +208,7 @@ function HistoryControls() {
     if (viewport) pending.current = { viewport, position: captureReadingPosition(viewport), focused: root.current?.contains(document.activeElement) ? document.activeElement : null };
     try {
       const loaded = all ? await actions.loadAllEntries() : await actions.loadEarlierEntries();
-      if (loaded) setAnnouncement(all ? "Complete history loaded." : "Earlier messages loaded.");
+      if (loaded) setAnnouncement(all ? "Other versions loaded." : "Earlier messages loaded.");
     } finally {
       busy.current = false;
       setLoading(null);
@@ -250,9 +250,12 @@ function HistoryControls() {
     {history.before && <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" aria-disabled={loading !== null} onClick={() => void load()}>
       {loading === "earlier" ? "Loading earlier messages…" : "Load earlier messages"}
     </Button>}
-    <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" aria-disabled={loading !== null || (history.complete && !history.branchesUnloaded)} onClick={() => void load(true)}>
-      {history.complete && !history.branchesUnloaded ? "Complete history loaded" : loading === "all" ? "Loading history…" : history.complete ? "Load other versions" : "Load complete history"}
-    </Button>
+    {/* Earlier messages arrive by scrolling up (and through the button above,
+        which is the same thing for a keyboard). Only other versions of a prompt
+        need asking for: no amount of scrolling reaches a branch. */}
+    {history.branchesUnloaded && <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" aria-disabled={loading !== null} onClick={() => void load(true)}>
+      {loading === "all" ? "Loading other versions…" : "Load other versions"}
+    </Button>}
     <span role="status" className="sr-only">{announcement}</span>
   </div>;
 }

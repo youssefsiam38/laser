@@ -283,6 +283,7 @@ export function visibleProjectCwds(
   archive: ArchiveStore,
   options: { /** Directories that are never projects: the Beam and Chat workspaces. */ exclude?: readonly string[]; visibleCounts?: Readonly<Record<string, number>> } = {},
 ): string[] {
+  const archived = archivedPaths(sessions, archive);
   const excluded = (options.exclude ?? []).map((cwd) => cwd.replace(/\\/g, "/").replace(/\/+$/, ""));
   const isExcluded = (cwd: string): boolean => {
     const path = cwd.replace(/\\/g, "/").replace(/\/+$/, "");
@@ -290,7 +291,7 @@ export function visibleProjectCwds(
   };
   const archivedByCwd = new Map<string, number>();
   for (const session of sessions) {
-    if (!archive.has(session.path)) continue;
+    if (!archived(session.path)) continue;
     archivedByCwd.set(session.cwd, (archivedByCwd.get(session.cwd) ?? 0) + 1);
   }
   const visible: string[] = [];
@@ -308,7 +309,7 @@ export function visibleProjectCwds(
     if (project.pinned || (options.visibleCounts?.[project.cwd] ?? project.sessionCount - (archivedByCwd.get(project.cwd) ?? 0)) > 0) append(project.cwd);
   }
   const workspaceKind = (kind: string | undefined) => kind === "beam" || kind === "chat";
-  for (const session of sessions) if (!archive.has(session.path) && !workspaceKind(session.agent?.kind)) append(session.cwd);
+  for (const session of sessions) if (!archived(session.path) && !workspaceKind(session.agent?.kind)) append(session.cwd);
   for (const view of Object.values(open)) if (view && !workspaceKind(view.state.agent?.kind)) append(view.state.cwd);
   return visible;
 }
@@ -413,19 +414,50 @@ export function sessionSubtreePaths(paths: readonly string[], sessions: readonly
   return [...found];
 }
 
+/**
+ * Archiving is inherited. A session under an archived one is archived too, even
+ * when it was started after its parent was put away or its row had not been
+ * loaded when the tree was archived — otherwise the sidebar promotes it to a
+ * top-level row, which is the one thing an archived branch must never do.
+ */
+export function archivedPaths(
+  sessions: readonly SessionSummary[],
+  archive: Pick<ArchiveStore, "has">,
+): (path: string) => boolean {
+  const parents = new Map<string, string>();
+  for (const session of sessions) {
+    const parent = parentPathOf(session);
+    if (parent) parents.set(session.path, parent);
+  }
+  const answers = new Map<string, boolean>();
+  const archived = (path: string): boolean => {
+    const known = answers.get(path);
+    if (known !== undefined) return known;
+    // Claim the answer before walking up: a cycle must not recurse forever.
+    answers.set(path, false);
+    const parent = parents.get(path);
+    const value = archive.has(path) || (parent !== undefined && archived(parent));
+    answers.set(path, value);
+    return value;
+  };
+  return archived;
+}
+
 export function createThreadListAdapter(deps: ThreadListDeps): RemoteThreadListAdapter {
   const metadataFor = (path: string): RemoteThreadMetadata | undefined => {
     const views = deps.views();
-    const summary = mergeSessions(deps.sessions(), views).find((s) => s.path === path);
+    const merged = mergeSessions(deps.sessions(), views);
+    const summary = merged.find((s) => s.path === path);
     if (!summary) return undefined;
-    return toThreadMetadata(summary, views[path], deps.archive.has(path));
+    return toThreadMetadata(summary, views[path], archivedPaths(merged, deps.archive)(path));
   };
 
   return {
     list: async () => {
       const views = deps.views();
       const merged = sortSessions(mergeSessions(deps.sessions(), views), views);
-      return { threads: merged.map((s) => toThreadMetadata(s, views[s.path], deps.archive.has(s.path))) };
+      const archived = archivedPaths(merged, deps.archive);
+      return { threads: merged.map((s) => toThreadMetadata(s, views[s.path], archived(s.path))) };
     },
 
     rename: async (remoteId, newTitle) => {
@@ -491,6 +523,7 @@ export function threadListSignature(
   archive: ArchiveStore,
 ): string {
   const merged = sortSessions(mergeSessions(sessions, views), views);
+  const archived = archivedPaths(merged, archive);
   return merged
     .map((s) =>
       [
@@ -499,7 +532,7 @@ export function threadListSignature(
         sessionAttention(s, views[s.path]),
         s.modifiedAt,
         sessionIsEmpty(s, views[s.path]) ? "empty" : "started",
-        archive.has(s.path) ? "a" : "r",
+        archived(s.path) ? "a" : "r",
         // A child attributed after the fact moves under its parent: the list
         // has to reload for that, so the attribution is part of the signature.
         s.agent?.kind ?? "",
