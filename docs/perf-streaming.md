@@ -21,6 +21,9 @@ answers `Stream <n> deltas every <ms> ms` with exactly that many SSE content
 frames. Everything else — host, worker, fixtures, theme, RPC — is
 `targets/app.mjs`.
 
+It asserts the acceptance and fails the run when a surface regresses; see
+"What the profile now asserts" at the end.
+
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `PROFILE_DELTAS` | 500 | content frames per run |
@@ -88,7 +91,7 @@ changed:
 subscription to the stream. This is one defect repeated in fifteen places, not
 fifteen defects.
 
-## Fixed here (the thread column)
+## Fixed, part one: the thread column
 
 1. **Find holds no subscription while it is closed.** `useConversationFind`
    selects a constant until the bar opens; open, it reads the live transcript as
@@ -106,6 +109,38 @@ fifteen defects.
    rebuilt the whole row list; `WindowRow` now bails out when its id and
    controller are unchanged. assistant-ui already shields the message body
    itself, so this saves the row wrapper, not the transcript.
+
+## Fixed, part two: everything beside it
+
+The same defect stood in fifteen more places, and it is one sentence: **read the
+fields you draw, not the session**. `lastSeq` and `blocks` move with every
+token, so `useLaserView()` in a surface that draws no transcript is a
+subscription to the stream.
+
+1. **The shell frame, the top bar, the command palette, the fullscreen map.**
+   The first two take the session through `samePresentationView`
+   (`runtime/presentation-state.ts`): the same object, with its identity held
+   while the name, the agent, the status, the questions and the conversation's
+   first line are unchanged. Only a surface that draws none of the transcript
+   may use it — the comparison deliberately ignores blocks, entries and the
+   sequence — and the two that do (the palette's `/fork`, the top bar's) read
+   entries from the host at the moment they act. The palette reads nothing at
+   all while its dialog is closed.
+2. **The workbench, the inline question cards, the waiting notice, the
+   composer's agent / thinking / microphone / tray controls.** Narrow reads:
+   the project directory, the questions, the session's agent, the pending tray,
+   and one derived boolean ("has this session started?") in place of
+   `isUnstartedSession(view)`.
+3. **The monitor's Tools and Files sections.** Both derived from every message
+   through `useThreadToolTimeline` / `useSessionFileChanges`. They now subscribe
+   to a key describing the tool calls themselves — id, status, incomplete
+   reason, error flag and argument length — and read the messages imperatively
+   for that same commit. Live tool work still moves them (a call appearing, its
+   arguments arriving, its status settling); prose does not.
+4. **The sessions panel.** assistant-ui re-allocates `threadIds` and
+   `threadItems` on every publication of its store, with the same entries
+   inside. `useStableAuiList` keeps the previous array while the entries are the
+   same objects, so the list re-renders when the list changes.
 
 ## Numbers
 
@@ -127,12 +162,42 @@ are stable across runs to ~1 %). "Renders" are component bodies that ran.
 | top bar | 24,430 | 24,792 | 25,154 |
 | long tasks > 50 ms | 0 | 0 | 0 |
 
-¹ An experiment, not shipped: `Shell.tsx`'s two `useLaserView()` reads replaced
-by narrow selectors (session `cwd`, "is a session open", the tab title as a
-string). Measured on the pre-merge build of the same branch. It is recorded here
-because it is the largest single cause and it is not this task's file to change.
-While the shell re-renders the whole app per batch, the columns cannot reach
-zero and the thread's own savings are partly masked.
+¹ At the time, an experiment: `Shell.tsx`'s two `useLaserView()` reads replaced
+by narrow selectors. It is now shipped as part two, together with the other
+fourteen sites, and the table below supersedes that column.
+
+### After both parts
+
+Production (minified) build, `--fixture huge` (2,000 messages, tail-first
+window), medians of three runs of 511 deltas, compared with the same build
+before any of this work:
+
+| | before | part one | **both parts** |
+| --- | ---: | ---: | ---: |
+| component renders per delta | 625.0² | 515.0 | **82.2** |
+| React commits per delta | 2.24² | 2.02 | **1.57** |
+| settled-row re-renders per delta (mounts excluded) | — | 9.3 | **4.2** |
+| shell-frame wakes (511 deltas) | 267 | 267 | **15** |
+| sessions panel wakes | 307 | 307 | **23** |
+| telemetry wakes | 302 | 302 | **4** |
+| long tasks > 50 ms | 0 | 0 | **0** |
+| median gap between commits | — | 2.2–2.5 ms | **1.0–1.5 ms** |
+
+² measured on the `long` fixture; the two fixtures differ by about 2 % on this
+metric, and the 2,000-message fixture was measured at 515.0 after part one.
+
+A "wake" is a component that re-rendered while its parent did not — its own
+subscription fired. The rail, the top bar, the workbench and the goal bar never
+woke on their own even before: the shell frame above them did, and they were
+dragged through it. What is left is the turn itself (it starts, it ends, the
+status and the catalog change), a handful of times per reply rather than one
+per streamed batch.
+
+By surface, component bodies run over 511 deltas (unminified; before on the
+`long` fixture, after on `huge` — both a 40-message tail window): sessions panel
+57,420 → 4,226; rail 34,250 → 2,750; top bar 24,792 → 1,987; telemetry
+37,099 → 2,759; fleet 7,956 → 648; workbench 137 → 11; goal bar 137 → 11;
+composer and footer 45,859 → 5,595; shell frame 12,572 → 980.
 
 Production (minified) build, `--fixture huge` (2,000 messages, tail-first
 window), medians of three runs of 511 deltas:
@@ -148,29 +213,52 @@ window), medians of three runs of 511 deltas:
 | mounted rows during the stream | 1–3 |
 | DOM elements | 539 |
 
-### Memory across long↔short switches
+### Memory across long↔short switches (after both parts)
 
 Ten long↔short session switch pairs through the real sidebar, with the
 renderer's own counters read after a forced collection (CDP
 `HeapProfiler.collectGarbage` + `Performance.getMetrics`):
 
-| after | JS heap | DOM nodes | listeners |
-| --- | ---: | ---: | ---: |
-| baseline (long conversation) | 19.13 MB | 801 | 316 |
-| 1 pair | 18.84 MB | 797 | 320 |
-| 5 pairs | 19.83 MB | 797 | 320 |
-| 10 pairs | 20.33 MB | 797 | 320 |
+| after | JS heap | DOM nodes | listeners | mounted rows |
+| --- | ---: | ---: | ---: | ---: |
+| baseline (long conversation, just streamed into) | 19.34 MB | 986 | 328 | 3 |
+| 1 pair | 18.01 MB | 797 | 321 | 1 |
+| 5 pairs | 18.63 MB | 797 | 321 | 1 |
+| 10 pairs | 19.06 MB | 797 | 321 | 1 |
 
-DOM nodes and listeners return to their starting level and stay there: no row,
-observer or listener is retained per switch. The heap ends 1.2 MB (6 %) above
-its baseline, consistent with the bounded caches the transcript keeps (measured
-row heights, search content); it is not proportional to the number of switches
-and no growth per pair is visible in the node or listener counts.
+DOM nodes and listeners fall to the level of a freshly opened conversation after
+the first switch and stay exactly there for the remaining nine: no row,
+observer, listener or subscription is retained per switch. The heap ends 0.28 MB
+*below* its baseline and 1.05 MB above its own first reading, drifting with the
+bounded caches the transcript keeps (measured row heights, search content)
+rather than with the number of switches.
 
-## Still open (outside this task's files)
+## What the profile now asserts
 
-The fifteen-place defect above is the remaining cost, and the profile's own
-assertions still fail on it (`PROFILE_ASSERT=0` to report without failing):
-the sessions sidebar, rail, top bar, fleet, telemetry and workbench re-render
-once per streamed batch. Every one is the same one-line change — read the field,
-not the view — and the shell experiment above says what it is worth.
+"Zero renders per delta" is a statement about deltas, not about the turn: a
+column still wakes when the turn starts and ends and when a status or the
+catalog changes. So the run fails when
+
+- any of the sessions panel, rail, top bar, fleet, telemetry, workbench or goal
+  bar **wakes** more than `max(8, deltas/20)` times (23 measured for the sessions
+  panel, ≤ 10 for the rest, at 511 deltas);
+- settled message rows re-render (mounts excluded) more than 20 times per delta
+  (4.2 measured);
+- the whole app renders more than 150 components per delta (82.2 measured);
+- a long task over 50 ms appears (none measured);
+- the switch loop retains more than 2,000 DOM nodes (it retains none).
+
+## Still open
+
+- **Settled rows.** About four component bodies per delta still run inside rows
+  that are not the streaming one, in Radix tooltip/popper wrappers whose ref
+  callbacks re-register when their row re-renders. Rows entering the window as
+  the reply grows (counted separately as mounts) are the window working, not
+  waste.
+- **`components/mobile/Notices.tsx`** still reads the view for a dialog count;
+  it is a phone-only surface and was not part of this measurement.
+- **The conversation map** re-renders per batch by design (it reads the message
+  list) but does not re-layout; that guard is tested elsewhere.
+- Phone width and dark theme were screenshotted, not profiled; tool-heavy and
+  reasoning-heavy turns were not streamed into; Beam's second scope and the
+  Electron shell were not profiled.

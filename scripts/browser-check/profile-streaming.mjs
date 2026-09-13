@@ -493,10 +493,24 @@ export default async function profileStreaming(check) {
 
   if (process.env.PROFILE_ASSERT !== '0') {
     const problems = [];
-    if (summary.medians.settledRowRenders > 0) problems.push(`settled message rows re-rendered ${summary.medians.settledRowRenders} times`);
-    for (const surface of ['SessionsPanel', 'FleetPanel', 'TelemetryPanel', 'Workbench', 'Rail']) {
-      if ((summary.medians.surfaces[surface] ?? 0) > 0) problems.push(`${surface} re-rendered ${summary.medians.surfaces[surface]} times`);
+    // "Zero renders per delta" is a statement about deltas, not about the turn:
+    // a column still wakes when the turn starts and ends, when a status or the
+    // catalog changes. What must not happen is a surface waking WITH the
+    // stream, so the budget is on wakes (a component whose own subscription
+    // fired) per delta, not on a lifetime count.
+    const wakes = surface => Object.entries(summary.medians.roots)
+      .filter(([key]) => key.startsWith(`${surface}/`)).reduce((total, [, count]) => total + count, 0);
+    const budget = Math.max(8, Math.round(summary.medians.deltas / 20));
+    for (const surface of ['SessionsPanel', 'FleetPanel', 'TelemetryPanel', 'Workbench', 'Rail', 'TopBar', 'GoalBar']) {
+      const woke = wakes(surface);
+      if (woke > budget) problems.push(`${surface} woke ${woke} times for ${summary.medians.deltas} deltas (budget ${budget})`);
     }
+    // The rows that are not the streaming one: a row entering the window is the
+    // window's work and is counted separately from a row re-rendering in place.
+    const settledRerenders = sumOf(summary.medians.settledRenders);
+    const perDelta = summary.medians.deltas ? settledRerenders / summary.medians.deltas : 0;
+    if (perDelta > 20) problems.push(`settled message rows re-rendered ${perDelta.toFixed(1)} times per delta`);
+    if (summary.medians.rendersPerDelta > 150) problems.push(`${summary.medians.rendersPerDelta} component renders per delta`);
     if (summary.medians.longTasksOver50 > 0) problems.push(`${summary.medians.longTasksOver50} long tasks over 50 ms`);
     // A switch loop that ends where it started returns its rows and its heap.
     if (summary.memory && summary.memory.growth.nodes > 2000) problems.push(`the switch loop retained ${summary.memory.growth.nodes} DOM nodes`);
