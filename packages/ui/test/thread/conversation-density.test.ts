@@ -14,7 +14,7 @@ describe("compact conversation density", () => {
   });
 
   it("tightens message and prompt spacing without shrinking controls", () => {
-    // Mounted-row spacing is measured with the real stylesheet in sustained-navigation.mjs.
+    // Mounted-row spacing is measured with the real stylesheet in transcript-window.mjs.
     const pair = source("components/assistant-ui/elements/message-pair.tsx");
     expect(pair).toContain("gap-1.5 rounded-xl bg-surface-2 px-3 py-2 text-base");
     expect(pair).toContain('className={cn("-ms-1.5 mt-1 flex h-7');

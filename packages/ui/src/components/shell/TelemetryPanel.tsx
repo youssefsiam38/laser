@@ -550,7 +550,15 @@ export function HistorySection() {
   const meta = useSessionMeta();
   const shell = useShell();
   const entries = useLaserState((s) => s.current ? s.open[s.current]?.entries : undefined);
-  const rows = useMemo(() => (entries ? historyRows(entries) : []), [entries]);
+  // Store entries are immutable snapshots. Revisit a destination without
+  // projecting it again, but never retain closed histories through strong keys.
+  const snapshots = useRef(new WeakMap<readonly unknown[], ReturnType<typeof historyRows>>());
+  const rows = useMemo(() => {
+    if (!entries) return [];
+    let cached = snapshots.current.get(entries);
+    if (!cached) { cached = historyRows(entries); snapshots.current.set(entries, cached); }
+    return cached;
+  }, [entries]);
 
   // Refresh when opened and when the session settles; never on callback churn.
   const refresh = useRef(actions.refreshEntries);

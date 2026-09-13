@@ -165,26 +165,25 @@ export function ThreadDialogCards({ className }: { className?: string | undefine
 function useDialogLink(dialog: UiDialogRequest | undefined): boolean {
   const link = usePendingDecisionLink();
   const { actions } = useLaserStable();
-  const [declineFirst, setDeclineFirst] = useState(false);
+  const path = useLaserView()?.path;
+  const presentation = useTranscriptPresentation();
+  const [declineFirst, setDeclineFirst] = useState<{ id: string; path: string | undefined } | undefined>(undefined);
 
   useEffect(() => {
     if (!link || !dialog) return;
     if (!dialog.id.endsWith(link.decisionId)) return;
     consumeDecisionLink();
     if (link.answer === "deny") {
-      setDeclineFirst(true);
+      setDeclineFirst({ id: dialog.id, path });
       return;
     }
     if (link.answer === "allow" && dialog.method === "confirm") {
-      void actions
-        .answerDialog({ id: dialog.id, confirmed: true })
-        .then(() => actions.toast("info", `Allowed · ${dialog.title}`));
+      const answer = () => actions.answerDialog({ id: dialog.id, confirmed: true }).then(() => actions.toast("info", `Allowed · ${dialog.title}`));
+      const form = dialogFormOf(dialog, false);
+      if (presentation && path && form) void presentation.question(path, form).answer(answer);
+      else void answer();
     }
-  }, [actions, dialog, link]);
+  }, [actions, dialog, link, path, presentation]);
 
-  useEffect(() => {
-    setDeclineFirst(false);
-  }, [dialog?.id]);
-
-  return declineFirst;
+  return declineFirst !== undefined && declineFirst.id === dialog?.id && declineFirst.path === path;
 }

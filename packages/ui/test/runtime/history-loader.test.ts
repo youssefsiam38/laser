@@ -20,6 +20,88 @@ function fixture(request: (params: Params) => Promise<Result>) {
 const deferred = <T>() => { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; };
 
 describe("history request ownership", () => {
+  it("replaces a complete cached tree with an authoritative recent tail and can page it again", async () => {
+    const request = vi.fn(async (params: Params) => historyWindow(source, params.window!, scope));
+    const f = fixture(request);
+    await f.loader.read(state.path, true);
+    expect(f.view().blocks).toHaveLength(80);
+    await f.loader.read(state.path, false, () => true, undefined, "recent");
+    expect(request).toHaveBeenLastCalledWith({ path: state.path, window: { tail: 40 } });
+    const expected = historyWindow(source, { tail: 40 }, scope);
+    expect(f.view().entries).toEqual(expected.entries);
+    expect(f.view().history).toEqual(expected.window);
+    expect(f.view().historyRevision).toBeDefined();
+    expect(f.view().blocks).toHaveLength(40);
+    expect(f.view().history).toMatchObject({ complete: false, userOffset: 20 });
+    const revision = f.view().historyRevision;
+    expect(await f.loader.earlier(state.path, () => true)).toBe(true);
+    expect(f.view().entries).toEqual(entries);
+    expect(new Set(f.view().blocks.map(block => block.id)).size).toBe(80);
+    expect(f.view().historyRevision).toBe(revision);
+  });
+
+  it("starts recent-tail replacement immediately instead of coalescing an older all read", async () => {
+    const old = deferred<Result>();
+    const request = vi.fn(async (params: Params) => params.window && "all" in params.window ? old.promise : historyWindow(source, params.window!, scope));
+    const f = fixture(request);
+    await f.loader.read(state.path);
+    const expanding = f.loader.all(state.path, () => true);
+    const resetting = f.loader.read(state.path, false, () => true, undefined, "recent");
+    expect(request.mock.calls.map(([p]) => p.window)).toEqual([{ tail: 40 }, { all: true }, { tail: 40 }]);
+    await resetting;
+    const accepted = f.view();
+    old.resolve(historyWindow(source, { all: true }, scope));
+    expect(await expanding).toBe(false);
+    expect(f.view()).toBe(accepted);
+    expect(f.view().blocks).toHaveLength(40);
+    expect(f.view().historyPending).toBeUndefined();
+  });
+
+  it.each(["earlier", "metadata"] as const)("fences an old %s response even when the new tail has the same cursor and epoch", async kind => {
+    const old = deferred<Result>();
+    let hold = false;
+    const request = vi.fn(async (params: Params) => hold && !(params.window && "tail" in params.window)
+      ? old.promise : historyWindow(source, params.window!, { ...scope, seq: 2 }));
+    const f = fixture(request);
+    await f.loader.read(state.path);
+    const before = f.view().history!.before!;
+    hold = true;
+    const stale = f.loader[kind](state.path, () => true);
+    await f.loader.read(state.path, false, () => true, undefined, "recent");
+    const accepted = f.view();
+    expect(accepted.history?.before).toBe(before);
+    const obsolete = { type: "message", id: "obsolete", parentId: "e79", message: { role: "assistant", content: "abandoned branch" } };
+    old.resolve(kind === "earlier" ? historyWindow(source, { before }, scope)
+      : historyWindow({ entries: [...entries, obsolete], leafId: "obsolete" }, { from: "e79" }, { ...scope, seq: 1 }));
+    await stale;
+    expect(f.view()).toBe(accepted);
+    expect(f.view().entries).toHaveLength(40);
+    expect(f.view().leafId).toBe("e79");
+  });
+
+  it("fences earlier replies from a predecessor loader after another loader accepts a recent tail", async () => {
+    const old = deferred<Result>();
+    const f = fixture(async params => params.window && "before" in params.window ? old.promise : historyWindow(source, params.window!, scope));
+    await f.loader.read(state.path);
+    const before = f.view().history!.before!;
+    const earlier = f.loader.earlier(state.path, () => true);
+    await f.replace(async params => historyWindow(source, params.window!, scope)).recent(state.path, () => true);
+    const accepted = f.view();
+    const stale = historyWindow(source, { before }, scope);
+    old.resolve(stale);
+    expect(await earlier).toBe(false);
+    expect(f.view()).toBe(accepted);
+    f.dispatch({ type: "historyPrepend", path: state.path, before, entries: stale.entries, window: stale.window });
+    expect(f.view()).toBe(accepted);
+  });
+
+  it("does not pretend a response without window metadata is a recent-tail reset", async () => {
+    const f = fixture(async () => source);
+    await expect(f.loader.read(state.path, false, () => true, undefined, "recent")).rejects.toThrow("Recent history could not be loaded");
+    expect(f.view().hydrated).toBe(false);
+    expect(f.view().historyRevision).toBeUndefined();
+  });
+
   it("coalesces concurrent tail reads and drops a late result after close", async () => {
     const pending = deferred<Result>();
     const request = vi.fn(() => pending.promise);

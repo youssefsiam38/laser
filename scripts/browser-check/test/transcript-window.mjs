@@ -4,6 +4,10 @@ import { join } from 'node:path';
 
 export default async function sustainedNavigation(check) {
   const page = check.page;
+  await check.touch(check.state.touch || check.state.width === 390);
+  await check.reducedMotion(check.state.theme === 'light');
+  const install = page.getByRole('dialog', { name: /works best installed/ });
+  await page.addLocatorHandler(install, async () => { await install.getByRole('button', { name: 'Not now', exact: true }).click(); });
   const { entries } = await check.rpc('pi/session/entries', { path: check.fixture.path });
   const canonical = entries.filter(entry => entry.type === 'message').length;
   const turns = canonical / 2;
@@ -75,8 +79,8 @@ async function companions(check, entries, turns) {
 }
 export async function row(check, title) {
   const page = check.page;
-  const show = page.getByRole('button', { name: 'Show sessions', exact: true });
-  if (await show.isVisible()) await show.click();
+  const sessions = page.getByRole('region', { name: 'Sessions', exact: true });
+  if (!await sessions.isVisible()) await page.getByRole('button', { name: /^Sessions$|Show sessions/ }).click();
   const escaped = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const button = page.getByRole('button', { name: new RegExp(`^(?:Finished, unread )?${escaped}$`) });
   await button.waitFor(); return button;
@@ -96,7 +100,9 @@ async function open(check, title, text, record = false) {
         if (correct) {
           window.__cVisible ??= performance.now() - window.__cStart;
           const input = viewport.querySelector('textarea[aria-label="Message"]');
-          if (input && !input.disabled && input.getBoundingClientRect().height) {
+          const inputRect = input?.getBoundingClientRect();
+          const hit = inputRect && document.elementFromPoint(inputRect.x + inputRect.width / 2, inputRect.y + inputRect.height / 2);
+          if (input && !input.disabled && inputRect.height && hit && input.contains(hit)) {
             window.__cArrival = { resident: window.__cVisible, interactive: performance.now() - window.__cStart, mounted: viewport.querySelectorAll('[data-window-message]').length };
             return;
           }
@@ -110,7 +116,28 @@ async function open(check, title, text, record = false) {
   if (check.state.touch) await button.tap(); else await button.click();
   await check.page.waitForFunction(() => window.__cArrival !== null);
   const result = await check.page.evaluate(() => window.__cArrival);
-  return record ? result : undefined;
+  if (record) {
+    const composer = check.page.getByRole('textbox', { name: 'Message', exact: true });
+    const draft = await composer.inputValue();
+    await check.page.evaluate(() => {
+      window.__cTyped = null;
+      const input = document.querySelector('main textarea[aria-label="Message"]');
+      input.addEventListener('input', () => requestAnimationFrame(() => {
+        window.__cTyped = { elapsed: performance.now() - window.__cStart, value: input.value };
+      }), { once: true });
+    });
+    // Actual supported input, not dispatchEvent or a synthetic React update.
+    // Total includes automation/readiness round trips; it is conservative,
+    // separate from the resident and enabled/hit-testable-input endpoints.
+    await composer.fill(`${draft}x`);
+    await check.page.waitForFunction(() => window.__cTyped !== null);
+    const typed = await check.page.evaluate(() => window.__cTyped);
+    assert.equal(typed.value, `${draft}x`);
+    result.actualInput = typed.elapsed;
+    await composer.fill(draft);
+  }
+  if (check.state.width < 1024) await check.page.getByRole('region', { name: 'Sessions', exact: true }).waitFor({ state: 'hidden' });
+  return record ? { destination: title, ...result } : undefined;
 }
 async function loadAll(check) {
   const composer = check.page.getByRole('textbox', { name: 'Message', exact: true });
@@ -153,6 +180,17 @@ async function navigationPairs(check, entries, turns) {
     longLong.push(await open(check, 'C mirror', `Checkpoint ${turns} is complete.`, true));
     longLong.push(await open(check, title, `Checkpoint ${turns} is complete.`, true));
   }
-  const result = { canonical: turns * 2, pairs, anchor: { before, after, error: Math.abs(before - after) }, shortLong: { resident: stats(shortLong, 'resident'), interactive: stats(shortLong, 'interactive'), samples: shortLong }, longLong: { resident: stats(longLong, 'resident'), interactive: stats(longLong, 'interactive'), samples: longLong } };
+  const result = { canonical: turns * 2, pairs, anchor: { before, after, error: Math.abs(before - after) }, shortLong: { resident: stats(shortLong, 'resident'), interactive: stats(shortLong, 'interactive'), actualInput: stats(shortLong, 'actualInput'), samples: shortLong }, longLong: { resident: stats(longLong, 'resident'), interactive: stats(longLong, 'interactive'), actualInput: stats(longLong, 'actualInput'), samples: longLong } };
   await writeFile(join(check.root, `switches-${check.state.width}-${check.state.theme}.json`), JSON.stringify(result, null, 2));
+  if (process.env.TRANSCRIPT_SWITCH_PROFILE === '1' && turns >= 1000 && check.state.width === 1360 && check.state.theme === 'light' && (result.longLong.resident.median > 250 || result.longLong.resident.p95 > 400)) {
+    // Explicit one-off attribution, after all samples; ordinary reruns never
+    // silently collect another profile of an already attributed budget miss.
+    const cdp = await check.context.newCDPSession(page);
+    await cdp.send('Profiler.enable'); await cdp.send('Profiler.start');
+    await open(check, 'C mirror', `Checkpoint ${turns} is complete.`);
+    const { profile } = await cdp.send('Profiler.stop');
+    await writeFile(join(check.root, 'resident-switch.cpuprofile'), JSON.stringify(profile));
+    await cdp.detach();
+    await open(check, title, `Checkpoint ${turns} is complete.`);
+  }
 }

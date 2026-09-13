@@ -7,6 +7,7 @@ import { dialogFormOf } from "../../src/dialogs/model.js";
 import { QuestionPresentation, TranscriptPresentation } from "../../src/runtime/transcript-presentation.js";
 import { initialState } from "../../src/store.js";
 import { createStateStore } from "../../src/runtime/LaserProvider.js";
+import { ToolRowScope, useRegisterToolRow, useToolRowIds } from "../../src/dialogs/tool-rows.js";
 
 let host: HTMLDivElement, root: Root;
 beforeEach(() => { globalThis.IS_REACT_ACT_ENVIRONMENT = true; host = document.createElement("div"); document.body.append(host); root = createRoot(host); });
@@ -24,7 +25,9 @@ it("retains typed fields and pending submission across relocation; sibling scope
   const send = vi.fn(() => new Promise<void>(done => { resolve = done; }));
   const render = (location: string) => act(async () => root.render(<div key={location}><DialogBody form={form} presentation={owner} onAnswer={send} /></div>));
   await render("inline"); await type("unsent exact value");
+  host.tabIndex = -1; host.focus();
   await render("footer"); expect(host.querySelector("input")!.value).toBe("unsent exact value");
+  expect(document.activeElement).toBe(host);
   await act(async () => [...host.querySelectorAll("button")].find(b => b.textContent === "Submit")!.click());
   await render("inline-again"); expect(owner.getSnapshot().busy).toBe(true);
   await owner.answer(send); expect(send).toHaveBeenCalledTimes(1);
@@ -74,6 +77,16 @@ it("retains answers and the deadline through the real optimistic remove/failed-r
   expect(retry.getSnapshot()).toEqual({ values: { value: "keep on retry" }, declining: false, busy: false });
   await owner.answer(async () => { store.dispatch({ type: "dialogAnswered", path, id: form.id }); });
   expect(store.presentation!.question(path, form)).not.toBe(owner);
+});
+function Row({ id }: { id: string }) { useRegisterToolRow(id); return null; }
+function Placement({ label }: { label: string }) { const ids = useToolRowIds(); return <output aria-label={label}>{[...ids].join(",")}</output>; }
+it("does not let a mounted main-thread tool suppress the Beam footer fallback", async () => {
+  await act(async () => root.render(<><ToolRowScope scope="/same"><Row id="tool" /><Placement label="main" /></ToolRowScope><ToolRowScope scope="/same"><Placement label="beam" /></ToolRowScope></>));
+  expect(host.querySelector('[aria-label="main"]')!.textContent).toBe("tool");
+  expect(host.querySelector('[aria-label="beam"]')!.textContent).toBe("");
+  await act(async () => root.render(<><ToolRowScope scope="/next"><Placement label="main" /></ToolRowScope><ToolRowScope scope="/same"><Row id="beam-tool" /><Placement label="beam" /></ToolRowScope></>));
+  expect(host.querySelector('[aria-label="main"]')!.textContent).toBe("");
+  expect(host.querySelector('[aria-label="beam"]')!.textContent).toBe("beam-tool");
 });
 it("keeps independent local approval owners independent", () => {
   const a = new QuestionPresentation(form), b = new QuestionPresentation(form);

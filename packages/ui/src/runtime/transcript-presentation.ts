@@ -9,10 +9,13 @@ export class QuestionPresentation {
   private listeners = new Set<() => void>();
   private disposed = false;
   private present = true;
+  private focused = false;
+  private declineFocus = false;
   readonly deadline: number | undefined;
   constructor(form: DialogForm, declining = false, now = Date.now(), private onDispose?: () => void) {
     this.state = { values: Object.fromEntries(form.fields.filter(f => f.default !== undefined).map(f => [f.id, f.default!])), declining, busy: false };
     this.deadline = form.timeoutMs === undefined ? undefined : now + form.timeoutMs;
+    this.declineFocus = declining;
   }
   getSnapshot = () => this.state;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
@@ -22,7 +25,9 @@ export class QuestionPresentation {
     for (const listener of this.listeners) listener();
   }
   setValue = (id: string, value: string | boolean) => this.update({ values: { ...this.state.values, [id]: value } });
-  setDeclining = (declining: boolean) => this.update({ declining });
+  setDeclining = (declining: boolean) => { if (declining && !this.state.declining) this.declineFocus = true; this.update({ declining }); };
+  claimInitialFocus() { if (this.focused) return false; this.focused = true; return true; }
+  claimDeclineFocus() { const pending = this.declineFocus; this.declineFocus = false; return pending; }
   /** Synchronous guard shared by every mounted presentation of this request. */
   async answer(send: () => Promise<unknown>): Promise<void> {
     if (this.disposed || this.state.busy) return;

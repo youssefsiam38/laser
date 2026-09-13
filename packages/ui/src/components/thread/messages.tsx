@@ -213,8 +213,8 @@ export function UserMessage() {
   // One request: the worker owns the sequence, and a move that fails leaves
   // the session stopped and where it was.
   const move = { stopFirst: busy };
-  const fork = entryId ? () => void actions.fork(entryId, move) : undefined;
-  const jump = entryId ? () => void actions.jump(entryId, move) : undefined;
+  const fork = entryId ? () => { viewport?.startAction(); void actions.fork(entryId, move); } : undefined;
+  const jump = entryId ? () => { viewport?.startAction(); void actions.jump(entryId, move); } : undefined;
   const copyPath = path ? () => void copy(path) : undefined;
   const startEdit = entryId
     ? () => {
@@ -231,6 +231,7 @@ export function UserMessage() {
    */
   const sendEdit = async (where: "here" | "fork") => {
     if (!entryId || sending) return;
+    const location = viewport?.startAction();
     setSending(true);
     try {
       if (where === "here") {
@@ -241,6 +242,7 @@ export function UserMessage() {
         if (!(await actions.navigate(entryId, move))) return;
         await actions.send(editContent(), "prompt");
         setEditing(false);
+        if (location) void viewport?.afterAction(location);
         return;
       }
       await actions.fork(entryId, move);
@@ -297,7 +299,13 @@ export function UserMessage() {
               // A version is reached through its own last entry: navigating
               // onto a prompt would put the session before it instead of on it.
               const target = versions[i];
-              if (target) void actions.jump(leafOf(entries, target));
+              if (target) {
+                const location = viewport?.startAction();
+                const branchLeaf = leafOf(entries, target);
+                void actions.navigate(branchLeaf).then(moved => {
+                  if (moved && location) void viewport?.afterAction(location, { messageId: `entry:${target}`, leafId: branchLeaf });
+                });
+              }
             }}
           />
           <MessageActions
@@ -545,6 +553,7 @@ function AssistantStopped({ reason, detail, tone }: ReturnType<typeof stopReason
  */
 function AssistantFooter() {
   const aui = useAui();
+  const viewport = useTranscriptViewport();
   const { actions } = useLaserStable();
   const text = useMessageText();
   const { copied, copy } = useCopy();
@@ -566,6 +575,7 @@ function AssistantFooter() {
 
   const rerun = async (where: "here" | "fork", pick?: RegeneratePick) => {
     if (!promptEntryId) return;
+    const location = viewport?.startAction();
     const source = aui.thread.getState().messages.find((message) =>
       message.role === "user" && laserMeta(message as MessageState).userOrdinal === promptOrdinal);
     let prompt = source?.content.map((part) => part.type === "text" ? part.text : "").filter(Boolean).join("\n\n");
@@ -583,6 +593,7 @@ function AssistantFooter() {
     else if (pick) await actions.setThinking(pick.thinking as ThinkingLevel);
     await actions.send([{ type: "text", text: prompt }], "prompt");
     if (where === "fork") clearHandedBackPrompt(aui, prompt);
+    else if (location) void viewport?.afterAction(location);
   };
 
   return (

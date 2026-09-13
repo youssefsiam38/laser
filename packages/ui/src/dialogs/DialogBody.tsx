@@ -63,14 +63,14 @@ export function DialogBody({ form, presentation, onAnswer, variant = "card", tou
   const onlyConfirm = single?.type === "confirm";
 
   useEffect(() => {
-    if (!autoFocus) return;
+    if (!autoFocus || !owner.claimInitialFocus()) return;
     rootRef.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus({ preventScroll: true });
-  }, [autoFocus]);
+  }, [autoFocus, owner]);
 
   useEffect(() => {
-    if (!declining) return;
+    if (!declining || !owner.claimDeclineFocus()) return;
     rootRef.current?.querySelector<HTMLElement>("[data-rejection]")?.focus({ preventScroll: true });
-  }, [declining]);
+  }, [declining, owner]);
 
   const submit = async (override?: FieldValues): Promise<void> => {
     const next = { ...values, ...override };

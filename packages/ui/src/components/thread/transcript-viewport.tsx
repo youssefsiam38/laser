@@ -7,7 +7,7 @@ import { HeightIndex, windowRanges } from "./transcript-window.js";
 import { ThreadMessage } from "./messages.js";
 import { registerReadingController } from "./preserve-reading-position.js";
 
-export interface TranscriptTarget { messageId: string; toolCallId?: string }
+export interface TranscriptTarget { messageId: string; toolCallId?: string; leafId?: string | null }
 export interface LocateOptions {
   reason: "find" | "map" | "question" | "action" | "focus" | "restore";
   signal?: AbortSignal;
@@ -39,12 +39,18 @@ export class TranscriptViewport {
   private focused: string | undefined;
   private frame = 0;
   private revision = 0;
+  private windowDirty = false;
   private listeners = new Set<() => void>();
   private observer: ResizeObserver | undefined;
   private intent = 0;
+  private controlIntent = 0;
+  private leafId: string | null | undefined;
   private pendingFrames = new Map<number, () => void>();
   private pendingLocates = new Set<() => void>();
   private target: TranscriptTarget | undefined;
+  // A measured destination owns its anchor until a new navigation intent.
+  // Native layout/clamp scrolls can arrive even after the target settles.
+  private ownsLocation = false;
   private tail: (() => void) | undefined;
   private expectedTop: number | undefined;
   private disposed = false;
@@ -52,7 +58,8 @@ export class TranscriptViewport {
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   private publish() { this.revision++; for (const listener of this.listeners) listener(); }
   private cacheKey(id: string) { return JSON.stringify([this.path, this.signature, id]); }
-  configure(path: string) {
+  configure(path: string, leafId?: string | null) {
+    this.leafId = leafId;
     if (this.path === path) return;
     this.cancel();
     if (this.path) this.places.set(this.path, this.place);
@@ -75,7 +82,7 @@ export class TranscriptViewport {
     this.positions = new Map(ids.map((id, i) => [id, i]));
     this.rebuild();
     // A branch replacement cancels a pending destination; appends/prepends do not.
-    if (previous.length && previous.some(id => !this.positions.has(id))) this.cancel();
+    if (previous.length && previous.some(id => !this.positions.has(id))) this.cancel("structure");
   }
   private rebuild() { this.heights = new HeightIndex(this.ids.map(id => this.measured.get(this.cacheKey(id)) ?? this.estimate)); }
   private top() {
@@ -85,7 +92,12 @@ export class TranscriptViewport {
   ranges() {
     const height = this.viewport?.clientHeight || window.innerHeight;
     let top = this.top();
-    if (!this.content || this.place.following) top = this.heights.total - height;
+    const targetIndex = this.target ? this.positions.get(this.target.messageId) : undefined;
+    // Mount/unmount callbacks can synchronously rerender before the next measured
+    // frame. While locating, the canonical target must own the window: switching
+    // between the live top and an evicted old anchor makes those renders oscillate.
+    if (targetIndex !== undefined) top = this.heights.offset(targetIndex) - height / 3;
+    else if (!this.content || this.place.following) top = this.heights.total - height;
     else if (this.place.anchor && !this.nodes.has(this.place.anchor.messageId)) top = this.heights.offset(this.positions.get(this.place.anchor.messageId) ?? 0) - this.place.anchor.messageOffset;
     const pins = [...this.pins.keys(), this.focused, this.target?.messageId].flatMap(id => id && this.positions.has(id) ? [this.positions.get(id)!] : []);
     if (this.selected) {
@@ -171,6 +183,7 @@ export class TranscriptViewport {
     this.signature = signature; this.rebuild(); return true;
   }
   private measure = () => {
+    if (this.frame) cancelAnimationFrame(this.frame);
     this.frame = 0;
     if (this.disposed) return;
     let changed = this.layout();
@@ -187,18 +200,35 @@ export class TranscriptViewport {
     }
     // A global measurement budget, including layouts and previously visited sessions.
     while (this.measured.size > 20_000) this.measured.delete(this.measured.keys().next().value!);
-    if (changed) { this.restore(); this.publish(); }
+    if (changed || this.windowDirty) { this.windowDirty = false; this.restore(); this.publish(); }
     this.capture();
   };
   schedule = () => { if (!this.frame && !this.disposed) this.frame = requestAnimationFrame(this.measure); };
-  committed() { this.layout(); this.restore(); this.schedule(); }
-  cancel = () => {
-    this.intent++; this.target = undefined;
+  committed() { if (this.layout()) this.windowDirty = true; this.restore(); this.schedule(); }
+  cancel = (reason?: unknown) => {
+    this.ownsLocation = false;
+    this.intent++;
+    if (this.target) { this.target = undefined; this.windowDirty = true; this.schedule(); }
+    if (reason !== "structure") this.controlIntent++;
     for (const [frame, resolve] of this.pendingFrames) { cancelAnimationFrame(frame); resolve(); }
     this.pendingFrames.clear();
     for (const resolve of this.pendingLocates) resolve();
     this.pendingLocates.clear();
   };
+  startAction() { this.capture(); this.cancel(); return { path: this.path, intent: this.controlIntent }; }
+  async afterAction(ticket: { path: string; intent: number }, target?: TranscriptTarget): Promise<void> {
+    // Engine moves publish before React commits. Begin the new location only
+    // after that commit, and never after a later person/destination intent.
+    do {
+      await this.nextFrame();
+      if (this.disposed || ticket.path !== this.path || ticket.intent !== this.controlIntent) return;
+      // A successful engine move can settle before React commits its history.
+      // Wait for that exact branch, not an arbitrary number of frames. Only
+      // the accepted action calls here; later person/destination intents cancel.
+    } while (target && ((target.leafId !== undefined && target.leafId !== this.leafId) || !this.positions.has(target.messageId)));
+    if (target) { await this.ensureVisible(target, { reason: "action" }); return; }
+    this.latest();
+  }
   private nextFrame() {
     return new Promise<void>(resolve => {
       const frame = requestAnimationFrame(() => { this.pendingFrames.delete(frame); resolve(); });
@@ -208,7 +238,7 @@ export class TranscriptViewport {
   async ensureVisible(target: TranscriptTarget, options: LocateOptions): Promise<LocateResult> {
     this.cancel();
     const intent = this.intent, path = this.path;
-    const cancelled = () => this.disposed || options.signal?.aborted || this.intent !== intent || path !== this.path;
+    const cancelled = () => this.disposed || options.signal?.aborted || this.intent !== intent || path !== this.path || (target.leafId !== undefined && target.leafId !== this.leafId);
     const abort = () => { if (this.intent === intent) this.cancel(); };
     options.signal?.addEventListener("abort", abort, { once: true });
     try {
@@ -225,6 +255,7 @@ export class TranscriptViewport {
     }
     if (!this.positions.has(target.messageId)) return "missing";
     this.place.following = false;
+    this.ownsLocation = true;
     this.target = target;
     this.publish();
     let stable = 0;
@@ -263,6 +294,11 @@ export class TranscriptViewport {
     const unbind = registerReadingController(viewport, this.preserve);
     const scroll = () => {
       if (this.expectedTop !== undefined && Math.abs(viewport.scrollTop - this.expectedTop) < 0.5) { this.expectedTop = undefined; return; }
+      if (this.ownsLocation) {
+        // Only wheel/touch/pointer/keyboard or another explicit destination can
+        // relinquish this anchor. A scroll event itself is not user intent.
+        this.windowDirty = true; this.schedule(); return;
+      }
       this.place.following = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop <= 2;
       this.capture(); this.publish(); this.schedule();
     };
@@ -275,7 +311,16 @@ export class TranscriptViewport {
       const id = (node: Node | null) => (node instanceof Element ? node : node?.parentElement)?.closest<HTMLElement>("[data-window-message]")?.dataset.windowMessage;
       const start = id(selected?.anchorNode ?? null), end = id(selected?.focusNode ?? null);
       const a = start ? this.positions.get(start) : undefined, b = end ? this.positions.get(end) : undefined;
-      this.selected = selected && !selected.isCollapsed && a !== undefined && b !== undefined ? [start!, end!] : undefined;
+      if (!selected || selected.isCollapsed) this.selected = undefined;
+      else if (a !== undefined && b !== undefined) this.selected = [start!, end!];
+      else if (selected.rangeCount && this.content && selected.getRangeAt(0).intersectsNode(this.content)) {
+        // A drag can end on a spacer/container boundary before the next window
+        // commits. Preserve the already selected interval through that gap.
+        const range = selected.getRangeAt(0);
+        const intersecting = [...this.nodes].filter(([, node]) => range.intersectsNode(node)).map(([id]) => this.positions.get(id)!);
+        if (this.selected) for (const id of this.selected) { const index = this.positions.get(id); if (index !== undefined) intersecting.push(index); }
+        if (intersecting.length) this.selected = [this.ids[Math.min(...intersecting)]!, this.ids[Math.max(...intersecting)]!];
+      } else this.selected = undefined;
       this.publish();
     };
     const focus = (event: FocusEvent) => {
@@ -286,22 +331,36 @@ export class TranscriptViewport {
       this.publish();
     };
     const key = (event: KeyboardEvent) => {
+      this.cancel();
       if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End"].includes(event.key) && event.target === viewport) user();
       if (event.key === "Tab" && event.target instanceof HTMLElement) {
         const row = event.target.closest<HTMLElement>("[data-window-message]");
         const id = row?.dataset.windowMessage;
         const index = id ? this.positions.get(id) : undefined;
         const selector = 'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), a[href], [tabindex="0"]';
-        const controls = [...(row?.querySelectorAll<HTMLElement>(selector) ?? [])].filter(node => node.getClientRects().length > 0);
-        const edge = event.shiftKey ? controls[0] : controls.at(-1);
-        const next = index === undefined ? undefined : this.ids[index + (event.shiftKey ? -1 : 1)];
-        if (edge === event.target && next && !this.nodes.has(next)) {
+        const controlsOf = (node?: Element) => [...(node?.querySelectorAll<HTMLElement>(selector) ?? [])].filter(control => control.getClientRects().length > 0);
+        const controls = controlsOf(row ?? undefined), backward = event.shiftKey, direction = backward ? -1 : 1;
+        const edge = backward ? controls[0] : controls.at(-1);
+        if (edge !== event.target || index === undefined || !row) return;
+        let nextIndex = index + direction;
+        while (this.ids[nextIndex] && this.nodes.has(this.ids[nextIndex]!) && !controlsOf(this.nodes.get(this.ids[nextIndex]!)).length) nextIndex += direction;
+        const next = this.ids[nextIndex];
+        if (next && !this.nodes.has(next)) {
           event.preventDefault();
-          void this.ensureVisible({ messageId: next }, { reason: "focus" }).then(result => {
-            if (result !== "visible") return;
-            const controls = [...(this.nodes.get(next)?.querySelectorAll<HTMLElement>(selector) ?? [])].filter(node => node.getClientRects().length > 0);
-            (event.shiftKey ? controls.at(-1) : controls[0])?.focus({ preventScroll: true });
-          });
+          void (async () => {
+            // A notice can have no controls. Continue to the next canonical
+            // focus target instead of dropping Tab through a window gap.
+            for (let i = nextIndex; i >= 0 && i < this.ids.length; i += direction) {
+              const nextId = this.ids[i]!;
+              if (!this.nodes.has(nextId) && await this.ensureVisible({ messageId: nextId }, { reason: "focus" }) !== "visible") return;
+              const candidates = controlsOf(this.nodes.get(nextId)), control = backward ? candidates.at(-1) : candidates[0];
+              if (!control) continue;
+              if (await this.ensureVisible({ messageId: nextId }, { reason: "focus", rect: () => control.getBoundingClientRect() }) === "visible") control.focus({ preventScroll: true });
+              return;
+            }
+            const outside = controlsOf(document.body).filter(control => !this.content?.contains(control) && Boolean(control.compareDocumentPosition(row) & (backward ? Node.DOCUMENT_POSITION_FOLLOWING : Node.DOCUMENT_POSITION_PRECEDING)));
+            (backward ? outside.at(-1) : outside[0])?.focus({ preventScroll: true });
+          })();
         }
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a" && !(event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)) {
@@ -313,6 +372,7 @@ export class TranscriptViewport {
     };
     viewport.addEventListener("scroll", scroll, { passive: true });
     viewport.addEventListener("wheel", user, { passive: true }); viewport.addEventListener("touchstart", user, { passive: true });
+    viewport.addEventListener("pointerdown", this.cancel, { passive: true });
     viewport.addEventListener("focusin", focus); viewport.addEventListener("focusout", focus); viewport.addEventListener("keydown", key);
     document.addEventListener("selectionchange", selection);
     const theme = new MutationObserver(this.schedule); theme.observe(document.documentElement, { attributes: true, attributeFilter: ["style", "class", "data-theme"] });
@@ -322,6 +382,7 @@ export class TranscriptViewport {
       this.cancel(); this.disposed = true; cancelAnimationFrame(this.frame); this.frame = 0;
       this.observer?.disconnect(); this.observer = undefined; theme.disconnect(); unbind();
       viewport.removeEventListener("scroll", scroll); viewport.removeEventListener("wheel", user); viewport.removeEventListener("touchstart", user);
+      viewport.removeEventListener("pointerdown", this.cancel);
       viewport.removeEventListener("focusin", focus); viewport.removeEventListener("focusout", focus); viewport.removeEventListener("keydown", key);
       document.removeEventListener("selectionchange", selection); document.fonts?.removeEventListener("loadingdone", this.schedule);
       this.viewport = undefined; this.tail = undefined;
@@ -337,9 +398,13 @@ export function TranscriptViewportProvider({ children }: { children: ReactNode }
   const paths = useLaserState(s => Object.keys(s.open).join("\0"));
   const destination = useLaserState(s => s.destination);
   const epoch = useLaserState(s => s.current ? s.open[s.current]?.updateEpoch : undefined);
+  const leafId = useLaserState(s => s.current ? s.open[s.current]?.leafId : undefined);
   const previous = useRef({ destination, epoch });
-  if (previous.current.destination !== destination || previous.current.epoch !== epoch) { controller.cancel(); previous.current = { destination, epoch }; }
-  controller.configure(path);
+  if (previous.current.destination !== destination || previous.current.epoch !== epoch) {
+    controller.cancel(previous.current.destination !== destination ? undefined : "structure");
+    previous.current = { destination, epoch };
+  }
+  controller.configure(path, leafId);
   useLayoutEffect(() => { controller.retain(paths.split("\0")); }, [controller, paths]);
   return <Context value={controller}>{children}</Context>;
 }

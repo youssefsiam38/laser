@@ -306,7 +306,7 @@ describe("the version picker", () => {
     await click(picker.querySelector('button[aria-label="Previous version"]') ?? picker.querySelector("button")!);
     // Navigating onto a prompt would put the session before it; the version is
     // reached through the reply that ends it.
-    expect(stable.actions.jump).toHaveBeenCalledWith("a2a");
+    expect(stable.actions.navigate).toHaveBeenCalledWith("a2a");
   });
 });
 

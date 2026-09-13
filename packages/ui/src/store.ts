@@ -144,6 +144,8 @@ export interface SessionView {
   /** Loaded entries; history distinguishes incomplete messages from unloaded versions. */
   entries: unknown[];
   history?: Omit<HistoryWindow, "live"> | undefined;
+  /** Owner-local accepted recent-tail replacement, not a worker generation. */
+  historyRevision?: string | undefined;
   /** Accepted updates buffered only while an authoritative window read is in flight. */
   historyPending?: { token: string; updates: HostNotifications["session/update"][] } | undefined;
   /**

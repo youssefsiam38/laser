@@ -1,4 +1,4 @@
-import { AuiConfig, AuiIf, AuiProvider, Suggestions, ThreadPrimitive, useAui, unstable_useThreadMessageIds } from "@assistant-ui/react";
+import { AuiConfig, AuiIf, AuiProvider, Suggestions, ThreadPrimitive, useAui } from "@assistant-ui/react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { ConversationMapAui } from "@/components/assistant-ui/elements/conversation-map.aui";
@@ -19,7 +19,6 @@ import { useSessionSeen } from "./use-session-seen.js";
 import { FileOpenerProvider } from "./FileOpener.js";
 import { Composer } from "./Composer.js";
 import { EmptyState } from "./EmptyState.js";
-import { ThreadMessage } from "./messages.js";
 import { ThreadSlotsProvider, type ThreadSlots } from "./thread-slots.js";
 import { useConversationFind } from "./use-conversation-find.js";
 import { FindSelectionContext } from "./search-state.js";
@@ -62,7 +61,8 @@ const FOLLOW_UPS = AuiConfig({
 });
 
 export function Thread(props: ThreadProps = {}) {
-  return <TranscriptViewportProvider><ToolRowScope><ThreadContent {...props} /></ToolRowScope></TranscriptViewportProvider>;
+  const path = useLaserState(s => s.current ?? "");
+  return <TranscriptViewportProvider><ToolRowScope scope={path}><ThreadContent {...props} /></ToolRowScope></TranscriptViewportProvider>;
 }
 
 function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
@@ -182,14 +182,6 @@ function EntriesRefresh() {
     if (path && old.path === path && old.running && !running) void actions.refreshEntries({ tail: true });
   }, [actions, path, running]);
   return null;
-}
-
-const MESSAGE_COMPONENTS = { Message: ThreadMessage };
-
-/** Index providers rebind existing rows on prepend; identity providers keep their state. */
-export function HistoryMessages() {
-  const ids = unstable_useThreadMessageIds();
-  return ids.map(messageId => <ThreadPrimitive.Unstable_MessageById key={messageId} messageId={messageId} components={MESSAGE_COMPONENTS} />);
 }
 
 /** History is explicit, and upward reading fetches the next complete turn page. */

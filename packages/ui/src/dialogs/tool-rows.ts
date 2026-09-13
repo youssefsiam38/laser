@@ -1,5 +1,5 @@
 "use client";
-import { createContext, createElement, useContext, useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
+import { createContext, createElement, useContext, useEffect, useMemo, useSyncExternalStore, type ReactNode } from "react";
 
 /** Mounted placement belongs to a rendered scope, not to the canonical request. */
 class ToolRows {
@@ -12,8 +12,8 @@ class ToolRows {
 }
 const standalone = new ToolRows();
 const Context = createContext(standalone);
-export function ToolRowScope({ children }: { children: ReactNode }) {
-  const [store] = useState(() => new ToolRows());
+export function ToolRowScope({ children, scope = "" }: { children: ReactNode; scope?: string }) {
+  const store = useMemo(() => new ToolRows(), [scope]);
   return createElement(Context.Provider, { value: store }, children);
 }
 export function useToolRowIds(): ReadonlySet<string> {
