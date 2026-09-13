@@ -76,7 +76,13 @@ describe("Run setup again", () => {
   });
 
   it("keeps the person in Settings and says why when the host refuses", async () => {
-    mocks.request.mockRejectedValueOnce(new Error("The host is not answering."));
+    // By method, not by call order: this tab also asks the host how big the log
+    // store is, and a `…Once` rejection would land on whichever went first.
+    mocks.request.mockImplementation((method: string) =>
+      method === "pi/setup/complete"
+        ? Promise.reject(new Error("The host is not answering."))
+        : Promise.resolve({}),
+    );
     await act(async () => root.render(<TooltipProvider><DeviceTab /></TooltipProvider>));
     await press();
     expect(mocks.toast).toHaveBeenCalledWith("error", "The host is not answering.");

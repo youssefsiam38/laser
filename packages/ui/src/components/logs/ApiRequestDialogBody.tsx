@@ -9,7 +9,7 @@
 import { TextMessagePartProvider } from "@assistant-ui/react";
 import { useEffect, useMemo, useState } from "react";
 import { Braces, Check, Copy, FileText, Info, ListFilter, MessagesSquare, Search, ShieldCheck, Wrench } from "lucide-react";
-import type { InstructionSourceMap, InstructionSourceSpan, LogEntry } from "@lasercode/protocol";
+import type { InstructionSourceMap, InstructionSourceSpan, LogBodySummary, LogEntry } from "@lasercode/protocol";
 import { Button } from "@/components/ui/button";
 import { JsonViewer } from "@/components/assistant-ui/elements/json-viewer";
 import { MarkdownText } from "@/components/assistant-ui/elements/markdown-text";
@@ -30,6 +30,7 @@ import { ConfidenceMarker } from "@/components/assistant-ui/elements/confidence-
 import { FileLinkDirectory } from "@/components/ui/source-file-link";
 import { requestSourceSpans } from "./request-sources.js";
 import { createRequestJsonText } from "./request-json-text.js";
+import { ReleasedBody } from "./ReleasedBody.js";
 
 import type { ApiRequestTarget } from "./ApiRequestDialog.js";
 
@@ -116,6 +117,9 @@ function RequestBody({entry}:{entry:LogEntry}) {
   const [payload,setPayload]=useState<unknown>(entry.detail);
   const [loading,setLoading]=useState(Boolean(entry.detailRef));
   const [error,setError]=useState<string>();
+  // The store keeps recent bodies in full and reduces older ones to a summary
+  // (D-245). That is an answer, not a failure, so it has its own state.
+  const [released,setReleased]=useState<LogBodySummary>();
   const [truncated,setTruncated]=useState(false);
   const [section,setSection]=useState<Section>("instructions");
   const [search,setSearch]=useState("");
@@ -149,6 +153,8 @@ function RequestBody({entry}:{entry:LogEntry}) {
     let live=true;
     void client.request("pi/logs/content",{ref:entry.detailRef.ref,maxBytes:8*1024*1024}).then(result=>{
       if(!live)return;
+      setReleased(result.released);
+      if(result.released)return;
       setTruncated(result.truncated);
       try { setPayload(JSON.parse(result.text)); } catch {setPayload(result.text);}
     }).catch(()=>{if(live)setError("This payload could not be loaded. It may have expired under log retention.");})
@@ -184,6 +190,7 @@ function RequestBody({entry}:{entry:LogEntry}) {
   },[find.input,find.viewport,loading]);
   if(loading)return <div className="grid flex-1 place-items-center"><GenerationLoader label="Fetching the complete payload" /></div>;
   if(error)return <p role="alert" className="p-5 text-danger">{error}</p>;
+  if(released)return <div className="min-h-0 flex-1 overflow-y-auto"><ReleasedBody summary={released} /></div>;
   if(payload===undefined)return <div className="p-6"><h3 className="font-medium">Request body was not recorded</h3><p className="mt-2 text-ink-2">Only the summary is retained. Full payloads may have been disabled when this request ran.</p></div>;
   return <div className="flex min-h-0 min-w-0 flex-1 flex-col md:flex-row">
     <aside className="shrink-0 border-b border-line bg-surface-2 p-3 md:w-56 md:overflow-y-auto md:border-e md:border-b-0">

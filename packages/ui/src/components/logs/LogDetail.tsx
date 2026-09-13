@@ -24,10 +24,11 @@ import { useCopy } from "@/hooks";
 import { dateTime, duration } from "@/format";
 import { cn } from "@/lib/utils";
 import { useLaserStable } from "@/runtime";
-import { PRODUCT_NAME, type LogEntry } from "@lasercode/protocol";
+import { PRODUCT_NAME, type LogBodySummary, type LogEntry } from "@lasercode/protocol";
 
 import { SECTION_TONE } from "./model.js";
 import { ApiRequestDialog } from "./ApiRequestDialog.js";
+import { ReleasedBody } from "./ReleasedBody.js";
 
 export function LogDetail({ entry }: { entry: LogEntry | undefined }) {
   if (!entry) {
@@ -49,6 +50,8 @@ function Detail({ entry }: { entry: LogEntry }) {
   const [truncated, setTruncated] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
+  /** The store keeps recent bodies in full and older ones as a summary (D-245). */
+  const [released, setReleased] = useState<LogBodySummary>();
   const { copied, copy } = useCopy();
   const [requestOpen, setRequestOpen] = useState(false);
 
@@ -77,6 +80,8 @@ function Detail({ entry }: { entry: LogEntry }) {
       .request("pi/logs/content", { ref: ref.ref })
       .then((result) => {
         if (!live) return;
+        setReleased(result.released);
+        if (result.released) return;
         setTruncated(result.truncated);
         try {
           setBody(JSON.stringify(JSON.parse(result.text), null, 2));
@@ -157,6 +162,8 @@ function Detail({ entry }: { entry: LogEntry }) {
           </p>
         )}
 
+        {released && <ReleasedBody summary={released} variant="panel" />}
+
         {loading && <GenerationLoader label="Fetching the payload" layout="inline" />}
         {error && (
           <p className="rounded-lg bg-[color-mix(in_oklab,var(--danger)_10%,transparent)] px-3 py-2 text-xs leading-5 text-danger">
@@ -191,7 +198,7 @@ function Detail({ entry }: { entry: LogEntry }) {
           </div>
         )}
 
-        {body === undefined && !loading && !error && (
+        {body === undefined && !loading && !error && !released && (
           <p className="text-xs leading-5 text-ink-3">This row has no payload — its summary is the whole record.</p>
         )}
       </div>

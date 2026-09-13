@@ -715,6 +715,37 @@ export interface LogContentRef {
   contentType: "application/json" | "text/plain";
   /** Leading characters, already plain text, for the collapsed row. */
   preview: string;
+  /**
+   * The store no longer keeps this body (D-245): the row, its size and its
+   * preview are intact, and `pi/logs/content` answers with the summary.
+   * Absent from an older host, and from every row whose body is stored.
+   */
+  released?: boolean;
+}
+
+/**
+ * What is left of a body the store released (D-245). Bodies are the whole
+ * conversation of one turn; the store keeps the most recent ones per session
+ * inside a byte budget and reduces the rest to the line the row already had.
+ */
+export interface LogBodySummary {
+  /**
+   * `budget` — the store was over its byte budget for retained bodies.
+   * `session-limit` — newer requests in this session took its place.
+   * `retention` — the rows that referenced it are gone.
+   */
+  reason: "budget" | "session-limit" | "retention";
+  /** Size of the body when it was stored. */
+  bytes: number;
+  /** The row's own line: model, message count, size. */
+  summary: string;
+  /** Leading characters of the body, kept on the row. */
+  preview: string;
+  /** When the request was captured. */
+  at?: string;
+  model?: string;
+  messages?: number;
+  durationMs?: number;
 }
 
 export interface LogEntry {
@@ -775,9 +806,18 @@ export interface LogStats {
   bySection: Record<LogSection, number>;
   oldestAt?: string;
   newestAt?: string;
-  /** Size of the store's database file. */
+  /** Size of the store on disk: the database file and its write-ahead log. */
   bytes: number;
-  retention: { maxRows: number; maxAgeDays: number };
+  retention: {
+    maxRows: number;
+    maxAgeDays: number;
+    /** Budget for retained request bodies, in bytes (D-245). Absent from an older host. */
+    bodyBudgetBytes?: number;
+    /** Provider requests per session whose body is kept in full (D-245). */
+    bodiesPerSession?: number;
+    /** Bodies actually stored right now, in bytes. */
+    retainedBodyBytes?: number;
+  };
   /**
    * Pi 0.85 gives extensions the complete provider REQUEST but only the
    * response's status and headers — there is no raw-body hook. The assistant
@@ -1277,10 +1317,14 @@ export interface ClientRequests {
 
   /** Paged read of the host log store, oldest first, bounded by a byte budget. */
   "pi/logs/query": { params: LogQuery; result: LogPage };
-  /** Fetch a payload referenced by `LogEntry.detailRef`. */
+  /**
+   * Fetch a payload referenced by `LogEntry.detailRef`. A body the store
+   * released answers with `released` and an empty `text` — the row is still
+   * there, so this is a summary, not a failure (D-245).
+   */
   "pi/logs/content": {
     params: { ref: string; maxBytes?: number };
-    result: { ref: string; contentType: string; bytes: number; truncated: boolean; text: string };
+    result: { ref: string; contentType: string; bytes: number; truncated: boolean; text: string; released?: LogBodySummary };
   };
   "pi/logs/stats": { params: {}; result: { stats: LogStats } };
   /** Delete rows. Omit `sections` to clear everything. */

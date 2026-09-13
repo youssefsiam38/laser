@@ -27,6 +27,28 @@
  * `pi/logs/content` only when a person opens that row. Bodies are stored once
  * per hash, so a retried provider request costs one copy.
  *
+ * ## What it keeps (D-245)
+ *
+ * A provider request body is the *whole* conversation for that turn, so one
+ * long session writes one full copy of itself per turn: this store reached
+ * 27.7 GB in eight days on a real machine while both retention limits (rows,
+ * age) were still far from firing. Three bounds now apply to bodies, on top of
+ * the row and age limits, which are unchanged:
+ *
+ * - the **50 most recent provider requests per session** keep their body;
+ * - retained bodies are held to a **global byte budget** (1 GiB by default),
+ *   enforced as rows arrive rather than only on a timer;
+ * - an older row keeps its summary — model, message count, size, timing, the
+ *   preview it already stored — and its body is *released*. `pi/logs/content`
+ *   answers with that summary and says so; it does not pretend the row is gone.
+ *
+ * A body is shared by hash, so it is released only when no retained entry
+ * still points at it. The space is really returned to the filesystem:
+ * `auto_vacuum = INCREMENTAL` for a new store, a one-time `VACUUM` to convert
+ * an older one (after the budget pass, so it copies the small live set rather
+ * than the whole file), then bounded `incremental_vacuum` steps off the
+ * request path.
+ *
  * ## Redaction
  *
  * Everything written here goes through `redact()` first: any field whose name
@@ -46,6 +68,7 @@ import { chmodSync, mkdirSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import type {
+  LogBodySummary,
   LogContentRef,
   LogEntry,
   LogLevel,
@@ -67,6 +90,44 @@ const DEFAULT_BYTE_BUDGET = 256 * 1024;
 const ORPHAN_SWEEP_EVERY = 10;
 const DEFAULT_LIMIT = 200;
 
+/** Provider requests per session whose body is kept in full (D-245). */
+export const BODIES_PER_SESSION = 50;
+/** Every retained body, in bytes, across every session and project (D-245). */
+export const DEFAULT_BODY_BUDGET_BYTES = 1024 * 1024 * 1024;
+/**
+ * Bodies released in one bounded maintenance step. Releasing a megabyte-sized
+ * body costs about 0.4 ms, so this is the step's share of the event loop: the
+ * host answers requests between steps, not during one.
+ */
+const RELEASE_BATCH = 16;
+/** Bodies released on the ingestion path itself, when a burst overshoots. */
+const INGEST_RELEASE_BATCH = 16;
+/**
+ * How far over budget a burst may get before ingestion stops waiting for the
+ * next tick. Releases are normally a timer's job; a loop that records a
+ * hundred large bodies without yielding would otherwise never reach it.
+ */
+const BUDGET_OVERSHOOT = 1.05;
+/** Sessions tracked as possibly over the per-session limit before a full sweep. */
+const DIRTY_SESSIONS_MAX = 256;
+/** Pages returned to the filesystem per vacuum step (4 KiB pages → 4 MiB, ~5 ms). */
+const VACUUM_PAGES = 1024;
+/** A freelist this small is not worth a step; SQLite reuses those pages. */
+const VACUUM_FLOOR_PAGES = 64;
+/**
+ * A vacuum pass that has caught up writes the WAL back into the file, which is
+ * the moment the file actually shortens. Measured: letting the WAL grow
+ * instead is the more expensive choice by far — ingesting 1 MiB bodies went
+ * from 3.2 ms to 6–9 ms mean, with 40–77 ms spikes, because SQLite's own
+ * automatic checkpoint then has a backlog to copy on the ingestion path.
+ */
+/** Free pages that make converting an older store worth its one-time VACUUM. */
+const CONVERT_FREELIST_PAGES = 4096;
+/** Time an explicit administrative reclaim may block before yielding the rest. */
+const RECLAIM_BUDGET_MS = 250;
+/** SQLite's `auto_vacuum` value for incremental mode. */
+const AUTO_VACUUM_INCREMENTAL = 2;
+
 export interface LogStoreOptions {
   /** SQLite file. `:memory:` for tests. Parent directories are created. */
   file: string;
@@ -77,6 +138,15 @@ export interface LogStoreOptions {
   onAppend?: (entries: LogEntry[]) => void;
   /** Rows appended between retention passes. */
   pruneEvery?: number;
+  /**
+   * Every retained body across the store, in bytes (D-245). Bodies beyond it
+   * are released oldest first, as rows arrive.
+   */
+  bodyBudgetBytes?: number;
+  /** Provider requests per session whose body is kept in full (D-245). */
+  bodiesPerSession?: number;
+  /** Where a long maintenance pass says what it is doing and how long it took. */
+  log?: (message: string) => void;
   /**
    * What to keep of a provider round-trip. `"full"` (the default) stores the
    * serialized request body — the whole conversation, system prompt and every
@@ -159,6 +229,19 @@ interface Row {
   detail_bytes: number | null;
   detail_type: string | null;
   detail_preview: string | null;
+  /** NULL while the body is stored; otherwise why it was released (D-245). */
+  body_released: string | null;
+}
+
+/** One row of a body the store no longer keeps, and the reason. */
+interface ReleasedRow {
+  at: string;
+  summary: string;
+  duration_ms: number | null;
+  detail_bytes: number | null;
+  detail_preview: string | null;
+  body_released: string | null;
+  request_context: string | null;
 }
 
 type Database = {
@@ -204,6 +287,11 @@ function openDatabase(file: string): Database {
       }
     }
   }
+  // Before `journal_mode` and before the first table: SQLite only accepts a
+  // change out of `auto_vacuum = NONE` on an empty database, or through a
+  // VACUUM. An existing store keeps NONE here and is converted once, later,
+  // off the request path (`convertToIncrementalVacuum`).
+  db.exec("PRAGMA auto_vacuum = INCREMENTAL;");
   db.exec(`
     PRAGMA journal_mode = WAL;
     PRAGMA synchronous = NORMAL;
@@ -242,7 +330,20 @@ function openDatabase(file: string): Database {
   // prompt attribution. New captures carry branch-local entry identity.
   const columns = db.prepare("PRAGMA table_info(entries)").all() as { name: string }[];
   if (!columns.some((column) => column.name === "request_context")) db.exec("ALTER TABLE entries ADD COLUMN request_context TEXT");
-  db.exec("CREATE INDEX IF NOT EXISTS entries_prompt ON entries(session_path, json_extract(request_context, '$.promptEntryId'), id)");
+  // Additive migration for D-245: every existing row is retained (NULL) until
+  // the budget pass decides otherwise, so an upgrade loses nothing at open.
+  if (!columns.some((column) => column.name === "body_released")) db.exec("ALTER TABLE entries ADD COLUMN body_released TEXT");
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS entries_prompt ON entries(session_path, json_extract(request_context, '$.promptEntryId'), id);
+    -- Partial indexes over exactly the rows retention walks: the oldest
+    -- retained body in the store, and the retained request bodies of one
+    -- session. Both stay small because their predicate is the policy.
+    CREATE INDEX IF NOT EXISTS entries_retained_body ON entries(id) WHERE detail_ref IS NOT NULL AND body_released IS NULL;
+    CREATE INDEX IF NOT EXISTS entries_session_body ON entries(session_path, id)
+      WHERE kind = 'provider_request' AND detail_ref IS NOT NULL AND body_released IS NULL;
+    -- Summing retained bytes never touches a body: the index carries them.
+    CREATE INDEX IF NOT EXISTS content_bytes ON content(bytes);
+  `);
   return db;
 }
 
@@ -260,6 +361,24 @@ export class LogStore {
   private sinceSweep = 0;
   private pruneTimer: ReturnType<typeof setTimeout> | undefined;
   private closed = false;
+  private readonly bodyBudget: number;
+  private readonly bodiesPerSession: number;
+  private readonly log: (message: string) => void;
+  /** Bytes of body actually stored, kept in step with the `content` table. */
+  private retainedBodyBytes = 0;
+  /** Sessions that may hold more retained request bodies than the policy allows. */
+  private readonly dirtySessions = new Set<string>();
+  /** Every session is suspect until the first sweep: the file outlives this process. */
+  private sweepAllSessions = true;
+  /** Age/row retention is owed a pass; body retention has its own triggers. */
+  private pruneDue = false;
+  /** The next prune step also looks for bodies no row points at any more. */
+  private sweepOrphans = false;
+  /** SQLite's mode for this file; 2 once the store returns space by itself. */
+  private autoVacuum = 0;
+  /** One conversion attempt per process: it is a whole-file rewrite. */
+  private conversionAttempted = false;
+
   /** Open provider requests and tool calls, for latency and correlation. */
   private readonly openProviderRequests = new Map<string, { id: number; startedAt: number }>();
   private readonly openToolCalls = new Map<string, { id: number; startedAt: number; toolName: string }>();
@@ -274,7 +393,15 @@ export class LogStore {
     this.maxAgeMs = (options.maxAgeDays ?? 14) * 24 * 60 * 60 * 1000;
     this.pruneEvery = options.pruneEvery ?? 500;
     this.onAppend = options.onAppend;
+    this.log = options.log ?? (() => {});
+    this.bodyBudget = Math.max(0, Math.trunc(options.bodyBudgetBytes ?? DEFAULT_BODY_BUDGET_BYTES));
+    this.bodiesPerSession = Math.max(1, Math.trunc(options.bodiesPerSession ?? BODIES_PER_SESSION));
+    this.autoVacuum = this.pragma("auto_vacuum");
+    this.retainedBodyBytes = this.sumRetainedBodyBytes();
     this.prune();
+    // What this store already holds is decided off the request path: an
+    // upgrade from a version with no budget can have gigabytes to release.
+    this.scheduleMaintenance();
   }
 
   close(): void {
@@ -359,6 +486,7 @@ export class LogStore {
     };
 
     if (++this.sincePrune >= this.pruneEvery) this.schedulePrune();
+    if (detail.ref !== null) this.afterBodyIngested(input);
     this.onAppend?.([entry]);
     return entry;
   }
@@ -390,9 +518,12 @@ export class LogStore {
       return { inline: body, ref: null, bytes, contentType: "application/json", preview };
     }
     const ref = createHash("sha256").update(body).digest("hex");
-    this
+    const stored = this
       .statement("INSERT OR IGNORE INTO content (ref, bytes, content_type, body) VALUES (?,?,?,?)")
       .run(ref, bytes, "application/json", body);
+    // A body already on disk (same hash) costs nothing more, so it must not be
+    // charged twice against the budget.
+    if (Number(stored.changes) > 0) this.retainedBodyBytes += bytes;
     return { inline: null, ref, bytes, contentType: "application/json", preview };
   }
 
@@ -490,17 +621,25 @@ export class LogStore {
     };
   }
 
+  /**
+   * The body behind a `detailRef`. A body the byte budget or the per-session
+   * limit released is not an error and not a 404: the row it belongs to is
+   * still there, and this answers with what the row still knows (D-245).
+   */
   content(ref: string, maxBytes = 4 * 1024 * 1024): {
     ref: string;
     contentType: string;
     bytes: number;
     truncated: boolean;
     text: string;
+    released?: LogBodySummary;
   } {
     const row = this.db.prepare("SELECT * FROM content WHERE ref = ?").get(ref) as
       | { ref: string; bytes: number; content_type: string; body: string }
       | undefined;
     if (!row) {
+      const released = this.releasedSummary(ref);
+      if (released) return { ref, contentType: "application/json", bytes: released.bytes, truncated: false, text: "", released };
       throw new Error(
         `Log payload ${ref.slice(0, 12)}… is no longer stored. Retention removed the rows that referenced it.`,
       );
@@ -534,7 +673,13 @@ export class LogStore {
       ...(span.oldest ? { oldestAt: span.oldest } : {}),
       ...(span.newest ? { newestAt: span.newest } : {}),
       bytes: this.fileBytes(),
-      retention: { maxRows: this.maxRows, maxAgeDays: Math.round(this.maxAgeMs / (24 * 60 * 60 * 1000)) },
+      retention: {
+        maxRows: this.maxRows,
+        maxAgeDays: Math.round(this.maxAgeMs / (24 * 60 * 60 * 1000)),
+        bodyBudgetBytes: this.bodyBudget,
+        bodiesPerSession: this.bodiesPerSession,
+        retainedBodyBytes: this.retainedBodyBytes,
+      },
       providerResponseBodies: "unavailable",
     };
   }
@@ -546,6 +691,10 @@ export class LogStore {
           .run(...sections)
       : this.db.prepare("DELETE FROM entries").run();
     this.collectOrphanedContent();
+    // A person who clears the store is asking for the disk back, so give back
+    // what a bounded pass can and leave the rest to maintenance.
+    this.reclaimSpace(RECLAIM_BUDGET_MS);
+    this.scheduleMaintenance();
     return Number(info.changes);
   }
 
@@ -557,33 +706,64 @@ export class LogStore {
    */
   private schedulePrune(): void {
     this.sincePrune = 0;
+    this.pruneDue = true;
+    if (++this.sinceSweep >= ORPHAN_SWEEP_EVERY) {
+      this.sinceSweep = 0;
+      this.sweepOrphans = true;
+    }
+    this.scheduleMaintenance();
+  }
+
+  /** One pending timer for every kind of maintenance; the step decides what is owed. */
+  private scheduleMaintenance(): void {
     if (this.pruneTimer || this.closed) return;
-    const sweep = ++this.sinceSweep >= ORPHAN_SWEEP_EVERY;
-    if (sweep) this.sinceSweep = 0;
-    const step = () => {
-      this.pruneTimer = undefined;
-      if (this.closed) return;
-      try {
-        const cutoff = new Date(Date.now() - this.maxAgeMs).toISOString();
-        const aged = Number(this.statement("DELETE FROM entries WHERE id IN (SELECT id FROM entries WHERE at < ? LIMIT 256)").run(cutoff).changes);
-        const excess = Number(this.statement(`DELETE FROM entries WHERE id IN (
-          SELECT id FROM entries WHERE id < (SELECT id FROM entries ORDER BY id DESC LIMIT 1 OFFSET ?) LIMIT 256
-        )`).run(this.maxRows - 1).changes);
-        const orphans = sweep && aged < 256 && excess < 256
-          ? Number(this.statement(`DELETE FROM content WHERE ref IN (
-              SELECT ref FROM content WHERE NOT EXISTS (SELECT 1 FROM entries WHERE detail_ref = content.ref) LIMIT 256
-            )`).run().changes)
-          : 0;
-        if (aged === 256 || excess === 256 || orphans === 256) {
-          this.pruneTimer = setTimeout(step, 0);
-          this.pruneTimer.unref?.();
-        }
-      } catch {
-        /* failed maintenance retries after the next ingestion batch */
-      }
-    };
-    this.pruneTimer = setTimeout(step, 0);
+    this.pruneTimer = setTimeout(() => this.maintenanceStep(), 0);
     this.pruneTimer.unref?.();
+  }
+
+  /**
+   * One bounded slice of everything retention owes, in the order that keeps
+   * the file smallest: drop rows, release bodies over the limits, and only
+   * then hand pages back — a vacuum before the releases would copy bytes that
+   * are about to go.
+   */
+  private maintenanceStep(): void {
+    this.pruneTimer = undefined;
+    if (this.closed) return;
+    let more = false;
+    try {
+      if (this.pruneDue) more = this.pruneStep();
+      const released = this.releaseStep(RELEASE_BATCH);
+      more = more || released.more;
+      // Reclaiming waits for a quiet step: no step both deletes and vacuums,
+      // so the longest one the host can see is a single vacuum's pages.
+      if (!more && released.released === 0) more = this.reclaimStep();
+      else if (released.released > 0) more = true;
+    } catch {
+      /* failed maintenance retries after the next ingestion batch */
+    }
+    if (more) this.scheduleMaintenance();
+  }
+
+  /** Age, then row count, then bodies nothing points at. 256 rows at a time. */
+  private pruneStep(): boolean {
+    const cutoff = new Date(Date.now() - this.maxAgeMs).toISOString();
+    const aged = Number(this.statement("DELETE FROM entries WHERE id IN (SELECT id FROM entries WHERE at < ? LIMIT 256)").run(cutoff).changes);
+    const excess = Number(this.statement(`DELETE FROM entries WHERE id IN (
+      SELECT id FROM entries WHERE id < (SELECT id FROM entries ORDER BY id DESC LIMIT 1 OFFSET ?) LIMIT 256
+    )`).run(this.maxRows - 1).changes);
+    const orphans = this.sweepOrphans && aged < 256 && excess < 256
+      ? Number(this.statement(`DELETE FROM content WHERE ref IN (
+          SELECT ref FROM content WHERE NOT EXISTS (SELECT 1 FROM entries WHERE detail_ref = content.ref) LIMIT 256
+        )`).run().changes)
+      : 0;
+    if (orphans > 0) this.retainedBodyBytes = this.sumRetainedBodyBytes();
+    const more = aged === 256 || excess === 256 || orphans === 256;
+    if (!more) {
+      this.pruneDue = false;
+      this.sweepOrphans = false;
+    }
+    return more;
   }
 
   /** Trim by age, then by row count, then collect bodies nothing points at. */
@@ -604,19 +784,285 @@ export class LogStore {
     if (collectOrphans) this.collectOrphanedContent();
   }
 
+  /**
+   * Everything retention owes, now, to completion: rows, bodies over the
+   * per-session limit and the byte budget, and the space itself. The host
+   * never calls this on a request — it is the administrative door, and what
+   * a test asserts against instead of a timer.
+   */
+  maintain(): { released: number; bytes: number } {
+    this.prune();
+    let released = 0;
+    // Bounded batches in a loop rather than one unbounded statement: the same
+    // code path the timer drives, so a test proves the code that runs.
+    for (let pass = 0; pass < 10_000; pass++) {
+      const step = this.releaseStep(RELEASE_BATCH);
+      released += step.released;
+      if (!step.more) break;
+    }
+    this.collectOrphanedContent();
+    this.reclaimSpace(Number.POSITIVE_INFINITY);
+    return { released, bytes: this.fileBytes() };
+  }
+
+  // ----------------------------------------------------------------- bodies
+
+  /**
+   * A body landed. The per-session limit and the budget are enforced from
+   * here, but normally *after* this turn of the loop: a provider request is
+   * already paying for a redact, a hash and a multi-megabyte insert, and the
+   * timer is a few microseconds away. The exception is a burst that never
+   * yields — an import, a replay, a loop over a hundred captures — which is
+   * why ingestion releases synchronously once the store is over budget by
+   * more than the overshoot margin.
+   */
+  private afterBodyIngested(input: LogInput): void {
+    if (input.kind === "provider_request" && input.sessionPath) {
+      if (this.dirtySessions.size >= DIRTY_SESSIONS_MAX) this.sweepAllSessions = true;
+      else this.dirtySessions.add(input.sessionPath);
+    }
+    if (this.retainedBodyBytes > this.bodyBudget * BUDGET_OVERSHOOT) this.releaseForBudget(INGEST_RELEASE_BATCH);
+    this.scheduleMaintenance();
+  }
+
+  /** One bounded release pass: the per-session limit first, then the budget. */
+  private releaseStep(batch: number): { released: number; more: boolean } {
+    let released = this.releaseOverSessionLimit(batch);
+    if (released < batch) released += this.releaseForBudget(batch - released);
+    const more =
+      this.retainedBodyBytes > this.bodyBudget || this.sweepAllSessions || this.dirtySessions.size > 0;
+    // `more` only matters while something is actually moving: a budget that
+    // cannot be met (every body already released) must not spin the timer.
+    return { released, more: more && released > 0 };
+  }
+
+  /**
+   * Beyond the newest `bodiesPerSession` provider requests of a session, the
+   * row keeps its summary and the body goes (D-245). The sessions to look at
+   * are the ones that just ingested one; after an upgrade, every session with
+   * a retained body is a candidate exactly once.
+   */
+  private releaseOverSessionLimit(batch: number): number {
+    if (this.sweepAllSessions) {
+      const sessions = this.db
+        .prepare(
+          `SELECT DISTINCT session_path AS path FROM entries
+             WHERE kind = 'provider_request' AND detail_ref IS NOT NULL AND body_released IS NULL
+               AND session_path IS NOT NULL`,
+        )
+        .all() as Array<{ path: string }>;
+      for (const row of sessions) this.dirtySessions.add(row.path);
+      this.sweepAllSessions = false;
+    }
+    let released = 0;
+    for (const session of [...this.dirtySessions]) {
+      const room = batch - released;
+      if (room <= 0) return released;
+      const rows = this.statement(
+        `SELECT id, detail_ref AS ref FROM entries
+           WHERE session_path = ? AND kind = 'provider_request' AND detail_ref IS NOT NULL AND body_released IS NULL
+           ORDER BY id DESC LIMIT ? OFFSET ?`,
+      ).all(session, room, this.bodiesPerSession) as Array<{ id: number; ref: string }>;
+      for (const row of rows) this.releaseBody(row.id, row.ref, "session-limit");
+      released += rows.length;
+      // A short page means this session is inside the limit; a full one means
+      // there is more of it, and the next step continues from here.
+      if (rows.length < room) this.dirtySessions.delete(session);
+    }
+    return released;
+  }
+
+  /** Oldest body first, until the store is inside its byte budget. */
+  private releaseForBudget(batch: number): number {
+    let released = 0;
+    while (this.retainedBodyBytes > this.bodyBudget && released < batch) {
+      const rows = this.statement(
+        `SELECT id, detail_ref AS ref FROM entries
+           WHERE detail_ref IS NOT NULL AND body_released IS NULL ORDER BY id ASC LIMIT ?`,
+      ).all(Math.min(64, batch - released)) as Array<{ id: number; ref: string }>;
+      if (rows.length === 0) break;
+      for (const row of rows) {
+        this.releaseBody(row.id, row.ref, "budget");
+        released += 1;
+        if (this.retainedBodyBytes <= this.bodyBudget) break;
+      }
+    }
+    return released;
+  }
+
+  /**
+   * The row remembers what it held — size, preview, summary, timing — and
+   * stops pointing at a stored body. The body itself only goes when no
+   * retained entry still references it: `content` is shared by hash, and a
+   * retried request must not lose its payload because an older twin aged out.
+   */
+  private releaseBody(id: number, ref: string, reason: LogBodySummary["reason"]): void {
+    this.statement("UPDATE entries SET body_released = ? WHERE id = ?").run(reason, id);
+    const stored = this.statement("SELECT bytes FROM content WHERE ref = ?").get(ref) as { bytes: number } | undefined;
+    if (!stored) return;
+    const dropped = Number(
+      this.statement(
+        `DELETE FROM content WHERE ref = ?
+           AND NOT EXISTS (SELECT 1 FROM entries WHERE detail_ref = ? AND body_released IS NULL)`,
+      ).run(ref, ref).changes,
+    );
+    if (dropped > 0) this.retainedBodyBytes = Math.max(0, this.retainedBodyBytes - stored.bytes);
+  }
+
+  /** What the row still knows about a body that is no longer stored. */
+  private releasedSummary(ref: string): LogBodySummary | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT at, summary, duration_ms, detail_bytes, detail_preview, body_released, request_context
+           FROM entries WHERE detail_ref = ? ORDER BY id DESC LIMIT 1`,
+      )
+      .get(ref) as ReleasedRow | undefined;
+    if (!row) return undefined;
+    const context = row.request_context
+      ? (safeParse(row.request_context) as { model?: unknown } | undefined)
+      : undefined;
+    const model = typeof context?.model === "string" ? context.model : summaryModel(row.summary);
+    const messages = summaryMessageCount(row.summary);
+    const reason = row.body_released;
+    return {
+      // A body missing without a marker is a body retention took with its
+      // rows; saying "budget" there would be a guess.
+      reason: reason === "budget" || reason === "session-limit" ? reason : "retention",
+      bytes: row.detail_bytes ?? 0,
+      summary: row.summary,
+      preview: row.detail_preview ?? "",
+      at: row.at,
+      ...(model !== undefined ? { model } : {}),
+      ...(messages !== undefined ? { messages } : {}),
+      ...(row.duration_ms !== null ? { durationMs: row.duration_ms } : {}),
+    };
+  }
+
+  private sumRetainedBodyBytes(): number {
+    try {
+      return Number((this.db.prepare("SELECT COALESCE(SUM(bytes), 0) AS n FROM content").get() as { n: number }).n);
+    } catch {
+      return 0;
+    }
+  }
+
   private collectOrphanedContent(): void {
     this.db.exec(
       "DELETE FROM content WHERE ref NOT IN (SELECT detail_ref FROM entries WHERE detail_ref IS NOT NULL)",
     );
+    this.retainedBodyBytes = this.sumRetainedBodyBytes();
   }
 
-  private fileBytes(): number {
-    if (this.file === ":memory:") return 0;
+  // ------------------------------------------------------------- reclaiming
+
+  /**
+   * SQLite does not shrink a file by itself. A store created by this version
+   * is in incremental mode and only needs bounded steps; a store from before
+   * it needs one whole-file VACUUM to change mode, which is why that happens
+   * after the budget pass (it then copies the live set, not the 27 GB) and
+   * says so in the log.
+   */
+  private reclaimStep(): boolean {
+    if (this.file === ":memory:") return false;
+    if (this.autoVacuum !== AUTO_VACUUM_INCREMENTAL) return this.convertToIncrementalVacuum();
+    const before = this.pragma("freelist_count");
+    if (before <= VACUUM_FLOOR_PAGES) return false;
+    this.db.exec(`PRAGMA incremental_vacuum(${VACUUM_PAGES})`);
+    const after = this.pragma("freelist_count");
+    if (after <= VACUUM_FLOOR_PAGES) this.checkpoint();
+    return after < before && after > VACUUM_FLOOR_PAGES;
+  }
+
+  /** Bounded synchronous reclaim, for an explicit administrative request. */
+  private reclaimSpace(budgetMs: number): void {
+    if (this.file === ":memory:") return;
+    const until = Date.now() + budgetMs;
+    if (this.autoVacuum !== AUTO_VACUUM_INCREMENTAL) this.convertToIncrementalVacuum();
+    if (this.autoVacuum !== AUTO_VACUUM_INCREMENTAL) {
+      // Still the old mode (nothing to gain, or the VACUUM failed): the WAL is
+      // the only space this can give back.
+      this.checkpoint();
+      return;
+    }
+    while (Date.now() < until) {
+      const before = this.pragma("freelist_count");
+      if (before <= VACUUM_FLOOR_PAGES) break;
+      this.db.exec(`PRAGMA incremental_vacuum(${VACUUM_PAGES})`);
+      if (this.pragma("freelist_count") >= before) break;
+    }
+    this.checkpoint();
+  }
+
+  /**
+   * Returns whether it is worth trying again. The conversion is attempted at
+   * most once per process and only when this store is really carrying dead
+   * weight — a file over its own body budget, or a large freelist a store in
+   * this mode can never hand back.
+   */
+  private convertToIncrementalVacuum(): boolean {
+    if (this.conversionAttempted) return false;
+    const free = this.pragma("freelist_count");
+    const bytes = this.fileBytes();
+    if (bytes <= this.bodyBudget && free < CONVERT_FREELIST_PAGES) return false;
+    this.conversionAttempted = true;
+    this.log(
+      `log store: compacting ${formatBytes(bytes)} of ${this.file} so deleted captures give their space back. ` +
+        `This runs once and holds the host's other work while it does.`,
+    );
+    const started = Date.now();
     try {
-      return statSync(this.file).size;
+      this.db.exec("VACUUM");
+    } catch (error) {
+      this.log(`log store: could not compact the file (${error instanceof Error ? error.message : String(error)}).`);
+      return false;
+    }
+    this.autoVacuum = this.pragma("auto_vacuum");
+    const durationMs = Date.now() - started;
+    const now = this.fileBytes();
+    this.log(`log store: compacted ${formatBytes(bytes)} → ${formatBytes(now)} in ${durationMs} ms.`);
+    this.record({
+      section: "host",
+      kind: "logstore_compacted",
+      summary: `log store compacted: ${formatBytes(bytes)} → ${formatBytes(now)} · ${durationMs} ms`,
+      durationMs,
+      detail: { before: bytes, after: now, durationMs, autoVacuum: this.autoVacuum },
+    });
+    return this.autoVacuum === AUTO_VACUUM_INCREMENTAL;
+  }
+
+  private checkpoint(): void {
+    try {
+      this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    } catch {
+      /* a reader holding the WAL open just defers the truncation */
+    }
+  }
+
+  private pragma(name: string): number {
+    try {
+      const row = this.db.prepare(`PRAGMA ${name}`).get() as Record<string, unknown> | undefined;
+      const value = row ? Object.values(row)[0] : undefined;
+      return typeof value === "number" ? value : 0;
     } catch {
       return 0;
     }
+  }
+
+  /**
+   * The store on disk, which is the database and its write-ahead log: a
+   * person asking how much space this takes is not asking about one of them.
+   */
+  private fileBytes(): number {
+    if (this.file === ":memory:") return 0;
+    let total = 0;
+    for (const path of [this.file, `${this.file}-wal`]) {
+      try {
+        total += statSync(path).size;
+      } catch {
+        /* no WAL right now, or the file is gone: neither is worth failing over */
+      }
+    }
+    return total;
   }
 
   // --------------------------------------------------------------- ingestion
@@ -855,6 +1301,9 @@ function toEntry(row: Row): LogEntry {
             bytes: row.detail_bytes ?? 0,
             contentType: (row.detail_type ?? "application/json") as LogContentRef["contentType"],
             preview: row.detail_preview ?? "",
+            // The row is whole; the body behind it is not. Saying so here
+            // saves every reader a request that answers "summary only".
+            ...(row.body_released !== null ? { released: true as const } : {}),
           },
         }
       : {}),
@@ -871,6 +1320,28 @@ function safeParse(text: string): unknown {
 
 function escapeLike(value: string): string {
   return value.replace(/[%_\\]/g, "\\$&");
+}
+
+/**
+ * The message count out of a summary this store wrote itself
+ * (`describeProviderRequest`), so a released row can still say how big the
+ * conversation was without keeping a second copy of anything.
+ */
+export function summaryMessageCount(summary: string): number | undefined {
+  const match = /(?:^|· )(\d+) messages?(?: ·|$)/.exec(summary);
+  return match ? Number(match[1]) : undefined;
+}
+
+/**
+ * The model out of the same line, for a capture recorded before request
+ * context existed. `describeProviderRequest` writes it first and writes
+ * nothing there when the payload named no model, so an unrecognised shape
+ * yields nothing rather than a guess.
+ */
+export function summaryModel(summary: string): string | undefined {
+  const first = summary.split(" · ")[0]?.trim();
+  if (!first || first === "provider request" || /^[\d.]+ (B|kB|MB)$/.test(first)) return undefined;
+  return first;
 }
 
 /**
