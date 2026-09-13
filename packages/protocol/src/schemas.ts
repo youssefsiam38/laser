@@ -28,6 +28,14 @@ import { PREFS_MAX_BYTES } from "./messages.js";
 import type { ClientMethod, ClientRequests } from "./messages.js";
 import { TASK_COMMAND_MAX, TASK_LINE_MAX } from "./tasks.js";
 
+/** Opt-in browse replies must not silently reinterpret legacy folders as files. */
+export const explorerListingSchema = z.object({
+  path: z.string(), home: z.string(), parent: z.string().optional(),
+  entries: z.array(z.object({ name: z.string(), path: z.string(), project: z.boolean(), kind: z.enum(["directory", "file"]) }).strict()).max(100),
+  commonPrefix: z.string(), truncated: z.boolean(),
+  nextOffset: z.number().int().nonnegative().optional(), error: z.string().optional(),
+}).strict();
+
 const originIds = ORIGINS.map(origin => origin.id) as [InstructionOrigin, ...InstructionOrigin[]];
 /** Legacy captures omit origin; new captures always include it. */
 export const instructionSourceSchema = z.object({

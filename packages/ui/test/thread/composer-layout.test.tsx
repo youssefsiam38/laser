@@ -54,8 +54,8 @@ vi.mock("@/components/thread/session-preparation.js", () => ({
   SessionPreparationProvider: ({ children }: { children: ReactNode }) => children,
   useSessionPreparation: () => ({ pending: false }),
 }));
-vi.mock("@/components/thread/use-project-file-search.js", () => ({
-  useProjectFileSearch: () => ({ files: [], loading: false, failed: false, truncated: false, retry: vi.fn() }),
+vi.mock("@/components/thread/use-directory-page.js", () => ({
+  useDirectoryPage: (cwd: string, query: string) => ({ entries: [], loading: false, navigation: { cwd, query, head: '', commonPrefix: '', loading: false, next: undefined, previous: undefined } }),
 }));
 vi.mock("@/components/shell/session-groups", () => ({ useSessionsList: () => ({ tab: "code" }) }));
 vi.mock("@/components/shell/shell-context", () => ({

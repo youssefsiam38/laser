@@ -650,6 +650,15 @@ export interface DirectoryEntry {
   kind?: "directory" | "file";
 }
 
+export interface ExplorerEntry extends DirectoryEntry {
+  kind: "directory" | "file";
+}
+
+export interface ExplorerListing extends DirectoryListing {
+  entries: ExplorerEntry[];
+  commonPrefix: string;
+}
+
 export interface DirectoryExplorerOptions {
   mode: "explorer";
   /** Absolute session directory used to resolve relative paths; not a sandbox. */

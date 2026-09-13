@@ -58,6 +58,8 @@ type ComposerTriggerPopoverBaseProps = Omit<
   emptyCategoriesLabel?: string;
   /** Label shown when no items match. @default "No matching items" */
   emptyItemsLabel?: string;
+  /** Why results are unavailable, instead of empty/no-match advice. */
+  unavailableLabel?: string | undefined;
   /** Label shown while an async adapter is resolving items. @default "Loading…" */
   loadingLabel?: string;
   title?: string;
@@ -241,21 +243,7 @@ function PickerSurface({ title, notice, onQueryChange, onOpenChange, onComplete,
         if (completed) {
           event.preventDefault();
           event.stopPropagation();
-          aui.composer.setText(completed.text);
-          state.setCursorPosition(completed.caret);
-          // The primitive's cursor is its own detection state; nothing moves
-          // the caret the person can see, and React does not restore a
-          // selection when focus did not change, so assigning the new value
-          // leaves it at the end — past the arguments the completion kept.
-          // Put it back once the textarea actually holds the new draft.
-          const place = (): boolean => {
-            if (input.value !== completed.text) return false;
-            input.setSelectionRange(completed.caret, completed.caret);
-            return true;
-          };
-          queueMicrotask(() => {
-            if (!place()) requestAnimationFrame(place);
-          });
+          writeDraft(completed, input);
           return;
         }
       }
@@ -316,7 +304,7 @@ function PickerSurface({ title, notice, onQueryChange, onOpenChange, onComplete,
     };
   }, [scope.open]);
   if (!scope.open) return null;
-  const count = scope.isSearchMode || scope.activeCategoryId ? scope.items.filter((item) => item.type !== 'page').length : scope.categories.length;
+  const count = scope.isSearchMode || scope.activeCategoryId ? scope.items.filter((item) => item.metadata?.countable !== false).length : scope.categories.length;
   const selected = scope.items[scope.highlightedIndex];
   return <>
     <div className="flex shrink-0 items-center gap-2 px-3 py-2 hairline-b">
@@ -407,6 +395,7 @@ type ItemsProps = {
   backLabel: string;
   emptyLabel: string;
   loadingLabel: string;
+  unavailableLabel: string | undefined;
 };
 
 const Items: FC<ItemsProps> = ({
@@ -415,6 +404,7 @@ const Items: FC<ItemsProps> = ({
   backLabel,
   emptyLabel,
   loadingLabel,
+  unavailableLabel,
 }) => {
   const { isLoading, query } = unstable_useTriggerPopoverScopeContext();
   return (
@@ -465,7 +455,7 @@ const Items: FC<ItemsProps> = ({
             })}
             {items.length === 0 && (
               <div className="px-3 py-5 text-sm text-ink-2">
-                {isLoading ? loadingLabel : query ? 'No matches. Try a shorter name or path.' : emptyLabel}
+                {unavailableLabel ?? (isLoading ? loadingLabel : query ? 'No matches. Try a shorter name or path.' : emptyLabel)}
               </div>
             )}
           </div>
@@ -485,6 +475,7 @@ const ComposerTriggerPopoverImpl: FC<ComposerTriggerPopoverProps> = ({
   backLabel = "Back",
   emptyCategoriesLabel = "No items available",
   emptyItemsLabel = "No matching items",
+  unavailableLabel,
   loadingLabel = "Loading…",
   title = "Suggestions",
   notice,
@@ -545,6 +536,7 @@ const ComposerTriggerPopoverImpl: FC<ComposerTriggerPopoverProps> = ({
         backLabel={backLabel}
         emptyLabel={emptyItemsLabel}
         loadingLabel={loadingLabel}
+        unavailableLabel={unavailableLabel}
       />
       </PickerSurface>
     </ComposerPrimitive.Unstable_TriggerPopover>

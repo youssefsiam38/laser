@@ -1,25 +1,59 @@
 import { opendir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
-import type { DirectoryEntry, DirectoryExplorerOptions, DirectoryListing } from "@lasercode/protocol";
+import { setImmediate as yieldHost } from "node:timers/promises";
+import type { ExplorerEntry, DirectoryExplorerOptions, ExplorerListing } from "@lasercode/protocol";
 
-/** Opt-in machine explorer. The OS account is the boundary, as for file previews.
- * Only immediate entry metadata is read; no recursive traversal or file reads.
- * The legacy project chooser remains unchanged. No worker is opened.
- */
-export async function browseExplorer(path: string | undefined, options: DirectoryExplorerOptions): Promise<DirectoryListing> {
-  const target = resolve(options.cwd, path ?? ".");
-  const parent = resolve(target, "..");
-  const base = { path: target, home: homedir(), ...(target !== parent ? { parent } : {}) };
-  const failure = (error: string): DirectoryListing => ({ ...base, entries: [], truncated: false, error });
-  try {
-    if (!isAbsolute(options.cwd)) return failure("Choose a conversation directory before browsing.");
-    const entries: DirectoryEntry[] = [];
+const names = new Intl.Collator("en", { sensitivity: "base", numeric: true });
+const ties = new Intl.Collator("en");
+const compare = (a: ExplorerEntry, b: ExplorerEntry) => Number(a.name.startsWith(".")) - Number(b.name.startsWith("."))
+  || Number(a.kind === "file") - Number(b.kind === "file") || names.compare(a.name, b.name) || ties.compare(a.name, b.name);
+const CHUNK = 512;
+const MERGE_SLICE = 1024;
+
+/** Bounded native sorts, followed by stable cooperative merges. No result ceiling. */
+async function sortEntries(entries: ExplorerEntry[]): Promise<ExplorerEntry[]> {
+  for (let start = 0; start < entries.length; start += CHUNK) {
+    const chunk = entries.slice(start, start + CHUNK).sort(compare);
+    for (let i = 0; i < chunk.length; i++) entries[start + i] = chunk[i]!;
+    await yieldHost();
+  }
+  let source = entries;
+  let target = new Array<ExplorerEntry>(entries.length);
+  for (let width = CHUNK; width < entries.length; width *= 2) {
+    let budget = MERGE_SLICE;
+    for (let start = 0; start < source.length; start += width * 2) {
+      const middle = Math.min(start + width, source.length), end = Math.min(start + width * 2, source.length);
+      let left = start, right = middle;
+      for (let out = start; out < end; out++) {
+        target[out] = right >= end || (left < middle && compare(source[left]!, source[right]!) <= 0) ? source[left++]! : source[right++]!;
+        if (--budget === 0) { await yieldHost(); budget = MERGE_SLICE; }
+      }
+    }
+    [source, target] = [target, source];
+    await yieldHost();
+  }
+  return source;
+}
+
+type Scan = { entries: ExplorerEntry[]; commonPrefix: string };
+// One active explorer scan/sort per host. Identical queued/in-flight path+prefix
+// requests share work (including pagination). No cache or cancellation protocol.
+const pending = new Map<string, Promise<Scan>>();
+let queue: Promise<void> = Promise.resolve();
+function scan(target: string, prefix: string): Promise<Scan> {
+  const key = JSON.stringify([target, prefix]);
+  const existing = pending.get(key);
+  if (existing) return existing;
+  const work = queue.then(async () => {
+    const entries: ExplorerEntry[] = [];
+    let commonPrefix = "", scanned = 0;
     const directory = await opendir(target);
     for await (const entry of directory) {
-      if (!entry.name.toLocaleLowerCase().startsWith(options.prefix.toLocaleLowerCase())) continue;
+      if (++scanned % 256 === 0) await yieldHost();
+      if (!entry.name.toLocaleLowerCase().startsWith(prefix)) continue;
       const full = join(target, entry.name);
-      let kind: "directory" | "file";
+      let kind: ExplorerEntry["kind"];
       if (entry.isSymbolicLink()) {
         try {
           const info = await stat(full);
@@ -29,16 +63,26 @@ export async function browseExplorer(path: string | undefined, options: Director
       } else if (entry.isDirectory()) kind = "directory";
       else if (entry.isFile()) kind = "file";
       else continue;
+      if (!entries.length) commonPrefix = entry.name;
+      else while (!entry.name.startsWith(commonPrefix)) commonPrefix = commonPrefix.slice(0, -1);
       entries.push({ name: entry.name, path: full, project: false, kind });
     }
-    entries.sort((a, b) => Number(a.name.startsWith(".")) - Number(b.name.startsWith("."))
-      || Number(a.kind === "file") - Number(b.kind === "file")
-      || a.name.localeCompare(b.name, "en", { sensitivity: "base", numeric: true })
-      || a.name.localeCompare(b.name, "en"));
-    let commonPrefix = entries[0]?.name ?? "";
-    for (const entry of entries) {
-      while (!entry.name.startsWith(commonPrefix)) commonPrefix = commonPrefix.slice(0, -1);
-    }
+    return { entries: await sortEntries(entries), commonPrefix };
+  });
+  pending.set(key, work);
+  queue = work.then(() => { pending.delete(key); }, () => { pending.delete(key); });
+  return work;
+}
+
+/** OS-account metadata only: no recursive traversal, file reads, or worker. */
+export async function browseExplorer(path: string | undefined, options: DirectoryExplorerOptions): Promise<ExplorerListing> {
+  const target = resolve(options.cwd, path ?? ".");
+  const parent = resolve(target, "..");
+  const base = { path: target, home: homedir(), ...(target !== parent ? { parent } : {}) };
+  const failure = (error: string): ExplorerListing => ({ ...base, entries: [], commonPrefix: "", truncated: false, error });
+  try {
+    if (!isAbsolute(options.cwd)) return failure("Choose a conversation directory before browsing.");
+    const { entries, commonPrefix } = await scan(target, options.prefix.toLocaleLowerCase());
     const start = options.offset ?? 0;
     const end = start + Math.max(1, Math.min(100, options.limit ?? 80));
     return { ...base, entries: entries.slice(start, end), truncated: end < entries.length, commonPrefix,

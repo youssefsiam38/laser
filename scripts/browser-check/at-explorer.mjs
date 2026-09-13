@@ -22,6 +22,10 @@ export default async function checkExplorer(check) {
   writeFileSync(join(project, 'server', 'index.ts'), 'export const ready = true;\n');
   writeFileSync(join(project, '.hidden-file'), 'visible hidden entry\n');
   for (let i = 0; i < 190; i++) writeFileSync(join(project, 'many', `entry-${String(i).padStart(3, '0')}.ts`), '');
+  const collisionNames = ['next', 'previous', '__page:next', 'action:006e006500780074', 'file:006e006500780074', 'agent:006e006500780074', 'directory:006e006500780074'];
+  const awkwardNames = ['a]b.md', 'a\nb.md', ':file[a].md'];
+  for (const name of [...collisionNames, ...awkwardNames, 'a']) writeFileSync(join(project, name), 'Harmless identity fixture.\n');
+  for (let i = 0; i < 95; i++) writeFileSync(join(project, `zz-sentinel-${i}`), '');
   const page = check.page;
   const input = page.getByRole('textbox', { name: 'Message', exact: true });
   const popup = page.getByRole('listbox', { name: 'Files & agents', exact: true });
@@ -45,7 +49,9 @@ export default async function checkExplorer(check) {
     ['@./node', ['node-one', 'node-two', 'node_modules']],
     ['@server/', ['server/index.ts']],
     ['@server/ind', ['server/index.ts']],
-    ['@./', ['dist', '.git', '.hidden-folder', '.hidden-file']],
+    ['@./', ['dist']],
+    ['@.git', ['.git', '.gitignore']],
+    ['@.hidden', ['.hidden-folder', '.hidden-file']],
     ['@../', [sibling]],
     ['@../explorer-sibling/', [guide]],
     [`@${sibling}/gui`, [guide]],
@@ -58,6 +64,33 @@ export default async function checkExplorer(check) {
     if (text.includes('node')) assert.equal(await popup.getByRole('option').count(), 3);
     assert.equal(await input.evaluate(element => element === document.activeElement), true);
   }
+  await fill('@~'); await popup.getByText('Home shortcuts aren’t supported here. Type an absolute path instead.').waitFor();
+  assert.equal(await popup.getByRole('button', { name: 'Try again', exact: true }).count(), 0);
+  assert.equal(await popup.getByText('No matches.', { exact: false }).count(), 0);
+  await check.shot('explorer-refusal');
+  await fill('@/'); await option('/tmp').waitFor(); await input.press('Backspace');
+  assert.equal(await input.inputValue(), '@');
+  await fill('@'); await option('More entries…').waitFor();
+  for (const name of collisionNames) await option(name).waitFor();
+  const rows = popup.getByRole('option');
+  const ids = await rows.evaluateAll(elements => elements.map(element => element.id));
+  assert.equal(new Set(ids).size, ids.length);
+  const labels = await rows.evaluateAll(elements => elements.map(element => element.getAttribute('aria-label')));
+  const targetIndex = labels.indexOf('next'); assert.ok(targetIndex >= 0);
+  // Query changes reset the highlight to the first row. Walk it naturally.
+  for (let i = 0; i < targetIndex; i++) await input.press('ArrowDown');
+  assert.equal(await input.getAttribute('aria-activedescendant'), await option('next').getAttribute('id'));
+  await check.shot('explorer-collisions');
+  await input.press('Enter'); assert.equal(await input.inputValue(), ':file[next] ');
+  const messagesBefore = await page.locator('[data-role="user"]').count();
+  for (const name of awkwardNames) {
+    await fill('@'); await option(name).waitFor(); await choose(option(name));
+    const text = await input.inputValue();
+    assert.equal(JSON.parse(text.trim()), name);
+    assert.equal(text.includes(':file['), false);
+    assert.equal(await page.locator('[data-role="user"]').count(), messagesBefore);
+  }
+  await check.shot('explorer-awkward-path');
   await fill('@no'); await option('node-one').waitFor(); await input.press('Tab');
   assert.equal(await input.inputValue(), '@node');
   await choose(option('node_modules')); await option('node_modules/index.js').waitFor();
@@ -82,6 +115,7 @@ export default async function checkExplorer(check) {
   const retryName = `retry-${check.state.width}-${check.state.theme}-${check.state.touch}`;
   await fill(`@${retryName}/`);
   await popup.getByText('This folder no longer exists. Check the path.').waitFor();
+  assert.equal(await popup.getByText('No matches.', { exact: false }).count(), 0);
   mkdirSync(join(project, retryName)); writeFileSync(join(project, retryName, 'ready.ts'), '');
   await choose(popup.getByRole('button', { name: 'Try again', exact: true }));
   await option(`${retryName}/ready.ts`).waitFor();

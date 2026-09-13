@@ -30,6 +30,21 @@ it("filters before pagination and computes completion across every match", async
   expect((await list(root, "node", page.nextOffset!, 2)).entries[0]?.name).toBe("node-z");
   expect((await list(root, "", 0, 1000)).entries).toHaveLength(100);
 });
+it('keeps global stable ordering across native-sort chunks and merge boundaries, with complete prefix and reachable tail', async () => {
+  const names = Array.from({ length: 2051 }, (_, i) => `file-${(i * 7919) % 2051}`);
+  for (const name of names) writeFileSync(join(root, name), '');
+  const expected = [...names].sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base', numeric: true }) || a.localeCompare(b, 'en'));
+  for (const offset of [0, 500, 1010, 2030]) {
+    const page = await list(root, 'FILE-', offset, 30);
+    expect(page.entries.map(entry => entry.name)).toEqual(expected.slice(offset, offset + 30));
+    expect(page.commonPrefix).toBe('file-');
+    expect(page.nextOffset).toBe(offset + 30 < names.length ? offset + 30 : undefined);
+  }
+  const pages = await Promise.all([list(root, 'file-', 0, 30), list(root, 'FILE-', 30, 30), list(root, 'file-', 0, 30)]);
+  expect(pages[0]).toEqual(pages[2]);
+  expect(pages[1]?.entries.map(entry => entry.name)).toEqual(expected.slice(30, 60));
+});
+
 it("includes git-ignored, generated and dot entries without recursive traversal", async () => {
   execFileSync("git", ["init", "-q", root]);
   writeFileSync(join(root, ".gitignore"), "node_modules/\ndist/\n.hidden/\n");

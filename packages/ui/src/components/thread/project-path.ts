@@ -1,6 +1,6 @@
 import type { Unstable_TriggerMatcher } from "@assistant-ui/react";
 
-export type ProjectPath = { directory: string; prefix: string; head: string; error?: never } | { error: string; directory?: never; prefix?: never; head?: never };
+export type ProjectPath = { ok: true; directory: string; prefix: string; head: string } | { ok: false; error: string };
 const absolute = (path: string) => path.startsWith("/") || /^[a-z]:\//iu.test(path);
 
 /** Renderer-safe path arithmetic. The host still owns IO and permissions. */
@@ -21,15 +21,15 @@ function normalized(path: string): string {
 export function resolveProjectPath(text: string, cwd: string): ProjectPath {
   let query = (text.startsWith("@") ? text.slice(1) : text).replaceAll("\\", "/");
   cwd = normalized(cwd.replaceAll("\\", "/") || "/");
-  if (/\s$/u.test(query) || /[\n\r\t\0]/u.test(query)) return { error: "Finish the path before adding a space." };
-  if (query.startsWith("~")) return { error: "Home shortcuts aren’t supported here. Type an absolute path instead." };
-  if (/^[a-z]:(?!\/)/iu.test(query)) return { error: "Use an absolute drive path, such as C:/." };
+  if (/\s$/u.test(query) || /[\n\r\t\0]/u.test(query)) return { ok: false, error: "Finish the path before adding a space." };
+  if (query.startsWith("~")) return { ok: false, error: "Home shortcuts aren’t supported here. Type an absolute path instead." };
+  if (/^[a-z]:(?!\/)/iu.test(query)) return { ok: false, error: "Use an absolute drive path, such as C:/." };
   // Dot segments name directories even before their following separator.
   if (/(?:^|\/)\.{1,2}$/u.test(query)) query += "/";
   const slash = query.lastIndexOf("/");
   const head = query.slice(0, slash + 1);
   const prefix = query.slice(slash + 1);
-  return { directory: normalized(absolute(head) ? head : cwd + (cwd.endsWith("/") ? "" : "/") + head), prefix, head };
+  return { ok: true, directory: normalized(absolute(head) ? head : cwd + (cwd.endsWith("/") ? "" : "/") + head), prefix, head };
 }
 
 export const matchProjectMention: Unstable_TriggerMatcher = (text, char, caret) => {
@@ -52,8 +52,9 @@ export function parentProjectQuery(query: string, cwd = "/"): string | null {
   query = query.replaceAll("\\", "/");
   if (!query.endsWith("/")) return null;
   const current = resolveProjectPath(query, cwd);
-  if (current.error) return null;
-  const parent = normalized(current.directory! + "/..");
+  if (!current.ok) return null;
+  const parent = normalized(current.directory + "/..");
+  if (parent === current.directory) return null;
   if (absolute(query)) return parent.endsWith("/") ? parent : parent + "/";
   const base = normalized(cwd.replaceAll("\\", "/")).split("/");
   const target = parent.split("/");

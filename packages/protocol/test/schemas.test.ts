@@ -16,6 +16,7 @@ import {
   agentRunStatusSchema,
   backgroundTaskUpdateSchema,
   isTerminalRunStatus,
+  explorerListingSchema,
   clientMethods,
   clientParamsSchemas,
   parseClientRequest,
@@ -597,6 +598,15 @@ it.each([{ exposure: "direct", alwaysLoad: false }, { only: ["echo"], alwaysLoad
   }).success).toBe(false);
 });
 
+
+it('requires explorer kind and common-prefix metadata, without accepting a legacy reply as an explorer page', () => {
+  const legacy = { path: '/project', home: '/home/test', entries: [{ name: 'folder', path: '/project/folder', project: false }], truncated: false };
+  expect(explorerListingSchema.safeParse(legacy).success).toBe(false);
+  expect(explorerListingSchema.safeParse({ ...legacy, commonPrefix: '' }).success).toBe(false);
+  const explorer = { ...legacy, commonPrefix: 'folder', entries: [{ ...legacy.entries[0], kind: 'directory' }] };
+  expect(explorerListingSchema.parse(JSON.parse(JSON.stringify(explorer)))).toEqual(explorer);
+  expect(explorerListingSchema.safeParse({ ...explorer, entries: [{ ...explorer.entries[0], kind: 'socket' }] }).success).toBe(false);
+});
 
 it("browse remains strict and explorer requires explicit opt-in", () => {
   const request = { jsonrpc: "2.0", id: 1, method: "pi/project/browse", params: { path: "/project" } };

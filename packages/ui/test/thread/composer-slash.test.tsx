@@ -46,14 +46,14 @@ vi.mock("@/components/thread/session-preparation.js", () => ({
   SessionPreparationProvider: ({ children }: { children: ReactNode }) => children,
   useSessionPreparation: () => ({ pending: false }),
 }));
-vi.mock("@/components/thread/use-project-file-search.js", () => ({
-  useProjectFileSearch: () => ({ files: [{ path: "src/app.ts", name: "app.ts", kind: "file", project: false }], head: "src/", commonPrefix: "app.ts", loading: false, failed: false, truncated: false, retry: vi.fn() }),
+vi.mock("@/components/thread/use-directory-page.js", () => ({
+  useDirectoryPage: (cwd: string, query: string) => ({ entries: [{ path: "src/app.ts", name: "app.ts", kind: "file", project: false }], loading: false, navigation: { cwd, query, head: "src/", commonPrefix: "app.ts", loading: false, next: undefined, previous: undefined } }),
 }));
 vi.mock("@/components/shell/session-groups", () => ({ useSessionsList: () => ({ tab: "code" }) }));
 vi.mock("@/components/shell/shell-context", () => ({
   useShell: () => ({ newSession: mocks.newSession, openHistory: mocks.openHistory, setAddProjectOpen: mocks.setAddProjectOpen }),
 }));
-vi.mock("@/agents", () => ({ useRunsForRoot: () => [{ subagentName: "audit", task: "Review the changes" }] }));
+vi.mock("@/agents", () => ({ useRunsForRoot: () => [{ runId: 'audit-1', subagentName: "audit", task: "Review the changes" }, { runId: 'audit-2', subagentName: 'auth-audit', task: 'Review authentication' }] }));
 vi.mock("@/runtime", async (importActual) => ({
   ...(await importActual<typeof import("../../src/runtime/index.js")>()),
   useLaserView: () => mocks.view,
@@ -299,6 +299,14 @@ describe("completing a slash command", () => {
 });
 
 describe("completing an @ mention", () => {
+  it('keeps fuzzy agent matching and typed identities separate from insertion', async () => {
+    await mount(); await type('@audit');
+    const handles = rows().filter(row => ['audit', 'auth-audit'].includes(row.getAttribute('aria-label') ?? ''));
+    expect(handles.map(row => row.getAttribute('aria-label'))).toEqual(['audit', 'auth-audit']);
+    expect(new Set(rows().map(row => row.id)).size).toBe(rows().length);
+    await key('ArrowDown'); await key('Enter');
+    expect(input().value).toBe(':agent[auth-audit] '); expect(mocks.sent).not.toHaveBeenCalled();
+  });
   it("still inserts a child agent handle without sending", async () => {
     await mount(); await type("@aud"); await key("Enter");
     expect(input().value).toBe(":agent[audit] ");

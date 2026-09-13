@@ -1,6 +1,6 @@
 import { ComposerPrimitive, useAui, useAuiState, unstable_useMentionAdapter, unstable_useSlashCommandAdapter } from "@assistant-ui/react";
 import type { CommandInfo } from "@lasercode/protocol";
-import { AtSign, Bot, FileText, FolderOpen, GitFork, History, ListX, Pencil, Plus, Shrink, SlashSquare, Sparkles } from "lucide-react";
+import { AtSign, Bot, ChevronLeft, ChevronRight, FileText, FolderOpen, GitFork, History, ListX, Pencil, Plus, Shrink, SlashSquare, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 
 import { SessionAgentSelector } from "@/components/assistant-ui/elements/agent-selector";
@@ -33,9 +33,9 @@ import { completeLeadingSlash, matchLeadingSlash, rankSlashCommandMatches } from
 import { StatusLine } from "./StatusLine.js";
 import { userEntryIds } from "./entries.js";
 import { SessionPreparationProvider, useSessionPreparation } from "./session-preparation.js";
-import { useProjectFileSearch } from "./use-project-file-search.js";
+import { useDirectoryPage } from "./use-directory-page.js";
 import { matchProjectMention } from "./project-path.js";
-import { explorerItems, explorerNavigation } from "./project-explorer-model.js";
+import { explorerItems, explorerNavigation, explorerPageItem, mentionFormatter, mentionItemId } from "./project-explorer-model.js";
 
 /**
  * The composer (DESIGN.md "Composer"), composed from the catalog: the
@@ -131,7 +131,7 @@ function ComposerBody() {
         )}
         {/* `/` runs a laser command; `@` addresses a running subagent by handle. */}
         <ComposerTriggerPopover char="/" title="Commands & skills" matcher={matchLeadingSlash} adapter={slash.adapter} action={slash.action} onComplete={completeSlashDraft} {...(slash.iconMap ? { iconMap: slash.iconMap } : {})} fallbackIcon={SlashSquare} />
-        <ComposerTriggerPopover char="@" title="Files & agents" matcher={matchProjectMention} adapter={mention.adapter} directive={mention.directive} navigation={mention.navigation} iconMap={MENTION_ICONS} fallbackIcon={AtSign} emptyItemsLabel="This folder is empty." loadingLabel="Reading this folder…" isLoading={mention.loading} onQueryChange={mention.setQuery} onOpenChange={mention.setOpen} notice={mention.failed ? <>{mention.error} <button type="button" className="min-h-11 rounded-md px-2 underline underline-offset-2 focus-visible:outline focus-visible:outline-live" onClick={mention.retry}>Try again</button></> : <span className="block truncate" dir="ltr">{mention.directory ?? 'Choose a conversation to browse files.'}</span>} />
+        <ComposerTriggerPopover char="@" title="Files & agents" matcher={matchProjectMention} adapter={mention.adapter} directive={mention.directive} navigation={mention.navigation} iconMap={MENTION_ICONS} fallbackIcon={AtSign} emptyItemsLabel="This folder is empty." unavailableLabel={mention.issue ? mention.issue.kind === 'refusal' ? 'Update the path to continue.' : 'Retry to load this folder.' : undefined} loadingLabel="Reading this folder…" isLoading={mention.loading} onQueryChange={mention.setQuery} onOpenChange={mention.setOpen} notice={mention.issue ? <>{mention.issue.message}{mention.retry && <button type="button" className="min-h-11 rounded-md px-2 underline underline-offset-2 focus-visible:outline focus-visible:outline-live" onClick={mention.retry}>Try again</button>}</> : <span className="block truncate" dir="ltr">{mention.directory ?? 'Choose a conversation to browse files.'}</span>} />
       </ComposerPrimitive.Root>
     </ComposerPrimitive.Unstable_TriggerPopoverRoot>
   );
@@ -459,7 +459,7 @@ function useSlashCommands() {
 // continue the path; only files and handles use the primitive's directive.
 // ---------------------------------------------------------------------------
 
-const MENTION_ICONS = { agent: Bot, file: FileText, directory: FolderOpen } as const;
+const MENTION_ICONS = { agent: Bot, file: FileText, directory: FolderOpen, next: ChevronRight, previous: ChevronLeft } as const;
 
 function useHandleMentions() {
   const view = useLaserView();
@@ -468,14 +468,13 @@ function useHandleMentions() {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const cwd = view?.state.cwd ?? currentProject;
-  const search = useProjectFileSearch(cwd, query, open);
-  const files = search.files;
+  const page = useDirectoryPage(cwd, query, open);
   const items = useMemo(
     () => [
       // @name completes to a child agent of this session, by the name the
       // person gave it when they (or their agent) started it.
       ...childRuns.flatMap((run) =>
-        run.subagentName ? [{ id: run.subagentName, type: "agent", label: run.subagentName, description: run.task, icon: "agent" }] : [],
+        run.subagentName ? [{ id: mentionItemId("agent", JSON.stringify([run.runId, run.subagentName])), type: "agent", label: run.subagentName, description: run.task, icon: "agent" }] : [],
       ),
     ],
     [childRuns],
@@ -484,18 +483,19 @@ function useHandleMentions() {
   const adapter = useMemo(() => ({
     ...mention.adapter,
     search: (nextQuery: string) => {
-      const all = mention.adapter.search?.("") ?? [];
-      const handles = /[/\\\\~]/u.test(nextQuery) ? [] : all.filter((item) => item.label.toLocaleLowerCase().startsWith(nextQuery.toLocaleLowerCase()));
+      const all = (mention.adapter.search?.("") ?? []).map(item => ({ ...item, metadata: { ...item.metadata, identity: item.label } }));
+      const handles = /[/\\\\~]/u.test(nextQuery) ? [] : rankSlashCommandMatches(all, nextQuery);
       if (nextQuery !== query) return handles;
       return [...handles,
-        ...(search.previous ? [{ id: "previous", type: "page", label: "Previous entries" }] : []),
-        ...explorerItems(files, cwd ?? ""),
-        ...(search.next ? [{ id: "next", type: "page", label: "More entries…" }] : []),
+        ...(page.navigation.previous ? [explorerPageItem("previous")] : []),
+        ...explorerItems(page.entries, cwd ?? ""),
+        ...(page.navigation.next ? [explorerPageItem("next")] : []),
       ];
     },
-  }), [mention.adapter, query, files, cwd, search.next, search.previous]);
-  const navigation = explorerNavigation(search);
-  return { ...mention, ...search, adapter, navigation, setQuery, setOpen };
+  }), [mention.adapter, query, page.entries, cwd, page.navigation.next, page.navigation.previous]);
+  const navigation = explorerNavigation(page.navigation);
+  return { adapter, directive: { ...mention.directive, formatter: mentionFormatter }, navigation, loading: page.loading,
+    issue: page.issue, retry: page.retry, directory: page.directory, setQuery, setOpen };
 }
 
 /**

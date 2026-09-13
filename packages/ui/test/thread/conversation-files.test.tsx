@@ -7,9 +7,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { AssistantRuntimeProvider, TextMessagePartProvider, useExternalStoreRuntime } from "@assistant-ui/react";
 import type { ProjectFileContent } from "@lasercode/protocol";
 import { MarkdownText } from "../../src/components/assistant-ui/elements/markdown-text.js";
-import { unstable_defaultDirectiveFormatter } from "@assistant-ui/react";
 import { DirectiveString } from "../../src/components/assistant-ui/elements/directive-text.aui.js";
-import { explorerItems } from "../../src/components/thread/project-explorer-model.js";
+import { explorerItems, mentionFormatter } from "../../src/components/thread/project-explorer-model.js";
 import { FileLinkDirectory } from "../../src/components/ui/source-file-link.js";
 import { looksLikeFilePath, projectDirectivePath, projectReferencePath } from "../../src/components/ui/project-file-link.js";
 import { findTextRanges } from "../../src/components/thread/use-conversation-find.js";
@@ -72,7 +71,7 @@ it("opens an outside Markdown link in the viewer and labels its absolute host pa
 });
 it.each(["/outside/guide.md", "/project/link.md"])("opens an explorer-created directive for %s through the existing safe viewer", async path => {
   const item = explorerItems([{ name: "guide.md", path, kind: "file", project: false }], "/project")[0]!;
-  const text = unstable_defaultDirectiveFormatter.serialize(item);
+  const text = mentionFormatter.serialize(item);
   transport.request.mockResolvedValue({ ...file, path: "/outside/guide.md" });
   const openSourceFile = vi.fn(); vi.stubGlobal("desktop", { openSourceFile });
   await act(async () => root.render(<Fixture text={text} directive />));
@@ -83,6 +82,14 @@ it.each(["/outside/guide.md", "/project/link.md"])("opens an explorer-created di
   expect(document.querySelector('[role="dialog"]')?.textContent).toContain("/outside/guide.md");
   expect(document.querySelector('[role="dialog"] h1')?.textContent).toBe("The guide");
   expect(openSourceFile).not.toHaveBeenCalled();
+});
+it.each(['a]b.md', 'a\nb.md', ':file[a].md'])('never renders a shorter preview identity for an awkward explorer name: %j', async name => {
+  const item = explorerItems([{ name, path: '/project/' + name, kind: 'file', project: false }], '/project')[0]!;
+  const text = mentionFormatter.serialize(item);
+  await act(async () => root.render(<Fixture text={text} directive />));
+  expect(container.querySelector('[data-slot="file-chip"]')).toBeNull();
+  expect(JSON.parse(container.textContent ?? '')).toBe(name);
+  expect(transport.request).not.toHaveBeenCalled();
 });
 it("retains Open in editor as a second explicit action", async () => {
   const openSourceFile = vi.fn(async () => ({ opened: true })); vi.stubGlobal("desktop", { openSourceFile });

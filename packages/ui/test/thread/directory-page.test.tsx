@@ -2,21 +2,39 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { useProjectFileSearch } from "../../src/components/thread/use-project-file-search.js";
+import { useDirectoryPage } from "../../src/components/thread/use-directory-page.js";
 
 const request = vi.hoisted(() => vi.fn());
 const client = { request };
 vi.mock('@/runtime', () => ({ useLaserStable: () => ({ client }) }));
 let root: Root, container: HTMLDivElement;
 function Harness({ cwd = '/project', query = '', active = true }: { cwd?: string; query?: string; active?: boolean }) {
-  const search = useProjectFileSearch(cwd, query, active);
-  return <div>{search.loading ? 'Loading' : search.failed ? 'Failed' : search.files.map(file => file.path).join(',')}{search.truncated && ' · More results'}<button onClick={search.retry}>Retry</button>{search.next && <button onClick={search.next}>More</button>}</div>;
+  const page = useDirectoryPage(cwd, query, active);
+  return <div>{page.loading ? 'Loading' : page.issue ? page.issue.kind : page.entries.map(entry => entry.path).join(',')}{page.retry && <button onClick={page.retry}>Retry</button>}{page.navigation.next && <button onClick={page.navigation.next}>More</button>}</div>;
 }
 beforeEach(() => { globalThis.IS_REACT_ACT_ENVIRONMENT = true; vi.useFakeTimers(); request.mockReset(); container = document.createElement('div'); document.body.append(container); root = createRoot(container); });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.useRealTimers(); });
-const result = (path: string) => ({ path: '/project', home: '/home/test', entries: [{ path, name: path, kind: 'file', project: false }], truncated: false });
+const result = (path: string) => ({ path: '/project', home: '/home/test', entries: [{ path, name: path, kind: 'file', project: false }], truncated: false, commonPrefix: '' });
 const render = async (query: string, cwd = '/project') => { await act(async () => root.render(<Harness query={query} cwd={cwd} />)); };
 const tick = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(150); }); };
+
+it.each(['~', 'C:relative', 'server/ '])('reports a local refusal without a dead retry or request: %s', async query => {
+  await render(query); await tick();
+  expect(container.textContent).toBe('refusal'); expect(request).not.toHaveBeenCalled(); expect(container.querySelector('button')).toBeNull();
+});
+it('reports a host read failure and retries successfully', async () => {
+  request.mockResolvedValueOnce({ ...result(''), entries: [], error: 'You do not have permission to open this folder.' });
+  await render(''); await tick(); expect(container.textContent).toBe('failureRetry');
+  request.mockResolvedValueOnce(result('ready.ts'));
+  await act(async () => container.querySelector('button')!.click()); await tick();
+  expect(container.textContent).toBe('ready.ts'); expect(request).toHaveBeenCalledTimes(2);
+});
+it('refuses untyped legacy entries at the explorer response boundary, then permits a valid retry', async () => {
+  request.mockResolvedValueOnce({ ...result('folder'), entries: [{ path: '/project/folder', name: 'folder', project: false }] });
+  await render(''); await tick(); expect(container.textContent).toBe('failureRetry');
+  request.mockResolvedValueOnce(result('valid.ts'));
+  await act(async () => container.querySelector('button')!.click()); await tick(); expect(container.textContent).toBe('valid.ts');
+});
 
 it('sends the debounced directory and prefix to host browse', async () => {
   request.mockResolvedValue(result('deep/file-9999.ts'));
@@ -33,17 +51,17 @@ it('ignores stale replies after query and project changes and never shows the ol
   await act(async () => old(result('old.ts')));
   expect(container.textContent).toContain('new.ts'); expect(container.textContent).not.toContain('old.ts');
 });
-it('reports a failure, supports retry and exposes truncated results honestly', async () => {
+it('reports a transport failure and supports successful retry', async () => {
   request.mockRejectedValueOnce(new Error('private path and stack'));
-  await render('x'); await tick(); expect(container.textContent).toContain('Failed'); expect(container.textContent).not.toContain('private');
+  await render('x'); await tick(); expect(container.textContent).toContain('failure'); expect(container.textContent).not.toContain('private');
   request.mockResolvedValue({ ...result('x.ts'), truncated: true });
   await act(async () => container.querySelector('button')!.click()); await tick();
-  expect(container.textContent).toContain('x.ts · More results');
+  expect(container.textContent).toContain('x.ts'); expect(container.textContent).not.toContain('Retry');
 });
 it('starts at the first page after navigating away and back', async () => {
   request.mockResolvedValue({ ...result('x.ts'), truncated: true, nextOffset: 80 });
   await render('x'); await tick();
-  await act(async () => container.querySelectorAll('button')[1]!.click()); await tick();
+  await act(async () => container.querySelector('button')!.click()); await tick();
   expect(request.mock.calls.at(-1)?.[1].explorer.offset).toBe(80);
   await render('server/'); await tick(); await render('x'); await tick();
   expect(request.mock.calls.at(-1)?.[1].explorer.offset).toBe(0);
