@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PRODUCT_NAME } from "@lasercode/protocol";
 import { adapterRoot, loadMcpEngine } from "../../src/mcp/engine.js";
 import { mcpClientIdentity } from "../../src/mcp/identity.js";
@@ -28,7 +28,7 @@ async function modernResponseConstructor() {
   // pin; runtime negotiation and production validation are never changed.
   const { G: codecForVersion } = await import(pathToFileURL(join(dirname(clientEntry), chunk)).href);
   const codec = codecForVersion("2026-07-28");
-  return (method: string, payload: Record<string, unknown>): Record<string, unknown> => {
+  const complete = (method: string, payload: Record<string, unknown>): Record<string, unknown> => {
     const result = payload.resultType === "input_required" ? payload : {
       ...(CACHE_METHODS.has(method) ? { ttlMs: 0, cacheScope: "private" } : {}),
       resultType: "complete", ...payload,
@@ -37,6 +37,12 @@ async function modernResponseConstructor() {
     if (decoded.kind === "invalid") throw decoded.error;
     return result;
   };
+  return Object.assign(complete, { notification(method: string, params: Record<string, unknown>) {
+    const notification = { method, params };
+    const decoded = codec.validateNotification(method, notification);
+    if (decoded.kind === "invalid") throw decoded.error;
+    return notification;
+  } });
 }
 
 async function fixture(modern = false) {
@@ -48,6 +54,8 @@ async function fixture(modern = false) {
   cleanups.push(() => { if (old === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = old; });
   const requests: Array<{ method: string; params?: Record<string, unknown> }> = [];
   const streams = new Set<ServerResponse>();
+  const subscriptionIds = new WeakMap<ServerResponse, unknown>();
+  const listening = Promise.withResolvers<void>();
   const responses: Array<{ method: string; envelope: unknown }> = [];
   let respond = (method: string, params?: Record<string, unknown>): unknown => {
     if (method === "tools/list") return { tools: [tool("old")], ttlMs: 0 };
@@ -57,15 +65,27 @@ async function fixture(modern = false) {
   const server = createServer((req, res) => {
     if (req.method === "GET") {
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
-      res.write(": listening\n\n"); streams.add(res); res.on("close", () => streams.delete(res)); return;
+      res.write(": listening\n\n"); streams.add(res); listening.resolve(); res.on("close", () => streams.delete(res)); return;
     }
     if (req.method !== "POST") { res.writeHead(200).end(); return; }
     let body = "";
     req.on("data", chunk => { body += chunk; });
-    req.on("end", () => {
+    req.on("end", async () => {
       const message = JSON.parse(body);
       if (message.id === undefined) { res.writeHead(202).end(); return; }
       requests.push({ method: message.method, ...(message.params ? { params: message.params } : {}) });
+      if (modern && message.method === "subscriptions/listen") {
+        // A subscription opens with an acknowledgement notification, not a
+        // complete result (which would close it). Every delivery carries its ID.
+        const acknowledgement = modernResponse!.notification("notifications/subscriptions/acknowledged", {
+          _meta: { "io.modelcontextprotocol/subscriptionId": message.id }, notifications: message.params.notifications,
+        });
+        responses.push({ method: message.method, envelope: acknowledgement });
+        res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+        res.write(`data: ${JSON.stringify({ jsonrpc: "2.0", ...acknowledgement })}\n\n`);
+        streams.add(res); subscriptionIds.set(res, message.id); listening.resolve(); res.on("close", () => streams.delete(res));
+        return;
+      }
       const capabilities = { tools: { listChanged: true }, resources: {}, prompts: {} };
       const legacyDefaults: Record<string, unknown> = {
         initialize: { protocolVersion: "2025-11-25", capabilities, serverInfo: { name: "cache-fixture", version: "1" } },
@@ -81,15 +101,15 @@ async function fixture(modern = false) {
       const defaults = modern ? modernDefaults : legacyDefaults;
       let envelope: unknown;
       try {
-        const result = (respond(message.method, message.params) ?? defaults[message.method] ?? {}) as Record<string, unknown>;
+        const result = (await respond(message.method, message.params) ?? defaults[message.method] ?? {}) as Record<string, unknown>;
         envelope = { result: modernResponse ? modernResponse(message.method, result) : result };
       } catch (error) {
         envelope = { error: { code: (error as { code?: number }).code ?? -32603, message: (error as Error).message } };
         console.error("Synthetic MCP fixture rejected response", message.method, envelope);
       }
       responses.push({ method: message.method, envelope });
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, ...envelope as object }));
+      const reply = JSON.stringify({ jsonrpc: "2.0", id: message.id, ...envelope as object });
+      res.writeHead(200, { "content-type": "application/json" }); res.end(reply);
     });
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
@@ -103,10 +123,15 @@ async function fixture(modern = false) {
   });
   const client = connection.client as any;
   let now = Date.now(); client._cache._now = () => now;
-  return { client, manager, connection, requests, responses,
+  return { client, manager, connection, requests, responses, listening: listening.promise,
     set: (handler: typeof respond) => { respond = handler; },
     advance: (ms: number) => { now += ms; },
-    notify: () => { for (const stream of streams) stream.write(`data: ${JSON.stringify({ jsonrpc: "2.0", method: "notifications/tools/list_changed" })}\n\n`); },
+    notify: () => { for (const stream of streams) {
+      const method = "notifications/tools/list_changed";
+      const notification = modernResponse ? modernResponse.notification(method, { _meta: { "io.modelcontextprotocol/subscriptionId": subscriptionIds.get(stream) } }) : { method };
+      responses.push({ method, envelope: notification });
+      stream.write(`data: ${JSON.stringify({ jsonrpc: "2.0", ...notification })}\n\n`);
+    } },
   };
 }
 
@@ -163,6 +188,91 @@ describe("pinned MCP cache contract over HTTP", () => {
     await expect(f.client.listTools()).rejects.toThrow("scopes disagree");
     f.set(method => method === "tools/list" ? { tools: [tool("complete")], ttlMs: 10_000 } : undefined);
     expect((await f.client.listTools()).tools.map((t: { name: string }) => t.name)).toEqual(["complete"]);
+  });
+
+  it("restarts an invalid cursor once and never publishes the abandoned prefix", async () => {
+    const f = await fixture();
+    let invalid = false;
+    f.set((method, params) => {
+      if (method !== "tools/list") return undefined;
+      if (params?.cursor) { invalid = true; throw Object.assign(new Error("synthetic invalid cursor"), { code: -32602 }); }
+      return { tools: [tool(invalid ? "replacement" : "abandoned")], ...(!invalid ? { nextCursor: "invalid" } : {}), ttlMs: 1000 };
+    });
+    const start = f.requests.length;
+    expect((await f.client.listTools({}, { cacheMode: "refresh" })).tools.map((value: { name: string }) => value.name)).toEqual(["replacement"]);
+    expect(f.requests.slice(start).map(request => request.params?.cursor)).toEqual([undefined, "invalid", undefined]);
+    const end = f.requests.length;
+    expect((await f.client.listTools()).tools.map((value: { name: string }) => value.name)).toEqual(["replacement"]);
+    expect(f.requests.length).toBe(end);
+  });
+
+  it.each([false, true])("invalidates immediately and rejects an in-flight old walk before publishing added/removed tools (modern=%s)", async modern => {
+    const f = await fixture(modern);
+    await f.listening;
+    f.set(method => method === "tools/list" ? { tools: [tool("old")], ttlMs: 1000 } : undefined);
+    await f.client.listTools({}, { cacheMode: "refresh" });
+    const started = Promise.withResolvers<void>();
+    const oldReply = Promise.withResolvers<void>();
+    const replacement = Promise.withResolvers<void>();
+    let reads = 0;
+    f.set(async method => {
+      if (method !== "tools/list") return undefined;
+      if (++reads === 1) { started.resolve(); await oldReply.promise; return { tools: [tool("old")], ttlMs: 1000 }; }
+      await replacement.promise;
+      return { tools: [tool("new")], ttlMs: 1000 };
+    });
+    const pending = f.client.listTools({}, { cacheMode: "refresh" });
+    const outcome = pending.then(() => undefined, (error: Error) => error);
+    await started.promise;
+    f.notify();
+    try {
+      await vi.waitFor(() => expect(f.connection.tools).toEqual([]));
+      expect(await f.client._cache.read("tools/list")).toBeUndefined();
+      oldReply.resolve(); expect((await outcome)?.message).toContain("changed while it was being read");
+      expect(f.connection.tools).toEqual([]);
+      replacement.resolve();
+      await vi.waitFor(() => expect(f.connection.tools.map(value => value.name)).toEqual(["new"]));
+      const end = f.requests.length;
+      expect((await f.client.listTools()).tools.map((value: { name: string }) => value.name)).toEqual(["new"]);
+      expect(f.requests.length).toBe(end);
+    } catch (error) {
+      console.error("Synthetic notification transcript", JSON.stringify(f.responses)); throw error;
+    } finally { oldReply.resolve(); replacement.resolve(); await outcome; }
+  });
+
+  it("keeps a failed notification refresh stale and recovers only from a successful replacement", async () => {
+    const f = await fixture(); await f.listening;
+    f.set(method => method === "tools/list" ? { tools: [tool("old")], ttlMs: 1000 } : undefined);
+    await f.client.listTools({}, { cacheMode: "refresh" });
+    f.set(method => { if (method === "tools/list") throw new Error("synthetic refresh failure"); return undefined; });
+    f.notify();
+    await vi.waitFor(() => expect(f.responses.some(value => value.method === "tools/list" && (value.envelope as { error?: unknown }).error)).toBe(true));
+    expect(f.connection.tools).toEqual([]);
+    expect(await f.client._cache.read("tools/list")).toBeUndefined();
+    await expect(f.client.listTools()).rejects.toThrow("synthetic refresh failure");
+    f.set(method => method === "tools/list" ? { tools: [tool("replacement")], ttlMs: 1000 } : undefined);
+    f.notify();
+    await vi.waitFor(() => expect(f.connection.tools.map(value => value.name)).toEqual(["replacement"]));
+    expect((await f.client.listTools()).tools.map((value: { name: string }) => value.name)).toEqual(["replacement"]);
+  });
+
+  it("never reuses explicit input responses or a manually handled input-required resource result", async () => {
+    const f = await fixture(true);
+    f.set((method, params) => method === "resources/read" ? { contents: [{ uri: params?.uri, text: params?.inputResponses ? "conditioned" : "plain" }], ttlMs: 1000 } : undefined);
+    expect((await f.client.readResource({ uri: "test://interactive", inputResponses: {} })).contents[0].text).toBe("conditioned");
+    const afterRetry = f.requests.length;
+    expect((await f.client.readResource({ uri: "test://interactive" })).contents[0].text).toBe("plain");
+    expect(f.requests.length).toBe(afterRetry + 1);
+    f.set(method => method === "resources/read" ? { resultType: "input_required", requestState: "continue", ttlMs: 1000 } : undefined);
+    expect(await f.client.readResource({ uri: "test://interactive" }, { cacheMode: "refresh", allowInputRequired: true })).toMatchObject({ resultType: "input_required" });
+    const start = f.requests.length;
+    f.set((method, params) => method === "resources/read" ? { contents: [{ uri: params?.uri, text: "after-input" }], ttlMs: 1000 } : undefined);
+    expect((await f.client.readResource({ uri: "test://interactive" })).contents[0].text).toBe("after-input");
+    expect(f.requests.length).toBe(start + 1);
+    // A later, independent complete reply is cacheable; neither the old plain
+    // value nor the input-required envelope was reused to obtain it.
+    expect((await f.client.readResource({ uri: "test://interactive" })).contents[0].text).toBe("after-input");
+    expect(f.requests.length).toBe(start + 1);
   });
 
   it("caches discovery and resource reads but never reuses an interactive resource request", async () => {
