@@ -64,6 +64,7 @@ function headline(status: ProjectEnvStatus): string {
 export function EnvironmentTab({ cwd }: { cwd: string | undefined }) {
   const { client } = useLaserStable();
   const [status, setStatus] = useState<ProjectEnvStatus>();
+  const [preface, setPreface] = useState("");
   const [command, setCommand] = useState("");
   const [argsText, setArgsText] = useState("");
   const [enabled, setEnabled] = useState(false);
@@ -77,6 +78,7 @@ export function EnvironmentTab({ cwd }: { cwd: string | undefined }) {
     if (!answer) return;
     setStatus(answer.status);
     const config = answer.status.config;
+    setPreface(config?.preface ?? "");
     setCommand(config?.command ?? "");
     setArgsText((config?.args ?? []).join(" "));
     setEnabled(config?.enabled ?? false);
@@ -94,9 +96,10 @@ export function EnvironmentTab({ cwd }: { cwd: string | undefined }) {
     try {
       const answer = await client.request("pi/project/env/set", {
         cwd,
-        config: command.trim()
+        config: preface.trim() || command.trim()
           ? {
               enabled,
+              preface: preface.trim(),
               command: command.trim(),
               // Arguments are split on whitespace and passed as an array, never
               // through a shell: nothing here is interpreted as a command.
@@ -107,7 +110,7 @@ export function EnvironmentTab({ cwd }: { cwd: string | undefined }) {
       });
       setStatus(answer.status);
       setNote(
-        command.trim()
+        preface.trim() || command.trim()
           ? "Saved and approved. Projects already open keep their current environment until you refresh."
           : "Removed.",
       );
@@ -116,7 +119,7 @@ export function EnvironmentTab({ cwd }: { cwd: string | undefined }) {
     } finally {
       setBusy(undefined);
     }
-  }, [argsText, client, command, cwd, enabled, required]);
+  }, [argsText, client, command, cwd, enabled, preface, required]);
 
   const run = useCallback(
     async (method: "pi/project/env/test" | "pi/project/env/refresh") => {
@@ -158,9 +161,9 @@ export function EnvironmentTab({ cwd }: { cwd: string | undefined }) {
       <div className="mx-auto flex max-w-200 flex-col gap-5 px-6 py-6">
         <div className="flex flex-col gap-1">
           <p className="text-xs leading-5 text-ink-3">
-            {PRODUCT_DISPLAY_NAME} can ask a program of your choosing what environment this project&rsquo;s commands
-            should run with, and apply the answer to every command, background task, child agent and worktree in it. It
-            never learns where the values come from, and never shows them: only the variable names appear here.
+            Give this project a command to run first — the way you would prepare a shell yourself — and
+            {" "}{PRODUCT_DISPLAY_NAME} runs it before every command the agent runs here, including background tasks,
+            child agents and worktrees. It never learns what the command does, and never shows any value.
           </p>
           <p className="typed text-ink-3" title={cwd}>
             {shortCwd(cwd)}
@@ -202,6 +205,25 @@ export function EnvironmentTab({ cwd }: { cwd: string | undefined }) {
 
         <div className="flex flex-col gap-3 rounded-lg border border-line px-3 py-3">
           <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-ink-2">Command to run first</span>
+            <Input
+              value={preface}
+              onChange={(event) => setPreface(event.target.value)}
+              placeholder="workenv use kwentra"
+              spellCheck={false}
+              className="[font-variant-ligatures:none]"
+            />
+            <span className="text-xs text-ink-3">
+              Run in the same shell, before every command the agent runs here. A shell function works.
+            </span>
+          </label>
+
+          <details className="flex flex-col gap-1">
+            <summary className="cursor-pointer text-xs font-medium text-ink-2">
+              Or run a program that returns variables
+            </summary>
+            <div className="mt-2 flex flex-col gap-3">
+          <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-ink-2">Program</span>
             <Input
               value={command}
@@ -226,6 +248,9 @@ export function EnvironmentTab({ cwd }: { cwd: string | undefined }) {
               Passed as separate arguments, never through a shell.
             </span>
           </label>
+
+            </div>
+          </details>
 
           <label className="flex items-center justify-between gap-3">
             <span className="text-sm text-ink">Use it for this project</span>

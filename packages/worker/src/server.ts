@@ -185,6 +185,8 @@ export class WorkerServer {
       backgroundWork: (cwd) => ({
         cwd,
         foregroundCommandSeconds: this.definitions.policy().foregroundCommandSeconds,
+        // Runs first, in the agent's own shell, before every command it runs.
+        ...(this.projectEnv?.preface ? { commandPrefix: this.projectEnv.preface } : {}),
         // Every child agent and every worktree of this project runs in this
         // worker, so they share the project's environment by construction.
         ...(this.projectEnv ? { projectEnv: this.projectEnvBridge() } : {}),
@@ -971,6 +973,7 @@ export class WorkerServer {
       backgroundWork: handle.backgroundWork(this.options.cwd) ?? {
         cwd: this.options.cwd,
         foregroundCommandSeconds: this.definitions.policy().foregroundCommandSeconds,
+        ...(this.projectEnv?.preface ? { commandPrefix: this.projectEnv.preface } : {}),
         ...(this.projectEnv ? { projectEnv: this.projectEnvBridge() } : {}),
       },
     };

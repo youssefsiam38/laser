@@ -17,7 +17,28 @@ a personal one. Without this, both inherit whatever the terminal that launched
 the app happened to export, which is at best the wrong environment and at worst
 someone else's credentials.
 
-## The contract, version 1
+## The ordinary case: a command to run first
+
+A project names a shell command. Laser runs it **first, in the same shell**,
+before every command the agent runs in that project:
+
+```
+workenv use kwentra
+```
+
+It is passed to the engine's shell tool as a command prefix, so it runs inside
+the agent's own shell rather than in a process of its own. That is the point: a
+**shell function** works, and so does anything else a person's shell can do —
+`nvm use`, `source .envrc`, `conda activate`. A program spawned separately could
+never do any of that, because a child process cannot change its parent's shell.
+
+It covers foreground commands, background tasks, promoted commands, child agents
+and worktrees, because all of them run through that one shell tool.
+
+It is executed, so it is part of what a person approves: changing the text needs
+approving again.
+
+## The resolver form, version 1
 
 Laser spawns the configured program:
 

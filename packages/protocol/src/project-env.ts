@@ -76,6 +76,20 @@ const NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 /** What a project's environment command is, as configured. Never a secret. */
 export interface ProjectEnvConfig {
   enabled: boolean;
+  /**
+   * A shell command run first, in the same shell, before every command the
+   * agent runs in this project.
+   *
+   * This is the ordinary case: a person already has a way to put a project's
+   * environment into a shell — `workenv use kwentra`, `nvm use`, `source
+   * .envrc` — and wants the agent's commands to start the same way. It is run
+   * by the shell that is about to run the agent's command, so a shell function
+   * works, and so does anything else the person's shell can do.
+   *
+   * Empty when the project uses the resolver form below instead.
+   */
+  preface?: string;
+  /** The resolver form: a program that returns variables on a private pipe. */
   command: string;
   args: string[];
   /**
@@ -138,8 +152,10 @@ export interface ProjectEnvResolution {
  * Only the executable and its arguments are material: those decide what runs.
  * Everything else about a configuration can change without a new approval.
  */
-export function projectEnvFingerprint(config: Pick<ProjectEnvConfig, "command" | "args">): string {
-  return JSON.stringify([config.command, ...config.args]);
+export function projectEnvFingerprint(config: Pick<ProjectEnvConfig, "command" | "args" | "preface">): string {
+  // The preface is executed, so a change to it is a change to what runs and
+  // needs approving again, exactly like the executable and its arguments.
+  return JSON.stringify([config.preface ?? "", config.command, ...config.args]);
 }
 
 /** True when the configuration matches what the person approved. */
@@ -240,6 +256,7 @@ export function parseProjectEnvDocument(text: string): { document: ProjectEnvDoc
 /** The non-secret configuration a worker is started with. */
 export interface ProjectEnvWorkerConfig {
   enabled: boolean;
+  preface?: string;
   command: string;
   args: string[];
   required: boolean;
@@ -249,8 +266,10 @@ export interface ProjectEnvWorkerConfig {
 
 export function projectEnvWorkerConfig(config: ProjectEnvConfig | undefined): ProjectEnvWorkerConfig | undefined {
   if (!config || !config.enabled) return undefined;
+  if (!config.preface && !config.command) return undefined;
   return {
     enabled: true,
+    ...(config.preface ? { preface: config.preface } : {}),
     command: config.command,
     args: [...config.args],
     required: config.required,

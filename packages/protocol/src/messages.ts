@@ -1141,6 +1141,7 @@ export interface ClientRequests {
       cwd: string;
       config: {
         enabled: boolean;
+        preface?: string;
         command: string;
         args?: string[];
         required?: boolean;

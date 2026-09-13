@@ -49,6 +49,7 @@ export interface ProjectEnvStoreOptions {
 
 interface Stored {
   enabled: boolean;
+  preface?: string;
   command: string;
   args: string[];
   required: boolean;
@@ -76,6 +77,7 @@ export class ProjectEnvStore {
     cwd: string,
     config: {
       enabled: boolean;
+      preface?: string;
       command: string;
       args?: string[];
       required?: boolean;
@@ -91,6 +93,7 @@ export class ProjectEnvStore {
     const args = [...(config.args ?? [])];
     const next: Stored = {
       enabled: config.enabled,
+      ...(config.preface ? { preface: config.preface } : {}),
       command: config.command,
       args,
       required: config.required ?? true,
@@ -137,10 +140,13 @@ export class ProjectEnvStore {
       if (!projects || typeof projects !== "object") return;
       for (const [cwd, value] of Object.entries(projects as Record<string, unknown>)) {
         const v = value as Partial<Stored> | null;
-        if (!v || typeof v.command !== "string" || !v.command) continue;
+        if (!v) continue;
+        if (typeof v.command !== "string") v.command = "";
+        if (!v.command && typeof v.preface !== "string") continue;
         const args = Array.isArray(v.args) ? v.args.filter((a): a is string => typeof a === "string") : [];
         this.configs.set(canonical(cwd), {
           enabled: v.enabled === true,
+          ...(typeof v.preface === "string" && v.preface ? { preface: v.preface } : {}),
           command: v.command,
           args,
           required: v.required !== false,

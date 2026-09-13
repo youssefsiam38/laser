@@ -651,7 +651,8 @@ export const clientParamsSchemas = {
       config: z
         .object({
           enabled: z.boolean(),
-          command: z.string().min(1).max(4096),
+          preface: z.string().max(4096).optional(),
+          command: z.string().max(4096),
           args: z.array(z.string().max(4096)).max(64).optional(),
           required: z.boolean().optional(),
           allowProviderKeys: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).max(256)).max(64).optional(),

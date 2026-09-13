@@ -81,6 +81,20 @@ export class ProjectEnvironment {
     this.snapshot = initialSnapshot(options.config);
   }
 
+  /**
+   * The shell command to run first, in the same shell, before the agent's own.
+   *
+   * Empty unless this project configures one. The engine's shell tool runs it
+   * as a prefix, so a shell function — `workenv use kwentra` — works, which a
+   * spawned executable could never provide.
+   */
+  get preface(): string | undefined {
+    const preface = this.options.config?.preface;
+    if (!this.options.config?.enabled || !preface) return undefined;
+    if (!this.options.config.approved) return undefined;
+    return preface;
+  }
+
   status(): ProjectEnvSnapshot {
     return { ...this.snapshot, names: [...this.snapshot.names], unsetNames: [...this.snapshot.unsetNames] };
   }
@@ -117,6 +131,7 @@ export class ProjectEnvironment {
     const config = this.options.config;
     if (!config?.enabled) return this.status();
     if (!config.approved) return this.status();
+    if (!config.command) return this.status(); // preface only: nothing to run here
     if (this.snapshot.state === "ready") return this.status();
     if (this.inFlight) return this.inFlight;
     const run = this.resolve();
@@ -231,6 +246,9 @@ export function expandHome(command: string): string {
 function initialSnapshot(config: ProjectEnvWorkerConfig | undefined): ProjectEnvSnapshot {
   if (!config?.enabled) return { state: "off", names: [], unsetNames: [], refused: [] };
   if (!config.approved) return { state: "needs-approval", names: [], unsetNames: [], refused: [] };
+  // A preface runs inside the agent's own shell; there is nothing for this to
+  // resolve, and nothing that could fail before a command is run.
+  if (!config.command) return { state: "ready", names: [], unsetNames: [], refused: [] };
   return { state: "failed", names: [], unsetNames: [], refused: [], error: "Not resolved yet." };
 }
 
