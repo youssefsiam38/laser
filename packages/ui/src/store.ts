@@ -415,6 +415,7 @@ export function reduce(state: AppState, action: Action): AppState {
       return { ...state, open: rest, sessionLoads };
     }
     case "historyBegin":
+    case "historyReset":
     case "historyEnd":
     case "historySnapshot":
     case "historyMetadata":

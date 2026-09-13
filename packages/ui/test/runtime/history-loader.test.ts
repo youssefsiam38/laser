@@ -40,6 +40,29 @@ describe("history request ownership", () => {
     expect(f.view().historyRevision).toBe(revision);
   });
 
+  it("puts the old loaded transcript away before the recent one is requested, and replays what arrives meanwhile", async () => {
+    const pending = deferred<Result>();
+    const f = fixture(async params => params.window && "tail" in params.window && f.view().hydrated
+      ? pending.promise : historyWindow(source, params.window!, scope));
+    await f.loader.read(state.path, true);
+    expect(f.view().blocks).toHaveLength(80);
+    f.dispatch({ type: "optimisticUser", path: state.path, id: "sending", text: "Sent from here", images: [] });
+    const reset = f.loader.recent(state.path, () => true);
+    // Synchronously, before the response: nothing older is on screen, the view
+    // is honestly not hydrated, and this surface's own unsent message stands.
+    expect(f.view().entries).toEqual([]);
+    expect(f.view().blocks).toEqual([expect.objectContaining({ id: "sending", optimistic: true })]);
+    expect(f.view().hydrated).toBe(false);
+    expect(f.view().history).toBeUndefined();
+    f.dispatch({ type: "notification", method: "session/update", params: { sessionPath: state.path, epoch: scope.epoch, seq: 9, at: "2026-01-01T00:00:00Z", update: { kind: "agent_start" } } });
+    pending.resolve(historyWindow(source, { tail: 40 }, { ...scope, seq: 8 }));
+    await reset;
+    expect(f.view().hydrated).toBe(true);
+    expect(f.view().blocks).toHaveLength(41);
+    expect(f.view().blocks.at(-1)).toMatchObject({ id: "sending", optimistic: true });
+    expect(f.view().lastSeq).toBe(9);
+  });
+
   it("starts recent-tail replacement immediately instead of coalescing an older all read", async () => {
     const old = deferred<Result>();
     const request = vi.fn(async (params: Params) => params.window && "all" in params.window ? old.promise : historyWindow(source, params.window!, scope));
@@ -95,10 +118,14 @@ describe("history request ownership", () => {
     expect(f.view()).toBe(accepted);
   });
 
-  it("does not pretend a response without window metadata is a recent-tail reset", async () => {
+  it("does not claim window metadata a response without any did not carry", async () => {
     const f = fixture(async () => source);
-    await expect(f.loader.read(state.path, false, () => true, undefined, "recent")).rejects.toThrow("Recent history could not be loaded");
-    expect(f.view().hydrated).toBe(false);
+    await f.loader.recent(state.path, () => true);
+    // The legacy shape still loads the session; it simply is not a window, so
+    // nothing downstream may treat it as an accepted recent-tail revision.
+    expect(f.view().hydrated).toBe(true);
+    expect(f.view().entries).toEqual(entries);
+    expect(f.view().history).toBeUndefined();
     expect(f.view().historyRevision).toBeUndefined();
   });
 

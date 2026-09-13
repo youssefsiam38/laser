@@ -45,6 +45,10 @@ export class TranscriptViewport {
   private intent = 0;
   private controlIntent = 0;
   private leafId: string | null | undefined;
+  private loaded: string | undefined;
+  // A surface that just reloaded its recent tail is on its way to the latest
+  // message; the clamp scrolls that replacement causes are not a person.
+  private arriving = false;
   private pendingFrames = new Map<number, () => void>();
   private pendingLocates = new Set<() => void>();
   private target: TranscriptTarget | undefined;
@@ -58,9 +62,23 @@ export class TranscriptViewport {
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   private publish() { this.revision++; for (const listener of this.listeners) listener(); }
   private cacheKey(id: string) { return JSON.stringify([this.path, this.signature, id]); }
-  configure(path: string, leafId?: string | null) {
+  configure(path: string, leafId?: string | null, loaded?: string) {
     this.leafId = leafId;
-    if (this.path === path) return;
+    if (this.path === path) {
+      // This surface reloaded the session's recent tail: its old place in a
+      // transcript it no longer holds is gone, and latest is where it opens.
+      if (loaded !== undefined && loaded !== this.loaded) {
+        this.cancel();
+        this.place = { following: true };
+        this.places.delete(path);
+        this.loaded = loaded;
+        this.arriving = true;
+        this.schedule();
+      }
+      return;
+    }
+    this.loaded = loaded;
+    this.arriving = false;
     this.cancel();
     if (this.path) this.places.set(this.path, this.place);
     this.path = path;
@@ -147,7 +165,8 @@ export class TranscriptViewport {
     const viewport = this.viewport;
     if (!viewport || this.target) return;
     if (this.place.following) {
-      if (Math.abs(viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop) > 0.5) {
+      if (Math.abs(viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop) <= 0.5) this.arriving = false;
+      else {
         // The primitive's tail event also focuses its composer. Passive layout
         // correction must not steal an active find field, menu, or question.
         const focused = document.activeElement;
@@ -162,7 +181,14 @@ export class TranscriptViewport {
     const row = this.nodes.get(anchor.messageId);
     if (!row) {
       const index = this.positions.get(anchor.messageId);
-      if (index !== undefined) this.scroll(viewport.scrollTop + this.heights.offset(index) - this.top() - anchor.messageOffset);
+      if (index !== undefined) { this.scroll(viewport.scrollTop + this.heights.offset(index) - this.top() - anchor.messageOffset); return; }
+      // The transcript this place belonged to is not loaded here any more —
+      // a reloaded recent tail, or a branch that dropped the message. Latest
+      // is the honest answer; the top of an arbitrary window is not.
+      this.place = { following: true };
+      this.arriving = true;
+      this.tail?.();
+      this.expectedTop = viewport.scrollTop;
       return;
     }
     const mark = anchor.toolCallId ? row.querySelector<HTMLElement>(`[data-tool-call="${CSS.escape(anchor.toolCallId)}"] ${LANDMARKS.split(",").at(-1)!.trim()}`)
@@ -294,6 +320,7 @@ export class TranscriptViewport {
     const unbind = registerReadingController(viewport, this.preserve);
     const scroll = () => {
       if (this.expectedTop !== undefined && Math.abs(viewport.scrollTop - this.expectedTop) < 0.5) { this.expectedTop = undefined; return; }
+      if (this.arriving) { this.place.following = true; this.windowDirty = true; this.schedule(); return; }
       if (this.ownsLocation) {
         // Only wheel/touch/pointer/keyboard or another explicit destination can
         // relinquish this anchor. A scroll event itself is not user intent.
@@ -302,7 +329,7 @@ export class TranscriptViewport {
       this.place.following = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop <= 2;
       this.capture(); this.publish(); this.schedule();
     };
-    const user = () => { this.cancel(); this.place.following = false; this.expectedTop = undefined; };
+    const user = () => { this.cancel(); this.arriving = false; this.place.following = false; this.expectedTop = undefined; };
     const selection = () => {
       const selected = document.getSelection();
       if (selected && !selected.isCollapsed && selected.anchorNode === this.content && selected.focusNode === this.content && this.ids.length) {
@@ -399,12 +426,13 @@ export function TranscriptViewportProvider({ children }: { children: ReactNode }
   const destination = useLaserState(s => s.destination);
   const epoch = useLaserState(s => s.current ? s.open[s.current]?.updateEpoch : undefined);
   const leafId = useLaserState(s => s.current ? s.open[s.current]?.leafId : undefined);
+  const loaded = useLaserState(s => s.current ? s.open[s.current]?.historyRevision : undefined);
   const previous = useRef({ destination, epoch });
   if (previous.current.destination !== destination || previous.current.epoch !== epoch) {
     controller.cancel(previous.current.destination !== destination ? undefined : "structure");
     previous.current = { destination, epoch };
   }
-  controller.configure(path, leafId);
+  controller.configure(path, leafId, loaded);
   useLayoutEffect(() => { controller.retain(paths.split("\0")); }, [controller, paths]);
   return <Context value={controller}>{children}</Context>;
 }

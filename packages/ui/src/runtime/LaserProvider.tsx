@@ -51,6 +51,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -88,7 +89,8 @@ import {
   type MainInitializationToken,
 } from "./main-destination-controller.js";
 import { createCatalogLoader } from "./catalog-loader.js";
-import { createHistoryLoader } from "./history-loader.js";
+import { createHistoryLoader, type HistoryReads } from "./history-loader.js";
+import { createHistoryWindows, MAIN_WINDOW_SCOPE, type HistoryWindowOwner, type HistoryWindows } from "./history-owners.js";
 import { sessionsList } from "../components/shell/session-groups.js";
 import { beamStore } from "../components/beam/beam-store.js";
 import { createShellSnapshot } from "./presentation-state.js";
@@ -268,8 +270,9 @@ interface LaserInternals {
   client: HostClient;
   dispatch: (action: Action) => void;
   onError: (error: unknown) => void;
-  openSession: (path: string, options?: { select?: boolean }) => Promise<void>;
-  buildActions: (readScoped: () => AppState) => LaserActions;
+  openSession: (path: string, options?: { select?: boolean; policy?: "recent" }) => Promise<void>;
+  buildActions: (readScoped: () => AppState, history?: HistoryReads) => LaserActions;
+  windows: HistoryWindows;
   archive: ArchiveStore;
   refreshSessions: () => Promise<void>;
   /** Keep `path` attached on the host while a scope shows it; returns the release. */
@@ -363,12 +366,17 @@ export interface StateStore {
   dispatch(action: Action): void;
 }
 
-export function createStateStore(initial: AppState = initialState): StateStore & { batch(deliver: () => void): void } {
+export function createStateStore(initial: AppState = initialState): StateStore & {
+  batch(deliver: () => void): void;
+  observeWindows(observer: (action: Action, before: AppState, after: AppState) => boolean): () => void;
+  publishWindows(): void;
+} {
   let current = initial;
   const presentation = new TranscriptPresentation();
   let depth = 0;
   let dirty = false;
   const listeners = new Set<() => void>();
+  const windows = new Set<(action: Action, before: AppState, after: AppState) => boolean>();
   const publish = () => {
     if (depth || !dirty) return;
     dirty = false;
@@ -385,12 +393,16 @@ export function createStateStore(initial: AppState = initialState): StateStore &
       };
     },
     dispatch(action) {
-      const next = reduce(current, action);
-      if (Object.is(next, current)) return;
-      current = next;
-      dirty = true;
+      const before = current;
+      current = reduce(before, action);
+      dirty = dirty || current !== before;
+      // Window replay may need an event the canonical watermark already saw.
+      // Finish every fold before any React subscriber observes the transaction.
+      for (const observer of [...windows]) dirty = observer(action, before, current) || dirty;
       publish();
     },
+    observeWindows(observer) { windows.add(observer); return () => { windows.delete(observer); }; },
+    publishWindows() { dirty = true; publish(); },
     batch(deliver) {
       depth++;
       try {
@@ -705,6 +717,13 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
    * The move re-hydrates when it lands, so the re-read has nothing to add.
    */
   const moving = useRef(new Set<string>());
+  const windows = useMemo(() => createHistoryWindows(store), [store]);
+  useEffect(() => () => windows.dispose(), [windows]);
+  // The main window is registered wherever it is, so a scope that shows the
+  // same session keeps its own loaded transcript instead of sharing this one.
+  const mainWindowPath = mainPath(state.destination) ?? state.current;
+  windows.owner(MAIN_WINDOW_SCOPE, mainWindowPath);
+  useEffect(() => () => windows.forget(MAIN_WINDOW_SCOPE, mainWindowPath), [windows, mainWindowPath]);
   const historyLoader = useMemo(() => createHistoryLoader({
     get: path => readState().open[path],
     request: params => client.request("pi/session/entries", params),
@@ -716,7 +735,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
 
   /** Hydrate one cached view. Main-window selection belongs to the controller. */
   const openSession = useCallback(
-    (path: string, options: { select?: boolean; refreshHistory?: boolean } = {}): Promise<void> => {
+    (path: string, options: { select?: boolean; refreshHistory?: boolean; policy?: "recent" } = {}): Promise<void> => {
       const running = openInFlight.current.get(path);
       if (running) return running.promise;
       dispatch({ type: "sessionLoad", path, phase: "opening" });
@@ -758,7 +777,10 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         // Capture each race watermark before issuing them. Only history is
         // required for readiness; a missing goal or tray must never hide it.
         const expectPending = readState().open[path]?.pending;
-        const history = (!hydrated || needsResync || options.refreshHistory)
+        // A normal re-entry replaces whatever this surface had paged in with the
+        // session's recent tail, before anything older can be mounted again.
+        const history = options.policy === "recent" ? historyLoader.recent(path, accepting, loadedSeq)
+          : (!hydrated || needsResync || options.refreshHistory)
           ? readHistory(path, false, accepting, loadedSeq) : Promise.resolve();
         void client.request("session/goal/get", { path }).then(({ goal }) => {
           if (accepting()) dispatch({ type: "goal", path, goal });
@@ -827,7 +849,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     state,
     readState,
     dispatch,
-    loadSession: (path) => openSession(path, { select: false }),
+    loadSession: (path) => openSession(path, { select: false, policy: "recent" }),
     launchSession: (cwd, options) => launchSession(cwd, { ...options, select: false }),
     archived: (path) => archive.has(path),
     onError,
@@ -1007,7 +1029,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
    * own session, and every session-bound verb below follows it — the composer
    * inside the Beam bubble sets Beam's model, not the main session's.
    */
-  const buildActions = useCallback((readScoped: () => AppState): LaserActions => {
+  const buildActions = useCallback((readScoped: () => AppState, history: HistoryReads = historyLoader): LaserActions => {
     const requireCurrent = (): string => {
       const snapshot = readScoped();
       const path = snapshot.current;
@@ -1044,7 +1066,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     };
 
     const ensureEntry = async (path: string, entryId: string) => {
-      await historyLoader.ensure(path, entryId, () => readScoped().current === path);
+      await history.ensure(path, entryId, () => readScoped().current === path);
       if (requireCurrent() !== path) throw new Error("The conversation changed. Choose the message again.");
       // The engine, not a client-side tree projection, validates the target.
     };
@@ -1065,7 +1087,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         // Prepare the fork in its own cached view; the visible source survives
         // until this tail (and any intervening live updates) is ready.
         dispatch({ type: "opened", state: session });
-        await readHistory(session.path);
+        await history.read(session.path);
       } finally {
         moving.current.delete(path);
       }
@@ -1098,7 +1120,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           dispatch({ type: "toast", level: "warning", text: "A feature stopped that change." });
           return false;
         }
-        await readHistory(path);
+        await history.read(path);
         return editorText !== undefined ? { editorText } : {};
       } finally {
         moving.current.delete(path);
@@ -1177,18 +1199,18 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           if (moving.current.has(path)) return;
           const epoch = openEpochs.current.get(path);
           const accepting = () => !moving.current.has(path) && openEpochs.current.get(path) === epoch;
-          if (!options?.tail) { await readHistory(path, true, accepting); return; }
-          await historyLoader.metadata(path, accepting);
+          if (!options?.tail) { await history.read(path, true, accepting); return; }
+          await history.metadata(path, accepting);
         }).then(() => undefined),
       loadAllEntries: () => guard(async () => {
         const path = requireCurrent();
         const epoch = openEpochs.current.get(path);
-        return historyLoader.all(path, () => !moving.current.has(path) && openEpochs.current.get(path) === epoch);
+        return history.all(path, () => !moving.current.has(path) && openEpochs.current.get(path) === epoch);
       }).then(Boolean),
       loadEarlierEntries: () => guard(async () => {
         const path = requireCurrent();
         const epoch = openEpochs.current.get(path);
-        return historyLoader.earlier(path, () => !moving.current.has(path) && openEpochs.current.get(path) === epoch);
+        return history.earlier(path, () => !moving.current.has(path) && openEpochs.current.get(path) === epoch);
       }).then(Boolean),
       refreshAccountUsage: () =>
         guard(async () => {
@@ -1470,8 +1492,8 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   );
 
   const internals = useMemo<LaserInternals>(
-    () => ({ store, client, dispatch, onError, openSession, buildActions, archive, refreshSessions, attach: attachScope }),
-    [archive, attachScope, buildActions, client, dispatch, onError, openSession, refreshSessions, store],
+    () => ({ store, client, dispatch, onError, openSession, buildActions, archive, refreshSessions, attach: attachScope, windows }),
+    [archive, attachScope, buildActions, client, dispatch, onError, openSession, refreshSessions, store, windows],
   );
 
   return (
@@ -1639,13 +1661,15 @@ function useThreadRuntime(store: SnapshotStore<RuntimeSnapshot>): AssistantRunti
  * that session while the store itself stays one. Derived lazily and cached
  * per underlying state, so identity survives every unrelated delta.
  */
-function createScopedStateStore(store: StateStore, path: string | undefined, destination: MainDestination): StateStore {
+function createScopedStateStore(store: StateStore, path: string | undefined, destination: MainDestination, owner: HistoryWindowOwner): StateStore {
   let source: AppState | undefined;
   let derived: AppState | undefined;
   return {
     ...(store.presentation ? { presentation: store.presentation } : {}),
     getSnapshot: () => {
-      const state = store.getSnapshot();
+      // The scope's own loaded transcript, when it is not the surface that owns
+      // the canonical one; its session state and questions are still canonical.
+      const state = owner.overlay(store.getSnapshot());
       if (state !== source || derived === undefined) {
         source = state;
         derived = { ...state, current: path, destination };
@@ -1728,7 +1752,12 @@ export function LaserThreadScope({ path, onPathChange, filter, createIn, unavail
   const internals = useContext(LaserInternalsContext);
   if (!internals) throw new Error("LaserThreadScope must be used inside <LaserProvider>.");
   const parent = useLaserStable();
-  const { store, client, dispatch, onError, openSession, buildActions, archive, refreshSessions, attach } = internals;
+  const { store, client, dispatch, onError, openSession, buildActions, archive, refreshSessions, attach, windows } = internals;
+  // This scope's identity for as long as it is mounted, so its window survives
+  // a StrictMode remount and never collides with another scope's.
+  const scopeId = useId();
+  const owner = windows.owner(scopeId, path);
+  useEffect(() => () => windows.forget(scopeId, path), [windows, scopeId, path]);
 
   // Latest props for callbacks that must keep their identity (the adapter is
   // built once; swapping it drops cached threads).
@@ -1746,13 +1775,21 @@ export function LaserThreadScope({ path, onPathChange, filter, createIn, unavail
   const scopedDestination = useMemo<MainDestination>(() => path
     ? { phase: "ready-code", intent: 0, code: { kind: "beam-session", path, returnTo: workspace ? { kind: "project-landing", project: workspace } : { kind: "no-project-landing" } } }
     : { phase: "ready-code", intent: 0, code: workspace ? { kind: "project-landing", project: workspace } : { kind: "no-project-landing" } }, [path, workspace]);
-  const scopedStore = useMemo(() => createScopedStateStore(store, path, scopedDestination), [store, path, scopedDestination]);
+  const scopedStore = useMemo(() => createScopedStateStore(store, path, scopedDestination, owner), [store, path, scopedDestination, owner]);
+  const scopedHistory = useMemo(() => createHistoryLoader({
+    get: target => scopedStore.getSnapshot().open[target],
+    request: params => client.request("pi/session/entries", params),
+    dispatch: owner.dispatch,
+    // Generation adoption and watermarks belong to the canonical session.
+    adoptEpoch: () => {},
+    track: () => {},
+  }), [client, owner, scopedStore]);
   const stable = useMemo<LaserStable>(() => ({
     ...parent,
     destination: scopedDestination,
     ...(workspace !== undefined ? { currentProject: workspace } : {}),
-    actions: buildActions(scopedStore.getSnapshot),
-  }), [parent, buildActions, scopedDestination, scopedStore, workspace]);
+    actions: buildActions(scopedStore.getSnapshot, scopedHistory),
+  }), [parent, buildActions, scopedDestination, scopedHistory, scopedStore, workspace]);
   const unavailableRef = useRef(unavailable);
   unavailableRef.current = unavailable;
   const onPathChangeRef = useRef(onPathChange);
@@ -1826,7 +1863,11 @@ export function LaserThreadScope({ path, onPathChange, filter, createIn, unavail
           await client.request("pi/session/delete", { path: target, worktree: takeWorktreeDisposition(target) });
         },
         loadSession: (target) =>
-          openSession(target, { select: false }).catch((error: unknown) => {
+          openSession(target, { select: false }).then(async () => {
+            // Opening a conversation in this scope starts at its recent tail,
+            // whatever this or another surface had paged in before.
+            if (target === pathRef.current) await scopedHistory.recent(target, () => target === pathRef.current);
+          }).catch((error: unknown) => {
             // The remembered session is gone: start fresh rather than sit on a
             // thread that cannot load.
             if (target === pathRef.current) onPathChangeRef.current(undefined);
@@ -1836,7 +1877,7 @@ export function LaserThreadScope({ path, onPathChange, filter, createIn, unavail
         beginInitialize: () => setInitializing((n) => n + 1),
         endInitialize: () => setInitializing((n) => Math.max(0, n - 1)),
       }),
-    [archive, client, openSession, refreshSessions, sessions, store, views],
+    [archive, client, openSession, refreshSessions, scopedHistory, sessions, store, views],
   );
 
   const snapshotStore = useMemo(

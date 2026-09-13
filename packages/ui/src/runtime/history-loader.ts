@@ -4,6 +4,7 @@ import { deepEqual } from "./projection.js";
 
 export type HistoryAction =
   | { type: "historyBegin"; path: string; token: string }
+  | { type: "historyReset"; path: string; token: string }
   | { type: "historyEnd"; path: string; token: string }
   | { type: "historySnapshot"; path: string; token: string; entries: unknown[]; leafId?: string | null; window: HistoryWindow; replaceWindow?: true }
   | { type: "historyPrepend"; path: string; before: string; entries: unknown[]; window: HistoryWindow; revision?: string | undefined }
@@ -58,6 +59,14 @@ export function receiveHistoryUpdate(v: SessionView, p: SessionUpdateParams, { a
 export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpdate, blocksFromEntries, modelNamesOf, stampNewBlocks, textOf }: HistoryFold): SessionView {
   switch (action.type) {
     case "historyBegin": return { ...v, historyPending: { token: action.token, updates: [] } };
+    case "historyReset": {
+      // The loaded window goes before its replacement is requested, so no older
+      // expanded transcript is on screen while the recent one is in flight. A
+      // message this surface has already sent is not history and stays.
+      if (v.historyPending?.token !== action.token) return v;
+      const { history: _window, historyRevision: _revision, ...rest } = v;
+      return { ...rest, entries: [], blocks: v.blocks.filter(block => block.kind === "user" && block.optimistic), hydrated: false };
+    }
     case "historyEnd": return v.historyPending?.token === action.token ? { ...v, historyPending: undefined } : v;
     case "historySnapshot": {
       if (v.historyPending?.token !== action.token) return v;
@@ -135,6 +144,9 @@ interface HistoryLoaderDeps {
 // A replacement client can share the store while its predecessor settles.
 let nextToken = 0;
 
+/** Every read one rendered surface can ask for; scoped surfaces have their own. */
+export type HistoryReads = ReturnType<typeof createHistoryLoader>;
+
 /** One request owner for tail/all reads, generation adoption and cursor recovery. */
 export function createHistoryLoader(deps: HistoryLoaderDeps) {
   const reads = new Map<string, Promise<void>>();
@@ -156,6 +168,7 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     const token = String(++nextToken);
     const expectSeq = deps.get(path)?.lastSeq ?? 0;
     deps.dispatch({ type: "historyBegin", path, token });
+    if (policy === "recent") deps.dispatch({ type: "historyReset", path, token });
     const work = (async () => {
       const anchor = policy === "recent" ? undefined : deps.get(path)?.history?.anchor;
       const window: HistoryWindowRequest = policy === "recent" ? { tail: 40 } : all ? { all: true } : anchor ? { from: anchor } : { tail: 40 };
@@ -165,7 +178,7 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
       });
       const current = deps.get(path);
       if (!active() || !current || current.historyPending?.token !== token) return;
-      if (policy === "recent" && !result.window) throw new Error("Recent history could not be loaded. Retry this conversation.");
+
       const epoch = current.history?.epoch ?? current.updateEpoch;
       if (result.window && epoch && epoch !== result.window.epoch) deps.adoptEpoch(path, result.window.seq);
       if (result.window) deps.dispatch({ type: "historySnapshot", path, token, ...result, window: result.window, ...(policy === "recent" ? { replaceWindow: true } : {}) });
