@@ -15,7 +15,7 @@ import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { LogStore, summaryMessageCount } from "../src/logstore.js";
+import { LogStore, summaryMessageCount, summaryModel } from "../src/logstore.js";
 import { HostServer } from "../src/server.js";
 
 let base: string;
@@ -113,6 +113,20 @@ describe("fifty per session", () => {
     expect(kept.map((entry) => entry.id)).toEqual(rows.slice(30).map((entry) => entry.id));
     // Another session is untouched by the first one's volume.
     expect(store.query({ sessionPath: "/s/b.jsonl", limit: 50 }).entries.every((entry) => !entry.detailRef?.released)).toBe(true);
+  });
+
+  it("a released row whose body comes back by hash stops saying summary only", () => {
+    const store = open("restore.db", { bodiesPerSession: 2 });
+    for (let i = 0; i < 4; i++) ingest(store, "/s/a.jsonl", i, 4);
+    store.maintain();
+    const first = store.query({ sessionPath: "/s/a.jsonl", limit: 10 }).entries[0]!;
+    expect(first.detailRef?.released).toBe(true);
+    // The identical payload arrives again (same hash) in another session.
+    ingest(store, "/s/b.jsonl", 0, 4);
+    const again = store.query({ sessionPath: "/s/a.jsonl", limit: 10 }).entries[0]!;
+    expect(again.id).toBe(first.id);
+    expect(again.detailRef?.released).toBeUndefined();
+    expect(store.content(first.detailRef!.ref).text.length).toBeGreaterThan(0);
   });
 
   it("answers for a released body with the row's summary, not an error", () => {
@@ -321,5 +335,16 @@ describe("what stats says", () => {
     expect(summaryMessageCount("gpt-5 · 1 message · thinking · 40 B")).toBe(1);
     expect(summaryMessageCount("provider request · 12 B")).toBeUndefined();
     expect(summaryMessageCount("bash finished · 3000 ms")).toBeUndefined();
+  });
+});
+
+describe("summaryModel", () => {
+  it("never mistakes a count or the stream marker for a model", () => {
+    expect(summaryModel("claude-sonnet-4-5 · 3 messages · 1.2 kB")).toBe("claude-sonnet-4-5");
+    expect(summaryModel("3 messages · 1.2 kB")).toBeUndefined();
+    expect(summaryModel("2 tools · 1.2 kB")).toBeUndefined();
+    expect(summaryModel("stream · 1.2 kB")).toBeUndefined();
+    expect(summaryModel("provider request")).toBeUndefined();
+    expect(summaryModel("1.2 kB")).toBeUndefined();
   });
 });

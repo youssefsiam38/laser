@@ -523,7 +523,12 @@ export class LogStore {
       .run(ref, bytes, "application/json", body);
     // A body already on disk (same hash) costs nothing more, so it must not be
     // charged twice against the budget.
-    if (Number(stored.changes) > 0) this.retainedBodyBytes += bytes;
+    if (Number(stored.changes) > 0) {
+      this.retainedBodyBytes += bytes;
+      // The same body back on disk: rows that had it released have it again,
+      // and must not go on saying "summary only" over a body that opens.
+      this.statement("UPDATE entries SET body_released = NULL WHERE detail_ref = ? AND body_released IS NOT NULL").run(ref);
+    }
     return { inline: null, ref, bytes, contentType: "application/json", preview };
   }
 
@@ -1340,7 +1345,9 @@ export function summaryMessageCount(summary: string): number | undefined {
  */
 export function summaryModel(summary: string): string | undefined {
   const first = summary.split(" · ")[0]?.trim();
-  if (!first || first === "provider request" || /^[\d.]+ (B|kB|MB)$/.test(first)) return undefined;
+  // A model id has no spaces; "3 messages", "2 tools" and "stream" are the
+  // other things that lead a summary line, and none of them is a model.
+  if (!first || first === "stream" || /\s/.test(first)) return undefined;
   return first;
 }
 
