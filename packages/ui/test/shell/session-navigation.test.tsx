@@ -9,7 +9,9 @@ import { ThreadList } from "../../src/components/assistant-ui/elements/thread-li
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { sessionsList, SESSION_PINS_STORAGE_KEY } from "../../src/components/shell/session-groups.js";
 
-const fixture = vi.hoisted(() => ({ state: { destination: { phase: "resolving" as string, target: { kind: "session", path: "/none" } }, sessionLoads: {} as Record<string, { phase: "opening" }>, sessions: [
+import type { MainDestination } from "../../src/runtime/main-destination.js";
+
+const fixture = vi.hoisted(() => ({ state: { destination: { phase: "ready-code", intent: 0, code: { kind: "project-landing", project: "/one" } } as MainDestination, sessionLoads: {} as Record<string, { phase: "opening" }>, sessions: [
   { path: "/one/working.jsonl", cwd: "/one", name: "Active work", modifiedAt: "2026-09-07T03:00:00Z", messageCount: 2, attention: "working" },
   { path: "/one/finished.jsonl", cwd: "/one", name: "Finished work", modifiedAt: "2026-09-07T02:00:00Z", messageCount: 2, attention: "finished_unread" },
   { path: "/two/waiting.jsonl", cwd: "/two", name: "Review needed", modifiedAt: "2026-09-07T01:00:00Z", messageCount: 2, attention: "waiting_for_input" },
@@ -39,7 +41,7 @@ let root: Root;
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   sessionsList.reset();
-  fixture.state.destination = { phase: "ready-code", target: { kind: "session", path: "/none" } };
+  fixture.state.destination = { phase: "ready-code", intent: 0, code: { kind: "project-landing", project: "/one" } } satisfies MainDestination;
   fixture.state.sessionLoads = {};
   localStorage.clear();
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
@@ -67,7 +69,7 @@ describe("compact session navigation", () => {
     expect(rows()).toHaveLength(3);
   });
   it("acknowledges the destination before a view exists without overwriting its attention mark", async () => {
-    fixture.state.destination = { phase: "resolving", target: { kind: "session", path: "/one/finished.jsonl" } };
+    fixture.state.destination = { phase: "resolving", intent: 1, target: { kind: "session", path: "/one/finished.jsonl", visibleTab: "code" }, rememberedCode: { kind: "project-landing", project: "/one" } } satisfies MainDestination;
     fixture.state.sessionLoads = { "/one/finished.jsonl": { phase: "opening" } };
     await act(async () => root.render(<Fixture />));
     const row = rows().find(row => row.textContent?.includes("Finished work"))!;
