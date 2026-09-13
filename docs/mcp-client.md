@@ -537,8 +537,13 @@ Milestones 4 and 5 inherit them.
   one-line guidance, for example: “Sign in again: two servers on this machine are
   called Notion”. Current uniqueness alone does not establish historical uniqueness.
   The old configuration store deletes removed entries and the old OAuth store has
-  no scope/ambiguity history; treatment of this unknown-history case must be resolved
-  before migration can be implemented safely.
+  no scope/ambiguity history. **Unknown historical ownership requires fresh sign-in**,
+  even for a currently unique name: a fresh sign-in is preferable to leaking another
+  project's credential. Show “Sign in again: this saved sign-in can't be matched to
+  a server safely.” on that server's existing needs-auth surface, never a global
+  notice or a new dialog. Retain the legacy entry until the new scoped sign-in
+  succeeds, then remove it. Normal restarts reuse the resolved scoped identity;
+  they do not trigger migration or ask for sign-in again.
 - **Durable authorization generations:** worker-owned, locked registry; no new host
   RPC or host hot-path dependency. One monotonic generation per full server identity,
   visible to every worker using it. Credential save, sign-out, disable and removal
