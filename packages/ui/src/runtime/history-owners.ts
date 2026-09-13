@@ -16,6 +16,14 @@
  */
 import { reduce, type Action, type AppState, type SessionView } from "../store.js";
 
+/**
+ * What one surface loaded, and only that surface: another surface's reads must
+ * never reach this window. Its own reads arrive through `owner.dispatch`.
+ */
+const LOADED_BY_ONE_SURFACE = new Set<Action["type"]>([
+  "historyBegin", "historyReset", "historyEnd", "historySnapshot", "historyPrepend", "historyMetadata", "hydrate", "entries",
+]);
+
 /** What a surface loads for itself. Everything else comes from the canonical view. */
 function windowOf(canonical: SessionView, owned: SessionView): SessionView {
   const { history: _h, historyPending: _p, historyRevision: _r, pendingSentBy: _s, ...rest } = canonical;
@@ -82,10 +90,19 @@ export function createHistoryWindows(root: HistoryWindowRoot): HistoryWindows {
     return entry;
   };
 
-  const stop = root.observeWindows((action, _before, after) => {
+  const stop = root.observeWindows((action, before, after) => {
     let changed = false;
     for (const entry of held.values()) {
       if (!entry.owned) continue;
+      const was = before.open[entry.path], now = after.open[entry.path];
+      // The session moved to another branch or another worker generation. That
+      // is canonical, not a loaded window: every surface takes the new one
+      // rather than staying on a transcript that no longer exists.
+      if (now && was && (was.updateEpoch !== now.updateEpoch || was.leafId !== now.leafId)) {
+        entry.owned = now; changed = true; continue;
+      }
+      // Another surface reading its own window says nothing about this one.
+      if (LOADED_BY_ONE_SURFACE.has(action.type)) continue;
       // The same reducer, over this surface's own loaded window. A canonical
       // no-op still reaches a surface that is waiting to replay this event.
       const next = reduce({ ...after, open: { ...after.open, [entry.path]: entry.owned } }, action).open[entry.path];

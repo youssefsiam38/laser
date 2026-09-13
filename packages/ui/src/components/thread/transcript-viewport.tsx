@@ -5,7 +5,6 @@ import { activityDetailLevel } from "@/runtime/sessionPreferences";
 import { motionMs } from "@/motion";
 import { HeightIndex, windowRanges } from "./transcript-window.js";
 import { ThreadMessage } from "./messages.js";
-import { registerReadingController } from "./preserve-reading-position.js";
 
 export interface TranscriptTarget { messageId: string; toolCallId?: string; leafId?: string | null }
 export interface LocateOptions {
@@ -196,7 +195,6 @@ export class TranscriptViewport {
     const live = mark && mark.getBoundingClientRect().height > 0 ? mark : row;
     this.scroll(viewport.scrollTop + live.getBoundingClientRect().top - viewport.getBoundingClientRect().top - (live === row ? anchor.messageOffset : anchor.offset));
   }
-  preserve = () => { this.capture(); this.schedule(); return () => {}; };
   private layout() {
     if (!this.content) return false;
     const css = getComputedStyle(this.content);
@@ -317,7 +315,6 @@ export class TranscriptViewport {
     this.observer = new ResizeObserver(this.schedule);
     this.observer.observe(viewport);
     for (const node of this.nodes.values()) this.observer.observe(node);
-    const unbind = registerReadingController(viewport, this.preserve);
     const scroll = () => {
       if (this.expectedTop !== undefined && Math.abs(viewport.scrollTop - this.expectedTop) < 0.5) { this.expectedTop = undefined; return; }
       if (this.arriving) { this.place.following = true; this.windowDirty = true; this.schedule(); return; }
@@ -407,7 +404,7 @@ export class TranscriptViewport {
     this.schedule();
     return () => {
       this.cancel(); this.disposed = true; cancelAnimationFrame(this.frame); this.frame = 0;
-      this.observer?.disconnect(); this.observer = undefined; theme.disconnect(); unbind();
+      this.observer?.disconnect(); this.observer = undefined; theme.disconnect();
       viewport.removeEventListener("scroll", scroll); viewport.removeEventListener("wheel", user); viewport.removeEventListener("touchstart", user);
       viewport.removeEventListener("pointerdown", this.cancel);
       viewport.removeEventListener("focusin", focus); viewport.removeEventListener("focusout", focus); viewport.removeEventListener("keydown", key);
@@ -418,7 +415,17 @@ export class TranscriptViewport {
 }
 
 const Context = createContext<TranscriptViewport | undefined>(undefined);
-export function useTranscriptViewport() { return useContext(Context); }
+/**
+ * The controller for this surface. In the app it is always the one `Thread`
+ * provides; a row mounted outside a conversation (a harness, a preview) gets
+ * its own, attached to nothing, so there is still exactly one implementation
+ * of this scroll and no caller has to carry a second one.
+ */
+export function useTranscriptViewport(): TranscriptViewport {
+  const provided = useContext(Context);
+  const [detached] = useState(() => (provided ? undefined : new TranscriptViewport()));
+  return provided ?? detached!;
+}
 export function TranscriptViewportProvider({ children }: { children: ReactNode }) {
   const [controller] = useState(() => new TranscriptViewport());
   const path = useLaserState(s => s.current ?? "");
@@ -444,7 +451,7 @@ export function TranscriptViewportBinding() {
   return null;
 }
 export function WindowedMessages() {
-  const controller = useTranscriptViewport()!;
+  const controller = useTranscriptViewport();
   const ids = unstable_useThreadMessageIds();
   controller.setIds(ids);
   useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);

@@ -106,7 +106,7 @@ export function useConversationFind({ partial = false, loadAll }: { partial?: bo
   activeRef.current = active;
   const schedulePaint = useRef<(() => void) | undefined>(undefined);
   const close = useCallback(() => {
-    controller?.cancel();
+    controller.cancel();
     setOpen(false);
     (restoreFocus.current?.isConnected ? restoreFocus.current : root.current?.querySelector<HTMLElement>("textarea"))?.focus({ preventScroll: true });
   }, [controller]);
@@ -173,24 +173,12 @@ export function useConversationFind({ partial = false, loadAll }: { partial?: bo
   useEffect(() => { schedulePaint.current?.(); }, [active?.id, active?.messageId, active?.occurrence]);
   useEffect(() => {
     if (!active) return;
-    if (controller) {
-      const abort = new AbortController();
-      void controller.ensureVisible({ messageId: active.messageId }, { reason: "find", signal: abort.signal, rect: message => {
-        const ranges = findTextRanges(message, query);
-        return (ranges[active.occurrence] ?? ranges[0])?.getBoundingClientRect();
-      } });
-      return () => abort.abort();
-    }
-    const timer = window.setTimeout(() => {
-      const viewport = root.current?.querySelector<HTMLElement>('[data-slot="thread-viewport"]');
-      const message = [...(viewport?.querySelectorAll<HTMLElement>("[data-message-id]") ?? [])].find(n => n.dataset.messageId === active.messageId);
-      if (!viewport || !message) return;
+    const abort = new AbortController();
+    void controller.ensureVisible({ messageId: active.messageId }, { reason: "find", signal: abort.signal, rect: message => {
       const ranges = findTextRanges(message, query);
-      const rect = (ranges[active.occurrence] ?? ranges[0])?.getBoundingClientRect() ?? message.getBoundingClientRect();
-      const footer = viewport.querySelector<HTMLElement>('[data-slot="thread-footer"]')?.getBoundingClientRect().height ?? 0;
-      viewport.scrollTop += rect.top - viewport.getBoundingClientRect().top - Math.max(0, viewport.clientHeight - footer) / 3;
-    }, motionMs("--motion-fast") + 32);
-    return () => clearTimeout(timer);
+      return (ranges[active.occurrence] ?? ranges[0])?.getBoundingClientRect();
+    } });
+    return () => abort.abort();
   }, [active?.id, query, controller]);
   return {
     root, open, selectedMessage: active?.messageId,

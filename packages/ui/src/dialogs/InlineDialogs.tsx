@@ -99,7 +99,7 @@ export function ToolRowDialog({ toolCallId }: { toolCallId: string }) {
     <div data-slot="tool-dialog" data-tool-call={toolCallId} className="mb-2 ms-6 border-s-2 border-attention py-1 ps-3">
       <DialogBody
         form={form}
-        presentation={path ? presentation?.question(path, form) : undefined}
+        presentation={path ? presentation.question(path, form) : undefined}
         touch={touch}
         onAnswer={(values) => actions.answerDialog(uiResponseFor(dialog.id, dialog.method, values))}
       />
@@ -144,7 +144,7 @@ export function ThreadDialogCards({ className }: { className?: string | undefine
       <DialogBody
         key={`${dialog.id}:${declineFirst ? "decline" : "ask"}`}
         form={form}
-        presentation={path ? presentation?.question(path, form, declineFirst) : undefined}
+        presentation={path ? presentation.question(path, form, declineFirst) : undefined}
         touch={touch}
         initialDeclining={declineFirst}
         onAnswer={(values) => actions.answerDialog(uiResponseFor(dialog.id, dialog.method, values))}
@@ -180,7 +180,7 @@ function useDialogLink(dialog: UiDialogRequest | undefined): boolean {
     if (link.answer === "allow" && dialog.method === "confirm") {
       const answer = () => actions.answerDialog({ id: dialog.id, confirmed: true }).then(() => actions.toast("info", `Allowed · ${dialog.title}`));
       const form = dialogFormOf(dialog, false);
-      if (presentation && path && form) void presentation.question(path, form).answer(answer);
+      if (path && form) void presentation.question(path, form).answer(answer);
       else void answer();
     }
   }, [actions, dialog, link, path, presentation]);

@@ -171,18 +171,8 @@ export function ConversationMapAui({ side = "right", minTurns = 4, className }: 
   }, [turnKey]);
 
   const select = useCallback(
-    (id: string) => {
-      if (controller) { void controller.ensureVisible({ messageId: id }, { reason: "map" }); return; }
-      if (!viewport) return;
-      for (const element of viewport.querySelectorAll<HTMLElement>("[data-message-id]")) {
-        if (element.dataset["messageId"] !== id) continue;
-        // `scrollIntoView` aligns every scrollable ancestor; only this viewport should move.
-        const top = element.getBoundingClientRect().top - viewport.getBoundingClientRect().top + viewport.scrollTop;
-        viewport.scrollTo({ top, behavior: "smooth" });
-        return;
-      }
-    },
-    [viewport, controller],
+    (id: string) => { void controller.ensureVisible({ messageId: id }, { reason: "map" }); },
+    [controller],
   );
 
   if (entries.length < minTurns) return null;

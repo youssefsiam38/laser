@@ -34,7 +34,7 @@ const stable = vi.hoisted(() => ({
     toast: vi.fn(),
     send: vi.fn(async () => undefined),
     fork: vi.fn(async () => undefined),
-    jump: vi.fn(async () => undefined),
+    jump: vi.fn(async () => true),
     navigate: vi.fn(async () => ({ editorText: "list the tests" }) as { editorText?: string } | false),
     setModel: vi.fn(async () => undefined),
     setThinking: vi.fn(async () => undefined),
@@ -305,8 +305,10 @@ describe("the version picker", () => {
     const picker = userRoots().at(-1)!.querySelector('[data-slot="message-branches"]')!;
     await click(picker.querySelector('button[aria-label="Previous version"]') ?? picker.querySelector("button")!);
     // Navigating onto a prompt would put the session before it; the version is
-    // reached through the reply that ends it.
-    expect(stable.actions.navigate).toHaveBeenCalledWith("a2a");
+    // reached through the reply that ends it. Jump, not navigate: a version
+    // ending in an unanswered prompt hands that text back to the composer.
+    expect(stable.actions.jump).toHaveBeenCalledWith("a2a");
+    expect(stable.actions.navigate).not.toHaveBeenCalled();
   });
 });
 

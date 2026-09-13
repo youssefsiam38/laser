@@ -54,6 +54,51 @@ describe("owner-local transcript windows", () => {
     expect(f.view(f.main).blocks).toHaveLength(80);
   });
 
+  it("leaves a peer's expanded window alone when the canonical surface re-enters at the tail", () => {
+    const f = fixture();
+    const page = historyWindow(source, { all: true }, scope);
+    f.beam.dispatch({ type: "historyBegin", path: state.path, token: "beam" });
+    f.beam.dispatch({ type: "historySnapshot", path: state.path, token: "beam", ...page, window: page.window!, replaceWindow: true });
+    const expanded = f.view(f.beam);
+    expect(expanded.blocks).toHaveLength(80);
+    expect(expanded.historyRevision).toBe("beam");
+    // The canonical surface reloads its own recent tail, same epoch, same leaf.
+    const tail = historyWindow(source, { tail: 40 }, scope);
+    f.store.dispatch({ type: "historyBegin", path: state.path, token: "main-2" });
+    f.store.dispatch({ type: "historyReset", path: state.path, token: "main-2" });
+    f.store.dispatch({ type: "historySnapshot", path: state.path, token: "main-2", ...tail, window: tail.window!, replaceWindow: true });
+    expect(f.view(f.main).blocks).toHaveLength(40);
+    expect(f.view(f.main).historyRevision).toBe("main-2");
+    // The peer is untouched: its window, its place, its revision.
+    expect(f.view(f.beam).blocks).toEqual(expanded.blocks);
+    expect(f.view(f.beam).entries).toEqual(expanded.entries);
+    expect(f.view(f.beam).history).toEqual(expanded.history);
+    expect(f.view(f.beam).historyRevision).toBe(expanded.historyRevision);
+  });
+
+  it("reconciles both surfaces onto a new generation or branch before either is ready", () => {
+    const f = fixture();
+    const tail = historyWindow(source, { tail: 40 }, scope);
+    f.beam.dispatch({ type: "historyBegin", path: state.path, token: "beam" });
+    f.beam.dispatch({ type: "historyReset", path: state.path, token: "beam" });
+    f.beam.dispatch({ type: "historySnapshot", path: state.path, token: "beam", ...tail, window: tail.window!, replaceWindow: true });
+    expect(f.view(f.beam).blocks).toHaveLength(40);
+    // A restarted worker: canonical adopts the new generation and re-reads.
+    f.store.dispatch({ type: "historyBegin", path: state.path, token: "restart" });
+    const replacement = historyWindow(source, { tail: 40 }, { ...scope, epoch: "two", seq: 1 });
+    f.store.dispatch({ type: "historySnapshot", path: state.path, token: "restart", ...replacement, window: replacement.window! });
+    // Neither surface is left on the old generation, and neither is stranded.
+    expect(f.view(f.beam).history?.epoch).toBe("two");
+    expect(f.view(f.main).history?.epoch).toBe("two");
+    expect(f.view(f.beam).hydrated).toBe(f.view(f.main).hydrated);
+    // A later update on the new generation reaches both, once.
+    f.store.dispatch({ type: "notification", method: "session/update", params: { sessionPath: state.path, epoch: "two", seq: 2, at: "2026-01-01T00:00:00Z", update: { kind: "agent_start" } } });
+    f.store.dispatch({ type: "notification", method: "session/update", params: { sessionPath: state.path, epoch: "two", seq: 3, at: "2026-01-01T00:00:00Z", update: { kind: "text_delta", delta: "after the restart", contentIndex: 0 } } });
+    expect(f.view(f.beam).blocks.at(-1)).toMatchObject({ text: "after the restart" });
+    expect(f.view(f.main).blocks.at(-1)).toMatchObject({ text: "after the restart" });
+    expect(f.view(f.beam).blocks).toHaveLength(f.view(f.main).blocks.length);
+  });
+
   it("delivers one live update to both surfaces exactly once, with the same identity", () => {
     const f = fixture();
     const tail = historyWindow(source, { tail: 40 }, scope);

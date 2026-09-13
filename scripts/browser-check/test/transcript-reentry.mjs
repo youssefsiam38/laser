@@ -94,7 +94,7 @@ export default async function reentry(check) {
   assert.equal(await oldest.count(), 0, 'the old reading position is not restored');
   assert.equal(await earlierControl().count(), 1, 'older messages remain one control away');
   const windows = entryReads.filter(params => params.path === seeded.path).map(params => params.window);
-  assert.deepEqual(windows, [{ tail: 40 }, { tail: 40 }], `re-entry reads the recent tail, got ${JSON.stringify(windows)}`);
+  assert.deepEqual(windows, [{ tail: 40 }], `one authoritative tail read per return, got ${JSON.stringify(windows)}`);
   const returnedTop = await oldestLoaded();
   assert.equal(returnedTop, '101', `re-entry loads the last 40 messages, not from checkpoint ${returnedTop}`);
   const returnedDom = await page.locator('[data-window-message]').count();

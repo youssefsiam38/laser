@@ -45,7 +45,7 @@ export function ConversationMap({ entries, activeId, visibleIds, onSelect, side 
   };
   if (!entry) return null;
   return <nav ref={rail} data-slot="conversation-map" aria-label="Conversation map" className={cn("group/rail flex h-full w-6 flex-col justify-center [@media(pointer:coarse)]:min-w-11", className)} {...props} onKeyDown={onKeyDown}>
-    <HoverCard.Root open={open} onOpenChange={setOpen}>
+    <HoverCard.Root open={open} onOpenChange={setOpen} openDelay={120} closeDelay={80}>
       <HoverCard.Trigger asChild>
         <button type="button" role="slider" aria-label={`Conversation map: ${entry.title}`} aria-valuemin={1} aria-valuemax={entries.length} aria-valuenow={index + 1} aria-valuetext={`Turn ${index + 1} of ${entries.length}: ${entry.title}`}
           data-slot="conversation-map-control" className="flex h-full w-full flex-col justify-center outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-live"
@@ -67,7 +67,9 @@ export function ConversationMap({ entries, activeId, visibleIds, onSelect, side 
           })}
         </button>
       </HoverCard.Trigger>
-      <HoverCard.Portal><HoverCard.Content side={logicalSide(side, direction)} dir={direction} className={cn(floating, "z-50 w-60 rounded-xl p-3 outline-none")}>
+      <HoverCard.Portal><HoverCard.Content side={logicalSide(side, direction)} dir={direction} sideOffset={10} collisionPadding={8}
+        className={cn(floating, "z-50 w-60 rounded-xl p-3 outline-none",
+          "animate-in fade-in-0 zoom-in-95 duration-(--motion-fast) data-[state=closed]:animate-out data-[state=closed]:fade-out-0 motion-reduce:animate-none")}>
         <p className="line-clamp-2 text-sm leading-snug font-medium text-ink">{entry.title}</p>
         {entry.preview && <p className="mt-1 line-clamp-3 text-sm text-ink-2">{entry.preview}</p>}
       </HoverCard.Content></HoverCard.Portal>

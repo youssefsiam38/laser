@@ -63,6 +63,28 @@ describe("history request ownership", () => {
     expect(f.view().lastSeq).toBe(9);
   });
 
+  it("accepts the tail on every ordinary re-entry, not only the first", async () => {
+    const request = vi.fn(async (params: Params) => historyWindow(source, params.window!, scope));
+    const f = fixture(request);
+    await f.loader.recent(state.path, () => true);
+    const first = f.view().historyRevision;
+    expect(f.view().blocks).toHaveLength(40);
+    await f.loader.all(state.path, () => true);
+    expect(f.view().blocks).toHaveLength(80);
+    // The second return has a revision of its own to replace; retiring that
+    // window must not make the read refuse its own answer.
+    await f.loader.recent(state.path, () => true);
+    expect(f.view()).toMatchObject({ hydrated: true });
+    expect(f.view().blocks).toHaveLength(40);
+    expect(f.view().entries).toHaveLength(40);
+    expect(f.view().historyRevision).not.toBe(first);
+    // One authoritative read per return, and nothing rescued it afterwards.
+    expect(request.mock.calls.map(([params]) => params.window)).toEqual([{ tail: 40 }, { all: true }, { tail: 40 }]);
+    await f.loader.recent(state.path, () => true);
+    expect(f.view().blocks).toHaveLength(40);
+    expect(request).toHaveBeenCalledTimes(4);
+  });
+
   it("starts recent-tail replacement immediately instead of coalescing an older all read", async () => {
     const old = deferred<Result>();
     const request = vi.fn(async (params: Params) => params.window && "all" in params.window ? old.promise : historyWindow(source, params.window!, scope));

@@ -43,7 +43,7 @@ function useOffscreenQuestion(): { toolCallId: string; title: string } | undefin
       return;
     }
     const check = (): void => {
-      const viewport = controller?.viewport ?? document.querySelector<HTMLElement>(VIEWPORT);
+      const viewport = controller.viewport;
       if (!viewport) return;
       const footer = viewport.querySelector<HTMLElement>(FOOTER)?.getBoundingClientRect().height ?? 0;
       const box = viewport.getBoundingClientRect();
@@ -61,7 +61,7 @@ function useOffscreenQuestion(): { toolCallId: string; title: string } | undefin
       setOffscreen({ toolCallId: first.toolCallId!, title: first.title });
     };
     check();
-    const viewport = controller?.viewport ?? document.querySelector<HTMLElement>(VIEWPORT);
+    const viewport = controller.viewport;
     viewport?.addEventListener("scroll", check, { passive: true });
     const timer = window.setInterval(check, 500);
     return () => {
@@ -99,20 +99,13 @@ export function WaitingNotice({ className }: { className?: string | undefined })
   );
 }
 
-/** The same move find makes: the target a third of the way down the readable area. */
-function scrollToQuestion(toolCallId: string, controller?: TranscriptViewport): void {
-  const viewport = controller?.viewport ?? document.querySelector<HTMLElement>(VIEWPORT);
+/** The same move find makes, through the one controller that owns this scroll. */
+function scrollToQuestion(toolCallId: string, controller: TranscriptViewport): void {
+  const viewport = controller.viewport;
   const node = viewport ? elementFor(toolCallId, viewport) : null;
-  if (controller && node) {
-    const messageId = node.closest<HTMLElement>("[data-message-id]")?.dataset.messageId;
-    if (messageId) void controller.ensureVisible({ messageId, toolCallId }, { reason: "question" }).then(result => {
-      if (result === "visible" && controller.viewport) elementFor(toolCallId, controller.viewport)?.querySelector<HTMLElement>("[data-autofocus], button, input, textarea")?.focus({ preventScroll: true });
-    });
-    return;
-  }
-  if (!viewport || !node) return;
-  const footer = viewport.querySelector<HTMLElement>(FOOTER)?.getBoundingClientRect().height ?? 0;
-  const rect = node.getBoundingClientRect();
-  viewport.scrollTop += rect.top - viewport.getBoundingClientRect().top - Math.max(0, viewport.clientHeight - footer) / 3;
-  node.querySelector<HTMLElement>("[data-autofocus], button, input, textarea")?.focus({ preventScroll: true });
+  const messageId = node?.closest<HTMLElement>("[data-message-id]")?.dataset.messageId;
+  if (!messageId) return;
+  void controller.ensureVisible({ messageId, toolCallId }, { reason: "question" }).then(result => {
+    if (result === "visible" && controller.viewport) elementFor(toolCallId, controller.viewport)?.querySelector<HTMLElement>("[data-autofocus], button, input, textarea")?.focus({ preventScroll: true });
+  });
 }

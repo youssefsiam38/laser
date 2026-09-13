@@ -22,7 +22,6 @@ import { EmptyState } from "./EmptyState.js";
 import { ThreadSlotsProvider, type ThreadSlots } from "./thread-slots.js";
 import { useConversationFind } from "./use-conversation-find.js";
 import { FindSelectionContext } from "./search-state.js";
-import { captureReadingPosition, preserveReadingPosition, type ReadingPosition } from "./preserve-reading-position.js";
 import { TranscriptViewportProvider, TranscriptViewportBinding, WindowedMessages, useTranscriptViewport } from "./transcript-viewport.js";
 
 /**
@@ -190,8 +189,7 @@ function HistoryControls() {
   const controller = useTranscriptViewport();
   const history = useLaserState(s => s.current ? s.open[s.current]?.history : undefined);
   const root = useRef<HTMLDivElement>(null);
-  const pending = useRef<{ viewport: HTMLElement; position: ReadingPosition; focused?: Element | null } | undefined>(undefined);
-  const stopAnchor = useRef<(() => void) | undefined>(undefined);
+  const pending = useRef<{ focused?: Element | null } | undefined>(undefined);
   const busy = useRef(false);
   const requestedHistory = useRef(false);
   const interacted = useRef(false);
@@ -202,9 +200,10 @@ function HistoryControls() {
     busy.current = true;
     requestedHistory.current = true;
     setLoading(all ? "all" : "earlier");
-    const viewport = root.current?.closest<HTMLElement>("[data-slot=thread-viewport]");
-    controller?.capture();
-    if (viewport) pending.current = { viewport, position: captureReadingPosition(viewport), focused: root.current?.contains(document.activeElement) ? document.activeElement : null };
+    // The controller holds this surface's place across the page it is about to
+    // commit; nothing else needs to remember where the person was reading.
+    controller.capture();
+    pending.current = { focused: root.current?.contains(document.activeElement) ? document.activeElement : null };
     try {
       const loaded = all ? await actions.loadAllEntries() : await actions.loadEarlierEntries();
       if (loaded) setAnnouncement(all ? "Other versions loaded." : "Earlier messages loaded.");
@@ -217,12 +216,9 @@ function HistoryControls() {
     const anchor = pending.current;
     if (!anchor) return;
     pending.current = undefined;
-    stopAnchor.current?.();
-    if (controller) controller.committed();
-    else stopAnchor.current = preserveReadingPosition(anchor.viewport, anchor.position);
+    controller.committed();
     if (anchor.focused && !anchor.focused.isConnected && document.activeElement === document.body) root.current?.querySelector("button")?.focus({ preventScroll: true });
   }, [controller, history?.anchor, history?.complete]);
-  useEffect(() => () => { stopAnchor.current?.(); }, []);
   useEffect(() => {
     const viewport = root.current?.closest<HTMLElement>("[data-slot=thread-viewport]");
     if (!viewport || !history?.before) return;

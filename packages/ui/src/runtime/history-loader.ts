@@ -159,7 +159,7 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
   const read = async (path: string, all = false, accepting: () => boolean = () => true, legacySeq?: number, policy?: "recent"): Promise<void> => {
     if (!accepting()) return;
     if (policy === "recent") generations.set(path, (generations.get(path) ?? 0) + 1);
-    const active = fence(path, accepting);
+    let active = fence(path, accepting);
     const pending = policy === "recent" ? undefined : reads.get(path);
     if (pending) {
       await pending;
@@ -168,7 +168,12 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     const token = String(++nextToken);
     const expectSeq = deps.get(path)?.lastSeq ?? 0;
     deps.dispatch({ type: "historyBegin", path, token });
-    if (policy === "recent") deps.dispatch({ type: "historyReset", path, token });
+    if (policy === "recent") {
+      // Retiring the window clears the revision this read is replacing, so the
+      // fence is taken again afterwards: a read must not refuse its own reset.
+      deps.dispatch({ type: "historyReset", path, token });
+      active = fence(path, accepting);
+    }
     const work = (async () => {
       const anchor = policy === "recent" ? undefined : deps.get(path)?.history?.anchor;
       const window: HistoryWindowRequest = policy === "recent" ? { tail: 40 } : all ? { all: true } : anchor ? { from: anchor } : { tail: 40 };

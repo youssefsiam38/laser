@@ -26,7 +26,7 @@ export interface ScrollAnchorProps extends Omit<ComponentProps<"button">, "child
 export function ScrollAnchor({ label = "Jump to latest", className, ...props }: ScrollAnchorProps) {
   const viewport = useTranscriptViewport();
   return (
-    <ThreadPrimitive.ScrollToBottom asChild onClick={() => viewport?.latest()}>
+    <ThreadPrimitive.ScrollToBottom asChild onClick={() => viewport.latest()}>
       <button
         type="button"
         data-slot="scroll-anchor"

@@ -179,7 +179,7 @@ export interface LaserActions {
    */
   navigate(entryId: string, options?: MoveOptions): Promise<{ editorText?: string } | false>;
   /** `navigate`, plus the engine's text into the composer. The menu's "Jump to this entry". */
-  jump(entryId: string, options?: MoveOptions): Promise<void>;
+  jump(entryId: string, options?: MoveOptions): Promise<boolean>;
   refreshSessions(): Promise<void>;
   loadMoreSessions(cwd: string): Promise<boolean>;
   allSessionSummaries(): Promise<SessionSummary[]>;
@@ -334,8 +334,12 @@ export function LaserStoreProvider({ store, children }: { store: StateStore; chi
 }
 
 /** The canonical presentation owner is shared by main and Beam, not their DOM placement. */
-export function useTranscriptPresentation(): TranscriptPresentation | undefined {
-  return useContext(LaserStateContext)?.presentation;
+export function useTranscriptPresentation(): TranscriptPresentation {
+  const store = useContext(LaserStateContext);
+  // A row mounted outside the app's store (a harness, a preview) still gets an
+  // owner, so no caller carries a second edit/question implementation.
+  const [detached] = useState(() => (store ? undefined : new TranscriptPresentation()));
+  return store?.presentation ?? detached!;
 }
 
 /** The currently open session view. Identity is stable while it does not change. */
@@ -360,7 +364,7 @@ export function useLaser(): LaserContextValue {
 // ---------------------------------------------------------------------------
 
 export interface StateStore {
-  presentation?: TranscriptPresentation;
+  presentation: TranscriptPresentation;
   getSnapshot(): AppState;
   subscribe(listener: () => void): () => void;
   dispatch(action: Action): void;
@@ -1184,7 +1188,8 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
               params: { path, method: "setEditorText", text: moved.editorText },
             });
           }
-        }).then(() => undefined),
+          return Boolean(moved);
+        }).then(Boolean),
       refreshSessions,
       loadMoreSessions: (cwd) => catalogLoader.more(cwd),
       allSessionSummaries: () => catalogLoader.all(),
@@ -1665,7 +1670,7 @@ function createScopedStateStore(store: StateStore, path: string | undefined, des
   let source: AppState | undefined;
   let derived: AppState | undefined;
   return {
-    ...(store.presentation ? { presentation: store.presentation } : {}),
+    presentation: store.presentation,
     getSnapshot: () => {
       // The scope's own loaded transcript, when it is not the surface that owns
       // the canonical one; its session state and questions are still canonical.
