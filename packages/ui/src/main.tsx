@@ -3,6 +3,7 @@ import "./globals.css";
 import { migrateFormerBrowserStorage } from "./identity/storage-migration.js";
 import { themeStore } from "./theme/store.js";
 import { App } from "./App.js";
+import { AppErrorBoundary } from "./AppErrorBoundary.js";
 
 // Before the theme store, or anything else, reads a key: if this product was
 // renamed, everything the browser remembers is still under the old prefix
@@ -14,4 +15,4 @@ migrateFormerBrowserStorage();
 // following the OS scheme and other tabs.
 themeStore.init();
 
-createRoot(document.getElementById("root")!).render(<App />);
+createRoot(document.getElementById("root")!).render(<AppErrorBoundary><App /></AppErrorBoundary>);
