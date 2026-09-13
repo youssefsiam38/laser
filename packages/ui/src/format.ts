@@ -15,10 +15,12 @@ export function relativeTime(iso: string, now = Date.now()): string {
 
 export function duration(ms: number): string {
   if (ms < 1000) return `${Math.round(ms)}ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`;
-  const m = Math.floor(ms / 60_000);
-  const s = Math.round((ms % 60_000) / 1000);
-  return `${m}m ${s}s`;
+  if (ms < 10_000) return `${(ms / 1000).toFixed(1)}s`;
+  // Round to whole seconds first, then split: rounding the remainder alone
+  // turns 119.6 s into "1m 60s".
+  const total = Math.round(ms / 1000);
+  if (total < 60) return `${total}s`;
+  return `${Math.floor(total / 60)}m ${total % 60}s`;
 }
 
 export function tokens(n: number): string {
