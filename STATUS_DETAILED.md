@@ -2223,7 +2223,7 @@ lane T's own if both were written.
 | M16-T15 | No "Detached" group | done | worker no-detached | merged `74df015` (`bd04ba2`) | the person: remove the idea; the tree goes with its parent |
 | M16-T16 | Conversations load like a chat app | done | worker chat-loading (01a0956e-442a-7405-a9c3-60452bc90d24) | merged `d6e5ebd` (A `ae423a5`, B `6cc8572`, fixes `557d92a`/`5166b9d`) + defect round `402de75` (`83e0748`) | stages C/D/E dropped (review: not justified); acceptance `/tmp/snappy/REPORT.md` found three older-message action defects, all fixed |
 #### M16-T34 notes
-- 2026-09-13 claimed from `docs/handoff-open-problems.md` P1 for 0.6.2; policy decided by the orchestrator in full-autonomy mode (D-244).
+- 2026-09-13 claimed from `docs/handoff-open-problems.md` P1 for 0.6.2; policy decided by the orchestrator in full-autonomy mode (D-245).
 
 #### M16-T35 notes
 - 2026-09-13 claimed from `docs/handoff-open-problems.md` P2 for 0.6.2; reproduce red first.
@@ -3237,7 +3237,7 @@ Decision: Adopt `/home/youssef/electron-optimization-report.md` as the plan for 
 Why: the wide audit (D-229, M16-T20..T22) and the transcript work (M16-T16/T29) already delivered the report's largest items; what remains is low-risk with measurable evidence, except the two architectural items.
 Consequences: four owners with disjoint write sets (desktop main; UI bundle boundaries; UI thread profiling; packaging config), each with its own review; the packaging change is gated on the clean-machine check on a real packaged build.
 
-### D-244 · 2026-09-13 · Log-store retention policy for 0.6.2
+### D-245 · 2026-09-13 · Log-store retention policy for 0.6.2
 Decision: Full provider request bodies are retained for the most recent 50 requests per session; older rows keep a summary (model, message count, body size, timing) and their body is released. A global byte budget on retained bodies (default 1 GiB) is enforced at ingestion; row and age limits stay. Space is reclaimed with `auto_vacuum = INCREMENTAL` plus bounded `incremental_vacuum` steps off the request path. Settings shows the store size and a Clear.
 Why: D-242's open policy question; the person put the release in full-autonomy mode. Fifty full requests cover every inspector use observed (a turn's request and the turns around it); the body of an older turn is a strict prefix of a newer one in the same session.
 Consequences: `pi/logs/content` for a released body answers with the summary and says so in the inspector; the count and budget are constants in `logstore.ts` until a Settings control is asked for. P5 (MCP script approvals) stays out of 0.6.2 (D-240).
