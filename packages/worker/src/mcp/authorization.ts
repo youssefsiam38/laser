@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from "node:crypto";
-import { channel } from "node:diagnostics_channel";
 import { open, mkdir, rename, unlink, realpath, lstat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import lockfile from "proper-lockfile";
@@ -55,7 +54,6 @@ const ID = /^[a-f0-9]{64}$/;
 const EPOCH = /^[a-f0-9-]{36}$/;
 const MAX_BYTES = 512;
 const READ_MS = 100;
-const readDiagnostics = channel("mcp.authorization.read");
 
 function valid(value: unknown, identity: string): value is McpAuthorizationGeneration {
   if (!value || typeof value !== "object") return false;
@@ -100,7 +98,7 @@ type AuthorizationRead =
   | { kind: "unavailable" }
   | { kind: "locked" };
 
-function requireAvailable(read: AuthorizationRead) {
+function requireAvailable(read: AuthorizationRead): Extract<AuthorizationRead, { kind: "present" | "missing" | "corrupt" }> {
   if (read.kind === "unavailable") {
     throw new McpAuthorizationError("unavailable", "MCP sign-in information could not be checked. Try again.");
   }
@@ -131,55 +129,58 @@ export class McpAuthorizationRegistry {
   }
 
   async read(identity: string): Promise<McpAuthorizationGeneration | undefined> {
-    const result = await this.readBounded(identity, false);
+    const result = await this.readBounded(identity, true);
     return result.kind === "present" ? result.snapshot : undefined;
   }
 
-  private async readBounded(identity: string, ownsLock: boolean): Promise<AuthorizationRead> {
+  private async readBounded(identity: string, fenceOnLock: boolean): Promise<AuthorizationRead> {
     const path = this.path(identity);
-    const started = performance.now();
-    let phase = "lock-before";
-    const refused = (kind: Exclude<AuthorizationRead["kind"], "present">, reason: string, code?: string): AuthorizationRead => {
-      if (readDiagnostics.hasSubscribers) readDiagnostics.publish({ identity, reason, code, phase, ownsLock, elapsedMs: performance.now() - started });
-      return { kind };
-    };
     const lockState = async (): Promise<AuthorizationRead | undefined> => {
-      if (ownsLock) return undefined;
+      if (!fenceOnLock) return undefined;
       try { await lstat(`${path}.lock`); }
       catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        return code === "ENOENT" ? undefined : refused("unavailable", "lock-error", code);
+        return (error as NodeJS.ErrnoException).code === "ENOENT" ? undefined : { kind: "unavailable" };
       }
-      return refused("locked", phase === "lock-before" ? "locked-before" : "locked-after");
+      return { kind: "locked" };
     };
     let timer: ReturnType<typeof setTimeout> | undefined;
     const controller = new AbortController();
     try {
       return await Promise.race([
         (async (): Promise<AuthorizationRead> => {
-          // Open first, then bound the read itself; a replacement between stat and
-          // read cannot turn this into an unbounded JSON allocation.
           const before = await lockState();
+          if (controller.signal.aborted) return { kind: "unavailable" };
           if (before) return before;
-          phase = "open";
-          const handle = await open(path, "r");
+          let handle;
+          try { handle = await open(path, "r"); }
+          catch (error) {
+            return (error as NodeJS.ErrnoException).code === "ENOENT" ? { kind: "missing" } : { kind: "unavailable" };
+          }
           try {
+            // One handle, bounded allocation and one overall deadline. A short
+            // read is only a chunk; corruption requires EOF or proven oversize.
             const bytes = Buffer.alloc(MAX_BYTES + 1);
-            if (controller.signal.aborted) return refused("unavailable", "aborted-before-read");
-            phase = "read";
-            const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
-            if (bytesRead > MAX_BYTES) return refused("corrupt", "oversize");
-            if (controller.signal.aborted) return refused("unavailable", "aborted-after-read");
-            phase = "parse";
+            let length = 0;
+            while (length < bytes.length) {
+              if (controller.signal.aborted) return { kind: "unavailable" };
+              const { bytesRead } = await handle.read(bytes, length, bytes.length - length, length);
+              if (controller.signal.aborted) return { kind: "unavailable" };
+              length += bytesRead;
+              if (bytesRead === 0) break;
+            }
+            if (length > MAX_BYTES) return { kind: "corrupt" };
             let parsed: unknown;
-            try { parsed = JSON.parse(bytes.subarray(0, bytesRead).toString("utf8")); }
-            catch { return refused("corrupt", "parse-error"); }
-            if (!valid(parsed, identity)) return refused("corrupt", "invalid");
-            phase = "lock-after";
-            return await lockState() ?? { kind: "present", snapshot: parsed };
-          } finally { phase = "close"; await handle.close(); }
-        })().catch((error: NodeJS.ErrnoException) => refused(phase === "open" && error.code === "ENOENT" ? "missing" : "unavailable", "read-error", error.code ?? error.name)),
-        new Promise<AuthorizationRead>((done) => { timer = setTimeout(() => { controller.abort(); done(refused("unavailable", "deadline")); }, READ_MS); }),
+            try { parsed = JSON.parse(bytes.subarray(0, length).toString("utf8")); }
+            catch { return { kind: "corrupt" }; }
+            if (!valid(parsed, identity)) return { kind: "corrupt" };
+            const after = await lockState();
+            if (controller.signal.aborted) return { kind: "unavailable" };
+            return after ?? { kind: "present", snapshot: parsed };
+          } finally { await handle.close(); }
+        })().catch((): AuthorizationRead => ({ kind: "unavailable" })),
+        new Promise<AuthorizationRead>(done => {
+          timer = setTimeout(() => { controller.abort(); done({ kind: "unavailable" }); }, READ_MS);
+        }),
       ]);
     } finally { if (timer) clearTimeout(timer); }
   }
@@ -188,32 +189,35 @@ export class McpAuthorizationRegistry {
     const now = await this.read(snapshot.identity);
     const current = now !== undefined && now.generation.epoch === snapshot.generation.epoch
       && now.generation.counter === snapshot.generation.counter;
-    if (!current && now && readDiagnostics.hasSubscribers) readDiagnostics.publish({ identity: snapshot.identity, reason: "generation-mismatch", expected: snapshot.generation, actual: now.generation });
     return current;
   }
 
   /**
    * Account lookup for explicit sign-in/sign-out only. Reading the epoch is not
    * an authorization check and grants no cached data or call forwarding rights.
+   * This lookup is deliberately unfenced (including inside sign-out's lock);
+   * callers fence credential use/commit through current() and expected snapshots.
    */
   async credentialAccount(identity: string): Promise<string> {
-    const read = requireAvailable(await this.readBounded(identity, true));
+    const read = requireAvailable(await this.readBounded(identity, false));
     const snapshot = read.kind === "present" ? read.snapshot : await this.establish(identity);
     return mcpAuthorizationAccount(snapshot);
   }
 
   /** Fresh authorization/setup only; never called by a stale runtime's guard. */
   async establish(identity: string): Promise<McpAuthorizationGeneration> {
-    const current = await this.readBounded(identity, false);
+    const current = await this.readBounded(identity, true);
     if (current.kind === "present") return current.snapshot;
-    if (current.kind === "unavailable") requireAvailable(current);
     const key = this.path(identity);
     const existing = establishments.get(key);
     if (existing) return existing;
-    // Only this worker's first-use establishment can join its existing lock.
-    // A real mutation lock stays refused; unavailable reads never join a write.
-    requireAvailable(current);
-    const pending = this.write(identity, false);
+    // The unlocked probe is advisory. Missing/corrupt/unavailable observations
+    // enter one authoritative locked preflight, never a repair based on a guess.
+    // Only an existing same-worker establishment may join an observed lock.
+    if (current.kind === "locked") {
+      throw new McpAuthorizationError("updating", "MCP sign-in information is being updated. Try again after the Settings change finishes.");
+    }
+    const pending = this.write(identity, "establish");
     establishments.set(key, pending);
     try { return await pending; }
     finally { if (establishments.get(key) === pending) establishments.delete(key); }
@@ -221,20 +225,20 @@ export class McpAuthorizationRegistry {
 
   /** Revoke before returning success from a credential/configuration mutation. */
   bump(identity: string): Promise<McpAuthorizationGeneration> {
-    return this.write(identity, true);
+    return this.write(identity, "bump");
   }
 
   /** Hold all affected identities stale until a configuration mutation settles. */
   revoke<T>(identities: readonly string[], operation: (snapshots: ReadonlyMap<string, McpAuthorizationGeneration>) => Promise<T>, expected?: ReadonlyMap<string, McpAuthorizationGeneration>): Promise<T> {
-    return this.mutate(new Map(identities.map(identity => [identity, true])), operation, expected);
+    return this.mutate(new Map(identities.map(identity => [identity, "bump" as const])), operation, expected);
   }
 
-  private write(identity: string, increment: boolean): Promise<McpAuthorizationGeneration> {
-    return this.mutate(new Map([[identity, increment]]), async snapshots => snapshots.get(identity)!);
+  private write(identity: string, intent: "bump" | "establish"): Promise<McpAuthorizationGeneration> {
+    return this.mutate(new Map([[identity, intent]]), async snapshots => snapshots.get(identity)!);
   }
 
   /** Preflight the whole lock set before any write; never roll back revocation. */
-  private async mutate<T>(changes: ReadonlyMap<string, boolean>, operation: (snapshots: ReadonlyMap<string, McpAuthorizationGeneration>) => Promise<T>, expected?: ReadonlyMap<string, McpAuthorizationGeneration>): Promise<T> {
+  private async mutate<T>(changes: ReadonlyMap<string, "bump" | "establish">, operation: (snapshots: ReadonlyMap<string, McpAuthorizationGeneration>) => Promise<T>, expected?: ReadonlyMap<string, McpAuthorizationGeneration>): Promise<T> {
     const ordered = [...new Set([...changes.keys(), ...(expected?.keys() ?? [])])].sort();
     const snapshots = new Map<string, McpAuthorizationGeneration>();
     if (!ordered.length) return operation(snapshots);
@@ -252,7 +256,7 @@ export class McpAuthorizationRegistry {
       }
       const previous = new Map<string, McpAuthorizationGeneration | undefined>();
       for (const identity of ordered) {
-        const read = requireAvailable(await this.readBounded(identity, true));
+        const read = requireAvailable(await this.readBounded(identity, false));
         const snapshot = read.kind === "present" ? read.snapshot : undefined;
         const comparison = expected?.get(identity);
         if (comparison && (!snapshot || snapshot.generation.epoch !== comparison.generation.epoch || snapshot.generation.counter !== comparison.generation.counter)) {
@@ -262,15 +266,23 @@ export class McpAuthorizationRegistry {
       }
       for (const identity of ordered) {
         const before = previous.get(identity);
-        const next: McpAuthorizationGeneration = before && !changes.get(identity) ? before : {
+        const intent = changes.get(identity); // absent means a CAS-only guard
+        const rewrite = intent === "bump" || (intent === "establish" && before === undefined);
+        if (!rewrite) {
+          // CAS-only records can never be created, even if a future caller
+          // accidentally bypasses the expected-snapshot preflight above.
+          if (!before) throw new McpAuthorizationError("revoked", "MCP access changed before the mutation could be committed.");
+          snapshots.set(identity, before);
+          continue;
+        }
+        const next: McpAuthorizationGeneration = {
           identity,
           generation: before && before.generation.counter < Number.MAX_SAFE_INTEGER
             ? { epoch: before.generation.epoch, counter: before.generation.counter + 1 }
             : { epoch: randomUUID(), counter: 0 },
           updatedAt: Date.now(),
         };
-        // CAS-only guards and established non-mutating reads keep exact bytes.
-        if (next !== before) await this.persist(next);
+        await this.persist(next);
         snapshots.set(identity, next);
       }
       // A write failure leaves earlier advances intact but never reaches this

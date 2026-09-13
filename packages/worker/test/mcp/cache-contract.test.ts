@@ -4,7 +4,6 @@ import type { AddressInfo } from "node:net";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import * as fs from "node:fs/promises";
-import { channel } from "node:diagnostics_channel";
 import { pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -334,78 +333,70 @@ describe("pinned MCP cache contract over HTTP", () => {
     const connection = await manager.connect("guarded", { url: f.url, auth: false, protocolVersion: "legacy" });
     expect((await connection.client.listTools()).tools.map(value => value.name)).toEqual(["retained"]);
     const before = f.requests.length;
-    const diagnostics: Array<{ identity?: string; reason?: string; phase?: string; elapsedMs?: number }> = [];
-    const observed = channel("mcp.authorization.read");
-    const record = (value: unknown) => {
-      const entry = value as typeof diagnostics[number];
-      if (entry.identity === snapshot.identity) diagnostics.push(entry);
-    };
-    observed.subscribe(record);
     const refuseBoth = () => Promise.all([
       expect(connection.client.listTools()).rejects.toThrow("Synthetic authorization refusal"),
       expect(connection.client.callTool({ name: "retained", arguments: {} })).rejects.toThrow("Synthetic authorization refusal"),
     ]);
-    try {
-      if (cause === "deadline") {
-        // Delay actual filesystem opens, not registry.current or its result.
-        // Both operations must reach that gate before advancing the real 100ms
-        // deadline on a controlled clock. No sleep, load generator or retry.
-        const entered = Promise.withResolvers<void>();
-        const release = Promise.withResolvers<void>();
-        const drained = Promise.withResolvers<void>();
-        let opens = 0, closes = 0;
-        const open = fs.open;
-        const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-          const delayed = args[0] === join(registry.directory, `${snapshot.identity}.json`) && args[1] === "r";
-          if (delayed) { if (++opens === 2) entered.resolve(); await release.promise; }
-          const handle = await open(...args);
-          if (delayed) {
-            const close = handle.close.bind(handle);
-            vi.spyOn(handle, "close").mockImplementation(async () => {
-              try { await close(); } finally { if (++closes === 2) drained.resolve(); }
-            });
-          }
-          return handle;
-        });
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-        try {
-          const refused = refuseBoth();
-          await entered.promise;
-          await vi.advanceTimersByTimeAsync(101);
-          await refused;
-          expect(diagnostics.filter(value => value.reason === "deadline")).toHaveLength(2);
-          expect(diagnostics.filter(value => value.reason === "deadline").every(value => value.phase === "open" && value.elapsedMs! >= 100)).toBe(true);
-        } finally {
-          release.resolve(); spy.mockRestore();
-          try { await drained.promise; } finally { vi.useRealTimers(); }
+    if (cause === "deadline") {
+      // Delay actual filesystem opens, not registry.current or its result.
+      // Both operations must reach that gate before advancing the real 100ms
+      // deadline on a controlled clock. No sleep, load generator or retry.
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const drained = Promise.withResolvers<void>();
+      let opens = 0, closes = 0;
+      const open = fs.open;
+      const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const delayed = args[0] === join(registry.directory, `${snapshot.identity}.json`) && args[1] === "r";
+        if (delayed) {
+          if (++opens === 2) entered.resolve();
+          await release.promise;
         }
-        // A refused read did not change credentials or generations. This is
-        // a registry observation only, never a retry with captured credentials.
-        expect(await registry.read(snapshot.identity)).toEqual(snapshot);
-        expect(await registry.current(snapshot)).toBe(true);
-        expect(diagnostics.some(value => value.reason === "generation-mismatch")).toBe(false);
-      } else if (cause === "held-revocation") {
-        await registry.revoke([snapshot.identity], async () => {
-          await refuseBoth();
-          expect(diagnostics.filter(value => value.reason === "locked-before")).toHaveLength(2);
-          expect(diagnostics.some(value => value.reason === "generation-mismatch")).toBe(false);
-        });
-        expect(await registry.current(snapshot)).toBe(false);
-        expect(diagnostics.some(value => value.reason === "generation-mismatch")).toBe(true);
-      } else {
-        if (cause === "counter") await registry.bump(snapshot.identity);
-        else {
-          await fs.writeFile(join(registry.directory, `${snapshot.identity}.json`), "{torn");
-          const repaired = await registry.establish(snapshot.identity);
-          expect(repaired.generation.epoch).not.toBe(snapshot.generation.epoch);
+        const handle = await open(...args);
+        if (delayed) {
+          const close = handle.close.bind(handle);
+          vi.spyOn(handle, "close").mockImplementation(async () => {
+            try { await close(); } finally { if (++closes === 2) drained.resolve(); }
+          });
         }
-        diagnostics.length = 0;
-        await refuseBoth();
-        expect(diagnostics.filter(value => value.reason === "generation-mismatch")).toHaveLength(2);
-        expect(diagnostics.some(value => value.reason === "deadline")).toBe(false);
+        return handle;
+      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const refused = refuseBoth();
+        await entered.promise;
+        await vi.advanceTimersByTimeAsync(101);
+        await refused;
+        expect(opens).toBe(2);
+        expect(closes).toBe(0); // both filesystem observations are still pending
+      } finally {
+        release.resolve();
+        spy.mockRestore();
+        try { await drained.promise; } finally { vi.useRealTimers(); }
       }
-      expect(f.requests).toHaveLength(before); // neither cached data nor a wire call escaped
-    } finally { observed.unsubscribe(record); }
+      // A refused read did not change credentials or generations. This is
+      // a registry observation only, never a retry with captured credentials.
+      expect(await registry.read(snapshot.identity)).toEqual(snapshot);
+      expect(await registry.current(snapshot)).toBe(true);
+    } else if (cause === "held-revocation") {
+      await registry.revoke([snapshot.identity], async () => {
+        await refuseBoth();
+        expect(await registry.read(snapshot.identity)).toBeUndefined();
+      });
+      expect(await registry.current(snapshot)).toBe(false);
+      expect((await registry.read(snapshot.identity))?.generation).toEqual({ ...snapshot.generation, counter: snapshot.generation.counter + 1 });
+    } else {
+      if (cause === "counter") await registry.bump(snapshot.identity);
+      else {
+        await fs.writeFile(join(registry.directory, `${snapshot.identity}.json`), "{torn");
+        const repaired = await registry.establish(snapshot.identity);
+        expect(repaired.generation.epoch).not.toBe(snapshot.generation.epoch);
+      }
+      await refuseBoth();
+      expect(await registry.current(snapshot)).toBe(false);
+      expect((await registry.read(snapshot.identity))?.generation).not.toEqual(snapshot.generation);
+    }
+    expect(f.requests).toHaveLength(before); // neither cached data nor a wire call escaped
   });
 
   it("reports unavailable registry account lookup without migration or server contact", async () => {

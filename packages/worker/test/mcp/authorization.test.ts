@@ -190,6 +190,122 @@ describe("MCP authorization identities and durable generations", () => {
     expect(await registry.current(repaired)).toBe(true);
   });
 
+  it("joins a pending same-worker establishment after actually observing its held lock", async () => {
+    const registry = new McpAuthorizationRegistry(root);
+    const id = await mcpAuthorizationIdentity("global", root, server);
+    const path = join(registry.directory, `${id}.json`);
+    const entered = Promise.withResolvers<void>();
+    const observed = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const open = fs.open;
+    const lstat = fs.lstat;
+    let watching = false;
+    let held = false;
+    const locks = vi.spyOn(lockfile, "lock");
+    const probe = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      const result = await lstat(...args);
+      if (watching && args[0] === `${path}.lock`) observed.resolve();
+      return result;
+    });
+    const gate = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      if (args[0] === path && args[1] === "r" && !held && await lstat(`${path}.lock`).then(() => true, () => false)) {
+        held = true;
+        entered.resolve();
+        await release.promise;
+      }
+      return open(...args);
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const pending: Array<ReturnType<McpAuthorizationRegistry["establish"]>> = [];
+    try {
+      const first = registry.establish(id);
+      pending.push(first);
+      await entered.promise;
+      watching = true;
+      const second = new McpAuthorizationRegistry(root).establish(id);
+      pending.push(second);
+      await observed.promise;
+      release.resolve();
+      const [a, b] = await Promise.all([first, second]);
+      expect(b).toEqual(a);
+      expect(locks).toHaveBeenCalledTimes(1);
+      expect(await registry.current(a)).toBe(true);
+    } finally {
+      release.resolve();
+      await Promise.allSettled(pending);
+      gate.mockRestore();
+      probe.mockRestore();
+      locks.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["complete", "EIO", "deadline"] as const)("preserves a valid generation across partial filesystem chunks (%s)", async fault => {
+    const registry = new McpAuthorizationRegistry(root);
+    const snapshot = await registry.establish(await mcpAuthorizationIdentity("global", root, server));
+    const path = join(registry.directory, `${snapshot.identity}.json`);
+    const before = await readFile(path, "utf8");
+    const entered = Array.from({ length: 2 }, () => Promise.withResolvers<void>());
+    const release = Promise.withResolvers<void>();
+    const drained: Promise<void>[] = [];
+    const positions: number[][] = [];
+    const open = fs.open;
+    const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (args[0] !== path || args[1] !== "r") return handle;
+      const index = positions.length;
+      const observed: number[] = [];
+      positions.push(observed);
+      const closed = Promise.withResolvers<void>();
+      drained.push(closed.promise);
+      const read = handle.read.bind(handle);
+      const close = handle.close.bind(handle);
+      const partial = async (buffer: Buffer, offset: number, length: number, position: number) => {
+        observed.push(position);
+        if (observed.length === 2 && fault === "EIO") throw Object.assign(new Error("synthetic partial read failure"), { code: "EIO" });
+        if (observed.length === 2 && fault === "deadline") {
+          entered[index]!.resolve();
+          await release.promise;
+        }
+        return read(buffer, offset, Math.min(length, 11), position);
+      };
+      vi.spyOn(handle, "read").mockImplementation(partial as typeof handle.read);
+      vi.spyOn(handle, "close").mockImplementation(async () => {
+        try { await close(); } finally { closed.resolve(); }
+      });
+      return handle;
+    });
+    if (fault === "deadline") vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let result: typeof snapshot | undefined;
+    let error: unknown;
+    try {
+      const outcome = registry.establish(snapshot.identity).then(value => { result = value; }, value => { error = value; });
+      if (fault === "deadline") for (const signal of entered) {
+        if (!await Promise.race([signal.promise.then(() => true), outcome.then(() => false)])) break;
+        await vi.advanceTimersByTimeAsync(101);
+      }
+      await outcome;
+    } finally {
+      release.resolve();
+      spy.mockRestore();
+      try { await Promise.all(drained); } finally { vi.useRealTimers(); }
+    }
+    expect(await readFile(path, "utf8")).toBe(before);
+    if (fault === "complete") {
+      expect(result).toEqual(snapshot);
+      expect(error).toBeUndefined();
+      expect(positions).toHaveLength(1);
+      expect(positions[0]!.slice(0, 3)).toEqual([0, 11, 22]);
+      expect(positions[0]!.at(-1)).toBe(Buffer.byteLength(before)); // EOF, not a short-prefix guess
+    } else {
+      expect(error).toMatchObject({ code: "MCP_AUTHORIZATION_UNAVAILABLE" });
+      expect(result).toBeUndefined();
+      expect(positions).toHaveLength(2); // advisory observation, then locked authority
+      expect(positions.every(value => value.length === 2)).toBe(true);
+    }
+    expect(await registry.current(snapshot)).toBe(true);
+  });
+
   it.each(["establish", "establish-first-read", "bump", "cas", "credential-account"] as const)("preserves an existing record when %s reads are unavailable", async operation => {
     const registry = new McpAuthorizationRegistry(root);
     const snapshot = await registry.establish(await mcpAuthorizationIdentity("global", root, server));
@@ -208,12 +324,19 @@ describe("MCP authorization identities and durable generations", () => {
       : operation === "cas" ? registry.revoke([snapshot.identity], save, new Map([[snapshot.identity, snapshot]]))
       : operation === "credential-account" ? registry.credentialAccount(snapshot.identity)
       : registry.establish(snapshot.identity);
+    let result: unknown;
     let error: unknown;
-    try { await execute().catch(value => { error = value; }); }
+    try { result = await execute().catch(value => { error = value; }); }
     finally { spy.mockRestore(); }
     expect(await readFile(path, "utf8")).toBe(before);
-    expect(error).toMatchObject({ code: "MCP_AUTHORIZATION_UNAVAILABLE", reason: "unavailable" });
-    expect(String(error)).not.toContain("private-path-and-credential-sentinel");
+    if (operation === "establish-first-read") {
+      expect(result).toEqual(snapshot);
+      expect(error).toBeUndefined();
+      expect(reads).toBe(2); // advisory fault followed by one healthy locked preflight
+    } else {
+      expect(error).toMatchObject({ code: "MCP_AUTHORIZATION_UNAVAILABLE", reason: "unavailable" });
+      expect(String(error)).not.toContain("private-path-and-credential-sentinel");
+    }
     expect(save).not.toHaveBeenCalled();
     expect(await registry.current(snapshot)).toBe(true);
   });
@@ -245,7 +368,7 @@ describe("MCP authorization identities and durable generations", () => {
         return handle;
       } catch (error) { closed.resolve(); throw error; }
     });
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const execute = () => operation === "bump" ? registry.bump(snapshot.identity)
       : operation === "cas" ? registry.revoke([snapshot.identity], save, new Map([[snapshot.identity, snapshot]]))
       : operation === "credential-account" ? registry.credentialAccount(snapshot.identity)
@@ -254,8 +377,8 @@ describe("MCP authorization identities and durable generations", () => {
     try {
       const outcome = execute().catch(value => { error = value; });
       // Advance only after each real filesystem operation reaches its gate.
-      // Old code proceeds to another unavailable read under the write lock;
-      // corrected code refuses on the first one without acquiring that lock.
+      // Establishment has an advisory probe and one locked preflight; other
+      // paths have one authoritative read. Neither may repair an unknown record.
       for (const signal of entered) {
         if (!await Promise.race([signal.promise.then(() => true), outcome.then(() => false)])) break;
         await vi.advanceTimersByTimeAsync(101);
@@ -322,8 +445,17 @@ describe("MCP authorization identities and durable generations", () => {
       }
       return handle;
     });
-    try { await expect(registry.establish(snapshot.identity)).rejects.toMatchObject({ code: "MCP_AUTHORIZATION_UNAVAILABLE" }); }
-    finally { lockSpy.mockRestore(); openSpy.mockRestore(); }
+    try {
+      // The public guard always refuses this observation. Establishment may
+      // safely fall through to a healthy locked preflight for lock-probe faults.
+      expect(await registry.current(snapshot)).toBe(false);
+      probes = 0;
+      if (phase === "lock-before" || phase === "lock-after") {
+        expect(await registry.establish(snapshot.identity)).toEqual(snapshot);
+      } else {
+        await expect(registry.establish(snapshot.identity)).rejects.toMatchObject({ code: "MCP_AUTHORIZATION_UNAVAILABLE" });
+      }
+    } finally { lockSpy.mockRestore(); openSpy.mockRestore(); }
     expect(await readFile(path, "utf8")).toBe(before);
     expect(await registry.current(snapshot)).toBe(true);
   });
@@ -441,6 +573,41 @@ describe("MCP authorization identities and durable generations", () => {
     expect(await f.registry.current(f.snapshots[1]!)).toBe(true);
     expect(save).not.toHaveBeenCalled();
     expect((await fs.readdir(f.registry.directory)).some(name => name.endsWith(".tmp"))).toBe(false);
+    await f.expectReleased();
+  });
+
+  it.each(["success", "callback", "write"] as const)("attempts every release and preserves the proper error after %s", async outcome => {
+    const f = await transactionFixture();
+    const releaseFailure = new Error("synthetic release failure");
+    const operationFailure = new Error("synthetic operation failure");
+    const attempted: string[] = [];
+    const lock = lockfile.lock;
+    const locks = vi.spyOn(lockfile, "lock").mockImplementation(async (...args) => {
+      const release = await lock(...args);
+      return async () => {
+        attempted.push(args[0]);
+        await release();
+        if (args[0] === f.paths[1]) throw releaseFailure;
+      };
+    });
+    const rename = fs.rename;
+    const writes = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+      if (outcome === "write" && args[1] === f.paths[1]) throw operationFailure;
+      return rename(...args);
+    });
+    const save = vi.fn(async () => {
+      if (outcome === "callback") throw operationFailure;
+    });
+    try {
+      await expect(f.registry.revoke(f.ids, save)).rejects.toBe(outcome === "success" ? releaseFailure : operationFailure);
+    } finally {
+      locks.mockRestore();
+      writes.mockRestore();
+    }
+    expect(attempted).toEqual(f.paths.toReversed());
+    expect(save).toHaveBeenCalledTimes(outcome === "write" ? 0 : 1);
+    expect(await f.registry.current(f.snapshots[0]!)).toBe(false);
+    expect(await f.registry.current(f.snapshots[1]!)).toBe(outcome === "write");
     await f.expectReleased();
   });
 
