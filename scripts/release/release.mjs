@@ -320,10 +320,14 @@ export function preflight({ exec = systemExec, repoRoot, version, source, allowR
     // main, so the source it was told to verify is legitimately behind, and
     // every stage that is left only reads the remote. The tag must exist, it
     // must descend from this source, and remote main must still carry it.
-    const resumingPublished = allowRemoteAhead && Boolean(tagSha) &&
-      isAncestor(exec, root, exactSource, tagSha) &&
-      isAncestor(exec, root, tagSha, main);
-    if (!resumingPublished) {
+    // Before the tag, a resume is also legitimate: the candidate this run
+    // pushed is a version-only child of the source, so the source is behind
+    // remote main by exactly that commit. `--resume` says so, and the journal
+    // stage then demands that remote main *is* the candidate.
+    const sourceInMain = allowRemoteAhead && isAncestor(exec, root, exactSource, main);
+    const resuming = sourceInMain && (!tagSha ||
+      (isAncestor(exec, root, exactSource, tagSha) && isAncestor(exec, root, tagSha, main)));
+    if (!resuming) {
       const hint = tagSha && isAncestor(exec, root, exactSource, tagSha)
         ? ` Tag ${tag} already exists at ${tagSha}: a release that has pushed its tag is continued with --publish --resume.`
         : "";

@@ -59,7 +59,7 @@ recorded. Which history the resume accepts depends on whether the tag exists:
 
 | | Reviewed source vs remote `main` | Remote `main` vs candidate |
 | --- | --- | --- |
-| Before the tag | must be a fast-forward — a source behind `main` is unreviewed history and is refused | must be exactly the candidate |
+| Before the tag | must be a fast-forward — a source behind `main` is unreviewed history and is refused; on `--resume` the source may be behind `main` by the run's own candidate | must be exactly the candidate |
 | After `tag-pushed` | the source may be behind `main`, but only when the release's own tag exists, descends from that source, and is still contained in `main` | must be the candidate **or** a commit that contains it |
 
 That is the ordering a real release produces: its own candidate becomes remote

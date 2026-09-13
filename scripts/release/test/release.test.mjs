@@ -766,9 +766,16 @@ function ancestryExec({ main, tagObject = null, tagCommit = null, ancestry = [] 
 test("the pre-push fast-forward check still refuses a source behind remote main", () => {
   const candidate = "e".repeat(40);
   const ahead = { main: MAIN, ancestry: [[SHA, MAIN]] };
-  // No tag yet: this is an unreleased source behind remote main, refused even
-  // on a resume — nothing has been published that could excuse it.
-  assert.throws(() => preflight({ exec: ancestryExec(ahead), repoRoot: "/fixture", version: "0.3.8", source: SHA, allowRemoteAhead: true }),
+  // No tag yet and no resume: an unreleased source behind remote main is
+  // refused — nothing has been published that could excuse it.
+  assert.throws(() => preflight({ exec: ancestryExec(ahead), repoRoot: "/fixture", version: "0.3.8", source: SHA }),
+    /is not a fast-forward of remote main/);
+  // A resume before the tag is legitimate: the run's own candidate (a
+  // version-only child of the source) is what moved remote main. The journal
+  // stage check then demands that main is exactly that candidate.
+  assert.equal(preflight({ exec: ancestryExec(ahead), repoRoot: "/fixture", version: "0.3.8", source: SHA, allowRemoteAhead: true }).frozenRemoteMain, MAIN);
+  // A resume of a source remote main does not contain at all stays refused.
+  assert.throws(() => preflight({ exec: ancestryExec({ main: MAIN, ancestry: [] }), repoRoot: "/fixture", version: "0.3.8", source: SHA, allowRemoteAhead: true }),
     /is not a fast-forward of remote main/);
   // A tag that does not descend from this source proves nothing about it.
   assert.throws(() => preflight({
