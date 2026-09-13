@@ -4,7 +4,11 @@
  * fullscreen overlay and a dock island — with a composition chosen by the
  * measured size of whichever box holds it.
  */
-export { AgentMap, type AgentMapProps } from "./AgentMap.js";
+// The map itself is not re-exported on purpose (M16-T31): it imports React
+// Flow's stylesheet, so a barrel re-export would pull the canvas back into
+// whatever chunk imports this file. `AgentMapConnected` is the way in; the map
+// loads behind its loader.
+export type { AgentMapProps } from "./AgentMap.js";
 export { AgentMapConnected, AgentMapView, useMapRoot, type AgentMapConnectedProps } from "./AgentMapView.js";
 export { AgentMapFullscreen } from "./AgentMapFullscreen.js";
 export { MapHostProvider, useMapHost, type MapHost } from "./map-context.js";

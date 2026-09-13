@@ -17,7 +17,30 @@ export default defineConfig({
   optimizeDeps: { include: ["remark-gfm"] },
   // The host (and, per the architecture, the relay) serves dist verbatim, so a
   // sourcemap comment would publish the whole unminified source.
-  build: { outDir: "dist", sourcemap: false },
+  build: {
+    outDir: "dist",
+    sourcemap: false,
+    rollupOptions: {
+      treeshake: {
+        /**
+         * `@lasercode/protocol` is one barrel, so importing any of it reaches
+         * every module it re-exports, and Rollup keeps an unused module when it
+         * cannot prove the module does nothing on import. Two of them do a lot:
+         * the instruction-template vocabulary pulls a template engine and its
+         * source-map dependency (275 KiB), and the wire schemas pull the schema
+         * library (160 KiB) — neither of which a conversation runs.
+         *
+         * The package is a pure library: types, constants and functions, no
+         * registration, no global state, nothing to run at import. Saying so
+         * lets each of its modules follow the code that actually calls it —
+         * into the agents editors, into the file explorer's chunk — instead of
+         * riding the barrel into the first paint. Anything that genuinely must
+         * run on import does not belong in the protocol package.
+         */
+        moduleSideEffects: (id) => !/[/\\]protocol[/\\]dist[/\\][^/\\]+\.js$/.test(id),
+      },
+    },
+  },
   server: {
     port: 5173,
     strictPort: true,
