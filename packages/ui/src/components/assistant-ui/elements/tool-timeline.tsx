@@ -96,8 +96,8 @@ export function toolTimelineKey(messages: readonly MessageLike[]): string {
   for (const message of messages) {
     for (const part of message.parts) {
       if (part.type !== "tool-call") continue;
-      const p = part as ToolPart & { argsText?: string };
-      parts.push(`${p.toolCallId}:${p.status.type}:${p.status.type === "incomplete" ? p.status.reason : ""}:${p.isError === true ? 1 : 0}:${p.argsText?.length ?? 0}`);
+      const p = part as ToolPart & { argsText?: string; result?: unknown };
+      parts.push(`${p.toolCallId}:${p.status.type}:${p.status.type === "incomplete" ? p.status.reason : ""}:${p.isError === true ? 1 : 0}:${p.argsText?.length ?? 0}:${p.result === undefined ? 0 : 1}`);
     }
   }
   return parts.join("|");
