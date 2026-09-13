@@ -38,6 +38,7 @@ import { FeaturesScreen } from "./FeaturesScreen.js";
 import { SettingsForm } from "./SettingsForm.js";
 import { TrustTab } from "./TrustTab.js";
 import { EnvironmentTab } from "./EnvironmentTab.js";
+import { LogStoreSetting } from "./LogStoreSetting.js";
 import { UsageTab } from "./UsageTab.js";
 
 type Tab = "general" | "advanced" | "appearance" | "features" | "mcp" | "models" | "usage" | "keyboard" | "environment" | "trust" | "device";
@@ -257,14 +258,23 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
 }
 
 /**
- * Settings that belong to this browser rather than to a project: notifications,
- * and the way back into first-run setup.
+ * Settings that belong to this installation rather than to a project:
+ * notifications for this browser, the disk the log store is taking on the
+ * machine running the host, and the way back into first-run setup.
+ *
+ * The log store is the one thing here that is not per browser — it lives on
+ * the computer running {PRODUCT_NAME}, which a phone is connected to rather
+ * than running. It is here because it is the only project-independent,
+ * laser-owned settings surface the app has: Advanced is the engine's own
+ * settings, per project and per scope, and a store that belongs to the whole
+ * machine has no row there. Its copy names the computer for that reason.
  */
 export function DeviceTab() {
   return (
     <ScrollArea className="h-full">
       <div className="mx-auto flex max-w-160 flex-col gap-6 px-6 py-6">
         <NotificationsSetting />
+        <LogStoreSetting />
         <RunSetupAgain />
       </div>
     </ScrollArea>

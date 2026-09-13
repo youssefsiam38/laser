@@ -406,10 +406,17 @@ function formatSize(bytes: number): string {
 }
 
 function StatsLine({ stats }: { stats: LogStats }) {
+  const { retention } = stats;
   return (
     <p className="font-mono text-xs leading-4 text-ink-3">
       {stats.total.toLocaleString()} rows · {formatSize(stats.bytes)} · keeps{" "}
-      {stats.retention.maxRows.toLocaleString()} rows or {stats.retention.maxAgeDays} days, whichever comes first
+      {retention.maxRows.toLocaleString()} rows or {retention.maxAgeDays} days, whichever comes first
+      {/* The bodies have their own policy (D-245) and they are almost all of
+          the size above, so a line about what the store keeps says both. */}
+      {retention.retainedBodyBytes !== undefined && retention.bodyBudgetBytes !== undefined
+        ? ` · request bodies ${formatSize(retention.retainedBodyBytes)} of ${formatSize(retention.bodyBudgetBytes)}`
+        : ""}
+      {retention.bodiesPerSession !== undefined ? `, newest ${retention.bodiesPerSession} per session` : ""}
       {stats.oldestAt ? ` · oldest ${new Date(stats.oldestAt).toLocaleString()}` : ""}
     </p>
   );
