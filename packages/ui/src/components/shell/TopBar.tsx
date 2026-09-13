@@ -26,7 +26,6 @@ import { ContextRingButton } from "@/components/assistant-ui/elements/context-di
 // Beam: the quiet mark on one of its sessions (view styling, not an entry point).
 import { BeamSessionMark } from "@/components/beam/BeamSessionMark";
 import { StatusDot } from "@/components/status";
-import { preserveReadingPosition } from "@/components/thread/preserve-reading-position";
 import { openConversationFind } from "@/components/thread/search-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -364,8 +363,10 @@ export function TopBar() {
               value={activityLevel}
               onValueChange={(level) => {
                 if (!view || level === activityLevel) return;
-                const viewport = document.querySelector<HTMLElement>('[data-slot="thread-viewport"]');
-                if (viewport) preserveReadingPosition(viewport);
+                // The transcript's own controller holds the visible content
+                // through the change: detail level is part of its layout
+                // signature, so the anchor it already captured is restored on
+                // the measured frame after React commits the new rows.
                 setActivityDetailLevel(view.path, level as ActivityDetailLevel);
               }}
             >

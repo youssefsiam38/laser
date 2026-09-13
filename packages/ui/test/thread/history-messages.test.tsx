@@ -3,7 +3,9 @@ import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { AssistantRuntimeProvider, useExternalStoreRuntime, type ThreadMessageLike } from "@assistant-ui/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { HistoryMessages } from "../../src/components/thread/Thread.js";
+import { WindowedMessages, TranscriptViewportProvider } from "../../src/components/thread/transcript-viewport.js";
+import { createStateStore, LaserStoreProvider } from "../../src/runtime/LaserProvider.js";
+import { initialState } from "../../src/store.js";
 
 // Isolate row rendering, not the message-id provider/runtime boundary under test.
 // Local disclosure state must remain with its message when earlier rows arrive.
@@ -20,17 +22,19 @@ let root: Root;
 let container: HTMLDivElement;
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
-  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  container = document.createElement("div"); container.style.fontSize = "14px"; container.style.lineHeight = "21px";
+  document.body.append(container); root = createRoot(container);
 });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
 
 it("keeps focus and a manual disclosure on the same message across an asynchronous prepend", async () => {
   let prepend!: () => void;
+  const store = createStateStore({ ...initialState, current: "/history" });
   function Fixture() {
     const [messages, setMessages] = useState<ThreadMessageLike[]>([{ id: "tail", role: "assistant", content: "Tail message" }]);
     prepend = () => setMessages(previous => [{ id: "older", role: "user", content: "Earlier message" }, ...previous]);
     const runtime = useExternalStoreRuntime({ messages, convertMessage: (message: ThreadMessageLike) => message, isRunning: false, onNew: async () => {} });
-    return <AssistantRuntimeProvider runtime={runtime}><HistoryMessages /></AssistantRuntimeProvider>;
+    return <LaserStoreProvider store={store}><AssistantRuntimeProvider runtime={runtime}><TranscriptViewportProvider><WindowedMessages /></TranscriptViewportProvider></AssistantRuntimeProvider></LaserStoreProvider>;
   }
   await act(async () => root.render(<Fixture />));
   const tail = container.querySelector<HTMLButtonElement>('[aria-label="tail details"]')!;

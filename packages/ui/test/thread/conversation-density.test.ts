@@ -14,9 +14,8 @@ describe("compact conversation density", () => {
   });
 
   it("tightens message and prompt spacing without shrinking controls", () => {
-    const thread = source("components/thread/Thread.tsx");
+    // Mounted-row spacing is measured with the real stylesheet in transcript-window.mjs.
     const pair = source("components/assistant-ui/elements/message-pair.tsx");
-    expect(thread).toContain('data-slot="thread-messages" className="flex flex-col gap-5 pt-5 pb-5 empty:hidden"');
     expect(pair).toContain("gap-1.5 rounded-xl bg-surface-2 px-3 py-2 text-base");
     expect(pair).toContain('className={cn("-ms-1.5 mt-1 flex h-7');
   });

@@ -528,20 +528,47 @@ export function historyRows(entries: readonly unknown[]): HistoryRow[] {
   // A label entry itself is a tree node, so it must not count as a fork point.
   for (const e of raw) if (e.type === "label") children.set(e.parentId ?? null, (children.get(e.parentId ?? null) ?? 1) - 1);
 
+  // Cost of each ancestor, including its own fork. Resolve each chain once,
+  // iteratively: loaded pages need not be parent-first, and can be very deep.
+  const depths = new Map<string, number>();
+  const fork = (id: string) => (children.get(id) ?? 0) > 1 ? 1 : 0;
   const depthOf = (e: RawEntry): number => {
-    let d = 0;
-    let p = e.parentId ?? null;
-    while (p) {
-      if ((children.get(p) ?? 0) > 1) d++;
+    const start = e.parentId;
+    if (!start) return 0;
+    const trail: string[] = [];
+    const visiting = new Map<string, number>();
+    let p: string | null = start;
+    while (p && !depths.has(p)) {
+      const cycle = visiting.get(p);
+      if (cycle !== undefined) {
+        // Malformed cycles count their distinct forks once. Every member gets
+        // the same cost, independent of which row first reaches the cycle.
+        const cost = trail.slice(cycle).reduce((sum, id) => sum + fork(id), 0);
+        for (let i = cycle; i < trail.length; i++) depths.set(trail[i]!, cost);
+        trail.length = cycle;
+        break;
+      }
+      visiting.set(p, trail.length);
+      trail.push(p);
       p = byId.get(p)?.parentId ?? null;
     }
-    return d;
+    for (let i = trail.length - 1; i >= 0; i--) {
+      const id = trail[i]!, parent = byId.get(id)?.parentId;
+      depths.set(id, fork(id) + (parent ? depths.get(parent) ?? 0 : 0));
+    }
+    return depths.get(start)!;
   };
 
   const rows: HistoryRow[] = [];
   let lastAssistant: HistoryRow | undefined;
   for (const e of raw) {
-    if (!e.id) continue;
+    if (!e.id || e.type === "label" || (e.type === "custom_message" && e.display === false)) continue;
+    if (e.type === "message" && e.message?.role === "toolResult") {
+      // Results fold into the last assistant, even across intervening entries.
+      const label = labels.get(e.id);
+      if (lastAssistant && label) lastAssistant.label = label;
+      continue;
+    }
     const base = {
       id: e.id,
       parentId: e.parentId ?? null,
@@ -567,10 +594,6 @@ export function historyRows(entries: readonly unknown[]): HistoryRow[] {
           canJump: true,
         };
         lastAssistant = row;
-      } else if (m.role === "toolResult") {
-        // Folded into the calling assistant row (a label on the result still surfaces).
-        if (lastAssistant && base.label) lastAssistant.label = base.label;
-        continue;
       } else if (m.role === "custom" || m.role === "bashExecution") {
         row = { ...base, kind: "custom", text: textOf(m.content), canFork: true, canJump: true };
       } else {
@@ -581,7 +604,6 @@ export function historyRows(entries: readonly unknown[]): HistoryRow[] {
     } else if (e.type === "branch_summary") {
       row = { ...base, kind: "branch", text: e.summary ?? "Branch summary", canFork: false, canJump: true };
     } else if (e.type === "custom_message") {
-      if (e.display === false) continue;
       row = { ...base, kind: "custom", text: textOf(e.content), canFork: false, canJump: true };
     } else if (e.type === "session_info") {
       row = { ...base, kind: "name", text: e.name ?? "", canFork: false, canJump: false };

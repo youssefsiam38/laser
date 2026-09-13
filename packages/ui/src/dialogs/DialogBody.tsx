@@ -1,17 +1,19 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useSyncExternalStore, type KeyboardEvent } from "react";
 import { useLogicalArrowKeys } from "@/hooks/use-direction";
 
 import { ApprovalCard } from "@/components/assistant-ui/elements/approval-card";
 import { ElicitationForm, type FieldValues } from "@/components/assistant-ui/elements/elicitation-form";
 import { PermissionGrant } from "@/components/assistant-ui/elements/permission-grant";
-import { useCountdown } from "@/components/thread/timing";
+import { useTick } from "@/components/thread/timing";
+import { QuestionPresentation } from "@/runtime/transcript-presentation";
 import { Kbd } from "@/components/ui/kbd";
 import { modKey } from "@/format";
 import { cn } from "@/lib/utils";
-import { blockingWords, isModeChangingOption, type DialogField, type DialogForm } from "./model.js";
+import { blockingWords, isModeChangingOption, type DialogForm } from "./model.js";
 
 export interface DialogBodyProps {
   form: DialogForm;
+  presentation?: QuestionPresentation | undefined;
   /** Answer with values keyed by field id, or cancel with `undefined`. */
   onAnswer(values: Record<string, string | boolean> | undefined): Promise<unknown>;
   /** Free-standing card vs. inside another surface. */
@@ -42,13 +44,17 @@ export interface DialogBodyProps {
  * `ElicitationForm`. Keyboard-first: Enter submits a one-line field,
  * ⌘/Ctrl+Enter a long one, Esc cancels, arrows move between choices.
  */
-export function DialogBody({ form, onAnswer, variant = "card", touch = false, initialDeclining = false, autoFocus = true, className }: DialogBodyProps) {
+export function DialogBody({ form, presentation, onAnswer, variant = "card", touch = false, initialDeclining = false, autoFocus = true, className }: DialogBodyProps) {
   const logicalKey = useLogicalArrowKeys();
   const id = useId();
-  const [values, setValues] = useState<FieldValues>(() => defaults(form.fields));
-  const [declining, setDeclining] = useState(initialDeclining);
-  const [busy, setBusy] = useState(false);
-  const secondsLeft = useCountdown(form.timeoutMs);
+  // Standalone approvals keep a local owner; canonical extension questions pass theirs.
+  const local = useMemo(() => new QuestionPresentation(form, initialDeclining), [form.id]);
+  const owner = presentation ?? local;
+  const { values, declining, busy } = useSyncExternalStore(owner.subscribe, owner.getSnapshot, owner.getSnapshot);
+  const setDeclining = owner.setDeclining;
+  useTick(owner.deadline !== undefined, 1000);
+  const secondsLeft = owner.deadline === undefined ? undefined : Math.max(0, Math.ceil((owner.deadline - Date.now()) / 1000));
+  useEffect(() => { if (initialDeclining) owner.setDeclining(true); }, [owner, initialDeclining]);
   const rootRef = useRef<HTMLDivElement>(null);
 
   const rejectionField = form.rejection ? form.fields.find((f) => f.id === form.rejection?.field) : undefined;
@@ -57,14 +63,14 @@ export function DialogBody({ form, onAnswer, variant = "card", touch = false, in
   const onlyConfirm = single?.type === "confirm";
 
   useEffect(() => {
-    if (!autoFocus) return;
+    if (!autoFocus || !owner.claimInitialFocus()) return;
     rootRef.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus({ preventScroll: true });
-  }, [autoFocus]);
+  }, [autoFocus, owner]);
 
   useEffect(() => {
-    if (!declining) return;
+    if (!declining || !owner.claimDeclineFocus()) return;
     rootRef.current?.querySelector<HTMLElement>("[data-rejection]")?.focus({ preventScroll: true });
-  }, [declining]);
+  }, [declining, owner]);
 
   const submit = async (override?: FieldValues): Promise<void> => {
     const next = { ...values, ...override };
@@ -74,12 +80,7 @@ export function DialogBody({ form, onAnswer, variant = "card", touch = false, in
         return;
       }
     }
-    setBusy(true);
-    try {
-      await onAnswer(next);
-    } finally {
-      setBusy(false);
-    }
+    await owner.answer(() => onAnswer(next));
   };
 
   const decline = (): void => {
@@ -90,7 +91,7 @@ export function DialogBody({ form, onAnswer, variant = "card", touch = false, in
     void submit(onlyConfirm ? { [single!.id]: false } : {});
   };
 
-  const cancel = (): void => void onAnswer(undefined);
+  const cancel = (): void => { void owner.answer(() => onAnswer(undefined)); };
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === "Escape") {
@@ -118,7 +119,7 @@ export function DialogBody({ form, onAnswer, variant = "card", touch = false, in
     secondsLeft,
     large: variant === "sheet",
   };
-  const setValue = (fieldId: string, value: string | boolean) => setValues((s) => ({ ...s, [fieldId]: value }));
+  const setValue = owner.setValue;
   const hint = (long: boolean) =>
     touch ? null : (
       <span className="ms-auto hidden items-center gap-1 text-xs text-ink-3 sm:inline-flex" aria-hidden="true">
@@ -215,10 +216,4 @@ export function DialogBody({ form, onAnswer, variant = "card", touch = false, in
       {body}
     </div>
   );
-}
-
-function defaults(fields: readonly DialogField[]): FieldValues {
-  const out: FieldValues = {};
-  for (const field of fields) if (field.default !== undefined) out[field.id] = field.default;
-  return out;
 }

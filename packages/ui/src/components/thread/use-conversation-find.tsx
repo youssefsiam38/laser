@@ -6,6 +6,15 @@ import { Button } from "@/components/ui/button";
 import { matchExcerpt, textMatches } from "./search-text.js";
 import { createConversationSearch, createMessageRangeCache } from "./conversation-search-cache.js";
 import type { SearchSource } from "./search-state.js";
+import { useTranscriptViewport } from "./transcript-viewport.js";
+
+const highlightScopes = new Map<symbol, { matches: Range[]; current: Range[] }>();
+function publishHighlights() {
+  if (typeof CSS === "undefined" || !("highlights" in CSS) || typeof Highlight === "undefined") return;
+  if (!highlightScopes.size) { CSS.highlights.delete("conversation-matches"); CSS.highlights.delete("conversation-current"); return; }
+  CSS.highlights.set("conversation-matches", new Highlight(...[...highlightScopes.values()].flatMap(scope => scope.matches)));
+  CSS.highlights.set("conversation-current", new Highlight(...[...highlightScopes.values()].flatMap(scope => scope.current)));
+}
 
 /** Build ranges across markup boundaries without changing React-owned DOM. */
 export function findTextRanges(root: HTMLElement, query: string): Range[] {
@@ -50,6 +59,8 @@ export function findTextMatches(root: HTMLElement, query: string, mode: "convers
 }
 
 export function useConversationFind({ partial = false, loadAll }: { partial?: boolean; loadAll?: () => Promise<boolean> } = {}) {
+  const controller = useTranscriptViewport();
+  const highlightScope = useMemo(() => Symbol("conversation-find"), []);
   const messages = useAuiState(s => s.thread.messages);
   const threadId = useAuiState(s => s.threads.mainThreadId);
   const [loadingAll, setLoadingAll] = useState(false);
@@ -95,9 +106,10 @@ export function useConversationFind({ partial = false, loadAll }: { partial?: bo
   activeRef.current = active;
   const schedulePaint = useRef<(() => void) | undefined>(undefined);
   const close = useCallback(() => {
+    controller.cancel();
     setOpen(false);
     (restoreFocus.current?.isConnected ? restoreFocus.current : root.current?.querySelector<HTMLElement>("textarea"))?.focus({ preventScroll: true });
-  }, []);
+  }, [controller]);
   useEffect(() => {
     if (previousThread.current !== threadId) { setOpen(false); setQuery(""); setIndex(0); setLoadingAll(false); loadingRef.current = false; previousThread.current = threadId; }
   }, [threadId]);
@@ -111,12 +123,17 @@ export function useConversationFind({ partial = false, loadAll }: { partial?: bo
       requestAnimationFrame(() => { input.current?.focus(); input.current?.select(); });
     };
     const key = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "f" && !document.querySelector('[role="dialog"]')) {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "f" && ![...document.querySelectorAll('[role="dialog"]')].some(dialog => !dialog.contains(root.current))) {
         if (!root.current?.getClientRects().length || document.querySelector('[aria-label="Workbench screens"]')) return;
+        const focusedThread = document.activeElement?.closest('[data-slot="thread"]');
+        if (focusedThread && focusedThread !== root.current) return;
+        if (!focusedThread && document.activeElement?.closest('[data-slot="beam-bubble"]') !== root.current?.closest('[data-slot="beam-bubble"]')) return;
         e.preventDefault(); show();
       }
     };
     const event = (e: Event) => {
+      // Saved-session results and the main top bar target the main conversation.
+      if (root.current?.closest('[data-slot="beam-bubble"]')) return;
       const { query, source } = (e as CustomEvent<{ query?: string; source?: SearchSource }>).detail;
       show(query, source);
     };
@@ -143,30 +160,26 @@ export function useConversationFind({ partial = false, loadAll }: { partial?: bo
         ranges.push(...found);
         if (active && message.dataset.messageId === active.messageId) selected = found[active.occurrence] ?? found[0];
       }
-      CSS.highlights.set("conversation-matches", new Highlight(...ranges));
-      CSS.highlights.set("conversation-current", new Highlight(...(selected ? [selected] : [])));
+      highlightScopes.set(highlightScope, { matches: ranges, current: selected ? [selected] : [] });
+      publishHighlights();
     };
     const schedule = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(paint); };
     const observer = new MutationObserver(records => { cache.invalidate(records); schedule(); });
     observer.observe(viewport, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["hidden", "aria-hidden", "data-state", "data-search-content", "data-search-exclude"] });
     schedulePaint.current = schedule;
     schedule();
-    return () => { schedulePaint.current = undefined; cancelAnimationFrame(frame); observer.disconnect(); CSS.highlights?.delete("conversation-matches"); CSS.highlights?.delete("conversation-current"); };
-  }, [open, query]);
+    return () => { schedulePaint.current = undefined; cancelAnimationFrame(frame); observer.disconnect(); highlightScopes.delete(highlightScope); publishHighlights(); };
+  }, [open, query, highlightScope]);
   useEffect(() => { schedulePaint.current?.(); }, [active?.id, active?.messageId, active?.occurrence]);
   useEffect(() => {
     if (!active) return;
-    const timer = window.setTimeout(() => {
-      const viewport = root.current?.querySelector<HTMLElement>('[data-slot="thread-viewport"]');
-      const message = [...(viewport?.querySelectorAll<HTMLElement>("[data-message-id]") ?? [])].find(n => n.dataset.messageId === active.messageId);
-      if (!viewport || !message) return;
+    const abort = new AbortController();
+    void controller.ensureVisible({ messageId: active.messageId }, { reason: "find", signal: abort.signal, rect: message => {
       const ranges = findTextRanges(message, query);
-      const rect = (ranges[active.occurrence] ?? ranges[0])?.getBoundingClientRect() ?? message.getBoundingClientRect();
-      const footer = viewport.querySelector<HTMLElement>('[data-slot="thread-footer"]')?.getBoundingClientRect().height ?? 0;
-      viewport.scrollTop += rect.top - viewport.getBoundingClientRect().top - Math.max(0, viewport.clientHeight - footer) / 3;
-    }, motionMs("--motion-fast") + 32);
-    return () => clearTimeout(timer);
-  }, [active?.id, query]);
+      return (ranges[active.occurrence] ?? ranges[0])?.getBoundingClientRect();
+    } });
+    return () => abort.abort();
+  }, [active?.id, query, controller]);
   return {
     root, open, selectedMessage: active?.messageId,
     bar: open ? <ConversationSearch inputRef={input} query={query} hits={hits} activeIndex={activeIndex}

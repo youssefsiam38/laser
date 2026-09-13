@@ -8,7 +8,10 @@ import { AgentEventMessage } from "./AgentEventMessage.js";
 import { TaskEventNotice } from "./TaskEventNotice.js";
 import { AGENT_COMPLETION_DATA_PART, AGENT_EVENT_DATA_PART, GOAL_DATA_PART, TASK_EVENT_DATA_PART, type AgentCompletionData } from "@/runtime/projection";
 import type { GoalRecord as GoalRecordData } from "@/runtime/goal-history";
-import { memo, useContext, useMemo, useRef, useState } from "react";
+import { memo, useContext, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useTranscriptViewport } from "./transcript-viewport.js";
+import { useTranscriptPresentation } from "@/runtime/LaserProvider";
+import { MessageEditPresentation } from "@/runtime/transcript-presentation";
 import { useFileOpener } from "@/lib/file-opener";
 import { attachmentFile, describeMediaType } from "@/components/preview/media";
 import { attachedFileContent, splitAttachedFiles, wrapFileAttachment, type AttachedFile } from "@/runtime/attachments";
@@ -159,10 +162,19 @@ export function UserMessage() {
   const userOffset = useUserOffset();
   const partialHistory = usePartialHistory();
   const { copied, copy } = useCopy();
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(text);
-  const [sending, setSending] = useState(false);
+  const id = useAuiState(s => s.message.id);
+  const presentation = useTranscriptPresentation();
+  const viewport = useTranscriptViewport();
+  const editOwner = useMemo(() => (path ? presentation.edit(path, id) : undefined) ?? new MessageEditPresentation(text), [presentation, path, id]);
+  const { editing, draft, sending } = useSyncExternalStore(editOwner.subscribe, editOwner.getSnapshot, editOwner.getSnapshot);
+  const setDraft = (draft: string) => editOwner.update({ draft });
+  const setEditing = (editing: boolean) => {
+    editOwner.update({ editing });
+    if (path) { if (editing) presentation.rememberEdit(path, id, editOwner); else presentation.releaseEdit(path, id); }
+  };
+  const setSending = (sending: boolean) => editOwner.update({ sending });
   const [requestOpen, setRequestOpen] = useState(false);
+  useLayoutEffect(() => editing || requestOpen ? viewport.pin(id) : undefined, [viewport, id, editing, requestOpen]);
   const requestAt = useAuiState(s => s.message.createdAt?.toISOString());
   const nextRequestAt = useAuiState(s => s.thread.messages.slice(s.message.index + 1).find(m => m.role === "user")?.createdAt?.toISOString());
 
@@ -201,8 +213,8 @@ export function UserMessage() {
   // One request: the worker owns the sequence, and a move that fails leaves
   // the session stopped and where it was.
   const move = { stopFirst: busy };
-  const fork = entryId ? () => void actions.fork(entryId, move) : undefined;
-  const jump = entryId ? () => void actions.jump(entryId, move) : undefined;
+  const fork = entryId ? () => { viewport.startAction(); void actions.fork(entryId, move); } : undefined;
+  const jump = entryId ? () => { viewport.startAction(); void actions.jump(entryId, move); } : undefined;
   const copyPath = path ? () => void copy(path) : undefined;
   const startEdit = entryId
     ? () => {
@@ -219,6 +231,7 @@ export function UserMessage() {
    */
   const sendEdit = async (where: "here" | "fork") => {
     if (!entryId || sending) return;
+    const location = viewport.startAction();
     setSending(true);
     try {
       if (where === "here") {
@@ -227,13 +240,14 @@ export function UserMessage() {
         // worker has stopped the reply by then, so the send below goes out,
         // it does not wait in the tray (D-149).
         if (!(await actions.navigate(entryId, move))) return;
-        setEditing(false);
         await actions.send(editContent(), "prompt");
+        setEditing(false);
+        void viewport.afterAction(location);
         return;
       }
-      setEditing(false);
       await actions.fork(entryId, move);
       await actions.send(editContent(), "prompt");
+      setEditing(false);
       clearHandedBackPrompt(aui, [text, ...files.map(wrapFileAttachment)].filter(Boolean).join("\n\n"));
     } finally {
       setSending(false);
@@ -285,7 +299,15 @@ export function UserMessage() {
               // A version is reached through its own last entry: navigating
               // onto a prompt would put the session before it instead of on it.
               const target = versions[i];
-              if (target) void actions.jump(leafOf(entries, target));
+              if (target) {
+                // Jump, not navigate: a version whose leaf is an unanswered
+                // prompt hands that text back, and it belongs in the composer.
+                const location = viewport.startAction();
+                const branchLeaf = leafOf(entries, target);
+                void actions.jump(branchLeaf).then(moved => {
+                  if (moved) void viewport.afterAction(location, { messageId: `entry:${target}`, leafId: branchLeaf });
+                });
+              }
             }}
           />
           <MessageActions
@@ -533,6 +555,7 @@ function AssistantStopped({ reason, detail, tone }: ReturnType<typeof stopReason
  */
 function AssistantFooter() {
   const aui = useAui();
+  const viewport = useTranscriptViewport();
   const { actions } = useLaserStable();
   const text = useMessageText();
   const { copied, copy } = useCopy();
@@ -554,6 +577,7 @@ function AssistantFooter() {
 
   const rerun = async (where: "here" | "fork", pick?: RegeneratePick) => {
     if (!promptEntryId) return;
+    const location = viewport.startAction();
     const source = aui.thread.getState().messages.find((message) =>
       message.role === "user" && laserMeta(message as MessageState).userOrdinal === promptOrdinal);
     let prompt = source?.content.map((part) => part.type === "text" ? part.text : "").filter(Boolean).join("\n\n");
@@ -571,6 +595,7 @@ function AssistantFooter() {
     else if (pick) await actions.setThinking(pick.thinking as ThinkingLevel);
     await actions.send([{ type: "text", text: prompt }], "prompt");
     if (where === "fork") clearHandedBackPrompt(aui, prompt);
+    else void viewport.afterAction(location);
   };
 
   return (

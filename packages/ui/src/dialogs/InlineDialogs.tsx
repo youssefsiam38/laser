@@ -25,6 +25,7 @@ import { useIsTouch } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
 import { consumeDecisionLink, usePendingDecisionLink } from "@/pwa";
 import { useLaserStable, useLaserView } from "@/runtime";
+import { useTranscriptPresentation } from "@/runtime/LaserProvider";
 
 import { DialogBody } from "./DialogBody.js";
 import { cancelResponse, dialogFormOf, isRenderableDialog, uiResponseFor } from "./model.js";
@@ -87,6 +88,8 @@ export function useWaitingDialogCount(): number {
  */
 export function ToolRowDialog({ toolCallId }: { toolCallId: string }) {
   const { actions } = useLaserStable();
+  const path = useLaserView()?.path;
+  const presentation = useTranscriptPresentation();
   const touch = useIsTouch();
   const { byToolCall } = useDialogs();
   const dialog = byToolCall.get(toolCallId);
@@ -96,6 +99,7 @@ export function ToolRowDialog({ toolCallId }: { toolCallId: string }) {
     <div data-slot="tool-dialog" data-tool-call={toolCallId} className="mb-2 ms-6 border-s-2 border-attention py-1 ps-3">
       <DialogBody
         form={form}
+        presentation={path ? presentation.question(path, form) : undefined}
         touch={touch}
         onAnswer={(values) => actions.answerDialog(uiResponseFor(dialog.id, dialog.method, values))}
       />
@@ -113,6 +117,8 @@ export function ToolRowDialog({ toolCallId }: { toolCallId: string }) {
  */
 export function ThreadDialogCards({ className }: { className?: string | undefined }) {
   const { actions } = useLaserStable();
+  const path = useLaserView()?.path;
+  const presentation = useTranscriptPresentation();
   const touch = useIsTouch();
   const { cards } = useDialogs();
   useCancelUnrenderable();
@@ -138,6 +144,7 @@ export function ThreadDialogCards({ className }: { className?: string | undefine
       <DialogBody
         key={`${dialog.id}:${declineFirst ? "decline" : "ask"}`}
         form={form}
+        presentation={path ? presentation.question(path, form, declineFirst) : undefined}
         touch={touch}
         initialDeclining={declineFirst}
         onAnswer={(values) => actions.answerDialog(uiResponseFor(dialog.id, dialog.method, values))}
@@ -158,26 +165,25 @@ export function ThreadDialogCards({ className }: { className?: string | undefine
 function useDialogLink(dialog: UiDialogRequest | undefined): boolean {
   const link = usePendingDecisionLink();
   const { actions } = useLaserStable();
-  const [declineFirst, setDeclineFirst] = useState(false);
+  const path = useLaserView()?.path;
+  const presentation = useTranscriptPresentation();
+  const [declineFirst, setDeclineFirst] = useState<{ id: string; path: string | undefined } | undefined>(undefined);
 
   useEffect(() => {
     if (!link || !dialog) return;
     if (!dialog.id.endsWith(link.decisionId)) return;
     consumeDecisionLink();
     if (link.answer === "deny") {
-      setDeclineFirst(true);
+      setDeclineFirst({ id: dialog.id, path });
       return;
     }
     if (link.answer === "allow" && dialog.method === "confirm") {
-      void actions
-        .answerDialog({ id: dialog.id, confirmed: true })
-        .then(() => actions.toast("info", `Allowed · ${dialog.title}`));
+      const answer = () => actions.answerDialog({ id: dialog.id, confirmed: true }).then(() => actions.toast("info", `Allowed · ${dialog.title}`));
+      const form = dialogFormOf(dialog, false);
+      if (path && form) void presentation.question(path, form).answer(answer);
+      else void answer();
     }
-  }, [actions, dialog, link]);
+  }, [actions, dialog, link, path, presentation]);
 
-  useEffect(() => {
-    setDeclineFirst(false);
-  }, [dialog?.id]);
-
-  return declineFirst;
+  return declineFirst !== undefined && declineFirst.id === dialog?.id && declineFirst.path === path;
 }

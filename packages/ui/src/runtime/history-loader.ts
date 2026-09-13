@@ -4,10 +4,11 @@ import { deepEqual } from "./projection.js";
 
 export type HistoryAction =
   | { type: "historyBegin"; path: string; token: string }
+  | { type: "historyReset"; path: string; token: string }
   | { type: "historyEnd"; path: string; token: string }
-  | { type: "historySnapshot"; path: string; token: string; entries: unknown[]; leafId?: string | null; window: HistoryWindow }
-  | { type: "historyPrepend"; path: string; before: string; entries: unknown[]; window: HistoryWindow }
-  | { type: "historyMetadata"; path: string; from?: string | null | undefined; entries: unknown[]; leafId?: string | null | undefined; window: HistoryWindow };
+  | { type: "historySnapshot"; path: string; token: string; entries: unknown[]; leafId?: string | null; window: HistoryWindow; replaceWindow?: true }
+  | { type: "historyPrepend"; path: string; before: string; entries: unknown[]; window: HistoryWindow; revision?: string | undefined }
+  | { type: "historyMetadata"; path: string; from?: string | null | undefined; entries: unknown[]; leafId?: string | null | undefined; window: HistoryWindow; revision?: string | undefined };
 
 export const hasCompleteTree = (view: SessionView | undefined): boolean =>
   view?.history ? view.history.complete && !view.history.branchesUnloaded : Boolean(view?.hydrated);
@@ -58,6 +59,14 @@ export function receiveHistoryUpdate(v: SessionView, p: SessionUpdateParams, { a
 export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpdate, blocksFromEntries, modelNamesOf, stampNewBlocks, textOf }: HistoryFold): SessionView {
   switch (action.type) {
     case "historyBegin": return { ...v, historyPending: { token: action.token, updates: [] } };
+    case "historyReset": {
+      // The loaded window goes before its replacement is requested, so no older
+      // expanded transcript is on screen while the recent one is in flight. A
+      // message this surface has already sent is not history and stays.
+      if (v.historyPending?.token !== action.token) return v;
+      const { history: _window, historyRevision: _revision, ...rest } = v;
+      return { ...rest, entries: [], blocks: v.blocks.filter(block => block.kind === "user" && block.optimistic), hydrated: false };
+    }
     case "historyEnd": return v.historyPending?.token === action.token ? { ...v, historyPending: undefined } : v;
     case "historySnapshot": {
       if (v.historyPending?.token !== action.token) return v;
@@ -68,11 +77,12 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
       // already fetched in this worker generation. Merge its fresh suffix
       // into that tree so known siblings remain immediately navigable. A new
       // epoch or an authoritative complete snapshot still replaces the cache.
-      const retainTree = oldEpoch === window.epoch && hasCompleteTree(v) && (!window.complete || window.branchesUnloaded);
+      const retainTree = !action.replaceWindow && oldEpoch === window.epoch && hasCompleteTree(v) && (!window.complete || window.branchesUnloaded);
       const entries = retainTree ? [...new Map([...v.entries, ...action.entries].map(entry => [(entry as { id: string }).id, entry])).values()] : action.entries;
       const history = retainTree ? { ...window, complete: true, branchesUnloaded: false, userOffset: 0, context: [], priorGoalIds: [] } : window;
       if (retainTree) delete history.before;
       let next: SessionView = { ...v, entries, leafId: action.leafId, history, hydrated: true,
+        historyRevision: action.replaceWindow ? action.token : v.historyRevision,
         blocks: blocksFromEntries(entries, action.leafId, modelNamesOf(v.state)),
         running: live?.running ?? v.running, lastSeq: action.window.seq, updateEpoch: history.epoch, pendingSentBy: undefined, historyPending: undefined };
       if (live?.message) {
@@ -98,7 +108,7 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
       return { ...next, blocks: shareHistoryBlocks(next.blocks, v.blocks), lastSeq: changedEpoch ? next.lastSeq : Math.max(next.lastSeq, v.lastSeq) };
     }
     case "historyMetadata": {
-      if (v.history && v.history.epoch !== action.window.epoch) return v;
+      if (v.historyRevision !== action.revision || (v.history && v.history.epoch !== action.window.epoch)) return v;
       const index = action.from ? v.entries.findIndex(e => (e as { id?: string }).id === action.from) : -1;
       if (action.from && index < 0) return v;
       // Entries are an append-only tree, not a contiguous active branch.
@@ -111,7 +121,7 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
         history: v.history ? { ...v.history, seq: history.seq, hasHistory: v.history.hasHistory || history.hasHistory } : { ...history, userOffset: 0, context: [], priorGoalIds: [], complete: true } };
     }
     case "historyPrepend": {
-      if (v.history?.before !== action.before || v.history.epoch !== action.window.epoch) return v;
+      if (v.historyRevision !== action.revision || v.history?.before !== action.before || v.history.epoch !== action.window.epoch) return v;
       const ids = new Set(v.entries.map(e => (e as { id?: string }).id));
       const entries = action.entries.filter(e => !ids.has((e as { id?: string }).id));
       const { live: _live, ...history } = action.window;
@@ -134,67 +144,93 @@ interface HistoryLoaderDeps {
 // A replacement client can share the store while its predecessor settles.
 let nextToken = 0;
 
+/** Every read one rendered surface can ask for; scoped surfaces have their own. */
+export type HistoryReads = ReturnType<typeof createHistoryLoader>;
+
 /** One request owner for tail/all reads, generation adoption and cursor recovery. */
 export function createHistoryLoader(deps: HistoryLoaderDeps) {
   const reads = new Map<string, Promise<void>>();
-  const read = async (path: string, all = false, accepting: () => boolean = () => true, legacySeq?: number): Promise<void> => {
-    const pending = reads.get(path);
+  const generations = new Map<string, number>();
+  const fence = (path: string, accepting: () => boolean) => {
+    const generation = generations.get(path) ?? 0;
+    const revision = deps.get(path)?.historyRevision;
+    return () => accepting() && (generations.get(path) ?? 0) === generation && deps.get(path)?.historyRevision === revision;
+  };
+  const read = async (path: string, all = false, accepting: () => boolean = () => true, legacySeq?: number, policy?: "recent"): Promise<void> => {
+    if (!accepting()) return;
+    if (policy === "recent") generations.set(path, (generations.get(path) ?? 0) + 1);
+    let active = fence(path, accepting);
+    const pending = policy === "recent" ? undefined : reads.get(path);
     if (pending) {
       await pending;
-      if (!all || hasCompleteTree(deps.get(path))) return;
+      if (!active() || !all || hasCompleteTree(deps.get(path))) return;
     }
     const token = String(++nextToken);
     const expectSeq = deps.get(path)?.lastSeq ?? 0;
     deps.dispatch({ type: "historyBegin", path, token });
+    if (policy === "recent") {
+      // Retiring the window clears the revision this read is replacing, so the
+      // fence is taken again afterwards: a read must not refuse its own reset.
+      deps.dispatch({ type: "historyReset", path, token });
+      active = fence(path, accepting);
+    }
     const work = (async () => {
-      const anchor = deps.get(path)?.history?.anchor;
-      const window: HistoryWindowRequest = all ? { all: true } : anchor ? { from: anchor } : { tail: 40 };
+      const anchor = policy === "recent" ? undefined : deps.get(path)?.history?.anchor;
+      const window: HistoryWindowRequest = policy === "recent" ? { tail: 40 } : all ? { all: true } : anchor ? { from: anchor } : { tail: 40 };
       const result = await deps.request({ path, window }).catch(error => {
         if (!("from" in window) || (error as { code?: number }).code !== ErrorCodes.InvalidParams) throw error;
         return deps.request({ path, window: { tail: 40 } });
       });
       const current = deps.get(path);
-      if (!accepting() || !current || current.historyPending?.token !== token) return;
+      if (!active() || !current || current.historyPending?.token !== token) return;
+
       const epoch = current.history?.epoch ?? current.updateEpoch;
       if (result.window && epoch && epoch !== result.window.epoch) deps.adoptEpoch(path, result.window.seq);
-      if (result.window) deps.dispatch({ type: "historySnapshot", path, token, ...result, window: result.window });
+      if (result.window) deps.dispatch({ type: "historySnapshot", path, token, ...result, window: result.window, ...(policy === "recent" ? { replaceWindow: true } : {}) });
       else deps.dispatch({ type: "hydrate", path, entries: result.entries, leafId: result.leafId, expectSeq, ...(legacySeq !== undefined ? { seq: legacySeq } : {}) });
       deps.track(path, deps.get(path)?.lastSeq ?? 0);
     })();
     reads.set(path, work);
-    try { await work; } finally {
+    try { await work; } catch (error) { if (active()) throw error; } finally {
       deps.dispatch({ type: "historyEnd", path, token });
       if (reads.get(path) === work) reads.delete(path);
     }
   };
   const all = async (path: string, accepting: () => boolean): Promise<boolean> => {
-    if (deps.get(path)?.history && hasCompleteTree(deps.get(path))) return true;
-    if (!accepting()) return false;
-    await read(path, true, accepting);
-    return hasCompleteTree(deps.get(path));
+    const active = fence(path, accepting);
+    if (!active()) return false;
+    if (!reads.has(path) && deps.get(path)?.history && hasCompleteTree(deps.get(path))) return true;
+    await read(path, true, active);
+    return active() && hasCompleteTree(deps.get(path));
   };
   const earlier = async (path: string, accepting: () => boolean): Promise<boolean> => {
+    const active = fence(path, accepting);
     const before = deps.get(path)?.history?.before;
-    if (!before || !accepting()) return false;
+    const revision = deps.get(path)?.historyRevision;
+    if (!before || !active()) return false;
     const result = await deps.request({ path, window: { before, limit: 40 } }).catch(async error => {
-      if ((error as { code?: number }).code !== ErrorCodes.InvalidParams || !accepting()) throw error;
-      await read(path, false, accepting); return undefined;
+      if (!active()) return undefined;
+      if ((error as { code?: number }).code !== ErrorCodes.InvalidParams) throw error;
+      await read(path, false, active); return undefined;
     });
-    if (!result || !accepting() || !result.window) return false;
-    deps.dispatch({ type: "historyPrepend", path, before, entries: result.entries, window: result.window });
+    if (!result || !active() || !result.window) return false;
+    deps.dispatch({ type: "historyPrepend", path, before, revision, entries: result.entries, window: result.window });
     return deps.get(path)?.history?.before !== before;
   };
   const metadata = async (path: string, accepting: () => boolean): Promise<void> => {
-    if (!accepting()) return;
+    const active = fence(path, accepting);
+    if (!active()) return;
     const from = deps.get(path)?.leafId;
+    const revision = deps.get(path)?.historyRevision;
     const result = await deps.request({ path, window: from ? { from } : { all: true } }).catch(async error => {
-      if ((error as { code?: number }).code !== ErrorCodes.InvalidParams || !accepting()) throw error;
-      await read(path, false, accepting); return undefined;
+      if (!active()) return undefined;
+      if ((error as { code?: number }).code !== ErrorCodes.InvalidParams) throw error;
+      await read(path, false, active); return undefined;
     });
-    if (!result || !accepting()) return;
+    if (!result || !active()) return;
     const previousEpoch = deps.get(path)?.history?.epoch ?? deps.get(path)?.updateEpoch;
-    if (result.window && previousEpoch && previousEpoch !== result.window.epoch) { await read(path, false, accepting); return; }
-    if (result.window) deps.dispatch({ type: "historyMetadata", path, from, ...result, window: result.window });
+    if (result.window && previousEpoch && previousEpoch !== result.window.epoch) { await read(path, false, active); return; }
+    if (result.window) deps.dispatch({ type: "historyMetadata", path, from, revision, ...result, window: result.window });
     else deps.dispatch({ type: "entries", path, entries: result.entries, leafId: result.leafId });
   };
   const ensure = async (path: string, entryId: string, accepting: () => boolean): Promise<void> => {
@@ -202,5 +238,6 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     if (view?.entries.some(entry => (entry as { id?: string }).id === entryId) || !view?.history || hasCompleteTree(view)) return;
     await read(path, true, accepting);
   };
-  return { read, all, earlier, metadata, ensure };
+  const recent = (path: string, accepting: () => boolean, legacySeq?: number) => read(path, false, accepting, legacySeq, "recent");
+  return { read, recent, all, earlier, metadata, ensure };
 }

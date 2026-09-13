@@ -19,7 +19,7 @@ beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, "getClientRects").mockReturnValue([new DOMRect(0, 0, 100, 100)] as unknown as DOMRectList);
   vi.spyOn(Range.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 200, 100, 20));
 });
-afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks(); });
+afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 const messages: ThreadMessageLike[] = [{ id: "first", role: "user", content: [{ type: "text", text: "Apple Apple" }] }, { id: "last", role: "assistant", content: [{ type: "reasoning", text: "Apple thought" }] }];
 type HistoryOptions = { partial?: boolean; loadAll?: () => Promise<boolean> };
 function Body(options: HistoryOptions) {
@@ -88,6 +88,26 @@ it("makes partial search explicit, loads missing messages once, and restores key
   expect(document.activeElement).toBe(container.querySelector("input"));
 });
 
+it("keeps main and Beam find fields and native highlights independent", async () => {
+  const highlights = new Map<string, { ranges: Range[] }>();
+  vi.stubGlobal("CSS", { ...CSS, highlights });
+  vi.stubGlobal("Highlight", class { constructor(...publicRanges: Range[]) { this.ranges = publicRanges; } ranges: Range[]; });
+  try {
+    await act(async () => root.render(<><section data-test="main"><Fixture /></section><section data-slot="beam-bubble" tabIndex={-1}><Fixture /></section></>));
+    await act(async () => openConversationFind("Apple"));
+    const beam = container.querySelector<HTMLElement>('[data-slot="beam-bubble"]')!;
+    expect(beam.querySelector("input")).toBeNull();
+    await act(async () => { beam.focus(); beam.dispatchEvent(new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true })); });
+    const input = beam.querySelector("input")!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "Apple"); input.dispatchEvent(new Event("input", { bubbles: true })); });
+    await act(async () => { await vi.waitFor(() => expect(highlights.get("conversation-matches")?.ranges).toHaveLength(4)); });
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-test="main"] [aria-label="Close search"]')!.click());
+    expect(beam.querySelector("input")).toBe(input);
+    expect(highlights.get("conversation-matches")!.ranges).toHaveLength(2);
+    await act(async () => beam.querySelector<HTMLButtonElement>('[aria-label="Close search"]')!.click());
+    expect(highlights.size).toBe(0);
+  } finally { vi.unstubAllGlobals(); }
+});
 it("highlights across markup boundaries without indexing hidden controls or changing DOM", () => {
   container.innerHTML = '<p>Ap<strong>ple</strong></p><button>Apple</button><div hidden>Apple</div>';
   const original = container.innerHTML;

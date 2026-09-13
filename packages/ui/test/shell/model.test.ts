@@ -286,6 +286,87 @@ describe("entries", () => {
     expect(rows[5]).toMatchObject({ text: "Named", canFork: false, canJump: false });
   });
 
+  it("preserves every history row kind, hidden nodes, and last label/unlabel semantics", () => {
+    const specs = [
+      { id: "u", type: "message", message: { role: "user", content: "question" }, timestamp: 0 },
+      { id: "a", type: "message", message: { role: "assistant", content: [{ type: "text", text: "answer" }, { type: "toolCall" }] } },
+      { id: "custom", type: "message", message: { role: "custom", content: "custom body" } },
+      { id: "bash", type: "message", message: { role: "bashExecution", content: "shell body" } },
+      { id: "result", type: "message", message: { role: "toolResult", content: "folded" } },
+      { id: "reason", type: "message", message: { role: "assistant", content: [{ type: "thinking", thinking: "private" }] } },
+      { id: "tools", type: "message", message: { role: "assistant", content: [{ type: "toolCall" }, { type: "toolCall" }] } },
+      { id: "empty", type: "message", message: { role: "assistant", content: [] } },
+      { id: "cp", type: "compaction" },
+      { id: "branch", type: "branch_summary", summary: "branch body" },
+      { id: "notice", type: "custom_message", content: "notice body" },
+      { id: "hidden", type: "custom_message", display: false, content: "not shown" },
+      { id: "name", type: "session_info", name: "renamed" },
+      { id: "model", type: "model_change", provider: "provider", modelId: "model" },
+      { id: "thinking", type: "thinking_level_change", thinkingLevel: "high" },
+      { id: "unknown", type: "unknown" },
+    ];
+    const input = specs.map((entry, i) => ({ ...entry, parentId: specs[i - 1]?.id ?? null }));
+    const label = (id: string, targetId: string, value: string) => ({ id, parentId: "unknown", type: "label", targetId, label: value });
+    const labeled = [...input, label("l1", "u", "first"), label("l2", "u", "last"), label("l3", "u", ""),
+      label("l4", "a", "assistant label"), label("l5", "result", "first result"), label("l6", "result", "last result")];
+    const rows = historyRows(labeled);
+    expect(rows.map(r => [r.id, r.kind, r.text, r.tools, r.canFork, r.canJump])).toEqual([
+      ["u", "user", "question", 0, true, true],
+      ["a", "assistant", "answer", 1, true, true],
+      ["custom", "custom", "custom body", 0, true, true],
+      ["bash", "custom", "shell body", 0, true, true],
+      ["reason", "assistant", "Reasoning only", 0, true, true],
+      ["tools", "assistant", "", 2, true, true],
+      ["empty", "assistant", "", 0, true, true],
+      ["cp", "compaction", "Context compacted", 0, false, true],
+      ["branch", "branch", "branch body", 0, false, true],
+      ["notice", "custom", "notice body", 0, false, true],
+      ["name", "name", "renamed", 0, false, false],
+      ["model", "model", "provider/model", 0, false, false],
+      ["thinking", "thinking", "high", 0, false, false],
+    ]);
+    expect(rows.every(r => r.depth === 0 && !r.branchStart)).toBe(true);
+    expect(rows[0]).toMatchObject({ parentId: null, at: "1970-01-01T00:00:00.000Z", label: undefined });
+    expect(rows[1]?.label).toBe("last result");
+    expect(historyRows([...labeled, label("l7", "result", "")])[1]?.label).toBe("assistant label");
+  });
+
+  it("preserves fork depth for out-of-order and missing ancestors, without counting labels as forks", () => {
+    const user = (id: string, parentId: string | null) => ({ id, parentId, type: "message", message: { role: "user", content: id } });
+    const input = [user("tip", "left"), user("right", "root"), user("left", "root"), user("root", "missing"), user("other", "missing"),
+      { id: "label", parentId: "left", type: "label", targetId: "tip", label: "bookmark" }];
+    expect(historyRows(input).map(r => [r.id, r.depth, r.branchStart])).toEqual([
+      ["tip", 2, false], ["right", 2, true], ["left", 2, true], ["root", 1, true], ["other", 1, true],
+    ]);
+    expect(historyRows([...input].reverse()).map(r => [r.id, r.depth, r.branchStart])).toEqual([
+      ["other", 1, true], ["root", 1, true], ["left", 2, true], ["right", 2, true], ["tip", 2, false],
+    ]);
+  });
+
+  it("uses linear ancestor work and no recursive stack on a reversed 10k chain", () => {
+    let parentReads = 0;
+    const count = 10_000;
+    const input = Array.from({ length: count }, (_, i) => ({
+      id: `e${i}`, get parentId() { parentReads++; return i ? `e${i - 1}` : null; },
+      type: "message", message: { role: "user", content: `message ${i}` },
+    })).reverse();
+    const rows = historyRows(input);
+    expect(rows).toHaveLength(count);
+    expect(rows.every(r => r.depth === 0 && !r.branchStart)).toBe(true);
+    expect(rows[0]?.id).toBe("e9999");
+    expect(rows.at(-1)?.id).toBe("e0");
+    // Counts source ancestor accesses, not machine-dependent elapsed time.
+    expect(parentReads).toBeLessThanOrEqual(count * 10);
+  });
+
+  it("terminates cyclic ancestors with a deterministic distinct-fork depth", () => {
+    const user = (id: string, parentId: string) => ({ id, parentId, type: "message", message: { role: "user", content: id } });
+    const input = [user("a", "b"), user("b", "a"), user("tail", "a"), user("leaf", "tail"), user("self", "self")];
+    const depths = (entries: unknown[]) => Object.fromEntries(historyRows(entries).map(r => [r.id, r.depth]));
+    expect(depths(input)).toEqual({ a: 1, b: 1, tail: 1, leaf: 1, self: 0 });
+    expect(depths([...input].reverse())).toEqual(depths(input));
+  });
+
   it("finds the last prompt to fork from", () => {
     expect(lastPromptEntryId(entries)).toBe("u3");
     expect(lastPromptEntryId([])).toBeUndefined();
