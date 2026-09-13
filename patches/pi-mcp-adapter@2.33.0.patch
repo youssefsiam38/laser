@@ -1360,10 +1360,10 @@ index 49f1b4e..03e10b6 100644
    let autoAuthAttempted = false;
 diff --git a/sdk-cache-contract.ts b/sdk-cache-contract.ts
 new file mode 100644
-index 0000000..01b681d
+index 0000000..aa6a122
 --- /dev/null
 +++ b/sdk-cache-contract.ts
-@@ -0,0 +1,189 @@
+@@ -0,0 +1,190 @@
 +import type { Client } from "@modelcontextprotocol/client";
 +
 +type Payload = Record<string, unknown> & { ttlMs?: number; nextCursor?: string };
@@ -1403,7 +1403,8 @@ index 0000000..01b681d
 +  for (const member of ["read", "write", "_probe", "now", "captureGeneration", "evict"]) if (typeof cache[member] !== "function") fail(`_cache.${member}`);
 +  if (typeof object(cache._store, "_cache._store").evict !== "function") fail("_cache._store.evict");
 +  if (!(cache._evictionGeneration instanceof Map)) fail("_cache._evictionGeneration");
-+  if (cache._cachePartition !== undefined && typeof cache._cachePartition !== "string") fail("_cache._cachePartition");
++  if (!("_cachePartition" in cache) || (cache._cachePartition !== undefined && typeof cache._cachePartition !== "string")) fail("_cache._cachePartition");
++  if (!("_discoverResult" in sdk)) fail("_discoverResult");
 +  if (typeof sdk._listMaxPages !== "number" || !Number.isSafeInteger(sdk._listMaxPages) || sdk._listMaxPages <= 0) fail("_listMaxPages must be a finite positive integer");
 +  return client as PinnedClient;
 +}

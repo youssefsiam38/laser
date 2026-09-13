@@ -30,7 +30,7 @@ beforeAll(async () => {
   }
 }, 30_000);
 
-it.each(["_listMaxPages", "_cache", "_cache._probe", "_cache._store.evict", "_onnotification", "listTools"])("refuses incompatible pinned SDK member %s before installing wrappers", async member => {
+it.each(["_listMaxPages", "_cache", "_cache._probe", "_cache._store.evict", "_cache._cachePartition", "_discoverResult", "_onnotification", "listTools"])("refuses incompatible pinned SDK member %s before installing wrappers", async member => {
   const require = createRequire(join(adapterRoot(), "index.ts"));
   const { Client } = await import(pathToFileURL(join(dirname(require.resolve("@modelcontextprotocol/client")), "index.mjs")).href);
   const { installCacheContract } = await createJiti(import.meta.url, { fsCache: false }).import<{ installCacheContract: (client: unknown, invalidated: () => void) => unknown }>(join(adapterRoot(), "sdk-cache-contract.ts"));
@@ -39,7 +39,8 @@ it.each(["_listMaxPages", "_cache", "_cache._probe", "_cache._store.evict", "_on
   const keys = member.split(".");
   let target = client;
   for (const key of keys.slice(0, -1)) target = target[key];
-  target[keys.at(-1)!] = undefined;
+  if (member === "_cache._cachePartition" || member === "_discoverResult") delete target[keys.at(-1)!];
+  else target[keys.at(-1)!] = undefined;
   expect(() => installCacheContract(client, () => {})).toThrow(`Incompatible pi-mcp-adapter 2.33.0 / MCP client 3b205e7 cache contract: ${member}`);
   expect(client._serveFromCache).toBe(original);
 });
