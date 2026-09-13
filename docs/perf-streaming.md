@@ -248,6 +248,72 @@ catalog changes. So the run fails when
 - a long task over 50 ms appears (none measured);
 - the switch loop retains more than 2,000 DOM nodes (it retains none).
 
+## M16-T36 — a phone stopped waiting for the sheet to finish leaving
+
+`docs/handoff-open-problems.md` P3: returning to a 2,000-message conversation at
+390 px in dark mode was typable at **316 ms median / 337 ms p95** against a
+budget of 300 / 500, while the same case with `prefers-reduced-motion` measured
+**159 ms**. The animation was the cost — but not because it was slow.
+
+### What the trace said
+
+A per-frame recording of one return (tap → first frame the composer accepts a
+tap), at 390 px dark with motion on, on the built app:
+
+| frame | state |
+| ---: | --- |
+| ~25 ms | the sessions sheet is dismissed (`data-state=closed`), the transcript is mounting |
+| **~60 ms** | the destination conversation is **drawn and readable** |
+| 60–233 ms | a hit test at the centre of the composer returns `div[data-slot=sheet-overlay]` |
+| **~233–266 ms** | the overlay unmounts; only now is the composer typable |
+
+The sheet's exit animation is composited and cheap. What cost 180 ms was that
+**a dismissed overlay keeps hit-testing until its fade ends**: the conversation
+was on screen and a tap on its composer landed on the leaving overlay. Radix
+sets `pointer-events: auto` inline on the overlay, so a class alone could not
+take it back.
+
+### The fix
+
+One rule in `components/ui/sheet.tsx`: `data-[state=closed]:pointer-events-none!`
+on the overlay. A sheet that is leaving has already been dismissed — it keeps
+fading, and it stops taking taps. The movement is untouched (both the overlay's
+fade and the panel's slide still run; `prefers-reduced-motion` remains the
+fallback that loses only the movement), and no duration, token or literal
+changed.
+
+### Numbers
+
+Same recording after the fix: drawn at ~60 ms, **typable at 53–78 ms**, with the
+overlay still fading. A real key press issued the moment the composer is typable
+puts the character on screen **3–18 ms later, with motion on and off alike**
+(no long task; longest frame 17–35 ms).
+
+The harness measurement, 2,000-message conversation, 390 px dark, **20 pairs =
+40 samples per lane** (`scripts/browser-check/test/transcript-window-phone-motion.mjs`
+and `…-phone-reduced.mjs`, `TRANSCRIPT_PAIRS=20`), long↔long lane:
+
+| | resident median / p95 | typable median / p95 | typed median / p95 |
+| --- | ---: | ---: | ---: |
+| before (P3, 6 samples, earlier build) | 105.1 | 267.8 / 299.1 | 316.2 / 337.7 |
+| **after, motion on** | 67.2 / 75.4 | **70.9 / 75.4** | **282.7 / 283.6** |
+| after, reduced motion (same build) | 76.7 / 81.6 | 76.8 / 81.6 | 100.2 / 116.5 |
+
+Budget: 300 ms median / 500 ms p95 for typing readiness, 250 / 400 resident. Both
+are met with motion on, and the p95 falls from 337.7 to 283.6. The short↔long
+lane measures 56.6 / 65.6 / 266.2.
+
+The "typed" column is the harness's deliberately conservative endpoint: it
+includes its own automation round trips (`inputValue`, an `evaluate`, then
+`fill`), which queue behind the renderer's remaining work. That is why it still
+reads higher with motion on (283 ms) than with motion off (100 ms) although a
+real key press lands within 18 ms of readiness in both. The budget is stated on
+that conservative endpoint and is met on it.
+
+`transcript-window.mjs` now asserts the shape of the defect rather than the
+number: typing readiness may not trail the drawn conversation by more than
+150 ms in either lane. Before the fix that gap was ~200 ms; it is now 4–10 ms.
+
 ## Still open
 
 - **Settled rows.** About four component bodies per delta still run inside rows
@@ -259,6 +325,10 @@ catalog changes. So the run fails when
   it is a phone-only surface and was not part of this measurement.
 - **The conversation map** re-renders per batch by design (it reads the message
   list) but does not re-layout; that guard is tested elsewhere.
-- Phone width and dark theme were screenshotted, not profiled; tool-heavy and
-  reasoning-heavy turns were not streamed into; Beam's second scope and the
-  Electron shell were not profiled.
+- Phone width and dark theme were screenshotted, not profiled (the streaming
+  profile is 1360/light; the phone re-entry above is a separate measurement);
+  tool-heavy and reasoning-heavy turns were not streamed into; Beam's second
+  scope and the Electron shell were not profiled.
+- `components/ui/dialog.tsx` has the same closing-overlay behaviour as the sheet
+  had. No measurement asked for it, so it was left alone; a modal dialog that is
+  fading out still swallows a click for the length of its fade.

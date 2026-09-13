@@ -169,7 +169,10 @@ async function navigationPairs(check, entries, turns) {
   await loadAll(check);
   await open(check, title, `Checkpoint ${turns} is complete.`);
   const shortLong = [], longLong = [];
-  const pairs = check.state.width === 1360 ? 20 : 3;
+  // A phone case takes three pairs in the ordinary matrix; a controlled
+  // measurement of one case asks for the same twenty the desktop takes.
+  const requested = Number(process.env.TRANSCRIPT_PAIRS);
+  const pairs = Number.isFinite(requested) && requested > 0 ? requested : check.state.width === 1360 ? 20 : 3;
   for (let i = 0; i < pairs; i++) {
     shortLong.push(await open(check, 'C short', 'Checkpoint 900002 is complete.', true));
     shortLong.push(await open(check, title, `Checkpoint ${turns} is complete.`, true));
@@ -178,6 +181,15 @@ async function navigationPairs(check, entries, turns) {
   }
   const result = { canonical: turns * 2, pairs, latest, shortLong: { resident: stats(shortLong, 'resident'), interactive: stats(shortLong, 'interactive'), actualInput: stats(shortLong, 'actualInput'), samples: shortLong }, longLong: { resident: stats(longLong, 'resident'), interactive: stats(longLong, 'interactive'), actualInput: stats(longLong, 'actualInput'), samples: longLong } };
   await writeFile(join(check.root, `switches-${check.state.width}-${check.state.theme}.json`), JSON.stringify(result, null, 2));
+  // Typing readiness must not wait for the sheet's exit animation: the
+  // conversation is drawn (resident) and the composer takes a tap at once,
+  // while the sheet keeps fading. A closing overlay that still hit-tests put
+  // ~200 ms between the two on a phone (M16-T36, P3). The margin is generous
+  // so ordinary machine noise never fails a run that is not the defect.
+  for (const lane of [result.shortLong, result.longLong]) {
+    const gap = lane.interactive.median - lane.resident.median;
+    assert(gap <= 150, `the composer became typable ${Math.round(gap)}ms after the conversation was drawn; readiness is waiting on an animation`);
+  }
   if (process.env.TRANSCRIPT_SWITCH_PROFILE === '1' && turns >= 1000 && check.state.width === 1360 && check.state.theme === 'light' && (result.longLong.resident.median > 250 || result.longLong.resident.p95 > 400)) {
     // Explicit one-off attribution, after all samples; ordinary reruns never
     // silently collect another profile of an already attributed budget miss.

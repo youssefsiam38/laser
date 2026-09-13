@@ -33,6 +33,14 @@ function SheetOverlay({
       className={cn(
         "fixed inset-0 z-50 bg-[color-mix(in_oklab,var(--ink)_28%,transparent)]",
         "animate-in fade-in-0 duration-(--motion-slow) data-[state=closed]:animate-out data-[state=closed]:fade-out-0",
+        // A sheet that is leaving has already been dismissed: it keeps fading,
+        // and it stops taking taps. Without this the overlay hit-tests for the
+        // whole exit animation, so on a phone the conversation underneath is
+        // drawn and readable while a tap on its composer lands on the overlay
+        // — typing readiness waited on the animation (M16-T36, P3). The
+        // primitive sets `pointer-events: auto` inline, so this one rule has to
+        // win over it.
+        "data-[state=closed]:pointer-events-none!",
         className,
       )}
       {...props}
