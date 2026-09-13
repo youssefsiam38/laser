@@ -26,6 +26,7 @@ export type { McpConfig, McpDiscoveryPolicy, ServerEntry } from "pi-mcp-adapter/
 export interface McpConnection {
   client: McpClient;
   tools: McpEngineTool[];
+  toolsRevision?: number;
   resources: McpEngineResource[];
   prompts: McpEnginePrompt[];
   instructions?: string;
@@ -55,6 +56,7 @@ export interface McpEnginePrompt {
 }
 
 export interface McpClient {
+  listTools(params?: unknown, options?: unknown): Promise<{ tools: McpEngineTool[]; ttlMs?: number; resultType?: string }>;
   callTool(params: { name: string; arguments?: Record<string, unknown> }, options?: { signal?: AbortSignal | undefined }): Promise<unknown>;
   ping(options?: unknown): Promise<unknown>;
   getServerVersion(): { name?: string; version?: string; title?: string } | undefined;
@@ -66,10 +68,14 @@ export interface McpClient {
 }
 
 export interface McpManager {
+  getToolCatalog?(name: string): { checkedAt: number; expiresAt: number } | undefined;
   connect(name: string, definition: ServerEntry, signal?: AbortSignal): Promise<McpConnection>;
   close(name: string): Promise<void>;
   closeAll(): Promise<void>;
   getConnection(name: string): McpConnection | undefined;
+  setAuthorizationGuard?(guard: ((server: string) => Promise<string | undefined>) | undefined): void;
+  setCredentialCommitter?(commit: ((server: string, save: () => void) => Promise<string>) | undefined): void;
+  setMetadataListChangedListener?(listener: (server: string, reason: string) => void): void;
   setOAuthRuntime?(runtime: unknown): void;
   setAuthStorageOptions?(options: Record<string, unknown>): void;
   setRuntimeSignal?(signal: AbortSignal | undefined): void;
@@ -105,7 +111,7 @@ export interface McpCachedServer {
 
 export interface McpEngine {
   /** The adapter extension factory, for `extensionFactories` (never file discovery). */
-  createMcpAdapter(options: { config: McpConfig; clientIdentity: McpClientIdentity; discovery?: McpDiscoveryPolicy }): InlineExtension;
+  createMcpAdapter(options: { config: McpConfig; clientIdentity: McpClientIdentity; discovery?: McpDiscoveryPolicy; personManaged?: boolean; authorization?: (server: string) => Promise<string | undefined>; commitCredentials?: (server: string, save: () => void) => Promise<string> }): InlineExtension;
   renderSchema: (schema: unknown) => string | null;
   Manager: new (defaultCwd: string | undefined, clientIdentity: McpClientIdentity) => McpManager;
   auth: McpAuthFlow;

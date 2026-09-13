@@ -20,10 +20,13 @@ const TOOLS = [
 export interface FixtureHttpServer {
   url: string;
   clientInfos: unknown[];
+  toolCalls: string[];
+  toolListRequests(): number;
+  replaceTools(names: string[]): void;
   close(): Promise<void>;
 }
 
-function answer(method: string, params: Record<string, unknown> | undefined): unknown {
+function answer(method: string, params: Record<string, unknown> | undefined, tools = TOOLS, ttlMs?: number): unknown {
   switch (method) {
     case "initialize":
       return {
@@ -35,7 +38,7 @@ function answer(method: string, params: Record<string, unknown> | undefined): un
     case "ping":
       return {};
     case "tools/list":
-      return { tools: TOOLS };
+      return { tools, ...(ttlMs !== undefined ? { ttlMs } : {}) };
     case "resources/list":
       return { resources: [] };
     case "resources/templates/list":
@@ -47,6 +50,7 @@ function answer(method: string, params: Record<string, unknown> | undefined): un
       const args = ((params as { arguments?: Record<string, unknown> } | undefined)?.arguments ?? {}) as { text?: string };
       if (name === "echo") return { content: [{ type: "text", text: `echo: ${args.text ?? ""}` }] };
       if (name === "snapshot") return { content: [{ type: "text", text: "a picture" }, { type: "image", data: PNG, mimeType: "image/png" }] };
+      if (tools.some(tool => tool.name === name)) return { content: [{ type: "text", text: `${name}: ${args.text ?? ""}` }] };
       throw new Error(`unknown tool: ${String(name)}`);
     }
     default:
@@ -54,8 +58,11 @@ function answer(method: string, params: Record<string, unknown> | undefined): un
   }
 }
 
-export function startFixtureHttpServer(mode: "streamable-http" | "sse" = "streamable-http"): Promise<FixtureHttpServer> {
+export function startFixtureHttpServer(mode: "streamable-http" | "sse" = "streamable-http", ttlMs?: number): Promise<FixtureHttpServer> {
   const clientInfos: unknown[] = [];
+  const toolCalls: string[] = [];
+  let tools = TOOLS;
+  let lists = 0;
   const streams = new Map<string, ServerResponse>();
   const server: Server = createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -87,7 +94,9 @@ export function startFixtureHttpServer(mode: "streamable-http" | "sse" = "stream
         if (message.id === undefined) continue;
         if (message.method === "initialize") clientInfos.push(message.params?.["clientInfo"]);
         try {
-          const value = answer(message.method ?? "", message.params);
+          if (message.method === "tools/list") lists++;
+          if (message.method === "tools/call") toolCalls.push(String(message.params?.["name"]));
+          const value = answer(message.method ?? "", message.params, tools, ttlMs);
           replies.push(value === undefined
             ? { jsonrpc: "2.0", id: message.id, error: { code: -32601, message: `unknown method: ${message.method}` } }
             : { jsonrpc: "2.0", id: message.id, result: value });
@@ -116,6 +125,12 @@ export function startFixtureHttpServer(mode: "streamable-http" | "sse" = "stream
       resolve({
         url: `http://127.0.0.1:${port}/mcp`,
         clientInfos,
+        toolCalls,
+        toolListRequests: () => lists,
+        replaceTools: names => {
+          tools = names.map(name => ({ ...TOOLS[0]!, name, description: `Call ${name}.` }));
+          for (const stream of streams.values()) stream.write(`event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", method: "notifications/tools/list_changed" })}\n\n`);
+        },
         close: () => new Promise<void>((done) => {
           for (const stream of streams.values()) stream.end();
           server.closeAllConnections();

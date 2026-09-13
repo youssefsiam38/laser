@@ -46,6 +46,11 @@ export default async function acceptance(check) {
   await activate(page.locator('[data-server="global:fixture"] button').first());
   const inspector = page.locator('[data-slot="mcp-inspector"]');
   await activate(inspector.getByRole('tab', { name: 'Tools', exact: true }));
+  const freshness = inspector.locator('[data-slot="mcp-tool-freshness"]');
+  await freshness.getByText('Lists without a cache lifetime refresh for each use. A connection does not make an old list current.', { exact: true }).waitFor();
+  await freshness.getByText('Showing previously listed tools. Reconnect on Overview to check again.', { exact: true }).waitFor();
+  await freshness.scrollIntoViewIfNeeded();
+  await check.shot('mcp-tool-freshness');
   const section = inspector.getByRole('region', { name: 'Conversation tools' });
   await section.getByRole('combobox', { name: 'Conversation', exact: true }).selectOption(progressive);
   await section.getByText('No tools discovered from this server in this conversation yet.').waitFor();
@@ -56,6 +61,9 @@ export default async function acceptance(check) {
   await check.shot('mcp-discovery');
 
   await activate(inspector.getByRole('tab', { name: 'Overview', exact: true }));
+  const reconnect = inspector.getByRole('button', { name: 'Reconnect', exact: true });
+  await reconnect.focus(); await reconnect.press('Enter');
+  // Edit waits for the supported reconnect to settle; no forced action or sleep.
   await activate(inspector.getByRole('button', { name: 'Edit', exact: true }));
   const edit = page.getByRole('dialog', { name: 'Edit fixture', exact: true });
   await activate(edit.getByRole('button', { name: 'Advanced', exact: true }));

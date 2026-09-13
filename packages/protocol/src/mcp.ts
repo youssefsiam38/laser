@@ -131,7 +131,14 @@ export type McpServerConfigInput = McpServerConfigBase<McpValueInput>;
 export const MCP_SERVER_STATUSES = ["connected", "ready", "starting", "needs-auth", "failed", "off", "unknown"] as const;
 export type McpServerStatus = (typeof MCP_SERVER_STATUSES)[number];
 
+/** Last successful tool-list observation; zero lifetime means revalidate on use. */
+export interface McpToolCatalogState {
+  checkedAt: number;
+  expiresAt: number;
+}
+
 export interface McpServerState {
+  toolCatalog?: McpToolCatalogState;
   scope: McpScope;
   config: McpServerConfig;
   /**
@@ -209,6 +216,7 @@ export interface McpServerCapabilities {
 }
 
 export interface McpInspection {
+  toolCatalog?: McpToolCatalogState;
   name: string;
   scope: McpScope;
   status: McpServerStatus;
@@ -485,6 +493,9 @@ export interface McpConversationContext {
 // Runtime snapshot from the companion module (engine-neutral copy)
 
 export interface McpRuntimeServer {
+  /** Opaque worker attribution; never a credential, display label or permission. */
+  authorizationRevision?: string;
+  toolCatalog?: McpToolCatalogState;
   name: string;
   status: McpServerStatus;
   toolCount: number;

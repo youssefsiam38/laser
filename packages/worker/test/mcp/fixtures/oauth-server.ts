@@ -17,6 +17,8 @@ export interface FixtureOAuthServer {
   issuedCodes: string[];
   /** How many times a token was minted, so a refresh is visible. */
   tokenGrants: number;
+  wireCalls: number;
+  rotateToken(): void;
   clientInfos: unknown[];
   registrations: Array<Record<string, unknown>>;
   close(): Promise<void>;
@@ -53,6 +55,9 @@ export function startFixtureOAuthServer(): Promise<FixtureOAuthServer> {
   const clientInfos: unknown[] = [];
   const registrations: Array<Record<string, unknown>> = [];
   let tokenGrants = 0;
+  let wireCalls = 0;
+  let tokenRevision = 0;
+  let accessToken = ACCESS_TOKEN;
   let base = "";
 
   const server: Server = createServer((request, response) => {
@@ -115,7 +120,7 @@ export function startFixtureOAuthServer(): Promise<FixtureOAuthServer> {
       request.on("data", (chunk: Buffer) => (body += chunk.toString()));
       request.on("end", () => {
         tokenGrants += 1;
-        json(200, { access_token: ACCESS_TOKEN, token_type: "Bearer", expires_in: 3600, refresh_token: "fixture-refresh", scope: "mcp" });
+        json(200, { access_token: accessToken, token_type: "Bearer", expires_in: 3600, refresh_token: "fixture-refresh", scope: "mcp" });
       });
       return;
     }
@@ -128,7 +133,7 @@ export function startFixtureOAuthServer(): Promise<FixtureOAuthServer> {
       "www-authenticate": `Bearer resource_metadata="${base}/.well-known/oauth-protected-resource"`,
     });
     if (request.method !== "POST") {
-      if (request.headers.authorization !== `Bearer ${ACCESS_TOKEN}`) challenge();
+      if (request.headers.authorization !== `Bearer ${accessToken}`) challenge();
       else response.writeHead(405).end();
       return;
     }
@@ -145,8 +150,9 @@ export function startFixtureOAuthServer(): Promise<FixtureOAuthServer> {
       const messages = Array.isArray(parsed) ? parsed : [parsed];
       for (const message of messages as Array<{ method?: string; params?: Record<string, unknown> }>) {
         if (message.method === "initialize") clientInfos.push(message.params?.["clientInfo"]);
+        if (message.method === "tools/call") wireCalls += 1;
       }
-      if (request.headers.authorization !== `Bearer ${ACCESS_TOKEN}`) {
+      if (request.headers.authorization !== `Bearer ${accessToken}`) {
         challenge();
         return;
       }
@@ -180,6 +186,8 @@ export function startFixtureOAuthServer(): Promise<FixtureOAuthServer> {
         get tokenGrants() {
           return tokenGrants;
         },
+        get wireCalls() { return wireCalls; },
+        rotateToken() { accessToken = `${ACCESS_TOKEN}-${++tokenRevision}`; },
         close: () => new Promise<void>((done) => server.close(() => done())),
       });
     });

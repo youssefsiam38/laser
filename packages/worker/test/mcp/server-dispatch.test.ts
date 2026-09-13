@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { McpAuthorizationRegistry, mcpAuthorizationIdentities, mcpAuthorizationRevision } from "../../src/mcp/authorization.js";
 import { WorkerServer } from "../../src/server.js";
 import type { DriverEvent, DriverListener, SessionDriver } from "../../src/driver.js";
 
@@ -164,7 +165,7 @@ describe("WorkerServer · mcp/*", () => {
     expect(listed.result?.servers[0]).toMatchObject({ scope: "global", status: "unknown" });
 
     const inspected = await call<McpInspection>("mcp/inspect", { cwd, scope: "global", name: "fixture" });
-    expect(inspected.result?.status).toBe("connected");
+    expect(inspected.result?.status, JSON.stringify(inspected)).toBe("connected");
     expect(inspected.result?.tools.map((tool) => tool.name)).toContain("fixture_echo");
 
     const listedWhileInspecting = await call<{ servers: McpServerState[] }>("mcp/list", { cwd });
@@ -208,9 +209,12 @@ describe("WorkerServer · mcp/*", () => {
     await call("mcp/save", { cwd, scope: "global", server: fixture });
     await call("session/new", { cwd });
     const driver = drivers[0]!;
+    const registry = new McpAuthorizationRegistry(agentDir);
+    const generations = await Promise.all((await mcpAuthorizationIdentities("global", cwd, fixture)).map(id => registry.establish(id)));
+    const authorizationRevision = mcpAuthorizationRevision(generations);
     driver.emit({
       type: "extension",
-      message: { type: "lasercode/mcp/status", snapshot: { servers: [{ name: "fixture", status: "connected", toolCount: 3, directToolCount: 3 }], totalTools: 3, connectedCount: 1 } },
+      message: { type: "lasercode/mcp/status", snapshot: { servers: [{ name: "fixture", status: "connected", toolCount: 3, directToolCount: 3, authorizationRevision }], totalTools: 3, connectedCount: 1 } },
     });
     let listed = await call<{ servers: McpServerState[] }>("mcp/list", { cwd });
     expect(listed.result?.servers[0]).toMatchObject({ status: "connected", toolCount: 3, directToolCount: 3 });

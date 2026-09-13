@@ -490,7 +490,7 @@ export function McpServerForm({
             checked={form.alwaysLoad}
             onChange={(preload) => set({ alwaysLoad: preload })}
           />
-          <p className="text-xs leading-5 text-ink-3">Applies to new conversations. Conversations already running keep their current tools. Tools you've turned off stay off.</p>
+          <p className="text-xs leading-5 text-ink-3">Definitions apply to new conversations. Saving server changes stops further calls from existing conversations without rewriting their tool definitions or history. Tools you've turned off stay off.</p>
           <p className="text-sm leading-6 text-ink-2">Conversation connections stay available until the conversation closes. An idle timer does not remove its tools between turns.</p>
           <Field label="Give up on a call after this many milliseconds" hint="Leave empty to use the app’s own timing.">
             {(id) => (

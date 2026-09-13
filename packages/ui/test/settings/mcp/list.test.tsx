@@ -53,6 +53,7 @@ beforeEach(() => {
     serverState({
       scope: "project",
       status: "ready",
+      toolCatalog: { checkedAt: Date.now(), expiresAt: Date.now() + 60_000 },
       toolCount: 3,
       directToolCount: 0,
       shadowed: false,
@@ -77,6 +78,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   document.body.innerHTML = "";
+  vi.useRealTimers();
 });
 
 async function mount(props: { projectOpen?: boolean } = {}) {
@@ -117,7 +119,21 @@ it("shows both scopes, the project's first, with every status in a person's word
   expect(override.textContent).toContain("switches the every-project server");
   expect(rows.find((row) => row.dataset["server"] === "global:broken")!.textContent).toContain("It quit straight away.");
   expect(rows.find((row) => row.dataset["server"] === "project:memory")!.textContent).toContain("…/memory.sock");
-  expect(text()).toContain("reaches conversations you start afterwards");
+  expect(text()).toContain("stops further calls from existing conversations");
+});
+
+it("marks counts as historical at expiry without polling or claiming a retained list is ready", async () => {
+  vi.useFakeTimers(); vi.setSystemTime(1000);
+  servers = [serverState({ status: "ready", toolCount: 3, directToolCount: 0,
+    toolCatalog: { checkedAt: 1000, expiresAt: 2000 }, config: { name: "fixture", transport: { kind: "stdio", command: "fixture" } } })];
+  await mount();
+  expect(text()).toContain("Ready");
+  expect(text()).not.toContain("Last listed:");
+  const requests = mocks.request.mock.calls.length;
+  await act(async () => { await vi.advanceTimersByTimeAsync(1001); });
+  expect(text()).toContain("Last listed: 3 tools");
+  expect(text()).toContain("Needs refresh");
+  expect(mocks.request.mock.calls).toHaveLength(requests);
 });
 
 it("filters by scope without hiding the other one behind a guess", async () => {

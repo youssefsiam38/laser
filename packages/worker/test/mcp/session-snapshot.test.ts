@@ -17,7 +17,7 @@ async function fixture() {
   await store.save("global", options.cwd, { name: "docs", label: "Before", transport: { kind: "http", url: "https://before.example/mcp" } });
   return { options, store };
 }
-it("uses one validated snapshot for engine configuration and command attribution during a save", async () => {
+it("refuses a snapshot changed during setup rather than pairing old attribution and targets with new authorization",  async () => {
   const { options } = await fixture();
   const original = McpStore.prototype.enabled;
   const reads = vi.spyOn(McpStore.prototype, "enabled").mockImplementationOnce(async function(this: McpStore, cwd, trust) {
@@ -25,13 +25,12 @@ it("uses one validated snapshot for engine configuration and command attribution
     await this.save("global", cwd, { name: "docs", label: "After", transport: { kind: "http", url: "https://after.example/mcp" } });
     return snapshot;
   });
-  const setup = await mcpSessionSetup(options);
-  expect(reads).toHaveBeenCalledTimes(1);
-  expect(setup?.servers).toEqual([{ name: "docs", label: "Before" }]);
-  expect(adapter.create.mock.calls[0]?.[0]).toMatchObject({ config: { mcpServers: { docs: { url: "https://before.example/mcp" } } } });
+  await expect(mcpSessionSetup(options)).rejects.toThrow("settings changed");
+  expect(reads).toHaveBeenCalledTimes(2);
+  expect(adapter.create).not.toHaveBeenCalled();
   const next = await mcpSessionSetup(options);
   expect(next?.servers).toEqual([{ name: "docs", label: "After" }]);
-  expect(adapter.create.mock.calls[1]?.[0]).toMatchObject({ config: { mcpServers: { docs: { url: "https://after.example/mcp" } } } });
+  expect(adapter.create.mock.calls[0]?.[0]).toMatchObject({ config: { mcpServers: { docs: { url: "https://after.example/mcp" } } } });
 });
 it("measures eliminating the redundant discovery before per-session adapter setup", async () => {
   const { options, store } = await fixture();

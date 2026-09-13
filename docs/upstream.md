@@ -22,6 +22,44 @@ small and self-contained (`AGENTS.md` §6).
 
 ## Prepared patches
 
+### pi-mcp-adapter · SDK cache and embedded authorization (M16-T25, milestone 3)
+
+Extends the exact `2.33.0` patch; **not filed upstream**. The pinned SDK remains
+responsible for response storage and notification refresh. The bridge preserves
+absolute aggregate expiry, prevents interactive-envelope reuse, rejects invalid
+pagination scopes/cursors and invalidated in-flight walks, and partitions cache
+and OAuth state by embedding-owned authorization context. Token persistence has
+a guarded commit callback; stale clients refuse before cache reads or forwarding.
+Inspector observations expose clocks, not credentials. Model-management fields
+are omitted only for a person-managed embedding before its tools are frozen.
+
+The existing compiled `utils` module is exposed so the embedding uses the same
+URL, argument and path expansion rather than a second resolver. Relative stdio
+cwd and socket paths resolve against the manager's configured working directory.
+The embedding separates effective-target accounts from named configuration guards;
+a credential commit checks every guard but advances only its own target. Evidence
+and remaining acceptance gates are in the milestone handoff report; this is not an
+upstream acceptance or release claim.
+
+### pi-mcp-adapter · scoped OAuth identities (M16-T25, milestone 3 checkpoint)
+
+Extends `patches/pi-mcp-adapter@2.33.0.patch`; **not filed upstream**.
+`ServerEntry.authorizationIdentity` lets an embedding application partition OAuth
+storage independently of a display/configuration name. `AuthStorageOptions.identities`
+uses that identity for secure-store accounts and legacy file paths. Scoped reads
+bypass the process-local credential cache, so another worker's credential changes
+cannot be hidden by it. Connections and standalone sign-in receive the same map;
+native callers without the option retain their original accounts.
+
+An unresolved name-only credential is never used in the scoped account. It remains
+until scoped tokens have been successfully stored, then its old account is removed.
+Product migration guidance belongs to the existing per-server needs-auth surface.
+Worker OAuth regressions exercise real discovery/registration/code exchange with
+the adapter's in-memory test credential store: cross-project/scope isolation,
+legacy retention through pending sign-in, successful replacement, and restart.
+This checkpoint does **not** claim live-runtime revocation or complete cache
+freshness/pagination correctness; those require the remaining milestone 3 work.
+
 ### pi-mcp-adapter · embedded discovery policy (M16-T25, milestone 2)
 
 Local exact-version patch: `patches/pi-mcp-adapter@2.33.0.patch`; proposal prepared

@@ -24,7 +24,6 @@ export function answer(request) {
     const turn = request.messages.slice(request.messages.findLastIndex(message => message.role === 'user') + 1);
     const step = turn.filter(message => message.role === 'tool').length;
     const calls = [
-      { name: 'mcp', args: { connect: 'fixture' } },
       { name: 'mcp', args: { search: 'echo', detail: 'names' } },
       { name: 'mcp', args: { search: 'echo' } },
       { name: 'mcp', args: { describe: 'fixture_echo' } },

@@ -25,6 +25,7 @@ import { cn } from "@/lib/utils";
 import { useLaserStable } from "@/runtime";
 
 import { selectClass } from "../fields.js";
+import { catalogStatusWords, toolCatalogFresh, useCatalogClock } from "./catalog.js";
 import { McpRunPanel } from "./McpRunPanel.js";
 import { McpToolsPanel } from "./McpToolsPanel.js";
 import {
@@ -32,7 +33,6 @@ import {
   policyOf,
   scopeLabel,
   serverTitle,
-  statusWords,
   transportSummary,
 } from "./model.js";
 
@@ -81,6 +81,10 @@ export function McpInspector({
   const { client } = useLaserStable();
   const [tab, setTab] = useState<InspectorTab>("overview");
   const [inspection, setInspection] = useState<McpInspection>();
+  const catalog = !inspection ? state?.toolCatalog : state?.toolCatalog && inspection.toolCatalog && state.toolCatalog.checkedAt >= inspection.toolCatalog.checkedAt
+    ? state.toolCatalog : inspection?.toolCatalog;
+  const now = useCatalogClock(state ? catalog?.expiresAt : undefined);
+  const freshTools = toolCatalogFresh(catalog, now);
   const [connecting, setConnecting] = useState(false);
   const [failure, setFailure] = useState<string>();
   const [ping, setPing] = useState<{ status: McpServerStatus; latencyMs?: number; detail?: string }>();
@@ -271,7 +275,8 @@ export function McpInspector({
 
   const config = state ? { ...state.config, ...(policy ? { tools: policy } : {}) } : undefined;
   // A ping is the freshest answer there is, so it owns the pill once it ran.
-  const words = statusWords(ping?.status ?? state?.status ?? "unknown");
+  const reportedStatus = ping?.status ?? state?.status ?? "unknown";
+  const words = catalogStatusWords(reportedStatus, catalog, state?.toolCount !== undefined, now);
   const transport = transportSummary(state?.config.transport);
   const tabs = switchOffOnly ? TABS.filter((entry) => entry.id === "overview") : TABS;
 
@@ -348,12 +353,18 @@ export function McpInspector({
 
               {state && config && (
                 <>
+                  {inspection && ["overview", "tools", "run"].includes(tab) && (
+                    <div data-slot="mcp-tool-freshness" className="flex min-w-0 flex-col gap-1 text-sm leading-6 text-ink-2">
+                      <p>{connecting ? "Refreshing tool information…" : !catalog ? "Tool information has not been checked." : freshTools ? "Tool information is current." : "Showing previously listed tools. Reconnect on Overview to check again."}</p>
+                      <p className="text-xs leading-5 text-ink-3">Lists without a cache lifetime refresh for each use. A connection does not make an old list current.</p>
+                    </div>
+                  )}
                   {tab === "overview" && (
                     <Overview
                       state={state}
                       inspection={inspection}
                       ping={ping}
-                      busy={busy}
+                      busy={busy || connecting}
                       statusLabel={words.label}
                       statusHelp={words.help}
                       switchOffOnly={switchOffOnly}
@@ -378,7 +389,7 @@ export function McpInspector({
                     (inspection ? (
                       <>
                         <ConversationTools conversations={conversations} server={config.name} />
-                        <McpToolsPanel config={config} inspection={inspection} busy={busy} onPolicy={changePolicy} />
+                        <McpToolsPanel config={config} inspection={inspection} busy={busy || connecting} onPolicy={changePolicy} />
                       </>
                     ) : (
                       <WaitingForConnection connecting={connecting} />
@@ -406,7 +417,7 @@ export function McpInspector({
             <DialogTitle>Remove {state ? serverTitle(state.config) : "this server"}?</DialogTitle>
             <DialogDescription>
               It disappears from {state ? scopeLabel(state.scope).toLowerCase() : "this list"}, together with anything secret you saved
-              for it. Conversations already running keep the tools they started with.
+              for it. Existing conversations keep their tool definitions and history, but cannot make further calls to this server.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -693,7 +704,7 @@ function ConversationTools({ conversations, server }: {
         <p className="text-xs leading-5 text-ink-3">Estimates use UTF-8 byte counts as token upper bounds, not billed tokens. Discovery figures describe lookup results, which scripts may keep internal.</p>
         <dl className="grid grid-cols-1 gap-1 text-sm text-ink-2">
           <dt>Included from the start across all servers</dt><dd className="typed text-ink">{context.preloaded.length} server tools</dd>
-          <dt>All MCP definitions, including connection tools</dt><dd className="typed text-ink">{context.preloadedTokens.toLocaleString()} tokens</dd>
+          <dt>All MCP definitions, including discovery tools</dt><dd className="typed text-ink">{context.preloadedTokens.toLocaleString()} tokens</dd>
           <dt>Last discovery response only</dt><dd className="typed text-ink">{context.lastDiscoveryTokens.toLocaleString()} tokens</dd>
         </dl>
         {context.preloaded.length > 0 && context.budget !== null && context.preloadedTokens > context.budget && <p className="text-sm text-attention">Preloaded definitions exceed the per-lookup target, but do not reduce the lookup allowance. Turn off “Put every tool in the conversation” in Advanced to leave more room in new conversations.</p>}

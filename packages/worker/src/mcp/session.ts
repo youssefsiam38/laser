@@ -22,6 +22,7 @@ import { McpPromptFreeze } from "./prompt-freeze.js";
 import { loadMcpEngine, type McpConfig } from "./engine.js";
 import { McpStore } from "./store.js";
 import { mcpClientIdentity } from "./identity.js";
+import { McpAuthorizationRegistry, mcpAuthorizationAccount, mcpAuthorizationPartition, mcpAuthorizationIdentities, mcpAuthorizationRevision } from "./authorization.js";
 
 export interface McpSessionOptions {
   cwd: string;
@@ -70,12 +71,51 @@ export async function mcpSessionSetup(options: McpSessionOptions): Promise<McpSe
   if (servers.length === 0) return undefined;
   // Configuration and attribution must describe the same validated snapshot,
   // even if the person saves a changed server while secrets are resolving.
+  const registry = new McpAuthorizationRegistry(options.agentDir);
+  // Display aliases may share one scoped target. Coalesce establishment inside
+  // this one setup so they cannot contend with themselves on its durable lock.
+  const establishing = new Map<string, ReturnType<McpAuthorizationRegistry["establish"]>>();
+  const capture = (identity: string) => {
+    let pending = establishing.get(identity);
+    if (!pending) { pending = registry.establish(identity); establishing.set(identity, pending); }
+    return pending;
+  };
+  // Capture before resolving credentials. A save racing resolution must make this
+  // runtime stale, never pair old credentials with the new generation.
+  const generations = new Map(await Promise.all(servers.map(async ({ scope, config }) => {
+    const identities = await mcpAuthorizationIdentities(scope, options.cwd, config);
+    return [config.name, await Promise.all(identities.map(capture))] as const;
+  })));
+  const current = await store.enabled(options.cwd, options.projectTrusted);
+  if (JSON.stringify(current) !== JSON.stringify(servers)) {
+    throw new Error("MCP server settings changed while opening this conversation.");
+  }
   const config = await resolveConfig(store, servers, options.cwd, options.projectEnv);
+  for (const [name, snapshots] of generations) {
+    const primary = snapshots[0]!;
+    config.mcpServers[name]!.authorizationIdentity = mcpAuthorizationAccount(primary);
+    config.mcpServers[name]!.authorizationPartition = mcpAuthorizationPartition(snapshots);
+  }
+  const authorization = async (name: string): Promise<string | undefined> => {
+    const snapshots = generations.get(name);
+    if (snapshots?.length && (await Promise.all(snapshots.map(snapshot => registry.current(snapshot)))).every(Boolean)) return undefined;
+    const label = servers.find(server => server.config.name === name)?.config.label ?? name;
+    return `Access to ${label} changed. Sign in again in Settings → MCP servers.`;
+  };
+  const commitCredentials = async (name: string, save: () => void): Promise<string> => {
+    const snapshots = generations.get(name);
+    const primary = snapshots?.[0];
+    if (!primary) throw new Error("This server is no longer authorized. Sign in again in Settings → MCP servers.");
+    const expected = new Map(snapshots!.map(value => [value.identity, value]));
+    const committed = await registry.revoke([primary.identity], async next => { save(); return next; }, expected);
+    generations.set(name, snapshots!.map(value => committed.get(value.identity)!));
+    return mcpAuthorizationPartition(generations.get(name) ?? []);
+  };
   const engine = await loadMcpEngine();
   const discovery = new McpPromptFreeze(engine.renderSchema);
-  const factory = engine.createMcpAdapter({ config, clientIdentity: mcpClientIdentity(), discovery }) as unknown as (pi: ExtensionAPI) => void | Promise<void>;
+  const factory = engine.createMcpAdapter({ config, clientIdentity: mcpClientIdentity(), discovery, authorization, commitCredentials, personManaged: true }) as unknown as (pi: ExtensionAPI) => void | Promise<void>;
   return {
-    extension: { name: "mcp", factory: (pi: ExtensionAPI) => factory(quietEngineUi(discovery.wrap(pi, engine.statusEvent))) },
+    extension: { name: "mcp", factory: (pi: ExtensionAPI) => factory(quietEngineUi(discovery.wrap(pi, engine.statusEvent, name => mcpAuthorizationRevision(generations.get(name) ?? [])))) },
     statusEvent: engine.statusEvent,
     servers: servers.map(({ config: server }) => ({ name: server.name, ...(server.label ? { label: server.label } : {}) })),
   };

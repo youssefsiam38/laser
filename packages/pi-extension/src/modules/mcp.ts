@@ -8,7 +8,7 @@
  * file, and never names the engine: the worker passes the channel in, so this
  * package takes no dependency on the adapter.
  */
-import { mcpConversationContextSchema, type McpRuntimeServer, type McpRuntimeSnapshot, type McpServerStatus } from "@lasercode/protocol";
+import { mcpConversationContextSchema, mcpToolCatalogStateSchema, type McpRuntimeServer, type McpRuntimeSnapshot, type McpServerStatus } from "@lasercode/protocol";
 import type { LaserModule, ModuleContext } from "./index.js";
 
 /** What the worker hands over when the engine is loaded for this session. */
@@ -32,6 +32,8 @@ const STATUS: Record<string, McpServerStatus> = {
 };
 
 interface EngineServer {
+  authorizationRevision?: unknown;
+  toolCatalog?: unknown;
   name?: unknown;
   status?: unknown;
   toolCount?: unknown;
@@ -49,9 +51,13 @@ export function toRuntimeSnapshot(raw: unknown): McpRuntimeSnapshot | undefined 
     const name = typeof entry?.name === "string" ? entry.name : undefined;
     const status = typeof entry?.status === "string" ? STATUS[entry.status] : undefined;
     if (!name) continue;
+    const toolCatalog = mcpToolCatalogStateSchema.safeParse(entry.toolCatalog);
+    const authorizationRevision = typeof entry.authorizationRevision === "string" && /^[a-f0-9]{64}$/.test(entry.authorizationRevision) ? entry.authorizationRevision : undefined;
     servers.push({
+      ...(authorizationRevision ? { authorizationRevision } : {}),
+      ...(toolCatalog.success ? { toolCatalog: toolCatalog.data } : {}),
       name,
-      status: status ?? "unknown",
+      status: status === "ready" && (!toolCatalog.success || toolCatalog.data.expiresAt <= Date.now()) ? "unknown" : status ?? "unknown",
       toolCount: count(entry.toolCount),
       directToolCount: count(entry.directToolCount),
       ...(entry.resourceCount !== undefined ? { resourceCount: count(entry.resourceCount) } : {}),

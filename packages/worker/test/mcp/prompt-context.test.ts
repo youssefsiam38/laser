@@ -4,22 +4,24 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { DATA_DIR_NAME, PRODUCT_NAME, type McpRuntimeSnapshot } from "@lasercode/protocol";
-import { afterEach, describe, expect, it } from "vitest";
+import { DATA_DIR_NAME, PRODUCT_NAME, type McpRuntimeSnapshot, type McpServerConfig } from "@lasercode/protocol";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createJiti } from "jiti";
 import { fallbackDefaultAgent, fallbackPolicy } from "../../src/agents/definitions.js";
 import { rootRecord, rootRole } from "../../src/agents/session-config.js";
 import { StableSdkDriver } from "../../src/drivers/stable-sdk.js";
 import type { DriverEvent } from "../../src/driver.js";
+import { McpService } from "../../src/mcp/service.js";
 import { McpPromptFreeze } from "../../src/mcp/prompt-freeze.js";
 import { adapterRoot } from "../../src/mcp/engine.js";
+import { startFixtureHttpServer } from "./fixtures/http-server.js";
 import { startStubProvider, toolNamesOf, writeStubModels, type StubAnswer } from "../agents/stub-provider.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures/stdio-server.mjs");
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 
-async function run(preload: boolean, window?: number) {
+async function run(preload: boolean, window?: number, transport?: NonNullable<McpServerConfig["transport"]>, cold?: "gateway" | "script" | "management" | "empty", extra: McpServerConfig[] = []) {
   const base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-mcp-prefix-`));
   cleanups.push(() => rmSync(base, { recursive: true, force: true }));
   const cwd = join(base, "project");
@@ -29,15 +31,28 @@ async function run(preload: boolean, window?: number) {
   process.env.PI_CODING_AGENT_DIR = agentDir;
   cleanups.push(() => { if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous; });
   // Legacy direct is intentionally present in both cases: it is not an override.
-  writeFileSync(join(agentDir, DATA_DIR_NAME, "mcp.json"), JSON.stringify({ version: 1, servers: [{ name: "fixture", transport: { kind: "stdio", command: process.execPath, args: [fixture] }, tools: { exposure: "direct", ...(preload ? { alwaysLoad: true } : {}) } }] }));
+  writeFileSync(join(agentDir, DATA_DIR_NAME, "mcp.json"), JSON.stringify({ version: 1, servers: [{ name: "fixture", startup: cold ? "on-demand" : "at-start", transport: transport ?? { kind: "stdio", command: process.execPath, args: [fixture] }, ...(transport ? { auth: { kind: "none" } } : {}), tools: { exposure: "direct", ...(preload ? { alwaysLoad: true } : {}) } }, ...extra] }));
   const answers: StubAnswer[] = [
-    { toolCall: { name: "mcp", args: { connect: "fixture" } } },
-    { toolCall: { name: "mcp", args: { search: "echo" } } },
+    cold === "script" ? { toolCall: { name: "mcpScript", args: { code: 'emit(await tools.search({query:"echo",server:"fixture"}));' } } }
+      : { toolCall: { name: "mcp", args: cold ? { search: "echo", server: "fixture" } : { server: "fixture" } } },
+    { toolCall: { name: "mcp", args: { search: "echo", server: "fixture" } } },
     { toolCall: { name: "mcp", args: { describe: "fixture_echo" } } },
-    { toolCall: { name: "mcpScript", args: { code: 'const page = await tools.search({query:"echo",detail:"names"}); emit(page);' } } },
-    { toolCall: { name: "mcp", args: { tool: "fixture_echo", args: { text: "discovered-call" } } } },
+    { toolCall: { name: "mcpScript", args: { code: 'const page = await tools.search({query:"echo",server:"fixture",detail:"names"}); emit(page);' } } },
+    cold === "script" ? { toolCall: { name: "mcpScript", args: { code: 'emit(await tools.call("fixture_echo", {text:"discovered-call"}));' } } }
+      : { toolCall: { name: "mcp", args: { tool: "fixture_echo", args: { text: "discovered-call" } } } },
     { text: "done" },
   ];
+  if (cold === "empty") answers.splice(0, answers.length,
+    { toolCall: { name: "mcp", args: { search: "   " } } },
+    { toolCall: { name: "mcpScript", args: { code: 'emit(await tools.search({query:"   "}));' } } },
+    { text: "done" });
+  if (cold === "management") {
+    const forbidden = [{ connect: "fixture" }, { action: "install", url: "http://127.0.0.1:1/mcp" }, { action: "auth-start", server: "fixture" }, { action: "auth-complete", server: "fixture", args: { code: "synthetic" } }, { enable: "fixture" }, { disable: "fixture" }, { remove: "fixture" }];
+    answers.splice(0, answers.length, ...forbidden.flatMap(args => [
+      { toolCall: { name: "mcp", args } },
+      { toolCall: { name: "mcpScript", args: { code: `emit(await tools.call("mcp", ${JSON.stringify(args)}));` } } },
+    ]), { text: "done" });
+  }
   let index = 0;
   const stub = await startStubProvider(() => answers[index++] ?? { text: "done" });
   cleanups.push(() => stub.close());
@@ -57,7 +72,7 @@ async function run(preload: boolean, window?: number) {
   } });
   const settled = new Promise<void>((resolve) => driver.subscribe((event) => { if (event.type === "update" && event.update.kind === "agent_settled") resolve(); }));
   await driver.prompt([{ type: "text", text: "Discover then call echo" }]); await settled;
-  return { stub, events, driver };
+  return { stub, events, driver, answers, cwd, agentDir };
 }
 
 function snapshots(events: DriverEvent[]): McpRuntimeSnapshot[] {
@@ -65,6 +80,111 @@ function snapshots(events: DriverEvent[]): McpRuntimeSnapshot[] {
 }
 
 describe("MCP prompt contract through real provider requests", () => {
+  it("does not establish cold transports for empty gateway or script searches", async () => {
+    const remote = await startFixtureHttpServer("sse"); cleanups.push(() => remote.close());
+    const { stub } = await run(false, undefined, { kind: "http", url: remote.url, stream: "sse" }, "empty");
+    expect(stub.requests.at(-1)!.messages.filter(message => message.role === "tool")).toHaveLength(2);
+    expect(remote.clientInfos).toHaveLength(0);
+    expect(remote.toolListRequests()).toBe(0);
+  }, 60_000);
+
+  it("refuses model management before a cold server has any transport or auth side effects", async () => {
+    const remote = await startFixtureHttpServer("sse"); cleanups.push(() => remote.close());
+    const { stub } = await run(false, undefined, { kind: "http", url: remote.url, stream: "sse" }, "management");
+    expect(remote.clientInfos).toHaveLength(0);
+    expect(remote.toolListRequests()).toBe(0);
+    expect(remote.toolCalls).toHaveLength(0);
+    const results = stub.requests.at(-1)!.messages.filter(message => message.role === "tool");
+    expect(results).toHaveLength(14);
+    for (const result of results) expect(JSON.stringify(result)).toContain("managed by the person in Settings");
+    const frozen = JSON.stringify(stub.requests[0]!.tools);
+    for (const request of stub.requests) expect(JSON.stringify(request.tools)).toBe(frozen);
+  }, 60_000);
+
+  it.each(["gateway", "script"] as const)("discovers a cold enabled server through %s without management or unrelated connections", async cold => {
+    const remote = await startFixtureHttpServer("sse", 60_000);
+    const unrelated = await startFixtureHttpServer("sse");
+    cleanups.push(() => remote.close(), () => unrelated.close());
+    const { stub } = await run(false, undefined, { kind: "http", url: remote.url, stream: "sse" }, cold, [
+      { name: "unrelated", startup: "on-demand", transport: { kind: "http", url: unrelated.url, stream: "sse" } },
+      { name: "off", disabled: true, transport: { kind: "http", url: unrelated.url, stream: "sse" } },
+    ]);
+    expect(remote.clientInfos).toHaveLength(1);
+    expect(unrelated.clientInfos).toHaveLength(0);
+    expect(unrelated.toolListRequests()).toBe(0);
+    expect(remote.toolCalls).toEqual(["echo"]);
+    const tools = JSON.stringify(stub.requests[0]!.tools);
+    for (const request of stub.requests) expect(JSON.stringify(request.tools)).toBe(tools);
+    const results = JSON.stringify(stub.requests.at(-1)!.messages.filter(message => message.role === "tool"));
+    expect(results).toContain("fixture_echo"); expect(results).toContain("discovered-call");
+    expect(results).not.toMatch(/connect:|auth-start|mcp enable/);
+  }, 60_000);
+
+  it.each([false, true])("re-indexes script discovery after one notification refresh while provider tools remain frozen (preload=%s)", async preload => {
+    const remote = await startFixtureHttpServer("sse", 60_000);
+    cleanups.push(() => remote.close());
+    const { stub, driver, answers, events } = await run(preload, undefined, { kind: "http", url: remote.url, stream: "sse" });
+    const frozen = JSON.stringify(stub.requests[0]!.tools);
+    const checked = snapshots(events).at(-1)?.servers[0]?.toolCatalog?.checkedAt ?? 0;
+    const lists = remote.toolListRequests();
+    const calls = remote.toolCalls.length;
+    remote.replaceTools(["replacement", "snapshot"]);
+    await vi.waitFor(() => expect(snapshots(events).at(-1)?.servers[0]?.toolCatalog?.checkedAt).toBeGreaterThan(checked), { timeout: 5000 });
+    answers.push({ toolCall: { name: "mcpScript", args: { code: 'emit(await tools.search({query:"replacement",detail:"names"})); emit(await tools.call("fixture_replacement",{text:"fresh-call"})); emit(await tools.call("fixture_echo",{text:"must-not-forward"}));' } } }, { text: "done" });
+    const settled = new Promise<void>(resolve => driver.subscribe(event => { if (event.type === "update" && event.update.kind === "agent_settled") resolve(); }));
+    await driver.prompt([{ type: "text", text: "Use the changed tool list" }]); await settled;
+    expect(remote.toolCalls.slice(calls)).toEqual(["replacement"]);
+    expect(remote.toolListRequests()).toBe(lists + 1);
+    const result = stub.requests.at(-1)!.messages.filter(message => message.role === "tool").at(-1);
+    expect(JSON.stringify(result)).toContain("fresh-call");
+    expect(JSON.stringify(result)).toContain("fixture_replacement");
+    for (const request of stub.requests) expect(JSON.stringify(request.tools)).toBe(frozen);
+  }, 60_000);
+
+  it("refuses server management through both gateway and script dispatch without changing the frozen surface", async () => {
+    const { stub, driver, answers, cwd, agentDir } = await run(false);
+    const tools = JSON.stringify(stub.requests[0]!.tools);
+    const configPath = join(agentDir, DATA_DIR_NAME, "mcp.json");
+    const saved = readFileSync(configPath, "utf8");
+    const forbidden = [{ connect: "fixture" }, { action: "install", url: "http://127.0.0.1:1/mcp" },
+      { action: "auth-start", server: "fixture" }, { action: "auth-complete", server: "fixture", args: { code: "synthetic" } },
+      { enable: "fixture" }, { disable: "fixture" }, { remove: "fixture" }];
+    for (const args of forbidden) {
+      answers.push({ toolCall: { name: "mcp", args } },
+        { toolCall: { name: "mcpScript", args: { code: `emit(await tools.call("mcp", ${JSON.stringify(args)}));` } } });
+    }
+    answers.push({ text: "done" });
+    const settled = new Promise<void>(resolve => driver.subscribe(event => { if (event.type === "update" && event.update.kind === "agent_settled") resolve(); }));
+    await driver.prompt([{ type: "text", text: `Do not change server configuration in ${cwd}` }]); await settled;
+    for (const request of stub.requests) expect(JSON.stringify(request.tools)).toBe(tools);
+    const results = stub.requests.at(-1)!.messages.filter(message => message.role === "tool").slice(-forbidden.length * 2);
+    expect(results).toHaveLength(forbidden.length * 2);
+    for (const result of results) expect(JSON.stringify(result.content)).toContain("managed by the person in Settings");
+    expect(readFileSync(configPath, "utf8")).toBe(saved);
+    const gateway = stub.requests[0]!.tools!.find(tool => tool.function.name === "mcp") as unknown as { function: { parameters: { properties: Record<string, unknown> } } };
+    for (const name of ["connect", "action", "url", "target"]) expect(gateway.function.parameters.properties).not.toHaveProperty(name);
+  }, 60_000);
+  it.each([false, true])("refuses the next call after sign-out without changing any serialized provider tool (preload=%s)", async preload => {
+    const previous = process.env.PI_MCP_ADAPTER_TEST_AUTH_STORE;
+    process.env.PI_MCP_ADAPTER_TEST_AUTH_STORE = "memory";
+    cleanups.push(() => { if (previous === undefined) delete process.env.PI_MCP_ADAPTER_TEST_AUTH_STORE; else process.env.PI_MCP_ADAPTER_TEST_AUTH_STORE = previous; });
+    const { stub, driver, answers, cwd, agentDir } = await run(preload);
+    const before = JSON.stringify(stub.requests[0]!.tools);
+    const service = new McpService({ cwd, agentDir, projectTrusted: true, changed: () => {} });
+    cleanups.push(() => service.dispose());
+    await service.authLogout({ cwd, scope: "global", name: "fixture" });
+    answers.push(
+      { toolCall: preload ? { name: "fixture_echo", args: { text: "revoked-call" } }
+        : { name: "mcp", args: { tool: "fixture_echo", args: { text: "revoked-call" } } } },
+      { text: "stopped" },
+    );
+    const settled = new Promise<void>(resolve => driver.subscribe(event => { if (event.type === "update" && event.update.kind === "agent_settled") resolve(); }));
+    await driver.prompt([{ type: "text", text: "Try the same tool again" }]); await settled;
+    expect(stub.requests.length).toBe(8);
+    for (const request of stub.requests) expect(JSON.stringify(request.tools)).toBe(before);
+    expect(JSON.stringify(stub.requests.at(-1))).toContain("Access to fixture changed. Sign in again in Settings → MCP servers.");
+  }, 60_000);
+
   it.each(["flat", "function", "google", "bedrock", "relay"])("reads the pinned %s provider payload without rewriting it", (format) => {
     const context = new McpPromptFreeze();
     const events = new EventEmitter();
@@ -158,7 +278,7 @@ describe("MCP prompt contract through real provider requests", () => {
     expect(JSON.stringify(events)).toContain("Preloaded MCP tools may exceed");
     expect(events.filter(event => event.type === "update" && event.update.kind === "extension_error")).toEqual([]);
   }, 120_000);
-  it.each([false, true])("keeps the entire tools array stable across connect, discover, inspect, script search and execution (preload=%s)", async (preload) => {
+  it.each([false, true])("keeps the entire tools array stable across person-owned startup, discover, inspect, script search and execution (preload=%s)", async (preload) => {
     const { stub, events, driver } = await run(preload);
     expect(stub.requests).toHaveLength(6);
     const first = JSON.stringify((stub.requests[0] as { tools?: unknown }).tools);

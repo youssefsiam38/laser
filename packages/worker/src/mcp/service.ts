@@ -21,6 +21,7 @@ import type {
   McpServerStatus,
 } from "@lasercode/protocol";
 import { ErrorCodes, ProtocolError } from "@lasercode/protocol";
+import { McpAuthorizationRegistry, mcpAuthorizationIdentity, mcpAuthorizationIdentities, mcpConfigurationIdentity, mcpAuthorizationRevision, type McpAuthorizationGeneration } from "./authorization.js";
 import { secretFieldPaths, type ResolvedSecrets } from "./adapter-config.js";
 import { detectImportSources, inlineSecretValues, markConflicts, readSourceEntries } from "./import.js";
 import { McpInspector, toolInfos } from "./inspector.js";
@@ -41,9 +42,10 @@ interface SessionSnapshot {
 }
 
 interface RememberedInspection {
+  authorizationRevision?: string;
   definition: string;
   at: number;
-  state: Pick<McpServerState, "status" | "detail" | "toolCount" | "directToolCount" | "resourceCount" | "promptCount" | "latencyMs">;
+  state: Pick<McpServerState, "status" | "detail" | "toolCount" | "directToolCount" | "resourceCount" | "promptCount" | "latencyMs" | "toolCatalog">;
   toolNames?: string[];
 }
 
@@ -56,7 +58,7 @@ export class McpService {
 
   constructor(private readonly options: McpServiceOptions) {
     this.store = new McpStore(options.agentDir);
-    this.inspector = new McpInspector(options.cwd);
+    this.inspector = new McpInspector(options.cwd, options.agentDir, () => options.changed());
   }
 
   /** The store, for the driver's "does this project have any server" question. */
@@ -96,7 +98,8 @@ export class McpService {
   }
 
   async save(params: ClientRequests["mcp/save"]["params"]): Promise<ClientRequests["mcp/save"]["result"]> {
-    await this.store.save(params.scope, this.options.cwd, params.server, params.originalName);
+    await this.revoke(params.scope, params.originalName ?? params.server.name,
+      () => this.store.save(params.scope, this.options.cwd, params.server, params.originalName), params.server as McpServerConfig);
     await this.inspector.closeServer(params.scope, params.originalName ?? params.server.name);
     if (params.originalName && params.originalName !== params.server.name) {
       await this.inspector.closeServer(params.scope, params.server.name);
@@ -115,7 +118,7 @@ export class McpService {
   }
 
   async remove(params: ClientRequests["mcp/remove"]["params"]): Promise<ClientRequests["mcp/remove"]["result"]> {
-    await this.store.remove(params.scope, this.options.cwd, params.name);
+    await this.revoke(params.scope, params.name, () => this.store.remove(params.scope, this.options.cwd, params.name));
     await this.inspector.closeServer(params.scope, params.name);
     this.inspections.delete(McpInspector.key(params.scope, params.name));
     this.options.changed();
@@ -137,8 +140,9 @@ export class McpService {
       }
       if (!params.name) throw new ProtocolError(ErrorCodes.InvalidParams, "Name the server to inspect, or send the definition to test.");
       const found = await this.find(params.scope, params.name);
-      const result = await this.inspector.inspect({ scope: found.scope, config: found.config, secrets: await this.secretsFor(found.config, found.scope) });
-      this.inspections.set(McpInspector.key(found.scope, found.config.name), this.remember(found.config, result));
+      const authorization = await this.capture(found);
+      const result = await this.inspector.inspect({ scope: found.scope, config: found.config, authorization, secrets: await this.secretsFor(found.config, found.scope) });
+      this.inspections.set(McpInspector.key(found.scope, found.config.name), this.remember(found.config, result, this.inspector.authorizationRevision(found.scope, found.config.name)));
       return result;
     });
   }
@@ -146,7 +150,8 @@ export class McpService {
   async ping(params: ClientRequests["mcp/ping"]["params"]): Promise<ClientRequests["mcp/ping"]["result"]> {
     return this.reportChanges(async () => {
       const found = await this.find(params.scope, params.name);
-      const result = await this.inspector.ping(found.scope, found.config, await this.secretsFor(found.config, found.scope));
+      const authorization = await this.capture(found);
+      const result = await this.inspector.ping(found.scope, found.config, await this.secretsFor(found.config, found.scope), undefined, authorization);
       const key = McpInspector.key(found.scope, found.config.name);
       const previous = this.inspections.get(key);
       const { detail: _detail, ...previousState } = previous?.state ?? {};
@@ -162,7 +167,8 @@ export class McpService {
 
   async call(params: ClientRequests["mcp/call"]["params"]): Promise<ClientRequests["mcp/call"]["result"]> {
     const found = await this.find(params.scope, params.name);
-    return this.inspector.call(found.scope, found.config, await this.secretsFor(found.config, found.scope), params.tool, params.args);
+    const authorization = await this.capture(found);
+    return this.inspector.call(found.scope, found.config, await this.secretsFor(found.config, found.scope), params.tool, params.args, undefined, authorization);
   }
 
   async disconnect(params: ClientRequests["mcp/disconnect"]["params"]): Promise<ClientRequests["mcp/disconnect"]["result"]> {
@@ -175,11 +181,14 @@ export class McpService {
   async authStart(params: ClientRequests["mcp/auth/start"]["params"]): Promise<ClientRequests["mcp/auth/start"]["result"]> {
     const found = await this.find(params.scope, params.name);
     const before = await this.reported();
+    const authorization = await this.capture(found);
     const started = await this.inspector.authStart(found.scope, found.config, await this.secretsFor(found.config, found.scope), () => {
       // Loopback completion happens outside the request; inspect through the
       // normal path so its notification and reported status agree.
+      // The inspector's token-save transaction has already revoked old runtimes
+      // before the credential was written, for loopback and manual completion.
       void this.inspect({ cwd: this.options.cwd, scope: found.scope, name: found.config.name }).catch(() => {});
-    });
+    }, authorization);
     if (started.alreadyAuthorized) {
       this.rememberAuth(found.scope, found.config, { status: "ready" });
       if (before !== await this.reported()) this.options.changed();
@@ -206,7 +215,7 @@ export class McpService {
   async authLogout(params: ClientRequests["mcp/auth/logout"]["params"]): Promise<ClientRequests["mcp/auth/logout"]["result"]> {
     const found = await this.find(params.scope, params.name);
     const before = await this.reported();
-    await this.inspector.authLogout(found.scope, found.config);
+    await this.revoke(found.scope, found.config.name, () => this.inspector.authLogout(found.scope, found.config), undefined, true);
     this.rememberAuth(found.scope, found.config, { status: "needs-auth" });
     if (before !== await this.reported()) this.options.changed();
     return { status: "needs-auth" };
@@ -235,7 +244,9 @@ export class McpService {
       }
       const values = inlineSecretValues(entries[name], params.source as McpImportSourceId);
       const withSecrets = structuredClone(server.config) as McpServerConfig;
-      await this.store.save(params.scope, this.options.cwd, withInlineSecrets(withSecrets, values) as never, conflicts ? name : undefined);
+      const replacement = withInlineSecrets(withSecrets, values);
+      await this.revoke(params.scope, name,
+        () => this.store.save(params.scope, this.options.cwd, replacement as never, conflicts ? name : undefined), replacement);
       imported.push(name);
     }
     if (imported.length > 0) this.options.changed();
@@ -243,6 +254,22 @@ export class McpService {
   }
 
   // ------------------------------------------------------------ internals
+
+  private async revoke<T>(scope: McpScope, name: string, operation: () => Promise<T>, replacement?: McpServerConfig, credentialsOnly = false): Promise<T> {
+    const { servers } = await this.store.effective(this.options.cwd, this.options.projectTrusted);
+    const previous = servers.find(server => server.scope === scope && server.config.name === name)
+      ?? (scope === "project" ? servers.find(server => server.scope === "global" && server.config.name === name) : undefined);
+    // A project's off-only override observes the global definition but does not
+    // own its credential target: revoke the project slot, never other projects'
+    // shared global account, when this override is changed or removed.
+    const owned = previous?.scope === scope && !previous.overridesGlobal ? previous.config : undefined;
+    const definitions = [credentialsOnly ? previous?.config : owned, replacement].filter((config): config is McpConfiguredServer => config !== undefined && isConfigured(config));
+    const identities = await Promise.all(definitions.map(config => mcpAuthorizationIdentity(scope, this.options.cwd, config)));
+    if (!credentialsOnly) {
+      for (const slot of new Set([name, ...(replacement ? [replacement.name] : [])])) identities.push(await mcpConfigurationIdentity(scope, this.options.cwd, slot));
+    }
+    return new McpAuthorizationRegistry(this.options.agentDir).revoke(identities, operation);
+  }
 
   private rememberAuth(scope: McpScope, config: McpServerConfig, result: { status: McpServerStatus; detail?: string }): void {
     const key = McpInspector.key(scope, config.name);
@@ -253,10 +280,11 @@ export class McpService {
       state: { ...previousState, ...result } });
   }
 
-  private remember(config: McpServerConfig, result: McpInspection): RememberedInspection {
-    return { definition: inspectionDefinition(config), at: Date.now(),
+  private remember(config: McpServerConfig, result: McpInspection, authorizationRevision?: string): RememberedInspection {
+    return { definition: inspectionDefinition(config), at: Date.now(), ...(authorizationRevision ? { authorizationRevision } : {}),
       toolNames: result.tools.map((tool) => tool.originalName),
       state: { status: result.status === "connected" ? "ready" : result.status,
+        ...(result.toolCatalog ? { toolCatalog: result.toolCatalog } : {}),
         ...(result.detail ? { detail: result.detail } : {}),
         ...(result.latencyMs !== undefined ? { latencyMs: result.latencyMs } : {}),
         toolCount: result.tools.length, directToolCount: result.tools.filter((tool) => tool.visibility === "direct").length,
@@ -285,6 +313,17 @@ export class McpService {
     const fallback = servers.find((server) => server.config.name === name && isConfigured(server.config));
     if (fallback && isConfigured(fallback.config)) return { scope: fallback.scope, config: fallback.config };
     throw new ProtocolError(ErrorCodes.InvalidParams, `No MCP server named "${name}" is saved for this project.`);
+  }
+
+  private async capture(found: { scope: McpScope; config: McpConfiguredServer }): Promise<readonly McpAuthorizationGeneration[]> {
+    const registry = new McpAuthorizationRegistry(this.options.agentDir);
+    const identities = await mcpAuthorizationIdentities(found.scope, this.options.cwd, found.config);
+    const snapshots = await Promise.all(identities.map(identity => registry.establish(identity)));
+    const current = await this.find(found.scope, found.config.name);
+    if (JSON.stringify(current) !== JSON.stringify(found)) {
+      throw new ProtocolError(ErrorCodes.InvalidParams, "Server settings changed. Reopen this server in Settings → MCP servers.");
+    }
+    return snapshots;
   }
 
   private async secretsFor(config: McpServerConfig, scope?: McpScope): Promise<ResolvedSecrets> {
@@ -329,16 +368,17 @@ export class McpService {
   }
 
   /** The newest snapshot any session of this project reported for a server. */
-  private runtimeStatus(name: string): { status: McpServerStatus; toolCount?: number; directToolCount?: number; resourceCount?: number; failedAgoSeconds?: number } | undefined {
+  private runtimeStatus(name: string, authorizationRevision: string | undefined): { status: McpServerStatus; toolCatalog?: NonNullable<McpServerState["toolCatalog"]>; toolCount?: number; directToolCount?: number; resourceCount?: number; failedAgoSeconds?: number } | undefined {
     let newest: { at: number; server: McpRuntimeSnapshot["servers"][number] } | undefined;
     for (const { snapshot, at } of this.snapshots.values()) {
-      const server = snapshot.servers.find((candidate) => candidate.name === name);
+      const server = snapshot.servers.find((candidate) => candidate.name === name && authorizationRevision !== undefined && candidate.authorizationRevision === authorizationRevision);
       if (server && (!newest || at > newest.at)) newest = { at, server };
     }
     if (!newest) return undefined;
     const { server } = newest;
     return {
-      status: server.status,
+      status: server.status === "ready" && (!server.toolCatalog || server.toolCatalog.expiresAt <= Date.now()) ? "unknown" : server.status,
+      ...(server.toolCatalog ? { toolCatalog: server.toolCatalog } : {}),
       toolCount: server.toolCount,
       directToolCount: server.directToolCount,
       ...(server.resourceCount !== undefined ? { resourceCount: server.resourceCount } : {}),
@@ -380,23 +420,42 @@ export class McpService {
     };
     if (config.disabled) return { ...state, status: "off" };
     if (server.shadowed) return { ...state, status: "off", detail: "This project uses its own server of the same name." };
+    if (isConfigured(config)) {
+      const migration = await this.inspector.migrationDetail(scope, config);
+      if (migration) return { ...state, status: "needs-auth", detail: migration };
+    }
 
     if (this.inspector.inspecting(scope, config.name)) {
+      if (!await this.inspector.authorized(scope, config.name)) return { ...state, status: "unknown", detail: "Access to this server changed. Reconnect to check its current tools." };
       const latencyMs = this.inspector.latency(scope, config.name);
       return { ...state, ...this.inspector.liveCounts(scope, config.name), status: "connected", inspecting: true,
         ...(latencyMs !== undefined ? { latencyMs } : {}) };
     }
-    const runtime = this.runtimeStatus(config.name);
+    let authorizationRevision: string | undefined;
+    if (isConfigured(config)) {
+      const registry = new McpAuthorizationRegistry(this.options.agentDir);
+      const identities = await mcpAuthorizationIdentities(scope, this.options.cwd, config);
+      const snapshots = await Promise.all(identities.map(identity => registry.read(identity)));
+      if (snapshots.every(Boolean)) authorizationRevision = mcpAuthorizationRevision(snapshots);
+    }
+    const runtime = this.runtimeStatus(config.name, authorizationRevision);
     if (runtime) return { ...state, ...runtime };
     const remembered = this.inspections.get(McpInspector.key(scope, config.name));
     if (remembered?.definition === inspectionDefinition(config)) {
       const directToolCount = remembered.toolNames
         ? toolInfos(config, { tools: remembered.toolNames.map((name) => ({ name })) }).filter((tool) => tool.visibility === "direct").length
         : remembered.state.directToolCount;
-      return { ...state, ...remembered.state, ...(directToolCount !== undefined ? { directToolCount } : {}) };
+      const current = authorizationRevision !== undefined && remembered.authorizationRevision === authorizationRevision;
+      const toolCatalog = remembered.state.toolCatalog;
+      const fresh = current && toolCatalog !== undefined && toolCatalog.expiresAt > Date.now();
+      return { ...state, ...remembered.state,
+        ...(remembered.state.status === "ready" && !fresh ? { status: "unknown" } : {}),
+        ...(!current && toolCatalog ? { toolCatalog: { ...toolCatalog, expiresAt: toolCatalog.checkedAt } } : {}),
+        ...(directToolCount !== undefined ? { directToolCount } : {}) };
     }
-    const cached = await this.inspector.cachedCounts(config.name).catch(() => undefined);
-    return { ...state, ...(cached ? { ...cached, status: "ready" } : {}) };
+    // Persisted entries indexed by display name are historical data, not proof
+    // of this scoped target's current metadata or authorization.
+    return state;
   }
 }
 

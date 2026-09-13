@@ -147,8 +147,8 @@ export function McpServersTab({ cwd, projectOpen = true }: { cwd: string; projec
             <p className="typed uppercase tracking-eyebrow text-live">Tools from other programs</p>
             <h2 className="mt-1 text-lg font-semibold text-ink">MCP servers</h2>
             <p className="mt-1 text-sm leading-6 text-ink-2">
-              A server brings tools {PRODUCT_DISPLAY_NAME} can use — a browser, a database, an issue tracker. What you change here
-              reaches conversations you start afterwards; the one you are in keeps the tools it started with.
+              A server brings tools {PRODUCT_DISPLAY_NAME} can use — a browser, a database, an issue tracker. New definitions apply to
+              new conversations. Changing server settings or sign-in stops further calls from existing conversations; their tool definitions and history stay unchanged.
             </p>
           </div>
           <div className="flex items-center gap-2">
