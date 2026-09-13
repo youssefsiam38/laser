@@ -1,49 +1,32 @@
 # STATUS.md — one screen, always current
 
-Regenerated from `STATUS_DETAILED.md`; detail and history live there.
+**Last updated:** 2026-09-13T05:01:44Z · orchestrator · HEAD: 5193fc9
+**Current focus:** M16 next release: MCP cache/revocation implementation, global `@` merged (workspace gate running), sustained-navigation conversion/selection fixes. Release authorized after acceptance; model-managed MCP servers permanently excluded (D-230).
 
-**Last updated:** 2026-09-12T13:27:35Z · linux-relaunch · HEAD: 669c64f
+| Milestone | State |
+| --- | --- |
+| M0 Foundation | done |
+| M1 Local loop | done |
+| MP Panel system | done |
+| M2 Many sessions | in-progress |
+| M3 Subagent tabs | in-progress |
+| M4 Settings and logs | done |
+| M5 Desktop shell | in-progress |
+| M6 Relay and pairing | done |
+| M7 Mobile PWA | in-progress |
+| M8 Package support | in-progress |
+| M9 CLI | done |
+| M10 Distribution | in-progress |
+| M11 Theme system | in-progress |
+| M12 Product experience | done |
+| M13 Agents Leap | in-progress |
+| M14 MCP servers | done |
+| M15 After MCP release | done |
+| M16 Conversation experience | in-progress |
+| MX Cross-cutting | in-progress |
 
-**Current focus:** M5-T6 finished: Linux update restart preserves command privileges; full verification and isolated Electron regression pass. Not deployed; an already-restricted app needs one full quit/reopen. M16 sidebar/loading work remains with its recorded owners. v0.5.4 is public.
+**Blockers:** No task explicitly marked blocked. M16-T29 attribution complete; B conversion/selection fixes active, C viewport awaits B review; MCP code-mode safety remains outstanding.
+**Next up:** M13-T99 keystroke/draft regression; M13-T100 Beam/touch follow-ups; M13-T117 remembered-Chat recovery. Active release work takes priority.
+**Recently done:** M16-T28 global explorer (`5193fc9`, review fixes verified); M16-T27 catalog-arrival (`961aeb8`); M16-T16 tail-first/actions (`d6e5ebd`, `402de75`); M16-T26 readiness (`f8b0d34`); M16-T24 forensics (`d9b7b7a`, `7942fb5`).
 
-## Milestones
-
-| Milestone | State | Note |
-| --- | --- | --- |
-| M0 Foundation | done | CI verified |
-| M1 Local loop | done | runtime complete |
-| MP Panel system | dropped | fleet replaces it, D-147 |
-| M2 Many sessions | in-progress | platform proof |
-| M3 Subagent tabs | in-progress | superseded by M13 |
-| M4 Settings and logs | done | settings complete |
-| M5 Desktop shell | in-progress | restart fix done; platform proof remains |
-| M6 Relay and pairing | done | cryptographic foundations |
-| M7 Mobile PWA | in-progress | pairing transport remains |
-| M8 Package support | in-progress | device dictation proof |
-| M9 CLI | done | planned tasks complete |
-| M10 Distribution | in-progress | in-app updater seam |
-| M11 Theme system | in-progress | cold-start network trace |
-| M12 Product experience | done | shipped |
-| M13 Agents Leap | in-progress | remaining lifecycle/UI work |
-| M14 MCP servers | done | shell environment and identity included |
-| M15 After MCP release | done | v0.5.0 public |
-| M16 Refinements | in-progress | sidebar/loading; environment discovery handed off |
-| MX Cross-cutting | in-progress | engine pin, identity/seam gates |
-
-## Blockers
-
-None recorded.
-
-## Next up
-
-1. M16-T17: per-project environment command; discovery `/tmp/workenv/REPORT.md`.
-2. M13-T117: remembered Chat fallback; branch `chat-memory-fallback` (`7d121ef`).
-3. M13-T99: keystroke-burst composer draft-restore crash.
-
-## Recently done
-
-- M5-T6: Linux restart privileges; `pnpm verify`, desktop 135 tests, real Electron smoke.
-- M16-T18: v0.5.4 public; source `d5dec9c`.
-- M16-T14: stack-neutral worktrees; `29faafc`.
-- M16-T13: bidirectional layout; `267f315`, 28 RTL screenshots.
-- M16-T8: prompt-source attribution; `94c017f`.
+Ownership and release evidence: `STATUS_DETAILED.md`. Previous local STATUS snapshot preserved at `/tmp/status-before-m16-t29.md`.
