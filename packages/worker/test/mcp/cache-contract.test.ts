@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { PRODUCT_NAME } from "@lasercode/protocol";
 import { adapterRoot, loadMcpEngine } from "../../src/mcp/engine.js";
+import { McpAuthorizationRegistry, mcpAuthorizationIdentity } from "../../src/mcp/authorization.js";
 import { McpInspector } from "../../src/mcp/inspector.js";
 import { mcpClientIdentity } from "../../src/mcp/identity.js";
 
@@ -288,6 +289,31 @@ describe("pinned MCP cache contract over HTTP", () => {
     // value nor the input-required envelope was reused to obtain it.
     expect((await f.client.readResource({ uri: "test://interactive" })).contents[0].text).toBe("after-input");
     expect(f.requests.length).toBe(start + 1);
+  });
+
+  it("discards a cold connection revoked while its initial tool list is in flight", async () => {
+    const f = await fixture();
+    const engine = await loadMcpEngine();
+    const manager = new engine.Manager(f.base, mcpClientIdentity());
+    cleanups.push(() => manager.closeAll());
+    const registry = new McpAuthorizationRegistry(f.base);
+    const snapshot = await registry.establish(await mcpAuthorizationIdentity("global", f.base, { name: "cold", transport: { kind: "http", url: f.url } }));
+    manager.setAuthorizationGuard?.(async () => await registry.current(snapshot) ? undefined : "Access changed during connection");
+    const published = vi.fn(); manager.setMetadataListChangedListener?.(published);
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+    f.set(async method => {
+      if (method !== "tools/list") return undefined;
+      entered.resolve(); await release.promise;
+      return { tools: [tool("must_not_publish")], ttlMs: 60_000 };
+    });
+    const pending = manager.connect("cold", { url: f.url, auth: false });
+    const refused = expect(pending).rejects.toThrow("Access changed");
+    await entered.promise;
+    await registry.bump(snapshot.identity);
+    release.resolve(); await refused;
+    expect(manager.getConnection("cold")).toBeUndefined();
+    expect(published).not.toHaveBeenCalled();
+    expect(f.requests.filter(request => request.method === "tools/call")).toHaveLength(0);
   });
 
   it("revalidates inspector tools at expiry and refuses a removed tool without forwarding it", async () => {

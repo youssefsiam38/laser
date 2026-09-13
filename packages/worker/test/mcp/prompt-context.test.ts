@@ -21,7 +21,7 @@ const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures/stdio-se
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 
-async function run(preload: boolean, window?: number, transport?: NonNullable<McpServerConfig["transport"]>) {
+async function run(preload: boolean, window?: number, transport?: NonNullable<McpServerConfig["transport"]>, cold?: "gateway" | "script" | "management", extra: McpServerConfig[] = []) {
   const base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-mcp-prefix-`));
   cleanups.push(() => rmSync(base, { recursive: true, force: true }));
   const cwd = join(base, "project");
@@ -31,15 +31,23 @@ async function run(preload: boolean, window?: number, transport?: NonNullable<Mc
   process.env.PI_CODING_AGENT_DIR = agentDir;
   cleanups.push(() => { if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous; });
   // Legacy direct is intentionally present in both cases: it is not an override.
-  writeFileSync(join(agentDir, DATA_DIR_NAME, "mcp.json"), JSON.stringify({ version: 1, servers: [{ name: "fixture", startup: "at-start", transport: transport ?? { kind: "stdio", command: process.execPath, args: [fixture] }, ...(transport ? { auth: { kind: "none" } } : {}), tools: { exposure: "direct", ...(preload ? { alwaysLoad: true } : {}) } }] }));
+  writeFileSync(join(agentDir, DATA_DIR_NAME, "mcp.json"), JSON.stringify({ version: 1, servers: [{ name: "fixture", startup: cold ? "on-demand" : "at-start", transport: transport ?? { kind: "stdio", command: process.execPath, args: [fixture] }, ...(transport ? { auth: { kind: "none" } } : {}), tools: { exposure: "direct", ...(preload ? { alwaysLoad: true } : {}) } }, ...extra] }));
   const answers: StubAnswer[] = [
-    { toolCall: { name: "mcp", args: { server: "fixture" } } },
-    { toolCall: { name: "mcp", args: { search: "echo" } } },
+    cold === "script" ? { toolCall: { name: "mcpScript", args: { code: 'emit(await tools.search({query:"echo",server:"fixture"}));' } } }
+      : { toolCall: { name: "mcp", args: cold ? { search: "echo", server: "fixture" } : { server: "fixture" } } },
+    { toolCall: { name: "mcp", args: { search: "echo", server: "fixture" } } },
     { toolCall: { name: "mcp", args: { describe: "fixture_echo" } } },
-    { toolCall: { name: "mcpScript", args: { code: 'const page = await tools.search({query:"echo",detail:"names"}); emit(page);' } } },
+    { toolCall: { name: "mcpScript", args: { code: 'const page = await tools.search({query:"echo",server:"fixture",detail:"names"}); emit(page);' } } },
     { toolCall: { name: "mcp", args: { tool: "fixture_echo", args: { text: "discovered-call" } } } },
     { text: "done" },
   ];
+  if (cold === "management") {
+    const forbidden = [{ connect: "fixture" }, { action: "install", url: "http://127.0.0.1:1/mcp" }, { action: "auth-start", server: "fixture" }, { action: "auth-complete", server: "fixture", args: { code: "synthetic" } }, { enable: "fixture" }, { disable: "fixture" }, { remove: "fixture" }];
+    answers.splice(0, answers.length, ...forbidden.flatMap(args => [
+      { toolCall: { name: "mcp", args } },
+      { toolCall: { name: "mcpScript", args: { code: `emit(await tools.call("mcp", ${JSON.stringify(args)}));` } } },
+    ]), { text: "done" });
+  }
   let index = 0;
   const stub = await startStubProvider(() => answers[index++] ?? { text: "done" });
   cleanups.push(() => stub.close());
@@ -67,6 +75,38 @@ function snapshots(events: DriverEvent[]): McpRuntimeSnapshot[] {
 }
 
 describe("MCP prompt contract through real provider requests", () => {
+  it("refuses model management before a cold server has any transport or auth side effects", async () => {
+    const remote = await startFixtureHttpServer("sse"); cleanups.push(() => remote.close());
+    const { stub } = await run(false, undefined, { kind: "http", url: remote.url, stream: "sse" }, "management");
+    expect(remote.clientInfos).toHaveLength(0);
+    expect(remote.toolListRequests()).toBe(0);
+    expect(remote.toolCalls).toHaveLength(0);
+    const results = stub.requests.at(-1)!.messages.filter(message => message.role === "tool");
+    expect(results).toHaveLength(14);
+    for (const result of results) expect(JSON.stringify(result)).toContain("managed by the person in Settings");
+    const frozen = JSON.stringify(stub.requests[0]!.tools);
+    for (const request of stub.requests) expect(JSON.stringify(request.tools)).toBe(frozen);
+  }, 60_000);
+
+  it.each(["gateway", "script"] as const)("discovers a cold enabled server through %s without management or unrelated connections", async cold => {
+    const remote = await startFixtureHttpServer("sse", 60_000);
+    const unrelated = await startFixtureHttpServer("sse");
+    cleanups.push(() => remote.close(), () => unrelated.close());
+    const { stub } = await run(false, undefined, { kind: "http", url: remote.url, stream: "sse" }, cold, [
+      { name: "unrelated", startup: "on-demand", transport: { kind: "http", url: unrelated.url, stream: "sse" } },
+      { name: "off", disabled: true, transport: { kind: "http", url: unrelated.url, stream: "sse" } },
+    ]);
+    expect(remote.clientInfos).toHaveLength(1);
+    expect(unrelated.clientInfos).toHaveLength(0);
+    expect(unrelated.toolListRequests()).toBe(0);
+    expect(remote.toolCalls).toEqual(["echo"]);
+    const tools = JSON.stringify(stub.requests[0]!.tools);
+    for (const request of stub.requests) expect(JSON.stringify(request.tools)).toBe(tools);
+    const results = JSON.stringify(stub.requests.at(-1)!.messages.filter(message => message.role === "tool"));
+    expect(results).toContain("fixture_echo"); expect(results).toContain("discovered-call");
+    expect(results).not.toMatch(/connect:|auth-start|mcp enable/);
+  }, 60_000);
+
   it.each([false, true])("re-indexes script discovery after one notification refresh while provider tools remain frozen (preload=%s)", async preload => {
     const remote = await startFixtureHttpServer("sse", 60_000);
     cleanups.push(() => remote.close());
