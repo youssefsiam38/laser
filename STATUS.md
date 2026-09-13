@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-13T06:41:08Z · orchestrator · HEAD: 1b5f826
-**Current focus:** M16 next release: MCP enabled-server lazy-discovery correction, global `@` merged (workspace verification passed), bounded transcript/map implementation (B merged). Release authorized after acceptance; model-managed MCP servers permanently excluded (D-230).
+**Last updated:** 2026-09-13T07:50:14Z · orchestrator · HEAD: d2113ba
+**Current focus:** Resumed two failed owners from preserved private worktrees. M16 next release: MCP enabled-server lazy-discovery correction, global `@` merged (workspace verification passed), bounded transcript/map implementation (B merged). Release authorized after acceptance; model-managed MCP servers permanently excluded (D-230).
 
 | Milestone | State |
 | --- | --- |
@@ -29,4 +29,4 @@
 **Next up:** M13-T99 keystroke/draft regression; M13-T100 Beam/touch follow-ups; M13-T117 remembered-Chat recovery. Active release work takes priority.
 **Recently done:** M16-T28 global explorer (`5193fc9`, review fixes verified); M16-T27 catalog-arrival (`961aeb8`); M16-T16 tail-first/actions (`d6e5ebd`, `402de75`); M16-T26 readiness (`f8b0d34`); M16-T24 forensics (`d9b7b7a`, `7942fb5`).
 
-Ownership and release evidence: `STATUS_DETAILED.md`. Previous local STATUS snapshot preserved at `/tmp/status-before-m16-t29.md`.
+Ownership and release evidence: `STATUS_DETAILED.md`. Recovery checkpoints and new reports: `.git/coordination-recovery/`. Previous `/tmp` artifacts are unavailable after runtime loss.
