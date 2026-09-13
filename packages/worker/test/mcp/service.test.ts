@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { inspectionDefinition, McpService } from "../../src/mcp/service.js";
+import { McpAuthorizationRegistry, mcpAuthorizationIdentity, mcpAuthorizationRevision } from "../../src/mcp/authorization.js";
 import { startFixtureOAuthServer } from "./fixtures/oauth-server.js";
 
 const FIXTURE = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "stdio-server.mjs");
@@ -33,7 +34,8 @@ describe("inspection status in the saved list", () => {
     expect(result.status).toBe("connected");
     expect(changed).not.toHaveBeenCalled();
     const saved = await service.save({ cwd, scope: "project", server: { ...fixture, tools: { alwaysLoad: false } } });
-    expect(saved.servers[0]).toMatchObject({ status: "ready", toolCount: 3, directToolCount: 0, resourceCount: 1, promptCount: 1 });
+    expect(saved.servers[0]).toMatchObject({ status: "unknown", toolCount: 3, directToolCount: 0, resourceCount: 1, promptCount: 1 });
+    expect(saved.servers[0]?.toolCatalog?.expiresAt).toBe(saved.servers[0]?.toolCatalog?.checkedAt);
     expect(saved.servers[0]?.latencyMs).toBeGreaterThanOrEqual(0);
     expect(changed).toHaveBeenCalledTimes(1);
     expect(saved.servers[0]?.inspecting).toBeUndefined();
@@ -50,7 +52,9 @@ describe("inspection status in the saved list", () => {
     expect(changed).toHaveBeenCalledTimes(1);
     await service.disconnect(named());
     expect(changed).toHaveBeenCalledTimes(2);
-    expect((await service.list()).servers[0]).toMatchObject({ status: "ready", toolCount: 3 });
+    const disconnected = (await service.list()).servers[0];
+    expect(disconnected).toMatchObject({ status: "unknown", toolCount: 3 });
+    expect(disconnected?.toolCatalog?.expiresAt).toBe(disconnected?.toolCatalog?.checkedAt);
     await service.disconnect(named());
     expect(changed).toHaveBeenCalledTimes(2);
   }, 60_000);
@@ -72,12 +76,18 @@ describe("inspection status in the saved list", () => {
   it("uses held connection → session snapshot → remembered inspection", async () => {
     await service.save({ cwd, scope: "project", server: fixture });
     await service.inspect(named());
-    service.observeSnapshot("session", { servers: [{ name: "fixture", status: "ready", toolCount: 7, directToolCount: 2 }], totalTools: 7, connectedCount: 0 });
+    const registry = new McpAuthorizationRegistry(join(root, "agent"));
+    const generation = await registry.read(await mcpAuthorizationIdentity("project", cwd, fixture));
+    const authorizationRevision = mcpAuthorizationRevision([generation]);
+    const toolCatalog = { checkedAt: Date.now(), expiresAt: Date.now() + 60_000 };
+    service.observeSnapshot("session", { servers: [{ name: "fixture", status: "ready", toolCount: 7, directToolCount: 2, authorizationRevision, toolCatalog }], totalTools: 7, connectedCount: 0 });
     expect((await service.list()).servers[0]).toMatchObject({ status: "connected", toolCount: 3 });
     await service.disconnect(named());
     expect((await service.list()).servers[0]).toMatchObject({ status: "ready", toolCount: 7 });
+    await registry.bump(generation!.identity);
+    expect((await service.list()).servers[0]).toMatchObject({ status: "unknown", toolCount: 3 });
     service.sessionClosed("session");
-    expect((await service.list()).servers[0]).toMatchObject({ status: "ready", toolCount: 3 });
+    expect((await service.list()).servers[0]).toMatchObject({ status: "unknown", toolCount: 3 });
   }, 60_000);
 
   it("keeps conversation evidence separate from inspection and withdraws it on close", async () => {
@@ -130,7 +140,7 @@ describe("inspection status in the saved list", () => {
       const complete = await service.authComplete({ ...named(), redirectUrl: callback.toString() });
       expect(complete.status).toBe("ready");
       expect(changed).toHaveBeenCalledTimes(2);
-      expect((await service.list()).servers[0]?.status).toBe("ready");
+      expect((await service.list()).servers[0]?.status).toBe("unknown");
       await service.inspect(named());
       expect(changed).toHaveBeenCalledTimes(3);
       await service.authLogout(named());

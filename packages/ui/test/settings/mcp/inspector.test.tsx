@@ -94,6 +94,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   document.body.innerHTML = "";
+  vi.useRealTimers();
 });
 
 function Runtime({ children }: { children: ReactNode }) {
@@ -138,6 +139,31 @@ it("connects on open and shows what the server is", async () => {
   await click("Prompts");
   expect(text()).toContain("Walk a site");
   expect(text()).toContain("url");
+});
+
+it("discloses no-lifetime behavior, marks expiry locally, and refreshes through the supported reconnect action", async () => {
+  vi.useFakeTimers(); vi.setSystemTime(1000);
+  inspectResult = { ...inspectResult, toolCatalog: { checkedAt: 1000, expiresAt: 2000 } };
+  await open();
+  expect(text()).toContain("Tool information is current.");
+  expect(text()).toContain("Lists without a cache lifetime refresh for each use.");
+  const count = calls.length;
+  await act(async () => { await vi.advanceTimersByTimeAsync(1001); });
+  expect(text()).toContain("Showing previously listed tools.");
+  expect(calls).toHaveLength(count);
+  inspectResult = { ...inspectResult, toolCatalog: { checkedAt: 2001, expiresAt: 2001 } };
+  await click("Reconnect");
+  expect(calls.slice(-2)).toEqual(["mcp/disconnect", "mcp/inspect"]);
+  await click("Tools");
+  expect(text()).toContain("Showing previously listed tools.");
+  expect(text()).toContain("Lists without a cache lifetime refresh for each use.");
+});
+
+it("does not describe a failed refresh as a server advertising no tools", async () => {
+  inspectResult = { ...inspectResult, status: "failed", detail: "Tool information could not be refreshed. Reconnect to try again.", tools: [] };
+  await open(); await click("Tools");
+  expect(text()).toContain("Tool information could not be refreshed.");
+  expect(text()).not.toContain("This server advertises no tools.");
 });
 
 it("maintains exclusions and approvals without turning legacy direct exposure into preload", async () => {

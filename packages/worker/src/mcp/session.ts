@@ -22,7 +22,7 @@ import { McpPromptFreeze } from "./prompt-freeze.js";
 import { loadMcpEngine, type McpConfig } from "./engine.js";
 import { McpStore } from "./store.js";
 import { mcpClientIdentity } from "./identity.js";
-import { McpAuthorizationRegistry, mcpAuthorizationIdentity } from "./authorization.js";
+import { McpAuthorizationRegistry, mcpAuthorizationIdentity, mcpAuthorizationRevision } from "./authorization.js";
 
 export interface McpSessionOptions {
   cwd: string;
@@ -128,7 +128,7 @@ export async function mcpSessionSetup(options: McpSessionOptions): Promise<McpSe
   const discovery = new McpPromptFreeze(engine.renderSchema);
   const factory = engine.createMcpAdapter({ config, clientIdentity: mcpClientIdentity(), discovery, authorization, commitCredentials, personManaged: true }) as unknown as (pi: ExtensionAPI) => void | Promise<void>;
   return {
-    extension: { name: "mcp", factory: (pi: ExtensionAPI) => factory(quietEngineUi(discovery.wrap(pi, engine.statusEvent))) },
+    extension: { name: "mcp", factory: (pi: ExtensionAPI) => factory(quietEngineUi(discovery.wrap(pi, engine.statusEvent, name => mcpAuthorizationRevision([generations.get(name), overrides.get(name)])))) },
     statusEvent: engine.statusEvent,
     servers: servers.map(({ config: server }) => ({ name: server.name, ...(server.label ? { label: server.label } : {}) })),
   };

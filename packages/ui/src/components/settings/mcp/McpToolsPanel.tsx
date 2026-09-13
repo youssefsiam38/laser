@@ -58,6 +58,10 @@ export function McpToolsPanel({
   // tool at a time without quietly replacing it with literal names.
   const locks = policyPatternLocks(policy);
 
+  if (inspection.status !== "connected" && inspection.status !== "ready") {
+    return <p className="text-sm leading-6 text-ink-2">{inspection.detail ?? "Tool information could not be checked. Try Reconnect on Overview."}</p>;
+  }
+
   if (!inspection.tools.length) {
     return <p className="text-sm leading-6 text-ink-2">This server advertises no tools.</p>;
   }

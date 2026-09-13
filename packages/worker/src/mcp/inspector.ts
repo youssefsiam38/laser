@@ -10,7 +10,7 @@
  */
 import { delimiter } from "node:path";
 import { mcpClientIdentity } from "./identity.js";
-import { McpAuthorizationRegistry, mcpAuthorizationIdentity, type McpAuthorizationGeneration } from "./authorization.js";
+import { McpAuthorizationRegistry, mcpAuthorizationIdentity, mcpAuthorizationRevision, type McpAuthorizationGeneration } from "./authorization.js";
 import type {
   McpCallResult,
   McpInspection,
@@ -21,6 +21,7 @@ import type {
   McpServerConfig,
   McpToolInfo,
   McpToolPolicy,
+  McpToolCatalogState,
 } from "@lasercode/protocol";
 import { getToolNameCandidates, isToolAllowed, matchesToolPattern } from "pi-mcp-adapter/types";
 import { prefixedToolName, toServerEntry, type ResolvedSecrets } from "./adapter-config.js";
@@ -35,6 +36,7 @@ const MAX_TEXT_BYTES = 51_200;
 const CONNECT_TIMEOUT_MS = 30_000;
 
 export interface LiveCounts {
+  toolCatalog?: McpToolCatalogState;
   toolCount: number;
   directToolCount: number;
   resourceCount: number;
@@ -61,7 +63,7 @@ export class McpInspector {
    * definition's authorizationIdentity. One project has one effective definition
    * per name; inspecting a replacement closes the previous connection.
    */
-  private readonly held = new Map<string, { name: string; entry: ServerEntry; latencyMs?: number; counts?: LiveCounts }>();
+  private readonly held = new Map<string, { name: string; entry: ServerEntry; latencyMs?: number; counts?: LiveCounts; catalogRevision?: number | undefined }>();
   private ephemeralCounter = 0;
   private readonly authorizations = new Map<string, readonly McpAuthorizationGeneration[]>();
 
@@ -74,7 +76,7 @@ export class McpInspector {
     }
   }
 
-  constructor(private readonly cwd: string, private readonly agentDir?: string) {}
+  constructor(private readonly cwd: string, private readonly agentDir?: string, private readonly changed?: () => void) {}
 
   static key(scope: McpScope, name: string): string {
     return `${scope}:${name}`;
@@ -86,13 +88,30 @@ export class McpInspector {
     return held !== undefined && this.manager?.getConnection(held.name)?.status === "connected";
   }
 
+  authorizationRevision(scope: McpScope, name: string): string | undefined {
+    const held = this.held.get(McpInspector.key(scope, name));
+    const snapshots = held ? this.authorizations.get(held.name) : undefined;
+    return snapshots ? mcpAuthorizationRevision(snapshots) : undefined;
+  }
+
+  async authorized(scope: McpScope, name: string): Promise<boolean> {
+    const held = this.held.get(McpInspector.key(scope, name));
+    if (!held) return false;
+    try { await this.assertAuthorized(held.name); return true; } catch { return false; }
+  }
+
   latency(scope: McpScope, name: string): number | undefined {
     return this.held.get(McpInspector.key(scope, name))?.latencyMs;
   }
 
   /** What the held connection actually advertises, for the list's counts. */
   liveCounts(scope: McpScope, name: string): LiveCounts | undefined {
-    return this.held.get(McpInspector.key(scope, name))?.counts;
+    const held = this.held.get(McpInspector.key(scope, name));
+    const counts = held?.counts;
+    if (held && counts?.toolCatalog && held.catalogRevision !== this.manager?.getConnection(held.name)?.toolsRevision) {
+      return { ...counts, toolCatalog: { ...counts.toolCatalog, expiresAt: counts.toolCatalog.checkedAt } };
+    }
+    return counts;
   }
 
   private async engineOrLoad(): Promise<McpEngine> {
@@ -147,6 +166,7 @@ export class McpInspector {
     if (!this.manager) {
       const manager = new engine.Manager(this.cwd, mcpClientIdentity());
       manager.setOAuthRuntime?.(runtime);
+      manager.setMetadataListChangedListener?.(() => this.changed?.());
       if (this.agentDir) {
         manager.setAuthorizationGuard?.(async name => {
           try { await this.assertAuthorized(name); return undefined; } catch (error) { return messageOf(error); }
@@ -165,18 +185,6 @@ export class McpInspector {
     return this.manager;
   }
 
-  /** Tool counts the engine already knows for a server, without connecting. */
-  async cachedCounts(name: string): Promise<{ toolCount: number; resourceCount: number; promptCount: number } | undefined> {
-    const engine = await this.engineOrLoad().catch(() => undefined);
-    const cached = engine?.cachedServers()[name];
-    if (!cached) return undefined;
-    return {
-      toolCount: cached.tools?.length ?? 0,
-      resourceCount: cached.resources?.length ?? 0,
-      promptCount: cached.prompts?.length ?? 0,
-    };
-  }
-
   /** Connect (or reuse) and describe the server, in the person's vocabulary. */
   async inspect(target: InspectTarget, signal?: AbortSignal): Promise<McpInspection> {
     const { scope, config } = target;
@@ -192,12 +200,15 @@ export class McpInspector {
         await this.close(key);
         return { ...base, status: "needs-auth", detail: signInDetail(config.name) };
       }
+      const toolCatalog = await this.refreshTools(connection, config.name, signal);
       const latencyMs = Date.now() - started;
       const held = this.held.get(key);
       const tools = toolInfos(config, connection);
       if (held) {
         held.latencyMs = latencyMs;
+        held.catalogRevision = connection.toolsRevision;
         held.counts = {
+          ...(toolCatalog ? { toolCatalog } : {}),
           toolCount: tools.length,
           directToolCount: tools.filter((tool) => tool.visibility === "direct").length,
           resourceCount: connection.resources.length,
@@ -213,6 +224,7 @@ export class McpInspector {
       const inspection: McpInspection = {
         ...base,
         status: "connected",
+        ...(toolCatalog ? { toolCatalog } : {}),
         ...(version?.name ? { server: { name: version.name, ...(version.version ? { version: version.version } : {}), ...(version.title ? { title: version.title } : {}) } } : {}),
         ...(protocolVersion(client) ? { protocolVersion: protocolVersion(client)! } : {}),
         ...(capabilities ? { capabilities: toCapabilities(capabilities) } : {}),
@@ -312,10 +324,24 @@ export class McpInspector {
     }
   }
 
+  private async refreshTools(connection: McpConnection, name: string, signal?: AbortSignal): Promise<McpToolCatalogState | undefined> {
+    if (!connection.client.getServerCapabilities()?.tools) return undefined;
+    const revision = connection.toolsRevision;
+    const result = await connection.client.listTools(undefined, signal ? { signal } : undefined);
+    const checkedAt = Date.now();
+    await this.assertAuthorized(name);
+    if (connection.toolsRevision !== revision) throw new Error("Tool information changed while it was being read. Refresh this server and try again.");
+    if (result.resultType === "input_required" || !Array.isArray(result.tools)) throw new Error("The server needs more input before its tools can be listed. Reconnect to try again.");
+    connection.tools = result.tools;
+    return this.manager?.getToolCatalog?.(name) ?? { checkedAt, expiresAt: checkedAt };
+  }
+
   /** Run and Test use the same connection, tool-name resolution and result guard. */
   private async runTool(connection: McpConnection, server: string, tool: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpCallResult> {
     const started = Date.now();
+    await this.refreshTools(connection, server, signal);
     const original = originalToolName(server, tool, connection);
+    if (!connection.tools.some(candidate => candidate.name === original)) throw new Error("This tool is no longer available. Refresh this server's tools and choose one that is listed.");
     const result = await connection.client.callTool({ name: original, arguments: args }, { signal });
     return toCallResult(result, Date.now() - started);
   }

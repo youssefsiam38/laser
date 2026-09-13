@@ -119,8 +119,11 @@ stdio servers that environment instead, unless the server is configured with
 server keeps what it started with until it is reconnected.
 
 OAuth tokens are stored by the adapter in the operating system credential
-store, keyed by server name and bound to the server URL; Laser never sees or
-stores them.
+store, partitioned by configuration scope and transport target, with a repair
+epoch. Display names alone never identify an account. An unowned legacy entry
+requires sign-in again and remains until scoped sign-in succeeds. Tokens never
+enter the host, protocol or model; the worker's durable authorization registry
+contains only identities, generations and timestamps.
 
 Writes use the same discipline as `search-connections.json`: a lock on the
 stable path, an atomic replace, and user-only permissions for anything under
@@ -128,10 +131,13 @@ the agent directory. The worker owns every read and write; the host routes
 `mcp/*` requests to the worker of the project named in `cwd` and never parses
 these files itself.
 
-Changing configuration applies to sessions started afterwards. A running
-session keeps the servers it started with — its tool list is part of the
-conversation the model is having — and the Settings page says so, with the
-project restart the host already offers for people who want it now.
+New definitions apply to later conversations. Settings and sign-in mutations
+immediately fence old runtimes before cached discovery or another forwarded call,
+without rewriting their serialized provider tools or history. They refuse rather
+than silently reconnecting with captured credentials. An authorized OAuth refresh
+advances only its initiating runtime and rotates its response-cache partition;
+peer runtimes remain stale. The token-save transaction covers manual, loopback
+and automatic refresh paths; a late refresh cannot undo sign-out.
 
 ## The vocabulary (`packages/protocol/src/mcp.ts`)
 
@@ -155,11 +161,11 @@ names.
 - **Tools** carry one explicit `alwaysLoad` boolean (default false),
   `include`/`exclude` (which tools exist at all, as names or globs) and `approve`
   (call-time approval for all or for matching tools).
-- **Status** for a person is one of: `connected`, `ready` (tools known from
-  the cache, not connected right now), `starting`, `needs-auth`, `failed`,
-  `off`, `unknown`. The adapter's `cached`/`not-connected` collapse into
-  `ready` and `unknown` — a person wants to know whether the tools are
-  usable, not which internal state produced that answer.
+- **Status** for a person is one of: `connected`, `ready` (fresh tools in the
+  current authorization context, without a live connection), `starting`,
+  `needs-auth`, `failed`, `off`, `unknown`. A retained or name-only catalogue
+  cannot make a server ready. A connection and fresh tool information are
+  separate facts; expired counts read **Last listed**.
 
 Every method is `cwd`-routed to the project's worker. The list is the
 contract; the schemas in `schemas.ts` and the round-trip sample in
@@ -246,6 +252,16 @@ which PATH it looked in when it does not. Both doors end in **Test**, which is
 descriptions, and saves it with tools found when needed. No tool-count cutoff
 changes that default. The page explains the choice and points to Advanced for
 the explicit preload override.
+
+**Tool freshness.** The inspector revalidates through the SDK on access and before
+Run. Missing, invalid or zero lifetime means no reusable catalogue; the page says
+that lists without a lifetime refresh for each use. Positive expiry is preserved
+from receipt, including the earliest expiry of a complete paginated result. A
+local repaint marks expiry without polling a server. Notifications immediately
+invalidate old offered tools; failed refresh never declares an empty catalogue
+current. Historical counts remain labelled rather than being execution authority.
+The protocol carries only observation/expiry times and an opaque runtime attribution
+revision, never credential accounts or generation records.
 
 **Inspecting.** Selecting a row opens the inspector, a full-height sheet on a
 wide screen and a page on a phone:

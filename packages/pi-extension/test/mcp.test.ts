@@ -38,11 +38,12 @@ function harness(mcp?: { statusEvent: string }) {
   return { events, pi, send, channels, unsubscribed: () => unsubscribed };
 }
 
+const warmCatalog = { checkedAt: Date.now(), expiresAt: Date.now() + 60_000 };
 const engineSnapshot = {
   version: 1,
   servers: [
     { name: "playwright", status: "connected", listenState: "legacy", toolCount: 24, directToolCount: 24, resourceCount: 0, disabled: false },
-    { name: "warm", status: "cached", listenState: "not-listening", toolCount: 3, directToolCount: 0, disabled: false },
+    { name: "warm", toolCatalog: warmCatalog, status: "cached", listenState: "not-listening", toolCount: 3, directToolCount: 0, disabled: false },
     { name: "sleeping", status: "not-connected", listenState: "disconnected", toolCount: 0, directToolCount: 0, disabled: false },
     { name: "broken", status: "failed", listenState: "disconnected", toolCount: 0, directToolCount: 0, failedAgoSeconds: 12, disabled: false },
     { name: "locked", status: "needs-auth", listenState: "disconnected", toolCount: 0, directToolCount: 0, disabled: false },
@@ -72,7 +73,7 @@ describe("mcp companion module", () => {
     const message = h.send.mock.calls.map(([value]) => value).find((value) => (value as { type: string }).type === "lasercode/mcp/status") as { snapshot: McpRuntimeSnapshot };
     expect(message.snapshot.servers).toEqual([
       { name: "playwright", status: "connected", toolCount: 24, directToolCount: 24, resourceCount: 0 },
-      { name: "warm", status: "ready", toolCount: 3, directToolCount: 0 },
+      { name: "warm", toolCatalog: warmCatalog, status: "ready", toolCount: 3, directToolCount: 0 },
       { name: "sleeping", status: "unknown", toolCount: 0, directToolCount: 0 },
       { name: "broken", status: "failed", toolCount: 0, directToolCount: 0, failedAgoSeconds: 12 },
       { name: "locked", status: "needs-auth", toolCount: 0, directToolCount: 0 },
@@ -94,6 +95,16 @@ describe("mcp companion module", () => {
     expect(h.unsubscribed()).toBe(1);
     h.pi.events.emit(CHANNEL, engineSnapshot);
     expect(h.send.mock.calls.filter(([value]) => (value as { type: string }).type === "lasercode/mcp/status")).toHaveLength(1);
+  });
+
+  it("does not call unqualified or expired retained metadata ready", () => {
+    const cached = { name: "old", status: "cached", toolCount: 4, directToolCount: 0 };
+    for (const toolCatalog of [undefined, { checkedAt: 1, expiresAt: 1 }, { checkedAt: -1, expiresAt: 10 }]) {
+      expect(toRuntimeSnapshot({ servers: [{ ...cached, toolCatalog }] })?.servers[0]?.status).toBe("unknown");
+    }
+    const authorizationRevision = "a".repeat(64);
+    expect(toRuntimeSnapshot({ servers: [{ ...cached, toolCatalog: warmCatalog, authorizationRevision }] })?.servers[0]).toMatchObject({ status: "ready", authorizationRevision, toolCatalog: warmCatalog });
+    expect(toRuntimeSnapshot({ servers: [{ ...cached, authorizationRevision: "not-a-revision" }] })?.servers[0]?.authorizationRevision).toBeUndefined();
   });
 
   it("preserves validated conversation evidence without trusting malformed context", () => {

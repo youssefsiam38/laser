@@ -21,7 +21,7 @@ import type {
   McpServerStatus,
 } from "@lasercode/protocol";
 import { ErrorCodes, ProtocolError } from "@lasercode/protocol";
-import { McpAuthorizationRegistry, mcpAuthorizationIdentity, type McpAuthorizationGeneration } from "./authorization.js";
+import { McpAuthorizationRegistry, mcpAuthorizationIdentity, mcpAuthorizationRevision, type McpAuthorizationGeneration } from "./authorization.js";
 import { secretFieldPaths, type ResolvedSecrets } from "./adapter-config.js";
 import { detectImportSources, inlineSecretValues, markConflicts, readSourceEntries } from "./import.js";
 import { McpInspector, toolInfos } from "./inspector.js";
@@ -42,9 +42,10 @@ interface SessionSnapshot {
 }
 
 interface RememberedInspection {
+  authorizationRevision?: string;
   definition: string;
   at: number;
-  state: Pick<McpServerState, "status" | "detail" | "toolCount" | "directToolCount" | "resourceCount" | "promptCount" | "latencyMs">;
+  state: Pick<McpServerState, "status" | "detail" | "toolCount" | "directToolCount" | "resourceCount" | "promptCount" | "latencyMs" | "toolCatalog">;
   toolNames?: string[];
 }
 
@@ -57,7 +58,7 @@ export class McpService {
 
   constructor(private readonly options: McpServiceOptions) {
     this.store = new McpStore(options.agentDir);
-    this.inspector = new McpInspector(options.cwd, options.agentDir);
+    this.inspector = new McpInspector(options.cwd, options.agentDir, () => options.changed());
   }
 
   /** The store, for the driver's "does this project have any server" question. */
@@ -141,7 +142,7 @@ export class McpService {
       const found = await this.find(params.scope, params.name);
       const authorization = await this.capture(found);
       const result = await this.inspector.inspect({ scope: found.scope, config: found.config, authorization, secrets: await this.secretsFor(found.config, found.scope) });
-      this.inspections.set(McpInspector.key(found.scope, found.config.name), this.remember(found.config, result));
+      this.inspections.set(McpInspector.key(found.scope, found.config.name), this.remember(found.config, result, this.inspector.authorizationRevision(found.scope, found.config.name)));
       return result;
     });
   }
@@ -272,10 +273,11 @@ export class McpService {
       state: { ...previousState, ...result } });
   }
 
-  private remember(config: McpServerConfig, result: McpInspection): RememberedInspection {
-    return { definition: inspectionDefinition(config), at: Date.now(),
+  private remember(config: McpServerConfig, result: McpInspection, authorizationRevision?: string): RememberedInspection {
+    return { definition: inspectionDefinition(config), at: Date.now(), ...(authorizationRevision ? { authorizationRevision } : {}),
       toolNames: result.tools.map((tool) => tool.originalName),
       state: { status: result.status === "connected" ? "ready" : result.status,
+        ...(result.toolCatalog ? { toolCatalog: result.toolCatalog } : {}),
         ...(result.detail ? { detail: result.detail } : {}),
         ...(result.latencyMs !== undefined ? { latencyMs: result.latencyMs } : {}),
         toolCount: result.tools.length, directToolCount: result.tools.filter((tool) => tool.visibility === "direct").length,
@@ -359,16 +361,17 @@ export class McpService {
   }
 
   /** The newest snapshot any session of this project reported for a server. */
-  private runtimeStatus(name: string): { status: McpServerStatus; toolCount?: number; directToolCount?: number; resourceCount?: number; failedAgoSeconds?: number } | undefined {
+  private runtimeStatus(name: string, authorizationRevision: string | undefined): { status: McpServerStatus; toolCatalog?: NonNullable<McpServerState["toolCatalog"]>; toolCount?: number; directToolCount?: number; resourceCount?: number; failedAgoSeconds?: number } | undefined {
     let newest: { at: number; server: McpRuntimeSnapshot["servers"][number] } | undefined;
     for (const { snapshot, at } of this.snapshots.values()) {
-      const server = snapshot.servers.find((candidate) => candidate.name === name);
+      const server = snapshot.servers.find((candidate) => candidate.name === name && authorizationRevision !== undefined && candidate.authorizationRevision === authorizationRevision);
       if (server && (!newest || at > newest.at)) newest = { at, server };
     }
     if (!newest) return undefined;
     const { server } = newest;
     return {
-      status: server.status,
+      status: server.status === "ready" && (!server.toolCatalog || server.toolCatalog.expiresAt <= Date.now()) ? "unknown" : server.status,
+      ...(server.toolCatalog ? { toolCatalog: server.toolCatalog } : {}),
       toolCount: server.toolCount,
       directToolCount: server.directToolCount,
       ...(server.resourceCount !== undefined ? { resourceCount: server.resourceCount } : {}),
@@ -416,21 +419,36 @@ export class McpService {
     }
 
     if (this.inspector.inspecting(scope, config.name)) {
+      if (!await this.inspector.authorized(scope, config.name)) return { ...state, status: "unknown", detail: "Access to this server changed. Reconnect to check its current tools." };
       const latencyMs = this.inspector.latency(scope, config.name);
       return { ...state, ...this.inspector.liveCounts(scope, config.name), status: "connected", inspecting: true,
         ...(latencyMs !== undefined ? { latencyMs } : {}) };
     }
-    const runtime = this.runtimeStatus(config.name);
+    let authorizationRevision: string | undefined;
+    if (isConfigured(config)) {
+      const registry = new McpAuthorizationRegistry(this.options.agentDir);
+      const scopes: McpScope[] = scope === "global" ? ["global", "project"] : ["project"];
+      const snapshots = await Promise.all(scopes.map(async target => registry.read(await mcpAuthorizationIdentity(target, this.options.cwd, config))));
+      if (snapshots.every(Boolean)) authorizationRevision = mcpAuthorizationRevision(snapshots);
+    }
+    const runtime = this.runtimeStatus(config.name, authorizationRevision);
     if (runtime) return { ...state, ...runtime };
     const remembered = this.inspections.get(McpInspector.key(scope, config.name));
     if (remembered?.definition === inspectionDefinition(config)) {
       const directToolCount = remembered.toolNames
         ? toolInfos(config, { tools: remembered.toolNames.map((name) => ({ name })) }).filter((tool) => tool.visibility === "direct").length
         : remembered.state.directToolCount;
-      return { ...state, ...remembered.state, ...(directToolCount !== undefined ? { directToolCount } : {}) };
+      const current = authorizationRevision !== undefined && remembered.authorizationRevision === authorizationRevision;
+      const toolCatalog = remembered.state.toolCatalog;
+      const fresh = current && toolCatalog !== undefined && toolCatalog.expiresAt > Date.now();
+      return { ...state, ...remembered.state,
+        ...(remembered.state.status === "ready" && !fresh ? { status: "unknown" } : {}),
+        ...(!current && toolCatalog ? { toolCatalog: { ...toolCatalog, expiresAt: toolCatalog.checkedAt } } : {}),
+        ...(directToolCount !== undefined ? { directToolCount } : {}) };
     }
-    const cached = await this.inspector.cachedCounts(config.name).catch(() => undefined);
-    return { ...state, ...(cached ? { ...cached, status: "ready" } : {}) };
+    // Persisted entries indexed by display name are historical data, not proof
+    // of this scoped target's current metadata or authorization.
+    return state;
   }
 }
 

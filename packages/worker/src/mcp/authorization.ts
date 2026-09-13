@@ -37,6 +37,12 @@ function valid(value: unknown, identity: string): value is McpAuthorizationGener
     && Number.isSafeInteger(v.updatedAt) && v.updatedAt >= 0;
 }
 
+/** Opaque status attribution, not a capability or a credential account. */
+export function mcpAuthorizationRevision(snapshots: readonly (McpAuthorizationGeneration | undefined)[]): string {
+  return createHash("sha256").update(JSON.stringify(snapshots.filter((value): value is McpAuthorizationGeneration => value !== undefined)
+    .map(({ identity, generation }) => ({ identity, generation })).sort((a, b) => a.identity.localeCompare(b.identity)))).digest("hex");
+}
+
 /**
  * One small atomic file per identity, shared by project workers. Reads never take
  * a lock or scan the registry. Unknown/corrupt/unavailable is always stale, never

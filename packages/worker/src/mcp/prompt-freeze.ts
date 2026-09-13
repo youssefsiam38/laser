@@ -78,7 +78,7 @@ export class McpPromptFreeze implements McpDiscoveryPolicy {
     this.discoveries.set(key, { server, name: tool.name, detail: retained ? previous.detail : detail, revision: hash });
   }
 
-  wrap(pi: ExtensionAPI, statusEvent: string): ExtensionAPI {
+  wrap(pi: ExtensionAPI, statusEvent: string, authorizationRevision?: (server: string) => string): ExtensionAPI {
     let latestStatus: Record<string, unknown> | undefined;
     const emit = (snapshot: Record<string, unknown>) => pi.events.emit(statusEvent, {
       ...snapshot, ...(this.frozen ? { context: this.snapshot() } : {}),
@@ -89,6 +89,10 @@ export class McpPromptFreeze implements McpDiscoveryPolicy {
         if (key === "emit") return (channel: string, data: unknown) => {
           if (channel !== statusEvent) return target.emit(channel, data);
           latestStatus = record(data);
+          if (authorizationRevision && Array.isArray(latestStatus.servers)) latestStatus = { ...latestStatus, servers: latestStatus.servers.map(value => {
+            const server = record(value);
+            return typeof server.name === "string" ? { ...server, authorizationRevision: authorizationRevision(server.name) } : server;
+          }) };
           emit(latestStatus);
         };
         const value = Reflect.get(target, key);

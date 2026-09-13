@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { McpAuthorizationRegistry, mcpAuthorizationIdentity, mcpAuthorizationRevision } from "../../src/mcp/authorization.js";
 import { WorkerServer } from "../../src/server.js";
 import type { DriverEvent, DriverListener, SessionDriver } from "../../src/driver.js";
 
@@ -208,9 +209,12 @@ describe("WorkerServer · mcp/*", () => {
     await call("mcp/save", { cwd, scope: "global", server: fixture });
     await call("session/new", { cwd });
     const driver = drivers[0]!;
+    const registry = new McpAuthorizationRegistry(agentDir);
+    const generations = await Promise.all((["global", "project"] as const).map(async scope => registry.establish(await mcpAuthorizationIdentity(scope, cwd, fixture))));
+    const authorizationRevision = mcpAuthorizationRevision(generations);
     driver.emit({
       type: "extension",
-      message: { type: "lasercode/mcp/status", snapshot: { servers: [{ name: "fixture", status: "connected", toolCount: 3, directToolCount: 3 }], totalTools: 3, connectedCount: 1 } },
+      message: { type: "lasercode/mcp/status", snapshot: { servers: [{ name: "fixture", status: "connected", toolCount: 3, directToolCount: 3, authorizationRevision }], totalTools: 3, connectedCount: 1 } },
     });
     let listed = await call<{ servers: McpServerState[] }>("mcp/list", { cwd });
     expect(listed.result?.servers[0]).toMatchObject({ status: "connected", toolCount: 3, directToolCount: 3 });

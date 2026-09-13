@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PRODUCT_NAME } from "@lasercode/protocol";
 import { adapterRoot, loadMcpEngine } from "../../src/mcp/engine.js";
+import { McpInspector } from "../../src/mcp/inspector.js";
 import { mcpClientIdentity } from "../../src/mcp/identity.js";
 
 const tool = (name: string) => ({ name, inputSchema: { type: "object", properties: {} } });
@@ -117,13 +118,14 @@ async function fixture(modern = false) {
   const engine = await loadMcpEngine();
   const manager = new engine.Manager(base, mcpClientIdentity());
   cleanups.push(() => manager.closeAll());
-  const connection = await manager.connect("fixture", { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/mcp`, auth: false, protocolVersion: modern ? "2026-07-28" : "legacy" }).catch(error => {
+  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/mcp`;
+  const connection = await manager.connect("fixture", { url, auth: false, protocolVersion: modern ? "2026-07-28" : "legacy" }).catch(error => {
     console.error("Synthetic MCP fixture setup transcript", responses);
     throw error;
   });
   const client = connection.client as any;
   let now = Date.now(); client._cache._now = () => now;
-  return { client, manager, connection, requests, responses, listening: listening.promise,
+  return { client, manager, connection, requests, responses, base, url, streamCount: () => streams.size, listening: listening.promise,
     set: (handler: typeof respond) => { respond = handler; },
     advance: (ms: number) => { now += ms; },
     notify: () => { for (const stream of streams) {
@@ -273,6 +275,51 @@ describe("pinned MCP cache contract over HTTP", () => {
     // value nor the input-required envelope was reused to obtain it.
     expect((await f.client.readResource({ uri: "test://interactive" })).contents[0].text).toBe("after-input");
     expect(f.requests.length).toBe(start + 1);
+  });
+
+  it("revalidates inspector tools at expiry and refuses a removed tool without forwarding it", async () => {
+    const f = await fixture();
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    cleanups.push(() => clock.mockRestore());
+    const inspector = new McpInspector(f.base, f.base);
+    cleanups.push(() => inspector.dispose());
+    const config = { name: "inspected", transport: { kind: "http" as const, url: f.url }, auth: { kind: "none" as const } };
+    f.set(method => method === "tools/list" ? { tools: [tool("first")], ttlMs: 1000 } : undefined);
+    const first = await inspector.inspect({ scope: "project", config, secrets: new Map() });
+    expect(first.status).toBe("connected");
+    expect(first.toolCatalog!.expiresAt).toBeGreaterThan(first.toolCatalog!.checkedAt);
+    now += 1001;
+    f.set(method => method === "tools/list" ? { tools: [tool("replacement")], ttlMs: 1000 } : undefined);
+    const sent = f.requests.filter(request => request.method === "tools/call").length;
+    expect(await inspector.call("project", config, new Map(), "first", {})).toMatchObject({ ok: false, error: expect.stringContaining("no longer available") });
+    expect(f.requests.filter(request => request.method === "tools/call")).toHaveLength(sent);
+    expect((await inspector.inspect({ scope: "project", config, secrets: new Map() })).tools.map(value => value.originalName)).toEqual(["replacement"]);
+    now += 1001;
+    f.set(method => { if (method === "tools/list") throw new Error("synthetic failed inspector refresh"); return undefined; });
+    const failed = await inspector.inspect({ scope: "project", config, secrets: new Map() });
+    expect(failed).toMatchObject({ status: "failed", tools: [] });
+    expect(failed.toolCatalog).toBeUndefined();
+  });
+
+  it("marks held inspector counts stale before a notification refresh can finish", async () => {
+    const f = await fixture();
+    const changed = vi.fn();
+    const inspector = new McpInspector(f.base, f.base, changed);
+    cleanups.push(() => inspector.dispose());
+    const config = { name: "inspected", transport: { kind: "http" as const, url: f.url }, auth: { kind: "none" as const } };
+    f.set(method => method === "tools/list" ? { tools: [tool("first")], ttlMs: 10_000 } : undefined);
+    await inspector.inspect({ scope: "project", config, secrets: new Map() });
+    await vi.waitFor(() => expect(f.streamCount()).toBe(2));
+    const release = Promise.withResolvers<void>();
+    f.set(async method => { if (method !== "tools/list") return undefined; await release.promise; return { tools: [tool("replacement")], ttlMs: 10_000 }; });
+    f.notify();
+    try {
+      await vi.waitFor(() => expect(changed).toHaveBeenCalled());
+      const counts = inspector.liveCounts("project", "inspected")!;
+      expect(counts.toolCount).toBe(1);
+      expect(counts.toolCatalog?.expiresAt).toBe(counts.toolCatalog?.checkedAt);
+    } finally { release.resolve(); }
   });
 
   it("caches discovery and resource reads but never reuses an interactive resource request", async () => {

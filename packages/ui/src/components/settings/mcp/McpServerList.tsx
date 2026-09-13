@@ -10,10 +10,13 @@ import type { McpScope, McpServerState } from "@lasercode/protocol";
 
 import { McpServerPanel, type McpServerPanelRow } from "@/components/assistant-ui/elements/mcp-server-panel";
 
-import { failedAgoPhrase, rowKey, scopeLabel, scopeNote, statusWords, toolCountLabel, transportSummary } from "./model.js";
+import { catalogStatusWords, toolCatalogFresh, useCatalogClock } from "./catalog.js";
+import { failedAgoPhrase, rowKey, scopeLabel, scopeNote, toolCountLabel, transportSummary } from "./model.js";
 
-export function toPanelRow(state: McpServerState): McpServerPanelRow {
-  const status = statusWords(state.status);
+export function toPanelRow(state: McpServerState, now = Date.now()): McpServerPanelRow {
+  const fresh = toolCatalogFresh(state.toolCatalog, now);
+  const status = catalogStatusWords(state.status, state.toolCatalog, state.toolCount !== undefined, now);
+  const counts = toolCountLabel(state);
   // A project entry that only switches a global server off carries no
   // definition of its own; the row then says so instead of a command line.
   const transport = transportSummary(state.config.transport);
@@ -29,7 +32,7 @@ export function toPanelRow(state: McpServerState): McpServerPanelRow {
     statusHelp: status.help,
     tone: status.tone,
     working: status.working,
-    tools: toolCountLabel(state),
+    tools: counts === undefined ? undefined : fresh ? counts : `Last listed: ${counts}`,
     scope: scopeLabel(state.scope),
     note: scopeNote(state),
     detail,
@@ -49,9 +52,11 @@ export function McpServerList({
   onSelect: (id: string) => void;
   onSignIn: (id: string) => void;
 }) {
+  const nextExpiry = Math.min(...servers.map(server => server.toolCatalog?.expiresAt ?? 0).filter(expiry => expiry > Date.now()));
+  const now = useCatalogClock(nextExpiry);
   const groups: Array<{ scope: McpScope; rows: McpServerPanelRow[] }> = [
-    { scope: "project", rows: servers.filter((entry) => entry.scope === "project").map(toPanelRow) },
-    { scope: "global", rows: servers.filter((entry) => entry.scope === "global").map(toPanelRow) },
+    { scope: "project", rows: servers.filter((entry) => entry.scope === "project").map(state => toPanelRow(state, now)) },
+    { scope: "global", rows: servers.filter((entry) => entry.scope === "global").map(state => toPanelRow(state, now)) },
   ];
   return (
     <div className="flex min-w-0 flex-col gap-5">

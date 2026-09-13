@@ -182,6 +182,11 @@ const mcpAuthInputSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
 ]);
+export const mcpToolCatalogStateSchema = z.object({
+  checkedAt: z.number().int().nonnegative(),
+  expiresAt: z.number().int().nonnegative(),
+}).strict().refine(value => value.expiresAt >= value.checkedAt);
+
 export const mcpConversationContextSchema = z.object({
   title: z.string().optional(),
   contextWindow: z.number().positive().nullable(),
