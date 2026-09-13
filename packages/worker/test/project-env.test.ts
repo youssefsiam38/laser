@@ -227,6 +227,16 @@ describe("ProjectEnvironment", () => {
     expect(allowed.apply({})["ANTHROPIC_API_KEY"]).toBe("sk-project");
   });
 
+  it("expands a leading ~, which a person types from habit", async () => {
+    const { homedir } = await import("node:os");
+    const { expandHome } = await import("../src/project-env.js");
+    expect(expandHome("~/bin/hook")).toBe(join(homedir(), "bin/hook"));
+    expect(expandHome("~")).toBe(homedir());
+    // Only a leading `~/`: a real path that merely contains one is left alone.
+    expect(expandHome("/opt/a~b/hook")).toBe("/opt/a~b/hook");
+    expect(expandHome("~weird/hook")).toBe("~weird/hook");
+  });
+
   it("is inert when no environment command is configured", async () => {
     const root = workspace();
     const environment = new ProjectEnvironment({ cwd: root, config: undefined });

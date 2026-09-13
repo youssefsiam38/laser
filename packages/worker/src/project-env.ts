@@ -15,6 +15,8 @@
  * apart makes that impossible rather than merely discouraged.
  */
 import { spawn } from "node:child_process";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import {
   PROJECT_ENV_FD,
   PROJECT_ENV_MAX_BYTES,
@@ -163,7 +165,10 @@ export class ProjectEnvironment {
     let result: RunResult;
     try {
       result = await this.runner({
-        command: config.command,
+        // `~` is a shell's, and the hook is spawned directly rather than
+        // through one. Expanding it here means a path a person typed from
+        // habit works, instead of failing as "not found".
+        command: expandHome(config.command),
         args: config.args,
         cwd: this.options.cwd,
         // The hook inherits the worker's environment, which is the app's, not a
@@ -214,6 +219,13 @@ export class ProjectEnvironment {
     };
     return this.status();
   }
+}
+
+/** Expand a leading `~` against the person's home directory. */
+export function expandHome(command: string): string {
+  if (command === "~") return homedir();
+  if (command.startsWith("~/")) return join(homedir(), command.slice(2));
+  return command;
 }
 
 function initialSnapshot(config: ProjectEnvWorkerConfig | undefined): ProjectEnvSnapshot {
