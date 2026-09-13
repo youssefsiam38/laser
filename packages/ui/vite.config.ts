@@ -3,12 +3,13 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { laserPwa, productIdentityHtml } from "./src/pwa/vite-plugin.js";
+import { bundleReport } from "./src/build/bundle-report.js";
 
 // In dev the UI runs on 5173 and talks to a host on 41441; in production the
 // host serves the built bundle and the client uses the page's own origin.
 export default defineConfig({
   // laserPwa emits /sw.js (app shell only) and injects src/pwa/boot.ts (M7-T1).
-  plugins: [react(), tailwindcss(), productIdentityHtml(), laserPwa()],
+  plugins: [react(), tailwindcss(), productIdentityHtml(), laserPwa(), bundleReport()],
   resolve: {
     alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
     dedupe: ["react", "react-dom", "@assistant-ui/react"],

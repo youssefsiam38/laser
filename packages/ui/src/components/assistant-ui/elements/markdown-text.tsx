@@ -15,14 +15,14 @@
  *   - Fences highlight through the Shiki element only once the part settles;
  *     a `mermaid` fence draws through the sanitizing Mermaid element.
  *   - Math via remark-math + rehype-katex, with the delimiter normalizer and
- *     the currency guard the markdown package ships — `$5` stays a price.
+ *     the currency guard the markdown package ships — `$5` stays a price. The
+ *     KaTeX renderer and its stylesheet are a chunk of their own, asked for by
+ *     the first message whose source has math in it (`markdown-math.ts`).
  *   - GFM footnote references draw as citation chips, so `[^1]` in an answer
  *     from web-access reads like a citation rather than a superscript link.
  *   - The streaming caret rides on the last block while the part runs.
  *   - `dot.css` is not imported: the caret is the streaming indicator here.
  */
-import "katex/dist/katex.min.css";
-
 import {
   MarkdownTextPrimitive,
   escapeCurrencyDollars,
@@ -33,7 +33,6 @@ import {
 } from "@assistant-ui/react-markdown";
 import { Check, Copy } from "lucide-react";
 import { createContext, memo, useContext, useMemo, useRef, type FC, type ReactNode, type ComponentProps } from "react";
-import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 
@@ -46,11 +45,11 @@ import { ProjectMarkdownImage } from "./image.js";
 import { markdownUrl } from "@/lib/file-links";
 
 import { citationChip } from "./inline-citation.js";
+import { useMathRehypePlugin } from "./markdown-math.js";
 import { MermaidDiagram } from "./mermaid-diagram.aui.js";
 import { SyntaxHighlighter } from "./shiki-highlighter.aui.js";
 
 const remarkPlugins = [remarkGfm, remarkMath];
-const rehypePlugins = [rehypeKatex];
 
 /** `\(x\)` → `$x$`, `\[…\]` → `$$…$$`, and `$5` stays money. Code spans are left alone. */
 const preprocess = (text: string): string => escapeCurrencyDollars(normalizeMathDelimiters(text));
@@ -244,10 +243,14 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ className, components, native
     const map = { ...defaultComponents, ...(stableComponents ? memoizeMarkdownComponents(stableComponents) : {}) };
     return hasSources ? { ...map, div: ProvenanceBlock } satisfies Components : map;
   }, [stableComponents, hasSources]);
-  const plugins = useMemo(() => hasSources ? [...rehypePlugins, () => (tree: { children: Array<{ type: string; value?: string; position?: { start: { offset?: number }; end: { offset?: number } } }> }) => {
-    tree.children = tree.children.map(node => (node.type === "element" || (node.type === "raw" || node.type === "text") && node.value?.trim()) && node.position?.start.offset !== undefined && node.position.end.offset !== undefined
-      ? { type: "element", tagName: "div", properties: { provenanceStart: node.position.start.offset, provenanceEnd: node.position.end.offset }, children: [node] } : node);
-  }] : rehypePlugins, [hasSources]);
+  const math = useMathRehypePlugin();
+  const plugins = useMemo(() => {
+    const base = math ? [math] : [];
+    return hasSources ? [...base, () => (tree: { children: Array<{ type: string; value?: string; position?: { start: { offset?: number }; end: { offset?: number } } }> }) => {
+      tree.children = tree.children.map(node => (node.type === "element" || (node.type === "raw" || node.type === "text") && node.value?.trim()) && node.position?.start.offset !== undefined && node.position.end.offset !== undefined
+        ? { type: "element", tagName: "div", properties: { provenanceStart: node.position.start.offset, provenanceEnd: node.position.end.offset }, children: [node] } : node);
+    }] : base;
+  }, [hasSources, math]);
 
   return (
     <ProseDirection.Provider value={dir}><SourceBlocks.Provider value={sourceBlock}><NativeFiles.Provider value={nativeFiles}><MarkdownTextPrimitive

@@ -1,5 +1,8 @@
 node_modules/
 dist/
+# The opt-in bundle report (packages/ui/src/build/bundle-report.ts): build
+# output about build output, never committed.
+dist-report/
 *.tsbuildinfo
 .env
 .env.*
