@@ -1,6 +1,6 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-14T10:39:41Z · orchestrator `01a09ea5` · HEAD: 51442d6
+**Last updated:** 2026-09-14T10:44:25Z · orchestrator `01a09ea5` · HEAD: 67cb8ff
 **Current focus:** 0.6.4 fixes are complete; final review blockers are corrected and M16-T54 remains open only for the authorized public release.
 
 | Milestone | State |
