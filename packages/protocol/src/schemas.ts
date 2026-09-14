@@ -933,6 +933,17 @@ export type TypedClientRequest = {
 }[ClientMethod];
 
 /**
+ * The one answer to a method nothing knows.
+ *
+ * Built in a single place so the boundary's refusal (RP-13) and the parser's
+ * are the same error with the same sentence: a caller must not be able to tell
+ * from the answer whether a name got as far as the parser.
+ */
+export function unknownMethodError(method: string): ProtocolError {
+  return new ProtocolError(ErrorCodes.MethodNotFound, `unknown method ${method}`);
+}
+
+/**
  * Parse one raw JSON-RPC line into a typed client request. Throws
  * ProtocolError with the right JSON-RPC code for the host to echo back.
  */
@@ -943,7 +954,7 @@ export function parseClientRequest(raw: unknown): TypedClientRequest {
   }
   const { method } = env.data;
   if (!isClientMethod(method)) {
-    throw new ProtocolError(ErrorCodes.MethodNotFound, `unknown method ${method}`);
+    throw unknownMethodError(method);
   }
   const params = clientParamsSchemas[method].safeParse(env.data.params ?? {});
   if (!params.success) {

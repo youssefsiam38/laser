@@ -84,8 +84,31 @@ describe("the method table", () => {
   it("maps reach onto the three proven actor classes", () => {
     const classes: ActorClass[] = ["local_app", "local_browser", "paired_device"];
     expect(classes.map((actor) => reachAllows("any", actor))).toEqual([true, true, true]);
-    expect(classes.map((actor) => reachAllows("local", actor))).toEqual([true, true, false]);
     expect(classes.map((actor) => reachAllows("native", actor))).toEqual([true, false, false]);
+    // Two values, and no unused third: every row is one or the other.
+    expect(new Set(Object.values(METHOD_POLICY).map((policy) => policy.reach))).toEqual(new Set(["any", "native"]));
+  });
+
+  it("separates running something from configuring it", () => {
+    for (const method of ["mcp/call", "pi/project/env/set", "pi/project/env/test", "pi/project/env/refresh"] as const) {
+      expect(METHOD_POLICY[method].scope, method).toBe("execution");
+    }
+    // Describing what is configured is not execution.
+    expect(METHOD_POLICY["mcp/list"].scope).toBe("read");
+    expect(METHOD_POLICY["pi/project/env/status"].scope).toBe("read");
+    expect(METHOD_POLICY["mcp/save"].scope).toBe("settings");
+    // A policy that narrows to settings alone cannot reach an executable.
+    const settingsOnly = resolveEnvironmentPolicy({ remote: { scopes: ["handshake", "read", "settings"] } }, "the host's configured policy");
+    expect(settingsOnly.remote.scopes).not.toContain("execution");
+    // And the default policy keeps today's behaviour exactly.
+    expect(resolveEnvironmentPolicy({}, "the host's configured policy").remote.scopes).toContain("execution");
+  });
+
+  it("summarises the one high-frequency stream, and nothing else", () => {
+    const summarised = Object.entries(METHOD_POLICY)
+      .filter(([, policy]) => policy.audit === "summary")
+      .map(([method]) => method);
+    expect(summarised).toEqual(["pi/transcribe/chunk"]);
   });
 
   it("gives every host notification an owning scope", () => {

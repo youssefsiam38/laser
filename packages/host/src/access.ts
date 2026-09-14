@@ -27,7 +27,6 @@ import {
   ENVIRONMENT_CONTRACT_VERSION,
   ErrorCodes,
   METHOD_POLICY,
-  METHOD_SCOPES,
   PRODUCT_VERSION,
   ProtocolError,
   WIRE_NAMESPACE,
@@ -36,6 +35,7 @@ import {
   methodPolicy,
   notificationScope,
   reachAllows,
+  unknownMethodError,
   type ActorClass,
   type CachePolicy,
   type DeviceGrants,
@@ -77,25 +77,44 @@ export type Authorization = { ok: true; policy: MethodPolicy } | AuthorizationRe
 /** The two local actors need no derivation: there is one of each per machine. */
 export const LOCAL_APP_ACTOR_ID = "l1.app";
 export const LOCAL_BROWSER_ACTOR_ID = "l1.browser";
+
 /**
- * A socket the host cannot prove came from this machine. Nothing creates one
- * today — the host binds loopback and remote access goes through the relay —
- * but an operator who binds elsewhere must not thereby hand out local
- * authority. Such a socket is treated as the least privileged class there is,
- * with an id of its own so the audit never confuses it with a paired device.
+ * Is this peer address this machine talking to itself?
+ *
+ * Every direct socket on the host's own listener is *required* to be one:
+ * a peer the host cannot prove is local is refused during the upgrade, not
+ * admitted with reduced authority. A socket is not a pairing — the only way
+ * to reach this host from elsewhere is the relay's authenticated Noise
+ * session, which builds its actor from the device's static key.
+ *
+ * Both families, and the IPv4-mapped IPv6 form a dual-stack listener reports.
+ * An address the host does not have (a destroyed socket) is not local.
  */
-export const UNPROVEN_SOCKET_ACTOR_ID = "r1.socket";
+export function isLoopbackAddress(address: string | undefined): boolean {
+  if (!address) return false;
+  const plain = address.startsWith("[") && address.endsWith("]") ? address.slice(1, -1) : address;
+  const value = plain.split("%")[0] ?? plain; // strip an IPv6 zone index
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(value);
+  const v4 = mapped?.[1] ?? (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(value) ? value : undefined);
+  if (v4) {
+    const parts = v4.split(".").map((part) => Number(part));
+    return parts.length === 4 && parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255) && parts[0] === 127;
+  }
+  if (!value.includes(":")) return false;
+  // The IPv6 loopback, in any of the forms Node may report it.
+  const groups = value.toLowerCase();
+  return groups === "::1" || /^(0{1,4}:){7}0{0,3}1$/.test(groups);
+}
 
 /**
  * The actor of a socket on this host's own listener.
  *
- * `loopback` is the host's own proof (the peer address), and `hasBrowserOrigin`
- * is the browser's mandatory `Origin` header: a page always sends one, so its
- * absence on a loopback socket is what identifies the shell or the command
- * line. Neither comes from the request body.
+ * `hasBrowserOrigin` is the browser's mandatory `Origin` header: a page always
+ * sends one, so its absence identifies the shell or the command line. It does
+ * not come from the request body. The socket's locality is not a parameter
+ * because a non-local socket never gets this far: see {@link isLoopbackAddress}.
  */
-export function localActor(hasBrowserOrigin: boolean, loopback = true): ActorIdentity {
-  if (!loopback) return { class: "paired_device", id: UNPROVEN_SOCKET_ACTOR_ID };
+export function localActor(hasBrowserOrigin: boolean): ActorIdentity {
   return hasBrowserOrigin
     ? { class: "local_browser", id: LOCAL_BROWSER_ACTOR_ID }
     : { class: "local_app", id: LOCAL_APP_ACTOR_ID };
@@ -144,6 +163,7 @@ const SCOPE_REFUSAL: Record<MethodScope, string> = {
   session_write: "This connection is not allowed to change conversations in this environment.",
   approval: "This connection is not allowed to answer questions or approve tools in this environment.",
   work_control: "This connection is not allowed to start or stop work in this environment.",
+  execution: "This connection is not allowed to run tools or project environment commands in this environment.",
   settings: "This connection is not allowed to change settings in this environment.",
   features: "This connection is not allowed to change features in this environment.",
   diagnostics: "This connection is not allowed to read diagnostics in this environment.",
@@ -183,11 +203,7 @@ export class AccessControl {
   authorize(method: string, actor: ActorIdentity): Authorization {
     const policy = methodPolicy(method);
     if (!policy) {
-      return {
-        ok: false,
-        reason: "unknown_method",
-        error: new ProtocolError(ErrorCodes.MethodNotFound, `unknown method ${method}`),
-      };
+      return { ok: false, reason: "unknown_method", error: unknownMethodError(method) };
     }
     if (!reachAllows(policy.reach, actor.class)) {
       return {
@@ -247,33 +263,6 @@ export class AccessControl {
   }
 }
 
-/**
- * The boundary a host gets when nobody wired one: the default policy, which
- * narrows nothing. Reach is still enforced — it belongs to the method, not to
- * a policy — and the scopes are exactly the table's own. It cannot describe an
- * environment, because a host that did not supply its identity has none to
- * name; `environment/describe` is refused instead of answered with a fiction.
- */
-let fallback: AccessControl | undefined;
-export function defaultAccessControl(): AccessControl {
-  return (fallback ??= new AccessControl({
-    policy: {
-      deployment: "local",
-      local: { scopes: [...METHOD_SCOPES] },
-      remote: { scopes: [...METHOD_SCOPES] },
-      cache: { ...DEFAULT_CACHE_POLICY },
-      audit: { reads: "summary" },
-    },
-    environmentKey: "",
-    capabilities: {
-      revisions: false,
-      deltas: false,
-      snapshots: false,
-      durableReads: false,
-      search: false,
-      logs: false,
-      diagnostics: false,
-      push: false,
-    },
-  }));
-}
+// There is deliberately no default `AccessControl`. A Router without one is a
+// wiring mistake, and `RouterDeps.access` is required so the compiler says so
+// rather than the product quietly running with whatever a fallback allowed.

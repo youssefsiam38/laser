@@ -33,7 +33,7 @@ import { basename, dirname, extname, join, normalize, relative, resolve as resol
 import { WebSocketServer, type WebSocket } from "ws";
 import { channelIdFor, type KeyPair } from "@lasercode/crypto";
 import { ENV, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, isTerminalRunStatus, projectEnvWorkerConfig, type ClientRequests, type DeviceGrants, type EnvironmentPolicyInput, type HostNotifications, type JsonRpcNotification, type LogEntry, type NamerState, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
-import { AccessControl, localActor, pairedActor, type ActorIdentity } from "./access.js";
+import { AccessControl, isLoopbackAddress, localActor, pairedActor, type ActorIdentity } from "./access.js";
 import { AccessAudit } from "./access-audit.js";
 import { loadEnvironmentPolicy } from "./environment-policy.js";
 import { suggestBeamModel } from "./agents/models.js";
@@ -583,7 +583,17 @@ export class HostServer {
     this.wss = new WebSocketServer({
       server: this.http,
       path: "/ws",
-      verifyClient: ({ origin }, done) => {
+      verifyClient: ({ origin, req }, done) => {
+        // A direct socket is this machine talking to itself, or it is nothing.
+        // Reaching this host from elsewhere means the relay's authenticated
+        // Noise session; a TCP peer is not a pairing and must not be admitted
+        // with reduced authority, because "reduced" would still be authority
+        // (RP-13).
+        if (!isLoopbackAddress(req.socket.remoteAddress)) {
+          this.log(`refused a WebSocket upgrade from a peer that is not on this machine`);
+          done(false, 403, `${PRODUCT_NAME} only accepts connections from this machine`);
+          return;
+        }
         if (this.isAllowedOrigin(origin)) {
           done(true);
           return;
@@ -594,10 +604,10 @@ export class HostServer {
     });
     this.wss.on("connection", (ws, req) => this.onConnection(
       ws,
-      // The same two facts the host has always used, now named: a loopback
-      // peer, and whether a browser announced itself. `verifyClient` has
-      // already refused any origin that is not this app's.
-      localActor(Boolean(req.headers.origin), ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress ?? "")),
+      // Locality was proved during the upgrade; what is left is the browser's
+      // mandatory `Origin`, which tells the shell and the command line apart
+      // from a page this host serves.
+      localActor(Boolean(req.headers.origin)),
     ));
   }
 
@@ -1018,16 +1028,7 @@ export class HostServer {
       if (type === `${WIRE_NAMESPACE}/provider/request` || type === `${WIRE_NAMESPACE}/provider/response`) return;
     }
     let line: string | undefined;
-    for (const ws of this.clients) {
-      if (ws.readyState !== ws.OPEN || !this.transcripts.get(ws)?.accepts(notification)) continue;
-      // A connection hears only what its scopes cover (RP-13).
-      const actor = this.actors.get(ws);
-      if (actor && !this.access.allowsNotification(notification.method, actor)) continue;
-      const held = [...(this.loadDeliveries.get(ws) ?? [])]
-        .map((delivery) => delivery.offer(notification))
-        .some(Boolean);
-      if (!held) ws.send(line ??= JSON.stringify(notification));
-    }
+    for (const ws of this.clients) this.emit(ws, notification, () => (line ??= JSON.stringify(notification)));
     for (const listener of this.notificationListeners) {
       // One relayed device throwing must not cost the others their stream.
       try {
@@ -1058,6 +1059,31 @@ export class HostServer {
     return (this.options.allowedOrigins ?? []).includes(origin);
   }
 
+  /**
+   * The one way a notification reaches a direct socket.
+   *
+   * Broadcast and the replay a client gets on connect both go through here, so
+   * there is a single place where the order is decided and a single place to
+   * change it: the connection must be open and **proved** (no actor is a drop,
+   * never a send), its scopes must cover the notification (RP-13), the
+   * transcript filter must admit it, and a `session/load` in flight may hold
+   * it for ordering. Only then does it go out.
+   */
+  private emit(ws: WebSocket, notification: JsonRpcNotification, serialize?: () => string): boolean {
+    if (ws.readyState !== ws.OPEN) return false;
+    const actor = this.actors.get(ws);
+    // Fail closed: a socket the host cannot name is a socket that hears nothing.
+    if (!actor) return false;
+    if (!this.access.allowsNotification(notification.method, actor)) return false;
+    if (!this.transcripts.get(ws)?.accepts(notification)) return false;
+    const held = [...(this.loadDeliveries.get(ws) ?? [])]
+      .map((delivery) => delivery.offer(notification))
+      .some(Boolean);
+    if (held) return true;
+    ws.send(serialize ? serialize() : JSON.stringify(notification));
+    return true;
+  }
+
   private onConnection(ws: WebSocket, actor: ActorIdentity): void {
     this.clients.add(ws);
     this.actors.set(ws, actor);
@@ -1070,7 +1096,7 @@ export class HostServer {
     // A client that connects while a project is waiting on a trust decision
     // must see the question, not a worker that never starts.
     for (const request of this.projects.pendingTrustRequests()) {
-      ws.send(JSON.stringify({ jsonrpc: "2.0", method: "pi/project/trust_request", params: request }));
+      this.emit(ws, { jsonrpc: "2.0", method: "pi/project/trust_request", params: request });
     }
     ws.on("message", async (data) => {
       let raw: unknown;

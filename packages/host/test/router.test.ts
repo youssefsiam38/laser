@@ -10,7 +10,7 @@
  * cheapest way to rule out.
  */
 import { ErrorCodes, PRODUCT_NAME } from "@lasercode/protocol";
-import { LOCAL_ACCESS } from "./actors.js";
+import { LOCAL_ACCESS, testAccess } from "./actors.js";
 import { describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -135,7 +135,7 @@ function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string
   // Fixtures date from June; a fixed clock keeps retention from pruning them.
   const runs = options.agents ? new AgentRunRegistry({ now: () => new Date("2026-06-02T00:00:00.000Z") }) : undefined;
   const views = new ViewCache(2);
-  const router = new Router(pool, catalog, { attention, projects, views, agents, runs, ...(options.now ? { now: options.now } : {}) });
+  const router = new Router(pool, catalog, { attention, projects, views, agents, runs, access: testAccess(), ...(options.now ? { now: options.now } : {}) });
 
   // The Router only records a stub from inside `dispatch`; reach the private
   // recorder the same way `session/new` does, without standing up a worker.

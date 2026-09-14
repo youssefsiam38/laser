@@ -35,6 +35,10 @@ import type { HostNotifications } from "./messages.js";
  *   and an environment may want to read remotely without granting it.
  * - `work_control` — stopping or restarting work and runtimes: workers,
  *   background commands, agent runs, a child's worktree.
+ * - `execution` — running something this machine can execute: an MCP server's
+ *   tool, or the command a project's environment helper runs. Separate from
+ *   `settings` on purpose, so an environment can let a connection configure
+ *   the product without letting it run an executable through it.
  * - `settings` — configuration that outlives a turn: projects and trust,
  *   provider sign-in, MCP servers, keybindings, preferences, agent
  *   definitions, the shell's private environment overlay.
@@ -49,6 +53,7 @@ export type MethodScope =
   | "session_write"
   | "approval"
   | "work_control"
+  | "execution"
   | "settings"
   | "features"
   | "diagnostics"
@@ -60,6 +65,7 @@ export const METHOD_SCOPES: readonly MethodScope[] = [
   "session_write",
   "approval",
   "work_control",
+  "execution",
   "settings",
   "features",
   "diagnostics",
@@ -74,11 +80,15 @@ export function isMethodScope(value: unknown): value is MethodScope {
  * Which proven connection classes may call a method.
  *
  * - `any` — every authenticated connection, including a paired device.
- * - `local` — a connection on this machine's loopback socket, browser or not.
  * - `native` — a local process with no browser origin: the app shell or the
  *   command line. A page — even one served by this host — is not one.
+ *
+ * There is deliberately no third value. A "this machine, browser or not" reach
+ * would have no row today, and an unused authority level is one more thing to
+ * get wrong than it is a thing that protects anybody. Add it when a method
+ * needs it, with the row that needs it.
  */
-export type MethodReach = "any" | "local" | "native";
+export type MethodReach = "any" | "native";
 
 /** How the host proved who is calling. Never taken from a request body. */
 export type ActorClass = "local_app" | "local_browser" | "paired_device";
@@ -88,6 +98,17 @@ export interface MethodPolicy {
   reach: MethodReach;
   /** The sentence a person sees when *reach* refuses the call. */
   refusal?: string;
+  /**
+   * How the access audit records a *successful* call of this method.
+   *
+   * `"summary"` marks a high-frequency stream — a method a person's normal use
+   * calls tens or hundreds of times a minute. Those are counted per actor and
+   * written as one row per window instead of one row per call, so ordinary use
+   * cannot spend the per-call allowance or the capacity reserved for
+   * refusals. Refusals and errors are always individual rows, whatever this
+   * says: the reason for a refusal is the record that matters.
+   */
+  audit?: "summary";
 }
 
 const NATIVE_ENVIRONMENT_REFUSAL = "Environment updates are only accepted from a local app or terminal.";
@@ -99,8 +120,6 @@ export function reachAllows(reach: MethodReach, actor: ActorClass): boolean {
   switch (reach) {
     case "any":
       return true;
-    case "local":
-      return actor === "local_app" || actor === "local_browser";
     case "native":
       return actor === "local_app";
   }
@@ -198,7 +217,9 @@ export const METHOD_POLICY = {
   "pi/model/set": { scope: "session_write", reach: "any" },
   "pi/thinking/set": { scope: "session_write", reach: "any" },
   "pi/transcribe/begin": { scope: "session_write", reach: "any" },
-  "pi/transcribe/chunk": { scope: "session_write", reach: "any" },
+  // Dictation sends a chunk every few hundred milliseconds. Counted, not
+  // written per call: two minutes of speech is one audit row, not four hundred.
+  "pi/transcribe/chunk": { scope: "session_write", reach: "any", audit: "summary" },
   "pi/transcribe/end": { scope: "session_write", reach: "any" },
   "pi/transcribe/cancel": { scope: "session_write", reach: "any" },
 
@@ -222,9 +243,15 @@ export const METHOD_POLICY = {
   "pi/project/remove": { scope: "settings", reach: "any" },
   "pi/project/reorder": { scope: "settings", reach: "any" },
   "pi/project/trust": { scope: "settings", reach: "any" },
-  "pi/project/env/set": { scope: "settings", reach: "any" },
-  "pi/project/env/test": { scope: "settings", reach: "any" },
-  "pi/project/env/refresh": { scope: "settings", reach: "any" },
+  // ---------------------------------------------------------- execution ---
+  // Running something this machine can execute. `mcp/call` runs a configured
+  // server's tool; the project environment helpers run the command a project
+  // was given. Granting `settings` alone lets a connection describe those
+  // things without being able to run them.
+  "mcp/call": { scope: "execution", reach: "any" },
+  "pi/project/env/set": { scope: "execution", reach: "any" },
+  "pi/project/env/test": { scope: "execution", reach: "any" },
+  "pi/project/env/refresh": { scope: "execution", reach: "any" },
   "pi/providers/login/start": { scope: "settings", reach: "any" },
   "pi/providers/login/answer": { scope: "settings", reach: "any" },
   "pi/providers/login/cancel": { scope: "settings", reach: "any" },
@@ -234,7 +261,6 @@ export const METHOD_POLICY = {
   "mcp/remove": { scope: "settings", reach: "any" },
   "mcp/inspect": { scope: "settings", reach: "any" },
   "mcp/ping": { scope: "settings", reach: "any" },
-  "mcp/call": { scope: "settings", reach: "any" },
   "mcp/disconnect": { scope: "settings", reach: "any" },
   "mcp/auth/start": { scope: "settings", reach: "any" },
   "mcp/auth/complete": { scope: "settings", reach: "any" },

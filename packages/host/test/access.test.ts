@@ -16,7 +16,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AccessAudit, type AccessAuditRecord } from "../src/access-audit.js";
-import { AccessControl, localActor, pairedActor, type ActorIdentity } from "../src/access.js";
+import { AccessControl, isLoopbackAddress, localActor, pairedActor, type ActorIdentity } from "../src/access.js";
 import { loadEnvironmentPolicy } from "../src/environment-policy.js";
 import { AttentionTracker } from "../src/attention.js";
 import type { SessionCatalog } from "../src/catalog.js";
@@ -89,6 +89,81 @@ const call = (router: Router, method: string, actor: ActorIdentity, params: unkn
 
 const errorOf = (response: JsonRpcResponse): { code: number; message: string } =>
   (response as { error: { code: number; message: string } }).error;
+
+describe("execution is not settings", () => {
+  it("refuses running a tool or a project environment helper to a settings-only grant", async () => {
+    const h = harness({ policy: { remote: { scopes: ["handshake", "read", "settings"] } } });
+    try {
+      for (const [method, params] of [
+        ["mcp/call", { cwd: "/p", server: "s", tool: "t", args: {} }],
+        ["pi/project/env/set", { cwd: "/p", config: { command: "direnv" } }],
+        ["pi/project/env/test", { cwd: "/p" }],
+        ["pi/project/env/refresh", { cwd: "/p" }],
+      ] as Array<[string, unknown]>) {
+        const response = await call(h.router, method, deviceActor(), params);
+        expect(errorOf(response).code, method).toBe(ErrorCodes.Unsupported);
+        expect(errorOf(response).message, method).toContain("run tools or project environment commands");
+      }
+      expect(h.spawned).toEqual([]);
+      // Describing what is configured stays available to the same connection.
+      expect(h.access.authorize("mcp/list", deviceActor()).ok).toBe(true);
+      expect(h.access.authorize("pi/project/env/status", deviceActor()).ok).toBe(true);
+      expect(h.access.authorize("mcp/save", deviceActor()).ok).toBe(true);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("is in the default policy, so a host nobody narrowed behaves as it did", async () => {
+    const h = harness();
+    try {
+      expect(h.access.scopesFor(deviceActor())).toContain("execution");
+      expect(h.access.authorize("mcp/call", deviceActor()).ok).toBe(true);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("can be granted without settings, and then settings are refused", () => {
+    const access = control({ policy: { remote: { scopes: ["handshake", "read", "execution"] } } });
+    expect(access.authorize("mcp/call", deviceActor()).ok).toBe(true);
+    expect(access.authorize("mcp/save", deviceActor()).ok).toBe(false);
+  });
+});
+
+describe("admission", () => {
+  it("knows this machine's own addresses in both families, and nothing else", () => {
+    for (const local of [
+      "127.0.0.1",
+      "127.0.0.53",
+      "127.1.2.3",
+      "::1",
+      "[::1]",
+      "0:0:0:0:0:0:0:1",
+      "::ffff:127.0.0.1",
+      "::FFFF:127.0.0.1",
+      "::1%lo",
+    ]) {
+      expect(isLoopbackAddress(local), local).toBe(true);
+    }
+    for (const remote of [
+      "192.168.1.10",
+      "10.0.0.1",
+      "128.0.0.1",
+      "27.0.0.1",
+      "::ffff:192.168.1.10",
+      "2001:db8::1",
+      "fe80::1",
+      "::",
+      "",
+      undefined,
+      "127.0.0.1.example.com",
+      "not an address",
+    ]) {
+      expect(isLoopbackAddress(remote), String(remote)).toBe(false);
+    }
+  });
+});
 
 describe("reach", () => {
   it("keeps the shell's own two methods on this machine and refuses them elsewhere, in words", async () => {
@@ -363,6 +438,69 @@ describe("the audit", () => {
     }
   });
 
+  it("counts only successful reads: an errored read is its own row", () => {
+    const store = sink();
+    const audit = new AccessAudit({ sink: store, autoFlush: false });
+    audit.record(record({ scope: "read", method: "pi/session/entries", outcome: "ok" }));
+    audit.record(record({ scope: "read", method: "pi/session/entries", outcome: "error", code: ErrorCodes.InvalidParams }));
+    expect(store.rows.map((row) => row.kind)).toEqual(["access_error"]);
+    expect((store.rows[0]!.detail as { outcome: string; code: number }).outcome).toBe("error");
+    audit.close();
+    expect(store.rows.map((row) => row.kind)).toEqual(["access_error", "access_reads"]);
+    expect((store.rows[1]!.detail as { reads: number }).reads).toBe(1);
+  });
+
+  it("counts a dictation stream instead of writing a row per chunk", () => {
+    const store = sink();
+    const audit = new AccessAudit({
+      sink: store,
+      autoFlush: false,
+      // A reserve of 2 in an allowance of 4: two minutes of dictation must
+      // spend neither.
+      bounds: { perActor: 4, perActorRefusals: 2, global: 8, globalRefusals: 4 },
+    });
+    // ~200 ms chunks for two minutes.
+    for (let index = 0; index < 600; index++) {
+      audit.record(record({ method: "pi/transcribe/chunk", scope: "session_write", outcome: "ok" }));
+    }
+    expect(store.rows).toHaveLength(0);
+    // The refusal reserve is untouched, and so is the ordinary allowance.
+    audit.record(record({ outcome: "refused", reason: "scope" }));
+    audit.record(record({ method: "session/prompt", outcome: "ok" }));
+    expect(store.rows.map((row) => row.kind)).toEqual(["access_refused", "access_allowed"]);
+    audit.close();
+    const stream = store.rows.find((row) => row.kind === "access_stream")!;
+    expect((stream.detail as { method: string; calls: number })).toMatchObject({ method: "pi/transcribe/chunk", calls: 600 });
+    // A refused or errored chunk is never folded into that count.
+    const second = sink();
+    const strict = new AccessAudit({ sink: second, autoFlush: false });
+    strict.record(record({ method: "pi/transcribe/chunk", outcome: "refused", reason: "scope" }));
+    strict.record(record({ method: "pi/transcribe/chunk", outcome: "error", code: ErrorCodes.InvalidParams }));
+    expect(second.rows.map((row) => row.kind)).toEqual(["access_refused", "access_error"]);
+    strict.close();
+  });
+
+  it("reserves capacity for refusals that ordinary traffic cannot spend", () => {
+    const store = sink();
+    const audit = new AccessAudit({
+      sink: store,
+      autoFlush: false,
+      bounds: { perActor: 10, perActorRefusals: 4, global: 100, globalRefusals: 40, windowMs: 60_000 },
+    });
+    // A flood of allowed writes: it may have all but the reserve.
+    for (let index = 0; index < 50; index++) audit.record(record({ method: "session/prompt", outcome: "ok" }));
+    expect(store.rows.filter((row) => row.kind === "access_allowed")).toHaveLength(6);
+    // The refusals that follow still get rows of their own.
+    for (let index = 0; index < 4; index++) audit.record(record({ outcome: "refused", reason: "scope" }));
+    expect(store.rows.filter((row) => row.kind === "access_refused")).toHaveLength(4);
+    // Past the reserve they are counted, not silently dropped.
+    audit.record(record({ outcome: "refused", reason: "reach" }));
+    audit.close();
+    const dropped = store.rows.find((row) => row.kind === "access_dropped")!;
+    expect((dropped.detail as { dropped: number; refusalsDropped: number })).toMatchObject({ dropped: 44, refusalsDropped: 1 });
+    expect(dropped.summary).toContain("1 of them refusals");
+  });
+
   it("records each read when the policy asks for it", () => {
     const store = sink();
     const audit = new AccessAudit({ sink: store, reads: "each", autoFlush: false });
@@ -378,9 +516,9 @@ describe("the audit", () => {
       sink: store,
       autoFlush: false,
       now: () => now,
-      bounds: { perActor: 3, global: 5, maxActors: 8, windowMs: 60_000 },
+      bounds: { perActor: 4, perActorRefusals: 1, global: 7, globalRefusals: 2, maxActors: 8, windowMs: 60_000 },
     });
-    for (let index = 0; index < 10; index++) audit.record(record());
+    for (let index = 0; index < 10; index++) audit.record(record({ method: "session/prompt" }));
     expect(store.rows.filter((row) => row.kind === "access_allowed")).toHaveLength(3);
 
     // A second actor — a reconnect mints a new connection, not a new actor,
@@ -396,9 +534,76 @@ describe("the audit", () => {
     // The next window lets the same actor write again.
     now += 60_000;
     const before = store.rows.length;
-    audit.record(record());
+    audit.record(record({ method: "session/prompt" }));
     expect(store.rows.length).toBe(before + 1);
     audit.close();
+  });
+
+  it("cannot be made to write more than its ceiling by actor churn or reconnecting", () => {
+    const store = sink();
+    let now = 1_000;
+    const bounds = {
+      perActor: 4,
+      perActorRefusals: 2,
+      global: 20,
+      globalRefusals: 8,
+      maxActors: 3,
+      summaries: 6,
+      windowMs: 60_000,
+    };
+    const audit = new AccessAudit({ sink: store, autoFlush: false, now: () => now, bounds });
+    // 400 connection attempts inside one window, each inventing an actor id
+    // and each mixing reads, writes and refusals: exactly the shape of a
+    // reconnect loop trying to turn eviction into rows.
+    for (let connection = 0; connection < 400; connection++) {
+      const actorId = `d1.${connection}`;
+      audit.record(record({ actorId, scope: "read", method: "pi/session/list", outcome: "ok" }));
+      audit.record(record({ actorId, method: "pi/transcribe/chunk", outcome: "ok" }));
+      audit.record(record({ actorId, method: "session/prompt", outcome: "ok" }));
+      audit.record(record({ actorId, outcome: "refused", reason: "scope" }));
+    }
+    audit.close();
+    // The stated bound: ordinary rows + summary rows + at most one rollup.
+    const ceiling = bounds.global + bounds.summaries + 1;
+    expect(store.rows.length).toBeLessThanOrEqual(ceiling);
+    // And it is a real audit, not an empty one: refusals were kept, and the
+    // rollup says what did not fit.
+    expect(store.rows.some((row) => row.kind === "access_refused")).toBe(true);
+    expect(store.rows.filter((row) => row.kind === "access_rollup")).toHaveLength(1);
+    expect(store.rows.find((row) => row.kind === "access_rollup")!.summary).toContain("summary ceiling");
+
+    // A second window is a fresh allowance, not a second ceiling on top of
+    // the first: the same flood costs the same again, never more.
+    now += 60_000;
+    const before = store.rows.length;
+    const second = new AccessAudit({ sink: store, autoFlush: false, now: () => now, bounds });
+    for (let connection = 0; connection < 400; connection++) {
+      second.record(record({ actorId: `d1.b${connection}`, method: "session/prompt", outcome: "ok" }));
+      second.record(record({ actorId: `d1.b${connection}`, outcome: "refused", reason: "reach" }));
+    }
+    second.close();
+    expect(store.rows.length - before).toBeLessThanOrEqual(ceiling);
+  });
+
+  it("keeps summarising window after window, on a host whose traffic is all summarised", () => {
+    const store = sink();
+    let now = 1_000;
+    const audit = new AccessAudit({
+      sink: store,
+      autoFlush: false,
+      now: () => now,
+      // A tiny summary budget: if the budget never refilled, the rows below
+      // would stop after the second window and never come back.
+      bounds: { summaries: 2, windowMs: 60_000 },
+    });
+    for (let window = 0; window < 8; window++) {
+      audit.record(record({ scope: "read", method: "pi/session/list", outcome: "ok" }));
+      audit.flush();
+      now += 60_000;
+    }
+    audit.close();
+    expect(store.rows.filter((row) => row.kind === "access_reads").length).toBeGreaterThanOrEqual(8);
+    expect(store.rows.some((row) => row.kind === "access_rollup")).toBe(false);
   });
 
   it("evicts the least recently seen actor and flushes its counters on the way out", () => {
@@ -445,11 +650,10 @@ describe("actor identity", () => {
     expect(first.id).toMatch(/^d1\.[A-Za-z0-9_-]{22}$/);
     expect(pairedActor(ENVIRONMENT_ID, new Uint8Array(32).fill(4)).id).not.toBe(first.id);
     // The two local actors are one each per machine, and say which they are.
+    // There is no third: a socket that is not on this machine never gets an
+    // actor at all, because the upgrade refuses it (see "admission").
     expect(localActor(false)).toEqual({ class: "local_app", id: "l1.app" });
     expect(localActor(true)).toEqual({ class: "local_browser", id: "l1.browser" });
-    // A socket the host cannot prove is local gets the least privileged class.
-    expect(localActor(false, false).class).toBe("paired_device");
-    expect(localActor(false, false).id).toBe("r1.socket");
   });
 });
 
@@ -510,29 +714,7 @@ describe("where the policy comes from", () => {
   });
 });
 
-describe("a host with no boundary wired", () => {
-  it("still enforces reach, and refuses to describe an environment it cannot name", async () => {
-    const dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-access-bare-`));
-    try {
-      const router = new Router({ openSessions: () => [], cwdOfSession: () => undefined } as unknown as WorkerPool, {
-        list: () => [],
-        get: () => undefined,
-        cwdOf: () => undefined,
-        cwdCounts: () => new Map<string, number>(),
-        invalidate: () => {},
-      } as unknown as SessionCatalog, {
-        attention: new AttentionTracker({ storePath: join(dir, "attention.json") }),
-        projects: { isExcluded: () => false, list: () => [] } as never,
-        projectEnv: {} as never,
-        views: new ViewCache(1),
-      });
-      const refused = await router.handle({ jsonrpc: "2.0", id: 1, method: "resource/report", params: {} }, { actor: deviceActor() });
-      expect(errorOf(refused).message).toContain("running on this machine");
-      const described = await router.handle({ jsonrpc: "2.0", id: 2, method: "environment/describe", params: {} }, BROWSER_ACCESS);
-      expect(errorOf(described).code).toBe(ErrorCodes.Unsupported);
-      expect(errorOf(described).message).toContain("cannot describe its environment");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-});
+// There is deliberately no "a host with no boundary wired" case: `RouterDeps`
+// requires an `AccessControl`, so a Router without one does not compile. The
+// wiring mistake is a build failure rather than a host running on whatever a
+// fallback allowed.

@@ -54,20 +54,33 @@ worker start or change of state.
   cache, and which methods are available only on this machine.
 - **Narrowing only.** An organisation's policy and a device's pairing grant
   intersect with the table; neither can add a scope, and neither can change a
-  method's reach. `HostServerOptions.policy` is authoritative;
-  `<stateDir>/policy.json` is an optional *local* narrowing and is not managed
-  enforcement. A policy that is present and unusable stops the host before it
-  listens.
+  method's reach. `HostServerOptions.policy` is authoritative, but **no
+  launcher supplies it today**: the producers that ship are a program
+  embedding `HostServer` directly and the optional `<stateDir>/policy.json`,
+  which is a *local* narrowing and not managed enforcement. A policy that is
+  present and unusable stops the host before it listens.
+- **Running is not configuring.** `mcp/call` and the project environment
+  helpers (`pi/project/env/set|test|refresh`) carry their own `execution`
+  scope, so an environment can grant `settings` without letting a connection
+  run an executable through the host. (`mcp/save` + `mcp/inspect` can still
+  start a server for inspection; that boundary is documented, not implied.)
 - **Three methods are local by nature**: `pi/host/environment` and
   `agents/sync` (the shell's and the host's own plumbing) and `resource/report`
   (the desktop's measurement input). The redacted inventory a phone *reads*
   stays reachable.
+- **A direct socket must be this machine.** The WebSocket upgrade refuses any
+  peer that is not loopback, in both address families, before the origin check
+  — a TCP peer is never admitted as a lesser actor. Remote access is the
+  relay's authenticated Noise session and nothing else.
 - **The audit** records the actor, the method, the scope and the outcome, and
   nothing else: no conversation, path, payload, argv, environment variable,
   session id or URL. The actor is an opaque value salted with this
   environment's private identity — never the signed list's device id or the
-  device's public key. It is bounded per actor and host-globally, and a
-  reconnect does not reset either bound.
+  device's public key. Refusals hold reserved capacity that ordinary traffic
+  cannot spend; past that reserve they are counted in a bounded summary rather
+  than written individually, and the whole module writes at most
+  `global + summaries + 1` rows per window however many actors a reconnect
+  loop invents.
 
 The relay is unchanged by all of this: scopes, descriptors and audit rows are
 host state, and the frames that carry the requests remain padded ciphertext it

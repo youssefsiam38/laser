@@ -5,7 +5,7 @@
  * the environment's raw identity leaving the host.
  */
 import { ErrorCodes, PRODUCT_NAME, environmentKeyOf, environmentTagOf, isEnvironmentKey, isSessionRevision, sessionRevisionOf } from "@lasercode/protocol";
-import { LOCAL_ACCESS } from "./actors.js";
+import { LOCAL_ACCESS, testAccess } from "./actors.js";
 import { nodeRevisionHasher } from "@lasercode/protocol/revision-node";
 import { describe, expect, it, vi } from "vitest";
 import { appendFileSync, chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -267,7 +267,7 @@ describe("routing a revision request", () => {
     const attention = new AttentionTracker({});
     const projects = new ProjectRegistry({ catalog, agentDir: dir });
     projects.add(CWD);
-    const router = new Router(pool, catalog, { attention, projects, views: new ViewCache(2), revisions: options.revisions, projection: options.projection });
+    const router = new Router(pool, catalog, { attention, projects, views: new ViewCache(2), access: testAccess(), revisions: options.revisions, projection: options.projection });
     return {
       router,
       catalog,

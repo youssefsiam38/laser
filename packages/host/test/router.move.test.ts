@@ -7,7 +7,7 @@
  * tree, a live run is not abandoned.
  */
 import { PRODUCT_NAME, SESSION_AGENT_ENTRY_TYPE, type AgentRun, type SessionSummary } from "@lasercode/protocol";
-import { LOCAL_ACCESS } from "./actors.js";
+import { LOCAL_ACCESS, testAccess } from "./actors.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -79,7 +79,7 @@ function harness(options: { open?: string[]; closeRefuses?: string } = {}) {
   const projects = new ProjectRegistry({ catalog, agentDir: join(base, "projects"), exclude: [stateDir, join(base, "agent"), workspaces.beam, workspaces.chat] });
   const agents = new AgentStore({ agentDir: join(base, "agent"), workspaces });
   const runs = new AgentRunRegistry({ now: () => new Date("2026-09-02T00:00:00.000Z") });
-  const router = new Router(pool, catalog, { attention, projects, views: new ViewCache(2), agents, runs });
+  const router = new Router(pool, catalog, { attention, projects, views: new ViewCache(2), agents, runs, access: testAccess() });
   const rpc = (method: string, params: unknown) => router.handle({ jsonrpc: "2.0", id: 1, method, params }, LOCAL_ACCESS) as Promise<{ result?: unknown; error?: { code: number; message: string } }>;
   const rows = async () => ((await rpc("pi/session/list", {})).result as { sessions: SessionSummary[] }).sessions;
   return {

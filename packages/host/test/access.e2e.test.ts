@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
 import { channelIdFor, fromUtf8, nobleBackend, utf8 } from "@lasercode/crypto";
-import { ErrorCodes, PRODUCT_NAME, PRODUCT_VERSION, type EnvironmentDescriptor, type JsonRpcMessage } from "@lasercode/protocol";
+import { ErrorCodes, PRODUCT_NAME, PRODUCT_VERSION, type EnvironmentDescriptor, type EnvironmentPolicyInput, type JsonRpcMessage } from "@lasercode/protocol";
 import { HostServer } from "../src/server.js";
 import { Phone, StubRelay, until } from "./relay-stub.js";
 
@@ -42,11 +42,15 @@ class LocalClient {
 
   static async connect(url: string, origin?: string): Promise<LocalClient> {
     const socket = new WebSocket(`${url.replace("http", "ws")}/ws`, origin ? { origin } : {});
+    // The listener is attached before the socket opens on purpose: the host
+    // replays a pending question the moment it accepts the connection, and a
+    // client that subscribed a tick later would simply not see it.
+    const client = new LocalClient(socket);
     await new Promise<void>((resolve, reject) => {
       socket.once("open", () => resolve());
       socket.once("error", reject);
     });
-    return new LocalClient(socket);
+    return client;
   }
 
   request(method: string, params: unknown = {}): Promise<Answer> {
@@ -141,6 +145,124 @@ describe("the boundary over a real socket", () => {
     const host = new HostServer({ stateDir, logFile: false, log: () => {} });
     cleanup.push(() => host.close());
     expect(host.access.policy.remote.scopes).toEqual(["handshake", "read"]);
+  });
+
+  it("refuses the upgrade for a peer that is not on this machine, in both families", async () => {
+    const dir = base();
+    const lines: string[] = [];
+    const host = new HostServer({
+      agentDir: join(dir, "agent"),
+      sessionDir: join(dir, "sessions"),
+      stateDir: join(dir, "state"),
+      logFile: false,
+      log: (line) => lines.push(line),
+    });
+    cleanup.push(() => host.close());
+    const { port } = await host.listen();
+
+    // The real callback the WebSocket server was built with, asked about the
+    // peers a listener can actually report.
+    const verify = (host as unknown as {
+      wss: { options: { verifyClient: (info: { origin?: string; req: { socket: { remoteAddress?: string } } }, done: (ok: boolean, code?: number, message?: string) => void) => void } };
+    }).wss.options.verifyClient;
+    const ask = (remoteAddress: string | undefined, origin?: string) =>
+      new Promise<{ ok: boolean; code?: number; message?: string }>((resolve) => {
+        verify({ ...(origin ? { origin } : {}), req: { socket: { remoteAddress } } }, (ok, code, message) =>
+          resolve({ ok, ...(code !== undefined ? { code } : {}), ...(message !== undefined ? { message } : {}) }));
+      });
+
+    for (const address of ["127.0.0.1", "::1", "::ffff:127.0.0.1", "127.0.0.53"]) {
+      expect((await ask(address)).ok, address).toBe(true);
+    }
+    expect((await ask("127.0.0.1", `http://127.0.0.1:${port}`)).ok).toBe(true);
+
+    for (const address of ["192.168.1.10", "::ffff:192.168.1.10", "2001:db8::1", "fe80::1", undefined]) {
+      const answer = await ask(address, `http://127.0.0.1:${port}`);
+      expect(answer.ok, String(address)).toBe(false);
+      expect(answer.code, String(address)).toBe(403);
+      expect(answer.message, String(address)).toContain("only accepts connections from this machine");
+    }
+    // The refusal says nothing about who the peer was.
+    const refusals = lines.filter((line) => line.includes("not on this machine"));
+    expect(refusals.length).toBe(5);
+    expect(refusals.join(" ")).not.toContain("192.168");
+  });
+});
+
+describe("one way out to a direct socket", () => {
+  it("replays a pending question to a connection whose scopes cover it, and to nobody else", async () => {
+    const request = { id: "trust-1", cwd: "/projects/fixture", reasons: ["project configuration"], timeoutMs: 1_000 };
+    const start = (policy?: EnvironmentPolicyInput): HostServer => {
+      const dir = base();
+      const host = new HostServer({
+        agentDir: join(dir, "agent"),
+        sessionDir: join(dir, "sessions"),
+        stateDir: join(dir, "state"),
+        logFile: false,
+        log: () => {},
+        ...(policy ? { policy } : {}),
+      });
+      cleanup.push(() => host.close());
+      // The replay reads whatever is waiting; what is waiting is not the point
+      // of this test, and standing up an untrusted project to produce one
+      // would test the trust flow instead of the delivery path.
+      (host.projects as unknown as { pendingTrustRequests: () => unknown[] }).pendingTrustRequests = () => [request];
+      return host;
+    };
+
+    const open = start();
+    const openUrl = (await open.listen()).url;
+    const heard = await LocalClient.connect(openUrl);
+    cleanup.push(() => heard.close());
+    await until(
+      () => heard.notifications.some((message) => (message as { method?: string }).method === "pi/project/trust_request"),
+      4000,
+      "the replayed question",
+    );
+
+    // The same host, narrowed to the handshake alone: the question is a `read`,
+    // so this connection never hears it.
+    const narrowed = start({ local: { scopes: ["handshake"] } });
+    const narrowedUrl = (await narrowed.listen()).url;
+    const silent = await LocalClient.connect(narrowedUrl);
+    cleanup.push(() => silent.close());
+    // A round trip this connection *is* allowed, as a barrier: anything the
+    // replay was going to send has been sent by the time this answers.
+    expect((await silent.request("pi/host/version")).result).toBeDefined();
+    expect(silent.notifications).toEqual([]);
+
+    // And a broadcast afterwards goes the same single way.
+    open.notify("pi/session/seen", { path: "/sessions/a.jsonl" });
+    narrowed.notify("pi/session/seen", { path: "/sessions/a.jsonl" });
+    await until(
+      () => heard.notifications.some((message) => (message as { method?: string }).method === "pi/session/seen"),
+      4000,
+      "the broadcast a reader may hear",
+    );
+    expect(silent.notifications).toEqual([]);
+  }, 20_000);
+
+  it("drops a notification for a socket it cannot name", async () => {
+    const dir = base();
+    const host = new HostServer({
+      agentDir: join(dir, "agent"),
+      sessionDir: join(dir, "sessions"),
+      stateDir: join(dir, "state"),
+      logFile: false,
+      log: () => {},
+    });
+    cleanup.push(() => host.close());
+    await host.listen();
+
+    // A socket that never went through admission has no proven actor. The one
+    // emit path must fail closed rather than fall back to sending.
+    const sent: string[] = [];
+    const orphan = { readyState: 1, OPEN: 1, send: (line: string) => sent.push(line) };
+    const emit = (host as unknown as {
+      emit: (ws: unknown, notification: JsonRpcMessage) => boolean;
+    }).emit.bind(host);
+    expect(emit(orphan, { jsonrpc: "2.0", method: "pi/session/seen", params: { path: "/sessions/a.jsonl" } } as JsonRpcMessage)).toBe(false);
+    expect(sent).toEqual([]);
   });
 });
 

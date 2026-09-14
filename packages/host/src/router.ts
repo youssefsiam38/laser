@@ -28,7 +28,7 @@ import { ENVIRONMENT_DESCRIBE_METHOD, ErrorCodes, PRODUCT_DISPLAY_NAME, PRODUCT_
 import { existsSync, statSync, unlinkSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { HOST_ENVIRONMENT_METHOD, applyHostEnvironment } from "./environment.js";
-import { defaultAccessControl, type AccessControl, type ActorIdentity, type RequestAccess } from "./access.js";
+import type { AccessControl, ActorIdentity, RequestAccess } from "./access.js";
 import { unknownMethodDigest, type AccessAudit } from "./access-audit.js";
 import { destinationFor, rewriteSessionFile } from "./session-move.js";
 import type { AgentRunRegistry } from "./agents/runs.js";
@@ -116,11 +116,13 @@ export interface RouterDeps {
    */
   resources?: ResourceService | undefined;
   /**
-   * The boundary's authorization and environment descriptor (RP-13). Absent =
-   * reach and the default scopes are still enforced, and `environment/describe`
-   * is refused rather than answered with an environment this host cannot name.
+   * The boundary's authorization and environment descriptor (RP-13).
+   *
+   * Required. A Router that could be built without one would be a Router that
+   * runs with whatever a fallback happened to allow, and the wiring mistake
+   * would surface as authority rather than as a compile error.
    */
-  access?: AccessControl | undefined;
+  access: AccessControl;
   /** The access audit (RP-13). Absent = decisions are not recorded. */
   audit?: AccessAudit | undefined;
 }
@@ -237,7 +239,7 @@ export class Router {
     const id = (raw as { id?: string | number } | null)?.id ?? 0;
     const method = (raw as { method?: unknown } | null)?.method;
     const name = typeof method === "string" ? method : "";
-    const decision = this.access().authorize(name, access.actor);
+    const decision = this.deps.access.authorize(name, access.actor);
     if (!decision.ok) {
       this.audit()?.record({
         actorId: access.actor.id,
@@ -275,15 +277,6 @@ export class Router {
       durationMs: Date.now() - startedAt,
     });
     return response;
-  }
-
-  /**
-   * The boundary's authorization. A host built without one still refuses
-   * nothing more than it did before, but that is a wiring mistake rather than
-   * a mode: `HostServer` always supplies it.
-   */
-  private access(): AccessControl {
-    return this.deps.access ?? defaultAccessControl();
   }
 
   private audit(): AccessAudit | undefined {
@@ -370,20 +363,12 @@ export class Router {
       .slice(0, limit);
   }
 
-  private async dispatch(req: TypedClientRequest, searches?: SearchCancellation, actor?: ActorIdentity): Promise<unknown> {
+  private async dispatch(req: TypedClientRequest, searches: SearchCancellation | undefined, actor: ActorIdentity): Promise<unknown> {
     switch (req.method) {
       case "pi/host/version":
         return { version: PRODUCT_VERSION };
-      case ENVIRONMENT_DESCRIBE_METHOD: {
-        const access = this.deps.access;
-        if (!access || !actor) {
-          throw new ProtocolError(
-            ErrorCodes.Unsupported,
-            "This host cannot describe its environment. Restart the app and try again.",
-          );
-        }
-        return { environment: access.describe(actor) };
-      }
+      case ENVIRONMENT_DESCRIBE_METHOD:
+        return { environment: this.deps.access.describe(actor) };
       case HOST_ENVIRONMENT_METHOD: return applyHostEnvironment(this.pool, req.params);
       case "pi/session/list": {
         if (!req.params.page) return { sessions: this.sessions(req.params.cwd) };

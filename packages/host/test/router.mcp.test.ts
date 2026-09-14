@@ -5,7 +5,7 @@
  * router does not know is refused, which is exactly the failure this covers.
  */
 import { PRODUCT_NAME } from "@lasercode/protocol";
-import { LOCAL_ACCESS } from "./actors.js";
+import { LOCAL_ACCESS, testAccess } from "./actors.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -44,6 +44,7 @@ function harness(reply?: unknown) {
     attention: new AttentionTracker({}),
     projects: new ProjectRegistry({ catalog, agentDir: dir, exclude: [] }),
     views: new ViewCache(2),
+    access: testAccess(),
   });
   return { router, requests, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }

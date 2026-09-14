@@ -6,7 +6,7 @@
  * in a sentence rather than answering with an invented shape.
  */
 import { mkdtempSync, rmSync } from "node:fs";
-import { BROWSER_ACCESS, LOCAL_ACCESS, deviceAccess } from "../actors.js";
+import { BROWSER_ACCESS, LOCAL_ACCESS, deviceAccess, testAccess } from "../actors.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -65,6 +65,7 @@ function harness(withResources = true) {
     attention: new AttentionTracker({}),
     projects: new ProjectRegistry({ catalog, agentDir: dir }),
     views: new ViewCache(2),
+    access: testAccess(),
     ...(withResources ? { resources } : {}),
   });
   return { router, resources };
