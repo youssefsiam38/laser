@@ -134,9 +134,27 @@ let loading: Promise<McpEngine> | undefined;
  * Load the engine once per worker process. Lazy on purpose: a project with no
  * MCP server must not pay a transpile, and nothing here runs in a session that
  * has no server configured.
+ *
+ * A *failed* load is never cached: a transpile that could not write its cache,
+ * a file read that lost a race with an update, any transient fault would
+ * otherwise leave this worker — and so every conversation in this project —
+ * without MCP tools until the person restarts the app. The next caller tries
+ * again; a success is still loaded exactly once.
  */
 export function loadMcpEngine(): Promise<McpEngine> {
-  loading ??= (async (): Promise<McpEngine> => {
+  if (loading) return loading;
+  const attempt = loader().catch((error: unknown) => {
+    if (loading === attempt) loading = undefined;
+    throw error;
+  });
+  loading = attempt;
+  return attempt;
+}
+
+let loader: () => Promise<McpEngine> = buildMcpEngine;
+
+function buildMcpEngine(): Promise<McpEngine> {
+  return (async (): Promise<McpEngine> => {
     const root = adapterRoot();
     const { createJiti } = await import("jiti");
     const { getAgentDir } = await import("@earendil-works/pi-coding-agent");
@@ -178,10 +196,15 @@ export function loadMcpEngine(): Promise<McpEngine> {
       },
     };
   })();
-  return loading;
 }
 
 /** Tests only: forget the loaded engine so a fresh process state can be built. */
 export function resetMcpEngineForTests(): void {
+  loading = undefined;
+}
+
+/** Tests only: run the cache above a loader that can be made to fail. */
+export function setMcpEngineLoaderForTests(next?: () => Promise<McpEngine>): void {
+  loader = next ?? buildMcpEngine;
   loading = undefined;
 }
