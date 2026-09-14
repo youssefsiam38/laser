@@ -1441,6 +1441,39 @@ describe("AgentHarness", () => {
     expect(child.prompted.map((item) => item.text)).toEqual(["initial", "late steering"]);
   });
 
+  it("still runs a preserved message when the engine's queue could not be read", async () => {
+    world.setAutoResolveChildPrompts(false);
+    const root = world.openRoot("lead");
+    const first = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "unreadable", task: "initial" });
+    const path = "/sessions/child-1.jsonl";
+    const child = world.drivers.get(path)!;
+
+    await root.handle.bridge.sendAgentMessage({ sessionId: first.sessionId, message: "late steering", mode: "steer" });
+    await root.handle.bridge.sendAgentMessage({ sessionId: first.sessionId, message: "later steering", mode: "steer" });
+    expect(child.steers).toEqual(["late steering", "later steering"]);
+
+    // The one case the transfer exists for: the engine cannot say what it
+    // still holds, so every locally known message is replayed under the
+    // successor — never lost, possibly repeated.
+    child.clearQueueRejects = true;
+    expect(await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "done" })).toEqual({ ok: true, runId: first.runId });
+    const queued = world.harness.runs().find((run) => run.sessionPath === path && run.runId !== first.runId);
+    expect(queued).toMatchObject({ status: "queued", task: "late steering" });
+
+    child.clearQueueRejects = false;
+    child.emit({ type: "update", update: { kind: "agent_settled" } });
+    child.resolvePrompt();
+    await flushLifecycle();
+    expect(world.harness.run(first.runId)?.status).toBe("completed");
+    expect(child.prompted.map((item) => item.text)).toEqual(["initial", "late steering"]);
+    expect(world.harness.run(queued!.runId)?.status).toBe("running");
+
+    // Everything the parent sent runs, in order, under that one successor.
+    child.resolvePrompt();
+    await flushLifecycle();
+    expect(child.prompted.map((item) => item.text)).toEqual(["initial", "late steering", "later steering"]);
+  });
+
   it("never awaits or leaks a failing abort when completion cannot clear the engine queue", async () => {
     world.setAutoResolveChildPrompts(false);
     const root = world.openRoot("lead");

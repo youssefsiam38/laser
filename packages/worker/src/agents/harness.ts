@@ -1702,7 +1702,18 @@ export class AgentHarness {
         preserved = this.preservedMessages(entry, state, cleared);
         counts = { clearedSteering: cleared.steering.length, clearedFollowUp: cleared.followUp.length, local: before, preserved: preserved.length, custom };
       } catch (error) {
-        preserved = entry.lifecycle.clearInbox(state.run.runId);
+        // Disowned from the engine on the way out. These messages were the
+        // engine's to deliver under a run that is ending, and its queue
+        // cannot even be read, so nothing may wait for it to run them: an
+        // engine-owned entry is skipped by the successor's fence and dropped
+        // at its boundary, which is precisely the message loss this whole
+        // transfer exists to prevent.
+        preserved = entry.lifecycle.clearInbox(state.run.runId).map((pending) => {
+          const { engine: _engine, lane: _lane, ...rest } = pending;
+          void _engine;
+          void _lane;
+          return { ...rest, engine: false };
+        });
         counts = { cleared: "unknown", local: preserved.length, preserved: preserved.length, error: error instanceof Error ? error.name : "error" };
         this.diagnose(entry, "warn", "engine-queue-unreadable", { runId: state.run.runId, reason, ...counts });
         this.diagnose(entry, "info", "abort-requested", { runId: state.run.runId, reason: "engine-queue-unreadable" });
