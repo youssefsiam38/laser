@@ -37,7 +37,7 @@ import {
 import { ErrorCodes, type JsonRpcNotification, type JsonRpcResponse, type SessionUpdateParams, WIRE_NAMESPACE } from "@lasercode/protocol";
 import WebSocket from "ws";
 import { SessionLoadDelivery } from "./session-load-delivery.js";
-import { TranscriptDelivery } from "./transcript-delivery.js";
+import { TranscriptDelivery, type SessionMembershipView } from "./transcript-delivery.js";
 import { SearchCancellation } from "./search-cancellation.js";
 
 export type RelayClientState =
@@ -217,6 +217,20 @@ export class RelayClient {
 
   get channelIdText(): string {
     return toBase64Url(this.options.channelId);
+  }
+
+  /**
+   * What this device is holding, for the host's one membership truth (RP-6).
+   * A paired device following a session pins its worker exactly as a local
+   * window does; a teardown replaces the delivery, so this reads the current
+   * one rather than capturing it.
+   */
+  membership(): SessionMembershipView {
+    return {
+      holders: (path) => this.transcripts.holders(path),
+      paths: () => this.transcripts.paths(),
+      counts: () => this.transcripts.counts(),
+    };
   }
 
   statistics(): RelayClientStats {

@@ -242,6 +242,15 @@ follower asks for, aligned to a UTF-8 character boundary; a collapsed row
 reads nothing at all. The log path never crosses to a client: the host reads
 it, because the task carried it, and only for the session that owns it.
 
+What is *kept* is bounded too (RP-6). A command's log is a rotating window, so
+a command that prints for ever cannot fill the disk — and it is never paused
+or stopped to keep it inside: only bytes already written are released. A row
+whose head went says `logState: truncated` and where the window starts; one
+whose bytes are gone says `released` and offers no pane (R4). Either way
+`outputBytes` is the exact number of bytes the command produced and
+`outputDigest` is the sha256 of all of them, so nothing pretends the output
+was complete and nothing loses the truth about what it was.
+
 **R10 · Shrink by dropping content, never by shrinking type.** No data below
 12px anywhere, at any size, on any device. A long value truncates with the
 full text in the tooltip. Nothing overflows its container and the page never

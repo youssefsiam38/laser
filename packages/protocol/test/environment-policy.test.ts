@@ -49,12 +49,14 @@ describe("the method table", () => {
     }
   });
 
-  it("restricts reach to the three methods that reconfigure or measure this machine", () => {
+  it("restricts reach to the methods that reconfigure or measure this machine, or address its own workers", () => {
     const restricted = Object.entries(METHOD_POLICY)
       .filter(([, policy]) => policy.reach !== "any")
       .map(([method]) => method)
       .sort();
-    expect(restricted).toEqual(["agents/sync", "pi/host/environment", "resource/report"]);
+    // `pi/worker/retained-stores` joins `agents/sync`: the app asking its own
+    // already-live workers what they are holding, never a client's call.
+    expect(restricted).toEqual(["agents/sync", "pi/host/environment", "pi/worker/retained-stores", "resource/report"]);
     // The phone's redacted inventory summary stays reachable (RP-3); only the
     // desktop's measurement *input* is local.
     for (const method of ["resource/snapshot", "resource/history", "resource/export"] as const) {

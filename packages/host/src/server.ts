@@ -32,7 +32,7 @@ import type { AddressInfo } from "node:net";
 import { basename, dirname, extname, join, normalize, relative, resolve as resolvePath, sep } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { channelIdFor, type KeyPair } from "@lasercode/crypto";
-import { ENV, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, isTerminalRunStatus, projectEnvWorkerConfig, type ClientRequests, type DeviceGrants, type EnvironmentPolicyInput, type HostNotifications, type JsonRpcNotification, type LogEntry, type NamerState, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
+import { ENV, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, isTerminalRunStatus, projectEnvWorkerConfig, type ClientRequests, type DeviceGrants, type EnvironmentPolicyInput, type HostNotifications, type JsonRpcNotification, type LogEntry, type NamerState, type ResourceRetainedStores, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
 import { AccessControl, isLoopbackAddress, localActor, pairedActor, type ActorIdentity } from "./access.js";
 import { AccessAudit } from "./access-audit.js";
 import { loadEnvironmentPolicy } from "./environment-policy.js";
@@ -56,7 +56,7 @@ import { PushService } from "./push.js";
 import { RelayClient, type RelayClientState, type RelayClientStats } from "./relay-client.js";
 import { Router } from "./router.js";
 import { SessionLoadDelivery } from "./session-load-delivery.js";
-import { TranscriptDelivery } from "./transcript-delivery.js";
+import { TranscriptDelivery, type SessionMembershipView } from "./transcript-delivery.js";
 import { SearchCancellation } from "./search-cancellation.js";
 import { SessionIndexCache } from "./session-index.js";
 import { SessionProjection } from "./session-projection.js";
@@ -181,6 +181,13 @@ const PERSISTING_UPDATES = new Set(["message_end", "compaction_end", "entry_appe
 /** New log rows are batched for this long before one notification goes out. */
 const LOG_APPEND_FLUSH_MS = 120;
 
+/**
+ * How long the Advanced resource surface waits for one live worker to say what
+ * it is retaining. A diagnostic never delays a person's answer: past this, the
+ * worker's numbers are missing coverage rather than a slow reply.
+ */
+const RETAINED_STORES_TIMEOUT_MS = 750;
+
 /** Vite's emitted `assets/<name>-<hash>.<ext>`; mirrors the service worker's `hashedAsset`. */
 const HASHED_ASSET = /^assets[/\\][^/\\]+-[\w-]{8,}\.(?:m?js|css|woff2?)$/;
 
@@ -255,7 +262,6 @@ export class HostServer {
   /** What the boundary proved about each local socket (RP-13). */
   private readonly actors = new Map<WebSocket, ActorIdentity>();
   /** Session paths each client is following, for the retirement guard. */
-  private readonly attached = new Map<WebSocket, Set<string>>();
   private readonly transcripts = new Map<WebSocket, TranscriptDelivery>();
   private readonly searches = new Map<WebSocket, SearchCancellation>();
   /** Question-only response fences for concurrent session/load requests, per socket. */
@@ -458,6 +464,7 @@ export class HostServer {
         runIdsOf: (cwd) => this.runs.list().filter((run) => run.projectCwd === cwd && !isTerminalRunStatus(run.status)).map((run) => run.runId),
         taskIdsOf: (cwd) => this.tasks.list().filter((task) => task.status === "running" && (this.pool.cwdOfSession(task.sessionPath) ?? this.catalog.cwdOf(task.sessionPath)) === cwd).map((task) => task.id),
       },
+      retainedStores: () => this.retainedStores(),
     });
 
     // The host resolves the package manager the workers should use — the one
@@ -709,7 +716,6 @@ export class HostServer {
     for (const ws of this.clients) ws.close(1001, "host shutting down");
     this.clients.clear();
     this.actors.clear();
-    this.attached.clear();
     for (const deliveries of this.loadDeliveries.values()) for (const delivery of deliveries) delivery.dispose();
     this.loadDeliveries.clear();
     await this.pool.stopAll();
@@ -824,6 +830,20 @@ export class HostServer {
       case "pi/ui/event": {
         const params = notification.params as HostNotifications["pi/ui/event"];
         if (params.method === "dialogResolved") this.attention.dialogResolved(params.path, params.id);
+        return;
+      }
+      case "pi/resource/process": {
+        // A pid whose meaning the worker knows (RP-1). It is consumed here and
+        // dropped in `broadcast`: it carries a host-internal session path and a
+        // process id, neither of which is a client's business. Nothing is
+        // believed on the strength of this message — the inventory proves
+        // `(pid, startToken)` and ancestry against its own collected table
+        // before a row is named.
+        const params = notification.params as HostNotifications["pi/resource/process"];
+        if (params.registrations?.length) {
+          this.resources.observeProcessRegistrations(cwd, params.registrations);
+        }
+        for (const pid of params.exited ?? []) this.resources.ownership.noteExit(pid);
         return;
       }
       case "pi/extension/message": {
@@ -1006,14 +1026,118 @@ export class HostServer {
     return worker ? { [ENV.projectEnv]: JSON.stringify(worker) } : {};
   }
 
-  /** Is any connected client following a session in this directory? */
+  /**
+   * Is any connected client following a session in this directory?
+   *
+   * One truth for it (RP-6): the per-connection transcript membership, which
+   * is reference-counted by connection and scope and now covers paired devices
+   * as well as direct sockets. A phone watching a session used to pin nothing,
+   * because the relay kept its own delivery and the retirement bookkeeping
+   * only saw local sockets.
+   */
   private isAttached(cwd: string): boolean {
-    for (const paths of this.attached.values()) {
-      for (const path of paths) {
+    for (const membership of this.memberships()) {
+      for (const path of membership.paths()) {
         if ((this.pool.cwdOfSession(path) ?? this.catalog.cwdOf(path)) === cwd) return true;
       }
     }
     return false;
+  }
+
+  /**
+   * What this host and its live workers are retaining, for the Advanced
+   * resource surface (RP-3). Counts and bytes of *state*, not of memory: a
+   * task record is metadata, a delivery membership is a subscription, and
+   * neither pretends to be a share of a process's footprint.
+   *
+   * Only workers that are **already running** are asked, with a bound: this is
+   * a diagnostic, and a diagnostic must never start a worker or wait on one.
+   * A worker that does not answer inside the bound leaves its numbers out and
+   * makes the coverage incomplete, because a partial sum presented as a total
+   * is the one thing this whole surface exists not to do.
+   */
+  private async retainedStores(): Promise<ResourceRetainedStores> {
+    /** A worker that does not answer in time is missing coverage, not a delay. */
+    const bounded = <T>(work: Promise<T>): Promise<T | undefined> =>
+      new Promise<T | undefined>((resolve) => {
+        const timer = setTimeout(() => resolve(undefined), RETAINED_STORES_TIMEOUT_MS);
+        timer.unref?.();
+        work.then(
+          (value) => {
+            clearTimeout(timer);
+            resolve(value);
+          },
+          () => {
+            clearTimeout(timer);
+            resolve(undefined);
+          },
+        );
+      });
+    const registry = this.tasks.retained();
+    const delivery = this.sessionMembership().counts();
+    const live = this.pool.liveClients();
+    const answers = await Promise.all(
+      live.map(async ({ client }) => {
+        return bounded(client.request<ClientRequests["pi/worker/retained-stores"]["result"]>("pi/worker/retained-stores", {}));
+      }),
+    );
+    const answered = answers.filter((answer): answer is ClientRequests["pi/worker/retained-stores"]["result"] => answer !== undefined);
+    let workerTaskCount = 0;
+    let workerTaskBytes = 0;
+    for (const answer of answered) {
+      workerTaskCount += answer.stores.taskRegistry?.count ?? 0;
+      workerTaskBytes += answer.stores.taskRegistry?.bytes ?? 0;
+    }
+    const complete = answered.length === live.length;
+    return {
+      entries: {
+        taskRegistry: {
+          count: registry.count + workerTaskCount,
+          // Bytes are only honest when every live worker answered: the host's
+          // own records are a fraction of what the tails cost.
+          ...(complete ? { bytes: registry.bytes + workerTaskBytes } : {}),
+        },
+        deliveryRegistry: {
+          count: delivery.owners,
+          // Queued transport bytes belong to the transport (RP-7); membership
+          // itself holds no payload, and saying "0 bytes" would read as a
+          // measurement rather than as the absence of one.
+        },
+      },
+      coverage: {
+        workers: live.length,
+        answered: answered.length,
+        complete,
+        ...(complete ? {} : { reason: "collector_failed" as const }),
+      },
+    };
+  }
+
+  /** Every connection's membership: direct sockets first, then paired devices. */
+  private memberships(): SessionMembershipView[] {
+    return [...this.transcripts.values(), ...this.relayClients.map((client) => client.membership())];
+  }
+
+  /**
+   * Holders of one session across every connection, and the totals behind
+   * them. Read-only, and the only thing anything outside this file may use:
+   * RP-4's unload policy consumes `holders(path) > 0` as one of its guards and
+   * never writes membership itself.
+   */
+  sessionMembership(): { holders(path: string): number; counts(): { connections: number; paths: number; owners: number } } {
+    return {
+      holders: (path) => this.memberships().reduce((sum, membership) => sum + membership.holders(path), 0),
+      counts: () => {
+        const all = this.memberships();
+        const paths = new Set<string>();
+        let owners = 0;
+        for (const membership of all) {
+          for (const path of membership.paths()) paths.add(path);
+          owners += membership.counts().owners;
+        }
+        return { connections: all.length, paths: paths.size, owners };
+      },
+    };
   }
 
   // ------------------------------------------------------------- sockets
@@ -1022,6 +1146,9 @@ export class HostServer {
     // Captures have already reached LogStore in observe(). Views inspect the
     // redacted retained body via logs/query + logs/content, not this raw event.
     // Filter before serialization and before relay listeners/frame admission.
+    // Process registrations are consumed by the inventory and go no further:
+    // no client, no relay listener and no audit ever sees a pid (RP-1/RP-6).
+    if (notification.method === "pi/resource/process") return;
     if (notification.method === "pi/extension/message") {
       const { message } = notification.params as HostNotifications["pi/extension/message"];
       const type = (message as { type?: unknown } | null)?.type;
@@ -1087,7 +1214,6 @@ export class HostServer {
   private onConnection(ws: WebSocket, actor: ActorIdentity): void {
     this.clients.add(ws);
     this.actors.set(ws, actor);
-    this.attached.set(ws, new Set());
     const transcripts = new TranscriptDelivery();
     this.transcripts.set(ws, transcripts);
     const searches = new SearchCancellation();
@@ -1132,33 +1258,17 @@ export class HostServer {
   }
 
   /**
-   * Remember what this client is following (so an attached worker is never
-   * retired) and clear a dialog it just answered (the worker's UI bridge stays
+   * Clear a dialog this client just answered (the worker's UI bridge stays
    * silent when the answer came from a client).
+   *
+   * What the client is *following* is no longer tracked here: membership owns
+   * it, per connection and per scope, and retirement reads that one place
+   * (`isAttached`). Two sets that were supposed to say the same thing, updated
+   * by two different rules, is exactly how a Beam bubble's session could be
+   * unpinned by the main view leaving.
    */
-  private noteRequest(ws: WebSocket, request: { method?: unknown; params?: { path?: unknown; id?: unknown } } | null, result: unknown): void {
+  private noteRequest(_ws: WebSocket, request: { method?: unknown; params?: { path?: unknown; id?: unknown } } | null, _result: unknown): void {
     const method = request?.method;
-    if (method === "session/load" && typeof request?.params?.path === "string") {
-      this.attached.get(ws)?.add(request.params.path);
-      return;
-    }
-    if (method === "session/new") {
-      const path = (result as { state?: { path?: string } } | null)?.state?.path;
-      if (path) this.attached.get(ws)?.add(path);
-      return;
-    }
-    if (method === "pi/session/fork") {
-      const path = (result as { state?: { path?: string } } | null)?.state?.path;
-      if (path) this.attached.get(ws)?.add(path);
-      return;
-    }
-    if (method === "pi/session/detach" && typeof request?.params?.path === "string") {
-      // The one thing that made idle retirement fire in practice: without a
-      // detach the attached set only ever grew, so every project the user had
-      // clicked into today kept its worker for the life of the window.
-      this.attached.get(ws)?.delete(request.params.path);
-      return;
-    }
     if (method === "pi/ui/response" && typeof request?.params?.id === "string") {
       this.attention.dialogAnswered(request.params.id);
     }
@@ -1178,7 +1288,6 @@ export class HostServer {
   private dropClient(ws: WebSocket): void {
     this.clients.delete(ws);
     this.actors.delete(ws);
-    this.attached.delete(ws);
     this.transcripts.delete(ws);
     this.searches.get(ws)?.close();
     this.searches.delete(ws);

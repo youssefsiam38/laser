@@ -45,6 +45,7 @@ import { NamerService, type NamerModelRuntime } from "./agents/namer.js";
 import { readSessionAgentRecord, rootRecord, rootRole, removedWorktreeCwd } from "./agents/session-config.js";
 import { listAgentSkills } from "./agents/skills.js";
 import { TaskIndex } from "./agents/tasks.js";
+import { setWorkerProcessObserver } from "./process-registry.js";
 import { WorktreeManager } from "./agents/worktrees.js";
 
 export interface WorkerServerOptions {
@@ -184,6 +185,14 @@ export class WorkerServer {
       ? new ProjectEnvironment({ cwd: options.cwd, config: projectEnvConfig })
       : undefined;
     this.definitions = new DefinitionsCache();
+    // Processes this worker starts on purpose are named for the host's
+    // inventory (RP-1). Pids only: the host proves `(pid, startToken)` and
+    // ancestry itself before it believes any of it, and the notification is
+    // consumed by the host rather than broadcast.
+    setWorkerProcessObserver({
+      started: (registration) => this.notify("pi/resource/process", { registrations: [registration] }),
+      exited: (pid) => this.notify("pi/resource/process", { exited: [pid] }),
+    });
     const host: SessionHost = {
       openChild: (open) => this.openChild(open),
       driver: (path) => this.sessions.get(path)?.driver,
@@ -532,6 +541,12 @@ export class WorkerServer {
       }
 
       // ------------------------------------------- background tasks ---
+      case "pi/worker/retained-stores":
+        // The app asking its own worker what it is holding (RP-3/RP-6). Read
+        // from state this process already has: nothing is collected, nothing
+        // is opened and no session is touched to answer it.
+        return { stores: this.tasks.retainedStores() } satisfies Result<"pi/worker/retained-stores">;
+
       case "pi/task/stop": {
         // The companion extension owns the process, so Stop is a command to
         // the session that started it. `delivered: false` means nobody in
@@ -1680,9 +1695,26 @@ export class WorkerServer {
         // `mcp/list`. A shutdown snapshot is empty and carries no information,
         // so a closing session never blanks a live one (docs/mcp.md).
         if (event.message.type === "lasercode/mcp/status") this.mcp().observeSnapshot(live.path, event.message.snapshot);
+        // A pid the module knows the meaning of goes to the host's process
+        // inventory (RP-1) and nowhere else: it is a number about this
+        // machine, not conversation state, so it never joins the extension
+        // message stream a client can hear.
+        if (event.message.type === "lasercode/process/registration") {
+          const { pid, taskId, exited } = event.message;
+          this.notify(
+            "pi/resource/process",
+            exited
+              ? { path: live.path, exited: [pid] }
+              : { path: live.path, registrations: [{ pid, role: "background_command", sessionPath: live.path, taskId }] },
+          );
+          return;
+        }
         // A background command going past is indexed here, so the harness
         // can show it in an agent's fleet (D-163); the host indexes it too.
-        this.tasks.observe(live.path, event.message);
+        if (this.tasks.observe(live.path, event.message)) this.applyLogBudgets();
+        // What a session's commands are holding is this worker's business and
+        // the host's diagnostics; it is not transcript state.
+        if (event.message.type === "lasercode/task/retention") return;
         this.notify("pi/extension/message", { path: live.path, message: event.message });
         return;
       case "closed":
@@ -1690,11 +1722,29 @@ export class WorkerServer {
         this.sessions.delete(live.path);
         this.mcpService?.sessionClosed(live.path);
         this.tasks.sessionClosed(live.path);
+        // One holder fewer: the rest of this worker's sessions may keep more.
+        this.applyLogBudgets();
         this.gitService?.forget(live.path);
         this.runningTools.delete(live.path);
         this.unnamed.delete(live.path);
         this.namer.forget(live.path);
         return;
+    }
+  }
+
+  /**
+   * Keep this worker's command logs inside their budget (RP-6).
+   *
+   * The worker sees every session; the sessions own their files. So it divides
+   * the budget and tells each session that is over its share how much it may
+   * keep, and that session releases its own oldest bytes. Nothing here deletes
+   * a file, nothing touches bytes another runtime wrote, and no command is
+   * paused, throttled or ended: only bytes already written are released, and
+   * the exact byte count and digest of every command survive it.
+   */
+  private applyLogBudgets(): void {
+    for (const { path, bytes } of this.tasks.logBudgets()) {
+      this.sessions.get(path)?.driver.deliverExtensionCommand?.({ type: "lasercode/task/log-budget", bytes });
     }
   }
 

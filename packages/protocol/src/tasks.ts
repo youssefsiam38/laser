@@ -26,6 +26,19 @@ export type BackgroundTaskOrigin = "background" | "promoted";
 /** How a running task ended, in the words a person reads. */
 export type BackgroundTaskStoppedBy = "agent" | "person" | "turn" | "shutdown";
 
+/**
+ * What is still on disk for a command (RP-6).
+ *
+ * - `retained` — every byte the command produced is still readable;
+ * - `truncated` — the window bound released the head of the stream; the exact
+ *   total and digest still describe everything that was produced;
+ * - `released` — the bytes are gone and only the bounded excerpt remains.
+ *
+ * A command is never paused, throttled or killed to keep bytes: only bytes
+ * already written are released, and the fact is said out loud.
+ */
+export type BackgroundTaskLogState = "retained" | "truncated" | "released";
+
 export interface BackgroundTask {
   /** Unique inside its session; stable for the life of the task. */
   id: string;
@@ -49,6 +62,12 @@ export interface BackgroundTask {
   terminalReason?: string;
   /** The failure in the runner's own words, when there was one. */
   error?: string;
+  /** Whether the bytes are all there, windowed, or gone. Absent means retained. */
+  logState?: BackgroundTaskLogState;
+  /** First byte still readable. Above 0 means the head was released. */
+  retainedFromByte?: number;
+  /** sha256 of everything the command produced, whatever was retained. */
+  outputDigest?: string;
 }
 
 /** Largest range one `tasks/output` answers. Ask again for more. */
@@ -67,6 +86,10 @@ export interface TaskOutputChunk {
   chunk: string;
   /** The chunk reached the current end. */
   eof: boolean;
+  /** First byte still on disk; above 0 means the head was released (RP-6). */
+  retainedFrom?: number;
+  /** sha256 of everything the command produced, retained or not. */
+  digest?: string;
 }
 
 /**

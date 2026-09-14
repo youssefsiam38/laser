@@ -260,6 +260,7 @@ const samples: Record<ClientMethod, unknown> = {
     main: { pid: 4242, creationTime: 1767225600000 },
     processes: [{ pid: 4243, creationTime: 1767225601000, type: "Tab", workingSetBytes: 1024 }],
   },
+  "pi/worker/retained-stores": {},
 };
 
 describe("process inventory methods", () => {
@@ -349,6 +350,31 @@ describe("client request schemas", () => {
     expect(schema.safeParse({ name: "default", instructions: "x" }).success).toBe(false);
     expect(schema.safeParse({ name: "chat" }).success).toBe(false);
     expect(schema.safeParse({ name: "chat", instructions: "x", extra: true }).success).toBe(false);
+  });
+
+  it("takes a bounded, opaque delivery owner on load and detach, and nothing else", () => {
+    // RP-6: the label says which surface of one connection is holding a
+    // session. It is not authorization and it is not an identity — bounding it
+    // is only about the host's own membership state.
+    const load = clientParamsSchemas["session/load"];
+    const detach = clientParamsSchemas["pi/session/detach"];
+    expect(load.parse({ path: "/s.jsonl", owner: "view" }).owner).toBe("view");
+    expect(load.parse({ path: "/s.jsonl", owner: "scope:12" }).owner).toBe("scope:12");
+    expect(load.parse({ path: "/s.jsonl" }).owner).toBeUndefined();
+    expect(detach.parse({ path: "/s.jsonl", owner: "scope:1" }).owner).toBe("scope:1");
+    for (const owner of ["", "A", "/sessions/a.jsonl", "scope 1", "x".repeat(33), "\u0000"]) {
+      expect(load.safeParse({ path: "/s.jsonl", owner }).success, owner).toBe(false);
+      expect(detach.safeParse({ path: "/s.jsonl", owner }).success, owner).toBe(false);
+    }
+  });
+
+  it("carries what a command's bytes are: exact size, what is retained, and the digest of all of it", () => {
+    const base = { id: "t-1", command: "pnpm test", title: "pnpm test", status: "completed" as const, origin: "background" as const, startedAt: "2026-01-01T00:00:00.000Z", outputBytes: 20_000_000 };
+    const digest = "a".repeat(64);
+    expect(backgroundTaskUpdateSchema.parse({ ...base, logState: "truncated", retainedFromByte: 12, outputDigest: digest })).toMatchObject({ logState: "truncated", retainedFromByte: 12, outputDigest: digest });
+    expect(backgroundTaskUpdateSchema.safeParse({ ...base, logState: "gone" }).success).toBe(false);
+    expect(backgroundTaskUpdateSchema.safeParse({ ...base, retainedFromByte: -1 }).success).toBe(false);
+    expect(backgroundTaskUpdateSchema.safeParse({ ...base, outputDigest: "nope" }).success).toBe(false);
   });
 
   it("every method has a sample and every sample round-trips through JSON", () => {

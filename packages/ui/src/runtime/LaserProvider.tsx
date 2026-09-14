@@ -874,33 +874,75 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
    * the counter re-runs the effect when a scope comes or goes.
    */
   const scopedPaths = useRef(new Map<string, number>());
+  /**
+   * The label each live scope holds its session with (RP-6).
+   *
+   * The host counts transcript delivery per connection *and* per surface, so a
+   * bubble over a session and the session's own view are two holders and the
+   * session stops being delivered when the last of them lets go. The label is
+   * this window's own opaque counter — never a path, a session id, a run or a
+   * device value — and it grants nothing: it only says which of this
+   * connection's surfaces is still looking.
+   */
+  const scopeClaims = useRef(new Map<string, string>());
+  const nextScopeOwner = useRef(0);
+  /** Which connection each scope last claimed on: membership is per connection. */
+  const scopeClaimedAt = useRef(new Map<string, number>());
+  const connectionEpoch = useRef(0);
   const [scopeRevision, setScopeRevision] = useState(0);
+  const claimScope = useCallback(
+    (owner: string, path: string) => {
+      // `fromSeq` is what this window already holds, so claiming a surface
+      // never costs a replay of the buffer it has already applied.
+      const seq = readState().open[path]?.lastSeq ?? 0;
+      scopeClaimedAt.current.set(owner, connectionEpoch.current);
+      client.request("session/load", { path, owner, fromSeq: seq }).catch(() => {});
+    },
+    [client, readState],
+  );
   const attachScope = useCallback((path: string): (() => void) => {
+    const owner = `scope:${nextScopeOwner.current++}`;
     scopedPaths.current.set(path, (scopedPaths.current.get(path) ?? 0) + 1);
-    // The scope's own `session/load` re-attaches it on the host; forget the
-    // detach so it is sent again once the scope lets go.
-    detached.current.delete(path);
+    scopeClaims.current.set(owner, path);
+    claimScope(owner, path);
     setScopeRevision((n) => n + 1);
     return () => {
       const left = (scopedPaths.current.get(path) ?? 1) - 1;
       if (left <= 0) scopedPaths.current.delete(path);
       else scopedPaths.current.set(path, left);
+      scopeClaims.current.delete(owner);
+      scopeClaimedAt.current.delete(owner);
+      client.request("pi/session/detach", { path, owner }).catch(() => {});
       setScopeRevision((n) => n + 1);
     };
-  }, []);
+  }, [claimScope, client]);
+  // A reconnect is a new connection, so its membership starts empty: every
+  // scope still on screen says so again before it can expect updates.
+  useEffect(() => {
+    if (state.connection !== "open") {
+      connectionEpoch.current += 1;
+      return;
+    }
+    for (const [owner, path] of scopeClaims.current) {
+      if (scopeClaimedAt.current.get(owner) === connectionEpoch.current) continue;
+      claimScope(owner, path);
+    }
+  }, [claimScope, state.connection]);
   useEffect(() => {
     if (state.connection !== "open") {
       detached.current.clear();
       return;
     }
     for (const path of Object.keys(state.open)) {
-      if (path === state.current || scopedPaths.current.has(path)) {
+      if (path === state.current) {
         detached.current.delete(path);
         continue;
       }
       if (detached.current.has(path)) continue;
       detached.current.add(path);
-      // Bookkeeping only: nothing is closed, and switching back re-attaches
+      // This view has stopped showing the session. A scope holding the same
+      // session keeps its own hold, so this releases one surface and not the
+      // conversation: nothing is closed, and switching back re-attaches
       // through the `session/load` that `openSession` always sends.
       client.request("pi/session/detach", { path }).catch(() => detached.current.delete(path));
     }
@@ -930,6 +972,8 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   resetEnvironmentState.current = () => {
     seenSeq.current.clear();
     scopedPaths.current.clear();
+    scopeClaims.current.clear();
+    scopeClaimedAt.current.clear();
     detached.current.clear();
     openInFlight.current.clear();
     openEpochs.current.clear();

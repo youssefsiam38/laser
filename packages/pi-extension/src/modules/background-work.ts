@@ -36,8 +36,8 @@
  * `triggerTurn: false` — recorded and shown with the next turn, never waking
  * one. `notify` without `background` is ignored.
  */
-import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
 import { randomBytes } from "node:crypto";
+import { readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -54,12 +54,15 @@ import {
   TASK_COMMAND_MAX,
   TASK_EVENT_MESSAGE_TYPE,
   TASK_LINE_MAX,
+  TASK_OUTPUT_MAX_BYTES,
   WIRE_NAMESPACE,
+  type BackgroundTaskRetention,
   type BackgroundTaskUpdate,
 } from "@lasercode/protocol";
 import { Type } from "typebox";
 import type { BackgroundWorkOptions } from "../agents-bridge.js";
 import type { LaserModule, ModuleContext } from "./index.js";
+import { TaskLog } from "./task-log.js";
 
 /**
  * Give every process this module starts the project's environment.
@@ -75,7 +78,7 @@ function projectEnvSpawnHook(
   return { spawnHook: (context) => ({ ...context, env: projectEnv.apply(context.env) }) };
 }
 
-/** Bytes of output kept in memory per task; the log file keeps everything. */
+/** Bytes of output kept in memory while a command runs. Released when it ends. */
 const TAIL_BYTES = 256 * 1024;
 const DEFAULT_TAIL_LINES = 100;
 const PROMOTED_TAIL_LINES = 40;
@@ -85,6 +88,45 @@ const PUBLISH_THROTTLE_MS = 500;
 /** How long `task_stop` waits for the killed process to be reaped. */
 const STOP_GRACE_MS = 5000;
 
+// --- what a finished command is allowed to keep (RP-6) ----------------------
+//
+// A command that has ended keeps a compact record and nothing else: the full
+// tail buffer, the engine's result, its failure and the closure that held the
+// tool call all go at terminal delivery. The three bounds below are
+// independent, and a running command is exempt from every one of them — the
+// rule is that memory is released, never that work is.
+//
+// The counts match `MAX_TASKS_PER_SESSION` in the host's register and
+// `MAX_INDEXED_TASKS_PER_SESSION` in the worker's index on purpose: the three
+// layers forget in the same order, so the fleet never draws a row whose
+// metadata one layer has quietly dropped (docs/ux-fleet.md R8). Forgetting a
+// record here removes neither the fleet row (the host and worker keep it) nor
+// the bytes on disk (they have their own budget), so nothing a person is
+// looking at vanishes (R7).
+
+/** Bytes of the end of the output a finished command keeps in memory. */
+const TASK_EXCERPT_BYTES = 8 * 1024;
+/** Finished commands one session keeps in memory. */
+const TERMINAL_TASKS_MAX = 200;
+/** How long a finished command's compact record stays in memory. */
+const TERMINAL_TASK_MAX_AGE_MS = 60 * 60_000;
+/** Excerpt bytes across every finished command of one session. */
+const TERMINAL_EXCERPT_BYTES_MAX = 2 * 1024 * 1024;
+/** Bytes this session's command logs may occupy on disk, unless the worker lowers it. */
+const SESSION_LOG_BYTES_MAX = 128 * 1024 * 1024;
+/** Smallest budget the worker may impose: one segment for the newest command. */
+const SESSION_LOG_BYTES_MIN = 8 * 1024 * 1024;
+/** How much a command may write between two checks of the session's disk budget. */
+const BUDGET_CHECK_BYTES = 1024 * 1024;
+/** How old a file left by a crashed run must be before a sweep may remove it. */
+const STALE_LOG_AGE_MS = 24 * 60 * 60_000;
+/** Directory entries one sweep looks at. A sweep is housekeeping, not a scan. */
+const SWEEP_ENTRIES_MAX = 500;
+/** Session directories one sweep may clean, oldest first. */
+const SWEEP_DIRS_MAX = 64;
+/** Directory names one sweep will even look at. */
+const SWEEP_NAMES_MAX = 512;
+
 export type TaskStatus = "running" | "completed" | "failed" | "stopped";
 type TaskMode = "foreground" | "promoted" | "background";
 type StoppedBy = "agent" | "person" | "turn" | "shutdown";
@@ -93,6 +135,9 @@ type BashResult = AgentToolResult<BashToolDetails | undefined>;
 type BashUpdate = AgentToolUpdateCallback<BashToolDetails | undefined>;
 /** The engine's own details, or the task handle the override adds. */
 export type BashOverrideDetails = BashToolDetails | { taskId: string; promoted: true } | { taskId: string; background: true } | undefined;
+
+/** Released at compaction; a shared one costs a finished task nothing. */
+const NOOP = (): void => {};
 
 interface TaskRecord {
   id: string;
@@ -104,14 +149,20 @@ interface TaskRecord {
   exitCode: number | null | undefined;
   startedAt: string;
   endedAt?: string;
+  /** When it ended, for the age bound. `undefined` while it runs. */
+  endedAtMs?: number;
   bytes: number;
-  tail: TailBuffer;
-  logPath: string;
-  stream: WriteStream | undefined;
-  controller: AbortController;
+  /** The live 256 KiB window. Released the moment the command's exit is delivered. */
+  tail: TailBuffer | undefined;
+  /** What the compact record keeps of the output: the last few KiB, as text. */
+  excerpt?: string;
+  /** The bounded window on disk, and the exact byte count and digest beside it. */
+  log: TaskLog;
   stoppedBy?: StoppedBy;
+  /** Dropped at compaction: the engine result/failure are already delivered. */
+  controller: AbortController | undefined;
   /** The engine's own result or failure, returned unchanged on the foreground path. */
-  result?: BashResult;
+  result?: BashResult | undefined;
   failure?: unknown;
   error?: string;
   done: Promise<void>;
@@ -119,6 +170,8 @@ interface TaskRecord {
   detach: () => void;
   publishTimer: NodeJS.Timeout | undefined;
   lastPublishAt: number;
+  /** True once the terminal record has been compacted; it never runs twice. */
+  compacted: boolean;
 }
 
 interface State {
@@ -126,6 +179,16 @@ interface State {
   sessionId?: string;
   /** Set by activate; a task that ends before then has nobody to tell. */
   notify?: (task: TaskRecord) => void;
+  /** Set by register; publishes retention when it changes, never on a timer. */
+  publishRetention?: () => void;
+  /** Bytes this session's logs may occupy; the worker may lower it (RP-6). */
+  logBudget: number;
+  /** Logs of records a bound forgot: still ours to account for and release. */
+  orphanLogs: TaskLog[];
+  /** Bytes written since the last budget check; the check is not per chunk. */
+  bytesSinceBudgetCheck: number;
+  evicted: number;
+  released: number;
 }
 
 const states = new WeakMap<ModuleContext, State>();
@@ -135,6 +198,10 @@ export class TailBuffer {
   private chunks: Buffer[] = [];
   private size = 0;
   constructor(private readonly limit: number) {}
+  /** Bytes held right now, for the retention counters. */
+  get bytes(): number {
+    return this.size;
+  }
   append(chunk: Buffer): void {
     this.chunks.push(chunk);
     this.size += chunk.length;
@@ -187,6 +254,238 @@ const STOP_REASONS: Readonly<Record<StoppedBy, string>> = {
 };
 
 // ---------------------------------------------------------------------------
+// What a finished command keeps (RP-6)
+// ---------------------------------------------------------------------------
+
+/** The output a record can still show: the live window, or the excerpt left of it. */
+function heldText(task: TaskRecord): string {
+  return task.tail ? task.tail.text() : (task.excerpt ?? "");
+}
+
+/** The last `limit` bytes of `text`, cut on a character boundary. */
+function tailBytesOf(text: string, limit: number): string {
+  const bytes = Buffer.from(text, "utf8");
+  if (bytes.length <= limit) return text;
+  return bytes.subarray(bytes.length - limit).toString("utf8").replace(/^[\uFFFD]/, "");
+}
+
+/**
+ * Let go of everything a finished command no longer needs.
+ *
+ * This runs **after** its terminal `lasercode/task/update` has been published,
+ * after its exit message has been built and sent to the model, and after the
+ * foreground caller (if there was one) has taken the engine's own result: a
+ * command's ending is delivered in full, and only then is the memory that
+ * carried it released.
+ *
+ * What goes: the 256 KiB tail buffer, the engine's result and failure, the
+ * abort controller, and — the largest of them — the `detach` closure, which
+ * held the tool call's `ExtensionContext`, its update callback and the
+ * per-task bash tool definition alive for as long as the record existed.
+ * What stays is a compact record plus a few KiB of the end of the output, and
+ * the bounded window on disk that `task_output` reads.
+ */
+function compact(state: State, task: TaskRecord): void {
+  if (task.compacted || task.status === "running") return;
+  task.compacted = true;
+  task.excerpt = tailBytesOf(heldText(task), TASK_EXCERPT_BYTES);
+  task.tail = undefined;
+  task.result = undefined;
+  task.failure = undefined;
+  task.controller = undefined;
+  task.detach = NOOP;
+  if (task.publishTimer) {
+    clearTimeout(task.publishTimer);
+    task.publishTimer = undefined;
+  }
+  task.log.close();
+  enforceBounds(state);
+}
+
+/** Finished commands, oldest ending first — the order every bound forgets in. */
+function terminalByAge(state: State): TaskRecord[] {
+  return [...state.tasks.values()]
+    .filter((task) => task.status !== "running" && task.endedAtMs !== undefined)
+    .sort((left, right) => (left.endedAtMs ?? 0) - (right.endedAtMs ?? 0));
+}
+
+/**
+ * The three independent bounds on finished commands: how many, how old, how
+ * many excerpt bytes. A running command is exempt from all three.
+ *
+ * Forgetting a record here releases memory and nothing else: the fleet row
+ * lives in the worker's index and the host's register, and the bytes on disk
+ * have their own budget, so nothing a person is looking at disappears because
+ * this ran (docs/ux-fleet.md R7).
+ */
+function enforceBounds(state: State, now = Date.now()): void {
+  let terminal = terminalByAge(state);
+  const excerptBytes = (): number =>
+    terminal.reduce((sum, task) => sum + Buffer.byteLength(task.excerpt ?? "", "utf8"), 0);
+  const forget = (task: TaskRecord): void => {
+    state.tasks.delete(task.id);
+    state.evicted += 1;
+    keepLogForBudget(state, task);
+    terminal = terminal.filter((candidate) => candidate !== task);
+  };
+  for (const task of [...terminal]) {
+    if (task.endedAtMs !== undefined && now - task.endedAtMs > TERMINAL_TASK_MAX_AGE_MS) forget(task);
+  }
+  while (terminal.length > TERMINAL_TASKS_MAX) forget(terminal[0]!);
+  while (terminal.length > 0 && excerptBytes() > TERMINAL_EXCERPT_BYTES_MAX) forget(terminal[0]!);
+}
+
+/**
+ * A forgotten record's bytes are still this session's to account for and to
+ * release: the log stays owned here until a budget releases it, because
+ * nothing else may delete bytes this runtime wrote.
+ */
+function keepLogForBudget(state: State, task: TaskRecord): void {
+  if (!task.log.usable) return;
+  state.orphanLogs.push(task.log);
+  while (state.orphanLogs.length > SWEEP_ENTRIES_MAX) {
+    const oldest = state.orphanLogs.shift();
+    if (oldest && oldest.usable) {
+      oldest.release();
+      state.released += 1;
+    }
+  }
+}
+
+/** Every log this session owns, oldest first: what a budget may release. */
+function logsOf(state: State): Array<{ log: TaskLog; live: boolean }> {
+  const live: Array<{ log: TaskLog; live: boolean }> = [];
+  const finished: Array<{ log: TaskLog; live: boolean }> = [];
+  for (const task of state.tasks.values()) {
+    (task.status === "running" ? live : finished).push({ log: task.log, live: task.status === "running" });
+  }
+  return [...state.orphanLogs.map((log) => ({ log, live: false })), ...finished, ...live];
+}
+
+function sessionLogBytes(state: State): number {
+  return logsOf(state).reduce((sum, entry) => sum + entry.log.diskBytes, 0);
+}
+
+/**
+ * Keep this session's commands inside their share of the disk.
+ *
+ * Order: logs nobody holds a record for, then finished commands oldest first,
+ * then the older half of a running command's window. **A running command is
+ * never paused, throttled or killed to stay inside the budget** — only bytes
+ * it has already written are released, its exact byte count and digest survive
+ * the release, and its row says `truncated` so nothing pretends the output was
+ * complete. Live output is not exempt: a command that prints for ever must not
+ * be able to fill the disk.
+ */
+function enforceLogBudget(state: State): void {
+  if (sessionLogBytes(state) <= state.logBudget) return;
+  for (const entry of logsOf(state)) {
+    if (sessionLogBytes(state) <= state.logBudget) break;
+    if (entry.live) {
+      if (entry.log.releaseOldest() > 0) state.released += 1;
+    } else {
+      entry.log.release();
+      state.released += 1;
+    }
+  }
+  // Still over after every finished log went: the live windows themselves are
+  // the floor, and they are already one segment each.
+  state.orphanLogs = state.orphanLogs.filter((log) => log.usable);
+}
+
+/** What this session's commands are holding, for RP-3 and the worker's budget. */
+export function retentionOf(state: State): BackgroundTaskRetention {
+  let live = 0;
+  let terminal = 0;
+  let liveTailBytes = 0;
+  let excerptBytes = 0;
+  for (const task of state.tasks.values()) {
+    if (task.status === "running") {
+      live += 1;
+      liveTailBytes += task.tail?.bytes ?? 0;
+    } else {
+      terminal += 1;
+      excerptBytes += Buffer.byteLength(task.excerpt ?? "", "utf8");
+      liveTailBytes += task.tail?.bytes ?? 0;
+    }
+  }
+  return {
+    live,
+    terminal,
+    liveTailBytes,
+    excerptBytes,
+    logBytes: sessionLogBytes(state),
+    evicted: state.evicted,
+    released: state.released,
+  };
+}
+
+/**
+ * Files left by a run that is gone.
+ *
+ * Only age decides, and only for crash recovery: this directory is shared with
+ * the other workers on this machine, and a young file may belong to a command
+ * somebody else's session is still writing. A file this runtime owns is
+ * released by its owner through the budget above, never by a guess about who
+ * wrote it.
+ */
+function sweepStaleLogs(root: string, now = Date.now()): number {
+  let removed = 0;
+  let examined = 0;
+  let names: string[];
+  try {
+    names = readdirSync(root).slice(0, SWEEP_NAMES_MAX);
+  } catch {
+    return 0;
+  }
+  // One stat per directory decides: a session that wrote a command log in the
+  // last day may still be writing one, and nothing here opens it. The oldest
+  // go first, so a machine with many sessions still reclaims the stale ones.
+  const candidates: Array<{ directory: string; mtimeMs: number }> = [];
+  for (const name of names) {
+    const directory = join(root, name);
+    try {
+      const { mtimeMs } = statSync(directory);
+      if (now - mtimeMs > STALE_LOG_AGE_MS) candidates.push({ directory, mtimeMs });
+    } catch {
+      // Gone, or not ours to read.
+    }
+  }
+  candidates.sort((left, right) => left.mtimeMs - right.mtimeMs);
+  for (const { directory } of candidates.slice(0, SWEEP_DIRS_MAX)) {
+    if (examined >= SWEEP_ENTRIES_MAX) break;
+    let files: string[];
+    try {
+      files = readdirSync(directory);
+    } catch {
+      continue;
+    }
+    let left = files.length;
+    for (const file of files) {
+      if (examined >= SWEEP_ENTRIES_MAX) break;
+      examined += 1;
+      const path = join(directory, file);
+      try {
+        if (now - statSync(path).mtimeMs <= STALE_LOG_AGE_MS) continue;
+        rmSync(path, { force: true });
+        removed += 1;
+        left -= 1;
+      } catch {
+        // A file somebody else removed first, or one we may not touch.
+      }
+    }
+    if (left <= 0) {
+      try {
+        rmSync(directory, { recursive: false, force: true });
+      } catch {
+        // A directory that is not empty after all: leave it alone.
+      }
+    }
+  }
+  return removed;
+}
+
+// ---------------------------------------------------------------------------
 // The task record on the wire
 // ---------------------------------------------------------------------------
 
@@ -196,7 +495,7 @@ const STOP_REASONS: Readonly<Record<StoppedBy, string>> = {
  * and a fleet row for every quick `ls` would bury the real work.
  */
 export function taskUpdate(task: TaskRecord): BackgroundTaskUpdate {
-  const activity = lastLines(task.tail.text(), 1).slice(0, TASK_LINE_MAX);
+  const activity = lastLines(heldText(task), 1).slice(0, TASK_LINE_MAX);
   return {
     id: task.id,
     command: task.command.slice(0, TASK_COMMAND_MAX),
@@ -217,7 +516,14 @@ export function taskUpdate(task: TaskRecord): BackgroundTaskUpdate {
           ...(task.error ? { error: task.error.slice(0, 4000) } : {}),
         }
       : {}),
-    ...(task.logPath ? { logPath: task.logPath } : {}),
+    // What is still readable, and the truth about what was produced whatever
+    // was released: the exact byte count is `outputBytes` above, the digest
+    // covers every byte the command printed, and `retainedFromByte` says where
+    // the window that survives begins.
+    ...(task.log.usable ? { logPath: task.log.path } : {}),
+    logState: task.log.state,
+    retainedFromByte: task.log.retainedFromByte,
+    outputDigest: task.log.digest(),
   };
 }
 
@@ -249,15 +555,30 @@ function sessionIdFor(state: State, toolCtx: ExtensionContext): string {
   return state.sessionId;
 }
 
+/** Where this session's command logs live: one directory, one writer. */
+function logRoot(): string {
+  return join(tmpdir(), `${WIRE_NAMESPACE}-tasks`);
+}
+
 function startTask(ctx: ModuleContext, state: State, options: BackgroundWorkOptions, input: StartInput, publish: (task: TaskRecord) => void): TaskRecord {
   const id = newTaskId();
-  const dir = join(tmpdir(), `${WIRE_NAMESPACE}-tasks`, sessionIdFor(state, input.toolCtx));
-  const logPath = join(dir, `${id}.log`);
+  const dir = join(logRoot(), sessionIdFor(state, input.toolCtx));
   const controller = new AbortController();
   let forwardUpdates = true;
   let settle: () => void = () => {};
   const finished = new Promise<void>((resolve) => {
     settle = resolve;
+  });
+
+  let loggedLogFailure = false;
+  const log = new TaskLog({
+    dir,
+    id,
+    onError: (error) => {
+      if (loggedLogFailure) return;
+      loggedLogFailure = true;
+      ctx.send({ type: "lasercode/module/log", module: "background-work", level: "warn", message: `task ${id} has no log file: ${describe(error)}` });
+    },
   });
 
   const task: TaskRecord = {
@@ -270,8 +591,7 @@ function startTask(ctx: ModuleContext, state: State, options: BackgroundWorkOpti
     startedAt: new Date().toISOString(),
     bytes: 0,
     tail: new TailBuffer(TAIL_BYTES),
-    logPath,
-    stream: undefined,
+    log,
     controller,
     done: finished,
     detach: () => {
@@ -279,19 +599,9 @@ function startTask(ctx: ModuleContext, state: State, options: BackgroundWorkOpti
     },
     publishTimer: undefined,
     lastPublishAt: 0,
+    compacted: false,
   };
   state.tasks.set(id, task);
-
-  try {
-    mkdirSync(dir, { recursive: true });
-    const stream = createWriteStream(logPath, { flags: "a" });
-    stream.on("error", () => {
-      task.stream = undefined;
-    });
-    task.stream = stream;
-  } catch (error) {
-    ctx.send({ type: "lasercode/module/log", module: "background-work", level: "warn", message: `task ${id} has no log file: ${describe(error)}` });
-  }
 
   const schedulePublish = (): void => {
     if (task.publishTimer || task.status !== "running") return;
@@ -304,14 +614,36 @@ function startTask(ctx: ModuleContext, state: State, options: BackgroundWorkOpti
   };
 
   const local = createLocalBashOperations(options.shellPath ? { shellPath: options.shellPath } : {});
+  let shellPid: number | undefined;
   const operations: BashOperations = {
     exec: async (command, cwd, execOptions) => {
       const result = await local.exec(command, cwd, {
         ...execOptions,
+        // The engine spawns the shell; `onSpawn` is how it hands back the pid
+        // it already has, so the host's process inventory can say which
+        // command a process belongs to instead of calling it an unknown
+        // descendant (RP-1). It is an observation and nothing else: an engine
+        // without the callback never calls it and nothing is registered
+        // rather than guessed, and a throw in here cannot reach the command
+        // (the engine guards the call). Filed upstream; carried meanwhile as
+        // an exact-version patch (docs/upstream.md).
+        onSpawn: (pid: number) => {
+          if (!Number.isInteger(pid) || pid <= 0) return;
+          shellPid = pid;
+          ctx.send({ type: "lasercode/process/registration", pid, taskId: task.id });
+        },
         onData: (data) => {
           task.bytes += data.length;
-          task.tail.append(data);
-          task.stream?.write(data);
+          task.tail?.append(data);
+          task.log.append(data);
+          // The budget is checked per megabyte written, not per chunk: a
+          // command printing in 8 KiB pieces must not pay for a walk of every
+          // log this session owns on each one.
+          state.bytesSinceBudgetCheck += data.length;
+          if (state.bytesSinceBudgetCheck >= BUDGET_CHECK_BYTES) {
+            state.bytesSinceBudgetCheck = 0;
+            enforceLogBudget(state);
+          }
           execOptions.onData(data);
           schedulePublish();
         },
@@ -349,28 +681,38 @@ function startTask(ctx: ModuleContext, state: State, options: BackgroundWorkOpti
       task.status = controller.signal.aborted ? "stopped" : "failed";
     }
     task.endedAt = new Date().toISOString();
+    task.endedAtMs = Date.now();
     if (task.publishTimer) {
       clearTimeout(task.publishTimer);
       task.publishTimer = undefined;
     }
-    task.stream?.end();
-    task.stream = undefined;
+    task.log.close();
+    if (shellPid !== undefined) ctx.send({ type: "lasercode/process/registration", pid: shellPid, taskId: task.id, exited: true });
     publish(task);
     // The rule (D-162): a foreground call carried its own result; every other
     // exit is a message to the model, and `task.notify` says whether it
     // wakes a turn (always, unless the model asked `notify: false`).
-    if (task.mode !== "foreground") state.notify?.(task);
+    if (task.mode !== "foreground") {
+      state.notify?.(task);
+      // Its ending has been published and delivered: the memory that carried
+      // it may go. A foreground call still has to return the engine's own
+      // result, so that path compacts itself once it has taken it.
+      compact(state, task);
+    }
+    state.publishRetention?.();
     settle();
   })();
 
   publish(task);
+  enforceLogBudget(state);
+  state.publishRetention?.();
   return task;
 }
 
 function stopTask(task: TaskRecord, by: StoppedBy): void {
   if (task.status !== "running") return;
   task.stoppedBy = by;
-  task.controller.abort();
+  task.controller?.abort();
 }
 
 function summary(task: TaskRecord) {
@@ -398,7 +740,7 @@ function exitText(task: TaskRecord): string {
         : typeof task.exitCode === "number"
           ? `exited with code ${task.exitCode}`
           : `failed: ${task.error ?? "it did not finish"}`;
-  const tail = lastLines(task.tail.text(), PROMOTED_TAIL_LINES);
+  const tail = lastLines(heldText(task), PROMOTED_TAIL_LINES);
   return [
     `Background task ${task.id} (${firstLine(task.command)}) ${outcome}.`,
     tail ? `Last lines:\n${tail}` : "(no output)",
@@ -407,7 +749,7 @@ function exitText(task: TaskRecord): string {
 }
 
 function promotedText(task: TaskRecord, seconds: number): string {
-  const tail = lastLines(task.tail.text(), PROMOTED_TAIL_LINES);
+  const tail = lastLines(heldText(task), PROMOTED_TAIL_LINES);
   return [
     `Still running after ${formatSeconds(seconds)} s; it continues as background task ${task.id}. Output so far (last lines):`,
     tail || "(no output yet)",
@@ -448,9 +790,27 @@ export const backgroundWorkModule: LaserModule = {
     const options = ctx.backgroundWork;
     if (!options) return;
     const { pi } = ctx;
-    const state: State = { tasks: new Map() };
+    const state: State = { tasks: new Map(), logBudget: SESSION_LOG_BYTES_MAX, orphanLogs: [], bytesSinceBudgetCheck: 0, evicted: 0, released: 0 };
     states.set(ctx, state);
     const seconds = options.foregroundCommandSeconds;
+
+    // Housekeeping for runs that are gone: bounded, age-only, and never a
+    // guess about who owns a young file (see `sweepStaleLogs`).
+    try {
+      sweepStaleLogs(logRoot());
+    } catch {
+      // A missing or unreadable temp directory is not a reason to fail a session.
+    }
+
+    let lastRetention = "";
+    state.publishRetention = () => {
+      const retention = retentionOf(state);
+      const serialized = JSON.stringify(retention);
+      // On change only: this is a fact about what is held, not a heartbeat.
+      if (serialized === lastRetention) return;
+      lastRetention = serialized;
+      ctx.send({ type: "lasercode/task/retention", retention });
+    };
 
     const publish = (task: TaskRecord): void => {
       // Only background work is fleet work (see `taskUpdate`).
@@ -531,8 +891,15 @@ export const backgroundWorkModule: LaserModule = {
         signal?.removeEventListener("abort", onTurnAbort);
 
         if (outcome === "done" || task.status !== "running") {
-          if (task.failure !== undefined) throw task.failure;
-          return task.result!;
+          // The engine's own answer, taken before anything is released: this is
+          // the third and last consumption fence, so compaction after it can
+          // never race the value this call has to return.
+          const failure = task.failure;
+          const result = task.result;
+          compact(state, task);
+          state.publishRetention?.();
+          if (failure !== undefined) throw failure;
+          return result!;
         }
         task.mode = "promoted";
         task.detach();
@@ -559,11 +926,30 @@ export const backgroundWorkModule: LaserModule = {
       async execute(_toolCallId, { taskId, tail }): Promise<AgentToolResult<Record<string, unknown>>> {
         const own = state.tasks.get(taskId);
         if (own) {
-          const lines = lastLines(own.tail.text(), tail ?? DEFAULT_TAIL_LINES);
+          // A running command answers from the window in memory; a finished one
+          // answers from the bounded window on disk, which is why its tail
+          // buffer could be released when it ended. What was released is said,
+          // never implied: the exact total and the digest are always there.
+          const durable = own.status === "running" ? undefined : own.log.readTail(TASK_OUTPUT_MAX_BYTES);
+          const body = durable !== undefined ? durable.toString("utf8") : heldText(own);
+          const lines = lastLines(body, tail ?? DEFAULT_TAIL_LINES);
+          const released = own.status !== "running" && durable === undefined;
+          const retainedFrom = own.log.retainedFromByte;
+          const note = released
+            ? `\n(the full output was released; ${own.bytes} bytes were produced, sha256 ${own.log.digest()}, and this is the last of it)`
+            : retainedFrom > 0
+              ? `\n(output before byte ${retainedFrom} was released; ${own.bytes} bytes were produced, sha256 ${own.log.digest()})`
+              : "";
           const header = `task ${own.id} ${own.status}${typeof own.exitCode === "number" ? ` (exit code ${own.exitCode})` : ""} · ${own.bytes} bytes of output`;
           return {
-            content: text(`${header}\n${lines || "(no output)"}`),
-            details: { ...summary(own), lines: lines ? lines.split("\n").length : 0 },
+            content: text(`${header}\n${lines || "(no output)"}${note}`),
+            details: {
+              ...summary(own),
+              lines: lines ? lines.split("\n").length : 0,
+              logState: own.log.state,
+              retainedFromByte: retainedFrom,
+              outputDigest: own.log.digest(),
+            },
           };
         }
         // Not this session's: a command of an agent under it, read through
@@ -633,6 +1019,15 @@ export const backgroundWorkModule: LaserModule = {
     // which sends the command here. A task this session does not own is not
     // ours to answer, so the worker learns it was not delivered.
     const offCommand = ctx.commands?.on((command) => {
+      // The worker's share of the per-worker disk budget for this session. It
+      // never deletes another runtime's files; it says how much this one may
+      // keep, and this runtime releases its own bytes (RP-6).
+      if (command.type === "lasercode/task/log-budget") {
+        state.logBudget = Math.max(SESSION_LOG_BYTES_MIN, Math.min(SESSION_LOG_BYTES_MAX, Math.floor(command.bytes)));
+        enforceLogBudget(state);
+        state.publishRetention?.();
+        return true;
+      }
       if (command.type !== "lasercode/task/stop") return false;
       const task = state.tasks.get(command.id);
       if (!task) return false;

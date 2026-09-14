@@ -501,6 +501,9 @@ describe("Router · agents (docs/agents-leap)", () => {
       });
       expect(await rpc(h.router, "agents/runs/list", {})).toMatchObject({ result: { runs: [] } });
       expect(await rpc(h.router, "agents/sync", { snapshot: { revision: 1 } })).toMatchObject({ error: { message: "The app sends this to its own workers." } });
+      // Same rule for the retained-store question (RP-6): a client asking it
+      // would be choosing which worker to ask, and it is never forwarded.
+      expect(await rpc(h.router, "pi/worker/retained-stores", {})).toMatchObject({ error: { message: "The app sends this to its own workers." } });
       expect(h.workerRequests).toEqual([]);
     } finally {
       h.cleanup();

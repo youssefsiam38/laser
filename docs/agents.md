@@ -565,15 +565,28 @@ process-tree kill, output truncation stay the engine's) and adds:
 - `background: true` — start the command and return a task id at once;
 - promotion — a foreground command still running after
   `policy.foregroundCommandSeconds` keeps running as the same task; the tool
-  returns the output so far and the task id, and the task keeps every byte in
-  its log file plus the last 256 KiB in memory, with its exit code when it
-  ends;
+  returns the output so far and the task id, and the task keeps the last
+  256 KiB in memory and a bounded window on disk while it runs, with its exit
+  code when it ends;
+- bounded lifetime (RP-6) — when a command ends, its ending is published and
+  delivered first, and only then is the memory that carried it released: the
+  full tail buffer, the engine's result, and the closure that held the tool
+  call's context. What is left is a compact record with a few KiB of the end
+  of the output, under independent count, age and excerpt-byte bounds; a
+  running command is exempt from all three. The bytes themselves live in a
+  rotating window on disk (per task, per session, and a per-worker budget the
+  worker divides between its sessions — it never deletes another runtime's
+  files). Whatever is released, `outputBytes` stays the exact number of bytes
+  the command produced and `outputDigest` covers every one of them, and the
+  row says `truncated` or `released` rather than implying the output was
+  complete. Nothing pauses, throttles or kills a command to keep bytes;
 - `task_output` and `task_stop` (`BACKGROUND_TOOL_NAMES`) to follow tasks —
   read output before the exit, or end one; there is no waiting tool (D-162,
   the rule D-158 set for child agents) and no list: `inspect_fleet` shows
   every command in the session's tree beside the agents that ran them
   (D-163), and `task_output` takes any of them, reading another session's
-  through the worker. A task is `running`, `completed`, `failed` or `stopped`;
+  through the worker — and one of its own that a bound has forgotten, from the
+  worker's index and the log still on disk. A task is `running`, `completed`, `failed` or `stopped`;
 - one `lasercode/task/update` per task carrying a `BackgroundTaskUpdate`
   (`packages/protocol/src/tasks.ts`), including the log file it streams into,
   so the host can serve `tasks/output` and the fleet can follow it; re-emits

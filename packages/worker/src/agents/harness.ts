@@ -1418,9 +1418,31 @@ export class AgentHarness {
     };
   }
 
-  /** A command by id, anywhere strictly under `callerPath`, with the agent whose session ran it. */
+  /**
+   * A command by id: one of the caller's own, or one anywhere strictly under
+   * it, with the agent whose session ran it.
+   *
+   * The caller's own session is here because a finished command's record is
+   * bounded inside the module that ran it (RP-6): once a bound forgets it, the
+   * worker's index is where the command still is, and its log is still on
+   * disk. Reading your own finished command must not depend on how many you
+   * have run since.
+   */
   private findTask(callerPath: string, id: string): { task: IndexedTask; owner: ReadTaskOutputResult["owner"] } | undefined {
     if (id === "" || !this.host.tasks) return undefined;
+    const own = this.host.tasks(callerPath).find((candidate) => candidate.id === id);
+    if (own) {
+      const self = this.latestRun(callerPath)?.run;
+      const entry = this.byPath.get(callerPath);
+      return {
+        task: own,
+        owner: {
+          agentName: self?.agentName ?? entry?.definition.name ?? "this session",
+          subagentName: self?.subagentName ?? "this session",
+          sessionId: self?.sessionId ?? entry?.sessionId ?? "",
+        },
+      };
+    }
     for (const run of this.runs()) {
       if (!this.descends(callerPath, run.sessionPath)) continue;
       const task = this.host.tasks(run.sessionPath).find((candidate) => candidate.id === id);

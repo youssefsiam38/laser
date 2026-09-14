@@ -113,6 +113,28 @@ export interface ProviderResponseRecord {
   headers: Record<string, string>;
 }
 
+/**
+ * What one session's background commands hold, for RP-3's retained-store
+ * counters and the worker's log budget. Counts and bytes only; no command
+ * text, no paths, no ids.
+ */
+export interface BackgroundTaskRetention {
+  /** Commands still running. Never compacted, never evicted. */
+  live: number;
+  /** Terminal records still held in memory, already compacted. */
+  terminal: number;
+  /** Bytes of live tail buffers held in memory. */
+  liveTailBytes: number;
+  /** Bytes of terminal excerpts held in memory. */
+  excerptBytes: number;
+  /** Bytes this session's command logs occupy on disk. */
+  logBytes: number;
+  /** Records dropped by a bound since the session started. */
+  evicted: number;
+  /** Log segments released by a byte bound since the session started. */
+  released: number;
+}
+
 export type PiExtensionMessage =
   | {
       type: "lasercode/capabilities";
@@ -133,6 +155,20 @@ export type PiExtensionMessage =
    * path on the way past; the host keeps `logPath` and never forwards it.
    */
   | { type: "lasercode/task/update"; task: BackgroundTaskUpdate }
+  /**
+   * The `background-work` module: what this session's commands are holding
+   * right now (RP-6). Published when it changes — a task starts, a terminal
+   * one is compacted, a bound evicts — never on a timer, so it stays a fact
+   * and not a heartbeat. The worker aggregates it for the host's retained
+   * store counters and for its own per-worker log budget.
+   */
+  | { type: "lasercode/task/retention"; retention: BackgroundTaskRetention }
+  /**
+   * A pid the module knows the meaning of: the shell of one background
+   * command. Consumed by the host's process inventory (RP-1) and dropped
+   * before any broadcast; a client is never told a pid.
+   */
+  | { type: "lasercode/process/registration"; pid: number; taskId: string; exited?: boolean }
   | {
       type: "lasercode/module/log";
       module: PiExtensionModuleName | "worker";
@@ -147,4 +183,10 @@ export type PiExtensionMessage =
 export type PiExtensionCommand =
   /** A person pressed Stop on a background task in the fleet. */
   | { type: "lasercode/task/stop"; id: string }
+  /**
+   * The worker's share of the per-worker log budget for this session (RP-6).
+   * A session releases only bytes it wrote itself: the worker never deletes
+   * another runtime's files, it tells each owner how much it may keep.
+   */
+  | { type: "lasercode/task/log-budget"; bytes: number }
   | { type: "lasercode/account-usage/refresh" };

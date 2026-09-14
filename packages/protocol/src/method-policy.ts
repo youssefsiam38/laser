@@ -297,6 +297,10 @@ export const METHOD_POLICY = {
   "resource/history": { scope: "diagnostics", reach: "any" },
   "resource/export": { scope: "diagnostics", reach: "any" },
   "resource/report": { scope: "diagnostics", reach: "native", refusal: NATIVE_REPORT_REFUSAL },
+  // Host → its own already-live workers (RP-6). It is in this table because
+  // every method is, and it is `native` for the same reason `agents/sync` is:
+  // nothing outside this machine's app may ask a worker what it is holding.
+  "pi/worker/retained-stores": { scope: "diagnostics", reach: "native", refusal: NATIVE_SYNC_REFUSAL },
 
   // ------------------------------------------------------------- device ---
   "pi/push/config": { scope: "device", reach: "any" },
@@ -345,6 +349,9 @@ export const NOTIFICATION_SCOPE = {
   "agents/beam/choose-model": "read",
   "mcp/changed": "read",
   "resource/refresh_request": "diagnostics",
+  // Worker → host only, and dropped before broadcast: the scope is here
+  // because the table is compiler-complete, not because a client hears it.
+  "pi/resource/process": "diagnostics",
   "tasks/update": "read",
 } satisfies Record<keyof HostNotifications, MethodScope>;
 

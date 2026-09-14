@@ -1186,6 +1186,27 @@ describe("AgentHarness", () => {
       expect(fleet.rows.filter((row) => row.kind === "command")).toHaveLength(46);
     });
 
+    it("reads one of this session's own commands, so a bound that forgot it in the module is not the end of it", async () => {
+      // A finished command's record is bounded inside the module that ran it
+      // (RP-6). When a bound forgets it, the worker's index still has it and
+      // its log is still on disk — reading your own command must not depend on
+      // how many you have run since.
+      const root = world.openRoot("lead");
+      const rootPath = root.path;
+      const log = join(mkdtempSync(join(tmpdir(), "own-log-")), "t-own.log");
+      writeFileSync(log, "first\nsecond\n");
+      world.tasks.set(rootPath, [task("t-own", rootPath, "completed", { exitCode: 0, outputBytes: 13, logPath: log })]);
+      const read = await root.handle.backgroundWork("/repo")!.readTask!("t-own", 1);
+      expect(read.task).toMatchObject({ id: "t-own", status: "completed", exitCode: 0 });
+      expect(read.text).toBe("second");
+      expect(read.task).not.toHaveProperty("logPath");
+      expect(read.owner.sessionId).toBeDefined();
+      // Still refused for a command of a session that is not the caller's and
+      // not under it.
+      world.tasks.set("/sessions/stranger.jsonl", [task("t-stranger", "/sessions/stranger.jsonl", "running", { logPath: log })]);
+      await expect(root.handle.backgroundWork("/repo")!.readTask!("t-stranger", 5)).rejects.toThrow(/is not in the tree under this session/);
+    });
+
     it("reads a command of an agent under this session from its log, and refuses one outside the tree", async () => {
       const root = world.openRoot("lead");
       const child = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w1", task: "t" });

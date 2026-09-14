@@ -198,6 +198,11 @@ is *fleet* work, and the fleet has a typed domain model rather than a bus
 ([`docs/ux-fleet.md`](ux-fleet.md)). `background-work` is the worked example:
 it publishes `laser/task/update` with a `BackgroundTaskUpdate`, the worker
 stamps the session path, the host keeps the register and the column draws it.
+It also publishes `laser/task/retention` when what its commands hold changes
+(never on a timer), which is what the worker divides its log budget with and
+what the Advanced resource surface counts; and `laser/process/registration`
+for the pid of a command's shell, which the worker hands to the host's process
+inventory and which never reaches a client.
 
 Adding a third kind of fleet work means adding a type to
 `packages/protocol/src/tasks.ts` and a decision in `STATUS_DETAILED.md`. That

@@ -84,6 +84,60 @@ describe("TaskRegister", () => {
     expect(w.register.get(PATH, "t-done")?.status).toBe("completed");
   });
 
+  it("reads a windowed log across both its segments, with stream offsets and the digest", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "task-register-window-"));
+    dirs.push(dir);
+    const logPath = join(dir, "t-1.log");
+    // A long command's log is a window (RP-6): the writer rotated the older
+    // half into `.prev` and released everything before it. Offsets stay stream
+    // offsets, so a follower's arithmetic never has to know that happened.
+    writeFileSync(`${logPath}.prev`, "middle-part");
+    writeFileSync(logPath, "latest-part");
+    const digest = "a".repeat(64);
+    const w = world();
+    w.register.observeExtensionMessage(PATH, {
+      type: "lasercode/task/update",
+      task: update({ logPath, outputBytes: 1_000_000, retainedFromByte: 999_978, logState: "truncated", outputDigest: digest }),
+    });
+
+    const head = await w.register.read(PATH, "t-1", 0);
+    expect(head).toMatchObject({ from: 999_978, chunk: "middle-part", retainedFrom: 999_978, digest, bytes: 1_000_000, eof: false });
+    const tail = await w.register.read(PATH, "t-1", 999_989);
+    expect(tail).toMatchObject({ from: 999_989, chunk: "latest-part", eof: true });
+  });
+
+  it("says a released log is gone rather than reading a file that is not it", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "task-register-released-"));
+    dirs.push(dir);
+    const logPath = join(dir, "t-1.log");
+    writeFileSync(logPath, "stale");
+    const w = world();
+    w.register.observeExtensionMessage(PATH, {
+      type: "lasercode/task/update",
+      task: update({ logPath, status: "completed", exitCode: 0, outputBytes: 5_000, logState: "released", retainedFromByte: 5_000 }),
+    });
+    await expect(w.register.read(PATH, "t-1", 0)).rejects.toThrow(/kept no log file/);
+  });
+
+  it("bounds itself by records and bytes, and never forgets a session with a command still running", () => {
+    const w = world();
+    // One session with a live command, then many finished ones.
+    w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ id: "t-live" }) });
+    for (let index = 0; index < 260; index++) {
+      w.register.observeExtensionMessage(`/sessions/s${index}.jsonl`, {
+        type: "lasercode/task/update",
+        task: update({ id: `t-${index}`, status: "completed", exitCode: 0, endedAt: "2026-09-08T10:01:00.000Z", command: "x".repeat(2000), title: "x" }),
+      });
+    }
+    const retained = w.register.retained();
+    expect(retained.count).toBeLessThanOrEqual(260);
+    expect(retained.bytes).toBeGreaterThan(0);
+    expect(w.register.list(PATH).map((task) => task.id)).toEqual(["t-live"]);
+    expect(w.register.list().length).toBe(retained.count);
+    // Sessions that were all finished went first; the live one is still here.
+    expect(w.register.list().some((task) => task.id === "t-live")).toBe(true);
+  });
+
   it("lists one session or every session", () => {
     const w = world();
     w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update() });

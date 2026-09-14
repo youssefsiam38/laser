@@ -8,7 +8,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { TASK_OUTPUT_MAX_BYTES, type BackgroundTaskUpdate } from "@lasercode/protocol";
-import { MAX_CLOSED_SESSIONS, MAX_INDEXED_TASKS_PER_SESSION, TaskIndex, readLogTail } from "../../src/agents/tasks.js";
+import { MAX_CLOSED_SESSIONS, MAX_INDEXED_TASKS_PER_SESSION, MIN_SESSION_LOG_BYTES, TaskIndex, readLogTail } from "../../src/agents/tasks.js";
+
+const retention = (partial: Partial<Parameters<TaskIndex["observe"]>[1] extends never ? never : never> | Record<string, number> = {}) => ({
+  live: 0,
+  terminal: 0,
+  liveTailBytes: 0,
+  excerptBytes: 0,
+  logBytes: 0,
+  evicted: 0,
+  released: 0,
+  ...partial,
+});
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -18,6 +29,52 @@ afterEach(() => {
 function update(partial: Partial<BackgroundTaskUpdate> & Pick<BackgroundTaskUpdate, "id">): BackgroundTaskUpdate {
   return { command: `echo ${partial.id}`, title: `echo ${partial.id}`, status: "running", origin: "background", startedAt: "2026-09-09T10:00:00.000Z", outputBytes: 0, ...partial };
 }
+
+describe("TaskIndex retained state and the per-worker log budget (RP-6)", () => {
+  it("reports what its sessions hold, and forgets it when a session closes", () => {
+    const index = new TaskIndex();
+    index.observe("/s/a.jsonl", { type: "lasercode/task/update", task: update({ id: "t-1" }) });
+    index.observe("/s/b.jsonl", { type: "lasercode/task/update", task: update({ id: "t-2" }) });
+    expect(index.observe("/s/a.jsonl", { type: "lasercode/task/retention", retention: retention({ live: 1, terminal: 3, liveTailBytes: 1000, excerptBytes: 500, logBytes: 10 }) })).toBe(true);
+    index.observe("/s/b.jsonl", { type: "lasercode/task/retention", retention: retention({ terminal: 2, excerptBytes: 250, logBytes: 20 }) });
+
+    // Records are metadata; tails and excerpts are the memory they cost.
+    expect(index.retainedStores()).toEqual({ taskRegistry: { count: 2, bytes: 1750 } });
+    expect(index.logBytes()).toBe(30);
+
+    index.sessionClosed("/s/b.jsonl");
+    expect(index.retainedStores().taskRegistry.bytes).toBe(1500);
+    expect(index.logBytes()).toBe(10);
+  });
+
+  it("hands each session a share when the worker is over its log budget, and never below the floor", () => {
+    const index = new TaskIndex();
+    for (const path of ["/s/a.jsonl", "/s/b.jsonl"]) {
+      index.observe(path, { type: "lasercode/task/update", task: update({ id: `t-${path}` }) });
+    }
+    index.observe("/s/a.jsonl", { type: "lasercode/task/retention", retention: retention({ logBytes: 90 * 1024 * 1024 }) });
+    index.observe("/s/b.jsonl", { type: "lasercode/task/retention", retention: retention({ logBytes: 1024 }) });
+
+    // Inside the budget: nobody is asked to release anything.
+    expect(index.logBudgets(200 * 1024 * 1024)).toEqual([]);
+
+    // Over it: the biggest holder is told what it may keep, the small one is
+    // left alone, and the share never drops below one segment.
+    const budgets = index.logBudgets(64 * 1024 * 1024);
+    expect(budgets.map((budget) => budget.path)).toEqual(["/s/a.jsonl"]);
+    expect(budgets[0]!.bytes).toBeGreaterThanOrEqual(MIN_SESSION_LOG_BYTES);
+    expect(index.logBudgets(1)[0]!.bytes).toBe(MIN_SESSION_LOG_BYTES);
+  });
+
+  it("moves a session's retention with it when a fork rekeys the path", () => {
+    const index = new TaskIndex();
+    index.observe("/s/old.jsonl", { type: "lasercode/task/update", task: update({ id: "t-1" }) });
+    index.observe("/s/old.jsonl", { type: "lasercode/task/retention", retention: retention({ logBytes: 42, excerptBytes: 7 }) });
+    index.rekeySession("/s/old.jsonl", "/s/new.jsonl");
+    expect(index.logBytes()).toBe(42);
+    expect(index.retainedStores()).toEqual({ taskRegistry: { count: 1, bytes: 7 } });
+  });
+});
 
 describe("TaskIndex", () => {
   it("keeps one record per task per session, stamped with the session, replacing in place and remembering the log path", () => {

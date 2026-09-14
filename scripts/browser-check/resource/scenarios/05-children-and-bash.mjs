@@ -109,8 +109,9 @@ export default {
     assert.equal(phase.tailBuffers.available, true, 'retained-count evidence needs the extension tail buffers readable');
     const workerTaskRows = phase.workers.reduce((sum, worker) => sum + worker.tasks, 0);
     assert.equal(phase.tailBuffers.count, retention.tailBuffers,
-      'extension retains one bounded TailBuffer per Bash call served by the live worker generation, plus the earlier heavy tool when that generation survived '
+      'no finished command keeps a tail buffer: 200 completed Bash calls leave compact records and bounded logs, not 200 windows in memory (RP-6) '
       + `(same-generation calls ${retention.sameGenerationCalls}, calls whose worker was replaced ${retention.replacedGenerationCalls}, heavy tool survived ${retention.heavyToolGenerationSurvived})`);
+    assert.equal(phase.tailBuffers.bytes, 0, 'retained tail bytes after every command has ended');
     assert.equal(phase.host.tasks, config.backgroundCalls, 'host retains background-task metadata only');
     assert.equal(workerTaskRows, retention.workerBackgroundTasks,
       `workers retain background-task metadata only for the generation that ran it (expected ${retention.workerBackgroundTasks} of ${config.backgroundCalls})`);
