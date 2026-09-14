@@ -2547,6 +2547,31 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 
 ---
 
+## M17 · The coding experience developers stay for
+
+| ID | Task | State | Owner | Evidence | Notes |
+| --- | --- | --- | --- | --- | --- |
+| M17-T1 | The conversation owns the window | todo | — | — | audit §4 |
+| M17-T2 | One column for the fleet and the monitor | todo | — | — | audit §4 |
+| M17-T3 | A child's question is answered where it is shown | todo | — | — | audit §4 |
+| M17-T4 | A failed run says what went wrong, for a person | todo | — | — | audit §4 |
+| M17-T5 | The fleet row is a row, not a record | todo | — | — | audit §4 |
+| M17-T6 | Snapshot and restore (protocol) | todo | — | — | audit §4 |
+| M17-T7 | Review the changes before they are yours | todo | — | — | audit §4 |
+| M17-T8 | Commit and push without a terminal | todo | — | — | audit §4 |
+| M17-T9 | Permissions a person can set once | todo | — | — | audit §4 |
+| M17-T10 | Always allow this command | todo | — | — | audit §4 |
+| M17-T11 | Plan mode | todo | — | — | audit §4 |
+| M17-T12 | The engine's keymap leaves the Help tab | todo | — | — | audit §4 |
+| M17-T13 | Every key is findable | todo | — | — | audit §4 |
+| M17-T14 | Projects you can tell apart | todo | — | — | audit §4 |
+| M17-T15 | A sidebar that scales past one project | todo | — | — | audit §4 |
+| M17-T16 | The monitor stops repeating itself | todo | — | — | audit §4 |
+| M17-T17 | Logs open on what you can act on | todo | — | — | audit §4 |
+| M17-T18 | One noun for an agent | todo | — | — | audit §4 |
+| M17-T19 | Rows shrink their arguments, never their verbs | todo | — | — | audit §4 |
+| M17-T20 | The map never covers the conversation | todo | — | — | audit §4 |
+
 ## Handoffs
 
 ### H-10 · M14-T3 / M14-T6 UI findings · 2026-09-12 · mcp-settings-fixes
@@ -3276,6 +3301,11 @@ Consequences: M16-T38 (logstore/release split) and M16-T39 (selector family) add
 Decision: Independent review `/tmp/review-063/REVIEW.md` on `e0e4d51`: pass except Windows. Fixed on main by the orchestrator: B1 Windows "open in editor" awaited the editor through a 5 s launcher and killed it (now `spawn` detached, resolved on `spawn`, Notepad only on a spawn error; test asserts the editor is never awaited); H1 two relay peers paused for each other were never reaped (a pause older than two ping intervals closes with `Timeout`; test). H2 is M16-T52 (parent fork re-keys children) — follow-up, comment at `server.ts:1564` to be weakened then. Not changed with reasons: M1 `settingsLane` drops serialisation against fork/navigate/compact (a stale success is possible only in the window of a person's own concurrent move; a per-session settings tail is the follow-up, M16-T53); M2 `feature/set` refusal copy names "the current session" (M16-T53 too); M3 FIFO provider pairing approximate by design and commented; dead `sourceEditor` flag, leftover `title` in `composer-trigger-popover`, `artifact-card` duplicate of `Hint` — polish, M17.
 Why: nothing remaining changes behaviour a person meets on Linux, the shipped platform; Windows/macOS installers are not in this release channel but the code must not lie there either.
 Consequences: 0.6.3 proceeds from the corrected bytes after verify, matrices and the packaged gate rerun.
+
+### D-248 · 2026-09-14 · M17 is planned from the field audit
+Decision: `docs/ux-audit-coding-agents.md` (merged `5ee7f85`) becomes milestone M17 with its twenty proposed tasks verbatim, in the audit's order. M17-T1 (the conversation owns the window) goes first and alone; M17-T6/T7 (snapshot/restore and reviewable diff) and M17-T11 (plan mode via the existing `session/set_mode`) are protocol-first per invariant 2; M17-T3/T4/T5 replace model-facing text in the parent's transcript with typed person-facing questions and failures.
+Why: the audit measured a 318 px transcript at 1360 px, a child's question rendered as instructions to a model, no diff review or restore, and a Help tab listing the engine's terminal keymap — each below the bar in AGENTS.md and each with a concrete, constitution-fitting proposal.
+Consequences: M17 opens after 0.6.3; nothing in it ships as a placeholder; every task carries both-widths/both-themes matrix evidence.
 
 ## Open questions
 
