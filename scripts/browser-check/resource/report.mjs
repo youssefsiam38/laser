@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { memoryLabels } from './process-sampler.mjs';
@@ -47,17 +46,46 @@ export function spearman(a, b) {
 function sign(value) { return value === 0 ? 0 : value > 0 ? 1 : -1; }
 function slopeValue(value) { return typeof value === 'number' ? value : value?.value; }
 
+/**
+ * Predeclared, category-specific repeatability. Retained-heap owners, the
+ * renderer's own state projection and Chrome's native allocator names are
+ * structural: the same run twice must name the same top owner in the same
+ * order, and a difference there is a real failure. Sampled allocation profiles
+ * and desktop process rows are evidence of where allocation happens, drawn from
+ * a statistical sampler, so they are still gated — the same owners must keep
+ * showing up in the same broad order — but one noisy top symbol cannot fail a
+ * run on its own. Categories are declared here, before any run; anything new is
+ * strict until someone decides otherwise.
+ */
+export const COMPARISON_POLICY = Object.freeze({
+  // A structural category can legitimately have only a handful of owners — one
+  // retained target per heap phase, for instance — so the overlap it must show
+  // is capped by how many owners exist rather than assumed to be five. What is
+  // never relaxed: the same top owner, and rank correlation.
+  strict: Object.freeze({ kind: 'strict', requireSameTopOwner: true, minimumTopFiveOverlap: 4, minimumSpearman: 0.8, minimumOwners: 2 }),
+  evidence: Object.freeze({ kind: 'evidence', requireSameTopOwner: false, minimumTopFiveOverlap: 3, minimumSpearman: 0.4, minimumOwners: 5 }),
+});
+export const EVIDENCE_CATEGORIES = Object.freeze(['host-allocation', 'worker-allocation', 'desktop-processes']);
+export function policyFor(category) {
+  return EVIDENCE_CATEGORIES.includes(category) ? COMPARISON_POLICY.evidence : COMPARISON_POLICY.strict;
+}
+
 export function compareRuns(a, b) {
   const categories = {};
   for (const name of [...new Set([...Object.keys(a.rankings ?? {}), ...Object.keys(b.rankings ?? {})])]) {
+    const policy = policyFor(name);
     const ar = rankNames(a.rankings?.[name] ?? []);
     const br = rankNames(b.rankings?.[name] ?? []);
     const overlap = ar.slice(0, 5).filter(owner => br.slice(0, 5).includes(owner)).length;
     const correlation = spearman(ar, br);
-    const enough = ar.length >= 5 && br.length >= 5;
+    const enough = ar.length >= policy.minimumOwners && br.length >= policy.minimumOwners;
+    const topOwnerSame = ar[0] === br[0];
+    const requiredOverlap = Math.min(policy.minimumTopFiveOverlap, ar.length, br.length);
     categories[name] = {
-      topOwnerSame: ar[0] === br[0], topFiveOverlap: overlap, spearman: correlation,
-      pass: enough && ar[0] === br[0] && overlap >= 4 && (correlation ?? -1) >= 0.8,
+      policy: policy.kind, topOwnerSame, topFiveOverlap: overlap, requiredOverlap, spearman: correlation,
+      owners: { a: ar.length, b: br.length },
+      pass: enough && (policy.requireSameTopOwner ? topOwnerSame : true)
+        && overlap >= requiredOverlap && (correlation ?? -1) >= policy.minimumSpearman,
     };
   }
   const slopes = {};
@@ -74,6 +102,7 @@ export function compareRuns(a, b) {
   return {
     pass: scenariosComplete && Object.keys(categories).length > 0 && Object.values(categories).every(value => value.pass)
       && Object.keys(slopes).length > 0 && Object.values(slopes).every(value => value.pass),
+    policy: { strict: COMPARISON_POLICY.strict, evidence: COMPARISON_POLICY.evidence, evidenceCategories: EVIDENCE_CATEGORIES },
     scenariosComplete, categories, slopes,
   };
 }
@@ -87,6 +116,9 @@ const FORBIDDEN = [
   /RESOURCE-SOAK-(?:PROMPT|COMMAND)-CANARY/g,
   /(?:authorization|api[_-]?key|token|password)["'\s:=]+[^\s,}"']+/gi,
   /(?:\.jsonl|\.heapsnapshot)\b/g,
+  // A bare transcript basename is an identity even without its directory: the
+  // settle timeout used to carry one into a report.
+  /\bsession-[A-Za-z0-9_-]{4,}/g,
 ];
 export function assertRedacted(text) {
   for (const pattern of FORBIDDEN) {
@@ -95,11 +127,24 @@ export function assertRedacted(text) {
     if (match) throw new Error(`Unsafe resource report content matched ${pattern}: ${match[0].slice(0, 60)}`);
   }
 }
+/**
+ * The one place a label becomes safe. Every owner, phase name and error message
+ * goes through this on the way *into* the report, so JSON and Markdown carry
+ * the same sanitized text and a later renderer cannot reintroduce an identity.
+ */
 export function sanitizeOwner(value) {
-  return String(value).replace(/(?:file:\/\/)?\/(?:home|Users|tmp|private|var)\/[\w./@~-]+/g, '<path>')
-    .replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, '<id>').slice(0, 160);
+  return String(value)
+    .replace(/(?:file:\/\/)?\/(?:home|Users|tmp|private|var)\/[\w./@~-]+/g, '<path>')
+    .replace(/\bsession-[A-Za-z0-9_-]{4,}(?:\.jsonl)?/g, '<session>')
+    .replace(/\b[\w-]+\.(?:jsonl|heapsnapshot)\b/g, '<file>')
+    .replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, '<id>')
+    .replace(/\bprocess \d+\b/g, 'a sampled process')
+    .slice(0, 160);
 }
-export function manifestHash(value) { return createHash('sha256').update(JSON.stringify(value)).digest('hex'); }
+/** Sanitize an error the run is about to record, message only, never a stack. */
+export function sanitizeError(error) {
+  return sanitizeOwner(error instanceof Error ? error.message : String(error));
+}
 
 export async function writeReport(root, report) {
   const safe = { schemaVersion: 1, ...report, memoryLabels: memoryLabels() };
@@ -117,14 +162,19 @@ function markdown(report) {
   const lines = [
     `# Resource soak — ${report.mode}`, '', `Implementation: \`${report.implementationSha}\``, '',
     'PSS apportions shared resident pages. Private resident is reported separately. RSS includes shared mappings at full size and is never summed as physical use.',
-    'JavaScript heap, V8 external memory, native allocator totals and logical decoded-image bytes can overlap and are never presented as disjoint buckets.', '',
+    'JavaScript heap, V8 external memory, native allocator totals and logical decoded-image bytes can overlap and are never presented as disjoint buckets.',
+    'Totals cover the sampled scope only — the host process tree plus the renderer of the measured page — and each phase lists what it included and excluded.', '',
     `Result: **${report.pass ? 'pass' : 'incomplete'}**`, '', '## Scenarios', '',
     ...Object.entries(report.scenarios ?? {}).map(([name, value]) => `- ${name}: ${value}`), '',
   ];
-  for (const phase of report.phases ?? []) lines.push(`- ${phase.name}: PSS ${phase.totalPssBytes ?? 'unavailable'}; private resident ${phase.totalPrivateResidentBytes ?? 'unavailable'}; JS heap ${phase.renderer?.jsHeapUsedBytes ?? 'unavailable'}`);
+  for (const phase of report.phases ?? []) {
+    lines.push(`- ${phase.name}: PSS ${phase.totalPssBytes ?? 'unavailable'}; private resident ${phase.totalPrivateResidentBytes ?? 'unavailable'};`
+      + ` JS heap ${phase.renderer?.jsHeapUsedBytes ?? 'unavailable'}; coverage ${phase.coverage?.complete ? 'complete' : 'incomplete'}`
+      + ` (${phase.coverage?.measured ?? 0}/${phase.coverage?.expected ?? 0} expected processes)`);
+  }
   lines.push('', '## Retained owner rankings', '');
   for (const [category, rows] of Object.entries(report.rankings ?? {})) {
-    lines.push(`### ${category}`, ...mergedRanks(rows).slice(0, 10).map((row, index) => `${index + 1}. \`${row.owner}\` — ${row.bytes} bytes`), '');
+    lines.push(`### ${category} (${policyFor(category).kind})`, ...mergedRanks(rows).slice(0, 10).map((row, index) => `${index + 1}. \`${row.owner}\` — ${row.bytes} bytes`), '');
   }
   lines.push('## Slopes', '', ...Object.entries(report.slopes ?? {}).map(([name, value]) => `- ${name}: ${typeof value === 'number' ? value : value?.value ?? 'unavailable'}`), '',
     '## Capabilities and limitations', '', ...Object.entries(report.capabilities ?? {}).map(([name, value]) => `- ${name}: ${value}`),

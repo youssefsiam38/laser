@@ -1,5 +1,5 @@
 import { readFile, readdir, rm } from 'node:fs/promises';
-import { basename, resolve } from 'node:path';
+import { resolve } from 'node:path';
 
 const delay = ms => new Promise(resolveDelay => setTimeout(resolveDelay, ms));
 
@@ -180,8 +180,14 @@ export async function scalarCounters(client, instanceId, kind) {
   return callFunction(client, instanceId, fn, { returnByValue: true });
 }
 
-export async function tailBufferCounters(client, moduleUrl) {
-  const found = await queryInstances(client, moduleUrl, 'TailBuffer', { exact: null, minimum: 1 });
+/**
+ * TailBuffer has no single published handle, so counting it costs one
+ * heap-walking query. A worker that never ran a command holds none of them, and
+ * that is a zero, not an unreadable process: `minimum` says which of the two a
+ * caller is asking for.
+ */
+export async function tailBufferCounters(client, moduleUrl, { minimum = 0 } = {}) {
+  const found = await queryInstances(client, moduleUrl, 'TailBuffer', { exact: null, minimum });
   try {
     return await callFunction(client, found.objectsId, `function(){ const a=Array.from(this); const sizes=a.map(x=>x.size||0); return {count:a.length,bytes:sizes.reduce((n,x)=>n+x,0),maxBytes:Math.max(0,...sizes)}; }`, { returnByValue: true });
   } finally { await client.send('Runtime.releaseObjectGroup', { objectGroup: found.group }); }
@@ -190,5 +196,3 @@ export async function tailBufferCounters(client, moduleUrl) {
 export async function removeRegistrations(records) {
   await Promise.all(records.map(record => rm(record.file, { force: true }).catch(() => {})));
 }
-
-export function inspectorLabel(record) { return basename(record.file ?? String(record.pid)); }

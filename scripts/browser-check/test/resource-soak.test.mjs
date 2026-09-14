@@ -11,13 +11,22 @@ import { EventEmitter } from 'node:events';
 import { promisify } from 'node:util';
 import { modeConfig, expected, SAFETY } from '../resource/config.mjs';
 import { syntheticPng, imagePayload } from '../resource/fixtures.mjs';
-import { theilSen, compareRuns, assertRedacted, sanitizeOwner } from '../resource/report.mjs';
+import { theilSen, compareRuns, assertRedacted, sanitizeOwner, sanitizeError, COMPARISON_POLICY } from '../resource/report.mjs';
 import { connectInspector, InspectorClient } from '../resource/inspector.mjs';
 import { captureHeap } from '../resource/heap.mjs';
 import { captureMemoryInfra, dumpAllocators } from '../resource/memory-infra.mjs';
 import { memoryLabels } from '../resource/process-sampler.mjs';
 import { dispatchFindShortcut, findShortcutEvents } from '../resource/keyboard.mjs';
-import { assertNoLiveWork, captureInstanceHeap, classifySampledProcess, closedPageMetrics, connectWorkerInspector, expectedRetainedCounts, partialFailureReport, proveNoLiveWork, rendererSample, retirementGuardSnapshot, revealSessionRow, safetyRefusalDetail, safetyRefusalMessage, sidebarRowView, traverseRetainedViews, writeAtomicJson } from '../resource-soak.mjs';
+import { partialFailureReport, providerAccounting, writeAtomicJson, writePartialReport } from '../resource-soak.mjs';
+import { SoakRun, classifySampledProcess, closedPageMetrics, connectWorkerInspector, safetyRefusalDetail, safetyRefusalMessage } from '../resource/context.mjs';
+import { assertNoLiveWork, dormantViews, proveNoLiveWork, reconcileDelivery, retirementGuardSnapshot, traverseRetainedViews } from '../resource/retirement.mjs';
+import { expectedRetainedCounts } from '../resource/retention.mjs';
+import { revealSessionRow, sidebarRowView } from '../resource/sidebar.mjs';
+import { DiscoveryRegistry, PUBLISHED } from '../resource/discovery.mjs';
+import { ProcessCensus, censusTotals, verdictFor } from '../resource/sampling.mjs';
+import { withStalledClient } from '../resource/scenarios/08-slow-consumer.mjs';
+import { BROWSER_SCENARIOS, SCENARIO_IDS } from '../resource/scenarios/index.mjs';
+import { graphBudget, validateHeader } from '../resource/heap-parser.mjs';
 import { closeNodeWebSocket, settledWebSocketRpc } from '../resource/websocket.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -37,6 +46,8 @@ test('quick fixture still exercises every bounded mechanism', () => {
   const quick = modeConfig('quick');
   assert.deepEqual([quick.projects * quick.sessionsPerProject, quick.longMessages, quick.children,
     quick.foregroundCalls + quick.backgroundCalls, quick.images, quick.imageSide], [3, 80, 2, 6, 2, 512]);
+  const values = expected(quick);
+  assert.deepEqual([values.retainedViews, values.workspaceSessions, values.workers, values.seedRequests, values.historyPages], [5, 2, 3, 44, 1]);
 });
 
 test('PNG generator is deterministic, valid and uniquely seeded', () => {
@@ -339,15 +350,50 @@ test('a capture tracks object moves around its ids and stops tracking without a 
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test('an instance is re-acquired immediately before its own capture', async () => {
-  const order = [];
-  const client = { send: async (method, params) => { order.push(`${method}:${params.objectGroup}`); return {}; } };
-  const result = await captureInstanceHeap(client, '/tmp/ignored', 'module', 'WorkerServer', {
-    query: async () => { order.push('query'); return { group: 'group-1', instanceId: 'instance-1' }; },
-    capture: async (_client, _file, targets) => { order.push(`capture:${JSON.stringify(targets)}`); return { available: true }; },
-  });
-  assert.deepEqual(result, { available: true });
-  assert.deepEqual(order, ['query', 'capture:{"WorkerServer":"instance-1"}', 'Runtime.releaseObjectGroup:group-1']);
+test('queryObjects is one checkpoint per process generation and later phases read its published handle', async () => {
+  const calls = [];
+  const client = {
+    async send(method, params = {}) {
+      calls.push(`${method}${params.expression ? `:${params.expression.includes(PUBLISHED) ? 'published' : 'other'}` : ''}`);
+      if (method === 'Runtime.evaluate') return { result: { objectId: 'published-1' } };
+      if (method === 'Runtime.callFunctionOn') return { result: { value: true } };
+      return {};
+    },
+  };
+  let queries = 0;
+  const registry = new DiscoveryRegistry({ query: async () => { queries += 1; return { group: `g${queries}`, instanceId: 'instance-1', count: 1 }; } });
+  const identity = { pid: 41, startToken: 'token-a', moduleUrl: 'module', exportName: 'HostServer' };
+  const first = await registry.handle(client, identity);
+  const second = await registry.handle(client, identity);
+  assert.equal(first.source, 'queryObjects checkpoint');
+  assert.equal(second.source, 'published handle');
+  assert.equal(queries, 1, 'one generation costs exactly one heap-walking query');
+  assert.equal(registry.proved('HostServer'), true);
+  assert.equal(registry.proved('WorkerServer'), false);
+
+  // A new process generation is a new checkpoint, never an inherited one.
+  await registry.handle(client, { ...identity, pid: 41, startToken: 'token-b' });
+  assert.equal(queries, 2);
+  assert.doesNotMatch(JSON.stringify(registry.checkpoints()), /41|token-/);
+});
+
+test('a lost publication re-pays the checkpoint instead of reporting a handle it does not have', async () => {
+  let published = false;
+  const client = {
+    async send(method) {
+      if (method === 'Runtime.evaluate') return { result: published ? { objectId: 'published-1' } : {} };
+      if (method === 'Runtime.callFunctionOn') { published = true; return { result: { value: true } }; }
+      return {};
+    },
+  };
+  let queries = 0;
+  const registry = new DiscoveryRegistry({ query: async () => { queries += 1; return { group: 'g', instanceId: 'i', count: 1 }; } });
+  const identity = { pid: 7, startToken: 't', moduleUrl: 'module', exportName: 'WorkerServer' };
+  await registry.handle(client, identity);
+  published = false;
+  const again = await registry.handle(client, identity);
+  assert.equal(again.source, 'queryObjects checkpoint');
+  assert.equal(queries, 2);
 });
 
 class FakeSocket extends EventEmitter {
@@ -444,18 +490,22 @@ function fixtureViews(projects, sessionsPerProject, beam, chat) {
   return { sessions, workspace };
 }
 
-test('quick retirement traversal selects all five retained views once in stable kind order', async () => {
-  const { sessions, workspace } = fixtureViews(1, 3, 1, 1); const selected = [];
-  const result = await traverseRetainedViews({}, sessions, workspace, 5, { select: async (_check, session) => selected.push(session.path) });
-  assert.deepEqual(result, { visited: 5, unique: 5, project: 3, beam: 1, chat: 1 });
+test('quick retirement traversal selects every retained view once in stable kind order', async () => {
+  const quick = modeConfig('quick'); const values = expected(quick);
+  const { sessions, workspace } = fixtureViews(quick.projects, quick.sessionsPerProject, quick.workspaceSessionsPerKind, quick.workspaceSessionsPerKind);
+  const selected = [];
+  const result = await traverseRetainedViews({}, sessions, workspace, values.retainedViews, { select: async (_check, session) => selected.push(session.path) });
+  assert.deepEqual(result, { visited: values.retainedViews, unique: values.retainedViews, project: values.projectSessions, beam: 1, chat: 1 });
   assert.deepEqual(selected, [...sessions, ...workspace].map(session => session.path));
 });
 
-test('full retirement traversal selects all 54 retained views once in stable kind order', async () => {
-  const { sessions, workspace } = fixtureViews(5, 10, 2, 2); const selected = [];
-  const result = await traverseRetainedViews({}, sessions, workspace, 54, { select: async (_check, session) => selected.push(session.path) });
-  assert.deepEqual(result, { visited: 54, unique: 54, project: 50, beam: 2, chat: 2 });
-  assert.equal(new Set(selected).size, 54);
+test('full retirement traversal selects every retained view once in stable kind order', async () => {
+  const full = modeConfig('full'); const values = expected(full);
+  const { sessions, workspace } = fixtureViews(full.projects, full.sessionsPerProject, full.workspaceSessionsPerKind, full.workspaceSessionsPerKind);
+  const selected = [];
+  const result = await traverseRetainedViews({}, sessions, workspace, values.retainedViews, { select: async (_check, session) => selected.push(session.path) });
+  assert.deepEqual(result, { visited: values.retainedViews, unique: values.retainedViews, project: values.projectSessions, beam: 2, chat: 2 });
+  assert.equal(new Set(selected).size, values.retainedViews);
   assert.deepEqual(selected.slice(-4), workspace.map(session => session.path));
 });
 
@@ -645,26 +695,6 @@ test('guard proof fails with sanitized reasons, readable/unreadable counts and t
   );
 });
 
-test('post-close sampling touches no page, CDP or renderer counter, and says so', async () => {
-  const forbidden = new Proxy({}, { get(_target, property) { throw new Error(`post-close sampling touched check.${String(property)}`); } });
-  let pidCalls = 0; let counterCalls = 0;
-  const injected = { pid: async () => { pidCalls += 1; return 4242; }, counters: async () => { counterCalls += 1; return { storeReachable: true }; } };
-  const closed = await rendererSample(forbidden, { pageClosed: true }, injected);
-  assert.deepEqual(closed, { pid: null, renderer: null, status: 'unavailable: app page closed before this phase' });
-  assert.deepEqual([pidCalls, counterCalls], [0, 0]);
-
-  const live = await rendererSample({ page: { url: () => 'http://fixture/app' } }, {}, injected);
-  assert.deepEqual(live, { pid: 4242, renderer: { storeReachable: true }, status: 'available' });
-  const blank = await rendererSample({ page: { url: () => 'about:blank' } }, {}, injected);
-  assert.deepEqual(blank, { pid: 4242, renderer: null, status: 'unavailable: blank page' });
-  assert.deepEqual([pidCalls, counterCalls], [2, 1]);
-
-  const metrics = closedPageMetrics();
-  assert.deepEqual([metrics.domNodes, metrics.longTasks, metrics.renderCounts], [null, null, null]);
-  assert.match(metrics.note, /closed before teardown/);
-  assert.doesNotThrow(() => assertRedacted(JSON.stringify({ ...closed, metrics })));
-});
-
 test('retirement guard projection is count-only and distinguishes every blocker', () => {
   const snapshot = retirementGuardSnapshot(
     { connections: 2, attachmentRefs: 3, attachedPaths: 2, runningSessions: 1, liveRuns: 1, runningTasks: 1, attentionDialogs: 1, cwd: '/secret/project' },
@@ -675,4 +705,319 @@ test('retirement guard projection is count-only and distinguishes every blocker'
   assert.doesNotMatch(JSON.stringify(snapshot), /secret|project|session/);
   assert.throws(() => assertNoLiveWork(snapshot), /not settled/);
   assert.doesNotThrow(() => assertNoLiveWork(retirementGuardSnapshot()));
+});
+
+// --- phase capture order, identity and coverage ------------------------------
+
+function fakeInspectorClient(counters = { connections: 0 }) {
+  return {
+    async send(method, params = {}) {
+      if (method === 'Runtime.callFunctionOn') {
+        const worker = String(params.functionDeclaration).includes("kind:'worker'");
+        return { result: { value: worker ? { kind: 'worker', sessions: 1, tasks: 0, runningTasks: 0, pendingQuestions: 0, pendingApprovals: 0, runningTools: 0 } : { kind: 'host', ...counters } } };
+      }
+      if (method === 'Runtime.evaluate') return { result: { objectId: 'published-1' } };
+      return {};
+    },
+    on: () => () => {},
+    async close() {},
+  };
+}
+
+function soakRunFixture({ order = [], census, touched = [], workerCounterFails = false } = {}) {
+  const config = modeConfig('quick');
+  const check = {
+    root: '/tmp/ignored',
+    fixture: { hostRecord: { pid: 1234 }, inspectDir: '/tmp/ignored' },
+    async rpc(method) {
+      order.push(`rpc:${method}`);
+      return { snapshot: { processes: [], totals: { coverage: 'complete', knownPhysicalBytes: 0, physical: { value: 0 } }, byRole: [], health: { collectors: [], crossCheck: { status: 'ok' } } } };
+    },
+    page: new Proxy({ url: () => 'http://fixture/app' }, { get(target, property) { touched.push(`page.${String(property)}`); return target[property]; } }),
+    cdp: new Proxy({}, { get(_t, property) { touched.push(`cdp.${String(property)}`); throw new Error(`sampling touched cdp.${String(property)}`); } }),
+    browserCdp: new Proxy({}, { get(_t, property) { touched.push(`browserCdp.${String(property)}`); throw new Error(`sampling touched browserCdp.${String(property)}`); } }),
+  };
+  const report = { mode: 'quick', startedAtMs: Date.now(), phases: [], rankings: {}, slopes: {}, scenarios: {} };
+  const run = new SoakRun(check, { config, expected: expected(config), report, modules: { host: 'h', worker: 'w', tail: 't' }, mode: 'quick', checkout: '/tmp/ignored' });
+  run.census = { take: async (...args) => { order.push('census'); return census(...args); } };
+  run.inspectorSet = async () => {
+    order.push('inspectorSet');
+    const workers = workerCounterFails
+      ? [{ record: { pid: 2 }, client: { send: async () => { throw new Error('worker vanished'); }, on: () => () => {}, close: async () => {} }, handle: { objectId: 'w', group: 'g' } }]
+      : [];
+    return { records: [], host: { record: { pid: 1234 }, client: fakeInspectorClient(), handle: { objectId: 'h', group: 'g' } }, workers, unreadableWorkers: [] };
+  };
+  run.closeInspectorSet = async () => { order.push('closeInspectorSet'); };
+  run.rendererPid = async () => { order.push('rendererPid'); return 99; };
+  run.rendererCounters = async () => { order.push('rendererCounters'); return { storeReachable: true, ownerBytes: [] }; };
+  return { run, report, order, touched };
+}
+
+const completeCensus = rows => ({
+  rows, unreadable: [], exited: [], replaced: [], missingRequired: [],
+  coverage: { scope: 'test', expected: rows.length, measured: rows.length, complete: true, unreadableProcesses: 0, exitedProcesses: 0, replacedProcesses: 0,
+    includedRoles: ['host'], excludedRoles: ['browser'], note: 'test' },
+});
+
+test('a phase takes its process rows before any inspector, query or heap work', async () => {
+  const order = [];
+  const { run } = soakRunFixture({ order, census: async () => completeCensus([{ pid: 1234, startToken: 't', pssBytes: 10, privateResidentBytes: 5 }]) });
+  const phase = await run.samplePhase('ordered');
+  assert.deepEqual(order.slice(0, 3), ['rendererPid', 'census', 'rendererCounters'],
+    `process rows must precede inspector work, saw ${order.join(' → ')}`);
+  assert.ok(order.indexOf('census') < order.indexOf('inspectorSet'), 'the natural sample precedes any inspector connection');
+  assert.equal(phase.natural.label, 'before any inspector, query or heap work');
+  assert.equal(phase.tailBuffers.phase, 'post-gc');
+  assert.match(phase.tailBuffers.measuredBy, /after the natural sample/);
+  assert.equal(phase.totalPssBytes, 10);
+});
+
+test('a closed page is measured without touching the page, its CDP session or renderer counters', async () => {
+  const order = [];
+  const touched = [];
+  const { run } = soakRunFixture({ order, touched, census: async () => completeCensus([{ pid: 1234, startToken: 't', pssBytes: 10, privateResidentBytes: 5 }]) });
+  const phase = await run.samplePhase('retired', { includeWorkers: false, pageClosed: true });
+  assert.equal(phase.renderer, null);
+  assert.equal(phase.rendererStatus, 'unavailable: app page closed before this phase');
+  assert.ok(!order.includes('rendererPid') && !order.includes('rendererCounters'), 'a closed page is never asked for counters');
+  assert.deepEqual(touched, [], `a closed page must not be touched at all, saw ${touched.join(', ')}`);
+  const metrics = closedPageMetrics();
+  assert.deepEqual([metrics.domNodes, metrics.longTasks, metrics.renderCounts], [null, null, null]);
+  assert.match(metrics.note, /closed before teardown/);
+});
+
+test('an unreadable worker counter is recorded, never counted as zero', async () => {
+  const { run } = soakRunFixture({ census: async () => completeCensus([{ pid: 1234, startToken: 't', pssBytes: 10, privateResidentBytes: 5 }]), workerCounterFails: true });
+  const phase = await run.samplePhase('unreadable-worker');
+  assert.equal(phase.unreadableWorkers, 1);
+  assert.equal(phase.workers.length, 0, 'a worker that could not be read contributes no row at all');
+  assert.doesNotThrow(() => assertRedacted(JSON.stringify(phase.unreadableWorkerReasons)));
+});
+
+test('an expected process that cannot be read makes totals null, coverage false and safety inconclusive', async () => {
+  const census = new ProcessCensus({
+    hostPid: 1,
+    descendants: async () => [1, 2],
+    sample: async pid => {
+      if (pid === 1) return { pid: 1, startToken: 'a', pssBytes: 100, privateResidentBytes: 90 };
+      throw new Error('EACCES: permission denied, open /proc/2/smaps_rollup');
+    },
+  });
+  const taken = await census.take({ rendererPid: null, requiredPids: [1] });
+  assert.equal(taken.coverage.complete, false);
+  assert.equal(taken.coverage.unreadableProcesses, 1);
+  const totals = censusTotals(taken);
+  assert.deepEqual([totals.totalPssBytes, totals.totalPrivateResidentBytes], [null, null]);
+  assert.deepEqual(totals.coverage.includedRoles.length > 0 && totals.coverage.excludedRoles.length > 0, true);
+  await assert.rejects(verdictFor(taken), /coverage is inconclusive/);
+});
+
+test('a process that exited is not an unreadable row, and a reused pid is re-identified', async () => {
+  const seen = [];
+  const census = new ProcessCensus({
+    hostPid: 1,
+    descendants: async () => [1, 2],
+    sample: async (pid, expectedToken) => {
+      seen.push([pid, expectedToken ?? null]);
+      if (pid === 2 && seen.length === 2) return { pid: 2, startToken: 'first', pssBytes: 1, privateResidentBytes: 1 };
+      if (pid === 2 && expectedToken === 'first') throw new Error('Process changed identity before resource sampling.');
+      if (pid === 2) return { pid: 2, startToken: 'second', pssBytes: 2, privateResidentBytes: 2 };
+      return { pid: 1, startToken: 'a', pssBytes: 10, privateResidentBytes: 9 };
+    },
+  });
+  await census.take({ requiredPids: [1] });
+  const again = await census.take({ requiredPids: [1] });
+  assert.deepEqual(again.replaced, [2]);
+  assert.equal(again.coverage.complete, true);
+  assert.equal(censusTotals(again).totalPssBytes, 12);
+
+  const gone = new ProcessCensus({ hostPid: 1, descendants: async () => [1, 3],
+    sample: async pid => { if (pid === 3) throw new Error('ENOENT: no such file or directory'); return { pid: 1, startToken: 'a', pssBytes: 7, privateResidentBytes: 7 }; } });
+  const result = await gone.take({ requiredPids: [1] });
+  assert.deepEqual([result.exited, result.unreadable], [[3], []]);
+  assert.equal(result.coverage.complete, true, 'a process that exited is not a hole in coverage');
+});
+
+// --- scenario 8 and 9 races ---------------------------------------------------
+
+test('a stalled client is resumed and closed even when its body throws', async () => {
+  for (const failing of [false, true]) {
+    let resumed = 0; let closed = 0;
+    const socket = { _socket: { resume: () => { resumed += 1; } } };
+    const body = async () => { if (failing) throw new Error('slow socket crossed safety ceiling'); return 5; };
+    const call = withStalledClient(socket, body, { close: async (_socket, options) => { closed += 1; assert.deepEqual(options, { force: true, resume: true }); } });
+    if (failing) await assert.rejects(call, /safety ceiling/);
+    else assert.equal(await call, 5);
+    assert.deepEqual([resumed, closed], [1, 1]);
+  }
+});
+
+test('dormant views are every retained view except the one on screen', () => {
+  assert.deepEqual(dormantViews(['a', 'b', 'c'], 'b'), ['a', 'c']);
+  assert.deepEqual(dormantViews(['a'], 'a'), []);
+  assert.deepEqual(dormantViews(['a', 'b'], null), ['a', 'b']);
+});
+
+test('reattached delivery reconciles in either arrival order and never on a stale snapshot', async () => {
+  const clock = fakeClock();
+  const sequences = {
+    'terminal first': [{ entries: 4, streaming: false }, { entries: 4, streaming: true }, { entries: 6, streaming: true }, { entries: 6, streaming: false }],
+    'entries first': [{ entries: 6, streaming: true }, { entries: 6, streaming: true }, { entries: 6, streaming: false }],
+    'duplicates': [{ entries: 4, streaming: false }, { entries: 6, streaming: false }],
+  };
+  for (const [label, frames] of Object.entries(sequences)) {
+    let index = 0;
+    const result = await reconcileDelivery(async () => frames[Math.min(index++, frames.length - 1)], { baselineEntries: 4, deadlineMs: 5_000, pollMs: 10, ...fakeClock() });
+    assert.deepEqual([result.settled, result.entries, result.grewBy], [true, 6, 2], `${label} did not reconcile`);
+  }
+  await assert.rejects(reconcileDelivery(async () => ({ entries: 4, streaming: true }), { baselineEntries: 4, deadlineMs: 500, pollMs: 100, ...clock }),
+    /was not reconciled: baselineEntries=4 lastEntries=4 lastStreaming=true sawGrowth=false sawTerminal=false/);
+});
+
+// --- parser validation --------------------------------------------------------
+
+test('the parser costs its typed arrays before allocating them and refuses a graph it cannot hold', () => {
+  const small = graphBudget(1_000_000, 4_000_000);
+  assert.deepEqual([small.bytes, small.fits], [1_000_000 * 24 + 4_000_000 * 4, true]);
+  const huge = graphBudget(40_000_000, 160_000_000);
+  assert.equal(huge.fits, false);
+  assert.equal(huge.budget, 512 * 1024 * 1024);
+});
+
+test('the parser validates every field, count and edge target it depends on', () => {
+  const meta = { node_fields: ['type', 'name', 'id', 'self_size', 'edge_count'], node_types: [['object']], edge_fields: ['type', 'name_or_index', 'to_node'] };
+  assert.deepEqual(validateHeader({ meta, node_count: 2, edge_count: 1 }).index.to_node, 2);
+  assert.throws(() => validateHeader({}), /no meta/);
+  assert.throws(() => validateHeader({ meta: { ...meta, node_fields: ['type'] }, node_count: 1, edge_count: 0 }), /no name node field/);
+  assert.throws(() => validateHeader({ meta: { ...meta, edge_fields: ['type'] }, node_count: 1, edge_count: 0 }), /no to_node edge field/);
+  assert.throws(() => validateHeader({ meta, node_count: -1, edge_count: 0 }), /unusable node_count/);
+  assert.throws(() => validateHeader({ meta, node_count: 1 }), /unusable edge_count/);
+});
+
+test('a malformed or truncated snapshot is unavailable, never a wrong number', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'resource-heap-bad-'));
+  const parser = new URL('../resource/heap-parser.mjs', import.meta.url).pathname;
+  const meta = { node_fields: ['type', 'name', 'id', 'self_size', 'edge_count'], node_types: [['synthetic', 'object']], edge_fields: ['type', 'name_or_index', 'to_node'] };
+  const run = async (name, body) => {
+    const file = join(root, name);
+    await writeFile(file, body);
+    const { stdout } = await execFileAsync(process.execPath, ['--max-old-space-size=64', parser, file, JSON.stringify({ target: 7 })]);
+    return JSON.parse(stdout);
+  };
+  try {
+    const truncated = await run('truncated.json', '{"snapshot":{"meta":' + JSON.stringify(meta) + ',"node_count":2,"edge_count":1},"nodes":[0,0,1,0,1,1,1,7,10');
+    assert.equal(truncated.available, false);
+    assert.match(truncated.reason, /ended inside a numeric array/);
+
+    const misaligned = await run('misaligned.json', '{"snapshot":{"meta":' + JSON.stringify(meta) + ',"node_count":2,"edge_count":1},"nodes":[0,0,1,0,1,1,1,7,10,0],"edges":[2,3,3],"strings":["a"]}');
+    assert.equal(misaligned.available, false);
+    assert.match(misaligned.reason, /points outside the nodes array/);
+
+    const miscounted = await run('miscounted.json', '{"snapshot":{"meta":' + JSON.stringify(meta) + ',"node_count":2,"edge_count":5},"nodes":[0,0,1,0,1,1,1,7,10,0],"edges":[2,3,5],"strings":["a"]}');
+    assert.equal(miscounted.available, false);
+    assert.match(miscounted.reason, /edge counts sum to/);
+
+    const headerless = await run('headerless.json', '{"nodes":[0,0,1,0,0],"edges":[],"strings":[]}');
+    assert.equal(headerless.available, false);
+    assert.match(headerless.reason, /header is missing/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+// --- sanitization and refusals ------------------------------------------------
+
+test('a bare transcript basename is sanitized at ingestion and refused in a report', () => {
+  const settleTimeout = 'Timed out waiting for session session-IMRrrr to settle.';
+  assert.equal(sanitizeOwner(settleTimeout), 'Timed out waiting for session <session> to settle.');
+  assert.equal(sanitizeError(new Error(settleTimeout)), 'Timed out waiting for session <session> to settle.');
+  assert.throws(() => assertRedacted(settleTimeout), /session-IMRrrr/);
+  assert.equal(sanitizeOwner('/home/person/sessions/session-IMRrrr.jsonl'), '<path>');
+  assert.equal(sanitizeOwner('renderer/state.open/session-abc123/entries'), 'renderer/state.open/<session>/entries');
+  assert.doesNotThrow(() => assertRedacted(sanitizeOwner(settleTimeout)));
+});
+
+test('a partial report that redaction refuses is reported, never swallowed', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'resource-partial-'));
+  try {
+    const written = [];
+    const refusing = async (path, value) => {
+      const text = JSON.stringify(value);
+      assertRedacted(text);
+      written.push(path);
+      return path;
+    };
+    const safe = await writePartialReport(root, { phases: [], scenarios: {} }, new Error('Safety refusal: a sampled process PSS crossed 1.'), { survivors: [] }, { write: refusing });
+    assert.equal(safe.written, true);
+
+    const unsafe = await writePartialReport(root, { phases: [], scenarios: { '1-baseline': 'complete' }, leak: '/home/person/project/file.ts' },
+      new Error('Timed out waiting for session session-IMRrrr to settle.'), { survivors: [] }, { write: refusing });
+    assert.equal(unsafe.written, false);
+    assert.equal(unsafe.refused, true);
+    assert.match(unsafe.reason, /Unsafe resource report content/);
+    assert.match(written.at(-1), /report-partial-refused\.json$/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+// --- comparison policy, provider accounting, scenario contract ----------------
+
+test('repeatability is gated per category: structural owners strictly, sampled evidence loosely', () => {
+  const scenarios = Object.fromEntries(SCENARIO_IDS.map(id => [id, 'complete']));
+  const owners = (names, base = 5) => names.map((owner, index) => ({ owner, bytes: (base - index) * 10 }));
+  const structural = ['sessions', 'tasks', 'logs', 'socket', 'pool'];
+  const shuffledTop = ['tasks', 'sessions', 'logs', 'socket', 'pool'];
+  const slopes = { host: { value: 2 } };
+  const a = { scenarios, slopes, rankings: { host: owners(structural), 'host-allocation': owners(structural) } };
+  const b = { scenarios, slopes: { host: { value: 3 } }, rankings: { host: owners(shuffledTop), 'host-allocation': owners(shuffledTop) } };
+  const result = compareRuns(a, b);
+  assert.equal(result.categories.host.policy, 'strict');
+  assert.equal(result.categories.host.pass, false, 'a structural category must fail when its top owner moves');
+  assert.equal(result.categories['host-allocation'].policy, 'evidence');
+  assert.equal(result.categories['host-allocation'].pass, true, 'one noisy sampled symbol cannot fail the run on its own');
+  assert.equal(result.pass, false);
+  // The evidence policy still gates: unrelated owners fail it too.
+  const unrelated = { scenarios, slopes, rankings: { 'host-allocation': owners(['x', 'y', 'z', 'w', 'v']) } };
+  assert.equal(compareRuns(a, unrelated).categories['host-allocation'].pass, false);
+  assert.deepEqual([COMPARISON_POLICY.strict.requireSameTopOwner, COMPARISON_POLICY.evidence.requireSameTopOwner], [true, false]);
+});
+
+test('provider accounting asserts the exact routes this workload drives', () => {
+  const config = modeConfig('quick');
+  const values = expected(config);
+  const routes = {};
+  for (let i = 1; i <= values.seedRequests; i++) routes[`seed:S${i}:1`] = 1;
+  Object.assign(routes, {
+    'resource:large-stream': 2, 'resource:tool-large': 2, 'resource:images': 1,
+    'resource:reattached': 1, First: 15, 'Tool:': 15,
+  });
+  for (let i = 1; i <= config.children; i++) { routes[`resource:start-child:${i}`] = 2; routes[`resource:child:${i}`] = 1; }
+  for (let i = 1; i <= config.foregroundCalls; i++) routes[`resource:bash:fg:${i}`] = 2;
+  for (let i = 1; i <= config.backgroundCalls; i++) routes[`resource:bash:bg:${i}`] = 2;
+  const accounting = providerAccounting({ requests: 999, routes }, config, values);
+  assert.deepEqual(accounting.mismatches, []);
+  assert.equal(accounting.buckets.engineInternal, 30, 'engine-driven requests are counted apart from the harness routes');
+  assert.deepEqual(accounting.childRuns, { observed: config.children, started: config.children });
+
+  const short = providerAccounting({ requests: 1, routes: { ...routes, 'resource:bash:fg:1': 1 } }, config, values);
+  assert.deepEqual(short.mismatches, [`bash: expected ${values.bashCalls * 2}, saw ${values.bashCalls * 2 - 1}`]);
+});
+
+test('every scenario declares the ids it completes, and nothing is marked complete without a phase', () => {
+  const ids = BROWSER_SCENARIOS.flatMap(scenario => scenario.ids ?? [scenario.id]);
+  assert.deepEqual(ids, ['1-baseline', '2-distinct-sessions', '6-multiple-projects-and-workspaces', '3-backward-pagination',
+    '4-large-content-and-images', '5-children-and-bash', '8-slow-consumer', '9-detach-and-retirement']);
+  assert.equal(SCENARIO_IDS.length, 9, 'nine scenarios, including the desktop lane');
+  for (const scenario of BROWSER_SCENARIOS) assert.equal(typeof scenario.run, 'function', `${scenario.id} has no run`);
+});
+
+test('a small structural category is gated by what it has, not by an unreachable five', () => {
+  const scenarios = Object.fromEntries(SCENARIO_IDS.map(id => [id, 'complete']));
+  const slopes = { host: { value: 2 } };
+  const three = names => names.map((owner, index) => ({ owner, bytes: (3 - index) * 10 }));
+  const a = { scenarios, slopes, rankings: { renderer: three(['baseline/stateOpen', 'paged/stateOpen', 'stream/stateOpen']) } };
+  const same = { scenarios, slopes: { host: { value: 3 } }, rankings: { renderer: three(['baseline/stateOpen', 'paged/stateOpen', 'stream/stateOpen']) } };
+  const moved = { scenarios, slopes: { host: { value: 3 } }, rankings: { renderer: three(['paged/stateOpen', 'baseline/stateOpen', 'stream/stateOpen']) } };
+  const stable = compareRuns(a, same).categories.renderer;
+  assert.deepEqual([stable.pass, stable.requiredOverlap, stable.owners], [true, 3, { a: 3, b: 3 }]);
+  assert.equal(compareRuns(a, moved).categories.renderer.pass, false, 'a moved top owner still fails a structural category');
+  assert.equal(compareRuns(a, { scenarios, slopes, rankings: { renderer: [{ owner: 'only', bytes: 1 }] } }).categories.renderer.pass, false,
+    'a category with a single owner cannot be called repeatable');
 });

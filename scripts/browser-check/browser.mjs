@@ -20,6 +20,12 @@ export async function resolvePlaywright(explicit) {
   }
   throw new Error('Playwright is unavailable; pass --playwright /path/to/playwright/index.mjs or populate the npm cache with npx playwright --version.');
 }
+/** What a case reports for a page that was deliberately closed before teardown. */
+export function closedPageMetrics() {
+  return { domNodes: null, longTasks: null, renderCounts: null,
+    note: 'page closed before teardown; renderer metrics are unavailable by design' };
+}
+
 export function shotName(name, state, matrix) {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(name)) throw new Error('Screenshot names must contain only letters, numbers, hyphens and underscores.');
   return `${name}${matrix ? `-${state.width}-${state.theme}${state.touch ? '-touch' : ''}` : ''}.png`;
@@ -82,7 +88,13 @@ export async function startBrowser({ root, env, life, target, timeout, playwrigh
     async shot(name) { const filename = shotName(name, state, matrix); const path = join(root, filename); await page.screenshot({ path, timeout }); shots.push({ path, ...state }); return path; },
     async snapshot() { const text = await page.locator('body').ariaSnapshot({ timeout }); writeFileSync(join(root, `snapshot-${state.width}-${state.theme}.yml`), text); return text; },
     async waitFor(value) { const locator = typeof value === 'string' ? page.getByText(value, { exact: false }).first() : page.locator(value.selector).first(); try { await locator.waitFor({ state: 'visible', timeout }); } catch { throw new Error(`Timed out after ${timeout}ms waiting for ${JSON.stringify(value)} at ${page.url()}`); } },
-    async metrics() { return page.evaluate(() => ({ domNodes: document.querySelectorAll('*').length, longTasks: window.__browserCheckLongTasks, renderCounts: window.__renderCounts ?? null })); },
+    // A case may close the page on purpose — that is how a run proves the app's
+    // own socket and attachments are released. Asking a closed page for metrics
+    // is not an error and not a zero: it is unavailable, and says so.
+    async metrics() {
+      if (page.isClosed()) return closedPageMetrics();
+      return page.evaluate(() => ({ domNodes: document.querySelectorAll('*').length, longTasks: window.__browserCheckLongTasks, renderCounts: window.__renderCounts ?? null }));
+    },
     async contactSheet() {
       const sheet = await context.newPage();
       try {

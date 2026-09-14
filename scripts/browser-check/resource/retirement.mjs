@@ -1,0 +1,132 @@
+/**
+ * Scenario 9's vocabulary: what "dormant" means, what a detached view must
+ * still receive, and what has to be true before a worker may retire.
+ */
+import assert from 'node:assert/strict';
+import { sanitizeError, sanitizeOwner } from './report.mjs';
+
+const sleep = ms => new Promise(done => setTimeout(done, ms));
+
+export function retirementGuardSnapshot(host = {}, workers = []) {
+  const sum = key => workers.reduce((total, worker) => total + (Number(worker?.[key]) || 0), 0);
+  return {
+    productConnections: Number(host.connections) || 0,
+    attachmentRefs: Number(host.attachmentRefs) || 0,
+    attachedPaths: Number(host.attachedPaths) || 0,
+    runningSessions: Number(host.runningSessions) || 0,
+    liveRuns: Number(host.liveRuns) || 0,
+    runningTasks: (Number(host.runningTasks) || 0) + sum('runningTasks'),
+    attentionDialogs: Number(host.attentionDialogs) || 0,
+    pendingQuestions: sum('pendingQuestions'),
+    pendingApprovals: sum('pendingApprovals'),
+    runningTools: sum('runningTools'),
+  };
+}
+
+export function liveWorkOf(snapshot = {}) {
+  const { productConnections: _connections, attachmentRefs: _refs, attachedPaths: _paths, ...work } = snapshot;
+  return work;
+}
+
+export function assertNoLiveWork(snapshot) {
+  const work = liveWorkOf(snapshot);
+  assert.deepEqual(work, {
+    runningSessions: 0, liveRuns: 0, runningTasks: 0, attentionDialogs: 0,
+    pendingQuestions: 0, pendingApprovals: 0, runningTools: 0,
+  }, `retirement prerequisites are not settled: ${JSON.stringify(work)}`);
+}
+
+/**
+ * Prove the retirement prerequisites, tolerating only the observation race: a
+ * worker may exit between its identity-checked inspector connect and the
+ * counter read, and a vanished worker is neither live work nor a zero. The
+ * whole set is re-sampled within one explicit deadline until every currently
+ * connected worker answered and every work count is zero.
+ */
+export async function proveNoLiveWork(sample, { deadlineMs = 15_000, now = () => Date.now(), sleepFor = sleep, pollMs = 250 } = {}) {
+  const deadline = now() + deadlineMs;
+  let attempts = 0;
+  let last = { guards: retirementGuardSnapshot(), readable: 0, unreadable: ['no sample taken'] };
+  while (true) {
+    attempts += 1;
+    last = await sample();
+    const work = liveWorkOf(last.guards);
+    if (last.unreadable.length === 0 && Object.values(work).every(value => value === 0)) {
+      assertNoLiveWork(last.guards);
+      return { ...last, attempts };
+    }
+    if (now() >= deadline) break;
+    await sleepFor(pollMs);
+  }
+  throw new Error('Retirement prerequisites were not provable before the guard deadline; '
+    + `attempts=${attempts} readableWorkers=${last.readable} unreadableWorkers=${last.unreadable.length} `
+    + `reasons=${JSON.stringify(last.unreadable.map(reason => sanitizeOwner(reason)))} guards=${JSON.stringify(last.guards)}`);
+}
+
+export async function traverseRetainedViews(check, sessions, workspaceSessions, expectedCount, { select } = {}) {
+  const retained = [...sessions, ...workspaceSessions];
+  assert.equal(retained.length, expectedCount, 'retirement traversal has the expected retained view count');
+  assert.equal(new Set(retained.map(session => session.path)).size, expectedCount, 'retirement traversal paths are unique');
+  const rank = session => session.kind === 'chat' ? 2 : session.kind === 'beam' ? 1 : 0;
+  const ordered = retained.map((session, index) => ({ session, index })).sort((a, b) => rank(a.session) - rank(b.session) || a.index - b.index);
+  for (const { session } of ordered) await select(check, session);
+  const kinds = ordered.reduce((counts, { session }) => {
+    const kind = session.kind === 'chat' ? 'chat' : session.kind === 'beam' ? 'beam' : 'project';
+    counts[kind] += 1; return counts;
+  }, { project: 0, beam: 0, chat: 0 });
+  return { visited: ordered.length, unique: expectedCount, ...kinds };
+}
+
+/** Which retained views the app should have detached: everything but the current one. */
+export function dormantViews(openPaths, currentPath) {
+  return openPaths.filter(path => path !== currentPath);
+}
+
+/**
+ * Delivery reconciliation for one session, tolerant of arrival order.
+ *
+ * A prompt produces two independent facts — the transcript grew, and the turn
+ * finished — and they can be observed in either order, more than once, or from
+ * a snapshot taken before either happened. This settles only when both hold in
+ * the same observation, and reports what it saw when they never do.
+ */
+export async function reconcileDelivery(observe, { baselineEntries, deadlineMs = 60_000, pollMs = 250, now = () => Date.now(), sleepFor = sleep } = {}) {
+  const deadline = now() + deadlineMs;
+  let last = null;
+  let sawGrowth = false;
+  let sawTerminal = false;
+  while (true) {
+    const value = await observe();
+    last = value;
+    if (value.entries > baselineEntries) sawGrowth = true;
+    if (value.streaming === false) sawTerminal = true;
+    if (value.entries > baselineEntries && value.streaming === false) {
+      return { entries: value.entries, grewBy: value.entries - baselineEntries, settled: true, attentionSeen: value.attention ?? null };
+    }
+    if (now() >= deadline) break;
+    await sleepFor(pollMs);
+  }
+  throw new Error('Delivery to a reattached view was not reconciled: '
+    + `baselineEntries=${baselineEntries} lastEntries=${last?.entries ?? 'none'} lastStreaming=${last?.streaming ?? 'unknown'} `
+    + `sawGrowth=${sawGrowth} sawTerminal=${sawTerminal}`);
+}
+
+export function workerStatusCounts(workers) {
+  return workers.reduce((counts, worker) => {
+    const status = ['starting', 'ready', 'retiring', 'retired', 'crashed'].includes(worker.status) ? worker.status : 'other';
+    counts[status] = (counts[status] ?? 0) + 1; return counts;
+  }, {});
+}
+
+export async function waitForNaturalRetirement(check, timeoutMs, guards, { pollMs = 250 } = {}) {
+  const deadline = Date.now() + timeoutMs; let statuses = {};
+  while (Date.now() < deadline) {
+    const workers = (await check.rpc('pi/worker/list', {})).workers;
+    statuses = workerStatusCounts(workers);
+    if (workers.every(worker => !['starting', 'ready'].includes(worker.status))) return workers;
+    await sleep(pollMs);
+  }
+  throw new Error(`Timed out waiting for natural worker retirement; guards=${JSON.stringify(guards)} statuses=${JSON.stringify(statuses)}`);
+}
+
+export { sanitizeError };

@@ -33,10 +33,12 @@ export async function dumpAllocators(browserCdp, { byteCeiling = 16 * 1024 * 102
   const attempts = [];
   for (const levelOfDetail of levels) {
     let stream;
+    let listener;
     try {
       let resolveComplete;
       const completed = new Promise(resolve => { resolveComplete = resolve; });
-      browserCdp.once('Tracing.tracingComplete', resolveComplete);
+      listener = value => resolveComplete(value);
+      browserCdp.once('Tracing.tracingComplete', listener);
       await browserCdp.send('Tracing.start', { categories: 'disabled-by-default-memory-infra', transferMode: 'ReturnAsStream' });
       const dump = await browserCdp.send('Tracing.requestMemoryDump', { deterministic: true, levelOfDetail });
       await browserCdp.send('Tracing.end');
@@ -67,6 +69,10 @@ export async function dumpAllocators(browserCdp, { byteCeiling = 16 * 1024 * 102
       attempts.push({ levelOfDetail, owners: 0, error: error instanceof Error ? error.message : String(error) });
       if (stream) await browserCdp.send('IO.close', { handle: stream }).catch(() => {});
       await browserCdp.send('Tracing.end').catch(() => {});
+    } finally {
+      // A listener left behind would resolve the next attempt's promise with
+      // this attempt's stream.
+      if (listener) browserCdp.off?.('Tracing.tracingComplete', listener);
     }
   }
   return { available: false, reason: `no bounded memory dump produced ${minimumOwners} allocator owners`, attempts, allocators: [], physicalImageOwnerBytes: null };

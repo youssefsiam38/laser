@@ -175,6 +175,29 @@ node scripts/browser-check/resource-soak.mjs --quick --runs 1 --artifacts /tmp/r
 node scripts/browser-check/resource-soak.mjs --full --runs 2 --electron --artifacts /tmp/resource-full
 ```
 
+Its nine scenarios live one to a file under `resource/scenarios/`, behind one
+contract: a scenario returns the phase sample that evidences it, and the runner
+marks it complete only when that sample is in the report, so "complete" always
+means measured. Every quick/full constant — workload, pacing, sampling depth,
+polling interval, desktop lane scale — is declared in `resource/config.mjs`;
+scenario code never compares the mode's name.
+
+Each phase reads `/proc` rows and renderer counters *before* any inspector,
+query or heap work, because those collect garbage in the process being
+measured; anything that can only be obtained by querying the heap is taken
+afterwards and labelled post-GC. Expected processes are `(pid, startToken)`
+identities checked every phase: a process that exited is recorded as exited, a
+process that cannot be read makes the totals null, the coverage incomplete and
+the safety verdict inconclusive. Totals cover the host tree and the measured
+renderer only, and say so. One product RPC is one WebSocket torn down per call,
+so polling loops use the mode's declared `pollIntervalMs`.
+
+Repeatability is gated by a predeclared, category-specific policy: retained-heap
+owners, the renderer state projection and native allocator names are strict
+(same top owner, rank correlation); sampled allocation profiles and desktop
+process rows are evidence, gated more loosely so one noisy sampled symbol cannot
+fail a run, but never dropped.
+
 Quick mode exercises the mechanisms but is not baseline evidence. Full mode
 requires two fresh runs. Run B is refused when run A crosses a safety ceiling or
 leaves a survivor. Raw heaps are capped at 256 MiB, read one at a time in a

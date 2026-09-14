@@ -54,9 +54,13 @@ export function resourceTarget(mode = 'quick') {
                 && typeof descriptors.dispatch?.value === 'function' && descriptors.presentation?.value;
             } catch { return false; }
           };
+          // Walk only until both objects are in hand. This runs on every React
+          // commit in a page the run is about to measure, so it must not keep
+          // traversing a fifty-session fiber tree once it has what it needs.
           const record = root => {
             const stack = [root.current]; const found = new Set();
             while (stack.length) {
+              if (found.size === 1 && state.stable) break;
               const fiber = stack.pop(); if (!fiber) continue;
               let value;
               try { value = fiber.memoizedProps?.value; } catch {}
@@ -71,7 +75,7 @@ export function resourceTarget(mode = 'quick') {
               if (fiber.child) stack.push(fiber.child);
               for (let sibling = fiber.child?.sibling; sibling; sibling = sibling.sibling) stack.push(sibling);
             }
-            state.matches = found.size;
+            if (found.size >= 1) state.matches = found.size;
             if (found.size === 1) state.store = [...found][0];
           };
           const hook = { renderers: new Map(), supportsFiber: true, isDisabled: false, checkDCE() {},
