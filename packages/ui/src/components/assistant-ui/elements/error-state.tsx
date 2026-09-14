@@ -47,7 +47,7 @@ export function ErrorState({ title, detail, retrying = false, onRetry, retryLabe
         {detail ? <p className="mt-0.5 wrap-break-word whitespace-pre-wrap text-sm text-ink-2">{detail}</p> : null}
       </div>
       {onRetry ? (
-        <Button variant="destructive-ghost" size="xs" className="shrink-0" onClick={onRetry}>
+        <Button variant="destructive-ghost" size="xs" className="shrink-0 pointer-coarse:min-h-11" onClick={onRetry}>
           <RefreshCw />
           {retryLabel}
         </Button>

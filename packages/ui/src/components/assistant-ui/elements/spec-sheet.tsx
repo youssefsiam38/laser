@@ -24,6 +24,8 @@ export interface SpecRow {
   /** Draw the value in mono (a path, an id, a count). */
   typed?: boolean | undefined;
   emphasis?: boolean | undefined;
+  /** Long explanatory prose wraps; identifiers and compact values truncate. */
+  wrap?: boolean | undefined;
 }
 
 const row = (label: string, value: string | number | undefined | null, typed = false): SpecRow[] =>
@@ -70,7 +72,12 @@ export function SpecSheet({ title, subtitle, rows, bare = false, className, ...p
           <div key={r.label} className="contents">
             <dt className="eyebrow self-baseline pt-px">{r.label}</dt>
             <dd
-              className={cn("min-w-0 truncate text-end", r.typed ? cn(mono, "tnum") : "text-sm", r.emphasis ? "font-medium text-ink" : "text-ink-2")}
+              className={cn(
+                "min-w-0 text-end",
+                r.wrap ? "wrap-break-word whitespace-normal" : "truncate",
+                r.typed ? cn(mono, "tnum") : "text-sm",
+                r.emphasis ? "font-medium text-ink" : "text-ink-2",
+              )}
               title={r.value}
             >
               {r.value}

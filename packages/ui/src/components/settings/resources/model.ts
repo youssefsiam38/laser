@@ -46,9 +46,15 @@ export function measureCell(measure: ResourceMeasure): MetricCell {
   return { status: "unavailable", reason: measure.detail ? `${reason}: ${measure.detail}` : reason };
 }
 
-export function physicalMeasure(process: ResourceProcess, platform: ResourceSnapshot["platform"]): ResourceMeasure {
-  if (platform === "linux") return process.memory.pss;
-  return process.memory.privateResident;
+export type PhysicalMeasureKind = "pss" | "privateResident";
+
+/** Match the host's physical-memory authority: prefer PSS, then private resident. */
+export function physicalMeasureKind(process: ResourceProcess): PhysicalMeasureKind {
+  return process.memory.pss.status === "available" ? "pss" : "privateResident";
+}
+
+export function physicalMeasure(process: ResourceProcess): ResourceMeasure {
+  return process.memory[physicalMeasureKind(process)];
 }
 
 function peakCell(snapshots: readonly ResourceSnapshot[], roles?: ReadonlySet<ResourceProcessRole>): MetricCell {
@@ -106,15 +112,16 @@ const SUMMARY_ROLES = [
 
 export function roleSummaries(snapshot: ResourceSnapshot, history: readonly ResourceSnapshot[]): RoleSummary[] {
   return SUMMARY_ROLES.map((group) => {
-    const rows = snapshot.processes.filter((process) => group.roles.has(process.role));
-    const measured = rows.filter((process) => physicalMeasure(process, snapshot.platform).status === "available").length;
+    const totals = snapshot.byRole.filter((entry) => group.roles.has(entry.role));
+    const measured = totals.reduce((sum, entry) => sum + entry.coverage.measured, 0);
+    const processes = totals.reduce((sum, entry) => sum + entry.coverage.processes, 0);
     return {
       id: group.id,
       label: group.label,
       current: roleCurrent(snapshot, group.roles),
       peak: peakCell(history, group.roles),
-      coverage: `${measured} of ${rows.length} processes measured`,
-      processCount: rows.length,
+      coverage: `${measured} of ${processes} processes measured`,
+      processCount: processes,
     };
   });
 }
@@ -161,24 +168,38 @@ export function processTree(snapshot: ResourceSnapshot): ProcessRoleGroup[] {
 
 function nodesFor(processes: readonly ResourceProcess[]): ProcessNode[] {
   const nodes = new Map<string, ProcessNode>(processes.map((process) => [process.key, { process, children: [] }]));
+  const cyclic = new Set<string>();
+
+  for (const node of nodes.values()) {
+    const path: string[] = [];
+    const seen = new Map<string, number>();
+    let current: ProcessNode | undefined = node;
+    while (current) {
+      const previous = seen.get(current.process.key);
+      if (previous !== undefined) {
+        path.slice(previous).forEach((key) => cyclic.add(key));
+        break;
+      }
+      seen.set(current.process.key, path.length);
+      path.push(current.process.key);
+      current = current.process.parentKey ? nodes.get(current.process.parentKey) : undefined;
+    }
+  }
+
   const roots: ProcessNode[] = [];
   for (const node of nodes.values()) {
     const parent = node.process.parentKey ? nodes.get(node.process.parentKey) : undefined;
-    if (parent && parent !== node) parent.children.push(node);
-    else roots.push(node);
+    if (cyclic.has(node.process.key) || !parent || parent === node) roots.push(node);
+    else parent.children.push(node);
   }
-  const sort = (left: ProcessNode, right: ProcessNode) => left.process.label.localeCompare(right.process.label) || left.process.key.localeCompare(right.process.key);
-  const visit = (node: ProcessNode, ancestors: Set<string>): void => {
-    if (ancestors.has(node.process.key)) {
-      node.children = [];
-      return;
-    }
-    const next = new Set(ancestors).add(node.process.key);
+  const sort = (left: ProcessNode, right: ProcessNode) =>
+    left.process.label.localeCompare(right.process.label) || left.process.key.localeCompare(right.process.key);
+  const visit = (node: ProcessNode): void => {
     node.children.sort(sort);
-    node.children.forEach((child) => visit(child, next));
+    node.children.forEach(visit);
   };
   roots.sort(sort);
-  roots.forEach((root) => visit(root, new Set()));
+  roots.forEach(visit);
   return roots;
 }
 
@@ -196,7 +217,7 @@ export interface OptionalStoreValue {
   bytes?: number | undefined;
 }
 
-/** One future-facing adapter: later typed producers replace unavailable cells here, not in rendering branches. */
+/** One adapter for retained-state counters as their owning subsystems expose them. */
 export type ResourceOptionalStores = Partial<Record<ResourceOptionalStoreKey, OptionalStoreValue>>;
 
 export interface RetainedStoreInputs {
@@ -218,7 +239,8 @@ export interface RetainedStoreRow {
 
 const unavailable = (reason: string): MetricCell => ({ status: "unavailable", reason });
 const available = (value: number, qualifier?: string): MetricCell => ({ status: "available", value, ...(qualifier ? { qualifier } : {}) });
-const optionalCell = (value: number | undefined, handoff: string): MetricCell => value === undefined ? unavailable(`Awaiting ${handoff} typed producer`) : available(value);
+const optionalCell = (value: number | undefined, unavailableReason: string): MetricCell =>
+  value === undefined ? unavailable(unavailableReason) : available(value);
 
 export function associatedIds(snapshot: ResourceSnapshot, kind: "sessionIds" | "runIds" | "taskIds"): { ids: string[]; truncated: boolean } {
   const ids = new Set<string>();
@@ -235,29 +257,77 @@ export function retainedStoreRows(input: RetainedStoreInputs): RetainedStoreRow[
   const runs = associatedIds(input.snapshot, "runIds");
   const tasks = associatedIds(input.snapshot, "taskIds");
   const optional = input.optional ?? {};
-  const association = (value: { ids: string[]; truncated: boolean }): MetricCell => available(value.ids.length, value.truncated ? "at least; association list was truncated" : undefined);
+  const association = (value: { ids: string[]; truncated: boolean }): MetricCell => available(
+    value.ids.length,
+    value.truncated ? "at least; association list was truncated" : undefined,
+  );
   const future = (id: ResourceOptionalStoreKey, label: string, owner: string, handoff: RetainedStoreRow["handoff"]): RetainedStoreRow => ({
     id,
     label,
     owner,
-    count: optionalCell(optional[id]?.count, `M18-${handoff}`),
-    bytes: optionalCell(optional[id]?.bytes, `M18-${handoff}`),
+    count: optionalCell(optional[id]?.count, `This count is not currently reported by ${owner}`),
+    bytes: optionalCell(optional[id]?.bytes, `Retained bytes are not currently reported by ${owner}`),
     handoff,
   });
   return [
-    { id: "processes", label: "Owned processes", owner: "Host inventory", count: available(input.snapshot.processes.length), bytes: unavailable("Process memory is shown above; this is not a retained store") },
-    { id: "workers", label: "Project workers", owner: "Host inventory", count: available(input.snapshot.processes.filter((process) => process.role === "project_worker").length), bytes: unavailable("Worker memory is shown above; this is not a retained store") },
-    { id: "associated-sessions", label: "Associated sessions", owner: "RP-1 snapshot", count: association(sessions), bytes: unavailable("Associations do not allocate process memory") },
-    { id: "associated-runs", label: "Associated agent runs", owner: "RP-1 snapshot", count: association(runs), bytes: unavailable("Associations do not allocate process memory") },
-    { id: "associated-tasks", label: "Associated background tasks", owner: "RP-1 snapshot", count: association(tasks), bytes: unavailable("Associations do not allocate process memory") },
-    { id: "saved-sessions", label: "Saved sessions", owner: "Host catalog", count: input.savedSessions === undefined ? unavailable("The complete session catalog has not loaded") : available(input.savedSessions), bytes: unavailable("No typed retained-byte counter is available") },
-    { id: "renderer-pending", label: "Queued messages in cached views", owner: "This viewer", count: available(input.pendingMessages), bytes: unavailable("Renderer retained bytes await M18-T5"), handoff: "T5" },
+    {
+      id: "processes",
+      label: "Owned processes",
+      owner: "Host inventory",
+      count: available(input.snapshot.processes.length),
+      bytes: unavailable("Process memory is shown above; this is not a retained store"),
+    },
+    {
+      id: "workers",
+      label: "Project workers",
+      owner: "Host inventory",
+      count: available(input.snapshot.processes.filter((process) => process.role === "project_worker").length),
+      bytes: unavailable("Worker memory is shown above; this is not a retained store"),
+    },
+    {
+      id: "associated-sessions",
+      label: "Associated sessions",
+      owner: "Host snapshot",
+      count: association(sessions),
+      bytes: unavailable("Associations do not allocate process memory"),
+    },
+    {
+      id: "associated-runs",
+      label: "Associated agent runs",
+      owner: "Host snapshot",
+      count: association(runs),
+      bytes: unavailable("Associations do not allocate process memory"),
+    },
+    {
+      id: "associated-tasks",
+      label: "Associated background tasks",
+      owner: "Host snapshot",
+      count: association(tasks),
+      bytes: unavailable("Associations do not allocate process memory"),
+    },
+    {
+      id: "saved-sessions",
+      label: "Saved sessions",
+      owner: "Host catalog",
+      count: input.savedSessions === undefined
+        ? unavailable("The complete session catalog has not loaded")
+        : available(input.savedSessions),
+      bytes: unavailable("The host catalog does not currently report retained bytes"),
+    },
+    {
+      id: "renderer-pending",
+      label: "Queued messages in cached views",
+      owner: "This viewer",
+      count: available(input.pendingMessages),
+      bytes: unavailable("This viewer does not currently report retained bytes"),
+      handoff: "T5",
+    },
     {
       id: "rendererViews",
       label: "Cached conversation views",
       owner: "This viewer",
       count: available(optional.rendererViews?.count ?? input.rendererViews),
-      bytes: optionalCell(optional.rendererViews?.bytes, "M18-T5"),
+      bytes: optionalCell(optional.rendererViews?.bytes, "Retained bytes are not currently reported by this viewer"),
       handoff: "T5",
     },
     future("workerSessions", "Worker session runtimes", "Project workers", "T4"),
@@ -288,14 +358,14 @@ export function resolveSessionAssociation(id: string, state: ResourceActionState
 
 export function resolveRunAssociation(id: string, state: ResourceActionState): { path?: string; run?: AgentRun; reason?: string } {
   const run = state.runs[id];
-  if (!run) return { reason: "This run is no longer in the current run registry" };
-  if (!reachable(run.sessionPath, state)) return { reason: "This run’s session is no longer reachable" };
+  if (!run) return { reason: "This run is not currently known to the run registry" };
+  if (!reachable(run.sessionPath, state)) return { reason: "This run’s session is not currently reachable" };
   return { path: run.sessionPath, run };
 }
 
 export function resolveTaskAssociation(id: string, state: ResourceActionState): { path?: string; task?: BackgroundTask; reason?: string } {
   const task = state.tasks[id];
-  if (!task) return { reason: "This task is no longer in the current task registry" };
-  if (!reachable(task.sessionPath, state)) return { reason: "This task’s session is no longer reachable" };
+  if (!task) return { reason: "This task is not currently known to the task registry" };
+  if (!reachable(task.sessionPath, state)) return { reason: "This task’s session is not currently reachable" };
   return { path: task.sessionPath, task };
 }

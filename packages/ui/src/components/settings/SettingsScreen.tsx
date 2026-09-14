@@ -278,12 +278,12 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
  * notifications for this browser, the disk the log store is taking on the
  * machine running the host, and the way back into first-run setup.
  *
- * The log store is the one thing here that is not per browser — it lives on
+ * The log store is the one setting here that is not per browser — it lives on
  * the computer running {PRODUCT_NAME}, which a phone is connected to rather
- * than running. It is here because it is the only project-independent,
- * laser-owned settings surface the app has: Advanced is the engine's own
- * settings, per project and per scope, and a store that belongs to the whole
- * machine has no row there. Its copy names the computer for that reason.
+ * than running. Advanced now also contains machine-wide resource diagnostics,
+ * but those report state and route lifecycle actions; they do not configure
+ * retention. The log store remains here because its setting belongs to the
+ * whole machine. Its copy names the computer for that reason.
  */
 export function DeviceTab() {
   return (

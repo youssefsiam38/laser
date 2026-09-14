@@ -3,6 +3,7 @@ import type { AgentRun, BackgroundTask, ResourceMeasure, ResourceProcess, Resour
 
 import {
   physicalMeasure,
+  physicalMeasureKind,
   processTree,
   resolveRunAssociation,
   resolveSessionAssociation,
@@ -67,8 +68,10 @@ describe("resource diagnostics projection", () => {
     expect(summary.current).toEqual({ status: "unavailable", reason: "1 of 2 processes measured", knownValue: 100 });
     expect(summary.peak).toEqual({ status: "available", value: 500 });
     expect(summary.peak).not.toMatchObject({ value: 99_999 });
-    expect(physicalMeasure(renderer, "darwin")).toEqual(available(200));
-    expect(physicalMeasure(renderer, "linux")).toEqual(unavailable());
+    expect(physicalMeasure(renderer)).toEqual(available(200));
+    expect(physicalMeasureKind(renderer)).toBe("privateResident");
+    expect(physicalMeasure(host)).toEqual(available(100));
+    expect(physicalMeasureKind(host)).toBe("pss");
   });
 
   it("keeps renderer, host and workers visibly separate, including a missing role", () => {
@@ -80,13 +83,29 @@ describe("resource diagnostics projection", () => {
         { role: "project_worker", coverage: { processes: 1, measured: 1, complete: true }, knownPhysicalBytes: 250, physical: available(250) },
       ],
     });
-    expect(roleSummaries(current, [current]).map((row) => [row.label, row.processCount, row.current])).toEqual([
-      ["Renderer", 1, { status: "available", value: 200 }],
-      ["Host", 1, { status: "available", value: 90 }],
-      ["Workers", 1, { status: "available", value: 250 }],
+    expect(roleSummaries(current, [current]).map((row) => [row.label, row.processCount, row.current, row.coverage])).toEqual([
+      ["Renderer", 1, { status: "available", value: 200 }, "1 of 1 processes measured"],
+      ["Host", 1, { status: "available", value: 90 }, "1 of 1 processes measured"],
+      ["Workers", 1, { status: "available", value: 250 }, "1 of 1 processes measured"],
     ]);
     const withoutRenderer = roleSummaries(snapshot([host, worker]), [snapshot([host, worker])])[0]!;
     expect(withoutRenderer.current).toMatchObject({ status: "unavailable", reason: "No process with this role was discovered" });
+  });
+
+  it("uses snapshot role coverage rather than recomputing it from platform or row metrics", () => {
+    const current = snapshot([renderer], {
+      platform: "linux",
+      byRole: [{
+        role: "desktop_renderer",
+        coverage: { processes: 3, measured: 2, complete: false },
+        knownPhysicalBytes: 200,
+        physical: unavailable("incomplete_coverage"),
+      }],
+    });
+    const summary = roleSummaries(current, [current])[0]!;
+    expect(summary.processCount).toBe(3);
+    expect(summary.coverage).toBe("2 of 3 processes measured");
+    expect(summary.current).toEqual({ status: "unavailable", reason: "2 of 3 processes measured", knownValue: 200 });
   });
 
   it("groups by role and opaque work owner using pid@startToken identity", () => {
@@ -100,7 +119,16 @@ describe("resource diagnostics projection", () => {
     expect(owners[0]!.roots[0]!.children[0]!.process.key).toBe("13@child");
   });
 
-  it("shows exact local facts and centralizes every unavailable producer handoff", () => {
+  it("preserves orphaned and cyclic process rows as visible roots", () => {
+    const orphan = process({ ...worker, key: "13@orphan", pid: 13, label: "orphan", parentKey: "missing@parent" });
+    const cycleA = process({ ...worker, key: "14@a", pid: 14, label: "cycle a", parentKey: "15@b" });
+    const cycleB = process({ ...worker, key: "15@b", pid: 15, label: "cycle b", parentKey: "14@a" });
+    const roots = processTree(snapshot([orphan, cycleA, cycleB]))[0]!.owners[0]!.roots;
+    expect(roots.map((node) => node.process.key)).toEqual(["14@a", "15@b", "13@orphan"]);
+    expect(roots.flatMap((node) => node.children)).toHaveLength(0);
+  });
+
+  it("shows exact local facts and centralizes every unavailable counter owner", () => {
     const inherited = process({ ...worker, key: "13@child", pid: 13, role: "unknown_descendant", associations: { ...worker.associations, truncated: true } });
     const rows = retainedStoreRows({ snapshot: snapshot([host, worker, inherited]), savedSessions: 12, rendererViews: 3, pendingMessages: 2 });
     expect(rows.find((row) => row.id === "associated-runs")?.count).toEqual({ status: "available", value: 1, qualifier: "at least; association list was truncated" });
@@ -108,7 +136,9 @@ describe("resource diagnostics projection", () => {
     for (const [id, handoff] of [["workerSessions", "T4"], ["workerReplay", "T4"], ["workerCaches", "T4"], ["rendererViews", "T5"], ["taskRegistry", "T6"], ["deliveryRegistry", "T6"], ["providerQueues", "T7"]] as const) {
       const row = rows.find((candidate) => candidate.id === id)!;
       expect(row.handoff).toBe(handoff);
-      expect(row.bytes).toMatchObject({ status: "unavailable", reason: `Awaiting M18-${handoff} typed producer` });
+      expect(row.bytes).toMatchObject({ status: "unavailable" });
+      expect(row.bytes.status === "unavailable" ? row.bytes.reason.toLowerCase() : "").toContain(row.owner.toLowerCase());
+      expect(row.bytes.status === "unavailable" ? row.bytes.reason : "").not.toMatch(/M18|typed producer/i);
     }
     const withProducer = retainedStoreRows({ snapshot: snapshot([host]), rendererViews: 1, pendingMessages: 0, optional: { workerReplay: { count: 7, bytes: 8_192 } } });
     expect(withProducer.find((row) => row.id === "workerReplay")).toMatchObject({ count: { status: "available", value: 7 }, bytes: { status: "available", value: 8_192 } });
@@ -124,8 +154,8 @@ it("re-resolves exact current session, run and task ownership and rejects stale 
   expect(resolveSessionAssociation("s1", state)).toEqual({ path: session.path });
   expect(resolveRunAssociation("r1", state)).toMatchObject({ path: session.path, run });
   expect(resolveTaskAssociation("t1", state)).toMatchObject({ path: session.path, task });
-  expect(resolveRunAssociation("gone", state).reason).toContain("no longer");
-  expect(resolveTaskAssociation("gone", state).reason).toContain("no longer");
+  expect(resolveRunAssociation("gone", state).reason).toContain("not currently known");
+  expect(resolveTaskAssociation("gone", state).reason).toContain("not currently known");
   expect(resolveSessionAssociation("s1", { ...state, sessions: [session, { ...session, path: "/q/s1.jsonl", cwd: "/q" }] }).reason).toContain("ambiguous");
-  expect(resolveRunAssociation("r1", { ...state, presence: { [session.path]: false } }).reason).toContain("no longer reachable");
+  expect(resolveRunAssociation("r1", { ...state, presence: { [session.path]: false } }).reason).toContain("not currently reachable");
 });

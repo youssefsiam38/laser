@@ -36,6 +36,9 @@ it("keeps Resources usable without a selected project", async () => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   ({ root } = await render(<Host />));
   expect(document.querySelector('[role="tabpanel"][aria-label="Resources"]')?.textContent).toContain("Resource truth is available");
+  for (const tab of document.querySelectorAll<HTMLButtonElement>('[role="tab"]')) {
+    expect(tab.className).toContain("pointer-coarse:min-h-11");
+  }
   await click("Configuration");
   expect(document.body.textContent).toContain("Configuration needs a project");
   await click("Resources");

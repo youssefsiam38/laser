@@ -6,7 +6,10 @@ import type { ResourceMeasure, ResourceProcess, ResourceRetention, ResourceSnaps
 
 const fixture = vi.hoisted(() => ({
   state: undefined as any,
-  client: { request: vi.fn() },
+  client: {
+    request: vi.fn(),
+    get connection() { return fixture.state?.connection ?? "closed"; },
+  },
   actions: { openSession: vi.fn(), tasks: { stop: vi.fn() }, toast: vi.fn() },
   close: vi.fn(),
   reveal: vi.fn(),
@@ -150,7 +153,80 @@ it("loads snapshot then history, starts one 5s visible poll, and stops it on unm
   expect(fixture.pollStop).toHaveBeenCalledOnce();
 });
 
-it("shows honest distinct summaries, producer handoffs, retention and keyboard-operable hidden detail", async () => {
+it("shows an initial disconnected state without polling or inventing a refresh error", async () => {
+  fixture.state = { ...fixture.state, connection: "closed" };
+  await mount();
+  expect(text()).toContain("Resource diagnostics need a host connection");
+  expect(text()).toContain("will refresh as soon as the connection returns");
+  expect(fixture.client.request).not.toHaveBeenCalled();
+  expect(fixture.poll).not.toHaveBeenCalled();
+});
+
+it("stops polling while disconnected and refreshes once immediately on reconnect", async () => {
+  await mount();
+  const initialSnapshots = fixture.client.request.mock.calls.filter(([method]) => method === "resource/snapshot").length;
+
+  fixture.state = { ...fixture.state, connection: "closed" };
+  await act(async () => {
+    root!.render(<TooltipProvider><ResourceDiagnostics /></TooltipProvider>);
+  });
+  expect(fixture.pollStop).toHaveBeenCalledOnce();
+  expect(text()).toContain("The host is disconnected. These values are the last sample received.");
+  await act(async () => fixture.pollRefresh?.());
+  expect(fixture.client.request.mock.calls.filter(([method]) => method === "resource/snapshot")).toHaveLength(initialSnapshots);
+
+  fixture.state = { ...fixture.state, connection: "open" };
+  await act(async () => {
+    root!.render(<TooltipProvider><ResourceDiagnostics /></TooltipProvider>);
+    await Promise.resolve();
+  });
+  expect(fixture.client.request.mock.calls.filter(([method]) => method === "resource/snapshot")).toHaveLength(initialSnapshots + 1);
+  expect(fixture.poll).toHaveBeenCalledTimes(2);
+});
+
+it("does not turn a transport disconnect during refresh into a refresh error", async () => {
+  await mount();
+  let rejectRefresh: ((reason: Error) => void) | undefined;
+  fixture.client.request.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectRefresh = reject; }));
+  await click("Refresh");
+  fixture.state = { ...fixture.state, connection: "closed" };
+  await act(async () => {
+    root!.render(<TooltipProvider><ResourceDiagnostics /></TooltipProvider>);
+    rejectRefresh?.(new Error("socket closed"));
+    await Promise.resolve();
+  });
+  expect(text()).toContain("These values are the last sample received");
+  expect(text()).not.toContain("latest refresh failed");
+  expect(text()).not.toContain("socket closed");
+});
+
+it("keeps initial and manual refreshes available while hidden but guards poll refreshes", async () => {
+  Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+  await mount();
+  const afterInitial = fixture.client.request.mock.calls.filter(([method]) => method === "resource/snapshot").length;
+  expect(afterInitial).toBe(1);
+
+  await click("Refresh");
+  const afterManual = fixture.client.request.mock.calls.filter(([method]) => method === "resource/snapshot").length;
+  expect(afterManual).toBe(2);
+  await act(async () => fixture.pollRefresh?.());
+  expect(fixture.client.request.mock.calls.filter(([method]) => method === "resource/snapshot")).toHaveLength(2);
+});
+
+it("acknowledges and disables manual controls while a refresh is in flight", async () => {
+  await mount();
+  let resolveRefresh: ((value: { snapshot: ResourceSnapshot; retention: ResourceRetention }) => void) | undefined;
+  fixture.client.request.mockImplementationOnce(() => new Promise((resolve) => { resolveRefresh = resolve; }));
+  await click("Refresh");
+  const refresh = [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Refreshing"))!;
+  const download = [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Download redacted report"))!;
+  expect(refresh.disabled).toBe(true);
+  expect(download.disabled).toBe(true);
+  await act(async () => resolveRefresh?.({ snapshot, retention }));
+  expect(refresh.disabled).toBe(false);
+});
+
+it("shows honest summaries, retained-state table semantics, human copy and keyboard-operable detail", async () => {
   await mount();
   const body = text();
   expect(body).toContain("Whole application");
@@ -158,11 +234,23 @@ it("shows honest distinct summaries, producer handoffs, retention and keyboard-o
   expect(body).toContain("Host");
   expect(body).toContain("Workers");
   expect(body).toContain("Unavailable · No process with this role was discovered");
-  expect(body).toContain("Contract handoff: M18-T4");
-  expect(body).toContain("Contract handoff: M18-T5");
-  expect(body).toContain("Contract handoff: M18-T6");
-  expect(body).toContain("Contract handoff: M18-T7");
+  expect(body).toContain("Retained bytes are not currently reported by Project workers");
+  expect(body).not.toMatch(/RP-\d|M18-T|typed producer|contract handoff/i);
+  expect(body).toContain("Process detailsWorking");
+  expect(body).toContain("No desktop measurement is available yet");
   expect(body).toContain("3,600 samples");
+  expect(container!.querySelectorAll('[data-slot="number-ticker"]')).toHaveLength(3);
+  const table = container!.querySelector<HTMLTableElement>('[data-section="retained-state"] table')!;
+  expect(table).toBeInstanceOf(HTMLTableElement);
+  expect(table.querySelector("caption")?.textContent).toBe("Retained state by store and owner");
+  expect([...table.querySelectorAll("thead th")].map((cell) => cell.textContent)).toEqual([
+    "Store",
+    "Owner",
+    "Count",
+    "Retained bytes",
+  ]);
+  expect(table.querySelector('thead th:nth-child(2)')?.className).toContain("hidden md:table-cell");
+  expect(table.querySelector('tbody th[scope="row"] [data-handoff="T4"]')).not.toBeNull();
   expect(body).toContain("64.0 MB");
   const trigger = container!.querySelector<HTMLButtonElement>('[aria-label="Show details for worker"]')!;
   expect([...container!.querySelectorAll('[data-slot="collapsible-content"]')].every((node) => node.hasAttribute("hidden"))).toBe(true);
@@ -171,6 +259,9 @@ it("shows honest distinct summaries, producer handoffs, retention and keyboard-o
   await act(async () => trigger.click());
   const content = [...container!.querySelectorAll('[data-slot="collapsible-content"]')].find((node) => !node.hasAttribute("hidden"))!;
   expect(content.textContent).toContain("11@worker");
+  const unavailableValue = [...content.querySelectorAll("dd")].find((node) => node.textContent?.includes("Not available on this platform"))!;
+  expect(unavailableValue.className).toContain("whitespace-normal");
+  expect(unavailableValue.className).not.toContain("truncate");
   expect(text()).not.toContain("Associations hosted by a process");
   expect(text()).toContain("They do not divide or allocate its memory");
 });
@@ -195,7 +286,13 @@ it("re-resolves navigation and native lifecycle ownership at click time without 
   delete fixture.state.agents.runs.r1;
   await act(async () => buttons.find((button) => button.textContent?.includes("End agent"))!.click());
   expect(fixture.end).not.toHaveBeenCalled();
-  expect(text()).toContain("This run is no longer in the current run registry");
+  expect(text()).toContain("This run is not currently known to the run registry");
+  const actionAlert = container!.querySelector('[data-slot="error-state"]')!;
+  expect(actionAlert.getAttribute("role")).toBe("alert");
+  const dismiss = [...actionAlert.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Dismiss"))!;
+  expect(dismiss.className).toContain("pointer-coarse:min-h-11");
+  await act(async () => dismiss.click());
+  expect(container!.querySelector('[data-slot="error-state"]')).toBeNull();
 
   await act(async () => buttons.find((button) => button.textContent === "Stop")!.click());
   expect(fixture.actions.tasks.stop).toHaveBeenCalledWith("/p/s1.jsonl", "t1");
@@ -203,7 +300,11 @@ it("re-resolves navigation and native lifecycle ownership at click time without 
   delete fixture.state.tasks.tasks.t1;
   await act(async () => buttons.find((button) => button.textContent === "Stop")!.click());
   expect(fixture.actions.tasks.stop).not.toHaveBeenCalled();
-  expect(text()).toContain("This task is no longer in the current task registry");
+  expect(text()).toContain("This task is not currently known to the task registry");
+
+  for (const button of container!.querySelectorAll<HTMLButtonElement>('[data-slot="resource-diagnostics"] button')) {
+    expect(button.className, button.textContent ?? button.getAttribute("aria-label") ?? "button").toContain("pointer-coarse:min-h-11");
+  }
 });
 
 it("retains the last good data on refresh failure and downloads the host export byte-for-byte", async () => {
@@ -230,9 +331,12 @@ it("surfaces host export truncation and a retryable export failure", async () =>
     : Promise.resolve({ snapshot, retention }));
   vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
   await click("Download redacted report");
-  expect(text()).toContain("older samples were omitted");
+  const truncated = [...container!.querySelectorAll('[role="status"]')].find((node) => node.textContent?.includes("Older samples were omitted"));
+  expect(truncated).toBeDefined();
+  expect(truncated?.classList.contains("sr-only")).toBe(false);
   fixture.client.request.mockRejectedValueOnce(new Error("export unavailable"));
   await click("Download redacted report");
+  expect(text()).not.toContain("Older samples were omitted");
   expect(text()).toContain("Could not download the redacted report");
   expect(text()).toContain("export unavailable");
 });
@@ -257,7 +361,9 @@ it("draws the empty and degraded states without turning unavailable data into su
   await act(async () => { await Promise.resolve(); await Promise.resolve(); });
   expect(text()).toContain("No owned processes were discovered");
   expect(text()).toContain("Needs attention");
-  expect(text()).toContain("collector timed out");
+  expect(text()).toContain("Process detailsFailed · collector timed out");
+  expect(text()).toContain("Differs from desktop measurements · working sets differed");
+  expect(text()).not.toContain("diverged");
   expect(text()).toContain("Truncated at the collection bound");
   expect(text()).toContain("Unavailable · 0 of 0 processes measured");
 });
