@@ -5,12 +5,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { RelayServer } from "../src/server.js";
-import { RelayClose, channelSubprotocol, type RelayControl } from "../src/protocol.js";
+import { RelayClose, CHANNEL_PROTOCOL_PREFIX, channelSubprotocol, type RelayControl } from "../src/protocol.js";
 
 const CHANNEL_A = "A".repeat(43);
 const CHANNEL_B = "B".repeat(43);
 /** 12-byte header + 64-byte bucket + 16-byte tag. */
 const LEGAL_FRAME = 92;
+/** The same, with the largest padded bucket: what a real transcript frame looks like. */
+const BIG_FRAME = 12 + 4096 + 16;
 /** A distinct, well-formed 43-character channel id. */
 const channelId = (n: number): string => String(n).padStart(43, "C");
 
@@ -85,6 +87,16 @@ function connect(channel: string, query = "", origin = base): Promise<Peer> {
       });
     });
   });
+}
+
+/** Poll `check` until it holds or the deadline passes; the relay has no event for either state. */
+async function until(check: () => boolean, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (check()) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }
 
 function safeJson(text: string): unknown {
@@ -164,6 +176,72 @@ describe("relay", () => {
     const c = await connect(CHANNEL_A);
     expect(await c.control()).toMatchObject({ t: "hello", peer: true });
   });
+
+  it("gives the arrival that replaces a departed peer that peer's slot, never a duplicate", async () => {
+    // Two sockets on a channel are slot 0 and slot 1. Handing the replacement
+    // for slot 0 the number the surviving peer already has makes the pair
+    // indistinguishable to anything that reads `slot`.
+    const a = await connect(CHANNEL_A);
+    const b = await connect(CHANNEL_A);
+    expect(await a.control()).toMatchObject({ t: "hello", slot: 0 });
+    expect(await b.control()).toMatchObject({ t: "hello", slot: 1 });
+    a.close();
+    await b.control((m) => m.t === "peer" && !m.present);
+    const replacement = await connect(CHANNEL_A);
+    expect(await replacement.control()).toMatchObject({ t: "hello", slot: 0, peer: true });
+  });
+
+  it("echoes the subprotocol of the channel it actually routed to", async () => {
+    // A client may offer several values. The relay routes on the first *valid*
+    // channel; telling it a malformed earlier value was selected would name a
+    // channel this socket is not on.
+    const ws = new WebSocket(`${base}/ws`, [`${CHANNEL_PROTOCOL_PREFIX}not-a-channel-id`, channelSubprotocol(CHANNEL_A)]);
+    const peer = new Peer(ws);
+    open.push(peer);
+    await new Promise<void>((resolve, reject) => {
+      ws.once("open", () => resolve());
+      ws.once("error", reject);
+    });
+    expect(ws.protocol).toBe(channelSubprotocol(CHANNEL_A));
+    expect(await peer.control()).toMatchObject({ t: "hello", channel: CHANNEL_A });
+  });
+
+  it("pauses a flooding peer instead of queueing for a reader that never reads", async () => {
+    // One socket on each slot, one of them refusing to read: without
+    // backpressure every forwarded frame stays on the relay's heap.
+    const cap = 64 * 1024;
+    const backpressured = new RelayServer({ host: "127.0.0.1", port: 0, pingIntervalMs: 60_000, maxBufferedBytes: cap });
+    const { port } = await backpressured.listen();
+    const origin = `ws://127.0.0.1:${port}`;
+    try {
+      const sender = await connect(CHANNEL_A, "", origin);
+      const reader = await connect(CHANNEL_A, "", origin);
+      await sender.control((m) => m.t === "peer");
+      // The reader stops taking bytes off its socket, as a hostile or wedged
+      // peer does. `ws` keeps parsed frames for it; nothing is read.
+      reader.ws.pause();
+
+      const frame = Buffer.alloc(BIG_FRAME, 3);
+      const frames = 2000; // ~8 MiB, far past the 64 KiB cap and any socket buffer
+      for (let i = 0; i < frames; i++) sender.ws.send(frame, { binary: true });
+
+      const paused = await until(() => backpressured.statistics().pausedSockets > 0, 10_000);
+      expect(paused, "the relay paused the flooding socket").toBe(true);
+      // Bounded by the cap plus the frames already parsed when it was hit —
+      // not by how much the flooder chose to send.
+      const peak = backpressured.statistics().bufferedBytes;
+      expect(peak, `${peak} bytes queued for ${frames * BIG_FRAME} bytes sent`).toBeLessThan(cap * 2);
+
+      // …and the forwarding resumes by itself once the reader drains.
+      reader.ws.resume();
+      const delivered = await until(() => reader.binary.length === frames, 20_000);
+      expect(delivered, `delivered ${reader.binary.length} of ${frames} frames`).toBe(true);
+      expect(backpressured.statistics().pausedSockets).toBe(0);
+      expect(backpressured.statistics().framesForwarded).toBe(frames);
+    } finally {
+      await backpressured.close();
+    }
+  }, 40_000);
 
   it("forwards the Noise handshake, which is not a padded frame size", async () => {
     // A Noise_KK message is 32 bytes of ephemeral plus a 16-byte tag. It is not
