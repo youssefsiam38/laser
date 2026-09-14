@@ -4,8 +4,9 @@
  */
 import { GOAL_TOOL_NAMES } from "@lasercode/pi-goal";
 import { describe, expect, it, vi } from "vitest";
-import { isGoalCommand, syncGoalTools } from "../src/modules/goal.js";
-import type { ModuleContext } from "../src/modules/index.js";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { goalModule, isGoalCommand, syncGoalTools } from "../src/modules/goal.js";
+import type { ModuleContext, OutboundMessage } from "../src/modules/index.js";
 
 function fakeCtx(active: string[], known = [...active]) {
   const setActiveTools = vi.fn((names: string[]) => {
@@ -69,6 +70,66 @@ describe("the goal tool gate", () => {
     } as unknown as ModuleContext;
     // A wider tool list is a cost; a turn that dies for it is a fault.
     expect(() => syncGoalTools(ctx, false)).not.toThrow();
+  });
+
+  it("reports a session it cannot read instead of taking the turn down with it", () => {
+    // `getBranch` belongs to the engine and can throw — a session being
+    // rewritten, a shape the goal engine does not recognise. Every hook this
+    // module installs is the engine's, so an escape here ends the turn.
+    const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    const sent: OutboundMessage[] = [];
+    const ctx = {
+      pi: {
+        on: (name: string, handler: (...args: unknown[]) => unknown) => handlers.set(name, handler),
+        getAllTools: () => GOAL_TOOL_NAMES.map((name) => ({ name })),
+        getActiveTools: () => [],
+        setActiveTools: () => {},
+      } as unknown as ExtensionAPI,
+      send: (message: OutboundMessage) => {
+        sent.push(message);
+      },
+      session: {
+        sessionManager: {
+          getBranch: () => {
+            throw new Error("session file is being rewritten");
+          },
+        },
+      } as unknown as ExtensionContext,
+    } as ModuleContext;
+
+    expect(() => goalModule.activate(ctx)).not.toThrow();
+    for (const event of ["before_agent_start", "agent_start", "agent_end", "agent_settled", "session_compact", "session_start"]) {
+      const handler = handlers.get(event);
+      expect(handler, event).toBeTypeOf("function");
+      expect(() => handler!({}, ctx.session), event).not.toThrow();
+    }
+    // The person is told, once per attempt, in words rather than a stack trace.
+    expect(sent.length).toBe(7);
+    for (const message of sent) {
+      expect(message).toMatchObject({ type: "lasercode/module/log", module: "goal", level: "warn" });
+      expect((message as { message: string }).message).toContain("could not read this session's goal");
+    }
+    // Nothing about the goal's own state was published from a session it could
+    // not read: a wrong "no goal" would clear the person's goal bar.
+    expect(sent.some((message) => message.type === "lasercode/goal/state")).toBe(false);
+  });
+
+  it("survives a worker that can no longer be told", () => {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    const ctx = {
+      pi: {
+        on: (name: string, handler: (...args: unknown[]) => unknown) => handlers.set(name, handler),
+        getAllTools: () => [],
+        getActiveTools: () => [],
+        setActiveTools: () => {},
+      } as unknown as ExtensionAPI,
+      send: () => {
+        throw new Error("the worker is gone");
+      },
+      session: { sessionManager: { getBranch: () => [] } } as unknown as ExtensionContext,
+    } as ModuleContext;
+    expect(() => goalModule.activate(ctx)).not.toThrow();
+    expect(() => handlers.get("agent_end")!({}, ctx.session)).not.toThrow();
   });
 
   it("recognises the goal command in the forms a person types", () => {

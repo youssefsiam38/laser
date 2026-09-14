@@ -7,16 +7,41 @@ export const goalModule: LaserModule = {
   name: "goal",
   detect: () => true,
   activate(ctx) {
+    // Every hook below is the engine's, and a module that throws inside one
+    // takes the turn with it (AGENTS.md §6a: a module fails on its own). The
+    // session's entries come from the engine — `getBranch` on a session being
+    // rewritten, a shape the goal engine cannot read — and the worker's `send`
+    // can be gone, so both are reported to the person instead of escaping.
+    const report = (error: unknown) => {
+      try {
+        ctx.send({
+          type: "lasercode/module/log",
+          module: "goal",
+          level: "warn",
+          message: `could not read this session's goal: ${error instanceof Error ? error.message : String(error)}`,
+        });
+      } catch {
+        // Nothing left to tell: the goal bar simply keeps its last state.
+      }
+    };
     const sync = () => {
-      const goal = readGoal(ctx);
-      syncGoalTools(ctx, goal !== null);
-      ctx.send({ type: "lasercode/goal/state", goal });
+      try {
+        const goal = readGoal(ctx);
+        syncGoalTools(ctx, goal !== null);
+        ctx.send({ type: "lasercode/goal/state", goal });
+      } catch (error) {
+        report(error);
+      }
     };
     sync();
     // Before the turn's request is built, so a session with no goal has lost
     // them by the time the model sees the request.
     ctx.pi.on("before_agent_start", () => {
-      syncGoalTools(ctx, readGoal(ctx) !== null);
+      try {
+        syncGoalTools(ctx, readGoal(ctx) !== null);
+      } catch (error) {
+        report(error);
+      }
       return undefined;
     });
     ctx.pi.on("agent_start", sync);
