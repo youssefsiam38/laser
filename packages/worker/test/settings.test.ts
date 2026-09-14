@@ -306,6 +306,39 @@ describe("project trust", () => {
     expect(existsSync(join(cwd, ".pi", "settings.json"))).toBe(false);
   });
 
+  it("says so when the project's own settings file cannot be read", () => {
+    mkdirSync(join(cwd, PROJECT_DIR_NAME), { recursive: true });
+    const file = join(cwd, PROJECT_DIR_NAME, "settings.json");
+    writeFileSync(file, '{ "steeringMode": "all",\n', "utf8");
+
+    const snapshot = adapter(true).snapshot();
+    expect(snapshot.project.exists).toBe(true);
+    expect(snapshot.project.values).toEqual({});
+    expect(snapshot.project.error).toContain(file);
+    expect(snapshot.project.error).toMatch(/not valid JSON/);
+    expect(snapshot.project.error).toMatch(/Fix the file/);
+    expect(snapshot.effective["steeringMode"]).toBeUndefined();
+  });
+
+  it("says nothing about a project that has no settings file", () => {
+    expect(adapter(true).snapshot().project.error).toBeUndefined();
+  });
+
+  it("keeps hand-written keys it does not know through a project-scope write", async () => {
+    mkdirSync(join(cwd, PROJECT_DIR_NAME), { recursive: true });
+    const file = join(cwd, PROJECT_DIR_NAME, "settings.json");
+    writeFileSync(file, JSON.stringify({ steeringMode: "one-at-a-time", teamNotes: { owner: "ada" } }, null, 2), "utf8");
+
+    const snapshot = await adapter(true).apply("project", [{ path: "steeringMode", op: "set", value: "all" }]);
+
+    const onDisk = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+    expect(onDisk["steeringMode"]).toBe("all");
+    expect(onDisk["teamNotes"]).toEqual({ owner: "ada" });
+    // Unknown keys stay in the file but never reach the engine or the screen.
+    expect(snapshot.project.values["teamNotes"]).toBeUndefined();
+    expect(snapshot.effective["teamNotes"]).toBeUndefined();
+  });
+
   it(`loads trusted ${PROJECT_DIR_NAME} settings and filters engine-private keys`, () => {
     mkdirSync(join(cwd, PROJECT_DIR_NAME), { recursive: true });
     writeFileSync(
