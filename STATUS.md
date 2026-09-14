@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-14T11:10:59Z · orchestrator `01a09ea5` · HEAD: c4ee554
-**Current focus:** 0.6.4 is public and verified. M17-T1 (the conversation owns the window) is next and alone.
+**Last updated:** 2026-09-14T14:48:42Z · orchestrator `01a09ea5` · HEAD: ec1c42d
+**Current focus:** M16-T59 fixes session re-entry at the top of the recent tail and releases 0.6.5; concurrent M18 work remains isolated.
 
 | Milestone | State |
 | --- | --- |
@@ -26,7 +26,7 @@
 | MX Cross-cutting | in-progress |
 
 **Blockers:** none. MCP5 stays on its branch (D-240).
-**Next up:** M17-T1; then M17-T3/T4/T5; M16-T52/T53 remain 0.6.3 review follow-ups. Q-9 awaits the person.
+**Next up:** release verified 0.6.5 from M16-T59; M17-T1; M16-T52/T53 remain review follow-ups. Q-9 awaits the person.
 **Recently done:** M16-T54 release 0.6.4 (`c4ee554`); M16-T55 stream follows explicit Send; M16-T56 Projects Bash setup; M16-T57 terminal compaction state; M16-T58 owned agent endings and transient recovery.
 
 Ownership: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`.

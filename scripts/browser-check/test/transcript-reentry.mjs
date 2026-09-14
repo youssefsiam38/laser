@@ -89,7 +89,12 @@ export default async function reentry(check) {
   await openLong(names.second);
   entryReads.length = 0;
   await openLong(names.first);
-  await page.getByText('Checkpoint 120 is complete.', { exact: true }).waitFor({ state: 'visible' });
+  const newest = page.getByText('Checkpoint 120 is complete.', { exact: true });
+  await newest.waitFor({ state: 'visible' });
+  const placement = await viewport().evaluate(element => ({ gap: element.scrollHeight - element.clientHeight - element.scrollTop, top: element.getBoundingClientRect().top, bottom: element.getBoundingClientRect().bottom }));
+  const newestRect = await newest.boundingBox();
+  assert(placement.gap <= 4, `re-entry is ${placement.gap}px above latest`);
+  assert(newestRect && newestRect.y < placement.bottom && newestRect.y + newestRect.height > placement.top, 'the newest message is inside the returned viewport');
   const oldest = page.locator('[data-role=user]').filter({ hasText: 'Review checkpoint 1:' });
   assert.equal(await oldest.count(), 0, 'the old reading position is not restored');
   assert.equal(await earlierControl().count(), 1, 'older messages remain one control away');
@@ -139,6 +144,6 @@ export default async function reentry(check) {
   await find.press('Escape');
   assert.equal(await composer.inputValue(), 'an unsent draft', 'the draft survives re-entry and find');
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
-  writeFileSync(join(check.root, `reentry-${label}.json`), JSON.stringify({ returnedTop, expandedDom, returnedDom, windows, question: 'answerable after re-entry' }, null, 2));
+  writeFileSync(join(check.root, `reentry-${label}.json`), JSON.stringify({ returnedTop, expandedDom, returnedDom, windows, placementGap: placement.gap, question: 'answerable after re-entry' }, null, 2));
   await check.snapshot(); await check.shot('reentry');
 }
