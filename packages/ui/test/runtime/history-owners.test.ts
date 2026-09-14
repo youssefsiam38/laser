@@ -164,6 +164,19 @@ describe("owner-local transcript windows", () => {
     expect(f.view(f.beam).editorText).toBe("unsent draft");
   });
 
+  it("hands one surface the same owner every time it asks", () => {
+    const f = fixture();
+    // The owner is a dependency of a scope's store, its history loader and its
+    // thread-list adapter: a new object every render is a new adapter, and
+    // assistant-ui cancels the work in flight under one.
+    expect(f.windows.owner("beam", state.path)).toBe(f.beam);
+    expect(f.windows.owner(MAIN_WINDOW_SCOPE, state.path)).toBe(f.main);
+    expect(f.windows.owner("beam", other.path)).not.toBe(f.beam);
+    // A surface that let go and came back is a new surface.
+    f.windows.forget("beam", state.path);
+    expect(f.windows.owner("beam", state.path)).not.toBe(f.beam);
+  });
+
   it("leaves another session alone and stops following a released window", () => {
     const f = fixture();
     const elsewhere = f.windows.owner("beam", other.path);

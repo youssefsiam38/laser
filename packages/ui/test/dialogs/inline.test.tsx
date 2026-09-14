@@ -19,6 +19,8 @@ const PATH = "/p/root.jsonl";
 
 const fixture = vi.hoisted(() => ({
   dialogs: [] as unknown[],
+  link: undefined as { decisionId: string; answer?: "allow" | "deny"; at: number } | undefined,
+  consumed: 0,
   actions: { answerDialog: vi.fn(async () => undefined), toast: vi.fn() },
 }));
 
@@ -30,7 +32,10 @@ vi.mock("@/runtime", async (importActual) => ({
     selector({ current: PATH, open: { [PATH]: { path: PATH, dialogs: fixture.dialogs } } }),
   useLaserStable: () => ({ actions: fixture.actions }),
 }));
-vi.mock("@/pwa", () => ({ usePendingDecisionLink: () => undefined, consumeDecisionLink: () => {} }));
+vi.mock("@/pwa", () => ({
+  usePendingDecisionLink: () => fixture.link,
+  consumeDecisionLink: () => { fixture.consumed += 1; },
+}));
 
 let container: HTMLDivElement;
 let root: Root;
@@ -39,6 +44,8 @@ beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   resetToolRows();
   fixture.dialogs = [];
+  fixture.link = undefined;
+  fixture.consumed = 0;
   fixture.actions.answerDialog.mockClear();
   container = document.createElement("div");
   document.body.append(container);
@@ -133,6 +140,21 @@ describe("questions in the transcript", () => {
     // The same renderer either way, so the answer travels the same road.
     await press("Yes");
     expect(fixture.actions.answerDialog).toHaveBeenCalledWith({ id: "d6", confirmed: true });
+  });
+
+  it("lets a notification answer only the question it was raised for", async () => {
+    // The host tags the notification with the request's exact id.
+    const question = { id: "ui-7f3a2c-21", method: "confirm", title: "Run the release?" } satisfies UiDialogRequest;
+    fixture.dialogs = [question];
+    fixture.link = { decisionId: "1", answer: "allow", at: 1 };
+    await mount(<ThreadDialogCards />);
+    expect(fixture.actions.answerDialog).not.toHaveBeenCalled();
+    expect(fixture.consumed).toBe(0);
+
+    fixture.link = { decisionId: question.id, answer: "allow", at: 2 };
+    await mount(<ThreadDialogCards />);
+    expect(fixture.actions.answerDialog).toHaveBeenCalledWith({ id: question.id, confirmed: true });
+    expect(fixture.consumed).toBe(1);
   });
 
   it("shows one question at a time and says how many are behind it", async () => {
