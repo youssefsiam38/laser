@@ -71,10 +71,17 @@ export class ResourceHistory {
       const index = this.entries.findIndex((entry) => entry.snapshot.id === options.sinceId);
       if (index >= 0) start = index + 1;
     }
-    return this.entries.slice(start).slice(-limit).map((entry) => entry.snapshot);
+    // From `start` forward, not the newest `limit` of what follows it: paging
+    // must be able to walk the middle of the history, and a page that jumps to
+    // the end would silently drop every sample in between.
+    return this.entries.slice(start, start + limit).map((entry) => entry.snapshot);
   }
 
-  retention(): ResourceRetention {
+  /**
+   * Snapshot retention only. Spawn records are bounded on their own, by the
+   * ownership registry, and the service joins the two into the reply.
+   */
+  retention(): Omit<ResourceRetention, "ownershipRecords" | "maxOwnershipRecords"> {
     this.enforce();
     return {
       maxAgeMs: this.limits.maxAgeMs,

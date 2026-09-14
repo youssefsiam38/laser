@@ -41,27 +41,45 @@ afterEach(async () => {
 });
 
 describe("worker registration", () => {
-  it("records a live worker's identity and drops it when the process exits", async () => {
-    const resources = new ResourceService({ hostPid: process.pid, ancestorsOf: () => [] });
+  it("records a live worker, proves its identity from the real machine, and forgets it on exit", async () => {
+    const resources = new ResourceService({ hostPid: process.pid, minIntervalMs: 0 });
     pool = new WorkerPool({
       workerMain: join(dir, "fake-worker.mjs"),
       onNotification: () => {},
       onStatus: () => {},
       resources: {
         noteWorker: (cwd, pid) => resources.ownership.noteWorker(cwd, pid),
-        noteExit: (pid) => resources.ownership.noteExit(pid),
+        noteExit: (pid, generation) => resources.ownership.noteExit(pid, generation),
       },
     });
 
     const client = await pool.get(project);
     const pid = client.pid!;
-    const record = resources.ownership.roots().find((entry) => entry.pid === pid);
-    expect(record).toMatchObject({ role: "project_worker", projectCwd: project });
-    // An identity, not just a number: this is what a reused pid is checked against.
-    if (process.platform === "linux") expect(record!.startToken).toMatch(/^linux:/);
+    expect(resources.ownership.size()).toBe(1);
+
+    // Registration reads nothing; the identity comes from the first collected
+    // table, which on this machine is the real one.
+    const { snapshot } = await resources.snapshot();
+    const row = snapshot.processes.find((entry) => entry.pid === pid);
+    if (process.platform === "linux") {
+      expect(row).toBeDefined();
+      expect(row!.role).toBe("project_worker");
+      expect(row!.project?.label).toBe("project");
+      expect(row!.startToken).toMatch(/^linux:/);
+    }
 
     await pool.stop(project, "test");
-    expect(resources.ownership.roots().some((entry) => entry.pid === pid)).toBe(false);
+    expect(resources.ownership.size()).toBe(0);
+  });
+
+  it("ignores a late exit that quotes a generation the pid no longer belongs to", async () => {
+    const resources = new ResourceService({ hostPid: process.pid, minIntervalMs: 0 });
+    const stale = resources.ownership.noteWorker(project, 4242);
+    const current = resources.ownership.noteWorker(project, 4242);
+    resources.ownership.noteExit(4242, stale);
+    expect(resources.ownership.size()).toBe(1);
+    resources.ownership.noteExit(4242, current);
+    expect(resources.ownership.size()).toBe(0);
   });
 
   it("leaves a pool without diagnostics exactly as it was", async () => {

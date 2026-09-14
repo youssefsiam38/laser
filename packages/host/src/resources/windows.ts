@@ -2,14 +2,23 @@
  * Windows collector: one PowerShell call, two CIM classes.
  *
  * `Win32_Process` gives structure, creation time (the identity token), working
- * set, peak working set, private commit (`PrivatePageCount`), CPU and I/O byte
- * counters. Private *working set* — the figure Task Manager shows and the one
- * RP-1 asks for — is not on that class, so it is joined from
- * `Win32_PerfRawData_PerfProc_Process.WorkingSetPrivate`, which is keyed by
- * `IDProcess` and needs no localized counter names.
+ * set, peak working set, CPU and I/O byte counters. Two figures RP-1 asks for
+ * are not on that class at all and are joined from
+ * `Win32_PerfRawData_PerfProc_Process`, keyed by `IDProcess` and free of
+ * localized counter names: `WorkingSetPrivate` (private working set, the
+ * figure Task Manager shows) and `PrivateBytes` (private commit).
+ *
+ * `Win32_Process.PrivatePageCount` is deliberately not used: it is a page
+ * count on some systems and bytes on others, and a number whose unit we are
+ * guessing at is worse than an honest `unavailable`. `PeakWorkingSetSize` is
+ * documented as kilobytes and is converted as such; `WorkingSetSize` is
+ * documented as bytes and is not.
  *
  * `CommandLine` is never selected. The projection below is the complete list of
  * fields that leave PowerShell.
+ *
+ * Parsed against source-shaped captures; live behavior on Windows is unproven
+ * from this repository's Linux CI and is reported as such.
  */
 import { resourceAvailable, resourceUnavailable, type ResourceMeasure } from "@lasercode/protocol";
 import { executableLabel } from "./identity.js";
@@ -24,9 +33,9 @@ import {
 
 const SCRIPT = [
   "$ErrorActionPreference='Stop';",
-  "$p = Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CreationDate,Name,WorkingSetSize,PeakWorkingSetSize,PrivatePageCount,KernelModeTime,UserModeTime,ReadTransferCount,WriteTransferCount;",
+  "$p = Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CreationDate,Name,WorkingSetSize,PeakWorkingSetSize,KernelModeTime,UserModeTime,ReadTransferCount,WriteTransferCount;",
   "$w = @();",
-  "try { $w = Get-CimInstance Win32_PerfRawData_PerfProc_Process | Select-Object IDProcess,WorkingSetPrivate } catch { };",
+  "try { $w = Get-CimInstance Win32_PerfRawData_PerfProc_Process | Select-Object IDProcess,WorkingSetPrivate,PrivateBytes } catch { };",
   "ConvertTo-Json -Depth 3 -Compress @{ processes = @($p); perf = @($w) }",
 ].join(" ");
 
@@ -78,11 +87,15 @@ export function parseWindowsProcesses(json: string): WindowsRow[] {
     return [];
   }
   const privateBySid = new Map<number, number>();
+  const commitBySid = new Map<number, number>();
   for (const raw of document.perf ?? []) {
     const row = raw as Record<string, unknown>;
     const pid = numberOf(row.IDProcess);
-    const bytes = numberOf(row.WorkingSetPrivate);
-    if (pid !== undefined && bytes !== undefined) privateBySid.set(pid, bytes);
+    if (pid === undefined) continue;
+    const workingSetPrivate = numberOf(row.WorkingSetPrivate);
+    const privateBytes = numberOf(row.PrivateBytes);
+    if (workingSetPrivate !== undefined) privateBySid.set(pid, workingSetPrivate);
+    if (privateBytes !== undefined) commitBySid.set(pid, privateBytes);
   }
 
   const rows: WindowsRow[] = [];
@@ -95,8 +108,9 @@ export function parseWindowsProcesses(json: string): WindowsRow[] {
     const user = numberOf(row.UserModeTime) ?? 0;
     const ppid = numberOf(row.ParentProcessId);
     const workingSetBytes = numberOf(row.WorkingSetSize);
+    // Documented in kilobytes on this class, unlike WorkingSetSize.
     const peakWorkingSetKb = numberOf(row.PeakWorkingSetSize);
-    const commitBytes = numberOf(row.PrivatePageCount);
+    const commitBytes = commitBySid.get(pid);
     const readBytes = numberOf(row.ReadTransferCount);
     const writeBytes = numberOf(row.WriteTransferCount);
     const privateWorkingSetBytes = privateBySid.get(pid);
@@ -137,6 +151,7 @@ export class WindowsProcessCollector implements ProcessCollector {
       pid: row.pid,
       ...(row.ppid !== undefined ? { ppid: row.ppid } : {}),
       startToken: row.startToken,
+      ...(row.createdAtMs !== undefined ? { startedAtMs: row.createdAtMs } : {}),
       label: row.label,
     }));
   }
@@ -154,7 +169,9 @@ export class WindowsProcessCollector implements ProcessCollector {
         privateResident: cached.privateWorkingSetBytes === undefined
           ? resourceUnavailable("permission_denied", "the process performance counters were not readable")
           : resourceAvailable(cached.privateWorkingSetBytes),
-        commit: value(cached.commitBytes, "private commit was not reported"),
+        commit: cached.commitBytes === undefined
+          ? resourceUnavailable("permission_denied", "the process performance counters were not readable")
+          : resourceAvailable(cached.commitBytes),
       },
       cpu: { seconds: value(cached.cpuSeconds, "processor time was not reported") },
       elapsedMs: cached.createdAtMs === undefined

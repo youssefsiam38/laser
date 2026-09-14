@@ -1,11 +1,11 @@
-import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { LinuxProcessCollector } from "../../src/resources/linux.js";
 import { ResourceService } from "../../src/resources/service.js";
-import { FIXTURE_UPTIME_SECONDS, writeProcFixture } from "./proc-fixture.js";
+import { FIXTURE_BOOT_TIME_SECONDS, FIXTURE_UPTIME_SECONDS, writeProcFixture } from "./proc-fixture.js";
 
 let root: string;
 
@@ -30,6 +30,9 @@ describe("the Linux collector", () => {
     const parent = table.find((row) => row.pid === 10)!;
     expect(parent.ppid).toBe(1);
     expect(parent.label).toBe("node");
+    // An absolute start time, from `btime` plus the process's start ticks:
+    // this is what an outside claim about a pid is checked against.
+    expect(parent.startedAtMs).toBe((FIXTURE_BOOT_TIME_SECONDS + 5) * 1000);
     const metrics = await collector.measure(parent);
 
     // The same numbers a person would read out of the fixture's own files.
@@ -77,9 +80,9 @@ describe("the Linux collector", () => {
     const opened: string[] = [];
     const collector = new LinuxProcessCollector({
       procRoot: root,
-      readFile: (path) => {
+      readFile: async (path) => {
         opened.push(path);
-        return readFileSync(path, "utf8");
+        return readFile(path, "utf8");
       },
     });
     const table = await collector.table();
@@ -95,12 +98,7 @@ describe("the Linux collector", () => {
       { pid: 12, ppid: 11, comm: "bash", startTicks: 300, pssKb: 3_000, rssKb: 9_000, privateCleanKb: 1, privateDirtyKb: 2, hwmKb: 9_500 },
       { pid: 99, ppid: 1, comm: "unrelated", startTicks: 400, pssKb: 999_999, rssKb: 999_999 },
     ]);
-    const resources = new ResourceService({
-      platform: "linux",
-      hostPid: 10,
-      identityIo: { platform: "linux", procRoot: root },
-      ancestorsOf: () => [],
-    });
+    const resources = new ResourceService({ platform: "linux", hostPid: 10, procRoot: root });
     const { snapshot } = await resources.snapshot();
 
     // Read the fixture's own rollups back, exactly as a person would.
@@ -115,6 +113,28 @@ describe("the Linux collector", () => {
     expect(snapshot.processes.some((row) => row.pid === 99)).toBe(false);
   });
 
+  it("keeps the host's event loop responsive while it walks every process on this machine", async ({ skip }) => {
+    if (process.platform !== "linux") return skip();
+    // A synchronous traversal of /proc would stall every timer in the host for
+    // as long as it took. This measures that it does not.
+    const gaps: number[] = [];
+    let previous = Date.now();
+    const ticker = setInterval(() => {
+      const now = Date.now();
+      gaps.push(now - previous);
+      previous = now;
+    }, 5);
+    try {
+      const resources = new ResourceService({ hostPid: process.pid, minIntervalMs: 0 });
+      const { snapshot } = await resources.snapshot();
+      expect(snapshot.processes.length).toBeGreaterThan(0);
+    } finally {
+      clearInterval(ticker);
+    }
+    expect(gaps.length).toBeGreaterThan(2);
+    expect(Math.max(...gaps)).toBeLessThan(250);
+  });
+
   it("agrees with the kernel for a real process on this machine", async ({ skip }) => {
     if (process.platform !== "linux") return skip();
     const collector = new LinuxProcessCollector();
@@ -123,7 +143,7 @@ describe("the Linux collector", () => {
     expect(self).toBeDefined();
     const metrics = await collector.measure(self!);
     if (metrics.memory.pss.status !== "available") return skip(); // smaps_rollup is a kernel option
-    const rollup = execFileSync("cat", [`/proc/${process.pid}/smaps_rollup`], { encoding: "utf8" });
+    const rollup = readFileSync(`/proc/${process.pid}/smaps_rollup`, "utf8");
     const kernelPss = Number(/Pss:\s+(\d+) kB/.exec(rollup)![1]) * 1024;
     // The process keeps allocating between the two reads; agreement within a
     // few percent is what "the same number" means for a live process.

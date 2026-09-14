@@ -4,37 +4,44 @@
  * Demand-driven: a snapshot happens because somebody asked for one. Nothing
  * samples on a timer, so with diagnostics closed this file costs nothing.
  *
- * Discovery is structural. The roots are processes the host already knows —
- * itself, the workers it spawned, the pids its subsystems registered, and the
- * desktop shell once that shell has been *proved* to be this host's own
- * ancestor. Everything else in the inventory is there because it descends from
- * one of those, and is honestly labelled `unknown_descendant` rather than
- * guessed at from a command line.
+ * Discovery is structural. The roots are processes the host can *prove* it
+ * knows in the table it just collected — itself, the workers it spawned, the
+ * pids its subsystems registered, and the desktop shell once that shell's
+ * claim has been checked against the same table. Everything else in the
+ * inventory is there because it descends from one of those, and is honestly
+ * labelled `unknown_descendant` rather than guessed at from a command line.
  *
  * Four promises hold this together:
  *
  * - **Identity.** Nothing is attached to a pid; everything is attached to
- *   `(pid, startToken)`. A registration whose token no longer matches is
- *   dropped, so a reused pid inherits neither a role, an owner nor a number.
+ *   `(pid, startToken)`, and identity is always taken from one collected
+ *   table. A record the table contradicts is pruned, not reinterpreted, so a
+ *   reused pid inherits neither a role, an owner nor a number.
  * - **Honest gaps.** A counter we could not read is `unavailable` with a
  *   reason. A sum whose rows are not all measured is not presented as a total.
+ *   A cross-check with nothing to compare is not "ok".
  * - **Nothing sensitive.** No argv, no environment, no paths: a project is an
  *   opaque salted id with a sanitized basename, a session is its durable id,
  *   a process is its sanitized executable basename.
- * - **No blast radius.** Every collector call is wrapped and bounded; a failure
- *   becomes a health entry. Nothing here can touch a worker, a session or a
- *   process — there is no control verb in this slice at all.
+ * - **No blast radius.** Every collector call is wrapped, bounded and
+ *   asynchronous; the whole snapshot has a deadline and a concurrency limit.
+ *   A failure becomes a health entry. Nothing here can touch a worker, a
+ *   session or a process — there is no control verb in this slice at all.
  */
 import {
   RESOURCE_CROSS_CHECK_TOLERANCE,
   RESOURCE_EXPORT_MAX_BYTES,
+  RESOURCE_MEASURE_CONCURRENCY,
   RESOURCE_MIN_COLLECT_INTERVAL_MS,
   RESOURCE_REPORT_MAX_AGE_MS,
+  RESOURCE_SNAPSHOT_DEADLINE_MS,
   RESOURCE_SNAPSHOT_PROCESS_MAX,
+  RESOURCE_START_TIME_TOLERANCE_MS,
   boundedResourceIds,
   boundedResourceText,
   resourceAvailable,
   resourceUnavailable,
+  sanitizeResourceLabel,
   type ResourceAssociations,
   type ResourceCollectorStatus,
   type ResourceCoverage,
@@ -43,14 +50,16 @@ import {
   type ResourceMeasure,
   type ResourceProcess,
   type ResourceProcessRole,
+  type ResourceProject,
+  type ResourceReportResult,
   type ResourceRetention,
   type ResourceRoleTotals,
   type ResourceSnapshot,
   type ResourceTotals,
 } from "@lasercode/protocol";
-import { ancestorChain, processKey, type IdentityIo } from "./identity.js";
+import { processKey } from "./identity.js";
 import { ResourceHistory, type ResourceHistoryOptions } from "./history.js";
-import { ProcessOwnershipRegistry, type OwnershipLookups } from "./ownership.js";
+import { ProcessOwnershipRegistry, type OwnershipLookups, type OwnershipRecord } from "./ownership.js";
 import { LinuxProcessCollector } from "./linux.js";
 import { DarwinProcessCollector } from "./darwin.js";
 import { WindowsProcessCollector } from "./windows.js";
@@ -61,26 +70,27 @@ export interface ResourceServiceOptions {
   collector?: ProcessCollector;
   platform?: NodeJS.Platform;
   hostPid?: number;
-  /** The host's parent as recorded at start, before any reparenting. */
-  hostParentPid?: number;
-  identityIo?: IdentityIo;
+  procRoot?: string;
   lookups?: OwnershipLookups;
   history?: ResourceHistoryOptions;
+  /** Floor between collections. Applies to `refresh` too; 0 only in tests. */
   minIntervalMs?: number;
+  /** Whole-snapshot deadline; rows not reached say `not_collected`. */
+  deadlineMs?: number;
+  measureConcurrency?: number;
   now?: () => number;
   /** Asks the desktop shell for fresh metrics. Never a poll: one request per demand. */
   requestDesktopRefresh?: () => void;
-  /** Injectable ancestor walk, so verification can be tested without a real tree. */
-  ancestorsOf?: (pid: number) => Array<{ pid: number; startToken: string }>;
-  /** Injectable identity read for spawn records, for the same reason. */
-  startTokenOf?: (pid: number) => string | undefined;
 }
 
-interface StoredReport {
-  report: ResourceDesktopReport;
+interface VerifiedReport {
+  /** Verified rows, keyed by the identity the host itself observed. */
+  rows: Map<string, { type: string; workingSetBytes?: number }>;
+  /** The app's main process, as this host identified it. */
+  main: { pid: number; key: string };
   receivedAtMs: number;
-  /** The desktop main we verified, with the identity we observed ourselves. */
-  root: { pid: number; startToken: string };
+  accepted: number;
+  rejected: number;
 }
 
 const ELECTRON_ROLES: Array<[RegExp, ResourceProcessRole]> = [
@@ -95,11 +105,12 @@ export class ResourceService {
   private readonly now: () => number;
   private readonly platform: NodeJS.Platform;
   private readonly hostPid: number;
-  private readonly hostParentPid: number | undefined;
-  private readonly identityIo: IdentityIo;
   private collector: ProcessCollector | undefined;
   private collectorFailure: string | undefined;
-  private report: StoredReport | undefined;
+  /** The last report a table proved. Kept when a later, worse one arrives. */
+  private report: VerifiedReport | undefined;
+  /** The claim itself, re-checked against every new table. */
+  private claim: { report: ResourceDesktopReport; receivedAtMs: number } | undefined;
   private rejectedReport: string | undefined;
   private last: { snapshot: ResourceSnapshot; atMs: number } | undefined;
   private inFlight: Promise<ResourceSnapshot> | undefined;
@@ -109,50 +120,79 @@ export class ResourceService {
     this.now = options.now ?? Date.now;
     this.platform = options.platform ?? process.platform;
     this.hostPid = options.hostPid ?? process.pid;
-    this.hostParentPid = options.hostParentPid ?? process.ppid;
-    this.identityIo = options.identityIo ?? {};
-    this.ownership = new ProcessOwnershipRegistry(
-      this.identityIo,
-      options.lookups ?? {},
-      ...(options.startTokenOf ? [options.startTokenOf] : []),
-    );
+    this.ownership = new ProcessOwnershipRegistry(options.lookups ?? {}, { now: this.now });
     this.history = new ResourceHistory({ now: this.now, ...options.history });
   }
 
   // ----------------------------------------------------------------- reads
 
+  /**
+   * Collect, or answer from the last snapshot when one was taken inside the
+   * floor. `refresh` expresses intent, not entitlement: a client asking in a
+   * loop must not be able to turn a diagnostic into a load generator, so the
+   * floor applies to it too. Concurrent askers share one collection.
+   */
   async snapshot(params: { refresh?: boolean } = {}): Promise<{ snapshot: ResourceSnapshot; retention: ResourceRetention }> {
     const minInterval = this.options.minIntervalMs ?? RESOURCE_MIN_COLLECT_INTERVAL_MS;
-    if (!params.refresh && this.last && this.now() - this.last.atMs < minInterval) {
-      return { snapshot: this.last.snapshot, retention: this.history.retention() };
+    if (this.last && this.now() - this.last.atMs < minInterval) {
+      return { snapshot: this.last.snapshot, retention: this.retention() };
     }
-    // Concurrent askers share one collection: two open diagnostics must not
-    // double the cost of the answer.
     this.inFlight ??= this.collect().finally(() => {
       this.inFlight = undefined;
     });
     const snapshot = await this.inFlight;
-    return { snapshot, retention: this.history.retention() };
+    return { snapshot, retention: this.retention() };
   }
 
   historyPage(params: { sinceId?: string; limit?: number } = {}): { snapshots: ResourceSnapshot[]; retention: ResourceRetention } {
-    return { snapshots: this.history.page(params), retention: this.history.retention() };
+    return { snapshots: this.history.page(params), retention: this.retention() };
   }
 
   /**
    * A diagnostic document built from the same sanitized rows — there is no
-   * second, richer copy of anything to leak. Oldest snapshots are dropped
-   * until the document fits its byte bound, and it says when that happened.
+   * second, richer copy of anything to leak.
+   *
+   * The byte bound is absolute: oldest snapshots go first, and if one snapshot
+   * is still too large its process rows are trimmed. The result is always
+   * valid JSON that says what was left out.
+   *
+   * Each snapshot is serialized once and its size reused, and the document is
+   * emitted in the same compact form it was measured in — a bound checked
+   * against a different rendering than the one that leaves the host is not a
+   * bound at all.
    */
   export(): { document: string; bytes: number; truncated: boolean } {
-    const retention = this.history.retention();
-    let snapshots = this.history.page({ limit: 60 });
+    const retention = this.retention();
+    const serialized = this.history.page({ limit: 60 }).map((snapshot) => ({ snapshot, bytes: Buffer.byteLength(JSON.stringify(snapshot), "utf8") }));
+    const envelope = 512; // the wrapper's own fields, generously
     let truncated = false;
+
+    let total = serialized.reduce((sum, entry) => sum + entry.bytes, 0) + envelope;
+    while (serialized.length > 1 && total > RESOURCE_EXPORT_MAX_BYTES) {
+      total -= serialized.shift()!.bytes;
+      truncated = true;
+    }
+
+    let snapshots = serialized.map((entry) => entry.snapshot);
+    if (total > RESOURCE_EXPORT_MAX_BYTES && snapshots.length === 1) {
+      // One snapshot larger than the whole budget: keep its shape and its
+      // totals, and say how many rows were left out rather than emitting
+      // something that is not the document it claims to be.
+      const only = snapshots[0]!;
+      const perRow = Math.max(1, Math.floor((only.processes.length ? Buffer.byteLength(JSON.stringify(only.processes), "utf8") : 1) / Math.max(1, only.processes.length)));
+      const room = Math.max(0, RESOURCE_EXPORT_MAX_BYTES - envelope * 4);
+      const keep = Math.max(1, Math.floor(room / perRow));
+      snapshots = [{ ...only, processes: only.processes.slice(0, keep) }];
+      truncated = true;
+    }
+
     for (;;) {
-      const document = JSON.stringify({ at: new Date(this.now()).toISOString(), platform: this.platformName(), retention, truncated, snapshots }, null, 2);
+      const document = JSON.stringify({ at: new Date(this.now()).toISOString(), platform: this.platformName(), retention, truncated, snapshots });
       const bytes = Buffer.byteLength(document, "utf8");
       if (bytes <= RESOURCE_EXPORT_MAX_BYTES || snapshots.length <= 1) return { document, bytes, truncated };
-      snapshots = snapshots.slice(Math.ceil(snapshots.length / 2));
+      // The estimate was close but not exact (a wide row, a long label): drop
+      // the oldest and check the real bytes again rather than hope.
+      snapshots = snapshots.slice(1);
       truncated = true;
     }
   }
@@ -162,29 +202,34 @@ export class ResourceService {
   /**
    * Electron's metrics, from the local shell.
    *
-   * Accepted only when the claimed main process is genuinely this host's own
-   * ancestor, with the identity the host observes itself. An arbitrary local
-   * client cannot relabel a process it does not own, and nothing it sends can
-   * act on a process: the payload is pids and counters, and the only thing the
-   * host does with it is compare.
+   * The claim is checked against the host's own process table: the reported
+   * main must be a process that exists, with the creation time the report
+   * gives it, and every accepted row must be in that main's subtree *now*,
+   * with its own creation time matching. No relationship to the host is
+   * required — a host the shell adopted rather than spawned is ordinary — and
+   * a row that cannot be verified is rejected on its own.
+   *
+   * A rejected report never displaces a verified one: the cross-check keeps
+   * the last thing it could prove, and says how old it is.
    */
-  receiveDesktopReport(report: ResourceDesktopReport): { accepted: number; rejected: number; verified: boolean } {
-    const chain = (this.options.ancestorsOf ?? ((pid: number) => ancestorChain(pid, this.identityIo)))(this.hostPid);
-    const candidates = [...chain];
-    const verified = candidates.find((ancestor) => ancestor.pid === report.main.pid);
-    const tokenMatches = verified && (!report.main.startToken || report.main.startToken === verified.startToken);
-    if (!verified || !tokenMatches) {
-      this.report = undefined;
-      this.rejectedReport = verified
-        ? "the shell's own identity for its main process did not match this machine's"
-        : this.hostParentPid === report.main.pid
-          ? "the process that started this host has gone, so its metrics cannot be tied to it"
-          : "the reported desktop process is not this host's own shell";
-      return { accepted: 0, rejected: report.processes.length, verified: false };
+  async receiveDesktopReport(report: ResourceDesktopReport): Promise<ResourceReportResult> {
+    const previousClaim = this.claim;
+    const previousReport = this.report;
+    this.claim = { report, receivedAtMs: this.now() };
+    const table = await this.readTable([]);
+    if (table.length === 0) {
+      // No table: the claim waits for the next snapshot rather than being
+      // believed or thrown away.
+      return { accepted: 0, rejected: 0, verified: false, pending: true };
     }
-    this.report = { report, receivedAtMs: this.now(), root: verified };
-    this.rejectedReport = undefined;
-    return { accepted: report.processes.length, rejected: 0, verified: true };
+    const verified = this.verifyClaim(table);
+    if (verified && verified !== previousReport) {
+      return { accepted: verified.accepted, rejected: verified.rejected, verified: true };
+    }
+    // This claim proved nothing. The last one that did keeps standing, and the
+    // claim the host re-checks stays the one it could believe.
+    this.claim = previousClaim;
+    return { accepted: 0, rejected: report.processes.length, verified: false };
   }
 
   /** RP-6 / RP-7 publish background-command and helper pids here. */
@@ -196,6 +241,7 @@ export class ResourceService {
 
   private async collect(): Promise<ResourceSnapshot> {
     const started = this.now();
+    const deadline = started + (this.options.deadlineMs ?? RESOURCE_SNAPSHOT_DEADLINE_MS);
     const collectors: ResourceCollectorStatus[] = [];
     const table = await this.readTable(collectors);
     const byPid = new Map<number, ProcessTableRow>();
@@ -209,14 +255,24 @@ export class ResourceService {
       else children.set(row.ppid, [row]);
     }
 
-    const desktopRoot = this.verifiedDesktopRoot(byPid);
+    // Records are proved against this table before they can be a root; stale
+    // ones are pruned here and add nothing to discovery.
+    const live = table.length > 0 ? this.ownership.reconcile(table) : [];
+    const records = new Map<string, OwnershipRecord>();
+    for (const record of live) {
+      if (record.startToken) records.set(processKey(record.pid, record.startToken), record);
+    }
+
+    const verified = table.length > 0 ? this.verifyClaim(table) : this.report;
+    const desktopRoot = this.desktopRootIn(byPid, verified);
+
     const roots: ProcessTableRow[] = [];
     const pushRoot = (row: ProcessTableRow | undefined): void => {
       if (row && !roots.some((existing) => existing.pid === row.pid)) roots.push(row);
     };
     pushRoot(desktopRoot);
     pushRoot(byPid.get(this.hostPid));
-    for (const record of this.ownership.roots()) pushRoot(byPid.get(record.pid));
+    for (const record of live) pushRoot(byPid.get(record.pid));
 
     const kept: ProcessTableRow[] = [];
     const seen = new Set<number>();
@@ -233,14 +289,22 @@ export class ResourceService {
       kept.push(row);
       for (const child of children.get(row.pid) ?? []) queue.push(child);
     }
+    const keptPids = new Set(kept.map((row) => row.pid));
+
+    const metrics = await this.measureAll(kept, collectors, deadline);
+    if (metrics.skipped > 0) truncated = true;
 
     const processes: ResourceProcess[] = [];
-    for (const row of kept) {
-      const metrics = await this.measure(row, collectors);
-      processes.push(this.describe(row, metrics, byPid, seen, desktopRoot));
+    // Kept rows are in breadth-first order from the roots, so a parent is
+    // always described before its children and inheritance can walk upward
+    // through what is already there.
+    const context = new Map<string, { project?: ResourceProject; associations?: ResourceAssociations }>();
+    for (const [index, row] of kept.entries()) {
+      const described = this.describe(row, metrics.rows[index]!, byPid, keptPids, records, verified, context);
+      processes.push(described);
     }
 
-    const crossCheck = this.crossCheck(processes);
+    const crossCheck = this.crossCheck(processes, verified);
     const snapshot: ResourceSnapshot = {
       id: `rs_${++this.counter}`,
       at: new Date(started).toISOString(),
@@ -263,6 +327,38 @@ export class ResourceService {
     // a current cross-check, and nothing polls in between.
     if (crossCheck.status !== "ok") this.options.requestDesktopRefresh?.();
     return snapshot;
+  }
+
+  /**
+   * Measure the kept rows with a bounded number in flight and a deadline over
+   * the whole set. macOS measures each process with its own subprocess, so
+   * without both of these one snapshot of a wide tree could take a minute.
+   */
+  private async measureAll(
+    rows: ProcessTableRow[],
+    collectors: ResourceCollectorStatus[],
+    deadline: number,
+  ): Promise<{ rows: ProcessRowMetrics[]; skipped: number }> {
+    const out = new Array<ProcessRowMetrics>(rows.length);
+    const concurrency = Math.max(1, this.options.measureConcurrency ?? RESOURCE_MEASURE_CONCURRENCY);
+    let next = 0;
+    let skipped = 0;
+
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        const index = next++;
+        if (index >= rows.length) return;
+        if (this.now() >= deadline) {
+          out[index] = unavailableMetrics("not_collected", "the snapshot's time budget was reached");
+          skipped += 1;
+          continue;
+        }
+        out[index] = await this.measure(rows[index]!, collectors);
+      }
+    };
+
+    await Promise.all(Array.from({ length: Math.min(concurrency, Math.max(1, rows.length)) }, () => worker()));
+    return { rows: out, skipped };
   }
 
   private async readTable(collectors: ResourceCollectorStatus[]): Promise<ProcessTableRow[]> {
@@ -300,7 +396,7 @@ export class ResourceService {
     if (this.collector) return this.collector;
     if (this.collectorFailure) return undefined;
     try {
-      if (this.platform === "linux") this.collector = new LinuxProcessCollector(this.identityIo.procRoot ? { procRoot: this.identityIo.procRoot } : {});
+      if (this.platform === "linux") this.collector = new LinuxProcessCollector(this.options.procRoot ? { procRoot: this.options.procRoot } : {});
       else if (this.platform === "darwin") this.collector = new DarwinProcessCollector();
       else if (this.platform === "win32") this.collector = new WindowsProcessCollector();
       else this.collectorFailure = `${this.platform} has no process collector`;
@@ -310,11 +406,64 @@ export class ResourceService {
     return this.collector;
   }
 
-  /** The desktop main, only when a verified report says so and identity still agrees. */
-  private verifiedDesktopRoot(byPid: Map<number, ProcessTableRow>): ProcessTableRow | undefined {
-    if (!this.report) return undefined;
-    const row = byPid.get(this.report.root.pid);
-    return row && row.startToken === this.report.root.startToken ? row : undefined;
+  // ------------------------------------------------------- desktop metrics
+
+  /**
+   * Check the shell's claim against one collected table. Rows that survive are
+   * keyed by the identity the host observed, so a later table that disagrees
+   * simply stops matching them.
+   */
+  private verifyClaim(table: readonly ProcessTableRow[]): VerifiedReport | undefined {
+    const claim = this.claim;
+    if (!claim) return this.report;
+    const byPid = new Map<number, ProcessTableRow>();
+    for (const row of table) byPid.set(row.pid, row);
+
+    const main = byPid.get(claim.report.main.pid);
+    if (!main || !startsWhenClaimed(main, claim.report.main.creationTime)) {
+      this.rejectedReport = main
+        ? "the reported app process is not the one running under that process id"
+        : "the reported app process is not running on this machine";
+      return this.report; // Keep the last thing we could prove.
+    }
+
+    const subtree = descendantsOf(main.pid, table);
+    const rows = new Map<string, { type: string; workingSetBytes?: number }>();
+    let rejected = 0;
+    for (const reported of claim.report.processes) {
+      const row = byPid.get(reported.pid);
+      if (!row || !subtree.has(row.pid) || !startsWhenClaimed(row, reported.creationTime)) {
+        rejected += 1;
+        continue;
+      }
+      rows.set(processKey(row.pid, row.startToken), {
+        // Untrusted text from a local client, and it is retained and exported:
+        // it is sanitized and bounded before it is kept, not when it is shown.
+        type: sanitizeResourceLabel(reported.type, 32),
+        ...(reported.workingSetBytes !== undefined ? { workingSetBytes: reported.workingSetBytes } : {}),
+      });
+    }
+
+    if (rows.size === 0) {
+      this.rejectedReport = "no reported process could be tied to the app's own process tree";
+      return this.report;
+    }
+    this.rejectedReport = undefined;
+    this.report = {
+      rows,
+      main: { pid: main.pid, key: processKey(main.pid, main.startToken) },
+      receivedAtMs: claim.receivedAtMs,
+      accepted: rows.size,
+      rejected,
+    };
+    return this.report;
+  }
+
+  /** The verified desktop main in this table, if this table still shows it. */
+  private desktopRootIn(byPid: Map<number, ProcessTableRow>, verified: VerifiedReport | undefined): ProcessTableRow | undefined {
+    if (!verified) return undefined;
+    const row = byPid.get(verified.main.pid);
+    return row && processKey(row.pid, row.startToken) === verified.main.key ? row : undefined;
   }
 
   private describe(
@@ -322,28 +471,44 @@ export class ResourceService {
     metrics: ProcessRowMetrics,
     byPid: Map<number, ProcessTableRow>,
     keptPids: Set<number>,
-    desktopRoot: ProcessTableRow | undefined,
+    records: Map<string, OwnershipRecord>,
+    verified: VerifiedReport | undefined,
+    context: Map<string, { project?: ResourceProject; associations?: ResourceAssociations }>,
   ): ResourceProcess {
     const key = processKey(row.pid, row.startToken);
-    const record = this.ownership.lookup(row.pid, row.startToken);
-    const electron = this.electronRowFor(row, desktopRoot);
+    const record = records.get(key);
+    const electron = verified?.rows.get(key);
 
     let role: ResourceProcessRole = "unknown_descendant";
     if (row.pid === this.hostPid) role = "host";
     else if (record) role = record.role;
-    else if (desktopRoot && row.pid === desktopRoot.pid) role = "desktop_main";
+    else if (verified && key === verified.main.key) role = "desktop_main";
     else if (electron) role = electronRole(electron.type);
 
     const parent = row.ppid !== undefined ? byPid.get(row.ppid) : undefined;
-    const project = record?.projectCwd ? this.ownership.projectIdentity(record.projectCwd) : undefined;
-    const associations = this.associationsFor(record);
+    // Only a row that is actually in this snapshot may be pointed at: a
+    // truncated collection must not leave a link to something nobody can read.
+    const parentKey = parent && keptPids.has(parent.pid) ? processKey(parent.pid, parent.startToken) : undefined;
+
+    let project = record?.projectCwd ? this.ownership.projectIdentity(record.projectCwd) : undefined;
+    let associations = this.associationsFor(record);
+    if (!record && parentKey) {
+      // A descendant nobody registered still belongs somewhere: it inherits
+      // the nearest proved ancestor's project and work ids as *context*. It
+      // keeps the role `unknown_descendant`, and none of its memory is
+      // attributed to that work — an association is not an allocation.
+      const inherited = context.get(parentKey);
+      project = inherited?.project;
+      associations = inherited?.associations;
+    }
+    context.set(key, { ...(project ? { project } : {}), ...(associations ? { associations } : {}) });
 
     return {
       key,
       pid: row.pid,
       startToken: row.startToken,
       ...(row.ppid !== undefined ? { ppid: row.ppid } : {}),
-      ...(parent && keptPids.has(parent.pid) ? { parentKey: processKey(parent.pid, parent.startToken) } : {}),
+      ...(parentKey ? { parentKey } : {}),
       role,
       label: record?.label ?? row.label,
       ...(project ? { project } : {}),
@@ -353,34 +518,22 @@ export class ResourceService {
       elapsedMs: metrics.elapsedMs,
       io: metrics.io,
       source: (this.options.collector ?? this.collector)?.source ?? "proc",
-      ...(electron
+      ...(electron && verified
         ? {
             electron: {
-              type: boundedResourceText(electron.type, 32),
+              type: electron.type,
               workingSetBytes: electron.workingSetBytes === undefined
-                ? resourceUnavailable("not_collected", "the shell reported no working set for this process")
+                ? resourceUnavailable("not_collected", "the app reported no working set for this process")
                 : resourceAvailable(electron.workingSetBytes),
-              reportAgeMs: Math.max(0, this.now() - (this.report?.receivedAtMs ?? this.now())),
+              reportAgeMs: Math.max(0, this.now() - verified.receivedAtMs),
             },
           }
         : {}),
     };
   }
 
-  /**
-   * A reported row is usable only when it belongs to the verified desktop tree
-   * *as this host sees it* and its identity matches. Anything else is ignored.
-   */
-  private electronRowFor(row: ProcessTableRow, desktopRoot: ProcessTableRow | undefined): { type: string; workingSetBytes?: number } | undefined {
-    if (!this.report || !desktopRoot) return undefined;
-    const reported = this.report.report.processes.find((entry) => entry.pid === row.pid);
-    if (!reported) return undefined;
-    if (reported.startToken && reported.startToken !== row.startToken) return undefined;
-    return { type: reported.type, ...(reported.workingSetBytes !== undefined ? { workingSetBytes: reported.workingSetBytes } : {}) };
-  }
-
   /** Work a process is associated with. Never an allocation of its memory. */
-  private associationsFor(record: ReturnType<ProcessOwnershipRegistry["lookup"]>): ResourceAssociations | undefined {
+  private associationsFor(record: OwnershipRecord | undefined): ResourceAssociations | undefined {
     if (!record) return undefined;
     const lookups = this.ownership.lookups;
     const sessions: string[] = [];
@@ -415,32 +568,80 @@ export class ResourceService {
     };
   }
 
-  private crossCheck(processes: ResourceProcess[]): { status: ResourceCrossCheckStatus; detail?: string } {
-    if (this.rejectedReport) return { status: "unverified", detail: boundedResourceText(this.rejectedReport) };
-    if (!this.report) return { status: "unavailable", detail: "the desktop shell has not reported its own metrics yet" };
-    const ageMs = this.now() - Date.parse(this.report.report.at || new Date(this.report.receivedAtMs).toISOString());
-    const matched = processes.filter((row) => row.electron);
-    if (matched.length === 0) {
-      return { status: "unverified", detail: "no reported process could be tied to this host's own process tree" };
+  /**
+   * The cross-check is a comparison, so it reports what it actually compared.
+   * Rows the shell described but whose memory neither side could measure prove
+   * nothing, and a cross-check with no comparable pair is never "ok".
+   */
+  private crossCheck(processes: ResourceProcess[], verified: VerifiedReport | undefined): { status: ResourceCrossCheckStatus; detail?: string } {
+    if (!verified) {
+      return this.rejectedReport
+        ? { status: "unverified", detail: boundedResourceText(this.rejectedReport) }
+        : { status: "unavailable", detail: "the app has not reported its own metrics yet" };
     }
-    if (!Number.isFinite(ageMs) || ageMs > RESOURCE_REPORT_MAX_AGE_MS) {
-      return { status: "stale", detail: "the shell's metrics are older than a minute; a refresh was requested" };
+    // Age is measured from when the host received it. A client clock — or a
+    // client — cannot keep a stale report looking fresh.
+    const ageMs = this.now() - verified.receivedAtMs;
+    if (ageMs > RESOURCE_REPORT_MAX_AGE_MS) {
+      return { status: "stale", detail: "the app's metrics are older than a minute; a refresh was requested" };
     }
-    for (const row of matched) {
-      const theirs = row.electron!.workingSetBytes;
+
+    let compared = 0;
+    let diverged: ResourceProcess | undefined;
+    for (const row of processes) {
+      const theirs = row.electron?.workingSetBytes;
       const ours = row.memory.resident;
-      if (theirs.status !== "available" || ours.status !== "available") continue;
+      if (!theirs || theirs.status !== "available" || ours.status !== "available") continue;
+      compared += 1;
       const scale = Math.max(theirs.value, ours.value);
-      if (scale > 0 && Math.abs(theirs.value - ours.value) / scale > RESOURCE_CROSS_CHECK_TOLERANCE) {
-        return { status: "diverged", detail: `${row.label} differs from the shell's own working set by more than ${Math.round(RESOURCE_CROSS_CHECK_TOLERANCE * 100)}%` };
-      }
+      if (scale > 0 && Math.abs(theirs.value - ours.value) / scale > RESOURCE_CROSS_CHECK_TOLERANCE) diverged ??= row;
+    }
+    if (compared === 0) {
+      return { status: "unverified", detail: "the app's metrics carried no figure this host could compare" };
+    }
+    if (diverged) {
+      return { status: "diverged", detail: `${diverged.label} differs from the app's own working set by more than ${Math.round(RESOURCE_CROSS_CHECK_TOLERANCE * 100)}%` };
     }
     return { status: "ok" };
+  }
+
+  private retention(): ResourceRetention {
+    return { ...this.history.retention(), ownershipRecords: this.ownership.size(), maxOwnershipRecords: this.ownership.maxRecordsBound };
   }
 
   private platformName(): ResourceSnapshot["platform"] {
     return this.platform === "linux" || this.platform === "darwin" || this.platform === "win32" ? this.platform : "other";
   }
+}
+
+/** Does this process's start time match what an outside claim says it is? */
+function startsWhenClaimed(row: ProcessTableRow, creationTime: number | undefined): boolean {
+  // A claim with no creation time, or a platform that cannot say when a
+  // process started, cannot be checked — and an unverifiable row is refused
+  // rather than believed.
+  if (creationTime === undefined || row.startedAtMs === undefined) return false;
+  return Math.abs(row.startedAtMs - creationTime) <= RESOURCE_START_TIME_TOLERANCE_MS;
+}
+
+/** Every pid under `root` in this table, including the root itself. */
+function descendantsOf(root: number, table: readonly ProcessTableRow[]): Set<number> {
+  const children = new Map<number, number[]>();
+  for (const row of table) {
+    if (row.ppid === undefined) continue;
+    const list = children.get(row.ppid);
+    if (list) list.push(row.pid);
+    else children.set(row.ppid, [row.pid]);
+  }
+  const out = new Set<number>([root]);
+  const queue = [root];
+  while (queue.length > 0) {
+    for (const child of children.get(queue.shift()!) ?? []) {
+      if (out.has(child)) continue;
+      out.add(child);
+      queue.push(child);
+    }
+  }
+  return out;
 }
 
 /**

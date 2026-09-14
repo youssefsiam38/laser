@@ -1,20 +1,6 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ancestorChain, commFromStat, executableLabel, ppidFromStat, processKey, processStartToken, startTicksFromStat } from "../../src/resources/identity.js";
-import { ProcessOwnershipRegistry } from "../../src/resources/ownership.js";
-import { FIXTURE_BOOT_ID, writeProcFixture } from "./proc-fixture.js";
-
-let root: string;
-
-beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "resource-identity-"));
-});
-
-afterEach(() => {
-  rmSync(root, { recursive: true, force: true });
-});
+import { describe, expect, it } from "vitest";
+import { commFromStat, executableLabel, ppidFromStat, processKey, startTicksFromStat } from "../../src/resources/identity.js";
+import { ProcessOwnershipRegistry, UNPROVEN_ADOPTION_WINDOW_MS, type ObservedProcess } from "../../src/resources/ownership.js";
 
 describe("parsing /proc/<pid>/stat", () => {
   it("survives an executable name with spaces and parentheses", () => {
@@ -24,81 +10,134 @@ describe("parsing /proc/<pid>/stat", () => {
     expect(startTicksFromStat(stat)).toBe("4242");
   });
 
-  it("has no token for a process it cannot describe", () => {
+  it("has no identity for a process it cannot describe", () => {
     expect(startTicksFromStat("nonsense")).toBeUndefined();
-    expect(processStartToken(-1, { platform: "linux", procRoot: root })).toBeUndefined();
+    expect(ppidFromStat("nonsense")).toBeUndefined();
+  });
+
+  it("keys a row by pid and start token together, never a pid", () => {
+    expect(processKey(10, "linux:boot:777")).toBe("10@linux:boot:777");
   });
 });
 
-describe("process identity", () => {
-  it("is the boot id and the start time, not the pid", () => {
-    writeProcFixture(root, [{ pid: 10, ppid: 1, comm: "node", startTicks: 777 }]);
-    const token = processStartToken(10, { platform: "linux", procRoot: root });
-    expect(token).toBe(`linux:${FIXTURE_BOOT_ID}:777`);
-    expect(processKey(10, token!)).toBe(`10@linux:${FIXTURE_BOOT_ID}:777`);
-  });
-
-  it("walks the ancestors it can prove and stops where it cannot", () => {
-    writeProcFixture(root, [
-      { pid: 30, ppid: 20, comm: "node", startTicks: 300 },
-      { pid: 20, ppid: 10, comm: "electron", startTicks: 200 },
-      { pid: 10, ppid: 1, comm: "systemd", startTicks: 100 },
-    ]);
-    const chain = ancestorChain(30, { platform: "linux", procRoot: root });
-    expect(chain.map((entry) => entry.pid)).toEqual([20, 10]);
-    expect(chain[0]!.startToken).toBe(`linux:${FIXTURE_BOOT_ID}:200`);
-  });
-});
+const observed = (pid: number, startedAtMs: number, token = `linux:boot:${startedAtMs}`): ObservedProcess => ({ pid, startToken: token, startedAtMs });
 
 describe("ownership records and pid reuse", () => {
-  const io = () => ({ platform: "linux" as const, procRoot: root });
-
-  it("attaches nothing to a pid that has become a different process", () => {
-    writeProcFixture(root, [{ pid: 10, ppid: 1, comm: "node", startTicks: 500 }]);
-    const registry = new ProcessOwnershipRegistry(io());
+  it("is a claim until a collected table proves it", () => {
+    let now = 1_000_000;
+    const registry = new ProcessOwnershipRegistry({}, { now: () => now });
     registry.noteWorker("/projects/alpha", 10);
-    const recorded = processStartToken(10, io())!;
-    expect(registry.lookup(10, recorded)?.role).toBe("project_worker");
+    // Nothing is provable before a table has been read.
+    expect(registry.lookup(10, "linux:boot:999_000")).toBeUndefined();
 
-    // The worker exits and the kernel hands 10 to somebody else.
-    writeProcFixture(root, [{ pid: 10, ppid: 1, comm: "vim", startTicks: 900 }]);
-    const reused = processStartToken(10, io())!;
-    expect(reused).not.toBe(recorded);
-    expect(registry.lookup(10, reused)).toBeUndefined();
-    // And the old identity does not come back either: the record is for that
-    // process, and that process is gone.
-    expect(registry.lookup(10, recorded)?.role).toBe("project_worker");
+    now += 50;
+    const live = registry.reconcile([observed(10, 999_950)]);
+    expect(live).toHaveLength(1);
+    expect(registry.lookup(10, "linux:boot:999950")?.role).toBe("project_worker");
   });
 
-  it("applies no record when the platform could not prove an identity at spawn", () => {
-    const registry = new ProcessOwnershipRegistry({ platform: "linux", procRoot: join(root, "missing") });
+  it("refuses to adopt a process that started after the registration: that is the next owner of the pid", () => {
+    let now = 1_000_000;
+    const registry = new ProcessOwnershipRegistry({}, { now: () => now });
     registry.noteWorker("/projects/alpha", 10);
-    expect(registry.lookup(10, "linux:whatever:1")).toBeUndefined();
+    now += 60_000;
+    // The worker died and pid 10 was handed to something started later.
+    expect(registry.reconcile([observed(10, 1_030_000)])).toEqual([]);
+    expect(registry.lookup(10, "linux:boot:1030000")).toBeUndefined();
   });
 
-  it("forgets a record on exit, so the next owner of the pid inherits nothing", () => {
-    writeProcFixture(root, [{ pid: 10, ppid: 1, comm: "node", startTicks: 500 }]);
-    const registry = new ProcessOwnershipRegistry(io());
+  it("prunes a proved record the moment the table disagrees, so a reused pid is never a root", () => {
+    let now = 1_000_000;
+    const registry = new ProcessOwnershipRegistry({}, { now: () => now });
     registry.noteWorker("/projects/alpha", 10);
-    registry.noteExit(10);
-    expect(registry.lookup(10, processStartToken(10, io())!)).toBeUndefined();
+    registry.reconcile([observed(10, 999_990)]);
+    expect(registry.size()).toBe(1);
+
+    now += 10_000;
+    const live = registry.reconcile([observed(10, 1_005_000)]);
+    expect(live).toEqual([]);
+    expect(registry.size()).toBe(0);
+    expect(registry.lookup(10, "linux:boot:1005000")).toBeUndefined();
+  });
+
+  it("keeps a record while its process is simply missing from one table, then forgets it", () => {
+    let now = 1_000_000;
+    const registry = new ProcessOwnershipRegistry({}, { now: () => now, maxAgeMs: 30_000 });
+    registry.noteWorker("/projects/alpha", 10);
+    expect(registry.reconcile([])).toEqual([]);
+    expect(registry.size()).toBe(1);
+    now += 31_000;
+    registry.reconcile([]);
+    expect(registry.size()).toBe(0);
+  });
+
+  it("gives up on an unproven claim whose pid never appears in time", () => {
+    let now = 1_000_000;
+    const registry = new ProcessOwnershipRegistry({}, { now: () => now });
+    registry.noteWorker("/projects/alpha", 10);
+    now += UNPROVEN_ADOPTION_WINDOW_MS + 1000;
+    // Present, but started far too late to be the process we registered.
+    expect(registry.reconcile([observed(10, now - 1000)])).toEqual([]);
+    expect(registry.size()).toBe(0);
+  });
+
+  it("lets a late exit from a dead worker delete only its own record", () => {
+    let now = 1_000_000;
+    const registry = new ProcessOwnershipRegistry({}, { now: () => now });
+    const first = registry.noteWorker("/projects/alpha", 10);
+    now += 10;
+    const second = registry.noteWorker("/projects/beta", 10);
+    expect(second).not.toBe(first);
+
+    registry.noteExit(10, first); // the old process's exit, arriving late
+    expect(registry.size()).toBe(1);
+    registry.reconcile([observed(10, 1_000_005)]);
+    expect(registry.lookup(10, "linux:boot:1000005")?.projectCwd).toBe("/projects/beta");
+
+    registry.noteExit(10, second);
+    expect(registry.size()).toBe(0);
+  });
+
+  it("bounds records on its own, and never evicts a live worker to do it", () => {
+    let now = 1_000_000;
+    const registry = new ProcessOwnershipRegistry({}, { now: () => now, maxRecords: 3, maxAgeMs: 10 ** 9 });
+    registry.noteWorker("/projects/alpha", 1);
+    registry.noteWorker("/projects/beta", 2);
+    for (let pid = 10; pid < 20; pid += 1) {
+      now += 1;
+      registry.observeProcessRegistrations("/projects/alpha", [{ pid, role: "background_command", taskId: `t${pid}` }]);
+    }
+    expect(registry.size()).toBe(3);
+    // Both workers survived; the oldest commands were dropped.
+    expect(registry.reconcile([observed(1, 999_999), observed(2, 999_999)]).map((record) => record.projectCwd).sort()).toEqual([
+      "/projects/alpha",
+      "/projects/beta",
+    ]);
+  });
+
+  it("forgets a command record that outlived its age bound, without touching workers", () => {
+    let now = 1_000_000;
+    const registry = new ProcessOwnershipRegistry({}, { now: () => now, maxAgeMs: 1000 });
+    registry.noteWorker("/projects/alpha", 1);
+    registry.observeProcessRegistrations("/projects/alpha", [{ pid: 2, role: "helper" }]);
+    now += 2000;
+    registry.reconcile([observed(1, 999_999)]);
+    expect(registry.size()).toBe(1);
   });
 
   it("turns a project into an opaque id and a sanitized label, never a path", () => {
-    const registry = new ProcessOwnershipRegistry(io());
+    const registry = new ProcessOwnershipRegistry();
     const identity = registry.projectIdentity("/home/someone/secret-client/alpha");
     expect(identity.label).toBe("alpha");
     expect(identity.id).toMatch(/^[a-f0-9]{16}$/);
     expect(JSON.stringify(identity)).not.toContain("secret-client");
-    // Stable within one host run, so rows can be compared across snapshots.
     expect(registry.projectIdentity("/home/someone/secret-client/alpha").id).toBe(identity.id);
-    // And different per directory.
     expect(registry.projectIdentity("/home/someone/other/alpha").id).not.toBe(identity.id);
   });
 
   it("accepts only valid typed registrations from a subsystem", () => {
-    writeProcFixture(root, [{ pid: 11, ppid: 10, comm: "bash", startTicks: 600 }]);
-    const registry = new ProcessOwnershipRegistry(io());
+    let now = 1_000_000;
+    const registry = new ProcessOwnershipRegistry({}, { now: () => now });
     const accepted = registry.observeProcessRegistrations("/projects/alpha", [
       { pid: 11, role: "background_command", taskId: "task-1", sessionPath: "/sessions/a.jsonl" },
       { pid: 12, role: "host" },
@@ -106,7 +145,8 @@ describe("ownership records and pid reuse", () => {
       "not a registration",
     ]);
     expect(accepted).toBe(1);
-    const record = registry.lookup(11, processStartToken(11, io())!);
+    registry.reconcile([observed(11, 999_990)]);
+    const record = registry.lookup(11, "linux:boot:999990");
     expect(record?.role).toBe("background_command");
     expect(record?.taskId).toBe("task-1");
   });

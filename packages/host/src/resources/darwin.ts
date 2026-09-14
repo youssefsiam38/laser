@@ -30,8 +30,14 @@ import {
   type ProcessTableRow,
 } from "./platform.js";
 
-/** `vmmap` calls one snapshot may make. Beyond it, rows say `not_collected`. */
-export const DARWIN_FOOTPRINT_BUDGET = 32;
+/**
+ * `vmmap` calls one snapshot may make. Beyond it, rows say `not_collected`.
+ *
+ * Kept small on purpose: each call is a subprocess with its own timeout, and
+ * the service also holds a deadline over the whole snapshot. A wide tree gives
+ * up detail, never a person's patience.
+ */
+export const DARWIN_FOOTPRINT_BUDGET = 12;
 
 export interface DarwinPsRow {
   pid: number;
@@ -40,6 +46,8 @@ export interface DarwinPsRow {
   elapsedMs?: number;
   cpuSeconds?: number;
   startToken: string;
+  /** `lstart` parsed to epoch milliseconds, when it parses. */
+  startedAtMs?: number;
 }
 
 /** `pid ppid rss etime time lstart…` — `lstart` has spaces, so it comes last. */
@@ -56,6 +64,7 @@ export function parsePsTable(text: string): DarwinPsRow[] {
     const cpuSeconds = parseCpuTime(parts[4] ?? "");
     const lstart = parts.slice(5).join(" ");
     if (!lstart) continue;
+    const startedAtMs = Date.parse(lstart);
     rows.push({
       pid,
       ppid,
@@ -63,6 +72,7 @@ export function parsePsTable(text: string): DarwinPsRow[] {
       ...(elapsedMs !== undefined ? { elapsedMs } : {}),
       ...(cpuSeconds !== undefined ? { cpuSeconds } : {}),
       startToken: `ps:${lstart}`,
+      ...(Number.isFinite(startedAtMs) ? { startedAtMs } : {}),
     });
   }
   return rows;
@@ -125,6 +135,7 @@ export class DarwinProcessCollector implements ProcessCollector {
       pid: row.pid,
       ppid: row.ppid,
       startToken: row.startToken,
+      ...(row.startedAtMs !== undefined ? { startedAtMs: row.startedAtMs } : {}),
       label: labels.get(row.pid) ?? "unknown",
     }));
   }

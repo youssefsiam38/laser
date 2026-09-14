@@ -9,11 +9,15 @@
  * where secrets live — a token passed as a flag, a password in a URL — and the
  * answer to that is not redaction, it is never opening the file.
  *
+ * Every read is asynchronous. `/proc` is a virtual filesystem, but it is
+ * backed by real kernel work, and a host that pauses its event loop to walk a
+ * thousand processes has made a diagnostic into an outage.
+ *
  * `procRoot` is injectable so the whole collector can be exercised against a
  * fixture tree, which is also how the PSS reconciliation test gets exact
  * expected numbers.
  */
-import { readdirSync, readFileSync, readlinkSync } from "node:fs";
+import { readdir, readFile, readlink } from "node:fs/promises";
 import { resourceAvailable, resourceUnavailable, type ResourceMeasure } from "@lasercode/protocol";
 import { commFromStat, executableLabel, ppidFromStat, startTicksFromStat } from "./identity.js";
 import { unavailableMetrics, type ProcessCollector, type ProcessRowMetrics, type ProcessTableRow } from "./platform.js";
@@ -23,61 +27,55 @@ const USER_HZ = 100;
 
 export interface LinuxCollectorIo {
   procRoot?: string;
-  readFile?: (path: string) => string;
-  readLink?: (path: string) => string;
-  readDir?: (path: string) => string[];
+  readFile?: (path: string) => Promise<string>;
+  readLink?: (path: string) => Promise<string>;
+  readDir?: (path: string) => Promise<string[]>;
 }
 
 export class LinuxProcessCollector implements ProcessCollector {
   readonly name = "linux-proc";
   readonly source = "proc" as const;
   private readonly root: string;
-  private readonly readFile: (path: string) => string;
-  private readonly readLink: (path: string) => string;
-  private readonly readDir: (path: string) => string[];
+  private readonly readFile: (path: string) => Promise<string>;
+  private readonly readLink: (path: string) => Promise<string>;
+  private readonly readDir: (path: string) => Promise<string[]>;
   private bootId: string | undefined;
+  private bootTimeMs: number | undefined;
   private uptimeSeconds: number | undefined;
 
   constructor(io: LinuxCollectorIo = {}) {
     this.root = io.procRoot ?? "/proc";
-    this.readFile = io.readFile ?? ((path) => readFileSync(path, "utf8"));
-    this.readLink = io.readLink ?? ((path) => readlinkSync(path));
-    this.readDir = io.readDir ?? ((path) => readdirSync(path));
+    this.readFile = io.readFile ?? ((path) => readFile(path, "utf8"));
+    this.readLink = io.readLink ?? ((path) => readlink(path));
+    this.readDir = io.readDir ?? ((path) => readdir(path));
   }
 
   async table(): Promise<ProcessTableRow[]> {
-    this.bootId = this.read(`${this.root}/sys/kernel/random/boot_id`)?.trim();
-    this.uptimeSeconds = Number(this.read(`${this.root}/uptime`)?.split(" ")[0] ?? NaN);
-    const rows: ProcessTableRow[] = [];
-    for (const entry of this.readDir(this.root)) {
-      if (!/^\d+$/.test(entry)) continue;
-      const pid = Number(entry);
-      const stat = this.read(`${this.root}/${pid}/stat`);
-      if (!stat) continue; // It ended while we were looking at it. Normal.
-      const ticks = startTicksFromStat(stat);
-      if (!ticks || !this.bootId) continue; // No provable identity: no row.
-      const ppid = ppidFromStat(stat);
-      rows.push({
-        pid,
-        ...(ppid !== undefined ? { ppid } : {}),
-        startToken: `linux:${this.bootId}:${ticks}`,
-        label: this.labelOf(pid, stat),
-      });
-    }
-    return rows;
+    this.bootId = (await this.read(`${this.root}/sys/kernel/random/boot_id`))?.trim();
+    this.uptimeSeconds = Number((await this.read(`${this.root}/uptime`))?.split(" ")[0] ?? NaN);
+    this.bootTimeMs = this.parseBootTime(await this.read(`${this.root}/stat`));
+
+    const entries = (await this.readDir(this.root).catch(() => [] as string[])).filter((entry) => /^\d+$/.test(entry));
+    const rows = await Promise.all(entries.map((entry) => this.rowOf(Number(entry))));
+    return rows.filter((row): row is ProcessTableRow => row !== undefined);
   }
 
   async measure(row: ProcessTableRow): Promise<ProcessRowMetrics> {
-    const stat = this.read(`${this.root}/${row.pid}/stat`);
+    const stat = await this.read(`${this.root}/${row.pid}/stat`);
     if (!stat) return unavailableMetrics("process_gone");
     // The pid was reused between the table read and now: measuring it would
     // attach a stranger's numbers to our row.
     const ticks = startTicksFromStat(stat);
     if (!ticks || !row.startToken.endsWith(`:${ticks}`)) return unavailableMetrics("process_gone");
 
-    const rollup = this.parseKeyedKb(this.read(`${this.root}/${row.pid}/smaps_rollup`));
-    const status = this.parseKeyedKb(this.read(`${this.root}/${row.pid}/status`));
-    const io = this.parseIo(this.read(`${this.root}/${row.pid}/io`));
+    const [rollupText, statusText, ioText] = await Promise.all([
+      this.read(`${this.root}/${row.pid}/smaps_rollup`),
+      this.read(`${this.root}/${row.pid}/status`),
+      this.read(`${this.root}/${row.pid}/io`),
+    ]);
+    const rollup = this.parseKeyedKb(rollupText);
+    const status = this.parseKeyedKb(statusText);
+    const io = this.parseIo(ioText);
     const rollupMissing = rollup === undefined;
 
     const privateBytes = rollup && (rollup.Private_Clean !== undefined || rollup.Private_Dirty !== undefined)
@@ -111,9 +109,25 @@ export class LinuxProcessCollector implements ProcessCollector {
     };
   }
 
-  private labelOf(pid: number, stat: string): string {
+  private async rowOf(pid: number): Promise<ProcessTableRow | undefined> {
+    const stat = await this.read(`${this.root}/${pid}/stat`);
+    if (!stat) return undefined; // It ended while we were looking at it. Normal.
+    const ticks = startTicksFromStat(stat);
+    if (!ticks || !this.bootId) return undefined; // No provable identity: no row.
+    const ppid = ppidFromStat(stat);
+    const startedAtMs = this.bootTimeMs === undefined ? undefined : this.bootTimeMs + (Number(ticks) / USER_HZ) * 1000;
+    return {
+      pid,
+      ...(ppid !== undefined ? { ppid } : {}),
+      startToken: `linux:${this.bootId}:${ticks}`,
+      ...(startedAtMs !== undefined ? { startedAtMs } : {}),
+      label: await this.labelOf(pid, stat),
+    };
+  }
+
+  private async labelOf(pid: number, stat: string): Promise<string> {
     try {
-      return executableLabel(this.readLink(`${this.root}/${pid}/exe`));
+      return executableLabel(await this.readLink(`${this.root}/${pid}/exe`));
     } catch {
       // `exe` needs the same user or CAP_SYS_PTRACE; `comm` is the kernel's own
       // name for the executable and is always readable. Neither is argv.
@@ -121,12 +135,19 @@ export class LinuxProcessCollector implements ProcessCollector {
     }
   }
 
-  private read(path: string): string | undefined {
+  private async read(path: string): Promise<string | undefined> {
     try {
-      return this.readFile(path);
+      return await this.readFile(path);
     } catch {
       return undefined;
     }
+  }
+
+  /** `btime <seconds since epoch>` from `/proc/stat`, for absolute start times. */
+  private parseBootTime(text: string | undefined): number | undefined {
+    if (text === undefined) return undefined;
+    const match = /^btime\s+(\d+)$/m.exec(text);
+    return match ? Number(match[1]) * 1000 : undefined;
   }
 
   /** `Pss:  1234 kB` lines → bytes, keyed by name. */

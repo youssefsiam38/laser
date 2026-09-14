@@ -255,8 +255,8 @@ const samples: Record<ClientMethod, unknown> = {
   "resource/export": {},
   "resource/report": {
     at: "2026-01-01T00:00:00.000Z",
-    main: { pid: 4242, startToken: "linux:boot:1000" },
-    processes: [{ pid: 4243, type: "Tab", workingSetBytes: 1024 }],
+    main: { pid: 4242, creationTime: 1767225600000 },
+    processes: [{ pid: 4243, creationTime: 1767225601000, type: "Tab", workingSetBytes: 1024 }],
   },
 };
 
@@ -268,6 +268,9 @@ describe("process inventory methods", () => {
     // A role, a project or a session would let a client name what it does not own.
     expect(schema.safeParse({ ...valid, processes: [{ pid: 11, type: "GPU", role: "host" }] }).success).toBe(false);
     expect(schema.safeParse({ ...valid, processes: [{ pid: 11, type: "GPU", command: "node --token=s3cret" }] }).success).toBe(false);
+    // The creation time is what ties a row to a process; it stays a number.
+    expect(schema.safeParse({ ...valid, processes: [{ pid: 11, type: "GPU", creationTime: 1767225600000 }] }).success).toBe(true);
+    expect(schema.safeParse({ ...valid, processes: [{ pid: 11, type: "GPU", creationTime: "yesterday" }] }).success).toBe(false);
     expect(schema.safeParse({ ...valid, main: { pid: 0 } }).success).toBe(false);
     expect(schema.safeParse({ ...valid, processes: Array.from({ length: 257 }, (_, i) => ({ pid: i + 1, type: "Tab" })) }).success).toBe(false);
   });

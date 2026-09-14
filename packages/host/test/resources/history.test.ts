@@ -101,11 +101,21 @@ describe("retained history", () => {
     expect(retention.lastEvictedBy).toBeUndefined();
   });
 
-  it("pages from a known id and bounds the page", () => {
+  it("pages forward without skipping the middle of the history", () => {
     const history = new ResourceHistory();
     for (let index = 1; index <= 5; index += 1) history.add(snapshot(`rs_${index}`, 1));
     expect(history.page({ sinceId: "rs_3" }).map((entry) => entry.id)).toEqual(["rs_4", "rs_5"]);
-    expect(history.page({ limit: 2 }).map((entry) => entry.id)).toEqual(["rs_4", "rs_5"]);
+    // A bounded page starts where the caller is, not at the end: walking the
+    // history two at a time must visit every sample exactly once.
+    const walked: string[] = [];
+    let cursor: string | undefined;
+    for (;;) {
+      const page = history.page({ limit: 2, ...(cursor ? { sinceId: cursor } : {}) });
+      if (page.length === 0) break;
+      walked.push(...page.map((entry) => entry.id));
+      cursor = page.at(-1)!.id;
+    }
+    expect(walked).toEqual(["rs_1", "rs_2", "rs_3", "rs_4", "rs_5"]);
     expect(history.page({ sinceId: "nope" })).toHaveLength(5);
   });
 });

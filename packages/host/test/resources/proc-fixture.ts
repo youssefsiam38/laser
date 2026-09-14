@@ -39,11 +39,15 @@ export interface FixtureProcess {
 export const FIXTURE_BOOT_ID = "3f2a1c44-0000-4000-8000-000000000001";
 /** Seconds since boot, used for elapsed time. */
 export const FIXTURE_UPTIME_SECONDS = 10_000;
+/** `btime` from `/proc/stat`: seconds since the epoch at boot. */
+export const FIXTURE_BOOT_TIME_SECONDS = 1_767_000_000;
 
 export function writeProcFixture(root: string, processes: FixtureProcess[]): string {
   mkdirSync(join(root, "sys", "kernel", "random"), { recursive: true });
   writeFileSync(join(root, "sys", "kernel", "random", "boot_id"), `${FIXTURE_BOOT_ID}\n`);
   writeFileSync(join(root, "uptime"), `${FIXTURE_UPTIME_SECONDS}.00 ${FIXTURE_UPTIME_SECONDS * 2}.00\n`);
+  // The kernel's own summary file; `btime` turns start ticks into a real time.
+  writeFileSync(join(root, "stat"), `cpu  1 2 3 4\nbtime ${FIXTURE_BOOT_TIME_SECONDS}\nprocesses 12345\n`);
   for (const entry of processes) writeProcess(root, entry);
   return root;
 }

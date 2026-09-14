@@ -32,6 +32,8 @@ describe("macOS parsing", () => {
     expect(rows[1]).toMatchObject({ pid: 501, ppid: 1, residentBytes: 204800 * 1024, cpuSeconds: 721 });
     expect(rows[1]!.elapsedMs).toBe((2 * 86_400 + 3 * 3600 + 20 * 60 + 11) * 1000);
     expect(rows[1]!.startToken).toBe("ps:Mon Jan 6 09:01:02 2026");
+    // An absolute start time, so a claim about that pid can be checked.
+    expect(rows[1]!.startedAtMs).toBe(Date.parse("Mon Jan 6 09:01:02 2026"));
   });
 
   it("keeps only the basename of an executable path", () => {
@@ -83,8 +85,8 @@ const CIM = JSON.stringify({
       CreationDate: "/Date(1767690000000)/",
       Name: "node.exe",
       WorkingSetSize: 120 * 1024 * 1024,
+      // Documented in kilobytes on this class, unlike WorkingSetSize.
       PeakWorkingSetSize: 200 * 1024,
-      PrivatePageCount: 90 * 1024 * 1024,
       KernelModeTime: 10_000_000,
       UserModeTime: 20_000_000,
       ReadTransferCount: 1234,
@@ -92,7 +94,7 @@ const CIM = JSON.stringify({
     },
     { ProcessId: 7, CreationDate: "not a date" },
   ],
-  perf: [{ IDProcess: 4242, WorkingSetPrivate: 80 * 1024 * 1024 }],
+  perf: [{ IDProcess: 4242, WorkingSetPrivate: 80 * 1024 * 1024, PrivateBytes: 90 * 1024 * 1024 }],
 });
 
 describe("Windows parsing", () => {
@@ -103,7 +105,7 @@ describe("Windows parsing", () => {
     expect(parseCimDate("nonsense")).toBeUndefined();
   });
 
-  it("joins the private working set and drops a row with no provable identity", () => {
+  it("joins both performance counters and drops a row with no provable identity", () => {
     const rows = parseWindowsProcesses(CIM);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
@@ -111,20 +113,45 @@ describe("Windows parsing", () => {
       ppid: 10,
       label: "node.exe",
       startToken: "cim:1767690000000",
+      // Private working set and private commit both come from the performance
+      // class, in bytes. `PrivatePageCount` is never treated as bytes.
       privateWorkingSetBytes: 80 * 1024 * 1024,
       commitBytes: 90 * 1024 * 1024,
+      peakWorkingSetBytes: 200 * 1024 * 1024,
       cpuSeconds: 3,
     });
+  });
+
+  it("ignores PrivatePageCount even when the machine reports one", () => {
+    const withPageCount = JSON.stringify({
+      ...JSON.parse(CIM),
+      processes: [{ ...JSON.parse(CIM).processes[0], PrivatePageCount: 42 }],
+      perf: [],
+    });
+    const rows = parseWindowsProcesses(withPageCount);
+    // A page count is not a byte count, and a number whose unit we are
+    // guessing at is worse than an honest gap.
+    expect(rows[0]!.commitBytes).toBeUndefined();
   });
 
   it("says permission_denied when the performance counters are missing, never zero", async () => {
     const withoutPerf = JSON.stringify({ ...JSON.parse(CIM), perf: [] });
     const collector = new WindowsProcessCollector(async () => withoutPerf, () => 1767690060000);
     const [row] = await collector.table();
+    expect(row!.startedAtMs).toBe(1767690000000);
     const metrics = await collector.measure(row!);
     expect(metrics.memory.privateResident).toMatchObject({ status: "unavailable", reason: "permission_denied" });
-    expect(metrics.memory.commit).toEqual({ status: "available", value: 90 * 1024 * 1024 });
+    expect(metrics.memory.commit).toMatchObject({ status: "unavailable", reason: "permission_denied" });
+    expect(metrics.memory.resident).toEqual({ status: "available", value: 120 * 1024 * 1024 });
     expect(metrics.elapsedMs).toEqual({ status: "available", value: 60_000 });
+  });
+
+  it("reads both counters when the performance class answers", async () => {
+    const collector = new WindowsProcessCollector(async () => CIM, () => 1767690060000);
+    const [row] = await collector.table();
+    const metrics = await collector.measure(row!);
+    expect(metrics.memory.privateResident).toEqual({ status: "available", value: 80 * 1024 * 1024 });
+    expect(metrics.memory.commit).toEqual({ status: "available", value: 90 * 1024 * 1024 });
   });
 
   it("never asks PowerShell for a command line", async () => {

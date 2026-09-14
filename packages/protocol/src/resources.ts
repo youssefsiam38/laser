@@ -32,6 +32,7 @@
  * processes are honest `unknown_descendant` rows under the worker that spawned
  * them. Wiring those two producers is part of finishing M18, not of this slice.
  */
+import { z } from "zod";
 
 // ---------------------------------------------------------------------------
 // Roles and reasons
@@ -107,8 +108,32 @@ export const RESOURCE_ID_MAX = 128;
 export const RESOURCE_ASSOCIATIONS_MAX = 20;
 /** Bytes of a diagnostic export document. */
 export const RESOURCE_EXPORT_MAX_BYTES = 4 * 1024 * 1024;
-/** A repeat request inside this window is answered from the last snapshot. */
+/**
+ * A repeat request inside this window is answered from the last snapshot,
+ * `refresh` or not. The floor is the protection against a client that asks in
+ * a loop; an opt-out would remove the protection it exists to provide.
+ */
 export const RESOURCE_MIN_COLLECT_INTERVAL_MS = 250;
+/**
+ * A whole snapshot must finish inside this. Rows not reached say
+ * `not_collected` rather than making a person wait: macOS measures each
+ * process with its own bounded command, and a wide tree could otherwise take
+ * a minute.
+ */
+export const RESOURCE_SNAPSHOT_DEADLINE_MS = 6000;
+/** Per-process measurements in flight at once. */
+export const RESOURCE_MEASURE_CONCURRENCY = 8;
+/** Spawn records kept at once; live project workers are never evicted. */
+export const RESOURCE_OWNERSHIP_MAX_RECORDS = 512;
+/** A registration nothing has confirmed for this long is forgotten. */
+export const RESOURCE_OWNERSHIP_MAX_AGE_MS = 60 * 60_000;
+/**
+ * How far a reported creation time may sit from the one the operating system
+ * reports before the two are not the same process. Kernels report start times
+ * at second granularity (Linux derives it from boot time and clock ticks),
+ * so the window has to be wider than the precision of either side.
+ */
+export const RESOURCE_START_TIME_TOLERANCE_MS = 5000;
 /** A desktop metrics report older than this is stale and says so. */
 export const RESOURCE_REPORT_MAX_AGE_MS = 60_000;
 /** Rows one desktop report may carry. */
@@ -305,6 +330,9 @@ export interface ResourceRetention {
   bytes: number;
   /** Which independent bound evicted last, so retention can be explained. */
   lastEvictedBy?: "age" | "snapshots" | "rows" | "bytes";
+  /** Spawn records held right now, and their own independent bound. */
+  ownershipRecords: number;
+  maxOwnershipRecords: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -315,22 +343,40 @@ export interface ResourceRetention {
  * Electron's `app.getAppMetrics()`, reduced to what a cross-check needs.
  *
  * Accepted only over a local connection, only as metrics, and only after the
- * host has verified — from its own process table — that the claimed main
- * process is its own ancestor and that every reported pid is a descendant of
- * it with the `(pid, startToken)` the host itself observed. It never creates a
- * row, never relabels an unrelated process, and carries no control verb.
+ * host has verified the claim against its **own** process table: the reported
+ * main process exists with the creation time the report gives it, and every
+ * accepted row is in that main's current subtree with its own creation time
+ * matching. Nothing about ancestry of the host is required — a host the shell
+ * adopted rather than spawned is the normal case — and a row that cannot be
+ * verified is rejected on its own. The report never creates a row, never
+ * relabels an unrelated process, and carries no control verb.
+ *
+ * `creationTime` is Electron's own `ProcessMetric.creationTime`: milliseconds
+ * since the epoch. It is what stops a recycled renderer pid from inheriting
+ * the metrics of the renderer that used to hold it.
  */
 export interface ResourceDesktopReport {
-  /** ISO time the metrics were taken, for staleness. */
+  /** ISO time the metrics were taken. Advisory: the host times its own receipt. */
   at: string;
-  main: { pid: number; startToken?: string };
+  main: { pid: number; creationTime?: number };
   processes: Array<{
     pid: number;
-    startToken?: string;
+    creationTime?: number;
     /** Electron's own process type (`Browser`, `Tab`, `GPU`, `Utility`, …). */
     type: string;
     workingSetBytes?: number;
   }>;
+}
+
+/** What the host did with a report. Counts are rows it can actually use. */
+export interface ResourceReportResult {
+  /** Rows tied to a real process in the verified subtree. */
+  accepted: number;
+  /** Rows refused: unknown pid, wrong creation time, outside the subtree. */
+  rejected: number;
+  verified: boolean;
+  /** The host has no process table yet; the report is verified at the next snapshot. */
+  pending?: true;
 }
 
 /**
@@ -356,6 +402,61 @@ export interface ResourceProcessRegistration {
 // ---------------------------------------------------------------------------
 // The wire
 // ---------------------------------------------------------------------------
+
+/**
+ * Validation for this family, beside the types it validates.
+ *
+ * `schemas.ts` stays the registry that maps a method to its schema; the shapes
+ * themselves live where the vocabulary does, so a change to a type and its
+ * validation is one file, not two.
+ */
+const resourcePidSchema = z.number().int().positive().max(0xffffffff);
+const creationTimeSchema = z.number().finite().nonnegative();
+
+export const resourceDesktopReportSchema = z
+  .object({
+    at: z.string().min(1).max(64),
+    main: z.object({ pid: resourcePidSchema, creationTime: creationTimeSchema.optional() }).strict(),
+    processes: z
+      .array(
+        z
+          .object({
+            pid: resourcePidSchema,
+            creationTime: creationTimeSchema.optional(),
+            type: z.string().min(1).max(RESOURCE_LABEL_MAX),
+            workingSetBytes: z.number().nonnegative().finite().optional(),
+          })
+          .strict(),
+      )
+      .max(RESOURCE_REPORT_PROCESS_MAX),
+  })
+  .strict();
+
+/**
+ * A pid whose meaning a host subsystem knows (RP-6 background commands, RP-7
+ * helpers), including one arriving in a worker-originated typed report. The
+ * host validates it here before it may name anything.
+ */
+export const resourceProcessRegistrationSchema = z
+  .object({
+    pid: resourcePidSchema,
+    role: z.enum(["background_command", "helper"]),
+    sessionPath: z.string().min(1).max(4096).optional(),
+    taskId: z.string().min(1).max(RESOURCE_ID_MAX).optional(),
+    runId: z.string().min(1).max(RESOURCE_ID_MAX).optional(),
+    label: z.string().min(1).max(RESOURCE_LABEL_MAX).optional(),
+  })
+  .strict();
+
+/** Method → params, for the registry in `schemas.ts`. */
+export const resourceParamsSchemas = {
+  "resource/snapshot": z.object({ refresh: z.boolean().optional() }).strict(),
+  "resource/history": z
+    .object({ sinceId: z.string().min(1).max(RESOURCE_ID_MAX).optional(), limit: z.number().int().positive().max(RESOURCE_HISTORY_PAGE_MAX).optional() })
+    .strict(),
+  "resource/export": z.object({}).strict(),
+  "resource/report": resourceDesktopReportSchema,
+};
 
 declare module "./messages.js" {
   interface ClientRequests {
@@ -384,7 +485,7 @@ declare module "./messages.js" {
      */
     "resource/report": {
       params: ResourceDesktopReport;
-      result: { accepted: number; rejected: number; verified: boolean };
+      result: ResourceReportResult;
     };
   }
 

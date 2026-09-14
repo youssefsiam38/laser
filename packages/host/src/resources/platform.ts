@@ -25,6 +25,12 @@ export interface ProcessTableRow {
   ppid?: number;
   /** Identity of this run of the pid; the collector's own platform token. */
   startToken: string;
+  /**
+   * When the process started, in epoch milliseconds, when the platform can
+   * say. This is what an outside claim (Electron's `creationTime`) is checked
+   * against, so a recycled pid cannot inherit another process's metrics.
+   */
+  startedAtMs?: number;
   /** Sanitized executable basename. Never argv. */
   label: string;
 }

@@ -25,10 +25,15 @@ afterEach(() => {
   for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
+const NOW = 2_000_000_000_000;
+
 const collector: ProcessCollector = {
   name: "fake",
   source: "proc",
-  table: async () => [{ pid: 200, ppid: 100, startToken: "linux:boot:200", label: "node" }],
+  table: async () => [
+    { pid: 100, ppid: 1, startToken: "linux:boot:100", startedAtMs: NOW - 60_000, label: "electron" },
+    { pid: 200, ppid: 100, startToken: "linux:boot:200", startedAtMs: NOW - 30_000, label: "node" },
+  ],
   measure: async () => ({
     memory: {
       pss: resourceAvailable(1000),
@@ -54,13 +59,7 @@ function harness(withResources = true) {
     invalidate: () => {},
   } as unknown as SessionCatalog;
   const pool = { openSessions: () => [], cwdOfSession: () => undefined } as unknown as WorkerPool;
-  const resources = new ResourceService({
-    collector,
-    platform: "linux",
-    hostPid: 200,
-    hostParentPid: 100,
-    ancestorsOf: () => [{ pid: 100, startToken: "linux:boot:100" }],
-  });
+  const resources = new ResourceService({ collector, platform: "linux", hostPid: 200, minIntervalMs: 0, now: () => NOW });
   const router = new Router(pool, catalog, {
     attention: new AttentionTracker({}),
     projects: new ProjectRegistry({ catalog, agentDir: dir }),
@@ -87,7 +86,11 @@ describe("resource methods at the socket boundary", () => {
 
   it("takes Electron metrics from the local app and refuses them from anywhere else", async () => {
     const { router } = harness();
-    const report = { at: new Date().toISOString(), main: { pid: 100 }, processes: [{ pid: 100, type: "Browser", workingSetBytes: 1000 }] };
+    const report = {
+      at: new Date(NOW).toISOString(),
+      main: { pid: 100, creationTime: NOW - 60_000 },
+      processes: [{ pid: 100, creationTime: NOW - 60_000, type: "Browser", workingSetBytes: 1000 }],
+    };
 
     const remote = await router.handle(request(4, "resource/report", report));
     expect((remote as { error: { code: number; message: string } }).error.code).toBe(ErrorCodes.Unsupported);
@@ -107,7 +110,7 @@ describe("resource methods at the socket boundary", () => {
   it("refuses a report whose shape could name something it does not own", async () => {
     const { router } = harness();
     const response = await router.handle(
-      request(7, "resource/report", { at: new Date().toISOString(), main: { pid: 100 }, processes: [{ pid: 100, type: "Browser", role: "host" }] }),
+      request(7, "resource/report", { at: new Date(NOW).toISOString(), main: { pid: 100 }, processes: [{ pid: 100, type: "Browser", role: "host" }] }),
       { localEnvironment: true },
     );
     expect((response as { error: { code: number } }).error.code).toBe(ErrorCodes.InvalidParams);

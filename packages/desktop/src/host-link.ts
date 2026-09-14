@@ -7,9 +7,12 @@
  * renderer's socket would mean the tray goes blank the moment someone closes
  * the last window.
  *
- * It is a read-only listener — it lists sessions and projects and follows
- * attention. It never prompts, never cancels, never writes. Anything that
+ * It reads: it lists sessions and projects and follows attention. It never
+ * prompts, never cancels and changes nothing a person owns — anything that
  * changes state goes through the UI, where a person can see what they did.
+ * The one thing it sends is the shell's own process metrics (RP-1), which the
+ * host verifies against its own view of the machine and uses only to
+ * cross-check a diagnostic; it starts nothing and stops nothing.
  *
  * Unlike the CLI's `HostRpc`, this one reconnects: the host restarts (a crash,
  * an update, `laser restart`) and the tray has to come back on its own.
@@ -199,6 +202,7 @@ export class HostLink {
     if (!read) return;
     try {
       await this.request("resource/report", electronProcessReport(read(), { mainPid: process.pid }));
+      // The host answers with what it could verify; nothing here acts on it.
     } catch {
       // An older host without the method, or a closing socket. Neither matters.
     }

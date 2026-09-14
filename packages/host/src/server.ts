@@ -462,11 +462,13 @@ export class HostServer {
       },
       isAttached: (cwd) => this.isAttached(cwd),
       hasLiveRun: (cwd) => this.runs.hasLiveRun(cwd),
-      // The pid is only knowable at spawn, and so is the start time that makes
-      // it an identity rather than a number.
+      // The pid is only knowable at spawn. Recording it reads nothing and
+      // blocks nothing; the identity is proved later against a collected table.
       resources: {
         noteWorker: (cwd, pid) => this.resources.ownership.noteWorker(cwd, pid),
-        noteExit: (pid) => this.resources.ownership.noteExit(pid),
+        // The generation travels with the exit, so a dying worker cannot
+        // delete the record of the one that took its pid.
+        noteExit: (pid, generation) => this.resources.ownership.noteExit(pid, generation),
       },
     };
     this.pool = new WorkerPool(poolOptions);
