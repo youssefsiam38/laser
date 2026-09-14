@@ -434,18 +434,140 @@ describe("a key that only looks namespaced", () => {
 });
 
 describe("clearing this browser's data", () => {
-  it("takes every key this app wrote, and closes the store", () => {
-    storage = fakeStorage({
-      [storageKey("panels")]: "{}",
-      "lasercode.theme": '{"v":1}',
-      "someone-elses-key": "left alone",
-    });
+  it("takes everything on this origin, which is all this app's, and closes the store", () => {
+    storage = fakeStorage({ [storageKey("panels")]: "{}", "lasercode.theme": '{"v":1}' });
     store = createDeviceStore(() => storage);
     store.activate(testDescriptor());
     store.writeJson(DEVICE_KEYS.sessionPins, ["/p/s.jsonl"]);
 
-    clearBrowserStorage(storage);
-    expect([...storage.map.keys()]).toEqual(["someone-elses-key"]);
+    expect(clearBrowserStorage(storage)).toBe(true);
+    expect([...storage.map.keys()]).toEqual([]);
     expect(deviceStore.status().active).toBe(false);
+  });
+});
+
+describe("an invalidation that cannot be carried out", () => {
+  /** A storage whose `removeItem` refuses exactly the keys a test names. */
+  function stubborn(entries: Record<string, string>, refuses: (key: string) => boolean): Storage & { map: Map<string, string> } {
+    const backing = fakeStorage(entries);
+    return {
+      ...backing,
+      map: backing.map,
+      get length() {
+        return backing.length;
+      },
+      key: (index: number) => backing.key(index),
+      getItem: (key: string) => backing.getItem(key),
+      setItem: (key: string, value: string) => backing.setItem(key, value),
+      removeItem: (key: string) => {
+        if (refuses(key)) throw new DOMException("denied");
+        backing.removeItem(key);
+      },
+      clear: () => backing.clear(),
+    } as unknown as Storage & { map: Map<string, string> };
+  }
+
+  const draftsKey = deviceKeyName(DEVICE_KEYS.drafts);
+  const pinsKey = deviceKeyName(DEVICE_KEYS.sessionPins);
+  const fingerprintKey = deviceKeyName(DEVICE_KEYS.descriptor);
+  const draftBytes = JSON.stringify({ "/p/s.jsonl": { text: "unsent, and forbidden", at: new Date().toISOString() } });
+
+  const cases: Array<[string, Parameters<typeof testDescriptor>[0]]> = [
+    ["the cache tightened", { cache: { maxBytes: 1024 } }],
+    ["the policy forbids content", { cache: { transcripts: "disabled" } }],
+    ["an encrypted store is required", { cache: { requireDeviceEncryption: true } }],
+  ];
+
+  for (const [name, overrides] of cases) {
+    it(`refuses the environment when the content it must drop survives, because ${name}`, () => {
+      const store = createDeviceStore(() => storage);
+      storage = stubborn(
+        { [fingerprintKey]: JSON.stringify({ contract: "ep1", capabilities: FULL_CAPABILITIES, cache: DEFAULT_CACHE_POLICY }), [draftsKey]: draftBytes },
+        (key) => key === draftsKey,
+      );
+
+      const outcome = store.activate(testDescriptor(overrides));
+      expect(outcome).toMatchObject({ kind: "failure" });
+      expect(outcome.kind === "failure" && outcome.reason).toMatch(/will not let go/);
+      expect(store.status().active).toBe(false);
+
+      // The old, wider fingerprint is untouched: nothing claimed these bytes
+      // were written under the narrower policy.
+      expect(JSON.parse(storage.map.get(fingerprintKey)!).cache).toEqual(DEFAULT_CACHE_POLICY);
+
+      // And when the policy loosens again, the forbidden bytes are not
+      // readable: what could not be removed was at least emptied.
+      expect(store.readDraft("/p/s.jsonl")).toBeUndefined();
+      expect(storage.map.get(draftsKey)).toBe("");
+      const loosened = createDeviceStore(() => storage);
+      loosened.activate(testDescriptor());
+      expect(loosened.readDraft("/p/s.jsonl")).toBeUndefined();
+      loosened.deactivate();
+    });
+  }
+
+  it("refuses when a whole-namespace invalidation leaves anything behind", () => {
+    storage = stubborn({ [pinsKey]: '["/p/s.jsonl"]' }, (key) => key === pinsKey);
+    const store = createDeviceStore(() => storage);
+    // No fingerprint beside real data: the namespace must go, and it cannot.
+    const outcome = store.activate(testDescriptor());
+    expect(outcome.kind).toBe("failure");
+    expect(store.status().active).toBe(false);
+    expect(storage.map.has(fingerprintKey)).toBe(false);
+  });
+
+  it("purges a suffix it has never heard of, when the provenance is gone", () => {
+    const future = `${ENVIRONMENT_NAMESPACE}:${TEST_ENVIRONMENT_KEY}:tail-cache`;
+    storage = fakeStorage({ [future]: '{"entries":["transcript bytes"]}' });
+    const store = createDeviceStore(() => storage);
+    const outcome = store.activate(testDescriptor());
+    // Data with no fingerprint beside it, under a key this build does not
+    // know: still this environment's, still invalidated.
+    expect(outcome).toMatchObject({ kind: "first", invalidated: "namespace" });
+    expect(storage.map.has(future)).toBe(false);
+    store.deactivate();
+  });
+});
+
+describe("clearing this browser's data, when that is the only way out", () => {
+  it("works past the scan ceiling that caused the failure in the first place", () => {
+    const crowded: Record<string, string> = {};
+    for (let index = 0; index <= MAX_SCANNED_KEYS; index += 1) crowded[`${storageKey("draft:")}${index}.jsonl`] = "x";
+    storage = fakeStorage(crowded);
+    const store = createDeviceStore(() => storage);
+    // Exactly the failure the notice appears for.
+    expect(store.activate(testDescriptor()).kind).toBe("failure");
+
+    expect(clearBrowserStorage(storage)).toBe(true);
+    expect(storage.map.size).toBe(0);
+    // And the environment opens on the next attempt.
+    expect(createDeviceStore(() => storage).activate(testDescriptor()).kind).toBe("first");
+  });
+
+  it("does not claim success when the browser refuses to clear", () => {
+    const refusing = { ...fakeStorage(), clear: () => { throw new DOMException("denied"); } } as unknown as Storage;
+    expect(clearBrowserStorage(refusing)).toBe(false);
+  });
+});
+
+describe("the lifecycle listeners", () => {
+  it("are all told, in order, even when one of them throws", () => {
+    const store = createDeviceStore(() => storage);
+    const heard: string[] = [];
+    store.subscribe(() => heard.push("first"));
+    store.subscribe(() => {
+      heard.push("throws");
+      throw new Error("a store's rehydrate went wrong");
+    });
+    store.subscribe(() => heard.push("last"));
+
+    expect(() => store.activate(testDescriptor())).not.toThrow();
+    expect(heard).toEqual(["first", "throws", "last"]);
+    // And the activation itself is unharmed: this is still an open store.
+    expect(store.status()).toMatchObject({ active: true, persistent: true });
+
+    heard.length = 0;
+    store.deactivate();
+    expect(heard).toEqual(["first", "throws", "last"]);
   });
 });

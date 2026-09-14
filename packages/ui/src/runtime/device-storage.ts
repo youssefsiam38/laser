@@ -244,6 +244,8 @@ export interface DraftRecord {
 
 export interface DeviceStore {
   status(): DeviceStorageStatus;
+  /** Internal: close the store with the stable "cannot clear" failure. */
+  refuse(): ActivationResult;
   /**
    * Remove the pre-environment keys, whatever happens next.
    *
@@ -354,7 +356,15 @@ export function createDeviceStore(getStorage: () => Storage | null): DeviceStore
 
   const publish = (event: DeviceStoreEvent): void => {
     snapshot = { active: environmentKey !== undefined, environmentKey, persistent: storage !== null, content, refusal };
-    for (const listener of [...listeners]) listener(event);
+    for (const listener of [...listeners]) {
+      try {
+        listener(event);
+      } catch {
+        // One store's rehydrate is not allowed to cost the others theirs, nor
+        // to turn a safe activation into half a handshake. A store that throws
+        // keeps whatever it had; the ones after it still hear the event.
+      }
+    }
   };
 
   const open = (): Storage | null => {
@@ -421,9 +431,60 @@ export function createDeviceStore(getStorage: () => Storage | null): DeviceStore
     }
   };
 
-  /** Does this namespace hold anything at all beside its fingerprint? */
-  const namespaceHasData = (): boolean =>
-    Object.values(DEVICE_KEYS).some((key) => key !== DEVICE_KEYS.descriptor && rawRead(key) !== undefined);
+  /**
+   * Every key this environment actually holds, discovered by prefix.
+   *
+   * By prefix rather than by {@link DEVICE_KEYS}, because the thing that must
+   * not survive an invalidation is *whatever is there* — including a suffix an
+   * older or newer build of this app wrote and this one has never heard of.
+   * `undefined` means the scan could not be taken, which is never treated as
+   * "nothing is there".
+   */
+  const namespaceKeys = (store: Storage, key: string): string[] | undefined => {
+    const prefix = `${ENVIRONMENT_NAMESPACE}:${key}:`;
+    return snapshotKeys(store)?.filter((name) => name.startsWith(prefix));
+  };
+
+  const isDescriptorKey = (name: string, key: string): boolean =>
+    name === `${ENVIRONMENT_NAMESPACE}:${key}:${DEVICE_KEYS.descriptor}`;
+
+  const isContentKey = (name: string, key: string): boolean =>
+    name === `${ENVIRONMENT_NAMESPACE}:${key}:${DEVICE_KEYS.drafts}`;
+
+  /**
+   * Remove exactly these keys and prove they are gone.
+   *
+   * `false` means the device still holds something that was supposed to be
+   * invalidated — a selectively failing `removeItem`, a scan that could not be
+   * retaken — and the caller must refuse to open the namespace rather than
+   * write a new fingerprint over bytes a later, looser policy would happily
+   * read back.
+   */
+  const purgeExact = (store: Storage, names: readonly string[]): boolean => {
+    let complete = true;
+    for (const name of names) {
+      try {
+        store.removeItem(name);
+      } catch {
+        complete = false;
+      }
+      // A browser that refuses to remove a key may still let it be written.
+      // Emptying it is not as good as removing it — the key is still there —
+      // but it means the bytes are gone, so a later, looser policy cannot read
+      // back what this one forbade. The activation still fails.
+      try {
+        if (store.getItem(name) !== null) {
+          store.setItem(name, "");
+          complete = false;
+        }
+      } catch {
+        complete = false;
+      }
+    }
+    const after = snapshotKeys(store);
+    if (after === undefined) return false;
+    return complete && !names.some((name) => after.includes(name));
+  };
 
   /**
    * Which way each cache field can only get tighter.
@@ -443,7 +504,7 @@ export function createDeviceStore(getStorage: () => Storage | null): DeviceStore
   };
 
   /** What a new descriptor takes away from the one this namespace was written under. */
-  const invalidationFor = (next: Fingerprint, transition: EnvironmentTransition): "none" | "namespace" | "content" => {
+  const invalidationFor = (next: Fingerprint, transition: EnvironmentTransition, hasData: boolean): "none" | "namespace" | "content" => {
     const previous = readFingerprint();
     if (!previous) {
       // No fingerprint, or one this build cannot read, beside data somebody
@@ -453,7 +514,7 @@ export function createDeviceStore(getStorage: () => Storage | null): DeviceStore
       // holds this session's own writes, made under the descriptor now being
       // re-confirmed (the record itself can go missing under the app — another
       // tab clearing site data — without making this session's state foreign).
-      return namespaceHasData() && transition !== "same" ? "namespace" : "none";
+      return hasData && transition !== "same" ? "namespace" : "none";
     }
     if (previous.contract !== next.contract) return "namespace";
     const after = next.capabilities as unknown as Record<string, boolean>;
@@ -483,11 +544,6 @@ export function createDeviceStore(getStorage: () => Storage | null): DeviceStore
     // Verified, not assumed: a half-purged device must never become readable.
     const after = snapshotKeys(store);
     return after !== undefined && !after.some(unsafe);
-  };
-
-  const purgeNamespace = (only: readonly DeviceKey[] | "all"): void => {
-    const keys = only === "all" ? Object.values(DEVICE_KEYS) : only;
-    for (const key of keys) rawWrite(key, undefined);
   };
 
   /** Open the environment without any storage behind it. */
@@ -640,12 +696,25 @@ export function createDeviceStore(getStorage: () => Storage | null): DeviceStore
       content = admission.content;
       refusal = admission.refusal;
 
+      // What this environment really holds, discovered rather than assumed.
+      const held = namespaceKeys(store, key);
+      if (!held) return this.refuse();
       const next = fingerprintOf(descriptor);
-      const invalidated = invalidationFor(next, transition);
-      if (invalidated === "namespace") purgeNamespace("all");
-      else if (invalidated === "content") purgeNamespace([DEVICE_KEYS.drafts]);
-      // A policy that forbids content also forbids the content already here.
-      if (!content) rawWrite(DEVICE_KEYS.drafts, undefined);
+      const invalidated = invalidationFor(next, transition, held.some((name) => !isDescriptorKey(name, key)));
+
+      // Everything that must not survive this descriptor, by exact key: the
+      // whole namespace when its provenance is gone or a capability was
+      // withdrawn, the content alone when the cache tightened, and the content
+      // again when this policy forbids keeping any. A removal that cannot be
+      // proved to have happened closes the store instead of opening it — the
+      // alternative is forbidden bytes sitting under a fingerprint that says
+      // they are fine, waiting for a looser policy to read them back.
+      const doomed = invalidated === "namespace"
+        ? held
+        : invalidated === "content" || !content
+          ? held.filter((name) => isContentKey(name, key))
+          : [];
+      if (doomed.length > 0 && !purgeExact(store, doomed)) return this.refuse();
 
       // The fingerprint is written and read back. If it does not survive — a
       // quota that will not take even this — the namespace cannot be trusted
@@ -658,6 +727,19 @@ export function createDeviceStore(getStorage: () => Storage | null): DeviceStore
       const kind = transition === "same" && invalidated !== "none" ? "narrowed" : transition;
       publish({ kind: "activated", environmentKey: key, transition: kind });
       return { kind, environmentKey: key, invalidated, persistent: true };
+    },
+
+    /**
+     * Close the store and say why, in a sentence a person can act on: the
+     * notice's recovery is to clear this browser's data for this app, which is
+     * exactly what an un-removable key needs.
+     */
+    refuse(): ActivationResult {
+      this.deactivate();
+      return {
+        kind: "failure",
+        reason: "This browser will not let go of data from an earlier session, so nothing is being kept on this device. Clearing this browser's data for this app fixes it.",
+      };
     },
 
     deactivate() {
@@ -722,18 +804,24 @@ export const deviceStore: DeviceStore = createDeviceStore(() => globalThis.local
  * start, and half a clean start is the confusing answer. Never touches the
  * host, and never throws.
  */
-export function clearBrowserStorage(storage: Storage | null = safeLocalStorage()): void {
+export function clearBrowserStorage(storage: Storage | null = safeLocalStorage()): boolean {
   deviceStore.deactivate();
-  if (!storage) return;
-  const keys = snapshotKeys(storage);
-  if (!keys) return;
-  for (const key of keys) {
-    if (!key.startsWith(`${STORAGE_PREFIX}-`) && !key.startsWith(`${STORAGE_PREFIX}.`)) continue;
-    try {
-      storage.removeItem(key);
-    } catch {
-      // A browser that will not let go of a key is one this cannot help with.
-    }
+  if (!storage) return true;
+  try {
+    // `clear()`, not a scan: this is the person asking, on this app's own
+    // origin, and the failure it recovers from is precisely the one where
+    // there is more here than a bounded scan will look at. Everything in this
+    // origin's `localStorage` is this app's.
+    storage.clear();
+  } catch {
+    return false;
+  }
+  try {
+    // Only meaningful when the store still answers; a store that will not say
+    // is not evidence that anything survived.
+    return storage.length === 0;
+  } catch {
+    return true;
   }
 }
 

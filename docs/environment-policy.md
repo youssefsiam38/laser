@@ -307,7 +307,9 @@ the provider: it reads a discriminated activation result (`failure`, or
 away. Stores do not each remember to keep up — they subscribe to the device
 store and re-read whichever namespace opens, **including the first one**, which
 is the case a store watching only for switches would miss and then overwrite
-with its own empty start.
+with its own empty start. Each listener is isolated: one store's rehydrate
+throwing cannot skip the stores after it or turn a safe activation into half a
+handshake.
 
 Drafts and the fingerprint are not reachable through the generic accessors at
 all: their keys are excluded from the accessor's type, so content can only go
@@ -355,6 +357,21 @@ environment opens.
 
 Keys that only *look* namespaced — no environment segment, or one that is not
 a valid environment key — belong to nobody and are purged with the rest.
+
+The same holds inside the namespace: what an invalidation must remove is
+**discovered by prefix** and removed key by key, so a suffix an older or newer
+build wrote is invalidated too rather than quietly surviving an "everything I
+know about" sweep. A removal that cannot be proved to have happened closes the
+store and reports the failure, and whatever could not be removed is at least
+emptied — a later, looser policy must not be able to read back what this one
+forbade. No new fingerprint is ever written over bytes that were supposed to
+be gone.
+
+The notice's recovery uses `Storage.clear()` rather than a scan, because the
+failure it exists to fix is precisely the one where there is more stored here
+than a bounded scan will look at. It is the person asking, on this app's own
+origin. If the browser refuses even that, the notice stays after the reload
+rather than claiming success.
 
 **A purge that could not finish does not open the door.** The scan is bounded
 (`MAX_SCANNED_KEYS`) and verified afterwards; if it hits its ceiling or a
