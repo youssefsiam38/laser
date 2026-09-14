@@ -6,11 +6,12 @@
  * piece and is module-level so `Rail` and `SessionsPanel` share it without a
  * context the shell would have to own.
  */
-import { WORKTREES_DIR_NAME, storageKey } from "@lasercode/protocol";
+import { WORKTREES_DIR_NAME } from "@lasercode/protocol";
 import { useSyncExternalStore } from "react";
 import type { AgentRun, SessionSummary } from "@lasercode/protocol";
 
 import { shortCwd } from "../../format.js";
+import { DEVICE_KEYS, deviceStore } from "../../runtime/device-storage.js";
 import { rootCwdForSession, type MainTab } from "../../runtime/main-destination.js";
 import { SESSIONS_TAB_STORAGE_KEY } from "../../runtime/session-tab-memory.js";
 import { mergeSessions, parentPathOf, sessionTitle, sortSessions } from "../../runtime/threadList.js";
@@ -233,8 +234,6 @@ export function groupDomId(cwd: string): string {
 // List state shared by the rail and the panel
 // ---------------------------------------------------------------------------
 
-export const SESSION_GROUPS_STORAGE_KEY = storageKey("session-groups");
-export const SESSION_PINS_STORAGE_KEY = storageKey("session-pins");
 
 export interface SessionsListState {
   /** Only this project's group is shown; `undefined` = every project. */
@@ -249,24 +248,20 @@ export interface SessionsListState {
   readonly revealed: ReadonlyMap<string, number>;
 }
 
-const readPaths = (key: string): Set<string> => {
-  try {
-    const parsed: unknown = JSON.parse(globalThis.localStorage?.getItem(key) ?? "[]");
-    return new Set(Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : []);
-  } catch {
-    return new Set();
-  }
-};
+/**
+ * Collapsed groups are project directories and pins are session paths, so both
+ * belong to the environment they came from (RP-13). `deviceStore` answers
+ * nothing until one is known, which is why the list starts empty and adopts
+ * what it finds when {@link sessionsList.rehydrate} runs.
+ */
+const readPaths = (key: typeof DEVICE_KEYS.sessionGroups | typeof DEVICE_KEYS.sessionPins): Set<string> =>
+  new Set(deviceStore.readJson(key, (value) => (Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : undefined)) ?? []);
 
 const writeCollapsed = (collapsed: ReadonlySet<string>): void => {
-  try {
-    globalThis.localStorage?.setItem(SESSION_GROUPS_STORAGE_KEY, JSON.stringify([...collapsed]));
-  } catch {
-    /* private mode / quota: the choice lives for this tab */
-  }
+  deviceStore.writeJson(DEVICE_KEYS.sessionGroups, [...collapsed]);
 };
 
-let listState: SessionsListState = { filter: undefined, jump: undefined, collapsed: readPaths(SESSION_GROUPS_STORAGE_KEY), pinned: readPaths(SESSION_PINS_STORAGE_KEY), revealed: new Map() };
+let listState: SessionsListState = { filter: undefined, jump: undefined, collapsed: readPaths(DEVICE_KEYS.sessionGroups), pinned: readPaths(DEVICE_KEYS.sessionPins), revealed: new Map() };
 const listeners = new Set<() => void>();
 let jumpNonce = 0;
 
@@ -316,16 +311,22 @@ export const sessionsList = {
     const pinned = new Set(listState.pinned);
     if (pinned.has(path)) pinned.delete(path);
     else pinned.add(path);
-    try {
-      globalThis.localStorage?.setItem(SESSION_PINS_STORAGE_KEY, JSON.stringify([...pinned]));
-    } catch {
-      // As with collapsed groups, private mode retains this tab's choice.
-    }
+    deviceStore.writeJson(DEVICE_KEYS.sessionPins, [...pinned]);
     publish({ ...listState, pinned });
   },
-  /** Test seam. */
+  /** Forget this environment's list state entirely (environment switch, tests). */
   reset(): void {
     publish({ filter: undefined, jump: undefined, collapsed: new Set(), pinned: new Set(), revealed: new Map() });
+  },
+  /** Adopt the newly opened environment's remembered groups and pins. */
+  rehydrate(): void {
+    publish({
+      filter: undefined,
+      jump: undefined,
+      collapsed: readPaths(DEVICE_KEYS.sessionGroups),
+      pinned: readPaths(DEVICE_KEYS.sessionPins),
+      revealed: new Map(),
+    });
   },
 };
 

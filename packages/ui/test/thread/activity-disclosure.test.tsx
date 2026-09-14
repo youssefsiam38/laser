@@ -16,6 +16,7 @@ import type { Block } from "../../src/store.js";
 import { activityRow, activityTrigger } from "../../src/components/assistant-ui/elements/surfaces.js";
 import { SearchMessageContext } from "../../src/components/thread/search-state.js";
 import { ToolRow } from "../../src/components/thread/ToolRow.js";
+import { activateTestEnvironment } from "../../test/runtime/environment-fixture.js";
 
 const preferences = vi.hoisted(() => ({ level: "answers" as ActivityDetailLevel, path: "/test/session" }));
 vi.mock("@/runtime", async () => ({
@@ -45,6 +46,7 @@ beforeEach(() => {
   preferences.level = "answers";
   preferences.path = "/test/session";
   globalThis.localStorage.clear();
+  activateTestEnvironment();
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);

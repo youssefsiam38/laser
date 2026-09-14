@@ -25,25 +25,20 @@ import { mapUi } from "@/components/agents/map";
 import { useWorkbench } from "@/components/workbench";
 import { closeFleetSheet } from "@/fleet";
 import { isMainReady, mainPath, mainTab, useLaserStable, useLaserState } from "@/runtime";
-import { SESSION_STORAGE_KEY } from "@/runtime/LaserProvider";
+import { rememberedSessions } from "@/runtime/main-destination-controller";
 
 import { errorText } from "./shell-context.js";
 
 /**
- * The session the app remembers for `cwd` — the one the runtime writes under
- * `SESSION_STORAGE_KEY` whenever a session becomes current — provided it is
- * still in the catalog. A deleted or unknown session is not a destination.
+ * The session the app remembers for `cwd` — the one the destination
+ * controller records whenever a session becomes current, inside this
+ * environment's own namespace — provided it is still in the catalog. A deleted
+ * or unknown session is not a destination.
  */
 export function rememberedSessionFor(cwd: string | undefined, sessions: readonly SessionSummary[]): string | undefined {
   if (!cwd) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(globalThis.localStorage?.getItem(SESSION_STORAGE_KEY) ?? "{}");
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
-    const path = (parsed as Record<string, unknown>)[cwd];
-    return typeof path === "string" && sessions.some((session) => session.path === path) ? path : undefined;
-  } catch {
-    return undefined;
-  }
+  const path = rememberedSessions()[cwd];
+  return path !== undefined && sessions.some((session) => session.path === path) ? path : undefined;
 }
 
 export interface ChatNavigation {

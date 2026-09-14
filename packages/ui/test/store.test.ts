@@ -287,3 +287,60 @@ describe("blocksFromEntries", () => {
     expect(block).not.toHaveProperty("stopReason");
   });
 });
+
+describe("the environment (RP-13)", () => {
+  const environment = {
+    contract: "ep1",
+    deployment: "cloud" as const,
+    environmentKey: "e1.AAAAAAAAAAAAAAAAAAAAAA",
+    capabilities: { revisions: true, deltas: true, snapshots: true, durableReads: true, search: true, diagnostics: true, logs: true, push: true },
+    cache: { transcripts: "allowed" as const, maxSessions: 24, maxBytes: 1024, maxEntriesPerSession: 200, maxAgeHours: 336, attachments: "reference" as const, requireDeviceEncryption: false },
+    scopes: ["handshake", "read"] as never,
+  };
+
+  it("clears a failure when an environment is established, and keeps one sentence otherwise", () => {
+    const failed = reduce(initialState, { type: "environmentError", message: "This host cannot say what environment this is." });
+    expect(failed.environmentError).toBe("This host cannot say what environment this is.");
+    // The same sentence again is the same state: a retry loop renders nothing new.
+    expect(reduce(failed, { type: "environmentError", message: "This host cannot say what environment this is." })).toBe(failed);
+    const established = reduce(failed, { type: "environment", environment });
+    expect(established.environment).toEqual(environment);
+    expect(established).not.toHaveProperty("environmentError");
+  });
+
+  it("throws away everything derived from the environment it is leaving", () => {
+    const busy = {
+      ...initialState,
+      connection: "open" as const,
+      environment,
+      sessions: [{ path: "/p/s.jsonl" } as never],
+      sessionsLoaded: true,
+      open: { "/p/s.jsonl": { path: "/p/s.jsonl" } as unknown as SessionView },
+      current: "/p/s.jsonl",
+      workers: { "/p": { status: "ready" } },
+      toasts: [{ id: 1, level: "info" as const, text: "kept nothing" }],
+      agents: { ...initialState.agents, runs: { r1: { runId: "r1" } as never } },
+      tasks: { tasks: { t1: { id: "t1" } as never }, listed: ["/p/s.jsonl"] },
+    };
+    const next = reduce(busy, { type: "resetEnvironment" });
+    expect(next.sessions).toEqual([]);
+    expect(next.open).toEqual({});
+    expect(next.current).toBeUndefined();
+    expect(next.sessionsLoaded).toBe(false);
+    expect(next.workers).toEqual({});
+    expect(next.toasts).toEqual([]);
+    expect(next.agents.runs).toEqual({});
+    expect(next.tasks).toEqual(initialState.tasks);
+    expect(next.destination).toEqual(initialState.destination);
+    // The connection's own facts are not environment state.
+    expect(next.connection).toBe("open");
+  });
+
+  it("adopts a remembered destination only while nothing else has chosen one", () => {
+    const remembered = { phase: "resolving" as const, intent: 0, target: { kind: "chat-tab" as const }, rememberedCode: { kind: "no-project-landing" as const } };
+    expect(reduce(initialState, { type: "restoreDestination", destination: remembered }).destination).toEqual(remembered);
+
+    const chosen = reduce(initialState, { type: "destination", destination: { ...remembered, intent: 4 } });
+    expect(reduce(chosen, { type: "restoreDestination", destination: remembered })).toBe(chosen);
+  });
+});

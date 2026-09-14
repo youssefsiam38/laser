@@ -25,13 +25,15 @@ import { SessionsPanel } from "../../src/components/shell/SessionsPanel.js";
 import { ShellContext, type ShellContextValue } from "../../src/components/shell/shell-context.js";
 import { sessionsList } from "../../src/components/shell/session-groups.js";
 import { ThreadList } from "../../src/components/assistant-ui/elements/thread-list.aui.js";
-import { SESSION_FOLDS_STORAGE_KEY, sessionFolds } from "../../src/components/assistant-ui/elements/session-folds.js";
+import { sessionFolds } from "../../src/components/assistant-ui/elements/session-folds.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { LaserStoreProvider, createStateStore, type StateStore } from "../../src/runtime/LaserProvider.js";
 import type { MainDestination } from "../../src/runtime/main-destination.js";
 import { toThreadMetadata } from "../../src/runtime/threadList.js";
 import { initialState, reduce, type AppState } from "../../src/store.js";
 import { run, snapshot, summary } from "../agents/fixtures.js";
+import { DEVICE_KEYS } from "../../src/runtime/device-storage.js";
+import { activateTestEnvironment, readDeviceValue } from "../../test/runtime/environment-fixture.js";
 
 const stable = vi.hoisted(() => ({
   projects: ["/one"],
@@ -153,6 +155,7 @@ beforeEach(() => {
   sessionsList.reset();
   sessionFolds.reset();
   localStorage.clear();
+  activateTestEnvironment();
   store = createStateStore(seed());
   container = document.createElement("div");
   document.body.append(container);
@@ -421,7 +424,7 @@ describe("sub-sessions fold", () => {
 
     // Remembered, per parent, across a remount.
     await act(async () => foldOf("Ship the release").click());
-    expect(JSON.parse(localStorage.getItem(SESSION_FOLDS_STORAGE_KEY)!)).toEqual({ [`c:${ROOT}`]: false });
+    expect(JSON.parse(readDeviceValue(DEVICE_KEYS.sessionFolds)!)).toEqual({ [`c:${ROOT}`]: false });
     await act(async () => root.unmount());
     root = createRoot(container);
     await mount();

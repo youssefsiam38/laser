@@ -31,8 +31,18 @@ interface WorkerReadinessOptions {
 /** One subscription for the main provider; default catalog selection is not intent. */
 export function useWorkerReadiness({ currentProject, connection, sessionsLoaded, projects, client, readState, archive }: WorkerReadinessOptions) {
   // Capture restored memory before the provider's automatic project fallback.
+  //
+  // The remembered project is readable only once the environment is known
+  // (RP-13), which is after this hook's first render: the descriptor is
+  // delivered, the device is scoped to it and the destination is restored, and
+  // only then does the connection open. So the restored project is adopted
+  // whenever it arrives, up until the readiness controller starts.
   const memory = useRef(currentProject);
   const controller = useRef<ReturnType<typeof createWorkerReadiness> | undefined>(undefined);
+  // Adopted during render, before any effect of this commit: the readiness
+  // controller has not started, so nothing the app chose automatically can be
+  // in `currentProject` yet — only what the person left behind.
+  if (memory.current === undefined && controller.current === undefined) memory.current = currentProject;
   useEffect(() => {
     if (connection !== "open" || !sessionsLoaded || projects.length === 0) return;
     const readiness = createWorkerReadiness(

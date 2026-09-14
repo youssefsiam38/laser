@@ -20,6 +20,7 @@ import { ComposerDraftRestore, writeDraft } from "../../src/components/assistant
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { LaserProvider, useLaserStable } from "../../src/runtime/LaserProvider.js";
 import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../beam/fake-host.js";
+import { activateTestEnvironment } from "../runtime/environment-fixture.js";
 
 const PATH = `${PROJECT_CWD}/s.jsonl`;
 
@@ -54,6 +55,8 @@ let world: World;
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   localStorage.clear();
+  // A draft is content, and content belongs to an environment (RP-13).
+  activateTestEnvironment();
   world = createWorld();
   addSession(world, PATH, PROJECT_CWD);
   FakeHostClient.reset(world);

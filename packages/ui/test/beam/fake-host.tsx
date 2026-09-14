@@ -11,9 +11,10 @@
  *     HostClient: (await import("./fake-host.js")).FakeHostClient,
  *   }));
  */
-import type { AgentsSnapshot, HostNotificationMethod, HostNotifications, ModelCatalogEntry, ProviderAuthInfo, SessionState, SessionSummary } from "@lasercode/protocol";
+import type { AgentsSnapshot, EnvironmentDescriptor, HostNotificationMethod, HostNotifications, ModelCatalogEntry, ProviderAuthInfo, SessionState, SessionSummary } from "@lasercode/protocol";
 import type { HostClientOptions } from "../../src/client.js";
 import { sessionState, snapshot as agentsSnapshot, summary } from "../agents/fixtures.js";
+import { testDescriptor } from "../runtime/environment-fixture.js";
 
 export const BEAM_CWD = "/state/beam";
 export const PROJECT_CWD = "/p";
@@ -65,6 +66,7 @@ export class FakeHostClient {
   static reset(world: World = createWorld()): void {
     FakeHostClient.instances = [];
     FakeHostClient.world = world;
+    FakeHostClient.environment = testDescriptor();
     created = 0;
   }
   /** The most recent client the provider built. */
@@ -78,11 +80,43 @@ export class FakeHostClient {
     FakeHostClient.instances.push(this);
   }
 
+  /**
+   * The environment this fake host describes on connect, or `null` for a host
+   * that cannot describe one (RP-13). A test that switches environments sets
+   * this and calls {@link FakeHostClient.redescribe}.
+   */
+  static environment: EnvironmentDescriptor | null = testDescriptor();
+
   connect(): void {
-    queueMicrotask(() => this.options.onConnection?.("open"));
+    queueMicrotask(() => {
+      // As in the app: the environment comes first, the connection second, and
+      // a host that cannot describe one never opens.
+      const environment = FakeHostClient.environment;
+      if (!environment) {
+        this.options.onEnvironmentFailure?.("This host cannot say what environment this is, so nothing is being kept on this device.");
+        this.options.onConnection?.("closed");
+        return;
+      }
+      const acceptance = this.options.onEnvironment?.(environment) ?? { ok: true };
+      if (!acceptance.ok) {
+        this.options.onEnvironmentFailure?.(acceptance.reason);
+        this.options.onConnection?.("closed");
+        return;
+      }
+      this.options.onConnection?.("open");
+    });
+  }
+
+  /** A reconnect that lands in a different (or narrowed) environment. */
+  redescribe(environment: EnvironmentDescriptor): void {
+    FakeHostClient.environment = environment;
+    this.options.onConnection?.("connecting");
+    this.options.onEnvironment?.(environment);
+    this.options.onConnection?.("open");
   }
   reconnect(): void {}
   close(): void {}
+  forgetAttachments(): void {}
   track(): void {}
   untrack(): void {}
   resync(): void {}

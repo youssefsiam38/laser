@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { ProjectInfo, SessionState, SessionSummary } from "@lasercode/protocol";
 import type { SessionView } from "../../src/store.js";
 import {
-  ARCHIVE_STORAGE_KEY,
   attentionRank,
   createArchiveStore,
   createThreadListAdapter,
@@ -15,6 +14,8 @@ import {
   toThreadMetadata,
   visibleProjectCwds,
 } from "../../src/runtime/threadList.js";
+import { DEVICE_KEYS, deviceStore } from "../../src/runtime/device-storage.js";
+import { activateTestEnvironment, deviceKeyName, installFakeStorage } from "./environment-fixture.js";
 
 const summary = (over: Partial<SessionSummary> & Pick<SessionSummary, "path" | "id">): SessionSummary => ({
   cwd: "/p",
@@ -137,7 +138,7 @@ describe("titles and metadata", () => {
   it("lets the first live prompt clear empty ordering before a zero-count catalog catches up", () => {
     const s = summary({ path: "/a.jsonl", id: "a", messageCount: 0 });
     const v = view({ state: sessionState({ messageCount: 0 }), blocks: [] });
-    const archive = createArchiveStore(null);
+    const archive = createArchiveStore();
     const before = threadListSignature([s], { [s.path]: v }, archive);
     expect(toThreadMetadata(s, v, false).custom?.["empty"]).toBe(true);
     const sent: SessionView = { ...v, blocks: [{ kind: "user", id: "first", text: "Start here", files: [], images: [] }] };
@@ -161,41 +162,55 @@ describe("mergeSessions", () => {
 });
 
 describe("createArchiveStore", () => {
-  it("round-trips through storage under the documented key", () => {
-    const backing = new Map<string, string>();
-    const storage = {
-      getItem: (k: string) => backing.get(k) ?? null,
-      setItem: (k: string, v: string) => void backing.set(k, v),
-    };
-    const store = createArchiveStore(storage);
-    store.add("/a.jsonl");
-    expect(store.has("/a.jsonl")).toBe(true);
-    expect(JSON.parse(backing.get(ARCHIVE_STORAGE_KEY)!)).toEqual(["/a.jsonl"]);
+  it("round-trips inside the environment's own namespace", () => {
+    const storage = installFakeStorage();
+    try {
+      activateTestEnvironment();
+      const store = createArchiveStore();
+      store.add("/a.jsonl");
+      expect(store.has("/a.jsonl")).toBe(true);
+      expect(JSON.parse(storage.entries.get(deviceKeyName(DEVICE_KEYS.archived))!)).toEqual(["/a.jsonl"]);
 
-    expect(createArchiveStore(storage).has("/a.jsonl")).toBe(true);
-    store.remove("/a.jsonl");
-    expect(store.list()).toEqual([]);
+      expect(createArchiveStore().has("/a.jsonl")).toBe(true);
+      store.remove("/a.jsonl");
+      expect(store.list()).toEqual([]);
+    } finally {
+      storage.restore();
+    }
   });
 
-  it("survives a missing or hostile storage", () => {
-    const store = createArchiveStore(null);
-    store.add("/x");
-    expect(store.has("/x")).toBe(true);
-    const throwing = {
-      getItem: () => {
-        throw new Error("blocked");
-      },
-      setItem: () => {
-        throw new Error("blocked");
-      },
-    };
-    const guarded = createArchiveStore(throwing);
-    guarded.add("/y");
-    expect(guarded.has("/y")).toBe(true);
+  it("keeps working in memory when no environment has been established", () => {
+    // Nothing is stored before the descriptor, but the archive a person
+    // touches in this tab still behaves.
+    const storage = installFakeStorage();
+    try {
+      deviceStore.deactivate();
+      const store = createArchiveStore();
+      store.add("/x");
+      expect(store.has("/x")).toBe(true);
+      expect(storage.entries.get(deviceKeyName(DEVICE_KEYS.archived))).toBeUndefined();
+    } finally {
+      storage.restore();
+    }
+  });
+
+  it("adopts the namespace that opens after it was built", () => {
+    const storage = installFakeStorage();
+    try {
+      deviceStore.deactivate();
+      const store = createArchiveStore();
+      expect(store.has("/remembered.jsonl")).toBe(false);
+      activateTestEnvironment();
+      deviceStore.writeJson(DEVICE_KEYS.archived, ["/remembered.jsonl"]);
+      store.rehydrate();
+      expect(store.has("/remembered.jsonl")).toBe(true);
+    } finally {
+      storage.restore();
+    }
   });
 
   it("publishes only real archive changes", () => {
-    const store = createArchiveStore(null);
+    const store = createArchiveStore();
     const revisions: number[] = [];
     const unsubscribe = store.subscribe(() => revisions.push(store.getSnapshot()));
     store.add("/a");
@@ -219,7 +234,7 @@ describe("visibleProjectCwds", () => {
   });
 
   it("hides an unpinned project whose on-disk chats are all archived", () => {
-    const archive = createArchiveStore(null);
+    const archive = createArchiveStore();
     archive.add("/old.jsonl");
     expect(
       visibleProjectCwds(
@@ -232,7 +247,7 @@ describe("visibleProjectCwds", () => {
   });
 
   it("keeps unarchived and open projects reachable", () => {
-    const archive = createArchiveStore(null);
+    const archive = createArchiveStore();
     archive.add("/open.jsonl");
     const open = view({ path: "/open.jsonl", state: sessionState({ path: "/open.jsonl", cwd: "/open" }) });
     expect(
@@ -249,7 +264,7 @@ describe("visibleProjectCwds", () => {
   });
 
   it("keeps a discovered project visible until its complete catalog is archived", () => {
-    const archive = createArchiveStore(null);
+    const archive = createArchiveStore();
     archive.add("/known.jsonl");
     expect(
       visibleProjectCwds(
@@ -262,7 +277,7 @@ describe("visibleProjectCwds", () => {
   });
 
   it("preserves host priority and only appends not-yet-indexed projects", () => {
-    const archive = createArchiveStore(null);
+    const archive = createArchiveStore();
     expect(
       visibleProjectCwds(
         [project("/z-priority", true), project("/a-later", true)],
@@ -297,7 +312,7 @@ describe("orderProjectInfos", () => {
 describe("createThreadListAdapter", () => {
   const deps = (over: Partial<Parameters<typeof createThreadListAdapter>[0]> = {}) => {
     const calls: string[] = [];
-    const archive = createArchiveStore(null);
+    const archive = createArchiveStore();
     const adapter = createThreadListAdapter({
       sessions: () => [summary({ path: "/a.jsonl", id: "aaaabbbb", attention: "idle", firstMessage: "Start here" })],
       views: () => ({}),
@@ -446,7 +461,7 @@ describe("createThreadListAdapter", () => {
 
 describe("threadListSignature", () => {
   it("changes when a title, attention, or archive flag changes", () => {
-    const archive = createArchiveStore(null);
+    const archive = createArchiveStore();
     const sessions = [summary({ path: "/a.jsonl", id: "aaaabbbb" })];
     const base = threadListSignature(sessions, {}, archive);
     expect(threadListSignature(sessions, {}, archive)).toBe(base);
@@ -458,7 +473,7 @@ describe("threadListSignature", () => {
   // A synthesized row used to stamp `new Date()`, so the signature changed on
   // every call and `runtime.threads.reload()` fired on every streamed token.
   it("is stable for a session that is open but not yet in the catalog", async () => {
-    const archive = createArchiveStore(null);
+    const archive = createArchiveStore();
     const open = { "/new.jsonl": view({ path: "/new.jsonl", state: sessionState({ path: "/new.jsonl" }) }) };
     const first = threadListSignature([], open, archive);
     await new Promise((resolve) => setTimeout(resolve, 5));

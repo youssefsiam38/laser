@@ -14,7 +14,7 @@ import type { SessionSummary } from "@lasercode/protocol";
 import { SessionsPanel } from "../../src/components/shell/SessionsPanel.js";
 import { ShellContext, type ShellContextValue } from "../../src/components/shell/shell-context.js";
 import { SESSIONS_TAB_STORAGE_KEY, sessionsList } from "../../src/components/shell/session-groups.js";
-import { SESSION_TAB_MEMORY_KEY, rememberSessionsTab } from "../../src/runtime/session-tab-memory.js";
+import { rememberSessionsTab } from "../../src/runtime/session-tab-memory.js";
 import { readDestinationMemory } from "../../src/runtime/main-destination-controller.js";
 import { sessionFolds } from "../../src/components/assistant-ui/elements/session-folds.js";
 import { clearEndAgentRequest, useEndAgentRequest } from "../../src/components/agents/end-agent.js";
@@ -24,6 +24,8 @@ import { mainTab } from "../../src/runtime/main-destination.js";
 import { toThreadMetadata } from "../../src/runtime/threadList.js";
 import { initialState, reduce, type AppState } from "../../src/store.js";
 import { run, snapshot, summary } from "../agents/fixtures.js";
+import { DEVICE_KEYS } from "../../src/runtime/device-storage.js";
+import { activateTestEnvironment, seedDeviceValue } from "../../test/runtime/environment-fixture.js";
 
 const stable = vi.hoisted(() => ({
   projects: ["/one", "/two"],
@@ -101,6 +103,9 @@ const seed = (): AppState => {
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   localStorage.clear();
+  // This panel reads what the destination controller remembered, and that is
+  // per environment (RP-13): there is nothing to read without one.
+  activateTestEnvironment();
   sessionsList.reset();
   stable.actions.openSession.mockClear();
   stable.actions.goTab.mockClear();
@@ -132,7 +137,7 @@ const rememberTabSession = (tab: "chat" | "code", path: string) => {
   const code = tab === "code"
     ? { kind: "project-session" as const, project: path.startsWith("/two/") ? "/two" : "/one", path }
     : memory.code;
-  localStorage.setItem(SESSION_TAB_MEMORY_KEY, JSON.stringify({ v: 2, tab: memory.tab, ...(chat ? { chat } : {}), code }));
+  seedDeviceValue(DEVICE_KEYS.destination, JSON.stringify({ v: 2, tab: memory.tab, ...(chat ? { chat } : {}), code }));
 };
 const rememberedTabSession = (tab: "chat" | "code"): string | undefined => {
   const memory = readDestinationMemory();

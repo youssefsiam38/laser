@@ -7,11 +7,9 @@
  *
  * Pure of React apart from {@link useBeam}; tested through the bubble.
  */
-import { storageKey } from "@lasercode/protocol";
 import { useSyncExternalStore } from "react";
 
-/** Compatibility key: opening the spark clears any path older builds remembered. */
-export const BEAM_SESSION_STORAGE_KEY = storageKey("beam-session");
+import { DEVICE_KEYS, deviceStore } from "@/runtime/device-storage";
 
 export interface BeamSnapshot {
   open: boolean;
@@ -19,22 +17,13 @@ export interface BeamSnapshot {
   path: string | undefined;
 }
 
-const readPath = (): string | undefined => {
-  try {
-    return globalThis.localStorage?.getItem(BEAM_SESSION_STORAGE_KEY) ?? undefined;
-  } catch {
-    return undefined;
-  }
-};
-
-const writePath = (path: string | undefined): void => {
-  try {
-    if (path === undefined) globalThis.localStorage?.removeItem(BEAM_SESSION_STORAGE_KEY);
-    else globalThis.localStorage?.setItem(BEAM_SESSION_STORAGE_KEY, path);
-  } catch {
-    /* private mode, quota: the path lives for this page only */
-  }
-};
+/**
+ * The remembered Beam session is a session path, so it belongs to one
+ * environment: `deviceStore` answers nothing until the environment is known,
+ * and answers a different namespace in a different one (RP-13).
+ */
+const readPath = (): string | undefined => deviceStore.read(DEVICE_KEYS.beamSession);
+const writePath = (path: string | undefined): void => deviceStore.write(DEVICE_KEYS.beamSession, path);
 
 function createBeamStore() {
   let snapshot: BeamSnapshot = { open: false, path: readPath() };
@@ -71,7 +60,13 @@ function createBeamStore() {
     newChat(): void {
       this.setPath(undefined);
     },
-    /** Test seam: forget everything and read the remembered path again. */
+    /**
+     * Forget everything and read the remembered path again.
+     *
+     * The environment's own reset calls this, so the bubble adopts the newly
+     * opened namespace instead of staying empty forever (and a test uses it
+     * the same way).
+     */
     reset(): void {
       anchor = null;
       snapshot = { open: false, path: readPath() };

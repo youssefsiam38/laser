@@ -1,13 +1,19 @@
 import { storageKey } from "@lasercode/protocol";
 import { useCallback, useEffect, useState } from "react";
 
+import { DEVICE_KEYS, deviceStore } from "./device-storage.js";
+
 export type ActivityDetailLevel = "answers" | "reasoning" | "everything";
 
-const PREFIX = storageKey("activity-detail:");
+/**
+ * Both records name the session they belong to, so both live inside this
+ * environment's namespace (RP-13) and both are one bounded key rather than a
+ * key per session path. The two event names are DOM events, not storage.
+ */
 const EVENT = storageKey("session-preference");
-const DISCLOSURE_KEY = storageKey("activity-disclosure-overrides");
 const DISCLOSURE_EVENT = storageKey("activity-disclosure-override");
 const MAX_DISCLOSURE_OVERRIDES = 400;
+const MAX_DETAIL_LEVELS = 400;
 const LEVELS = new Set<ActivityDetailLevel>(["answers", "reasoning", "everything"]);
 
 interface ActivityDisclosureOverride {
@@ -23,13 +29,8 @@ const validDisclosureOverride = (value: unknown): value is ActivityDisclosureOve
 };
 
 function activityDisclosureOverrides(): ActivityDisclosureOverride[] {
-  try {
-    const parsed: unknown = JSON.parse(globalThis.localStorage?.getItem(DISCLOSURE_KEY) ?? "[]");
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(validDisclosureOverride).slice(-MAX_DISCLOSURE_OVERRIDES);
-  } catch {
-    return [];
-  }
+  const parsed = deviceStore.readJson(DEVICE_KEYS.activityDisclosure, (value) => (Array.isArray(value) ? value : undefined));
+  return (parsed ?? []).filter(validDisclosureOverride).slice(-MAX_DISCLOSURE_OVERRIDES);
 }
 
 /** A manual row choice, scoped to one persisted session and stable row identity. */
@@ -50,11 +51,7 @@ export function activityDisclosureOverride(path: string | undefined, id: string 
 export function setActivityDisclosureOverride(path: string, id: string, open: boolean): void {
   const next = activityDisclosureOverrides().filter((entry) => entry.path !== path || entry.id !== id);
   next.push({ path, id, open });
-  try {
-    globalThis.localStorage?.setItem(DISCLOSURE_KEY, JSON.stringify(next.slice(-MAX_DISCLOSURE_OVERRIDES)));
-  } catch {
-    // Private browsing can deny storage; this mounted row still receives the event.
-  }
+  deviceStore.writeJson(DEVICE_KEYS.activityDisclosure, next.slice(-MAX_DISCLOSURE_OVERRIDES));
   globalThis.dispatchEvent?.(new CustomEvent(DISCLOSURE_EVENT, { detail: { path, id, open } }));
 }
 
@@ -91,22 +88,22 @@ export function useActivityDisclosureOverride(
 }
 
 /** A new session starts quiet; its live summary still says what is happening. */
+const detailLevels = (): Record<string, string> =>
+  deviceStore.readJson(DEVICE_KEYS.activityDetail, (value) =>
+    value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, string>) : undefined) ?? {};
+
 export function activityDetailLevel(path: string | undefined): ActivityDetailLevel {
   if (!path) return "answers";
-  try {
-    const value = globalThis.localStorage?.getItem(`${PREFIX}${path}`);
-    return LEVELS.has(value as ActivityDetailLevel) ? (value as ActivityDetailLevel) : "answers";
-  } catch {
-    return "answers";
-  }
+  const value = detailLevels()[path];
+  return LEVELS.has(value as ActivityDetailLevel) ? (value as ActivityDetailLevel) : "answers";
 }
 
 export function setActivityDetailLevel(path: string, level: ActivityDetailLevel): void {
-  try {
-    globalThis.localStorage?.setItem(`${PREFIX}${path}`, level);
-  } catch {
-    // Private browsing can deny storage; this tab still receives the event.
-  }
+  const { [path]: _previous, ...rest } = detailLevels();
+  // Insertion order is the bound: the oldest choice leaves when the newest
+  // arrives, so a long-lived browser never grows a row per session it showed.
+  const entries = [...Object.entries(rest), [path, level] as const].slice(-MAX_DETAIL_LEVELS);
+  deviceStore.writeJson(DEVICE_KEYS.activityDetail, Object.fromEntries(entries));
   globalThis.dispatchEvent?.(new CustomEvent(EVENT, { detail: { path, level } }));
 }
 

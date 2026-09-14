@@ -31,7 +31,6 @@ export {
 } from "./projection.js";
 
 export {
-  ARCHIVE_STORAGE_KEY,
   ATTENTION_ORDER,
   attentionRank,
   createArchiveStore,
@@ -76,10 +75,19 @@ export {
   type ThreadAdapterDeps,
 } from "./adapter.js";
 
+export {
+  DEVICE_KEYS,
+  ENVIRONMENT_NAMESPACE,
+  createDeviceStore,
+  deviceStore,
+  isLegacyDeviceKey,
+  namespaceOf,
+  type DeviceStorageStatus,
+  type DeviceStore,
+} from "./device-storage.js";
 export { THEME_PREFS_NAMESPACE, useThemeSync } from "./prefs.js";
 export { createSessionLauncher, isUnstartedSession, type NewSessionOptions, type SessionLauncher } from "./new-session.js";
 export {
-  SESSION_TAB_MEMORY_KEY,
   SESSIONS_TAB_STORAGE_KEY,
   rememberSessionsTab,
   rememberedSessionsTab,
@@ -121,8 +129,6 @@ export {
 
 export {
   forgetRememberedSessions,
-  PROJECTS_STORAGE_KEY,
-  PROJECT_STORAGE_KEY,
   LaserProvider,
   LaserThreadScope,
   useExtensionUi,

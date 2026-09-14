@@ -11,8 +11,9 @@ vi.mock("../../src/components/thread/Composer.js", () => ({ Composer: () => <Com
 import { Thread } from "../../src/components/thread/Thread.js";
 import type { AppState } from "../../src/store.js";
 import { WorkbenchProvider } from "../../src/components/workbench/workbench-context.js";
-import { LaserProvider, PROJECT_STORAGE_KEY, SESSION_STORAGE_KEY, useLaserStable, useLaserState, type LaserActions } from "../../src/runtime/LaserProvider.js";
+import { LaserProvider, useLaserStable, useLaserState, type LaserActions } from "../../src/runtime/LaserProvider.js";
 import { addSession, createWorld, FakeHostClient, settle as settleReal, type World } from "../beam/fake-host.js";
+import { seedProject, seedRememberedSessions } from "../../test/runtime/environment-fixture.js";
 
 const path = "/p/history.jsonl";
 const settle = (ms: number) => vi.isFakeTimers() ? vi.advanceTimersByTimeAsync(ms) : settleReal(ms);
@@ -26,8 +27,8 @@ beforeEach(async () => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   localStorage.clear();
   world = createWorld(); addSession(world, path, "/p"); addSession(world, "/p/start.jsonl", "/p"); FakeHostClient.reset(world);
-  localStorage.setItem(PROJECT_STORAGE_KEY, "/p");
-  localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ "/p": "/p/start.jsonl" }));
+  seedProject("/p");
+  seedRememberedSessions({ "/p": "/p/start.jsonl" });
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   await act(async () => root.render(<LaserProvider url="ws://test"><WorkbenchProvider><Probe /><Thread /></WorkbenchProvider></LaserProvider>));
   await act(async () => settle(30));

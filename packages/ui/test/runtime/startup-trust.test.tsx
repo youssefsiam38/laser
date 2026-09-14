@@ -19,9 +19,10 @@ vi.mock("../../src/client.js", async (original) => ({
   HostClient: (await import("../beam/fake-host.js")).FakeHostClient,
 }));
 
-import { LaserProvider, PROJECT_STORAGE_KEY } from "../../src/runtime/LaserProvider.js";
+import { LaserProvider } from "../../src/runtime/LaserProvider.js";
 import { StartupShell } from "../../src/components/shell/Shell.js";
 import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../beam/fake-host.js";
+import { seedProject } from "../../test/runtime/environment-fixture.js";
 
 const CODE = `${PROJECT_CWD}/code.jsonl`;
 const REQUEST: HostNotifications["pi/project/trust_request"] = { id: "trust-1", cwd: PROJECT_CWD, reasons: ["settings.json"], timeoutMs: 120_000 };
@@ -45,7 +46,7 @@ beforeEach(() => {
   world = createWorld();
   FakeHostClient.reset(world);
   addSession(world, CODE, PROJECT_CWD, { firstMessage: "yesterday's work" });
-  localStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_CWD);
+  seedProject(PROJECT_CWD);
   loadsHeld = 0;
   // The host cannot serve the load until the project's worker may start, and
   // the worker may not start until someone answers the trust question.

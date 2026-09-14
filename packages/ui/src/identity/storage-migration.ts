@@ -2,12 +2,16 @@
  * What happens to what the browser remembers when the product is renamed
  * (MX-T7, D-36).
  *
- * Every key this app writes is namespaced: `<name>-panels`, `<name>-archived`,
- * `<name>-draft:<path>`, `<name>.theme`, and the app-shell caches under
+ * Every key this app writes is namespaced: `<name>-panels`, `<name>.theme`,
+ * `<name>-env:<environment>:…`, and the app-shell caches under
  * `<name>-shell-<build>`. A rename changes the prefix, and to the person that
- * looks like the app forgetting their theme, their collapsed groups, their
- * archived sessions and the message they were half-way through typing — on a
+ * looks like the app forgetting their theme and their panel sizes — on a
  * phone, where there is nothing to inspect and nobody to ask.
+ *
+ * What a rename may **not** carry forward is anything that names a
+ * conversation: an environment-scoped key cannot be proved to belong to the
+ * environment this build will connect to, and the pre-environment keys never
+ * recorded one at all (RP-13). Those are dropped here, not copied.
  *
  * So on boot, before anything reads a key, every key under a former prefix is
  * copied to the current one. It is deliberately conservative:
@@ -24,17 +28,23 @@
  * With no former names it does nothing, which is today's answer.
  */
 import { FORMER_NAMES, STORAGE_PREFIX } from "@lasercode/protocol";
+import { isLegacyDeviceKey, namespaceOf } from "../runtime/device-storage.js";
 
 export interface StorageMigrationResult {
   /** Keys moved onto the current prefix. */
   moved: string[];
   /** Keys left alone because the current name already had one. */
   kept: string[];
+  /**
+   * Keys removed instead of moved: they carry conversation content or a path
+   * with no environment behind it (RP-13, `runtime/device-storage.ts`).
+   */
+  dropped: string[];
   /** Cache Storage buckets deleted because they belong to a former name. */
   caches: string[];
 }
 
-const EMPTY: StorageMigrationResult = { moved: [], kept: [], caches: [] };
+const EMPTY: StorageMigrationResult = { moved: [], kept: [], dropped: [], caches: [] };
 
 /** `laser-` and `laser.` — both separators this app has ever used. */
 function prefixesFor(name: string): string[] {
@@ -55,6 +65,7 @@ export function migrateStorageKeys(
   if (!storage || formerNames.length === 0) return EMPTY;
   const moved: string[] = [];
   const kept: string[] = [];
+  const dropped: string[] = [];
   try {
     const keys: string[] = [];
     for (let index = 0; index < storage.length; index += 1) {
@@ -67,6 +78,16 @@ export function migrateStorageKeys(
           if (!key.startsWith(oldPrefix)) continue;
           const next = `${prefixesFor(STORAGE_PREFIX)[slot]}${key.slice(oldPrefix.length)}`;
           if (next === key) continue;
+          // A rename must never carry an unsafe key forward (RP-13). The old
+          // unscoped keys named sessions and projects without recording which
+          // environment they came from, and an environment namespace from
+          // before the rename cannot be proved to be this environment's, so
+          // both are dropped rather than copied onto the current name.
+          if (isLegacyDeviceKey(next) || namespaceOf(next) !== undefined) {
+            dropped.push(key);
+            storage.removeItem(key);
+            continue;
+          }
           if (storage.getItem(next) !== null) {
             kept.push(key);
             continue;
@@ -85,7 +106,7 @@ export function migrateStorageKeys(
     // Storage is unavailable or full. The app opens with its defaults, which is
     // what happens on a fresh install too.
   }
-  return { moved, kept, caches: [] };
+  return { moved, kept, dropped, caches: [] };
 }
 
 /**

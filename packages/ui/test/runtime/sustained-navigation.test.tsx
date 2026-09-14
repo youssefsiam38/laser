@@ -10,10 +10,11 @@ vi.mock("../../src/client.js", async (original) => ({
 }));
 
 import { createThreadAdapter, type RequestClient } from "../../src/runtime/adapter.js";
-import { LaserProvider, PROJECT_STORAGE_KEY, SESSION_STORAGE_KEY, useLaserStable, useLaserState } from "../../src/runtime/LaserProvider.js";
+import { LaserProvider, useLaserStable, useLaserState } from "../../src/runtime/LaserProvider.js";
 import { ThreadListItem } from "../../src/components/assistant-ui/elements/thread-list.aui.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle } from "../beam/fake-host.js";
+import { seedProject, seedRememberedSessions } from "../../test/runtime/environment-fixture.js";
 
 let root: Root;
 let container: HTMLDivElement;
@@ -115,8 +116,8 @@ async function mountSelection() {
     { type: "message", id: path, parentId: null, timestamp: "2026-09-01T00:00:00Z", message: { role: "user", content: [{ type: "text", text: path }], timestamp: 0 } },
   ] })) as never;
   FakeHostClient.reset(world);
-  localStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_CWD);
-  localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ [PROJECT_CWD]: A }));
+  seedProject(PROJECT_CWD);
+  seedRememberedSessions({ [PROJECT_CWD]: A });
   await act(async () => root.render(<LaserProvider url="ws://test"><SelectionHarness /></LaserProvider>));
   await act(async () => settle(40));
   mounts.length = 0;

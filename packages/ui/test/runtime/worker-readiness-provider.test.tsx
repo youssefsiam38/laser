@@ -10,6 +10,7 @@ vi.mock("../../src/client.js", async (original) => ({
 import { LaserProvider, useLaserStable } from "../../src/runtime/LaserProvider.js";
 import { sessionsList } from "../../src/components/shell/session-groups.js";
 import { addSession, createWorld, FakeHostClient, settle, type World } from "../beam/fake-host.js";
+import { seedProject } from "./environment-fixture.js";
 
 let root: Root;
 let container: HTMLDivElement;
@@ -36,7 +37,7 @@ async function mount() {
   await settle(250);
 }
 it("prepares only actual remembered project memory, not every catalog/default-open group", async () => {
-  localStorage.setItem(storageKey("project"), "/q");
+  seedProject("/q");
   await mount();
   expect(hints()).toEqual([{ cwd: "/q" }]);
 });

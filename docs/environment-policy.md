@@ -234,39 +234,153 @@ allowance. Rows are stored `quiet`: queryable, but not streamed as
 `pi/logs/append`, so a boundary decision never becomes notification traffic or
 tells one connection what another is doing as it happens.
 
-## 6. What Milestone A does not do — the handoff to RP-10/RP-11
+## 6. The client half: the handshake and this device's memory
 
-Milestone A is the host-authoritative half. The client half (M18-T13
-Milestone B) must, when it lands:
+Milestone A is the host-authoritative half; Milestone B is what a client does
+with it. Both have landed.
 
-- fetch the descriptor inside the existing version handshake, and treat client
-  capability data as **presentation only** — the host stays authoritative;
-- **on descriptor failure, disable transcript and draft persistence and clear
-  environment-derived state.** A client that cannot learn its environment must
-  not keep writing content to the device "just in case";
-- namespace every device-local key that carries conversation content or a
-  session path by `environmentKey`, and purge foreign namespaces on change;
-- **not** migrate legacy path-bearing or content-bearing keys (today's
-  `<prefix>-draft:<path>`, folds, pins, destinations). They have no provenance:
-  assigning them to whichever environment connects first would be exactly the
-  leak this task exists to close. They are purged. Only environment-neutral
-  preferences (theme, panel sizes) may migrate;
-- consume `cache` as the single admission point RP-10 reads, and treat a
-  `contract` change or a capability that was true and is now false as an
-  invalidation of everything derived from it.
+### 6.1 The handshake
 
-And for a deployment that wants a managed policy:
+`HostClient` (`packages/ui/src/client.ts`) opens a connection in three steps,
+in this order and no other:
 
-- **launcher wiring** — teach `laser up`, the packaged daemon and the desktop
-  shell to read a policy they trust and pass it as `HostServerOptions.policy`.
-  Today they pass none (§3). The host half is done and tested: an unusable
-  policy stops the daemon before it listens
+1. `pi/host/version` — an **exact** match with this view's compiled release, or
+   the existing version notice and no connection;
+2. `environment/describe` — validated against `environmentDescriptorSchema`,
+   the `contract` generation this build knows, and the version the handshake
+   just accepted;
+3. the app scopes this device to that environment and only then does the
+   connection count as `open`.
+
+Nothing precedes step 3: no request is accepted (`request()` rejects while the
+connection is not open), no attached session is resumed, and notifications that
+arrive during the handshake are held and delivered afterwards, in order. Every
+reconnect repeats the whole sequence, because a policy is immutable only for
+the life of one connection.
+
+The descriptor is **presentation only** on the client: it tells a person what
+this environment is and what this view may keep. It never decides whether an
+action is allowed — the host answers that, per request, every time (§4).
+
+### 6.2 When the environment cannot be established
+
+A refused, malformed, mis-generation or mis-versioned descriptor — or an app
+that cannot make this device safe for it — leaves the connection **closed**,
+with one sentence written for a person on the existing connection line. It is
+deliberately not reported as a version mismatch: the build is fine, the
+environment is not. The ordinary reconnect backoff keeps trying (visible, not a
+hidden permanent stop), and the sentence is reported once per distinct reason
+rather than once per attempt. While it lasts, device persistence is off and
+everything derived from an environment has been cleared.
+
+## 7. What this device keeps, and for whom
+
+`packages/ui/src/runtime/device-storage.ts` is the only thing in the app that
+builds a browser storage key. It starts **disabled**: before a descriptor
+arrives every read answers `undefined` and every write does nothing, so
+"nothing before the environment is known" is a property of the code rather than
+a rule each call site has to remember.
+
+### 7.1 One namespace per environment
+
+`laser-env:<environmentKey>:<suffix>`, with RP-9's opaque environment key and
+nothing else — no path, no session id, no device identity, not in the key and
+not in the descriptor fingerprint stored beside it. Local browser storage is
+**not encrypted**; that is precisely why what lands in it is namespaced,
+bounded, admission-gated, and never logged or exported.
+
+| Suffix | What it holds |
+| --- | --- |
+| `destination` | the remembered tab and code destination |
+| `sessions`, `project` | the last session per project, and the last project |
+| `beam-session` | the Beam chat this device was in |
+| `archived`, `session-groups`, `session-pins`, `session-folds` | client-local list state, all of it session paths or project directories |
+| `activity-detail`, `activity-disclosure` | per-session disclosure choices, each one bounded |
+| `fleet-cleared` | this viewer's "I have read these" mark |
+| `drafts` | **content**: unsent composer text, per session and per landing |
+| `descriptor` | the contract/capabilities/cache fingerprint this namespace was written under |
+
+Environment-neutral values stay outside the namespace, and they are the only
+ones that may: the theme (`laser.theme`, read by the pre-paint boot script),
+panel geometry, which tab was last shown, the onboarding step, and the mobile
+dismissal timestamps. None of them names a conversation, a project or a
+machine, which is the whole test.
+
+### 7.2 Purged, never adopted
+
+The pre-environment keys (`laser-draft:<path>`, `laser-archived`,
+`laser-session`, `laser-project`, `laser-session-tab-last`, `laser-beam-session`,
+`laser-session-groups`, `laser-session-pins`, `laser-session-folds`,
+`laser-activity-detail:<path>`, `laser-activity-disclosure-overrides`,
+`laser-fleet-cleared`, and the dead pre-M2 `laser-projects` list) recorded
+paths and content without recording which environment they came from. Handing
+them to whichever environment connects first would be exactly the leak this
+task closes, so activation removes them. A product rename does the same: the
+storage migration carries neutral keys forward and **drops** anything
+path-bearing, content-bearing or environment-scoped.
+
+A foreign environment's namespace is purged the same way, when another
+environment opens.
+
+**A purge that could not finish does not open the door.** The scan is bounded
+(`MAX_SCANNED_KEYS`) and verified afterwards; if it hits its ceiling or a
+removal fails, activation *fails*, the store stays disabled and the person sees
+the connection failure of §6.2. A browser that refuses storage outright (a
+private window) is different and not a failure: there is nothing to read and
+nothing to purge, so the environment opens and simply remembers nothing.
+
+### 7.3 `cache` is the admission point
+
+Drafts are the only content Milestone B keeps, and they live or die by the
+environment's cache policy. Content is admissible only when `transcripts` is
+`allowed`, every bound (`maxBytes`, `maxSessions`, `maxEntriesPerSession`,
+`maxAgeHours`) is above zero, and `requireDeviceEncryption` is false — no
+browser storage can prove it is encrypted at rest, so that flag disables
+content here rather than pretending `localStorage` qualifies. When content is
+inadmissible, drafts cannot be read or written **and what is already stored is
+purged**. Within the policy, drafts obey its bounds: byte and count ceilings
+with oldest-first eviction, and expiry by `maxAgeHours`. Attachments are never
+written to device storage. This is the API RP-10's transcript cache will
+consume; B implements no transcript cache and adds no second transcript
+authority.
+
+### 7.4 Switching, downgrading, failing
+
+| What changed | What is invalidated |
+| --- | --- |
+| A different `environmentKey` | the whole previous namespace on disk, plus every in-memory store derived from it |
+| A new `contract`, or a capability that was `true` and is now `false` | the whole namespace |
+| A tightened `cache` | the content in it |
+| The same descriptor again | nothing — a reconnect into the same environment keeps the live session, its transcript and the list state |
+
+The in-memory half is `resetEnvironmentState` in `LaserProvider`: the reducer
+drops sessions, open transcripts, loads, workers, toasts, agent runs and
+background tasks; the module-level stores (fleet mark, Beam session, collapsed
+groups and pins, folds, archive, landing drafts) are cleared **and re-read from
+the newly opened namespace**, so an environment a person comes back to still
+remembers what it knew; and the client's attachment/resume map is dropped
+synchronously, before the connection opens, so no session path can be resumed
+against a different host. The first environment of a page's life is not a
+switch: there is nothing from elsewhere in memory, and clearing there would
+throw away the connection's own setup.
+
+## 8. Still to do
+
+- **RP-10/RP-11**: the bounded transcript tail cache and immediate paint, on
+  top of §7.3's admission API.
+- **Launcher wiring for a managed policy** — teach `laser up`, the packaged
+  daemon and the desktop shell to read a policy they trust and pass it as
+  `HostServerOptions.policy`. Today they pass none (§3). The host half is done
+  and tested: an unusable policy stops the daemon before it listens
   (`packages/cli/test/daemon-policy.test.ts`).
   **Residual risk to close with that work:** the daemon's refusal is a startup
-  failure, so a person who supplies a bad managed policy sees "the host did
-  not start" from whichever launcher they used, with the sentence in the
-  daemon's log rather than in a window. The sentence is written for a person
-  and names the field, never its value — but no UI presents it yet, and a
-  launcher that adopts policies should present it where the person is.
-
-None of that is implemented yet, and nothing in Milestone A claims it is.
+  failure, so a person who supplies a bad managed policy sees "the host did not
+  start" from whichever launcher they used, with the sentence in the daemon's
+  log rather than in a window. The sentence is written for a person and names
+  the field, never its value — but no UI presents it yet.
+- **Browser acceptance for §6 and §7** — the shared browser harness is owned by
+  M18-T2 while that work is in flight, so the matrix run for the handshake and
+  the namespace is deferred rather than skipped. Everything above is covered by
+  unit and integration tests with a fake `Storage` and a fake socket
+  (`packages/ui/test/runtime/device-storage.test.ts`,
+  `environment-handshake.test.ts`, `environment-switch.test.ts`).

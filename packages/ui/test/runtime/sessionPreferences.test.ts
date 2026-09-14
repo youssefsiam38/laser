@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   activityDetailLevel,
@@ -8,9 +8,17 @@ import {
   setActivityDisclosureOverride,
   toolDetailsDefaultOpen,
 } from "../../src/runtime/sessionPreferences.js";
+import { deviceStore } from "../../src/runtime/device-storage.js";
+import { activateTestEnvironment } from "./environment-fixture.js";
 
 describe("session activity detail", () => {
-  beforeEach(() => localStorage.clear());
+  beforeEach(() => {
+    localStorage.clear();
+    // These choices are remembered per device, inside the environment they
+    // belong to: without one there is nothing to remember (RP-13).
+    activateTestEnvironment();
+  });
+  afterEach(() => deviceStore.deactivate());
 
   it("starts new sessions with every activity disclosure collapsed", () => {
     expect(activityDetailLevel(undefined)).toBe("answers");

@@ -12,16 +12,16 @@ vi.mock("../../src/client.js", async (original) => ({
 
 import {
   LaserProvider,
-  PROJECT_STORAGE_KEY,
-  SESSION_STORAGE_KEY,
   useLaserStable,
   useLaserState,
   useLaserView,
   type LaserActions,
 } from "../../src/runtime/LaserProvider.js";
 import { isMainReady, mainTab } from "../../src/runtime/main-destination.js";
-import { SESSION_TAB_MEMORY_KEY, SESSIONS_TAB_STORAGE_KEY } from "../../src/runtime/session-tab-memory.js";
+import { SESSIONS_TAB_STORAGE_KEY } from "../../src/runtime/session-tab-memory.js";
 import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../beam/fake-host.js";
+import { DEVICE_KEYS } from "../../src/runtime/device-storage.js";
+import { readDeviceValue, seedDeviceValue, seedProject, seedRememberedSessions } from "../../test/runtime/environment-fixture.js";
 
 const CODE = `${PROJECT_CWD}/code.jsonl`;
 const CHAT = "/state/chat/chat.jsonl";
@@ -109,7 +109,7 @@ function persistPrompts(history: Record<string, ContentBlock[][]>): void {
 describe("main destination isolation", () => {
   it("allocates empty Chat with the Chat agent and persists hi only there", async () => {
     addSession(world, CODE, PROJECT_CWD, { firstMessage: "original code history" });
-    localStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_CWD);
+    seedProject(PROJECT_CWD);
     const history: Record<string, ContentBlock[][]> = { [CODE]: [[{ type: "text", text: "original code history" }]] };
     persistPrompts(history);
     await mount();
@@ -138,14 +138,14 @@ describe("main destination isolation", () => {
   it("opens Beam in Code without poisoning the remembered project session", async () => {
     addSession(world, CODE, PROJECT_CWD);
     addSession(world, BEAM, world.snapshot.workspaces.beam!, { agent: { agentName: "beam", kind: "beam" } });
-    localStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_CWD);
-    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ [PROJECT_CWD]: CODE }));
+    seedProject(PROJECT_CWD);
+    seedRememberedSessions({ [PROJECT_CWD]: CODE });
     await mount();
     expect(controls).toMatchObject({ tab: "code", path: CODE, codeProject: PROJECT_CWD });
 
     await act(async () => { await controls.actions.openSession(BEAM); await settle(20); });
     expect(controls).toMatchObject({ tab: "code", path: BEAM, codeProject: PROJECT_CWD });
-    expect(JSON.parse(localStorage.getItem(SESSION_STORAGE_KEY)!)).toEqual({ [PROJECT_CWD]: CODE });
+    expect(JSON.parse(readDeviceValue(DEVICE_KEYS.sessionsByProject)!)).toEqual({ [PROJECT_CWD]: CODE });
 
     await act(async () => { await controls.actions.goProject(PROJECT_CWD); await settle(20); });
     expect(controls).toMatchObject({ tab: "code", path: CODE, codeProject: PROJECT_CWD });
@@ -153,7 +153,7 @@ describe("main destination isolation", () => {
 
   it("blocks an immediate origin send while Chat allocation is pending and restores text plus image to Code", async () => {
     addSession(world, CODE, PROJECT_CWD);
-    localStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_CWD);
+    seedProject(PROJECT_CWD);
     await mount();
 
     let releaseNew!: () => void;
@@ -193,7 +193,7 @@ describe("main destination isolation", () => {
   it("refuses a captured old dialog answer in the same turn as a tab switch", async () => {
     addSession(world, CODE, PROJECT_CWD);
     addSession(world, CHAT, "/state/chat", { agent: { agentName: "chat", kind: "chat" } });
-    localStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_CWD);
+    seedProject(PROJECT_CWD);
     await mount();
     await act(async () => {
       FakeHostClient.current.notify("pi/ui/request", { path: CODE, id: "old-question", method: "confirm", title: "Proceed?" });
@@ -217,7 +217,7 @@ describe("main destination isolation", () => {
   it("latest navigation wins when opposite-kind loads settle out of order", async () => {
     addSession(world, CODE, PROJECT_CWD);
     addSession(world, CHAT, "/state/chat", { agent: { agentName: "chat", kind: "chat" } });
-    localStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_CWD);
+    seedProject(PROJECT_CWD);
     await mount();
 
     let releaseChat!: () => void;
@@ -251,7 +251,7 @@ describe("main destination isolation", () => {
   it("does not surface a stale load failure after a newer destination wins", async () => {
     addSession(world, CODE, PROJECT_CWD);
     addSession(world, CHAT, "/state/chat", { agent: { agentName: "chat", kind: "chat" } });
-    localStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_CWD);
+    seedProject(PROJECT_CWD);
     await mount();
 
     let releaseFailure!: () => void;
@@ -273,7 +273,7 @@ describe("main destination isolation", () => {
 
   it("keys pathless Code drafts, attachments and first-turn choices by project", async () => {
     const other = "/other-project";
-    localStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_CWD);
+    seedProject(PROJECT_CWD);
     await mount();
     expect(controls).toMatchObject({ tab: "code", path: undefined, phase: "ready" });
 
@@ -297,7 +297,7 @@ describe("main destination isolation", () => {
   });
 
   it("keeps an unsent landing draft through a frontend reload, and spends it when it is cleared", async () => {
-    localStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_CWD);
+    seedProject(PROJECT_CWD);
     await mount();
     expect(controls).toMatchObject({ tab: "code", path: undefined, phase: "ready" });
     await act(async () => { controls.aui.composer.setText("unsent landing message"); });
@@ -342,7 +342,7 @@ describe("main destination isolation", () => {
   it("keeps text, first-turn intent and an image with their origin thread", async () => {
     addSession(world, CODE, PROJECT_CWD);
     addSession(world, CHAT, "/state/chat", { agent: { agentName: "chat", kind: "chat" } });
-    localStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_CWD);
+    seedProject(PROJECT_CWD);
     await mount();
 
     await act(async () => {
@@ -364,7 +364,7 @@ describe("main destination isolation", () => {
     addSession(world, CODE, PROJECT_CWD);
     addSession(world, CHAT, "/state/chat", { agent: { agentName: "chat", kind: "chat" } });
     delete world.states[CHAT];
-    localStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_CWD);
+    seedProject(PROJECT_CWD);
     localStorage.setItem(SESSIONS_TAB_STORAGE_KEY, "chat");
     await mount();
     expect(controls).toMatchObject({ tab: "chat", path: undefined, phase: "unavailable", disabled: true });
@@ -381,7 +381,7 @@ describe("main destination isolation", () => {
 
   it("restores the saved tab and lets an explicit deep link override it", async () => {
     addSession(world, CODE, PROJECT_CWD);
-    localStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_CWD);
+    seedProject(PROJECT_CWD);
     localStorage.setItem(SESSIONS_TAB_STORAGE_KEY, "chat");
     await mount();
     expect(controls).toMatchObject({ tab: "chat", phase: "ready" });
@@ -401,9 +401,9 @@ describe("main destination isolation", () => {
     const oldProject = "/old-project";
     const oldCode = `${oldProject}/old.jsonl`;
     addSession(world, oldCode, oldProject);
-    localStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_CWD);
+    seedProject(PROJECT_CWD);
     localStorage.setItem(SESSIONS_TAB_STORAGE_KEY, "chat");
-    localStorage.setItem(SESSION_TAB_MEMORY_KEY, JSON.stringify({ code: oldCode }));
+    seedDeviceValue(DEVICE_KEYS.destination, JSON.stringify({ code: oldCode }));
     await mount();
 
     await act(async () => { await controls.actions.goProject(PROJECT_CWD); await settle(20); });
@@ -423,7 +423,7 @@ describe("main destination isolation", () => {
     const oldProject = "/old-project";
     const oldCode = `${oldProject}/old.jsonl`;
     addSession(world, oldCode, oldProject);
-    localStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_CWD);
+    seedProject(PROJECT_CWD);
     await mount();
     await act(async () => { await controls.actions.goProject(PROJECT_CWD); await settle(20); });
 
@@ -442,7 +442,7 @@ describe("main destination isolation", () => {
   });
 
   it("retries the exact created Chat identity after hydration fails without recreating it", async () => {
-    localStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_CWD);
+    seedProject(PROJECT_CWD);
     let failedPath: string | undefined;
     world.overrides["session/load"] = async (params: { path: string }) => {
       if (params.path.includes("/state/chat/") && failedPath === undefined) {
@@ -469,8 +469,8 @@ describe("main destination isolation", () => {
     addSession(world, CODE, PROJECT_CWD);
     addSession(world, CHAT, "/state/chat", { agent: { agentName: "chat", kind: "chat" } });
     world.states[CHAT] = { ...world.states[CHAT]!, agent: { agentName: "chat", kind: "chat" } };
-    localStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_CWD);
-    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ [PROJECT_CWD]: CODE }));
+    seedProject(PROJECT_CWD);
+    seedRememberedSessions({ [PROJECT_CWD]: CODE });
     localStorage.setItem(SESSIONS_TAB_STORAGE_KEY, "chat");
     world.overrides["pi/session/fork"] = () => {
       const state = { ...world.states[CHAT]!, path: CHAT_FORK, id: "chat-fork" };
@@ -488,8 +488,8 @@ describe("main destination isolation", () => {
     addSession(world, root, PROJECT_CWD);
     addSession(world, CHILD, `${PROJECT_CWD}/.worktrees/child`, { agent, parentPath: root });
     world.states[CHILD] = { ...world.states[CHILD]!, agent };
-    localStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_CWD);
-    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ [PROJECT_CWD]: CHILD }));
+    seedProject(PROJECT_CWD);
+    seedRememberedSessions({ [PROJECT_CWD]: CHILD });
     world.overrides["pi/session/fork"] = () => {
       const state = { ...world.states[CHILD]!, path: CHILD_FORK, id: "child-fork" };
       world.states[CHILD_FORK] = state;
@@ -504,8 +504,8 @@ describe("main destination isolation", () => {
     const other = `${PROJECT_CWD}/other.jsonl`;
     addSession(world, CODE, PROJECT_CWD, { modifiedAt: "2026-09-10T00:00:00.000Z" });
     addSession(world, other, PROJECT_CWD, { modifiedAt: "2026-09-11T00:00:00.000Z" });
-    localStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_CWD);
-    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ [PROJECT_CWD]: CODE }));
+    seedProject(PROJECT_CWD);
+    seedRememberedSessions({ [PROJECT_CWD]: CODE });
     let failures = 0;
     world.overrides["session/load"] = (params: { path: string }) => {
       if (params.path === CODE && failures++ === 0) throw new Error("load failed");
@@ -515,7 +515,7 @@ describe("main destination isolation", () => {
     };
     await mount();
     expect(controls).toMatchObject({ tab: "code", path: undefined, phase: "unavailable" });
-    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ [PROJECT_CWD]: other }));
+    seedRememberedSessions({ [PROJECT_CWD]: other });
     await act(async () => { await controls.actions.retryDestination(); await settle(20); });
     expect(controls).toMatchObject({ tab: "code", path: CODE, phase: "ready" });
     expect(calls("session/load").map(promptPath)).toEqual([CODE, CODE]);
@@ -564,7 +564,7 @@ describe("main destination isolation", () => {
   });
 
   it("settles a malformed session hash onto safe remembered Code memory", async () => {
-    localStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_CWD);
+    seedProject(PROJECT_CWD);
     localStorage.setItem(SESSIONS_TAB_STORAGE_KEY, "chat");
     globalThis.history.replaceState(null, "", "/#/session/%E0%A4%A");
     await mount();

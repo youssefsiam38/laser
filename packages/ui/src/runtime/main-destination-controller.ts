@@ -1,4 +1,4 @@
-import { storageKey, type SessionState } from "@lasercode/protocol";
+import type { SessionState } from "@lasercode/protocol";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { Action, AppState } from "../store.js";
@@ -21,37 +21,35 @@ import {
   type MainTarget,
   type ProjectCodeDestination,
 } from "./main-destination.js";
-import { SESSION_TAB_MEMORY_KEY, SESSIONS_TAB_STORAGE_KEY, sessionKindTab } from "./session-tab-memory.js";
+import { DEVICE_KEYS, deviceStore } from "./device-storage.js";
+import { rememberSessionsTab, rememberedSessionsTab, sessionKindTab } from "./session-tab-memory.js";
 import { mergeSessions } from "./threadList.js";
 
-export const PROJECT_STORAGE_KEY = storageKey("project");
-export const SESSION_STORAGE_KEY = storageKey("session");
-
+/**
+ * The remembered destination names a project directory and a session path, so
+ * it belongs to one environment and is read through `deviceStore` (RP-13).
+ * Before the environment is known there is nothing to read, which is why the
+ * app starts with no memory and adopts it at `restoreDestination`.
+ */
 interface DestinationMemory {
   v: 2;
   tab: MainTab;
   chat?: string;
   code: CodeDestination;
-  /** Present only while migrating the pre-controller project/session keys. */
+  /** Derived from this namespace's older project/session pair, not from `destination`. */
   legacy?: boolean;
 }
 
-const readRaw = (key: string): string | undefined => {
-  try { return globalThis.localStorage?.getItem(key) ?? undefined; } catch { return undefined; }
+const readMap = (key: typeof DEVICE_KEYS.sessionsByProject): Record<string, string> => {
+  const value = deviceStore.readJson(key, (parsed) =>
+    parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : undefined);
+  return Object.fromEntries(Object.entries(value ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
 };
-const writeRaw = (key: string, value: string | undefined): void => {
-  try {
-    if (value === undefined) globalThis.localStorage?.removeItem(key);
-    else globalThis.localStorage?.setItem(key, value);
-  } catch { /* live state remains authoritative */ }
-};
-const readMap = (key: string): Record<string, string> => {
-  try {
-    const value: unknown = JSON.parse(readRaw(key) ?? "{}");
-    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-    return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
-  } catch { return {}; }
-};
+
+/** The last session opened per project, for this environment. */
+export function rememberedSessions(): Record<string, string> {
+  return readMap(DEVICE_KEYS.sessionsByProject);
+}
 
 const projectCode = (value: unknown): ProjectCodeDestination | undefined => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
@@ -75,36 +73,37 @@ const codeDestination = (value: unknown): CodeDestination | undefined => {
     : undefined;
 };
 
-/** Typed memory is authoritative; old maps are read only as migration inputs. */
+/**
+ * What this environment remembers, or nothing.
+ *
+ * There is no migration path from the pre-environment keys: they recorded
+ * projects and sessions without recording which environment they came from,
+ * so adopting them here would be guessing (docs/environment-policy.md §7).
+ * They are purged instead, and a person's first visit to an environment opens
+ * where a first visit opens.
+ */
 export function readDestinationMemory(): DestinationMemory {
-  try {
-    const parsed: unknown = JSON.parse(readRaw(SESSION_TAB_MEMORY_KEY) ?? "{}");
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      const item = parsed as Record<string, unknown>;
-      const code = item["v"] === 2 ? codeDestination(item["code"]) : undefined;
-      if (code) {
-        return {
-          v: 2,
-          tab: item["tab"] === "chat" ? "chat" : "code",
-          ...(typeof item["chat"] === "string" ? { chat: item["chat"] } : {}),
-          code,
-        };
-      }
-    }
-  } catch { /* migrate below */ }
-  const project = readRaw(PROJECT_STORAGE_KEY);
-  const remembered = project ? readMap(SESSION_STORAGE_KEY)[project] : undefined;
-  const code: CodeDestination = project
+  const stored = deviceStore.readJson(DEVICE_KEYS.destination, (value) =>
+    value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined);
+  const code = stored?.["v"] === 2 ? codeDestination(stored["code"]) : undefined;
+  if (stored && code) {
+    return {
+      v: 2,
+      tab: stored["tab"] === "chat" ? "chat" : "code",
+      ...(typeof stored["chat"] === "string" ? { chat: stored["chat"] } : {}),
+      code,
+    };
+  }
+  // An older build of this same environment wrote a project and a per-project
+  // session instead of a destination. Those are inside this namespace, so they
+  // are this environment's own history and are read as migration inputs.
+  const project = deviceStore.read(DEVICE_KEYS.project);
+  const remembered = project ? rememberedSessions()[project] : undefined;
+  const older: CodeDestination = project
     ? remembered ? { kind: "project-session", project, path: remembered } : { kind: "project-landing", project }
     : emptyCodeDestination;
-  let chat: string | undefined;
-  try {
-    const legacy: unknown = JSON.parse(readRaw(SESSION_TAB_MEMORY_KEY) ?? "{}");
-    if (legacy && typeof legacy === "object" && !Array.isArray(legacy) && typeof (legacy as Record<string, unknown>)["chat"] === "string") {
-      chat = (legacy as Record<string, string>)["chat"];
-    }
-  } catch { /* empty */ }
-  return { v: 2, tab: readRaw(SESSIONS_TAB_STORAGE_KEY) === "chat" ? "chat" : "code", ...(chat ? { chat } : {}), code, legacy: true };
+  const chat = typeof stored?.["chat"] === "string" ? (stored["chat"] as string) : undefined;
+  return { v: 2, tab: rememberedSessionsTab(), ...(chat ? { chat } : {}), code: older, legacy: true };
 }
 
 export function initialDestinationFromMemory(memory = readDestinationMemory()): MainDestination {
@@ -123,15 +122,16 @@ function writeMemory(destination: MainDestination): void {
   const tab = mainTab(destination);
   const code = rememberedCodeOf(destination);
   const chat = destination.phase === "ready-chat" ? destination.path : previous.chat;
-  writeRaw(SESSION_TAB_MEMORY_KEY, JSON.stringify({ v: 2, tab, ...(chat ? { chat } : {}), code } satisfies DestinationMemory));
-  writeRaw(SESSIONS_TAB_STORAGE_KEY, tab);
-  const project = mainCodeProject(destination);
-  writeRaw(PROJECT_STORAGE_KEY, project);
+  deviceStore.writeJson(DEVICE_KEYS.destination, { v: 2, tab, ...(chat ? { chat } : {}), code } satisfies DestinationMemory);
+  // Which tab was last shown is an enum, not a place: it stays unscoped, so a
+  // person who prefers Chat gets Chat in every environment.
+  rememberSessionsTab(tab);
+  deviceStore.write(DEVICE_KEYS.project, mainCodeProject(destination));
   const projectTarget = projectReturnOf(code);
   if (projectTarget.kind === "project-session") {
-    const sessions = readMap(SESSION_STORAGE_KEY);
+    const sessions = rememberedSessions();
     if (sessions[projectTarget.project] !== projectTarget.path) {
-      writeRaw(SESSION_STORAGE_KEY, JSON.stringify({ ...sessions, [projectTarget.project]: projectTarget.path }));
+      deviceStore.writeJson(DEVICE_KEYS.sessionsByProject, { ...sessions, [projectTarget.project]: projectTarget.path });
     }
   }
 }
@@ -278,7 +278,7 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
     if (target.kind === "session") { await resolveSession(target.path, intent); return; }
     if (target.kind === "project" || target.kind === "startup-project") {
       const snapshot = depsRef.current.readState();
-      const remembered = readMap(SESSION_STORAGE_KEY)[target.project];
+      const remembered = rememberedSessions()[target.project];
       const sessions = mergeSessions(snapshot.sessions, snapshot.open);
       const rememberedSession = remembered ? sessions.find((item) => item.path === remembered && isSessionInCodeProject(item, sessions, snapshot.agents.runs, target.project)) : undefined;
       const known = rememberedSession ?? (target.kind === "startup-project"

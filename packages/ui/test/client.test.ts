@@ -6,8 +6,9 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostNotificationMethod } from "@lasercode/protocol";
-import { PRODUCT_VERSION } from "@lasercode/protocol";
+import { PRODUCT_VERSION, type EnvironmentDescriptor } from "@lasercode/protocol";
 import { HostClient } from "../src/client.js";
+import { testDescriptor } from "./runtime/environment-fixture.js";
 import { createStateStore } from "../src/runtime/LaserProvider.js";
 import { initialState, reduce } from "../src/store.js";
 
@@ -40,10 +41,24 @@ class FakeSocket {
     this.onclose?.();
   }
 
-  accept(version: string | null = PRODUCT_VERSION): void {
+  /**
+   * The whole handshake: the version, and then the environment the client now
+   * waits for before it opens (RP-13). `null` answers nothing, for the tests
+   * that drive a step by hand.
+   */
+  accept(version: string | null = PRODUCT_VERSION, environment: EnvironmentDescriptor | null = testDescriptor()): void {
     this.readyState = FakeSocket.OPEN;
     this.onopen?.();
-    if (version !== null) this.deliver({ jsonrpc: "2.0", id: 0, result: { version } });
+    if (version === null) return;
+    this.deliver({ jsonrpc: "2.0", id: 0, result: { version } });
+    if (environment !== null) this.describe(environment);
+  }
+
+  /** Answer `environment/describe` — or refuse it, with `null`. */
+  describe(environment: EnvironmentDescriptor | null = testDescriptor()): void {
+    this.deliver(environment === null
+      ? { jsonrpc: "2.0", id: -1, error: { code: -32601, message: "no" } }
+      : { jsonrpc: "2.0", id: -1, result: { environment } });
   }
 
   deliver(message: unknown): void {
@@ -51,7 +66,7 @@ class FakeSocket {
   }
 
   frames(): Array<{ id?: number; method: string; params: Record<string, unknown> }> {
-    return this.sent.map((s) => JSON.parse(s) as { id?: number; method: string; params: Record<string, unknown> }).filter((s) => s.id !== 0);
+    return this.sent.map((s) => JSON.parse(s) as { id?: number; method: string; params: Record<string, unknown> }).filter((s) => s.id !== 0 && s.id !== -1);
   }
 }
 
@@ -130,6 +145,10 @@ it("does not load or resume sessions until the host release matches", async () =
   expect(client.connection).toBe("connecting"); expect(socket.frames()).toEqual([]);
   await expect(client.request("session/new", { cwd: "/work" })).rejects.toThrow();
   socket.deliver({ jsonrpc: "2.0", id: 0, result: { version: PRODUCT_VERSION } });
+  // The version matched, and still nothing happens: the environment has not
+  // been described yet, so there is nothing this view knows it may do.
+  expect(client.connection).toBe("connecting"); expect(socket.frames()).toEqual([]);
+  socket.describe();
   expect(client.connection).toBe("open"); expect(socket.frames()[0]?.method).toBe("session/load");
   client.close();
 });

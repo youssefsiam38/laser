@@ -18,6 +18,7 @@
  */
 import type { HostNotifications, SessionState, SessionSummary, SessionUpdate, SessionUpdateParams } from "@lasercode/protocol";
 import type { HostClientOptions } from "../../src/client.js";
+import { testDescriptor } from "./environment-fixture.js";
 import { sessionState, snapshot as agentsSnapshot, summary } from "../agents/fixtures.js";
 
 export const PROJECT_CWD = "/p";
@@ -213,10 +214,19 @@ export class FakeWorkerClient {
   }
 
   connect(): void {
-    queueMicrotask(() => this.options.onConnection?.("open"));
+    queueMicrotask(() => {
+      // The real handshake describes the environment before the connection
+      // opens, and the app scopes this device to it there (RP-13). A fake that
+      // skipped it would let a test read storage the app could not.
+      this.options.onEnvironment?.(testDescriptor());
+      this.options.onConnection?.("open");
+    });
   }
   reconnect(): void {}
   close(): void {}
+  forgetAttachments(): void {
+    this.attached.clear();
+  }
   track(path: string, seq = 0): void {
     if (!this.attached.has(path) || (this.attached.get(path) ?? 0) < seq) this.attached.set(path, seq);
   }

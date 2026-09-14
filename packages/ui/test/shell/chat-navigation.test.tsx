@@ -24,9 +24,11 @@ import { ShellContext, type ShellContextValue } from "../../src/components/shell
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { WorkbenchProvider, useWorkbench, type Workbench } from "../../src/components/workbench/workbench-context.js";
 import { closeFleetSheet, setFleetSheetOpen, useFleetSheetOpen } from "../../src/fleet/index.js";
-import { LaserProvider, PROJECT_STORAGE_KEY, SESSION_STORAGE_KEY, useLaserStable, useLaserState, useLaserView } from "../../src/runtime/LaserProvider.js";
+import { LaserProvider, useLaserStable, useLaserState, useLaserView } from "../../src/runtime/LaserProvider.js";
 import { summary } from "../agents/fixtures.js";
 import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../beam/fake-host.js";
+import { DEVICE_KEYS } from "../../src/runtime/device-storage.js";
+import { clearDeviceValue, seedDeviceValue, seedProject, seedRememberedSessions } from "../../test/runtime/environment-fixture.js";
 
 const A = `${PROJECT_CWD}/a.jsonl`;
 const B = `${PROJECT_CWD}/b.jsonl`;
@@ -92,9 +94,9 @@ const seed = (remembered: string | null = A): void => {
   addSession(world, A, PROJECT_CWD, { name: "First" });
   addSession(world, B, PROJECT_CWD, { name: "Second" });
   FakeHostClient.reset(world);
-  localStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_CWD);
-  if (remembered !== null) localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ [PROJECT_CWD]: remembered }));
-  else localStorage.removeItem(SESSION_STORAGE_KEY);
+  seedProject(PROJECT_CWD);
+  if (remembered !== null) seedRememberedSessions({ [PROJECT_CWD]: remembered });
+  else clearDeviceValue(DEVICE_KEYS.sessionsByProject);
 };
 
 const mount = async (): Promise<void> => {
@@ -277,7 +279,7 @@ describe("a selection leaves every cover", () => {
 describe("rememberedSessionFor", () => {
   const sessions = [summary({ path: A }), summary({ path: B })];
   it("answers the remembered path only while it is in the catalog", () => {
-    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ [PROJECT_CWD]: B, "/other": A }));
+    seedRememberedSessions({ [PROJECT_CWD]: B, "/other": A });
     expect(rememberedSessionFor(PROJECT_CWD, sessions)).toBe(B);
     expect(rememberedSessionFor("/other", sessions)).toBe(A);
     expect(rememberedSessionFor(PROJECT_CWD, [sessions[0]!])).toBeUndefined();
@@ -285,13 +287,13 @@ describe("rememberedSessionFor", () => {
     expect(rememberedSessionFor(undefined, sessions)).toBeUndefined();
   });
   it("survives a missing, malformed or wrongly shaped entry", () => {
-    localStorage.removeItem(SESSION_STORAGE_KEY);
+    clearDeviceValue(DEVICE_KEYS.sessionsByProject);
     expect(rememberedSessionFor(PROJECT_CWD, sessions)).toBeUndefined();
-    localStorage.setItem(SESSION_STORAGE_KEY, "{not json");
+    seedDeviceValue(DEVICE_KEYS.sessionsByProject, "{not json");
     expect(rememberedSessionFor(PROJECT_CWD, sessions)).toBeUndefined();
-    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify([A]));
+    seedRememberedSessions([A]);
     expect(rememberedSessionFor(PROJECT_CWD, sessions)).toBeUndefined();
-    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ [PROJECT_CWD]: 7 }));
+    seedRememberedSessions({ [PROJECT_CWD]: 7 });
     expect(rememberedSessionFor(PROJECT_CWD, sessions)).toBeUndefined();
   });
 });

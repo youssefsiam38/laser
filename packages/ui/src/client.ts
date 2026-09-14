@@ -10,10 +10,11 @@
  * `session/update` notifications are coalesced to one flush per animation
  * frame; every other message flushes the buffer first, so order is preserved.
  */
-import { PRODUCT_VERSION } from "@lasercode/protocol";
+import { ENVIRONMENT_CONTRACT_VERSION, ENVIRONMENT_DESCRIBE_METHOD, PRODUCT_VERSION, environmentDescriptorSchema } from "@lasercode/protocol";
 import type {
   ClientMethod,
   ClientRequests,
+  EnvironmentDescriptor,
   HostNotificationMethod,
   HostNotifications,
   JsonRpcMessage,
@@ -24,8 +25,35 @@ export type NotificationHandler = <M extends HostNotificationMethod>(method: M, 
 
 export type ConnectionState = "connecting" | "open" | "closed";
 
+/**
+ * What the app does with the environment it was just told about, before the
+ * connection opens. Returning a refusal keeps the client closed: the app could
+ * not make this device safe for this environment, so nothing may be read,
+ * written, resumed or requested in it.
+ */
+export type EnvironmentAcceptance = { ok: true } | { ok: false; reason: string };
+
+/** Handshake ids. Negative and zero, so they can never be a request id. */
+const VERSION_ID = 0;
+const ENVIRONMENT_ID = -1;
+
+/** How long each handshake step may take before the socket is replaced. */
+const HANDSHAKE_TIMEOUT_MS = 5000;
+
 export interface HostClientOptions {
   onVersionMismatch?: (hostVersion: string) => void;
+  /**
+   * The environment this connection is in (RP-13), delivered after the version
+   * matches and **before** the connection opens, every time it opens. The app
+   * scopes this device's storage to it here; a refusal stops the handshake.
+   */
+  onEnvironment?: (environment: EnvironmentDescriptor) => EnvironmentAcceptance;
+  /**
+   * The environment could not be established: no descriptor, one this view
+   * cannot understand, or an app that refused it. One stable sentence — the
+   * same reason repeats without saying it twice.
+   */
+  onEnvironmentFailure?: (reason: string) => void;
   url?: string;
   onNotification: NotificationHandler;
   /** Synchronous publication transaction; event handlers still run in order. */
@@ -68,6 +96,10 @@ export class HostClient {
   private listening = false;
   private state: ConnectionState = "closed";
   private versionBlocked = false;
+  /** The last environment failure, kept so retries do not repeat themselves. */
+  private environmentReason: string | undefined;
+  /** The version this socket's handshake accepted, for the descriptor check. */
+  private acceptedVersion: string | undefined;
   private handshakeTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly handshakeMessages: JsonRpcMessage[] = [];
   private frameHandle: number | undefined;
@@ -151,6 +183,17 @@ export class HostClient {
     this.attached.delete(path);
   }
 
+  /**
+   * Forget every attachment and its resume watermark, now.
+   *
+   * Called synchronously while the environment changes, before the connection
+   * opens: a session path from the environment this device was in a moment ago
+   * must never be resumed in the one it is in now.
+   */
+  forgetAttachments(): void {
+    this.attached.clear();
+  }
+
   /** Adopt a worker's fresh `seq` epoch (see `HostClientOptions.onResume`). */
   resync(path: string, seq: number): void {
     if (this.attached.has(path)) this.attached.set(path, seq);
@@ -166,6 +209,7 @@ export class HostClient {
    */
   whenConnected(timeoutMs = 5000): Promise<void> {
     if (this.versionBlocked) return Promise.reject(new Error("Refresh this view to match the host before continuing."));
+    if (this.environmentReason && this.state !== "open") return Promise.reject(new Error(this.environmentReason));
     if (this.state === "open") return Promise.resolve();
     if (this.closedByUser) return Promise.reject(new Error("Not connected to the host."));
     return new Promise((resolve, reject) => {
@@ -208,9 +252,10 @@ export class HostClient {
     this.handshakeMessages.length = 0;
     const ws = new WebSocket(this.options.url ?? defaultHostUrl());
     this.ws = ws;
+    this.acceptedVersion = undefined;
     ws.onopen = () => {
-      this.handshakeTimer = setTimeout(() => ws.close(), 5000);
-      ws.send(JSON.stringify({ jsonrpc: "2.0", id: 0, method: "pi/host/version", params: {} }));
+      this.handshakeTimer = setTimeout(() => ws.close(), HANDSHAKE_TIMEOUT_MS);
+      ws.send(JSON.stringify({ jsonrpc: "2.0", id: VERSION_ID, method: "pi/host/version", params: {} }));
     };
     ws.onmessage = (event) => this.onMessage(JSON.parse(String(event.data)) as JsonRpcMessage);
     ws.onclose = () => {
@@ -227,31 +272,90 @@ export class HostClient {
     ws.onerror = () => ws.close();
   }
 
+  /**
+   * Step one: the versions must be the same build, exactly.
+   *
+   * A match no longer opens the connection. It asks the host which environment
+   * this is, because until that answer lands this view does not know what it
+   * may keep on this device, and must therefore keep nothing.
+   */
   private acceptVersion(version: unknown): void {
-      clearTimeout(this.handshakeTimer);
-      const desktop = (globalThis as typeof globalThis & { desktop?: { version: string } }).desktop;
-      if (version !== PRODUCT_VERSION || (desktop && desktop.version !== PRODUCT_VERSION)) {
-        this.handshakeMessages.length = 0;
-        this.versionBlocked = true;
-        this.options.onVersionMismatch?.(typeof version === "string" ? version : "unknown");
-        this.ws?.close();
-        return;
+    clearTimeout(this.handshakeTimer);
+    const desktop = (globalThis as typeof globalThis & { desktop?: { version: string } }).desktop;
+    if (version !== PRODUCT_VERSION || (desktop && desktop.version !== PRODUCT_VERSION)) {
+      this.handshakeMessages.length = 0;
+      this.versionBlocked = true;
+      this.options.onVersionMismatch?.(typeof version === "string" ? version : "unknown");
+      this.ws?.close();
+      return;
+    }
+    this.acceptedVersion = version;
+    const ws = this.ws;
+    if (!ws) return;
+    this.handshakeTimer = setTimeout(
+      () => this.failEnvironment("The host did not describe this environment in time."),
+      HANDSHAKE_TIMEOUT_MS,
+    );
+    ws.send(JSON.stringify({ jsonrpc: "2.0", id: ENVIRONMENT_ID, method: ENVIRONMENT_DESCRIBE_METHOD, params: {} }));
+  }
+
+  /**
+   * Step two: the environment, validated against the protocol's own schema,
+   * its contract generation, and the version this socket already accepted.
+   *
+   * Only after the app has scoped itself to it does the connection open — so
+   * no queued notification, no resume and no request can precede it.
+   */
+  private acceptEnvironment(message: { result?: unknown; error?: { message?: string } }): void {
+    clearTimeout(this.handshakeTimer);
+    if (message.error) {
+      this.failEnvironment("This host cannot say what environment this is, so nothing is being kept on this device.");
+      return;
+    }
+    const parsed = environmentDescriptorSchema.safeParse((message.result as { environment?: unknown } | undefined)?.environment);
+    if (!parsed.success || parsed.data.contract !== ENVIRONMENT_CONTRACT_VERSION || parsed.data.version !== this.acceptedVersion) {
+      this.failEnvironment("This view does not understand how this host describes its environment. Refresh this view.");
+      return;
+    }
+    const acceptance = this.options.onEnvironment?.(parsed.data as EnvironmentDescriptor) ?? { ok: true };
+    if (!acceptance.ok) {
+      this.failEnvironment(acceptance.reason);
+      return;
+    }
+    this.environmentReason = undefined;
+    this.backoffMs = 500;
+    this.setState("open");
+    for (const message of this.handshakeMessages.splice(0)) this.onMessage(message);
+    for (const [path, seq] of [...this.attached]) {
+      // A session the app has dropped must not be re-opened in a worker.
+      if (this.options.shouldResume && !this.options.shouldResume(path)) {
+        this.attached.delete(path);
+        continue;
       }
-      this.backoffMs = 500;
-      this.setState("open");
-      for (const message of this.handshakeMessages.splice(0)) this.onMessage(message);
-      for (const [path, seq] of [...this.attached]) {
-        // A session the app has dropped must not be re-opened in a worker.
-        if (this.options.shouldResume && !this.options.shouldResume(path)) {
-          this.attached.delete(path);
-          continue;
-        }
-        this.request("session/load", { path, fromSeq: seq })
-          .then((result) => {
-            this.options.onResume?.(path, result.replayFrom, seq);
-          })
-          .catch(() => {});
-      }
+      this.request("session/load", { path, fromSeq: seq })
+        .then((result) => {
+          this.options.onResume?.(path, result.replayFrom, seq);
+        })
+        .catch(() => {});
+    }
+  }
+
+  /**
+   * The environment is not established, so this connection stays shut.
+   *
+   * Deliberately *not* a version mismatch: the build is fine, the environment
+   * is not. The socket closes and the ordinary backoff keeps trying, which is
+   * visible in the connection line rather than a silent permanent stop — and
+   * the reason is reported once per distinct sentence, so a retry loop cannot
+   * become a stream of toasts.
+   */
+  private failEnvironment(reason: string): void {
+    clearTimeout(this.handshakeTimer);
+    this.handshakeMessages.length = 0;
+    const repeated = this.environmentReason === reason;
+    this.environmentReason = reason;
+    if (!repeated) this.options.onEnvironmentFailure?.(reason);
+    this.ws?.close();
   }
 
   /**
@@ -325,8 +429,12 @@ export class HostClient {
 
   private onMessage(message: JsonRpcMessage): void {
     if ("id" in message && !("method" in message)) {
-      if (message.id === 0) {
+      if (message.id === VERSION_ID) {
         this.acceptVersion((message.result as { version?: string } | undefined)?.version);
+        return;
+      }
+      if (message.id === ENVIRONMENT_ID) {
+        this.acceptEnvironment(message as { result?: unknown; error?: { message?: string } });
         return;
       }
       this.flushUpdates();

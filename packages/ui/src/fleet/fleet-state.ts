@@ -12,8 +12,9 @@
  * layout, beside the sessions and monitor columns, because it is a shape of
  * the window rather than a moment.
  */
-import { storageKey } from "@lasercode/protocol";
 import { useSyncExternalStore } from "react";
+
+import { DEVICE_KEYS, deviceStore } from "../runtime/device-storage.js";
 
 let sheetOpen = false;
 /** The item key the fleet should scroll to and expand, when it was asked for. */
@@ -70,26 +71,14 @@ export function clearFleetReveal(): void {
  * refuses site data simply never clears anything, which is the harmless way
  * for it to fail. Work that finishes *after* the mark still appears.
  */
-const CLEARED_KEY = storageKey("fleet-cleared");
-
-const readCleared = (): string | undefined => {
-  try {
-    return globalThis.localStorage?.getItem(CLEARED_KEY) ?? undefined;
-  } catch {
-    return undefined;
-  }
-};
+const readCleared = (): string | undefined => deviceStore.read(DEVICE_KEYS.fleetCleared);
 
 let clearedBefore: string | undefined = readCleared();
 
 /** Put every piece of work finished up to now out of sight. */
 export function clearFinishedFleet(at: string = new Date().toISOString()): void {
   clearedBefore = at;
-  try {
-    globalThis.localStorage?.setItem(CLEARED_KEY, at);
-  } catch {
-    // Only this window forgets, and only until it is reloaded.
-  }
+  deviceStore.write(DEVICE_KEYS.fleetCleared, at);
   publish();
 }
 
@@ -112,15 +101,22 @@ export function useFleetClearedBefore(): string | undefined {
   return useSyncExternalStore(subscribe, () => clearedBefore, () => undefined);
 }
 
-/** Test seam. */
+/** Test seam: forget the mark entirely, in memory and on the device. */
 export function resetFleetState(): void {
   sheetOpen = false;
   revealed = undefined;
   clearedBefore = undefined;
-  try {
-    globalThis.localStorage?.removeItem(CLEARED_KEY);
-  } catch {
-    // Nothing to reset if nothing could be stored.
-  }
+  deviceStore.write(DEVICE_KEYS.fleetCleared, undefined);
+  publish();
+}
+
+/**
+ * Adopt the environment that has just been opened: the sheet closes and the
+ * "I have read these" mark is the new namespace's, never the old one's.
+ */
+export function rehydrateFleetState(): void {
+  sheetOpen = false;
+  revealed = undefined;
+  clearedBefore = readCleared();
   publish();
 }

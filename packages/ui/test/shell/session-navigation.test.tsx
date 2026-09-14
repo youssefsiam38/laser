@@ -7,9 +7,11 @@ import { readFileSync } from "node:fs";
 import { URL as NodeURL } from "node:url";
 import { ThreadList } from "../../src/components/assistant-ui/elements/thread-list.aui.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
-import { sessionsList, SESSION_PINS_STORAGE_KEY } from "../../src/components/shell/session-groups.js";
+import { sessionsList } from "../../src/components/shell/session-groups.js";
 
 import type { MainDestination } from "../../src/runtime/main-destination.js";
+import { DEVICE_KEYS } from "../../src/runtime/device-storage.js";
+import { activateTestEnvironment, readDeviceValue } from "../../test/runtime/environment-fixture.js";
 
 const fixture = vi.hoisted(() => ({ state: { destination: { phase: "ready-code", intent: 0, code: { kind: "project-landing", project: "/one" } } as MainDestination, sessionLoads: {} as Record<string, { phase: "opening" }>, sessions: [
   { path: "/one/working.jsonl", cwd: "/one", name: "Active work", modifiedAt: "2026-09-07T03:00:00Z", messageCount: 2, attention: "working" },
@@ -44,6 +46,7 @@ beforeEach(() => {
   fixture.state.destination = { phase: "ready-code", intent: 0, code: { kind: "project-landing", project: "/one" } } satisfies MainDestination;
   fixture.state.sessionLoads = {};
   localStorage.clear();
+  activateTestEnvironment();
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
 });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
@@ -91,7 +94,7 @@ describe("compact session navigation", () => {
     expect(pinnedRows[0]?.textContent).toContain("Review needed");
     expect(pinnedRows[0]?.querySelector('[data-slot="pinned-session-project"]')?.getAttribute("aria-label")).toBe("Project: /two");
     expect(container.querySelector('[data-cwd="/one"]')?.textContent).not.toContain("Active work");
-    expect(JSON.parse(localStorage.getItem(SESSION_PINS_STORAGE_KEY)!)).toEqual(["/two/waiting.jsonl", "/one/working.jsonl"]);
+    expect(JSON.parse(readDeviceValue(DEVICE_KEYS.sessionPins)!)).toEqual(["/two/waiting.jsonl", "/one/working.jsonl"]);
     await act(async () => sessionsList.filter("/one"));
     expect(rows()).toHaveLength(2);
     expect(sessionsList.get().pinned.size).toBe(2);

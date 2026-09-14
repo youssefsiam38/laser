@@ -84,7 +84,14 @@ export const DEFAULT_CACHE_POLICY: CachePolicy = {
   requireDeviceEncryption: false,
 };
 
-/** How much of a read is written to the audit. Denials are always written. */
+/**
+ * How much of a *successful* read is written to the audit.
+ *
+ * `summary` counts them per actor per window; `each` writes a row apiece.
+ * Refusals are never summarised away by this setting — they hold reserved
+ * capacity of their own — but they are still bounded, and past that reserve
+ * they are counted rather than written (`docs/environment-policy.md` §5).
+ */
 export type AuditReadMode = "summary" | "each";
 
 export interface EnvironmentCapabilities {

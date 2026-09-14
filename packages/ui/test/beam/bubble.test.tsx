@@ -21,13 +21,15 @@ import { BeamBubble } from "../../src/components/beam/BeamBubble.js";
 import { BeamSpark } from "../../src/components/beam/BeamSpark.js";
 import { startBeamSession } from "../../src/components/beam/beam-model.js";
 import { useLaserStable } from "../../src/runtime/LaserProvider.js";
-import { BEAM_SESSION_STORAGE_KEY, beamStore } from "../../src/components/beam/beam-store.js";
+import { beamStore } from "../../src/components/beam/beam-store.js";
 import { mainTab } from "../../src/runtime/main-destination.js";
 import { ShellContext, type ShellContextValue } from "../../src/components/shell/shell-context.js";
 import { sessionsList } from "../../src/components/shell/session-groups.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { LaserProvider, useLaserState } from "../../src/runtime/LaserProvider.js";
 import { addSession, BEAM_CWD, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "./fake-host.js";
+import { DEVICE_KEYS } from "../../src/runtime/device-storage.js";
+import { readDeviceValue, seedDeviceValue } from "../../test/runtime/environment-fixture.js";
 
 const shell = (layout: ShellContextValue["layout"]): ShellContextValue => ({
   layout,
@@ -172,7 +174,7 @@ describe("the Beam bubble", () => {
     expect(prompts[0]!.params).toMatchObject({ path, content: [{ type: "text", text: "Which sessions need me?" }] });
     // Adopted by the bubble and this browser, not by the main view.
     expect(beamStore.getSnapshot().path).toBe(path);
-    expect(localStorage.getItem(BEAM_SESSION_STORAGE_KEY)).toBe(path);
+    expect(readDeviceValue(DEVICE_KEYS.beamSession)).toBe(path);
     expect(container.querySelector('[data-slot="main-current"]')?.textContent).toBe(`${PROJECT_CWD}/main.jsonl`);
     expect(bubble()!.querySelector('[data-slot="thread-path"]')?.textContent).toBe(path);
     expect(bubble()!.querySelector('[data-slot="beam-empty-state"]')).toBeNull();
@@ -207,7 +209,7 @@ describe("the Beam bubble", () => {
   it("clears a session remembered by an older build when the spark opens", async () => {
     const kept = `${BEAM_CWD}/kept.jsonl`;
     addSession(world, kept, BEAM_CWD);
-    localStorage.setItem(BEAM_SESSION_STORAGE_KEY, kept);
+    seedDeviceValue(DEVICE_KEYS.beamSession, kept);
     beamStore.reset();
     await mount();
     await openBubble();

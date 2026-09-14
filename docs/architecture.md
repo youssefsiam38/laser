@@ -112,7 +112,11 @@ ACP-inspired JSON-RPC:
   table at the host boundary, and `environment/describe` tells each connection
   what this environment is and what that connection may do in it
   (RP-13, [`environment-policy.md`](environment-policy.md)). A policy or a
-  pairing grant may narrow; nothing widens.
+  pairing grant may narrow; nothing widens. The client asks for the descriptor
+  inside the version handshake and does not open the connection until it has
+  scoped this device's storage to that environment; what a browser keeps lives
+  under one namespace per environment and obeys that environment's cache
+  policy.
 - Notifications (host → client): `session/update` with a monotonically
   increasing `seq` per session; clients resume with `session/load { fromSeq }`.
 - Requests (host → client): `session/request_permission` and `pi/ui/request`

@@ -6,12 +6,11 @@
  *
  * Divergences from the registry copy:
  *   - `useComposerDraft` and `ComposerDraftRestore` bind it to the runtime:
- *     the composer's text is saved per session path in `localStorage` while
+ *     the composer's text is saved per session path on the device while
  *     it is non-empty, dropped when it is sent or cleared, and offered back
  *     when the same session opens with an empty composer.
  *   - `savedAt` is a real time, formatted relatively, not a string prop.
  */
-import { storageKey } from "@lasercode/protocol";
 import { useAui, useAuiState } from "@assistant-ui/react";
 import { PencilLineIcon, XIcon } from "lucide-react";
 import { useEffect, useRef, useState, type ComponentProps } from "react";
@@ -21,6 +20,7 @@ import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { relativeTime } from "@/format";
 import { cn } from "@/lib/utils";
 import { useLaserState } from "@/runtime";
+import { deviceStore, type DraftRecord } from "@/runtime/device-storage";
 
 import { mono, paper } from "./surfaces.js";
 
@@ -64,36 +64,24 @@ export function DraftRestore({ draft, savedAt, onRestore, onDiscard, className, 
 // Runtime binding
 // ---------------------------------------------------------------------------
 
-export const DRAFT_STORAGE_PREFIX = storageKey("draft:");
 const SAVE_DEBOUNCE_MS = 300;
 
-interface SavedDraft {
-  text: string;
-  at: string;
-}
+type SavedDraft = DraftRecord;
 
-const draftKey = (path: string): string => `${DRAFT_STORAGE_PREFIX}${path}`;
-
+/**
+ * A draft is the one piece of *content* this app keeps on the device, so it
+ * goes through `deviceStore`: scoped to the environment the session belongs
+ * to, and admitted only while that environment's cache policy allows content
+ * at all and within its bounds (RP-13). An environment that disables
+ * transcripts, requires encrypted storage or bounds the cache to nothing has
+ * no drafts here — reads answer nothing and writes do nothing.
+ */
 export function readDraft(path: string): SavedDraft | undefined {
-  try {
-    const raw = globalThis.localStorage?.getItem(draftKey(path));
-    if (!raw) return undefined;
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return undefined;
-    const { text, at } = parsed as Partial<SavedDraft>;
-    return typeof text === "string" && text.trim() && typeof at === "string" ? { text, at } : undefined;
-  } catch {
-    return undefined;
-  }
+  return deviceStore.readDraft(path);
 }
 
 export function writeDraft(path: string, text: string | undefined): void {
-  try {
-    if (text === undefined) globalThis.localStorage?.removeItem(draftKey(path));
-    else globalThis.localStorage?.setItem(draftKey(path), JSON.stringify({ text, at: new Date().toISOString() }));
-  } catch {
-    /* private mode / quota: the draft lives for this tab */
-  }
+  deviceStore.writeDraft(path, text);
 }
 
 /**

@@ -1,7 +1,7 @@
-import { storageKey } from "@lasercode/protocol";
 import { useAui, useAuiState, type CreateAttachment, type ThreadComposerRuntime } from "@assistant-ui/react";
 import { useEffect, useLayoutEffect, useRef } from "react";
 
+import { deviceStore } from "./device-storage.js";
 import { codeLandingKey, type MainDestination } from "./main-destination.js";
 
 type ComposerState = ReturnType<ThreadComposerRuntime["getState"]>;
@@ -23,34 +23,21 @@ export interface MainLandingDraftStore {
  * A landing has no session, so it has no session draft — and a frontend the
  * app replaces after a version handshake (`refreshFrontend`, AGENTS.md §5a)
  * used to take an unsent landing message with it. The text is kept the way a
- * session's is (`useComposerDraft`): the same `draft:` prefix and the same
- * `{ text, at }`, under the landing's own stable key rather than a path, so
- * the two can never collide. Attachments and a quote stay in memory: a `File`
+ * session's is (`useComposerDraft`): the same environment-scoped, bounded
+ * draft store and the same `{ text, at }`, under the landing's own stable key
+ * rather than a path, so the two can never collide. Attachments and a quote stay in memory: a `File`
  * does not survive a reload, and half a draft would be a lie.
  */
-const LANDING_DRAFT_PREFIX = `${storageKey("draft:")}landing:`;
+/** Landing drafts share the session drafts' bounded, admission-gated home. */
+const LANDING_DRAFT_ID = (key: string): string => `landing:${key}`;
 const SAVE_DEBOUNCE_MS = 300;
 
 function readLandingDraft(key: string): string | undefined {
-  try {
-    const raw = globalThis.localStorage?.getItem(`${LANDING_DRAFT_PREFIX}${key}`);
-    if (!raw) return undefined;
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return undefined;
-    const { text } = parsed as { text?: unknown };
-    return typeof text === "string" && text.trim() ? text : undefined;
-  } catch {
-    return undefined;
-  }
+  return deviceStore.readDraft(LANDING_DRAFT_ID(key))?.text;
 }
 
 function writeLandingDraft(key: string, text: string | undefined): void {
-  try {
-    if (text === undefined) globalThis.localStorage?.removeItem(`${LANDING_DRAFT_PREFIX}${key}`);
-    else globalThis.localStorage?.setItem(`${LANDING_DRAFT_PREFIX}${key}`, JSON.stringify({ text, at: new Date().toISOString() }));
-  } catch {
-    /* private mode / quota: the draft lives for this tab */
-  }
+  deviceStore.writeDraft(LANDING_DRAFT_ID(key), text);
 }
 
 const capture = (composer: ThreadComposerRuntime): MainLandingDraft => {

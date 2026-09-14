@@ -3,18 +3,13 @@ import { storageKey, type SessionAgentInfo } from "@lasercode/protocol";
 export type SessionKindTab = "chat" | "code";
 
 /**
- * Where the main destination is remembered between launches.
+ * Which of the two tabs was last shown.
  *
- * `main-destination-controller.ts` is the only reader and the only writer of
- * this key, and its `DestinationMemory` (`{ v: 2, tab, chat?, code }`) is the
- * only shape it holds. This module used to keep a second pair of accessors
- * over a flat `{ chat, code }` of session paths; one write through them turned
- * `code` back into a string and cost the person the destination they left.
- * An older flat value left on a machine is not read as memory: the controller
- * migrates the `chat` path out of it and takes the rest from the pre-controller
- * project/session keys.
+ * An enum, not a place: it names no project, session or machine, so it is one
+ * of the few things that stays outside the environment namespace and follows a
+ * person between environments (`device-storage.ts`, RP-13). The *destination*
+ * behind each tab is a path, and that lives in the namespace.
  */
-export const SESSION_TAB_MEMORY_KEY = storageKey("session-tab-last");
 export const SESSIONS_TAB_STORAGE_KEY = storageKey("sessions-tab");
 
 const normalized = (path: string): string => path.replace(/\\/g, "/").replace(/\/+$/, "");

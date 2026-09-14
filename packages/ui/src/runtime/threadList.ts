@@ -7,13 +7,14 @@
  * (`@lasercode/protocol` SessionSummary.path).
  *
  * Archiving is client-local for now: laser's protocol has no archive verb, so
- * an archived path is remembered in `localStorage` under
- * {@link ARCHIVE_STORAGE_KEY}. Deleting is not supported at all — Pi session
+ * an archived path is remembered on this device, inside the environment's own
+ * namespace (`deviceStore`). Deleting is not supported at all — Pi session
  * files are the user's transcript history.
  *
  * The builders below are pure and tested in test/runtime/threadList.test.ts.
  */
-import { storageKey, WORKTREES_DIR_NAME } from "@lasercode/protocol";
+import { WORKTREES_DIR_NAME } from "@lasercode/protocol";
+import { DEVICE_KEYS, deviceStore } from "./device-storage.js";
 import type { RemoteThreadListAdapter } from "@assistant-ui/react";
 import type { ProjectInfo, SessionAttention, SessionSummary } from "@lasercode/protocol";
 import type { SessionView } from "../store.js";
@@ -33,8 +34,6 @@ export const ATTENTION_ORDER: readonly SessionAttention[] = [
   "working",
   "idle",
 ];
-
-export const ARCHIVE_STORAGE_KEY = storageKey("archived");
 
 /** Lower sorts first. An absent (or unknown) attention is `idle`. */
 export function attentionRank(attention: SessionAttention | undefined): number {
@@ -204,32 +203,29 @@ export interface ArchiveStore {
   add(path: string): void;
   remove(path: string): void;
   list(): string[];
+  /** Re-read the archive from the environment namespace now in force. */
+  rehydrate(): void;
   /** React-compatible change subscription for project and thread visibility. */
   subscribe(listener: () => void): () => void;
   getSnapshot(): number;
 }
 
-/** Storage-backed archive set; degrades to in-memory when storage is unavailable. */
-export function createArchiveStore(storage?: Pick<Storage, "getItem" | "setItem"> | null): ArchiveStore {
-  const load = (): Set<string> => {
-    try {
-      const raw = storage?.getItem(ARCHIVE_STORAGE_KEY);
-      const parsed: unknown = raw ? JSON.parse(raw) : [];
-      return new Set(Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : []);
-    } catch {
-      return new Set();
-    }
-  };
-  const set = load();
+/**
+ * The archive set, inside the environment's own namespace.
+ *
+ * An archived thread is a session path, so it belongs to one environment and
+ * to no other. `deviceStore` is disabled until the environment is known, so a
+ * store built before the handshake starts empty and adopts what it finds when
+ * {@link ArchiveStore.rehydrate} runs.
+ */
+export function createArchiveStore(): ArchiveStore {
+  const load = (): Set<string> =>
+    new Set(deviceStore.readJson(DEVICE_KEYS.archived, (value) =>
+      Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : undefined) ?? []);
+  let set = load();
   const listeners = new Set<() => void>();
   let revision = 0;
-  const persist = (): void => {
-    try {
-      storage?.setItem(ARCHIVE_STORAGE_KEY, JSON.stringify([...set]));
-    } catch {
-      /* private mode / quota — the archive stays in memory */
-    }
-  };
+  const persist = (): void => deviceStore.writeJson(DEVICE_KEYS.archived, [...set]);
   const publish = (): void => {
     revision += 1;
     for (const listener of listeners) listener();
@@ -248,6 +244,10 @@ export function createArchiveStore(storage?: Pick<Storage, "getItem" | "setItem"
       publish();
     },
     list: () => [...set],
+    rehydrate: () => {
+      set = load();
+      publish();
+    },
     subscribe: (listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);

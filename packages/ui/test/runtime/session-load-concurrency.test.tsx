@@ -7,10 +7,11 @@ vi.mock("../../src/runtime/projection.js", async original => {
   const source = await original<typeof import("../../src/runtime/projection.js")>();
   return { ...source, projectSessionView: vi.fn(source.projectSessionView) };
 });
-import { LaserProvider, PROJECT_STORAGE_KEY, SESSION_STORAGE_KEY, useLaserStable, useLaserState, type LaserActions } from "../../src/runtime/LaserProvider.js";
+import { LaserProvider, useLaserStable, useLaserState, type LaserActions } from "../../src/runtime/LaserProvider.js";
 import { projectSessionView } from "../../src/runtime/projection.js";
 import type { AppState } from "../../src/store.js";
 import { addSession, createWorld, FakeHostClient, settle, type World } from "../beam/fake-host.js";
+import { seedProject, seedRememberedSessions } from "../../test/runtime/environment-fixture.js";
 const path = "/p/target.jsonl";
 let actions: LaserActions, state: AppState, root: Root, container: HTMLDivElement, world: World;
 function Probe() { actions = useLaserStable().actions; state = useLaserState(s => s); return null; }
@@ -19,7 +20,7 @@ const entries = (text: string) => [{ id: "u", parentId: null, type: "message", m
 beforeEach(async () => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true; localStorage.clear();
   world = createWorld(); addSession(world, path, "/p"); addSession(world, "/p/start.jsonl", "/p"); FakeHostClient.reset(world);
-  localStorage.setItem(PROJECT_STORAGE_KEY, "/p"); localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ "/p": "/p/start.jsonl" }));
+  seedProject("/p"); seedRememberedSessions({ "/p": "/p/start.jsonl" });
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   await act(async () => root.render(<LaserProvider url="ws://test"><Probe /></LaserProvider>)); await act(async () => settle(40));
   vi.mocked(projectSessionView).mockClear();

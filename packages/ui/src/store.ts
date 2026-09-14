@@ -16,6 +16,7 @@ import type {
   AgentModelChoice,
   AgentRun,
   AgentsSnapshot,
+  EnvironmentDescriptor,
   HostNotificationMethod,
   HostNotifications,
   MessageSpeaker,
@@ -236,8 +237,32 @@ export const initialAgents: AgentsSlice = {
   chooseBeamModel: null,
 };
 
+/**
+ * What this connection's environment is, for the app to *show* (RP-13).
+ *
+ * Presentation only, and deliberately a copy rather than the descriptor: the
+ * host decides what a request may do, every time it is asked. Nothing here
+ * grants anything, and nothing reads it to decide whether an action is
+ * allowed — the answer to that always comes back from the host.
+ */
+export interface EnvironmentSnapshot {
+  contract: string;
+  deployment: EnvironmentDescriptor["deployment"];
+  environmentKey: string;
+  capabilities: EnvironmentDescriptor["capabilities"];
+  cache: EnvironmentDescriptor["cache"];
+  scopes: EnvironmentDescriptor["scopes"];
+}
+
 export interface AppState {
   versionMismatch?: string;
+  /** The environment of the open connection (RP-13). Absent until it opens. */
+  environment?: EnvironmentSnapshot;
+  /**
+   * Why the connection could not be established, when the build matched but
+   * the environment did not. One sentence, written for a person.
+   */
+  environmentError?: string;
   connection: "connecting" | "open" | "closed";
   sessions: SessionSummary[];
   catalogGroups?: Array<{ cwd: string; total: number; cursor?: string }>;
@@ -275,6 +300,22 @@ export const initialState: AppState = {
 
 export type Action =
   | { type: "versionMismatch"; version: string }
+  /** The connection's environment landed and this device is scoped to it. */
+  | { type: "environment"; environment: EnvironmentSnapshot }
+  /** The environment could not be established; `undefined` clears the notice. */
+  | { type: "environmentError"; message: string | undefined }
+  /**
+   * A different (or downgraded) environment: everything derived from the old
+   * one goes, including every open transcript, every catalog row and every
+   * remembered destination. Only the connection's own facts survive.
+   */
+  | { type: "resetEnvironment" }
+  /**
+   * The remembered destination, readable at last: device storage only opens
+   * once the environment is known, so the app starts with none and adopts it
+   * here — and only while nothing else has chosen one.
+   */
+  | { type: "restoreDestination"; destination: MainDestination }
   | { type: "connection"; state: AppState["connection"] }
   | { type: "sessions"; sessions: SessionSummary[]; groups?: Array<{ cwd: string; total: number; cursor?: string }>; archivedCount?: number; presence?: Record<string, boolean> }
   /** Loading/creation warms a view only; only the destination controller selects. */
@@ -361,6 +402,28 @@ export function reduce(state: AppState, action: Action): AppState {
       return { ...state, connection: action.state };
     case "versionMismatch":
       return { ...state, versionMismatch: action.version };
+    case "environment": {
+      const { environmentError: _cleared, ...rest } = state;
+      return { ...rest, environment: action.environment };
+    }
+    case "environmentError": {
+      // The same sentence twice is the same state: a reconnect loop must not
+      // re-render, re-announce or re-toast a failure that has not changed.
+      if (state.environmentError === action.message) return state;
+      const { environmentError: _previous, ...rest } = state;
+      return action.message === undefined ? rest : { ...rest, environmentError: action.message };
+    }
+    case "resetEnvironment":
+      return {
+        ...initialState,
+        connection: state.connection,
+        ...(state.versionMismatch !== undefined ? { versionMismatch: state.versionMismatch } : {}),
+        ...(state.environmentError !== undefined ? { environmentError: state.environmentError } : {}),
+      };
+    case "restoreDestination":
+      return state.destination.intent === 0 && state.destination.phase === "resolving"
+        ? { ...state, destination: action.destination }
+        : state;
     case "sessions":
       return { ...state, sessions: action.sessions.map(summary => summary.firstMessage ? { ...summary, firstMessage: summary.firstMessage.split(/(?:^|\s)<attached-file\b/)[0]!.trim() } : summary), sessionsLoaded: true,
         ...(action.groups ? { catalogGroups: action.groups, catalogPresence: action.groups.length ? action.presence ?? {} : undefined } : {}),

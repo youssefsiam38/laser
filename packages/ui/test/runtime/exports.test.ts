@@ -56,9 +56,13 @@ describe("runtime barrel", () => {
 
   it("exports the documented constants", () => {
     expect(runtime.NOTICE_DATA_PART).toBe(namespaced("notice"));
-    expect(runtime.ARCHIVE_STORAGE_KEY).toBe(namespaced("archived"));
-    expect(runtime.PROJECT_STORAGE_KEY).toBe(namespaced("project"));
-    expect(runtime.PROJECTS_STORAGE_KEY).toBe(namespaced("projects"));
+    // Every key that names a session or a project now hangs off one root and
+    // one environment (RP-13); the barrel exports the root, not the keys.
+    expect(runtime.ENVIRONMENT_NAMESPACE).toBe(namespaced("env"));
+    expect(runtime.DEVICE_KEYS.archived).toBe("archived");
+    expect(runtime).not.toHaveProperty("ARCHIVE_STORAGE_KEY");
+    expect(runtime).not.toHaveProperty("PROJECT_STORAGE_KEY");
+    expect(runtime).not.toHaveProperty("PROJECTS_STORAGE_KEY");
     expect(runtime.STEER_QUEUE_PREFIX).toBe("steer:");
     expect(runtime.FOLLOW_UP_QUEUE_PREFIX).toBe("followUp:");
     expect(runtime.ATTENTION_ORDER).toEqual(["waiting_for_input", "error", "finished_unread", "working", "idle"]);

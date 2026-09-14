@@ -16,8 +16,10 @@ vi.mock("../../src/client.js", async (original) => ({
 
 import { LaserProvider, useLaserStable, useLaserState, useLaserView, type LaserActions } from "../../src/runtime/LaserProvider.js";
 import { isMainReady, mainTab } from "../../src/runtime/main-destination.js";
-import { SESSION_TAB_MEMORY_KEY, SESSIONS_TAB_STORAGE_KEY } from "../../src/runtime/session-tab-memory.js";
+import { SESSIONS_TAB_STORAGE_KEY } from "../../src/runtime/session-tab-memory.js";
 import { addSession, createWorld, FakeHostClient, settle, type World } from "../beam/fake-host.js";
+import { DEVICE_KEYS } from "../../src/runtime/device-storage.js";
+import { clearDeviceValue, seedDeviceValue } from "../../test/runtime/environment-fixture.js";
 
 const CHAT = "/state/chat/yesterday.jsonl";
 
@@ -49,7 +51,7 @@ beforeEach(() => {
     return { state };
   }) as never;
   localStorage.setItem(SESSIONS_TAB_STORAGE_KEY, "chat");
-  localStorage.setItem(SESSION_TAB_MEMORY_KEY, JSON.stringify({ chat: CHAT }));
+  seedDeviceValue(DEVICE_KEYS.destination, JSON.stringify({ chat: CHAT }));
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -85,7 +87,7 @@ describe("the Chat tab's + button", () => {
     // create one, and the host has not yet said where Chat lives because the
     // agents snapshot is still on its way. The late-workspace effect exists
     // for exactly this intent, so it must fire for it.
-    localStorage.removeItem(SESSION_TAB_MEMORY_KEY);
+    clearDeviceValue(DEVICE_KEYS.destination);
     world.sessions.length = 0;
     const chatCwd = world.snapshot.workspaces.chat!;
     let deliverSnapshot!: () => void;

@@ -35,17 +35,43 @@ describe("browser storage across a rename", () => {
   it("moves every key onto the current prefix, hyphenated and dotted alike", () => {
     const storage = fakeStorage({
       "previous-panels": "{}",
-      "previous-draft:/a/b.jsonl": '{"text":"half a sentence"}',
       "previous.theme": '{"v":1}',
       "unrelated-key": "left alone",
     });
     const result = migrateStorageKeys(storage, OLD);
-    expect(result.moved.sort()).toEqual(["previous-draft:/a/b.jsonl", "previous-panels", "previous.theme"]);
+    expect(result.moved.sort()).toEqual(["previous-panels", "previous.theme"]);
     expect(storage.getItem(`${STORAGE_PREFIX}-panels`)).toBe("{}");
-    expect(storage.getItem(`${STORAGE_PREFIX}-draft:/a/b.jsonl`)).toBe('{"text":"half a sentence"}');
     expect(storage.getItem(`${STORAGE_PREFIX}.theme`)).toBe('{"v":1}');
     expect(storage.getItem("previous-panels")).toBeNull();
     expect(storage.getItem("unrelated-key")).toBe("left alone");
+  });
+
+  it("drops what it cannot prove belongs to this environment, instead of adopting it", () => {
+    // A draft and a session path from before environments existed, and a
+    // namespace from another one: none of them can be shown to belong to the
+    // environment this build will connect to (RP-13), so a rename removes them
+    // rather than handing them to whoever connects first.
+    const storage = fakeStorage({
+      "previous-draft:/a/b.jsonl": '{"text":"half a sentence"}',
+      "previous-archived": '["/a/b.jsonl"]',
+      "previous-projects": '["/work"]',
+      "previous-env:e1.AAAAAAAAAAAAAAAAAAAAAA:archived": '["/a/b.jsonl"]',
+      "previous-panels": "{}",
+    });
+    const result = migrateStorageKeys(storage, OLD);
+    expect(result.moved).toEqual(["previous-panels"]);
+    expect(result.dropped.sort()).toEqual([
+      "previous-archived",
+      "previous-draft:/a/b.jsonl",
+      "previous-env:e1.AAAAAAAAAAAAAAAAAAAAAA:archived",
+      "previous-projects",
+    ]);
+    for (const gone of ["previous-draft:/a/b.jsonl", "previous-archived", "previous-projects", "previous-env:e1.AAAAAAAAAAAAAAAAAAAAAA:archived"]) {
+      expect(storage.getItem(gone), gone).toBeNull();
+    }
+    expect(storage.getItem(`${STORAGE_PREFIX}-draft:/a/b.jsonl`)).toBeNull();
+    expect(storage.getItem(`${STORAGE_PREFIX}-archived`)).toBeNull();
+    expect(storage.getItem(`${STORAGE_PREFIX}-panels`)).toBe("{}");
   });
 
   it("never overwrites what the current name already has", () => {
@@ -59,7 +85,7 @@ describe("browser storage across a rename", () => {
 
   it("does nothing at all with no former names, which is the usual case", () => {
     const storage = fakeStorage({ [`${STORAGE_PREFIX}-panels`]: "{}" });
-    expect(migrateStorageKeys(storage, [])).toEqual({ moved: [], kept: [], caches: [] });
+    expect(migrateStorageKeys(storage, [])).toEqual({ moved: [], kept: [], dropped: [], caches: [] });
     expect(storage.getItem(`${STORAGE_PREFIX}-panels`)).toBe("{}");
   });
 
@@ -70,6 +96,6 @@ describe("browser storage across a rename", () => {
       },
     } as unknown as Storage;
     expect(() => migrateStorageKeys(hostile, OLD)).not.toThrow();
-    expect(migrateStorageKeys(null, OLD)).toEqual({ moved: [], kept: [], caches: [] });
+    expect(migrateStorageKeys(null, OLD)).toEqual({ moved: [], kept: [], dropped: [], caches: [] });
   });
 });

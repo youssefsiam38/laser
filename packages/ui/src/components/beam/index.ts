@@ -7,7 +7,7 @@ export { BeamBubble } from "./BeamBubble.js";
 export { BeamEmptyState } from "./BeamEmptyState.js";
 export { BeamModelDialog } from "./BeamModelDialog.js";
 export { BeamSessionMark } from "./BeamSessionMark.js";
-export { beamStore, useBeam, BEAM_SESSION_STORAGE_KEY, type BeamSnapshot } from "./beam-store.js";
+export { beamStore, useBeam, type BeamSnapshot } from "./beam-store.js";
 export {
   BEAM_DEFAULT_MODEL_NOTE,
   BEAM_FOLLOW_UPS,

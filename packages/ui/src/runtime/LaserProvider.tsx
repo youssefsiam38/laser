@@ -20,7 +20,7 @@ import { TranscriptPresentation } from "./transcript-presentation.js";
  * a small external store that this component keeps in sync, and reads no
  * closed-over state at all.
  */
-import { PRODUCT_NAME, storageKey } from "@lasercode/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import {
   AssistantRuntimeProvider,
   AuiConfig,
@@ -82,16 +82,17 @@ import {
 } from "./main-destination.js";
 import {
   initialDestinationFromMemory,
-  PROJECT_STORAGE_KEY,
-  SESSION_STORAGE_KEY,
   useMainDestinationController,
   readDestinationMemory,
   type MainInitializationToken,
 } from "./main-destination-controller.js";
 import { createCatalogLoader } from "./catalog-loader.js";
+import { DEVICE_KEYS, deviceStore } from "./device-storage.js";
 import { createHistoryLoader, type HistoryReads } from "./history-loader.js";
 import { createHistoryWindows, MAIN_WINDOW_SCOPE, type HistoryWindowOwner, type HistoryWindows } from "./history-owners.js";
 import { sessionsList } from "../components/shell/session-groups.js";
+import { sessionFolds } from "../components/assistant-ui/elements/session-folds.js";
+import { rehydrateFleetState } from "../fleet/fleet-state.js";
 import { beamStore } from "../components/beam/beam-store.js";
 import { createShellSnapshot } from "./presentation-state.js";
 import { startVisiblePoll } from "./visible-poll.js";
@@ -110,13 +111,6 @@ import {
   type ArchiveStore,
 } from "./threadList.js";
 
-export { PROJECT_STORAGE_KEY, SESSION_STORAGE_KEY } from "./main-destination-controller.js";
-/**
- * Pre-M2 project list. Projects now live in the host (`pi/project/*`) so the
- * CLI, a second browser and a phone all see one list; this key is only read
- * once, to hand old local entries to the host, and then removed.
- */
-export const PROJECTS_STORAGE_KEY = storageKey("projects");
 
 /** A project-trust question the host is holding a worker start on (M2-T4). */
 export type TrustRequest = HostNotifications["pi/project/trust_request"];
@@ -460,33 +454,8 @@ function createSnapshotStore<T>(initial: T): SnapshotStore<T> {
 }
 
 // ---------------------------------------------------------------------------
-// localStorage helpers (never throw: private mode, quota, SSR)
+// Device state (RP-13: one environment-scoped authority, `device-storage.ts`)
 // ---------------------------------------------------------------------------
-
-const storage = (): Storage | null => {
-  try {
-    return globalThis.localStorage ?? null;
-  } catch {
-    return null;
-  }
-};
-
-const readString = (key: string): string | undefined => {
-  try {
-    return storage()?.getItem(key) ?? undefined;
-  } catch {
-    return undefined;
-  }
-};
-
-const writeString = (key: string, value: string | undefined): void => {
-  try {
-    if (value === undefined) storage()?.removeItem(key);
-    else storage()?.setItem(key, value);
-  } catch {
-    /* ignore */
-  }
-};
 
 /**
  * Forget every remembered destination, so the next load opens no session.
@@ -494,31 +463,13 @@ const writeString = (key: string, value: string | undefined): void => {
  * reload during setup would restore the last session and hide the flow.
  */
 export function forgetRememberedSessions(): void {
-  writeString(SESSION_STORAGE_KEY, undefined);
+  deviceStore.write(DEVICE_KEYS.sessionsByProject, undefined);
+  deviceStore.write(DEVICE_KEYS.destination, undefined);
+  deviceStore.write(DEVICE_KEYS.project, undefined);
 }
-
-/** `{ "<project cwd>": "<session path>" }`, and never anything else. */
-const readStringMap = (key: string): Record<string, string> => {
-  try {
-    const parsed: unknown = JSON.parse(storage()?.getItem(key) ?? "{}");
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
-    return Object.fromEntries(Object.entries(parsed as Record<string, unknown>).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
-  } catch {
-    return {};
-  }
-};
 
 /** Last path segment, for a sentence about a directory. */
 const basenameOf = (cwd: string): string => cwd.replace(/[/\\]+$/, "").split(/[/\\]/).pop() || cwd;
-
-const readStringList = (key: string): string[] => {
-  try {
-    const parsed: unknown = JSON.parse(storage()?.getItem(key) ?? "[]");
-    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : [];
-  } catch {
-    return [];
-  }
-};
 
 // ---------------------------------------------------------------------------
 // Provider
@@ -544,7 +495,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   const [trustRequests, setTrustRequests] = useState<TrustRequest[]>([]);
   const landingDrafts = useMemo(() => createMainLandingDraftStore(), []);
 
-  const archive = useMemo(() => createArchiveStore(storage()), []);
+  const archive = useMemo(() => createArchiveStore(), []);
   const archiveRevision = useSyncExternalStore(archive.subscribe, archive.getSnapshot, archive.getSnapshot);
 
   /**
@@ -555,6 +506,18 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   const onHostNotification = useRef<(method: HostNotificationMethod, params: unknown) => void>(() => {});
 
   const rehydrate = useRef<(path: string) => void>(() => {});
+
+  /**
+   * Everything that is derived from an environment and lives outside the
+   * reducer: module-level stores, the landing drafts held in memory, and the
+   * per-session bookkeeping this provider keeps in refs.
+   *
+   * Assigned during render (not in an effect) because the socket callbacks
+   * below can fire as soon as the client connects, and a reset that had not
+   * been wired yet would leave the old environment's state on screen.
+   */
+  const resetEnvironmentState = useRef<() => void>(() => {});
+
   const client = useMemo(() => {
     const created: HostClient = new HostClient({
       ...(url !== undefined ? { url } : {}),
@@ -565,6 +528,56 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       },
       onConnection: (s) => dispatch({ type: "connection", state: s }),
       onVersionMismatch: (version) => dispatch({ type: "versionMismatch", version }),
+      /**
+       * The environment, before this connection opens (RP-13).
+       *
+       * Scoping this device to it is the first thing that happens and the
+       * connection does not open until it has: a refusal here means nothing
+       * could be made safe, so the client stays closed rather than reading or
+       * writing anything. A changed or downgraded environment drops every
+       * attachment *synchronously*, so no resume can carry a session path
+       * across the boundary.
+       */
+      onEnvironment: (environment) => {
+        const outcome = deviceStore.activate(environment);
+        if (!outcome.ok) {
+          created.forgetAttachments();
+          resetEnvironmentState.current();
+          return { ok: false, reason: outcome.reason ?? "This device could not be prepared for this environment." };
+        }
+        // Only a *move* between environments (or a narrowing of the one this
+        // view is already in) throws state away. The first environment of this
+        // page's life is not a move: nothing in memory came from anywhere
+        // else, and clearing here would discard this connection's own setup.
+        if (outcome.previous !== undefined && (outcome.changed || outcome.invalidated !== "none")) {
+          created.forgetAttachments();
+          resetEnvironmentState.current();
+        }
+        dispatch({
+          type: "environment",
+          environment: {
+            contract: environment.contract,
+            deployment: environment.deployment,
+            environmentKey: environment.environmentKey,
+            capabilities: environment.capabilities,
+            cache: environment.cache,
+            scopes: environment.scopes,
+          },
+        });
+        // Device storage only opens here, so this is the first moment the
+        // remembered destination can be read at all.
+        dispatch({ type: "restoreDestination", destination: initialDestinationFromMemory() });
+        return { ok: true };
+      },
+      onEnvironmentFailure: (reason) => {
+        deviceStore.deactivate();
+        // Unsafe in every environment, so they go even though this view could
+        // not learn which one it is in.
+        deviceStore.purgeLegacy();
+        created.forgetAttachments();
+        resetEnvironmentState.current();
+        dispatch({ type: "environmentError", message: reason });
+      },
       // A worker that restarted numbers its updates from 1 again; without this
       // the reducer would dedupe every one of them as a replay and the session
       // would look alive but render nothing.
@@ -672,23 +685,6 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     }
   }, [client]);
 
-  /**
-   * One-time migration: projects used to live in this browser. Hand them to
-   * the host so every client gets them, then drop the key.
-   */
-  const migratedProjects = useRef(false);
-  const migrateLocalProjects = useCallback(async () => {
-    if (migratedProjects.current) return;
-    migratedProjects.current = true;
-    const local = readStringList(PROJECTS_STORAGE_KEY);
-    if (local.length === 0) return;
-    for (const cwd of local) {
-      await client.request("pi/project/add", { cwd }).catch(() => {});
-    }
-    writeString(PROJECTS_STORAGE_KEY, undefined);
-    await refreshProjects();
-  }, [client, refreshProjects]);
-
   // Pi creates the session file on the first message and renames happen
   // mid-session, so refresh on connect, whenever a session settles, and on a
   // slow poll while connected.
@@ -698,8 +694,8 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   }, [state.connection, runningCount, refreshSessions]);
   useEffect(() => {
     if (state.connection !== "open") return;
-    void migrateLocalProjects().then(() => refreshProjects());
-  }, [state.connection, migrateLocalProjects, refreshProjects]);
+    void refreshProjects();
+  }, [state.connection, refreshProjects]);
   useEffect(() => {
     if (state.connection !== "open") return;
     return startVisiblePoll(() => void refreshSessions(), 20_000);
@@ -948,6 +944,34 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     },
     [client],
   );
+
+  /**
+   * Everything derived from an environment, cleared and then re-read from the
+   * namespace that is now in force (RP-13).
+   *
+   * Not "cleared to empty forever": each module store re-reads the newly
+   * opened namespace, so switching environments and switching back shows what
+   * each one remembers. The reducer's own reset keeps only the connection's
+   * facts — no session rows, no open transcripts, no projects, runs, questions
+   * or diagnostics can cross.
+   */
+  resetEnvironmentState.current = () => {
+    seenSeq.current.clear();
+    scopedPaths.current.clear();
+    detached.current.clear();
+    openInFlight.current.clear();
+    openEpochs.current.clear();
+    moving.current.clear();
+    landingDrafts.drafts.clear();
+    setProjectList([]);
+    setTrustRequests([]);
+    dispatch({ type: "resetEnvironment" });
+    archive.rehydrate();
+    beamStore.reset();
+    sessionsList.rehydrate();
+    sessionFolds.rehydrate();
+    rehydrateFleetState();
+  };
 
   // --- actions ------------------------------------------------------------
 

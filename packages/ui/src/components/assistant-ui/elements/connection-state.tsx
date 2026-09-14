@@ -33,10 +33,16 @@ export interface ConnectionStateProps extends Omit<ComponentProps<"div">, "child
   attempt?: number | undefined;
   /** True the first time: nothing has connected yet, so nothing was lost. */
   first?: boolean | undefined;
+  /**
+   * Why this connection cannot be used, when the reason is not the socket.
+   * Today: the host could not say what environment this is (RP-13), so this
+   * device keeps nothing and the app stays closed until it can.
+   */
+  reason?: string | undefined;
   onRetry?: (() => void) | undefined;
 }
 
-export function ConnectionState({ phase, attempt, first = false, onRetry, className, ...props }: ConnectionStateProps) {
+export function ConnectionState({ phase, attempt, first = false, reason, onRetry, className, ...props }: ConnectionStateProps) {
   if (phase === "online") return null;
   const tone = phase === "dropped" ? "attention" : phase === "resumed" ? "ok" : "attention";
   return (
@@ -58,9 +64,9 @@ export function ConnectionState({ phase, attempt, first = false, onRetry, classN
       {phase === "dropped" && (
         <>
           <CloudOffIcon aria-hidden="true" className="size-3.5 shrink-0 text-attention" />
-          <span className="font-medium text-ink">Disconnected from the host</span>
+          <span className="font-medium text-ink">{reason ? "Cannot use this connection" : "Disconnected from the host"}</span>
           <span className="hidden min-w-0 flex-1 truncate text-ink-2 sm:inline">
-            Retrying in the background. Every session is saved on this computer as it goes, so nothing you have already seen is lost.
+            {reason ?? "Retrying in the background. Every session is saved on this computer as it goes, so nothing you have already seen is lost."}
           </span>
           {onRetry && (
             <Button variant="outline" size="xs" onClick={onRetry} className="ms-auto shrink-0">
@@ -74,7 +80,7 @@ export function ConnectionState({ phase, attempt, first = false, onRetry, classN
           <StatusDot status="working" size="sm" label="Connecting" />
           <span className="font-medium text-ink">{first ? "Connecting to the host…" : "Reconnecting to the host…"}</span>
           <span className="hidden min-w-0 flex-1 truncate text-ink-2 sm:inline">
-            {first ? "The desktop host serves this page and runs the agent." : "Sessions resume from where they left off."}
+            {reason ?? (first ? "The desktop host serves this page and runs the agent." : "Sessions resume from where they left off.")}
           </span>
           {attempt !== undefined && attempt > 1 && (
             <span className={cn(mono, "ms-auto shrink-0 text-ink-3")}>attempt {attempt}</span>
@@ -187,10 +193,14 @@ export function useConnectionPhase(): { phase: ConnectionPhase; first: boolean }
 export function HostConnectionState({ className }: { className?: string | undefined }) {
   const { client } = useLaserStable();
   const { phase, first } = useConnectionPhase();
+  // The build matched and the socket is fine; the environment is not, so the
+  // person gets that sentence instead of "disconnected" (RP-13).
+  const environmentError = useLaserState((s) => s.environmentError);
   return (
     <ConnectionState
       phase={phase}
       first={first}
+      {...(environmentError ? { reason: environmentError } : {})}
       onRetry={() => {
         client.close();
         client.connect();

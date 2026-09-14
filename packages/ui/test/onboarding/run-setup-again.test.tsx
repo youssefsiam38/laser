@@ -27,6 +27,8 @@ import { SETUP_STEP_KEY } from "../../src/components/onboarding/setup-model.js";
 import { clearSetupRequest, honourSetupRequest, requestSetupAgain, useSetupRequested } from "../../src/components/onboarding/setup-request.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { SESSION_STORAGE_KEY } from "../../src/runtime/LaserProvider.js";
+import { DEVICE_KEYS } from "../../src/runtime/device-storage.js";
+import { activateTestEnvironment, readDeviceValue, seedRememberedSessions } from "../../test/runtime/environment-fixture.js";
 
 let root: Root, container: HTMLDivElement;
 beforeEach(() => {
@@ -109,13 +111,14 @@ describe("the setup request store", () => {
   });
 
   it("leaves the open session and the remembered destination behind, and reads the host again", () => {
-    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ "/p": "/p/s.jsonl" }));
+    activateTestEnvironment();
+    seedRememberedSessions({ "/p": "/p/s.jsonl" });
     const refresh = vi.fn();
     const leaveSession = vi.fn();
     honourSetupRequest({ refresh, leaveSession });
     expect(refresh).toHaveBeenCalledOnce();
     // Setup renders only while nothing is open, and a reload must not undo that.
     expect(leaveSession).toHaveBeenCalledOnce();
-    expect(localStorage.getItem(SESSION_STORAGE_KEY)).toBeNull();
+    expect(readDeviceValue(DEVICE_KEYS.sessionsByProject)).toBeNull();
   });
 });

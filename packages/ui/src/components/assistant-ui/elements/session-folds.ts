@@ -21,10 +21,9 @@
  * The store is module-level, like `sessionsList`, so a row's disclosure and the
  * list it controls read the same value without a context the shell would own.
  */
-import { storageKey } from "@lasercode/protocol";
 import { useSyncExternalStore } from "react";
 
-export const SESSION_FOLDS_STORAGE_KEY = storageKey("session-folds");
+import { DEVICE_KEYS, deviceStore } from "@/runtime/device-storage";
 
 /** The two folds a parent row owns: its sub-sessions, and the settled ones. */
 export type FoldKind = "children" | "finished";
@@ -46,29 +45,21 @@ export interface SessionFoldsState {
   readonly pinned: ReadonlyMap<string, boolean>;
 }
 
+/**
+ * A fold key carries the parent session's path, so these choices belong to the
+ * environment that session lives in (RP-13). Before an environment is known
+ * `deviceStore` answers nothing, and the list simply starts from its defaults.
+ */
 const readChosen = (): Map<string, boolean> => {
-  try {
-    const parsed: unknown = JSON.parse(globalThis.localStorage?.getItem(SESSION_FOLDS_STORAGE_KEY) ?? "{}");
-    const out = new Map<string, boolean>();
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-        if (typeof value === "boolean") out.set(key, value);
-      }
-    }
-    return out;
-  } catch {
-    // Private mode, a quota, or something else wrote nonsense here: the list
-    // still works, it just starts from its defaults.
-    return new Map();
-  }
+  const out = new Map<string, boolean>();
+  const stored = deviceStore.readJson(DEVICE_KEYS.sessionFolds, (value) =>
+    value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined);
+  for (const [key, value] of Object.entries(stored ?? {})) if (typeof value === "boolean") out.set(key, value);
+  return out;
 };
 
 const writeChosen = (chosen: ReadonlyMap<string, boolean>): void => {
-  try {
-    globalThis.localStorage?.setItem(SESSION_FOLDS_STORAGE_KEY, JSON.stringify(Object.fromEntries(chosen)));
-  } catch {
-    /* private mode / quota: the choice lives for this tab */
-  }
+  deviceStore.writeJson(DEVICE_KEYS.sessionFolds, Object.fromEntries(chosen));
 };
 
 let state: SessionFoldsState = { chosen: readChosen(), pinned: new Map() };
@@ -117,6 +108,10 @@ export const sessionFolds = {
   reset(): void {
     writeChosen(new Map());
     publish({ chosen: new Map(), pinned: new Map() });
+  },
+  /** Adopt the newly opened environment's remembered folds; forgets no storage. */
+  rehydrate(): void {
+    publish({ chosen: readChosen(), pinned: new Map() });
   },
 };
 

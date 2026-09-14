@@ -86,6 +86,18 @@ The relay is unchanged by all of this: scopes, descriptors and audit rows are
 host state, and the frames that carry the requests remain padded ciphertext it
 cannot read (§5, §9).
 
+**What a client keeps (RP-13 B).** A view asks for the descriptor inside the
+version handshake and does not open the connection until this device has been
+scoped to that environment. Everything the browser remembers that could name a
+conversation — session paths, project directories, folds, pins, the archive,
+remembered destinations and unsent drafts — lives under one namespace per
+environment; another environment's namespace and the pre-environment keys are
+**purged, never adopted**, and a purge that could not finish keeps persistence
+off rather than opening a half-cleared device. Local browser storage is not
+encrypted, so an environment that disables transcripts, bounds the cache to
+nothing or requires an encrypted store keeps no content at all. See
+[`environment-policy.md`](environment-policy.md) §6–§7.
+
 ### Machine file previews (M16-T19)
 
 `pi/project/read` permits regular files anywhere on the host machine, for local
