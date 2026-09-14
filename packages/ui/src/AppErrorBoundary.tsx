@@ -30,8 +30,12 @@ export class AppErrorBoundary extends Component<Props, State> {
     // The console is the only channel that survives the tree. The desktop's
     // main process copies renderer errors into its log, one bounded line each,
     // so the message and the component stack go out as one string.
+    // The JavaScript stack says where it was thrown; the component stack says
+    // which surface was drawing. Both, bounded: a minified stack's first
+    // frames are what a source map can still answer for.
     const reason = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-    console.error(`The window could not draw itself. ${reason}${info.componentStack ?? ""}`);
+    const thrown = error instanceof Error && error.stack ? `\n${error.stack.split("\n").slice(1, 9).join("\n")}` : "";
+    console.error(`The window could not draw itself. ${reason}${thrown}${info.componentStack ?? ""}`);
   }
 
   override render(): ReactNode {

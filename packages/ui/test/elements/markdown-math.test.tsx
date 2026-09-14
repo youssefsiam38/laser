@@ -88,3 +88,19 @@ it("loads the math renderer once for a message with math and typesets it", async
   expect(loads.count).toBe(1);
   expect(container.querySelector(".katex")).not.toBeNull();
 });
+
+it("renders ordinary prose after the math chunk is already loaded", async () => {
+  // 0.6.2 crashed the whole window here: once one message had loaded KaTeX,
+  // the next message's `useState(plugin)` called the plugin as a lazy
+  // initializer and handed unified a transformer instead of an attacher.
+  await render("inline $x$ math");
+  const errors: unknown[] = [];
+  const onError = (event: ErrorEvent) => { errors.push(event.error); event.preventDefault(); };
+  window.addEventListener("error", onError);
+  try {
+    await render("**bold** text\n\nand a `code` span");
+  } finally { window.removeEventListener("error", onError); }
+  expect(errors).toEqual([]);
+  expect(container.querySelector("strong")?.textContent).toBe("bold");
+  expect(container.querySelector("code")?.textContent).toBe("code");
+});

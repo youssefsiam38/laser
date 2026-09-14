@@ -56,7 +56,12 @@ export function useMathRehypePlugin(): RehypeKatex | null {
     const part = s.optional.part;
     return part?.type === "text" && hasMathDelimiters(part.text);
   });
-  const [plugin, setPlugin] = useState<RehypeKatex | null>(katex ?? null);
+  // The plugin is a function, and `useState(fn)` would *call* it as a lazy
+  // initializer: the state would then hold KaTeX's transformer instead of the
+  // attacher, unified would run that transformer as an attacher on nothing,
+  // and every message after the first with math would crash the window
+  // (0.6.2). The initializer must return the function, not be it.
+  const [plugin, setPlugin] = useState<RehypeKatex | null>(() => katex ?? null);
   useEffect(() => {
     if (!wanted || plugin) return;
     let alive = true;
