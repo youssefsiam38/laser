@@ -638,9 +638,19 @@ export const backgroundWorkModule: LaserModule = {
       return true;
     });
 
-    return () => {
+    return ({ reason }) => {
+      // Whatever happens next, this runtime stops speaking: its `pi` is being
+      // torn down, so no exit of ours can reach a model through it again.
       disposed = true;
       offCommand?.();
+      // Only the person leaving ends a detached command. A fork, a new or
+      // resumed session, or an extension reload replaces the runtime while the
+      // work carries on: killing then would end a build or a dev server the
+      // person never stopped, tell the fleet "the session ended" about a
+      // command that is still running, and leave the successor session with
+      // nothing to read. The task keeps publishing its own row and its log
+      // file, so `task_output` still finds it through the worker (D-163).
+      if (reason !== "quit") return;
       for (const task of state.tasks.values()) stopTask(task, "shutdown");
     };
   },

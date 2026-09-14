@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, SessionShutdownEvent } from "@earendil-works/pi-coding-agent";
 import type { AgentHarnessBridge, BackgroundWorkOptions } from "../agents-bridge.js";
 import type { PromptProvenanceObserver } from "../prompt-provenance.js";
 import type { PiExtensionCommand, PiExtensionMessage, PiExtensionModuleName } from "@lasercode/protocol";
@@ -60,6 +60,17 @@ export interface ModuleContext {
   mcp?: McpModuleOptions;
 }
 
+/**
+ * What a module is told when its session ends.
+ *
+ * The reason matters: only `quit` ends the person's work. `fork`, `new`,
+ * `resume` and `reload` replace the extension runtime while the project, its
+ * checkout and anything the agent left running carry on, so a module that owns
+ * something outside the session must not treat them as an ending.
+ */
+export type ModuleShutdown = Pick<SessionShutdownEvent, "reason">;
+export type ModuleDispose = (shutdown: ModuleShutdown) => void;
+
 export interface LaserModule {
   name: ModuleName;
   /** Register tools while Pi is collecting extension definitions. */
@@ -67,7 +78,7 @@ export interface LaserModule {
   /** True if the package this module bridges is present in this session. */
   detect(ctx: ModuleContext): boolean | Promise<boolean>;
   /** Wire up; return a disposer if anything needs cleanup at session_shutdown. */
-  activate(ctx: ModuleContext): void | (() => void) | Promise<void | (() => void)>;
+  activate(ctx: ModuleContext): void | ModuleDispose | Promise<void | ModuleDispose>;
 }
 
 /**
