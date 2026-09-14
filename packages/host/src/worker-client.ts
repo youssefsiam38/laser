@@ -26,6 +26,12 @@ export interface WorkerClientOptions {
    * default, which is "trusted".
    */
   projectTrusted?: boolean;
+  /**
+   * The environment its durable revisions belong to (RP-9), so a live session
+   * and the same session read from disk produce the same value. Not a secret,
+   * but never published: only its derived key reaches a client.
+   */
+  environmentId?: string;
   /** Path to the worker entry; defaults to the workspace `@lasercode/worker` build. */
   workerMain?: string;
   /** Node binary to run the worker with; defaults to the current one. */
@@ -74,6 +80,7 @@ export class WorkerClient {
     if (options.sessionDir) args.push("--session-dir", options.sessionDir);
     if (options.stateDir) args.push("--state-dir", options.stateDir);
     if (options.projectTrusted !== undefined) args.push("--project-trusted", options.projectTrusted ? "yes" : "no");
+    if (options.environmentId) args.push("--environment-id", options.environmentId);
 
     this.child = spawn(options.nodeBinary ?? process.execPath, args, {
       // --cwd configures the driver; it does not change the process directory.

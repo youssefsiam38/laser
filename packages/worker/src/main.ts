@@ -9,7 +9,7 @@
  * console output is redirected to stderr.
  *
  * Args: --cwd <dir> [--agent-dir <dir>] [--session-dir <dir>] [--state-dir <dir>]
- *       [--project-trusted yes|no]
+ *       [--project-trusted yes|no] [--environment-id <id>]
  */
 import { Socket } from "node:net";
 import { ENV, FEATURE_MANIFESTS, LineDecoder, PRODUCT_NAME, parseJsonLine, type FeatureId, type JsonRpcMessage } from "@lasercode/protocol";
@@ -66,6 +66,9 @@ async function main(): Promise<void> {
   // Laser-specific instructions. Optional for callers outside the host.
   const stateDir = arg("state-dir");
   const projectTrusted = arg("project-trusted");
+  // Which environment the durable revisions this worker mints belong to
+  // (RP-9). Never logged, never published: only its derived key is public.
+  const environmentId = arg("environment-id");
   alignEngineAgentDir(agentDir, sessionDir);
   extendRuntimePath();
   if (projectTrusted !== undefined && projectTrusted !== "yes" && projectTrusted !== "no") {
@@ -105,6 +108,7 @@ async function main(): Promise<void> {
     ...(sessionDir ? { sessionDir } : {}),
     ...(stateDir ? { stateDir } : {}),
     ...(projectTrusted !== undefined ? { projectTrusted: projectTrusted === "yes" } : {}),
+    ...(environmentId ? { environmentId } : {}),
     ...(npmCommand ? { npmCommand } : {}),
     features,
   });

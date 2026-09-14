@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PRODUCT_NAME, PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE } from "@lasercode/protocol";
+import { ErrorCodes, PRODUCT_NAME, PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE, isEnvironmentKey, isSessionRevision } from "@lasercode/protocol";
 import type { ContentBlock, JsonRpcMessage, SessionState, UiDialogRequest } from "@lasercode/protocol";
 import { WorkerServer } from "../src/server.js";
 import type { DriverEvent, DriverListener, ExtensionModelWorkHandler, FirstTurnOptions, PromptOptions, SessionDriver } from "../src/driver.js";
@@ -145,7 +145,12 @@ class FakeDriver implements SessionDriver {
   extensionWork: ExtensionModelWorkHandler | undefined;
   setExtensionModelWorkHandler(handler: ExtensionModelWorkHandler | undefined) { this.extensionWork = handler; }
   pendingUi() { return this.pending; }
-  async entries(_options?: { live?: boolean }): Promise<Awaited<ReturnType<SessionDriver["entries"]>>> { this.routed.push({ route: "entries", generation: this.generation }); return { entries: [], leafId: null }; }
+  /** The stored conversation this driver is standing in for, and its branch pointer. */
+  history: { entries: unknown[]; leafId: string | null } = { entries: [], leafId: null };
+  /** Present only when a test is exercising a driver that has a session file. */
+  header: { id: string; cwd: string; version?: number } | undefined;
+  async entries(_options?: { live?: boolean }): Promise<Awaited<ReturnType<SessionDriver["entries"]>>> { this.routed.push({ route: "entries", generation: this.generation }); return { ...this.history }; }
+  sessionHeader() { return this.header ?? null; }
   async goalState() { return null; }
   async commands() { return [{ name: "skill:test", source: "skill" as const, description: "Test skill" }]; }
   async prompts() { return []; }
@@ -285,6 +290,46 @@ describe("WorkerServer", () => {
       const older = await h.call(3, "pi/session/entries", { path: "/tmp/fake/s1.jsonl", window: { before, limit: 4 } });
       expect(older.result).toMatchObject({ entries: rows.slice(4, 8), window: { seq: 1, userOffset: 2 } });
       expect(older.result).not.toHaveProperty("window.live");
+    } finally { await h.server.dispose(); }
+  });
+
+  it("carries a durable revision on every window, load and revision read, and moves it only when the conversation does", async () => {
+    const h = harness();
+    await h.call(1, "session/new", { cwd: "/tmp/fake" });
+    const driver = h.drivers[0]!;
+    driver.header = { id: "s1", cwd: "/tmp/fake", version: 3 };
+    const rows = Array.from({ length: 6 }, (_, i) => ({ type: "message", id: `e${i}`, parentId: i ? `e${i - 1}` : null, message: { role: i % 2 ? "assistant" : "user", content: [{ type: "text", text: String(i) }] } }));
+    driver.history = { entries: rows, leafId: "e5" };
+    try {
+      const window = (await h.call(2, "pi/session/entries", { path: "/tmp/fake/s1.jsonl", window: { tail: 2 } })).result as { window: { revision: string; environmentKey: string; before: string } };
+      expect(isSessionRevision(window.window.revision)).toBe(true);
+      expect(isEnvironmentKey(window.window.environmentKey)).toBe(true);
+      // The page cursor says nothing about where or how history is stored.
+      expect(window.window.before).not.toContain("/tmp/fake");
+      expect(JSON.parse(window.window.before)).toMatchObject({ v: 2, s: "s1" });
+
+      const asked = (await h.call(3, "session/revision", { path: "/tmp/fake/s1.jsonl", baseRevision: window.window.revision })).result as { revision: string; authority: string; base: string };
+      expect(asked).toMatchObject({ revision: window.window.revision, authority: "live", base: "current" });
+
+      const loaded = (await h.call(4, "session/load", { path: "/tmp/fake/s1.jsonl" })).result as { revision: string; environmentKey: string };
+      expect(loaded.revision).toBe(window.window.revision);
+      expect(loaded.environmentKey).toBe(window.window.environmentKey);
+
+      // One more message: a new revision, and the old one is what it extends.
+      driver.history = { entries: [...rows, { type: "message", id: "e6", parentId: "e5", message: { role: "user", content: [{ type: "text", text: "6" }] } }], leafId: "e6" };
+      const grown = (await h.call(5, "session/revision", { path: "/tmp/fake/s1.jsonl", baseRevision: window.window.revision })).result as { revision: string; base: string };
+      expect(grown.revision).not.toBe(window.window.revision);
+      expect(grown.base).toBe("prefix");
+
+      // A record that cannot be canonicalised refuses the read rather than
+      // answering with a window nothing can validate.
+      driver.history = { entries: [...rows, { type: "message", id: "bad", parentId: "e5", message: { role: "user", content: NaN } }], leafId: "bad" };
+      const refused = await h.call(6, "pi/session/entries", { path: "/tmp/fake/s1.jsonl", window: { tail: 2 } });
+      expect(refused.error?.code).toBe(ErrorCodes.RevisionUnavailable);
+      // A load still opens the conversation; only the revision is absent.
+      const stillLoads = (await h.call(7, "session/load", { path: "/tmp/fake/s1.jsonl" })).result as { state: unknown; revision?: string };
+      expect(stillLoads.state).toBeTruthy();
+      expect(stillLoads.revision).toBeUndefined();
     } finally { await h.server.dispose(); }
   });
 

@@ -95,6 +95,7 @@ const samples: Record<ClientMethod, unknown> = {
     firstTurn: { agentName: "reviewer", model: null, thinkingLevel: "high" },
   },
   "session/cancel": { path: "/s.jsonl" },
+  "session/revision": { path: "/s.jsonl", baseRevision: "r1.AAAAAAAA.BBBBBBBBBBBBBBBBBBBBBBBBBBB" },
   "session/set_mode": { path: "/s.jsonl", mode: "plan" },
   "session/goal/get": { path: "/s.jsonl" },
   "session/goal/action": { path: "/s.jsonl", action: { action: "start", objective: "Ship the release" } },
@@ -549,6 +550,12 @@ describe("client request schemas", () => {
     expect(() => sessionLoadResultSchema.parse({ state: result.state, replayFrom: 0, seq: 1.5 })).toThrow();
     // Strict: another counter cannot arrive without saying what it means.
     expect(() => sessionLoadResultSchema.parse({ ...result, tail: 9 })).toThrow();
+    // The durable revision travels with a load when there is one, and has to
+    // be shaped like one: a free-form string is not an opaque token.
+    const withRevision = { ...result, revision: "r1.AAAAAAAA.BBBBBBBBBBBBBBBBBBBBBBBBBBB", environmentKey: "e1.CCCCCCCCCCCCCCCCCCCCCC" };
+    expect(sessionLoadResultSchema.parse(withRevision)).toEqual(withRevision);
+    expect(() => sessionLoadResultSchema.parse({ ...result, revision: "whatever" })).toThrow();
+    expect(() => sessionLoadResultSchema.parse({ ...result, environmentKey: "e1.short" })).toThrow();
   });
 
   it("refuses a log content ref that is not a sha256", () => {

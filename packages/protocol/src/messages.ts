@@ -38,6 +38,18 @@ export interface HistoryLiveSnapshot {
 export interface HistoryWindow {
   epoch: string;
   seq: number;
+  /**
+   * The durable revision of the state this window describes (RP-9). Opaque:
+   * compare it for equality, never parse it. Present on every successful
+   * authoritative window — a producer that cannot compute one refuses with
+   * `ErrorCodes.RevisionUnavailable` rather than answering without it.
+   */
+  revision: string;
+  /**
+   * The environment this revision belongs to: opaque, stable and non-secret.
+   * A cache keys by this, never by a path, an origin or the revision itself.
+   */
+  environmentKey: string;
   before?: string;
   /** First loaded entry, retained when refreshing an expanded window. */
   anchor?: string;
@@ -1009,7 +1021,28 @@ export interface ClientRequests {
    * it loads/creates/forks. Admission starts before replay. Loaded caches remain
    * subscribed until disconnect, independently of retirement detach; questions,
    * attention and other small notifications remain global. Omit for full stream. */
-  "session/load": { params: { path: string; fromSeq?: number; transcript?: "loaded" }; result: { state: SessionState; replayFrom: number; seq: number } };
+  /**
+   * `revision`/`environmentKey` are present for every session that has
+   * canonical content (RP-9). They stay optional for the two compatibility
+   * cases only: a session the engine has not written yet, and an alternate
+   * driver that keeps no entries.
+   */
+  "session/load": { params: { path: string; fromSeq?: number; transcript?: "loaded" }; result: { state: SessionState; replayFrom: number; seq: number; revision?: string; environmentKey?: string } };
+  /**
+   * The durable revision of a conversation (RP-9), host-owned rather than a Pi
+   * passthrough. Answered by the worker that owns the session when one is
+   * live, otherwise read from the stored conversation **without starting a
+   * worker**.
+   *
+   * `baseRevision` asks how a cached revision relates to the current state:
+   * `current` (identical), `prefix` (a proved canonical prefix of the current
+   * branch, so a suffix would be safe) or `stale` (replace atomically). An
+   * edit, fork, jump or compaction is always `stale`.
+   */
+  "session/revision": {
+    params: { path: string; baseRevision?: string };
+    result: { revision: string; environmentKey: string; authority: "live" | "durable"; base?: "current" | "prefix" | "stale" };
+  };
   "session/prompt": {
     params: {
       path: string;

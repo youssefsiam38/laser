@@ -28,6 +28,7 @@ import { PREFS_MAX_BYTES } from "./messages.js";
 import { resourceParamsSchemas } from "./resources.js";
 import type { ClientMethod, ClientRequests } from "./messages.js";
 import { TASK_COMMAND_MAX, TASK_LINE_MAX } from "./tasks.js";
+import { ENVIRONMENT_KEY_PATTERN, SESSION_REVISION_PATTERN } from "./session-revision.js";
 
 /** Opt-in browse replies must not silently reinterpret legacy folders as files. */
 export const explorerListingSchema = z.object({
@@ -163,6 +164,9 @@ export const uiDialogResponseSchema = z.union([
 ]);
 
 const sessionPath = z.string().min(1);
+// Opaque tokens, validated by shape only: nothing here ever interprets them.
+const sessionRevision = z.string().regex(SESSION_REVISION_PATTERN);
+const environmentKey = z.string().regex(ENVIRONMENT_KEY_PATTERN);
 const content = z.array(contentBlockSchema).min(1);
 /** A pending-tray id, as the worker mints it: `p-` and hex. */
 const pendingId = z.string().regex(/^p-[0-9a-f]{8,32}$/);
@@ -573,6 +577,13 @@ export const sessionLoadResultSchema = z
     replayFrom: z.number().int().nonnegative(),
     /** The worker's watermark for this session as it answered. */
     seq: z.number().int().nonnegative(),
+    /**
+     * RP-9. Optional here for exactly two compatibility cases — a session the
+     * engine has not written yet, and a driver that keeps no entries — never
+     * as a licence to omit it from a session that has content.
+     */
+    revision: sessionRevision.optional(),
+    environmentKey: environmentKey.optional(),
   })
   .strict();
 
@@ -594,6 +605,9 @@ export const clientParamsSchemas = {
     })
     .strict(),
   "session/cancel": z.object({ path: sessionPath }).strict(),
+  // RP-9. `baseRevision` is opaque to everything except the producer that
+  // minted it; an unparseable one is simply `stale`, never an error.
+  "session/revision": z.object({ path: sessionPath, baseRevision: z.string().min(1).max(128).optional() }).strict(),
   "session/set_mode": z.object({ path: sessionPath, mode: z.string().min(1) }).strict(),
 
   "pi/host/version": z.object({}).strict(),

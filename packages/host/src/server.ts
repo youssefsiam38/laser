@@ -55,6 +55,9 @@ import { Router } from "./router.js";
 import { SessionLoadDelivery } from "./session-load-delivery.js";
 import { TranscriptDelivery } from "./transcript-delivery.js";
 import { SearchCancellation } from "./search-cancellation.js";
+import { SessionIndexCache } from "./session-index.js";
+import { SessionRevisions } from "./session-revision.js";
+import { environmentIdentity, type EnvironmentIdentity } from "./environment-identity.js";
 import { ViewCache } from "./views.js";
 import type { WorkerClient } from "./worker-client.js";
 import { WorkerPool, type WorkerPoolOptions } from "./worker-pool.js";
@@ -195,6 +198,10 @@ export class HostServer {
   readonly packages: PackageService;
   readonly setup: SetupService;
   readonly views: ViewCache;
+  /** This environment's identity (RP-9). `id` is for workers only; `key` is public. */
+  readonly environment: EnvironmentIdentity;
+  /** Durable revisions read without starting a worker (RP-9). */
+  readonly revisions: SessionRevisions;
   /** M4 log store, or undefined when it could not be opened (see `logsUnavailable`). */
   readonly logs: LogStore | undefined;
   readonly logsUnavailable: string | undefined;
@@ -289,6 +296,14 @@ export class HostServer {
     }
     this.catalog = new SessionCatalog(options.sessionDir ?? defaultSessionDir(options.agentDir));
     this.views = new ViewCache(options.hydratedViews ?? 8);
+    // One identity for this environment, and the revision reader that binds to
+    // it. The raw id goes to workers and nowhere else; clients see the key.
+    this.environment = environmentIdentity(stateDir);
+    this.revisions = new SessionRevisions({
+      index: new SessionIndexCache(),
+      environmentId: this.environment.id,
+      environmentKey: this.environment.key,
+    });
 
     this.attention = new AttentionTracker({
       storePath: join(stateDir, "attention.json"),
@@ -403,6 +418,7 @@ export class HostServer {
       }),
       ...(options.sessionDir ? { sessionDir: options.sessionDir } : {}),
       stateDir,
+      environmentId: this.environment.id,
       ...(options.workerMain ? { workerMain: options.workerMain } : {}),
       ...(options.nodeBinary ? { nodeBinary: options.nodeBinary } : {}),
       ...(options.workerIdleMs !== undefined ? { idleMs: options.workerIdleMs } : {}),
@@ -490,6 +506,7 @@ export class HostServer {
       agents: this.agents,
       runs: this.runs,
       resources: this.resources,
+      revisions: this.revisions,
     });
 
     this.http = createServer((req, res) => this.serveHttp(req, res));
@@ -678,7 +695,10 @@ export class HostServer {
         // A compaction rewrites the file in place. The catalog's incremental
         // scan assumes append-only and would keep the old offset and message
         // count, so it has to be told.
-        if (params.update.kind === "compaction_end") this.catalog.invalidate(params.sessionPath);
+        if (params.update.kind === "compaction_end") {
+          this.catalog.invalidate(params.sessionPath);
+          this.revisions.invalidate(params.sessionPath);
+        }
         return;
       }
       case "pi/ui/request": {

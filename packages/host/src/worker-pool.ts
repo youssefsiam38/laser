@@ -31,6 +31,8 @@ export interface WorkerPoolOptions {
   sessionDir?: string;
   /** Passed to every worker as `--state-dir` (see WorkerClientOptions). */
   stateDir?: string;
+  /** Passed to every worker as `--environment-id`, so revisions agree (RP-9). */
+  environmentId?: string;
   workerMain?: string;
   nodeBinary?: string;
   /** Extra environment for every worker (the bundled package manager, M10-T5). */
@@ -356,6 +358,18 @@ export class WorkerPool {
   }
 
   /**
+   * The ready worker that already owns this session, or nothing. Never spawns
+   * and never starts a session: a read that must not cost a process start asks
+   * this first (RP-9).
+   */
+  ownerOfSession(path: string): WorkerClient | undefined {
+    const cwd = this.sessionCwd.get(path);
+    const entry = cwd === undefined ? undefined : this.entries.get(cwd);
+    if (!entry?.client?.alive || entry.status !== "ready" || !entry.active.has(path)) return undefined;
+    return entry.client;
+  }
+
+  /**
    * The worker let go of a session (`pi/session/close`) and its file is about
    * to move: nothing here may reopen it after a restart or route to it again.
    */
@@ -535,6 +549,7 @@ export class WorkerPool {
       ...(this.options.agentDir ? { agentDir: this.options.agentDir } : {}),
       ...(this.options.sessionDir ? { sessionDir: this.options.sessionDir } : {}),
       ...(this.options.stateDir ? { stateDir: this.options.stateDir } : {}),
+      ...(this.options.environmentId ? { environmentId: this.options.environmentId } : {}),
       ...(this.options.workerMain ? { workerMain: this.options.workerMain } : {}),
       ...(this.options.nodeBinary ? { nodeBinary: this.options.nodeBinary } : {}),
       ...((this.options.env || this.options.envForCwd)

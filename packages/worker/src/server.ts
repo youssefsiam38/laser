@@ -23,6 +23,8 @@ import type {
   SessionDriver,
 } from "./driver.js";
 import { ProjectFilesService } from "./files.js";
+import { RevisionCanonicalisationError, type SessionRevisionHeader } from "@lasercode/protocol";
+import { SessionRevisionTracker } from "./history-revision.js";
 import { ReplayBuffer } from "./replay-buffer.js";
 import { assertFirstTurnAdmission, FirstTurnLock } from "./first-turn.js";
 import { PendingTray } from "./pending.js";
@@ -55,6 +57,13 @@ export interface WorkerServerOptions {
   stateDir?: string;
   /** Host-resolved Pi project trust for `cwd`; see `DriverOpenOptions.projectTrusted`. */
   projectTrusted?: boolean;
+  /**
+   * The environment durable revisions belong to (RP-9). The host always passes
+   * its own; the default exists only so a worker constructed directly (a test,
+   * a hand-run process) still produces self-consistent revisions rather than
+   * none. It is never a secret and never leaves this process.
+   */
+  environmentId?: string;
   features?: FeatureId[];
   /** Updates kept per session for `fromSeq` replay. */
   replayBuffer?: number;
@@ -80,6 +89,8 @@ interface PreAcceptanceHydration {
 interface Live {
   driver: SessionDriver;
   historyEpoch: string;
+  /** Durable revision fold for this session (RP-9), kept across reads. */
+  revisions: SessionRevisionTracker;
   seq: number;
   buffer: ReplayBuffer;
   /** Read-only hydration baseline while a first turn is speculative/restoring. */
@@ -109,6 +120,8 @@ export class WorkerServer {
    * crash recovery can race a client's own reconnect.
    */
   private readonly opening = new Map<string, Promise<Live>>();
+  /** The environment every durable revision this worker mints belongs to (RP-9). */
+  private readonly environmentId: string;
   private readonly replayBuffer: number;
   /**
    * M4 adapters. Built on first use: constructing a `SettingsManager` reads two
@@ -162,6 +175,7 @@ export class WorkerServer {
   private readonly firstTurnLock = new FirstTurnLock();
 
   constructor(private readonly options: WorkerServerOptions) {
+    this.environmentId = options.environmentId ?? UNCONFIGURED_ENVIRONMENT;
     this.replayBuffer = options.replayBuffer ?? 5000;
     // Configured by the host, machine-local and non-secret: the executable, its
     // arguments, and whether a person approved exactly that pair.
@@ -390,6 +404,23 @@ export class WorkerServer {
         await this.firstTurnLock.run(live.path, () => live.driver.rename(req.params.name));
         return {};
       }
+      case "session/revision": {
+        // The worker that owns a session is the authority for it: its leaf can
+        // sit where no reader of the file could know (a navigation that has
+        // appended nothing yet), so a disk answer would be behind.
+        const live = this.live(req.params.path);
+        const snapshot = live.preAcceptance ?? await live.driver.entries();
+        const header = this.revisionHeader(live);
+        try {
+          const { revision, environmentKey } = live.revisions.compute(header, snapshot.entries, snapshot.leafId);
+          const base = req.params.baseRevision === undefined
+            ? undefined
+            : live.revisions.classify(req.params.baseRevision, header, snapshot.entries, snapshot.leafId);
+          return { revision, environmentKey, authority: "live", ...(base ? { base } : {}) } satisfies Result<"session/revision">;
+        } catch (error) {
+          throw revisionUnavailable(error);
+        }
+      }
       case "pi/session/entries": {
         const live = this.live(req.params.path);
         if (req.params.window) {
@@ -403,7 +434,13 @@ export class WorkerServer {
             if (this.sessions.get(live.path) !== live) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation was closed. Open it again.");
             if (seq !== live.seq || baseline !== live.preAcceptance) continue;
             const active = "live" in snapshot ? snapshot.live : undefined;
-            return historyWindow(snapshot, req.params.window, { path: live.path, epoch: live.historyEpoch, seq,
+            // Computed from the very snapshot being returned, inside the same
+            // retry fence, so the revision and the rows can never describe two
+            // different states. A record this cannot canonicalise refuses the
+            // read; it never answers with a window that has no revision.
+            const { revision, environmentKey } = this.revisionOf(live, snapshot);
+            return historyWindow(snapshot, req.params.window, {
+              sessionId: this.sessionIdOf(live), epoch: live.historyEpoch, seq, revision, environmentKey,
               ...("before" in req.params.window ? {} : { live: active ?? { running: baseline?.state.isStreaming ?? live.driver.state().isStreaming, tools: [] } }),
             });
           }
@@ -960,6 +997,7 @@ export class WorkerServer {
         state: this.decorate(existing, state),
         replayFrom: this.replayFloor(existing, params.fromSeq),
         seq: existing.seq,
+        ...(await this.loadRevision(existing)),
       };
     }
     const inFlight = this.opening.get(params.path);
@@ -967,7 +1005,7 @@ export class WorkerServer {
       const live = await inFlight;
       const state = live.driver.state();
       this.replay(live, params.fromSeq);
-      return { state: this.decorate(live, state), replayFrom: this.replayFloor(live, params.fromSeq), seq: live.seq };
+      return { state: this.decorate(live, state), replayFrom: this.replayFloor(live, params.fromSeq), seq: live.seq, ...(await this.loadRevision(live)) };
     }
     // Registered synchronously, before `open()` gets a chance to yield.
     const promise = (async () => {
@@ -984,9 +1022,52 @@ export class WorkerServer {
       // `session_start` report, the first state); the reply carries the state
       // they produced and the transcript snapshot that follows covers them, so
       // the client is told the watermark it may safely stamp.
-      return { state: this.decorate(live, live.driver.state()), replayFrom: 0, seq: live.seq };
+      return { state: this.decorate(live, live.driver.state()), replayFrom: 0, seq: live.seq, ...(await this.loadRevision(live)) };
     } finally {
       this.opening.delete(params.path);
+    }
+  }
+
+  /**
+   * The revision a `session/load` reply carries, when there is one.
+   *
+   * Unlike a window, a load must still succeed for a session whose records
+   * this cannot canonicalise or whose driver keeps no entries: refusing to
+   * open a conversation because its revision could not be computed would be a
+   * worse failure than opening it without one. Every reader that needs the
+   * revision asks for it explicitly and is refused properly there.
+   */
+  private async loadRevision(live: Live): Promise<{ revision?: string; environmentKey?: string }> {
+    try {
+      const snapshot = live.preAcceptance ?? await live.driver.entries();
+      const { revision, environmentKey } = live.revisions.compute(this.revisionHeader(live), snapshot.entries, snapshot.leafId);
+      return { revision, environmentKey };
+    } catch {
+      return {};
+    }
+  }
+
+  /**
+   * The session identity a durable revision binds to: the stored header when
+   * there is a file, else the engine's own session id. Both readers of a real
+   * session file see the same header, which is what lets a live revision and a
+   * worker-free one be compared at all.
+   */
+  private revisionHeader(live: Live): SessionRevisionHeader {
+    return live.driver.sessionHeader?.() ?? { id: live.driver.state().id, cwd: this.options.cwd };
+  }
+
+  private sessionIdOf(live: Live): string {
+    return this.revisionHeader(live).id;
+  }
+
+  /** The revision for one snapshot, or a refusal that says the read is unavailable. */
+  private revisionOf(live: Live, snapshot: { entries: unknown[]; leafId: string | null }): { revision: string; environmentKey: string } {
+    try {
+      const { revision, environmentKey } = live.revisions.compute(this.revisionHeader(live), snapshot.entries, snapshot.leafId);
+      return { revision, environmentKey };
+    } catch (error) {
+      throw revisionUnavailable(error);
     }
   }
 
@@ -1158,7 +1239,7 @@ export class WorkerServer {
     // have used it, where a person can read it.
     await this.ensureProjectEnv().catch(() => {});
     const driver = this.options.createDriver();
-    const live: Live = { driver, historyEpoch: randomUUID(), seq: 0, buffer: new ReplayBuffer(this.replayBuffer, this.options.replayBytes ?? 16 * 1024 * 1024), unsubscribe: () => {}, path: "" };
+    const live: Live = { driver, historyEpoch: randomUUID(), revisions: new SessionRevisionTracker(this.environmentId), seq: 0, buffer: new ReplayBuffer(this.replayBuffer, this.options.replayBytes ?? 16 * 1024 * 1024), unsubscribe: () => {}, path: "" };
     driver.setExtensionModelWorkHandler?.((request) => this.admitExtensionModelWork(live, request));
     const queued: DriverEvent[] = [];
     let ready = false;
@@ -1708,4 +1789,26 @@ function textOf(content: ContentBlock[]): string {
     .filter((block): block is Extract<ContentBlock, { type: "text" }> => block.type === "text")
     .map((block) => block.text)
     .join("\n");
+}
+
+/**
+ * A worker that was constructed without the host's environment identity. The
+ * host always supplies one (`--environment-id`), so this only ever binds the
+ * revisions of a hand-run or test worker, keeping them self-consistent instead
+ * of absent.
+ */
+const UNCONFIGURED_ENVIRONMENT = "unconfigured-environment";
+
+/**
+ * A read that cannot be answered with a revision is refused as unavailable,
+ * with words a person can act on — never answered with a window that silently
+ * has no revision for a cache to check.
+ */
+function revisionUnavailable(error: unknown): ProtocolError {
+  if (error instanceof ProtocolError) return error;
+  const why = error instanceof RevisionCanonicalisationError ? ` (${error.message})` : "";
+  return new ProtocolError(
+    ErrorCodes.RevisionUnavailable,
+    `This conversation could not be read as it is stored right now${why}. Open it again, and restart the app if it keeps happening.`,
+  );
 }

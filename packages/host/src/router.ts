@@ -50,6 +50,7 @@ import type { PushService } from "./push.js";
 import { RESOURCE_REPORT_METHOD, guardResourceReport } from "./resources/guard.js";
 import type { ResourceService } from "./resources/index.js";
 import { canonical } from "./trust.js";
+import type { SessionRevisions } from "./session-revision.js";
 import type { ViewCache } from "./views.js";
 import type { WorkerPool } from "./worker-pool.js";
 import { WorkerRpcError } from "./worker-client.js";
@@ -98,6 +99,11 @@ export interface RouterDeps {
   runs?: AgentRunRegistry | undefined;
   /** Injectable clock, for the dictation route sweep. */
   now?: (() => number) | undefined;
+  /**
+   * Durable session revisions (RP-9). Absent = this host can only answer for a
+   * session a worker already owns, and says so rather than inventing one.
+   */
+  revisions?: SessionRevisions | undefined;
   /**
    * Process inventory (RP-1). Absent = the `resource/*` methods are refused
    * rather than answered with an invented shape.
@@ -371,6 +377,7 @@ export class Router {
         unlinkSync(path);
         this.catalog.invalidate(path);
         this.deps.views.invalidate(path);
+        this.deps.revisions?.invalidate(path);
         this.unwritten.delete(path);
         // A child's runs cannot go on without their session. Its worktree is a
         // separate thing on disk, and it is kept unless this request asked for
@@ -391,6 +398,28 @@ export class Router {
         }));
         const removed = removals.find((removal) => removal?.worktree);
         return removed?.worktree ? { worktree: removed.worktree } : before ? { worktree: before.status } : {};
+      }
+
+      case "session/revision": {
+        // The owning worker wins whenever there is one: its leaf can be ahead
+        // of anything the file shows. Otherwise the stored conversation is read
+        // here, with no worker started for it (RP-9).
+        const { path } = req.params;
+        const live = this.liveWorkerFor(path);
+        if (live) return live.request(req.method, req.params);
+        const revisions = this.deps.revisions;
+        if (!revisions) {
+          throw new ProtocolError(
+            ErrorCodes.RevisionUnavailable,
+            "This conversation is not open, and this host cannot read a stored conversation on its own.",
+          );
+        }
+        const answer = revisions.read(path, req.params.baseRevision);
+        if (answer.kind === "answer") return answer.result;
+        if (answer.kind === "refuse") throw answer.error;
+        // Only the engine can read this one (an older stored format, a file
+        // past a hard bound, one being rewritten): ask it.
+        return (await this.workerFor(path)).request(req.method, req.params);
       }
 
       case "pi/session/move":
@@ -837,6 +866,8 @@ export class Router {
     this.catalog.invalidate(path);
     this.catalog.invalidate(dest);
     this.deps.views.invalidate(path);
+    this.deps.revisions?.invalidate(path);
+    this.deps.revisions?.invalidate(dest);
     this.unwritten.delete(path);
     // Read where it was read: a session someone had caught up on must not
     // come back as unread for having moved.
@@ -1028,9 +1059,11 @@ export class Router {
           // A fork, a navigate and a compaction all rewrite in place, so the
           // cached message count and first message have to be dropped too.
           this.catalog.invalidate(path);
+          this.deps.revisions?.invalidate(path);
           if (forked) {
             this.deps.views.invalidate(forked);
             this.catalog.invalidate(forked);
+            this.deps.revisions?.invalidate(forked);
           }
         }
         return result;
@@ -1146,6 +1179,11 @@ export class Router {
     if (known) return known;
     const header = this.catalog.cwdOf(path);
     return header === undefined ? undefined : projectRootOf(header);
+  }
+
+  /** The worker that already owns this session, if one does. Never spawns. */
+  private liveWorkerFor(path: string) {
+    return this.pool.ownerOfSession(path);
   }
 
   /**

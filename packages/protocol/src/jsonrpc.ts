@@ -47,6 +47,13 @@ export const ErrorCodes = {
   /** The project has trust-gated resources and nobody has approved it yet (M2-T4). */
   ProjectUntrusted: -32005,
   VersionMismatch: -32006,
+  /**
+   * This conversation cannot be read as it is stored right now (RP-9): its
+   * records cannot be canonicalised, its index exceeds a hard bound with no
+   * live worker to ask, or it kept being rewritten underneath the read. A
+   * window is never returned without its revision instead.
+   */
+  RevisionUnavailable: -32007,
 } as const;
 
 export function isRequest(m: JsonRpcMessage): m is JsonRpcRequest {

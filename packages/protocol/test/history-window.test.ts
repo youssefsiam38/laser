@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { historyWindow, parseClientRequest } from "../src/index.js";
 
-const scope = { path: "/project/session.jsonl", epoch: "worker-one", seq: 10 };
+const PATH = "/project/session.jsonl";
+const scope = {
+  sessionId: "11111111-2222-3333-4444-555555555555",
+  epoch: "worker-one",
+  seq: 10,
+  revision: "r1.AAAAAAAA.BBBBBBBBBBBBBBBBBBBBBBBBBBB",
+  environmentKey: "e1.CCCCCCCCCCCCCCCCCCCCCC",
+};
 function history(count: number): unknown[] {
   return Array.from({ length: count }, (_, i) => ({ type: "message", id: `e${i}`, parentId: i ? `e${i - 1}` : null, message: { role: i % 2 ? "assistant" : "user", content: [{ type: "text", text: `Message ${i}` }] } }));
 }
@@ -53,18 +60,35 @@ describe("history windows", () => {
     const before = historyWindow({ entries, leafId: "e11" }, { tail: 4 }, scope).window.before!;
     expect(historyWindow({ entries: history(14), leafId: "e13" }, { before, limit: 4 }, scope).entries).toEqual(entries.slice(4, 8));
     expect(() => historyWindow({ entries, leafId: "e7" }, { before }, scope)).toThrow("history changed");
-    expect(() => historyWindow({ entries, leafId: "e11" }, { before }, { ...scope, epoch: "worker-two" })).toThrow("history changed");
-    expect(() => historyWindow({ entries, leafId: "e11" }, { before }, { ...scope, path: "/another" })).toThrow("history changed");
+    // A restart no longer invalidates a page: the cursor binds to the session
+    // and its branch lineage, which is what actually decides whether the page
+    // still exists. Another session, and an older cursor shape, are refused.
+    expect(historyWindow({ entries, leafId: "e11" }, { before, limit: 4 }, { ...scope, epoch: "worker-two" }).entries).toEqual(entries.slice(4, 8));
+    expect(() => historyWindow({ entries, leafId: "e11" }, { before }, { ...scope, sessionId: "another" })).toThrow("history changed");
     expect(() => historyWindow({ entries, leafId: "e11" }, { before: "bad" }, scope)).toThrow("history changed");
+    const v1 = JSON.stringify({ path: "/project/session.jsonl", epoch: "worker-one", leaf: "e11", before: "e8" });
+    expect(() => historyWindow({ entries, leafId: "e11" }, { before: v1 }, scope)).toThrow("history changed");
+  });
+
+  it("carries the revision and environment key, and keeps storage details out of a cursor", () => {
+    const entries = history(12);
+    const page = historyWindow({ entries, leafId: "e11" }, { tail: 4 }, scope);
+    expect(page.window.revision).toBe(scope.revision);
+    expect(page.window.environmentKey).toBe(scope.environmentKey);
+    const cursor = JSON.parse(page.window.before!) as Record<string, unknown>;
+    expect(cursor).toEqual({ v: 2, s: scope.sessionId, l: "e11", b: "e8" });
+    expect(Object.keys(cursor)).not.toContain("path");
+    expect(page.window.before).not.toContain(".jsonl");
+    expect(page.window.before).not.toContain(scope.epoch);
   });
 
   it("round-trips every request variant and refuses ambiguous or unbounded initial windows", () => {
     for (const window of [{ tail: 40 }, { before: "cursor", limit: 40 }, { from: "entry" }, { all: true }]) {
-      const request = { jsonrpc: "2.0", id: 1, method: "pi/session/entries", params: { path: scope.path, window } };
+      const request = { jsonrpc: "2.0", id: 1, method: "pi/session/entries", params: { path: PATH, window } };
       expect(parseClientRequest(JSON.parse(JSON.stringify(request)))).toEqual(request);
     }
     for (const window of [{ tail: 0 }, { tail: 1000 }, { tail: 40, all: true }]) {
-      expect(() => parseClientRequest({ jsonrpc: "2.0", id: 1, method: "pi/session/entries", params: { path: scope.path, window } })).toThrow();
+      expect(() => parseClientRequest({ jsonrpc: "2.0", id: 1, method: "pi/session/entries", params: { path: PATH, window } })).toThrow();
     }
   });
 });

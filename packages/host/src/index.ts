@@ -26,6 +26,18 @@ export { FeatureService } from "./features.js";
 export { ProjectRegistry, type ProjectRegistryOptions, type TrustRequest } from "./projects.js";
 export { ViewCache } from "./views.js";
 export {
+  SessionIndexCache,
+  DEFAULT_SESSION_INDEX_LIMITS,
+  READABLE_SESSION_VERSION,
+  type IndexedEntry,
+  type SessionIndex,
+  type SessionIndexFailure,
+  type SessionIndexLimits,
+  type SessionIndexResult,
+} from "./session-index.js";
+export { SessionRevisions, type RevisionAnswer, type SessionRevisionsOptions } from "./session-revision.js";
+export { environmentIdentity, type EnvironmentIdentity } from "./environment-identity.js";
+export {
   canonical,
   trustReasons,
   type TrustReasons,

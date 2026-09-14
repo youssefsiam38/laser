@@ -1,0 +1,96 @@
+/**
+ * The live half of the durable revision contract (RP-9).
+ *
+ * The interesting cases are the ones only a live engine can produce: a leaf
+ * that sits behind the last stored record because someone jumped, and the
+ * fold being continued across many reads rather than recomputed.
+ */
+import { describe, expect, it } from "vitest";
+import { environmentTagOf, isEnvironmentKey, isSessionRevision, sessionRevisionOf } from "@lasercode/protocol";
+import { nodeRevisionHasher } from "@lasercode/protocol/revision-node";
+import { SessionRevisionTracker, branchIds } from "../src/history-revision.js";
+
+const header = { id: "session-1", cwd: "/project", version: 3 };
+const entry = (id: string, parentId: string | null, text: string) => ({
+  type: "message",
+  id,
+  parentId,
+  timestamp: "2026-01-01T00:00:00.000Z",
+  message: { role: "user", content: [{ type: "text", text }] },
+});
+
+const ENVIRONMENT = "11111111-2222-3333-4444-555555555555";
+const history = [entry("e0", null, "one"), entry("e1", "e0", "two"), entry("e2", "e1", "three")];
+
+describe("a live conversation's revision", () => {
+  it("is the same value whether it was folded in one read or grown over many", () => {
+    const grown = new SessionRevisionTracker(ENVIRONMENT);
+    grown.compute(header, history.slice(0, 1), "e0");
+    grown.compute(header, history.slice(0, 2), "e1");
+    const incremental = grown.compute(header, history, "e2");
+    const fresh = new SessionRevisionTracker(ENVIRONMENT).compute(header, history, "e2");
+    expect(incremental.revision).toBe(fresh.revision);
+    expect(isSessionRevision(incremental.revision)).toBe(true);
+    expect(isEnvironmentKey(incremental.environmentKey)).toBe(true);
+    // The same fold a worker-free reader would produce from the same records.
+    expect(incremental.revision).toBe(sessionRevisionOf(nodeRevisionHasher, environmentTagOf(nodeRevisionHasher, ENVIRONMENT), incremental.state));
+  });
+
+  it("restarts rather than extending a chain that no longer describes the conversation", () => {
+    const tracker = new SessionRevisionTracker(ENVIRONMENT);
+    const before = tracker.compute(header, history, "e2").revision;
+    // A compaction rewrote the file under the same session: same length, other
+    // records. Continuing the old chain here would hand out a stale value.
+    const rewritten = [entry("c0", null, "summary"), entry("c1", "c0", "kept"), entry("c2", "c1", "after")];
+    const after = tracker.compute(header, rewritten, "c2").revision;
+    expect(after).not.toBe(before);
+    expect(after).toBe(new SessionRevisionTracker(ENVIRONMENT).compute(header, rewritten, "c2").revision);
+  });
+
+  it("belongs to one environment, and to one session", () => {
+    const mine = new SessionRevisionTracker(ENVIRONMENT).compute(header, history, "e2");
+    const theirs = new SessionRevisionTracker("22222222-2222-3333-4444-555555555555").compute(header, history, "e2");
+    expect(theirs.revision).not.toBe(mine.revision);
+    expect(theirs.environmentKey).not.toBe(mine.environmentKey);
+    const forked = new SessionRevisionTracker(ENVIRONMENT).compute({ ...header, id: "session-2" }, history, "e2");
+    expect(forked.revision).not.toBe(mine.revision);
+  });
+
+  it("distinguishes a leaf the file cannot show, and still proves what extends it", () => {
+    const tracker = new SessionRevisionTracker(ENVIRONMENT);
+    const atTail = tracker.compute(header, history, "e2").revision;
+    // A jump moves the leaf without appending anything: a state that exists in
+    // this process and nowhere on disk.
+    const jumped = tracker.compute(header, history, "e1").revision;
+    expect(jumped).not.toBe(atTail);
+    expect(tracker.classify(jumped, header, history, "e1")).toBe("current");
+    // The view that was at the tail is now on an abandoned branch.
+    expect(tracker.classify(atTail, header, history, "e1")).toBe("stale");
+
+    // Work continues from the jumped-to leaf. The client cached at that exact
+    // live state, which no checkpoint could reconstruct, is still a prefix.
+    const continued = [...history, entry("e3", "e1", "four")];
+    expect(tracker.classify(jumped, header, continued, "e3")).toBe("prefix");
+    expect(tracker.classify(atTail, header, continued, "e3")).toBe("stale");
+  });
+
+  it("refuses a base it cannot prove instead of assuming it is old", () => {
+    const tracker = new SessionRevisionTracker(ENVIRONMENT);
+    tracker.compute(header, history, "e2");
+    expect(tracker.classify("r1.ZZZZZZZZ.ZZZZZZZZZZZZZZZZZZZZZZZZZZZ", header, history, "e2")).toBe("stale");
+    expect(tracker.classify("nonsense", header, history, "e2")).toBe("stale");
+    const elsewhere = new SessionRevisionTracker("33333333-2222-3333-4444-555555555555").compute(header, history.slice(0, 2), "e1").revision;
+    expect(tracker.classify(elsewhere, header, history, "e2")).toBe("stale");
+  });
+});
+
+describe("the branch a delta may extend", () => {
+  it("is the path from the leaf to the root, and nothing beside it", () => {
+    const sibling = entry("other", "e0", "another version");
+    expect(branchIds([...history, sibling], "e2")).toEqual(new Set(["e0", "e1", "e2"]));
+    expect(branchIds([...history, sibling], "other")).toEqual(new Set(["e0", "other"]));
+    expect(branchIds(history, null)).toEqual(new Set());
+    // A broken chain stops where it breaks rather than looping forever.
+    expect(branchIds([entry("a", "b", "x"), entry("b", "a", "y")], "a")).toEqual(new Set(["a", "b"]));
+  });
+});

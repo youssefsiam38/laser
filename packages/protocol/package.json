@@ -21,6 +21,10 @@
     "./startup-screen": {
       "types": "./dist/startup-screen.d.ts",
       "import": "./dist/startup-screen.js"
+    },
+    "./revision-node": {
+      "types": "./dist/session-revision-node.d.ts",
+      "import": "./dist/session-revision-node.js"
     }
   },
   "files": ["dist"],

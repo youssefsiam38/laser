@@ -8,11 +8,40 @@ const isMessage = (entry: unknown): boolean => ["message", "custom_message"].inc
 const isUser = (entry: unknown): boolean => record(entry).type === "message" && record(record(entry).message).role === "user";
 const changed = (): never => { throw new ProtocolError(ErrorCodes.InvalidParams, "This history changed. Reload the conversation and try again."); };
 
+/** Cursor generation. A cursor from an older shape is refused, never reinterpreted. */
+const CURSOR_VERSION = 2;
+
+/**
+ * Page cursors are opaque and carry nothing the caller does not already hold:
+ * the session's own id and two entry ids. No filesystem path, no serving
+ * epoch, no mtime — the public contract says nothing about how history is
+ * stored (RP-9). Lineage, not exact state, is what a cursor binds to, so a
+ * page request still works while the conversation is streaming.
+ */
+interface HistoryCursor {
+  v: number;
+  /** The session's own id, so a cursor cannot wander to another conversation. */
+  s: string;
+  /** The leaf the cursor was issued against; it must still be on the branch. */
+  l: string | null;
+  /** The entry this page ends before. */
+  b: string;
+}
+
 /** Window opaque entries along their real parent chain; never slice the disk's append order. */
 export function historyWindow(
   snapshot: { entries: unknown[]; leafId: string | null },
   request: HistoryWindowRequest,
-  scope: { path: string; epoch: string; seq: number; live?: HistoryLiveSnapshot },
+  scope: {
+    /** The session's own id (not its path): cursors are bound to identity, not storage. */
+    sessionId: string;
+    epoch: string;
+    seq: number;
+    /** RP-9. Required: a window without its revision is not a valid answer. */
+    revision: string;
+    environmentKey: string;
+    live?: HistoryLiveSnapshot;
+  },
 ): { entries: unknown[]; leafId: string | null; window: HistoryWindow } {
   const byId = new Map(snapshot.entries.map(entry => [record(entry).id, entry]));
   const reversed: unknown[] = [];
@@ -33,8 +62,8 @@ export function historyWindow(
   if ("before" in request) {
     let cursor: Record<string, unknown>;
     try { cursor = record(JSON.parse(request.before)); } catch { return changed(); }
-    if (cursor.path !== scope.path || cursor.epoch !== scope.epoch || !visited.has(String(cursor.leaf))) changed();
-    end = branch.findIndex(entry => record(entry).id === cursor.before);
+    if (cursor.v !== CURSOR_VERSION || cursor.s !== scope.sessionId || !visited.has(String(cursor.l))) changed();
+    end = branch.findIndex(entry => record(entry).id === cursor.b);
     if (end < 0) changed();
   }
   if ("from" in request) {
@@ -69,7 +98,11 @@ export function historyWindow(
     window: {
       epoch: scope.epoch,
       seq: scope.seq,
-      ...(start > 0 && typeof anchor === "string" ? { before: JSON.stringify({ path: scope.path, epoch: scope.epoch, leaf: snapshot.leafId, before: anchor }) } : {}),
+      revision: scope.revision,
+      environmentKey: scope.environmentKey,
+      ...(start > 0 && typeof anchor === "string"
+        ? { before: JSON.stringify({ v: CURSOR_VERSION, s: scope.sessionId, l: snapshot.leafId, b: anchor } satisfies HistoryCursor) }
+        : {}),
       ...(typeof anchor === "string" ? { anchor } : {}),
       userOffset: prefix.filter(isUser).length,
       complete: all || (start === 0 && end === branch.length),

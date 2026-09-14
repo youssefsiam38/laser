@@ -51,6 +51,7 @@ import type {
   FeatureId,
   GoalAction,
   HistoryLiveSnapshot,
+  SessionRevisionHeader,
   ImageContent,
   MessageSpeaker,
   ModelRef,
@@ -875,6 +876,24 @@ export class StableSdkDriver implements SessionDriver {
     const snapshot = { entries: manager.getEntries(), leafId: manager.getLeafId() };
     if (!options?.live) return snapshot;
     return { ...snapshot, live: this.historySnapshot.snapshot() };
+  }
+
+  /**
+   * The header the engine loaded, byte-for-byte the one a worker-free reader
+   * parses from the same file. It binds the durable revision to this session's
+   * identity, so a copied or forked file can never validate another's cache.
+   */
+  sessionHeader(): SessionRevisionHeader | null {
+    const header = this.session().sessionManager.getHeader();
+    if (!header) return null;
+    return {
+      id: header.id,
+      cwd: header.cwd,
+      // Absent and `undefined` are the same thing in the file; keep them the
+      // same thing here, or a fresh session and its reloaded self would differ.
+      ...(header.parentSession !== undefined ? { parentSession: header.parentSession } : {}),
+      ...(header.version !== undefined ? { version: header.version } : {}),
+    };
   }
 
   async goalState(): Promise<SessionGoal | null> {

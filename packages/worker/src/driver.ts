@@ -34,6 +34,7 @@ import type {
   GoalAction,
   HistoryLiveSnapshot,
   SessionGoal,
+  SessionRevisionHeader,
   UiDialogRequest,
   UiDialogResponse,
   UiFireAndForget,
@@ -258,6 +259,13 @@ export interface SessionDriver {
    * the first entry (`SessionManager.resetLeaf`).
    */
   entries(options?: { live?: boolean }): Promise<{ entries: unknown[]; leafId: string | null; live?: HistoryLiveSnapshot }>;
+
+  /**
+   * The stored session's own header, which is what binds a durable revision to
+   * a session identity (RP-9). Optional: a driver with no session file has
+   * none, and its revisions then bind to the state's identity instead.
+   */
+  sessionHeader?(): SessionRevisionHeader | null;
 
   /** Durable goal control. Optional for engines that do not implement Goals. */
   goalState?(): Promise<SessionGoal | null>;

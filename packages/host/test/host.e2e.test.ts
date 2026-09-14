@@ -4,10 +4,10 @@
  * and receives seq-numbered updates. Requires `pnpm -r build` (spawns the
  * worker's dist). Sandboxed dirs; never touches ~/.pi/agent.
  */
-import { PRODUCT_NAME, PRODUCT_VERSION, PROJECT_DIR_NAME } from "@lasercode/protocol";
+import { PRODUCT_NAME, PRODUCT_VERSION, PROJECT_DIR_NAME, isEnvironmentKey, isSessionRevision } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -408,6 +408,65 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("host end to end", () => {
 
     client.close();
     client2.close();
+  }, 90_000);
+
+  it("gives a conversation the same revision whether its worker is running or long gone", async () => {
+    const { url } = await host.listen();
+    const client = new Client();
+    await client.connect(url);
+    const project = join(base, "project");
+    try {
+      const { state } = await client.request<{ state: SessionState }>("session/new", { cwd: project });
+      await client.request("pi/model/set", { path: state.path, model: { provider: "stub", id: "stub-1" } });
+      await client.request("session/prompt", { path: state.path, content: [{ type: "text", text: "hello" }] });
+      await client.waitFor((m) => "method" in m && m.method === "session/update" && (m.params as SessionUpdateParams).update.kind === "agent_settled");
+      // Naming writes one more record after the turn settles. Equality across a
+      // restart is a claim about *unchanged* content, so let the conversation
+      // come to rest first — an append genuinely is a different revision.
+      await client.waitFor((m) => {
+        if (!("method" in m) || m.method !== "session/update") return false;
+        const { update } = m.params as SessionUpdateParams;
+        return update.kind === "state" && typeof update.state.name === "string" && update.state.name !== "";
+      });
+      let size = -1;
+      for (let settled = 0; settled < 3; settled++) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const now = statSync(state.path).size;
+        if (now === size) break;
+        size = now;
+        settled = 0;
+      }
+
+      // The worker owns it, so the worker answers.
+      const live = await client.request<{ revision: string; environmentKey: string; authority: string }>("session/revision", { path: state.path });
+      expect(live.authority).toBe("live");
+      expect(isSessionRevision(live.revision)).toBe(true);
+      expect(isEnvironmentKey(live.environmentKey)).toBe(true);
+      const window = await client.request<{ window: { revision: string; environmentKey: string } }>("pi/session/entries", { path: state.path, window: { tail: 40 } });
+      expect(window.window.revision).toBe(live.revision);
+      expect(window.window.environmentKey).toBe(live.environmentKey);
+
+      // Retire the worker, and the same conversation reads the same value from
+      // what is stored — this is the property a device cache depends on.
+      await client.request("pi/worker/stop", { cwd: project });
+      expect(host.pool.cwds()).toEqual([]);
+      const durable = await client.request<{ revision: string; environmentKey: string; authority: string; base?: string }>("session/revision", { path: state.path, baseRevision: live.revision });
+      expect(durable.authority).toBe("durable");
+      expect(durable.revision).toBe(live.revision);
+      expect(durable.environmentKey).toBe(live.environmentKey);
+      expect(durable.base).toBe("current");
+      // Nothing was started to answer that.
+      expect(host.pool.cwds()).toEqual([]);
+      // And the environment's own identity stayed inside the host.
+      const identity = JSON.parse(readFileSync(join(base, "state", "environment.json"), "utf8")) as { id: string };
+      expect(JSON.stringify(durable)).not.toContain(identity.id);
+
+      // A conversation that is gone is not a conversation that is unchanged.
+      rmSync(state.path);
+      await expect(client.request("session/revision", { path: state.path, baseRevision: live.revision })).rejects.toThrow(/no longer stored/);
+    } finally {
+      client.close();
+    }
   }, 90_000);
 
   it("answers the agents methods over a real socket, primes the real worker, and keeps the workspaces out of the project list", async () => {
