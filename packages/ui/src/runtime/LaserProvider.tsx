@@ -1890,9 +1890,13 @@ export function LaserThreadScope({ path, onPathChange, filter, createIn, unavail
     // eslint-disable-next-line react-hooks/exhaustive-deps -- created once; kept in sync below
     [],
   );
+  // On `scopedStore`, not on `path`: the scope's store is also rebuilt when its
+  // workspace changes under the same session, and the per-thread runtime reads
+  // its destination through this snapshot. Depending on the inputs instead of
+  // the store left it on the one built before the workspace arrived.
   useEffect(() => {
     snapshotStore.set({ store: scopedStore, client, dispatch, onError: scopedOnError, openSession: (target) => openSession(target, { select: false }) });
-  }, [snapshotStore, store, client, dispatch, scopedOnError, openSession, path]);
+  }, [snapshotStore, scopedStore, client, dispatch, scopedOnError, openSession]);
 
   const runtimeHook = useCallback(
     // oxlint-disable-next-line react-hooks/rules-of-hooks -- invoked by useRemoteThreadListRuntime at a stable hook position

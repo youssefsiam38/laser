@@ -88,6 +88,26 @@ it("does not let a mounted main-thread tool suppress the Beam footer fallback", 
   expect(host.querySelector('[aria-label="main"]')!.textContent).toBe("");
   expect(host.querySelector('[aria-label="beam"]')!.textContent).toBe("beam-tool");
 });
+it("re-issues a question with the same id and new options as the new question", async () => {
+  const send = vi.fn(async () => {});
+  const first = dialogFormOf({ id: "same-id", method: "editor", title: "The release note", prefill: "First draft." }, false);
+  const second = dialogFormOf({ id: "same-id", method: "editor", title: "The release note", prefill: "What actually shipped." }, false);
+  const render = (shown: typeof first) => act(async () => root.render(<DialogBody form={shown} onAnswer={send} />));
+  await render(first);
+  expect(host.querySelector("textarea")!.value).toBe("First draft.");
+  await render(second);
+  expect(host.querySelector("textarea")!.value).toBe("What actually shipped.");
+  await act(async () => [...host.querySelectorAll("button")].find(b => b.textContent === "Submit")!.click());
+  expect(send).toHaveBeenCalledWith({ value: "What actually shipped." });
+
+  // A choice that is no longer offered is not an answer either.
+  const choices = dialogFormOf({ id: "pick", method: "select", title: "Which branch?", options: ["main", "next"] }, false);
+  const rechoice = dialogFormOf({ id: "pick", method: "select", title: "Which branch?", options: ["release", "hotfix"] }, false);
+  await render(choices);
+  await render(rechoice);
+  expect([...host.querySelectorAll("button")].map(b => b.textContent)).toEqual(expect.arrayContaining(["release", "hotfix"]));
+});
+
 it("keeps independent local approval owners independent", () => {
   const a = new QuestionPresentation(form), b = new QuestionPresentation(form);
   a.setValue("value", "a"); expect(b.getSnapshot().values).toEqual({});

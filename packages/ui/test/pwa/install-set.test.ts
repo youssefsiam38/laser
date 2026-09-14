@@ -63,6 +63,39 @@ async function harness() {
   };
   return { network, failures, stores, caches, lifecycle, request, offline: () => { offline = true; } };
 }
+it("installs the shell without an icon a rename moved, and still prunes the old generation", async () => {
+  const { precache, optional } = shellAssetSets(bundle);
+  const h = await harness();
+  await h.lifecycle("install");
+  const current = [...h.stores.keys()][0]!;
+  const previous = await h.caches.open(`${current}-old`);
+  await previous.put("/index.html", new Response("stale shell"));
+  h.stores.delete(current);
+  h.network.length = 0;
+  h.failures.add("/icons/badge-96.png");
+  h.failures.add("/fonts/martian-mono-latin-ext.woff2");
+
+  await h.lifecycle("install");
+  // Everything else was still fetched, and the shell is really cached.
+  expect(new Set(h.network)).toEqual(new Set(precache));
+  await h.lifecycle("activate");
+  expect(h.stores.has(`${current}-old`)).toBe(false);
+  h.offline();
+  expect(await (await h.request("/conversation", true))?.text()).toBe("/index.html");
+  expect(await (await h.request("/assets/entry-12345678.js"))?.text()).toBe("/assets/entry-12345678.js");
+  // Hand-named public files: the list can outlive the file it names. The
+  // document and the code it needs are never optional.
+  expect(optional).toContain("/icons/badge-96.png");
+  expect(optional).not.toContain("/index.html");
+  expect(optional).not.toContain("/assets/entry-12345678.js");
+});
+
+it("refuses to install a shell whose own document or code is missing", async () => {
+  const h = await harness();
+  h.failures.add("/index.html");
+  await expect(h.lifecycle("install")).rejects.toThrow();
+});
+
 it("installs only static shell dependencies and caches optional modules on first use", async () => {
   const { precache, assets } = shellAssetSets(bundle);
   expect(precache).toContain("/assets/shared-12345678.js");

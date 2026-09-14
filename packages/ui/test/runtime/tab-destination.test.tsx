@@ -296,6 +296,31 @@ describe("main destination isolation", () => {
     expect(calls("session/prompt")).toHaveLength(0);
   });
 
+  it("keeps an unsent landing draft through a frontend reload, and spends it when it is cleared", async () => {
+    localStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_CWD);
+    await mount();
+    expect(controls).toMatchObject({ tab: "code", path: undefined, phase: "ready" });
+    await act(async () => { controls.aui.composer.setText("unsent landing message"); });
+    await act(async () => settle(400));
+
+    // `refreshFrontend()` after a version handshake: the window is replaced and
+    // every in-memory draft goes with it (AGENTS.md §5a).
+    const reload = async () => {
+      await act(async () => root.unmount());
+      root = createRoot(container);
+      FakeHostClient.reset(world);
+      await mount();
+    };
+    await reload();
+    expect(controls).toMatchObject({ tab: "code", path: undefined, text: "unsent landing message" });
+
+    // Clearing it is deliberate: nothing comes back next time.
+    await act(async () => { controls.aui.composer.setText(""); });
+    await act(async () => settle(400));
+    await reload();
+    expect(controls).toMatchObject({ tab: "code", path: undefined, text: "" });
+  });
+
   it("does not let the previously mounted thread retake a failed destination", async () => {
     addSession(world, CHAT, "/state/chat", { agent: { agentName: "chat", kind: "chat" } });
     localStorage.setItem(SESSIONS_TAB_STORAGE_KEY, "chat");

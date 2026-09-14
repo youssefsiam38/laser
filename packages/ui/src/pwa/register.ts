@@ -23,6 +23,8 @@ export interface ServiceWorkerSnapshot {
 
 let snapshot: ServiceWorkerSnapshot = { supported: false, registered: false, updateReady: false };
 let registration: ServiceWorkerRegistration | undefined;
+/** The registration in flight, so a second caller joins it instead of starting another. */
+let registering: Promise<void> | undefined;
 let waiting: ServiceWorker | undefined;
 const listeners = new Set<() => void>();
 const messageListeners = new Set<(data: unknown) => void>();
@@ -61,6 +63,14 @@ export async function registerServiceWorker(): Promise<void> {
     return;
   }
   if (registration) return;
+  // Two callers before the browser has answered would otherwise register twice
+  // and add a second `message`/`controllerchange` listener, so every message
+  // the worker posts would arrive twice.
+  registering ??= register();
+  await registering;
+}
+
+async function register(): Promise<void> {
   publish({ supported: true });
   try {
     navigator.serviceWorker.addEventListener("message", (event) => {
@@ -75,6 +85,8 @@ export async function registerServiceWorker(): Promise<void> {
       if (document.visibilityState === "visible") void registration?.update().catch(() => {});
     });
   } catch (error) {
+    // A failed attempt is not a permanent verdict: the next caller may try again.
+    registering = undefined;
     publish({ error: error instanceof Error ? error.message : String(error) });
   }
 }
@@ -127,5 +139,6 @@ export function useServiceWorker(): ServiceWorkerSnapshot {
 export function resetServiceWorkerState(): void {
   snapshot = { supported: false, registered: false, updateReady: false };
   registration = undefined;
+  registering = undefined;
   waiting = undefined;
 }
