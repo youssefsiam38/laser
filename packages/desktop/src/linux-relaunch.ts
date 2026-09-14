@@ -55,6 +55,51 @@ export function assertRelaunchPrivileges(status = readFileSync("/proc/self/statu
   throw new LinuxRelaunchError("The app could not verify its restart permissions. Keep working, or quit completely and open it from the applications menu.");
 }
 
+/**
+ * The whole handoff, in the one order that is safe: prepare, stop the host,
+ * commit. Every failure ends with the app still usable.
+ *
+ * That last part is the reason this is a function rather than three lines at
+ * the call site. The host is stopped between two steps that can fail, and a
+ * failure there used to leave the app running with no host under it: the window
+ * routes to the opening screen, nothing is working, and the only thing on
+ * screen is a dialog whose single button says "Keep app open". So the host is
+ * started again before the message is shown, and a start that fails publishes
+ * its own failed state, which the window already offers a retry for.
+ */
+export async function commitLinuxRelaunch(steps: {
+  prepare(): Promise<PreparedRelaunch>;
+  stopHost(): Promise<void>;
+  startHost(): Promise<unknown>;
+  /** Show the person what happened. Awaited, so it may be a modal dialog. */
+  report(message: string): Promise<void>;
+  log(message: string, error: unknown): void;
+}): Promise<PreparedRelaunch | undefined> {
+  let relaunch: PreparedRelaunch | undefined;
+  let hostStopped = false;
+  try {
+    relaunch = await steps.prepare();
+    // Preparation must succeed before interrupting work. A stop failure must
+    // never leave a committed replacement beside the old host.
+    hostStopped = true;
+    await steps.stopHost();
+    await relaunch.commit();
+    return relaunch;
+  } catch (error) {
+    relaunch?.cancel();
+    steps.log("preparing update restart failed", error);
+    if (hostStopped) {
+      // Adopts its own child if the stop is what failed, so this is safe
+      // whichever step threw.
+      try { await steps.startHost(); }
+      catch (restartError) { steps.log("restarting the host after a failed update restart failed", restartError); }
+    }
+    await steps.report(error instanceof LinuxRelaunchError ? error.message
+      : "The app could not restart itself. Keep working, or quit completely and open it from the applications menu.");
+    return undefined;
+  }
+}
+
 /** Must prepare BEFORE stopping the host or destroying any window/tray. */
 export async function prepareLinuxRelaunch(options: {
   nodeBinary: string; command: RelaunchCommand; logFile: string;

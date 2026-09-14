@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { fileLinkPath, markdownUrl } from "../../src/lib/file-links.js";
-import { FileLinkDirectory, SourceFileLink } from "../../src/components/ui/source-file-link.js";
+import { FileLinkDirectory, hasSourceEditor, SourceFileLink } from "../../src/components/ui/source-file-link.js";
 import { ConfidenceMarker } from "../../src/components/assistant-ui/elements/confidence-marker.js";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -42,6 +42,18 @@ it("opens native paths on click and prevents browser navigation including middle
 it("copies the host path in browsers instead of opening a different computer's file", async () => {
   vi.stubGlobal("desktop", undefined);
   const copy = vi.fn().mockResolvedValue(undefined); vi.stubGlobal("navigator", { clipboard: { writeText: copy } });
+  await act(async () => root.render(<SourceFileLink href="/host/AGENTS.md">File</SourceFileLink>));
+  await act(async () => container.querySelector("a")!.click());
+  expect(copy).toHaveBeenCalledWith("/host/AGENTS.md");
+});
+
+it("copies the path in a desktop window whose platform has no text editor to open", async () => {
+  // The bridge leaves `openSourceFile` off where the desktop cannot open one,
+  // so this window has to behave like the browser rather than offer a control
+  // that would fail with an explanation that was never true (M16-T49 #20).
+  vi.stubGlobal("desktop", { version: "0.0.0", platform: "linux" });
+  const copy = vi.fn().mockResolvedValue(undefined); vi.stubGlobal("navigator", { clipboard: { writeText: copy } });
+  expect(hasSourceEditor()).toBe(false);
   await act(async () => root.render(<SourceFileLink href="/host/AGENTS.md">File</SourceFileLink>));
   await act(async () => container.querySelector("a")!.click());
   expect(copy).toHaveBeenCalledWith("/host/AGENTS.md");
