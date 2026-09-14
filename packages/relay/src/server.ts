@@ -102,6 +102,8 @@ interface Peer {
   handshakeFrames: number;
   /** True while this socket is paused because the peer it feeds is behind. */
   paused: boolean;
+  /** When the pause began; a peer paused for two ping intervals is reaped. */
+  pausedSince: number | null;
 }
 
 interface Channel {
@@ -395,6 +397,7 @@ export class RelayServer {
       aloneSince: this.now(),
       handshakeFrames: HANDSHAKE_FRAMES,
       paused: false,
+      pausedSince: null,
     };
     channel.peers.push(peer);
     this.socketChannel.set(ws, channelId);
@@ -462,6 +465,7 @@ export class RelayServer {
     // backlog then sits in the sender's own kernel buffer, where it belongs.
     if (!peer.paused && other.socket.bufferedAmount > this.options.maxBufferedBytes) {
       peer.paused = true;
+      peer.pausedSince = Date.now();
       peer.socket.pause();
     }
   }
@@ -475,6 +479,7 @@ export class RelayServer {
       other.socket.bufferedAmount > this.options.maxBufferedBytes / 2;
     if (behind) return;
     peer.paused = false;
+    peer.pausedSince = null;
     if (peer.socket.readyState === peer.socket.OPEN) peer.socket.resume();
   }
 
@@ -506,6 +511,7 @@ export class RelayServer {
       // its sake must not stay paused, or it would never be read again.
       if (other.paused) {
         other.paused = false;
+        other.pausedSince = null;
         if (other.socket.readyState === other.socket.OPEN) other.socket.resume();
       }
       this.send(other.socket, { t: "peer", present: false });
@@ -550,7 +556,18 @@ export class RelayServer {
           // the ping rather than reap the sender for the reader's backlog. The
           // peer that is actually not reading still answers no ping of its own
           // and is reaped normally, which releases this one.
-          if (peer.paused) continue;
+          if (peer.paused) {
+            // Two peers paused for each other — both flooding, neither reading
+            // — would otherwise hold their sockets forever: the ping this
+            // branch skips is the only thing that reaps them. A pause that
+            // outlives two ping intervals is treated as the missed pings it
+            // stands in for.
+            if (peer.pausedSince !== null && now - peer.pausedSince > this.options.pingIntervalMs * 2) {
+              peer.socket.close(RelayClose.Timeout, "paused for too long");
+              this.onClose(channel, peer);
+            }
+            continue;
+          }
         }
         peer.lastPing = n;
         peer.missedPings++;

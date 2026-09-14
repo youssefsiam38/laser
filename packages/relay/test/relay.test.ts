@@ -243,6 +243,28 @@ describe("relay", () => {
     }
   }, 40_000);
 
+  it("reaps two peers that flood each other and read nothing, instead of holding them forever", async () => {
+    // Both paused for each other's sake: the sweep skips both pings, so
+    // without a bound on the pause itself the channel lived until the process
+    // died (0.6.3 review H1).
+    const cap = 64 * 1024;
+    const ping = 300;
+    const relay = new RelayServer({ host: "127.0.0.1", port: 0, pingIntervalMs: ping, maxBufferedBytes: cap });
+    const { port } = await relay.listen();
+    const origin = `ws://127.0.0.1:${port}`;
+    try {
+      const a = await connect(CHANNEL_A, "", origin);
+      const b = await connect(CHANNEL_A, "", origin);
+      await a.control((m) => m.t === "peer");
+      a.ws.pause(); b.ws.pause();
+      const frame = Buffer.alloc(BIG_FRAME, 5);
+      for (let i = 0; i < 2000; i++) { a.ws.send(frame, { binary: true }); b.ws.send(frame, { binary: true }); }
+      expect(await until(() => relay.statistics().pausedSockets === 2, 10_000), "both paused").toBe(true);
+      const closed = await until(() => relay.statistics().channels === 0, ping * 6);
+      expect(closed, "the mutually paused channel was reaped").toBe(true);
+    } finally { await relay.close(); }
+  }, 40_000);
+
   it("forwards the Noise handshake, which is not a padded frame size", async () => {
     // A Noise_KK message is 32 bytes of ephemeral plus a 16-byte tag. It is not
     // a padded transport frame and never will be, so enforcing padded sizes on
