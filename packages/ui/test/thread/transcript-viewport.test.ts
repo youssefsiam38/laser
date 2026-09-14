@@ -227,6 +227,138 @@ describe("scoped transcript destinations", () => {
     } finally { detach(); viewport.remove(); vi.useRealTimers(); }
   });
 
+  it("lets explicit Send choose latest while passive run starts preserve the reader", async () => {
+    const controller = new TranscriptViewport(), viewport = document.createElement("div");
+    let total = 2000;
+    Object.defineProperties(viewport, { clientHeight: { value: 600 }, scrollHeight: { get: () => total } });
+    viewport.scrollTop = 500;
+    const tail = vi.fn(() => { viewport.scrollTop = total - viewport.clientHeight; });
+    controller.configure("/new-run");
+    const detach = controller.attach(viewport, tail);
+    try {
+      controller.followRun(false);
+      viewport.dispatchEvent(new Event("wheel"));
+      viewport.dispatchEvent(new Event("scroll"));
+      expect(controller.capture().following).toBe(false);
+      // A run started from another client is output, not this reader's intent.
+      controller.followRun(true);
+      expect(controller.capture().following).toBe(false);
+      expect(tail).not.toHaveBeenCalled();
+
+      // The local composer submit owns the navigation to latest.
+      controller.latest();
+      expect(controller.capture().following).toBe(true);
+      expect(tail).toHaveBeenCalledTimes(1);
+      // The row can grow before the native event for that tail scroll arrives,
+      // and the delayed primitive scroll can land between its old and new end.
+      // It must not reinterpret that mismatched scrollTop as a reader.
+      total += 50; viewport.scrollTop += 25; viewport.dispatchEvent(new Event("scroll"));
+      expect(controller.capture().following).toBe(true);
+      // Streaming updates continue following without creating another intent.
+      controller.followRun(true);
+      expect(tail).toHaveBeenCalledTimes(2);
+      // Explicit reading input opts out even while that same run continues.
+      viewport.dispatchEvent(new Event("wheel"));
+      viewport.scrollTop -= 100;
+      viewport.dispatchEvent(new Event("scroll"));
+      controller.followRun(true);
+      expect(controller.capture().following).toBe(false);
+      expect(tail).toHaveBeenCalledTimes(2);
+      controller.followRun(false);
+      controller.followRun(true);
+      expect(tail).toHaveBeenCalledTimes(2);
+      controller.latest();
+      expect(tail).toHaveBeenCalledTimes(3);
+    } finally { detach(); }
+  });
+
+  it("does not stop following when the person clicks empty transcript gutter, only the scrollbar", () => {
+    const controller = new TranscriptViewport(), viewport = document.createElement("div");
+    Object.defineProperties(viewport, { clientHeight: { value: 600 }, clientWidth: { value: 600 }, scrollHeight: { value: 2000 } });
+    viewport.scrollTop = 1400;
+    controller.configure("/pointer-stream");
+    const detach = controller.attach(viewport, () => {});
+    const pointer = (offsetX: number) => {
+      const event = new MouseEvent("pointerdown", { bubbles: true });
+      Object.defineProperty(event, "offsetX", { value: offsetX });
+      viewport.dispatchEvent(event);
+    };
+    try {
+      controller.followRun(true);
+      pointer(100);
+      expect(controller.capture().following).toBe(true);
+      pointer(610);
+      expect(controller.capture().following).toBe(false);
+      document.documentElement.style.setProperty("--space-unit", "4px");
+      controller.latest();
+      pointer(595); // overlay scrollbar, inside clientWidth
+      expect(controller.capture().following).toBe(false);
+      viewport.dir = "rtl";
+      controller.latest();
+      pointer(5);
+      expect(controller.capture().following).toBe(false);
+    } finally { document.documentElement.style.removeProperty("--space-unit"); detach(); }
+  });
+
+  it.each(["PageUp"])("lets %s focused inside a message leave a followed stream", (key) => {
+    const controller = new TranscriptViewport(), viewport = document.createElement("div");
+    Object.defineProperties(viewport, { clientHeight: { value: 600 }, scrollHeight: { value: 2000 } });
+    viewport.scrollTop = 1400;
+    const button = document.createElement("button");
+    viewport.append(button);
+    controller.configure("/keyboard-stream");
+    const detach = controller.attach(viewport, () => {});
+    try {
+      controller.followRun(true);
+      button.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+      viewport.scrollTop = 1000;
+      viewport.dispatchEvent(new Event("scroll"));
+      controller.followRun(true);
+      expect(controller.capture().following).toBe(false);
+    } finally { detach(); }
+  });
+
+  it("lets Space scroll from a non-editing message surface but not steal follow from the composer", () => {
+    const controller = new TranscriptViewport(), viewport = document.createElement("div");
+    Object.defineProperties(viewport, { clientHeight: { value: 600 }, scrollHeight: { value: 2000 } });
+    viewport.scrollTop = 1400;
+    const row = document.createElement("div");
+    const composer = document.createElement("div");
+    composer.dataset.slot = "composer";
+    const send = document.createElement("button");
+    composer.append(send); viewport.append(row, composer);
+    controller.configure("/keyboard-stream");
+    const detach = controller.attach(viewport, () => {});
+    try {
+      controller.followRun(true);
+      send.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+      expect(controller.capture().following).toBe(true);
+      row.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+      expect(controller.capture().following).toBe(false);
+    } finally { detach(); }
+  });
+
+  it("preserves a saved reading place when switching back to a session already running", () => {
+    const controller = new TranscriptViewport(), viewport = document.createElement("div");
+    Object.defineProperties(viewport, { clientHeight: { value: 600 }, scrollHeight: { value: 2000 } });
+    viewport.scrollTop = 500;
+    const tail = vi.fn();
+    controller.configure("/one");
+    const detach = controller.attach(viewport, tail);
+    try {
+      controller.followRun(true);
+      viewport.dispatchEvent(new Event("wheel"));
+      viewport.scrollTop -= 100;
+      viewport.dispatchEvent(new Event("scroll"));
+      expect(controller.capture().following).toBe(false);
+      controller.configure("/two");
+      controller.followRun(true);
+      controller.configure("/one");
+      controller.followRun(true);
+      expect(controller.capture().following).toBe(false);
+    } finally { detach(); }
+  });
+
   it("keeps the reader's section on screen when an earlier page arrives above it", async () => {
     // 0.6.2 lost the reader's place: reading upwards at the top loaded the
     // earlier page, the rows landed above the anchor and the viewport stayed

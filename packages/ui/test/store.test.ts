@@ -65,6 +65,13 @@ describe("pending snapshot hydration", () => {
 });
 
 describe("applyUpdate", () => {
+  it("ends Compacting on every terminal compaction update", () => {
+    const compacting = applyUpdate(view(), { kind: "compaction_start" });
+    expect(compacting.state.isCompacting).toBe(true);
+    expect(applyUpdate(compacting, { kind: "compaction_end", ok: true }).state.isCompacting).toBe(false);
+    expect(applyUpdate(compacting, { kind: "compaction_end", ok: false }).state.isCompacting).toBe(false);
+  });
+
   it("keeps startup capabilities when opening the session view", () => {
     const next = reduce(initialState, {
       type: "opened",

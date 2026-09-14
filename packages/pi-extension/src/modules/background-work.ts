@@ -320,10 +320,11 @@ function startTask(ctx: ModuleContext, state: State, options: BackgroundWorkOpti
       return result;
     },
   };
+  const commandPrefix = typeof options.commandPrefix === "function" ? options.commandPrefix() : options.commandPrefix;
   const tool = createBashToolDefinition(options.cwd, {
     operations,
     ...(options.shellPath ? { shellPath: options.shellPath } : {}),
-    ...(options.commandPrefix ? { commandPrefix: options.commandPrefix } : {}),
+    ...(commandPrefix ? { commandPrefix } : {}),
     ...projectEnvSpawnHook(options.projectEnv),
   });
   const onUpdate: BashUpdate | undefined = input.onUpdate
@@ -467,9 +468,10 @@ export const backgroundWorkModule: LaserModule = {
     // The engine's own definition supplies the description and prompt text;
     // its renderers are inherited by omission (extensions.md, "Overriding
     // Built-in Tools").
+    const commandPrefix = typeof options.commandPrefix === "function" ? options.commandPrefix() : options.commandPrefix;
     const base = createBashToolDefinition(options.cwd, {
       ...(options.shellPath ? { shellPath: options.shellPath } : {}),
-      ...(options.commandPrefix ? { commandPrefix: options.commandPrefix } : {}),
+      ...(commandPrefix ? { commandPrefix } : {}),
       ...projectEnvSpawnHook(options.projectEnv),
     });
 

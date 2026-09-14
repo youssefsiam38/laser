@@ -73,7 +73,10 @@ const PROVIDER_AUTH_SET = new Set(PROVIDER_AUTH_KEYS);
 
 const NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-/** What a project's environment command is, as configured. Never a secret. */
+/**
+ * Machine-local execution configuration. Legacy arguments may be sensitive;
+ * public status responses must omit them and `approvedFingerprint`.
+ */
 export interface ProjectEnvConfig {
   enabled: boolean;
   /**
@@ -81,7 +84,7 @@ export interface ProjectEnvConfig {
    * agent runs in this project.
    *
    * This is the ordinary case: a person already has a way to put a project's
-   * environment into a shell — `workenv use kwentra`, `nvm use`, `source
+   * environment into a shell — `source ~/.bashrc`, `nvm use`, `source
    * .envrc` — and wants the agent's commands to start the same way. It is run
    * by the shell that is about to run the agent's command, so a shell function
    * works, and so does anything else the person's shell can do.
@@ -119,7 +122,13 @@ export type ProjectEnvState =
 export interface ProjectEnvStatus {
   cwd: string;
   state: ProjectEnvState;
+  /**
+   * Configuration safe to render. Legacy resolver arguments are omitted and
+   * `approvedFingerprint` is never present because it encodes the arguments.
+   */
   config?: ProjectEnvConfig;
+  /** Number of hidden arguments in a legacy resolver configuration. */
+  resolverArgumentCount?: number;
   /** Whether the stored fingerprint matches the configuration as it stands. */
   approved: boolean;
   /** Names the hook last set, sorted. Values never leave the worker. */
@@ -253,7 +262,7 @@ export function parseProjectEnvDocument(text: string): { document: ProjectEnvDoc
   };
 }
 
-/** The non-secret configuration a worker is started with. */
+/** The private execution configuration passed from the host to its worker. */
 export interface ProjectEnvWorkerConfig {
   enabled: boolean;
   preface?: string;

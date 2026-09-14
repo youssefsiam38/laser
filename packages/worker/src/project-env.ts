@@ -57,6 +57,28 @@ export interface RunOptions {
   maxBytes: number;
 }
 
+export function parseWorkerProjectEnvConfig(candidate: unknown): ProjectEnvWorkerConfig | undefined {
+  if (!candidate || typeof candidate !== "object") return undefined;
+  const value = candidate as Partial<ProjectEnvWorkerConfig>;
+  if (value.enabled !== true) return undefined;
+  const preface = typeof value.preface === "string" ? value.preface.trim() : "";
+  const command = typeof value.command === "string" ? value.command : "";
+  if (!preface && !command) return undefined;
+  const args = Array.isArray(value.args) ? value.args.filter((item): item is string => typeof item === "string") : [];
+  const allowProviderKeys = Array.isArray(value.allowProviderKeys)
+    ? value.allowProviderKeys.filter((item): item is string => typeof item === "string")
+    : [];
+  return {
+    enabled: true,
+    ...(preface ? { preface } : {}),
+    command,
+    args,
+    required: value.required !== false,
+    allowProviderKeys,
+    approved: value.approved === true,
+  };
+}
+
 export interface RunResult {
   /** Bytes the hook wrote to the private descriptor. */
   payload: string;
@@ -66,6 +88,13 @@ export interface RunResult {
   overflowed: boolean;
   timedOut: boolean;
   spawnError?: Error;
+}
+
+export function projectBashPrefix(command: string): string {
+  // Pi joins commandPrefix and the requested command with a newline. Exit the
+  // shell when setup fails: an AND-list would guard only the requested
+  // command's first pipeline, letting later `;` or newline statements run.
+  return `{\n${command}\n} || exit $?\n`;
 }
 
 export class ProjectEnvironment {
@@ -93,14 +122,14 @@ export class ProjectEnvironment {
    * The shell command to run first, in the same shell, before the agent's own.
    *
    * Empty unless this project configures one. The engine's shell tool runs it
-   * as a prefix, so a shell function — `workenv use kwentra` — works, which a
+   * as a prefix, so a shell function — `source ~/.bashrc` — works, which a
    * spawned executable could never provide.
    */
   get preface(): string | undefined {
     const preface = this.options.config?.preface;
     if (!this.options.config?.enabled || !preface) return undefined;
     if (!this.options.config.approved) return undefined;
-    return preface;
+    return projectBashPrefix(preface);
   }
 
   status(): ProjectEnvSnapshot {
@@ -121,12 +150,12 @@ export class ProjectEnvironment {
     if (!config.approved) {
       return (
         "This project's environment command has changed since it was approved, so nothing has run. " +
-        "Review it in Settings → Projects → Environment and approve it again."
+        "Review it in Settings → Projects and save it again."
       );
     }
     return (
       `This project's environment could not be prepared, so commands are not running with it. ` +
-      `${this.snapshot.error ?? ""} Open Settings → Projects → Environment to test or refresh it.`
+      `${this.snapshot.error ?? ""} Open Settings → Projects to replace or remove it.`
     ).trim();
   }
 
@@ -187,7 +216,7 @@ export class ProjectEnvironment {
     const config = this.options.config;
     if (!config) return this.status();
     // One attempt per configuration, success or failure alike. A person
-    // retries from Settings → Projects → Environment; opening a session does
+    // replaces it from Settings → Projects; opening a session does
     // not silently re-run a command that already failed.
     this.attempted = true;
 

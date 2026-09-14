@@ -217,6 +217,21 @@ describe("moving the leaf while a turn runs (real engine)", () => {
       expect(moved).toEqual({ cancelled: false, editorText: "one" });
       expect(kinds(from)).not.toContain("message_end:assistant:aborted");
     }, 30_000);
+
+    it("publishes idle state after branch summarisation clears its compaction controller", async () => {
+      await boot(3);
+      await finishedTurn("one");
+      const [user] = await userEntries();
+      const from = updates.length;
+
+      await driver.navigateTree(user!.id, { summarize: true });
+
+      expect(kinds(from)).toContain("state");
+      expect(updates.slice(from).filter(update => update.kind === "state").at(-1)).toMatchObject({
+        kind: "state",
+        state: { isCompacting: false },
+      });
+    }, 30_000);
   });
 
   describe("fork", () => {

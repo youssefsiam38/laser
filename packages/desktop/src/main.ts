@@ -34,6 +34,7 @@ import { startingPageUrl, statusPageUrl } from "./error-page.js";
 import { frameColours, parseStartupGround, readStartupGround, writeStartupGround, type StartupGround } from "./startup-ground.js";
 import type { AttentionChange, FleetSnapshot } from "./fleet.js";
 import { HostLink } from "./host-link.js";
+import { shouldCheckLiveWork } from "./live-work.js";
 import { HostProcess } from "./host-process.js";
 import { resolveShellEnvironment } from "./shell-environment.js";
 import { resolveStartupInputs } from "./startup.js";
@@ -102,6 +103,7 @@ let updateStatus: UpdateStatus = { state: "idle" };
 const pendingLinks: DeepLink[] = [];
 let mainReady = false;
 let quitting = false;
+let quitPromptOpen = false;
 /**
  * What the app last told us it paints with, so the opening screen and the
  * window frame are the person's own colours from the first frame (M13-T32).
@@ -196,12 +198,15 @@ const host = new HostProcess({
   // nothing else has to change when it lands.)
   ...(devUiUrl ? { env: { [ENV.allowedOrigins]: originOf(devUiUrl) } } : {}),
   onChange: (info) => onHostChanged(info),
-  confirmHostRefresh: async () => (await dialog.showMessageBox({
-    type: "question", title: `Restart ${PRODUCT_NAME} and its host?`,
-    message: "The running host is a different version.",
-    detail: "Restart both together to continue. Saved sessions are kept, but active work will stop. Choose Later to leave the host running.",
-    buttons: ["Later", "Restart together"], defaultId: 0, cancelId: 0,
-  })).response === 1,
+  confirmHostRefresh: async () => {
+    const liveWork = await hostStopDetail("Restarting");
+    return (await dialog.showMessageBox({
+      type: "question", title: `Restart ${PRODUCT_NAME} and its host?`,
+      message: "The running host is a different version.",
+      detail: ["Restart both together to continue. Saved sessions are kept. Choose Later to leave the host running.", liveWork].filter(Boolean).join("\n\n"),
+      buttons: ["Later", "Restart together"], defaultId: 0, cancelId: 0,
+    })).response === 1;
+  },
 });
 
 const link = new HostLink({
@@ -264,13 +269,14 @@ async function installUpdate(announce = false, forceRelaunch = false): Promise<v
   nativePromptOpen = true;
   if (!forceRelaunch && !nativeUpdate.check()) { nativePromptOpen = false; if (!announce) updater.install(); return; }
   try {
+  const liveWork = await hostStopDetail("Restarting");
   const { response } = await dialog.showMessageBox({
     type: "question", title: `${PRODUCT_NAME} update ready`,
     message: "Restart the app and host together?",
-    detail: "Saved sessions will be kept. Active work will stop during the restart. Choose Later to keep working; Restart is available from the system tray menu.",
+    detail: ["Saved sessions will be kept. Choose Later to keep working; Restart is available from the system tray menu.", liveWork].filter(Boolean).join("\n\n"),
     buttons: ["Later", "Restart now"], defaultId: 0, cancelId: 0,
   });
-  if (response === 1 && !quitting) await quit({ relaunch: true });
+  if (response === 1 && !quitting) await quit({ relaunch: true, liveWorkConfirmed: true });
   } finally { nativePromptOpen = false; }
 }
 
@@ -404,7 +410,38 @@ function openApp(): BrowserWindow {
   return window;
 }
 
-async function quit(options: { install?: boolean; relaunch?: boolean }): Promise<void> {
+async function hostStopDetail(action: "Quitting" | "Restarting"): Promise<string | undefined> {
+  const live = await link.liveWork();
+  if (!live) return `${PRODUCT_NAME} could not check whether agents or background commands are still running. ${action} now may stop active work.`;
+  if (live.total === 0) return undefined;
+  return `${live.sentence} ${action} now will stop that work.`;
+}
+
+async function quit(options: { install?: boolean; relaunch?: boolean; liveWorkConfirmed?: boolean; reopenOnCancel?: boolean }): Promise<void> {
+  if (quitting || quitPromptOpen) return;
+  if (shouldCheckLiveWork(hostInfo, options) && !options.liveWorkConfirmed) {
+    quitPromptOpen = true;
+    try {
+      const detail = await hostStopDetail("Quitting");
+      if (detail) {
+        const { response } = await dialog.showMessageBox({
+          type: "question",
+          title: `Quit ${PRODUCT_NAME} and its host?`,
+          message: "Active work may be stopped.",
+          detail,
+          buttons: ["Keep working", "Quit anyway"],
+          defaultId: 0,
+          cancelId: 0,
+        });
+        if (response !== 1) {
+          if (options.reopenOnCancel) openApp();
+          return;
+        }
+      }
+    } finally {
+      quitPromptOpen = false;
+    }
+  }
   if (quitting) return;
   quitting = true;
   let relaunch: PreparedRelaunch | undefined;
@@ -468,7 +505,7 @@ app.on("before-quit", (event) => {
 app.on("window-all-closed", () => {
   if (tray.available()) return;
   log.line("no status icon and no windows left; quitting");
-  void quit({});
+  void quit({ reopenOnCancel: true });
 });
 app.on("activate", () => {
   // macOS can emit this during launch, before a window may be built.

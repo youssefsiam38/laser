@@ -8,7 +8,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 export type StubAnswer =
-  | { text: string; reasoning?: string; delayMs?: number; chunks?: number; chunkDelayMs?: number }
+  | { text: string; reasoning?: string; delayMs?: number; chunks?: number; chunkDelayMs?: number; usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number } }
   | { toolCall: { name: string; args: Record<string, unknown>; id?: string }; delayMs?: number }
   /**
    * A failure, answered before any stream frame: an HTTP status with the
@@ -77,7 +77,7 @@ export function startStubProvider(respond: (request: StubRequest, index: number)
           res.write(sse({ ...base, choices: [{ index: 0, delta: { content: answer.text.slice(at, at + size) }, finish_reason: null }] }));
           if (answer.chunkDelayMs) await new Promise((resolve) => setTimeout(resolve, answer.chunkDelayMs));
         }
-        res.write(sse({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 5, completion_tokens: 4, total_tokens: 9 } }));
+        res.write(sse({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: answer.usage ?? { prompt_tokens: 5, completion_tokens: 4, total_tokens: 9 } }));
       } else {
         const id = answer.toolCall.id ?? `call_${calls}`;
         res.write(sse({ ...base, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id, type: "function", function: { name: answer.toolCall.name, arguments: "" } }] }, finish_reason: null }] }));

@@ -114,6 +114,11 @@ export interface WorktreeProvider {
 /** What a child is told when it stops without its final tool. */
 export const NUDGE_TEXT = "You stopped without calling complete_agent_run. Call complete_agent_run now with status completed or blocked and your final message.";
 const ENDED_WITHOUT_TOOL = "Ended without complete_agent_run";
+const TRANSIENT_RECOVERY_TEXT = "The last model request ended because of a temporary connection problem. Continue the task from the durable transcript. Do not repeat completed side effects; inspect the current state first when needed.";
+const TRANSIENT_RETRY_BASE_MS = 1_000;
+const TRANSIENT_RETRY_CAP_MS = 30_000;
+const NON_TRANSIENT_LIMIT = /GoUsageLimitError|FreeUsageLimitError|monthly usage limit|available balance|insufficient_quota|out of budget|quota exceeded|billing/i;
+const TRANSIENT_MODEL_ERROR = /(?:\b429\b|\b5(?:00|02|03|04|24)\b|overloaded|rate.?limit|too many requests|service.?unavailable|server.?error|internal.?error|provider.?returned.?error|network.?error|connection.?error|connection.?refused|connection.?lost|other side closed|fetch failed|getaddrinfo|ENOTFOUND|EAI_AGAIN|upstream.?connect|reset before headers|socket hang up|socket connection was closed|timed? out|timeout|terminated|websocket.?closed|websocket.?error|ended without|stream ended before|http2 request did not get a response|retry delay|you can retry|try your request again|please retry|ResourceExhausted|(?:this )?(?:operation|request) (?:was )?aborted)/i;
 /** Why a run ends when the engine took its one message without starting a model turn (a handled slash command). */
 export const HANDLED_WITHOUT_TURN = "Handled without a model turn.";
 const RESULT_EXCERPT = 2000;
@@ -270,7 +275,9 @@ interface RunState {
   nudged: boolean;
   /** `complete_agent_run` was called for this run. */
   completedByTool: boolean;
-  lastAssistant: { text?: string; error?: string } | undefined;
+  lastAssistant: { text?: string; error?: string; transient?: boolean } | undefined;
+  transientFailures: number;
+  retryTimer?: ReturnType<typeof setTimeout>;
 }
 
 const MODEL_EVENT_TYPE: Record<AgentRunTerminalStatus, AgentModelEvent["type"]> = {
@@ -305,6 +312,10 @@ function excerpt(text: string, max: number): string {
 
 function labelOf(role: Pick<HarnessSessionRole, "agentName" | "subagentName">): string {
   return role.subagentName ?? role.agentName;
+}
+
+function isTransientModelError(message: string): boolean {
+  return !NON_TRANSIENT_LIMIT.test(message) && TRANSIENT_MODEL_ERROR.test(message);
 }
 
 export function modelUnavailableMessage(model: AgentModelChoice): string {
@@ -949,9 +960,11 @@ export class AgentHarness {
       case "message_end": {
         if (!active || update.role !== "assistant") return;
         const text = textOfMessage(update.message);
+        const error = update.stopReason === "error" ? update.errorMessage ?? "The model returned an error." : undefined;
+        if (error === undefined) active.transientFailures = 0;
         active.lastAssistant = {
           ...(text !== undefined ? { text } : {}),
-          ...(update.stopReason === "error" ? { error: update.errorMessage ?? "The model returned an error." } : {}),
+          ...(error !== undefined ? { error, transient: isTransientModelError(error) } : {}),
         };
         return;
       }
@@ -1793,6 +1806,7 @@ export class AgentHarness {
       nudged: false,
       completedByTool: false,
       lastAssistant: undefined,
+      transientFailures: 0,
     };
     this.runStates.set(runId, state);
     this.runOrder.push(runId);
@@ -1903,6 +1917,10 @@ export class AgentHarness {
   }
 
   private kickMessage(state: RunState, message: PendingMessage): void {
+    if (state.retryTimer) {
+      clearTimeout(state.retryTimer);
+      delete state.retryTimer;
+    }
     const entry = this.byPath.get(state.run.sessionPath);
     const driver = this.host.driver(state.run.sessionPath);
     if (!entry || !driver) {
@@ -2148,6 +2166,10 @@ export class AgentHarness {
    */
   private settled(entry: Entry, state: RunState): void {
     if (state.lastAssistant?.error) {
+      if (state.lastAssistant.transient) {
+        this.scheduleTransientRecovery(entry, state);
+        return;
+      }
       this.finalizePendingEnd(entry, state, { status: "failed", outcome: { error: state.lastAssistant.error } });
       return;
     }
@@ -2159,6 +2181,32 @@ export class AgentHarness {
     const driver = this.host.driver(entry.path!);
     const context = driver?.lastAssistantText?.() ?? state.lastAssistant?.text;
     this.finalizePendingEnd(entry, state, { status: "failed", outcome: { error: ENDED_WITHOUT_TOOL, ...(context ? { context: excerpt(context, RESULT_EXCERPT) } : {}) } });
+  }
+
+  /** A transport failure pauses this run; it never turns delegated work terminal. */
+  private scheduleTransientRecovery(entry: Entry, state: RunState): void {
+    if (state.retryTimer || isTerminalRunStatus(state.run.status)) return;
+    const attempt = ++state.transientFailures;
+    const delayMs = Math.min(TRANSIENT_RETRY_CAP_MS, TRANSIENT_RETRY_BASE_MS * 2 ** Math.min(attempt - 1, 10));
+    this.diagnose(entry, "warn", "transient-model-retry", { runId: state.run.runId, attempt, delayMs });
+    this.touch(state, run => ({
+      ...run,
+      activity: { ...(run.activity ?? { turns: 0, tools: 0, lastAt: this.iso() }), label: "Retrying after a connection problem", lastAt: this.iso() },
+    }));
+    state.retryTimer = setTimeout(() => {
+      delete state.retryTimer;
+      void this.withEntry(entry, () => {
+        if (isTerminalRunStatus(state.run.status) || this.byPath.get(state.run.sessionPath) !== entry) return;
+        state.lastAssistant = undefined;
+        if (state.run.activity) {
+          const { label: _retrying, ...activity } = state.run.activity;
+          void _retrying;
+          this.touch(state, run => ({ ...run, activity }));
+        }
+        this.kick(state, TRANSIENT_RECOVERY_TEXT);
+      });
+    }, delayMs);
+    state.retryTimer.unref?.();
   }
 
   /** Reserve or extend the one run waiting behind the current invocation. */
@@ -2332,6 +2380,10 @@ export class AgentHarness {
     wakeParent = true,
   ): void {
     if (isTerminalRunStatus(state.run.status)) return;
+    if (state.retryTimer) {
+      clearTimeout(state.retryTimer);
+      delete state.retryTimer;
+    }
     const endedAt = this.iso();
     // A question dies with the run: nothing may keep offering an answer to a
     // child that is no longer listening.

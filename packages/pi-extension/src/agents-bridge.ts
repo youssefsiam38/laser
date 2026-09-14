@@ -370,7 +370,7 @@ export interface BackgroundWorkOptions {
   /** Seconds a foreground command may run before it is promoted to a background task. */
   foregroundCommandSeconds: number;
   shellPath?: string;
-  commandPrefix?: string;
+  commandPrefix?: string | (() => string | undefined);
   /**
    * `task_output` for a command this session did not start but can read: one
    * of an agent under it (D-163). The worker answers from its task index and

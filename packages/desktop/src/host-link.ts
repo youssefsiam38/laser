@@ -15,10 +15,11 @@
  * an update, `laser restart`) and the tray has to come back on its own.
  */
 import { WebSocket } from "ws";
-import type { HostNotificationMethod, HostNotifications, JsonRpcMessage, ProjectInfo, SessionSummary } from "@lasercode/protocol";
+import type { AgentRun, BackgroundTask, HostNotificationMethod, HostNotifications, JsonRpcMessage, ProjectInfo, SessionSummary } from "@lasercode/protocol";
 import type { AttentionChange, FleetSnapshot } from "./fleet.js";
 import { FleetModel } from "./fleet.js";
 import type { DesktopLog } from "./log.js";
+import { summarizeLiveWork, type LiveWorkSummary } from "./live-work.js";
 
 const RECONNECT_MIN_MS = 500;
 const RECONNECT_MAX_MS = 10_000;
@@ -126,7 +127,7 @@ export class HostLink {
     this.pending.clear();
   }
 
-  private request<T>(method: string, params: unknown): Promise<T> {
+  private request<T>(method: string, params: unknown, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
     const socket = this.socket;
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error("not connected to the host"));
@@ -136,10 +137,26 @@ export class HostLink {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`${method} timed out`));
-      }, REQUEST_TIMEOUT_MS);
+      }, timeoutMs);
       this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject, timer });
       socket.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
     });
+  }
+
+  /**
+   * Read the two typed live-work sources before an operation stops the host.
+   * Unknown is distinct from empty: a closed socket or timeout proves nothing.
+   */
+  async liveWork(timeoutMs = 1_500): Promise<LiveWorkSummary | undefined> {
+    try {
+      const [runs, tasks] = await Promise.all([
+        this.request<{ runs: AgentRun[] }>("agents/runs/list", {}, timeoutMs),
+        this.request<{ tasks: BackgroundTask[] }>("tasks/list", {}, timeoutMs),
+      ]);
+      return summarizeLiveWork(runs.runs, tasks.tasks);
+    } catch {
+      return undefined;
+    }
   }
 
   /** Re-read the whole picture. Cheap: it is a catalog the host already holds. */

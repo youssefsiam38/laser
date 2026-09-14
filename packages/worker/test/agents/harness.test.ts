@@ -18,6 +18,7 @@ import { AgentHarness, MAX_RETAINED_RUNS, NUDGE_TEXT, type SessionHost, type Wor
 import { HarnessError } from "../../src/agents/errors.js";
 import { rootRecord, rootRole } from "../../src/agents/session-config.js";
 import { WorktreeManager, type CreateWorktreeInput, type Worktree, type WorktreeFacts } from "../../src/agents/worktrees.js";
+import { projectBashPrefix } from "../../src/project-env.js";
 import type { IndexedTask } from "../../src/agents/tasks.js";
 import { PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE, SESSION_RUN_ENTRY_TYPE, type AgentDefinition, type AgentRun, type AgentsSnapshot, type ContentBlock, type SessionState, type UiDialogRequest, type UiDialogResponse } from "@lasercode/protocol";
 
@@ -226,7 +227,7 @@ function makeWorld(projectCwd = "/repo", projectTrusted = true) {
     tasks: (path) => tasks.get(path) ?? [],
   };
   const definitions = new DefinitionsCache();
-  const harness = new AgentHarness({ host, definitions, worktrees, projectTrusted, backgroundWork: (cwd) => ({ cwd, foregroundCommandSeconds: 120 }), now: () => Date.now() });
+  const harness = new AgentHarness({ host, definitions, worktrees, projectTrusted, backgroundWork: (cwd) => ({ cwd, foregroundCommandSeconds: 120, commandPrefix: projectBashPrefix("source scripts/project-shell.sh") }), now: () => Date.now() });
   const openRoot = (name = "default", path = "/sessions/root.jsonl", id = "root-1") => {
     const def = definitions.definition(name)!;
     const handle = harness.prepareSession({ role: rootRole(name), definition: def, record: rootRecord(name), projectCwd });
@@ -627,14 +628,81 @@ describe("AgentHarness", () => {
     expect(world.drivers.get(path)!.prompted).toHaveLength(1);
   });
 
-  it("fails a run whose model errored instead of nudging it", async () => {
+  it.each(["429 rate limited", "Request timed out.", "This operation was aborted"])("keeps a child alive and retries after a transient model failure: %s", async (errorMessage) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const root = world.openRoot("lead");
     const { runId } = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "t" });
     const path = "/sessions/child-1.jsonl";
-    world.harness.onDriverEvent(path, { type: "update", update: { kind: "message_end", role: "assistant", message: {}, stopReason: "error", errorMessage: "429 rate limited" } });
+    const child = world.drivers.get(path)!;
+    world.harness.onDriverEvent(path, { type: "update", update: { kind: "message_end", role: "assistant", message: {}, stopReason: "error", errorMessage } });
     world.harness.onDriverEvent(path, { type: "update", update: { kind: "agent_settled" } });
     await flushLifecycle();
-    expect(world.harness.run(runId)).toMatchObject({ status: "failed", error: "429 rate limited" });
+
+    expect(world.harness.run(runId)).toMatchObject({ status: "running", activity: { label: "Retrying after a connection problem" } });
+    expect(world.runsNotified().at(-1)).toMatchObject({ runId, activity: { label: "Retrying after a connection problem" } });
+    expect(child.prompted.map((prompt) => prompt.text)).toEqual(["t"]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flushLifecycle();
+    expect(child.prompted.map((prompt) => prompt.text)).toEqual([
+      "t",
+      "The last model request ended because of a temporary connection problem. Continue the task from the durable transcript. Do not repeat completed side effects; inspect the current state first when needed.",
+    ]);
+    expect(world.harness.run(runId)).toMatchObject({ status: "running" });
+    expect(world.harness.run(runId)?.activity?.label).toBeUndefined();
+  });
+
+  it("backs off repeated transport recovery without ever making the run terminal", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const root = world.openRoot("lead");
+    const { runId } = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "t" });
+    const path = "/sessions/child-1.jsonl";
+    const child = world.drivers.get(path)!;
+    const fail = () => {
+      world.harness.onDriverEvent(path, { type: "update", update: { kind: "message_end", role: "assistant", message: {}, stopReason: "error", errorMessage: "Request timed out." } });
+      world.harness.onDriverEvent(path, { type: "update", update: { kind: "agent_settled" } });
+    };
+
+    fail();
+    await flushLifecycle();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flushLifecycle();
+    expect(child.prompted).toHaveLength(2);
+
+    fail();
+    await flushLifecycle();
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(child.prompted).toHaveLength(2);
+    expect(world.harness.run(runId)?.status).toBe("running");
+    await vi.advanceTimersByTimeAsync(1);
+    await flushLifecycle();
+    expect(child.prompted).toHaveLength(3);
+    expect(world.harness.run(runId)?.status).toBe("running");
+  });
+
+  it("cancels a pending transport recovery when the parent explicitly stops the run", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const root = world.openRoot("lead");
+    const { runId } = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "t" });
+    const path = "/sessions/child-1.jsonl";
+    const child = world.drivers.get(path)!;
+    world.harness.onDriverEvent(path, { type: "update", update: { kind: "message_end", role: "assistant", message: {}, stopReason: "error", errorMessage: "fetch failed" } });
+    world.harness.onDriverEvent(path, { type: "update", update: { kind: "agent_settled" } });
+    await flushLifecycle();
+
+    await root.handle.bridge.stopAgent({ runId, reason: "Stop now" });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(child.prompted.map((prompt) => prompt.text)).toEqual(["t"]);
+    expect(world.harness.run(runId)).toMatchObject({ status: "cancelled", endedBy: { initiator: "parent", reason: "Stop now" } });
+  });
+
+  it("still fails a child immediately for a non-transient model error", async () => {
+    const root = world.openRoot("lead");
+    const { runId } = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "t" });
+    const path = "/sessions/child-1.jsonl";
+    world.harness.onDriverEvent(path, { type: "update", update: { kind: "message_end", role: "assistant", message: {}, stopReason: "error", errorMessage: "401 invalid API key" } });
+    world.harness.onDriverEvent(path, { type: "update", update: { kind: "agent_settled" } });
+    await flushLifecycle();
+    expect(world.harness.run(runId)).toMatchObject({ status: "failed", error: "401 invalid API key" });
   });
 
   // ---------------------------------------------------------- questions
@@ -1627,7 +1695,7 @@ describe("AgentHarness", () => {
     expect(world.worktrees.created).toHaveLength(0);
     const open = world.opened[0]!;
     expect(open.cwd).toBe("/repo");
-    expect(open.agent.backgroundWork).toMatchObject({ cwd: "/repo", foregroundCommandSeconds: 120 });
+    expect(open.agent.backgroundWork).toMatchObject({ cwd: "/repo", foregroundCommandSeconds: 120, commandPrefix: projectBashPrefix("source scripts/project-shell.sh") });
     expect(open.agent.record).not.toHaveProperty("worktree");
     expect(open.agent.role).toMatchObject({ isolated: false });
     const run = world.harness.run(result.runId)!;

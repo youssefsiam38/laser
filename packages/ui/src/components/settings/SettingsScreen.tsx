@@ -37,18 +37,18 @@ import { ModelsTab } from "./ModelsTab.js";
 import { FeaturesScreen } from "./FeaturesScreen.js";
 import { SettingsForm } from "./SettingsForm.js";
 import { TrustTab } from "./TrustTab.js";
-import { EnvironmentTab } from "./EnvironmentTab.js";
+import { ProjectsTab } from "./ProjectsTab.js";
 import { LogStoreSetting } from "./LogStoreSetting.js";
 import { UsageTab } from "./UsageTab.js";
 
-type Tab = "general" | "advanced" | "appearance" | "features" | "mcp" | "models" | "usage" | "keyboard" | "environment" | "trust" | "device";
+type Tab = "general" | "advanced" | "appearance" | "features" | "mcp" | "models" | "usage" | "keyboard" | "projects" | "trust" | "device";
 
 /**
  * `PROJECTLESS` lists tabs that do not require a selected project, keeping
  * appearance, shortcuts, account usage and browser permissions reachable
  * before a project is chosen.
  */
-const PROJECTLESS: readonly Tab[] = ["appearance", "keyboard", "trust", "device", "usage"];
+const PROJECTLESS: readonly Tab[] = ["appearance", "keyboard", "projects", "trust", "device", "usage"];
 
 /**
  * Extensions "for every project" and the provider/model settings are global —
@@ -70,7 +70,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "models", label: "Providers and models" },
   { id: "usage", label: "Usage" },
   { id: "keyboard", label: "Help and shortcuts" },
-  { id: "environment", label: "Environment" },
+  { id: "projects", label: "Projects" },
   { id: "trust", label: "Trust" },
   { id: "device", label: "This device" },
 ];
@@ -121,7 +121,7 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
     };
   }, [client, project, setupCwd]);
 
-  const cwd = tab === "usage" ? undefined : project ?? (GLOBAL_THROUGH_SETUP.includes(tab) ? setupCwd : undefined);
+  const cwd = tab === "usage" || tab === "projects" ? undefined : project ?? (GLOBAL_THROUGH_SETUP.includes(tab) ? setupCwd : undefined);
   const cwdRef = useRef(cwd);
   cwdRef.current = cwd;
 
@@ -203,7 +203,7 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
             </Button>
           ))}
         </div>
-        {tab !== "usage" && <div className="ms-auto flex items-center gap-2">
+        {tab !== "usage" && tab !== "projects" && <div className="ms-auto flex items-center gap-2">
           {loading && <GenerationLoader label="Loading settings" layout="inline" />}
           <TooltipIconButton tooltip="Reload settings" onClick={() => void load()}>
             <RefreshCw />
@@ -211,7 +211,7 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
         </div>}
       </div>
 
-      {error && !needsProject && tab !== "usage" && (
+      {error && !needsProject && tab !== "usage" && tab !== "projects" && (
         <div className="m-3 flex items-start gap-2 rounded-lg bg-[color-mix(in_oklab,var(--danger)_10%,transparent)] px-3 py-2 text-sm text-danger">
           <AlertTriangle className="mt-0.5 size-4 shrink-0" />
           <div className="min-w-0">
@@ -241,7 +241,7 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
             {tab === "models" && cwd && <ModelsTab cwd={cwd} snapshot={snapshot} onApply={apply} />}
             {tab === "usage" && <UsageTab />}
             {tab === "keyboard" && <KeyboardTab cwd={cwd} />}
-            {tab === "environment" && <EnvironmentTab cwd={cwd} />}
+            {tab === "projects" && <ProjectsTab activeCwd={project} />}
             {tab === "trust" && <TrustTab />}
             {tab === "device" && <DeviceTab />}
           </>

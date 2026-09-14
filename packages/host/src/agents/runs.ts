@@ -30,6 +30,7 @@ export interface AgentRunRegistryOptions {
 }
 
 const WORKER_LOST_MESSAGE = "The project's worker stopped before this run ended.";
+const HOST_STOPPING_MESSAGE = "The app and host were quit, so this run could not continue.";
 const DEFAULT_RETENTION_DAYS = 30;
 const DEFAULT_RETENTION_PER_PROJECT = 500;
 
@@ -128,6 +129,53 @@ export class AgentRunRegistry {
       if (isTerminalRunStatus(run.status) || canonical(run.projectCwd) !== key) continue;
       const updated: AgentRun = { ...run, status: "failed", error: WORKER_LOST_MESSAGE,
         endedBy: { initiator: "harness", reason: WORKER_LOST_MESSAGE }, endedAt: at, updatedAt: at };
+      this.put(updated);
+      changed.push(structuredClone(updated));
+    }
+    if (changed.length > 0) {
+      this.schedulePersist();
+      for (const run of changed) this.options.onRun?.(run);
+    }
+    return changed;
+  }
+
+  /** The host failed unexpectedly: no person chose to stop these runs. */
+  hostCrashed(reason = WORKER_LOST_MESSAGE): AgentRun[] {
+    const at = this.now().toISOString();
+    const changed: AgentRun[] = [];
+    for (const run of this.runs.values()) {
+      if (isTerminalRunStatus(run.status)) continue;
+      const updated: AgentRun = {
+        ...run,
+        status: "failed",
+        error: reason,
+        endedBy: { initiator: "harness", reason },
+        endedAt: at,
+        updatedAt: at,
+      };
+      this.put(updated);
+      changed.push(structuredClone(updated));
+    }
+    if (changed.length > 0) {
+      this.schedulePersist();
+      for (const run of changed) this.options.onRun?.(run);
+    }
+    return changed;
+  }
+
+  /** An orderly host shutdown is person-owned, not a worker crash. */
+  hostStopping(reason = HOST_STOPPING_MESSAGE): AgentRun[] {
+    const at = this.now().toISOString();
+    const changed: AgentRun[] = [];
+    for (const run of this.runs.values()) {
+      if (isTerminalRunStatus(run.status)) continue;
+      const updated: AgentRun = {
+        ...run,
+        status: "cancelled",
+        endedBy: { initiator: "user", reason },
+        endedAt: at,
+        updatedAt: at,
+      };
       this.put(updated);
       changed.push(structuredClone(updated));
     }

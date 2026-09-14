@@ -29,6 +29,6 @@ const server = new HostServer({
 
 server.listen().then(({ url }) => console.log(url));
 
-const shutdown = () => void server.close().then(() => process.exit(0));
+const shutdown = () => void server.close({ initiator: "user" }).then(() => process.exit(0));
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);

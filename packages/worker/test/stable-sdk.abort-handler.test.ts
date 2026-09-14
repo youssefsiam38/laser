@@ -13,6 +13,26 @@ const abortFromEngine = (driver: StableSdkDriver, session: Partial<AgentSession>
   (driver as unknown as { abortFromEngine(session: AgentSession): void }).abortFromEngine(session as AgentSession);
 
 describe("the engine's abort handler", () => {
+  it("records a credential-free initiator diagnostic before asking the runtime to stop", async () => {
+    const driver = new StableSdkDriver();
+    const events: unknown[] = [];
+    driver.subscribe(event => events.push(event));
+    const abort = vi.fn();
+
+    abortFromEngine(driver, { abort });
+    await vi.waitFor(() => expect(abort).toHaveBeenCalledOnce());
+
+    expect(events).toContainEqual({
+      type: "extension",
+      message: {
+        type: "lasercode/module/log",
+        module: "worker",
+        level: "info",
+        message: expect.stringMatching(/^lifecycle abort-request initiator=extension source=engine-handler at=/),
+      },
+    });
+  });
+
   it("keeps a failed stop off the process, and says why in the log", async () => {
     const driver = new StableSdkDriver();
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});

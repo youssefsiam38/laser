@@ -1,13 +1,13 @@
-# The project environment command
+# Project Bash setup
 
-A project can name one program that decides the environment its commands run
-with. Laser runs that program and applies what it returns to everything it
-executes for the project: foreground `bash`, background tasks, child agents and
-their worktrees.
+Each known project has one optional command in Settings → **Projects**. Laser
+runs it in the same shell before every Bash command in that project: foreground
+commands, background tasks, promoted commands, child agents and worktrees.
 
-Laser has no knowledge of where the values come from. A secret manager, a
-password store, a plain file on disk, an in-house service — all of them look the
-same from here, because the contract is a program and a document, not a provider.
+Earlier versions also accepted a resolver program that returns environment
+variables over a private pipe. That provider-agnostic contract remains supported
+for existing machine-local configuration, but it is not another setting in the
+Projects screen.
 
 ## Why this exists
 
@@ -23,7 +23,7 @@ A project names a shell command. Laser runs it **first, in the same shell**,
 before every command the agent runs in that project:
 
 ```
-workenv use kwentra
+source ~/.bashrc
 ```
 
 It is passed to the engine's shell tool as a command prefix, so it runs inside
@@ -33,7 +33,9 @@ the agent's own shell rather than in a process of its own. That is the point: a
 never do any of that, because a child process cannot change its parent's shell.
 
 It covers foreground commands, background tasks, promoted commands, child agents
-and worktrees, because all of them run through that one shell tool.
+and worktrees, because all of them run through that one shell tool. The setup is
+guarded with `|| exit $?` before the requested script: if setup exits non-zero,
+no semicolon-separated or multiline statement in that script can run.
 
 It is executed, so it is part of what a person approves: changing the text needs
 approving again.
@@ -113,26 +115,25 @@ repository author's choosing with the person's credentials in reach.
 
 ## Lifecycle
 
-- Resolved **once per worker lifetime**, before the first session opens.
-  Concurrent callers share one run.
-- **Refresh** re-resolves for later commands. Anything already running keeps the
-  environment it started with, because a live process's environment cannot be
-  rewritten. The UI says so rather than implying otherwise.
-- One worker per project directory means the resolved environment *is* the
-  project's: a second project runs in a second process and cannot see it.
-  Child agents and worktrees share the worker deliberately, which is what "a
-  worktree keeps its owning project's environment" means in practice.
-- A failure with `required` set refuses command execution with a sentence that
-  says what to do next. With `required` off, commands run without it.
+- The Bash pre-command runs before each requested command. Saving an empty value
+  removes it. An open worker uses the saved value on its next Bash call; work
+  already running keeps the shell it started with.
+- A legacy resolver is resolved **once per worker lifetime**, before the first
+  session opens. Concurrent callers share one run. A required resolver failure
+  refuses command execution rather than using a silently wrong environment.
+- One worker per project directory keeps both forms scoped to that project.
+  Child agents and worktrees share the worker deliberately.
 
 ## What a person sees
 
-Settings → **Environment**: the program, its arguments, two switches, and
-**Test** / **Refresh**. Status shows state, when it last ran, and the variable
-**names** it sets and removes.
+Settings → **Projects** lists every known project as a collapsible section. Each
+section contains exactly one setting: **Command to run before Bash**. Empty means
+disabled; a non-zero setup status blocks the requested command.
 
-No value is ever shown, and no value crosses the protocol — status carries names
-and counts only, so it is equally safe on a paired phone and in a screenshot.
+Resolved environment values are never shown and never cross the protocol. For a
+legacy resolver the Projects section identifies its saved executable and the
+number of arguments, but hides every argument; resolved status carries variable
+names and counts only, so it remains safe on a paired phone and in a screenshot.
 
 ## MCP servers
 

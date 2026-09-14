@@ -26,8 +26,27 @@ describe("ProjectEnvStore", () => {
     const { store: subject, cwd } = store();
     const saved = subject.set(cwd, { enabled: true, command: "/usr/bin/helper", args: ["--profile", "work"] });
     expect(projectEnvApproved(saved)).toBe(true);
-    expect(subject.baseStatus(cwd, "trusted").state).toBe("failed"); // configured, approved, awaiting a worker
-    expect(subject.baseStatus(cwd, "trusted").approved).toBe(true);
+    const status = subject.baseStatus(cwd, "trusted");
+    expect(status.state).toBe("failed"); // configured, approved, awaiting a worker
+    expect(status.approved).toBe(true);
+    expect(status.resolverArgumentCount).toBe(2);
+    expect(status.config).toMatchObject({ command: "/usr/bin/helper", args: [] });
+    expect(status.config?.approvedFingerprint).toBeUndefined();
+    expect(subject.publicStatus(status)).toEqual(status);
+    expect(JSON.stringify(status)).not.toContain("--profile");
+    expect(JSON.stringify(status)).not.toContain("work");
+  });
+
+  it("approves a preface-only Bash setup and fingerprints its text", () => {
+    const { store: subject, file, cwd } = store();
+    const saved = subject.set(cwd, { enabled: true, preface: "source scripts/project-shell.sh", command: "", args: [] });
+    expect(projectEnvApproved(saved)).toBe(true);
+    expect(subject.baseStatus(cwd, "trusted").state).toBe("ready");
+
+    const raw = JSON.parse(readFileSync(file, "utf8")) as { projects: Record<string, { preface: string }> };
+    raw.projects[Object.keys(raw.projects)[0]!]!.preface = "source scripts/other-shell.sh";
+    writeFileSync(file, JSON.stringify(raw));
+    expect(projectEnvApproved(new ProjectEnvStore({ storePath: file }).get(cwd))).toBe(false);
   });
 
   it("withholds the command from a project the person declined, or has not been asked about", () => {

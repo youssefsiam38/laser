@@ -60,7 +60,11 @@ async function settled(h: Harness, taskId: string, timeoutMs = 5000): Promise<{ 
 
 type Harness = ReturnType<typeof harness>;
 
-function harness(foregroundCommandSeconds = 0.3, readTask?: (taskId: string, tailLines: number) => Promise<ReadTaskOutputResult>) {
+function harness(
+  foregroundCommandSeconds = 0.3,
+  readTask?: (taskId: string, tailLines: number) => Promise<ReadTaskOutputResult>,
+  commandPrefix?: string | (() => string | undefined),
+) {
   const tools = new Map<string, FakeTool>();
   const sendMessage = vi.fn();
   const pi = {
@@ -73,7 +77,7 @@ function harness(foregroundCommandSeconds = 0.3, readTask?: (taskId: string, tai
   const send = vi.fn();
   const cwd = mkdtempSync(join(tmpdir(), "background-work-"));
   dirs.push(cwd);
-  const ctx: ModuleContext = { pi, send, commands, backgroundWork: { cwd, foregroundCommandSeconds, ...(readTask ? { readTask } : {}) } };
+  const ctx: ModuleContext = { pi, send, commands, backgroundWork: { cwd, foregroundCommandSeconds, ...(readTask ? { readTask } : {}), ...(commandPrefix ? { commandPrefix } : {}) } };
   backgroundWorkModule.register!(ctx);
   const dispose = backgroundWorkModule.activate(ctx) as ModuleDispose | undefined;
   if (dispose) open.push(() => dispose({ reason: "quit" }));
@@ -151,6 +155,26 @@ describe("background-work: the bash override", () => {
     // Foreground commands that finish within the limit are not fleet work:
     // their tool row carries the result, so no task is published.
     expect(h.published()).toEqual([]);
+  });
+
+  it("blocks every statement of a requested foreground or background command when its project pre-command fails", async () => {
+    let prefix = "{\nfalse\n} || exit $?\n";
+    const h = harness(0.5, undefined, () => prefix);
+    const foregroundMarker = join(h.cwd, "foreground-ran");
+    await expect(h.call("bash", { command: `echo skipped; touch ${JSON.stringify(foregroundMarker)}` })).rejects.toThrow(/exited with code 1/);
+    expect(existsSync(foregroundMarker)).toBe(false);
+
+    const backgroundMarker = join(h.cwd, "background-ran");
+    const started = await h.call("bash", { command: `echo skipped\ntouch ${JSON.stringify(backgroundMarker)}`, background: true });
+    const taskId = started.details.taskId as string;
+    expect(await settled(h, taskId)).toEqual({ status: "failed", exitCode: 1 });
+    expect(existsSync(backgroundMarker)).toBe(false);
+
+    // A settings save changes the next call without replacing the open session.
+    prefix = "{\ntrue\n} || exit $?\n";
+    const afterSave = join(h.cwd, "after-save-ran");
+    await h.call("bash", { command: `touch ${JSON.stringify(afterSave)}` });
+    expect(existsSync(afterSave)).toBe(true);
   });
 
   it("promotes a long foreground command and reports its exit with a turn-triggering message", async () => {

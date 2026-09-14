@@ -552,8 +552,13 @@ export class HostServer {
     return this.relayClients.map((client) => client.statistics());
   }
 
-  async close(): Promise<void> {
+  async close(options: { initiator?: "user" | "harness" } = {}): Promise<void> {
     this.closing = true;
+    // Stamp the owner before worker exits arrive. The default is deliberately
+    // harness-owned: only an explicit signal/desktop shutdown may invent a
+    // person-owned ending; crash cleanup uses the same close path.
+    if (options.initiator === "user") this.runs.hostStopping();
+    else this.runs.hostCrashed();
     await Promise.all(this.relayClients.map((client) => client.stop("host shutting down").catch(() => {})));
     this.relayClients.length = 0;
     this.notificationListeners.clear();

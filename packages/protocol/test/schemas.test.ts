@@ -132,7 +132,7 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/project/env/status": { cwd: "/home/me/code/app" },
   "pi/project/env/set": {
     cwd: "/home/me/code/app",
-    config: { enabled: true, preface: "workenv use kwentra", command: "", args: [], required: true, allowProviderKeys: [] },
+    config: { enabled: true, preface: "source ~/.bashrc", command: "", args: [], required: true, allowProviderKeys: [] },
   },
   "pi/project/env/test": { cwd: "/home/me/code/app" },
   "pi/project/env/refresh": { cwd: "/home/me/code/app" },

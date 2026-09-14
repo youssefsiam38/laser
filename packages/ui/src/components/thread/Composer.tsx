@@ -36,6 +36,7 @@ import { SessionPreparationProvider, useSessionPreparation } from "./session-pre
 import { useDirectoryPage } from "./use-directory-page.js";
 import { matchProjectMention } from "./project-path.js";
 import { explorerItems, explorerNavigation, explorerPageItem, mentionFormatter, mentionItemId } from "./project-explorer-model.js";
+import { useTranscriptViewport } from "./transcript-viewport.js";
 
 /**
  * The composer (DESIGN.md "Composer"), composed from the catalog: the
@@ -71,11 +72,13 @@ function ComposerBody() {
   const { destination } = useLaserStable();
   const allowProjectLanding = !destination || mainTab(destination) !== "chat";
   const disabled = useAuiState((s) => s.thread.isDisabled) || blocked !== undefined || preparingSession;
+  const canSend = useAuiState((s) => s.composer.canSend);
+  const transcript = useTranscriptViewport();
   const destinationBusy = destination?.phase === "resolving";
   const placeholder = usePlaceholder();
   return (
     <ComposerPrimitive.Unstable_TriggerPopoverRoot>
-      <ComposerPrimitive.Root data-slot="composer" inert={disabled} aria-busy={preparingSession || destinationBusy || undefined} className="relative flex flex-col gap-2">
+      <ComposerPrimitive.Root data-slot="composer" inert={disabled} aria-busy={preparingSession || destinationBusy || undefined} className="relative flex flex-col gap-2" onSubmit={() => { if (canSend) transcript.latest(); }}>
         <ComposerDraftRestore />
         <ComposerQueue />
         <StatusLine />
@@ -285,6 +288,7 @@ function ComposerInput() {
 
 function SendOrStop({ mobile = false }: { mobile?: boolean }) {
   const aui = useAui();
+  const transcript = useTranscriptViewport();
   const running = useAuiState((s) => s.thread.isRunning);
   const empty = useAuiState((s) => s.composer.isEmpty);
   const dictating = useAuiState((s) => s.composer.dictation != null);
@@ -313,6 +317,7 @@ function SendOrStop({ mobile = false }: { mobile?: boolean }) {
         className={className}
         onClick={(event) => {
           const prepare = () => {
+            transcript.latest();
             foldQuote(aui);
             setComposerStreamingBehavior(aui, running ? "pending" : "prompt");
           };

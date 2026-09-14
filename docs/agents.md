@@ -314,8 +314,24 @@ subtree is.
 | --- | --- |
 | `needs_input` | the harness, when the child's driver raises a `ui_request` while a run is active; back to `running` when the driver no longer holds that question — answered by the parent, answered by the person, timed out or aborted |
 | `completed`, `blocked` | the child model, only through `complete_agent_run` |
-| `cancelled` | `stop_agent` (initiator `parent`), `agents/runs/stop` (initiator `user`), or the host when the child's session is deleted (initiator `user`, reason "The session was deleted.") |
-| `failed` | the harness on an engine error, on a child that settles twice without `complete_agent_run`, on a child session that closes or refuses the task while busy; the host when a project's worker dies or when it loads `agent-runs.json` after a restart (nothing non-terminal survives, reason "The project's worker stopped before this run ended.") |
+| `cancelled` | `stop_agent` (initiator `parent`), `agents/runs/stop` (initiator `user`), the host when the child's session is deleted, or orderly app/host shutdown after the person's confirmation (both initiator `user`, with the concrete reason) |
+| `failed` | the harness on a deterministic engine/model error, on a child that settles twice without `complete_agent_run`, on a child session that closes or refuses the task while busy; the host when a project's worker dies unexpectedly or when it loads live state after a crash (initiator `harness`, reason "The project's worker stopped before this run ended.") |
+
+A transient provider or transport failure does not end delegated work. The run
+stays `running` and resumes from its durable transcript after exponential
+backoff (one second, capped at thirty); another transient failure backs off
+again without a terminal limit. While it waits, fleet activity says it is
+retrying after a connection problem. Any successful assistant turn resets the
+backoff. An explicit parent/person stop or session close cancels a pending
+recovery. Authentication, billing, quota and other deterministic errors still
+fail immediately with their actionable reason.
+
+Before desktop quit or restart stops the host it reads `agents/runs/list` and
+`tasks/list`; live work is named in one native confirmation whose safe default
+is to keep working. An orderly confirmed shutdown stamps every live run before
+workers exit, so it remains distinguishable from a crash after restart. A host
+adopted from another app process survives ordinary window-app quit and therefore
+does not raise a false warning.
 
 `endedBy: { initiator: "parent" | "user" | "harness", reason? }` records who
 ended a run. A person ending a run from the UI carries `initiator: "user"` and

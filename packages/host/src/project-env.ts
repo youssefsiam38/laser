@@ -98,7 +98,7 @@ export class ProjectEnvStore {
       args,
       required: config.required ?? true,
       ...(config.allowProviderKeys?.length ? { allowProviderKeys: [...config.allowProviderKeys] } : {}),
-      approvedFingerprint: projectEnvFingerprint({ command: config.command, args }),
+      approvedFingerprint: projectEnvFingerprint({ ...(config.preface ? { preface: config.preface } : {}), command: config.command, args }),
     };
     this.configs.set(key, next);
     this.persist();
@@ -119,14 +119,32 @@ export class ProjectEnvStore {
     const key = canonical(cwd);
     const config = this.get(key);
     if (!config) return { cwd: key, state: "not-configured", approved: false };
-    if (!config.enabled) return { cwd: key, state: "off", config, approved: projectEnvApproved(config) };
-    if (!projectEnvTrustAllows(trust)) return { cwd: key, state: "untrusted", config, approved: projectEnvApproved(config) };
-    if (!projectEnvApproved(config)) return { cwd: key, state: "needs-approval", config, approved: false };
-    return { cwd: key, state: "failed", config, approved: true };
+    const approved = projectEnvApproved(config);
+    let state: ProjectEnvStatus["state"];
+    if (!config.enabled) state = "off";
+    else if (!projectEnvTrustAllows(trust)) state = "untrusted";
+    else if (!approved) state = "needs-approval";
+    // A Bash pre-command has nothing to resolve ahead of time. Its exit status
+    // belongs to each Bash tool call; only the legacy resolver awaits a worker.
+    else if (config.preface && !config.command) state = "ready";
+    else state = "failed";
+    return this.publicStatus({ cwd: key, state, config, approved });
+  }
+
+  /** Strip legacy arguments and the reversible approval fingerprint at the host boundary. */
+  publicStatus(status: ProjectEnvStatus): ProjectEnvStatus {
+    if (!status.config) return status;
+    const { config: _config, resolverArgumentCount, ...safeStatus } = status;
+    const { args, approvedFingerprint: _approvedFingerprint, ...safeConfig } = status.config;
+    return {
+      ...safeStatus,
+      config: { ...safeConfig, args: [] },
+      ...(safeConfig.command ? { resolverArgumentCount: resolverArgumentCount ?? args.length } : {}),
+    };
   }
 
   emit(status: ProjectEnvStatus): void {
-    this.options.onChange?.(status);
+    this.options.onChange?.(this.publicStatus(status));
   }
 
   // ------------------------------------------------------------- storage

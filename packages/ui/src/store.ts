@@ -954,9 +954,9 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
     case "pending_update":
       return { ...v, pending: displayPending(u.pending) };
     case "compaction_start":
-      return notice(v, "info", "Compacting context…");
+      return notice({ ...v, state: { ...v.state, isCompacting: true } }, "info", "Compacting context…");
     case "compaction_end":
-      return notice(v, u.ok ? "info" : "warning", u.ok ? "Context compacted." : "Compaction did not complete.");
+      return notice({ ...v, state: { ...v.state, isCompacting: false } }, u.ok ? "info" : "warning", u.ok ? "Context compacted." : "Compaction did not complete.");
     case "auto_retry_start":
       // The engine has accepted this failure for automatic recovery. It stays
       // in low-level logs and engine history, but it is not an answer and must

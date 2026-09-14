@@ -553,6 +553,15 @@ export class StableSdkDriver implements SessionDriver {
    * the session carries on; the person's own stop reports its own failure.
    */
   private abortFromEngine(session: AgentSession): void {
+    this.emit({
+      type: "extension",
+      message: {
+        type: "lasercode/module/log",
+        module: "worker",
+        level: "info",
+        message: `lifecycle abort-request initiator=extension source=engine-handler at=${new Date().toISOString()}`,
+      },
+    });
     void Promise.resolve()
       .then(() => session.abort())
       .catch((error: unknown) => {
@@ -1145,14 +1154,21 @@ export class StableSdkDriver implements SessionDriver {
     options?: { summarize?: boolean; label?: string; stopFirst?: boolean },
   ): Promise<{ editorText?: string; cancelled: boolean }> {
     if (options?.stopFirst) await this.abort();
-    const result = await this.session().navigateTree(entryId, {
-      ...(options?.summarize !== undefined ? { summarize: options.summarize } : {}),
-      ...(options?.label !== undefined ? { label: options.label } : {}),
-    });
-    return {
-      ...(result.editorText !== undefined ? { editorText: result.editorText } : {}),
-      cancelled: result.cancelled,
-    };
+    try {
+      const result = await this.session().navigateTree(entryId, {
+        ...(options?.summarize !== undefined ? { summarize: options.summarize } : {}),
+        ...(options?.label !== undefined ? { label: options.label } : {}),
+      });
+      return {
+        ...(result.editorText !== undefined ? { editorText: result.editorText } : {}),
+        cancelled: result.cancelled,
+      };
+    } finally {
+      // Branch summarisation contributes to isCompacting but emits no terminal
+      // compaction event. The engine clears its controller before returning or
+      // throwing, so navigation itself must publish the terminal snapshot.
+      this.push({ kind: "state", state: this.state() });
+    }
   }
 
   /**
@@ -1400,12 +1416,21 @@ export class StableSdkDriver implements SessionDriver {
       event.type === "agent_end" ||
       event.type === "agent_settled" ||
       event.type === "session_info_changed" ||
-      event.type === "thinking_level_changed" ||
-      event.type === "compaction_end"
+      event.type === "thinking_level_changed"
     ) {
       this.push({ kind: "state", state: this.state() });
     }
-    if (event.type === "agent_settled" || event.type === "compaction_end") this.runDeferredSettingsReload();
+    if (event.type === "compaction_end") {
+      // Auto-compaction clears its controller in `finally`, after emitting this
+      // event. Its synchronous snapshot still says Compacting, although this
+      // terminal event is stronger evidence. Publish that terminal truth now;
+      // defer only work that must observe the engine's own idle state.
+      this.push({ kind: "state", state: { ...this.state(), isCompacting: false } });
+      // Failure/cancellation paths await extension notification before the
+      // engine's finally clears its flag, so even a microtask may still read a
+      // stale true. Only deferred settings work needs to wait here.
+      queueMicrotask(() => this.runDeferredSettingsReload());
+    } else if (event.type === "agent_settled") this.runDeferredSettingsReload();
   }
 
   // ------------------------------------------------------------- fallback

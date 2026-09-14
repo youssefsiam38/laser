@@ -515,7 +515,22 @@ export class Router {
         const root = projectRootOf(req.params.cwd);
         // Saving is the approval: the person is looking at the command.
         this.deps.projectEnv.set(root, req.params.config);
-        const status = await this.projectEnvStatus(root);
+        const base = this.projectEnvBase(root);
+        const live = this.pool.liveClients().find(entry => entry.cwd === root);
+        let status = base;
+        if (live) {
+          try {
+            const config = base.state === "ready" || base.state === "failed" ? req.params.config : null;
+            const answer = (await live.client.request("pi/project/env/set", { cwd: root, config })) as { status: ProjectEnvStatus };
+            status = base.state === "ready" || base.state === "failed"
+              ? { ...base, ...answer.status, cwd: root }
+              : base;
+          } catch {
+            // The stored value is still authoritative. An older worker keeps
+            // its current shell until it retires; a new worker reads this save.
+          }
+        }
+        status = this.deps.projectEnv.publicStatus(status);
         this.deps.projectEnv.emit(status);
         return { status };
       }
@@ -533,7 +548,7 @@ export class Router {
         );
         if (!worker) return { status: base };
         const answer = (await worker.request(req.method, { cwd: root })) as { status: ProjectEnvStatus };
-        const status = { ...base, ...answer.status, cwd: root };
+        const status = this.deps.projectEnv.publicStatus({ ...base, ...answer.status, cwd: root });
         this.deps.projectEnv.emit(status);
         return { status };
       }
@@ -1082,12 +1097,12 @@ export class Router {
   private async projectEnvStatus(cwd: string): Promise<ProjectEnvStatus> {
     const root = projectRootOf(cwd);
     const base = this.projectEnvBase(root);
-    if (base.state === "not-configured" || base.state === "off") return base;
+    if (base.state !== "failed" && base.state !== "ready") return base;
     const live = this.pool.liveClients().find((entry) => entry.cwd === root);
     if (!live) return base;
     try {
       const answer = (await live.client.request("pi/project/env/status", { cwd: root })) as { status: ProjectEnvStatus };
-      return { ...base, ...answer.status, cwd: root };
+      return this.deps.projectEnv.publicStatus({ ...base, ...answer.status, cwd: root });
     } catch {
       // An older worker without the method is still a working worker.
       return base;

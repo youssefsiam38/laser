@@ -10,7 +10,7 @@
  * Pending extension dialogs are re-emitted on load for the same reason.
  */
 
-import { AGENT_MAX_DEPTH_LIMIT, ENV, ErrorCodes, PRODUCT_NAME, ProtocolError, historyWindow, parseClientRequest, type AgentDefinition, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type SettingsScope, type TypedClientRequest } from "@lasercode/protocol";
+import { AGENT_MAX_DEPTH_LIMIT, ENV, ErrorCodes, PRODUCT_NAME, ProtocolError, historyWindow, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type SettingsScope, type TypedClientRequest } from "@lasercode/protocol";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import type {
@@ -33,7 +33,7 @@ import { SettingsAdapter } from "./settings.js";
 import { WebSearchService } from "./web-search.js";
 import { McpService } from "./mcp/service.js";
 import { TranscribeService } from "./transcribe.js";
-import { ProjectEnvironment } from "./project-env.js";
+import { parseWorkerProjectEnvConfig, ProjectEnvironment } from "./project-env.js";
 import type { HarnessSessionRole } from "./agents/bridge.js";
 import type { ProjectEnvironmentBridge } from "@lasercode/pi-extension";
 import { DefinitionsCache } from "./agents/definitions.js";
@@ -137,7 +137,7 @@ export class WorkerServer {
    * written into `process.env` — the worker's own environment is what the
    * engine authenticates a model with.
    */
-  private readonly projectEnv: ProjectEnvironment | undefined;
+  private projectEnv: ProjectEnvironment | undefined;
   /** M13 · agents: the host's definitions, the harness that runs them, and Namer. */
   private readonly definitions: DefinitionsCache;
   private readonly harness: AgentHarness;
@@ -185,11 +185,12 @@ export class WorkerServer {
       backgroundWork: (cwd) => ({
         cwd,
         foregroundCommandSeconds: this.definitions.policy().foregroundCommandSeconds,
-        // Runs first, in the agent's own shell, before every command it runs.
-        ...(this.projectEnv?.preface ? { commandPrefix: this.projectEnv.preface } : {}),
+        // Resolved when each Bash call starts, so a Settings save takes effect
+        // without ending an open parent or child session.
+        commandPrefix: () => this.projectEnv?.preface,
         // Every child agent and every worktree of this project runs in this
         // worker, so they share the project's environment by construction.
-        ...(this.projectEnv ? { projectEnv: this.projectEnvBridge() } : {}),
+        projectEnv: this.projectEnvBridge(),
       }),
     });
     this.namer = new NamerService({
@@ -266,6 +267,15 @@ export class WorkerServer {
         return (await this.promptRequest(this.live(req.params.path), req.params)) satisfies Result<"session/prompt">;
       case "session/cancel": {
         const live = this.live(req.params.path);
+        this.notify("pi/extension/message", {
+          path: live.path,
+          message: {
+            type: "lasercode/module/log",
+            module: "worker",
+            level: "info",
+            message: `lifecycle abort-request initiator=user source=session/cancel at=${new Date().toISOString()}`,
+          },
+        });
         // A first-turn lease spans runtime replacement and engine preflight.
         // Cancellation must reach that candidate rather than wait until after
         // acceptance; Stable records it safely even in the replacement gap.
@@ -515,6 +525,29 @@ export class WorkerServer {
         this.assertCwd(req.params.cwd);
         return { status: this.projectEnvStatus() } satisfies Result<"pi/project/env/status">;
       }
+      case "pi/project/env/set": {
+        this.assertCwd(req.params.cwd);
+        const input = req.params.config;
+        const args = input?.args ?? [];
+        const stored = input
+          ? {
+              ...input,
+              args,
+              required: input.required ?? true,
+              approvedFingerprint: projectEnvFingerprint({
+                ...(input.preface ? { preface: input.preface } : {}),
+                command: input.command,
+                args,
+              }),
+            }
+          : undefined;
+        const config = projectEnvWorkerConfig(stored);
+        if (this.projectEnv) this.projectEnv.reconfigure(config);
+        else if (config) this.projectEnv = new ProjectEnvironment({ cwd: this.options.cwd, config });
+        const status = this.projectEnvStatus();
+        this.notify("pi/project/env/changed", { status });
+        return { status } satisfies Result<"pi/project/env/set">;
+      }
       case "pi/project/env/test":
       case "pi/project/env/refresh": {
         this.assertCwd(req.params.cwd);
@@ -746,11 +779,12 @@ export class WorkerServer {
 
   /** What the companion extension is given: decoration and a refusal, no values. */
   private projectEnvBridge(): ProjectEnvironmentBridge {
-    const projectEnv = this.projectEnv;
     return {
-      apply: (env) => projectEnv?.apply(env) ?? env,
-      blocking: () => projectEnv?.blocking ?? false,
-      reason: () => projectEnv?.blockingReason() ?? "",
+      // Resolve through the server each time: a live save can add, replace or
+      // remove configuration after this session's bridge was created.
+      apply: (env) => this.projectEnv?.apply(env) ?? env,
+      blocking: () => this.projectEnv?.blocking ?? false,
+      reason: () => this.projectEnv?.blockingReason() ?? "",
     };
   }
 
@@ -974,8 +1008,8 @@ export class WorkerServer {
       backgroundWork: handle.backgroundWork(this.options.cwd) ?? {
         cwd: this.options.cwd,
         foregroundCommandSeconds: this.definitions.policy().foregroundCommandSeconds,
-        ...(this.projectEnv?.preface ? { commandPrefix: this.projectEnv.preface } : {}),
-        ...(this.projectEnv ? { projectEnv: this.projectEnvBridge() } : {}),
+        commandPrefix: () => this.projectEnv?.preface,
+        projectEnv: this.projectEnvBridge(),
       },
     };
   }
@@ -1662,22 +1696,7 @@ export class WorkerServer {
 function readProjectEnvConfig(): ProjectEnvWorkerConfig | undefined {
   try {
     const parsed: unknown = JSON.parse(process.env[ENV.projectEnv] ?? "null");
-    if (!parsed || typeof parsed !== "object") return undefined;
-    const candidate = parsed as Partial<ProjectEnvWorkerConfig>;
-    if (candidate.enabled !== true) return undefined;
-    if (typeof candidate.command !== "string" || !candidate.command) return undefined;
-    const args = Array.isArray(candidate.args) ? candidate.args.filter((a): a is string => typeof a === "string") : [];
-    const allow = Array.isArray(candidate.allowProviderKeys)
-      ? candidate.allowProviderKeys.filter((a): a is string => typeof a === "string")
-      : [];
-    return {
-      enabled: true,
-      command: candidate.command,
-      args,
-      required: candidate.required !== false,
-      allowProviderKeys: allow,
-      approved: candidate.approved === true,
-    };
+    return parseWorkerProjectEnvConfig(parsed);
   } catch {
     return undefined;
   }

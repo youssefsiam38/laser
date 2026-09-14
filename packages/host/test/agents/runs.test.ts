@@ -158,6 +158,44 @@ describe("AgentRunRegistry", () => {
     expect(registry.workerLost(PROJECT)).toEqual([]); // nothing left to fail
   });
 
+  it("records an unexpected host shutdown as harness-owned failure", () => {
+    const registry = new AgentRunRegistry({ now: NOW });
+    registry.upsert(run("live"));
+    registry.upsert(run("done", { status: "completed", endedAt: NOW().toISOString() }));
+
+    expect(registry.hostCrashed().map(run => run.runId)).toEqual(["live"]);
+    expect(registry.get("live")).toMatchObject({
+      status: "failed",
+      endedBy: { initiator: "harness", reason: "The project's worker stopped before this run ended." },
+    });
+    expect(registry.get("done")?.status).toBe("completed");
+    registry.close();
+  });
+
+  it("records orderly host shutdown as person-owned cancellation and never restamps it as a crash", () => {
+    const file = join(dir, "agent-runs.json");
+    const notified: AgentRun[] = [];
+    const registry = new AgentRunRegistry({ storePath: file, onRun: run => notified.push(run), now: NOW });
+    registry.upsert(run("live"));
+    registry.upsert(run("queued", { projectCwd: "/projects/b", status: "queued" }));
+    registry.upsert(run("done", { status: "completed", endedAt: NOW().toISOString() }));
+
+    expect(registry.hostStopping().map(run => run.runId).sort()).toEqual(["live", "queued"]);
+    expect(registry.get("live")).toMatchObject({
+      status: "cancelled",
+      endedBy: { initiator: "user", reason: "The app and host were quit, so this run could not continue." },
+    });
+    expect(registry.workerLost(PROJECT)).toEqual([]);
+    expect(registry.get("done")?.status).toBe("completed");
+    expect(notified.map(run => run.runId).sort()).toEqual(["live", "queued"]);
+    registry.close();
+
+    const restored = new AgentRunRegistry({ storePath: file, now: NOW });
+    try {
+      expect(restored.get("live")).toMatchObject({ status: "cancelled", endedBy: { initiator: "user" } });
+    } finally { restored.close(); }
+  });
+
   it("cancels the live runs of a deleted session", () => {
     const registry = new AgentRunRegistry({ now: NOW });
     registry.upsert(run("gone"));

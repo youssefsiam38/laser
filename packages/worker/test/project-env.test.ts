@@ -176,7 +176,7 @@ describe("ProjectEnvironment", () => {
     const status = await environment.ensure();
     expect(status.state).toBe("needs-approval");
     expect(environment.blocking).toBe(true);
-    expect(environment.blockingReason()).toContain("approve it again");
+    expect(environment.blockingReason()).toContain("save it again");
     // The proof that matters: the executable was never started.
     expect(() => rmSync(marker)).toThrow();
   });

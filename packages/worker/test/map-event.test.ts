@@ -1,7 +1,7 @@
 /** Pure mapping from Pi's AgentSessionEvent to protocol SessionUpdate (M0-T4). */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import { mapEvent } from "../src/drivers/stable-sdk.js";
+import { mapEvent, StableSdkDriver } from "../src/drivers/stable-sdk.js";
 
 const assistant = { role: "assistant", content: [] } as unknown;
 const partial = assistant as never;
@@ -61,6 +61,40 @@ describe("mapEvent", () => {
     expect(
       mapEvent({ type: "tool_execution_end", toolCallId: "x", toolName: "bash", result: { out: 1 }, isError: true } as never),
     ).toEqual({ kind: "tool_execution_end", toolCallId: "x", result: { out: 1 }, isError: true });
+  });
+
+  it("publishes terminal compaction state even while the engine's auto-compaction flag is stale", async () => {
+    const driver = new StableSdkDriver();
+    const updates: unknown[] = [];
+    const reload = vi.fn();
+    driver.subscribe(event => {
+      if (event.type === "update") updates.push(event.update);
+    });
+    const internal = driver as unknown as {
+      state: () => Record<string, unknown>;
+      runDeferredSettingsReload: () => void;
+      onSessionEvent: (event: AgentSessionEvent, generation: number) => void;
+    };
+    // The engine's controller can remain stale through the next microtask on
+    // failed/cancelled auto-compaction paths.
+    internal.state = vi.fn().mockReturnValue({ isCompacting: true });
+    internal.runDeferredSettingsReload = reload;
+
+    internal.onSessionEvent(
+      { type: "compaction_end", reason: "auto", result: { summary: "done" }, aborted: false, willRetry: false } as never,
+      0,
+    );
+    expect(updates).toEqual([
+      { kind: "compaction_end", ok: true },
+      { kind: "state", state: { isCompacting: false } },
+    ]);
+    expect(reload).not.toHaveBeenCalled();
+    await Promise.resolve();
+    expect(updates).toEqual([
+      { kind: "compaction_end", ok: true },
+      { kind: "state", state: { isCompacting: false } },
+    ]);
+    expect(reload).toHaveBeenCalledOnce();
   });
 
   it("maps queue, compaction, retry and entry events", () => {

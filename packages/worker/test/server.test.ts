@@ -200,6 +200,37 @@ describe("WorkerServer", () => {
       expect(drivers).toBe(0);
     } finally { rmSync(cwd, { recursive: true, force: true }); }
   });
+  it("applies a saved project Bash pre-command to the next call in an already-open parent session", async () => {
+    const h = harness();
+    await h.call(1, "session/new", { cwd: "/tmp/fake" });
+    const opened = h.drivers[0]!.opened as { agent: { backgroundWork: {
+      commandPrefix: () => string | undefined;
+      projectEnv: { blocking: () => boolean };
+    } } };
+    expect(opened.agent.backgroundWork.commandPrefix()).toBeUndefined();
+    expect(opened.agent.backgroundWork.projectEnv.blocking()).toBe(false);
+
+    const saved = await h.call(2, "pi/project/env/set", {
+      cwd: "/tmp/fake",
+      config: { enabled: true, preface: "source scripts/project-shell.sh", command: "", args: [], required: true },
+    });
+    expect(saved.result).toMatchObject({ status: { cwd: "/tmp/fake", state: "ready", approved: true } });
+    expect(opened.agent.backgroundWork.commandPrefix()).toBe("{\nsource scripts/project-shell.sh\n} || exit $?\n");
+    expect(opened.agent.backgroundWork.projectEnv.blocking()).toBe(false);
+
+    // The same already-open bridge stays compatible with an older resolver
+    // configuration, including later removal; it must not capture `undefined`.
+    await h.call(3, "pi/project/env/set", {
+      cwd: "/tmp/fake",
+      config: { enabled: true, command: "/missing/legacy-resolver", args: [], required: true },
+    });
+    expect(opened.agent.backgroundWork.projectEnv.blocking()).toBe(true);
+    await h.call(4, "pi/project/env/set", { cwd: "/tmp/fake", config: null });
+    expect(opened.agent.backgroundWork.projectEnv.blocking()).toBe(false);
+    expect(opened.agent.backgroundWork.commandPrefix()).toBeUndefined();
+    expect(h.notifications("pi/project/env/changed")).toHaveLength(3);
+  });
+
   it("lists project commands before a session exists without attaching the preview driver", async () => {
     const h = harness();
     const listed = await h.call(1, "pi/commands/list", { cwd: "/tmp/fake" });
@@ -445,6 +476,15 @@ describe("WorkerServer", () => {
     const cancelled = await h.call(4, "session/cancel", { path: "/tmp/fake/s1.jsonl" });
     expect(cancelled.error).toBeUndefined();
     expect(driver.routed.at(-1)).toMatchObject({ route: "abort", generation: "original" });
+    expect(h.notifications("pi/extension/message").at(-1)?.params).toMatchObject({
+      path: "/tmp/fake/s1.jsonl",
+      message: {
+        type: "lasercode/module/log",
+        module: "worker",
+        level: "info",
+        message: expect.stringMatching(/^lifecycle abort-request initiator=user source=session\/cancel at=/),
+      },
+    });
     prepare.resolve();
     expect((await binding).error).toBeDefined();
     expect(driver.prompted).toEqual([]);

@@ -124,12 +124,12 @@ export async function runDaemon(options: DaemonOptions): Promise<void> {
   process.stdout.write(`${url}\n`);
 
   let closing = false;
-  const shutdown = async (reason: string, code: number): Promise<void> => {
+  const shutdown = async (reason: string, code: number, initiator: "user" | "harness"): Promise<void> => {
     if (closing) return;
     closing = true;
     log(`${PRODUCT_NAME} host shutting down (${reason})`);
     try {
-      await server.close();
+      await server.close({ initiator });
     } catch (error) {
       log(`${PRODUCT_NAME} host close failed: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -138,11 +138,11 @@ export async function runDaemon(options: DaemonOptions): Promise<void> {
   };
 
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-    process.on(signal, () => void shutdown(signal, 0));
+    process.on(signal, () => void shutdown(signal, 0, "user"));
   }
   process.on("uncaughtException", (error) => {
     log(`${PRODUCT_NAME} host crashed: ${error.stack ?? error.message}`);
-    void shutdown("uncaughtException", 1);
+    void shutdown("uncaughtException", 1, "harness");
   });
   process.on("unhandledRejection", (reason) => {
     log(`${PRODUCT_NAME} host unhandled rejection: ${reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)}`);

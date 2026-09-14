@@ -6,12 +6,12 @@
  * a shell function works where a spawned executable never could.
  */
 import { describe, expect, it } from "vitest";
-import { ProjectEnvironment } from "../src/project-env.js";
+import { parseWorkerProjectEnvConfig, projectBashPrefix, ProjectEnvironment } from "../src/project-env.js";
 import { projectEnvFingerprint, projectEnvWorkerConfig } from "@lasercode/protocol";
 
 const config = (overrides: Record<string, unknown> = {}) => ({
   enabled: true,
-  preface: "workenv use kwentra",
+  preface: "source ~/.bashrc",
   command: "",
   args: [] as string[],
   required: true,
@@ -21,9 +21,10 @@ const config = (overrides: Record<string, unknown> = {}) => ({
 });
 
 describe("the command that runs first", () => {
-  it("is offered to the shell tool once approved", () => {
+  it("is offered to the shell tool once approved, with failure guarding the whole requested script", () => {
     const environment = new ProjectEnvironment({ cwd: "/tmp", config: config() });
-    expect(environment.preface).toBe("workenv use kwentra");
+    expect(environment.preface).toBe(projectBashPrefix("source ~/.bashrc"));
+    expect(environment.preface).toBe("{\nsource ~/.bashrc\n} || exit $?\n");
   });
 
   it("is withheld until it is approved, because it is executed", () => {
@@ -44,21 +45,22 @@ describe("the command that runs first", () => {
   });
 
   it("counts as what runs, so changing it needs approving again", () => {
-    const before = projectEnvFingerprint({ preface: "workenv use kwentra", command: "", args: [] });
-    const after = projectEnvFingerprint({ preface: "workenv use personal", command: "", args: [] });
+    const before = projectEnvFingerprint({ preface: "source ~/.bashrc", command: "", args: [] });
+    const after = projectEnvFingerprint({ preface: "source scripts/project-shell.sh", command: "", args: [] });
     expect(before).not.toBe(after);
   });
 
-  it("reaches a worker without an executable being configured", () => {
+  it("reaches and is accepted by a worker without an executable being configured", () => {
     const worker = projectEnvWorkerConfig({
       enabled: true,
-      preface: "workenv use kwentra",
+      preface: "source ~/.bashrc",
       command: "",
       args: [],
       required: true,
-      approvedFingerprint: projectEnvFingerprint({ preface: "workenv use kwentra", command: "", args: [] }),
+      approvedFingerprint: projectEnvFingerprint({ preface: "source ~/.bashrc", command: "", args: [] }),
     });
-    expect(worker?.preface).toBe("workenv use kwentra");
+    expect(worker?.preface).toBe("source ~/.bashrc");
     expect(worker?.approved).toBe(true);
+    expect(parseWorkerProjectEnvConfig(worker)).toEqual(worker);
   });
 });

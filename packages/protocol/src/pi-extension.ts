@@ -135,7 +135,7 @@ export type PiExtensionMessage =
   | { type: "lasercode/task/update"; task: BackgroundTaskUpdate }
   | {
       type: "lasercode/module/log";
-      module: PiExtensionModuleName;
+      module: PiExtensionModuleName | "worker";
       level: "info" | "warn" | "error";
       message: string;
     };

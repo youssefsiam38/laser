@@ -1,4 +1,4 @@
-import { ThreadPrimitive, useThreadViewport, unstable_useThreadMessageIds } from "@assistant-ui/react";
+import { ThreadPrimitive, useAuiState, useThreadViewport, unstable_useThreadMessageIds } from "@assistant-ui/react";
 import { createContext, memo, useContext, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useLaserState } from "@/runtime";
 import { activityDetailLevel } from "@/runtime/sessionPreferences";
@@ -60,6 +60,7 @@ export class TranscriptViewport {
   private structuralShift: number | undefined;
   /** The person is moving the viewport right now; layout may shift it, never re-place it. */
   private reading: ReturnType<typeof setTimeout> | undefined;
+  private running = false;
   private disposed = false;
   getSnapshot = () => this.revision;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
@@ -82,6 +83,7 @@ export class TranscriptViewport {
     }
     this.loaded = loaded;
     this.arriving = false;
+    this.running = false;
     this.cancel();
     if (this.path) this.places.set(this.path, this.place);
     this.path = path;
@@ -188,8 +190,11 @@ export class TranscriptViewport {
         // correction must not steal an active find field, menu, or question.
         const focused = document.activeElement;
         this.tail?.();
+        // assistant-ui's action may decline when its own sticky-state snapshot
+        // still says the reader is in history. This controller has already
+        // accepted latest as the destination, so place the native viewport too.
+        this.scroll(Math.max(0, viewport.scrollHeight - viewport.clientHeight));
         if (focused instanceof HTMLElement && focused !== document.body && focused.isConnected && document.activeElement !== focused) focused.focus({ preventScroll: true });
-        this.expectedTop = viewport.scrollTop;
       }
       return;
     }
@@ -359,7 +364,26 @@ export class TranscriptViewport {
     }
     } finally { options.signal?.removeEventListener("abort", abort); }
   }
-  latest = () => { this.cancel(); this.place.following = true; this.publish(); this.tail?.(); this.schedule(); };
+  followRun(running: boolean) {
+    this.running = running;
+    // Starting elsewhere is output, not this reader's navigation intent. The
+    // local composer's submit calls `latest()`; once chosen, streamed growth
+    // follows until explicit input changes `following` to false.
+    if (running && this.place.following) {
+      this.windowDirty = true;
+      this.restore();
+      this.schedule();
+    }
+  }
+  latest = () => {
+    this.cancel(); this.place.following = true; this.publish(); this.tail?.();
+    if (this.viewport) this.scroll(Math.max(0, this.viewport.scrollHeight - this.viewport.clientHeight));
+    // The first streamed delta can grow the row before the native event for
+    // this tail scroll arrives. Keep that event owned even if its scrollTop is
+    // already a few pixels behind the new scrollHeight.
+    this.expectedTop = this.viewport?.scrollTop;
+    this.schedule();
+  };
   attach(viewport: HTMLElement, tail: () => void) {
     this.disposed = false; this.viewport = viewport; this.tail = tail;
     this.observer = new ResizeObserver(this.schedule);
@@ -370,7 +394,20 @@ export class TranscriptViewport {
       this.reading = setTimeout(() => { this.reading = undefined; this.schedule(); }, 400);
     };
     const scroll = () => {
-      if (this.expectedTop !== undefined && Math.abs(viewport.scrollTop - this.expectedTop) < 0.5) { this.expectedTop = undefined; return; }
+      if (this.place.following && (this.running || this.expectedTop !== undefined)) {
+        // scrollToBottom can emit more than one delayed scroll while a streamed
+        // row grows. Explicit wheel/touch/key/scrollbar input clears following
+        // first; without that input, every scroll during the followed run is
+        // still ours even after an earlier event consumed expectedTop.
+        this.expectedTop = undefined;
+        this.windowDirty = true;
+        this.schedule();
+        return;
+      }
+      if (this.expectedTop !== undefined && Math.abs(viewport.scrollTop - this.expectedTop) < 0.5) {
+        this.expectedTop = undefined;
+        return;
+      }
       if (this.arriving) { this.place.following = true; this.windowDirty = true; this.schedule(); return; }
       if (this.ownsLocation) {
         // Only wheel/touch/pointer/keyboard or another explicit destination can
@@ -418,7 +455,10 @@ export class TranscriptViewport {
     };
     const key = (event: KeyboardEvent) => {
       this.cancel();
-      if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End"].includes(event.key) && event.target === viewport) user();
+      const target = event.target;
+      const editsText = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || (target instanceof HTMLElement && target.isContentEditable);
+      const inComposer = target instanceof Element && target.closest('[data-slot="composer"]') !== null;
+      if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " ", "Spacebar"].includes(event.key) && !editsText && !inComposer) user();
       if (event.key === "Tab" && event.target instanceof HTMLElement) {
         const row = event.target.closest<HTMLElement>("[data-window-message]");
         const id = row?.dataset.windowMessage;
@@ -456,9 +496,20 @@ export class TranscriptViewport {
         requestAnimationFrame(() => { if (intent !== this.intent || !this.content) return; const range = document.createRange(); range.selectNodeContents(this.content); const selection = document.getSelection(); selection?.removeAllRanges(); selection?.addRange(range); });
       }
     };
+    const pointer = (event: PointerEvent) => {
+      // A click in the wide transcript gutter is not a scroll intent. Classic
+      // scrollbars land outside clientWidth; overlay scrollbars occupy the edge
+      // inside it, on either side according to writing direction.
+      const unit = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--space-unit"));
+      const overlayEdge = Number.isFinite(unit) ? unit * 3 : 0;
+      const rtl = viewport.dir === "rtl" || getComputedStyle(viewport).direction === "rtl";
+      const overScrollbar = event.offsetX < 0 || event.offsetX > viewport.clientWidth || (rtl ? event.offsetX <= overlayEdge : event.offsetX >= viewport.clientWidth - overlayEdge);
+      if (event.target === viewport && viewport.scrollHeight > viewport.clientHeight && overScrollbar) user();
+      else this.cancel();
+    };
     viewport.addEventListener("scroll", scroll, { passive: true });
     viewport.addEventListener("wheel", user, { passive: true }); viewport.addEventListener("touchstart", user, { passive: true });
-    viewport.addEventListener("pointerdown", this.cancel, { passive: true });
+    viewport.addEventListener("pointerdown", pointer, { passive: true });
     viewport.addEventListener("focusin", focus); viewport.addEventListener("focusout", focus); viewport.addEventListener("keydown", key);
     document.addEventListener("selectionchange", selection);
     const theme = new MutationObserver(this.schedule); theme.observe(document.documentElement, { attributes: true, attributeFilter: ["style", "class", "data-theme"] });
@@ -468,7 +519,7 @@ export class TranscriptViewport {
       this.cancel(); this.disposed = true; cancelAnimationFrame(this.frame); this.frame = 0; if (this.reading) { clearTimeout(this.reading); this.reading = undefined; }
       this.observer?.disconnect(); this.observer = undefined; theme.disconnect();
       viewport.removeEventListener("scroll", scroll); viewport.removeEventListener("wheel", user); viewport.removeEventListener("touchstart", user);
-      viewport.removeEventListener("pointerdown", this.cancel);
+      viewport.removeEventListener("pointerdown", pointer);
       viewport.removeEventListener("focusin", focus); viewport.removeEventListener("focusout", focus); viewport.removeEventListener("keydown", key);
       document.removeEventListener("selectionchange", selection); document.fonts?.removeEventListener("loadingdone", this.schedule);
       this.viewport = undefined; this.tail = undefined;
@@ -515,9 +566,11 @@ export function TranscriptViewportBinding() {
 export function WindowedMessages() {
   const controller = useTranscriptViewport();
   const ids = unstable_useThreadMessageIds();
+  const running = useAuiState(s => s.thread.isRunning);
   controller.setIds(ids);
   useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   const ranges = controller.ranges();
+  useLayoutEffect(() => { controller.followRun(running); }, [controller, running, controller.path]);
   useLayoutEffect(() => { controller.committed(); });
   let cursor = 0;
   return <div ref={node => { controller.content = node ?? undefined; }} data-slot="thread-messages" className="flex flex-col pt-5 empty:hidden" style={{ overflowAnchor: "none" }}>
