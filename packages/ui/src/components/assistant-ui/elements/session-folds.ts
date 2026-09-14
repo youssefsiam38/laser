@@ -123,3 +123,10 @@ export function useFoldOpen(key: string, fallback: boolean): boolean {
     () => fallback,
   );
 }
+
+// Folds follow the environment the same way the sessions list does: one
+// subscription, and the choices of whichever namespace is open (RP-13).
+deviceStore.subscribe((event) => {
+  if (event.kind === "deactivated") publish({ chosen: new Map(), pinned: new Map() });
+  else sessionFolds.rehydrate();
+});

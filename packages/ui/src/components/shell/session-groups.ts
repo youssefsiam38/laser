@@ -319,13 +319,13 @@ export const sessionsList = {
     publish({ filter: undefined, jump: undefined, collapsed: new Set(), pinned: new Set(), revealed: new Map() });
   },
   /** Adopt the newly opened environment's remembered groups and pins. */
-  rehydrate(): void {
+  rehydrate(keepView = false): void {
     publish({
-      filter: undefined,
-      jump: undefined,
+      filter: keepView ? listState.filter : undefined,
+      jump: keepView ? listState.jump : undefined,
       collapsed: readPaths(DEVICE_KEYS.sessionGroups),
       pinned: readPaths(DEVICE_KEYS.sessionPins),
-      revealed: new Map(),
+      revealed: keepView ? listState.revealed : new Map(),
     });
   },
 };
@@ -333,3 +333,12 @@ export const sessionsList = {
 export function useSessionsList(): SessionsListState {
   return useSyncExternalStore(sessionsList.subscribe, sessionsList.get, sessionsList.get);
 }
+
+// The list follows the environment on its own: it re-reads the namespace the
+// moment one opens — including the very first one, which is the case a store
+// that only watched for switches would miss and then overwrite with its own
+// empty start (RP-13, `runtime/device-storage.ts`).
+deviceStore.subscribe((event) => {
+  if (event.kind === "deactivated") sessionsList.reset();
+  else sessionsList.rehydrate(event.transition === "same");
+});

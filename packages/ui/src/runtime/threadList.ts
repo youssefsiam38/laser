@@ -205,6 +205,12 @@ export interface ArchiveStore {
   list(): string[];
   /** Re-read the archive from the environment namespace now in force. */
   rehydrate(): void;
+  /**
+   * Stop following the environment. The provider owns this store, so it owns
+   * the subscription's lifetime too: an unmounted provider must not keep a
+   * dead store up to date.
+   */
+  dispose(): void;
   /** React-compatible change subscription for project and thread visibility. */
   subscribe(listener: () => void): () => void;
   getSnapshot(): number;
@@ -230,7 +236,7 @@ export function createArchiveStore(): ArchiveStore {
     revision += 1;
     for (const listener of listeners) listener();
   };
-  return {
+  const store: ArchiveStore = {
     has: (path) => set.has(path),
     add: (path) => {
       if (set.has(path)) return;
@@ -248,12 +254,16 @@ export function createArchiveStore(): ArchiveStore {
       set = load();
       publish();
     },
+    dispose: () => unfollow(),
     subscribe: (listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
     getSnapshot: () => revision,
   };
+  // The archive re-reads whichever namespace is open, first one included.
+  const unfollow = deviceStore.subscribe(() => store.rehydrate());
+  return store;
 }
 
 /**

@@ -71,7 +71,26 @@ export function activateTestEnvironment(overrides?: Parameters<typeof testDescri
  * previous visit would have left it there.
  */
 export function seedDeviceValue(key: DeviceKey, value: string, environmentKey = TEST_ENVIRONMENT_KEY): void {
+  seedFingerprint(environmentKey);
   globalThis.localStorage?.setItem(deviceKeyName(key, environmentKey), value);
+}
+
+/**
+ * The fingerprint an earlier visit would have left beside the data.
+ *
+ * Without one, a namespace that holds data is invalidated on activation and
+ * for good reason (RP-13: nothing says what that data was derived from), so a
+ * test that seeds a namespace has to seed the record of the environment that
+ * wrote it — exactly as the app does.
+ */
+export function seedFingerprint(environmentKey = TEST_ENVIRONMENT_KEY, descriptor = testDescriptor({ environmentKey })): void {
+  const name = deviceKeyName(DEVICE_KEYS.descriptor, environmentKey);
+  if (globalThis.localStorage?.getItem(name)) return;
+  globalThis.localStorage?.setItem(name, JSON.stringify({
+    contract: descriptor.contract,
+    capabilities: descriptor.capabilities,
+    cache: descriptor.cache,
+  }));
 }
 
 export function readDeviceValue(key: DeviceKey, environmentKey = TEST_ENVIRONMENT_KEY): string | null {

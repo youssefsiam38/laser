@@ -107,18 +107,46 @@ export class FakeHostClient {
     });
   }
 
-  /** A reconnect that lands in a different (or narrowed) environment. */
+  /** A reconnect whose handshake cannot establish an environment at all. */
+  failDescribe(reason = "This host cannot say what environment this is, so nothing is being kept on this device."): void {
+    FakeHostClient.environment = null;
+    this.options.onConnection?.("closed");
+    this.options.onEnvironmentFailure?.(reason);
+    this.options.onConnection?.("closed");
+  }
+
+  /**
+   * A **reconnect** that lands in a different (or narrowed) environment.
+   *
+   * Modelled the way the real client does it, because there is no such thing
+   * as a live re-description: the socket drops, the handshake runs again, the
+   * app is told about the environment before anything opens, and only then is
+   * the connection open (RP-13).
+   */
   redescribe(environment: EnvironmentDescriptor): void {
     FakeHostClient.environment = environment;
-    this.options.onConnection?.("connecting");
-    this.options.onEnvironment?.(environment);
+    this.options.onConnection?.("closed");
+    const acceptance = this.options.onEnvironment?.(environment) ?? { ok: true };
+    if (!acceptance.ok) {
+      this.options.onEnvironmentFailure?.(acceptance.reason);
+      this.options.onConnection?.("closed");
+      return;
+    }
     this.options.onConnection?.("open");
   }
   reconnect(): void {}
   close(): void {}
-  forgetAttachments(): void {}
-  track(): void {}
-  untrack(): void {}
+  /** Really forgotten, and observable: a test can assert nothing was kept. */
+  readonly attached = new Set<string>();
+  forgetAttachments(): void {
+    this.attached.clear();
+  }
+  track(path: string): void {
+    this.attached.add(path);
+  }
+  untrack(path: string): void {
+    this.attached.delete(path);
+  }
   resync(): void {}
   whenConnected(): Promise<void> {
     return Promise.resolve();

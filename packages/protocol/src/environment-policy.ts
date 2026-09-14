@@ -282,6 +282,40 @@ export function clampCachePolicy(base: CachePolicy, patch?: CachePatch): CachePo
 }
 
 /** The descriptor's own shape, for round-trip tests and any future consumer. */
+/**
+ * The capability set, on its own.
+ *
+ * Exported because a client that remembers what an environment could do the
+ * last time it wrote something needs to validate that record with the same
+ * shape the descriptor used, rather than casting a parsed blob and hoping
+ * (RP-13 B, `packages/ui/src/runtime/device-storage.ts`).
+ */
+export const environmentCapabilitiesSchema = z
+  .object({
+    revisions: z.boolean(),
+    deltas: z.boolean(),
+    snapshots: z.boolean(),
+    durableReads: z.boolean(),
+    search: z.boolean(),
+    diagnostics: z.boolean(),
+    logs: z.boolean(),
+    push: z.boolean(),
+  })
+  .strict() satisfies z.ZodType<EnvironmentCapabilities>;
+
+/** The cache policy, on its own, for the same reason. */
+export const cachePolicySchema = z
+  .object({
+    transcripts: z.enum(["allowed", "disabled"]),
+    maxSessions: z.number().int().nonnegative(),
+    maxBytes: z.number().int().nonnegative(),
+    maxEntriesPerSession: z.number().int().nonnegative(),
+    maxAgeHours: z.number().int().nonnegative(),
+    attachments: z.enum(["reference", "none"]),
+    requireDeviceEncryption: z.boolean(),
+  })
+  .strict() satisfies z.ZodType<CachePolicy>;
+
 export const environmentDescriptorSchema = z
   .object({
     contract: z.literal(ENVIRONMENT_CONTRACT_VERSION),
@@ -294,29 +328,8 @@ export const environmentDescriptorSchema = z
         id: z.string().min(1).max(64),
       })
       .strict(),
-    capabilities: z
-      .object({
-        revisions: z.boolean(),
-        deltas: z.boolean(),
-        snapshots: z.boolean(),
-        durableReads: z.boolean(),
-        search: z.boolean(),
-        diagnostics: z.boolean(),
-        logs: z.boolean(),
-        push: z.boolean(),
-      })
-      .strict(),
-    cache: z
-      .object({
-        transcripts: z.enum(["allowed", "disabled"]),
-        maxSessions: z.number().int().nonnegative(),
-        maxBytes: z.number().int().nonnegative(),
-        maxEntriesPerSession: z.number().int().nonnegative(),
-        maxAgeHours: z.number().int().nonnegative(),
-        attachments: z.enum(["reference", "none"]),
-        requireDeviceEncryption: z.boolean(),
-      })
-      .strict(),
+    capabilities: environmentCapabilitiesSchema,
+    cache: cachePolicySchema,
     scopes: z.array(scopeSchema),
     localOnly: z.array(z.string().min(1)),
   })

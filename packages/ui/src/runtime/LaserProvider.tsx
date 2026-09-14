@@ -47,6 +47,7 @@ import type {
   WorkerInfo,
 } from "@lasercode/protocol";
 import {
+  Fragment,
   createContext,
   useCallback,
   useContext,
@@ -88,6 +89,7 @@ import {
 } from "./main-destination-controller.js";
 import { createCatalogLoader } from "./catalog-loader.js";
 import { DEVICE_KEYS, deviceStore } from "./device-storage.js";
+import { createEnvironmentLifecycle, useEnvironmentSubtreeKey, type EnvironmentLifecycle } from "./environment-lifecycle.js";
 import { createHistoryLoader, type HistoryReads } from "./history-loader.js";
 import { createHistoryWindows, MAIN_WINDOW_SCOPE, type HistoryWindowOwner, type HistoryWindows } from "./history-owners.js";
 import { sessionsList } from "../components/shell/session-groups.js";
@@ -496,6 +498,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   const landingDrafts = useMemo(() => createMainLandingDraftStore(), []);
 
   const archive = useMemo(() => createArchiveStore(), []);
+  useEffect(() => () => archive.dispose(), [archive]);
   const archiveRevision = useSyncExternalStore(archive.subscribe, archive.getSnapshot, archive.getSnapshot);
 
   /**
@@ -517,6 +520,11 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
    * been wired yet would leave the old environment's state on screen.
    */
   const resetEnvironmentState = useRef<() => void>(() => {});
+  /**
+   * Assigned in the same `useMemo` as the client, because it needs that exact
+   * client: the attachments it drops must be the ones this connection holds.
+   */
+  const environmentLifecycle = useRef<EnvironmentLifecycle>({ accept: () => ({ ok: true }), fail: () => {} });
 
   const client = useMemo(() => {
     const created: HostClient = new HostClient({
@@ -531,53 +539,13 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       /**
        * The environment, before this connection opens (RP-13).
        *
-       * Scoping this device to it is the first thing that happens and the
-       * connection does not open until it has: a refusal here means nothing
-       * could be made safe, so the client stays closed rather than reading or
-       * writing anything. A changed or downgraded environment drops every
-       * attachment *synchronously*, so no resume can carry a session path
-       * across the boundary.
+       * The decision of what to keep and what to throw away lives in
+       * `environment-lifecycle.ts`; this is only the wiring. A refusal there
+       * keeps the client closed, so nothing is read, written, resumed or
+       * requested in an environment this device could not be prepared for.
        */
-      onEnvironment: (environment) => {
-        const outcome = deviceStore.activate(environment);
-        if (!outcome.ok) {
-          created.forgetAttachments();
-          resetEnvironmentState.current();
-          return { ok: false, reason: outcome.reason ?? "This device could not be prepared for this environment." };
-        }
-        // Only a *move* between environments (or a narrowing of the one this
-        // view is already in) throws state away. The first environment of this
-        // page's life is not a move: nothing in memory came from anywhere
-        // else, and clearing here would discard this connection's own setup.
-        if (outcome.previous !== undefined && (outcome.changed || outcome.invalidated !== "none")) {
-          created.forgetAttachments();
-          resetEnvironmentState.current();
-        }
-        dispatch({
-          type: "environment",
-          environment: {
-            contract: environment.contract,
-            deployment: environment.deployment,
-            environmentKey: environment.environmentKey,
-            capabilities: environment.capabilities,
-            cache: environment.cache,
-            scopes: environment.scopes,
-          },
-        });
-        // Device storage only opens here, so this is the first moment the
-        // remembered destination can be read at all.
-        dispatch({ type: "restoreDestination", destination: initialDestinationFromMemory() });
-        return { ok: true };
-      },
-      onEnvironmentFailure: (reason) => {
-        deviceStore.deactivate();
-        // Unsafe in every environment, so they go even though this view could
-        // not learn which one it is in.
-        deviceStore.purgeLegacy();
-        created.forgetAttachments();
-        resetEnvironmentState.current();
-        dispatch({ type: "environmentError", message: reason });
-      },
+      onEnvironment: (environment) => environmentLifecycle.current.accept(environment),
+      onEnvironmentFailure: (reason) => environmentLifecycle.current.fail(reason),
       // A worker that restarted numbers its updates from 1 again; without this
       // the reducer would dedupe every one of them as a replay and the session
       // would look alive but render nothing.
@@ -597,6 +565,12 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       },
       // Never re-open a Pi session the app has dropped.
       shouldResume: (path) => readState().open[path] !== undefined,
+    });
+    environmentLifecycle.current = createEnvironmentLifecycle({
+      forgetAttachments: () => created.forgetAttachments(),
+      dispatch,
+      reset: () => resetEnvironmentState.current(),
+      restoreDestination: () => dispatch({ type: "restoreDestination", destination: initialDestinationFromMemory() }),
     });
     return created;
   }, [url]);
@@ -946,14 +920,12 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   );
 
   /**
-   * Everything derived from an environment, cleared and then re-read from the
-   * namespace that is now in force (RP-13).
+   * The provider's own share of an environment reset (RP-13).
    *
-   * Not "cleared to empty forever": each module store re-reads the newly
-   * opened namespace, so switching environments and switching back shows what
-   * each one remembers. The reducer's own reset keeps only the connection's
-   * facts — no session rows, no open transcripts, no projects, runs, questions
-   * or diagnostics can cross.
+   * The reducer drops everything it holds, and the refs this component keeps
+   * about sessions go with it. The module-level stores and the archive keep
+   * themselves up to date through the device store's own lifecycle, so they
+   * are not enumerated here.
    */
   resetEnvironmentState.current = () => {
     seenSeq.current.clear();
@@ -966,11 +938,10 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     setProjectList([]);
     setTrustRequests([]);
     dispatch({ type: "resetEnvironment" });
-    archive.rehydrate();
-    beamStore.reset();
-    sessionsList.rehydrate();
-    sessionFolds.rehydrate();
-    rehydrateFleetState();
+    // The module-level stores are not listed here on purpose: each one
+    // subscribes to the device store and re-reads whatever namespace is in
+    // force, including the first one (`device-storage.ts`). A list here would
+    // be a second place to forget.
   };
 
   // --- actions ------------------------------------------------------------
@@ -1503,6 +1474,8 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
 
   // Identity survives every transcript delta, so a consumer that only reads
   // actions/projects never re-renders while the agent streams.
+  const environmentSubtreeKey = useEnvironmentSubtreeKey(state.environment?.environmentKey);
+
   const stable = useMemo<LaserStable>(
     () => ({
       dispatch,
@@ -1531,7 +1504,22 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         <LaserInternalsContext.Provider value={internals}>
           <AssistantRuntimeProvider runtime={runtime}>
             <MainLandingDraftBridge destination={state.destination} store={landingDrafts} />
-            {children}
+            {/*
+              * The screens below are keyed by the environment (RP-13).
+              *
+              * Logs, MCP, the resource inventory and every other surface that
+              * keeps a query, a filter or a fetched page in component state
+              * would otherwise carry it from one environment into the next.
+              * A switch (or a failure, which is no environment at all) remounts
+              * them; a reconnect into the same environment keeps the same key
+              * and remounts nothing. This unmounts client-local views only —
+              * the host's own work is untouched by a view going away.
+              *
+              * The first environment is not a change: nothing can have been
+              * fetched from anywhere before the connection opens, so a remount
+              * there would only throw away this connection's own startup.
+              */}
+            <Fragment key={environmentSubtreeKey}>{children}</Fragment>
           </AssistantRuntimeProvider>
         </LaserInternalsContext.Provider>
       </LaserStableContext.Provider>
@@ -1813,6 +1801,7 @@ export function LaserThreadScope({ path, onPathChange, filter, createIn, unavail
     adoptEpoch: () => {},
     track: () => {},
   }), [client, owner, scopedStore]);
+
   const stable = useMemo<LaserStable>(() => ({
     ...parent,
     destination: scopedDestination,

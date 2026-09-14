@@ -113,6 +113,9 @@ export function resetFleetState(): void {
 /**
  * Adopt the environment that has just been opened: the sheet closes and the
  * "I have read these" mark is the new namespace's, never the old one's.
+ *
+ * Driven by the device store's own lifecycle rather than by a caller that has
+ * to remember (RP-13).
  */
 export function rehydrateFleetState(): void {
   sheetOpen = false;
@@ -120,3 +123,14 @@ export function rehydrateFleetState(): void {
   clearedBefore = readCleared();
   publish();
 }
+
+deviceStore.subscribe((event) => {
+  if (event.kind === "deactivated") {
+    sheetOpen = false;
+    revealed = undefined;
+    clearedBefore = undefined;
+    publish();
+    return;
+  }
+  rehydrateFleetState();
+});

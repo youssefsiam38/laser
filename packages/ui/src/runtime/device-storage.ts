@@ -22,19 +22,18 @@
  * 3. **Foreign namespaces and legacy keys are purged, never adopted.** The old
  *    unscoped keys (`laser-draft:<path>`, `laser-archived`, …) have no
  *    provenance: assigning them to whichever environment connects first is
- *    exactly the leak this task closes. They are removed.
- * 4. **A purge that could not finish keeps the store disabled.** The scan is
- *    bounded and cooperative, and if it hits its ceiling or the removal cannot
- *    be verified, activation *fails* — the app shows a connection failure
- *    rather than reading half a purged namespace.
+ *    exactly the leak this task closes. So is a `laser-env:` key whose
+ *    environment segment is missing or malformed. They are removed.
+ * 4. **A purge that could not finish keeps the store shut.** The scan is
+ *    bounded and verified, and if it hits its ceiling or a removal fails,
+ *    activation *fails* — the app shows a connection failure rather than
+ *    reading half a purged namespace.
  * 5. **`cache` is the single admission point for content.** Drafts are the
  *    only content B stores, and they live or die by the environment's cache
- *    policy: disabled transcripts, any zero bound, or a required encrypted
- *    store (which a browser cannot prove) means content cannot be read or
- *    written and what is already here is purged. Attachments are never stored.
- * 6. **A downgrade invalidates what it took away** before the namespace opens:
- *    a new contract or a capability that was true and is now false clears the
- *    whole namespace; a tightened cache clears the content in it.
+ *    policy. Attachments are never stored.
+ * 6. **A downgrade invalidates what it took away** before the namespace opens,
+ *    and so does a fingerprint this build cannot read beside data it did not
+ *    write.
  *
  * Local browser storage is **not encrypted**. Everything here is readable by
  * anything with access to the profile, which is why paths live behind an
@@ -44,6 +43,9 @@
 import {
   ENVIRONMENT_CONTRACT_VERSION,
   ENVIRONMENT_KEY_PATTERN,
+  STORAGE_PREFIX,
+  cachePolicySchema,
+  environmentCapabilitiesSchema,
   storageKey,
   type CachePolicy,
   type EnvironmentCapabilities,
@@ -75,7 +77,7 @@ export const DEVICE_KEYS = {
   /** `[{path, id, open}]`, bounded. */
   activityDisclosure: "activity-disclosure",
   fleetCleared: "fleet-cleared",
-  /** Content: `{ "<id>": {text, at} }`. Admission-gated, bounded. */
+  /** Content: `{ "<id>": {text, at} }`. Reached only through the draft API. */
   drafts: "drafts",
   /** The descriptor fingerprint this namespace was written under. */
   descriptor: "descriptor",
@@ -83,8 +85,15 @@ export const DEVICE_KEYS = {
 
 export type DeviceKey = (typeof DEVICE_KEYS)[keyof typeof DEVICE_KEYS];
 
-/** Every key that is content, and therefore subject to the cache policy. */
-const CONTENT_KEYS: readonly DeviceKey[] = [DEVICE_KEYS.drafts];
+/**
+ * The keys a caller may read and write directly.
+ *
+ * Drafts are content and the descriptor is this module's own bookkeeping, so
+ * neither is reachable through the generic accessors — not by convention, but
+ * because the type of {@link DeviceStore.read} and friends does not admit
+ * them. Drafts have their own bounded, admission-gated API.
+ */
+export type DeviceValueKey = Exclude<DeviceKey, typeof DEVICE_KEYS.drafts | typeof DEVICE_KEYS.descriptor>;
 
 /**
  * The unscoped keys this product wrote before environments existed.
@@ -144,41 +153,88 @@ export const DRAFT_HARD_LIMITS = {
   entries: 64,
 } as const;
 
-export type ContentRefusal = "inactive" | "policy" | "bounds" | "encryption";
+/**
+ * Why content is not being kept.
+ *
+ * `unavailable` is the browser's answer, not the environment's: storage exists
+ * in name only (a private window, blocked site data, a quota that will not
+ * take even a fingerprint), so this environment is open and remembers nothing.
+ */
+export type ContentRefusal = "inactive" | "unavailable" | "policy" | "bounds" | "encryption";
 
 export interface DeviceStorageStatus {
   active: boolean;
   /** The opaque environment key in force, never anything derived from a path. */
   environmentKey: string | undefined;
+  /** Does this device actually keep what it is given? */
+  persistent: boolean;
   /** May content (today: drafts) be read and written? */
   content: boolean;
   /** Why not, when it may not. */
   refusal: ContentRefusal | undefined;
 }
 
-export interface ActivationResult {
-  ok: boolean;
-  /** Person-readable, for the connection failure line. Present when `!ok`. */
-  reason?: string;
-  /**
-   * The environment this store was scoped to a moment ago, if any.
-   *
-   * `undefined` means this is the first environment of this page's life, which
-   * is the ordinary case and is *not* a switch: there is nothing from another
-   * environment in memory to throw away, and throwing away what this
-   * connection has already set up would be a bug rather than isolation.
-   */
-  previous: string | undefined;
-  /** True when this is a different environment from the one last active. */
-  changed: boolean;
-  /** What the descriptor comparison threw away before opening the namespace. */
-  invalidated: "none" | "namespace" | "content";
-}
+/**
+ * What activating an environment turned out to be.
+ *
+ * A discriminated answer rather than a pair of booleans, so the caller reads
+ * the decision instead of re-deriving it: `switched` and `narrowed` are the
+ * two that throw live state away, `first` and `same` never do, and `failure`
+ * is the one the person is shown.
+ */
+export type ActivationResult =
+  | { kind: "failure"; reason: string }
+  | {
+      kind: EnvironmentTransition;
+      environmentKey: string;
+      /** What the descriptor comparison threw away before the namespace opened. */
+      invalidated: "none" | "namespace" | "content";
+      /** False when the browser will not actually keep anything. */
+      persistent: boolean;
+    };
 
+/** How this environment relates to the one this view was in a moment ago. */
+export type EnvironmentTransition = "first" | "same" | "switched" | "narrowed";
+
+/** What a store hears when the environment comes or goes. */
+export type DeviceStoreEvent =
+  | { kind: "activated"; environmentKey: string; transition: EnvironmentTransition }
+  | { kind: "deactivated" };
+
+/**
+ * The fingerprint beside a namespace: what the environment could do and what
+ * it allowed to be kept, the last time anything was written here.
+ *
+ * Deliberately **not** the whole descriptor. The actor, the scopes and the
+ * deployment label describe *this connection*, not what is on this device: a
+ * phone and a desktop in the same environment hold the same cache under
+ * different actors and different scopes, and treating either as part of the
+ * fingerprint would throw a person's pins away every time they changed device
+ * or an operator narrowed a grant. Capabilities and the cache policy are the
+ * two things everything stored here is derived from.
+ */
 interface Fingerprint {
   contract: string;
   capabilities: EnvironmentCapabilities;
   cache: CachePolicy;
+}
+
+/**
+ * Validate a stored fingerprint with the protocol's **own** schemas, field for
+ * field. Nothing here is cast: a capability set or a cache policy that gains a
+ * field upstream is rejected by the same parser the descriptor uses, so a
+ * record this build cannot fully read is treated as corrupt rather than
+ * half-believed.
+ */
+function parseFingerprint(value: unknown): Fingerprint | undefined {
+  if (!isRecord(value)) return undefined;
+  const contract = value["contract"];
+  if (typeof contract !== "string" || contract === "") return undefined;
+  const capabilities = environmentCapabilitiesSchema.safeParse(value["capabilities"]);
+  const cache = cachePolicySchema.safeParse(value["cache"]);
+  if (!capabilities.success || !cache.success) return undefined;
+  if (Object.keys(value).length !== 3) return undefined;
+  return { contract, capabilities: capabilities.data, cache: cache.data };
 }
 
 export interface DraftRecord {
@@ -197,15 +253,23 @@ export interface DeviceStore {
    * nothing to remove.
    */
   purgeLegacy(): void;
-  /** Notified after every activation, deactivation and policy change. */
-  subscribe(listener: () => void): () => void;
+  /**
+   * Hear every activation and deactivation.
+   *
+   * This is how a module-level store keeps up without each one remembering to:
+   * it subscribes once, and re-reads whatever namespace is in force. The event
+   * is delivered on the **first** activation too, which is the one a store
+   * that only listened for switches would miss — and it would then overwrite
+   * what a person left behind with whatever it started empty with.
+   */
+  subscribe(listener: (event: DeviceStoreEvent) => void): () => void;
   activate(descriptor: EnvironmentDescriptor): ActivationResult;
   /** Close the namespace. Reads and writes stop; nothing stored is deleted. */
   deactivate(): void;
-  read(key: DeviceKey): string | undefined;
-  write(key: DeviceKey, value: string | undefined): void;
-  readJson<T>(key: DeviceKey, parse: (value: unknown) => T | undefined): T | undefined;
-  writeJson(key: DeviceKey, value: unknown): void;
+  read(key: DeviceValueKey): string | undefined;
+  write(key: DeviceValueKey, value: string | undefined): void;
+  readJson<T>(key: DeviceValueKey, parse: (value: unknown) => T | undefined): T | undefined;
+  writeJson(key: DeviceValueKey, value: unknown): void;
   /** One draft, by session path or landing key. `undefined` when inadmissible or expired. */
   readDraft(id: string): DraftRecord | undefined;
   /** Store or forget one draft, within the environment's cache bounds. */
@@ -214,6 +278,10 @@ export interface DeviceStore {
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** Serialized size in bytes, which is what a storage quota actually counts. */
+const encoder = new TextEncoder();
+const byteLength = (value: string): number => encoder.encode(value).length;
 
 /**
  * A bounded, cooperative snapshot of the keys in a `Storage`.
@@ -245,13 +313,28 @@ export function isLegacyDeviceKey(key: string): boolean {
   return LEGACY_KEY_PREFIXES.some((prefix) => key.startsWith(prefix));
 }
 
-/** The environment a namespaced key belongs to, or `undefined` if it is not one. */
+/**
+ * The environment a namespaced key belongs to, or `undefined` if it is not one.
+ *
+ * A key that *looks* namespaced but carries no valid environment key is not
+ * "not a namespace": it is a malformed one, and {@link isUnsafeNamespaceKey}
+ * treats it as something to remove rather than something to leave lying there.
+ */
 export function namespaceOf(key: string): string | undefined {
   const prefix = `${ENVIRONMENT_NAMESPACE}:`;
   if (!key.startsWith(prefix)) return undefined;
   const rest = key.slice(prefix.length);
   const separator = rest.indexOf(":");
-  return separator > 0 ? rest.slice(0, separator) : undefined;
+  if (separator <= 0) return undefined;
+  const candidate = rest.slice(0, separator);
+  return ENVIRONMENT_KEY_PATTERN.test(candidate) ? candidate : undefined;
+}
+
+/** Does this key belong to an environment that is not `keep` — or to none at all? */
+export function isUnsafeNamespaceKey(key: string, keep: string): boolean {
+  if (!key.startsWith(`${ENVIRONMENT_NAMESPACE}:`)) return false;
+  const namespace = namespaceOf(key);
+  return namespace === undefined || namespace !== keep;
 }
 
 export function createDeviceStore(getStorage: () => Storage | null): DeviceStore {
@@ -260,12 +343,18 @@ export function createDeviceStore(getStorage: () => Storage | null): DeviceStore
   let cache: CachePolicy | undefined;
   let content = false;
   let refusal: ContentRefusal | undefined = "inactive";
-  let snapshot: DeviceStorageStatus = { active: false, environmentKey: undefined, content: false, refusal: "inactive" };
-  const listeners = new Set<() => void>();
+  let snapshot: DeviceStorageStatus = {
+    active: false,
+    environmentKey: undefined,
+    persistent: false,
+    content: false,
+    refusal: "inactive",
+  };
+  const listeners = new Set<(event: DeviceStoreEvent) => void>();
 
-  const publish = (): void => {
-    snapshot = { active: environmentKey !== undefined, environmentKey, content, refusal };
-    for (const listener of [...listeners]) listener();
+  const publish = (event: DeviceStoreEvent): void => {
+    snapshot = { active: environmentKey !== undefined, environmentKey, persistent: storage !== null, content, refusal };
+    for (const listener of [...listeners]) listener(event);
   };
 
   const open = (): Storage | null => {
@@ -321,52 +410,66 @@ export function createDeviceStore(getStorage: () => Storage | null): DeviceStore
     cache: { ...descriptor.cache },
   });
 
+  /** The stored fingerprint, or `undefined` for missing, partial or corrupt. */
   const readFingerprint = (): Fingerprint | undefined => {
     const raw = rawRead(DEVICE_KEYS.descriptor);
     if (!raw) return undefined;
     try {
-      const parsed: unknown = JSON.parse(raw);
-      if (!isRecord(parsed) || typeof parsed["contract"] !== "string") return undefined;
-      if (!isRecord(parsed["capabilities"]) || !isRecord(parsed["cache"])) return undefined;
-      return parsed as unknown as Fingerprint;
+      return parseFingerprint(JSON.parse(raw) as unknown);
     } catch {
       return undefined;
     }
   };
 
+  /** Does this namespace hold anything at all beside its fingerprint? */
+  const namespaceHasData = (): boolean =>
+    Object.values(DEVICE_KEYS).some((key) => key !== DEVICE_KEYS.descriptor && rawRead(key) !== undefined);
+
+  /**
+   * Which way each cache field can only get tighter.
+   *
+   * `Record<keyof CachePolicy, …>` on purpose: a field added to the policy
+   * without a rule here is a compile error, not a dimension that quietly stops
+   * invalidating anything.
+   */
+  const CACHE_TIGHTENED: Record<keyof CachePolicy, (before: CachePolicy, after: CachePolicy) => boolean> = {
+    transcripts: (before, after) => before.transcripts === "allowed" && after.transcripts === "disabled",
+    attachments: (before, after) => before.attachments === "reference" && after.attachments === "none",
+    requireDeviceEncryption: (before, after) => !before.requireDeviceEncryption && after.requireDeviceEncryption,
+    maxBytes: (before, after) => after.maxBytes < before.maxBytes,
+    maxSessions: (before, after) => after.maxSessions < before.maxSessions,
+    maxEntriesPerSession: (before, after) => after.maxEntriesPerSession < before.maxEntriesPerSession,
+    maxAgeHours: (before, after) => after.maxAgeHours < before.maxAgeHours,
+  };
+
   /** What a new descriptor takes away from the one this namespace was written under. */
-  const downgrade = (previous: Fingerprint | undefined, next: Fingerprint): "none" | "namespace" | "content" => {
-    if (!previous) return "none";
+  const invalidationFor = (next: Fingerprint, transition: EnvironmentTransition): "none" | "namespace" | "content" => {
+    const previous = readFingerprint();
+    if (!previous) {
+      // No fingerprint, or one this build cannot read, beside data somebody
+      // wrote: there is no way to know what that data was derived from, so it
+      // goes. Two exceptions that are not guesses: an empty namespace has
+      // nothing to invalidate, and a namespace this store is *already* open on
+      // holds this session's own writes, made under the descriptor now being
+      // re-confirmed (the record itself can go missing under the app — another
+      // tab clearing site data — without making this session's state foreign).
+      return namespaceHasData() && transition !== "same" ? "namespace" : "none";
+    }
     if (previous.contract !== next.contract) return "namespace";
     const after = next.capabilities as unknown as Record<string, boolean>;
     for (const [name, was] of Object.entries(previous.capabilities as unknown as Record<string, boolean>)) {
       if (was === true && after[name] !== true) return "namespace";
     }
-    const before = previous.cache;
-    const now = next.cache;
-    const tighter =
-      (before.transcripts === "allowed" && now.transcripts === "disabled") ||
-      (before.attachments === "reference" && now.attachments === "none") ||
-      (!before.requireDeviceEncryption && now.requireDeviceEncryption) ||
-      now.maxBytes < before.maxBytes ||
-      now.maxSessions < before.maxSessions ||
-      now.maxEntriesPerSession < before.maxEntriesPerSession ||
-      now.maxAgeHours < before.maxAgeHours;
-    return tighter ? "content" : "none";
+    const tightened = Object.values(CACHE_TIGHTENED).some((rule) => rule(previous.cache, next.cache));
+    return tightened ? "content" : "none";
   };
 
   /**
-   * Remove every legacy key and every foreign namespace, then prove it worked.
-   *
-   * Returns false when the scan could not be taken or something unsafe is
-   * still there afterwards — in which case the store stays shut.
+   * Remove every legacy key and every namespace that is not this one, then
+   * prove it worked. False means the store must stay shut.
    */
   const purgeUnsafe = (store: Storage, keep: string): boolean => {
-    const unsafe = (key: string): boolean => {
-      if (isLegacyDeviceKey(key)) return true;
-      const namespace = namespaceOf(key);
-      return namespace !== undefined && namespace !== keep;
-    };
+    const unsafe = (key: string): boolean => isLegacyDeviceKey(key) || isUnsafeNamespaceKey(key, keep);
     const keys = snapshotKeys(store);
     if (!keys) return false;
     for (const key of keys) {
@@ -387,6 +490,17 @@ export function createDeviceStore(getStorage: () => Storage | null): DeviceStore
     for (const key of keys) rawWrite(key, undefined);
   };
 
+  /** Open the environment without any storage behind it. */
+  const openWithoutStorage = (key: string, transition: EnvironmentTransition): ActivationResult => {
+    storage = null;
+    environmentKey = key;
+    cache = undefined;
+    content = false;
+    refusal = "unavailable";
+    publish({ kind: "activated", environmentKey: key, transition });
+    return { kind: transition, environmentKey: key, invalidated: "none", persistent: false };
+  };
+
   // ------------------------------------------------------------------ drafts
 
   const draftBounds = (): { bytes: number; entries: number; ageMs: number } | undefined => {
@@ -405,7 +519,13 @@ export function createDeviceStore(getStorage: () => Storage | null): DeviceStore
     return { text, at };
   };
 
-  /** Every admissible draft, oldest first, with expired ones already dropped. */
+  /**
+   * Every admissible draft, oldest first.
+   *
+   * A timestamp that cannot be read, or one from the future, is corrupt rather
+   * than immortal: it is dropped, because the alternative is an entry that can
+   * never expire and can never be evicted by age.
+   */
   const readDrafts = (): Array<[string, DraftRecord]> => {
     const bounds = draftBounds();
     if (!bounds) return [];
@@ -420,7 +540,9 @@ export function createDeviceStore(getStorage: () => Storage | null): DeviceStore
         const draft = validDraft(value);
         if (!draft) continue;
         const at = Date.parse(draft.at);
-        if (Number.isFinite(at) && now - at > bounds.ageMs) continue;
+        if (!Number.isFinite(at)) continue;
+        if (at > now + 60_000) continue;
+        if (now - at > bounds.ageMs) continue;
         entries.push([id, draft]);
       }
       return entries;
@@ -429,17 +551,28 @@ export function createDeviceStore(getStorage: () => Storage | null): DeviceStore
     }
   };
 
+  /**
+   * Write the drafts back inside the environment's bounds.
+   *
+   * Sizes are measured once per entry and the oldest are dropped against a
+   * running total, so trimming a full store costs one pass rather than one
+   * serialization per eviction.
+   */
   const writeDrafts = (entries: Array<[string, DraftRecord]>): void => {
     const bounds = draftBounds();
     if (!bounds) return;
     let kept = entries.slice(-bounds.entries);
-    let serialized = JSON.stringify(Object.fromEntries(kept));
-    // Oldest first out, until the whole family fits the environment's bound.
-    while (kept.length > 0 && serialized.length > bounds.bytes) {
-      kept = kept.slice(1);
-      serialized = JSON.stringify(Object.fromEntries(kept));
+    // `{}` plus, per entry, the JSON of its key, a colon, the JSON of its
+    // value and the comma before it: the exact bytes `JSON.stringify` writes.
+    const sizes = kept.map(([id, draft]) => byteLength(JSON.stringify(id)) + 1 + byteLength(JSON.stringify(draft)) + 1);
+    let total = 2 + sizes.reduce((sum, size) => sum + size, 0);
+    let first = 0;
+    while (first < kept.length && total > bounds.bytes) {
+      total -= sizes[first] ?? 0;
+      first += 1;
     }
-    rawWrite(DEVICE_KEYS.drafts, kept.length === 0 ? undefined : serialized);
+    kept = kept.slice(first);
+    rawWrite(DEVICE_KEYS.drafts, kept.length === 0 ? undefined : JSON.stringify(Object.fromEntries(kept)));
   };
 
   return {
@@ -473,10 +606,9 @@ export function createDeviceStore(getStorage: () => Storage | null): DeviceStore
       const previous = environmentKey;
       if (!ENVIRONMENT_KEY_PATTERN.test(key) || descriptor.contract !== ENVIRONMENT_CONTRACT_VERSION) {
         this.deactivate();
-        return { ok: false, reason: "This environment did not identify itself in a way this view understands.", previous, changed: true, invalidated: "none" };
+        return { kind: "failure", reason: "This environment did not identify itself in a way this view understands." };
       }
       const store = open();
-      const changed = environmentKey !== key;
       // A store that will not even say how much it holds is a browser that has
       // switched storage off (a private window, blocked site data). There is
       // then nothing to read and nothing to purge, so the environment is
@@ -490,26 +622,14 @@ export function createDeviceStore(getStorage: () => Storage | null): DeviceStore
           return false;
         }
       };
-      if (!store || !reachable(store)) {
-        // No storage at all (a private window, site data blocked). Nothing can
-        // be kept and nothing unsafe can be left behind, so the environment is
-        // usable — it simply remembers nothing.
-        storage = null;
-        environmentKey = key;
-        cache = { ...descriptor.cache };
-        content = false;
-        refusal = "inactive";
-        publish();
-        return { ok: true, previous, changed, invalidated: "none" };
-      }
+      const transition: EnvironmentTransition = previous === undefined ? "first" : previous === key ? "same" : "switched";
+      if (!store || !reachable(store)) return openWithoutStorage(key, transition);
+
       if (!purgeUnsafe(store, key)) {
         this.deactivate();
         return {
-          ok: false,
+          kind: "failure",
           reason: "This browser's stored data could not be cleared of other environments, so nothing is being kept on this device.",
-          previous,
-          changed: true,
-          invalidated: "none",
         };
       }
       // The namespace is only readable from here on: purge first, open second.
@@ -521,34 +641,44 @@ export function createDeviceStore(getStorage: () => Storage | null): DeviceStore
       refusal = admission.refusal;
 
       const next = fingerprintOf(descriptor);
-      const invalidated = downgrade(readFingerprint(), next);
+      const invalidated = invalidationFor(next, transition);
       if (invalidated === "namespace") purgeNamespace("all");
-      else if (invalidated === "content") purgeNamespace(CONTENT_KEYS);
+      else if (invalidated === "content") purgeNamespace([DEVICE_KEYS.drafts]);
       // A policy that forbids content also forbids the content already here.
-      if (!content) for (const key of CONTENT_KEYS) rawWrite(key, undefined);
-      rawWrite(DEVICE_KEYS.descriptor, JSON.stringify(next));
-      publish();
-      return { ok: true, previous, changed, invalidated };
+      if (!content) rawWrite(DEVICE_KEYS.drafts, undefined);
+
+      // The fingerprint is written and read back. If it does not survive — a
+      // quota that will not take even this — the namespace cannot be trusted
+      // to record what it was written under, so this device keeps nothing at
+      // all rather than reading state whose provenance it cannot check.
+      const encoded = JSON.stringify(next);
+      rawWrite(DEVICE_KEYS.descriptor, encoded);
+      if (rawRead(DEVICE_KEYS.descriptor) !== encoded) return openWithoutStorage(key, transition);
+
+      const kind = transition === "same" && invalidated !== "none" ? "narrowed" : transition;
+      publish({ kind: "activated", environmentKey: key, transition: kind });
+      return { kind, environmentKey: key, invalidated, persistent: true };
     },
 
     deactivate() {
+      const wasActive = environmentKey !== undefined;
       storage = null;
       environmentKey = undefined;
       cache = undefined;
       content = false;
       refusal = "inactive";
-      publish();
+      if (wasActive) publish({ kind: "deactivated" });
+      else snapshot = { active: false, environmentKey: undefined, persistent: false, content: false, refusal: "inactive" };
     },
 
-    read: (key) => (key === DEVICE_KEYS.drafts ? undefined : rawRead(key)),
+    read: (key) => rawRead(key),
 
     write(key, value) {
-      if (key === DEVICE_KEYS.drafts) return;
       rawWrite(key, value);
     },
 
     readJson(key, parse) {
-      const raw = this.read(key);
+      const raw = rawRead(key);
       if (raw === undefined) return undefined;
       try {
         return parse(JSON.parse(raw) as unknown);
@@ -558,7 +688,7 @@ export function createDeviceStore(getStorage: () => Storage | null): DeviceStore
     },
 
     writeJson(key, value) {
-      this.write(key, value === undefined ? undefined : JSON.stringify(value));
+      rawWrite(key, value === undefined ? undefined : JSON.stringify(value));
     },
 
     readDraft(id) {
@@ -582,3 +712,35 @@ export function createDeviceStore(getStorage: () => Storage | null): DeviceStore
  * can stand a fake one in front of it without a seam that ships.
  */
 export const deviceStore: DeviceStore = createDeviceStore(() => globalThis.localStorage ?? null);
+
+/**
+ * Forget everything this app has stored in this browser.
+ *
+ * The way out of an environment that cannot be established: the failure is
+ * about what is on this device, so the recovery is to take it off. Neutral
+ * preferences go too — a person who reaches for this is asking for a clean
+ * start, and half a clean start is the confusing answer. Never touches the
+ * host, and never throws.
+ */
+export function clearBrowserStorage(storage: Storage | null = safeLocalStorage()): void {
+  deviceStore.deactivate();
+  if (!storage) return;
+  const keys = snapshotKeys(storage);
+  if (!keys) return;
+  for (const key of keys) {
+    if (!key.startsWith(`${STORAGE_PREFIX}-`) && !key.startsWith(`${STORAGE_PREFIX}.`)) continue;
+    try {
+      storage.removeItem(key);
+    } catch {
+      // A browser that will not let go of a key is one this cannot help with.
+    }
+  }
+}
+
+function safeLocalStorage(): Storage | null {
+  try {
+    return globalThis.localStorage ?? null;
+  } catch {
+    return null;
+  }
+}

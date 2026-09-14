@@ -25,7 +25,7 @@ import { currentView, samePresentationView } from "@/runtime/presentation-state"
 import { AddProjectDialog } from "./AddProjectDialog.js";
 import { MoveSessionDialog } from "./MoveSessionDialog.js";
 import { useChatNavigation } from "./chat-navigation.js";
-import { HostConnectionState, HostVersionNotice } from "@/components/assistant-ui/elements/connection-state";
+import { HostConnectionState, HostEnvironmentNotice, HostVersionNotice } from "@/components/assistant-ui/elements/connection-state";
 import { StartupRestorationGate } from "@/components/assistant-ui/elements/loading-state";
 import { CommandPaletteDialog } from "./CommandPalette.js";
 import { GlobalSearch } from "./GlobalSearch.js";
@@ -98,6 +98,7 @@ export function StartupShell({ children }: { children: ReactNode }) {
   return (
     <div className="flex h-dvh min-h-0 flex-col">
       <HostVersionNotice />
+      <HostEnvironmentNotice />
       <div className="relative min-h-0 flex-1" inert={!!versionMismatch}>
     <StartupRestorationGate
       active={startupRestoring}

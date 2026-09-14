@@ -9,7 +9,7 @@
  * and not a draft somebody typed. And when the app cannot establish an
  * environment at all, it must keep nothing rather than keep guessing.
  */
-import { act, useEffect } from "react";
+import { act, useEffect, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -41,6 +41,21 @@ let probe: {
   cleared: string | undefined;
   openSession(path: string): Promise<void>;
 };
+
+/**
+ * Stands in for any screen that keeps a query or a fetched page of its own —
+ * Logs, MCP, the resource inventory. Its state is read from the DOM, so what
+ * the test sees is what a person would see.
+ */
+let remember: ((value: string) => void) | undefined;
+
+function LocalStateScreen() {
+  const [value, setValue] = useState("");
+  remember = setValue;
+  return <output data-testid="local-query">{value}</output>;
+}
+
+const localQuery = (): string => container.querySelector('[data-testid="local-query"]')?.textContent ?? "";
 
 function Probe() {
   const { actions } = useLaserStable();
@@ -80,7 +95,7 @@ afterEach(async () => {
 
 const mount = async () => {
   await act(async () => {
-    root.render(<LaserProvider url="ws://test"><Probe /></LaserProvider>);
+    root.render(<LaserProvider url="ws://test"><Probe /><LocalStateScreen /></LaserProvider>);
     await settle(40);
   });
 };
@@ -111,11 +126,10 @@ it("leaves nothing of one environment behind in the next", async () => {
 
   await act(async () => settle(40));
   // Whatever the app shows now, it asked *this* environment's host for it, and
-  // it asked from the beginning: no watermark from the other environment's
-  // session survived to be resumed against a different host.
-  const loads = world.calls.slice(before).filter((call) => call.method === "session/load");
-  expect(loads.length).toBeGreaterThan(0);
-  expect(loads.every((call) => ((call.params as { fromSeq?: number }).fromSeq ?? 0) === 0)).toBe(true);
+  // the fake really did drop what it was following when it was told to: the
+  // guarantee itself (no resume before the environment is established) is
+  // proved against the real client in `environment-handshake.test.ts`.
+  expect(world.calls.slice(before).some((call) => call.method === "session/load")).toBe(true);
   expect(beamStore.getSnapshot().path).toBeUndefined();
   expect(probe.cleared).toBeUndefined();
   expect(readDraft(SESSION)).toBeUndefined();
@@ -224,4 +238,40 @@ it("purges the pre-environment keys on the way in, whatever they hold", async ()
   // Panel geometry belongs to no environment and is left where it is.
   expect(localStorage.getItem("lasercode-panels")).toBe("{}");
   expect(readDraft("/p/one.jsonl")).toBeUndefined();
+});
+
+
+it("remounts the screens on a switch, and on nothing else", async () => {
+  await mount();
+  const first = probe.environmentKey;
+  expect(first).toBe(TEST_ENVIRONMENT_KEY);
+  // Component-local state of the kind Logs, MCP and the resource page keep:
+  // a query nobody else knows about.
+  await act(async () => remember?.("a query typed in the first environment"));
+  expect(localQuery()).toBe("a query typed in the first environment");
+
+  // A reconnect into the same environment is not a remount.
+  await act(async () => {
+    FakeHostClient.current.redescribe(testDescriptor());
+    await settle(20);
+  });
+  expect(localQuery()).toBe("a query typed in the first environment");
+
+  // A different environment is.
+  await act(async () => {
+    FakeHostClient.current.redescribe(testDescriptor({ environmentKey: OTHER_ENVIRONMENT_KEY }));
+    await settle(20);
+  });
+  expect(localQuery()).toBe("");
+});
+
+it("remounts the screens when the environment is lost as well", async () => {
+  await mount();
+  await act(async () => remember?.("a query that must not outlive its environment"));
+  await act(async () => {
+    FakeHostClient.current.failDescribe();
+    await settle(20);
+  });
+  expect(probe.error).toBeDefined();
+  expect(localQuery()).toBe("");
 });

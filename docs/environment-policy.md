@@ -265,13 +265,31 @@ action is allowed — the host answers that, per request, every time (§4).
 ### 6.2 When the environment cannot be established
 
 A refused, malformed, mis-generation or mis-versioned descriptor — or an app
-that cannot make this device safe for it — leaves the connection **closed**,
-with one sentence written for a person on the existing connection line. It is
-deliberately not reported as a version mismatch: the build is fine, the
-environment is not. The ordinary reconnect backoff keeps trying (visible, not a
-hidden permanent stop), and the sentence is reported once per distinct reason
-rather than once per attempt. While it lasts, device persistence is off and
-everything derived from an environment has been cleared.
+that cannot make this device safe for it, or a callback that throws, or a host
+that never answers — leaves the connection **closed** and puts a persistent
+notice on screen (`EnvironmentNotice`, shaped like the version notice: it wraps
+rather than truncates, and it is legible on a phone). It says what happened,
+that nothing is being kept on this device meanwhile, and offers the one
+recovery that helps — clearing what this browser stored for this app and
+reloading. Nothing on the host is touched by any of it.
+
+It is deliberately not reported as a version mismatch: the build is fine, the
+environment is not. The ordinary reconnect backoff keeps trying, the notice
+stays put rather than flickering with the socket, and the sentence is reported
+once per distinct reason rather than once per attempt, so a screen reader hears
+it once. While it lasts, device persistence is off and everything derived from
+an environment has been cleared.
+
+### 6.3 One handshake belongs to one socket
+
+Every deadline and every reply handler is bound to the socket generation it
+belongs to. A socket that has been replaced — a phone waking up, a `reconnect`,
+a `close` — takes its handshake with it: its late answer cannot open the
+replacement's connection, its deadline cannot close it, and nothing is ever
+sent on a socket other than the one the handshake is running on. Both requests
+carry `clientVersion`, and a frame that is not JSON, or an app callback that
+throws, ends as the same closed connection and the same sentence rather than an
+error inside a socket callback.
 
 ## 7. What this device keeps, and for whom
 
@@ -281,7 +299,20 @@ arrives every read answers `undefined` and every write does nothing, so
 "nothing before the environment is known" is a property of the code rather than
 a rule each call site has to remember.
 
-### 7.1 One namespace per environment
+### 7.1 One namespace per environment, and one authority over it
+
+The lifecycle lives in `runtime/environment-lifecycle.ts`, not spread through
+the provider: it reads a discriminated activation result (`failure`, or
+`first` / `same` / `switched` / `narrowed`) and decides once what is thrown
+away. Stores do not each remember to keep up — they subscribe to the device
+store and re-read whichever namespace opens, **including the first one**, which
+is the case a store watching only for switches would miss and then overwrite
+with its own empty start.
+
+Drafts and the fingerprint are not reachable through the generic accessors at
+all: their keys are excluded from the accessor's type, so content can only go
+through the bounded, admission-gated draft API.
+
 
 `laser-env:<environmentKey>:<suffix>`, with RP-9's opaque environment key and
 nothing else — no path, no session id, no device identity, not in the key and
@@ -322,12 +353,17 @@ path-bearing, content-bearing or environment-scoped.
 A foreign environment's namespace is purged the same way, when another
 environment opens.
 
+Keys that only *look* namespaced — no environment segment, or one that is not
+a valid environment key — belong to nobody and are purged with the rest.
+
 **A purge that could not finish does not open the door.** The scan is bounded
 (`MAX_SCANNED_KEYS`) and verified afterwards; if it hits its ceiling or a
 removal fails, activation *fails*, the store stays disabled and the person sees
 the connection failure of §6.2. A browser that refuses storage outright (a
-private window) is different and not a failure: there is nothing to read and
-nothing to purge, so the environment opens and simply remembers nothing.
+private window), or one whose quota will not even take the fingerprint, is
+different and not a failure: the environment opens, `status().persistent` is
+false with the refusal `unavailable`, and this device simply remembers nothing
+— rather than claiming a namespace whose provenance it cannot record.
 
 ### 7.3 `cache` is the admission point
 
@@ -338,8 +374,11 @@ environment's cache policy. Content is admissible only when `transcripts` is
 browser storage can prove it is encrypted at rest, so that flag disables
 content here rather than pretending `localStorage` qualifies. When content is
 inadmissible, drafts cannot be read or written **and what is already stored is
-purged**. Within the policy, drafts obey its bounds: byte and count ceilings
-with oldest-first eviction, and expiry by `maxAgeHours`. Attachments are never
+purged**. Within the policy, drafts obey its bounds: **UTF-8 byte** and count ceilings
+with oldest-first eviction (measured the way a quota measures, so a non-ASCII
+draft cannot overrun it), and expiry by `maxAgeHours`. A timestamp that cannot
+be parsed, or one from the future, is corrupt rather than immortal and is
+dropped. Attachments are never
 written to device storage. This is the API RP-10's transcript cache will
 consume; B implements no transcript cache and adds no second transcript
 authority.
@@ -350,19 +389,30 @@ authority.
 | --- | --- |
 | A different `environmentKey` | the whole previous namespace on disk, plus every in-memory store derived from it |
 | A new `contract`, or a capability that was `true` and is now `false` | the whole namespace |
+| A fingerprint that is missing, partial or unreadable, beside data | the whole namespace (an empty namespace has nothing to invalidate; a namespace this store is already open on holds this session's own writes) |
 | A tightened `cache` | the content in it |
 | The same descriptor again | nothing — a reconnect into the same environment keeps the live session, its transcript and the list state |
 
-The in-memory half is `resetEnvironmentState` in `LaserProvider`: the reducer
-drops sessions, open transcripts, loads, workers, toasts, agent runs and
-background tasks; the module-level stores (fleet mark, Beam session, collapsed
-groups and pins, folds, archive, landing drafts) are cleared **and re-read from
-the newly opened namespace**, so an environment a person comes back to still
-remembers what it knew; and the client's attachment/resume map is dropped
-synchronously, before the connection opens, so no session path can be resumed
-against a different host. The first environment of a page's life is not a
-switch: there is nothing from elsewhere in memory, and clearing there would
-throw away the connection's own setup.
+The in-memory half: the reducer drops sessions, open transcripts, loads,
+workers, toasts, agent runs and background tasks; the module-level stores
+(fleet mark, Beam session, collapsed groups and pins, folds, archive) follow
+the device store's own lifecycle and re-read the newly opened namespace, so an
+environment a person comes back to still remembers what it knew; and the
+client's attachment/resume map is dropped **synchronously**, before the
+connection opens, so no session path can be resumed against a different host.
+
+The screens below the provider are also **keyed by the environment**, so a log
+query, an MCP form or a fetched page of resource rows cannot outlive the
+environment it came from. Only client-local views go: the host keeps every
+session, run and command it is holding. The first environment does not remount
+anything, and neither does a reconnect into the same one.
+
+The fingerprint deliberately records only the contract, the capabilities and
+the cache policy. The actor, the scopes and the deployment label describe *this
+connection*, not what is on the device — a phone and a desktop in the same
+environment hold the same cache under different actors — so treating them as
+cache provenance would throw a person's state away every time they changed
+device or an operator adjusted a grant.
 
 ## 8. Still to do
 
@@ -383,4 +433,17 @@ throw away the connection's own setup.
   the namespace is deferred rather than skipped. Everything above is covered by
   unit and integration tests with a fake `Storage` and a fake socket
   (`packages/ui/test/runtime/device-storage.test.ts`,
-  `environment-handshake.test.ts`, `environment-switch.test.ts`).
+  `environment-handshake.test.ts`, `environment-mount.test.tsx`,
+  `environment-switch.test.tsx`, `environment-notice.test.tsx`).
+
+## 9. For the release notes
+
+One line belongs in the notes of the release that carries this, because it is
+a deliberate loss a person could otherwise mistake for a bug:
+
+> **This update clears what this browser had stored for conversations.** Drafts,
+> pins, collapsed groups, folds, the archive and the last session you had open
+> are kept per environment from now on, and the old records did not say which
+> environment they came from — so they are removed rather than handed to the
+> wrong one. Nothing on your computer's sessions is affected. A very old local
+> project list (unused since projects moved to the host) is removed with them.

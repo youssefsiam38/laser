@@ -16,7 +16,6 @@ import type {
   AgentModelChoice,
   AgentRun,
   AgentsSnapshot,
-  EnvironmentDescriptor,
   HostNotificationMethod,
   HostNotifications,
   MessageSpeaker,
@@ -238,20 +237,17 @@ export const initialAgents: AgentsSlice = {
 };
 
 /**
- * What this connection's environment is, for the app to *show* (RP-13).
+ * Which environment this connection is in (RP-13).
  *
- * Presentation only, and deliberately a copy rather than the descriptor: the
- * host decides what a request may do, every time it is asked. Nothing here
- * grants anything, and nothing reads it to decide whether an action is
- * allowed — the answer to that always comes back from the host.
+ * The opaque public key and nothing else. The rest of the descriptor is not
+ * copied here on purpose: the host decides what a request may do, every time
+ * it is asked, and state nothing renders or reads is state that goes stale
+ * without anybody noticing. What the app does with this key is identity —
+ * device storage is scoped to it, and the screens below the provider are
+ * keyed by it so none of their local state can outlive a switch.
  */
 export interface EnvironmentSnapshot {
-  contract: string;
-  deployment: EnvironmentDescriptor["deployment"];
   environmentKey: string;
-  capabilities: EnvironmentDescriptor["capabilities"];
-  cache: EnvironmentDescriptor["cache"];
-  scopes: EnvironmentDescriptor["scopes"];
 }
 
 export interface AppState {

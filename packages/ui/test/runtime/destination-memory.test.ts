@@ -16,7 +16,7 @@ import { storageKey } from "@lasercode/protocol";
 import { readDestinationMemory, initialDestinationFromMemory } from "../../src/runtime/main-destination-controller.js";
 import { SESSIONS_TAB_STORAGE_KEY } from "../../src/runtime/session-tab-memory.js";
 import { DEVICE_KEYS, deviceStore } from "../../src/runtime/device-storage.js";
-import { activateTestEnvironment, deviceKeyName, seedDestination } from "./environment-fixture.js";
+import { activateTestEnvironment, deviceKeyName, seedDestination, seedFingerprint } from "./environment-fixture.js";
 
 beforeEach(() => {
   localStorage.clear();
@@ -33,12 +33,11 @@ it("reads its own shape back, tab and code destination intact", () => {
 });
 
 it("remembers nothing until an environment is established", () => {
-  // The value is right there in storage, under this environment's name, and it
-  // is still unreadable: the descriptor has not landed, so the app does not
-  // know whose sessions these are.
-  localStorage.setItem(deviceKeyName(DEVICE_KEYS.destination), JSON.stringify({
-    v: 2, tab: "code", code: { kind: "project-session", project: "/one", path: "/one/root.jsonl" },
-  }));
+  // The value is right there in storage, under this environment's name, beside
+  // the record of the environment that wrote it, and it is still unreadable:
+  // the descriptor has not landed, so the app does not know whose sessions
+  // these are.
+  seedDestination({ tab: "code", code: { kind: "project-session", project: "/one", path: "/one/root.jsonl" } });
   expect(readDestinationMemory()).toMatchObject({ v: 2, tab: "code", code: { kind: "no-project-landing" } });
   activateTestEnvironment();
   expect(readDestinationMemory()).toMatchObject({ code: { kind: "project-session", project: "/one" } });
@@ -63,6 +62,7 @@ it("keeps the tab preference unscoped: an enum is not a place", () => {
 });
 
 it("ignores a value of any other shape rather than throwing", () => {
+  seedFingerprint();
   activateTestEnvironment();
   for (const stored of ["not json", "[]", "null", JSON.stringify({ v: 2, tab: "code" }), JSON.stringify({ v: 2, code: { kind: "nonsense" } })]) {
     localStorage.setItem(deviceKeyName(DEVICE_KEYS.destination), stored);

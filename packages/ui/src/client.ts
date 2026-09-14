@@ -98,9 +98,16 @@ export class HostClient {
   private versionBlocked = false;
   /** The last environment failure, kept so retries do not repeat themselves. */
   private environmentReason: string | undefined;
-  /** The version this socket's handshake accepted, for the descriptor check. */
-  private acceptedVersion: string | undefined;
-  private handshakeTimer: ReturnType<typeof setTimeout> | undefined;
+  /**
+   * The handshake of **one** socket.
+   *
+   * Everything time-sensitive is bound to the socket generation it belongs to:
+   * a reply or a timeout from a socket that has since been replaced has no
+   * business closing the replacement, cancelling its deadline or opening a
+   * connection on its behalf. `reconnect()` and `close()` retire this, so a
+   * late arrival finds nothing to act on.
+   */
+  private handshake: { socket: WebSocket; timer?: ReturnType<typeof setTimeout>; acceptedVersion?: string } | undefined;
   private readonly handshakeMessages: JsonRpcMessage[] = [];
   private frameHandle: number | undefined;
   private timerHandle: ReturnType<typeof setTimeout> | undefined;
@@ -142,6 +149,9 @@ export class HostClient {
     if (this.versionBlocked) return;
     const dead = this.ws;
     this.ws = undefined;
+    // The dead socket's handshake dies with it: its deadline must not close
+    // the replacement, and its late answer must not open one.
+    this.retireHandshake();
     if (dead) {
       dead.onopen = dead.onmessage = dead.onclose = dead.onerror = null;
       try {
@@ -159,7 +169,7 @@ export class HostClient {
   }
 
   close(): void {
-    clearTimeout(this.handshakeTimer);
+    this.retireHandshake();
     this.closedByUser = true;
     if (this.listening) {
       this.listening = false;
@@ -252,14 +262,31 @@ export class HostClient {
     this.handshakeMessages.length = 0;
     const ws = new WebSocket(this.options.url ?? defaultHostUrl());
     this.ws = ws;
-    this.acceptedVersion = undefined;
+    this.retireHandshake();
+    const handshake: { socket: WebSocket; timer?: ReturnType<typeof setTimeout>; acceptedVersion?: string } = { socket: ws };
+    this.handshake = handshake;
     ws.onopen = () => {
-      this.handshakeTimer = setTimeout(() => ws.close(), HANDSHAKE_TIMEOUT_MS);
-      ws.send(JSON.stringify({ jsonrpc: "2.0", id: VERSION_ID, method: "pi/host/version", params: {} }));
+      if (this.handshake !== handshake) return;
+      handshake.timer = setTimeout(() => this.timeOutHandshake(handshake), HANDSHAKE_TIMEOUT_MS);
+      // The version frame carries the client version like every other request:
+      // a host that has moved on answers the mismatch rather than the version.
+      this.send(ws, { jsonrpc: "2.0", id: VERSION_ID, method: "pi/host/version", params: {}, clientVersion: PRODUCT_VERSION });
     };
-    ws.onmessage = (event) => this.onMessage(JSON.parse(String(event.data)) as JsonRpcMessage);
+    ws.onmessage = (event) => {
+      // A frame from a socket this client has already replaced is not this
+      // connection's business, and neither is one that is not JSON at all.
+      if (this.ws !== ws) return;
+      let message: JsonRpcMessage;
+      try {
+        message = JSON.parse(String(event.data)) as JsonRpcMessage;
+      } catch {
+        return;
+      }
+      this.onMessage(message, ws);
+    };
     ws.onclose = () => {
-      clearTimeout(this.handshakeTimer);
+      if (this.handshake?.socket === ws) this.retireHandshake();
+      if (this.ws !== ws) return;
       this.flushUpdates();
       this.setState("closed");
       for (const p of this.pending.values()) p.reject(new Error("connection closed"));
@@ -272,6 +299,25 @@ export class HostClient {
     ws.onerror = () => ws.close();
   }
 
+  /** Drop the current handshake and its deadline, whatever state it is in. */
+  private retireHandshake(): void {
+    if (this.handshake?.timer) clearTimeout(this.handshake.timer);
+    this.handshake = undefined;
+  }
+
+  /** The handshake took too long. Replace that socket, and only that socket. */
+  private timeOutHandshake(handshake: { socket: WebSocket }): void {
+    if (this.handshake?.socket !== handshake.socket) return;
+    this.retireHandshake();
+    handshake.socket.close();
+  }
+
+  /** Send on one specific socket, never on whatever replaced it. */
+  private send(socket: WebSocket, frame: unknown): void {
+    if (this.ws !== socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify(frame));
+  }
+
   /**
    * Step one: the versions must be the same build, exactly.
    *
@@ -279,24 +325,26 @@ export class HostClient {
    * this is, because until that answer lands this view does not know what it
    * may keep on this device, and must therefore keep nothing.
    */
-  private acceptVersion(version: unknown): void {
-    clearTimeout(this.handshakeTimer);
+  private acceptVersion(version: unknown, socket: WebSocket): void {
+    const handshake = this.handshake;
+    if (!handshake || handshake.socket !== socket) return;
+    if (handshake.timer) clearTimeout(handshake.timer);
+    delete handshake.timer;
     const desktop = (globalThis as typeof globalThis & { desktop?: { version: string } }).desktop;
     if (version !== PRODUCT_VERSION || (desktop && desktop.version !== PRODUCT_VERSION)) {
       this.handshakeMessages.length = 0;
       this.versionBlocked = true;
+      this.retireHandshake();
       this.options.onVersionMismatch?.(typeof version === "string" ? version : "unknown");
-      this.ws?.close();
+      socket.close();
       return;
     }
-    this.acceptedVersion = version;
-    const ws = this.ws;
-    if (!ws) return;
-    this.handshakeTimer = setTimeout(
-      () => this.failEnvironment("The host did not describe this environment in time."),
+    handshake.acceptedVersion = version;
+    handshake.timer = setTimeout(
+      () => this.failEnvironment("The host did not describe this environment in time.", socket),
       HANDSHAKE_TIMEOUT_MS,
     );
-    ws.send(JSON.stringify({ jsonrpc: "2.0", id: ENVIRONMENT_ID, method: ENVIRONMENT_DESCRIBE_METHOD, params: {} }));
+    this.send(socket, { jsonrpc: "2.0", id: ENVIRONMENT_ID, method: ENVIRONMENT_DESCRIBE_METHOD, params: {}, clientVersion: PRODUCT_VERSION });
   }
 
   /**
@@ -306,26 +354,39 @@ export class HostClient {
    * Only after the app has scoped itself to it does the connection open — so
    * no queued notification, no resume and no request can precede it.
    */
-  private acceptEnvironment(message: { result?: unknown; error?: { message?: string } }): void {
-    clearTimeout(this.handshakeTimer);
+  private acceptEnvironment(message: { result?: unknown; error?: { message?: string } }, socket: WebSocket): void {
+    const handshake = this.handshake;
+    if (!handshake || handshake.socket !== socket) return;
+    if (handshake.timer) clearTimeout(handshake.timer);
+    delete handshake.timer;
     if (message.error) {
-      this.failEnvironment("This host cannot say what environment this is, so nothing is being kept on this device.");
+      this.failEnvironment("This host cannot say what environment this is, so nothing is being kept on this device.", socket);
       return;
     }
     const parsed = environmentDescriptorSchema.safeParse((message.result as { environment?: unknown } | undefined)?.environment);
-    if (!parsed.success || parsed.data.contract !== ENVIRONMENT_CONTRACT_VERSION || parsed.data.version !== this.acceptedVersion) {
-      this.failEnvironment("This view does not understand how this host describes its environment. Refresh this view.");
+    if (!parsed.success || parsed.data.contract !== ENVIRONMENT_CONTRACT_VERSION || parsed.data.version !== handshake.acceptedVersion) {
+      this.failEnvironment("This view does not understand how this host describes its environment. Refresh this view.", socket);
       return;
     }
-    const acceptance = this.options.onEnvironment?.(parsed.data as EnvironmentDescriptor) ?? { ok: true };
+    let acceptance: EnvironmentAcceptance;
+    try {
+      acceptance = this.options.onEnvironment?.(parsed.data as EnvironmentDescriptor) ?? { ok: true };
+    } catch {
+      // The app could not prepare this device and said so by throwing. That is
+      // still a closed connection with a sentence, never an unhandled error
+      // inside a socket callback.
+      this.failEnvironment("This view could not prepare this device for this environment.", socket);
+      return;
+    }
     if (!acceptance.ok) {
-      this.failEnvironment(acceptance.reason);
+      this.failEnvironment(acceptance.reason, socket);
       return;
     }
+    this.retireHandshake();
     this.environmentReason = undefined;
     this.backoffMs = 500;
     this.setState("open");
-    for (const message of this.handshakeMessages.splice(0)) this.onMessage(message);
+    for (const message of this.handshakeMessages.splice(0)) this.onMessage(message, socket);
     for (const [path, seq] of [...this.attached]) {
       // A session the app has dropped must not be re-opened in a worker.
       if (this.options.shouldResume && !this.options.shouldResume(path)) {
@@ -349,13 +410,20 @@ export class HostClient {
    * the reason is reported once per distinct sentence, so a retry loop cannot
    * become a stream of toasts.
    */
-  private failEnvironment(reason: string): void {
-    clearTimeout(this.handshakeTimer);
+  private failEnvironment(reason: string, socket: WebSocket): void {
+    if (this.handshake?.socket !== socket) return;
+    this.retireHandshake();
     this.handshakeMessages.length = 0;
     const repeated = this.environmentReason === reason;
     this.environmentReason = reason;
-    if (!repeated) this.options.onEnvironmentFailure?.(reason);
-    this.ws?.close();
+    if (!repeated) {
+      try {
+        this.options.onEnvironmentFailure?.(reason);
+      } catch {
+        // The app's own handler is not allowed to take the socket with it.
+      }
+    }
+    socket.close();
   }
 
   /**
@@ -427,14 +495,14 @@ export class HostClient {
     }
   }
 
-  private onMessage(message: JsonRpcMessage): void {
+  private onMessage(message: JsonRpcMessage, socket: WebSocket): void {
     if ("id" in message && !("method" in message)) {
       if (message.id === VERSION_ID) {
-        this.acceptVersion((message.result as { version?: string } | undefined)?.version);
+        this.acceptVersion((message.result as { version?: string } | undefined)?.version, socket);
         return;
       }
       if (message.id === ENVIRONMENT_ID) {
-        this.acceptEnvironment(message as { result?: unknown; error?: { message?: string } });
+        this.acceptEnvironment(message as { result?: unknown; error?: { message?: string } }, socket);
         return;
       }
       this.flushUpdates();

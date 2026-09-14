@@ -77,6 +77,10 @@ function createBeamStore() {
 
 export const beamStore = createBeamStore();
 
+// The remembered Beam chat belongs to an environment, so it is re-read
+// whenever one opens and let go of when none is (RP-13).
+deviceStore.subscribe(() => beamStore.reset());
+
 export function useBeam(): BeamSnapshot {
   return useSyncExternalStore(beamStore.subscribe, beamStore.getSnapshot, beamStore.getSnapshot);
 }

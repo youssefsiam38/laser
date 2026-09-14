@@ -12,12 +12,16 @@ import { DEFAULT_CACHE_POLICY, storageKey } from "@lasercode/protocol";
 
 import {
   DEVICE_KEYS,
+  DRAFT_HARD_LIMITS,
+  ENVIRONMENT_NAMESPACE,
   MAX_SCANNED_KEYS,
+  clearBrowserStorage,
   createDeviceStore,
+  deviceStore,
   isLegacyDeviceKey,
   namespaceOf,
 } from "../../src/runtime/device-storage.js";
-import { OTHER_ENVIRONMENT_KEY, TEST_ENVIRONMENT_KEY, deviceKeyName, testDescriptor } from "./environment-fixture.js";
+import { FULL_CAPABILITIES, OTHER_ENVIRONMENT_KEY, TEST_ENVIRONMENT_KEY, deviceKeyName, testDescriptor } from "./environment-fixture.js";
 
 /** A `Storage` a test owns completely, so every key in it is one it put there. */
 function fakeStorage(entries: Record<string, string> = {}): Storage & { map: Map<string, string> } {
@@ -47,7 +51,7 @@ afterEach(() => store.deactivate());
 describe("before the environment is known", () => {
   it("reads nothing, writes nothing, and says so", () => {
     storage.map.set(deviceKeyName(DEVICE_KEYS.archived), '["/already/here.jsonl"]');
-    expect(store.status()).toEqual({ active: false, environmentKey: undefined, content: false, refusal: "inactive" });
+    expect(store.status()).toEqual({ active: false, environmentKey: undefined, persistent: false, content: false, refusal: "inactive" });
     expect(store.read(DEVICE_KEYS.archived)).toBeUndefined();
     expect(store.readJson(DEVICE_KEYS.archived, (value) => value)).toBeUndefined();
     expect(store.readDraft("/s.jsonl")).toBeUndefined();
@@ -106,7 +110,7 @@ describe("namespacing", () => {
     };
     storage = fakeStorage({ ...legacy, ...neutral });
     store = createDeviceStore(() => storage);
-    expect(store.activate(testDescriptor()).ok).toBe(true);
+    expect(store.activate(testDescriptor()).kind).toBe("first");
 
     for (const key of Object.keys(legacy)) expect(storage.map.has(key), key).toBe(false);
     for (const key of Object.keys(neutral)) expect(storage.map.get(key), key).toBe(neutral[key as keyof typeof neutral]);
@@ -134,8 +138,8 @@ describe("a purge that cannot finish", () => {
     store = createDeviceStore(() => storage);
 
     const outcome = store.activate(testDescriptor());
-    expect(outcome.ok).toBe(false);
-    expect(outcome.reason).toMatch(/could not be cleared/);
+    expect(outcome.kind).toBe("failure");
+    expect(outcome.kind === "failure" && outcome.reason).toMatch(/could not be cleared/);
     expect(store.status().active).toBe(false);
     expect(store.read(DEVICE_KEYS.archived)).toBeUndefined();
     // The legacy key is still there, which is the point: nothing pretended it
@@ -147,14 +151,14 @@ describe("a purge that cannot finish", () => {
     const backing = fakeStorage({ [storageKey("archived")]: "[]" });
     const refusing = { ...backing, removeItem: () => { throw new DOMException("denied"); } } as unknown as Storage;
     const shut = createDeviceStore(() => refusing);
-    expect(shut.activate(testDescriptor()).ok).toBe(false);
+    expect(shut.activate(testDescriptor()).kind).toBe("failure");
     expect(shut.status().active).toBe(false);
   });
 
   it("refuses an environment key or contract it cannot trust", () => {
-    expect(store.activate(testDescriptor({ environmentKey: "not-a-key" })).ok).toBe(false);
-    expect(store.activate(testDescriptor({ environmentKey: "e1.tooshort" })).ok).toBe(false);
-    expect(store.activate(testDescriptor({ contract: "ep2" })).ok).toBe(false);
+    expect(store.activate(testDescriptor({ environmentKey: "not-a-key" })).kind).toBe("failure");
+    expect(store.activate(testDescriptor({ environmentKey: "e1.tooshort" })).kind).toBe("failure");
+    expect(store.activate(testDescriptor({ contract: "ep2" })).kind).toBe("failure");
     expect(store.status().active).toBe(false);
   });
 });
@@ -168,8 +172,9 @@ describe("a browser that refuses storage", () => {
     } as unknown as Storage;
     const shut = createDeviceStore(() => denied);
     const outcome = shut.activate(testDescriptor());
-    expect(outcome.ok).toBe(true);
-    expect(shut.status()).toMatchObject({ active: true, content: false });
+    expect(outcome.kind).toBe("first");
+    expect(outcome.kind !== "failure" && outcome.persistent).toBe(false);
+    expect(shut.status()).toMatchObject({ active: true, persistent: false, content: false, refusal: "unavailable" });
     expect(() => shut.writeJson(DEVICE_KEYS.archived, ["/a"])).not.toThrow();
     expect(shut.readJson(DEVICE_KEYS.archived, (value) => value)).toBeUndefined();
   });
@@ -177,7 +182,11 @@ describe("a browser that refuses storage", () => {
   it("swallows a quota failure on write without losing the app", () => {
     const full = { ...fakeStorage(), setItem: () => { throw new DOMException("quota"); } } as unknown as Storage;
     const limited = createDeviceStore(() => full);
-    expect(limited.activate(testDescriptor()).ok).toBe(true);
+    // The fingerprint cannot be written either, so this device is honest about
+    // keeping nothing rather than claiming a namespace it cannot vouch for.
+    const outcome = limited.activate(testDescriptor());
+    expect(outcome.kind !== "failure" && outcome.persistent).toBe(false);
+    expect(limited.status().refusal).toBe("unavailable");
     expect(() => limited.writeJson(DEVICE_KEYS.archived, ["/a"])).not.toThrow();
     expect(() => limited.writeDraft("/s.jsonl", "text")).not.toThrow();
   });
@@ -266,7 +275,7 @@ describe("a descriptor that takes something away", () => {
       cache: DEFAULT_CACHE_POLICY,
     }));
     const outcome = store.activate(testDescriptor());
-    expect(outcome.invalidated).toBe("namespace");
+    expect(outcome.kind !== "failure" && outcome.invalidated).toBe("namespace");
     expect(store.readJson(DEVICE_KEYS.sessionPins, (value) => value)).toBeUndefined();
   });
 
@@ -274,7 +283,7 @@ describe("a descriptor that takes something away", () => {
     store.activate(testDescriptor());
     store.writeJson(DEVICE_KEYS.sessionPins, ["/p/s.jsonl"]);
     const outcome = store.activate(testDescriptor({ capabilities: { search: false } }));
-    expect(outcome.invalidated).toBe("namespace");
+    expect(outcome.kind !== "failure" && outcome.invalidated).toBe("namespace");
     expect(store.readJson(DEVICE_KEYS.sessionPins, (value) => value)).toBeUndefined();
   });
 
@@ -283,7 +292,7 @@ describe("a descriptor that takes something away", () => {
     store.writeJson(DEVICE_KEYS.sessionPins, ["/p/s.jsonl"]);
     store.writeDraft("/p/s.jsonl", "unsent");
     const outcome = store.activate(testDescriptor({ cache: { maxBytes: 1024 } }));
-    expect(outcome.invalidated).toBe("content");
+    expect(outcome).toMatchObject({ kind: "narrowed", invalidated: "content" });
     expect(store.readDraft("/p/s.jsonl")).toBeUndefined();
     expect(store.readJson(DEVICE_KEYS.sessionPins, (value) => value)).toEqual(["/p/s.jsonl"]);
   });
@@ -293,13 +302,15 @@ describe("a descriptor that takes something away", () => {
     store.writeJson(DEVICE_KEYS.sessionPins, ["/p/s.jsonl"]);
     store.writeDraft("/p/s.jsonl", "unsent");
     const outcome = store.activate(testDescriptor());
-    expect(outcome).toMatchObject({ ok: true, changed: false, invalidated: "none", previous: TEST_ENVIRONMENT_KEY });
+    expect(outcome).toMatchObject({ kind: "same", invalidated: "none", environmentKey: TEST_ENVIRONMENT_KEY, persistent: true });
     expect(store.readDraft("/p/s.jsonl")?.text).toBe("unsent");
     expect(store.readJson(DEVICE_KEYS.sessionPins, (value) => value)).toEqual(["/p/s.jsonl"]);
   });
 
   it("does not call the first environment of a page's life a switch", () => {
-    expect(store.activate(testDescriptor())).toMatchObject({ previous: undefined, changed: true });
+    expect(store.activate(testDescriptor())).toMatchObject({ kind: "first" });
+    expect(store.activate(testDescriptor({ environmentKey: OTHER_ENVIRONMENT_KEY }))).toMatchObject({ kind: "switched" });
+    expect(store.activate(testDescriptor({ environmentKey: OTHER_ENVIRONMENT_KEY, cache: { maxBytes: 8 } }))).toMatchObject({ kind: "narrowed" });
   });
 
   it("writes no path into what it remembers about the descriptor", () => {
@@ -309,5 +320,132 @@ describe("a descriptor that takes something away", () => {
     expect(fingerprint).not.toContain("/p/");
     expect(fingerprint).not.toContain("actor");
     expect(fingerprint).not.toContain("l1.browser");
+  });
+});
+
+describe("bounds are counted in bytes, not characters", () => {
+  it("measures what a quota measures, so non-ASCII drafts cannot overrun it", () => {
+    // Each of these characters is three UTF-8 bytes; a length check would let
+    // three times the intended amount through.
+    store.activate(testDescriptor({ cache: { maxBytes: 300 } }));
+    store.writeDraft("/p/first.jsonl", "日".repeat(60));
+    store.writeDraft("/p/second.jsonl", "日".repeat(60));
+    const stored = storage.map.get(deviceKeyName(DEVICE_KEYS.drafts)) ?? "";
+    expect(new TextEncoder().encode(stored).length).toBeLessThanOrEqual(300);
+    // The newest survives; the oldest paid for it.
+    expect(store.readDraft("/p/second.jsonl")?.text).toHaveLength(60);
+    expect(store.readDraft("/p/first.jsonl")).toBeUndefined();
+  });
+
+  it("keeps an emoji draft readable rather than mangling it at a byte edge", () => {
+    store.activate(testDescriptor());
+    store.writeDraft("/p/s.jsonl", "🚀 ship it");
+    expect(store.readDraft("/p/s.jsonl")?.text).toBe("🚀 ship it");
+  });
+
+  it("stays linear when the hard entry limit is full", () => {
+    store.activate(testDescriptor());
+    for (let index = 0; index < DRAFT_HARD_LIMITS.entries * 3; index += 1) {
+      store.writeDraft(`/p/s${index}.jsonl`, `draft ${index}`);
+    }
+    const stored = JSON.parse(storage.map.get(deviceKeyName(DEVICE_KEYS.drafts))!) as Record<string, unknown>;
+    expect(Object.keys(stored).length).toBeLessThanOrEqual(DRAFT_HARD_LIMITS.entries);
+  });
+});
+
+describe("a draft with a timestamp that cannot be believed", () => {
+  const cases: Array<[string, string]> = [
+    ["unparseable", "the day before yesterday"],
+    ["empty", ""],
+    ["far in the future", new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString()],
+  ];
+
+  for (const [name, at] of cases) {
+    it(`is corrupt rather than immortal when it is ${name}`, () => {
+      store.activate(testDescriptor());
+      storage.map.set(deviceKeyName(DEVICE_KEYS.drafts), JSON.stringify({ "/p/s.jsonl": { text: "kept forever?", at } }));
+      expect(store.readDraft("/p/s.jsonl")).toBeUndefined();
+      // And it does not survive the next write either.
+      store.writeDraft("/p/other.jsonl", "fresh");
+      expect(JSON.parse(storage.map.get(deviceKeyName(DEVICE_KEYS.drafts))!)).not.toHaveProperty("/p/s.jsonl");
+    });
+  }
+});
+
+describe("a fingerprint this build cannot trust", () => {
+  const seedData = (): void => {
+    store.activate(testDescriptor());
+    store.writeJson(DEVICE_KEYS.sessionPins, ["/p/s.jsonl"]);
+    store.deactivate();
+  };
+
+  const cases: Array<[string, string | undefined]> = [
+    ["missing", undefined],
+    ["not JSON", "{not json"],
+    ["partial", JSON.stringify({ contract: "ep1" })],
+    ["missing its cache", JSON.stringify({ contract: "ep1", capabilities: FULL_CAPABILITIES })],
+    ["carrying a field this build does not know", JSON.stringify({
+      contract: "ep1",
+      capabilities: { ...FULL_CAPABILITIES, teleport: true },
+      cache: DEFAULT_CACHE_POLICY,
+    })],
+    ["carrying an extra top-level field", JSON.stringify({
+      contract: "ep1",
+      capabilities: FULL_CAPABILITIES,
+      cache: DEFAULT_CACHE_POLICY,
+      actor: "l1.browser",
+    })],
+  ];
+
+  for (const [name, fingerprint] of cases) {
+    it(`invalidates the namespace beside it when it is ${name}`, () => {
+      seedData();
+      if (fingerprint === undefined) storage.map.delete(deviceKeyName(DEVICE_KEYS.descriptor));
+      else storage.map.set(deviceKeyName(DEVICE_KEYS.descriptor), fingerprint);
+      // A fresh view of this device, as a reload would be.
+      const reopened = createDeviceStore(() => storage);
+      const outcome = reopened.activate(testDescriptor());
+      expect(outcome).toMatchObject({ kind: "first", invalidated: "namespace" });
+      expect(reopened.readJson(DEVICE_KEYS.sessionPins, (value) => value)).toBeUndefined();
+      reopened.deactivate();
+    });
+  }
+
+  it("leaves an empty namespace alone: there is nothing to be wrong about", () => {
+    const reopened = createDeviceStore(() => storage);
+    expect(reopened.activate(testDescriptor())).toMatchObject({ kind: "first", invalidated: "none" });
+    reopened.deactivate();
+  });
+});
+
+describe("a key that only looks namespaced", () => {
+  it("is purged like any other thing with no environment behind it", () => {
+    const malformed = {
+      [`${ENVIRONMENT_NAMESPACE}::archived`]: '["/p/s.jsonl"]',
+      [`${ENVIRONMENT_NAMESPACE}:not-a-key:archived`]: '["/p/s.jsonl"]',
+      [`${ENVIRONMENT_NAMESPACE}:e1.short:archived`]: '["/p/s.jsonl"]',
+      [`${ENVIRONMENT_NAMESPACE}:`]: "x",
+    };
+    storage = fakeStorage(malformed);
+    store = createDeviceStore(() => storage);
+    expect(store.activate(testDescriptor()).kind).toBe("first");
+    for (const key of Object.keys(malformed)) expect(storage.map.has(key), key).toBe(false);
+  });
+});
+
+describe("clearing this browser's data", () => {
+  it("takes every key this app wrote, and closes the store", () => {
+    storage = fakeStorage({
+      [storageKey("panels")]: "{}",
+      "lasercode.theme": '{"v":1}',
+      "someone-elses-key": "left alone",
+    });
+    store = createDeviceStore(() => storage);
+    store.activate(testDescriptor());
+    store.writeJson(DEVICE_KEYS.sessionPins, ["/p/s.jsonl"]);
+
+    clearBrowserStorage(storage);
+    expect([...storage.map.keys()]).toEqual(["someone-elses-key"]);
+    expect(deviceStore.status().active).toBe(false);
   });
 });

@@ -95,7 +95,11 @@ environment; another environment's namespace and the pre-environment keys are
 **purged, never adopted**, and a purge that could not finish keeps persistence
 off rather than opening a half-cleared device. Local browser storage is not
 encrypted, so an environment that disables transcripts, bounds the cache to
-nothing or requires an encrypted store keeps no content at all. See
+nothing or requires an encrypted store keeps no content at all, and a browser
+that will not keep anything says so rather than claiming a namespace. Losing an
+environment is visible: a persistent notice says nothing is being kept and
+offers to clear this browser's stored data, and the screens below are remounted
+so no query or fetched page outlives the environment it came from. See
 [`environment-policy.md`](environment-policy.md) §6–§7.
 
 ### Machine file previews (M16-T19)

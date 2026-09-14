@@ -309,3 +309,135 @@ describe("what a connection carries across environments", () => {
     expect(socket.work().map((frame) => frame.method)).toEqual(["session/load"]);
   });
 });
+
+describe("one handshake belongs to one socket", () => {
+  it("carries the client version on the version request itself", () => {
+    const h = build();
+    h.client.connect();
+    const socket = h.socket();
+    socket.open();
+    const first = JSON.parse(socket.sent[0]!) as { method: string; clientVersion?: string };
+    expect(first).toMatchObject({ method: "pi/host/version", clientVersion: PRODUCT_VERSION });
+    socket.answerVersion();
+    const second = JSON.parse(socket.sent[1]!) as { method: string; clientVersion?: string };
+    expect(second).toMatchObject({ method: "environment/describe", clientVersion: PRODUCT_VERSION });
+    h.client.close();
+  });
+
+  for (const step of ["before the version answer", "between the version and the environment"] as const) {
+    it(`survives a reconnect ${step}`, () => {
+      vi.useFakeTimers();
+      const h = build();
+      h.client.connect();
+      const dead = h.socket();
+      dead.open();
+      if (step === "between the version and the environment") dead.answerVersion();
+
+      h.client.reconnect("the tab woke up");
+      const live = h.socket();
+      expect(live).not.toBe(dead);
+      live.open();
+
+      // The old socket answers late, from a host that has moved on. It must
+      // not open this connection, and it must not close the new socket.
+      dead.answerVersion();
+      dead.answerEnvironment();
+      expect(h.client.connection).not.toBe("open");
+      expect(h.environments).toHaveLength(0);
+      expect(live.closed).toBe(false);
+
+      // The replacement finishes its own handshake, and that one counts.
+      live.answerVersion();
+      live.answerEnvironment();
+      expect(h.client.connection).toBe("open");
+      expect(h.environments).toHaveLength(1);
+      h.client.close();
+    });
+  }
+
+  it("does not let a retired socket's deadline close its replacement", () => {
+    vi.useFakeTimers();
+    const h = build();
+    h.client.connect();
+    const dead = h.socket();
+    dead.open();
+    dead.answerVersion();
+
+    h.client.reconnect("stale socket");
+    const live = h.socket();
+    live.open();
+    // Past the old socket's deadline, and well past it.
+    vi.advanceTimersByTime(30_000);
+    // The live socket has a deadline of its own and has been replaced by it,
+    // but nothing here was closed by the *old* one: the only socket that ever
+    // closed is the retired one.
+    expect(dead.closed).toBe(true);
+    const latest = h.socket();
+    latest.open();
+    latest.answerVersion();
+    latest.answerEnvironment();
+    expect(h.client.connection).toBe("open");
+    expect(h.failures).toEqual([]);
+    h.client.close();
+  });
+
+  it("gives the environment step its own deadline, and reports it once", () => {
+    vi.useFakeTimers();
+    const h = build();
+    h.client.connect();
+    const socket = h.socket();
+    socket.open();
+    socket.answerVersion();
+    expect(h.client.connection).not.toBe("open");
+
+    vi.advanceTimersByTime(5000);
+    expect(h.failures).toEqual(["The host did not describe this environment in time."]);
+    expect(socket.closed).toBe(true);
+
+    // The answer arrives after the deadline has already given up on it.
+    socket.answerEnvironment();
+    expect(h.client.connection).not.toBe("open");
+    expect(h.environments).toHaveLength(0);
+    h.client.close();
+  });
+
+  it("stops every handshake deadline when the person closes the client", () => {
+    vi.useFakeTimers();
+    const h = build();
+    h.client.connect();
+    const socket = h.socket();
+    socket.open();
+    socket.answerVersion();
+    h.client.close();
+    vi.advanceTimersByTime(60_000);
+    expect(h.failures).toEqual([]);
+    expect(FakeSocket.instances).toHaveLength(1);
+  });
+
+  it("ignores a frame that is not JSON at all, and keeps the connection", () => {
+    const h = build();
+    h.client.connect();
+    const socket = h.socket();
+    socket.open();
+    socket.answerVersion();
+    expect(() => socket.onmessage?.({ data: "<html>proxy error</html>" })).not.toThrow();
+    expect(socket.closed).toBe(false);
+    socket.answerEnvironment();
+    expect(h.client.connection).toBe("open");
+    h.client.close();
+  });
+
+  it("turns a throwing app callback into the same closed connection and sentence", () => {
+    const h = build(() => {
+      throw new Error("storage exploded");
+    });
+    h.client.connect();
+    const socket = h.socket();
+    socket.open();
+    socket.answerVersion();
+    expect(() => socket.answerEnvironment()).not.toThrow();
+    expect(h.client.connection).not.toBe("open");
+    expect(h.failures).toEqual(["This view could not prepare this device for this environment."]);
+    h.client.close();
+  });
+});
