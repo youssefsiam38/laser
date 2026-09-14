@@ -66,6 +66,7 @@ const ATTENTION_RANK: Record<SessionAttention, number> = {
 };
 
 const DEFAULT_INBOX_LIMIT = 50;
+type EntriesRequest = Extract<TypedClientRequest, { method: "pi/session/entries" }>;
 
 export interface RouterDeps {
   attention: AttentionTracker;
@@ -413,15 +414,7 @@ export class Router {
           );
         }
 
-        // Resolve ownership before the revision reader opens anything. An
-        // arbitrary connected path must not become a filesystem/session oracle:
-        // only a pool/run-known path or the catalog's normal admitted layout is
-        // allowed through, and its project/workspace guard runs first.
-        const knownCwd = this.pool.cwdOfSession(path) ?? this.deps.runs?.projectCwdOf(path);
-        const listedCwd = knownCwd === undefined ? this.catalog.cwdOfListed(path) : undefined;
-        const cwd = knownCwd ?? (listedCwd ? projectRootOf(listedCwd) : undefined);
-        if (!cwd) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation is not stored here.");
-        if (!this.isWorkspace(cwd)) this.deps.projects.assertProject(cwd);
+        this.assertDurableReadPath(path);
 
         // The owning worker wins whenever there is one: its leaf can be ahead
         // of anything the file shows. Its answer still has to belong to this
@@ -450,38 +443,7 @@ export class Router {
 
       case "pi/session/entries": {
         const { path } = req.params;
-        if (req.params.authority === "any") {
-          const revisions = this.deps.revisions;
-          const projection = this.deps.projection;
-          if (!revisions || !projection) {
-            throw new ProtocolError(ErrorCodes.RevisionUnavailable, "This host has no configured durable history reader. Restart the app and try again.");
-          }
-          // Apply the same ownership/project gate as session/revision before a
-          // host fd is opened. An arbitrary path never becomes a file oracle.
-          const knownCwd = this.pool.cwdOfSession(path) ?? this.deps.runs?.projectCwdOf(path);
-          const listedCwd = knownCwd === undefined ? this.catalog.cwdOfListed(path) : undefined;
-          const cwd = knownCwd ?? (listedCwd ? projectRootOf(listedCwd) : undefined);
-          if (!cwd) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation is not stored here.");
-          if (!this.isWorkspace(cwd)) this.deps.projects.assertProject(cwd);
-
-          // A live owner always wins, including an in-memory navigate that disk
-          // cannot observe. An omitted window becomes the bounded first screen.
-          const params = req.params.window ? req.params : { ...req.params, window: { tail: 40 } as const };
-          const live = this.liveWorkerFor(path);
-          if (live) return revisions.validateWindow(await live.request(req.method, params));
-          if (!existsSync(path)) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation is no longer stored here.");
-
-          // Bounds/unreadability refuse truthfully instead of silently spawning.
-          // Only an unmigrated format routes live: the pinned engine owns that
-          // rewrite and the host deliberately cannot reproduce it.
-          const answer = await projection.read(path, params.window, req.params.baseRevision);
-          if (answer.kind === "refuse") throw answer.error;
-          if (answer.kind === "route-live") {
-            const forwarded = await (await this.workerFor(path)).request(req.method, params);
-            return revisions.validateWindow(forwarded);
-          }
-          return answer.result;
-        }
+        if (req.params.authority === "any") return this.readAnyHistory(req);
         if (req.params.window) {
           // Default/explicit `live` preserves today's worker-owned behavior.
           const worker = await this.workerFor(path);
@@ -976,6 +938,47 @@ export class Router {
       throw new ProtocolError(ErrorCodes.InvalidParams, `${labelOf(name)} sessions start in ${PRODUCT_DISPLAY_NAME}'s own ${labelOf(name)} workspace, not in a project.`);
     }
     return name;
+  }
+
+  /**
+   * One ownership/project gate for every host-side transcript read. It runs
+   * before any fd is opened, so an arbitrary path cannot become a file oracle.
+   */
+  private assertDurableReadPath(path: string): void {
+    const knownCwd = this.pool.cwdOfSession(path) ?? this.deps.runs?.projectCwdOf(path);
+    const listedCwd = knownCwd === undefined ? this.catalog.cwdOfListed(path) : undefined;
+    const cwd = knownCwd ?? (listedCwd ? projectRootOf(listedCwd) : undefined);
+    if (!cwd) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation is not stored here.");
+    if (!this.isWorkspace(cwd)) this.deps.projects.assertProject(cwd);
+  }
+
+  /** The complete `authority:any` route, including live-owner precedence. */
+  private async readAnyHistory(req: EntriesRequest): Promise<unknown> {
+    const { path } = req.params;
+    const revisions = this.deps.revisions;
+    const projection = this.deps.projection;
+    if (!revisions || !projection) {
+      throw new ProtocolError(ErrorCodes.RevisionUnavailable, "This host has no configured durable history reader. Restart the app and try again.");
+    }
+    this.assertDurableReadPath(path);
+
+    // Omitted `window` under `any` means a bounded first screen. Default/live
+    // omission remains the legacy whole-transcript route in the switch above.
+    const params = req.params.window ? req.params : { ...req.params, window: { tail: 40 } as const };
+    const live = this.liveWorkerFor(path);
+    if (live) return revisions.validateWindow(await live.request(req.method, params));
+    if (!existsSync(path)) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation is no longer stored here.");
+
+    // Bounds/unreadability refuse truthfully instead of silently spawning.
+    // Only an unmigrated format routes live: the pinned engine owns that
+    // rewrite and the host deliberately cannot reproduce it.
+    const answer = await projection.read(path, params.window, req.params.baseRevision);
+    if (answer.kind === "refuse") throw answer.error;
+    if (answer.kind === "route-live") {
+      const forwarded = await (await this.workerFor(path)).request(req.method, params);
+      return revisions.validateWindow(forwarded);
+    }
+    return answer.result;
   }
 
   /** `beam` or `chat` when `cwd` is that built-in's workspace. */

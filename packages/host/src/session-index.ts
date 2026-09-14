@@ -49,6 +49,8 @@ export interface IndexedEntry {
   /** Byte range of the JSON object only; the newline is never materialised. */
   offset: number;
   length: number;
+  /** Exact UTF-8 length after JSON parse/stringify, for authority-neutral wire bounds. */
+  serializedLength: number;
 }
 
 export interface SessionIndex {
@@ -530,6 +532,6 @@ function parseEntry(line: string, offset: number, length: number): { value: unkn
   if (entry?.type === "session") return undefined;
   return {
     value: parsed,
-    identity: { ...historyWindowNode(parsed), offset, length },
+    identity: { ...historyWindowNode(parsed), offset, length, serializedLength: Buffer.byteLength(JSON.stringify(parsed), "utf8") },
   };
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { historyWindow, historyWindowNode, historyWindowPlan, parseClientRequest } from "../src/index.js";
+import { boundedHistoryWindow, fitHistoryWindowPlan, historyWindow, historyWindowNode, historyWindowPlan, parseClientRequest } from "../src/index.js";
 
 const PATH = "/project/session.jsonl";
 const scope = {
@@ -92,10 +92,29 @@ describe("history windows", () => {
     expect(plan.entryIndices.map(index => entries[index])).toEqual(full.entries);
     expect(plan.window).toEqual((({ context: _context, ...window }) => window)(full.window));
 
-    const delta = historyWindow(snapshot, { tail: 4 }, { ...scope, authority: "live", mode: "delta", deltaAfter: "e7" });
+    const delta = historyWindow(snapshot, { tail: 4 }, { ...scope, authority: "live", selection: { kind: "delta", after: "e7" } });
     expect(delta.entries).toEqual(entries.slice(8));
-    expect(delta.window).toMatchObject({ authority: "live", mode: "delta" });
-    expect(delta.window.before).toBeUndefined();
+    expect(delta.window).toMatchObject({ authority: "live", mode: "delta", anchor: "e8" });
+    expect(delta.window.before).toBeTypeOf("string");
+    expect(() => JSON.parse(delta.window.before!)).toThrow();
+  });
+
+  it("bounds tail pages with logarithmic complete-turn replans and refuses one unrepresentable turn", () => {
+    const entries = history(400);
+    const nodes = entries.map(historyWindowNode);
+    let plans = 0;
+    const fitted = fitHistoryWindowPlan(nodes, "e399", { tail: 200 }, { ...scope, selection: { kind: "replace" } }, plan => {
+      plans++;
+      return plan.entryIndices.length <= 40;
+    });
+    expect(fitted?.entryIndices).toEqual(entries.slice(-40).map((_, index) => 360 + index));
+    expect(plans).toBeLessThanOrEqual(9);
+
+    const huge = [
+      { type: "message", id: "u", parentId: null, message: { role: "user", content: "x".repeat(600_000) } },
+      { type: "message", id: "a", parentId: "u", message: { role: "assistant", content: "y".repeat(600_000) } },
+    ];
+    expect(boundedHistoryWindow({ entries: huge, leafId: "a" }, { tail: 1 }, { ...scope, selection: { kind: "replace" } })).toBeUndefined();
   });
 
   it("round-trips every request variant, authority and base revision, and refuses invalid values", () => {

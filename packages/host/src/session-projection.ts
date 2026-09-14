@@ -12,9 +12,9 @@ import {
   HISTORY_PAGE_BYTE_LIMIT,
   HISTORY_PAGE_ENTRY_LIMIT,
   ProtocolError,
-  historyEntriesSerializedBytes,
+  fitHistoryWindowPlan,
+  historyContentSerializedBytes,
   historyWindowNode,
-  historyWindowPlan,
   type ClientRequests,
   type HistoryWindow,
   type HistoryWindowRequest,
@@ -53,30 +53,37 @@ export class SessionProjection {
       const index = indexed.index;
       const revision = this.options.revisions.revisionOf(index);
       const base = baseRevision === undefined ? undefined : this.options.revisions.resolveBase(index, baseRevision);
-      const scope: HistoryWindowScope = {
+      const request = requested ?? { tail: 40 };
+      const common = {
         sessionId: index.header.id,
         epoch: DURABLE_HISTORY_EPOCH,
         seq: 0,
         revision,
         environmentKey: this.options.revisions.environmentKey,
-        authority: "durable",
-        mode: base && base.base !== "stale" ? "delta" : "replace",
-        ...(base?.state ? { deltaAfter: base.state.leafId } : {}),
+        authority: "durable" as const,
       };
-      let request = requested ?? { tail: 40 };
-      let plan = historyWindowPlan(index.entries, index.leafId, request, scope);
+      const deltaScope: HistoryWindowScope | undefined =
+        ("tail" in request) && base && base.base !== "stale" && base.state
+          ? { ...common, selection: { kind: "delta", after: base.state.leafId } }
+          : undefined;
+      let scope: HistoryWindowScope = deltaScope ?? { ...common, selection: { kind: "replace" } };
+      let plan = deltaScope
+        ? fitHistoryWindowPlan(index.entries, index.leafId, request, deltaScope, candidate => withinPlannedBounds(index.entries, candidate.entryIndices, candidate.contextIndices))
+        : undefined;
 
-      // A delta is useful only while it remains one bounded page. Otherwise the
-      // answer is an explicit replacement, never a partial suffix to mis-splice.
-      if (scope.mode === "delta" && !withinPlannedBounds(index.entries, plan.entryIndices, plan.contextIndices)) {
-        delete scope.deltaAfter;
-        scope.mode = "replace";
-        request = replacementRequest(request);
-        plan = historyWindowPlan(index.entries, index.leafId, request, scope);
+      // A delta must contain the complete suffix. If it does not fit, plan the
+      // caller's same tail request as an atomic replacement. Non-live-edge
+      // shapes never enter delta planning in the first place.
+      if (!plan) {
+        scope = { ...common, selection: { kind: "replace" } };
+        plan = fitHistoryWindowPlan(index.entries, index.leafId, request, scope, candidate => withinPlannedBounds(index.entries, candidate.entryIndices, candidate.contextIndices));
       }
-      const bounded = boundedReplacement(index, request, scope, plan);
-      if (!bounded) return { kind: "refuse", error: unavailable("No bounded history page can represent the latest turn.") };
-      plan = bounded.plan;
+      if (!plan) {
+        const detail = "all" in request || "from" in request
+          ? "The requested history range is too large to transfer safely. Ask for a bounded page instead."
+          : "No bounded history page can represent this complete turn.";
+        return { kind: "refuse", error: unavailable(detail) };
+      }
 
       this.options.beforeMaterialize?.(index, attempt);
       const materialized = materialize(path, index, plan.entryIndices, plan.contextIndices, this.options.onMaterializeRead);
@@ -89,9 +96,9 @@ export class SessionProjection {
 
       const entries = plan.entryIndices.map(index => materialized.values.get(index));
       const context = plan.contextIndices.map(index => materialized.values.get(index));
-      if (historyEntriesSerializedBytes([...entries, ...context]) > HISTORY_PAGE_BYTE_LIMIT) {
-        // Raw line lengths are a conservative planning bound, but keep this
-        // exact serialized-value check at the wire boundary too.
+      if (historyContentSerializedBytes(entries, context) > HISTORY_PAGE_BYTE_LIMIT) {
+        // Raw line lengths are conservative, but enforce the exact two-array
+        // wire-body size at the final authority boundary too.
         return { kind: "refuse", error: unavailable("The selected history page is too large to transfer safely.") };
       }
       return {
@@ -107,42 +114,19 @@ export class SessionProjection {
   }
 }
 
-function boundedReplacement(
-  index: SessionIndex,
-  request: HistoryWindowRequest,
-  scope: HistoryWindowScope,
-  initial: ReturnType<typeof historyWindowPlan>,
-): { plan: ReturnType<typeof historyWindowPlan> } | undefined {
-  if (withinPlannedBounds(index.entries, initial.entryIndices, initial.contextIndices)) return { plan: initial };
-  scope.mode = "replace";
-  delete scope.deltaAfter;
-  const preferred = "tail" in request ? request.tail : "before" in request ? request.limit ?? 40 : 40;
-  for (let limit = Math.min(preferred, HISTORY_PAGE_ENTRY_LIMIT); limit >= 1; limit--) {
-    const smaller: HistoryWindowRequest = "before" in request ? { before: request.before, limit } : { tail: limit };
-    const plan = historyWindowPlan(index.entries, index.leafId, smaller, scope);
-    if (withinPlannedBounds(index.entries, plan.entryIndices, plan.contextIndices)) return { plan };
-  }
-  // An empty conversation has a useful empty page even though there is no turn.
-  if (index.entries.length === 0) {
-    return { plan: historyWindowPlan(index.entries, index.leafId, { tail: 1 }, scope) };
-  }
-  return undefined;
-}
-
-function replacementRequest(request: HistoryWindowRequest): HistoryWindowRequest {
-  if ("tail" in request) return request;
-  if ("before" in request) return { tail: request.limit ?? 40 };
-  return { tail: 40 };
-}
-
 function withinPlannedBounds(entries: readonly IndexedEntry[], selected: readonly number[], context: readonly number[]): boolean {
   const unique = new Set([...selected, ...context]);
   if (unique.size > HISTORY_PAGE_ENTRY_LIMIT) return false;
-  // JSON arrays add at most one comma per row and two brackets. Raw JSONL line
-  // lengths conservatively include whitespace JSON.stringify may remove.
-  let bytes = 2 + Math.max(0, unique.size - 1);
-  for (const index of unique) {
-    bytes += entries[index]!.length;
+  // Two JSON arrays contribute four brackets and their own commas. The index
+  // retained each row's exact parse/stringify UTF-8 length, so this is the same
+  // body accounting used after materialization and by the live authority.
+  let bytes = 4 + Math.max(0, selected.length - 1) + Math.max(0, context.length - 1);
+  for (const index of selected) {
+    bytes += entries[index]!.serializedLength;
+    if (bytes > HISTORY_PAGE_BYTE_LIMIT) return false;
+  }
+  for (const index of context) {
+    bytes += entries[index]!.serializedLength;
     if (bytes > HISTORY_PAGE_BYTE_LIMIT) return false;
   }
   return true;

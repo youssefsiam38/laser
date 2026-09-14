@@ -10,7 +10,7 @@
  * Pending extension dialogs are re-emitted on load for the same reason.
  */
 
-import { AGENT_MAX_DEPTH_LIMIT, ENV, ErrorCodes, HISTORY_PAGE_BYTE_LIMIT, HISTORY_PAGE_ENTRY_LIMIT, PRODUCT_NAME, ProtocolError, historyEntriesSerializedBytes, historyWindow, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type SettingsScope, type TypedClientRequest } from "@lasercode/protocol";
+import { AGENT_MAX_DEPTH_LIMIT, ENV, ErrorCodes, PRODUCT_NAME, ProtocolError, boundedHistoryWindow, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type SettingsScope, type TypedClientRequest } from "@lasercode/protocol";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import type {
@@ -444,14 +444,28 @@ export class WorkerServer {
               authority: "live" as const,
               ...("before" in req.params.window ? {} : { live: active ?? { running: baseline?.state.isStreaming ?? live.driver.state().isStreaming, tools: [] } }),
             };
-            if (req.params.baseRevision !== undefined) {
-              const resolved = live.revisions.resolve(req.params.baseRevision, this.revisionHeader(live), snapshot.entries, snapshot.leafId);
-              if (resolved.base !== "stale" && resolved.state) {
-                const delta = historyWindow(snapshot, req.params.window, { ...common, mode: "delta", deltaAfter: resolved.state.leafId });
-                if (delta.entries.length <= HISTORY_PAGE_ENTRY_LIMIT && historyEntriesSerializedBytes(delta.entries) <= HISTORY_PAGE_BYTE_LIMIT) return delta;
-              }
+            const resolved = req.params.baseRevision === undefined
+              ? undefined
+              : live.revisions.resolve(req.params.baseRevision, this.revisionHeader(live), snapshot.entries, snapshot.leafId);
+            // Only a live-edge tail can be spliced onto a cached revision.
+            // Older-page, search-anchor and all-history requests retain their
+            // exact tree semantics even when the base is current or a prefix.
+            if ("tail" in req.params.window && resolved?.base !== "stale" && resolved?.state) {
+              const delta = boundedHistoryWindow(snapshot, req.params.window, {
+                ...common,
+                selection: { kind: "delta", after: resolved.state.leafId },
+              });
+              if (delta) return delta;
             }
-            return historyWindow(snapshot, req.params.window, { ...common, mode: "replace" });
+            const replacement = boundedHistoryWindow(snapshot, req.params.window, {
+              ...common,
+              selection: { kind: "replace" },
+            });
+            if (replacement) return replacement;
+            throw new ProtocolError(
+              ErrorCodes.RevisionUnavailable,
+              "The requested history range cannot be transferred without splitting a complete turn. Ask for a smaller page.",
+            );
           }
         }
         const baseline = live.preAcceptance;

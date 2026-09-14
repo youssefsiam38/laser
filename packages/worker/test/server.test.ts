@@ -339,6 +339,89 @@ describe("WorkerServer", () => {
     } finally { await h.server.dispose(); }
   });
 
+  it("uses base revisions only for live-edge tails across every live request shape", async () => {
+    const h = harness();
+    await h.call(1, "session/new", { cwd: "/tmp/fake" });
+    const driver = h.drivers[0]!;
+    driver.header = { id: "s1", cwd: "/tmp/fake", version: 3 };
+    const rows = Array.from({ length: 6 }, (_, i) => ({ type: "message", id: `e${i}`, parentId: i ? `e${i - 1}` : null, message: { role: i % 2 ? "assistant" : "user", content: String(i) } }));
+    driver.history = { entries: rows, leafId: "e5" };
+    try {
+      const legacy = (await h.call(2, "pi/session/entries", { path: "/tmp/fake/s1.jsonl" })).result as { entries: unknown[]; window?: unknown };
+      expect(legacy.entries).toEqual(rows);
+      expect(legacy.window).toBeUndefined();
+      const initial = (await h.call(3, "pi/session/entries", { path: "/tmp/fake/s1.jsonl", window: { tail: 2 } })).result as { window: { revision: string; before: string } };
+      const shapes = [
+        { name: "tail", window: { tail: 2 }, current: [] as unknown[] },
+        { name: "before", window: { before: initial.window.before, limit: 2 }, current: rows.slice(2, 4) },
+        { name: "from", window: { from: "e2" }, current: rows.slice(2) },
+        { name: "all", window: { all: true }, current: rows },
+      ];
+      let id = 4;
+      for (const shape of shapes) {
+        const result = (await h.call(id++, "pi/session/entries", {
+          path: "/tmp/fake/s1.jsonl", window: shape.window, baseRevision: initial.window.revision,
+        })).result as { entries: unknown[]; window: { mode: string; anchor?: string; before?: string } };
+        expect(result.entries, `${shape.name} current entries`).toEqual(shape.current);
+        expect(result.window.mode, `${shape.name} current mode`).toBe(shape.name === "tail" ? "delta" : "replace");
+        if (shape.name === "tail") expect(result.window).not.toHaveProperty("before");
+      }
+
+      const appended = [
+        { type: "message", id: "e6", parentId: "e5", message: { role: "user", content: "6" } },
+        { type: "message", id: "e7", parentId: "e6", message: { role: "assistant", content: "7" } },
+      ];
+      driver.history = { entries: [...rows, ...appended], leafId: "e7" };
+      for (const shape of shapes) {
+        const result = (await h.call(id++, "pi/session/entries", {
+          path: "/tmp/fake/s1.jsonl", window: shape.window, baseRevision: initial.window.revision,
+        })).result as { entries: unknown[]; window: { mode: string; anchor?: string; before?: string } };
+        const expected = shape.name === "tail" ? appended
+          : shape.name === "before" ? rows.slice(2, 4)
+            : shape.name === "from" ? [...rows, ...appended].slice(2)
+              : [...rows, ...appended];
+        expect(result.entries, `${shape.name} prefix entries`).toEqual(expected);
+        expect(result.window.mode, `${shape.name} prefix mode`).toBe(shape.name === "tail" ? "delta" : "replace");
+        if (shape.name === "tail") {
+          expect(result.window).toMatchObject({ anchor: "e6", before: expect.any(String) });
+          expect(() => JSON.parse(result.window.before!)).toThrow();
+        }
+      }
+    } finally { await h.server.dispose(); }
+  });
+
+  it("applies replacement byte/row bounds to live pages without splitting an oversized turn or context", async () => {
+    const h = harness();
+    await h.call(1, "session/new", { cwd: "/tmp/fake" });
+    const driver = h.drivers[0]!;
+    driver.header = { id: "s1", cwd: "/tmp/fake", version: 3 };
+    const large = Array.from({ length: 50 }, (_, i) => ({
+      type: "message", id: `e${i}`, parentId: i ? `e${i - 1}` : null,
+      message: { role: i % 2 ? "assistant" : "user", content: "x".repeat(30_000) },
+    }));
+    driver.history = { entries: large, leafId: "e49" };
+    try {
+      const bounded = (await h.call(2, "pi/session/entries", { path: "/tmp/fake/s1.jsonl", window: { tail: 40 } })).result as { entries: unknown[]; window: { context: unknown[]; mode: string } };
+      expect(bounded.entries.length).toBeLessThan(40);
+      expect(Buffer.byteLength(JSON.stringify(bounded.entries)) + Buffer.byteLength(JSON.stringify(bounded.window.context))).toBeLessThanOrEqual(1024 * 1024);
+
+      driver.history = { entries: [
+        { type: "custom", id: "goal", parentId: null, customType: "goal-state", data: { body: "x".repeat(1024 * 1024) } },
+        { type: "message", id: "old", parentId: "goal", message: { role: "user", content: "old" } },
+        { type: "message", id: "latest", parentId: "old", message: { role: "assistant", content: "latest" } },
+      ], leafId: "latest" };
+      const context = await h.call(3, "pi/session/entries", { path: "/tmp/fake/s1.jsonl", window: { tail: 1 } });
+      expect(context.error?.code).toBe(ErrorCodes.RevisionUnavailable);
+
+      driver.history = { entries: [
+        { type: "message", id: "u", parentId: null, message: { role: "user", content: "x".repeat(600_000) } },
+        { type: "message", id: "a", parentId: "u", message: { role: "assistant", content: "y".repeat(600_000) } },
+      ], leafId: "a" };
+      const turn = await h.call(4, "pi/session/entries", { path: "/tmp/fake/s1.jsonl", window: { tail: 1 } });
+      expect(turn.error?.code).toBe(ErrorCodes.RevisionUnavailable);
+    } finally { await h.server.dispose(); }
+  });
+
   it("keeps an in-memory navigated live branch authoritative for authority:any", async () => {
     const h = harness();
     await h.call(1, "session/new", { cwd: "/tmp/fake" });

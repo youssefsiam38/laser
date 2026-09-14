@@ -65,7 +65,14 @@ export interface HistoryWindow {
   live?: HistoryLiveSnapshot;
   /** The authority that produced this page. Durable pages never carry live work or actions. */
   authority?: "live" | "durable";
-  /** Append only for `delta`; every other answer atomically replaces the client's view. */
+  /**
+   * `replace` atomically replaces the requested page. `delta` is available only
+   * for a live-edge tail read: append its entries to the cached current branch,
+   * update the revision/live edge, and preserve the cached page/cursor metadata.
+   * A nonempty delta may carry a current-revision `before` cursor anchored at
+   * its first suffix row; an empty delta changes no cached entries or paging
+   * metadata. Never splice a delta into a different base revision.
+   */
   mode?: "replace" | "delta";
 }
 
@@ -1168,9 +1175,17 @@ export interface ClientRequests {
     params: {
       path: string;
       window?: HistoryWindowRequest;
-      /** Default `live` preserves the existing worker-owned behavior. */
+      /**
+       * Default `live` preserves the existing worker-owned behavior, including
+       * the legacy whole transcript when `window` is omitted. `any` with no
+       * window requests a bounded tail and may be answered durably.
+       */
       authority?: "live" | "any";
-      /** A proved canonical prefix may be answered as a delta; otherwise replace atomically. */
+      /**
+       * On an omitted/default-tail or explicit `tail` read, a proved canonical
+       * prefix may be answered as a delta. `before`, `from` and `all` always
+       * keep their requested page/tree semantics and return a replacement.
+       */
       baseRevision?: string;
     };
     result: { entries: unknown[]; leafId?: string | null; window?: HistoryWindow };

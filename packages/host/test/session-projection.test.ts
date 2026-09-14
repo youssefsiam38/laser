@@ -2,7 +2,7 @@ import { appendFileSync, closeSync, mkdtempSync, openSync, readFileSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { ErrorCodes, PRODUCT_NAME, historyWindow, type HistoryWindowRequest } from "@lasercode/protocol";
+import { ErrorCodes, HISTORY_PAGE_BYTE_LIMIT, PRODUCT_NAME, boundedHistoryWindow, historyContentSerializedBytes, historyWindow, type HistoryWindowRequest } from "@lasercode/protocol";
 import { SessionIndexCache } from "../src/session-index.js";
 import { SessionProjection } from "../src/session-projection.js";
 import { SessionRevisions } from "../src/session-revision.js";
@@ -68,7 +68,7 @@ describe("worker-free session projection", () => {
       const live = historyWindow(snapshot, { tail: 40 }, {
         sessionId: "session-1", epoch: "live", seq: 9,
         revision: revision.result.revision, environmentKey: revision.result.environmentKey,
-        authority: "live", mode: "replace",
+        authority: "live", selection: { kind: "replace" },
       });
       expect(durable.entries).toEqual(live.entries);
       expect(durable.leafId).toBe(live.leafId);
@@ -93,7 +93,7 @@ describe("worker-free session projection", () => {
         if (revision.kind !== "answer") throw new Error("missing revision");
         const live = historyWindow({ entries: messages(expected), leafId: `e${expected - 1}` }, { tail: 40 }, {
           sessionId: "session-1", epoch: "live", seq: 1, revision: revision.result.revision,
-          environmentKey: revision.result.environmentKey, authority: "live", mode: "replace",
+          environmentKey: revision.result.environmentKey, authority: "live", selection: { kind: "replace" },
         });
         expect(page.entries).toEqual(live.entries);
         expect(stableWindow(page.window!)).toEqual(stableWindow(live.window));
@@ -144,6 +144,67 @@ describe("worker-free session projection", () => {
     }
   });
 
+  it("keeps every non-live-edge request exact for current and prefix bases", async () => {
+    const entries = messages(12);
+    const f = fixture(entries);
+    try {
+      const { revisions, projection } = services();
+      const base = await revisions.read(f.path);
+      if (base.kind !== "answer") throw new Error("missing base");
+      const tail = await project(projection, f.path, { tail: 4 });
+      const shapes = [
+        { name: "tail", request: { tail: 4 } as const, current: [] as unknown[], prefix: [] as unknown[] },
+        { name: "before", request: { before: tail.window!.before!, limit: 4 } as const, current: entries.slice(4, 8), prefix: entries.slice(4, 8) },
+        { name: "from", request: { from: "e4" } as const, current: entries.slice(4), prefix: [] as unknown[] },
+        { name: "all", request: { all: true } as const, current: entries, prefix: [] as unknown[] },
+      ];
+      for (const shape of shapes) {
+        const current = await project(projection, f.path, shape.request, base.result.revision);
+        expect(current.entries, `${shape.name} current entries`).toEqual(shape.current);
+        expect(current.window?.mode, `${shape.name} current mode`).toBe(shape.name === "tail" ? "delta" : "replace");
+        if (shape.name === "tail") {
+          expect(current.window?.anchor).toBeUndefined();
+          expect(current.window?.before).toBeUndefined();
+          expect(current.window?.context).toEqual([]);
+          const live = boundedHistoryWindow({ entries, leafId: "e11" }, shape.request, {
+            sessionId: "session-1", epoch: "live", seq: 1,
+            revision: base.result.revision, environmentKey: base.result.environmentKey,
+            authority: "live", selection: { kind: "delta", after: "e11" },
+          });
+          expect(current.entries).toEqual(live?.entries);
+          expect(stableWindow(current.window!)).toEqual(stableWindow(live!.window));
+        }
+      }
+
+      const appended = [message("e12", "e11", 12), message("e13", "e12", 13)];
+      for (const entry of appended) appendFileSync(f.path, `${JSON.stringify(entry)}\n`);
+      for (const shape of shapes) {
+        const prefix = await project(projection, f.path, shape.request, base.result.revision);
+        const expected = shape.name === "tail" ? appended
+          : shape.name === "from" ? [...entries, ...appended].slice(4)
+            : shape.name === "all" ? [...entries, ...appended]
+              : shape.prefix;
+        expect(prefix.entries, `${shape.name} prefix entries`).toEqual(expected);
+        expect(prefix.window?.mode, `${shape.name} prefix mode`).toBe(shape.name === "tail" ? "delta" : "replace");
+        if (shape.name === "tail") {
+          expect(prefix.window).toMatchObject({ anchor: "e12", before: expect.any(String) });
+          expect(() => JSON.parse(prefix.window!.before!)).toThrow();
+          const latest = await revisions.read(f.path);
+          if (latest.kind !== "answer") throw new Error("missing latest revision");
+          const live = boundedHistoryWindow({ entries: [...entries, ...appended], leafId: "e13" }, shape.request, {
+            sessionId: "session-1", epoch: "live", seq: 2,
+            revision: latest.result.revision, environmentKey: latest.result.environmentKey,
+            authority: "live", selection: { kind: "delta", after: "e11" },
+          });
+          expect(prefix.entries).toEqual(live?.entries);
+          expect(stableWindow(prefix.window!)).toEqual(stableWindow(live!.window));
+        }
+      }
+    } finally {
+      f.cleanup();
+    }
+  });
+
   it("returns a proved append delta and replaces for branch, compaction, or an oversized suffix", async () => {
     const f = fixture(messages(4));
     try {
@@ -178,16 +239,106 @@ describe("worker-free session projection", () => {
   });
 
   it("shrinks a replacement until its serialized bodies fit the one-MiB page bound", async () => {
-    const entries = messages(50).map((entry, index) => ({
+    const entries = messages(100).map((entry, index) => ({
       ...(entry as object),
       message: { role: index % 2 ? "assistant" : "user", content: [{ type: "text", text: "x".repeat(30_000) }] },
     }));
     const f = fixture(entries);
     try {
-      const page = await project(services().projection, f.path, { tail: 40 });
+      const service = services();
+      const page = await project(service.projection, f.path, { tail: 40 });
+      const revision = await service.revisions.read(f.path);
+      if (revision.kind !== "answer") throw new Error("missing revision");
+      const live = boundedHistoryWindow({ entries, leafId: "e99" }, { tail: 40 }, {
+        sessionId: "session-1", epoch: "live", seq: 1,
+        revision: revision.result.revision, environmentKey: revision.result.environmentKey,
+        authority: "live", selection: { kind: "replace" },
+      });
+      expect(live).toBeDefined();
       expect(page.window?.mode).toBe("replace");
       expect(page.entries.length).toBeLessThan(40);
-      expect(Buffer.byteLength(JSON.stringify(page.entries))).toBeLessThanOrEqual(1024 * 1024);
+      expect(page.entries).toEqual(live!.entries);
+      expect(stableWindow(page.window!)).toEqual(stableWindow(live!.window));
+      expect(historyContentSerializedBytes(page.entries, page.window?.context ?? [])).toBeLessThanOrEqual(HISTORY_PAGE_BYTE_LIMIT);
+      const before = await project(service.projection, f.path, { before: page.window!.before!, limit: 40 });
+      expect(before.window).toMatchObject({ mode: "replace", before: expect.any(String) });
+      expect(before.entries.length).toBeLessThan(40);
+      expect(historyContentSerializedBytes(before.entries, before.window?.context ?? [])).toBeLessThanOrEqual(HISTORY_PAGE_BYTE_LIMIT);
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  it("refuses all/from and one oversized last turn instead of substituting or splitting it", async () => {
+    const ordinary = messages(20_000);
+    const huge = [
+      { type: "message", id: "huge-u", parentId: "e19999", message: { role: "user", content: "x".repeat(600_000) } },
+      { type: "message", id: "huge-a", parentId: "huge-u", message: { role: "assistant", content: "y".repeat(600_000) } },
+    ];
+    const f = fixture([...ordinary, ...huge]);
+    try {
+      const reads = vi.fn();
+      const { projection } = services({}, { onMaterializeRead: reads });
+      const started = performance.now();
+      const tail = await projection.read(f.path, { tail: 200 });
+      const tailElapsedMs = performance.now() - started;
+      expect(tail.kind).toBe("refuse");
+      if (tail.kind !== "refuse") throw new Error("expected refusal");
+      expect(tail.error.code).toBe(ErrorCodes.RevisionUnavailable);
+      console.info(`RP-12 pathological 20k/tail:200: ${tailElapsedMs.toFixed(2)} ms`);
+      for (const request of [{ from: "e0" }, { all: true }] as const) {
+        const answer = await projection.read(f.path, request);
+        expect(answer.kind).toBe("refuse");
+        if (answer.kind !== "refuse") throw new Error("expected refusal");
+        expect(answer.error.code).toBe(ErrorCodes.RevisionUnavailable);
+      }
+      expect(reads).not.toHaveBeenCalled();
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  it("uses parsed wire size, not JSONL whitespace, identically to the live authority", async () => {
+    const entry = message("e0", null, 0);
+    const f = fixture([]);
+    try {
+      writeFileSync(f.path, `${header()}\n{${" ".repeat(HISTORY_PAGE_BYTE_LIMIT + 1)}${JSON.stringify(entry).slice(1)}\n`);
+      const service = services();
+      const durable = await project(service.projection, f.path, { tail: 1 });
+      const revision = await service.revisions.read(f.path);
+      if (revision.kind !== "answer") throw new Error("missing revision");
+      const live = boundedHistoryWindow({ entries: [entry], leafId: "e0" }, { tail: 1 }, {
+        sessionId: "session-1", epoch: "live", seq: 1,
+        revision: revision.result.revision, environmentKey: revision.result.environmentKey,
+        authority: "live", selection: { kind: "replace" },
+      });
+      expect(durable.entries).toEqual(live?.entries);
+      expect(stableWindow(durable.window!)).toEqual(stableWindow(live!.window));
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  it("refuses oversized context rather than returning authority-dependent bodies", async () => {
+    const entries = [
+      { type: "custom", id: "goal", parentId: null, customType: "goal-state", data: { body: "x".repeat(HISTORY_PAGE_BYTE_LIMIT) } },
+      message("old", "goal", 0),
+      message("latest", "old", 1),
+    ];
+    const f = fixture(entries);
+    try {
+      const service = services();
+      const answer = await service.projection.read(f.path, { tail: 1 });
+      expect(answer.kind).toBe("refuse");
+      if (answer.kind !== "refuse") throw new Error("expected refusal");
+      expect(answer.error.code).toBe(ErrorCodes.RevisionUnavailable);
+      const revision = await service.revisions.read(f.path);
+      if (revision.kind !== "answer") throw new Error("missing revision");
+      expect(boundedHistoryWindow({ entries, leafId: "latest" }, { tail: 1 }, {
+        sessionId: "session-1", epoch: "live", seq: 1,
+        revision: revision.result.revision, environmentKey: revision.result.environmentKey,
+        authority: "live", selection: { kind: "replace" },
+      })).toBeUndefined();
     } finally {
       f.cleanup();
     }

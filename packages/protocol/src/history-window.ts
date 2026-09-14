@@ -21,6 +21,11 @@ export interface HistoryWindowNode {
   goalPromptId?: string | undefined;
 }
 
+export type HistoryWindowSelection =
+  | { kind: "replace" }
+  /** Internal delta boundary: selected rows are strictly after this branch entry. */
+  | { kind: "delta"; after: string | null };
+
 export interface HistoryWindowScope {
   /** The session's own id (not its path): cursors are bound to identity, not storage. */
   sessionId: string;
@@ -31,9 +36,8 @@ export interface HistoryWindowScope {
   environmentKey: string;
   live?: HistoryLiveSnapshot;
   authority?: "live" | "durable";
-  mode?: "replace" | "delta";
-  /** Internal delta boundary: selected rows are strictly after this branch entry. */
-  deltaAfter?: string | null;
+  /** One discriminant owns both internal selection and the exported mode. */
+  selection?: HistoryWindowSelection;
 }
 
 export interface HistoryWindowPlan {
@@ -144,10 +148,11 @@ export function historyWindowPlan(
     if (end < 0) changed();
   }
 
-  if (Object.prototype.hasOwnProperty.call(scope, "deltaAfter")) {
-    if (scope.deltaAfter === null) start = 0;
+  if (scope.selection?.kind === "delta") {
+    const { after } = scope.selection;
+    if (after === null) start = 0;
     else {
-      const boundary = branch.findIndex(index => nodes[index]!.id === scope.deltaAfter);
+      const boundary = branch.findIndex(index => nodes[index]!.id === after);
       if (boundary < 0) changed();
       start = boundary + 1;
     }
@@ -166,18 +171,20 @@ export function historyWindowPlan(
     while (start > 0 && !nodes[branch[start - 1]!]!.isMessage) start--;
   }
 
-  const entryIndices = all && !Object.prototype.hasOwnProperty.call(scope, "deltaAfter")
+  const entryIndices = all && scope.selection?.kind !== "delta"
     ? nodes.map((_, index) => index)
     : branch.slice(start, end);
   const prefix = branch.slice(0, start);
   const anchor = entryIndices.length > 0 ? nodes[entryIndices[0]!]!.id : undefined;
-  const contextIndices = prefix.filter(index => nodes[index]!.isGoalState);
+  // Delta consumers retain the cached page and its context; retransmitting old
+  // context would duplicate bodies and make an empty current delta nonempty.
+  const contextIndices = scope.selection?.kind === "delta" ? [] : prefix.filter(index => nodes[index]!.isGoalState);
   const priorGoalIds = new Set<string>();
   for (const index of prefix) {
     const goal = nodes[index]!.goalPromptId;
     if (goal) priorGoalIds.add(goal);
   }
-  const mode = scope.mode ?? "replace";
+  const mode = scope.selection?.kind;
   return {
     entryIndices,
     contextIndices,
@@ -187,7 +194,7 @@ export function historyWindowPlan(
       seq: scope.seq,
       revision: scope.revision,
       environmentKey: scope.environmentKey,
-      ...(mode !== "delta" && start > 0 && typeof anchor === "string"
+      ...(start > 0 && typeof anchor === "string"
         ? { before: encodeCursor({ v: CURSOR_VERSION, s: scope.sessionId, l: leafId, b: anchor } satisfies HistoryCursor) }
         : {}),
       ...(typeof anchor === "string" ? { anchor } : {}),
@@ -198,8 +205,59 @@ export function historyWindowPlan(
       priorGoalIds: [...priorGoalIds],
       ...(scope.live ? { live: scope.live } : {}),
       ...(scope.authority ? { authority: scope.authority } : {}),
-      ...(scope.mode ? { mode: scope.mode } : {}),
+      ...(mode ? { mode } : {}),
     },
+  };
+}
+
+/**
+ * Keep an exact request shape while fitting tail/before pages at complete-turn
+ * boundaries. `all` and `from` are indivisible: callers must refuse them when
+ * their exact projection is too large. The search is logarithmic, never one
+ * full branch replan per possible message count.
+ */
+export function fitHistoryWindowPlan(
+  nodes: readonly HistoryWindowNode[],
+  leafId: string | null,
+  request: HistoryWindowRequest,
+  scope: HistoryWindowScope,
+  fits: (plan: HistoryWindowPlan) => boolean,
+): HistoryWindowPlan | undefined {
+  const initial = historyWindowPlan(nodes, leafId, request, scope);
+  if (fits(initial)) return initial;
+  if ("all" in request || "from" in request || scope.selection?.kind === "delta") return undefined;
+
+  const maximum = Math.min("tail" in request ? request.tail : request.limit ?? 40, HISTORY_PAGE_ENTRY_LIMIT);
+  let low = 1;
+  let high = maximum - 1;
+  let best: HistoryWindowPlan | undefined;
+  while (low <= high) {
+    const limit = low + Math.floor((high - low) / 2);
+    const candidate = historyWindowPlan(
+      nodes,
+      leafId,
+      "before" in request ? { before: request.before, limit } : { tail: limit },
+      scope,
+    );
+    if (fits(candidate)) {
+      best = candidate;
+      low = limit + 1;
+    } else {
+      high = limit - 1;
+    }
+  }
+  return best;
+}
+
+/** Materialize one already planned page from an in-memory snapshot. */
+export function materializeHistoryWindow(
+  snapshot: { entries: unknown[]; leafId: string | null },
+  plan: HistoryWindowPlan,
+): { entries: unknown[]; leafId: string | null; window: HistoryWindow } {
+  return {
+    entries: plan.entryIndices.map(index => snapshot.entries[index]),
+    leafId: plan.leafId,
+    window: { ...plan.window, context: plan.contextIndices.map(index => snapshot.entries[index]) },
   };
 }
 
@@ -209,15 +267,34 @@ export function historyWindow(
   request: HistoryWindowRequest,
   scope: HistoryWindowScope,
 ): { entries: unknown[]; leafId: string | null; window: HistoryWindow } {
-  const plan = historyWindowPlan(snapshot.entries.map(historyWindowNode), snapshot.leafId, request, scope);
-  return {
-    entries: plan.entryIndices.map(index => snapshot.entries[index]),
-    leafId: plan.leafId,
-    window: { ...plan.window, context: plan.contextIndices.map(index => snapshot.entries[index]) },
-  };
+  return materializeHistoryWindow(snapshot, historyWindowPlan(snapshot.entries.map(historyWindowNode), snapshot.leafId, request, scope));
 }
 
-/** Exact UTF-8 JSON size used by both authorities for the page ceiling. */
-export function historyEntriesSerializedBytes(entries: readonly unknown[]): number {
-  return new TextEncoder().encode(JSON.stringify(entries)).byteLength;
+/** Exact UTF-8 JSON size of the two materialized body arrays. */
+export function historyContentSerializedBytes(entries: readonly unknown[], context: readonly unknown[]): number {
+  const encoder = new TextEncoder();
+  return encoder.encode(JSON.stringify(entries)).byteLength + encoder.encode(JSON.stringify(context)).byteLength;
+}
+
+/** Whether one in-memory page meets both authority-independent wire ceilings. */
+export function historyWindowFits(
+  snapshot: { entries: unknown[] },
+  plan: HistoryWindowPlan,
+): boolean {
+  const unique = new Set([...plan.entryIndices, ...plan.contextIndices]);
+  if (unique.size > HISTORY_PAGE_ENTRY_LIMIT) return false;
+  const entries = plan.entryIndices.map(index => snapshot.entries[index]);
+  const context = plan.contextIndices.map(index => snapshot.entries[index]);
+  return historyContentSerializedBytes(entries, context) <= HISTORY_PAGE_BYTE_LIMIT;
+}
+
+/** Plan, bound and materialize a live page with the same limits as durable reads. */
+export function boundedHistoryWindow(
+  snapshot: { entries: unknown[]; leafId: string | null },
+  request: HistoryWindowRequest,
+  scope: HistoryWindowScope,
+): { entries: unknown[]; leafId: string | null; window: HistoryWindow } | undefined {
+  const nodes = snapshot.entries.map(historyWindowNode);
+  const plan = fitHistoryWindowPlan(nodes, snapshot.leafId, request, scope, candidate => historyWindowFits(snapshot, candidate));
+  return plan ? materializeHistoryWindow(snapshot, plan) : undefined;
 }
