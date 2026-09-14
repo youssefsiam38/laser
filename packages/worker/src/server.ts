@@ -1035,15 +1035,29 @@ export class WorkerServer {
     }
   }
 
-  /** Namer names a session after its first prompt, unless the person got there first. */
+  /**
+   * Namer names a session after its first prompt, unless the person got there
+   * first.
+   *
+   * Never rejects, and that is load-bearing: every caller floats this promise
+   * (naming must not delay the turn), and the reads after the await are not
+   * safe — a driver whose runtime is being replaced throws
+   * `DriverUnavailableError` out of `state()`. An unhandled rejection would
+   * end the worker process, and with it every conversation in this project
+   * (AGENTS.md invariant 5), because a session could not be given a title.
+   */
   private async nameSession(live: Live, text: string): Promise<void> {
-    if (!this.namer.enabled()) {
-      this.waitToName(live.path, text);
-      return;
+    try {
+      if (!this.namer.enabled()) {
+        this.waitToName(live.path, text);
+        return;
+      }
+      const name = await this.namer.nameSession(text);
+      if (!name || !this.sessions.has(live.path) || live.driver.state().name) return;
+      await live.driver.rename(name).catch(() => undefined);
+    } catch (error) {
+      console.error(`${PRODUCT_NAME} worker: could not name ${live.path}:`, error instanceof Error ? error.message : error);
     }
-    const name = await this.namer.nameSession(text);
-    if (!name || !this.sessions.has(live.path) || live.driver.state().name) return;
-    await live.driver.rename(name).catch(() => undefined);
   }
 
   /** Hold a first prompt until a Namer model exists, oldest dropped past the cap. */

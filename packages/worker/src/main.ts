@@ -15,6 +15,7 @@ import { Socket } from "node:net";
 import { ENV, FEATURE_MANIFESTS, LineDecoder, PRODUCT_NAME, parseJsonLine, type FeatureId, type JsonRpcMessage } from "@lasercode/protocol";
 import { StableSdkDriver } from "./drivers/stable-sdk.js";
 import { alignEngineAgentDir, extendRuntimePath } from "./runtime-env.js";
+import { installUnhandledRejectionGuard } from "./process-guards.js";
 import { AgentResolutionError, assertBundledAgent } from "./resolve-pi.js";
 import { WorkerServer } from "./server.js";
 import { applyEnvironment } from "./environment.js";
@@ -40,6 +41,9 @@ function openTransport(): { input: NodeJS.ReadableStream; write: (line: string) 
 }
 
 async function main(): Promise<void> {
+  // First of all, before anything here can float a promise: a worker that
+  // dies takes every conversation in its project with it.
+  installUnhandledRejectionGuard();
   // Belt and braces. The desktop shell and `laser doctor` both check the pin
   // before a worker is ever spawned, so in a shipped app this cannot fail —
   // but this is the process that actually imports the agent, and a worker that
