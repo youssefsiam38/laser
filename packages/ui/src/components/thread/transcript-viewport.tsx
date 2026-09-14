@@ -269,10 +269,15 @@ export class TranscriptViewport {
     const shift = this.structuralShift;
     this.structuralShift = undefined;
     // Rows arrived above the anchor in this commit: move by what they take up
-    // now, before anyone sees the frame. `restore` then has the anchor row
-    // where it expects it and corrects the estimate against the real layout.
+    // now, before anyone sees the frame. `measure` refines that estimate; an
+    // absolute `restore` is safe only after active input has settled.
     if (shift !== undefined && this.viewport && !this.target) this.scroll(this.viewport.scrollTop + shift);
-    this.restore(); this.schedule();
+    // Browser default scrolling updates scrollTop before its scroll event lets
+    // capture() move the anchor. A layout commit can land in that gap. Never
+    // restore the stale mounted anchor over active wheel/touch/key movement;
+    // structural and measured-height deltas above are the only safe changes.
+    if (!this.reading || this.place.following) this.restore();
+    this.schedule();
   }
   cancel = (reason?: unknown) => {
     this.ownsLocation = false;
@@ -360,6 +365,10 @@ export class TranscriptViewport {
     this.observer = new ResizeObserver(this.schedule);
     this.observer.observe(viewport);
     for (const node of this.nodes.values()) this.observer.observe(node);
+    const markReading = () => {
+      if (this.reading) clearTimeout(this.reading);
+      this.reading = setTimeout(() => { this.reading = undefined; this.schedule(); }, 400);
+    };
     const scroll = () => {
       if (this.expectedTop !== undefined && Math.abs(viewport.scrollTop - this.expectedTop) < 0.5) { this.expectedTop = undefined; return; }
       if (this.arriving) { this.place.following = true; this.windowDirty = true; this.schedule(); return; }
@@ -368,13 +377,17 @@ export class TranscriptViewport {
         // relinquish this anchor. A scroll event itself is not user intent.
         this.windowDirty = true; this.schedule(); return;
       }
+      // Native scrolls also carry touch momentum, scrollbar drags, Space and
+      // keys focused inside a row. Programmatic corrections returned above via
+      // expectedTop; keep every other scroll authoritative through its next
+      // default-scroll → scroll-event gap.
+      markReading();
       this.place.following = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop <= 2;
       this.capture(); this.publish(); this.schedule();
     };
     const user = () => {
       this.cancel(); this.arriving = false; this.place.following = false; this.expectedTop = undefined;
-      if (this.reading) clearTimeout(this.reading);
-      this.reading = setTimeout(() => { this.reading = undefined; this.schedule(); }, 400);
+      markReading();
     };
     const selection = () => {
       const selected = document.getSelection();

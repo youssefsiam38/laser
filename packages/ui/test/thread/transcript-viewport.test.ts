@@ -155,6 +155,78 @@ describe("scoped transcript destinations", () => {
       expect(viewport.scrollTop).toBeCloseTo(rested, 0);
     } finally { detach(); viewport.remove(); vi.unstubAllGlobals(); vi.useRealTimers(); }
   });
+  it("does not restore a mounted anchor over a wheel scroll before its native scroll event", async () => {
+    // The browser applies a wheel's scroll position before it dispatches the
+    // scroll event that lets us capture it. A React layout commit can land in
+    // that gap. Restoring the previously captured mounted row there cancels
+    // the wheel; repeated commits make the viewport fight every wheel step.
+    vi.useFakeTimers();
+    const frames = new Map<number, FrameRequestCallback>(); let frameId = 0;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { frames.set(++frameId, callback); return frameId; });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => { frames.delete(id); });
+    const step = async () => { const pending = [...frames.values()]; frames.clear(); for (const callback of pending) callback(0); await Promise.resolve(); };
+    const controller = new TranscriptViewport(), viewport = document.createElement("div"), content = document.createElement("div");
+    const ids = Array.from({ length: 20 }, (_, i) => `row-${i}`);
+    const scrollHeight = () => controller.heights.total;
+    Object.defineProperties(viewport, { clientHeight: { value: 600 }, scrollHeight: { get: scrollHeight } });
+    viewport.getBoundingClientRect = () => new DOMRect(0, 0, 600, 600);
+    content.getBoundingClientRect = () => new DOMRect(0, -viewport.scrollTop, 600, scrollHeight());
+    content.style.fontSize = "14px"; content.style.lineHeight = "21px";
+    viewport.append(content); document.body.append(viewport); controller.content = content;
+    controller.configure("/wheel-race"); controller.setIds(ids);
+    for (const [index, id] of ids.entries()) {
+      const row = document.createElement("div"); row.dataset.windowMessage = id;
+      row.getBoundingClientRect = () => new DOMRect(0, controller.heights.offset(index) - viewport.scrollTop, 600, 100);
+      content.append(row); controller.register(id, row);
+    }
+    const detach = controller.attach(viewport, () => {});
+    try {
+      await step();
+      viewport.scrollTop = 1400; viewport.dispatchEvent(new Event("scroll")); await step();
+      expect(controller.capture().anchor?.messageId).toBe("row-14");
+      viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -500 }));
+      // Browser default scrolling has happened; its scroll event has not.
+      viewport.scrollTop = 900;
+      controller.committed();
+      expect(viewport.scrollTop).toBe(900);
+      viewport.dispatchEvent(new Event("scroll")); await step();
+      expect(viewport.scrollTop).toBe(900);
+    } finally { detach(); viewport.remove(); vi.unstubAllGlobals(); vi.useRealTimers(); }
+  });
+
+  it("keeps native momentum and scrollbar movement authoritative between scroll events", async () => {
+    // Touch momentum, a long drag, a scrollbar drag and Space can scroll without
+    // a fresh wheel/touchstart/viewport-key event. Their first native scroll
+    // event must keep the reading window alive for the next default-scroll →
+    // scroll-event gap, or a commit restores the previous position over it.
+    vi.useFakeTimers();
+    const controller = new TranscriptViewport(), viewport = document.createElement("div"), content = document.createElement("div");
+    const ids = Array.from({ length: 20 }, (_, i) => `row-${i}`);
+    controller.configure("/native-scroll"); controller.setIds(ids); controller.content = content;
+    controller.heights = new HeightIndex(ids.map(() => 100));
+    Object.defineProperties(viewport, { clientHeight: { value: 600 }, scrollHeight: { value: 2000 } });
+    viewport.getBoundingClientRect = () => new DOMRect(0, 0, 600, 600);
+    content.getBoundingClientRect = () => new DOMRect(0, -viewport.scrollTop, 600, 2000);
+    viewport.append(content); document.body.append(viewport);
+    for (const [index, id] of ids.entries()) {
+      const row = document.createElement("div"); row.dataset.windowMessage = id;
+      row.getBoundingClientRect = () => new DOMRect(0, index * 100 - viewport.scrollTop, 600, 100);
+      content.append(row); controller.register(id, row);
+    }
+    const detach = controller.attach(viewport, () => {});
+    try {
+      viewport.scrollTop = 1400; viewport.dispatchEvent(new Event("scroll"));
+      expect(controller.capture().anchor?.messageId).toBe("row-14");
+      // One momentum/drag scroll is captured normally.
+      viewport.scrollTop = 1100; viewport.dispatchEvent(new Event("scroll"));
+      expect(controller.capture().anchor?.messageId).toBe("row-11");
+      // The next native position lands before its scroll event.
+      viewport.scrollTop = 800;
+      controller.committed();
+      expect(viewport.scrollTop).toBe(800);
+    } finally { detach(); viewport.remove(); vi.useRealTimers(); }
+  });
+
   it("keeps the reader's section on screen when an earlier page arrives above it", async () => {
     // 0.6.2 lost the reader's place: reading upwards at the top loaded the
     // earlier page, the rows landed above the anchor and the viewport stayed
