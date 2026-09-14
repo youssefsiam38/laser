@@ -56,6 +56,8 @@ export class KeybindingsError extends ProtocolError {
 /** How long a lock file is trusted before it is treated as the debris of a crash. */
 const LOCK_STALE_MS = 10_000;
 const LOCK_WAIT_MS = 3_000;
+/** How long to wait before trying a lock another process holds again. */
+const LOCK_RETRY_MS = 25;
 
 const keysOf = (value: string | string[] | undefined): string[] =>
   value === undefined ? [] : Array.isArray(value) ? [...value] : [value];
@@ -181,7 +183,7 @@ export class KeybindingsAdapter {
           `Nothing was changed. Fix the file, or delete it to go back to the agent's defaults.`,
       );
     }
-    const release = this.lock();
+    const release = await this.lock();
     try {
       let doc: Record<string, unknown> = {};
       try {
@@ -215,8 +217,14 @@ export class KeybindingsAdapter {
    * global; workers are per project) cannot interleave a read-modify-write.
    * A lock left behind by a crash goes stale and is taken over rather than
    * blocking rebinding forever.
+   *
+   * The wait between attempts is asynchronous, and that is not a detail: this
+   * runs on the worker's only thread, which is also carrying every session's
+   * stream and every request in this project. Sleeping it — `Atomics.wait`,
+   * or any other synchronous pause — would freeze all of them for as long as
+   * another process held the lock, to save a keystroke from being rebound.
    */
-  private lock(): () => void {
+  private async lock(): Promise<() => void> {
     const lockFile = `${this.file}.lock`;
     const deadline = Date.now() + LOCK_WAIT_MS;
     mkdirSync(this.agentDir, { recursive: true });
@@ -248,7 +256,7 @@ export class KeybindingsAdapter {
               `Try again in a moment.`,
           );
         }
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+        await new Promise<void>((resolve) => setTimeout(resolve, LOCK_RETRY_MS));
       }
     }
   }
