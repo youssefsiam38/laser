@@ -72,6 +72,14 @@ export class ProjectEnvironment {
   private resolution: ProjectEnvResolution | undefined;
   private snapshot: ProjectEnvSnapshot;
   private inFlight: Promise<ProjectEnvSnapshot> | undefined;
+  /**
+   * The hook has run once under the current configuration, whatever it
+   * answered. The initial snapshot of a configured project is already
+   * `failed` ("Not resolved yet."), so the state alone cannot tell a hook
+   * that has never run from one that ran and failed — without this, a hook
+   * that fails is re-spawned on every session opened in this project.
+   */
+  private attempted = false;
   private readonly now: () => Date;
   private readonly runner: (options: RunOptions) => Promise<RunResult>;
 
@@ -132,7 +140,7 @@ export class ProjectEnvironment {
     if (!config?.enabled) return this.status();
     if (!config.approved) return this.status();
     if (!config.command) return this.status(); // preface only: nothing to run here
-    if (this.snapshot.state === "ready") return this.status();
+    if (this.snapshot.state === "ready" || this.attempted) return this.status();
     if (this.inFlight) return this.inFlight;
     const run = this.resolve();
     this.inFlight = run;
@@ -148,6 +156,7 @@ export class ProjectEnvironment {
     if (this.inFlight) await this.inFlight.catch(() => {});
     this.snapshot = initialSnapshot(this.options.config);
     this.resolution = undefined;
+    this.attempted = false;
     return this.ensure();
   }
 
@@ -155,6 +164,7 @@ export class ProjectEnvironment {
   reconfigure(config: ProjectEnvWorkerConfig | undefined): void {
     this.options = { ...this.options, config };
     this.resolution = undefined;
+    this.attempted = false;
     this.snapshot = initialSnapshot(config);
   }
 
@@ -176,6 +186,10 @@ export class ProjectEnvironment {
   private async resolve(): Promise<ProjectEnvSnapshot> {
     const config = this.options.config;
     if (!config) return this.status();
+    // One attempt per configuration, success or failure alike. A person
+    // retries from Settings → Projects → Environment; opening a session does
+    // not silently re-run a command that already failed.
+    this.attempted = true;
 
     let result: RunResult;
     try {
