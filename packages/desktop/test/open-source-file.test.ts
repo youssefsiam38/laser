@@ -47,38 +47,47 @@ it('opens the file with the text editor Windows registers for plain text, fallin
   vi.stubEnv('SystemRoot', 'C:\\Windows');
   const notepad = 'C:\\Windows\\system32\\notepad.exe';
   const registry = (value: string) => vi.fn().mockResolvedValueOnce({stdout:`\r\nHKEY_CLASSES_ROOT\\txtfile\\shell\\open\\command\r\n    (Default)    REG_EXPAND_SZ    ${value}\r\n\r\n`}).mockResolvedValue({stdout:''});
+  // The editor is started and left alone: `launch` resolves when the process
+  // exists and never waits for it to exit (the person is still typing in it).
+  const started = () => vi.fn<(exe: string, args: readonly string[]) => Promise<void>>().mockResolvedValue(undefined);
 
-  const expanded = registry('%SystemRoot%\\system32\\NOTEPAD.EXE %1');
-  expect(await openInTextEditor('/project/a space;$(nothing).html', expanded, 'win32')).toBe('');
+  const expanded = registry('%SystemRoot%\\system32\\NOTEPAD.EXE %1'); let launch = started();
+  expect(await openInTextEditor('/project/a space;$(nothing).html', expanded, 'win32', launch)).toBe('');
   expect(expanded.mock.calls[0]?.slice(0,2)).toEqual(['reg',['query','HKCR\\txtfile\\shell\\open\\command','/ve']]);
-  expect(expanded.mock.calls[1]?.slice(0,2)).toEqual(['C:\\Windows\\system32\\NOTEPAD.EXE',['/project/a space;$(nothing).html']]);
-  expect(expanded.mock.calls.every(call => !call[2].shell)).toBe(true);
+  expect(expanded).toHaveBeenCalledTimes(1);
+  expect(launch.mock.calls[0]).toEqual(['C:\\Windows\\system32\\NOTEPAD.EXE',['/project/a space;$(nothing).html']]);
 
-  const quoted = registry('"C:\\Program Files\\Editor\\edit.exe" -n "%1"');
-  expect(await openInTextEditor('C:\\project\\a.md', quoted, 'win32')).toBe('');
-  expect(quoted.mock.calls[1]?.slice(0,2)).toEqual(['C:\\Program Files\\Editor\\edit.exe',['C:\\project\\a.md']]);
+  const quoted = registry('"C:\\Program Files\\Editor\\edit.exe" -n "%1"'); launch = started();
+  expect(await openInTextEditor('C:\\project\\a.md', quoted, 'win32', launch)).toBe('');
+  expect(launch.mock.calls[0]).toEqual(['C:\\Program Files\\Editor\\edit.exe',['C:\\project\\a.md']]);
 
-  const unquoted = registry('C:\\Program Files\\Editor\\edit.exe %1');
-  await openInTextEditor('C:\\project\\a.md', unquoted, 'win32');
-  expect(unquoted.mock.calls[1]?.[0]).toBe('C:\\Program Files\\Editor\\edit.exe');
+  const unquoted = registry('C:\\Program Files\\Editor\\edit.exe %1'); launch = started();
+  await openInTextEditor('C:\\project\\a.md', unquoted, 'win32', launch);
+  expect(launch.mock.calls[0]?.[0]).toBe('C:\\Program Files\\Editor\\edit.exe');
 
   // A junk registration is never launched, and a missing one is not an error.
-  const junk = registry('rundll32 shell32.dll,ShellExec_RunDLL %1');
-  await openInTextEditor('C:\\project\\a.md', junk, 'win32');
-  expect(junk.mock.calls[1]?.slice(0,2)).toEqual([notepad,['C:\\project\\a.md']]);
-  const absent = vi.fn().mockRejectedValueOnce(new Error('reg missing')).mockResolvedValue({stdout:''});
-  expect(await openInTextEditor('C:\\project\\a.md', absent, 'win32')).toBe('');
-  expect(absent.mock.calls[1]?.slice(0,2)).toEqual([notepad,['C:\\project\\a.md']]);
+  const junk = registry('rundll32 shell32.dll,ShellExec_RunDLL %1'); launch = started();
+  await openInTextEditor('C:\\project\\a.md', junk, 'win32', launch);
+  expect(launch.mock.calls[0]).toEqual([notepad,['C:\\project\\a.md']]);
+  const absent = vi.fn().mockRejectedValueOnce(new Error('reg missing')).mockResolvedValue({stdout:''}); launch = started();
+  expect(await openInTextEditor('C:\\project\\a.md', absent, 'win32', launch)).toBe('');
+  expect(launch.mock.calls[0]).toEqual([notepad,['C:\\project\\a.md']]);
 
   // A registered editor that will not start falls back rather than failing.
-  const broken = vi.fn()
-    .mockResolvedValueOnce({stdout:'    (Default)    REG_SZ    "C:\\Gone\\edit.exe" %1'})
-    .mockRejectedValueOnce(new Error('ENOENT'))
-    .mockResolvedValue({stdout:''});
-  expect(await openInTextEditor('C:\\project\\a.md', broken, 'win32')).toBe('');
-  expect(broken.mock.calls[2]?.slice(0,2)).toEqual([notepad,['C:\\project\\a.md']]);
-  const dead = vi.fn().mockRejectedValue(new Error('ENOENT'));
-  expect(await openInTextEditor('C:\\project\\a.md', dead, 'win32')).not.toBe('');
+  const broken = vi.fn().mockResolvedValueOnce({stdout:'    (Default)    REG_SZ    "C:\\Gone\\edit.exe" %1'}).mockResolvedValue({stdout:''});
+  launch = vi.fn<(exe: string, args: readonly string[]) => Promise<void>>().mockRejectedValueOnce(new Error('ENOENT')).mockResolvedValue(undefined);
+  expect(await openInTextEditor('C:\\project\\a.md', broken, 'win32', launch)).toBe('');
+  expect(launch.mock.calls[1]).toEqual([notepad,['C:\\project\\a.md']]);
+  const dead = vi.fn<(exe: string, args: readonly string[]) => Promise<void>>().mockRejectedValue(new Error('ENOENT'));
+  expect(await openInTextEditor('C:\\project\\a.md', absent, 'win32', dead)).not.toBe('');
+
+  // The editor is never run through the awaiting launcher: an editor that
+  // stays open for an hour must not be a 5 s timeout and a failure.
+  const slowEditor = registry('"C:\\Editor\\edit.exe" %1').mockImplementation(() => new Promise(() => {}));
+  const running = vi.fn<(exe: string, args: readonly string[]) => Promise<void>>().mockResolvedValue(undefined);
+  expect(await openInTextEditor('C:\\project\\a.md', slowEditor, 'win32', running)).toBe('');
+  expect(slowEditor).toHaveBeenCalledTimes(1);
+  expect(running).toHaveBeenCalledTimes(1);
 });
 it('says where the feature exists, and never blames a missing editor on a platform it never tried', async () => {
   expect(['linux','darwin','win32'].every(platform => textEditorSupported(platform as NodeJS.Platform))).toBe(true);

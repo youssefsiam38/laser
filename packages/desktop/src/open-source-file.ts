@@ -2,7 +2,7 @@ import { open, realpath, stat } from "node:fs/promises";
 import { extname, isAbsolute, join } from "node:path";
 import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 
 const failure = { opened: false, reason: "Couldn’t open this source file. Check that it still exists and that your system has a default text editor." };
@@ -12,6 +12,19 @@ const failure = { opened: false, reason: "Couldn’t open this source file. Chec
 const unavailable = "Opening files in an editor isn’t available on this system. Copy the path and open the file yourself.";
 const execute = promisify(execFile);
 type Run = typeof execute;
+/**
+ * Start a program that *is* the editor and let it live: resolved once the
+ * process exists, never waiting for it to exit. `run` above is for launchers
+ * (`gio launch`, `open -t`, `reg query`) that return at once; awaiting an
+ * editor through it would kill the editor at the timeout and call that a
+ * failure (0.6.3 review B1).
+ */
+export type Launch = (executable: string, args: readonly string[]) => Promise<void>;
+const detached: Launch = (executable, args) => new Promise((resolve, reject) => {
+  const child = spawn(executable, [...args], { detached: true, stdio: "ignore", windowsHide: false });
+  child.once("error", reject);
+  child.once("spawn", () => { child.unref(); resolve(); });
+});
 const spawnOptions = { timeout: 5000, encoding: "utf8" } as const;
 
 /**
@@ -27,11 +40,11 @@ export function textEditorSupported(platform: NodeJS.Platform = process.platform
 /** Select the OS text editor, not the file's MIME handler (HTML → browser,
  * scripts → execution). Desktop entries belong to the user's OS configuration.
  * gio expands their Exec field; never parse it ourselves or invoke a shell. */
-export async function openInTextEditor(path: string, run: Run = execute, platform: NodeJS.Platform = process.platform): Promise<string> {
+export async function openInTextEditor(path: string, run: Run = execute, platform: NodeJS.Platform = process.platform, launch: Launch = detached): Promise<string> {
   try {
     if (platform === "linux") return await openWithFreedesktop(path, run);
     if (platform === "darwin") return await openWithMacOpen(path, run);
-    if (platform === "win32") return await openWithWindowsEditor(path, run);
+    if (platform === "win32") return await openWithWindowsEditor(path, run, launch);
     return unavailable;
   } catch { return failure.reason; }
 }
@@ -66,16 +79,16 @@ async function openWithMacOpen(path: string, run: Run): Promise<string> {
  * is the one thing this feature may never do. Notepad ships with every Windows
  * and is the fallback when the registration is missing or unusable.
  */
-async function openWithWindowsEditor(path: string, run: Run): Promise<string> {
+async function openWithWindowsEditor(path: string, run: Run, launch: Launch): Promise<string> {
   const registered = await windowsRegisteredEditor(run);
   if (registered) {
     try {
-      await run(registered, [path], spawnOptions);
+      await launch(registered, [path]);
       return "";
     } catch { /* An editor that will not start is not a reason to give up. */ }
   }
   const root = (process.env["SystemRoot"] || "C:\\Windows").replace(/[\\/]+$/, "");
-  await run(`${root}\\system32\\notepad.exe`, [path], spawnOptions);
+  await launch(`${root}\\system32\\notepad.exe`, [path]);
   return "";
 }
 
