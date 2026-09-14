@@ -198,6 +198,26 @@ describe("ProjectEnvironment", () => {
     expect(readFileSync(counter, "utf8").trim().split("\n")).toHaveLength(2);
   });
 
+  it("does not re-run a hook that failed until a person asks for it", async () => {
+    const root = workspace();
+    const counter = join(root, "failed-runs");
+    const command = hook(root, "env-fail", `echo x >> "${counter}"\nexit 3`);
+    const environment = new ProjectEnvironment({ cwd: root, config: config(command) });
+    const { readFileSync } = await import("node:fs");
+
+    expect((await environment.ensure()).state).toBe("failed");
+    // Every later session opened in this project asks again; the hook must
+    // not be spawned again for any of them.
+    await environment.ensure();
+    await environment.ensure();
+    expect(readFileSync(counter, "utf8").trim().split("\n")).toHaveLength(1);
+    expect(environment.status().error).toMatch(/exited with code 3/);
+
+    // The explicit retry still runs it.
+    await environment.refresh();
+    expect(readFileSync(counter, "utf8").trim().split("\n")).toHaveLength(2);
+  });
+
   it("keeps a project's values out of the worker's own environment", async () => {
     const root = workspace();
     const command = hook(root, "env-isolated", `printf '%s' '{"version":1,"set":{"PROJECT_ONLY_MARKER":"yes"}}' >&3`);

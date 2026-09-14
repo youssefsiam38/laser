@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { fallbackSnapshot } from "../../src/agents/definitions.js";
 import type { NamerModelRuntime } from "../../src/agents/namer.js";
+import { DriverUnavailableError } from "../../src/driver.js";
 import type { DriverEvent, DriverListener, DriverOpenOptions, PromptOptions, SessionDriver } from "../../src/driver.js";
 import { WorkerServer } from "../../src/server.js";
 
@@ -28,7 +29,15 @@ class LongTurnDriver implements SessionDriver {
     this.st = { ...this.st, path: o.sessionPath ?? join(base, "sessions", `s${counter}.jsonl`), id: `id-${counter}`, cwd: o.cwd };
     return this.st;
   }
-  state() { return this.st; }
+  /**
+   * Set while the driver's runtime is being replaced: `StableSdkDriver.state()`
+   * throws `DriverUnavailableError` for exactly as long as that lasts.
+   */
+  unavailable = false;
+  state() {
+    if (this.unavailable) throw new DriverUnavailableError("stable-sdk", "the runtime is being replaced");
+    return this.st;
+  }
   /** What the engine does while a turn runs; `prompt()` flips it itself. */
   streaming(on: boolean) { this.st = { ...this.st, isStreaming: on }; }
   subscribe(l: DriverListener) { this.listeners.add(l); return () => this.listeners.delete(l); }
@@ -182,6 +191,42 @@ describe("naming a session at the start of its first turn", () => {
     await h.call(4, "agents/sync", { snapshot: namedSnapshot() });
     await tick();
     expect(runtime.calls).toBe(1);
+  });
+
+  it("survives a driver that goes unavailable while Namer is thinking", async () => {
+    let answer: (name: string) => void = () => {};
+    const runtime: NamerModelRuntime & { calls: number } = {
+      calls: 0,
+      getModel: (provider: string, id: string) => ({ provider, id }),
+      async completeSimple() {
+        runtime.calls += 1;
+        return { content: [{ type: "text", text: await new Promise<string>((resolve) => (answer = resolve)) }] };
+      },
+    };
+    const h = harness(runtime);
+    await h.call(1, "agents/sync", { snapshot: namedSnapshot() });
+    const path = await h.open(2);
+    const unhandled: unknown[] = [];
+    const listener = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", listener);
+    try {
+      h.prompt(3, path, "replace the runtime under me");
+      await tick();
+      // A first-turn runtime replacement: `state()` throws until it lands.
+      h.drivers[0]!.unavailable = true;
+      answer("A name nobody can apply");
+      await tick();
+      await tick();
+    } finally {
+      process.off("unhandledRejection", listener);
+    }
+
+    // Naming a session must never be able to end the worker process, which
+    // is every conversation in this project.
+    expect(unhandled).toEqual([]);
+    h.drivers[0]!.unavailable = false;
+    expect(h.drivers[0]!.state().name).toBeUndefined();
+    expect((await h.call(4, "pi/session/entries", { path })).error).toBeUndefined();
   });
 
   it("lets a person who renames mid-turn win over a slow Namer", async () => {

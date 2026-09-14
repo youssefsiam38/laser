@@ -101,6 +101,7 @@ it("explains that setup refusal needs a new conversation, not a retry in the too
   const registry = new McpAuthorizationRegistry(join(base, "agent"));
   const id = await mcpAuthorizationIdentity("global", join(base, "project"), config as Parameters<typeof mcpAuthorizationIdentity>[2]);
   await registry.establish(id);
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
   await registry.revoke([id], async () => {
     const driver = await openSession([{ text: "done" }], { features: ["mcp"] });
     await promptAndSettle(driver);
@@ -109,6 +110,11 @@ it("explains that setup refusal needs a new conversation, not a retry in the too
     expect(JSON.stringify(errors)).toContain("This conversation started without MCP tools");
     expect(JSON.stringify(errors)).toContain("start a new conversation");
     expect(JSON.stringify(errors)).not.toContain("Try again");
+    // The person's sentence cannot say why; the log must (review finding #13).
+    const text = logged.mock.calls.map(call => call.map(String).join(" ")).join("\n");
+    expect(text).toContain("MCP setup failed");
+    expect(text).toContain("McpAuthorizationError");
+    expect(text).toContain("MCP sign-in information is being updated");
   });
 }, 60_000);
 

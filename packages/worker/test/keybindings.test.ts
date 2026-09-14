@@ -108,6 +108,34 @@ describe("KeybindingsAdapter", () => {
     await expect(adapter.apply([{ id: "app.clear", op: "set", keys: ["ctrl+l"] }])).rejects.toThrow(/not valid JSON/);
     expect(readFileSync(join(dir, "keybindings.json"), "utf8")).toBe("{ not json");
   });
+
+  it("waits for another process's lock without stopping this worker's own work", async () => {
+    const dir = agentDir();
+    const adapter = new KeybindingsAdapter({ agentDir: dir });
+    await adapter.snapshot(); // load the manager before the lock is taken
+    // Another laser worker is mid-write: a fresh lock file nobody will find stale.
+    const lockFile = join(dir, "keybindings.json.lock");
+    writeFileSync(lockFile, "");
+
+    // The worker's only thread is also carrying every session in the project.
+    // Stand in for that work with a timer, and measure the longest it ever
+    // goes unserved while this write waits its turn.
+    const ticks: number[] = [Date.now()];
+    const beating = setInterval(() => ticks.push(Date.now()), 10);
+    const write = adapter.apply([{ id: "app.clear", op: "set", keys: ["ctrl+l"] }]);
+    let settled = false;
+    void write.then(() => (settled = true), () => (settled = true));
+
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    const heldGap = Math.max(...ticks.slice(1).map((at, index) => at - ticks[index]!));
+    expect(settled).toBe(false); // still waiting for the other process
+    rmSync(lockFile, { force: true });
+    await write;
+    clearInterval(beating);
+
+    expect(heldGap).toBeLessThan(300);
+    expect(JSON.parse(readFileSync(join(dir, "keybindings.json"), "utf8"))).toEqual({ "app.clear": "ctrl+l" });
+  });
 });
 
 describe("project file ranking", () => {

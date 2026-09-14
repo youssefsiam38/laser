@@ -84,6 +84,19 @@ export class McpService {
     if (this.snapshots.delete(sessionPath)) this.options.changed();
   }
 
+  /**
+   * A fork moved the session's file. The snapshot describes the servers that
+   * conversation is connected to, which the fork does not change — dropping
+   * it would leave `mcp/list` naming a conversation that no longer exists.
+   */
+  rekeySession(oldPath: string, newPath: string): void {
+    const held = this.snapshots.get(oldPath);
+    if (!held || oldPath === newPath) return;
+    this.snapshots.delete(oldPath);
+    this.snapshots.set(newPath, held);
+    this.options.changed();
+  }
+
   async dispose(): Promise<void> {
     await this.inspector.dispose();
   }

@@ -1138,13 +1138,51 @@ export function modelSwitchedOff(model: { provider: string; id: string }, refs: 
 }
 
 export function readLaserProjectSettings(cwd: string): Doc {
+  return readLaserProjectSettingsFile(cwd).values;
+}
+
+/**
+ * The same read, with the reason the file gave nothing.
+ *
+ * A project file nobody can parse is not the same as a project with no file:
+ * every setting a person checked in is silently absent, and until this said so
+ * the only sign was a later write refusing. Absent and empty are still silent.
+ */
+export function readLaserProjectSettingsFile(cwd: string): { values: Doc; error?: string } {
   const file = join(resolve(cwd), LASER_PROJECT_DIR_NAME, "settings.json");
+  let text: string;
   try {
-    const parsed: unknown = JSON.parse(readFileSync(file, "utf8").replace(/^﻿/, ""));
-    return laserEngineSettings(parsed);
-  } catch {
-    return {};
+    text = readFileSync(file, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { values: {} };
+    return {
+      values: {},
+      error:
+        `${PRODUCT_NAME} could not read ${file} (${error instanceof Error ? error.message : String(error)}), ` +
+        `so none of this project's own settings are in force. Check the file's permissions, then reopen this screen.`,
+    };
   }
+  if (text.trim() === "") return { values: {} };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text.replace(/^﻿/, ""));
+  } catch (error) {
+    return {
+      values: {},
+      error:
+        `${file} is not valid JSON (${error instanceof Error ? error.message : String(error)}), ` +
+        `so none of this project's own settings are in force. Fix the file, or delete it to use your global settings.`,
+    };
+  }
+  if (!isPlainObject(parsed)) {
+    return {
+      values: {},
+      error:
+        `${file} does not contain a JSON object, so none of this project's own settings are in force. ` +
+        `Fix the file, or delete it to use your global settings.`,
+    };
+  }
+  return { values: laserEngineSettings(parsed) };
 }
 
 /** The engine's global settings file as written, or `{}` when absent or unreadable. */
@@ -1407,13 +1445,15 @@ export class SettingsAdapter {
       errors.set(error.scope, error.error.message);
     }
     const global = this.manager.getGlobalSettings() as Doc;
-    const project = this.trust.trusted ? readLaserProjectSettings(this.cwd) : {};
+    // The engine never reads `.laser`, so a malformed project file produces no
+    // engine error to drain: this read is the only place it can be noticed.
+    const project = this.trust.trusted ? readLaserProjectSettingsFile(this.cwd) : { values: {} as Doc };
     return {
       cwd: this.cwd,
       agentDir: this.agentDir,
       global: fileState(this.globalPath, global, errors.get("global")),
-      project: fileState(this.projectPath, project, errors.get("project")),
-      effective: mergeSettings(global, project),
+      project: fileState(this.projectPath, project.values, errors.get("project") ?? project.error),
+      effective: mergeSettings(global, project.values),
       projectTrust: this.trust,
     };
   }
@@ -1458,7 +1498,10 @@ export class SettingsAdapter {
         try {
           const parsed: unknown = JSON.parse(readFileSync(this.projectPath, "utf8").replace(/^﻿/, ""));
           if (!isPlainObject(parsed)) throw new Error("the file must contain a JSON object");
-          doc = laserEngineSettings(parsed);
+          // The person's file, as they wrote it. Only the keys this product
+          // reads are ever *applied* (`laserEngineSettings` on the way in), but
+          // a key we do not recognise is theirs, not ours to delete on a write.
+          doc = parsed;
         } catch (error) {
           throw new SettingsError(
             `${this.projectPath} is not valid ${PRODUCT_DISPLAY_NAME} settings (${error instanceof Error ? error.message : String(error)}). ` +
@@ -1557,7 +1600,10 @@ export class SettingsAdapter {
 function writeLaserProjectSettings(path: string, doc: Doc): void {
   mkdirSync(dirname(path), { recursive: true });
   const temporary = join(dirname(path), `.${process.pid}.${Date.now()}.settings.tmp`);
-  writeFileSync(temporary, `${JSON.stringify(laserEngineSettings(doc), null, 2)}\n`, { mode: 0o600 });
+  // `doc` is the file as it was, with this change applied: every change was
+  // validated against the product's own fields before we got here, and
+  // anything else in the file was written by hand and survives untouched.
+  writeFileSync(temporary, `${JSON.stringify(doc, null, 2)}\n`, { mode: 0o600 });
   renameSync(temporary, path);
 }
 
