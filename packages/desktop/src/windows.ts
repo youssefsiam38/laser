@@ -130,6 +130,13 @@ export interface WindowBootstrap {
   version: string;
   platform: string;
   chrome: DesktopChrome;
+  /**
+   * Whether this platform has a way to open a file in the person's text
+   * editor. False takes `openSourceFile` off the bridge entirely, so the UI
+   * falls back to offering the path to copy — the same thing it does on the
+   * phone — instead of a button that could only ever fail.
+   */
+  sourceEditor?: boolean;
 }
 
 export interface WindowManagerOptions {

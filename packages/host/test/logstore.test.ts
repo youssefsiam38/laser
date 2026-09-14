@@ -180,6 +180,30 @@ describe("large payloads", () => {
   it("explains a payload whose rows retention already removed", () => {
     expect(() => store.content("a".repeat(64))).toThrow(/no longer stored.*Retention/s);
   });
+
+  it("truncates a multibyte body to the byte budget, never mid-character", () => {
+    // Three bytes per character: a string-length cut sent three times the
+    // budget, and any cut that ignores code points ends in U+FFFD.
+    const text = "こんにちは".repeat(400);
+    const entry = store.record({ section: "provider", kind: "provider_request", summary: "japanese", detail: { text } });
+    const body = store.content(entry.detailRef!.ref, 1_000);
+    expect(body.truncated).toBe(true);
+    expect(Buffer.byteLength(body.text, "utf8")).toBeLessThanOrEqual(1_000);
+    expect(Buffer.byteLength(body.text, "utf8")).toBeGreaterThan(990);
+    expect(body.text).not.toContain("\uFFFD");
+    // The whole body still fits when the budget allows it.
+    const full = store.content(entry.detailRef!.ref, 10 * 1024 * 1024);
+    expect(full.truncated).toBe(false);
+    expect(JSON.parse(full.text)).toEqual({ text });
+  });
+
+  it("cuts an astral code point cleanly rather than splitting its surrogate pair", () => {
+    const entry = store.record({ section: "provider", kind: "provider_request", summary: "emoji", detail: { text: "🔥".repeat(1000) } });
+    const body = store.content(entry.detailRef!.ref, 101);
+    expect(body.text).not.toContain("\uFFFD");
+    expect(Buffer.byteLength(body.text, "utf8")).toBeLessThanOrEqual(101);
+    expect([...body.text].every((character) => character === "🔥" || !/[\uD800-\uDFFF]/.test(character))).toBe(true);
+  });
 });
 
 describe("ingestion", () => {
@@ -203,6 +227,63 @@ describe("ingestion", () => {
     expect(response!.correlationId).toBe(`req-${request!.id}`);
     // The ceiling: Pi has no response-body hook, and the row says so.
     expect(response!.detail).toMatchObject({ bodyAvailable: false });
+  });
+
+  it("pairs two provider round trips in flight with their own requests", () => {
+    const request = (at: string) => store.observeExtensionMessage("/p", "/s/a.jsonl", {
+      type: "lasercode/provider/request", at, payload: { model: "m", messages: [{}] },
+    });
+    const response = (at: string, status: number) => store.observeExtensionMessage("/p", "/s/a.jsonl", {
+      type: "lasercode/provider/response", at, status, headers: {},
+    });
+    request("2026-09-05T10:00:00.000Z");
+    request("2026-09-05T10:00:01.000Z");
+    response("2026-09-05T10:00:02.000Z", 200);
+    response("2026-09-05T10:00:05.000Z", 201);
+
+    const entries = store.query({ sections: ["provider"] }).entries;
+    const requests = entries.filter((e) => e.kind === "provider_request");
+    const responses = entries.filter((e) => e.kind === "provider_response");
+    // Each response reports its own request's latency, and each request is
+    // correlated exactly once: keyed by session alone, the first answer used to
+    // be timed from the second request and the first row stayed uncorrelated.
+    expect(responses.map((e) => e.durationMs)).toEqual([2000, 4000]);
+    expect(responses.map((e) => e.correlationId)).toEqual([`req-${requests[0]!.id}`, `req-${requests[1]!.id}`]);
+  });
+
+  it("forgets a turn's open tool calls when the turn ends, and a session's when it goes", () => {
+    const open = (store: LogStore) => (store as unknown as { openToolCalls: Map<string, unknown> }).openToolCalls.size;
+    const pending = (store: LogStore) => (store as unknown as { openProviderRequests: Map<string, unknown> }).openProviderRequests.size;
+    store.observeSessionUpdate("/p", update({ kind: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: {} }, "2026-09-05T10:00:00.000Z"));
+    store.observeExtensionMessage("/p", "/s/a.jsonl", { type: "lasercode/provider/request", at: "2026-09-05T10:00:00.000Z", payload: { model: "m" } });
+    expect(open(store)).toBe(1);
+    expect(pending(store)).toBe(1);
+
+    // An `agent_end` that announces a retry is not the end of the turn.
+    store.observeSessionUpdate("/p", update({ kind: "agent_end", willRetry: true }, "2026-09-05T10:00:00.500Z"));
+    expect(open(store)).toBe(1);
+    expect(pending(store)).toBe(1);
+
+    // The turn ended with that call still open: it can never end now.
+    store.observeSessionUpdate("/p", update({ kind: "agent_end" }, "2026-09-05T10:00:01.000Z"));
+    expect(open(store)).toBe(0);
+    expect(pending(store)).toBe(0);
+
+    // A session whose worker died mid-tool is closed the same way.
+    store.observeSessionUpdate("/p", update({ kind: "tool_execution_start", toolCallId: "t2", toolName: "bash", args: {} }, "2026-09-05T10:00:02.000Z"));
+    expect(open(store)).toBe(1);
+    store.forgetSession("/s/b.jsonl");
+    expect(open(store)).toBe(1); // another session's work is not touched
+    store.forgetSession("/s/a.jsonl");
+    expect(open(store)).toBe(0);
+  });
+
+  it("bounds one session's open tool calls when nothing ever closes them", () => {
+    const open = () => (store as unknown as { openToolCalls: Map<string, unknown> }).openToolCalls.size;
+    for (let i = 0; i < 500; i++) {
+      store.observeSessionUpdate("/p", update({ kind: "tool_execution_start", toolCallId: `t${i}`, toolName: "bash", args: {} }, "2026-09-05T10:00:00.000Z"));
+    }
+    expect(open()).toBe(64);
   });
 
   it("logs an HTTP error response at error level", () => {

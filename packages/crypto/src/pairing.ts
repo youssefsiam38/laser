@@ -253,6 +253,12 @@ export class PairingResponder {
   async grant(grant: PairingGrant, options: { sasConfirmed: boolean }): Promise<Uint8Array> {
     if (!this.request) throw new PairingError("grant() before readRequest()");
     if (this.granted) throw new PairingError("this pairing code has already been used");
+    // The code expires after its TTL regardless of how far the handshake got
+    // (docs/security §4.1). Checking only in `readRequest()` left the window
+    // open for as long as the approval sat on screen, and this is the message
+    // that discloses the desktop's static key, its root key and its device
+    // list — the one moment where a stale code costs everything.
+    if (this.expired) throw new PairingError("this pairing code has expired — show a new one on the desktop");
     if (options?.sasConfirmed !== true) {
       throw new PairingError(
         "the grant was refused because the emoji were not confirmed: show readRequest()'s `sas` on both screens " +

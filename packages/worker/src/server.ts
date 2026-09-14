@@ -416,11 +416,11 @@ export class WorkerServer {
       }
       case "pi/model/set": {
         const live = this.live(req.params.path);
-        return this.firstTurnLock.run(live.path, async () => ({ state: await live.driver.setModel(req.params.model) } satisfies Result<"pi/model/set">));
+        return this.settingsLane(live, async () => ({ state: await live.driver.setModel(req.params.model) } satisfies Result<"pi/model/set">));
       }
       case "pi/thinking/set": {
         const live = this.live(req.params.path);
-        return this.firstTurnLock.run(live.path, async () => ({ state: await live.driver.setThinkingLevel(req.params.level) } satisfies Result<"pi/thinking/set">));
+        return this.settingsLane(live, async () => ({ state: await live.driver.setThinkingLevel(req.params.level) } satisfies Result<"pi/thinking/set">));
       }
       case "pi/account-usage/refresh": {
         const live = this.live(req.params.path);
@@ -1257,6 +1257,26 @@ export class WorkerServer {
       });
     };
     return this.harness.admitExtensionModelWork(path, request, start);
+  }
+
+  /**
+   * A model or thinking change on a conversation that has already started
+   * applies at once: the engine takes it for the next turn (a steer in the
+   * queue, not a stop). Only a pristine session waits its turn behind the
+   * first-turn fence, because there the choice can replace the runtime. The
+   * admission lease is otherwise held by a queued steer for as long as the
+   * running turn lasts, and a settings change waiting on it left every
+   * composer disabled until that turn ended.
+   */
+  private settingsLane<T>(live: Live, work: () => Promise<T>): Promise<T> {
+    let started = false;
+    try {
+      const state = live.driver.state();
+      started = state.messageCount > 0 || state.pendingMessageCount > 0 || state.isStreaming;
+    } catch {
+      // No runtime to read: a replacement is in flight, so wait for it.
+    }
+    return started ? work() : this.firstTurnLock.run(live.path, work);
   }
 
   /** A public prompt's preflight lease and optional same-identity agent bind. */

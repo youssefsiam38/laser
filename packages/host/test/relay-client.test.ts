@@ -192,8 +192,44 @@ afterEach(async () => {
   for (const fn of cleanup.splice(0).reverse()) await fn();
 });
 
+/**
+ * A relay that answers the first `challenges` upgrades with a 429 cookie
+ * challenge and accepts anything that follows. Returns every request's query
+ * string, so a client that builds the URL by hand is caught.
+ */
+async function cookieRelay(challenges: number): Promise<{ port: number; seen: string[] }> {
+  const http = createServer((_req, res) => res.writeHead(404).end());
+  const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
+  const seen: string[] = [];
+  let asked = 0;
+  http.on("upgrade", (req, socket, head) => {
+    socket.on("error", () => {});
+    const url = new URL(req.url ?? "/", "http://relay.invalid");
+    seen.push(url.search);
+    if (url.searchParams.get("cookie") !== "the-cookie" || asked < challenges) {
+      if (asked++ < challenges) {
+        const payload = JSON.stringify({ error: "cookie_required", cookie: "the-cookie" });
+        socket.end(
+          `HTTP/1.1 429 Too Many Requests\r\ncontent-type: application/json\r\ncontent-length: ${payload.length}\r\nconnection: close\r\n\r\n${payload}`,
+        );
+        return;
+      }
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      ws.send(JSON.stringify({ t: "hello", channel: "x", slot: 0, peer: false }));
+    });
+  });
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", () => resolve()));
+  cleanup.push(async () => {
+    wss.close();
+    await new Promise<void>((resolve) => http.close(() => resolve()));
+  });
+  return { port: (http.address() as AddressInfo).port, seen };
+}
+
 async function harness(options: {
   shapeTiming?: boolean;
+  maxOutboundQueue?: number;
   handle?: (raw: unknown, notify: (notification: JsonRpcNotification) => void) => Promise<JsonRpcResponse>;
 } = {}) {
   const relay = new StubRelay();
@@ -218,6 +254,7 @@ async function harness(options: {
     minBackoffMs: 20,
     maxBackoffMs: 40,
     ...(options.shapeTiming ? { shapeTiming: true } : {}),
+    ...(options.maxOutboundQueue !== undefined ? { maxOutboundQueue: options.maxOutboundQueue } : {}),
     handle: async (raw): Promise<JsonRpcResponse> => {
       requests.push(raw);
       if (options.handle) return options.handle(raw, (notification) => emit(notification));
@@ -492,6 +529,83 @@ describe("RelayClient", () => {
     await until(() => client.state === "waiting_for_peer", 2000, "the retry to connect");
     expect(seen).toEqual(["", "?cookie=the-cookie"]);
     expect(client.statistics().connectAttempts).toBe(2);
+  });
+
+  it("answers a cookie challenge on a relay URL that already carries a query string", async () => {
+    // Built by string concatenation, the cookie landed after a second `?`, the
+    // relay never saw it, and the challenge was answered forever.
+    const { port, seen } = await cookieRelay(1);
+    const desktop = await nobleBackend.generateKeyPair();
+    const device = await nobleBackend.generateKeyPair();
+    const client = new RelayClient({
+      relayUrl: `ws://127.0.0.1:${port}/ws?deployment=eu-1`,
+      channelId: await channelIdFor(desktop, device.publicKey, { backend: nobleBackend }),
+      staticKeyPair: desktop,
+      devicePublicKey: device.publicKey,
+      backend: nobleBackend,
+      minBackoffMs: 20,
+      maxBackoffMs: 40,
+      handle: async () => ({ jsonrpc: "2.0", id: 0, result: {} }),
+      subscribe: () => () => {},
+    });
+    cleanup.push(() => client.stop());
+    client.start();
+
+    await until(() => client.state === "waiting_for_peer", 2000, "the retry to connect");
+    expect(seen).toEqual(["?deployment=eu-1", "?deployment=eu-1&cookie=the-cookie"]);
+    expect(client.statistics().connectAttempts).toBe(2);
+  });
+
+  it("stops answering a relay that keeps challenging and falls back to backoff", async () => {
+    const { port, seen } = await cookieRelay(20);
+    const desktop = await nobleBackend.generateKeyPair();
+    const device = await nobleBackend.generateKeyPair();
+    const states: string[] = [];
+    const errors: Error[] = [];
+    const client = new RelayClient({
+      relayUrl: `ws://127.0.0.1:${port}/ws`,
+      channelId: await channelIdFor(desktop, device.publicKey, { backend: nobleBackend }),
+      staticKeyPair: desktop,
+      devicePublicKey: device.publicKey,
+      backend: nobleBackend,
+      minBackoffMs: 10,
+      maxBackoffMs: 20,
+      handle: async () => ({ jsonrpc: "2.0", id: 0, result: {} }),
+      subscribe: () => () => {},
+      onStateChange: (state) => states.push(state),
+      onError: (error) => errors.push(error),
+    });
+    cleanup.push(() => client.stop());
+    client.start();
+
+    // Four attempts at most before it gives the relay room: the first plus the
+    // three cookies it is willing to answer.
+    await until(() => states.includes("backoff"), 2000, "the client to stop answering cookies");
+    await client.stop("test over");
+    expect(seen.length).toBeLessThanOrEqual(4);
+    expect(errors.at(-1)?.message).toMatch(/HTTP 429/);
+  });
+
+  it("drops outbound frames rather than queueing without bound when the peer stalls", async () => {
+    const h = await harness({ maxOutboundQueue: 4 });
+    const phone = await Phone.attach(h.url, h.channelId, h.device, h.desktop.publicKey);
+    cleanup.push(() => phone.close());
+    await phone.ready();
+    await until(() => h.client.state === "connected", 2000, "connected");
+
+    // Forty updates enqueued in one synchronous burst: nothing has drained yet,
+    // so everything past the cap is dropped and counted, as the shaped path's
+    // own `maxQueue` does.
+    for (let seq = 1; seq <= 40; seq++) h.notify(update("/s/a.jsonl", seq));
+    await until(() => h.client.statistics().outboundQueueDropped > 0, 2000, "the queue to refuse a frame");
+    await until(() => phone.messages.length >= 4, 2000, "the frames that were accepted");
+    expect(h.client.statistics().outboundQueueDropped).toBe(36);
+    expect(phone.messages).toHaveLength(4);
+    expect(h.errors.at(-1)?.message).toMatch(/outbound queue is full \(4 frames\)/);
+
+    // And the connection still works: this is backpressure, not a failure.
+    h.notify(update("/s/a.jsonl", 41));
+    await until(() => phone.messages.length === 5, 2000, "a later notification");
   });
 
   it("backs off and retries when the relay refuses the upgrade outright", async () => {

@@ -6,7 +6,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { BACKGROUND_TOOL_NAMES, TASK_EVENT_MESSAGE_TYPE, WIRE_NAMESPACE, backgroundTaskUpdateSchema, type BackgroundTaskUpdate } from "@lasercode/protocol";
 import type { ReadTaskOutputResult } from "../src/agents-bridge.js";
 import { createLaserExtension } from "../src/index.js";
-import { createCommandBus, type ModuleContext } from "../src/modules/index.js";
+import { createCommandBus, type ModuleContext, type ModuleDispose } from "../src/modules/index.js";
 import { backgroundWorkModule, lastLines, TailBuffer } from "../src/modules/background-work.js";
 
 interface FakeTool {
@@ -75,8 +75,8 @@ function harness(foregroundCommandSeconds = 0.3, readTask?: (taskId: string, tai
   dirs.push(cwd);
   const ctx: ModuleContext = { pi, send, commands, backgroundWork: { cwd, foregroundCommandSeconds, ...(readTask ? { readTask } : {}) } };
   backgroundWorkModule.register!(ctx);
-  const dispose = backgroundWorkModule.activate(ctx) as (() => void) | undefined;
-  if (dispose) open.push(dispose);
+  const dispose = backgroundWorkModule.activate(ctx) as ModuleDispose | undefined;
+  if (dispose) open.push(() => dispose({ reason: "quit" }));
   const toolCtx = { cwd, sessionManager: { getSessionId: () => SESSION_ID, getSessionFile: () => undefined } } as unknown as ExtensionContext;
   const call = (name: string, params: Record<string, unknown>, signal?: AbortSignal, onUpdate?: (update: unknown) => void) =>
     tools.get(name)!.execute("call-1", params, signal, onUpdate, toolCtx);
@@ -354,12 +354,44 @@ describe("background-work: the bash override", () => {
   it("stops running tasks when the session shuts down", async () => {
     const h = harness(5);
     const { details } = await h.call("bash", { command: "sleep 30", background: true });
-    h.dispose?.();
+    h.dispose?.({ reason: "quit" });
     open.length = 0;
     expect(await settled(h, details.taskId)).toMatchObject({ status: "stopped" });
     expect(h.published().at(-1)).toMatchObject({ status: "stopped", terminalReason: "the session ended" });
     expect(h.sendMessage).not.toHaveBeenCalled();
     expect(existsSync(logPath(details.taskId))).toBe(true);
+  });
+
+  it("leaves a detached task running when the session is replaced, not ended", async () => {
+    // A fork, a new or resumed session and an extension reload all tear this
+    // runtime down while the project carries on. Killing a detached command
+    // then ends work nobody stopped and tells the fleet a lie about it.
+    for (const reason of ["fork", "new", "resume", "reload"] as const) {
+      const h = harness(5);
+      const { details } = await h.call("bash", { command: "sleep 30", background: true });
+      h.dispose?.({ reason });
+      open.length = 0;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // Still running, and the fleet row says so: no "the session ended".
+      expect((await h.call("task_output", { taskId: details.taskId })).details, reason).toMatchObject({ status: "running" });
+      expect(h.published().at(-1), reason).toMatchObject({ id: details.taskId, status: "running" });
+      expect(h.published().some((task) => task.terminalReason === "the session ended"), reason).toBe(false);
+
+      // The successor session is a fresh runtime with an empty task map: it
+      // reads this command through the worker (D-163), which still has it.
+      const worker = vi.fn(async (taskId: string): Promise<ReadTaskOutputResult> => ({
+        task: { id: taskId, command: "sleep 30", title: "sleep 30", status: "running", origin: "background", startedAt: new Date().toISOString(), outputBytes: 0 },
+        owner: { agentName: "worker", subagentName: "parent", sessionId: "successor" },
+        text: "",
+      }));
+      const successor = harness(5, worker);
+      const read = await successor.call("task_output", { taskId: details.taskId });
+      expect(worker, reason).toHaveBeenCalledWith(details.taskId, 100);
+      expect(read.details, reason).toMatchObject({ taskId: details.taskId, status: "running" });
+
+      await h.call("task_stop", { taskId: details.taskId });
+    }
   });
 });
 
@@ -373,6 +405,34 @@ describe("background-work: helpers and wiring", () => {
     expect(lastLines("", 5)).toBe("");
   });
 
+  it("passes the shutdown reason through the extension, so only a quit ends a command", async () => {
+    // The event Pi fires carries why the runtime is going away; the companion
+    // must not flatten `fork`/`new`/`resume`/`reload` into "the session ended".
+    const run = async (reason: "quit" | "fork") => {
+      const tools = new Map<string, FakeTool>();
+      const handlers = new Map<string, (...args: unknown[]) => unknown>();
+      const cwd = mkdtempSync(join(tmpdir(), "background-work-shutdown-"));
+      dirs.push(cwd);
+      const pi = {
+        on: (n: string, cb: (...args: unknown[]) => unknown) => handlers.set(n, cb),
+        registerTool: (t: FakeTool) => tools.set(t.name, t),
+        events: { on: () => () => {}, emit: () => {} },
+        sendMessage: vi.fn(),
+      } as unknown as ExtensionAPI;
+      createLaserExtension({ send: vi.fn(), only: ["background-work"], backgroundWork: { cwd, foregroundCommandSeconds: 120 } }).factory(pi);
+      await handlers.get("session_start")!({}, {});
+      const toolCtx = { cwd, sessionManager: { getSessionId: () => SESSION_ID, getSessionFile: () => undefined } } as unknown as ExtensionContext;
+      const started = await tools.get("bash")!.execute("call-1", { command: "sleep 30", background: true }, undefined, undefined, toolCtx);
+      await handlers.get("session_shutdown")!({ reason }, {});
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      const status = (await tools.get("task_output")!.execute("call-2", { taskId: started.details.taskId }, undefined, undefined, toolCtx)).details.status;
+      if (status === "running") await tools.get("task_stop")!.execute("call-3", { taskId: started.details.taskId }, undefined, undefined, toolCtx);
+      return status;
+    };
+    expect(await run("quit")).toBe("stopped");
+    expect(await run("fork")).toBe("running");
+  });
+
   it("is active only when the worker supplies shell options", async () => {
     const registered: string[] = [];
     const handlers = new Map<string, (...args: unknown[]) => unknown>();
@@ -382,7 +442,7 @@ describe("background-work: helpers and wiring", () => {
     await handlers.get("session_start")!({}, {});
     expect(send).toHaveBeenCalledWith({ type: "lasercode/capabilities", active: ["background-work"], failed: [] });
     expect(registered).toEqual(["bash", "task_output", "task_stop"]);
-    await handlers.get("session_shutdown")!({}, {});
+    await handlers.get("session_shutdown")!({ reason: "quit" }, {});
 
     const bare: string[] = [];
     const bareHandlers = new Map<string, (...args: unknown[]) => unknown>();

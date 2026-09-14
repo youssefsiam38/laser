@@ -30,6 +30,7 @@ import {
   CHANNEL_PROTOCOL_PREFIX,
   RelayClose,
   channelIdFromProtocols,
+  channelSubprotocol,
   legalFrameSizes,
   type RelayControl,
   type RelayErrorCode,
@@ -51,6 +52,17 @@ export interface RelayOptions {
   pingIntervalMs?: number;
   /** Close a socket that has been alone on its channel this long. 0 = never (the default: a desktop parks here waiting for its phone). */
   soloTimeoutMs?: number;
+  /**
+   * Bytes allowed to queue for one socket before the peer feeding it is paused.
+   *
+   * A slow or hostile reader is the only way a byte forwarder can grow: `ws`
+   * queues whatever the kernel will not take, and a peer that sends faster than
+   * the other side reads turns that queue into the relay's heap. Above this
+   * mark the sender's socket is paused, which stops reading its TCP stream and
+   * pushes the backlog back to where it came from; it resumes once the queue
+   * has drained below half of it. Nothing is inspected and nothing is dropped.
+   */
+  maxBufferedBytes?: number;
   /**
    * How many trusted proxies sit in front of this relay.
    *
@@ -88,6 +100,8 @@ interface Peer {
    * re-handshake on every attachment.
    */
   handshakeFrames: number;
+  /** True while this socket is paused because the peer it feeds is behind. */
+  paused: boolean;
 }
 
 interface Channel {
@@ -104,6 +118,10 @@ export interface RelayStats {
   bytesForwarded: number;
   refused: Record<string, number>;
   cookiesRequired: boolean;
+  /** Bytes queued for sockets that have not taken them yet, across every channel. */
+  bufferedBytes: number;
+  /** Sockets paused right now because the peer they feed is behind. */
+  pausedSockets: number;
 }
 
 const DEFAULTS = {
@@ -115,6 +133,10 @@ const DEFAULTS = {
   pingIntervalMs: 20_000,
   soloTimeoutMs: 0,
   loadWindowMs: 10_000,
+  // Sixteen largest frames in flight per socket: enough that a healthy peer
+  // never notices, small enough that ten thousand channels cannot exhaust a
+  // relay's memory.
+  maxBufferedBytes: 1_048_576,
 } as const;
 
 /** Binary frames per attachment exempt from padded-size enforcement (two Noise messages). */
@@ -162,6 +184,7 @@ export class RelayServer {
       cookieThreshold: options.cookieThreshold ?? DEFAULTS.cookieThreshold,
       pingIntervalMs: options.pingIntervalMs ?? DEFAULTS.pingIntervalMs,
       soloTimeoutMs: options.soloTimeoutMs ?? DEFAULTS.soloTimeoutMs,
+      maxBufferedBytes: options.maxBufferedBytes ?? DEFAULTS.maxBufferedBytes,
       // Off unless a deployment says otherwise: a directly exposed relay must be
       // safe out of the box, and a wrong hop count is a silent bypass.
       trustProxy: normalizeHops(options.trustProxy),
@@ -189,11 +212,15 @@ export class RelayServer {
       noServer: true,
       perMessageDeflate: false,
       maxPayload: this.options.maxFrameBytes,
-      // Echo the channel subprotocol back, or the client's handshake fails.
+      // Echo back the subprotocol of the channel this socket is actually routed
+      // to, or the client's handshake fails. It has to be the one
+      // `channelIdFromProtocols` picks — the first *valid* channel value, not
+      // merely the first one carrying the prefix — or a client that offers a
+      // malformed value first is told it joined a channel it did not join.
       // Anything else a client offers is ignored, never selected.
       handleProtocols: (protocols) => {
-        for (const protocol of protocols) if (protocol.startsWith(CHANNEL_PROTOCOL_PREFIX)) return protocol;
-        return false;
+        const channelId = channelIdFromProtocols([...protocols]);
+        return channelId === undefined ? false : channelSubprotocol(channelId);
       },
     });
     this.http.on("upgrade", (req, socket, head) => this.onUpgrade(req, socket, head));
@@ -225,10 +252,20 @@ export class RelayServer {
 
   statistics(): RelayStats {
     let sockets = 0;
-    for (const channel of this.channels.values()) sockets += channel.peers.length;
+    let bufferedBytes = 0;
+    let pausedSockets = 0;
+    for (const channel of this.channels.values()) {
+      sockets += channel.peers.length;
+      for (const peer of channel.peers) {
+        bufferedBytes += peer.socket.bufferedAmount;
+        if (peer.paused) pausedSockets++;
+      }
+    }
     return {
       channels: this.channels.size,
       sockets,
+      bufferedBytes,
+      pausedSockets,
       upgrades: this.stats.upgrades,
       framesForwarded: this.stats.framesForwarded,
       bytesForwarded: this.stats.bytesForwarded,
@@ -346,7 +383,9 @@ export class RelayServer {
   private onConnection(ws: WebSocket, channelId: string, ip: string): void {
     const channel = this.channels.get(channelId) ?? { id: channelId, peers: [], createdAt: this.now() };
     this.channels.set(channelId, channel);
-    const slot: 0 | 1 = channel.peers.length === 0 ? 0 : 1;
+    // The free slot, not "the second one": after slot 0 leaves, the arrival
+    // that replaces it is slot 0 again, and the two peers never share a number.
+    const slot: 0 | 1 = channel.peers.some((member) => member.slot === 0) ? 1 : 0;
     const peer: Peer = {
       socket: ws,
       ip,
@@ -355,6 +394,7 @@ export class RelayServer {
       missedPings: 0,
       aloneSince: this.now(),
       handshakeFrames: HANDSHAKE_FRAMES,
+      paused: false,
     };
     channel.peers.push(peer);
     this.socketChannel.set(ws, channelId);
@@ -403,14 +443,39 @@ export class RelayServer {
     const other = this.other(channel, peer);
     if (!other) {
       // Zero bytes move until both sides are present. Nothing is buffered:
-      // buffering is state, and state is what a relay must not accumulate.
-      this.send(peer.socket, { t: "error", code: "no_peer", message: "no peer on this channel yet" });
+      // buffering is state, and state is what a relay must not accumulate —
+      // including the courtesy reply itself, which is skipped for a sender that
+      // floods a peerless channel without reading its own socket.
+      if (peer.socket.bufferedAmount <= this.options.maxBufferedBytes) {
+        this.send(peer.socket, { t: "error", code: "no_peer", message: "no peer on this channel yet" });
+      }
       return;
     }
     if (other.socket.readyState !== other.socket.OPEN) return;
-    other.socket.send(frame, { binary: true });
+    // The callback fires once this frame has left the queue: the only moment
+    // worth re-reading `bufferedAmount`, and the only drain signal `ws` gives.
+    other.socket.send(frame, { binary: true }, () => this.maybeResume(peer, other));
     this.stats.framesForwarded++;
     this.stats.bytesForwarded += frame.length;
+    // A peer that will not read is the one way a byte forwarder grows. Stop
+    // reading the sender's socket rather than queueing on its behalf; the
+    // backlog then sits in the sender's own kernel buffer, where it belongs.
+    if (!peer.paused && other.socket.bufferedAmount > this.options.maxBufferedBytes) {
+      peer.paused = true;
+      peer.socket.pause();
+    }
+  }
+
+  /** Resume `peer` once the socket it feeds has drained to half the cap (or gone). */
+  private maybeResume(peer: Peer, other: Peer | undefined): void {
+    if (!peer.paused) return;
+    const behind =
+      other !== undefined &&
+      other.socket.readyState === other.socket.OPEN &&
+      other.socket.bufferedAmount > this.options.maxBufferedBytes / 2;
+    if (behind) return;
+    peer.paused = false;
+    if (peer.socket.readyState === peer.socket.OPEN) peer.socket.resume();
   }
 
   private onControl(peer: Peer, data: RawData): void {
@@ -437,6 +502,12 @@ export class RelayServer {
     if (other) {
       other.aloneSince = this.now();
       other.handshakeFrames = HANDSHAKE_FRAMES; // it will handshake again for the next peer
+      // Nothing is left to drain for a peer that has gone: a socket paused for
+      // its sake must not stay paused, or it would never be read again.
+      if (other.paused) {
+        other.paused = false;
+        if (other.socket.readyState === other.socket.OPEN) other.socket.resume();
+      }
       this.send(other.socket, { t: "peer", present: false });
     }
     if (channel.peers.length === 0) this.channels.delete(channel.id);
@@ -470,6 +541,16 @@ export class RelayServer {
           peer.socket.close(RelayClose.Timeout, "no peer arrived");
           this.onClose(channel, peer);
           continue;
+        }
+        // A send callback can be lost with the socket it belonged to; the sweep
+        // is the safety net that un-pauses a peer whose queue has since drained.
+        if (peer.paused) {
+          this.maybeResume(peer, this.other(channel, peer));
+          // A paused socket is not being read, so its pong cannot arrive: hold
+          // the ping rather than reap the sender for the reader's backlog. The
+          // peer that is actually not reading still answers no ping of its own
+          // and is reaped normally, which releases this one.
+          if (peer.paused) continue;
         }
         peer.lastPing = n;
         peer.missedPings++;

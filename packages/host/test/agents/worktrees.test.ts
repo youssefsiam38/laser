@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -20,6 +20,25 @@ function repoWithChild(): { project: string; base: string; path: string; branch:
   const branch = "agents/explorer-1";
   git(project, "worktree", "add", "-q", path, "-b", branch, "HEAD");
   return { project, base, path, branch };
+}
+
+/**
+ * The monorepo shape: the person opened `<repo>/apps/web`, and the worker put
+ * the child's worktree under the repository's own `.worktrees`, a level up.
+ */
+function nestedProjectWithChild(): { repo: string; project: string; path: string; branch: string } {
+  const base = mkdtempSync(join(tmpdir(), "host-worktrees-nested-"));
+  const repo = join(base, "repo");
+  const project = join(repo, "apps", "web");
+  execFileSync("git", ["init", "-q", "-b", "main", repo]);
+  mkdirSync(project, { recursive: true });
+  writeFileSync(join(project, "a.txt"), "one\n");
+  git(repo, ...AUTHOR, "add", "-A");
+  git(repo, ...AUTHOR, "commit", "-q", "-m", "one");
+  const path = join(repo, ".worktrees", "explorer-1");
+  const branch = "agents/explorer-1";
+  git(repo, "worktree", "add", "-q", path, "-b", branch, "HEAD");
+  return { repo, project, path, branch };
 }
 
 const owner = (project: string, path: string, branch: string) => ({ projectCwd: project, worktree: { path, branch, baseCommit: "x" } });
@@ -94,6 +113,23 @@ describe("removeRunWorktree", () => {
     const forced = await removeRunWorktree(owner(project, path, branch), { force: true });
     expect(forced?.removed).toBe(true);
     expect(existsSync(path)).toBe(false);
+  });
+
+  it("reads and removes a child of a project opened in a subdirectory of its repository", async () => {
+    const { repo, project, path, branch } = nestedProjectWithChild();
+    // The predicate on its own: the git toplevel's `.worktrees` is ours too.
+    expect(isOwnedWorktreePath(project, path)).toBe(false);
+    expect(isOwnedWorktreePath(project, path, repo)).toBe(true);
+    expect(isOwnedWorktreePath(project, join(repo, "apps"), repo)).toBe(false);
+
+    const status = await worktreeStatus(owner(project, path, branch));
+    expect(status).toMatchObject({ path, branch, exists: true, unmergedCommits: 0, uncommittedFiles: 0 });
+    expect(status?.detail).toBeUndefined();
+
+    const removed = await removeRunWorktree(owner(project, path, branch));
+    expect(removed?.removed).toBe(true);
+    expect(existsSync(path)).toBe(false);
+    expect(git(repo, "branch", "--list", branch).trim()).toBe("");
   });
 
   it("refuses a worktree holding uncommitted files unless forced", async () => {

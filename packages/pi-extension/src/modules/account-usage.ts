@@ -77,6 +77,8 @@ export const accountUsageModule: LaserModule = {
   activate(ctx) {
     let last: AccountUsageSnapshot | undefined;
     let pending: Promise<void> | undefined;
+    /** A person asked for fresh numbers while a read was already in flight. */
+    let asked = false;
     let disposed = false;
 
     const emit = (status: AccountUsageState["status"], message?: string) => {
@@ -102,10 +104,27 @@ export const accountUsageModule: LaserModule = {
         emit("unavailable", result.message);
       }
     };
-    const queue = () => {
-      if (!pending) pending = refresh()
+    // A read already in flight answers for the credential, model and account
+    // it started with. Handing its result to a person who has just pressed
+    // Refresh — after connecting an account, or switching model — shows them
+    // the number they asked to leave behind, so their request gets its own
+    // read, queued behind the one in flight rather than racing it.
+    const run = (): Promise<void> =>
+      refresh()
         .catch(() => emit("unavailable", "Could not read your account credentials. Try refresh again or check the connected account in Providers."))
-        .finally(() => { pending = undefined; });
+        .finally(() => {
+          pending = undefined;
+          if (asked && !disposed) {
+            asked = false;
+            pending = run();
+          }
+        });
+    const queue = (asFresh = false) => {
+      if (pending) {
+        if (asFresh) asked = true;
+        return pending;
+      }
+      pending = run();
       return pending;
     };
     const updateContext = (session: ModuleContext["session"]) => {
@@ -118,7 +137,7 @@ export const accountUsageModule: LaserModule = {
     ctx.pi.on("agent_end", (_event, session) => updateContext(session));
     const offCommand = ctx.commands?.on((command) => {
       if (command.type !== "lasercode/account-usage/refresh") return false;
-      void queue();
+      void queue(true);
       return true;
     });
     return () => { disposed = true; offCommand?.(); };
@@ -148,7 +167,16 @@ async function readAccountUsage(
   };
 
   try {
-    const response = await fetch(USAGE_ENDPOINT, { headers, redirect: "error", signal: AbortSignal.timeout(10_000) });
+    // `manual`, never `follow`: this request carries the account's bearer
+    // token, and a redirect must not carry it to another host. `error` said
+    // the same thing but threw, and the throw came back to the person as
+    // "check your connection" — a sign-in redirect is not a network fault,
+    // and the sentence sent them to the wrong place.
+    const response = await fetch(USAGE_ENDPOINT, { headers, redirect: "manual", signal: AbortSignal.timeout(10_000) });
+    if (response.status >= 300 && response.status < 400) {
+      await response.body?.cancel();
+      return { message: "OpenAI redirected the allowance lookup instead of answering it, which usually means the account needs signing in again. Reconnect your OpenAI account in Providers, then refresh." };
+    }
     const html = response.headers.get("content-type")?.includes("text/html");
     if (response.headers.get("cf-mitigated") === "challenge" || html) {
       await response.body?.cancel();

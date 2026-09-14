@@ -71,6 +71,8 @@ interface Bootstrap {
   version: string;
   platform: DesktopPlatform;
   chrome: DesktopChrome;
+  /** Main's word on whether this platform can open a text editor at all. */
+  sourceEditor?: boolean;
 }
 
 /**
@@ -146,7 +148,13 @@ const api = {
   },
 
   chooseDirectory: (): Promise<string | null> => ipcRenderer.invoke(IPC.directorySelect) as Promise<string | null>,
-  openSourceFile: (path: string): Promise<{ opened: boolean; reason?: string }> => ipcRenderer.invoke(IPC.sourceFileOpen, path) as Promise<{ opened: boolean; reason?: string }>,
+
+  // Absent where the main process says this platform has no text-editor path.
+  // The decision is main's; the bridge only carries it, and its absence is
+  // already how every caller detects the browser and the phone.
+  ...(bootstrap.sourceEditor === false ? {} : {
+    openSourceFile: (path: string): Promise<{ opened: boolean; reason?: string }> => ipcRenderer.invoke(IPC.sourceFileOpen, path) as Promise<{ opened: boolean; reason?: string }>,
+  }),
 
   microphone: {
     status: (): Promise<MicrophoneStatus> => ipcRenderer.invoke(IPC.microphoneStatus) as Promise<MicrophoneStatus>,

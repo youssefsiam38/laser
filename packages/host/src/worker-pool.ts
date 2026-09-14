@@ -17,6 +17,9 @@
  * project has no live agent run (`hasLiveRun`, answered from the host's run
  * registry — see docs/agents.md). Nothing ends a run for taking too long, so a
  * project with an agent still working is never idle however long it takes.
+ * That promise is not the sweep's alone: `stop()` and `restart()` refuse the
+ * same work, so a `pi/worker/stop` or a Feature toggle (which restarts every
+ * open project) cannot end a run either.
  */
 import type { HostNotifications, JsonRpcNotification, WorkerInfo, WorkerStatus } from "@lasercode/protocol";
 import { ErrorCodes, ProtocolError, environmentOverlay } from "@lasercode/protocol";
@@ -370,6 +373,9 @@ export class WorkerPool {
   async restart(cwd: string): Promise<WorkerInfo> {
     const key = canonical(cwd);
     const entry = this.ensure(key);
+    // Asked before anything is touched: a refused restart must leave the worker
+    // exactly as it was, counters included.
+    this.assertNotBusy(key, entry);
     entry.restarts = 0;
     this.clearRetry(entry);
     // Retiring clears the open set, so remember it first: "Retry" is meant to
@@ -389,18 +395,36 @@ export class WorkerPool {
     return this.infoOf(entry);
   }
 
-  /** Retire a worker. Refused while one of its sessions is running. */
+  /** Retire a worker. Refused while it is running a session or an agent run. */
   async stop(cwd: string, message = "stopped"): Promise<void> {
     const key = canonical(cwd);
     const entry = this.entries.get(key);
     if (!entry) return;
+    this.assertNotBusy(key, entry);
+    await this.retire(entry, message);
+  }
+
+  /**
+   * A worker with work of its own is never stopped on purpose either. The
+   * sweep already honours `hasLiveRun`, and an explicit stop must too: a child
+   * waiting on a question, queued behind its parent, or simply between turns
+   * has an empty `running` set, and retiring its worker kills the run. That is
+   * the same promise as the idle sweep's — `feature/set` restarts every open
+   * project, and toggling a Feature may not end a live agent run (D-144).
+   */
+  private assertNotBusy(key: string, entry: Entry): void {
     if (entry.running.size > 0) {
       throw new ProtocolError(
         ErrorCodes.SessionBusy,
         `the worker for ${key} is running an agent; cancel the session before stopping it`,
       );
     }
-    await this.retire(entry, message);
+    if (this.options.hasLiveRun?.(entry.cwd) ?? false) {
+      throw new ProtocolError(
+        ErrorCodes.SessionBusy,
+        `the worker for ${key} has an agent run that has not ended; stop that agent before stopping it`,
+      );
+    }
   }
 
   async stopAll(): Promise<void> {
