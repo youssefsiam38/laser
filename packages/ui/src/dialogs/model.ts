@@ -110,6 +110,24 @@ export function dialogFormOf(dialog: UiDialogRequest, hasToolRow: boolean): Dial
 }
 
 /**
+ * What this form is asking, as one comparable value.
+ *
+ * An id alone does not identify a question: a re-issued request can carry the
+ * same id and different options, a different prefill or different fields, and
+ * the answer state of the old one belongs to a question nobody is asking any
+ * more. Only what the person fills in is in here — title and message change
+ * nothing about the values.
+ */
+export function dialogFormSignature(form: DialogForm): string {
+  return JSON.stringify([
+    form.id,
+    form.method,
+    form.fields.map((field) => [field.id, field.type, field.options ?? null, field.default ?? null, field.required ?? false]),
+    form.rejection ?? null,
+  ]);
+}
+
+/**
  * Turn an answer into the `pi/ui/response` the worker's UI bridge expects.
  * `values` are keyed by field id; a cancel carries none.
  */

@@ -29,7 +29,13 @@ const asTheme = (preset: ThemePreset): Theme => {
   return theme;
 };
 
-/** Shell files copied from `public/`; they never appear in the Rollup bundle. */
+/**
+ * Shell files copied from `public/`; they never appear in the Rollup bundle, so
+ * this list is written by hand and can name a file a rename has moved. They are
+ * cached when they are there and skipped when they are not: an install that
+ * rejects over one icon costs every client of that release its whole shell
+ * (`sw.ts`, `OPTIONAL`).
+ */
 const PUBLIC_SHELL = [
   "/manifest.webmanifest",
   "/icons/icon-192.png",
@@ -167,7 +173,7 @@ export function productIdentityHtml(): Plugin {
 /** Static entry dependencies are the offline shell. Dynamic renderers are
  * allowed in the asset cache but fetched only when a view actually uses them.
  * Keep all emitted styles/fonts conservatively: they also own theme variants. */
-export function shellAssetSets(bundle: Record<string, { type: "asset" | "chunk"; isEntry?: boolean; imports?: readonly string[] }>): { precache: string[]; assets: string[] } {
+export function shellAssetSets(bundle: Record<string, { type: "asset" | "chunk"; isEntry?: boolean; imports?: readonly string[] }>): { precache: string[]; optional: string[]; assets: string[] } {
   const emitted = Object.keys(bundle).filter(file => /\.(m?js|css|woff2?)$/.test(file) && !file.endsWith(".map"));
   const critical = new Set<string>();
   const visit = (file: string) => {
@@ -181,7 +187,13 @@ export function shellAssetSets(bundle: Record<string, { type: "asset" | "chunk";
   for (const file of emitted) if (/\.(css|woff2?)$/.test(file)) critical.add(file);
   const unique = (files: string[]) => [...new Set(files)];
   const base = ["/", "/index.html", ...PUBLIC_SHELL];
-  return { precache: unique([...base, ...[...critical].map(file => `/${file}`)]), assets: unique([...base, ...emitted.map(file => `/${file}`)]) };
+  return {
+    precache: unique([...base, ...[...critical].map(file => `/${file}`)]),
+    // The document and the code it needs are the shell; the hand-named public
+    // files are not, and must not be able to fail the install.
+    optional: unique(PUBLIC_SHELL),
+    assets: unique([...base, ...emitted.map(file => `/${file}`)]),
+  };
 }
 
 export function laserPwa(options: LaserPwaOptions = {}): Plugin {
@@ -207,7 +219,7 @@ export function laserPwa(options: LaserPwaOptions = {}): Plugin {
     },
 
     async generateBundle(_options, bundle) {
-      const { precache, assets } = shellAssetSets(bundle);
+      const { precache, optional, assets } = shellAssetSets(bundle);
 
       const source = readFileSync(fileURLToPath(new URL("./sw.ts", import.meta.url)), "utf8");
       const { code } = await transformWithEsbuild(source, "sw.ts", {
@@ -232,10 +244,11 @@ export function laserPwa(options: LaserPwaOptions = {}): Plugin {
         );
       }
 
-      const build = createHash("sha256").update(precache.join("\n")).update(assets.join("\n")).update(worker).digest("hex").slice(0, 12);
+      const build = createHash("sha256").update(precache.join("\n")).update(optional.join("\n")).update(assets.join("\n")).update(worker).digest("hex").slice(0, 12);
       const style = offlineStyle();
       const out = worker
         .replace('"__SW_PRECACHE__"', JSON.stringify(precache))
+        .replace('"__SW_OPTIONAL__"', JSON.stringify(optional))
         .replace('"__SW_ASSETS__"', JSON.stringify(assets))
         .replace("__SW_BUILD__", build)
         .replace("__SW_CACHE_PREFIX__", CACHE_PREFIX)
@@ -245,6 +258,7 @@ export function laserPwa(options: LaserPwaOptions = {}): Plugin {
         .replace("__SW_OFFLINE_STYLE__", () => style);
       if (!out.includes(JSON.stringify(precache))) throw new Error(`${PLUGIN} — the precache placeholder was not found in sw.ts`);
       if (out.includes("__SW_ASSETS__")) throw new Error(`${PLUGIN} — the asset allowlist placeholder was not found in sw.ts`);
+      if (out.includes("__SW_OPTIONAL__")) throw new Error(`${PLUGIN} — the optional-shell placeholder was not found in sw.ts`);
       if (out.includes("__SW_OFFLINE_STYLE__")) throw new Error(`${PLUGIN} — the offline-style placeholder was not found in sw.ts`);
       this.emitFile({ type: "asset", fileName: "sw.js", source: out });
     },

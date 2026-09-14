@@ -64,7 +64,15 @@ export interface HistoryWindowOwner {
 export const MAIN_WINDOW_SCOPE = "main";
 
 export interface HistoryWindows {
-  /** Idempotent for one surface identity; safe to call while rendering. */
+  /**
+   * Idempotent for one surface identity; safe to call while rendering, and
+   * stable: the same `scope` and `path` get the same object for as long as the
+   * surface holds them. The identity is load-bearing — the owner is a
+   * dependency of the scope's store, its history loader and its thread-list
+   * adapter, and assistant-ui treats a new `RemoteThreadListAdapter` as a new
+   * adapter: it bumps its generations and throws `ThreadListAdapterChangedError`
+   * out of the work already in flight.
+   */
   owner(scope: string, path: string | undefined): HistoryWindowOwner;
   /** This surface no longer shows this session. Host work is untouched. */
   forget(scope: string, path: string | undefined): void;
@@ -74,6 +82,8 @@ export interface HistoryWindows {
 export function createHistoryWindows(root: HistoryWindowRoot): HistoryWindows {
   interface Held { scope: string; path: string; owned?: SessionView | undefined; source?: AppState; shown?: SessionView; derived?: AppState }
   const held = new Map<string, Held>();
+  /** One owner object per `scope\0path`, for as long as that surface holds it. */
+  const owners = new Map<string, HistoryWindowOwner>();
   const key = (scope: string, path: string) => `${scope}\u0000${path}`;
 
   const ensure = (scope: string, path: string): Held => {
@@ -119,8 +129,10 @@ export function createHistoryWindows(root: HistoryWindowRoot): HistoryWindows {
   return {
     owner(scope, path) {
       if (!path) return inert;
+      const cached = owners.get(key(scope, path));
+      if (cached) return cached;
       const entry = ensure(scope, path);
-      return {
+      const created: HistoryWindowOwner = {
         overlay(state) {
           const view = state.open[path];
           if (!entry.owned || !view) return state;
@@ -139,9 +151,13 @@ export function createHistoryWindows(root: HistoryWindowRoot): HistoryWindows {
           root.publishWindows();
         },
       };
+      owners.set(key(scope, path), created);
+      return created;
     },
     forget(scope, path) {
-      if (path) held.delete(key(scope, path));
+      if (!path) return;
+      held.delete(key(scope, path));
+      owners.delete(key(scope, path));
     },
     dispose: stop,
   };

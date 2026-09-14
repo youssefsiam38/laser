@@ -159,6 +159,8 @@ export interface PushServiceOptions {
 export class PushService {
   private readonly file: string;
   private store: PushStoreFile | undefined;
+  /** The one in-flight `ready()`; keys are generated once, never per caller. */
+  private readying: Promise<PushStoreFile> | undefined;
   private readonly fetchImpl: typeof fetch;
   private readonly log: (line: string) => void;
   private readonly options: PushServiceOptions;
@@ -184,6 +186,18 @@ export class PushService {
    * file left exactly as it is for a person to look at.
    */
   async ready(): Promise<PushStoreFile> {
+    if (this.store) return this.store;
+    // One key generation, however many callers arrive at once. Two concurrent
+    // first callers used to generate a pair each and persist both: the second
+    // write wins the file, and every subscription a phone made against the
+    // loser's `applicationServerKey` is unreachable for good.
+    this.readying ??= this.load().finally(() => {
+      this.readying = undefined;
+    });
+    return this.readying;
+  }
+
+  private async load(): Promise<PushStoreFile> {
     if (this.store) return this.store;
     if (existsSync(this.file)) {
       let parsed: PushStoreFile;

@@ -45,10 +45,36 @@ export const instructionSourceSchema = z.object({
   agentName: z.string().optional(), fieldKey: z.string().optional(), module: z.string().optional(),
   reason: z.enum(["template-ranges-unavailable", "verification-unavailable"]).optional(),
 });
+/**
+ * Spans are UTF-16 ranges over one captured string, in reading order.
+ *
+ * A capture covers its text from left to right, so a span that ends where it
+ * starts, runs backwards, or reaches back into the one before it is not a
+ * range of that text at all — it is corrupted metadata, and attributing prompt
+ * text to a source by it would say something untrue about where an instruction
+ * came from. Whether the spans cover the *right* text is a question only the
+ * text can answer: the reader re-hashes the string and walks the cover
+ * (`packages/ui/src/components/logs/request-sources.ts`), and drops the whole
+ * map when either disagrees. This is the part that needs no text.
+ */
+const instructionSourceSpansSchema = z
+  .array(z.object({ start: z.number().int().nonnegative(), end: z.number().int().positive(), source: instructionSourceSchema }))
+  .superRefine((spans, ctx) => {
+    let cursor = 0;
+    for (const [index, span] of spans.entries()) {
+      if (span.end <= span.start) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: [index], message: "a source span must end after it starts" });
+      } else if (span.start < cursor) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: [index], message: "source spans must be in order and must not overlap" });
+      }
+      cursor = Math.max(cursor, span.end);
+    }
+  });
+
 export const instructionSourceMapSchema = z.object({
   path: z.array(z.union([z.string(), z.number().int().nonnegative()])),
   sha256: z.string().regex(/^[a-f0-9]{64}$/),
-  spans: z.array(z.object({ start: z.number().int().nonnegative(), end: z.number().int().positive(), source: instructionSourceSchema })),
+  spans: instructionSourceSpansSchema,
 });
 
 // ---------- the product's identity ----------

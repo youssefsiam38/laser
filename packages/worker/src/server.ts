@@ -357,10 +357,11 @@ export class WorkerServer {
             // The driver now serves the forked session file; re-key it so later
             // requests by the new path find it. Clients learn the new path from
             // the result and from the state update that follows.
-            this.sessions.delete(live.path);
-            this.harness.rekeySession(live.path, state.path);
+            const previous = live.path;
+            this.sessions.delete(previous);
             live.path = state.path;
             this.sessions.set(state.path, live);
+            this.rekeySessionState(previous, state.path);
           }
           this.onDriverEvent(live, { type: "update", update: { kind: "state", state } });
           return { ...forked, state: this.decorate(live, forked.state) } satisfies Result<"pi/session/fork">;
@@ -415,11 +416,11 @@ export class WorkerServer {
       }
       case "pi/model/set": {
         const live = this.live(req.params.path);
-        return this.firstTurnLock.run(live.path, async () => ({ state: await live.driver.setModel(req.params.model) } satisfies Result<"pi/model/set">));
+        return this.settingsLane(live, async () => ({ state: await live.driver.setModel(req.params.model) } satisfies Result<"pi/model/set">));
       }
       case "pi/thinking/set": {
         const live = this.live(req.params.path);
-        return this.firstTurnLock.run(live.path, async () => ({ state: await live.driver.setThinkingLevel(req.params.level) } satisfies Result<"pi/thinking/set">));
+        return this.settingsLane(live, async () => ({ state: await live.driver.setThinkingLevel(req.params.level) } satisfies Result<"pi/thinking/set">));
       }
       case "pi/account-usage/refresh": {
         const live = this.live(req.params.path);
@@ -1035,15 +1036,29 @@ export class WorkerServer {
     }
   }
 
-  /** Namer names a session after its first prompt, unless the person got there first. */
+  /**
+   * Namer names a session after its first prompt, unless the person got there
+   * first.
+   *
+   * Never rejects, and that is load-bearing: every caller floats this promise
+   * (naming must not delay the turn), and the reads after the await are not
+   * safe — a driver whose runtime is being replaced throws
+   * `DriverUnavailableError` out of `state()`. An unhandled rejection would
+   * end the worker process, and with it every conversation in this project
+   * (AGENTS.md invariant 5), because a session could not be given a title.
+   */
   private async nameSession(live: Live, text: string): Promise<void> {
-    if (!this.namer.enabled()) {
-      this.waitToName(live.path, text);
-      return;
+    try {
+      if (!this.namer.enabled()) {
+        this.waitToName(live.path, text);
+        return;
+      }
+      const name = await this.namer.nameSession(text);
+      if (!name || !this.sessions.has(live.path) || live.driver.state().name) return;
+      await live.driver.rename(name).catch(() => undefined);
+    } catch (error) {
+      console.error(`${PRODUCT_NAME} worker: could not name ${live.path}:`, error instanceof Error ? error.message : error);
     }
-    const name = await this.namer.nameSession(text);
-    if (!name || !this.sessions.has(live.path) || live.driver.state().name) return;
-    await live.driver.rename(name).catch(() => undefined);
   }
 
   /** Hold a first prompt until a Namer model exists, oldest dropped past the cap. */
@@ -1242,6 +1257,26 @@ export class WorkerServer {
       });
     };
     return this.harness.admitExtensionModelWork(path, request, start);
+  }
+
+  /**
+   * A model or thinking change on a conversation that has already started
+   * applies at once: the engine takes it for the next turn (a steer in the
+   * queue, not a stop). Only a pristine session waits its turn behind the
+   * first-turn fence, because there the choice can replace the runtime. The
+   * admission lease is otherwise held by a queued steer for as long as the
+   * running turn lasts, and a settings change waiting on it left every
+   * composer disabled until that turn ended.
+   */
+  private settingsLane<T>(live: Live, work: () => Promise<T>): Promise<T> {
+    let started = false;
+    try {
+      const state = live.driver.state();
+      started = state.messageCount > 0 || state.pendingMessageCount > 0 || state.isStreaming;
+    } catch {
+      // No runtime to read: a replacement is in flight, so wait for it.
+    }
+    return started ? work() : this.firstTurnLock.run(live.path, work);
   }
 
   /** A public prompt's preflight lease and optional same-identity agent bind. */
@@ -1522,6 +1557,41 @@ export class WorkerServer {
         this.unnamed.delete(live.path);
         this.namer.forget(live.path);
         return;
+    }
+  }
+
+  /**
+   * A fork moved a session's file: everything this worker holds under the old
+   * path follows it, here, in one place.
+   *
+   * This list is the list the `closed` case above drops, in the same order,
+   * and that is the point: a per-session structure added to one and not the
+   * other is a session that half exists. What was missing cost the fleet a
+   * child's background commands (left "running" for ever under a path nobody
+   * serves), its git baseline, its MCP snapshot, the first prompt still
+   * waiting to be named, and the run itself — `stopRun` then cancelled a
+   * child that was still working, because it could not find its session.
+   *
+   * `sessions`, `live.pending` and `live.buffer` move with the `Live` record
+   * itself; `firstTurnLock` is held on the old path for exactly this call and
+   * released by it.
+   */
+  private rekeySessionState(oldPath: string, newPath: string): void {
+    if (oldPath === newPath) return;
+    this.harness.rekeySession(oldPath, newPath);
+    this.tasks.rekeySession(oldPath, newPath);
+    this.mcpService?.rekeySession(oldPath, newPath);
+    this.gitService?.rekey(oldPath, newPath);
+    this.namer.rekey(oldPath, newPath);
+    const tools = this.runningTools.get(oldPath);
+    if (tools) {
+      this.runningTools.delete(oldPath);
+      this.runningTools.set(newPath, tools);
+    }
+    const waiting = this.unnamed.get(oldPath);
+    if (waiting !== undefined) {
+      this.unnamed.delete(oldPath);
+      this.unnamed.set(newPath, waiting);
     }
   }
 

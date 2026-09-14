@@ -14,7 +14,8 @@ import type { SessionSummary } from "@lasercode/protocol";
 import { SessionsPanel } from "../../src/components/shell/SessionsPanel.js";
 import { ShellContext, type ShellContextValue } from "../../src/components/shell/shell-context.js";
 import { SESSIONS_TAB_STORAGE_KEY, sessionsList } from "../../src/components/shell/session-groups.js";
-import { rememberSessionForTab, rememberSessionsTab, rememberedSessionForTab } from "../../src/runtime/session-tab-memory.js";
+import { SESSION_TAB_MEMORY_KEY, rememberSessionsTab } from "../../src/runtime/session-tab-memory.js";
+import { readDestinationMemory } from "../../src/runtime/main-destination-controller.js";
 import { sessionFolds } from "../../src/components/assistant-ui/elements/session-folds.js";
 import { clearEndAgentRequest, useEndAgentRequest } from "../../src/components/agents/end-agent.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
@@ -119,11 +120,31 @@ afterEach(async () => {
 });
 
 const mount = async (node: ReactNode = <Fixture store={store} />) => act(async () => root.render(node));
+
+/**
+ * What the destination controller remembers, in its own shape: this panel does
+ * not write it, so the test stands in for the controller rather than keeping a
+ * second writer of the key beside it.
+ */
+const rememberTabSession = (tab: "chat" | "code", path: string) => {
+  const memory = readDestinationMemory();
+  const chat = tab === "chat" ? path : memory.chat;
+  const code = tab === "code"
+    ? { kind: "project-session" as const, project: path.startsWith("/two/") ? "/two" : "/one", path }
+    : memory.code;
+  localStorage.setItem(SESSION_TAB_MEMORY_KEY, JSON.stringify({ v: 2, tab: memory.tab, ...(chat ? { chat } : {}), code }));
+};
+const rememberedTabSession = (tab: "chat" | "code"): string | undefined => {
+  const memory = readDestinationMemory();
+  if (tab === "chat") return memory.chat;
+  return memory.code.kind === "project-session" || memory.code.kind === "beam-session" ? memory.code.path : undefined;
+};
+
 const completeTab = async (next: "chat" | "code") => {
   rememberSessionsTab(next);
   const target = next === "chat"
-    ? (rememberedSessionForTab("chat") ?? "/state/chat/c1.jsonl")
-    : (rememberedSessionForTab("code") ?? "/one/root.jsonl");
+    ? (rememberedTabSession("chat") ?? "/state/chat/c1.jsonl")
+    : (rememberedTabSession("code") ?? "/one/root.jsonl");
   const intent = store.getSnapshot().destination.intent + 1;
   store.dispatch({ type: "destination", destination: next === "chat"
     ? { phase: "ready-chat", intent, path: target, rememberedCode: { kind: "project-session", project: "/one", path: ROOT } }
@@ -180,8 +201,8 @@ describe("sessions panel tabs", () => {
   });
 
   it("restores the last viewed session for each tab before falling back to newest", async () => {
-    rememberSessionForTab("chat", "/state/chat/c2.jsonl");
-    rememberSessionForTab("code", "/two/plain.jsonl");
+    rememberTabSession("chat", "/state/chat/c2.jsonl");
+    rememberTabSession("code", "/two/plain.jsonl");
     await mount();
     await act(async () => { tab("chat").click(); await completeTab("chat"); });
     expect(stable.actions.openSession).toHaveBeenLastCalledWith("/state/chat/c2.jsonl");

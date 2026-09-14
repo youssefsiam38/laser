@@ -118,3 +118,25 @@ it("clears a consumed choice when the session is no longer pristine", async () =
   expect(firstTurnFromRunConfig(composer.runConfig)).toBeUndefined();
   expect(composer.runConfig.custom?.retained).toBe("yes");
 });
+
+it("a preparation that has not answered for one session does not lock the composer of the next", async () => {
+  // 0.6.2: a thinking change waited behind a long turn on session A, and the
+  // composer — one component across switches — stayed inert on B, C and D.
+  laser.view = sessionView({ path: "/s/a.jsonl" });
+  await render();
+  const buttons = container.querySelectorAll("button");
+  await act(async () => buttons[0]!.click());
+  expect(container.querySelector("[data-state]")?.textContent).toBe("locked");
+  // The person moves to another session while A's answer is still out.
+  laser.view = sessionView({ path: "/s/b.jsonl" });
+  await render();
+  expect(container.querySelector("[data-state]")?.textContent).toBe("ready");
+  // A's late answer releases A's lock, which no longer exists here: B stays ready.
+  await act(async () => buttons[1]!.click());
+  expect(container.querySelector("[data-state]")?.textContent).toBe("ready");
+  // B's own preparation still locks B.
+  await act(async () => buttons[0]!.click());
+  expect(container.querySelector("[data-state]")?.textContent).toBe("locked");
+  await act(async () => buttons[1]!.click());
+  expect(container.querySelector("[data-state]")?.textContent).toBe("ready");
+});

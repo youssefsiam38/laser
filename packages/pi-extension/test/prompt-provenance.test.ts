@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { expect, it, vi } from "vitest";
+import { instructionSourceMapSchema } from "@lasercode/protocol";
 import type { BeforeAgentStartEvent, Extension, ExtensionContext, LoadExtensionsResult, Skill } from "@earendil-works/pi-coding-agent";
 import { createPromptProvenanceObserver, instructionLeaves, recordBasePrompt, recordPromptChange, recordInstructionWrite } from "../src/prompt-provenance.js";
 
@@ -17,6 +18,9 @@ const event = (systemPromptOptions = options): BeforeAgentStartEvent => ({ type:
 it.each([undefined, "Custom instructions."])("maps the exact engine-built base and files, custom=%s", customPrompt => {
   const input = event({ ...options, ...(customPrompt ? { customPrompt } : {}) });
   const trace = recordBasePrompt(input);
+  // Every range the real engine's prompt produces is one the wire schema
+  // accepts: tightening it must never reject a capture a person could have.
+  expect(instructionSourceMapSchema.parse({ path: ["instructions"], sha256: "a".repeat(64), spans: JSON.parse(JSON.stringify(trace.spans)) })).toBeTruthy();
   expect(trace.spans.map(span => trace.text.slice(span.start, span.end)).join("")).toBe(input.systemPrompt);
   expect(trace.spans.filter(span => span.source.kind === "file").map(span => trace.text.slice(span.start, span.end))).toEqual(["Root rule.", "Project rule 🟢."]);
   expect(trace.spans.filter(span => span.source.kind === "skill").map(span => span.source.path)).toEqual(["/skills/testing/SKILL.md"]);
@@ -80,6 +84,9 @@ it("observes ordered prompt and in-place request changes, captures once at the e
     }
     expect(capture).toHaveBeenCalledTimes(turn + 1);
     const map = capture.mock.calls.at(-1)![2][0];
+    // The capture this engine actually produces is what the wire schema calls
+    // a source map: ordered, non-overlapping ranges over the captured string.
+    expect(instructionSourceMapSchema.parse(JSON.parse(JSON.stringify(map)))).toBeTruthy();
     expect(map.sha256).toBe(createHash("sha256").update(payload.instructions).digest("hex"));
     expect(map.spans.at(-1).source.label).toBe("first");
     expect(map.spans.some((span: { source: { path?: string } }) => span.source.path === "/project/AGENTS.md")).toBe(true);

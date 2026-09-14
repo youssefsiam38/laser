@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { assertRelaunchPrivileges, linuxRelaunchCommand } from "../src/linux-relaunch.js";
+import { assertRelaunchPrivileges, commitLinuxRelaunch, LinuxRelaunchError, linuxRelaunchCommand, type PreparedRelaunch } from "../src/linux-relaunch.js";
 
 it("uses the installed launcher, keeping argv, cwd and environment exactly", () => {
   const env = { PATH: "/custom/bin", [ENV.stateDir]: "/data with spaces", DISPLAY: ":42" };
@@ -26,6 +26,65 @@ it("never pretends an inherited kernel restriction can be cleared", () => {
   expect(() => assertRelaunchPrivileges("NoNewPrivs:\t1\n")).toThrow(/cannot remove/);
   expect(() => assertRelaunchPrivileges("NoNewPrivs:\t2\n")).toThrow(/could not verify/);
   expect(() => assertRelaunchPrivileges("")).toThrow(/could not verify/);
+});
+
+describe("a restart that cannot be completed", () => {
+  /** Records what happened, in order, including the modal the person sees. */
+  function handoff(failure: { at: "prepare" | "stop" | "commit"; error: Error }, startHost = async () => {}) {
+    const events: string[] = [];
+    const messages: string[] = [];
+    const prepared: PreparedRelaunch = {
+      commit: async () => { events.push("commit"); if (failure.at === "commit") throw failure.error; },
+      cancel: () => events.push("cancel"),
+    };
+    const steps = {
+      prepare: async () => { events.push("prepare"); if (failure.at === "prepare") throw failure.error; return prepared; },
+      stopHost: async () => { events.push("stop"); if (failure.at === "stop") throw failure.error; },
+      startHost: async () => { events.push("start"); await startHost(); },
+      report: async (message: string) => { events.push("report"); messages.push(message); },
+      log: () => {},
+    };
+    return { events, messages, steps, prepared };
+  }
+
+  it("starts the host again before telling the person, so the app is not left with nothing under it", async () => {
+    const { events, messages, steps } = handoff({ at: "commit", error: new Error("helper channel closed") });
+    expect(await commitLinuxRelaunch(steps)).toBeUndefined();
+    // Start comes before the modal: the dialog blocks until it is answered.
+    expect(events).toEqual(["prepare", "stop", "commit", "cancel", "start", "report"]);
+    expect(messages[0]).toMatch(/Keep working/);
+    expect(messages[0]).not.toMatch(/helper channel closed|Error/);
+  });
+
+  it("restarts the host when stopping it is what failed, and says the person-facing reason verbatim", async () => {
+    const stop = handoff({ at: "stop", error: new LinuxRelaunchError("The restart helper stopped responding. Keep working, or quit completely.") });
+    expect(await commitLinuxRelaunch(stop.steps)).toBeUndefined();
+    expect(stop.events).toEqual(["prepare", "stop", "cancel", "start", "report"]);
+    expect(stop.messages[0]).toBe("The restart helper stopped responding. Keep working, or quit completely.");
+  });
+
+  it("leaves a running host alone when preparation failed before it was stopped", async () => {
+    const { events, steps } = handoff({ at: "prepare", error: new LinuxRelaunchError("It cannot restart itself here.") });
+    expect(await commitLinuxRelaunch(steps)).toBeUndefined();
+    expect(events).toEqual(["prepare", "report"]);
+  });
+
+  it("still explains itself when the host will not start again either", async () => {
+    const { events, messages, steps } = handoff(
+      { at: "commit", error: new Error("gone") },
+      async () => { throw new Error("port in use"); },
+    );
+    expect(await commitLinuxRelaunch(steps)).toBeUndefined();
+    expect(events).toEqual(["prepare", "stop", "commit", "cancel", "start", "report"]);
+    expect(messages).toHaveLength(1);
+  });
+
+  it("commits in the one safe order and reports nothing when it works", async () => {
+    const { events, steps, prepared } = handoff({ at: "prepare", error: new Error("unused") });
+    steps.prepare = async () => { events.push("prepare"); return prepared; };
+    expect(await commitLinuxRelaunch(steps)).toBe(prepared);
+    expect(events).toEqual(["prepare", "stop", "commit"]);
+  });
 });
 
 const roots: string[] = [];

@@ -179,7 +179,10 @@ function useDialogLink(dialog: UiDialogRequest | undefined): boolean {
 
   useEffect(() => {
     if (!link || !dialog) return;
-    if (!dialog.id.endsWith(link.decisionId)) return;
+    // The notification carries the question's exact id (`decisionPushPayload`,
+    // from `pi/ui/request`). Anything looser is a tap on one notification
+    // answering another question.
+    if (dialog.id !== link.decisionId) return;
     consumeDecisionLink();
     if (link.answer === "deny") {
       setDeclineFirst({ id: dialog.id, path });

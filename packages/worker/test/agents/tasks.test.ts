@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { TASK_OUTPUT_MAX_BYTES, type BackgroundTaskUpdate } from "@lasercode/protocol";
-import { MAX_INDEXED_TASKS_PER_SESSION, TaskIndex, readLogTail } from "../../src/agents/tasks.js";
+import { MAX_CLOSED_SESSIONS, MAX_INDEXED_TASKS_PER_SESSION, TaskIndex, readLogTail } from "../../src/agents/tasks.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -61,6 +61,34 @@ describe("TaskIndex", () => {
     expect(kept[0]!.id).toBe("t-first-live");
     expect(kept.some((task) => task.id === "t-0")).toBe(false);
     expect(kept.at(-1)!.id).toBe(`t-${MAX_INDEXED_TASKS_PER_SESSION + 4}`);
+  });
+
+  it("forgets the commands of long-closed sessions, never those of an open one", () => {
+    const index = new TaskIndex();
+    // An open session, and one that closed before all the others.
+    index.observe("/s/open.jsonl", { type: "lasercode/task/update", task: update({ id: "t-open" }) });
+    index.observe("/s/first.jsonl", { type: "lasercode/task/update", task: update({ id: "t-first" }) });
+    index.sessionClosed("/s/first.jsonl");
+    for (let i = 0; i < MAX_CLOSED_SESSIONS; i++) {
+      const path = `/s/closed-${i}.jsonl`;
+      index.observe(path, { type: "lasercode/task/update", task: update({ id: `t-${i}` }) });
+      index.sessionClosed(path);
+    }
+
+    expect(index.tasksOf("/s/first.jsonl")).toEqual([]); // the oldest closed session is gone
+    expect(index.tasksOf(`/s/closed-${MAX_CLOSED_SESSIONS - 1}.jsonl`)).toHaveLength(1);
+    expect(index.tasksOf("/s/open.jsonl")).toHaveLength(1); // never counted, never dropped
+
+    // A session that opens again is live again, and outlasts the newer closures.
+    const reopened = `/s/closed-${MAX_CLOSED_SESSIONS - 1}.jsonl`;
+    index.observe(reopened, { type: "lasercode/task/update", task: update({ id: "t-again" }) });
+    for (let i = 0; i < MAX_CLOSED_SESSIONS; i++) {
+      const path = `/s/late-${i}.jsonl`;
+      index.observe(path, { type: "lasercode/task/update", task: update({ id: `l-${i}` }) });
+      index.sessionClosed(path);
+    }
+    expect(index.tasksOf(reopened)).toHaveLength(2);
+    expect(index.tasksOf("/s/open.jsonl")).toHaveLength(1);
   });
 });
 

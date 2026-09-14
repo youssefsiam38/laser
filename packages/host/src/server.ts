@@ -583,7 +583,11 @@ export class HostServer {
    * so the fleet is told rather than left with a row that spins forever.
    */
   private forgetSessionsOf(cwd: string, reason: string): void {
-    this.tasks.workerLost(this.pool.openSessions(cwd), reason);
+    const paths = this.pool.openSessions(cwd);
+    this.tasks.workerLost(paths, reason);
+    // Nothing that was open in that worker can end now, so the log store's
+    // correlation bookkeeping for those sessions is closed too.
+    for (const path of paths) this.logs?.forgetSession(path);
   }
 
   /**

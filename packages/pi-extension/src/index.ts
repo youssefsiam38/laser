@@ -31,7 +31,9 @@ import {
   type CommandBus,
   type McpModuleOptions,
   type ModuleContext,
+  type ModuleDispose,
   type ModuleName,
+  type ModuleShutdown,
   type OutboundMessage,
   type WebSearchHandler,
 } from "./modules/index.js";
@@ -41,6 +43,8 @@ export type {
   CommandBus,
   CommandHandler,
   ModuleName,
+  ModuleDispose,
+  ModuleShutdown,
   OutboundMessage,
   ModuleContext,
   LaserModule,
@@ -109,7 +113,7 @@ export function createLaserExtension(options: LaserExtensionOptions): InlineExte
   return {
     name: LASER_EXTENSION_NAME,
     factory: (pi: ExtensionAPI) => {
-      const disposers: Array<() => void> = [];
+      const disposers: ModuleDispose[] = [];
       const ctx: ModuleContext = {
         pi,
         send: options.send,
@@ -149,9 +153,14 @@ export function createLaserExtension(options: LaserExtensionOptions): InlineExte
         options.send({ type: "lasercode/capabilities", active, failed });
       });
 
-      pi.on("session_shutdown", async () => {
+      // The reason is part of the news, not noise: `quit` is the person
+      // leaving, while `fork`, `new`, `resume` and `reload` only replace this
+      // runtime. A module that owns something living outside the session
+      // (a background command) decides for itself what each means.
+      pi.on("session_shutdown", async (event) => {
+        const shutdown: ModuleShutdown = { reason: event?.reason ?? "quit" };
         for (const d of disposers.splice(0)) {
-          try { d(); } catch { /* best effort */ }
+          try { d(shutdown); } catch { /* best effort */ }
         }
       });
     },

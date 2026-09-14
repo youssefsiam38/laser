@@ -1,5 +1,5 @@
 "use client";
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useAui, useAuiState } from "@assistant-ui/react";
 import type { ModelRef, ThinkingLevel } from "@lasercode/protocol";
 import { useLaserState } from "../../runtime/LaserProvider.js";
@@ -38,6 +38,18 @@ const SessionPreparationContext = createContext<SessionPreparationValue>({
 export function SessionPreparationProvider({ children }: { children: ReactNode }) {
   const [count, setCount] = useState(0);
   const aui = useAui();
+  // Preparation belongs to the session it was started for. The composer is
+  // one component across session switches, so a preparation that has not
+  // answered yet (a model change waiting behind a long turn) must not keep
+  // every other conversation's composer inert: leaving the session drops its
+  // count, and a late answer for that session releases nothing here.
+  const path = useLaserState((state) => state.current);
+  const owner = useRef(path);
+  useEffect(() => {
+    if (owner.current === path) return;
+    owner.current = path;
+    setCount(0);
+  }, [path]);
   const defaultAgent = useLaserState((state) => state.agents.snapshot?.defaultAgent);
   // Two narrow reads instead of the session view: this provider wraps the
   // composer, and reading the view re-rendered it on every streamed batch
@@ -62,10 +74,12 @@ export function SessionPreparationProvider({ children }: { children: ReactNode }
 
   const begin = useCallback(() => {
     let released = false;
+    const started = owner.current;
     setCount((value) => value + 1);
     return () => {
       if (released) return;
       released = true;
+      if (owner.current !== started) return;
       setCount((value) => Math.max(0, value - 1));
     };
   }, []);

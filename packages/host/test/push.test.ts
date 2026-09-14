@@ -162,4 +162,15 @@ describe("PushService", () => {
     expect(gone.expired).toBe(true);
     expect(await service.list()).toHaveLength(0);
   });
+
+  it("generates one key pair when two first callers arrive at once", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-push-race-`));
+    const service = new PushService({ agentDir });
+    // Both `config()` calls reach `ready()` before either has persisted: the
+    // loser's key used to win some phones' subscriptions and then vanish.
+    const [first, second] = await Promise.all([service.config(), service.config()]);
+    expect(first.vapidPublicKey).toBe(second.vapidPublicKey);
+    // And the key on disk is the one both callers were told about.
+    expect((await new PushService({ agentDir }).config()).vapidPublicKey).toBe(first.vapidPublicKey);
+  });
 });

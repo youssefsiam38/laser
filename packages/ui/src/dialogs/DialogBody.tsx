@@ -9,7 +9,7 @@ import { QuestionPresentation } from "@/runtime/transcript-presentation";
 import { Kbd } from "@/components/ui/kbd";
 import { modKey } from "@/format";
 import { cn } from "@/lib/utils";
-import { blockingWords, isModeChangingOption, type DialogForm } from "./model.js";
+import { blockingWords, dialogFormSignature, isModeChangingOption, type DialogForm } from "./model.js";
 
 export interface DialogBodyProps {
   form: DialogForm;
@@ -47,8 +47,14 @@ export interface DialogBodyProps {
 export function DialogBody({ form, presentation, onAnswer, variant = "card", touch = false, initialDeclining = false, autoFocus = true, className }: DialogBodyProps) {
   const logicalKey = useLogicalArrowKeys();
   const id = useId();
-  // Standalone approvals keep a local owner; canonical extension questions pass theirs.
-  const local = useMemo(() => new QuestionPresentation(form, initialDeclining), [form.id]);
+  // Standalone approvals keep a local owner; canonical extension questions pass
+  // theirs. Keyed on what the form asks, not on its id alone: a re-issued
+  // question with the same id and new options is a new question, and the old
+  // one's values (a stale prefill, a choice that is no longer offered) must not
+  // be what a person submits.
+  const signature = dialogFormSignature(form);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- the signature is the form's identity
+  const local = useMemo(() => new QuestionPresentation(form, initialDeclining), [signature]);
   const owner = presentation ?? local;
   const { values, declining, busy } = useSyncExternalStore(owner.subscribe, owner.getSnapshot, owner.getSnapshot);
   const setDeclining = owner.setDeclining;

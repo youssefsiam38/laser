@@ -196,6 +196,26 @@ export class GitService {
     if (this.firstKey === key) this.firstKey = this.baselines.keys().next().value;
   }
 
+  /**
+   * A fork moved the session's file. "Since this conversation started" is the
+   * same moment either side of it, so the baseline follows rather than being
+   * captured again from a working tree the agent has already changed.
+   */
+  rekey(oldKey: string, newKey: string): void {
+    if (oldKey === newKey) return;
+    const baseline = this.baselines.get(oldKey);
+    if (baseline) {
+      this.baselines.delete(oldKey);
+      this.baselines.set(newKey, baseline);
+    }
+    const cached = this.cache.get(oldKey);
+    if (cached) {
+      this.cache.delete(oldKey);
+      this.cache.set(newKey, cached);
+    }
+    if (this.firstKey === oldKey) this.firstKey = newKey;
+  }
+
   /** Current state, counted from `key`'s baseline (or the first one captured). Cached for `ttlMs`. */
   status(key?: string): Promise<ProjectGitStatus> {
     const resolved = key !== undefined && this.baselines.has(key) ? key : (this.firstKey ?? NO_BASELINE);

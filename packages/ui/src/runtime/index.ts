@@ -81,9 +81,7 @@ export { createSessionLauncher, isUnstartedSession, type NewSessionOptions, type
 export {
   SESSION_TAB_MEMORY_KEY,
   SESSIONS_TAB_STORAGE_KEY,
-  rememberSessionForTab,
   rememberSessionsTab,
-  rememberedSessionForTab,
   rememberedSessionsTab,
   sessionKindTab,
   type SessionKindTab,

@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DriverAgentOptions, DriverEvent, DriverListener, ExtensionModelWorkRequest, PromptOptions, SessionDriver } from "../../src/driver.js";
 import type { AgentModelEvent, HarnessSessionRole } from "../../src/agents/bridge.js";
 import { DefinitionsCache, fallbackDefaultAgent, fallbackSnapshot } from "../../src/agents/definitions.js";
-import { AgentHarness, NUDGE_TEXT, type SessionHost, type WorktreeProvider } from "../../src/agents/harness.js";
+import { AgentHarness, MAX_RETAINED_RUNS, NUDGE_TEXT, type SessionHost, type WorktreeProvider } from "../../src/agents/harness.js";
 import { HarnessError } from "../../src/agents/errors.js";
 import { rootRecord, rootRole } from "../../src/agents/session-config.js";
 import { WorktreeManager, type CreateWorktreeInput, type Worktree, type WorktreeFacts } from "../../src/agents/worktrees.js";
@@ -1439,6 +1439,66 @@ describe("AgentHarness", () => {
     expect(world.harness.run(first.runId)?.status).toBe("completed");
     expect(world.harness.activeRun(path)?.runId).toBe(queued?.runId);
     expect(child.prompted.map((item) => item.text)).toEqual(["initial", "late steering"]);
+  });
+
+  it("bounds the runs it keeps in memory without dropping a live one or a session's newest", async () => {
+    const root = world.openRoot("lead");
+    const first = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "busy", task: "first task" });
+    const path = "/sessions/child-1.jsonl";
+    const bridge = world.harness.bridgeOf(path)!;
+    await bridge.completeRun({ status: "completed", message: "done" });
+
+    // A second child, left running: the sort of thing that must survive any
+    // amount of history in another session.
+    const live = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "live", task: "still going" });
+
+    // A long day in one conversation.
+    for (let i = 0; i < MAX_RETAINED_RUNS + 20; i++) {
+      expect(world.harness.startUserRun(path, `question ${i}`)).toBeDefined();
+      await bridge.completeRun({ status: "completed", message: `answer ${i}` });
+    }
+
+    expect(world.harness.runs().length).toBeLessThanOrEqual(MAX_RETAINED_RUNS);
+    // Nothing that can still act was forgotten.
+    expect(world.harness.run(live.runId)).toMatchObject({ status: "running" });
+    expect(world.harness.sessionInfo(path)).toMatchObject({ runStatus: "completed" });
+    expect(world.harness.activeRun("/sessions/child-2.jsonl")?.runId).toBe(live.runId);
+    // The oldest finished run of the busy session is gone.
+    expect(world.harness.run(first.runId)).toBeUndefined();
+    expect(world.harness.runs().at(-1)?.task).toBe(`question ${MAX_RETAINED_RUNS + 19}`);
+  });
+
+  it("still runs a preserved message when the engine's queue could not be read", async () => {
+    world.setAutoResolveChildPrompts(false);
+    const root = world.openRoot("lead");
+    const first = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "unreadable", task: "initial" });
+    const path = "/sessions/child-1.jsonl";
+    const child = world.drivers.get(path)!;
+
+    await root.handle.bridge.sendAgentMessage({ sessionId: first.sessionId, message: "late steering", mode: "steer" });
+    await root.handle.bridge.sendAgentMessage({ sessionId: first.sessionId, message: "later steering", mode: "steer" });
+    expect(child.steers).toEqual(["late steering", "later steering"]);
+
+    // The one case the transfer exists for: the engine cannot say what it
+    // still holds, so every locally known message is replayed under the
+    // successor — never lost, possibly repeated.
+    child.clearQueueRejects = true;
+    expect(await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "done" })).toEqual({ ok: true, runId: first.runId });
+    const queued = world.harness.runs().find((run) => run.sessionPath === path && run.runId !== first.runId);
+    expect(queued).toMatchObject({ status: "queued", task: "late steering" });
+
+    child.clearQueueRejects = false;
+    child.emit({ type: "update", update: { kind: "agent_settled" } });
+    child.resolvePrompt();
+    await flushLifecycle();
+    expect(world.harness.run(first.runId)?.status).toBe("completed");
+    expect(child.prompted.map((item) => item.text)).toEqual(["initial", "late steering"]);
+    expect(world.harness.run(queued!.runId)?.status).toBe("running");
+
+    // Everything the parent sent runs, in order, under that one successor.
+    child.resolvePrompt();
+    await flushLifecycle();
+    expect(child.prompted.map((item) => item.text)).toEqual(["initial", "late steering", "later steering"]);
   });
 
   it("never awaits or leaks a failing abort when completion cannot clear the engine queue", async () => {

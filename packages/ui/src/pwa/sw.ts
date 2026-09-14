@@ -62,6 +62,15 @@ function isDeclarativePushPayload(value: unknown): value is { notification: Decl
 
 /** Replaced at build time with the precache list (a JSON array of same-origin paths). */
 const PRECACHE: readonly string[] = "__SW_PRECACHE__" as unknown as readonly string[];
+/**
+ * Shell files that improve the offline app but do not make it: the icons, the
+ * manifest, the typefaces. They are named by hand rather than emitted by the
+ * bundler, so one rename is enough to make them 404 — and an install that
+ * rejects leaves every client of that release with no shell at all and the
+ * previous generation's caches never pruned. Missing, they cost the offline
+ * page its typeface, not the app.
+ */
+const OPTIONAL: ReadonlySet<string> = new Set("__SW_OPTIONAL__" as unknown as readonly string[]);
 /** Includes optional modules: allowed to cache, not mandatory install fetches. */
 const ASSETS: readonly string[] = "__SW_ASSETS__" as unknown as readonly string[];
 /** Replaced at build time with a hash of the precache list and this file. */
@@ -102,9 +111,11 @@ self.addEventListener("install", (event) => {
       };
       await Promise.all(PRECACHE.map(async path => {
         const saved = await reusable(path);
-        if (saved) await cache.put(path, saved);
+        if (saved) { await cache.put(path, saved); return; }
         // Unhashed shell files must be revalidated for this generation.
-        else await cache.add(new Request(path, { cache: "reload" }));
+        const add = cache.add(new Request(path, { cache: "reload" }));
+        if (OPTIONAL.has(path)) await add.catch(() => undefined);
+        else await add;
       }));
       // Keep already-used optional hashed modules across upgrades. No network
       // warming: failure of an optional module must not prevent shell install.

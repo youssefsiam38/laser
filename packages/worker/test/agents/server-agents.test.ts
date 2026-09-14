@@ -251,6 +251,43 @@ describe("WorkerServer agents", () => {
     expect(h.notifications("pi/extension/message").some((n) => String((n.params as { message: { type: string } }).message.type).startsWith("lasercode/panel"))).toBe(false);
   });
 
+  // A fork moves a session's file. Everything this worker holds under the old
+  // path has to move with it, or the session half exists: findings #5 and #6.
+  it("moves a forked child's run, its commands and its place in the fleet", async () => {
+    const h = harness();
+    const created = await h.call(1, "session/new", { cwd: join(base, "project") });
+    const rootPath = (created.result as { state: SessionState }).state.path;
+    const parent = h.server.agents().bridgeOf(rootPath)!;
+    const started = await parent.startAgent({ agentName: "default", subagentName: "forked", task: "work", worktree: false });
+    const childDriver = h.drivers[1]!;
+    const childPath = childDriver.state().path;
+    const command = { id: "t-dev", command: "pnpm vite dev", title: "pnpm vite dev", status: "running" as const, origin: "background" as const, startedAt: new Date(Date.now() - 5_000).toISOString(), outputBytes: 240, activity: "ready in 412 ms" };
+    childDriver.emit({ type: "extension", message: { type: "lasercode/task/update", task: command } });
+    expect(h.server.agents().activeRun(childPath)?.runId).toBe(started.runId);
+
+    // The person forks the child's conversation while its run is still going.
+    const forked = await h.call(2, "pi/session/fork", { path: childPath, entryId: "e1" });
+    const newPath = (forked.result as { state: SessionState }).state.path;
+    expect(newPath).not.toBe(childPath);
+
+    // The run followed the driver that is executing it.
+    expect(h.server.agents().run(started.runId)).toMatchObject({ sessionPath: newPath, status: "running" });
+    expect(h.server.agents().activeRun(newPath)?.runId).toBe(started.runId);
+    expect(h.server.agents().activeRun(childPath)).toBeUndefined();
+
+    // The parent still sees the child, and the child's command under it.
+    const fleet = await parent.inspectFleet();
+    expect(fleet.rows.map((row) => row.title)).toEqual(["forked"]);
+    expect(fleet.rows[0]!.children.map((row) => row.title)).toEqual(["pnpm vite dev"]);
+    expect(fleet.rows[0]!.children[0]).toMatchObject({ kind: "command", taskId: "t-dev", status: "Working" });
+
+    // And stopping it reaches the driver, rather than marking a run cancelled
+    // while the child carries on working.
+    const stopped = await h.call(3, "agents/runs/stop", { runId: started.runId, reason: "enough" });
+    expect(stopped.result).toMatchObject({ run: { runId: started.runId, status: "cancelled", sessionPath: newPath } });
+    expect(childDriver.aborts).toBe(1);
+  });
+
   it("falls back to the default agent for a session written before agents existed", async () => {
     const h = harness();
     const path = join(base, "sessions", "old.jsonl");
