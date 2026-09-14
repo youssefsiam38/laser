@@ -21,7 +21,7 @@ Authoritative detail, evidence and ownership live in `STATUS_DETAILED.md`; `STAT
 | RP-9 | M18-T9 | done — integrated `dd637f3` | protocol integration follows RP-1 |
 | RP-10 | M18-T10 | todo | RP-5, RP-9 |
 | RP-11 | M18-T11 | todo | RP-10 |
-| RP-12 | M18-T12 | implementing approved worker-free read path | RP-9 |
+| RP-12 | M18-T12 | done — integrated `e9e3d8d` | RP-9 |
 | RP-13 | M18-T13 | todo | RP-12 |
 | RP-14 | M18-T14 | todo | RP-1..RP-13 |
 

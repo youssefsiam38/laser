@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-14T16:52:46Z · orchestrator `01a0a030` · HEAD: dd637f3
-**Current focus:** M18 is measuring the controlled resource baseline and adding worker-free authoritative conversation reads; its reviewed diagnostics UI checkpoint is integrated.
+**Last updated:** 2026-09-14T17:50:08Z · orchestrator `01a0a030` · HEAD: e9e3d8d
+**Current focus:** M18 is finishing the controlled resource baseline; durable revisions and worker-free authoritative conversation reads are integrated.
 
 | Milestone | State |
 | --- | --- |
@@ -27,8 +27,8 @@
 | M18 Resource containment | in-progress |
 | MX Cross-cutting | in-progress |
 
-**Blockers:** none. RP-2's quick soak is still being debugged; no full repeatability evidence is claimed yet.
-**Next up:** finish M18-T2 and M18-T12; then start M18-T4/T5/T6/T7 from measured evidence and complete M18-T3's counters/browser matrix.
-**Recently done:** M18-T9 durable revisions (`dd637f3`; build/typecheck, protocol 165, host 445); M18-T3 reviewed UI checkpoint (`8b5a269`; focused UI 23); M18-T1 process inventory (`1628349`); MX-T9 resource/loading plan; M16-T54 release 0.6.4 (`c4ee554`).
+**Blockers:** none. RP-2’s quick soak is correcting its product-socket settlement boundary; no full baseline is claimed yet.
+**Next up:** finish M18-T2; then start M18-T4/T5/T6/T7 from measured evidence, complete M18-T3’s counters/browser matrix, and begin M18-T13 from the finished read contract.
+**Recently done:** M18-T12 worker-free reads (`e9e3d8d`; protocol 167, focused host 106, worker 44); M18-T9 durable revisions (`dd637f3`); M18-T3 reviewed UI checkpoint (`8b5a269`); M18-T1 process inventory (`1628349`); MX-T9 resource/loading plan.
 
 Ownership and evidence: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`.
