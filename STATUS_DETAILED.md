@@ -2411,6 +2411,42 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 - 2026-09-12 **incident: this task's working tree was stashed by another lane.** After `6d42ec0` every integration edit was missing while the new files remained; `git stash list` held `stash@{0} On main: m16-t17 wip`, created by a concurrent agent clearing the tree before a merge. Recovered with `git stash show -p` + `git apply --3way` (14/16 clean). `packages/worker/src/mcp/session.ts` had meanwhile been refactored into a `resolveConfig` helper, so the decorator was re-threaded through the new signature. Backups now kept outside the repository: `/tmp/workenv2/m16t17-code.patch` and `/tmp/workenv2/m16t17-newfiles.tgz`. **The work is uncommitted and at risk of the same thing happening again.**
 - 2026-09-12 **STATUS.md deliberately not regenerated**: three other lanes (`perf-wide-audit`, `no-detached`, `chat-loading`) were rewriting it during this session and HEAD moved four times underneath; a wholesale rewrite would have clobbered their state. This task's claim was swept into `3f6ddc5` by a concurrent commit.
 
+## M18 · Resource containment and instant conversations
+
+| ID | Task | State | Owner | Evidence | Notes |
+| --- | --- | --- | --- | --- | --- |
+| M18-T1 | RP-1 process identity and correct accounting | done | orchestrator-01a0a030 + resource-inventory worker | `1628349`; build + protocol 153 + host 403 + desktop 160 pass | see notes; D-255/D-256 |
+| M18-T2 | RP-2 controlled reproduction and heap attribution | in-progress | orchestrator-01a0a030 + resource-soak worker | — | see notes; depends on M18-T1 |
+| M18-T3 | RP-3 Advanced resource diagnostics | todo | — | — | depends on M18-T1 |
+| M18-T4 | RP-4 bounded worker session lifetime | todo | — | — | depends on M18-T2 |
+| M18-T5 | RP-5 bounded renderer session lifetime | todo | — | — | depends on M18-T2 |
+| M18-T6 | RP-6 bounded task and transcript-delivery lifetime | todo | — | — | depends on M18-T2 |
+| M18-T7 | RP-7 bounded provider logging and transport pressure | todo | — | — | depends on M18-T2 |
+| M18-T8 | RP-8 memory-pressure policy and safety ceilings | todo | — | — | depends on M18-T4/M18-T5 |
+| M18-T9 | RP-9 durable session revision contract | in-progress | orchestrator-01a0a030 + revision-read worker | — | plan-only until M18-T1 protocol merge; see notes |
+| M18-T10 | RP-10 bounded device tail cache | todo | — | — | depends on M18-T5/M18-T9 |
+| M18-T11 | RP-11 immediate paint and authoritative reconciliation | todo | — | — | depends on M18-T10 |
+| M18-T12 | RP-12 worker-free authoritative reads | todo | — | — | depends on M18-T9 |
+| M18-T13 | RP-13 remote/cloud/enterprise policy | todo | — | — | depends on M18-T12 |
+| M18-T14 | RP-14 Electron/Tauri decision gate | todo | — | — | depends on M18-T1..T13 |
+
+#### M18-T1 notes
+- 2026-09-14 baseline: protocol 144/144 and host 316/316 pass at `ec1c42d`. Desktop 155/156 passes; `test/host-environment.test.ts` reproducibly expects same-version adoption but receives `failed` before this task changes code. Treat as a pre-existing baseline, not a telemetry regression; M18-T1 must keep every other desktop test green and report this exact case separately if unchanged.
+- 2026-09-14 claimed: implement the host-owned process inventory and bounded telemetry contract first, including protocol, Linux accounting, spawn-derived ownership, hostile-argument redaction and Electron metric cross-checks. No UI surface or raw process control in this slice.
+- 2026-09-14 plan `/tmp/m18-t1-plan.md` approved with corrections: no path-bearing wire owners; partial totals disclose coverage; macOS/Windows private metrics get bounded best-effort collectors; Electron reports are identity/ancestry validated and remain cross-checks; agent runs are associations, not invented processes. Actual command/helper PID registration transfers to RP-6/RP-7 and remains required before M18 completion.
+- 2026-09-14 implementation commit `8d3baf1` passed protocol 153, host resource 60 and desktop resource 3 tests on independent rerun, but independent review `run_3c87cc2b` rejected it: stale PID roots, adopted/Windows Electron verification, vacuous cross-check success and synchronous/unbounded collector work are blockers. One batched fix also covers history/export/registry bounds, report freshness, Windows commit units, schema placement and inherited verified-owner context.
+- 2026-09-14 done at `1628349` after review correction commits `52add7e` and `1628349`: `pnpm -r build`; protocol 153/153; host 403/403; desktop 160 pass/1 platform smoke skipped; workspace typecheck; identity check; diff check. Demand-driven connect behavior, adopted/Windows Electron verification, PID reuse, async bounded collection, redaction, history/export/ownership bounds and Windows units are covered. Live macOS/Windows collector behavior remains a later cross-platform gate, not claimed from Linux.
+- Ownership ledger: process accounting · resource-inventory worker `01a0a034-1255-73fe-8226-e60d334b6a89` · M18-T1 · integrated through `1628349` · status done · handoff: RP-2/RP-3 may consume the resource contract; command/helper producer registration remains assigned to T6/T7 before M18 completion.
+
+#### M18-T2 notes
+- 2026-09-14 claimed: extend the existing browser profiler and add a credential-free scratch-host soak covering all nine RP-2 scenarios, with process/heap/cache/queue attribution and repeatable ranking evidence. Plan approval precedes source changes.
+- Ownership ledger: controlled reproduction · resource-soak worker `01a0a084-72d9-73fe-8226-e6b957867807` run `run_82910ee0` · M18-T2 · permitted `scripts/browser-check/**`, new `scripts/resource-check/**`, focused script tests and a synthetic evidence report under `docs/`; no protocol/host/worker/UI implementation edits · base `1628349` · prerequisite M18-T1 done · plan in progress · handoff evidence/limits to T4-T8.
+
+#### M18-T9 notes
+- 2026-09-14 claimed: specify the opaque durable revision and worker-free bounded snapshot/read contract together before code, because RP-9 is the validation foundation for RP-10/RP-11/RP-12. Implementation waits for the RP-1 protocol merge to avoid competing writers in shared inventory files.
+- 2026-09-14 plan `/tmp/m18-revision-read-plan.md` approved with corrections: host-owned `session/revision`; a separate opaque environment cache key for RP-10; revisions required on successful authoritative windows; valid final JSON without newline included read-only; stronger rewrite checks and per-session index ceilings; raw environment UUID stays trusted-only; resource evidence joins focused validation.
+- Ownership ledger: revision/read path · revision-read worker `01a0a034-a0ed-73fe-8226-e612ae45b54b` run `run_ca28b200` · M18-T9 then M18-T12 sequentially · permitted protocol revision/snapshot contracts and host catalog/parser/router/worker precedence plus focused tests; no UI/cache writes · base `ec1c42d`, RP-1 protocol integration prerequisite for code · approved plan corrections only, no source until handoff · implementation after RP-1 merge.
+
 ## MX · Cross-cutting
 
 | ID | Task | State | Owner | Evidence | Notes |
@@ -2423,6 +2459,11 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 | MX-T6 | Element inventory reconciliation | done | five lanes + integrator | `pnpm -r build` / `-r typecheck` / `-r test` all exit 0, 686 tests; every row of `docs/ux-elements.md` names either the file that implements it or the reason it does not apply; no element file in `packages/ui/src/components/assistant-ui/elements/` is unimported | Five lanes adopted the catalog; integration wired the twelve elements they had adopted but left unmounted, and deleted eight whose data does not exist rather than leave unmountable files standing in the tree. See the wave-3 notes below |
 | MX-T7 | One module defines the product's identity | done | claude-2026-09-05-identity | `product.json` at the repository root; `pnpm identity:generate` rewrites 14 files; `pnpm identity:check` runs inside `pnpm -r build` and `pnpm -r test`; renaming to `wavelet` and back proved end to end — see notes | The rename is one edit plus one command. A frozen `wireNamespace` is the deliberate exception (D-48) |
 | MX-T8 | Cross-package performance audit | done | perf-wide-audit | `docs/performance-wide-audit.md`; isolated `probes.mts` and `extra-probes.mts` exit 0 | 24 findings; report only; see notes; D-229 |
+| MX-T9 | Resource containment and instant conversation plan | done | orchestrator-01a09f76 | `docs/resource-and-loading-plan.md`; `git diff --check` | see notes; D-255 |
+
+#### MX-T9 notes
+- 2026-09-14 claimed: turn the read-only T3 Code, DSH Desktop and Laser memory analysis into one dependency-ordered implementation plan; preserve Electron and the single-engine/API boundaries.
+- 2026-09-14 done: `docs/resource-and-loading-plan.md` records RP-1..RP-14 with dependencies, evidence, per-slice acceptance, local/self-hosted/cloud/enterprise behavior, safe memory-pressure order, and the Electron/Tauri decision gate. Documentation only; no runtime or installed process changed.
 
 #### MX-T8 notes
 - 2026-09-12 claimed: report-only audit against the live chat-loading worktree; leave ongoing implementation and installed processes untouched.
@@ -3374,6 +3415,16 @@ Consequences: every terminal path must retain its actual initiator; transient ab
 Decision: when desktop quit/restart will stop its host, read the host's typed agent-run and background-task sources and keep working by default if any are live. If the person confirms, orderly host close marks live runs cancelled with `initiator: user` before workers stop; only an unplanned worker/host loss is failed with `initiator: harness`.
 Why: the 15:45 cluster was an intentional Electron quit that bypassed worker busy guards and became indistinguishable from a crash. Blocking `WorkerPool.stopAll()` would prevent orderly shutdown; silently stopping delegated work violates M16-T58.
 Consequences: update/restart dialogs include the same live-work detail rather than stacking prompts; an adopted host is not warned on ordinary app quit because it survives; unknown activity is never presented as an empty list; transcripts/worktrees remain but runs do not claim to resume after host restart.
+
+### D-255 · 2026-09-14 · Measure and contain before reconsidering Electron
+Decision: add MX-T9 and keep Electron while Laser measures real private memory, bounds session/view/task lifetimes, and adds revisioned local-first conversation reads. A different shell is reconsidered only through an isolated same-UI/same-host comparison after those changes.
+Why: the live sample measured 1.66 GiB PSS against 2.1 GiB summed RSS and found the dominant retained state in the renderer, host and stock-Node workers; a Tauri shell would leave those object graphs and processes intact. T3 Code and DSH Desktop are also Electron applications, while their transferable strengths are process attribution, bounded telemetry, launch identity, safe recovery and transactional updates.
+Consequences: `docs/resource-and-loading-plan.md` is the implementation source; no provider-driver registry, third-party-agent controller, direct client JSONL read or relay plaintext cache enters Laser. Q-9's hidden-renderer half remains a person decision and is evaluated after durable renderer state exists.
+
+### D-256 · 2026-09-14 · The resource plan is milestone M18
+Decision: add M18-T1..T14, preserving the RP numbering and dependency graph from `docs/resource-and-loading-plan.md`, and implement it as reviewed slices rather than quietly expanding the documentation-only MX-T9 task.
+Why: the person explicitly authorized implementation of the plan. Its process telemetry, lifetime, revision/cache/read, deployment-policy and shell-gate contracts cross every package and cannot be truthfully represented as the already-finished architecture-plan deliverable.
+Consequences: M18 is the current focus. One continuing owner holds each cohesive area; protocol contracts settle before dependent UI or deployment work, every slice records focused and measurement evidence, and Electron remains until the final gate.
 
 ## Open questions
 
