@@ -1,6 +1,6 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-14T17:52:29Z · orchestrator `01a0a030` · HEAD: 9f390b3
+**Last updated:** 2026-09-14T19:48:11Z · orchestrator `01a0a030` · HEAD: 5fe4968
 **Current focus:** M18 is finishing the controlled resource baseline while designing the host-authoritative remote/enterprise policy contract.
 
 | Milestone | State |
@@ -27,8 +27,8 @@
 | M18 Resource containment | in-progress |
 | MX Cross-cutting | in-progress |
 
-**Blockers:** none. RP-2’s quick soak is correcting its product-socket settlement boundary; no full baseline is claimed yet.
-**Next up:** finish M18-T2; approve and implement M18-T13; then start M18-T4/T5/T6/T7 from measured evidence and complete M18-T3’s counters/browser matrix.
+**Blockers:** none. RP-2 quick validation is green; its full A/B measurement is continuing from preserved work. RP-13 milestone A is continuing from a preserved mid-implementation checkpoint.
+**Next up:** finish M18-T2 full evidence; finish/review M18-T13A; then start M18-T4/T5/T6/T7 from measurements and complete M18-T3’s counters/browser matrix.
 **Recently done:** M18-T12 worker-free reads (`e9e3d8d`; protocol 167, focused host 106, worker 44); M18-T9 durable revisions (`dd637f3`); M18-T3 reviewed UI checkpoint (`8b5a269`); M18-T1 process inventory (`1628349`); MX-T9 resource/loading plan.
 
 Ownership and evidence: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`.

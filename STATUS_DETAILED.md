@@ -2449,8 +2449,13 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 - Ownership transfer: prior continuation `01a0a0ad-acc4-7552-820d-1a41526bb1ea` ended after archiving `/tmp/m18-t2-preserved-browser-check-v3.tgz`; it no longer writes. New owner `01a0a0f3-b771-7552-820d-1ac7df6b0574` completed read-only audit `/tmp/m18-t2-retirement-audit.md`, disproving inspector leakage at the final boundary.
 - 2026-09-14 retirement audit: fixture RPC and adversarial slow WebSockets initiate but do not await close; required final all-view traversal is absent, so project/Beam attachments are unproved. Approved correction awaits every socket close, traverses 5 quick/54 full views, asserts zero work guards, then proves zero product connections/attachments before natural retirement.
 - 2026-09-14 corrected-boundary checkpoint: 18/18 lifecycle/traversal/guard tests pass, including notification/unrelated-id RPC correlation. The next quick reached the intended boundary: all live-work guards were zero and all five views traversed, but `about:blank` left exactly one product connection, attachment ref and attached path for ten seconds; teardown still had zero survivors.
-- 2026-09-14 decision: use awaited `page.close()` because RP-2 requires closing the Playwright page/socket; do not extend the wait. Post-close phases skip dead renderer/CDP sampling and retain host/process evidence only. The host-only inspector must prove zero connections/attachments before natural retirement.
-- Ownership ledger: controlled reproduction · retirement owner `01a0a0f3-b771-7552-820d-1ac7df6b0574` run `run_2b6d7115` · M18-T2 · permitted `.worktrees/resource-soak-82910ee0/scripts/browser-check/{targets/resource-soak.mjs,resource-soak.mjs,resource/{inspector,websocket}.mjs,test/resource-soak.test.mjs}`; no product/planning writes · base `1628349` with preserved uncommitted work · prerequisite M18-T1 done · close page deterministically, one quick, then full gates · handoff evidence/limits to T4-T8 and browser path to T3.
+- 2026-09-14 decision: use awaited `page.close()` because RP-2 requires closing the Playwright page/socket; post-close phases skip dead renderer/CDP sampling and retain host/process evidence. Nineteen focused tests pass, including no page/CDP access after close.
+- 2026-09-14 bounded guard re-sampling passes 21/21 focused tests. Quick v4 advanced to Bash accounting, then exposed an older invalid assumption: accelerated idle retirement replaced the project worker after the heavy tool, so the new generation correctly retained six Bash buffers rather than the prior generation’s seventh buffer; zero survivors.
+- 2026-09-14 generation-aware TailBuffer/task assertions and the cross-generation audit pass 22/22 focused tests. Quick v5 completed scenarios 1–8 and exact generation-aware Bash counts, then the renderer/browser child crossed the unchanged 1.5 GiB PSS safety ceiling at the start of pre-detach sampling; no retirement code ran and teardown had zero survivors.
+- 2026-09-14 quick v6 passes end to end with 25/25 focused tests, zero survivors, exact 5-view traversal, all live-work guards zero, page-close connection/attachment counts zero and natural retirement. The prior renderer ceiling did not recur. Workspace build and the existing long browser matrix pass.
+- 2026-09-14 full A correctly blocked B after scenario 1 because the full sidebar renders only seven of ten rows behind its real Load more control; partial report is redacted, atomic and records 11 completed phases with zero survivors. Authorized helper fix pages only the active tabpanel with a no-progress bound, then reruns full A/B without rerunning quick.
+- 2026-09-14 runtime handoff H-14: prior owner became unavailable after authorization, with all uncommitted work preserved. New continuation must add bounded active-tabpanel pagination tests, skip quick, then run full A/B and final gates.
+- Ownership ledger: controlled reproduction · continuation `01a0a175-cc98-76c8-926f-527022b2ebb0` run `run_0d762999` · M18-T2 · explicit existing `.worktrees/resource-soak-82910ee0/scripts/browser-check/**` and sanitized `docs/resource-soak-baseline.md`; no product/planning writes · base `1628349` with preserved uncommitted work · prerequisite M18-T1 done · full A/B and final evidence gates · handoff evidence/limits to T4-T8 and browser path to T3.
 
 #### M18-T3 notes
 - 2026-09-14 claimed: design the permanent Advanced diagnostics surface over the RP-1 process truth, including honest unavailable/retention states, links to existing work, safe lifecycle routing, responsive/touch/keyboard/reduced-motion behavior and browser-matrix evidence. Plan approval precedes UI changes.
@@ -2471,7 +2476,9 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 
 #### M18-T13 notes
 - 2026-09-14 claimed: define one host-authoritative environment capability/cache/grant descriptor and per-method admission policy across local and paired transports, with redacted actor/method audit and no worker side effects on refusal. Plan approval precedes code.
-- Ownership ledger: environment policy · `01a0a10c-5482-7552-820d-1ae704dbb6d6` run `run_d3b37f9c` · M18-T13 plan then implementation · likely protocol environment descriptor/schema, host connection context/router admission/audit, relay grant narrowing and focused tests; exact paths settle in plan · base `9f390b3` · prerequisite T12 done · draft `/tmp/m18-t13-plan.md`, no source before approval · handoff to T10/T11 cache policy and T14 deployment gate.
+- 2026-09-14 plan `/tmp/m18-t13-plan.md` approved for sequential milestone A: `environment/describe` ep1, compiler-complete method/notification policy, proven connection actors, narrow-only grants/policy, pre-parse authorization, bounded redacted audit and synthetic paired E2E. Corrections preserve phone resource summaries, fail invalid explicit policy closed, add host-global audit bounds, and forbid unsafe legacy device-state re-keying. UI/device-storage milestone B waits for A review.
+- 2026-09-14 runtime handoff H-13: original owner disappeared mid-implementation with staged protocol/host/docs/tests preserved in `.worktrees/environment-policy-d3b37f9c`; no commit. Continuation must inspect/checkpoint those bytes before finishing A.
+- Ownership ledger: environment policy · continuation `01a0a175-f9c3-76c8-926f-52770c48f04c` run `run_892acf9d` · M18-T13 milestone A · explicit existing environment-policy worktree; protocol environment descriptor/method policy + host connection context/admission/audit/policy/docs/tests; no UI/worker/crypto/relay/browser/planning writes · base `9f390b3` with preserved staged work · prerequisite T12 done · inspect, implement/validate/commit A for review · handoff same owner to B after integration.
 
 #### M18-T12 notes
 - 2026-09-14 claimed: extend the existing bounded `pi/session/entries` window with live-or-durable authority, host-side line-offset materialisation and no-spawn cold reads; no second read API or transcript authority.
@@ -2685,6 +2692,20 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 | M17-T20 | The map never covers the conversation | todo | — | — | audit §4 |
 
 ## Handoffs
+
+### H-14 · M18-T2 · 2026-09-14 · orchestrator
+State of the work: quick v6, focused 25/25, workspace build and long browser matrix pass; full A stopped at a sidebar row hidden behind the real Load more control, so B never began.
+Uncommitted: yes, preserved in `.worktrees/resource-soak-82910ee0`; partial full report and zero-survivor evidence are under `/tmp/resource-soak-full`.
+What is broken: full-only `selectSession` assumes all ten project rows are rendered, while the sidebar initially renders seven.
+Next concrete step: add bounded active-tabpanel Load more handling/tests, then run full A/B and final report/verify/commit gates without rerunning quick.
+Do not: change fixture sizes, ceilings, product sources, or discard the accumulated harness fixes.
+
+### H-13 · M18-T13 · 2026-09-14 · orchestrator
+State of the work: milestone A plan approved and implementation started; the owner runtime vanished before a checkpoint or commit.
+Uncommitted: yes, preserved staged changes in `.worktrees/environment-policy-d3b37f9c` across protocol/host/docs/tests.
+What is broken: completion and validation state are unknown.
+Next concrete step: inspect preserved bytes, write `/tmp/m18-t13-resume-checkpoint.md`, finish only milestone A, validate and commit for review.
+Do not: restart, discard staged work, modify parent/planning files, or expand into UI/device-storage milestone B.
 
 ### H-12 · M18-T2 · 2026-09-14 · orchestrator
 State of the work: approved resource-soak plan is partly implemented; the early scratch inspector prototype eventually exited successfully, then the agent runtime disappeared without a terminal report.
