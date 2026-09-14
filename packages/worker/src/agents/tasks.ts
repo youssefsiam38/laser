@@ -26,9 +26,19 @@ export interface IndexedTask extends BackgroundTask {
 /** How many finished tasks one session keeps before the oldest is forgotten (the host keeps the same). */
 export const MAX_INDEXED_TASKS_PER_SESSION = 200;
 
+/**
+ * How many closed sessions keep their commands. A worker lives as long as its
+ * project is open and every session it ever served left a map here; the ones
+ * still open are never counted, so what is bounded is only history nobody is
+ * looking at.
+ */
+export const MAX_CLOSED_SESSIONS = 50;
+
 export class TaskIndex {
   /** path → id → task, insertion-ordered so a session's commands read oldest first. */
   private readonly bySession = new Map<string, Map<string, IndexedTask>>();
+  /** Closed sessions, oldest first: what may be forgotten, and in what order. */
+  private readonly closed: string[] = [];
 
   /** Fold one extension message in; true when it was a task update. */
   observe(path: string, message: PiExtensionMessage): boolean {
@@ -39,11 +49,27 @@ export class TaskIndex {
       tasks = new Map();
       this.bySession.set(path, tasks);
     }
+    this.reopened(path);
     const previous = tasks.get(rest.id);
     const kept = logPath ?? previous?.logPath;
     tasks.set(rest.id, { ...rest, sessionPath: path, ...(kept !== undefined ? { logPath: kept } : {}) });
     this.prune(tasks);
     return true;
+  }
+
+  /**
+   * A fork moved the session's file: its commands are still running, in this
+   * process, and belong to the session that now lives at `newPath`.
+   */
+  rekeySession(oldPath: string, newPath: string): void {
+    const tasks = this.bySession.get(oldPath);
+    if (!tasks || oldPath === newPath) return;
+    this.bySession.delete(oldPath);
+    const moved = new Map<string, IndexedTask>();
+    for (const [id, task] of tasks) moved.set(id, { ...task, sessionPath: newPath });
+    this.bySession.set(newPath, moved);
+    const at = this.closed.indexOf(oldPath);
+    if (at >= 0) this.closed[at] = newPath;
   }
 
   /** Every command one session started, oldest first. */
@@ -63,6 +89,18 @@ export class TaskIndex {
       if (task.status !== "running") continue;
       tasks.set(id, { ...task, status: "stopped", endedAt: new Date().toISOString(), exitCode: null, terminalReason: reason });
     }
+    this.reopened(path);
+    this.closed.push(path);
+    while (this.closed.length > MAX_CLOSED_SESSIONS) {
+      const oldest = this.closed.shift();
+      if (oldest !== undefined) this.bySession.delete(oldest);
+    }
+  }
+
+  /** This session is live again (or never closed): it is not history to forget. */
+  private reopened(path: string): void {
+    const at = this.closed.indexOf(path);
+    if (at >= 0) this.closed.splice(at, 1);
   }
 
   private prune(tasks: Map<string, IndexedTask>): void {

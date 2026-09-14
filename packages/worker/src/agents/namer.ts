@@ -326,6 +326,14 @@ export class NamerService {
     this.labels.delete(sessionKey);
   }
 
+  /** A fork moved the session's file: the calls already labelled are the same calls. */
+  rekey(oldKey: string, newKey: string): void {
+    const labels = this.labels.get(oldKey);
+    if (!labels || oldKey === newKey) return;
+    this.labels.delete(oldKey);
+    this.labels.set(newKey, labels);
+  }
+
   private sessionLabels(sessionKey: string): SessionLabels {
     let session = this.labels.get(sessionKey);
     if (!session) {

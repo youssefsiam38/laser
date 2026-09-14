@@ -120,6 +120,8 @@ const RESULT_EXCERPT = 2000;
 const QUESTION_SUMMARY_EXCERPT = 80;
 const ROLE_TASK_EXCERPT = 2000;
 const PENDING_EVENTS_MAX = 50;
+/** How many runs this worker keeps in memory; the host owns the durable record. */
+export const MAX_RETAINED_RUNS = 500;
 
 /** What the harness needs from the worker around it. */
 export interface SessionHost {
@@ -411,13 +413,31 @@ export class AgentHarness {
     };
   }
 
-  /** A fork moved the session to a new file; follow it. Runs keep the path they were recorded under. */
+  /**
+   * A fork moved the session to a new file; follow it.
+   *
+   * A run that is still live moves with it, because the driver that executes
+   * it now writes to the new file and every lookup that can still act on the
+   * run — `stopRun`, `endRun`, `detachSession`, `activeRunState` — finds its
+   * session by `run.sessionPath`. Leaving a live run on the old path made
+   * `stopRun` mark it cancelled without ever aborting the driver, so the
+   * child kept working and the parent's next message started a second
+   * concurrent run.
+   *
+   * A run that has already ended stays where it was recorded: the old file
+   * still exists and still holds that run's history.
+   */
   rekeySession(oldPath: string, newPath: string): void {
     const entry = this.byPath.get(oldPath);
     if (!entry || oldPath === newPath) return;
     this.byPath.delete(oldPath);
     entry.path = newPath;
     this.byPath.set(newPath, entry);
+    for (const state of this.runStates.values()) {
+      if (state.run.sessionPath !== oldPath || isTerminalRunStatus(state.run.status)) continue;
+      state.run = { ...state.run, sessionPath: newPath };
+      this.publish(state);
+    }
   }
 
   /**
@@ -1776,6 +1796,7 @@ export class AgentHarness {
     };
     this.runStates.set(runId, state);
     this.runOrder.push(runId);
+    this.pruneRuns();
     if (!queued) this.activateRun(entry, state);
     void this.persistMoment(run, "started");
     this.publish(state);
@@ -2554,6 +2575,44 @@ export class AgentHarness {
     }
     parts.push(`at=${this.iso()}`);
     this.host.notify("pi/extension/message", { path, message: { type: "lasercode/module/log", module: "subagents", level, message: parts.join(" ") } });
+  }
+
+  /**
+   * Forget the oldest runs nothing can still need.
+   *
+   * A worker lives as long as its project is open, and every run it ever
+   * started stayed here for ever — a long day of agent work grew this without
+   * bound. The host keeps the durable registry (`<state>/agent-runs.json`),
+   * so this is a live working set, not the record.
+   *
+   * Three things are never dropped: a run that has not ended; the newest run
+   * of any session, which is what `sessionInfo` and worktree removal read;
+   * and a run whose worktree this process created, which only its own runId
+   * can remove (`removeWorktreeFor`).
+   */
+  private pruneRuns(): void {
+    if (this.runOrder.length <= MAX_RETAINED_RUNS) return;
+    const newestOfSession = new Map<string, string>();
+    for (const runId of this.runOrder) {
+      const state = this.runStates.get(runId);
+      if (state) newestOfSession.set(state.run.sessionPath, runId);
+    }
+    let excess = this.runOrder.length - MAX_RETAINED_RUNS;
+    const kept: string[] = [];
+    for (const runId of this.runOrder) {
+      const state = this.runStates.get(runId)!;
+      const droppable = isTerminalRunStatus(state.run.status)
+        && newestOfSession.get(state.run.sessionPath) !== runId
+        && this.worktrees.ownedBy(runId) === undefined;
+      if (excess > 0 && droppable) {
+        this.runStates.delete(runId);
+        excess -= 1;
+        continue;
+      }
+      kept.push(runId);
+    }
+    this.runOrder.length = 0;
+    this.runOrder.push(...kept);
   }
 
   private activeRunState(sessionPath: string): RunState | undefined {
