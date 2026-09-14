@@ -141,8 +141,14 @@ export interface LaserDesktop {
 
   /** Open the operating system's folder picker. Null means it was cancelled. */
   chooseDirectory(): Promise<string | null>;
-  /** Open a source Markdown file with its operating-system file association. */
-  openSourceFile(path: string): Promise<{ opened: boolean; reason?: string }>;
+  /**
+   * Open a source file in the operating system's text editor.
+   *
+   * Absent when this platform has no text-editor path at all, exactly as it is
+   * absent in the browser and on the phone: every caller already checks for it
+   * and offers the path to copy instead, which is the honest answer.
+   */
+  openSourceFile?(path: string): Promise<{ opened: boolean; reason?: string }>;
 
   microphone: {
     status(): Promise<MicrophoneStatus>;

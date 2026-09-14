@@ -257,6 +257,32 @@ describe("WorkerServer", () => {
     } finally { await h.server.dispose(); }
   });
 
+  it("applies a thinking change at once on a started conversation, even while a queued steer holds the fence", async () => {
+    const h = harness();
+    await h.call(1, "session/new", { cwd: "/tmp/fake" });
+    const driver = h.drivers[0]!;
+    // One turn has happened; the conversation is no longer pristine.
+    await h.call(2, "session/prompt", { path: "/tmp/fake/s1.jsonl", content: [{ type: "text", text: "x" }] });
+    driver.setStreaming(true);
+    // A steer whose acceptance never comes: the engine keeps its lease for
+    // as long as the running turn lasts.
+    driver.acceptPrompt = false;
+    const held = deferred<void>();
+    const original = driver.prompt.bind(driver);
+    driver.prompt = async (content, options) => { await held.promise; return original(content, options); };
+    const steer = h.call(3, "session/prompt", { path: "/tmp/fake/s1.jsonl", content: [{ type: "text", text: "steer" }], streamingBehavior: "steer" });
+    // The thinking change answers without waiting for that turn.
+    const thinking = await Promise.race([
+      h.call(4, "pi/thinking/set", { path: "/tmp/fake/s1.jsonl", level: "high" }),
+      new Promise<"stuck">((resolve) => setTimeout(() => resolve("stuck"), 200)),
+    ]);
+    expect(thinking).not.toBe("stuck");
+    expect(thinking).toMatchObject({ result: { state: { thinkingLevel: "high" } } });
+    held.resolve();
+    await steer;
+    await h.server.dispose();
+  });
+
   it("opens a session, numbers updates, and answers requests", async () => {
     const h = harness();
     const created = await h.call(1, "session/new", { cwd: "/tmp/fake" });

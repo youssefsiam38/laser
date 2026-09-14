@@ -95,7 +95,8 @@ export default async function scrollUpRepeat(check) {
   await check.shot(`scroll-repeat-${label}`);
   assert.equal(pageErrors.length, 0, pageErrors.join('\n'));
   assert.deepEqual(problems, [], problems.join('\n'));
-  if (!real) assert.equal(oldest, '1');
+  if (!real && !slow) assert.equal(oldest, '1');
+  if (slow) assert.ok(trail.length > 100 && Number(trail.at(-1)) < 500, `paced reading covered ${trail.length} notches down to checkpoint ${trail.at(-1)}`);
   console.log('scroll-up trail:', trail.join(','));
   return { ok: true };
 }

@@ -94,6 +94,8 @@ export interface RouterDeps {
   agents?: AgentStore | undefined;
   /** Agent runs the host has heard of; routes a child session to its project's worker. */
   runs?: AgentRunRegistry | undefined;
+  /** Injectable clock, for the dictation route sweep. */
+  now?: (() => number) | undefined;
 }
 
 /** Methods answered by the worker that owns `params.cwd` (M4). */
@@ -150,6 +152,13 @@ const CWD_ROUTED = new Set([
 /** Dictation methods that carry only an upload id, routed by `uploads`. */
 const UPLOAD_ROUTED = new Set(["pi/transcribe/chunk", "pi/transcribe/end", "pi/transcribe/cancel"]);
 
+/**
+ * A dictation route nothing has used for this long belonged to a client that is
+ * gone. Well above any pause inside a recording; the worker's own upload has
+ * ended long before.
+ */
+export const UPLOAD_IDLE_MS = 10 * 60_000;
+
 export class Router {
   /**
    * Compatibility rows for an older or alternate driver that returns before
@@ -159,14 +168,33 @@ export class Router {
    */
   private readonly unwritten = new Map<string, SessionSummary>();
 
-  /** Dictation upload id → cwd, so a chunk reaches the worker that opened it. */
-  private readonly uploads = new Map<string, string>();
+  /**
+   * Dictation upload id → the worker that opened it and when it was last used,
+   * so a chunk reaches that worker.
+   *
+   * A recording ends with `pi/transcribe/end` or `cancel`, which drops its row —
+   * but a client that disconnects mid-dictation (a phone leaving, a window
+   * closed, a reload) sends neither, and those rows used to stay for the life of
+   * the host. Every new recording sweeps the ones nothing has touched for
+   * `UPLOAD_IDLE_MS`; a live dictation keeps its row by using it.
+   */
+  private readonly uploads = new Map<string, { cwd: string; at: number }>();
 
   constructor(
     private readonly pool: WorkerPool,
     private readonly catalog: SessionCatalog,
     private readonly deps: RouterDeps,
   ) {}
+
+  private now(): number {
+    return this.deps.now?.() ?? Date.now();
+  }
+
+  /** Drop dictation routes whose client never said it was finished. */
+  private sweepUploads(): void {
+    const cutoff = this.now() - UPLOAD_IDLE_MS;
+    for (const [id, upload] of this.uploads) if (upload.at <= cutoff) this.uploads.delete(id);
+  }
 
   async handle(raw: unknown, access: { localEnvironment?: boolean; searches?: SearchCancellation } = {}): Promise<JsonRpcResponse> {
     const id = (raw as { id?: string | number } | null)?.id ?? 0;
@@ -906,7 +934,10 @@ export class Router {
       // an id and nothing else.
       if (req.method === "pi/transcribe/begin") {
         const id = (result as { id?: string } | null)?.id;
-        if (id) this.uploads.set(id, cwd);
+        if (id) {
+          this.sweepUploads();
+          this.uploads.set(id, { cwd, at: this.now() });
+        }
       }
       // The benchmark's verdict is the host's to keep: every client and every
       // worker hears it through the store's own change notification.
@@ -918,17 +949,18 @@ export class Router {
 
         if (UPLOAD_ROUTED.has(req.method)) {
           const { id } = req.params as { id: string };
-          const cwd = this.uploads.get(id);
-          if (!cwd) {
+          const upload = this.uploads.get(id);
+          if (!upload) {
             throw new ProtocolError(
               ErrorCodes.InvalidParams,
               "that recording is no longer open — start dictating again",
             );
           }
+          upload.at = this.now();
           // Keep the route while transcription is in flight: Discard must
           // still be able to reach the worker and abort the provider request.
           try {
-            return await (await this.pool.get(cwd)).request(req.method, req.params);
+            return await (await this.pool.get(upload.cwd)).request(req.method, req.params);
           } finally {
             if (req.method !== "pi/transcribe/chunk") this.uploads.delete(id);
           }

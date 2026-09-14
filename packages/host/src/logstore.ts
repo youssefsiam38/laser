@@ -95,6 +95,12 @@ export const BODIES_PER_SESSION = 50;
 /** Every retained body, in bytes, across every session and project (D-245). */
 export const DEFAULT_BODY_BUDGET_BYTES = 1024 * 1024 * 1024;
 /**
+ * Provider requests and tool calls one session may have open at once before the
+ * oldest is forgotten. Far above any real turn; it exists so a session whose
+ * turn never ends cannot grow this process without limit.
+ */
+const MAX_OPEN_PER_SESSION = 64;
+/**
  * Bodies released in one bounded maintenance step. Releasing a megabyte-sized
  * body costs about 0.4 ms, so this is the step's share of the event loop: the
  * host answers requests between steps, not during one.
@@ -379,8 +385,17 @@ export class LogStore {
   /** One conversion attempt per process: it is a whole-file rewrite. */
   private conversionAttempted = false;
 
-  /** Open provider requests and tool calls, for latency and correlation. */
-  private readonly openProviderRequests = new Map<string, { id: number; startedAt: number }>();
+  /**
+   * Open provider requests and tool calls, for latency and correlation.
+   *
+   * The provider hooks carry no request id of their own, so a session's
+   * requests are paired with its responses in order rather than by "the last
+   * one wins": two in flight used to make the first response report the
+   * second request's latency and leave the first row uncorrelated forever.
+   * Both maps are bounded and swept: a turn that ends with a tool call or a
+   * request still open is a leak otherwise, and nothing ever closed them.
+   */
+  private readonly openProviderRequests = new Map<string, Array<{ id: number; startedAt: number }>>();
   private readonly openToolCalls = new Map<string, { id: number; startedAt: number; toolName: string }>();
 
   constructor(options: LogStoreOptions) {
@@ -649,13 +664,17 @@ export class LogStore {
         `Log payload ${ref.slice(0, 12)}… is no longer stored. Retention removed the rows that referenced it.`,
       );
     }
-    const truncated = row.body.length > maxBytes;
+    // `maxBytes` is a byte budget, so it is measured in bytes: a string index
+    // let three times that much UTF-8 through for non-Latin text, and cutting
+    // mid-code-point would hand the UI a replacement character.
+    const bodyBytes = Buffer.byteLength(row.body, "utf8");
+    const truncated = bodyBytes > maxBytes;
     return {
       ref: row.ref,
       contentType: row.content_type,
       bytes: row.bytes,
       truncated,
-      text: truncated ? row.body.slice(0, maxBytes) : row.body,
+      text: truncated ? truncateUtf8(row.body, maxBytes) : row.body,
     };
   }
 
@@ -1093,13 +1112,19 @@ export class LogStore {
           ...(message.context ? { requestContext: message.context } : {}),
         }, detail);
         if (entry) {
-          this.openProviderRequests.set(sessionPath, { id: entry.id, startedAt: Date.parse(message.at) || Date.now() });
+          const queue = this.openProviderRequests.get(sessionPath) ?? [];
+          queue.push({ id: entry.id, startedAt: Date.parse(message.at) || Date.now() });
+          // A request nothing ever answered (a killed engine, a dropped hook)
+          // must not keep its session's queue growing.
+          if (queue.length > MAX_OPEN_PER_SESSION) queue.splice(0, queue.length - MAX_OPEN_PER_SESSION);
+          this.openProviderRequests.set(sessionPath, queue);
         }
         return;
       }
       case "lasercode/provider/response": {
-        const open = this.openProviderRequests.get(sessionPath);
-        this.openProviderRequests.delete(sessionPath);
+        const queue = this.openProviderRequests.get(sessionPath);
+        const open = queue?.shift();
+        if (queue && queue.length === 0) this.openProviderRequests.delete(sessionPath);
         const finishedAt = Date.parse(message.at) || Date.now();
         this.record({
           section: "provider",
@@ -1165,6 +1190,7 @@ export class LogStore {
             startedAt: Date.parse(at) || Date.now(),
             toolName: update.toolName,
           });
+          this.boundOpenToolCalls(sessionPath);
         }
         return;
       }
@@ -1189,9 +1215,17 @@ export class LogStore {
         });
         return;
       }
-      case "agent_start":
       case "agent_end":
       case "agent_settled":
+        // The turn is over, so a tool call still open in it will never end: its
+        // row is already written and nothing will correlate to it again. Left
+        // behind, one entry per abandoned call accumulated for the life of the
+        // host. The same holds for a provider request nobody answered. An
+        // `agent_end` that announces a retry is not the end of the turn.
+        if (!(update.kind === "agent_end" && update.willRetry === true)) this.forgetOpenWork(sessionPath);
+        this.record({ section: "session", kind: update.kind, cwd, sessionPath, at, summary: update.kind });
+        return;
+      case "agent_start":
       case "compaction_start":
       case "compaction_end":
         this.record({ section: "session", kind: update.kind, cwd, sessionPath, at, summary: update.kind });
@@ -1266,6 +1300,38 @@ export class LogStore {
     });
   }
 
+  /**
+   * A session is gone (closed, moved, or its worker died): nothing open in it
+   * can ever be closed, so the correlation bookkeeping goes with it. The rows
+   * already written stay; this is memory, not history.
+   */
+  forgetSession(sessionPath: string): void {
+    this.openProviderRequests.delete(sessionPath);
+    this.forgetOpenToolCalls(sessionPath);
+  }
+
+  /** Everything still open in one session's turn, dropped in one pass. */
+  private forgetOpenWork(sessionPath: string): void {
+    this.openProviderRequests.delete(sessionPath);
+    this.forgetOpenToolCalls(sessionPath);
+  }
+
+  private forgetOpenToolCalls(sessionPath: string): void {
+    const prefix = `${sessionPath}::`;
+    for (const key of this.openToolCalls.keys()) if (key.startsWith(prefix)) this.openToolCalls.delete(key);
+  }
+
+  /**
+   * A session whose turn never ends (a worker killed mid-stream, an engine that
+   * stops reporting) may not grow this map without limit either: the oldest
+   * open calls of that session go first, and only its own.
+   */
+  private boundOpenToolCalls(sessionPath: string): void {
+    const prefix = `${sessionPath}::`;
+    const keys = [...this.openToolCalls.keys()].filter((key) => key.startsWith(prefix));
+    for (const key of keys.slice(0, Math.max(0, keys.length - MAX_OPEN_PER_SESSION))) this.openToolCalls.delete(key);
+  }
+
   /** Worker stderr, split into lines so a stack trace is one row per line. */
   observeWorkerStderr(cwd: string, text: string): void {
     for (const line of text.split("\n")) {
@@ -1283,6 +1349,20 @@ export class LogStore {
 }
 
 // ------------------------------------------------------------------ helpers
+
+/**
+ * The longest prefix of `text` that fits `maxBytes` UTF-8 bytes, cut on a code
+ * point boundary: the first dropped byte is never a continuation byte, so no
+ * character is half-sent and no reader sees U+FFFD where data used to be.
+ */
+function truncateUtf8(text: string, maxBytes: number): string {
+  if (maxBytes <= 0) return "";
+  const buffer = Buffer.from(text, "utf8");
+  if (buffer.length <= maxBytes) return text;
+  let end = maxBytes;
+  while (end > 0 && (buffer[end]! & 0xc0) === 0x80) end--;
+  return buffer.subarray(0, end).toString("utf8");
+}
 
 function toEntry(row: Row): LogEntry {
   return {

@@ -26,7 +26,7 @@ it("loads subscription quota and refreshes it without emitting credentials or se
   await vi.waitFor(()=>expect(h.send).toHaveBeenLastCalledWith(expect.objectContaining({state:expect.objectContaining({status:"ready",snapshot:expect.objectContaining({windows:[{kind:"primary",usedPercent:35}]})})})));
   expect(fetcher).toHaveBeenCalledTimes(2);
   expect(fetcher.mock.calls.every(([url])=>url === "https://chatgpt.com/backend-api/wham/usage")).toBe(true);
-  expect(fetcher.mock.calls[0]?.[1]).toMatchObject({redirect:"error",headers:{"ChatGPT-Account-ID":"test-account"}});
+  expect(fetcher.mock.calls[0]?.[1]).toMatchObject({redirect:"manual",headers:{"ChatGPT-Account-ID":"test-account"}});
   expect(JSON.stringify(h.send.mock.calls)).not.toContain("test-account");
   expect(JSON.stringify(h.send.mock.calls)).not.toContain("signature");
   stop?.();
@@ -114,6 +114,45 @@ describe("OpenAI Codex account usage", () => {
       .toMatchObject({ windows: [{ kind: "primary", usedPercent: 10, windowDurationMins: 300 }] });
     expect(parseOpenAICodexUsage({ unrelated: true })).toBeUndefined();
   });
+});
+
+it("gives a person who asks for fresh numbers a fresh read, not the one already in flight", async () => {
+  // The read in flight asked before they connected the account or changed the
+  // model they are asking about; answering their press with it shows the
+  // number they pressed Refresh to leave behind.
+  let release: (() => void) | undefined;
+  const inFlight = new Promise<void>((resolve) => { release = resolve; });
+  const fetcher = vi.fn()
+    .mockImplementationOnce(async () => { await inFlight; return new Response(JSON.stringify({ rate_limit: { primary_window: { used_percent: 20 } } })); })
+    .mockResolvedValueOnce(new Response(JSON.stringify({ rate_limit: { primary_window: { used_percent: 71 } } })));
+  vi.stubGlobal("fetch", fetcher);
+  const h = moduleHarness();
+  const stop = await accountUsageModule.activate(h.ctx);
+  await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+  // Pressed while the first read is still out.
+  expect(h.commands.deliver({ type: "lasercode/account-usage/refresh" })).toBe(true);
+  release!();
+  await vi.waitFor(() => expect(h.send.mock.calls.at(-1)?.[0].state.snapshot?.windows).toEqual([{ kind: "primary", usedPercent: 71 }]));
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  stop?.();
+});
+
+it("reports a redirected lookup as a sign-in problem, and never follows it", async () => {
+  // A 3xx here is a sign-in redirect, not a broken connection, and the
+  // request carries the account's bearer token: following it would hand the
+  // credential to whatever host the redirect names.
+  const fetcher = vi.fn().mockResolvedValue(new Response(null, { status: 302, headers: { location: "https://auth.example.invalid/login" } }));
+  vi.stubGlobal("fetch", fetcher);
+  const h = moduleHarness();
+  const stop = await accountUsageModule.activate(h.ctx);
+  await vi.waitFor(() => expect(h.send.mock.calls.at(-1)?.[0].state.status).toBe("unavailable"));
+  const message = h.send.mock.calls.at(-1)![0].state.message as string;
+  expect(message).toContain("redirected");
+  expect(message).toContain("Reconnect your OpenAI account");
+  expect(message).not.toContain("connection");
+  expect(fetcher.mock.calls[0]?.[1]).toMatchObject({ redirect: "manual" });
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  stop?.();
 });
 
 it.each([

@@ -52,10 +52,16 @@ export class AgentRunRegistry {
     this.schedulePrune();
   }
 
-  /** Record what a worker reported. Newer `updatedAt` wins; an older report is ignored. */
+  /**
+   * Record what a worker reported. Newer `updatedAt` wins; an older report is
+   * ignored whatever either status is. Requiring the stored run to have ended
+   * first meant a late report could also overwrite newer **live** state — a
+   * child's `needs_input` question replaced by the `running` snapshot that
+   * preceded it, which is the one status a person is waiting on.
+   */
   upsert(run: AgentRun): AgentRun {
     const existing = this.runs.get(run.runId);
-    if (existing && existing.updatedAt > run.updatedAt && isTerminalRunStatus(existing.status)) return structuredClone(existing);
+    if (existing && existing.updatedAt > run.updatedAt) return structuredClone(existing);
     const stored = structuredClone(run);
     this.put(stored);
     if (isTerminalRunStatus(stored.status)) this.pruneProject(stored.projectCwd);
@@ -352,5 +358,12 @@ function readRun(raw: unknown): AgentRun | undefined {
   // `timed_out` was removed, D-144) is not read back: dropping the row is
   // honest, and beta data is not migrated.
   if (typeof run.status !== "string" || !(AGENT_RUN_STATUSES as readonly string[]).includes(run.status)) return undefined;
+  // A worktree is read by path (`canonical()`, `existsSync`) and named by
+  // branch, so a record whose worktree is not that shape is not a worktree:
+  // taking it on trust threw out of whatever request touched the run next.
+  if (run.worktree !== undefined && run.worktree !== null) {
+    const worktree = run.worktree as unknown as Record<string, unknown>;
+    if (typeof worktree !== "object" || typeof worktree.path !== "string" || typeof worktree.branch !== "string") return undefined;
+  }
   return structuredClone(run as AgentRun);
 }

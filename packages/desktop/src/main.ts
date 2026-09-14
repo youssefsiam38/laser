@@ -28,7 +28,7 @@ import {
   type UpdateStatus,
 } from "./api.js";
 import { agentHome, desktopEnv } from "./agent-home.js";
-import { openSourceFile } from "./open-source-file.js";
+import { openSourceFile, textEditorSupported } from "./open-source-file.js";
 import { deepLinkFromArgv, parseDeepLink } from "./deep-links.js";
 import { startingPageUrl, statusPageUrl } from "./error-page.js";
 import { frameColours, parseStartupGround, readStartupGround, writeStartupGround, type StartupGround } from "./startup-ground.js";
@@ -42,7 +42,7 @@ import { loadSecrets } from "./keychain.js";
 import { DesktopLog } from "./log.js";
 import { Notifier } from "./notifications.js";
 import { NativeUpdateWatch } from "./native-update.js";
-import { LinuxRelaunchError, linuxRelaunchCommand, prepareLinuxRelaunch, type PreparedRelaunch } from "./linux-relaunch.js";
+import { commitLinuxRelaunch, linuxRelaunchCommand, prepareLinuxRelaunch, type PreparedRelaunch } from "./linux-relaunch.js";
 import { resolveNodeRuntime } from "./runtime.js";
 import { installPermissionGates, microphoneStatus, openMicrophoneSettings, requestMicrophone } from "./permissions.js";
 import { TrayController } from "./tray.js";
@@ -170,6 +170,7 @@ const windows = new WindowManager({
     version: app.getVersion(),
     platform: process.platform,
     chrome: chromeFor(process.platform),
+    sourceEditor: textEditorSupported(process.platform),
   },
   origin: () => (devUiUrl ? originOf(devUiUrl) : hostInfo ? originOf(hostInfo.url) : ""),
   entryUrl: () => devUiUrl ?? hostInfo?.url ?? "",
@@ -408,29 +409,27 @@ async function quit(options: { install?: boolean; relaunch?: boolean }): Promise
   quitting = true;
   let relaunch: PreparedRelaunch | undefined;
   if (options.relaunch && process.platform === "linux") {
-    try {
-      const runtime = resolveNodeRuntime({ packaged: app.isPackaged, resourcesPath: process.resourcesPath });
-      relaunch = await prepareLinuxRelaunch({
-        nodeBinary: runtime.binary,
+    relaunch = await commitLinuxRelaunch({
+      prepare: () => prepareLinuxRelaunch({
+        nodeBinary: resolveNodeRuntime({ packaged: app.isPackaged, resourcesPath: process.resourcesPath }).binary,
         command: linuxRelaunchCommand({
           packaged: app.isPackaged, execPath: process.execPath, argv: process.argv,
           cwd: process.cwd(), env: process.env,
         }),
         logFile: join(paths.stateDir, "desktop.log"),
-      });
-      // Preparation must succeed before interrupting work. A stop failure must
-      // never leave a committed replacement beside the old host.
-      await host.stop(true);
-      await relaunch.commit();
-    } catch (error) {
-      relaunch?.cancel();
+      }),
+      stopHost: () => host.stop(true),
+      startHost: () => host.start(),
+      report: async (message) => {
+        await dialog.showMessageBox({
+          type: "error", title: "Restart could not be completed",
+          message, buttons: ["Keep app open"],
+        });
+      },
+      log: (message, error) => log.error(message, error),
+    });
+    if (!relaunch) {
       quitting = false;
-      log.error("preparing update restart failed", error);
-      await dialog.showMessageBox({
-        type: "error", title: "Restart could not be prepared",
-        message: error instanceof LinuxRelaunchError ? error.message : "The app could not prepare its restart. When your work is saved, quit completely and open it from the applications menu.",
-        buttons: ["Keep app open"],
-      });
       return;
     }
   }
