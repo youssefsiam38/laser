@@ -76,6 +76,12 @@ export interface RelayClientOptions {
    * side, which is where typing actually happens.
    */
   shapeTiming?: boolean;
+  /**
+   * Outbound frames that may wait on Noise encryption and the socket at once,
+   * as `KeystrokeShaperOptions.maxQueue` is for the shaped path. Beyond it a
+   * frame is dropped and counted rather than queued.
+   */
+  maxOutboundQueue?: number;
   backend?: CryptoBackend;
   minBackoffMs?: number;
   maxBackoffMs?: number;
@@ -103,6 +109,12 @@ export interface RelayClientStats {
    * dying and reconnecting into the same wall.
    */
   oversizedMessages: number;
+  /**
+   * Frames dropped because the unshaped outbound queue was full — the peer, or
+   * the socket, is not draining. The shaped path reports the same thing through
+   * the shaper's own `maxQueue`; neither grows without bound.
+   */
+  outboundQueueDropped: number;
   lastError?: string;
 }
 
@@ -112,6 +124,18 @@ const DEFAULT_MAX_BACKOFF_MS = 30_000;
 const MAX_MESSAGE_BYTES = 4 * 1024 * 1024;
 /** What the relay advertises today; replaced by the real value from `hello`. */
 const DEFAULT_RELAY_MAX_FRAME_BYTES = 65_536;
+/**
+ * Outbound frames waiting on Noise encryption and the socket. Mirrors the
+ * keystroke shaper's own queue cap: a phone that stops draining must cost this
+ * host a bounded amount of memory, not all of it.
+ */
+const MAX_OUTBOUND_QUEUE = 4_096;
+/**
+ * A cookie challenge is answered at once, but not forever and not in a tight
+ * loop: a relay that keeps asking (or a proxy that eats the cookie) would
+ * otherwise be an unbounded connect storm from every desktop at once.
+ */
+const MAX_COOKIE_ATTEMPTS = 3;
 /**
  * Mirrors `CHANNEL_PROTOCOL_PREFIX` in `@lasercode/relay`. Duplicated as a plain
  * string on purpose: the host does not depend on the relay package, exactly as
@@ -138,6 +162,10 @@ export class RelayClient {
   private backoffTimer: ReturnType<typeof setTimeout> | null = null;
   private attempt = 0;
   private cookie: string | undefined;
+  /** Consecutive cookie challenges answered without reaching an open socket. */
+  private cookieAttempts = 0;
+  /** Frames queued for the unshaped path, so the queue can be bounded. */
+  private pendingSends = 0;
   private stopped = true;
   private currentState: RelayClientState = "stopped";
   /** Changes whenever the Noise transport is torn down; old async sends may not cross it. */
@@ -157,6 +185,7 @@ export class RelayClient {
     framesReceived: 0,
     notificationsDropped: 0,
     oversizedMessages: 0,
+    outboundQueueDropped: 0,
   };
   /**
    * The relay's own ceiling, from its `hello`. Frames above it are refused by
@@ -253,6 +282,7 @@ export class RelayClient {
     ws.on("open", () => {
       this.log(`relay: connected for ${this.deviceLabel()} on channel ${this.channelIdText.slice(0, 8)}…`);
       this.cookie = undefined;
+      this.cookieAttempts = 0;
       this.setState("waiting_for_peer");
     });
     ws.on("message", (data: WebSocket.RawData, isBinary: boolean) => {
@@ -294,8 +324,15 @@ export class RelayClient {
    * (`channelSubprotocol`), which is a header, instead.
    */
   private socketUrl(): string {
-    const base = this.options.relayUrl.replace(/\/+$/, "");
-    return this.cookie ? `${base}?cookie=${encodeURIComponent(this.cookie)}` : base;
+    // Parsed, not concatenated: a relay URL is allowed to carry a query string
+    // of its own (a deployment id, a path-routing hint), and `?cookie=…` glued
+    // onto one produced a second `?` that no relay ever saw as a cookie — so
+    // the challenge was answered forever and never satisfied.
+    const url = new URL(this.options.relayUrl);
+    url.pathname = url.pathname.replace(/\/+$/, "");
+    if (this.cookie === undefined) url.searchParams.delete("cookie");
+    else url.searchParams.set("cookie", this.cookie);
+    return url.toString();
   }
 
   private onUpgradeRefused(status: number, body: string): void {
@@ -305,16 +342,25 @@ export class RelayClient {
     } catch {
       /* the relay always sends JSON, but a proxy in front of it might not */
     }
-    if (status === 429 && parsed.cookie) {
-      // A cookie challenge is not a failure: answer it and retry at once. The
-      // attempt does not count against the backoff, or a busy relay would push
-      // every desktop into ever longer waits for doing exactly what it asked.
+    if (status === 429 && parsed.cookie && this.cookieAttempts < MAX_COOKIE_ATTEMPTS) {
+      // A cookie challenge is not a failure: answer it and retry. The attempt
+      // does not count against the backoff, or a busy relay would push every
+      // desktop into ever longer waits for doing exactly what it asked — but it
+      // is counted here, and after a few unanswered rounds this falls through to
+      // ordinary backoff instead of spinning.
       this.cookie = parsed.cookie;
-      this.log("relay: answering the load cookie and retrying");
-      if (!this.stopped) this.connect();
+      this.cookieAttempts++;
+      this.log(`relay: answering the load cookie and retrying (${this.cookieAttempts}/${MAX_COOKIE_ATTEMPTS})`);
+      const delay = this.options.minBackoffMs ?? DEFAULT_MIN_BACKOFF_MS;
+      this.backoffTimer = setTimeout(() => {
+        this.backoffTimer = null;
+        this.connect();
+      }, delay);
+      this.backoffTimer.unref?.();
       return;
     }
     this.cookie = undefined;
+    this.cookieAttempts = 0;
     const detail = parsed.message ?? body.slice(0, 200);
     this.lastError = `relay refused the connection (HTTP ${status})${detail ? `: ${detail}` : ""}`;
     if (status === 409) {
@@ -569,22 +615,37 @@ export class RelayClient {
       this.shaper.enqueue(payload);
       return generation === this.connectionGeneration && this.session !== null;
     }
+    const maxQueue = this.options.maxOutboundQueue ?? MAX_OUTBOUND_QUEUE;
+    if (this.pendingSends >= maxQueue) {
+      // Bounded exactly like the shaped path: drop the frame, count it, say so.
+      // A device resumes with `session/load { fromSeq }`, so a lost update is
+      // recoverable; an unbounded queue on the desktop is not.
+      this.counters.outboundQueueDropped++;
+      this.lastError = `the relay's outbound queue is full (${maxQueue} frames); dropped one. ${this.deviceLabel()} is not draining.`;
+      this.options.onError?.(new Error(this.lastError));
+      return false;
+    }
+    this.pendingSends++;
     return this.enqueueSend(async () => {
-      if (generation !== this.connectionGeneration || !this.session || !this.ws || this.ws.readyState !== this.ws.OPEN) return false;
-      const session = this.session;
-      const ws = this.ws;
-      const frame = await session.encrypt(payload);
-      if (generation !== this.connectionGeneration || this.session !== session || this.ws !== ws || ws.readyState !== ws.OPEN) return false;
-      return new Promise<boolean>((resolve) => {
-        try {
-          ws.send(frame, { binary: true }, (error) => {
-            if (!error) this.counters.framesSent++;
-            resolve(!error && generation === this.connectionGeneration && this.session === session && this.ws === ws && ws.readyState === ws.OPEN);
-          });
-        } catch {
-          resolve(false);
-        }
-      });
+      try {
+        if (generation !== this.connectionGeneration || !this.session || !this.ws || this.ws.readyState !== this.ws.OPEN) return false;
+        const session = this.session;
+        const ws = this.ws;
+        const frame = await session.encrypt(payload);
+        if (generation !== this.connectionGeneration || this.session !== session || this.ws !== ws || ws.readyState !== ws.OPEN) return false;
+        return await new Promise<boolean>((resolve) => {
+          try {
+            ws.send(frame, { binary: true }, (error) => {
+              if (!error) this.counters.framesSent++;
+              resolve(!error && generation === this.connectionGeneration && this.session === session && this.ws === ws && ws.readyState === ws.OPEN);
+            });
+          } catch {
+            resolve(false);
+          }
+        });
+      } finally {
+        this.pendingSends--;
+      }
     });
   }
 

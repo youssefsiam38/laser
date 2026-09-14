@@ -11,6 +11,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { JsonRpcNotification, WorkerInfo } from "@lasercode/protocol";
+import { AgentRunRegistry } from "../src/agents/runs.js";
 import { WorkerPool } from "../src/worker-pool.js";
 
 /**
@@ -391,6 +392,39 @@ describe("WorkerPool", () => {
     working = false;
     pool["sweep"]();
     await waitFor(() => statusesOf(project).at(-1) === "retired");
+  });
+
+  it("refuses the feature toggle's restart while a child waits on a question", async () => {
+    // `feature/set` restarts every open project. A child in `needs_input` is
+    // paused on a question with nothing running — an empty `running` set — so
+    // the only thing standing between a Feature toggle and a killed live run is
+    // `hasLiveRun`, answered here by the real registry (D-144, AGENTS §4).
+    const runs = new AgentRunRegistry({ now: () => new Date("2026-06-02T00:00:00.000Z") });
+    runs.upsert({
+      agentName: "reviewer", subagentName: "review", sessionId: "s-1", runId: "r-1",
+      sessionPath: "/sessions/child.jsonl", projectCwd: project, rootSessionPath: "/sessions/a.jsonl",
+      depth: 1, parent: { sessionPath: "/sessions/a.jsonl", sessionId: "id-a" }, worktree: null,
+      origin: "agent", status: "needs_input", task: "Review",
+      startedAt: "2026-06-01T00:00:00.000Z", updatedAt: "2026-06-01T00:00:00.000Z",
+    });
+    pool = makePool({ idleMs: 0, sweepMs: 0, isAttached: () => false, hasLiveRun: (cwd) => runs.hasLiveRun(cwd) });
+    const client = await pool.get(project);
+    pool.bindSession("/sessions/a.jsonl", project);
+    expect(pool.workerInfo(project)?.restarts).toBe(0);
+
+    await expect(pool.restart(project)).rejects.toThrow(/has an agent run that has not ended/);
+    await expect(pool.stop(project, "stopped from the app")).rejects.toThrow(/has an agent run that has not ended/);
+    expect(client.alive).toBe(true);
+    expect((await pool.get(project)).pid).toBe(client.pid);
+    expect(pool.openSessions(project)).toEqual(["/sessions/a.jsonl"]);
+    expect(statusesOf(project)).toEqual(["starting", "ready"]);
+
+    // The person answered and the run ended: the toggle's restart goes through.
+    runs.forgetSession("/sessions/child.jsonl");
+    const info = await pool.restart(project);
+    expect(info.status).toBe("ready");
+    expect(info.pid).not.toBe(client.pid);
+    runs.close();
   });
 
   it("never spawns a second worker while the first is still shutting down", async () => {

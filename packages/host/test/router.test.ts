@@ -21,7 +21,7 @@ import { AgentStore } from "../src/agents/store.js";
 import { AttentionTracker } from "../src/attention.js";
 import { SessionCatalog } from "../src/catalog.js";
 import { ProjectRegistry } from "../src/projects.js";
-import { Router } from "../src/router.js";
+import { Router, UPLOAD_IDLE_MS } from "../src/router.js";
 import { ViewCache } from "../src/views.js";
 import type { WorkerPool } from "../src/worker-pool.js";
 
@@ -89,7 +89,7 @@ const WORKSPACE_ROOT = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-router-worksp
 const WORKSPACES = { beam: join(WORKSPACE_ROOT, "beam"), chat: join(WORKSPACE_ROOT, "chat") };
 
 /** A Router with fakes for everything but the piece under test. */
-function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string, string[]>; agents?: boolean; workspaces?: { beam: string; chat: string }; exclude?: string[]; workerRequest?: (method: string, params: unknown) => Promise<unknown> } = {}) {
+function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string, string[]>; agents?: boolean; workspaces?: { beam: string; chat: string }; exclude?: string[]; now?: () => number; workerRequest?: (method: string, params: unknown) => Promise<unknown> } = {}) {
   const dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-router-`));
   const catalogRows = options.catalogRows ?? [];
   const open = options.open ?? { [CWD_A]: [PATH_A] };
@@ -134,7 +134,7 @@ function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string
   // Fixtures date from June; a fixed clock keeps retention from pruning them.
   const runs = options.agents ? new AgentRunRegistry({ now: () => new Date("2026-06-02T00:00:00.000Z") }) : undefined;
   const views = new ViewCache(2);
-  const router = new Router(pool, catalog, { attention, projects, views, agents, runs });
+  const router = new Router(pool, catalog, { attention, projects, views, agents, runs, ...(options.now ? { now: options.now } : {}) });
 
   // The Router only records a stub from inside `dispatch`; reach the private
   // recorder the same way `session/new` does, without standing up a worker.
@@ -241,6 +241,34 @@ describe("Router · dictation cancellation", () => {
       const gone = await h.router.handle({ jsonrpc: "2.0", id: 4, method: "pi/transcribe/chunk", params: { id: "recording", data: "AA==" } });
       expect(gone).toHaveProperty("error");
     } finally { finish({ text: "" }); h.cleanup(); }
+  });
+
+  it("forgets the route of a recording whose client disappeared without ending it", async () => {
+    // A phone that leaves mid-dictation sends neither `end` nor `cancel`: its
+    // row used to stay in the router for the life of the host.
+    let now = 1_000;
+    let next = 0;
+    const h = harness({ now: () => now, workerRequest: async (method) => (method === "pi/transcribe/begin" ? { id: `rec-${++next}` } : {}) });
+    const uploads = (h.router as unknown as { uploads: Map<string, unknown> }).uploads;
+    try {
+      const begin = () => h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/transcribe/begin", params: { cwd: CWD_A, mimeType: "audio/wav" } });
+      await begin();
+      expect(uploads.size).toBe(1);
+
+      // A long recording still using its route is not swept.
+      now += UPLOAD_IDLE_MS - 1;
+      expect(await h.router.handle({ jsonrpc: "2.0", id: 2, method: "pi/transcribe/chunk", params: { id: "rec-1", data: "AA==" } })).toMatchObject({ result: {} });
+      now += 2;
+      await begin();
+      expect([...uploads.keys()]).toEqual(["rec-1", "rec-2"]);
+
+      // Nothing touched the abandoned one for the idle window: it goes.
+      now += UPLOAD_IDLE_MS + 1;
+      await begin();
+      expect([...uploads.keys()]).toEqual(["rec-3"]);
+      const gone = await h.router.handle({ jsonrpc: "2.0", id: 3, method: "pi/transcribe/chunk", params: { id: "rec-1", data: "AA==" } });
+      expect(gone).toHaveProperty("error.message", "that recording is no longer open — start dictating again");
+    } finally { h.cleanup(); }
   });
 });
 
