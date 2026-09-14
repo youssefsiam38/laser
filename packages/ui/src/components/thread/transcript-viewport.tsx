@@ -56,6 +56,8 @@ export class TranscriptViewport {
   private ownsLocation = false;
   private tail: (() => void) | undefined;
   private expectedTop: number | undefined;
+  /** Movement of the anchor caused by a list change that has rendered but not painted. */
+  private structuralShift: number | undefined;
   /** The person is moving the viewport right now; layout may shift it, never re-place it. */
   private reading: ReturnType<typeof setTimeout> | undefined;
   private disposed = false;
@@ -97,9 +99,23 @@ export class TranscriptViewport {
   setIds(ids: readonly string[]) {
     if (this.ids === ids || (this.ids.length === ids.length && this.ids.every((id, i) => ids[i] === id))) return;
     const previous = this.ids;
+    // Where the person's anchor sits before the list changes under it. Rows
+    // inserted above it (an earlier page) move it by their estimated height;
+    // the viewport must move by exactly that before the next paint, or the
+    // reader is left looking at the top of the page that just arrived while
+    // the section they were reading is now a page further down. Later
+    // measurements refine estimates by their delta, as they already do.
+    const anchor = !this.place.following ? this.place.anchor : undefined;
+    const anchorIndex = anchor ? this.positions.get(anchor.messageId) : undefined;
+    const anchorBefore = anchorIndex !== undefined ? this.heights.offset(anchorIndex) : undefined;
     this.ids = ids;
     this.positions = new Map(ids.map((id, i) => [id, i]));
     this.rebuild();
+    if (anchor && anchorBefore !== undefined) {
+      const index = this.positions.get(anchor.messageId);
+      const shift = index === undefined ? 0 : this.heights.offset(index) - anchorBefore;
+      if (Math.abs(shift) >= 0.5) this.structuralShift = (this.structuralShift ?? 0) + shift;
+    }
     // A branch replacement cancels a pending destination; appends/prepends do not.
     if (previous.length && previous.some(id => !this.positions.has(id))) this.cancel("structure");
   }
@@ -117,7 +133,7 @@ export class TranscriptViewport {
     // between the live top and an evicted old anchor makes those renders oscillate.
     if (targetIndex !== undefined) top = this.heights.offset(targetIndex) - height / 3;
     else if (!this.content || this.place.following) top = this.heights.total - height;
-    else if (this.place.anchor && !this.nodes.has(this.place.anchor.messageId)) top = this.heights.offset(this.positions.get(this.place.anchor.messageId) ?? 0) - this.place.anchor.messageOffset;
+    else if (this.place.anchor && (this.structuralShift !== undefined || !this.nodes.has(this.place.anchor.messageId))) top = this.heights.offset(this.positions.get(this.place.anchor.messageId) ?? 0) - this.place.anchor.messageOffset;
     const pins = [...this.pins.keys(), this.focused, this.target?.messageId].flatMap(id => id && this.positions.has(id) ? [this.positions.get(id)!] : []);
     if (this.selected) {
       const a = this.positions.get(this.selected[0]), b = this.positions.get(this.selected[1]);
@@ -248,7 +264,16 @@ export class TranscriptViewport {
     this.capture();
   };
   schedule = () => { if (!this.frame && !this.disposed) this.frame = requestAnimationFrame(this.measure); };
-  committed() { if (this.layout()) this.windowDirty = true; this.restore(); this.schedule(); }
+  committed() {
+    if (this.layout()) this.windowDirty = true;
+    const shift = this.structuralShift;
+    this.structuralShift = undefined;
+    // Rows arrived above the anchor in this commit: move by what they take up
+    // now, before anyone sees the frame. `restore` then has the anchor row
+    // where it expects it and corrects the estimate against the real layout.
+    if (shift !== undefined && this.viewport && !this.target) this.scroll(this.viewport.scrollTop + shift);
+    this.restore(); this.schedule();
+  }
   cancel = (reason?: unknown) => {
     this.ownsLocation = false;
     this.intent++;

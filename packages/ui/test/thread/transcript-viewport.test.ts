@@ -155,6 +155,63 @@ describe("scoped transcript destinations", () => {
       expect(viewport.scrollTop).toBeCloseTo(rested, 0);
     } finally { detach(); viewport.remove(); vi.unstubAllGlobals(); vi.useRealTimers(); }
   });
+  it("keeps the reader's section on screen when an earlier page arrives above it", async () => {
+    // 0.6.2 lost the reader's place: reading upwards at the top loaded the
+    // earlier page, the rows landed above the anchor and the viewport stayed
+    // at scrollTop 0 — the top of the new page — while the section being
+    // read was pushed a whole page down. Every further wheel notch at the top
+    // loaded another page the same way; the person saw only page tops, and
+    // met the same section again scrolling back down to find their place.
+    vi.useFakeTimers();
+    const frames = new Map<number, FrameRequestCallback>(); let frameId = 0;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { frames.set(++frameId, callback); return frameId; });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => { frames.delete(id); });
+    const step = async () => { const pending = [...frames.values()]; frames.clear(); for (const callback of pending) callback(0); await Promise.resolve(); };
+    const controller = new TranscriptViewport(), viewport = document.createElement("div"), content = document.createElement("div");
+    let ids = Array.from({ length: 40 }, (_, i) => `row-${i + 40}`);
+    const scrollHeight = () => controller.heights.total;
+    Object.defineProperties(viewport, { clientHeight: { value: 600 }, scrollHeight: { get: scrollHeight } });
+    viewport.getBoundingClientRect = () => new DOMRect(0, 0, 600, 600);
+    content.getBoundingClientRect = () => new DOMRect(0, -viewport.scrollTop, 600, scrollHeight());
+    content.style.fontSize = "14px"; content.style.lineHeight = "21px";
+    viewport.append(content); document.body.append(viewport); controller.content = content;
+    controller.configure("/paging"); controller.setIds(ids);
+    const rows = new Map<string, HTMLElement>();
+    const mount = (id: string) => {
+      const row = document.createElement("div"); row.dataset.windowMessage = id;
+      row.getBoundingClientRect = () => new DOMRect(0, controller.heights.offset(ids.indexOf(id)) - viewport.scrollTop, 600, 100);
+      content.append(row); controller.register(id, row); rows.set(id, row); return row;
+    };
+    for (const id of ids) mount(id);
+    const detach = controller.attach(viewport, () => { viewport.scrollTop = scrollHeight() - 600; });
+    try {
+      viewport.scrollTop = scrollHeight() - 600; viewport.dispatchEvent(new Event("scroll")); await step();
+      // Read up to the very top, the way a wheel does, and ask for what came before.
+      viewport.dispatchEvent(new Event("wheel"));
+      viewport.scrollTop = 120; viewport.dispatchEvent(new Event("scroll"));
+      const place = controller.capture();
+      expect(place.following).toBe(false);
+      const anchor = place.anchor!.messageId;
+      const screenTop = rows.get(anchor)!.getBoundingClientRect().top;
+      // Forty earlier rows arrive above; the list renders with them first.
+      ids = [...Array.from({ length: 40 }, (_, i) => `row-${i}`), ...ids];
+      controller.setIds(ids);
+      const inserted = controller.heights.offset(40);
+      expect(inserted).toBeGreaterThan(0);
+      // The window this render mounts is around the anchor, not the page top.
+      const ranges = controller.ranges();
+      expect(ranges.some(r => r.start <= 40 && r.end > 40)).toBe(true);
+      controller.committed(); await step();
+      // The anchor row is exactly where the person left it on screen.
+      expect(rows.get(anchor)!.getBoundingClientRect().top).toBeCloseTo(screenTop, 0);
+      expect(viewport.scrollTop).toBeCloseTo(120 + inserted, 0);
+      // And once they have stopped, nothing moves it.
+      vi.advanceTimersByTime(500); await step();
+      controller.committed(); await step();
+      expect(rows.get(anchor)!.getBoundingClientRect().top).toBeCloseTo(screenTop, 0);
+    } finally { detach(); viewport.remove(); vi.unstubAllGlobals(); vi.useRealTimers(); }
+  });
+
   it("does not alternate mounted windows when a phone version target evicts the old reading anchor", async () => {
     const controller = new TranscriptViewport(), viewport = document.createElement("div"), content = document.createElement("div");
     const ids = Array.from({ length: 100 }, (_, i) => `row-${i}`), nodes = new Map<string, HTMLElement>();
