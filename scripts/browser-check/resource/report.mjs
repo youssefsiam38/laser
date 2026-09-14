@@ -62,9 +62,16 @@ export const COMPARISON_POLICY = Object.freeze({
   // retained target per heap phase, for instance — so the overlap it must show
   // is capped by how many owners exist rather than assumed to be five. What is
   // never relaxed: the same top owner, and rank correlation.
-  strict: Object.freeze({ kind: 'strict', requireSameTopOwner: true, minimumTopFiveOverlap: 4, minimumSpearman: 0.8, minimumOwners: 2 }),
+  strict: Object.freeze({ kind: 'strict', requireSameTopOwner: true, minimumTopFiveOverlap: 4, minimumSpearman: 0.8, minimumOwners: 1 }),
   evidence: Object.freeze({ kind: 'evidence', requireSameTopOwner: false, minimumTopFiveOverlap: 3, minimumSpearman: 0.4, minimumOwners: 5 }),
 });
+
+/**
+ * Slopes repeat when they point the same way and stay within a declared spread.
+ * The 25% coefficient of variation is a gate, not a note in the margin: a run
+ * whose slope doubled between A and B did not reproduce, whatever its sign.
+ */
+export const SLOPE_POLICY = Object.freeze({ maximumCoefficientOfVariation: 0.25 });
 export const EVIDENCE_CATEGORIES = Object.freeze(['host-allocation', 'worker-allocation', 'desktop-processes']);
 export function policyFor(category) {
   return EVIDENCE_CATEGORIES.includes(category) ? COMPARISON_POLICY.evidence : COMPARISON_POLICY.strict;
@@ -78,14 +85,21 @@ export function compareRuns(a, b) {
     const br = rankNames(b.rankings?.[name] ?? []);
     const overlap = ar.slice(0, 5).filter(owner => br.slice(0, 5).includes(owner)).length;
     const correlation = spearman(ar, br);
+    const common = ar.filter(owner => br.includes(owner)).length;
     const enough = ar.length >= policy.minimumOwners && br.length >= policy.minimumOwners;
-    const topOwnerSame = ar[0] === br[0];
+    const topOwnerSame = ar[0] !== undefined && ar[0] === br[0];
     const requiredOverlap = Math.min(policy.minimumTopFiveOverlap, ar.length, br.length);
+    // Rank correlation needs two ranks. A structural category that legitimately
+    // has one owner — a single merged retained target, say — repeats when that
+    // one owner is the same in both runs, and there is no order left to get
+    // wrong; with two or more owners the correlation threshold applies as usual.
+    const trivial = correlation === null && common === 1 && topOwnerSame;
+    const correlationOk = trivial || (correlation ?? -1) >= policy.minimumSpearman;
     categories[name] = {
       policy: policy.kind, topOwnerSame, topFiveOverlap: overlap, requiredOverlap, spearman: correlation,
+      commonOwners: common, rankStability: trivial ? 'trivial: one common owner' : correlation === null ? 'unavailable' : 'correlated',
       owners: { a: ar.length, b: br.length },
-      pass: enough && (policy.requireSameTopOwner ? topOwnerSame : true)
-        && overlap >= requiredOverlap && (correlation ?? -1) >= policy.minimumSpearman,
+      pass: enough && (policy.requireSameTopOwner ? topOwnerSame : true) && overlap >= requiredOverlap && correlationOk,
     };
   }
   const slopes = {};
@@ -95,14 +109,17 @@ export function compareRuns(a, b) {
     const available = Number.isFinite(av) && Number.isFinite(bv);
     const meanMagnitude = available ? (Math.abs(av) + Math.abs(bv)) / 2 : null;
     const cv = available && meanMagnitude ? Math.abs(Math.abs(av) - Math.abs(bv)) / (Math.SQRT2 * meanMagnitude) : available ? 0 : null;
+    const withinSpread = cv !== null && cv <= SLOPE_POLICY.maximumCoefficientOfVariation;
     slopes[name] = { available, signAgrees: available && sign(av) === sign(bv), coefficientOfVariation: cv,
-      flaggedOver25Percent: cv !== null && cv > 0.25, pass: available && sign(av) === sign(bv) };
+      maximumCoefficientOfVariation: SLOPE_POLICY.maximumCoefficientOfVariation,
+      flaggedOver25Percent: cv !== null && cv > SLOPE_POLICY.maximumCoefficientOfVariation,
+      pass: available && sign(av) === sign(bv) && withinSpread };
   }
   const scenariosComplete = [a, b].every(run => Object.values(run.scenarios ?? {}).every(value => value === 'complete'));
   return {
     pass: scenariosComplete && Object.keys(categories).length > 0 && Object.values(categories).every(value => value.pass)
       && Object.keys(slopes).length > 0 && Object.values(slopes).every(value => value.pass),
-    policy: { strict: COMPARISON_POLICY.strict, evidence: COMPARISON_POLICY.evidence, evidenceCategories: EVIDENCE_CATEGORIES },
+    policy: { strict: COMPARISON_POLICY.strict, evidence: COMPARISON_POLICY.evidence, evidenceCategories: EVIDENCE_CATEGORIES, slopes: SLOPE_POLICY },
     scenariosComplete, categories, slopes,
   };
 }

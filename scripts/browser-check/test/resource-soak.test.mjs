@@ -11,7 +11,7 @@ import { EventEmitter } from 'node:events';
 import { promisify } from 'node:util';
 import { modeConfig, expected, SAFETY } from '../resource/config.mjs';
 import { syntheticPng, imagePayload } from '../resource/fixtures.mjs';
-import { theilSen, compareRuns, assertRedacted, sanitizeOwner, sanitizeError, COMPARISON_POLICY } from '../resource/report.mjs';
+import { theilSen, compareRuns, assertRedacted, sanitizeOwner, sanitizeError, COMPARISON_POLICY, SLOPE_POLICY } from '../resource/report.mjs';
 import { connectInspector, InspectorClient } from '../resource/inspector.mjs';
 import { captureHeap } from '../resource/heap.mjs';
 import { captureMemoryInfra, dumpAllocators } from '../resource/memory-infra.mjs';
@@ -62,8 +62,11 @@ test('robust slopes and repeated owner ranks are deterministic', () => {
   assert.equal(theilSen([{x:0,y:10},{x:1,y:12},{x:2,y:14},{x:3,y:100}]), 30);
   const scenarios = Object.fromEntries(Array.from({ length: 9 }, (_, index) => [`scenario-${index + 1}`, 'complete']));
   const a={rankings:{host:[{owner:'sessions',bytes:5},{owner:'tasks',bytes:4},{owner:'logs',bytes:3},{owner:'socket',bytes:2},{owner:'pool',bytes:1}]},slopes:{host:{value:2}},scenarios};
-  const b={rankings:{host:[{owner:'sessions',bytes:6},{owner:'tasks',bytes:5},{owner:'logs',bytes:3},{owner:'socket',bytes:2},{owner:'pool',bytes:1}]},slopes:{host:{value:3}},scenarios};
+  const b={rankings:{host:[{owner:'sessions',bytes:6},{owner:'tasks',bytes:5},{owner:'logs',bytes:3},{owner:'socket',bytes:2},{owner:'pool',bytes:1}]},slopes:{host:{value:2.2}},scenarios};
   assert.equal(compareRuns(a,b).pass,true);
+  // The same rankings with a slope half again as large do not repeat.
+  const spread={...b,slopes:{host:{value:3}}};
+  assert.equal(compareRuns(a,spread).slopes.host.pass,false);
 });
 
 test('report redaction rejects paths, inspector URLs, payloads, ids and canaries', () => {
@@ -1019,5 +1022,57 @@ test('a small structural category is gated by what it has, not by an unreachable
   assert.deepEqual([stable.pass, stable.requiredOverlap, stable.owners], [true, 3, { a: 3, b: 3 }]);
   assert.equal(compareRuns(a, moved).categories.renderer.pass, false, 'a moved top owner still fails a structural category');
   assert.equal(compareRuns(a, { scenarios, slopes, rankings: { renderer: [{ owner: 'only', bytes: 1 }] } }).categories.renderer.pass, false,
-    'a category with a single owner cannot be called repeatable');
+    'a single owner that is not the other run\u2019s owner is not repeatable');
+});
+
+test('a one-owner structural category repeats when its sole owner does, and fails when it changes', () => {
+  const scenarios = Object.fromEntries(SCENARIO_IDS.map(id => [id, 'complete']));
+  const slopes = { host: { value: 2 } };
+  const run = owner => ({ scenarios, slopes, rankings: { host: [{ owner, bytes: 1000 }] } });
+  const same = compareRuns(run('HostServer'), run('HostServer'));
+  assert.deepEqual([same.categories.host.pass, same.categories.host.topOwnerSame, same.categories.host.commonOwners], [true, true, 1]);
+  assert.equal(same.categories.host.spearman, null, 'one common owner has no rank correlation to compute');
+  assert.equal(same.categories.host.rankStability, 'trivial: one common owner');
+  assert.equal(same.pass, true, 'a legitimate single-owner structural category must not fail the whole comparison');
+
+  const moved = compareRuns(run('HostServer'), run('WorkerServer'));
+  assert.equal(moved.categories.host.pass, false, 'a different sole owner is not repeatable');
+  assert.equal(moved.categories.host.rankStability, 'unavailable');
+  assert.equal(COMPARISON_POLICY.strict.minimumOwners, 1);
+});
+
+test('two or more owners still have to correlate above the strict rank threshold', () => {
+  const scenarios = Object.fromEntries(SCENARIO_IDS.map(id => [id, 'complete']));
+  const slopes = { host: { value: 2 } };
+  const rank = names => ({ scenarios, slopes, rankings: { host: names.map((owner, index) => ({ owner, bytes: (names.length - index) * 10 })) } });
+  const ordered = ['a', 'b', 'c', 'd', 'e'];
+  const stable = compareRuns(rank(ordered), rank(ordered)).categories.host;
+  assert.deepEqual([stable.pass, stable.spearman, stable.rankStability], [true, 1, 'correlated']);
+  const reversedTail = compareRuns(rank(ordered), rank(['a', 'e', 'd', 'c', 'b'])).categories.host;
+  assert.equal(reversedTail.topOwnerSame, true, 'the top owner is unchanged');
+  assert.ok(reversedTail.spearman < COMPARISON_POLICY.strict.minimumSpearman);
+  assert.equal(reversedTail.pass, false, 'a scrambled tail below the rank threshold still fails');
+});
+
+test('a slope repeats only when it points the same way and stays inside the declared spread', () => {
+  const scenarios = Object.fromEntries(SCENARIO_IDS.map(id => [id, 'complete']));
+  const rankings = { host: [{ owner: 'HostServer', bytes: 1 }] };
+  const withSlope = value => ({ scenarios, rankings, slopes: { growth: { status: 'available', value } } });
+  const tight = compareRuns(withSlope(1_000_000), withSlope(1_100_000)).slopes.growth;
+  assert.equal(tight.pass, true);
+  assert.ok(tight.coefficientOfVariation <= SLOPE_POLICY.maximumCoefficientOfVariation);
+  assert.equal(tight.flaggedOver25Percent, false);
+
+  const doubled = compareRuns(withSlope(1_000_000), withSlope(2_000_000));
+  const wide = doubled.slopes.growth;
+  assert.equal(wide.signAgrees, true, 'the sign still agrees');
+  assert.ok(wide.coefficientOfVariation > SLOPE_POLICY.maximumCoefficientOfVariation);
+  assert.deepEqual([wide.flaggedOver25Percent, wide.pass], [true, false], 'a slope outside the declared spread fails');
+  assert.equal(doubled.pass, false, 'and it fails the whole comparison, not just its own row');
+
+  const flipped = compareRuns(withSlope(1_000_000), withSlope(-1_000_000)).slopes.growth;
+  assert.deepEqual([flipped.signAgrees, flipped.pass], [false, false]);
+  const missing = compareRuns(withSlope(1_000_000), { scenarios, rankings, slopes: { growth: { status: 'unavailable', value: null } } }).slopes.growth;
+  assert.deepEqual([missing.available, missing.coefficientOfVariation, missing.pass], [false, null, false]);
+  assert.equal(SLOPE_POLICY.maximumCoefficientOfVariation, 0.25);
 });

@@ -196,7 +196,10 @@ Repeatability is gated by a predeclared, category-specific policy: retained-heap
 owners, the renderer state projection and native allocator names are strict
 (same top owner, rank correlation); sampled allocation profiles and desktop
 process rows are evidence, gated more loosely so one noisy sampled symbol cannot
-fail a run, but never dropped.
+fail a run, but never dropped. A structural category with one owner repeats when
+that owner is the same in both runs; with two or more, rank correlation applies.
+Slopes must keep their sign and stay inside the declared 25% coefficient of
+variation — both are pass conditions, not annotations.
 
 Quick mode exercises the mechanisms but is not baseline evidence. Full mode
 requires two fresh runs. Run B is refused when run A crosses a safety ceiling or

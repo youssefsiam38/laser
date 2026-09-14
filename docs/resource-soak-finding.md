@@ -155,6 +155,9 @@ RP-5 and RP-8 bound retained renderer state:
    `resource/report.mjs`: retained-heap owners, the renderer state projection and
    native allocator names must keep the same top owner and rank order; sampled
    allocation profiles and desktop process rows are gated more loosely so one
-   noisy sampled symbol cannot fail a run.
+   noisy sampled symbol cannot fail a run. A structural category with a single
+   owner repeats when that owner is the same in both runs — there is no order
+   left to get wrong — and every slope must both keep its sign and stay within
+   the declared 25% coefficient of variation, which is a gate rather than a note.
 3. The baseline document that replaces this one needs both runs' owner rankings,
    both slope sets, the comparison verdict and the same limitations section.
