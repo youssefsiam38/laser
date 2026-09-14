@@ -14,15 +14,14 @@
  * checked for still being on the branch. Everything else is `stale`, and an
  * edit, fork, jump or compaction is always `stale`.
  */
-import { ErrorCodes, ProtocolError, classifyBaseRevision, environmentTagOf, sessionRevisionOf, type ClientRequests, type RevisionState } from "@lasercode/protocol";
+import { ErrorCodes, ProtocolError, classifyBaseRevision, environmentKeyOf, environmentTagOf, isEnvironmentKey, isSessionRevision, sessionRevisionOf, type ClientRequests, type RevisionState } from "@lasercode/protocol";
 import { nodeRevisionHasher } from "@lasercode/protocol/revision-node";
 import type { SessionIndex, SessionIndexCache, SessionIndexFailure } from "./session-index.js";
 
 export interface SessionRevisionsOptions {
   index: SessionIndexCache;
-  /** Trusted processes only; never published. Its derived key is what clients see. */
+  /** The single trusted identity input; the public key and revision tag are derived together. */
   environmentId: string;
-  environmentKey: string;
 }
 
 /**
@@ -40,14 +39,16 @@ export type RevisionAnswer =
 
 export class SessionRevisions {
   private readonly tag: string;
+  private readonly key: string;
 
   constructor(private readonly options: SessionRevisionsOptions) {
     this.tag = environmentTagOf(nodeRevisionHasher, options.environmentId);
+    this.key = environmentKeyOf(nodeRevisionHasher, options.environmentId);
   }
 
   /** The durable revision of a stored conversation, with no worker involved. */
-  read(path: string, baseRevision?: string): RevisionAnswer {
-    const result = this.options.index.read(path);
+  async read(path: string, baseRevision?: string): Promise<RevisionAnswer> {
+    const result = await this.options.index.read(path);
     if (!result.ok) {
       return routable(result.failure.reason)
         ? { kind: "route-live", reason: result.failure }
@@ -56,7 +57,50 @@ export class SessionRevisions {
     const { index } = result;
     const revision = sessionRevisionOf(nodeRevisionHasher, this.tag, index.state);
     const base = baseRevision === undefined ? undefined : this.classify(index, baseRevision);
-    return { kind: "answer", result: { revision, environmentKey: this.options.environmentKey, authority: "durable", ...(base ? { base } : {}) } };
+    return { kind: "answer", result: { revision, environmentKey: this.key, authority: "durable", ...(base ? { base } : {}) } };
+  }
+
+  /**
+   * Accept a live answer only when it is shaped for, and cryptographically
+   * tagged to, this host's environment. An unconfigured or mismatched worker
+   * is unavailable; letting it poison a device cache would be worse.
+   */
+  validateLive(value: unknown): ClientRequests["session/revision"]["result"] {
+    const result = value as Partial<ClientRequests["session/revision"]["result"]> | null;
+    const base = result?.base;
+    if (!result || result.authority !== "live" ||
+        (base !== undefined && base !== "current" && base !== "prefix" && base !== "stale")) this.liveMismatch();
+    this.validateBinding(result.revision, result.environmentKey);
+    return { revision: result.revision!, environmentKey: result.environmentKey!, authority: "live", ...(base ? { base } : {}) };
+  }
+
+  /** Validate a worker-produced history window without teaching Router token parsing. */
+  validateWindow<T>(value: T): T {
+    const window = (value as { window?: { revision?: unknown; environmentKey?: unknown } } | null)?.window;
+    if (!window) this.liveMismatch();
+    this.validateBinding(window!.revision, window!.environmentKey);
+    return value;
+  }
+
+  /** Session load revisions are optional only when canonicalisation itself was unavailable. */
+  validateLoad<T>(value: T): T {
+    const result = value as { revision?: unknown; environmentKey?: unknown } | null;
+    if (result?.revision !== undefined || result?.environmentKey !== undefined) {
+      this.validateBinding(result.revision, result.environmentKey);
+    }
+    return value;
+  }
+
+  private validateBinding(revision: unknown, environmentKey: unknown): void {
+    if (!isEnvironmentKey(environmentKey) || environmentKey !== this.key || !isSessionRevision(revision) ||
+        !revision.startsWith(`r1.${this.tag}.`)) this.liveMismatch();
+  }
+
+  private liveMismatch(): never {
+    throw new ProtocolError(
+      ErrorCodes.RevisionUnavailable,
+      "This conversation's live revision does not belong to this host. Restart the app and try again.",
+    );
   }
 
   private classify(index: SessionIndex, baseRevision: string): "current" | "prefix" | "stale" {
@@ -103,7 +147,8 @@ function branchIds(index: SessionIndex): Set<string> {
 
 /** Cases the engine can still answer: ask it rather than refusing the person. */
 function routable(reason: SessionIndexFailure["reason"]): boolean {
-  return reason === "unsupported-version" || reason === "too-large" || reason === "changed";
+  return reason === "unsupported-version" || reason === "too-large" || reason === "changed" ||
+    reason === "not-a-session" || reason === "unreadable";
 }
 
 /**

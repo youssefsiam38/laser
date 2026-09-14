@@ -306,7 +306,8 @@ describe("WorkerServer", () => {
       expect(isEnvironmentKey(window.window.environmentKey)).toBe(true);
       // The page cursor says nothing about where or how history is stored.
       expect(window.window.before).not.toContain("/tmp/fake");
-      expect(JSON.parse(window.window.before)).toMatchObject({ v: 2, s: "s1" });
+      expect(() => JSON.parse(window.window.before)).toThrow();
+      expect(JSON.parse(Buffer.from(window.window.before, "base64url").toString("utf8"))).toMatchObject({ v: 2, s: "s1" });
 
       const asked = (await h.call(3, "session/revision", { path: "/tmp/fake/s1.jsonl", baseRevision: window.window.revision })).result as { revision: string; authority: string; base: string };
       expect(asked).toMatchObject({ revision: window.window.revision, authority: "live", base: "current" });

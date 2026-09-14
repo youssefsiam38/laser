@@ -22,7 +22,7 @@
  * which is safe; keeping a value we cannot trust would not be.
  */
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, linkSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { environmentKeyOf } from "@lasercode/protocol";
 import { nodeRevisionHasher } from "@lasercode/protocol/revision-node";
@@ -58,24 +58,48 @@ function readIdentity(path: string): string | undefined {
 }
 
 /**
- * Written through a temporary file and a rename, so a torn write can never
- * leave half an identity behind. A state directory we cannot write to still
- * yields a working (process-lifetime) identity: revisions stay correct for
- * this run, and only cross-restart cache reuse is lost.
+ * Created exclusively (`wx`) and a loser re-reads the winner, so concurrent
+ * hosts never overwrite each other's identity. A state directory we cannot
+ * write to still yields a working process-lifetime identity: revisions stay
+ * correct for this run, and only cross-restart cache reuse is lost.
  */
 function createIdentity(path: string): string {
-  const id = randomUUID();
-  const temporary = `${path}.${process.pid}.tmp`;
   try {
     mkdirSync(join(path, ".."), { recursive: true });
-    writeFileSync(temporary, `${JSON.stringify({ version: FILE_VERSION, id, createdAt: new Date().toISOString() })}\n`, { mode: 0o600 });
-    renameSync(temporary, path);
   } catch {
+    return randomUUID();
+  }
+  // An invalid predecessor cannot be adopted. Remove it, then compete to
+  // create the replacement without ever overwriting another host's winner.
+  try {
+    unlinkSync(path);
+  } catch {
+    /* absent, or not ours to replace */
+  }
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const id = randomUUID();
+    const temporary = `${path}.${process.pid}.${id}.tmp`;
+    let fd: number | undefined;
     try {
+      // Finish private bytes first, then link that inode into the final name.
+      // `link` is exclusive: unlike rename it cannot replace another winner.
+      fd = openSync(temporary, "wx", 0o600);
+      writeFileSync(fd, `${JSON.stringify({ version: FILE_VERSION, id, createdAt: new Date().toISOString() })}\n`);
+      closeSync(fd);
+      fd = undefined;
+      linkSync(temporary, path);
       unlinkSync(temporary);
+      return id;
     } catch {
-      /* nothing to clean up */
+      if (fd !== undefined) try { closeSync(fd); } catch { /* already closed */ }
+      try { unlinkSync(temporary); } catch { /* best effort */ }
+      // The exclusive install lost a race: adopt its complete winner.
+      const winner = readIdentity(path);
+      if (winner) return winner;
     }
   }
-  return id;
+
+  // A state directory we cannot write still gets a process-lifetime identity.
+  return randomUUID();
 }

@@ -66,7 +66,7 @@ describe("history windows", () => {
     expect(historyWindow({ entries, leafId: "e11" }, { before, limit: 4 }, { ...scope, epoch: "worker-two" }).entries).toEqual(entries.slice(4, 8));
     expect(() => historyWindow({ entries, leafId: "e11" }, { before }, { ...scope, sessionId: "another" })).toThrow("history changed");
     expect(() => historyWindow({ entries, leafId: "e11" }, { before: "bad" }, scope)).toThrow("history changed");
-    const v1 = JSON.stringify({ path: "/project/session.jsonl", epoch: "worker-one", leaf: "e11", before: "e8" });
+    const v1 = Buffer.from(JSON.stringify({ path: "/project/session.jsonl", epoch: "worker-one", leaf: "e11", before: "e8" }), "utf8").toString("base64url");
     expect(() => historyWindow({ entries, leafId: "e11" }, { before: v1 }, scope)).toThrow("history changed");
   });
 
@@ -75,9 +75,11 @@ describe("history windows", () => {
     const page = historyWindow({ entries, leafId: "e11" }, { tail: 4 }, scope);
     expect(page.window.revision).toBe(scope.revision);
     expect(page.window.environmentKey).toBe(scope.environmentKey);
-    const cursor = JSON.parse(page.window.before!) as Record<string, unknown>;
+    expect(() => JSON.parse(page.window.before!)).toThrow();
+    const cursor = JSON.parse(Buffer.from(page.window.before!, "base64url").toString("utf8")) as Record<string, unknown>;
     expect(cursor).toEqual({ v: 2, s: scope.sessionId, l: "e11", b: "e8" });
     expect(Object.keys(cursor)).not.toContain("path");
+    expect(Object.keys(cursor)).not.toContain("epoch");
     expect(page.window.before).not.toContain(".jsonl");
     expect(page.window.before).not.toContain(scope.epoch);
   });

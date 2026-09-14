@@ -36,15 +36,23 @@ describe("a live conversation's revision", () => {
     expect(incremental.revision).toBe(sessionRevisionOf(nodeRevisionHasher, environmentTagOf(nodeRevisionHasher, ENVIRONMENT), incremental.state));
   });
 
-  it("restarts rather than extending a chain that no longer describes the conversation", () => {
-    const tracker = new SessionRevisionTracker(ENVIRONMENT);
-    const before = tracker.compute(header, history, "e2").revision;
-    // A compaction rewrote the file under the same session: same length, other
-    // records. Continuing the old chain here would hand out a stale value.
-    const rewritten = [entry("c0", null, "summary"), entry("c1", "c0", "kept"), entry("c2", "c1", "after")];
-    const after = tracker.compute(header, rewritten, "c2").revision;
-    expect(after).not.toBe(before);
-    expect(after).toBe(new SessionRevisionTracker(ENVIRONMENT).compute(header, rewritten, "c2").revision);
+  it("treats Pi-shaped compaction and branch-summary appends as replacement barriers", () => {
+    for (const type of ["compaction", "branch_summary"] as const) {
+      const tracker = new SessionRevisionTracker(ENVIRONMENT);
+      const before = tracker.compute(header, history, "e2").revision;
+      const barrier = {
+        type,
+        id: `${type}-1`,
+        parentId: "e2",
+        timestamp: "2026-01-01T00:00:01.000Z",
+        summary: "Earlier context summarized",
+        tokensBefore: 1000,
+      };
+      const appended = [...history, barrier];
+      const after = tracker.compute(header, appended, barrier.id);
+      expect(after.revision).not.toBe(before);
+      expect(tracker.classify(before, header, appended, barrier.id)).toBe("stale");
+    }
   });
 
   it("belongs to one environment, and to one session", () => {

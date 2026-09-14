@@ -8,6 +8,25 @@ const isMessage = (entry: unknown): boolean => ["message", "custom_message"].inc
 const isUser = (entry: unknown): boolean => record(entry).type === "message" && record(record(entry).message).role === "user";
 const changed = (): never => { throw new ProtocolError(ErrorCodes.InvalidParams, "This history changed. Reload the conversation and try again."); };
 
+const encodeCursor = (cursor: HistoryCursor): string => {
+  const bytes = new TextEncoder().encode(JSON.stringify(cursor));
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+};
+
+const decodeCursor = (value: string): Record<string, unknown> => {
+  if (!/^[A-Za-z0-9_-]+$/.test(value)) return changed();
+  try {
+    const base64 = value.replaceAll("-", "+").replaceAll("_", "/");
+    const binary = atob(base64.padEnd(Math.ceil(base64.length / 4) * 4, "="));
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    return record(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
+  } catch {
+    return changed();
+  }
+};
+
 /** Cursor generation. A cursor from an older shape is refused, never reinterpreted. */
 const CURSOR_VERSION = 2;
 
@@ -60,8 +79,7 @@ export function historyWindow(
   let start = 0;
   const all = "all" in request;
   if ("before" in request) {
-    let cursor: Record<string, unknown>;
-    try { cursor = record(JSON.parse(request.before)); } catch { return changed(); }
+    const cursor = decodeCursor(request.before);
     if (cursor.v !== CURSOR_VERSION || cursor.s !== scope.sessionId || !visited.has(String(cursor.l))) changed();
     end = branch.findIndex(entry => record(entry).id === cursor.b);
     if (end < 0) changed();
@@ -101,7 +119,7 @@ export function historyWindow(
       revision: scope.revision,
       environmentKey: scope.environmentKey,
       ...(start > 0 && typeof anchor === "string"
-        ? { before: JSON.stringify({ v: CURSOR_VERSION, s: scope.sessionId, l: snapshot.leafId, b: anchor } satisfies HistoryCursor) }
+        ? { before: encodeCursor({ v: CURSOR_VERSION, s: scope.sessionId, l: snapshot.leafId, b: anchor } satisfies HistoryCursor) }
         : {}),
       ...(typeof anchor === "string" ? { anchor } : {}),
       userOffset: prefix.filter(isUser).length,

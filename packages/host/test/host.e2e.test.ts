@@ -460,6 +460,8 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("host end to end", () => {
       // And the environment's own identity stayed inside the host.
       const identity = JSON.parse(readFileSync(join(base, "state", "environment.json"), "utf8")) as { id: string };
       expect(JSON.stringify(durable)).not.toContain(identity.id);
+      expect(JSON.stringify(host.logs?.query({}))).not.toContain(identity.id);
+      expect(host.resources.export().document).not.toContain(identity.id);
 
       // A conversation that is gone is not a conversation that is unchanged.
       rmSync(state.path);

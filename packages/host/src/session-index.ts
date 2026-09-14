@@ -1,32 +1,11 @@
 /**
- * A read-only index of one stored conversation (RP-9).
+ * A read-only, incrementally accounted index of one stored conversation (RP-9).
  *
- * The host already parses session JSONL without importing Pi (see
- * `catalog.ts`); this does the same for the part a revision needs: the header,
- * every entry's identity, the branch pointer, and the content fold those
- * produce. It never writes, never repairs and never migrates — the engine's own
- * loader appends a newline to an unterminated file, and this must not, because
- * the one-writer invariant is the whole reason a worker-free read is safe.
- *
- * What it deliberately does not do: keep entry bodies. A 50 MiB transcript
- * costs one pass and a few hundred kilobytes of identities, not a second copy
- * of the conversation. Growth costs only the new bytes.
- *
- * Three subtleties, each of which was a bug waiting to happen:
- *
- * - **The last line may have no newline.** The engine parses those bytes and
- *   keeps them as a real entry, so they are canonical history and are folded
- *   in — but the durable resume offset stops at the last newline, and that
- *   final entry is folded provisionally on top. When its newline finally
- *   arrives, the same entry is read once, not twice.
- * - **A torn line is not an entry.** Bytes that do not parse are excluded,
- *   exactly as the engine excludes them; a truncated JSON record cannot parse,
- *   so "parses" is the same proof the engine uses.
- * - **Nothing here treats a timestamp as content.** `(dev, ino, size, mtime,
- *   ctime)` decide only whether a *cached* index may be resumed, and every
- *   disagreement costs a full recompute rather than a stale answer.
+ * The host never repairs or migrates a session. It folds canonical entries,
+ * keeps only identities/checkpoints, and yields while doing a cold scan so a
+ * large transcript cannot monopolize host delivery.
  */
-import { closeSync, fstatSync, openSync, readSync, type Stats } from "node:fs";
+import { closeSync, fstatSync, openSync, readSync, statSync, type Stats } from "node:fs";
 import {
   RevisionFold,
   sessionRevisionOf,
@@ -36,37 +15,29 @@ import {
 } from "@lasercode/protocol";
 import { nodeRevisionHasher } from "@lasercode/protocol/revision-node";
 
-/**
- * The session format this host can read on its own. The engine rewrites an
- * older file when it opens it, and the host must never rewrite anything, so an
- * older session is routed to a worker instead of guessed at. Bumping the Pi pin
- * means checking this number against `CURRENT_SESSION_VERSION`.
- */
 export const READABLE_SESSION_VERSION = 3;
 
-/** Hard bounds. Exceeding one is reported, never absorbed by allocating more. */
 export interface SessionIndexLimits {
-  /** One record's bytes. A line larger than this is never buffered. */
   lineBytes: number;
-  /** Records in one session. */
   entries: number;
-  /** Retained identity/checkpoint bytes for one session. */
   indexBytes: number;
-  /** The file itself. */
   fileBytes: number;
-  /** How far back a cached revision can still be proved a prefix. */
   checkpoints: number;
 }
 
+/**
+ * The entry cap is intentionally below the 8 MiB accounted-identity budget.
+ * With UUID-sized ids, 32k identity rows plus the checkpoint ring account for
+ * about 6.8 MiB. Unusually long ids bind on `indexBytes` first.
+ */
 export const DEFAULT_SESSION_INDEX_LIMITS: SessionIndexLimits = {
   lineBytes: 16 * 1024 * 1024,
-  entries: 200_000,
+  entries: 32_000,
   indexBytes: 8 * 1024 * 1024,
   fileBytes: 256 * 1024 * 1024,
   checkpoints: 512,
 };
 
-/** One record's identity. Bodies are read later, by whoever needs them. */
 export interface IndexedEntry {
   id: string | undefined;
   parentId: string | null;
@@ -76,26 +47,17 @@ export interface SessionIndex {
   header: SessionRevisionHeader;
   entries: IndexedEntry[];
   leafId: string | null;
-  /** The fold over every entry, plus the leaf: what a revision is made of. */
   state: RevisionState;
-  /** States a worker-free reader could have seen, newest last. */
   checkpoints: RevisionState[];
 }
 
 export type SessionIndexReason =
-  /** No such file (deleted, moved, never written). */
   | "missing"
-  /** Present, but not a session this host recognises. */
   | "not-a-session"
-  /** An older session format the engine would rewrite on open. */
   | "unsupported-version"
-  /** A hard bound (line, entry count, index bytes, file bytes). */
   | "too-large"
-  /** The file could not be read. */
   | "unreadable"
-  /** It kept being rewritten underneath the read. */
   | "changed"
-  /** A record cannot be canonicalised, so no honest revision exists. */
   | "uncanonical";
 
 export interface SessionIndexFailure {
@@ -105,65 +67,94 @@ export interface SessionIndexFailure {
 
 export type SessionIndexResult = { ok: true; index: SessionIndex } | { ok: false; failure: SessionIndexFailure };
 
-/** What one pass over the unread bytes produced. */
 type ScanResult =
   | { ok: true; offset: number; tail?: { entry: IndexedEntry; state: RevisionState } }
   | { ok: false; failure: SessionIndexFailure };
 
-interface Cached {
-  /** Identity of the bytes this was built from; a hint, never a content proof. */
+interface Durable {
+  fold: RevisionFold;
+  entries: IndexedEntry[];
+  checkpoints: RevisionState[];
+  /** Accounted JS identity data, not process RSS or allocator capacity. */
+  bytes: number;
+}
+
+interface FileIdentity {
   dev: number;
   ino: number;
   size: number;
   mtimeMs: number;
   ctimeMs: number;
-  /** The header line's own digest, re-checked before any incremental resume. */
+}
+
+interface Cached extends FileIdentity {
   headerDigest: string;
   header: SessionRevisionHeader;
-  /** First byte after the last newline-terminated line that was folded. */
   offset: number;
-  /**
-   * The bytes immediately before `offset`, digested. Growth alone cannot tell
-   * an append from a whole-file rewrite that happens to be longer — a
-   * compaction is exactly that — so the prefix we are about to continue is
-   * re-read and checked before anything is folded onto it.
-   */
   anchor: { start: number; digest: string };
-  durable: { fold: RevisionFold; entries: IndexedEntry[]; checkpoints: RevisionState[] };
+  durable: Durable;
   bytes: number;
+  at: number;
+}
+
+interface NegativeCached extends FileIdentity {
+  failure: SessionIndexFailure;
   at: number;
 }
 
 const CHUNK = 256 * 1024;
 const HEADER_SCAN = 8192;
-/** How much of a cached prefix is re-read before it is continued. */
 const ANCHOR_BYTES = 64 * 1024;
-/** Rough retained cost of one identity row; the budget is bytes, not rows. */
 const ENTRY_OVERHEAD = 64;
+const DEFAULT_YIELD_LINES = 128;
+const RETRIES = 3;
+const NEGATIVE_REASONS = new Set<SessionIndexReason>(["too-large", "unsupported-version", "unreadable"]);
 
 const failure = (reason: SessionIndexReason, detail?: string): { ok: false; failure: SessionIndexFailure } =>
   ({ ok: false, failure: detail === undefined ? { reason } : { reason, detail } });
 
+const identityOf = (stats: Stats): FileIdentity => ({
+  dev: stats.dev,
+  ino: stats.ino,
+  size: stats.size,
+  mtimeMs: stats.mtimeMs,
+  ctimeMs: stats.ctimeMs,
+});
+
+const sameIdentity = (left: FileIdentity, right: FileIdentity): boolean =>
+  left.dev === right.dev && left.ino === right.ino && left.size === right.size &&
+  left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
+
+const entryBytes = (entry: IndexedEntry): number =>
+  ENTRY_OVERHEAD + ((entry.id?.length ?? 0) + (entry.parentId?.length ?? 0)) * 2;
+const checkpointBytes = (checkpoint: RevisionState): number =>
+  ENTRY_OVERHEAD + (checkpoint.digest.length + (checkpoint.leafId?.length ?? 0)) * 2 + 16;
+
 export interface SessionIndexCacheOptions {
   limits?: Partial<SessionIndexLimits>;
-  /** Indexed sessions retained. */
   sessions?: number;
-  /** Retained bytes across all sessions. */
   bytes?: number;
   hash?: RevisionHasher;
   now?: () => number;
-  /** Test seam for the rewrite-under-a-read check; defaults to `fstatSync`. */
   stat?: (fd: number) => Stats;
+  /** Test seam; production yields to the next event-loop turn. */
+  yield?: () => Promise<void>;
+  /** Maximum physical lines processed between cooperative yields. */
+  yieldEveryLines?: number;
 }
 
 export class SessionIndexCache {
   private readonly cache = new Map<string, Cached>();
+  private readonly negative = new Map<string, NegativeCached>();
+  private readonly inflight = new Map<string, Promise<SessionIndexResult>>();
   private readonly limits: SessionIndexLimits;
   private readonly hash: RevisionHasher;
   private readonly sessions: number;
   private readonly byteLimit: number;
   private readonly now: () => number;
   private readonly stat: (fd: number) => Stats;
+  private readonly yieldToHost: () => Promise<void>;
+  private readonly yieldEveryLines: number;
   private retained = 0;
 
   constructor(options: SessionIndexCacheOptions = {}) {
@@ -173,9 +164,11 @@ export class SessionIndexCache {
     this.byteLimit = options.bytes ?? 32 * 1024 * 1024;
     this.now = options.now ?? Date.now;
     this.stat = options.stat ?? fstatSync;
+    this.yieldToHost = options.yield ?? (() => new Promise<void>((resolve) => setImmediate(resolve)));
+    this.yieldEveryLines = Math.max(1, options.yieldEveryLines ?? DEFAULT_YIELD_LINES);
   }
 
-  /** Accounted identity bytes; diagnostics and the resource evidence. */
+  /** Accounted identity bytes, not physical retained heap. */
   get bytes(): number {
     return this.retained;
   }
@@ -187,66 +180,124 @@ export class SessionIndexCache {
   invalidate(path: string): void {
     this.retained -= this.cache.get(path)?.bytes ?? 0;
     this.cache.delete(path);
+    this.negative.delete(path);
   }
 
   clear(): void {
     this.cache.clear();
+    this.negative.clear();
     this.retained = 0;
   }
 
   /** The index for a stored conversation, or why there is none. Never writes. */
-  read(path: string): SessionIndexResult {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const result = this.attempt(path);
-      if (result.ok || result.failure.reason !== "changed") return result;
-    }
-    return failure("changed");
+  read(path: string): Promise<SessionIndexResult> {
+    const active = this.inflight.get(path);
+    if (active) return active;
+    const read = this.readWithRetries(path).finally(() => this.inflight.delete(path));
+    this.inflight.set(path, read);
+    return read;
   }
 
-  /** The revision of a stored conversation, bound to this environment. */
-  revision(path: string, environmentTag: string): { ok: true; index: SessionIndex; revision: string } | { ok: false; failure: SessionIndexFailure } {
-    const result = this.read(path);
+  async revision(path: string, environmentTag: string): Promise<{ ok: true; index: SessionIndex; revision: string } | { ok: false; failure: SessionIndexFailure }> {
+    const result = await this.read(path);
     if (!result.ok) return result;
     return { ok: true, index: result.index, revision: sessionRevisionOf(this.hash, environmentTag, result.index.state) };
   }
 
-  private attempt(path: string): SessionIndexResult {
+  private async readWithRetries(path: string): Promise<SessionIndexResult> {
+    for (let attempt = 0; attempt < RETRIES; attempt++) {
+      const result = await this.attempt(path);
+      if (result.ok || result.failure.reason !== "changed") return result;
+      if (attempt + 1 < RETRIES) await this.retryBackoff(attempt);
+    }
+    return failure("changed");
+  }
+
+  /** Changed-file retries yield and back off, and remain bounded at three. */
+  private async retryBackoff(attempt: number): Promise<void> {
+    await this.yieldToHost();
+    await new Promise<void>((resolve) => setTimeout(resolve, 1 << attempt));
+  }
+
+  private cachedNegative(path: string, identity: FileIdentity): SessionIndexResult | undefined {
+    const cached = this.negative.get(path);
+    if (!cached || !sameIdentity(cached, identity)) {
+      if (cached) this.negative.delete(path);
+      return undefined;
+    }
+    return { ok: false, failure: { ...cached.failure } };
+  }
+
+  private rememberNegative(path: string, stats: Stats, result: { ok: false; failure: SessionIndexFailure }): SessionIndexResult {
+    if (!NEGATIVE_REASONS.has(result.failure.reason)) return result;
+    // A failure and a successful index for the same path must never coexist;
+    // scan/read errors may have partially mutated a resumable durable fold.
+    this.invalidate(path);
+    this.negative.set(path, { ...identityOf(stats), failure: { ...result.failure }, at: this.now() });
+    while (this.negative.size > this.sessions) this.negative.delete(this.negative.keys().next().value!);
+    return result;
+  }
+
+  private async attempt(path: string): Promise<SessionIndexResult> {
+    // An unreadable file can still usually be stated. That identity lets the
+    // same failure return without another open/read attempt.
+    try {
+      const pathStats = statSync(path);
+      const cached = this.cachedNegative(path, identityOf(pathStats));
+      if (cached) return cached;
+    } catch {
+      // `open` below owns the person-facing missing/unreadable distinction.
+    }
+
     let fd: number;
     try {
       fd = openSync(path, "r");
     } catch (error) {
       const code = (error as { code?: string }).code;
-      return failure(code === "ENOENT" ? "missing" : "unreadable", code);
+      if (code === "ENOENT") return failure("missing", code);
+      try {
+        return this.rememberNegative(path, statSync(path), failure("unreadable", code));
+      } catch {
+        return failure("unreadable", code);
+      }
     }
+
+    let before: Stats | undefined;
     try {
-      const before = this.stat(fd);
+      before = this.stat(fd);
+      const negative = this.cachedNegative(path, identityOf(before));
+      if (negative) return negative;
       if (!before.isFile()) return failure("not-a-session", "not a file");
       if (before.size === 0) return failure("not-a-session", "empty");
-      if (before.size > this.limits.fileBytes) return failure("too-large", "file");
+      if (before.size > this.limits.fileBytes) return this.rememberNegative(path, before, failure("too-large", "file"));
 
       const headerLine = this.readHeaderLine(fd, before.size);
       if (!headerLine) return failure("not-a-session", "no header");
       const header = parseHeader(headerLine.text);
       if (!header) return failure("not-a-session", "header");
-      if ((header.version ?? 1) !== READABLE_SESSION_VERSION) return failure("unsupported-version", String(header.version ?? 1));
+      if ((header.version ?? 1) !== READABLE_SESSION_VERSION) {
+        return this.rememberNegative(path, before, failure("unsupported-version", String(header.version ?? 1)));
+      }
       const headerDigest = this.hash(headerLine.text);
 
-      const cached = this.resumable(path, before, headerDigest, fd);
-      const durable = cached
-        ? cached.durable
-        : { fold: RevisionFold.create(this.hash, header), entries: [] as IndexedEntry[], checkpoints: [] as RevisionState[] };
-      const from = cached ? cached.offset : headerLine.end;
+      const resumed = this.resumable(path, before, headerDigest, fd);
+      if (resumed?.untouched && resumed.cached.offset === before.size) {
+        return { ok: true, index: copyIndex(indexFrom(resumed.cached.header, resumed.cached.durable)) };
+      }
+      const durable = resumed?.cached.durable ?? {
+        fold: RevisionFold.create(this.hash, header),
+        entries: [],
+        checkpoints: [],
+        bytes: 0,
+      };
+      const from = resumed?.cached.offset ?? headerLine.end;
 
-      const scan = this.scan(fd, from, before.size, durable);
-      // A partly folded durable state must never be reused: it describes bytes
-      // this read could not finish proving.
+      const scan = await this.scan(fd, from, before.size, durable);
       if (!scan.ok) {
         this.invalidate(path);
-        return scan;
+        return this.rememberNegative(path, before, scan);
       }
 
-      // Appends after the snapshot are invisible to this read; a rewrite is
-      // not, and must never be folded into a half-old index.
       const after = this.stat(fd);
       if (after.ino !== before.ino || after.dev !== before.dev || after.size < before.size) {
         this.invalidate(path);
@@ -257,44 +308,41 @@ export class SessionIndexCache {
         return failure("changed", "touched");
       }
 
-      this.store(path, before, { headerDigest, header, offset: scan.offset, anchor: this.anchor(fd, headerLine.end, scan.offset), durable });
+      this.store(path, before, {
+        headerDigest,
+        header,
+        offset: scan.offset,
+        anchor: this.anchor(fd, headerLine.end, scan.offset),
+        durable,
+      });
+      this.negative.delete(path);
 
-      const entries = scan.tail ? [...durable.entries, scan.tail.entry] : durable.entries;
-      const state: RevisionState = { ...(scan.tail ? scan.tail.state : durable.fold.state), leafId: entries[entries.length - 1]?.id ?? null };
-      const checkpoints = scan.tail
-        ? [...durable.checkpoints, { ...scan.tail.state, leafId: scan.tail.entry.id ?? null }]
-        : durable.checkpoints;
-      return { ok: true, index: { header, entries, leafId: state.leafId, state, checkpoints } };
+      const index = indexFrom(header, durable, scan.tail);
+      return { ok: true, index: copyIndex(index) };
     } catch (error) {
-      return failure("unreadable", (error as { code?: string }).code ?? "read failed");
+      const result = failure("unreadable", (error as { code?: string }).code ?? "read failed");
+      return before ? this.rememberNegative(path, before, result) : result;
     } finally {
       closeSync(fd);
     }
   }
 
-  /**
-   * A cached index may only continue a file that has the same identity, the
-   * same header bytes and at least the same length. Anything else is recomputed
-   * from the start — the cost of being wrong here is a stale conversation.
-   */
-  private resumable(path: string, stats: Stats, headerDigest: string, fd: number): Cached | undefined {
+  private resumable(path: string, stats: Stats, headerDigest: string, fd: number): { cached: Cached; untouched: boolean } | undefined {
     const cached = this.cache.get(path);
     if (!cached) return undefined;
     const same = cached.dev === stats.dev && cached.ino === stats.ino && cached.headerDigest === headerDigest && stats.size >= cached.size;
-    // Same length and an untouched timestamp pair: nothing happened at all.
     const untouched = stats.size === cached.size && stats.mtimeMs === cached.mtimeMs && stats.ctimeMs === cached.ctimeMs;
-    // Rewritten in place at the same length, or a longer file whose prefix is
-    // no longer the one we folded: either way the identities we hold may
-    // describe bytes that are gone.
+    // Short-circuiting `untouched` is important: a warm no-op read does not
+    // spend another 64 KiB read merely to prove bytes whose full identity did
+    // not change.
     const continues = untouched || this.anchor(fd, cached.anchor.start, cached.offset).digest === cached.anchor.digest;
     if (!same || !continues) {
       this.invalidate(path);
       return undefined;
     }
-    return cached;
+    return { cached, untouched };
   }
 
-  /** A bounded digest of the bytes a later read would continue from. */
   private anchor(fd: number, headerEnd: number, offset: number): { start: number; digest: string } {
     const start = Math.max(headerEnd, offset - ANCHOR_BYTES);
     const length = offset - start;
@@ -315,25 +363,17 @@ export class SessionIndexCache {
     return { text: line.toString("utf8"), end: newline >= 0 ? newline + 1 : read };
   }
 
-  /**
-   * Fold `[from, size)` into the durable state, and report the unterminated
-   * final record separately so it is never counted twice.
-   */
-  private scan(
-    fd: number,
-    from: number,
-    size: number,
-    durable: { fold: RevisionFold; entries: IndexedEntry[]; checkpoints: RevisionState[] },
-  ): ScanResult {
+  private async scan(fd: number, from: number, size: number, durable: Durable): Promise<ScanResult> {
     const buffer = Buffer.alloc(CHUNK);
     let fragments: Buffer[] = [];
     let fragmentBytes = 0;
     let position = from;
     let offset = from;
+    let linesSinceYield = 0;
 
     const fold = (line: Buffer): { ok: false; failure: SessionIndexFailure } | undefined => {
       const entry = parseEntry(line.toString("utf8"));
-      if (!entry) return undefined; // a torn or blank line is not a record, exactly as the engine sees it
+      if (!entry) return undefined;
       if (durable.entries.length >= this.limits.entries) return failure("too-large", "entries");
       try {
         durable.fold.push(entry.value);
@@ -341,9 +381,14 @@ export class SessionIndexCache {
         return failure("uncanonical", error instanceof Error ? error.message : undefined);
       }
       durable.entries.push(entry.identity);
-      durable.checkpoints.push({ ...durable.fold.state, leafId: entry.identity.id ?? null });
-      if (durable.checkpoints.length > this.limits.checkpoints) durable.checkpoints.splice(0, durable.checkpoints.length - this.limits.checkpoints);
-      if (indexBytes(durable) > this.limits.indexBytes) return failure("too-large", "index");
+      durable.bytes += entryBytes(entry.identity);
+      const checkpoint = { ...durable.fold.state, leafId: entry.identity.id ?? null };
+      durable.checkpoints.push(checkpoint);
+      durable.bytes += checkpointBytes(checkpoint);
+      while (durable.checkpoints.length > this.limits.checkpoints) {
+        durable.bytes -= checkpointBytes(durable.checkpoints.shift()!);
+      }
+      if (durable.bytes > this.limits.indexBytes) return failure("too-large", "index");
       return undefined;
     };
 
@@ -365,6 +410,10 @@ export class SessionIndexCache {
         fragmentBytes = 0;
         start = newline + 1;
         offset = position - read + start;
+        if (++linesSinceYield >= this.yieldEveryLines) {
+          linesSinceYield = 0;
+          await this.yieldToHost();
+        }
       }
       if (start < read) {
         const fragment = Buffer.from(chunk.subarray(start));
@@ -374,8 +423,6 @@ export class SessionIndexCache {
       }
     }
 
-    // The engine keeps a final record that has no newline yet, so this must
-    // too — provisionally, because those bytes are still unterminated on disk.
     if (fragmentBytes > 0) {
       const entry = parseEntry(Buffer.concat(fragments, fragmentBytes).toString("utf8"));
       if (entry) {
@@ -392,19 +439,10 @@ export class SessionIndexCache {
     return { ok: true, offset };
   }
 
-  private store(path: string, stats: Stats, parts: Omit<Cached, "dev" | "ino" | "size" | "mtimeMs" | "ctimeMs" | "bytes" | "at">): void {
+  private store(path: string, stats: Stats, parts: Omit<Cached, keyof FileIdentity | "bytes" | "at">): void {
     this.invalidate(path);
-    const bytes = indexBytes(parts.durable);
-    const entry: Cached = {
-      ...parts,
-      dev: stats.dev,
-      ino: stats.ino,
-      size: stats.size,
-      mtimeMs: stats.mtimeMs,
-      ctimeMs: stats.ctimeMs,
-      bytes,
-      at: this.now(),
-    };
+    const bytes = parts.durable.bytes;
+    const entry: Cached = { ...parts, ...identityOf(stats), bytes, at: this.now() };
     this.cache.set(path, entry);
     this.retained += bytes;
     while (this.cache.size > this.sessions || this.retained > this.byteLimit) {
@@ -416,11 +454,21 @@ export class SessionIndexCache {
   }
 }
 
-function indexBytes(durable: { entries: IndexedEntry[]; checkpoints: RevisionState[] }): number {
-  let bytes = 0;
-  for (const entry of durable.entries) bytes += ENTRY_OVERHEAD + ((entry.id?.length ?? 0) + (entry.parentId?.length ?? 0)) * 2;
-  for (const checkpoint of durable.checkpoints) bytes += ENTRY_OVERHEAD + (checkpoint.digest.length + (checkpoint.leafId?.length ?? 0)) * 2;
-  return bytes;
+function indexFrom(header: SessionRevisionHeader, durable: Durable, tail?: { entry: IndexedEntry; state: RevisionState }): SessionIndex {
+  const entries = tail ? [...durable.entries, tail.entry] : durable.entries;
+  const state: RevisionState = { ...(tail ? tail.state : durable.fold.state), leafId: entries.at(-1)?.id ?? null };
+  const checkpoints = tail ? [...durable.checkpoints, { ...tail.state, leafId: tail.entry.id ?? null }] : durable.checkpoints;
+  return { header, entries, leafId: state.leafId, state, checkpoints };
+}
+
+function copyIndex(index: SessionIndex): SessionIndex {
+  return {
+    header: { ...index.header },
+    entries: index.entries.map((entry) => ({ ...entry })),
+    leafId: index.leafId,
+    state: { ...index.state },
+    checkpoints: index.checkpoints.map((checkpoint) => ({ ...checkpoint })),
+  };
 }
 
 function parseHeader(line: string): SessionRevisionHeader | undefined {
@@ -434,15 +482,12 @@ function parseHeader(line: string): SessionRevisionHeader | undefined {
   if (header?.type !== "session" || typeof header.id !== "string" || typeof header.cwd !== "string") return undefined;
   return {
     id: header.id,
-    // The header's own working directory, not the project a row is grouped
-    // under: the engine folds exactly what it wrote here.
     cwd: header.cwd,
     ...(typeof header.parentSession === "string" ? { parentSession: header.parentSession } : {}),
     ...(typeof header.version === "number" ? { version: header.version } : {}),
   };
 }
 
-/** A record the engine would keep: parseable, and not a second header line. */
 function parseEntry(line: string): { value: unknown; identity: IndexedEntry } | undefined {
   if (!line.trim()) return undefined;
   let parsed: unknown;

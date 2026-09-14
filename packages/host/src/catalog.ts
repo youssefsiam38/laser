@@ -103,14 +103,30 @@ export class SessionCatalog {
     return this.read(path);
   }
 
-  /** Known-path lookup with exactly the flat/one-project-deep list admission. */
-  getListed(path: string): CatalogEntry | null {
-    if (!path.endsWith(".jsonl")) return null;
+  /** Exactly the flat/one-project-deep path admission used by `list`, without filesystem I/O. */
+  isListedPath(path: string): boolean {
+    if (!path.endsWith(".jsonl")) return false;
     const parent = dirname(path);
-    if (parent !== this.sessionDir && dirname(parent) !== this.sessionDir) return null;
+    if (parent !== this.sessionDir && dirname(parent) !== this.sessionDir) return false;
     // Reject non-normal spellings that list() would never return.
-    if (join(parent, path.slice(parent.length + 1)) !== path) return null;
-    return this.get(path);
+    return join(parent, path.slice(parent.length + 1)) === path;
+  }
+
+  /** Known-path lookup with exactly the normal list admission. */
+  getListed(path: string): CatalogEntry | null {
+    return this.isListedPath(path) ? this.get(path) : null;
+  }
+
+  /**
+   * Ownership from an admitted transcript's bounded header only. Unlike `get`,
+   * this never scans its body and is safe as the gate before a cooperative read.
+   */
+  cwdOfListed(path: string): string | undefined {
+    if (!this.isListedPath(path)) return undefined;
+    let stats: ReturnType<typeof statSync>;
+    try { stats = statSync(path); } catch { return undefined; }
+    if (!stats.isFile()) return undefined;
+    return parseHeader(path, stats.size, stats.mtimeMs)?.entry.cwd;
   }
 
   /** The cwd recorded in a session file's header, or undefined if unreadable. */

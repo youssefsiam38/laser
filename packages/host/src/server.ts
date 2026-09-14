@@ -198,8 +198,8 @@ export class HostServer {
   readonly packages: PackageService;
   readonly setup: SetupService;
   readonly views: ViewCache;
-  /** This environment's identity (RP-9). `id` is for workers only; `key` is public. */
-  readonly environment: EnvironmentIdentity;
+  /** Raw identity is trusted spawn wiring only; it is never part of HostServer's public surface. */
+  private readonly environment: EnvironmentIdentity;
   /** Durable revisions read without starting a worker (RP-9). */
   readonly revisions: SessionRevisions;
   /** M4 log store, or undefined when it could not be opened (see `logsUnavailable`). */
@@ -253,10 +253,14 @@ export class HostServer {
   private readonly namerQualified = new Set<string>();
 
   constructor(private readonly options: HostServerOptions = {}) {
-    this.log = options.log ?? (() => {});
     this.uiDir = options.uiDir ?? defaultUiDir();
     const agentDir = options.agentDir ?? defaultAgentDir();
     const stateDir = options.stateDir ?? defaultStateDir();
+    this.environment = environmentIdentity(stateDir);
+    const log = options.log ?? (() => {});
+    // Defense in depth: even a dependency echoing worker argv cannot put the
+    // trusted identity into the host log (and therefore a log query/export).
+    this.log = (line) => log(this.privateLogText(line));
     const workspacesRoot = options.workspacesDir ?? workspacesDir(stateDir);
     const workspaces = { beam: join(workspacesRoot, "beam"), chat: join(workspacesRoot, "chat") };
     // Created here and again when a session asks for one (router.ts refuses
@@ -296,13 +300,11 @@ export class HostServer {
     }
     this.catalog = new SessionCatalog(options.sessionDir ?? defaultSessionDir(options.agentDir));
     this.views = new ViewCache(options.hydratedViews ?? 8);
-    // One identity for this environment, and the revision reader that binds to
-    // it. The raw id goes to workers and nowhere else; clients see the key.
-    this.environment = environmentIdentity(stateDir);
+    // The revision reader derives both its public key and private revision tag
+    // from the same identity input, so those fields cannot disagree.
     this.revisions = new SessionRevisions({
       index: new SessionIndexCache(),
       environmentId: this.environment.id,
-      environmentKey: this.environment.key,
     });
 
     this.attention = new AttentionTracker({
@@ -439,8 +441,9 @@ export class HostServer {
         this.broadcast(n);
       },
       onStderr: (cwd, text) => {
-        this.log(`[worker ${cwd}] ${text.trimEnd()}`);
-        this.logs?.observeWorkerStderr(cwd, text);
+        const safe = this.privateLogText(text);
+        this.log(`[worker ${cwd}] ${safe.trimEnd()}`);
+        this.logs?.observeWorkerStderr(cwd, safe);
       },
       onStatus: (info) => {
         if (info.status === "crashed") {
@@ -877,6 +880,11 @@ export class HostServer {
       if (rows.length > 0) this.notify("pi/logs/append", { entries: rows });
     }, LOG_APPEND_FLUSH_MS);
     this.logFlush.unref?.();
+  }
+
+  /** Remove the trusted revision identity before text reaches any log sink/store. */
+  private privateLogText(text: string): string {
+    return text.replaceAll(this.environment.id, "[private environment identity]");
   }
 
   /**

@@ -401,25 +401,40 @@ export class Router {
       }
 
       case "session/revision": {
-        // The owning worker wins whenever there is one: its leaf can be ahead
-        // of anything the file shows. Otherwise the stored conversation is read
-        // here, with no worker started for it (RP-9).
         const { path } = req.params;
-        const live = this.liveWorkerFor(path);
-        if (live) return live.request(req.method, req.params);
         const revisions = this.deps.revisions;
         if (!revisions) {
           throw new ProtocolError(
             ErrorCodes.RevisionUnavailable,
-            "This conversation is not open, and this host cannot read a stored conversation on its own.",
+            "This host has no configured revision identity. Restart the app and try again.",
           );
         }
-        const answer = revisions.read(path, req.params.baseRevision);
+
+        // Resolve ownership before the revision reader opens anything. An
+        // arbitrary connected path must not become a filesystem/session oracle:
+        // only a pool/run-known path or the catalog's normal admitted layout is
+        // allowed through, and its project/workspace guard runs first.
+        const knownCwd = this.pool.cwdOfSession(path) ?? this.deps.runs?.projectCwdOf(path);
+        const listedCwd = knownCwd === undefined ? this.catalog.cwdOfListed(path) : undefined;
+        const cwd = knownCwd ?? (listedCwd ? projectRootOf(listedCwd) : undefined);
+        if (!cwd) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation is not stored here.");
+        if (!this.isWorkspace(cwd)) this.deps.projects.assertProject(cwd);
+
+        // The owning worker wins whenever there is one: its leaf can be ahead
+        // of anything the file shows. Its answer still has to belong to this
+        // host's environment; an unconfigured/stale worker is never trusted.
+        const live = this.liveWorkerFor(path);
+        if (live) return revisions.validateLive(await live.request(req.method, req.params));
+        if (!existsSync(path)) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation is no longer stored here.");
+
+        const answer = await revisions.read(path, req.params.baseRevision);
         if (answer.kind === "answer") return answer.result;
         if (answer.kind === "refuse") throw answer.error;
-        // Only the engine can read this one (an older stored format, a file
-        // past a hard bound, one being rewritten): ask it.
-        return (await this.workerFor(path)).request(req.method, req.params);
+        // Pi may still understand unsupported/large/changing content, and can
+        // also give the authoritative error for parser/unreadable cases once
+        // normal path ownership has proved this is its transcript.
+        const forwarded = await (await this.workerFor(path)).request(req.method, req.params);
+        return revisions.validateLive(forwarded);
       }
 
       case "pi/session/move":
@@ -436,7 +451,8 @@ export class Router {
           // A page is not a full ViewCache snapshot. The serving worker owns
           // the actual branch pointer and its matching live-update watermark.
           const worker = await this.workerFor(path);
-          return worker.request(req.method, req.params);
+          const result = await worker.request(req.method, req.params);
+          return this.deps.revisions ? this.deps.revisions.validateWindow(result) : result;
         }
         const cached = this.deps.views.get(path);
         // The leaf travels with the entries: a navigation moves it without
@@ -1041,7 +1057,8 @@ export class Router {
         const path = (req.params as { path: string }).path;
         const loading = req.method === "session/load";
         const worker = await this.workerFor(path, !loading);
-        const result = await worker.request(req.method, req.params);
+        const forwarded = await worker.request(req.method, req.params);
+        const result = loading && this.deps.revisions ? this.deps.revisions.validateLoad(forwarded) : forwarded;
         const cwd = this.pool.cwdOfSession(path) ?? this.cwdOf(path);
         if (loading && cwd) this.pool.bindSession(path, cwd);
         if (loading && cwd && !this.isWorkspace(cwd) && !this.isWorkspaceSession(path)) this.deps.projects.touch(cwd);

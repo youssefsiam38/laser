@@ -125,6 +125,8 @@ export function sessionHeaderToken(header: SessionRevisionHeader): string {
 export interface RevisionFoldState {
   digest: string;
   count: number;
+  /** Number of compaction/branch-summary barriers folded so far. Derived, not part of the token. */
+  barrierCount?: number;
 }
 
 /** The fold plus the branch pointer: everything a revision is computed from. */
@@ -138,24 +140,27 @@ export class RevisionFold {
     private readonly hash: RevisionHasher,
     private digestValue: string,
     private countValue: number,
+    private barrierCountValue: number,
   ) {}
 
   static create(hash: RevisionHasher, header: SessionRevisionHeader): RevisionFold {
-    return new RevisionFold(hash, hash(`${SESSION_REVISION_VERSION}|h|${sessionHeaderToken(header)}`), 0);
+    return new RevisionFold(hash, hash(`${SESSION_REVISION_VERSION}|h|${sessionHeaderToken(header)}`), 0, 0);
   }
 
   /** Continue a fold captured earlier (a cached index, a live tracker). */
   static resume(hash: RevisionHasher, state: RevisionFoldState): RevisionFold {
-    return new RevisionFold(hash, state.digest, state.count);
+    return new RevisionFold(hash, state.digest, state.count, state.barrierCount ?? 0);
   }
 
   push(entry: unknown): void {
     this.digestValue = this.hash(`${this.digestValue}|e|${canonicalJson(entry)}`);
     this.countValue += 1;
+    const type = entry && typeof entry === "object" ? (entry as { type?: unknown }).type : undefined;
+    if (type === "compaction" || type === "branch_summary") this.barrierCountValue += 1;
   }
 
   get state(): RevisionFoldState {
-    return { digest: this.digestValue, count: this.countValue };
+    return { digest: this.digestValue, count: this.countValue, barrierCount: this.barrierCountValue };
   }
 }
 
@@ -223,6 +228,10 @@ export function classifyBaseRevision(options: {
   for (const candidate of options.candidates) {
     if (candidate.count > current.count) continue;
     if (sessionRevisionOf(hash, environmentTag, candidate) !== baseRevision) continue;
+    // Pi appends compaction and branch-summary records. Even when the old leaf
+    // remains an ancestor, content before the barrier is represented by the
+    // summary and cannot be merged as an ordinary suffix.
+    if ((candidate.barrierCount ?? 0) !== (current.barrierCount ?? 0)) return "stale";
     return options.onBranch(candidate.leafId) ? "prefix" : "stale";
   }
   return "stale";

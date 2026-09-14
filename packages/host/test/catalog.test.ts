@@ -100,11 +100,14 @@ describe("SessionCatalog", () => {
     const catalog = new SessionCatalog(dir);
     const spy = vi.spyOn(catalog, "list");
     expect(catalog.getListed(path)?.id).toBe("s");
+    expect(catalog.cwdOfListed(path)).toBe("/project");
     const outside = join(dir, "project", "deep", "s.jsonl");
     mkdirSync(join(dir, "project", "deep"));
     writeFileSync(outside, JSON.stringify({ type: "session", id: "outside", cwd: "/project" }) + "\n");
     expect(catalog.getListed(outside)).toBeNull();
+    expect(catalog.cwdOfListed(outside)).toBeUndefined();
     expect(catalog.getListed(join(dir, "..", "outside.jsonl"))).toBeNull();
+    expect(catalog.cwdOfListed(join(dir, "..", "outside.jsonl"))).toBeUndefined();
     rmSync(path);
     expect(catalog.getListed(path)).toBeNull();
     expect(spy).not.toHaveBeenCalled();

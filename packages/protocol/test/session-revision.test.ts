@@ -131,6 +131,14 @@ describe("what a cached revision is worth", () => {
     expect(classify(cached, edited, ["e0", "e1", "e2"])).toBe("stale");
   });
 
+  it("refuses a suffix containing a Pi compaction or branch-summary barrier", () => {
+    const cached = revisionOf(entries);
+    for (const type of ["compaction", "branch_summary"] as const) {
+      const barrier = { type, id: `${type}-1`, parentId: "e2", summary: "Earlier context summarized" };
+      expect(classify(cached, [...entries, barrier], ["e0", "e1", "e2", barrier.id])).toBe("stale");
+    }
+  });
+
   it("refuses a base on an abandoned branch, and one from another environment", () => {
     const cached = revisionOf(entries.slice(0, 2));
     expect(classify(cached, entries, ["e0", "e2"])).toBe("stale");

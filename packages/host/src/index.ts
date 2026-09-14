@@ -36,7 +36,6 @@ export {
   type SessionIndexResult,
 } from "./session-index.js";
 export { SessionRevisions, type RevisionAnswer, type SessionRevisionsOptions } from "./session-revision.js";
-export { environmentIdentity, type EnvironmentIdentity } from "./environment-identity.js";
 export {
   canonical,
   trustReasons,

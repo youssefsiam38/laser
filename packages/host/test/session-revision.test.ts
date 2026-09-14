@@ -4,7 +4,8 @@
  * and the two things that must never happen — a worker started for a read, and
  * the environment's raw identity leaving the host.
  */
-import { ErrorCodes, PRODUCT_NAME, isEnvironmentKey, isSessionRevision } from "@lasercode/protocol";
+import { ErrorCodes, PRODUCT_NAME, environmentKeyOf, environmentTagOf, isEnvironmentKey, isSessionRevision, sessionRevisionOf } from "@lasercode/protocol";
+import { nodeRevisionHasher } from "@lasercode/protocol/revision-node";
 import { describe, expect, it, vi } from "vitest";
 import { appendFileSync, chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,6 +23,8 @@ import type { WorkerPool } from "../src/worker-pool.js";
 
 const CWD = "/projects/a";
 const ENVIRONMENT = "11111111-2222-3333-4444-555555555555";
+const ENVIRONMENT_KEY = environmentKeyOf(nodeRevisionHasher, ENVIRONMENT);
+const LIVE_REVISION = sessionRevisionOf(nodeRevisionHasher, environmentTagOf(nodeRevisionHasher, ENVIRONMENT), { digest: "live", count: 0, leafId: null });
 
 const header = (id = "session-1", version = 3) => JSON.stringify({ type: "session", version, id, timestamp: "2026-01-01T00:00:00.000Z", cwd: CWD });
 const message = (id: string, parentId: string | null, text: string) =>
@@ -38,22 +41,21 @@ function revisions(options: { index?: SessionIndexCache } = {}): SessionRevision
   return new SessionRevisions({
     index: options.index ?? new SessionIndexCache(),
     environmentId: ENVIRONMENT,
-    environmentKey: environmentIdentity(mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-envkey-`))).key,
   });
 }
 
-const answer = (service: SessionRevisions, path: string, base?: string) => {
-  const result = service.read(path, base);
+const answer = async (service: SessionRevisions, path: string, base?: string) => {
+  const result = await service.read(path, base);
   if (result.kind !== "answer") throw new Error(`expected an answer, got ${result.kind}`);
   return result.result;
 };
 
 describe("the host's own answer", () => {
-  it("reads a stored conversation, and says a worker did not", () => {
+  it("reads a stored conversation, and says a worker did not", async () => {
     const { path, cleanup } = fixture();
     try {
       const service = revisions();
-      const result = answer(service, path);
+      const result = await answer(service, path);
       expect(result.authority).toBe("durable");
       expect(isSessionRevision(result.revision)).toBe(true);
       expect(isEnvironmentKey(result.environmentKey)).toBe(true);
@@ -63,50 +65,51 @@ describe("the host's own answer", () => {
     }
   });
 
-  it("proves an append is an extension of a cached view, and refuses everything else", () => {
+  it("proves an append is an extension of a cached view, and refuses everything else", async () => {
     const { path, cleanup } = fixture();
     try {
       const service = revisions();
-      const cached = answer(service, path).revision;
-      expect(answer(service, path, cached).base).toBe("current");
+      const cached = (await answer(service, path)).revision;
+      expect((await answer(service, path, cached)).base).toBe("current");
 
       appendFileSync(path, `${message("e2", "e1", "three")}\n`);
-      const grown = answer(service, path, cached);
+      const grown = await answer(service, path, cached);
       expect(grown.base).toBe("prefix");
       expect(grown.revision).not.toBe(cached);
 
       // An edit that abandons the cached leaf: same file, different branch.
       appendFileSync(path, `${message("edit", "e0", "two, again")}\n`);
-      expect(answer(service, path, cached).base).toBe("stale");
+      expect((await answer(service, path, cached)).base).toBe("stale");
       // And a revision that was never ours at all.
-      expect(answer(service, path, "r1.ZZZZZZZZ.ZZZZZZZZZZZZZZZZZZZZZZZZZZZ").base).toBe("stale");
+      expect((await answer(service, path, "r1.ZZZZZZZZ.ZZZZZZZZZZZZZZZZZZZZZZZZZZZ")).base).toBe("stale");
     } finally {
       cleanup();
     }
   });
 
-  it("treats a compaction as a replacement, never as a suffix", () => {
-    const { path, cleanup } = fixture();
-    try {
-      const service = revisions();
-      const cached = answer(service, path).revision;
-      // A compaction rewrites the stored conversation in place.
-      writeFileSync(path, [header(), message("c0", null, "summary"), message("e2", "c0", "after")].join("\n") + "\n");
-      const after = answer(service, path, cached);
-      expect(after.base).toBe("stale");
-      expect(after.revision).not.toBe(cached);
-    } finally {
-      cleanup();
+  it("treats Pi-shaped compaction and branch-summary appends as replacement barriers", async () => {
+    for (const type of ["compaction", "branch_summary"] as const) {
+      const { path, cleanup } = fixture();
+      try {
+        const service = revisions();
+        const cached = (await answer(service, path)).revision;
+        appendFileSync(path, `${JSON.stringify({ type, id: `${type}-1`, parentId: "e1", timestamp: "2026-01-01T00:00:02.000Z", summary: "Earlier context summarized", tokensBefore: 1000 })}\n`);
+        const after = await answer(service, path, cached);
+        expect(after.base).toBe("stale");
+        expect(after.revision).not.toBe(cached);
+      } finally {
+        cleanup();
+      }
     }
   });
 
-  it("says a deleted conversation is gone, not that a cached one is still valid", () => {
+  it("says a deleted conversation is gone, not that a cached one is still valid", async () => {
     const { path, cleanup } = fixture();
     try {
       const service = revisions();
-      const cached = answer(service, path).revision;
+      const cached = (await answer(service, path)).revision;
       rmSync(path);
-      const result = service.read(path, cached);
+      const result = await service.read(path, cached);
       expect(result.kind).toBe("refuse");
       if (result.kind !== "refuse") throw new Error("unreachable");
       expect(result.error.code).toBe(ErrorCodes.SessionNotFound);
@@ -115,10 +118,10 @@ describe("the host's own answer", () => {
     }
   });
 
-  it("hands an older stored format to the engine rather than guessing at it", () => {
+  it("hands an older stored format to the engine rather than guessing at it", async () => {
     const { path, cleanup } = fixture([header("session-old", 2), message("e0", null, "one")]);
     try {
-      const result = revisions().read(path);
+      const result = await revisions().read(path);
       expect(result.kind).toBe("route-live");
       if (result.kind !== "route-live") throw new Error("unreachable");
       expect(result.reason.reason).toBe("unsupported-version");
@@ -172,13 +175,14 @@ describe("this environment's identity", () => {
 });
 
 describe("routing a revision request", () => {
-  function harness(options: { open?: string[]; revisions?: SessionRevisions | undefined; path: string } ) {
+  function harness(options: { open?: string[]; revisions?: SessionRevisions | undefined; path: string; liveResult?: unknown; spawnedResult?: unknown } ) {
     const dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-revision-router-`));
     const rows: SessionSummary[] = [{ path: options.path, id: "session-1", cwd: CWD, createdAt: "2026-06-01T00:00:00.000Z", modifiedAt: "2026-06-01T00:00:00.000Z", messageCount: 2 }];
     const catalog = {
       list: () => rows.map((row) => ({ ...row, size: 1 })),
       get: (path: string) => rows.find((row) => row.path === path),
-      getListed: (path: string) => rows.find((row) => row.path === path),
+      getListed: vi.fn((path: string) => rows.find((row) => row.path === path)),
+      cwdOfListed: vi.fn((path: string) => rows.find((row) => row.path === path)?.cwd),
       cwdOf: (path: string) => rows.find((row) => row.path === path)?.cwd,
       cwdCounts: () => new Map<string, number>(),
       invalidate: () => {},
@@ -186,12 +190,12 @@ describe("routing a revision request", () => {
 
     const workerRequests: Array<{ method: string; params: unknown }> = [];
     const owner = options.open?.includes(options.path)
-      ? { request: async (method: string, params: unknown) => { workerRequests.push({ method, params }); return { revision: "r1.LLLLLLLL.LLLLLLLLLLLLLLLLLLLLLLLLLLL", environmentKey: "e1.LLLLLLLLLLLLLLLLLLLLLL", authority: "live" }; } }
+      ? { request: async (method: string, params: unknown) => { workerRequests.push({ method, params }); return options.liveResult ?? { revision: LIVE_REVISION, environmentKey: ENVIRONMENT_KEY, authority: "live" }; } }
       : undefined;
     const spawned = vi.fn(async () => ({
       request: async (method: string, params: unknown) => {
         workerRequests.push({ method, params });
-        return { revision: "r1.SSSSSSSS.SSSSSSSSSSSSSSSSSSSSSSSSSSS", environmentKey: "e1.SSSSSSSSSSSSSSSSSSSSSS", authority: "live" };
+        return options.spawnedResult ?? { revision: LIVE_REVISION, environmentKey: ENVIRONMENT_KEY, authority: "live" };
       },
     }));
     const pool = {
@@ -208,6 +212,7 @@ describe("routing a revision request", () => {
     const router = new Router(pool, catalog, { attention, projects, views: new ViewCache(2), revisions: options.revisions });
     return {
       router,
+      catalog,
       spawned,
       workerRequests,
       cleanup: () => {
@@ -263,14 +268,80 @@ describe("routing a revision request", () => {
     }
   });
 
-  it("says so plainly when this host cannot read stored conversations at all", async () => {
+  it.each(["not-a-session", "unreadable"] as const)("routes a path-gated %s parser result to Pi", async (reason) => {
     const { path, cleanup } = fixture();
-    const h = harness({ path, revisions: undefined });
+    const index = { read: async () => ({ ok: false as const, failure: { reason } }), invalidate: () => {}, bytes: 0, paths: () => [] } as unknown as SessionIndexCache;
+    const h = harness({ path, revisions: revisions({ index }) });
+    try {
+      const response = await request(h.router, path) as { result: { authority: string } };
+      expect(response.result.authority).toBe("live");
+      expect(h.spawned).toHaveBeenCalledTimes(1);
+    } finally {
+      h.cleanup();
+      cleanup();
+    }
+  });
+
+  it("refuses a host without a revision identity, even when a worker is already open", async () => {
+    const { path, cleanup } = fixture();
+    const h = harness({ path, open: [path], revisions: undefined });
     try {
       const response = await request(h.router, path) as { error: { code: number; message: string } };
       expect(response.error.code).toBe(ErrorCodes.RevisionUnavailable);
-      expect(response.error.message).toMatch(/not open/);
+      expect(response.error.message).toMatch(/no configured revision identity/);
       expect(h.spawned).not.toHaveBeenCalled();
+      expect(h.workerRequests).toEqual([]);
+    } finally {
+      h.cleanup();
+      cleanup();
+    }
+  });
+
+  it.each([
+    ["another environment key", { revision: LIVE_REVISION, environmentKey: "e1.ZZZZZZZZZZZZZZZZZZZZZZ", authority: "live" }],
+    ["another environment tag", { revision: "r1.ZZZZZZZZ.ZZZZZZZZZZZZZZZZZZZZZZZZZZZ", environmentKey: ENVIRONMENT_KEY, authority: "live" }],
+    ["an invalid shape", { revision: "not-a-revision", environmentKey: ENVIRONMENT_KEY, authority: "live" }],
+  ])("refuses a live answer carrying %s", async (_label, liveResult) => {
+    const { path, cleanup } = fixture();
+    const h = harness({ path, open: [path], revisions: revisions(), liveResult });
+    try {
+      const response = await request(h.router, path) as { error: { code: number } };
+      expect(response.error.code).toBe(ErrorCodes.RevisionUnavailable);
+      expect(h.spawned).not.toHaveBeenCalled();
+    } finally {
+      h.cleanup();
+      cleanup();
+    }
+  });
+
+  it.each([
+    ["a history window", "pi/session/entries", { path: "", window: { tail: 2 } }, { entries: [], leafId: null, window: { revision: LIVE_REVISION, environmentKey: "e1.ZZZZZZZZZZZZZZZZZZZZZZ" } }],
+    ["a session load", "session/load", { path: "" }, { state: {}, revision: LIVE_REVISION, environmentKey: "e1.ZZZZZZZZZZZZZZZZZZZZZZ" }],
+  ] as const)("refuses %s forwarded with another environment key", async (_label, method, rawParams, spawnedResult) => {
+    const { path, cleanup } = fixture();
+    const h = harness({ path, open: [path], revisions: revisions(), spawnedResult });
+    try {
+      const response = await h.router.handle({ jsonrpc: "2.0", id: 1, method, params: { ...rawParams, path } }) as { error: { code: number } };
+      expect(response.error.code).toBe(ErrorCodes.RevisionUnavailable);
+    } finally {
+      h.cleanup();
+      cleanup();
+    }
+  });
+
+  it("rejects an unknown or out-of-scope path before a revision read or worker spawn", async () => {
+    const { path, cleanup } = fixture();
+    const service = revisions();
+    const read = vi.spyOn(service, "read");
+    const h = harness({ path, revisions: service });
+    try {
+      const response = await request(h.router, join(path, "..", "..", "private.jsonl")) as { error: { code: number } };
+      expect(response.error.code).toBe(ErrorCodes.SessionNotFound);
+      expect(read).not.toHaveBeenCalled();
+      expect(h.catalog.getListed).not.toHaveBeenCalled();
+      expect(h.catalog.cwdOfListed).toHaveBeenCalledTimes(1);
+      expect(h.spawned).not.toHaveBeenCalled();
+      expect(h.workerRequests).toEqual([]);
     } finally {
       h.cleanup();
       cleanup();
@@ -281,7 +352,7 @@ describe("routing a revision request", () => {
     const { path, cleanup } = fixture();
     const dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-env-`));
     const identity = environmentIdentity(dir);
-    const service = new SessionRevisions({ index: new SessionIndexCache(), environmentId: identity.id, environmentKey: identity.key });
+    const service = new SessionRevisions({ index: new SessionIndexCache(), environmentId: identity.id });
     const h = harness({ path, revisions: service });
     try {
       const response = await request(h.router, path, "r1.ZZZZZZZZ.ZZZZZZZZZZZZZZZZZZZZZZZZZZZ");
