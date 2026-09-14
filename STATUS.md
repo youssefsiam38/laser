@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-14T10:44:25Z · orchestrator `01a09ea5` · HEAD: 67cb8ff
-**Current focus:** 0.6.4 fixes are complete; final review blockers are corrected and M16-T54 remains open only for the authorized public release.
+**Last updated:** 2026-09-14T11:10:59Z · orchestrator `01a09ea5` · HEAD: c4ee554
+**Current focus:** 0.6.4 is public and verified. M17-T1 (the conversation owns the window) is next and alone.
 
 | Milestone | State |
 | --- | --- |
@@ -25,8 +25,8 @@
 | M16 Conversation experience | in-progress |
 | MX Cross-cutting | in-progress |
 
-**Blockers:** none. The invalid inherited `GITHUB_TOKEN` is bypassed with the valid keyring account; local `pnpm verify` has only the known machine-specific `runtime-env.test.ts:76` npm-layout failure.
-**Next up:** publish 0.6.4 from the reviewed source; then M17-T1; M16-T52/T53 remain review follow-ups. Q-9 awaits the person.
-**Recently done:** M16-T55 stream follows explicit Send; M16-T56 Projects Bash setup; M16-T57 terminal compaction state; M16-T58 owned agent endings and transient recovery; M16-T54 scroll fix committed (`51442d6`).
+**Blockers:** none. MCP5 stays on its branch (D-240).
+**Next up:** M17-T1; then M17-T3/T4/T5; M16-T52/T53 remain 0.6.3 review follow-ups. Q-9 awaits the person.
+**Recently done:** M16-T54 release 0.6.4 (`c4ee554`); M16-T55 stream follows explicit Send; M16-T56 Projects Bash setup; M16-T57 terminal compaction state; M16-T58 owned agent endings and transient recovery.
 
 Ownership: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`.
