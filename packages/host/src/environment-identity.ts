@@ -18,17 +18,19 @@
  * - `key` — the public, opaque, irreversible 132-bit value clients key their
  *   caches by. RP-13's environment descriptor will carry this same key.
  *
- * A file we cannot read or parse is replaced. That invalidates device caches,
- * which is safe; keeping a value we cannot trust would not be.
+ * A file we cannot read or parse is replaced under an exclusive lock. That
+ * invalidates device caches, which is safe; keeping a value we cannot trust
+ * would not be.
  */
 import { randomUUID } from "node:crypto";
-import { closeSync, linkSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { environmentKeyOf } from "@lasercode/protocol";
 import { nodeRevisionHasher } from "@lasercode/protocol/revision-node";
 
 const FILE_NAME = "environment.json";
 const FILE_VERSION = 1;
+const LOCK_ATTEMPTS = 8;
 /** A UUID and nothing else; anything shorter is not an identity we minted. */
 const ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -39,16 +41,27 @@ export interface EnvironmentIdentity {
   readonly key: string;
 }
 
-export function environmentIdentity(stateDir: string): EnvironmentIdentity {
+/** Internal state-machine seam; this module is not part of the host package's public exports. */
+export interface EnvironmentIdentityFiles {
+  prepare(path: string): boolean;
+  read(path: string): string | undefined;
+  acquire(path: string): { kind: "acquired"; token: unknown } | { kind: "contended" } | { kind: "unavailable" };
+  install(path: string): string | undefined;
+  release(path: string, token: unknown): void;
+  wait(attempt: number): void;
+  transientId(): string;
+}
+
+export function environmentIdentity(stateDir: string, files: EnvironmentIdentityFiles = nodeIdentityFiles): EnvironmentIdentity {
   const path = join(stateDir, FILE_NAME);
-  const existing = readIdentity(path);
-  const id = existing ?? createIdentity(path);
+  const existing = files.read(path);
+  const id = existing ?? createIdentity(path, files);
   return { id, key: environmentKeyOf(nodeRevisionHasher, id) };
 }
 
-function readIdentity(path: string): string | undefined {
+function parseIdentity(text: string): string | undefined {
   try {
-    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+    const parsed: unknown = JSON.parse(text);
     const record = parsed as { version?: unknown; id?: unknown } | null;
     if (record?.version !== FILE_VERSION || typeof record.id !== "string" || !ID_PATTERN.test(record.id)) return undefined;
     return record.id;
@@ -58,48 +71,96 @@ function readIdentity(path: string): string | undefined {
 }
 
 /**
- * Created exclusively (`wx`) and a loser re-reads the winner, so concurrent
- * hosts never overwrite each other's identity. A state directory we cannot
- * write to still yields a working process-lifetime identity: revisions stay
- * correct for this run, and only cross-restart cache reuse is lost.
+ * Every mutation happens while holding `<path>.lock`. A contender never
+ * unlinks `path`: after acquiring the lock it re-reads, so a winner installed
+ * between the initial read and lock acquisition is adopted rather than erased.
  */
-function createIdentity(path: string): string {
-  try {
-    mkdirSync(join(path, ".."), { recursive: true });
-  } catch {
-    return randomUUID();
-  }
-  // An invalid predecessor cannot be adopted. Remove it, then compete to
-  // create the replacement without ever overwriting another host's winner.
-  try {
-    unlinkSync(path);
-  } catch {
-    /* absent, or not ours to replace */
+function createIdentity(path: string, files: EnvironmentIdentityFiles): string {
+  if (!files.prepare(path)) return files.transientId();
+  const lockPath = `${path}.lock`;
+  for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt++) {
+    const lock = files.acquire(lockPath);
+    if (lock.kind === "unavailable") return files.transientId();
+    if (lock.kind === "contended") {
+      // Installation is a completed rename, so a valid value is safe to adopt
+      // even just before its owner removes the lock.
+      const winner = files.read(path);
+      if (winner) return winner;
+      files.wait(attempt);
+      continue;
+    }
+
+    try {
+      // This is the decisive re-read under exclusive ownership. Only an absent
+      // or still-invalid predecessor reaches `install`, which may replace it.
+      const winner = files.read(path);
+      if (winner) return winner;
+      const installed = files.install(path);
+      if (installed) return installed;
+    } finally {
+      files.release(lockPath, lock.token);
+    }
+    files.wait(attempt);
   }
 
-  for (let attempt = 0; attempt < 3; attempt++) {
+  // A contended/unwritable state directory still gets a process-lifetime id.
+  return files.transientId();
+}
+
+const sleep = (milliseconds: number): void => {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+};
+
+const nodeIdentityFiles: EnvironmentIdentityFiles = {
+  prepare(path) {
+    try {
+      mkdirSync(join(path, ".."), { recursive: true });
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  read(path) {
+    try {
+      return parseIdentity(readFileSync(path, "utf8"));
+    } catch {
+      return undefined;
+    }
+  },
+  acquire(path) {
+    try {
+      return { kind: "acquired", token: openSync(path, "wx", 0o600) };
+    } catch (error) {
+      return (error as { code?: string }).code === "EEXIST" ? { kind: "contended" } : { kind: "unavailable" };
+    }
+  },
+  install(path) {
     const id = randomUUID();
     const temporary = `${path}.${process.pid}.${id}.tmp`;
     let fd: number | undefined;
     try {
-      // Finish private bytes first, then link that inode into the final name.
-      // `link` is exclusive: unlike rename it cannot replace another winner.
+      // The final name sees complete bytes in one rename. The lock, not rename,
+      // supplies exclusivity; rename is used only while that lock is held.
       fd = openSync(temporary, "wx", 0o600);
       writeFileSync(fd, `${JSON.stringify({ version: FILE_VERSION, id, createdAt: new Date().toISOString() })}\n`);
       closeSync(fd);
       fd = undefined;
-      linkSync(temporary, path);
-      unlinkSync(temporary);
+      renameSync(temporary, path);
       return id;
     } catch {
       if (fd !== undefined) try { closeSync(fd); } catch { /* already closed */ }
-      try { unlinkSync(temporary); } catch { /* best effort */ }
-      // The exclusive install lost a race: adopt its complete winner.
-      const winner = readIdentity(path);
-      if (winner) return winner;
+      return undefined;
+    } finally {
+      try { unlinkSync(temporary); } catch { /* renamed or best-effort cleanup */ }
     }
-  }
-
-  // A state directory we cannot write still gets a process-lifetime identity.
-  return randomUUID();
-}
+  },
+  release(path, token) {
+    try { closeSync(token as number); } finally {
+      try { unlinkSync(path); } catch { /* best-effort lock cleanup */ }
+    }
+  },
+  wait(attempt) {
+    sleep(Math.min(4, 1 << attempt));
+  },
+  transientId: randomUUID,
+};

@@ -254,6 +254,54 @@ describe("hard bounds", () => {
     }
   });
 
+  it("uses true LRU recency under both session-count and accounted-byte bounds", async () => {
+    const { dir, cleanup } = workspace();
+    try {
+      const [a, b, c] = ["a", "b", "c"].map((name) =>
+        session(dir, `${name}.jsonl`, [header(`session-${name}`), message("e0", null, "one")]));
+      const probe = new SessionIndexCache();
+      await probe.read(a!);
+      const oneSessionBytes = probe.bytes;
+      expect(oneSessionBytes).toBeGreaterThan(0);
+
+      for (const cache of [
+        new SessionIndexCache({ sessions: 2 }),
+        new SessionIndexCache({ sessions: 10, bytes: oneSessionBytes * 2 }),
+      ]) {
+        await cache.read(a!);
+        await cache.read(b!);
+        const retained = cache.bytes;
+        await cache.read(a!); // A is newest; B is now the eviction candidate.
+        expect(cache.bytes).toBe(retained);
+        await cache.read(c!);
+        expect(cache.paths()).toEqual([a, c]);
+        expect(cache.bytes).toBe(retained);
+      }
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("touches unchanged negative failures before count-bound eviction", async () => {
+    const { dir, cleanup } = workspace();
+    try {
+      const [a, b, c] = ["a", "b", "c"].map((name) =>
+        session(dir, `${name}.jsonl`, [header(`session-${name}`, 2), message("e0", null, "one")]));
+      let stats = 0;
+      const cache = new SessionIndexCache({ sessions: 2, stat: (fd) => { stats++; return fstatSync(fd); } });
+      await cache.read(a!);
+      await cache.read(b!);
+      await cache.read(a!); // Touch A, so inserting C must evict B.
+      await cache.read(c!);
+      await cache.read(a!);
+      expect(stats).toBe(3);
+      await cache.read(b!);
+      expect(stats).toBe(4);
+    } finally {
+      cleanup();
+    }
+  });
+
   it("returns copies rather than aliases into its cached arrays", async () => {
     const { dir, cleanup } = workspace();
     try {

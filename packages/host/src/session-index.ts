@@ -219,12 +219,21 @@ export class SessionIndexCache {
     await new Promise<void>((resolve) => setTimeout(resolve, 1 << attempt));
   }
 
+  /** One recency policy for both successful and negative cache hits. */
+  private touch<T extends { at: number }>(cache: Map<string, T>, path: string, value: T): T {
+    cache.delete(path);
+    value.at = this.now();
+    cache.set(path, value);
+    return value;
+  }
+
   private cachedNegative(path: string, identity: FileIdentity): SessionIndexResult | undefined {
     const cached = this.negative.get(path);
     if (!cached || !sameIdentity(cached, identity)) {
       if (cached) this.negative.delete(path);
       return undefined;
     }
+    this.touch(this.negative, path, cached);
     return { ok: false, failure: { ...cached.failure } };
   }
 
@@ -340,7 +349,7 @@ export class SessionIndexCache {
       this.invalidate(path);
       return undefined;
     }
-    return { cached, untouched };
+    return { cached: this.touch(this.cache, path, cached), untouched };
   }
 
   private anchor(fd: number, headerEnd: number, offset: number): { start: number; digest: string } {

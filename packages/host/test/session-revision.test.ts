@@ -13,7 +13,7 @@ import { join } from "node:path";
 import type { SessionSummary } from "@lasercode/protocol";
 import { AttentionTracker } from "../src/attention.js";
 import type { SessionCatalog } from "../src/catalog.js";
-import { environmentIdentity } from "../src/environment-identity.js";
+import { environmentIdentity, type EnvironmentIdentityFiles } from "../src/environment-identity.js";
 import { ProjectRegistry } from "../src/projects.js";
 import { Router } from "../src/router.js";
 import { SessionIndexCache } from "../src/session-index.js";
@@ -158,6 +158,62 @@ describe("this environment's identity", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("adopts a winner installed after its initial read instead of replacing it", () => {
+    const winner = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const contender = "11111111-2222-4333-8444-555555555555";
+    const calls: string[] = [];
+    let reads = 0;
+    const files: EnvironmentIdentityFiles = {
+      prepare: () => { calls.push("prepare"); return true; },
+      read: () => { calls.push("read"); return ++reads === 1 ? undefined : winner; },
+      acquire: () => { calls.push("acquire"); return { kind: "acquired", token: "A" }; },
+      install: () => { calls.push("install"); return contender; },
+      release: () => { calls.push("release"); },
+      wait: () => { calls.push("wait"); },
+      transientId: () => contender,
+    };
+
+    expect(environmentIdentity("/state", files).id).toBe(winner);
+    expect(calls).toEqual(["read", "prepare", "acquire", "read", "release"]);
+    expect(calls).not.toContain("install");
+  });
+
+  it("re-reads and adopts a complete winner when exclusive create reports EEXIST", () => {
+    const winner = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    let reads = 0;
+    let waited = false;
+    const files: EnvironmentIdentityFiles = {
+      prepare: () => true,
+      read: () => ++reads === 1 ? undefined : winner,
+      acquire: () => ({ kind: "contended" }),
+      install: () => { throw new Error("must not install"); },
+      release: () => { throw new Error("does not own the lock"); },
+      wait: () => { waited = true; },
+      transientId: () => "ffffffff-ffff-4fff-8fff-ffffffffffff",
+    };
+
+    expect(environmentIdentity("/state", files).id).toBe(winner);
+    expect(reads).toBe(2);
+    expect(waited).toBe(false);
+  });
+
+  it("replaces an invalid predecessor only after the exclusive-lock reread", () => {
+    const installed = "11111111-2222-4333-8444-555555555555";
+    const calls: string[] = [];
+    const files: EnvironmentIdentityFiles = {
+      prepare: () => { calls.push("prepare"); return true; },
+      read: () => { calls.push("read"); return undefined; },
+      acquire: () => { calls.push("acquire"); return { kind: "acquired", token: "A" }; },
+      install: () => { calls.push("install"); return installed; },
+      release: () => { calls.push("release"); },
+      wait: () => { calls.push("wait"); },
+      transientId: () => "ffffffff-ffff-4fff-8fff-ffffffffffff",
+    };
+
+    expect(environmentIdentity("/state", files).id).toBe(installed);
+    expect(calls).toEqual(["read", "prepare", "acquire", "read", "install", "release"]);
   });
 
   it("still answers when its directory cannot be written, without inventing a stored one", () => {
