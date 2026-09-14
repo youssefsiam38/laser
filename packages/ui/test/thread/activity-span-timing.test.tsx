@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AssistantRuntimeProvider,
@@ -112,13 +113,19 @@ function elapsedText(): string | undefined {
   return [...visible.matchAll(/\d+(?:\.\d)?s\b/g)].at(-1)?.[0];
 }
 
-async function render(content: readonly Part[], status: MessageStatus = running, actualMessage = false): Promise<void> {
-  await act(async () => root.render(<Fixture content={content} status={status} actualMessage={actualMessage} />));
+async function renderParts(content: readonly Part[], status: MessageStatus = running, actualMessage = false): Promise<void> {
+  await act(async () => render(<Fixture content={content} status={status} actualMessage={actualMessage} />));
 }
 
 async function advance(ms: number): Promise<void> {
   await act(async () => vi.advanceTimersByTime(ms));
 }
+
+/**
+ * Everything here mounts real transcript rows, and a real row carries the
+ * app's tooltip (the shell mounts one provider; this is that provider).
+ */
+const render = (node: React.ReactNode) => root.render(<TooltipProvider>{node}</TooltipProvider>);
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -143,42 +150,42 @@ describe("activity aggregate wall-clock timing", () => {
   it("covers reasoning, sequential gaps and parallel tools until answer text renders", async () => {
     // The future aggregate observes its first child without adding a redundant
     // parent row, so the reasoning time is already included when a tool arrives.
-    await render([reasoning(true)], running, true);
+    await renderParts([reasoning(true)], running, true);
     expect(container.querySelector('[data-slot="tool-group-root"][data-count]')).toBeNull();
     await advance(12_000);
-    await render([reasoning(), tool("first", true)], running, true);
+    await renderParts([reasoning(), tool("first", true)], running, true);
     expect(elapsedText()).toBe("12s");
 
     // A completed child is not the boundary. Idle time before the next step is
     // part of the same wall-clock span.
     await advance(8_000);
-    await render([reasoning(), tool("first")], running, true);
+    await renderParts([reasoning(), tool("first")], running, true);
     expect(elapsedText()).toBe("20s");
     await advance(5_000);
     expect(elapsedText()).toBe("25s");
 
     // Overlapping calls still advance one clock, never one duration per child.
-    await render([reasoning(), tool("first"), tool("parallel-a", true), tool("parallel-b", true)], running, true);
+    await renderParts([reasoning(), tool("first"), tool("parallel-a", true), tool("parallel-b", true)], running, true);
     await advance(10_000);
-    await render([reasoning(), tool("first"), tool("parallel-a"), tool("parallel-b")], running, true);
+    await renderParts([reasoning(), tool("first"), tool("parallel-a"), tool("parallel-b")], running, true);
     expect(elapsedText()).toBe("35s");
 
     // The final call keeps ticking while it waits for a decision and through
     // the wait for the answer.
-    await render([reasoning(), tool("first"), tool("parallel-a"), awaitingTool("parallel-b")], running, true);
+    await renderParts([reasoning(), tool("first"), tool("parallel-a"), awaitingTool("parallel-b")], running, true);
     await advance(5_000);
     expect(elapsedText()).toBe("40s");
-    await render([reasoning(), tool("first"), tool("parallel-a"), tool("parallel-b"), text("Answer starts")], running, true);
+    await renderParts([reasoning(), tool("first"), tool("parallel-a"), tool("parallel-b"), text("Answer starts")], running, true);
     expect(elapsedText()).toBe("40s");
     await advance(10_000);
     expect(elapsedText()).toBe("40s");
   });
 
   it("continues while a tail approval requires action", async () => {
-    await render([tool("one"), awaitingTool("two")], requiresAction);
+    await renderParts([tool("one"), awaitingTool("two")], requiresAction);
     await advance(4_000);
     expect(elapsedText()).toBe("4.0s");
-    await render([tool("one"), tool("two"), text("Continued")], running);
+    await renderParts([tool("one"), tool("two"), text("Continued")], running);
     await advance(4_000);
     expect(elapsedText()).toBe("4.0s");
   });
@@ -187,9 +194,9 @@ describe("activity aggregate wall-clock timing", () => {
     ["cancellation", cancelled],
     ["normal turn end", complete],
   ] as const)("freezes on %s without text and keeps the same value through disclosure and remount", async (_case, terminalStatus) => {
-    await render([tool("one", true)]);
+    await renderParts([tool("one", true)]);
     await advance(4_000);
-    await render([tool("one"), tool("two", true)]);
+    await renderParts([tool("one"), tool("two", true)]);
     expect(elapsedText()).toBe("4.0s");
 
     const trigger = aggregate().querySelector<HTMLButtonElement>('[data-slot="tool-group-trigger"]')!;
@@ -201,18 +208,18 @@ describe("activity aggregate wall-clock timing", () => {
     await act(async () => trigger.click());
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
 
-    await render([tool("one"), tool("two")], terminalStatus);
+    await renderParts([tool("one"), tool("two")], terminalStatus);
     expect(elapsedText()).toBe("10s");
     await advance(5_000);
     expect(elapsedText()).toBe("10s");
 
-    await act(async () => root.render(<div>away</div>));
-    await render([tool("one"), tool("two")], terminalStatus);
+    await act(async () => render(<div>away</div>));
+    await renderParts([tool("one"), tool("two")], terminalStatus);
     expect(elapsedText()).toBe("10s");
   });
 
   it("does not invent a duration for settled history first seen after reload", async () => {
-    await render([reasoning(), tool("historic")], complete);
+    await renderParts([reasoning(), tool("historic")], complete);
     expect(elapsedText()).toBeUndefined();
   });
 });

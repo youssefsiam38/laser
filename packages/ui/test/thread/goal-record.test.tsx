@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { GoalRecord } from "../../src/components/thread/GoalRecord.js";
+import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 
 const preferences = vi.hoisted(() => ({ level: "answers" }));
 vi.mock("@/runtime", () => ({ useActivityDetailLevel: () => preferences.level, useLaserState: () => "/test/session" }));
@@ -28,6 +29,20 @@ it("starts collapsed, expands the actual summary and preserves manual choice", a
   expect(trigger.getAttribute("aria-expanded")).toBe("true");
   await act(async () => trigger.click());
   expect(trigger.getAttribute("aria-expanded")).toBe("false");
+});
+
+// M16-T48 / review #49: what a continuation is was explained in a native
+// `title`, which no keyboard and no phone ever opened.
+it("explains its continuation count in the app's tooltip, on focus", async () => {
+  preferences.level = "everything";
+  await act(async () => root.render(<TooltipProvider><GoalRecord goal={{ ...goal, continuations: 3 }} /></TooltipProvider>));
+  const hint = container.querySelector<HTMLElement>('[data-slot="hint"]')!;
+  expect(hint.textContent).toBe("3 automatic continuations");
+  expect(hint.getAttribute("title")).toBeNull();
+  await act(async () => hint.focus());
+  expect([...document.querySelectorAll('[data-slot="tooltip-content"]')].map((n) => n.textContent).join(" "))
+    .toContain("Times the goal automatically asked the agent to continue");
+  await act(async () => hint.blur());
 });
 
 it("follows the full-detail preference but still permits manual collapse", async () => {

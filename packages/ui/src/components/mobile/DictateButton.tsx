@@ -6,6 +6,7 @@ import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { ComposerVoice, ComposerVoiceButton } from "@/components/assistant-ui/elements/composer";
 import { MobileComposerButtonClass } from "@/components/assistant-ui/elements/mobile-composer";
 import { cn } from "@/lib/utils";
+import { motionMs } from "@/motion";
 import {
   PhraseDictationAdapter,
   clearDictationError,
@@ -125,8 +126,9 @@ function DictateControls({ className, size, touchSized, cwd, path }: DictateButt
         if (card) {
           card.dataset.dictationInsert = "true";
           if (insertTimer.current !== undefined) clearTimeout(insertTimer.current);
-          const duration = Number.parseFloat(getComputedStyle(card).getPropertyValue("--motion-morph")) || 0;
-          insertTimer.current = setTimeout(() => delete card.dataset.dictationInsert, duration);
+          // The token, through `@/motion` — not a hand-parsed custom property:
+          // a theme that spells the morph in seconds is still that duration.
+          insertTimer.current = setTimeout(() => delete card.dataset.dictationInsert, motionMs("--motion-morph"));
         }
       });
     });

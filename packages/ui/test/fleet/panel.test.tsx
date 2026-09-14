@@ -259,6 +259,33 @@ describe("the fleet column", () => {
     expect(fixture.removeWorktree).toHaveBeenCalledWith(CHILD, "explorer");
   });
 
+  // M16-T48 / review #49: what these two buttons do not say in their own
+  // words used to live in a native `title`, which never opened for the
+  // keyboard and never opened for a finger.
+  it("explains its two least obvious buttons in the app's tooltip, reachable by focus", async () => {
+    const worktree = { path: "/p/.worktrees/explorer-1", branch: "agents/explorer-1", baseCommit: "abc" };
+    fixture.state.agents.runs = {
+      r1: run({ runId: "r1", sessionPath: CHILD, subagentName: "explorer", task: "Read the router", worktree, cwd: worktree.path, status: "completed", endedAt: "2026-09-08T10:05:00.000Z" }),
+    };
+    fixture.state.tasks.tasks = { t1: task({ id: "t1", sessionPath: CHILD }) };
+    await render();
+    await openFinished();
+
+    const tooltips = () => [...document.querySelectorAll('[data-slot="tooltip-content"]')].map((n) => n.textContent ?? "").join(" ");
+    const focusIn = async (row: string, label: string) => {
+      await act(async () => rowFor(row).querySelector("button")!.click());
+      const button = [...rowFor(row).querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.includes(label))!;
+      expect(button.getAttribute("title")).toBeNull();
+      await act(async () => button.focus());
+      const text = tooltips();
+      await act(async () => button.blur());
+      return text;
+    };
+
+    expect(await focusIn("pnpm vite dev", "Open its session")).toContain("The session whose agent ran this command");
+    expect(await focusIn("explorer", "Remove worktree")).toContain("Its parent owns this worktree");
+  });
+
   it("says a removed worktree is removed rather than offering a path that is gone", async () => {
     fixture.state.agents.runs = {
       r1: run({

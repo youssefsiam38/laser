@@ -1,5 +1,5 @@
 "use client";
-import { useSearchReveal } from "@/components/thread/search-state";
+import { useSearchRevealDisclosure } from "@/components/thread/search-state";
 /**
  * `tool-fallback` (assistant-ui registry), restyled to DESIGN.md.
  *
@@ -39,6 +39,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Textarea } from "@/components/ui/textarea";
 import { duration as formatDuration } from "@/format";
 import { cn } from "@/lib/utils";
+import { motionMs } from "@/motion";
 import { toolDetailsDefaultOpen, toolDisplayResult, useActivityDetailLevel, useLaserState } from "@/runtime";
 import { useActivityDisclosureOverride } from "@/runtime/sessionPreferences";
 import { JsonViewer, parseJsonText } from "./json-viewer.js";
@@ -47,14 +48,6 @@ import { toolOutputText } from "@lasercode/protocol";
 import { activityRow, activityTrigger, collapsePanel, mono, pressable } from "./surfaces.js";
 
 type Icon = ComponentType<SVGProps<SVGSVGElement>>;
-
-/** `--motion-fast` in ms, read when needed so a theme change is honoured. */
-function motionFastMs(): number {
-  if (typeof document === "undefined") return 0;
-  const raw = getComputedStyle(document.documentElement).getPropertyValue("--motion-fast").trim();
-  const n = Number.parseFloat(raw);
-  return Number.isFinite(n) ? n : 0;
-}
 
 // ---------------------------------------------------------------------------
 // Root
@@ -79,20 +72,27 @@ function ToolFallbackRoot({
 }: ToolFallbackRootProps) {
   const collapsibleRef = useRef<HTMLDivElement>(null);
   const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen);
-  const [lockMs] = useState(motionFastMs);
-  const lockScroll = useScrollLock(collapsibleRef, lockMs);
+  // The token at render, never frozen at mount (`@/motion`).
+  const lockScroll = useScrollLock(collapsibleRef, motionMs("--motion-fast"));
 
   const isControlled = controlledOpen !== undefined;
-  const reveal = useSearchReveal();
-  const isOpen = reveal || (isControlled ? controlledOpen : uncontrolledOpen);
+  const { revealing, open: revealOpen, fold } = useSearchRevealDisclosure();
+  const isOpen = revealing ? revealOpen : isControlled ? controlledOpen : uncontrolledOpen;
 
   const handleOpenChange = useCallback(
     (next: boolean) => {
       lockScroll();
+      // Folding a row that find is holding open belongs to that reveal, not to
+      // the person's remembered choice (AGENTS.md "Search disclosure is
+      // transient"; the same rule as `tool-group.aui.tsx`).
+      if (revealing) {
+        fold(next);
+        return;
+      }
       if (!isControlled) setUncontrolledOpen(next);
       controlledOnOpenChange?.(next);
     },
-    [lockScroll, isControlled, controlledOnOpenChange],
+    [lockScroll, revealing, fold, isControlled, controlledOnOpenChange],
   );
 
   return (

@@ -33,6 +33,7 @@ import { TerminalBlock } from "@/components/assistant-ui/elements/terminal-block
 import { requestRemoveWorktree } from "@/agents/worktree";
 import { requestEndAgent } from "@/components/agents/end-agent";
 import { Button } from "@/components/ui/button";
+import { ControlHint } from "@/components/ui/hint";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { clearFinishedFleet, clearFleetReveal, useFleetClearedBefore, useFleetReveal } from "@/fleet/fleet-state";
 import { useFleet, type FleetView } from "@/fleet/hooks";
@@ -300,16 +301,19 @@ function DetailActions({
           {task ? "Its session is the chat you are reading." : "This is the chat you are reading."}
         </span>
       ) : reachable && (
-        <Button
-          size="xs"
-          variant="outline"
-          data-slot={task ? "fleet-open-session" : "fleet-open-chat"}
-          title={task ? "The session whose agent ran this command" : undefined}
-          onClick={() => void actions.openSession(item.sessionPath)}
-        >
-          {task ? <MessagesSquare /> : <MessageSquare />}
-          {task ? "Open its session" : "Open chat"}
-        </Button>
+        // The app's tooltip, not the browser's: it opens on focus as well as
+        // on hover, and it says something the button's own words do not.
+        <ControlHint hint={task ? "The session whose agent ran this command" : undefined}>
+          <Button
+            size="xs"
+            variant="outline"
+            data-slot={task ? "fleet-open-session" : "fleet-open-chat"}
+            onClick={() => void actions.openSession(item.sessionPath)}
+          >
+            {task ? <MessagesSquare /> : <MessageSquare />}
+            {task ? "Open its session" : "Open chat"}
+          </Button>
+        </ControlHint>
       )}
       {onStop && (
         <Button size="xs" variant="outline" disabled={stopping} onClick={onStop}>
@@ -318,16 +322,17 @@ function DetailActions({
         </Button>
       )}
       {onRemoveWorktree && (
-        <Button
-          size="xs"
-          variant="outline"
-          data-slot="fleet-remove-worktree"
-          title="Its parent owns this worktree; remove it yourself if the parent never did"
-          onClick={onRemoveWorktree}
-        >
-          <FolderX />
-          Remove worktree…
-        </Button>
+        <ControlHint hint="Its parent owns this worktree; remove it yourself if the parent never did">
+          <Button
+            size="xs"
+            variant="outline"
+            data-slot="fleet-remove-worktree"
+            onClick={onRemoveWorktree}
+          >
+            <FolderX />
+            Remove worktree…
+          </Button>
+        </ControlHint>
       )}
     </div>
   );

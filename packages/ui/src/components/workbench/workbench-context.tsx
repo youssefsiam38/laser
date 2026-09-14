@@ -81,8 +81,11 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
     if (!page) return undefined;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
-      const target = event.target as HTMLElement | null;
-      if (target?.closest("[role='dialog'],[data-radix-popper-content-wrapper]")) return;
+      const target = event.target instanceof Element ? event.target : null;
+      // A text field owns Escape while it is focused (clearing a search box,
+      // dismissing a completion): typing in Settings or Logs must not throw the
+      // person back to the transcript. Same selector as the fullscreen map.
+      if (target?.closest("[role='dialog'],[data-radix-popper-content-wrapper],input,textarea,[contenteditable='true']")) return;
       close();
     };
     document.addEventListener("keydown", onKey);

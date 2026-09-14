@@ -1,5 +1,5 @@
 "use client";
-import { useSearchReveal } from "@/components/thread/search-state";
+import { useSearchRevealDisclosure } from "@/components/thread/search-state";
 /**
  * `tool-group` (assistant-ui registry), restyled: consecutive reasoning and
  * tool activity collapsed into one summary row — including mixed actions — with
@@ -13,8 +13,9 @@ import { useSearchReveal } from "@/components/thread/search-state";
  *     from `tool-groups.ts` (pure, tested), in the row grammar every other
  *     tool row uses, with the call in flight as its typed fragment.
  *   - One design, no `variant` cva: the transcript has no boxed variant.
- *   - Durations, easing and colours are tokens; the 200ms constant is read
- *     from `--motion-fast`.
+ *   - Durations, easing and colours are tokens: the scroll lock reads
+ *     `--motion-fast` through `motionMs()` at render, so changing the token in
+ *     Settings changes it, and nothing is frozen at mount.
  *   - `ToolGroup` (default) takes the `group-tool` part from
  *     `MessagePrimitive.GroupedParts`, not the deprecated start/end indices.
  */
@@ -49,8 +50,10 @@ import { classifyMcpTool } from "@/components/thread/mcp-tools";
 import { isNonZeroExit, resultDetails, resultText } from "@/components/thread/tool-summary";
 import { markDone, markRunning, useElapsed } from "@/components/thread/timing";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { ControlHint } from "@/components/ui/hint";
 import { duration } from "@/format";
 import { cn } from "@/lib/utils";
+import { motionMs } from "@/motion";
 import { activityGroupDefaultOpen, toolDisplayResult, useActivityDetailLevel, useLaserState, type ActivityDetailLevel } from "@/runtime";
 import { useActivityDisclosureOverride } from "@/runtime/sessionPreferences";
 
@@ -71,12 +74,6 @@ export const TOOL_ICONS: Record<ActivityIconKind, Icon> = {
   other: Wrench,
   reasoning: ScanText,
 };
-
-function motionFastMs(): number {
-  if (typeof document === "undefined") return 0;
-  const n = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--motion-fast"));
-  return Number.isFinite(n) ? n : 0;
-}
 
 // ---------------------------------------------------------------------------
 // Root
@@ -100,19 +97,27 @@ function ToolGroupRoot({
 }: ToolGroupRootProps) {
   const collapsibleRef = useRef<HTMLDivElement>(null);
   const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen);
-  const [lockMs] = useState(motionFastMs);
-  const lockScroll = useScrollLock(collapsibleRef, lockMs);
+  // Read at render, never frozen at mount: a person who changes the motion
+  // token in Settings changes this lock too (AGENTS.md "no static visual
+  // values"; `@/motion`).
+  const lockScroll = useScrollLock(collapsibleRef, motionMs("--motion-fast"));
   const isControlled = controlledOpen !== undefined;
-  const reveal = useSearchReveal();
-  const isOpen = reveal || (isControlled ? controlledOpen : uncontrolledOpen);
+  const { revealing, open: revealOpen, fold } = useSearchRevealDisclosure();
+  const isOpen = revealing ? revealOpen : isControlled ? controlledOpen : uncontrolledOpen;
 
   const handleOpenChange = useCallback(
     (next: boolean) => {
       lockScroll();
+      // A fold made while find holds this row open is that reveal's, not a
+      // preference: it must not reach `rememberOpen` below.
+      if (revealing) {
+        fold(next);
+        return;
+      }
       if (!isControlled) setUncontrolledOpen(next);
       controlledOnOpenChange?.(next);
     },
-    [lockScroll, isControlled, controlledOnOpenChange],
+    [lockScroll, revealing, fold, isControlled, controlledOnOpenChange],
   );
 
   return (
@@ -191,71 +196,84 @@ function ToolGroupTrigger({
         : `${label}${detail ? ` · ${detail}` : ""}`;
   const changeDescription = changes ? diffStatDescription(changes) : undefined;
   return (
-    <CollapsibleTrigger
-      data-slot="tool-group-trigger"
-      data-active={active || undefined}
-      title={lines?.join("\n")}
-      // Nothing here goes red for a failure, so the accessible name is where
-      // a failure is still said out loud.
-      aria-label={`${accessibleSummary}${changeDescription ? `, ${changeDescription}` : ""}.${failed ? " Something in it failed." : ""} ${open ? "Collapse" : "Expand"} details.`}
-      className={cn(
-        activityTrigger,
-        className,
-      )}
-      {...props}
-    >
-      {active && <ActivityBeam />}
-      <span className="flex size-4 shrink-0 items-center justify-center" aria-hidden="true">
-        {active ? (
-          <StatusDot status="working" size="sm" aria-hidden="true" />
-        ) : (
-          <LeadIcon className={cn("size-3.5", attention ? "text-attention" : "text-ink-3")} />
+    // The app's tooltip carries what ran, in place of the browser's `title`:
+    // that one never opened for the keyboard or for a finger, and it drew
+    // system chrome in the middle of the transcript. Long runs are cut here
+    // rather than covering the conversation — opening the row shows them all.
+    <ControlHint hint={hintLines(lines)}>
+      <CollapsibleTrigger
+        data-slot="tool-group-trigger"
+        data-active={active || undefined}
+        // Nothing here goes red for a failure, so the accessible name is where
+        // a failure is still said out loud.
+        aria-label={`${accessibleSummary}${changeDescription ? `, ${changeDescription}` : ""}.${failed ? " Something in it failed." : ""} ${open ? "Collapse" : "Expand"} details.`}
+        className={cn(
+          activityTrigger,
+          className,
         )}
-      </span>
-      <span className={cn("flex min-w-0 flex-1", !active && breakdown?.length ? "flex-col items-start gap-1 py-1.5" : "items-center gap-2 overflow-hidden")}>
-        {active && activeLabel ? (
-          <ThinkingIndicator
-            label={activeLabel}
-            dot={false}
-            className="min-w-0 overflow-hidden [&_[data-slot=thinking-indicator-label]]:max-w-full [&_[data-slot=thinking-indicator-label]]:truncate"
-          />
-        ) : (
-          <span data-slot="tool-group-trigger-label" className="min-w-0 break-words text-sm font-medium text-ink-2">
-            {label}
-          </span>
-        )}
-        {!active && !!breakdown?.length && (
-          <span data-slot="tool-group-breakdown" aria-hidden="true" className="flex max-w-full flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-3">
-            {breakdown.slice(0, 2).map((item) => {
-              const BreakdownIcon = TOOL_ICONS[item.iconKind];
-              return (
-                <span key={item.family} data-slot="tool-group-breakdown-item" className="inline-flex max-w-full items-center gap-1.5">
-                  <BreakdownIcon className="size-3 shrink-0" />
-                  <span className="break-words">{item.label}</span>
-                </span>
-              );
-            })}
-            {breakdown.length > 2 && <span data-slot="tool-group-breakdown-more" className="whitespace-nowrap">+{breakdown.length - 2} types</span>}
-          </span>
-        )}
-        {!active && !breakdown?.length && detail ? (
-          <span className={cn(mono, "min-w-0 truncate", active || attention ? "text-ink-2" : "text-ink-3")}>{detail}</span>
+        {...props}
+      >
+        {active && <ActivityBeam />}
+        <span className="flex size-4 shrink-0 items-center justify-center" aria-hidden="true">
+          {active ? (
+            <StatusDot status="working" size="sm" aria-hidden="true" />
+          ) : (
+            <LeadIcon className={cn("size-3.5", attention ? "text-attention" : "text-ink-3")} />
+          )}
+        </span>
+        <span className={cn("flex min-w-0 flex-1", !active && breakdown?.length ? "flex-col items-start gap-1 py-1.5" : "items-center gap-2 overflow-hidden")}>
+          {active && activeLabel ? (
+            <ThinkingIndicator
+              label={activeLabel}
+              dot={false}
+              className="min-w-0 overflow-hidden [&_[data-slot=thinking-indicator-label]]:max-w-full [&_[data-slot=thinking-indicator-label]]:truncate"
+            />
+          ) : (
+            <span data-slot="tool-group-trigger-label" className="min-w-0 break-words text-sm font-medium text-ink-2">
+              {label}
+            </span>
+          )}
+          {!active && !!breakdown?.length && (
+            <span data-slot="tool-group-breakdown" aria-hidden="true" className="flex max-w-full flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-3">
+              {breakdown.slice(0, 2).map((item) => {
+                const BreakdownIcon = TOOL_ICONS[item.iconKind];
+                return (
+                  <span key={item.family} data-slot="tool-group-breakdown-item" className="inline-flex max-w-full items-center gap-1.5">
+                    <BreakdownIcon className="size-3 shrink-0" />
+                    <span className="break-words">{item.label}</span>
+                  </span>
+                );
+              })}
+              {breakdown.length > 2 && <span data-slot="tool-group-breakdown-more" className="whitespace-nowrap">+{breakdown.length - 2} types</span>}
+            </span>
+          )}
+          {!active && !breakdown?.length && detail ? (
+            <span className={cn(mono, "min-w-0 truncate", active || attention ? "text-ink-2" : "text-ink-3")}>{detail}</span>
+          ) : null}
+        </span>
+        {changes ? <DiffStat added={changes.added} removed={changes.removed} /> : null}
+        {elapsedMs !== undefined ? (
+          <span className={cn(mono, "shrink-0 tnum", active ? "text-live" : "text-ink-3")}>{duration(elapsedMs)}</span>
         ) : null}
-      </span>
-      {changes ? <DiffStat added={changes.added} removed={changes.removed} /> : null}
-      {elapsedMs !== undefined ? (
-        <span className={cn(mono, "shrink-0 tnum", active ? "text-live" : "text-ink-3")}>{duration(elapsedMs)}</span>
-      ) : null}
-      <ChevronRight
-        data-slot="tool-group-trigger-chevron"
-        aria-hidden="true"
-        className={cn("rtl:-scale-x-100",
-          "size-3.5 shrink-0 text-ink-3 transition-transform duration-(--motion-fast) ease-(--motion-ease) motion-reduce:transition-none",
-          "group-data-[state=open]/trigger:rotate-90 group-data-[state=open]/trigger:rtl:-rotate-90",
-        )}
-      />
-    </CollapsibleTrigger>
+        <ChevronRight
+          data-slot="tool-group-trigger-chevron"
+          aria-hidden="true"
+          className={cn("rtl:-scale-x-100",
+            "size-3.5 shrink-0 text-ink-3 transition-transform duration-(--motion-fast) ease-(--motion-ease) motion-reduce:transition-none",
+            "group-data-[state=open]/trigger:rotate-90 group-data-[state=open]/trigger:rtl:-rotate-90",
+          )}
+        />
+      </CollapsibleTrigger>
+    </ControlHint>
   );
+}
+
+/** At most eight calls in the hint; the rest are one row away, in the group. */
+const HINT_LINES = 8;
+function hintLines(lines: readonly string[] | undefined): string | undefined {
+  if (!lines?.length) return undefined;
+  if (lines.length <= HINT_LINES) return lines.join("\n");
+  return [...lines.slice(0, HINT_LINES), `+${lines.length - HINT_LINES} more`].join("\n");
 }
 
 // ---------------------------------------------------------------------------

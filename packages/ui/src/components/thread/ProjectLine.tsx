@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Hint } from "@/components/ui/hint";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { useCopy } from "@/hooks";
 import { cn } from "@/lib/utils";
@@ -109,25 +110,27 @@ export function ProjectLine({ className }: { className?: string | undefined }) {
       data-slot="project-line"
       className={cn("flex h-5 min-w-0 items-center gap-2 text-xs leading-4 whitespace-nowrap text-ink-3", className)}
     >
-      <span className="flex min-w-0 items-center gap-1.5" title={`Branch ${git.branch}${git.dirty ? " · uncommitted changes" : ""}`}>
+      <Hint className="flex min-w-0 items-center gap-1.5" hint={`Branch ${git.branch}${git.dirty ? " · uncommitted changes" : ""}`}>
         <GitBranch aria-hidden="true" className="size-3 shrink-0" />
         <span className="typed min-w-0 truncate text-ink-2">{git.branch}</span>
         {git.dirty ? (
           <span aria-label="Uncommitted changes" role="img" className="size-1.5 shrink-0 rounded-full bg-attention" />
         ) : null}
-      </span>
+      </Hint>
       {delta.length > 0 ? (
-        <span className="typed flex shrink-0 items-center gap-1 tnum" title="Lines changed since this session opened">
+        <Hint className="typed flex shrink-0 items-center gap-1 tnum" hint="Lines changed since this session opened">
           {delta.map((d) => (
             <span key={d.sign} className={d.sign === "+" ? "text-ok" : "text-danger"}>
               {d.sign}
               {d.value.toLocaleString("en-US")}
             </span>
           ))}
-        </span>
+        </Hint>
       ) : null}
       {git.ahead > 0 || git.behind > 0 ? (
-        <span className="typed flex shrink-0 items-center gap-0.5 tnum" title={syncTitle} aria-label={syncTitle}>
+        // One statement of the counts, not two: the hint is the description,
+        // so it does not repeat itself as an `aria-label` as well.
+        <Hint className="typed flex shrink-0 items-center gap-0.5 tnum" hint={syncTitle}>
           {git.ahead > 0 ? (
             <>
               <ArrowUp aria-hidden="true" className="size-3" />
@@ -140,7 +143,7 @@ export function ProjectLine({ className }: { className?: string | undefined }) {
               {git.behind}
             </>
           ) : null}
-        </span>
+        </Hint>
       ) : null}
       {canPr ? (
         <>

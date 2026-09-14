@@ -23,7 +23,7 @@ import { SessionModelSelector } from "@/components/assistant-ui/elements/model-s
 import { ThinkingEffort } from "@/components/assistant-ui/elements/reasoning-effort";
 import { useRunsForRoot } from "@/agents";
 import { DictateButton } from "@/components/mobile";
-import { useShell } from "@/components/shell/shell-context";
+import { errorText, useShell } from "@/components/shell/shell-context";
 import { useIsMobile, useIsTouch } from "@/hooks/use-mobile";
 import { finishActiveDictation } from "@/pwa";
 import { appendAttachedPrompt, splitAttachedFiles, wrapFileAttachment } from "@/runtime/attachments";
@@ -393,11 +393,14 @@ function useAgentCommands(): CommandInfo[] {
 
 function useSlashCommands() {
   const aui = useAui();
-  const { actions } = useLaserStable();
-  // `/fork` needs the loaded tree and the branch it sits on — both change when
-  // history is read, not when a token arrives.
-  const entries = useLaserState(s => (s.current ? s.open[s.current]?.entries : undefined));
-  const leafId = useLaserState(s => (s.current ? s.open[s.current]?.leafId : undefined));
+  const { actions, client } = useLaserStable();
+  // `/fork` needs the tree and the branch it sits on, and it reads both from
+  // the host when the command runs (as `TopBar` and `CommandPalette` do): the
+  // view this hook rendered with deliberately ignores entries so a streamed
+  // token does not re-render the composer, so forking from it would fork one
+  // batch behind — or claim there is no prompt at all (M16-T48). Only the
+  // session path is read here, and it changes only when the session does.
+  const sessionPath = useLaserState(s => s.current);
   const shell = useShell();
   const { running, compacting } = useSessionMeta();
   const busy = running || compacting;
@@ -428,16 +431,24 @@ function useSlashCommands() {
         },
       })),
     ],
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- the callbacks below read the latest values themselves
-    [busy, actions, shell, agent],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `aui` is stable; every other value the callbacks read is a dependency
+    [busy, actions, client, sessionPath, shell, agent],
   );
 
+  /** The host's tree, at the moment of the command — never the rendered view's. */
   async function forkFromLastPrompt() {
-    if (!entries) return;
-    const entryId = userEntryIds(entries, leafId).at(-1);
-    if (entryId) return actions.fork(entryId);
-    await actions.refreshEntries({ tail: true });
-    actions.toast("warning", "Nothing to fork yet: this session has no prompt.");
+    if (!sessionPath) return;
+    try {
+      const { entries, leafId } = await client.request("pi/session/entries", { path: sessionPath });
+      const entryId = userEntryIds(entries, leafId).at(-1);
+      if (entryId) {
+        await actions.fork(entryId);
+        return;
+      }
+      actions.toast("warning", "Nothing to fork yet: this session has no prompt.");
+    } catch (error) {
+      actions.toast("error", errorText(error));
+    }
   }
 
   async function clearQueue() {

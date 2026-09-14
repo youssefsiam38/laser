@@ -14,6 +14,10 @@ function Probe() {
   return null;
 }
 
+function escapeFrom(element: Element): void {
+  element.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+}
+
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   container = document.createElement("div");
@@ -51,6 +55,33 @@ describe("workbench.open", () => {
     await act(async () => latest!.open("logs"));
     expect(latest?.page).toBe("logs");
     await act(async () => latest!.close());
+    expect(latest?.page).toBeNull();
+  });
+});
+
+describe("workbench Escape", () => {
+  it("leaves the workbench open while Escape belongs to a text field, and closes it otherwise", async () => {
+    await act(async () =>
+      root.render(
+        <WorkbenchProvider>
+          <Probe />
+          <input data-testid="text" />
+          <textarea data-testid="area" />
+          <div contentEditable data-testid="rich" />
+          <div role="dialog" data-testid="dialog"><button type="button" data-testid="in-dialog" /></div>
+          <button type="button" data-testid="plain" />
+        </WorkbenchProvider>,
+      ),
+    );
+    await act(async () => latest!.open("settings"));
+
+    for (const id of ["text", "area", "rich", "in-dialog"]) {
+      const target = container.querySelector(`[data-testid="${id}"]`)!;
+      await act(async () => escapeFrom(target));
+      expect(latest?.page, `Escape from ${id} must not close the workbench`).toBe("settings");
+    }
+
+    await act(async () => escapeFrom(container.querySelector('[data-testid="plain"]')!));
     expect(latest?.page).toBeNull();
   });
 });
