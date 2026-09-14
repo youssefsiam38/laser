@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { createWriteStream } from 'node:fs';
+import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { promisify } from 'node:util';
 import { modeConfig, expected, SAFETY } from '../resource/config.mjs';
@@ -12,9 +14,10 @@ import { syntheticPng, imagePayload } from '../resource/fixtures.mjs';
 import { theilSen, compareRuns, assertRedacted, sanitizeOwner } from '../resource/report.mjs';
 import { connectInspector, InspectorClient } from '../resource/inspector.mjs';
 import { captureHeap } from '../resource/heap.mjs';
+import { captureMemoryInfra, dumpAllocators } from '../resource/memory-infra.mjs';
 import { memoryLabels } from '../resource/process-sampler.mjs';
 import { dispatchFindShortcut, findShortcutEvents } from '../resource/keyboard.mjs';
-import { assertNoLiveWork, classifySampledProcess, closedPageMetrics, connectWorkerInspector, expectedRetainedCounts, partialFailureReport, proveNoLiveWork, rendererSample, retirementGuardSnapshot, revealSessionRow, safetyRefusalDetail, safetyRefusalMessage, sidebarRowView, traverseRetainedViews, writeAtomicJson } from '../resource-soak.mjs';
+import { assertNoLiveWork, captureInstanceHeap, classifySampledProcess, closedPageMetrics, connectWorkerInspector, expectedRetainedCounts, partialFailureReport, proveNoLiveWork, rendererSample, retirementGuardSnapshot, revealSessionRow, safetyRefusalDetail, safetyRefusalMessage, sidebarRowView, traverseRetainedViews, writeAtomicJson } from '../resource-soak.mjs';
 import { closeNodeWebSocket, settledWebSocketRpc } from '../resource/websocket.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -65,7 +68,7 @@ test('bounded heap parser computes target-retained bytes in its own process', as
   const root=await mkdtemp(join(tmpdir(),'resource-heap-test-')); const file=join(root,'heap.json');
   const meta={node_fields:['type','name','id','self_size','edge_count'],node_types:[['synthetic','object','string'],'string','number','number','number'],edge_fields:['type','name_or_index','to_node'],edge_types:[['context','element','property'],'string_or_number','node']};
   // root -> target -> owned, with five fields per node and three per edge.
-  const snapshot={snapshot:{meta},nodes:[0,0,1,0,1, 1,1,7,10,1, 1,2,9,20,0],edges:[2,3,5, 2,4,10],strings:['root','Target','Owned','target','owned']};
+  const snapshot={snapshot:{meta,node_count:3,edge_count:2},nodes:[0,0,1,0,1, 1,1,7,10,1, 1,2,9,20,0],edges:[2,3,5, 2,4,10],strings:['root','Target','Owned','target','owned']};
   await writeFile(file,JSON.stringify(snapshot));
   try {
     const parser=new URL('../resource/heap-parser.mjs',import.meta.url).pathname;
@@ -74,10 +77,52 @@ test('bounded heap parser computes target-retained bytes in its own process', as
   } finally { await rm(root,{recursive:true,force:true}); }
 });
 
+test('the bounded parser reads a full-scale snapshot larger than the old whole-JSON refusal', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'resource-heap-large-'));
+  const file = join(root, 'large.heapsnapshot');
+  const nodes = 4_000_000;
+  const meta = { node_fields: ['type','name','id','self_size','edge_count'], node_types: [['synthetic','object','string'],'string','number','number','number'],
+    edge_fields: ['type','name_or_index','to_node'], edge_types: [['context','element','property'],'string_or_number','node'] };
+  try {
+    // root -> target -> (nodes - 2) owned children, written as a stream so the
+    // fixture itself never needs the memory the parser is being proven against.
+    const out = createWriteStream(file);
+    const put = async text => { if (!out.write(text)) await once(out, 'drain'); };
+    await put(`{"snapshot":{"meta":${JSON.stringify(meta)},"node_count":${nodes},"edge_count":${nodes - 1}},"nodes":[0,0,1,0,1,1,1,7,10,${nodes - 2}`);
+    for (let start = 2; start < nodes; start += 50_000) {
+      const parts = [];
+      for (let i = start; i < Math.min(nodes, start + 50_000); i++) parts.push(`,1,2,${9 + 2 * i},20,0`);
+      await put(parts.join(''));
+    }
+    await put('],"edges":[2,3,5');
+    for (let start = 2; start < nodes; start += 50_000) {
+      const parts = [];
+      for (let i = start; i < Math.min(nodes, start + 50_000); i++) parts.push(`,2,4,${i * 5}`);
+      await put(parts.join(''));
+    }
+    await put('],"strings":["root","Target","Owned"]}\n');
+    out.end();
+    await once(out, 'close');
+
+    const size = (await stat(file)).size;
+    assert.ok(size > 96 * 1024 * 1024, `fixture is only ${size} bytes, below the old refusal`);
+    assert.ok(size <= SAFETY.snapshotBytes, 'the fixture stays inside the unchanged capture ceiling');
+    const parser = new URL('../resource/heap-parser.mjs', import.meta.url).pathname;
+    const { stdout } = await execFileAsync(process.execPath,
+      [`--max-old-space-size=${SAFETY.parserHeapMb}`, parser, file, JSON.stringify({ target: 7 })], { maxBuffer: 4 * 1024 * 1024 });
+    const result = JSON.parse(stdout);
+    assert.equal(result.available, true, result.reason);
+    assert.equal(result.nodeCount, nodes);
+    assert.equal(result.targets.target.available, true, result.targets?.target?.reason);
+    assert.equal(result.targets.target.retainedBytes, 10 + 20 * (nodes - 2));
+    assert.deepEqual(result.targets.target.largestOwnedNodes[0], { bytes: 20, type: 'object', name: 'Owned' });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('heap capture deletes raw bytes after success and size overflow', async () => {
   const root = await mkdtemp(join(tmpdir(), 'resource-heap-delete-'));
   const meta={node_fields:['type','name','id','self_size','edge_count'],node_types:[['synthetic'],'string','number','number','number'],edge_fields:['type','name_or_index','to_node'],edge_types:[['property'],'string_or_number','node']};
-  const body=JSON.stringify({snapshot:{meta},nodes:[0,0,1,0,0],edges:[],strings:['root']});
+  const body=JSON.stringify({snapshot:{meta,node_count:1,edge_count:0},nodes:[0,0,1,0,0],edges:[],strings:['root']});
   const fake = text => {
     let listener;
     return { on(_name, fn) { listener=fn; return () => { listener=undefined; }; }, async send(method) { if (method === 'HeapProfiler.takeHeapSnapshot') listener?.({chunk:text}); return {}; } };
@@ -111,6 +156,57 @@ test('restored-renderer keyboard helper delivers from BODY and proves the focuse
   assert.equal(result.before.activeTag, 'BODY');
   assert.equal(result.after.activeInSearch, true);
   assert.deepEqual(findShortcutEvents('darwin').map(event => event.modifiers), [4, 4, 4]);
+});
+
+function tracingStub({ owners, traceBytes = 1024 } = {}) {
+  const calls = [];
+  const events = level => ({ traceEvents: [{ args: { dumps: { allocators: Object.fromEntries(
+    Array.from({ length: owners[level] ?? 0 }, (_, index) => [`malloc/partition-${index}`, { attrs: { size: { value: String(1000 + index) } } }]),
+  ) } } }] });
+  let level;
+  const listeners = new Map();
+  const cdp = {
+    calls,
+    once(name, listener) { listeners.set(name, listener); },
+    async send(method, params = {}) {
+      calls.push(method === 'Tracing.requestMemoryDump' ? `${method}:${params.levelOfDetail}` : method);
+      if (method === 'Tracing.start') return {};
+      if (method === 'Tracing.requestMemoryDump') { level = params.levelOfDetail; return { success: true }; }
+      if (method === 'Tracing.end') { listeners.get('Tracing.tracingComplete')?.({ stream: 'stream-1' }); return {}; }
+      if (method === 'IO.read') return { data: JSON.stringify(events(level)).padEnd(traceBytes, ' '), eof: true };
+      return {};
+    },
+  };
+  return cdp;
+}
+
+test('the memory dump runs outside the measured workload and takes the least intrusive level that names owners', async () => {
+  const cdp = tracingStub({ owners: { background: 7 } });
+  const order = [];
+  const result = await captureMemoryInfra(cdp, async () => { order.push(`workload:${cdp.calls.length}`); });
+  assert.deepEqual(order, ['workload:0'], 'nothing is traced while the workload runs');
+  assert.equal(result.available, true, result.reason);
+  assert.equal(result.levelOfDetail, 'background');
+  assert.equal(result.allocators.length, 7);
+  assert.ok(!cdp.calls.includes('Tracing.requestMemoryDump:detailed'), 'the perturbing detailed level is never requested');
+  assert.deepEqual(cdp.calls.slice(0, 3), ['Tracing.start', 'Tracing.requestMemoryDump:background', 'Tracing.end']);
+});
+
+test('a dump that names too few owners escalates one bounded step and reports every attempt', async () => {
+  const cdp = tracingStub({ owners: { background: 2, light: 6 } });
+  const result = await dumpAllocators(cdp);
+  assert.equal(result.available, true, result.reason);
+  assert.equal(result.levelOfDetail, 'light');
+  assert.deepEqual(result.attempts.map(attempt => [attempt.levelOfDetail, attempt.owners]), [['background', 2], ['light', 6]]);
+});
+
+test('a dump that stays too small or too large is unavailable, never a silent empty ranking', async () => {
+  const thin = await dumpAllocators(tracingStub({ owners: { background: 1, light: 2 } }));
+  assert.equal(thin.available, false);
+  assert.match(thin.reason, /5 allocator owners/);
+  const huge = await dumpAllocators(tracingStub({ owners: { background: 9 }, traceBytes: 4096 }), { byteCeiling: 1024 });
+  assert.equal(huge.available, false);
+  assert.match(huge.attempts[0].error, /exceeded 1024 bytes/);
 });
 
 test('memory category labels keep proportional, private, RSS, JS, native and external meanings separate', () => {
@@ -152,6 +248,106 @@ test('inspector close settles only after the debugger WebSocket closes', async (
 
 test('inspector registration refuses non-loopback and stale identities before connect', async () => {
   await assert.rejects(connectInspector({pid:process.pid,startToken:'bad',url:'ws://example.invalid/secret'}),/Invalid/);
+});
+
+// A real inspected Node process with one known retained object, and nothing
+// else: no product, no credentials, no session data.
+const PROBE_SOURCE = `
+class ResourceSoakProbe { constructor(rows) { this.rows = Array.from({ length: rows }, (_, index) => \`\${index}:\${'x'.repeat(1024)}\`); } }
+globalThis.__probe = new ResourceSoakProbe(512);
+globalThis.__fresh = null;
+globalThis.__churn = () => { const junk = []; for (let i = 0; i < 50000; i++) junk.push({ i, s: 'y'.repeat(64) }); return junk.length; };
+globalThis.__makeFresh = () => { globalThis.__fresh = new ResourceSoakProbe(256); return 'made'; };
+setInterval(() => {}, 1000);
+`;
+
+async function inspectedProbe() {
+  const child = spawn(process.execPath, ['--inspect=127.0.0.1:0', '-e', PROBE_SOURCE], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const url = await new Promise((resolve, reject) => {
+    let text = '';
+    const timer = setTimeout(() => reject(new Error('probe inspector did not announce a URL')), 15_000);
+    child.stderr.on('data', part => {
+      text += String(part);
+      const match = /(ws:\/\/127\.0\.0\.1:\d+\/[0-9a-f-]+)/.exec(text);
+      if (match) { clearTimeout(timer); resolve(match[1]); }
+    });
+    child.once('exit', code => { clearTimeout(timer); reject(new Error(`probe exited early with ${code}`)); });
+  });
+  const socket = new WebSocket(url);
+  await new Promise((resolve, reject) => {
+    socket.addEventListener('open', resolve, { once: true });
+    socket.addEventListener('error', () => reject(new Error('probe inspector connect failed')), { once: true });
+  });
+  const client = new InspectorClient(socket, 'probe');
+  await client.send('Runtime.enable');
+  await client.send('HeapProfiler.enable');
+  const evaluate = async expression => (await client.send('Runtime.evaluate', { expression })).result;
+  return { child, client, evaluate, async stop() { await client.close().catch(() => {}); child.kill('SIGKILL'); await new Promise(resolve => child.once('exit', resolve)); } };
+}
+
+test('heap targets resolve to a concrete object across forced GC and sequential snapshots', async t => {
+  const probe = await inspectedProbe();
+  const root = await mkdtemp(join(tmpdir(), 'resource-heap-ids-'));
+  t.after(async () => { await probe.stop(); await rm(root, { recursive: true, force: true }); });
+
+  const first = await captureHeap(probe.client, join(root, 'first.heapsnapshot'), { probe: (await probe.evaluate('globalThis.__probe')).objectId });
+  assert.equal(first.available, true, first.reason);
+  assert.equal(first.targets.probe.available, true, first.targets?.probe?.reason);
+  assert.ok(first.targets.probe.retainedBytes > 100_000, `probe retained only ${first.targets.probe.retainedBytes} bytes`);
+  assert.ok(first.targets.probe.largestOwnedNodes.length > 0, 'a resolved target carries its largest owned nodes');
+  assert.equal(existsSync(join(root, 'first.heapsnapshot')), false, 'raw snapshot bytes are deleted after a successful capture');
+
+  // Churn and collect between the two captures: an id that only survives while
+  // nothing moves would be gone by the second snapshot.
+  await probe.evaluate('globalThis.__churn()');
+  await probe.client.send('HeapProfiler.collectGarbage');
+  await probe.evaluate('globalThis.__makeFresh()');
+  const second = await captureHeap(probe.client, join(root, 'second.heapsnapshot'), {
+    probe: (await probe.evaluate('globalThis.__probe')).objectId,
+    fresh: (await probe.evaluate('globalThis.__fresh')).objectId,
+  });
+  assert.equal(second.available, true, second.reason);
+  assert.deepEqual([second.targets.probe.available, second.targets.fresh.available], [true, true],
+    `sequential snapshot lost a target: ${JSON.stringify(second.targets)}`);
+  assert.ok(second.targets.fresh.retainedBytes > 50_000, `fresh object retained only ${second.targets.fresh.retainedBytes} bytes`);
+  assert.ok(second.targets.probe.retainedBytes > second.targets.fresh.retainedBytes * 1.5,
+    `retained size does not follow the objects: probe ${second.targets.probe.retainedBytes}, fresh ${second.targets.fresh.retainedBytes}`);
+
+  const stale = await captureHeap(probe.client, join(root, 'stale.heapsnapshot'), { probe: '{"injectedScriptId":1,"id":999999}' });
+  assert.equal(stale.available, false, 'a handle that no longer resolves is reported, not silently absent');
+  assert.match(stale.reason, /getHeapObjectId/);
+  assert.equal(existsSync(join(root, 'stale.heapsnapshot')), false, 'raw snapshot bytes are deleted after a failed capture too');
+});
+
+test('a capture tracks object moves around its ids and stops tracking without a second snapshot', async () => {
+  const calls = [];
+  const client = {
+    on: () => () => {},
+    async send(method, params) {
+      calls.push(method);
+      if (method === 'HeapProfiler.getHeapObjectId') { assert.equal(params.objectId, 'remote-1'); return { heapSnapshotObjectId: '42' }; }
+      return {};
+    },
+  };
+  const root = await mkdtemp(join(tmpdir(), 'resource-heap-order-'));
+  try {
+    const result = await captureHeap(client, join(root, 'ordered.heapsnapshot'), { probe: 'remote-1' });
+    assert.equal(result.available, false, 'an empty snapshot file cannot be parsed');
+    assert.deepEqual(calls, ['HeapProfiler.startTrackingHeapObjects', 'HeapProfiler.collectGarbage', 'HeapProfiler.collectGarbage',
+      'HeapProfiler.getHeapObjectId', 'HeapProfiler.takeHeapSnapshot', 'HeapProfiler.disable', 'HeapProfiler.enable']);
+    assert.equal(existsSync(join(root, 'ordered.heapsnapshot')), false);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('an instance is re-acquired immediately before its own capture', async () => {
+  const order = [];
+  const client = { send: async (method, params) => { order.push(`${method}:${params.objectGroup}`); return {}; } };
+  const result = await captureInstanceHeap(client, '/tmp/ignored', 'module', 'WorkerServer', {
+    query: async () => { order.push('query'); return { group: 'group-1', instanceId: 'instance-1' }; },
+    capture: async (_client, _file, targets) => { order.push(`capture:${JSON.stringify(targets)}`); return { available: true }; },
+  });
+  assert.deepEqual(result, { available: true });
+  assert.deepEqual(order, ['query', 'capture:{"WorkerServer":"instance-1"}', 'Runtime.releaseObjectGroup:group-1']);
 });
 
 class FakeSocket extends EventEmitter {

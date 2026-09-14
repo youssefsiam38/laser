@@ -11,7 +11,7 @@ import { resourceTarget, fixture, checkout } from './targets/resource-soak.mjs';
 import { modeConfig, expected, SAFETY } from './resource/config.mjs';
 import { createSessions, imagePayload, prompt, settle } from './resource/fixtures.mjs';
 import { waitForRegistrations, connectInspector, queryInstances, scalarCounters, tailBufferCounters, descendantPids, removeRegistrations, linuxStartToken } from './resource/inspector.mjs';
-import { captureHeap, heapObjectId } from './resource/heap.mjs';
+import { captureHeap } from './resource/heap.mjs';
 import { processSample, enforceSafety } from './resource/process-sampler.mjs';
 import { runElectronLane } from './resource/electron.mjs';
 import { captureMemoryInfra } from './resource/memory-infra.mjs';
@@ -47,6 +47,21 @@ export async function connectWorkerInspector(record, hostPid, { connect = connec
     return handle;
   } finally {
     if (client && !ownershipTransferred) await client.close();
+  }
+}
+
+/**
+ * Runtime.queryObjects stays the hard discovery checkpoint, and the instance it
+ * finds is re-acquired immediately before its own capture: a handle taken at
+ * the start of a phase can belong to an execution context that is already gone
+ * by the time that phase reaches its snapshot.
+ */
+export async function captureInstanceHeap(client, file, moduleUrl, exportName, { capture = captureHeap, query = queryInstances } = {}) {
+  const found = await query(client, moduleUrl, exportName);
+  try {
+    return await capture(client, file, { [exportName]: found.instanceId });
+  } finally {
+    await client.send('Runtime.releaseObjectGroup', { objectGroup: found.group }).catch(() => {});
   }
 }
 
@@ -219,19 +234,16 @@ async function samplePhase(check, name, report, { heap = false, includeWorkers =
         collectors: inventory.snapshot.health.collectors.map(row => ({ name: row.name, status: row.status })), crossCheck: inventory.snapshot.health.crossCheck.status },
       tailBuffers: { count: tails.reduce((n,row) => n + (row.count ?? 0), 0), bytes: tails.reduce((n,row) => n + (row.bytes ?? 0), 0) } };
     if (heap) {
-      const hostId = await heapObjectId(set.host.client, set.host.found.instanceId);
-      phase.hostHeap = await captureHeap(set.host.client, join(check.root, `${name}-host.heapsnapshot`), { HostServer: hostId });
+      phase.hostHeap = await captureInstanceHeap(set.host.client, join(check.root, `${name}-host.heapsnapshot`), hostModule, 'HostServer');
       if (renderer) {
         const object = await check.cdp.send('Runtime.evaluate', { expression: 'window.__resourceSoak.store.getSnapshot().open', objectGroup: 'resource-open' });
-        const openId = await heapObjectId(check.cdp, object.result.objectId);
-        phase.rendererHeap = await captureHeap(check.cdp, join(check.root, `${name}-renderer.heapsnapshot`), { stateOpen: openId });
+        phase.rendererHeap = await captureHeap(check.cdp, join(check.root, `${name}-renderer.heapsnapshot`), { stateOpen: object.result.objectId });
         await check.cdp.send('Runtime.releaseObjectGroup', { objectGroup: 'resource-open' });
       }
       phase.workerHeaps = [];
       for (const [index, worker] of set.workers.slice(0, report.mode === 'full' ? 3 : 1).entries()) {
         try {
-          const workerId = await heapObjectId(worker.client, worker.found.instanceId);
-          phase.workerHeaps.push(await captureHeap(worker.client, join(check.root, `${name}-worker-${index + 1}.heapsnapshot`), { WorkerServer: workerId }));
+          phase.workerHeaps.push(await captureInstanceHeap(worker.client, join(check.root, `${name}-worker-${index + 1}.heapsnapshot`), workerModule, 'WorkerServer'));
         } catch (error) {
           phase.workerHeaps.push({ available: false, reason: error instanceof Error ? error.message : String(error) });
         }
@@ -629,6 +641,9 @@ async function runBrowserSoak(check, mode, report) {
     await imageRows.evaluateAll(nodes => Promise.all(nodes.map(node => node.decode())));
   }, { timeoutMs: config.phaseTimeoutMs });
   report.memoryInfra = memoryInfra;
+  report.capabilities.nativeAllocatorDump = memoryInfra.available
+    ? `available; one bounded ${memoryInfra.levelOfDetail} dump outside the workload, ${memoryInfra.allocators.length} allocator owners`
+    : `unavailable: ${memoryInfra.reason}`;
   report.rankings['renderer-native-allocators'] = memoryInfra.allocators;
   const streamPhase = await samplePhase(check, 'large-stream', report, { heap: true });
   report.slopes.rendererHeavyPayloadHeapBytesPerMiB = slopeSummary([

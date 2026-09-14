@@ -177,8 +177,23 @@ node scripts/browser-check/resource-soak.mjs --full --runs 2 --electron --artifa
 
 Quick mode exercises the mechanisms but is not baseline evidence. Full mode
 requires two fresh runs. Run B is refused when run A crosses a safety ceiling or
-leaves a survivor. Raw heaps are capped at 256 MiB, parsed one at a time in a
-separate process with a declared heap ceiling, and deleted on every path. Final
-reports exclude scratch paths, inspector URLs, session IDs, commands and payloads.
+leaves a survivor. Raw heaps are capped at 256 MiB, read one at a time in a
+separate process under a declared heap ceiling, and deleted on every path. That
+reader streams `nodes` and `edges` into typed arrays and fetches only the names
+it prints, so a full-scale snapshot is measured rather than refused. Heap targets
+are resolved while V8 is tracking object moves, which is the only window in which
+a snapshot object id survives the collection that precedes the snapshot, and the
+live instance is re-acquired through `Runtime.queryObjects` immediately before
+its own capture. Final reports exclude scratch paths, inspector URLs, session
+IDs, commands and payloads.
+
+Native allocator ownership comes from one bounded Chrome memory dump taken after
+the measured workload, at the least intrusive level of detail that still names
+real allocator owners. Tracing never runs across the workload itself. To compare
+instrumentation against the same image payload the soak uses:
+
+```sh
+node scripts/browser-check/resource-image-diagnostic.mjs --artifacts /tmp/resource-image-diagnostic
+```
 
 Tests: `pnpm test:browser-check` (also in `pnpm verify`).
