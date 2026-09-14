@@ -19,6 +19,7 @@ export * from "./project-env.js";
 export * from "./attention.js";
 export * from "./tasks.js";
 export * from "./pending.js";
+export * from "./resources.js";
 export * from "./pi-extension.js";
 export * from "./push.js";
 export * from "./schemas.js";

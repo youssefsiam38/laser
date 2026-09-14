@@ -63,6 +63,13 @@ export {
 } from "./relay-client.js";
 export * from "./tasks/index.js";
 export {
+  ProcessOwnershipRegistry,
+  ResourceHistory,
+  ResourceService,
+  type OwnershipLookups,
+  type ResourceServiceOptions,
+} from "./resources/index.js";
+export {
   PushService,
   b64url,
   encryptPushPayload,

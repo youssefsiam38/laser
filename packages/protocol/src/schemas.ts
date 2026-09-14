@@ -25,8 +25,51 @@ import { MAX_FALLBACK_CHAIN_MODELS } from "./fallback.js";
 import { PROVIDER_FAILURE_CLASSES } from "./provider-failure.js";
 import { ErrorCodes, type JsonRpcRequest } from "./jsonrpc.js";
 import { PREFS_MAX_BYTES } from "./messages.js";
+import { RESOURCE_HISTORY_PAGE_MAX, RESOURCE_ID_MAX, RESOURCE_LABEL_MAX, RESOURCE_REPORT_PROCESS_MAX } from "./resources.js";
 import type { ClientMethod, ClientRequests } from "./messages.js";
 import { TASK_COMMAND_MAX, TASK_LINE_MAX } from "./tasks.js";
+
+/**
+ * A desktop metrics report (RP-1). Validating the shape is the cheap half;
+ * the host still proves ancestry and `(pid, startToken)` against its own
+ * process table before a single number is believed. Nothing here can name a
+ * role, a project or a session: it is pids and counters.
+ */
+const resourcePidSchema = z.number().int().positive().max(0xffffffff);
+export const resourceDesktopReportSchema = z
+  .object({
+    at: z.string().min(1).max(64),
+    main: z.object({ pid: resourcePidSchema, startToken: z.string().min(1).max(RESOURCE_ID_MAX).optional() }).strict(),
+    processes: z
+      .array(
+        z
+          .object({
+            pid: resourcePidSchema,
+            startToken: z.string().min(1).max(RESOURCE_ID_MAX).optional(),
+            type: z.string().min(1).max(RESOURCE_LABEL_MAX),
+            workingSetBytes: z.number().nonnegative().finite().optional(),
+          })
+          .strict(),
+      )
+      .max(RESOURCE_REPORT_PROCESS_MAX),
+  })
+  .strict();
+
+/**
+ * A pid whose meaning a host subsystem knows (RP-6 background commands, RP-7
+ * helpers), including one arriving in a worker-originated typed report. The
+ * host validates it here before it may name anything.
+ */
+export const resourceProcessRegistrationSchema = z
+  .object({
+    pid: resourcePidSchema,
+    role: z.enum(["background_command", "helper"]),
+    sessionPath: z.string().min(1).max(4096).optional(),
+    taskId: z.string().min(1).max(RESOURCE_ID_MAX).optional(),
+    runId: z.string().min(1).max(RESOURCE_ID_MAX).optional(),
+    label: z.string().min(1).max(RESOURCE_LABEL_MAX).optional(),
+  })
+  .strict();
 
 /** Opt-in browse replies must not silently reinterpret legacy folders as files. */
 export const explorerListingSchema = z.object({
@@ -852,6 +895,14 @@ export const clientParamsSchemas = {
   "agents/builtin/set-instructions": z.object({ name: builtinAgentNameSchema, instructions: z.string().max(AGENT_INSTRUCTIONS_MAX).nullable() }).strict(),
   "agents/namer/qualify": z.object({ cwd }).strict(),
   "agents/sync": z.object({ snapshot: agentsSnapshotSchema }).strict(),
+
+  // --- RP-1 process inventory (host-owned; demand-driven) ---
+  "resource/snapshot": z.object({ refresh: z.boolean().optional() }).strict(),
+  "resource/history": z
+    .object({ sinceId: z.string().min(1).max(RESOURCE_ID_MAX).optional(), limit: z.number().int().positive().max(RESOURCE_HISTORY_PAGE_MAX).optional() })
+    .strict(),
+  "resource/export": z.object({}).strict(),
+  "resource/report": resourceDesktopReportSchema,
 } satisfies Record<ClientMethod, z.ZodTypeAny>;
 
 export const clientMethods = Object.keys(clientParamsSchemas) as ClientMethod[];

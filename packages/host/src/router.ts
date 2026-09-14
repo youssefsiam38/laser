@@ -47,6 +47,8 @@ import type { PrefsStore } from "./prefs.js";
 import type { FeatureService } from "./features.js";
 import type { ProjectRegistry } from "./projects.js";
 import type { PushService } from "./push.js";
+import { RESOURCE_REPORT_METHOD, guardResourceReport } from "./resources/guard.js";
+import type { ResourceService } from "./resources/index.js";
 import { canonical } from "./trust.js";
 import type { ViewCache } from "./views.js";
 import type { WorkerPool } from "./worker-pool.js";
@@ -96,6 +98,11 @@ export interface RouterDeps {
   runs?: AgentRunRegistry | undefined;
   /** Injectable clock, for the dictation route sweep. */
   now?: (() => number) | undefined;
+  /**
+   * Process inventory (RP-1). Absent = the `resource/*` methods are refused
+   * rather than answered with an invented shape.
+   */
+  resources?: ResourceService | undefined;
 }
 
 /** Methods answered by the worker that owns `params.cwd` (M4). */
@@ -200,6 +207,7 @@ export class Router {
     const id = (raw as { id?: string | number } | null)?.id ?? 0;
     try {
       guardHostEnvironment(raw, access.localEnvironment);
+      guardResourceReport(raw, access.localEnvironment);
       const req = parseClientRequest(raw);
       const clientVersion = (raw as { clientVersion?: string }).clientVersion;
       if (req.method !== "pi/host/version" && clientVersion && clientVersion !== PRODUCT_VERSION) {
@@ -217,6 +225,11 @@ export class Router {
       throw new ProtocolError(ErrorCodes.Unsupported, "this host was started without package management");
     }
     return this.deps.packages;
+  }
+
+  private resources(): ResourceService {
+    if (!this.deps.resources) throw new ProtocolError(ErrorCodes.Unsupported, "this host was started without resource diagnostics");
+    return this.deps.resources;
   }
 
   private setup(): SetupService {
@@ -590,6 +603,19 @@ export class Router {
         await this.pool.stop(req.params.cwd, "stopped from the app");
         return {};
       }
+
+      // ------------------------------------------------- process inventory
+      case "resource/snapshot":
+        return this.resources().snapshot(req.params);
+      case "resource/history":
+        return this.resources().historyPage(req.params);
+      case "resource/export":
+        return this.resources().export();
+      case RESOURCE_REPORT_METHOD:
+        // Guarded above: only a local shell reaches this, and even then the
+        // service proves the claimed desktop process is this host's own
+        // ancestor before a single number is believed.
+        return this.resources().receiveDesktopReport(req.params);
 
       // -------------------------------------------------------------- M4
       case "pi/logs/query":

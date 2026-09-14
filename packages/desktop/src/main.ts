@@ -215,6 +215,9 @@ const link = new HostLink({
   onAttention: (change: AttentionChange) => notifier.handle(change),
   onSeen: (path) => notifier.clear(path),
   onSessions: (sessions) => notifier.reconcile(sessions),
+  // The shell's only part in the process inventory: report what only it can
+  // see, when the host asks. The host verifies and owns everything else.
+  appMetrics: () => app.getAppMetrics(),
 });
 
 const notifier = new Notifier({

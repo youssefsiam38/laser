@@ -32,7 +32,7 @@ import type { AddressInfo } from "node:net";
 import { basename, dirname, extname, join, normalize, relative, resolve as resolvePath, sep } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { channelIdFor, type KeyPair } from "@lasercode/crypto";
-import { ENV, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, projectEnvWorkerConfig, type ClientRequests, type HostNotifications, type JsonRpcNotification, type LogEntry, type NamerState, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
+import { ENV, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, isTerminalRunStatus, projectEnvWorkerConfig, type ClientRequests, type HostNotifications, type JsonRpcNotification, type LogEntry, type NamerState, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
 import { suggestBeamModel } from "./agents/models.js";
 import { AgentRunRegistry } from "./agents/runs.js";
 import { SkillsCheck } from "./agents/skills-check.js";
@@ -43,6 +43,7 @@ import { PrefsStore } from "./prefs.js";
 import { SessionCatalog, defaultSessionDir } from "./catalog.js";
 import { LogStore } from "./logstore.js";
 import { PackageService, SetupService } from "./packages.js";
+import { ResourceService } from "./resources/index.js";
 import { TaskRegister } from "./tasks/register.js";
 import { defaultAgentDir, defaultStateDir, ensureWorkspace, projectRootOf, workspaceAgentFor, workspacesDir } from "./paths.js";
 import { canonical } from "./trust.js";
@@ -212,6 +213,8 @@ export class HostServer {
   readonly runs: AgentRunRegistry;
   /** Periodic validation of scoped skills and child lists. */
   readonly skillsCheck: SkillsCheck;
+  /** Process inventory and resource snapshots (RP-1). Collects only on demand. */
+  readonly resources: ResourceService;
   readonly router: Router;
   private readonly http: Server;
   private readonly wss: WebSocketServer;
@@ -363,6 +366,19 @@ export class HostServer {
       report: (warnings) => this.agents.setWarnings(warnings),
     });
 
+    // Process inventory (RP-1). Demand-driven: constructing it starts nothing,
+    // and the lookups below are called only while a snapshot is being built.
+    // They answer with ids the host already publishes — never a path.
+    this.resources = new ResourceService({
+      requestDesktopRefresh: () => this.notify("resource/refresh_request", {}),
+      lookups: {
+        sessionIdOf: (path) => this.catalog.get(path)?.id,
+        sessionIdsOf: (cwd) => this.pool.openSessions(cwd).map((path) => this.catalog.get(path)?.id).filter((id): id is string => Boolean(id)),
+        runIdsOf: (cwd) => this.runs.list().filter((run) => run.projectCwd === cwd && !isTerminalRunStatus(run.status)).map((run) => run.runId),
+        taskIdsOf: (cwd) => this.tasks.list().filter((task) => task.status === "running" && (this.pool.cwdOfSession(task.sessionPath) ?? this.catalog.cwdOf(task.sessionPath)) === cwd).map((task) => task.id),
+      },
+    });
+
     // The host resolves the package manager the workers should use — the one
     // the packaged app bundles, or the one on PATH on a developer machine —
     // and hands it down as environment (M10-T5). Settings still win inside.
@@ -446,6 +462,12 @@ export class HostServer {
       },
       isAttached: (cwd) => this.isAttached(cwd),
       hasLiveRun: (cwd) => this.runs.hasLiveRun(cwd),
+      // The pid is only knowable at spawn, and so is the start time that makes
+      // it an identity rather than a number.
+      resources: {
+        noteWorker: (cwd, pid) => this.resources.ownership.noteWorker(cwd, pid),
+        noteExit: (pid) => this.resources.ownership.noteExit(pid),
+      },
     };
     this.pool = new WorkerPool(poolOptions);
 
@@ -465,6 +487,7 @@ export class HostServer {
       setup: this.setup,
       agents: this.agents,
       runs: this.runs,
+      resources: this.resources,
     });
 
     this.http = createServer((req, res) => this.serveHttp(req, res));

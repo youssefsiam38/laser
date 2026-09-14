@@ -60,6 +60,14 @@ export interface WorkerPoolOptions {
   /** True while `cwd` has an agent run that has not ended; such a project is never idle. */
   hasLiveRun?: (cwd: string) => boolean;
   /**
+   * Process inventory (RP-1). The pool is the only party that knows a worker's
+   * pid at the moment it is spawned, which is also the only moment its start
+   * time can be captured — the identity that stops a reused pid from
+   * inheriting this project's rows later. Optional: a host without diagnostics
+   * behaves exactly as before.
+   */
+  resources?: { noteWorker(cwd: string, pid: number | undefined): void; noteExit(pid: number | undefined): void };
+  /**
    * Runs after a worker reports `ready` and before `get()` resolves, so the
    * first request a worker answers already sees what the host knows (the
    * agent definitions, through `agents/sync`). A failure is reported through
@@ -531,6 +539,9 @@ export class WorkerPool {
       ...(this.options.onStderr ? { onStderr: (t: string) => { if (!entry.warm) this.options.onStderr?.(entry.cwd, t); } } : {}),
     };
     const client = new WorkerClient(clientOptions);
+    // Before `ready`: the identity must be read while this pid is certainly
+    // still this process.
+    this.options.resources?.noteWorker(entry.cwd, client.pid);
     entry.client = client;
     entry.stopping = false;
     entry.lastActivity = this.now();
@@ -600,6 +611,7 @@ export class WorkerPool {
   private onExit(entry: Entry, client: WorkerClient, code: number | null, signal: NodeJS.Signals | null): void {
     if (entry.client !== client) return; // a superseded process; ignore
     entry.client = undefined;
+    this.options.resources?.noteExit(client.pid);
     entry.running.clear();
     entry.active.clear();
     if (entry.stopping || this.closed) {

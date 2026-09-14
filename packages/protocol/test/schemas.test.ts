@@ -21,6 +21,7 @@ import {
   clientParamsSchemas,
   parseClientRequest,
   parseJsonLine,
+  resourceProcessRegistrationSchema,
   sessionLoadResultSchema,
   type ClientMethod,
   type ClientRequests,
@@ -249,7 +250,42 @@ const samples: Record<ClientMethod, unknown> = {
   "agents/builtin/set-instructions": { name: "chat", instructions: "Answer like an exacting editor." },
   "agents/namer/qualify": { cwd: "/p" },
   "agents/sync": { snapshot: { revision: 3, agents: [], defaultAgent: "default" } },
+  "resource/snapshot": { refresh: true },
+  "resource/history": { sinceId: "rs_4", limit: 10 },
+  "resource/export": {},
+  "resource/report": {
+    at: "2026-01-01T00:00:00.000Z",
+    main: { pid: 4242, startToken: "linux:boot:1000" },
+    processes: [{ pid: 4243, type: "Tab", workingSetBytes: 1024 }],
+  },
 };
+
+describe("process inventory methods", () => {
+  it("refuses a desktop report that tries to say more than pids and counters", () => {
+    const schema = clientParamsSchemas["resource/report"];
+    const valid = { at: "2026-01-01T00:00:00.000Z", main: { pid: 10 }, processes: [{ pid: 11, type: "GPU" }] };
+    expect(schema.safeParse(valid).success).toBe(true);
+    // A role, a project or a session would let a client name what it does not own.
+    expect(schema.safeParse({ ...valid, processes: [{ pid: 11, type: "GPU", role: "host" }] }).success).toBe(false);
+    expect(schema.safeParse({ ...valid, processes: [{ pid: 11, type: "GPU", command: "node --token=s3cret" }] }).success).toBe(false);
+    expect(schema.safeParse({ ...valid, main: { pid: 0 } }).success).toBe(false);
+    expect(schema.safeParse({ ...valid, processes: Array.from({ length: 257 }, (_, i) => ({ pid: i + 1, type: "Tab" })) }).success).toBe(false);
+  });
+
+  it("bounds a history page and refuses an unknown field", () => {
+    const schema = clientParamsSchemas["resource/history"];
+    expect(schema.safeParse({ limit: 60 }).success).toBe(true);
+    expect(schema.safeParse({ limit: 61 }).success).toBe(false);
+    expect(schema.safeParse({ limit: 0 }).success).toBe(false);
+    expect(schema.safeParse({ cwd: "/p" }).success).toBe(false);
+  });
+
+  it("accepts only the two roles a subsystem may register, and never a command line", () => {
+    expect(resourceProcessRegistrationSchema.safeParse({ pid: 9, role: "background_command", taskId: "t1" }).success).toBe(true);
+    expect(resourceProcessRegistrationSchema.safeParse({ pid: 9, role: "host" }).success).toBe(false);
+    expect(resourceProcessRegistrationSchema.safeParse({ pid: 9, role: "helper", argv: ["--token=x"] }).success).toBe(false);
+  });
+});
 
 describe("client request schemas", () => {
   it("refuses MCP definitions a person could not have meant", () => {

@@ -18,6 +18,7 @@ import { WebSocket } from "ws";
 import type { AgentRun, BackgroundTask, HostNotificationMethod, HostNotifications, JsonRpcMessage, ProjectInfo, SessionSummary } from "@lasercode/protocol";
 import type { AttentionChange, FleetSnapshot } from "./fleet.js";
 import { FleetModel } from "./fleet.js";
+import { electronProcessReport, type ElectronAppMetric } from "./resource-metrics.js";
 import type { DesktopLog } from "./log.js";
 import { summarizeLiveWork, type LiveWorkSummary } from "./live-work.js";
 
@@ -33,6 +34,12 @@ export interface HostLinkOptions {
   onAttention: (change: AttentionChange) => void;
   onSeen?: (path: string) => void;
   onSessions?: (sessions: readonly SessionSummary[]) => void;
+  /**
+   * `app.getAppMetrics()`, for the host's process cross-check (RP-1). Omitted
+   * in tests and in any shell that does not want to report. Reading it is the
+   * shell's only involvement: the host owns the inventory.
+   */
+  appMetrics?: () => readonly ElectronAppMetric[];
 }
 
 export class HostLink {
@@ -86,6 +93,7 @@ export class HostLink {
       this.backoff = RECONNECT_MIN_MS;
       this.model.setConnected(true);
       void this.refresh();
+      void this.reportMetrics();
     });
     socket.on("message", (data) => this.onMessage(String(data)));
     socket.on("error", () => {
@@ -180,6 +188,22 @@ export class HostLink {
     }
   }
 
+  /**
+   * Send Electron's metrics once. Called on connect and when the host asks;
+   * never on a timer. A failure is silent by design — a diagnostic cross-check
+   * that cannot be delivered must not put a line in the tray's log on every
+   * reconnect, and the host already says the cross-check is unavailable.
+   */
+  private async reportMetrics(): Promise<void> {
+    const read = this.options.appMetrics;
+    if (!read) return;
+    try {
+      await this.request("resource/report", electronProcessReport(read(), { mainPid: process.pid }));
+    } catch {
+      // An older host without the method, or a closing socket. Neither matters.
+    }
+  }
+
   private scheduleRefresh(): void {
     if (this.refreshTimer) return;
     this.refreshTimer = setTimeout(() => {
@@ -223,6 +247,12 @@ export class HostLink {
         // The event carries no session name, so a session we are meeting for
         // the first time needs one listing before the tray can label it.
         if (change?.initial) this.scheduleRefresh();
+        return;
+      }
+      case "resource/refresh_request": {
+        // Somebody opened diagnostics and the host wants fresh Electron
+        // numbers. One report, then quiet again.
+        void this.reportMetrics();
         return;
       }
       case "pi/project/updated": {
