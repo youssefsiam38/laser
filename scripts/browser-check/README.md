@@ -135,7 +135,18 @@ pnpm -r build
 node scripts/browser-check/run.mjs --target scripts/browser-check/targets/app.mjs --fixture long --matrix
 # Regression proof including exact persisted message count and pointer/keyboard:
 node scripts/browser-check/run.mjs --target scripts/browser-check/targets/app.mjs --fixture long --matrix --script scripts/browser-check/test/acceptance.mjs
+# Advanced → Resources (RP-3) and the environment-scoped device store (RP-13 B):
+node scripts/browser-check/run.mjs --target scripts/browser-check/targets/app.mjs --fixture long --matrix --script scripts/browser-check/test/resource-diagnostics.mjs
+node scripts/browser-check/run.mjs --target scripts/browser-check/targets/app.mjs --fixture long --matrix --script scripts/browser-check/test/environment-storage.mjs
 ```
+
+Two things those last two scripts rely on, so a later script does not rediscover
+them: nothing pings the host on a timer, so a network drop is only *found* once
+the app sends something (the diagnostics poll, or any surface that requests);
+and headless Chrome here has no browser window, so `document.visibilityState`
+cannot be driven to `hidden` — the hidden-document poll guard stays a unit test.
+Both scripts seed their own hostile state through the page rather than through a
+shipped seam, and clean it up before the next matrix case opens the app.
 
 | Fixture | Data |
 | --- | --- |
