@@ -43,11 +43,29 @@ function git(cwd: string, args: string[]): Promise<{ code: number; stdout: strin
   });
 }
 
-/** Only a directory strictly under `<project>/.worktrees/` is ever removed. */
-export function isOwnedWorktreePath(projectCwd: string, path: string): boolean {
-  const root = resolve(projectCwd, WORKTREES_DIR_NAME) + sep;
+/**
+ * Only a directory strictly under a `.worktrees/` the app itself creates is
+ * ever removed. The worker roots them at the **git toplevel** (see
+ * `packages/worker/src/agents/worktrees.ts`), which is the project directory
+ * only when the project is opened at the root of its repository: a project in
+ * a subdirectory of a monorepo has its children one or more levels up, and
+ * calling those "not ours" left the directory and its branch behind forever.
+ * So every root the worker could have used is accepted, and nothing else.
+ */
+export function isOwnedWorktreePath(projectCwd: string, path: string, gitRoot?: string): boolean {
   const target = resolve(path);
-  return target.startsWith(root) && target.length > root.length;
+  const roots = gitRoot === undefined ? [projectCwd] : [projectCwd, gitRoot];
+  return roots.some((base) => {
+    const root = resolve(base, WORKTREES_DIR_NAME) + sep;
+    return target.startsWith(root) && target.length > root.length;
+  });
+}
+
+/** The repository `projectCwd` belongs to; `undefined` when it is not one. */
+async function gitToplevel(projectCwd: string): Promise<string | undefined> {
+  const found = await git(projectCwd, ["rev-parse", "--show-toplevel"]);
+  const root = found.code === 0 ? found.stdout.trim() : "";
+  return root === "" ? undefined : root;
 }
 
 /**
@@ -65,7 +83,7 @@ export async function worktreeStatus(run: WorktreeOwner): Promise<AgentWorktreeS
     unmergedCommits: null,
     uncommittedFiles: null,
   };
-  if (!isOwnedWorktreePath(run.projectCwd, worktree.path)) return { ...base, detail: NOT_OURS };
+  if (!isOwnedWorktreePath(run.projectCwd, worktree.path, await gitToplevel(run.projectCwd))) return { ...base, detail: NOT_OURS };
   if (!base.exists) return { ...base, unmergedCommits: 0, uncommittedFiles: 0 };
 
   // Commits on the branch the project's own checkout does not have. A branch

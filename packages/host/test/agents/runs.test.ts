@@ -4,7 +4,7 @@
  */
 import { PRODUCT_NAME, type AgentRun } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentRunRegistry } from "../../src/agents/runs.js";
@@ -205,6 +205,30 @@ describe("AgentRunRegistry", () => {
     registry.upsert(run("r", { status: "completed", updatedAt: "2026-06-01T00:00:09.000Z" }));
     registry.upsert(run("r", { status: "running", updatedAt: "2026-06-01T00:00:01.000Z" }));
     expect(registry.get("r")?.status).toBe("completed");
+  });
+
+  it("does not let a stale report overwrite newer live state either", () => {
+    const registry = new AgentRunRegistry({ now: NOW });
+    const question = { id: "q1", kind: "input" as const, title: "Which branch?", askedAt: "2026-06-01T00:00:09.000Z" };
+    registry.upsert(run("r", { status: "needs_input", question, updatedAt: "2026-06-01T00:00:09.000Z" }));
+    // The `running` snapshot that preceded the question, arriving late.
+    registry.upsert(run("r", { status: "running", updatedAt: "2026-06-01T00:00:01.000Z" }));
+    expect(registry.get("r")?.status).toBe("needs_input");
+    expect(registry.get("r")?.question?.title).toBe("Which branch?");
+  });
+
+  it("drops a stored run whose worktree is not a worktree, instead of throwing later", () => {
+    const file = join(dir, "agent-runs.json");
+    const good = run("good", { status: "completed", endedAt: "2026-06-01T00:00:00.000Z" });
+    const bad = { ...run("bad", { status: "completed", endedAt: "2026-06-01T00:00:00.000Z" }), worktree: { path: 7, branch: "agents/x" } };
+    writeFileSync(file, JSON.stringify({ version: 1, runs: [good, bad] }));
+    const registry = new AgentRunRegistry({ storePath: file, now: NOW });
+    try {
+      expect(registry.get("good")?.runId).toBe("good");
+      expect(registry.get("bad")).toBeUndefined();
+      // The path that used to throw out of a request handler.
+      expect(registry.worktreeRemoved(`${PROJECT}/.worktrees/good`).map((r) => r.runId)).toEqual(["good"]);
+    } finally { registry.close(); }
   });
   it("calls a project busy while any of its runs is going, whatever its age", () => {
     const registry = new AgentRunRegistry({ now: NOW });
