@@ -8,6 +8,7 @@
 import { closeSync, fstatSync, openSync, readSync, statSync, type Stats } from "node:fs";
 import {
   RevisionFold,
+  historyWindowNode,
   sessionRevisionOf,
   type RevisionHasher,
   type RevisionState,
@@ -41,6 +42,13 @@ export const DEFAULT_SESSION_INDEX_LIMITS: SessionIndexLimits = {
 export interface IndexedEntry {
   id: string | undefined;
   parentId: string | null;
+  isMessage: boolean;
+  isUser: boolean;
+  isGoalState: boolean;
+  goalPromptId?: string | undefined;
+  /** Byte range of the JSON object only; the newline is never materialised. */
+  offset: number;
+  length: number;
 }
 
 export interface SessionIndex {
@@ -49,6 +57,8 @@ export interface SessionIndex {
   leafId: string | null;
   state: RevisionState;
   checkpoints: RevisionState[];
+  /** Exact file snapshot the fold and line offsets describe. */
+  identity: FileIdentity;
 }
 
 export type SessionIndexReason =
@@ -74,12 +84,14 @@ type ScanResult =
 interface Durable {
   fold: RevisionFold;
   entries: IndexedEntry[];
+  /** Fixed ring; `checkpointStart` is the oldest slot once full. */
   checkpoints: RevisionState[];
+  checkpointStart: number;
   /** Accounted JS identity data, not process RSS or allocator capacity. */
   bytes: number;
 }
 
-interface FileIdentity {
+export interface FileIdentity {
   dev: number;
   ino: number;
   size: number;
@@ -106,7 +118,7 @@ const CHUNK = 256 * 1024;
 const HEADER_SCAN = 8192;
 const ANCHOR_BYTES = 64 * 1024;
 const ENTRY_OVERHEAD = 64;
-const DEFAULT_YIELD_LINES = 128;
+const DEFAULT_YIELD_LINES = 8;
 const RETRIES = 3;
 const NEGATIVE_REASONS = new Set<SessionIndexReason>(["too-large", "unsupported-version", "unreadable"]);
 
@@ -126,7 +138,7 @@ const sameIdentity = (left: FileIdentity, right: FileIdentity): boolean =>
   left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
 
 const entryBytes = (entry: IndexedEntry): number =>
-  ENTRY_OVERHEAD + ((entry.id?.length ?? 0) + (entry.parentId?.length ?? 0)) * 2;
+  ENTRY_OVERHEAD + ((entry.id?.length ?? 0) + (entry.parentId?.length ?? 0) + (entry.goalPromptId?.length ?? 0)) * 2 + 16;
 const checkpointBytes = (checkpoint: RevisionState): number =>
   ENTRY_OVERHEAD + (checkpoint.digest.length + (checkpoint.leafId?.length ?? 0)) * 2 + 16;
 
@@ -291,12 +303,13 @@ export class SessionIndexCache {
 
       const resumed = this.resumable(path, before, headerDigest, fd);
       if (resumed?.untouched && resumed.cached.offset === before.size) {
-        return { ok: true, index: copyIndex(indexFrom(resumed.cached.header, resumed.cached.durable)) };
+        return { ok: true, index: copyIndex(indexFrom(resumed.cached.header, resumed.cached.durable, identityOf(before))) };
       }
       const durable = resumed?.cached.durable ?? {
         fold: RevisionFold.create(this.hash, header),
         entries: [],
         checkpoints: [],
+        checkpointStart: 0,
         bytes: 0,
       };
       const from = resumed?.cached.offset ?? headerLine.end;
@@ -326,7 +339,7 @@ export class SessionIndexCache {
       });
       this.negative.delete(path);
 
-      const index = indexFrom(header, durable, scan.tail);
+      const index = indexFrom(header, durable, identityOf(before), scan.tail);
       return { ok: true, index: copyIndex(index) };
     } catch (error) {
       const result = failure("unreadable", (error as { code?: string }).code ?? "read failed");
@@ -380,8 +393,8 @@ export class SessionIndexCache {
     let offset = from;
     let linesSinceYield = 0;
 
-    const fold = (line: Buffer): { ok: false; failure: SessionIndexFailure } | undefined => {
-      const entry = parseEntry(line.toString("utf8"));
+    const fold = (line: Buffer, lineOffset: number): { ok: false; failure: SessionIndexFailure } | undefined => {
+      const entry = parseEntry(line.toString("utf8"), lineOffset, line.length);
       if (!entry) return undefined;
       if (durable.entries.length >= this.limits.entries) return failure("too-large", "entries");
       try {
@@ -392,10 +405,14 @@ export class SessionIndexCache {
       durable.entries.push(entry.identity);
       durable.bytes += entryBytes(entry.identity);
       const checkpoint = { ...durable.fold.state, leafId: entry.identity.id ?? null };
-      durable.checkpoints.push(checkpoint);
-      durable.bytes += checkpointBytes(checkpoint);
-      while (durable.checkpoints.length > this.limits.checkpoints) {
-        durable.bytes -= checkpointBytes(durable.checkpoints.shift()!);
+      if (this.limits.checkpoints > 0) {
+        if (durable.checkpoints.length < this.limits.checkpoints) durable.checkpoints.push(checkpoint);
+        else {
+          durable.bytes -= checkpointBytes(durable.checkpoints[durable.checkpointStart]!);
+          durable.checkpoints[durable.checkpointStart] = checkpoint;
+          durable.checkpointStart = (durable.checkpointStart + 1) % this.limits.checkpoints;
+        }
+        durable.bytes += checkpointBytes(checkpoint);
       }
       if (durable.bytes > this.limits.indexBytes) return failure("too-large", "index");
       return undefined;
@@ -413,7 +430,7 @@ export class SessionIndexCache {
         const end = chunk.subarray(start, newline);
         if (fragmentBytes + end.length > this.limits.lineBytes) return failure("too-large", "line");
         const line = fragmentBytes === 0 ? end : Buffer.concat([...fragments, end], fragmentBytes + end.length);
-        const problem = fold(line);
+        const problem = fold(line, offset);
         if (problem) return problem;
         fragments = [];
         fragmentBytes = 0;
@@ -433,7 +450,7 @@ export class SessionIndexCache {
     }
 
     if (fragmentBytes > 0) {
-      const entry = parseEntry(Buffer.concat(fragments, fragmentBytes).toString("utf8"));
+      const entry = parseEntry(Buffer.concat(fragments, fragmentBytes).toString("utf8"), offset, fragmentBytes);
       if (entry) {
         if (durable.entries.length >= this.limits.entries) return failure("too-large", "entries");
         const provisional = RevisionFold.resume(this.hash, durable.fold.state);
@@ -463,11 +480,14 @@ export class SessionIndexCache {
   }
 }
 
-function indexFrom(header: SessionRevisionHeader, durable: Durable, tail?: { entry: IndexedEntry; state: RevisionState }): SessionIndex {
+function indexFrom(header: SessionRevisionHeader, durable: Durable, identity: FileIdentity, tail?: { entry: IndexedEntry; state: RevisionState }): SessionIndex {
   const entries = tail ? [...durable.entries, tail.entry] : durable.entries;
   const state: RevisionState = { ...(tail ? tail.state : durable.fold.state), leafId: entries.at(-1)?.id ?? null };
-  const checkpoints = tail ? [...durable.checkpoints, { ...tail.state, leafId: tail.entry.id ?? null }] : durable.checkpoints;
-  return { header, entries, leafId: state.leafId, state, checkpoints };
+  const ordered = durable.checkpoints.length === 0 || durable.checkpointStart === 0
+    ? durable.checkpoints
+    : [...durable.checkpoints.slice(durable.checkpointStart), ...durable.checkpoints.slice(0, durable.checkpointStart)];
+  const checkpoints = tail ? [...ordered, { ...tail.state, leafId: tail.entry.id ?? null }] : ordered;
+  return { header, entries, leafId: state.leafId, state, checkpoints, identity };
 }
 
 function copyIndex(index: SessionIndex): SessionIndex {
@@ -477,6 +497,7 @@ function copyIndex(index: SessionIndex): SessionIndex {
     leafId: index.leafId,
     state: { ...index.state },
     checkpoints: index.checkpoints.map((checkpoint) => ({ ...checkpoint })),
+    identity: { ...index.identity },
   };
 }
 
@@ -497,7 +518,7 @@ function parseHeader(line: string): SessionRevisionHeader | undefined {
   };
 }
 
-function parseEntry(line: string): { value: unknown; identity: IndexedEntry } | undefined {
+function parseEntry(line: string, offset: number, length: number): { value: unknown; identity: IndexedEntry } | undefined {
   if (!line.trim()) return undefined;
   let parsed: unknown;
   try {
@@ -505,13 +526,10 @@ function parseEntry(line: string): { value: unknown; identity: IndexedEntry } | 
   } catch {
     return undefined;
   }
-  const entry = parsed as { type?: unknown; id?: unknown; parentId?: unknown } | null;
+  const entry = parsed as { type?: unknown } | null;
   if (entry?.type === "session") return undefined;
   return {
     value: parsed,
-    identity: {
-      id: typeof entry?.id === "string" ? entry.id : undefined,
-      parentId: typeof entry?.parentId === "string" ? entry.parentId : null,
-    },
+    identity: { ...historyWindowNode(parsed), offset, length },
   };
 }

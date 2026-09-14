@@ -450,13 +450,25 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("host end to end", () => {
       // what is stored — this is the property a device cache depends on.
       await client.request("pi/worker/stop", { cwd: project });
       expect(host.pool.cwds()).toEqual([]);
+      const stoppedWorkers = await client.request("pi/worker/list", {});
       const durable = await client.request<{ revision: string; environmentKey: string; authority: string; base?: string }>("session/revision", { path: state.path, baseRevision: live.revision });
       expect(durable.authority).toBe("durable");
       expect(durable.revision).toBe(live.revision);
       expect(durable.environmentKey).toBe(live.environmentKey);
       expect(durable.base).toBe("current");
-      // Nothing was started to answer that.
+      // The same inactive conversation can now return its authoritative first
+      // screen without opening a worker or materialising older bodies.
+      const coldPage = await client.request<{ entries: unknown[]; window: { revision: string; environmentKey: string; authority: string; mode: string } }>("pi/session/entries", {
+        path: state.path, authority: "any",
+      });
+      expect(coldPage.entries.length).toBeGreaterThan(0);
+      expect(coldPage.window).toMatchObject({
+        revision: live.revision, environmentKey: live.environmentKey, authority: "durable", mode: "replace",
+      });
+      // Nothing was started to answer either read: even the public worker
+      // inventory is byte-for-byte the same retired status as before.
       expect(host.pool.cwds()).toEqual([]);
+      expect(await client.request("pi/worker/list", {})).toEqual(stoppedWorkers);
       // And the environment's own identity stayed inside the host.
       const identity = JSON.parse(readFileSync(join(base, "state", "environment.json"), "utf8")) as { id: string };
       expect(JSON.stringify(durable)).not.toContain(identity.id);

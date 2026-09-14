@@ -4,9 +4,69 @@ import { ErrorCodes } from "./jsonrpc.js";
 import { ProtocolError } from "./schemas.js";
 
 const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" ? value as Record<string, unknown> : {};
-const isMessage = (entry: unknown): boolean => ["message", "custom_message"].includes(String(record(entry).type));
-const isUser = (entry: unknown): boolean => record(entry).type === "message" && record(record(entry).message).role === "user";
 const changed = (): never => { throw new ProtocolError(ErrorCodes.InvalidParams, "This history changed. Reload the conversation and try again."); };
+
+/** A durable page is deliberately recognizable without carrying a path or process identity. */
+export const DURABLE_HISTORY_EPOCH = "durable-v1";
+export const HISTORY_PAGE_ENTRY_LIMIT = 200;
+export const HISTORY_PAGE_BYTE_LIMIT = 1024 * 1024;
+
+/** The body-free row retained by the host's read-only session index. */
+export interface HistoryWindowNode {
+  id: string | undefined;
+  parentId: string | null;
+  isMessage: boolean;
+  isUser: boolean;
+  isGoalState: boolean;
+  goalPromptId?: string | undefined;
+}
+
+export interface HistoryWindowScope {
+  /** The session's own id (not its path): cursors are bound to identity, not storage. */
+  sessionId: string;
+  epoch: string;
+  seq: number;
+  /** RP-9. Required: a window without its revision is not a valid answer. */
+  revision: string;
+  environmentKey: string;
+  live?: HistoryLiveSnapshot;
+  authority?: "live" | "durable";
+  mode?: "replace" | "delta";
+  /** Internal delta boundary: selected rows are strictly after this branch entry. */
+  deltaAfter?: string | null;
+}
+
+export interface HistoryWindowPlan {
+  entryIndices: number[];
+  contextIndices: number[];
+  leafId: string | null;
+  window: Omit<HistoryWindow, "context">;
+}
+
+export function historyWindowNode(entry: unknown): HistoryWindowNode {
+  const value = record(entry);
+  const type = String(value.type);
+  const isMessage = type === "message" || type === "custom_message";
+  const isUser = type === "message" && record(value.message).role === "user";
+  let promptId: string | undefined;
+  if (isUser) {
+    const content = record(value.message).content;
+    const text = typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content.map(part => record(part).type === "text" ? String(record(part).text ?? "") : "").join("\n")
+        : "";
+    promptId = goalPromptId(text);
+  }
+  return {
+    id: typeof value.id === "string" ? value.id : undefined,
+    parentId: typeof value.parentId === "string" ? value.parentId : null,
+    isMessage,
+    isUser,
+    isGoalState: type === "custom" && value.customType === "goal-state",
+    ...(promptId ? { goalPromptId: promptId } : {}),
+  };
+}
 
 const encodeCursor = (cursor: HistoryCursor): string => {
   const bytes = new TextEncoder().encode(JSON.stringify(cursor));
@@ -47,88 +107,117 @@ interface HistoryCursor {
   b: string;
 }
 
-/** Window opaque entries along their real parent chain; never slice the disk's append order. */
-export function historyWindow(
-  snapshot: { entries: unknown[]; leafId: string | null },
+/**
+ * Plan a window over identity-only rows. This is the shared display projection:
+ * the worker materialises from its in-memory entries and the host reads only
+ * these selected JSONL lines by offset.
+ */
+export function historyWindowPlan(
+  nodes: readonly HistoryWindowNode[],
+  leafId: string | null,
   request: HistoryWindowRequest,
-  scope: {
-    /** The session's own id (not its path): cursors are bound to identity, not storage. */
-    sessionId: string;
-    epoch: string;
-    seq: number;
-    /** RP-9. Required: a window without its revision is not a valid answer. */
-    revision: string;
-    environmentKey: string;
-    live?: HistoryLiveSnapshot;
-  },
-): { entries: unknown[]; leafId: string | null; window: HistoryWindow } {
-  const byId = new Map(snapshot.entries.map(entry => [record(entry).id, entry]));
-  const reversed: unknown[] = [];
+  scope: HistoryWindowScope,
+): HistoryWindowPlan {
+  const byId = new Map<string, number>();
+  nodes.forEach((node, index) => { if (node.id !== undefined) byId.set(node.id, index); });
+  const reversed: number[] = [];
   const visited = new Set<string>();
-  let id: unknown = snapshot.leafId;
+  let id: string | null = leafId;
   while (typeof id === "string") {
     if (visited.has(id)) changed();
     visited.add(id);
-    const entry = byId.get(id);
-    if (!entry) changed();
-    reversed.push(entry);
-    id = record(entry).parentId;
+    const index = byId.get(id);
+    if (index === undefined) return changed();
+    reversed.push(index);
+    id = nodes[index]!.parentId;
   }
   const branch = reversed.reverse();
   let end = branch.length;
   let start = 0;
   const all = "all" in request;
+
   if ("before" in request) {
     const cursor = decodeCursor(request.before);
-    if (cursor.v !== CURSOR_VERSION || cursor.s !== scope.sessionId || !visited.has(String(cursor.l))) changed();
-    end = branch.findIndex(entry => record(entry).id === cursor.b);
+    if (cursor.v !== CURSOR_VERSION || cursor.s !== scope.sessionId ||
+        typeof cursor.l !== "string" || !visited.has(cursor.l)) changed();
+    end = branch.findIndex(index => nodes[index]!.id === cursor.b);
     if (end < 0) changed();
   }
-  if ("from" in request) {
-    start = branch.findIndex(entry => record(entry).id === request.from);
+
+  if (Object.prototype.hasOwnProperty.call(scope, "deltaAfter")) {
+    if (scope.deltaAfter === null) start = 0;
+    else {
+      const boundary = branch.findIndex(index => nodes[index]!.id === scope.deltaAfter);
+      if (boundary < 0) changed();
+      start = boundary + 1;
+    }
+  } else if ("from" in request) {
+    start = branch.findIndex(index => nodes[index]!.id === request.from);
     if (start < 0) changed();
   } else if (!all) {
     const limit = "tail" in request ? request.tail : "before" in request ? request.limit ?? 40 : 40;
     let messages = 0;
     start = end;
-    while (start > 0 && messages < limit) if (isMessage(branch[--start])) messages++;
+    while (start > 0 && messages < limit) if (nodes[branch[--start]!]!.isMessage) messages++;
     // A tool result cannot be separated from its call, or an assistant action
     // from its prompt. A single unusually long turn may exceed the row target.
-    while (start > 0 && !isUser(branch[start])) start--;
+    while (start > 0 && !nodes[branch[start]!]!.isUser) start--;
     // Attribution and other turn-local custom markers precede the prompt.
-    while (start > 0 && !isMessage(branch[start - 1])) start--;
+    while (start > 0 && !nodes[branch[start - 1]!]!.isMessage) start--;
   }
-  const entries = all ? snapshot.entries : branch.slice(start, end);
-  const prefix = all ? [] : branch.slice(0, start);
-  const anchor = record(entries[0]).id;
-  const context = prefix.filter(entry => record(entry).type === "custom" && record(entry).customType === "goal-state");
+
+  const entryIndices = all && !Object.prototype.hasOwnProperty.call(scope, "deltaAfter")
+    ? nodes.map((_, index) => index)
+    : branch.slice(start, end);
+  const prefix = branch.slice(0, start);
+  const anchor = entryIndices.length > 0 ? nodes[entryIndices[0]!]!.id : undefined;
+  const contextIndices = prefix.filter(index => nodes[index]!.isGoalState);
   const priorGoalIds = new Set<string>();
-  for (const entry of prefix) {
-    if (!isUser(entry)) continue;
-    const content = record(record(entry).message).content;
-    const text = typeof content === "string" ? content : Array.isArray(content) ? content.map(part => record(part).type === "text" ? String(record(part).text ?? "") : "").join("\n") : "";
-    const goal = goalPromptId(text);
+  for (const index of prefix) {
+    const goal = nodes[index]!.goalPromptId;
     if (goal) priorGoalIds.add(goal);
   }
+  const mode = scope.mode ?? "replace";
   return {
-    entries,
-    leafId: snapshot.leafId,
+    entryIndices,
+    contextIndices,
+    leafId,
     window: {
       epoch: scope.epoch,
       seq: scope.seq,
       revision: scope.revision,
       environmentKey: scope.environmentKey,
-      ...(start > 0 && typeof anchor === "string"
-        ? { before: encodeCursor({ v: CURSOR_VERSION, s: scope.sessionId, l: snapshot.leafId, b: anchor } satisfies HistoryCursor) }
+      ...(mode !== "delta" && start > 0 && typeof anchor === "string"
+        ? { before: encodeCursor({ v: CURSOR_VERSION, s: scope.sessionId, l: leafId, b: anchor } satisfies HistoryCursor) }
         : {}),
       ...(typeof anchor === "string" ? { anchor } : {}),
-      userOffset: prefix.filter(isUser).length,
+      userOffset: prefix.filter(index => nodes[index]!.isUser).length,
       complete: all || (start === 0 && end === branch.length),
-      branchesUnloaded: !all && branch.length !== snapshot.entries.length,
-      hasHistory: snapshot.entries.some(entry => isMessage(entry) || (record(entry).type === "custom" && record(entry).customType === "goal-state")),
-      context,
+      branchesUnloaded: !all && branch.length !== nodes.length,
+      hasHistory: nodes.some(node => node.isMessage || node.isGoalState),
       priorGoalIds: [...priorGoalIds],
       ...(scope.live ? { live: scope.live } : {}),
+      ...(scope.authority ? { authority: scope.authority } : {}),
+      ...(scope.mode ? { mode: scope.mode } : {}),
     },
   };
+}
+
+/** Window opaque entries along their real parent chain; never slice the disk's append order. */
+export function historyWindow(
+  snapshot: { entries: unknown[]; leafId: string | null },
+  request: HistoryWindowRequest,
+  scope: HistoryWindowScope,
+): { entries: unknown[]; leafId: string | null; window: HistoryWindow } {
+  const plan = historyWindowPlan(snapshot.entries.map(historyWindowNode), snapshot.leafId, request, scope);
+  return {
+    entries: plan.entryIndices.map(index => snapshot.entries[index]),
+    leafId: plan.leafId,
+    window: { ...plan.window, context: plan.contextIndices.map(index => snapshot.entries[index]) },
+  };
+}
+
+/** Exact UTF-8 JSON size used by both authorities for the page ceiling. */
+export function historyEntriesSerializedBytes(entries: readonly unknown[]): number {
+  return new TextEncoder().encode(JSON.stringify(entries)).byteLength;
 }

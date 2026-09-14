@@ -17,6 +17,7 @@ import { environmentIdentity, type EnvironmentIdentityFiles } from "../src/envir
 import { ProjectRegistry } from "../src/projects.js";
 import { Router } from "../src/router.js";
 import { SessionIndexCache } from "../src/session-index.js";
+import { SessionProjection } from "../src/session-projection.js";
 import { SessionRevisions } from "../src/session-revision.js";
 import { ViewCache } from "../src/views.js";
 import type { WorkerPool } from "../src/worker-pool.js";
@@ -231,7 +232,7 @@ describe("this environment's identity", () => {
 });
 
 describe("routing a revision request", () => {
-  function harness(options: { open?: string[]; revisions?: SessionRevisions | undefined; path: string; liveResult?: unknown; spawnedResult?: unknown } ) {
+  function harness(options: { open?: string[]; revisions?: SessionRevisions | undefined; projection?: SessionProjection | undefined; path: string; liveResult?: unknown; spawnedResult?: unknown } ) {
     const dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-revision-router-`));
     const rows: SessionSummary[] = [{ path: options.path, id: "session-1", cwd: CWD, createdAt: "2026-06-01T00:00:00.000Z", modifiedAt: "2026-06-01T00:00:00.000Z", messageCount: 2 }];
     const catalog = {
@@ -265,7 +266,7 @@ describe("routing a revision request", () => {
     const attention = new AttentionTracker({});
     const projects = new ProjectRegistry({ catalog, agentDir: dir });
     projects.add(CWD);
-    const router = new Router(pool, catalog, { attention, projects, views: new ViewCache(2), revisions: options.revisions });
+    const router = new Router(pool, catalog, { attention, projects, views: new ViewCache(2), revisions: options.revisions, projection: options.projection });
     return {
       router,
       catalog,
@@ -396,6 +397,98 @@ describe("routing a revision request", () => {
       expect(read).not.toHaveBeenCalled();
       expect(h.catalog.getListed).not.toHaveBeenCalled();
       expect(h.catalog.cwdOfListed).toHaveBeenCalledTimes(1);
+      expect(h.spawned).not.toHaveBeenCalled();
+      expect(h.workerRequests).toEqual([]);
+    } finally {
+      h.cleanup();
+      cleanup();
+    }
+  });
+
+  it("answers authority:any from the durable projection without spawning, and defaults an omitted window to the tail", async () => {
+    const { path, cleanup } = fixture();
+    const index = new SessionIndexCache();
+    const service = revisions({ index });
+    const projection = new SessionProjection({ index, revisions: service });
+    const h = harness({ path, revisions: service, projection });
+    try {
+      const response = await h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/session/entries", params: { path, authority: "any" } }) as { result: { entries: unknown[]; window: { authority: string; mode: string } } };
+      expect(response.result.entries).toHaveLength(2);
+      expect(response.result.window).toMatchObject({ authority: "durable", mode: "replace" });
+      expect(h.spawned).not.toHaveBeenCalled();
+      expect(h.workerRequests).toEqual([]);
+    } finally {
+      h.cleanup();
+      cleanup();
+    }
+  });
+
+  it("lets a live owner win authority:any and forwards a bounded first-screen request", async () => {
+    const { path, cleanup } = fixture();
+    const index = new SessionIndexCache();
+    const service = revisions({ index });
+    const projection = new SessionProjection({ index, revisions: service });
+    const read = vi.spyOn(projection, "read");
+    const liveResult = { entries: [{ id: "live-only" }], leafId: "live-only", window: { revision: LIVE_REVISION, environmentKey: ENVIRONMENT_KEY, authority: "live", mode: "replace" } };
+    const h = harness({ path, open: [path], revisions: service, projection, liveResult });
+    try {
+      const response = await h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/session/entries", params: { path, authority: "any" } }) as { result: typeof liveResult };
+      expect(response.result).toEqual(liveResult);
+      expect(read).not.toHaveBeenCalled();
+      expect(h.spawned).not.toHaveBeenCalled();
+      expect(h.workerRequests).toEqual([{ method: "pi/session/entries", params: { path, authority: "any", window: { tail: 40 } } }]);
+    } finally {
+      h.cleanup();
+      cleanup();
+    }
+  });
+
+  it("routes an unmigrated authority:any session to the engine and marks the live answer", async () => {
+    const { path, cleanup } = fixture([header("session-old", 2), message("e0", null, "one")]);
+    const index = new SessionIndexCache();
+    const service = revisions({ index });
+    const projection = new SessionProjection({ index, revisions: service });
+    const livePage = { entries: [{ id: "migrated" }], leafId: "migrated", window: { revision: LIVE_REVISION, environmentKey: ENVIRONMENT_KEY, authority: "live", mode: "replace" } };
+    const h = harness({ path, revisions: service, projection, spawnedResult: livePage });
+    try {
+      const response = await h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/session/entries", params: { path, authority: "any", window: { tail: 40 } } }) as { result: typeof livePage };
+      expect(response.result).toEqual(livePage);
+      expect(h.spawned).toHaveBeenCalledTimes(1);
+      expect(h.workerRequests.map(call => call.method)).toEqual(["session/load", "pi/session/entries"]);
+    } finally {
+      h.cleanup();
+      cleanup();
+    }
+  });
+
+  it("refuses an over-cap authority:any projection without silently starting a worker", async () => {
+    // session-index.test drives the real default 32k cap; this route test pins
+    // what that exact failure does at the worker-spawn boundary.
+    const { path, cleanup } = fixture();
+    const index = { read: async () => ({ ok: false as const, failure: { reason: "too-large" as const, detail: "entries" } }), invalidate: () => {}, bytes: 0, paths: () => [] } as unknown as SessionIndexCache;
+    const service = revisions({ index });
+    const projection = new SessionProjection({ index, revisions: service });
+    const h = harness({ path, revisions: service, projection });
+    try {
+      const response = await h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/session/entries", params: { path, authority: "any", window: { tail: 40 } } }) as { error: { code: number } };
+      expect(response.error.code).toBe(ErrorCodes.RevisionUnavailable);
+      expect(h.spawned).not.toHaveBeenCalled();
+      expect(h.workerRequests).toEqual([]);
+    } finally {
+      h.cleanup();
+      cleanup();
+    }
+  });
+
+  it("refuses an unreadable authority:any projection without silently starting a worker", async () => {
+    const { path, cleanup } = fixture();
+    const index = { read: async () => ({ ok: false as const, failure: { reason: "unreadable" as const } }), invalidate: () => {}, bytes: 0, paths: () => [] } as unknown as SessionIndexCache;
+    const service = revisions({ index });
+    const projection = new SessionProjection({ index, revisions: service });
+    const h = harness({ path, revisions: service, projection });
+    try {
+      const response = await h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/session/entries", params: { path, authority: "any", window: { tail: 40 } } }) as { error: { code: number } };
+      expect(response.error.code).toBe(ErrorCodes.RevisionUnavailable);
       expect(h.spawned).not.toHaveBeenCalled();
       expect(h.workerRequests).toEqual([]);
     } finally {

@@ -56,6 +56,7 @@ import { SessionLoadDelivery } from "./session-load-delivery.js";
 import { TranscriptDelivery } from "./transcript-delivery.js";
 import { SearchCancellation } from "./search-cancellation.js";
 import { SessionIndexCache } from "./session-index.js";
+import { SessionProjection } from "./session-projection.js";
 import { SessionRevisions } from "./session-revision.js";
 import { environmentIdentity, type EnvironmentIdentity } from "./environment-identity.js";
 import { ViewCache } from "./views.js";
@@ -202,6 +203,8 @@ export class HostServer {
   private readonly environment: EnvironmentIdentity;
   /** Durable revisions read without starting a worker (RP-9). */
   readonly revisions: SessionRevisions;
+  /** Bounded, read-only history pages over that same index (RP-12). */
+  readonly projection: SessionProjection;
   /** M4 log store, or undefined when it could not be opened (see `logsUnavailable`). */
   readonly logs: LogStore | undefined;
   readonly logsUnavailable: string | undefined;
@@ -302,10 +305,12 @@ export class HostServer {
     this.views = new ViewCache(options.hydratedViews ?? 8);
     // The revision reader derives both its public key and private revision tag
     // from the same identity input, so those fields cannot disagree.
+    const sessionIndex = new SessionIndexCache();
     this.revisions = new SessionRevisions({
-      index: new SessionIndexCache(),
+      index: sessionIndex,
       environmentId: this.environment.id,
     });
+    this.projection = new SessionProjection({ index: sessionIndex, revisions: this.revisions });
 
     this.attention = new AttentionTracker({
       storePath: join(stateDir, "attention.json"),
@@ -510,6 +515,7 @@ export class HostServer {
       runs: this.runs,
       resources: this.resources,
       revisions: this.revisions,
+      projection: this.projection,
     });
 
     this.http = createServer((req, res) => this.serveHttp(req, res));

@@ -29,13 +29,15 @@ export {
   SessionIndexCache,
   DEFAULT_SESSION_INDEX_LIMITS,
   READABLE_SESSION_VERSION,
+  type FileIdentity,
   type IndexedEntry,
   type SessionIndex,
   type SessionIndexFailure,
   type SessionIndexLimits,
   type SessionIndexResult,
 } from "./session-index.js";
-export { SessionRevisions, type RevisionAnswer, type SessionRevisionsOptions } from "./session-revision.js";
+export { SessionProjection, type ProjectionAnswer, type SessionProjectionOptions } from "./session-projection.js";
+export { SessionRevisions, type ResolvedRevisionBase, type RevisionAnswer, type SessionRevisionsOptions } from "./session-revision.js";
 export {
   canonical,
   trustReasons,

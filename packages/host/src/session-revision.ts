@@ -14,7 +14,7 @@
  * checked for still being on the branch. Everything else is `stale`, and an
  * edit, fork, jump or compaction is always `stale`.
  */
-import { ErrorCodes, ProtocolError, classifyBaseRevision, environmentKeyOf, environmentTagOf, isEnvironmentKey, isSessionRevision, sessionRevisionOf, type ClientRequests, type RevisionState } from "@lasercode/protocol";
+import { ErrorCodes, ProtocolError, environmentKeyOf, environmentTagOf, isEnvironmentKey, isSessionRevision, sessionRevisionOf, type ClientRequests, type RevisionBase, type RevisionState } from "@lasercode/protocol";
 import { nodeRevisionHasher } from "@lasercode/protocol/revision-node";
 import type { SessionIndex, SessionIndexCache, SessionIndexFailure } from "./session-index.js";
 
@@ -37,6 +37,12 @@ export type RevisionAnswer =
   | { kind: "route-live"; reason: SessionIndexFailure }
   | { kind: "refuse"; error: ProtocolError };
 
+export interface ResolvedRevisionBase {
+  base: RevisionBase;
+  /** Present only when the current file proves this exact state. */
+  state?: RevisionState;
+}
+
 export class SessionRevisions {
   private readonly tag: string;
   private readonly key: string;
@@ -55,8 +61,8 @@ export class SessionRevisions {
         : { kind: "refuse", error: refusal(result.failure) };
     }
     const { index } = result;
-    const revision = sessionRevisionOf(nodeRevisionHasher, this.tag, index.state);
-    const base = baseRevision === undefined ? undefined : this.classify(index, baseRevision);
+    const revision = this.revisionOf(index);
+    const base = baseRevision === undefined ? undefined : this.resolveBase(index, baseRevision).base;
     return { kind: "answer", result: { revision, environmentKey: this.key, authority: "durable", ...(base ? { base } : {}) } };
   }
 
@@ -76,9 +82,9 @@ export class SessionRevisions {
 
   /** Validate a worker-produced history window without teaching Router token parsing. */
   validateWindow<T>(value: T): T {
-    const window = (value as { window?: { revision?: unknown; environmentKey?: unknown } } | null)?.window;
-    if (!window) this.liveMismatch();
-    this.validateBinding(window!.revision, window!.environmentKey);
+    const window = (value as { window?: { revision?: unknown; environmentKey?: unknown; authority?: unknown; mode?: unknown } } | null)?.window;
+    if (!window || window.authority !== "live" || (window.mode !== "replace" && window.mode !== "delta")) this.liveMismatch();
+    this.validateBinding(window.revision, window.environmentKey);
     return value;
   }
 
@@ -103,17 +109,28 @@ export class SessionRevisions {
     );
   }
 
-  private classify(index: SessionIndex, baseRevision: string): "current" | "prefix" | "stale" {
+  /** The same bound revision used by both the revision and projection routes. */
+  revisionOf(index: SessionIndex): string {
+    return sessionRevisionOf(nodeRevisionHasher, this.tag, index.state);
+  }
+
+  get environmentKey(): string {
+    return this.key;
+  }
+
+  /** Return the exact checkpoint behind a proved delta, never merely equality. */
+  resolveBase(index: SessionIndex, baseRevision: string): ResolvedRevisionBase {
+    if (this.revisionOf(index) === baseRevision) return { base: "current", state: index.state };
     const branch = branchIds(index);
-    return classifyBaseRevision({
-      hash: nodeRevisionHasher,
-      environmentTag: this.tag,
-      baseRevision,
-      current: index.state,
-      // Newest first: a client's cache is usually one or two appends behind.
-      candidates: [...index.checkpoints].reverse() satisfies RevisionState[],
-      onBranch: (leafId) => leafId === null ? index.leafId === null : branch.has(leafId),
-    });
+    for (const candidate of [...index.checkpoints].reverse()) {
+      if (candidate.count > index.state.count) continue;
+      if (sessionRevisionOf(nodeRevisionHasher, this.tag, candidate) !== baseRevision) continue;
+      if ((candidate.barrierCount ?? 0) !== (index.state.barrierCount ?? 0)) return { base: "stale" };
+      return candidate.leafId === null
+        ? (index.leafId === null ? { base: "prefix", state: candidate } : { base: "stale" })
+        : (branch.has(candidate.leafId) ? { base: "prefix", state: candidate } : { base: "stale" });
+    }
+    return { base: "stale" };
   }
 
   /** Drop a cached index (the file was forked, compacted, moved or deleted). */

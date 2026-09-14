@@ -63,6 +63,10 @@ export interface HistoryWindow {
   context: unknown[];
   priorGoalIds: string[];
   live?: HistoryLiveSnapshot;
+  /** The authority that produced this page. Durable pages never carry live work or actions. */
+  authority?: "live" | "durable";
+  /** Append only for `delta`; every other answer atomically replaces the client's view. */
+  mode?: "replace" | "delta";
 }
 
 export interface ImageContent {
@@ -1160,7 +1164,17 @@ export interface ClientRequests {
    * not carry one — read the last entry as the leaf, which is what the engine
    * itself does when it re-opens a file.
    */
-  "pi/session/entries": { params: { path: string; window?: HistoryWindowRequest }; result: { entries: unknown[]; leafId?: string | null; window?: HistoryWindow } };
+  "pi/session/entries": {
+    params: {
+      path: string;
+      window?: HistoryWindowRequest;
+      /** Default `live` preserves the existing worker-owned behavior. */
+      authority?: "live" | "any";
+      /** A proved canonical prefix may be answered as a delta; otherwise replace atomically. */
+      baseRevision?: string;
+    };
+    result: { entries: unknown[]; leafId?: string | null; window?: HistoryWindow };
+  };
   "pi/session/compact": { params: { path: string; instructions?: string }; result: {} };
   "pi/model/list": { params: { path: string }; result: { models: ModelRef[] } };
   "pi/model/set": { params: { path: string; model: ModelRef }; result: { state: SessionState } };

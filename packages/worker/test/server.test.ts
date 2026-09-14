@@ -304,6 +304,7 @@ describe("WorkerServer", () => {
       const window = (await h.call(2, "pi/session/entries", { path: "/tmp/fake/s1.jsonl", window: { tail: 2 } })).result as { window: { revision: string; environmentKey: string; before: string } };
       expect(isSessionRevision(window.window.revision)).toBe(true);
       expect(isEnvironmentKey(window.window.environmentKey)).toBe(true);
+      expect(window.window).toMatchObject({ authority: "live", mode: "replace" });
       // The page cursor says nothing about where or how history is stored.
       expect(window.window.before).not.toContain("/tmp/fake");
       expect(() => JSON.parse(window.window.before)).toThrow();
@@ -321,16 +322,35 @@ describe("WorkerServer", () => {
       const grown = (await h.call(5, "session/revision", { path: "/tmp/fake/s1.jsonl", baseRevision: window.window.revision })).result as { revision: string; base: string };
       expect(grown.revision).not.toBe(window.window.revision);
       expect(grown.base).toBe("prefix");
+      const delta = (await h.call(6, "pi/session/entries", {
+        path: "/tmp/fake/s1.jsonl", window: { tail: 2 }, authority: "any", baseRevision: window.window.revision,
+      })).result as { entries: unknown[]; window: { authority: string; mode: string; revision: string } };
+      expect(delta).toMatchObject({ entries: [driver.history.entries.at(-1)], window: { authority: "live", mode: "delta", revision: grown.revision } });
 
       // A record that cannot be canonicalised refuses the read rather than
       // answering with a window nothing can validate.
       driver.history = { entries: [...rows, { type: "message", id: "bad", parentId: "e5", message: { role: "user", content: NaN } }], leafId: "bad" };
-      const refused = await h.call(6, "pi/session/entries", { path: "/tmp/fake/s1.jsonl", window: { tail: 2 } });
+      const refused = await h.call(7, "pi/session/entries", { path: "/tmp/fake/s1.jsonl", window: { tail: 2 } });
       expect(refused.error?.code).toBe(ErrorCodes.RevisionUnavailable);
       // A load still opens the conversation; only the revision is absent.
-      const stillLoads = (await h.call(7, "session/load", { path: "/tmp/fake/s1.jsonl" })).result as { state: unknown; revision?: string };
+      const stillLoads = (await h.call(8, "session/load", { path: "/tmp/fake/s1.jsonl" })).result as { state: unknown; revision?: string };
       expect(stillLoads.state).toBeTruthy();
       expect(stillLoads.revision).toBeUndefined();
+    } finally { await h.server.dispose(); }
+  });
+
+  it("keeps an in-memory navigated live branch authoritative for authority:any", async () => {
+    const h = harness();
+    await h.call(1, "session/new", { cwd: "/tmp/fake" });
+    const driver = h.drivers[0]!;
+    driver.header = { id: "s1", cwd: "/tmp/fake", version: 3 };
+    const rows = Array.from({ length: 6 }, (_, i) => ({ type: "message", id: `e${i}`, parentId: i ? `e${i - 1}` : null, message: { role: i % 2 ? "assistant" : "user", content: String(i) } }));
+    driver.history = { entries: rows, leafId: "e1" };
+    try {
+      const response = (await h.call(2, "pi/session/entries", { path: "/tmp/fake/s1.jsonl", authority: "any", window: { tail: 40 } })).result as { entries: unknown[]; leafId: string; window: { authority: string } };
+      expect(response.entries).toEqual(rows.slice(0, 2));
+      expect(response.leafId).toBe("e1");
+      expect(response.window.authority).toBe("live");
     } finally { await h.server.dispose(); }
   });
 

@@ -50,6 +50,7 @@ import type { PushService } from "./push.js";
 import { RESOURCE_REPORT_METHOD, guardResourceReport } from "./resources/guard.js";
 import type { ResourceService } from "./resources/index.js";
 import { canonical } from "./trust.js";
+import type { SessionProjection } from "./session-projection.js";
 import type { SessionRevisions } from "./session-revision.js";
 import type { ViewCache } from "./views.js";
 import type { WorkerPool } from "./worker-pool.js";
@@ -104,6 +105,8 @@ export interface RouterDeps {
    * session a worker already owns, and says so rather than inventing one.
    */
   revisions?: SessionRevisions | undefined;
+  /** Read-only bounded history pages over the durable revision index (RP-12). */
+  projection?: SessionProjection | undefined;
   /**
    * Process inventory (RP-1). Absent = the `resource/*` methods are refused
    * rather than answered with an invented shape.
@@ -447,9 +450,40 @@ export class Router {
 
       case "pi/session/entries": {
         const { path } = req.params;
+        if (req.params.authority === "any") {
+          const revisions = this.deps.revisions;
+          const projection = this.deps.projection;
+          if (!revisions || !projection) {
+            throw new ProtocolError(ErrorCodes.RevisionUnavailable, "This host has no configured durable history reader. Restart the app and try again.");
+          }
+          // Apply the same ownership/project gate as session/revision before a
+          // host fd is opened. An arbitrary path never becomes a file oracle.
+          const knownCwd = this.pool.cwdOfSession(path) ?? this.deps.runs?.projectCwdOf(path);
+          const listedCwd = knownCwd === undefined ? this.catalog.cwdOfListed(path) : undefined;
+          const cwd = knownCwd ?? (listedCwd ? projectRootOf(listedCwd) : undefined);
+          if (!cwd) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation is not stored here.");
+          if (!this.isWorkspace(cwd)) this.deps.projects.assertProject(cwd);
+
+          // A live owner always wins, including an in-memory navigate that disk
+          // cannot observe. An omitted window becomes the bounded first screen.
+          const params = req.params.window ? req.params : { ...req.params, window: { tail: 40 } as const };
+          const live = this.liveWorkerFor(path);
+          if (live) return revisions.validateWindow(await live.request(req.method, params));
+          if (!existsSync(path)) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation is no longer stored here.");
+
+          // Bounds/unreadability refuse truthfully instead of silently spawning.
+          // Only an unmigrated format routes live: the pinned engine owns that
+          // rewrite and the host deliberately cannot reproduce it.
+          const answer = await projection.read(path, params.window, req.params.baseRevision);
+          if (answer.kind === "refuse") throw answer.error;
+          if (answer.kind === "route-live") {
+            const forwarded = await (await this.workerFor(path)).request(req.method, params);
+            return revisions.validateWindow(forwarded);
+          }
+          return answer.result;
+        }
         if (req.params.window) {
-          // A page is not a full ViewCache snapshot. The serving worker owns
-          // the actual branch pointer and its matching live-update watermark.
+          // Default/explicit `live` preserves today's worker-owned behavior.
           const worker = await this.workerFor(path);
           const result = await worker.request(req.method, req.params);
           return this.deps.revisions ? this.deps.revisions.validateWindow(result) : result;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { historyWindow, parseClientRequest } from "../src/index.js";
+import { historyWindow, historyWindowNode, historyWindowPlan, parseClientRequest } from "../src/index.js";
 
 const PATH = "/project/session.jsonl";
 const scope = {
@@ -84,13 +84,33 @@ describe("history windows", () => {
     expect(page.window.before).not.toContain(scope.epoch);
   });
 
-  it("round-trips every request variant and refuses ambiguous or unbounded initial windows", () => {
+  it("plans the same display rows without bodies and supports a strict-after delta boundary", () => {
+    const entries = history(12);
+    const snapshot = { entries, leafId: "e11" };
+    const full = historyWindow(snapshot, { tail: 4 }, scope);
+    const plan = historyWindowPlan(entries.map(historyWindowNode), snapshot.leafId, { tail: 4 }, scope);
+    expect(plan.entryIndices.map(index => entries[index])).toEqual(full.entries);
+    expect(plan.window).toEqual((({ context: _context, ...window }) => window)(full.window));
+
+    const delta = historyWindow(snapshot, { tail: 4 }, { ...scope, authority: "live", mode: "delta", deltaAfter: "e7" });
+    expect(delta.entries).toEqual(entries.slice(8));
+    expect(delta.window).toMatchObject({ authority: "live", mode: "delta" });
+    expect(delta.window.before).toBeUndefined();
+  });
+
+  it("round-trips every request variant, authority and base revision, and refuses invalid values", () => {
     for (const window of [{ tail: 40 }, { before: "cursor", limit: 40 }, { from: "entry" }, { all: true }]) {
-      const request = { jsonrpc: "2.0", id: 1, method: "pi/session/entries", params: { path: PATH, window } };
+      const request = { jsonrpc: "2.0", id: 1, method: "pi/session/entries", params: { path: PATH, window, authority: "any", baseRevision: scope.revision } };
       expect(parseClientRequest(JSON.parse(JSON.stringify(request)))).toEqual(request);
     }
-    for (const window of [{ tail: 0 }, { tail: 1000 }, { tail: 40, all: true }]) {
-      expect(() => parseClientRequest({ jsonrpc: "2.0", id: 1, method: "pi/session/entries", params: { path: PATH, window } })).toThrow();
+    for (const params of [
+      { path: PATH, window: { tail: 0 } },
+      { path: PATH, window: { tail: 1000 } },
+      { path: PATH, window: { tail: 40, all: true } },
+      { path: PATH, authority: "durable" },
+      { path: PATH, baseRevision: "" },
+    ]) {
+      expect(() => parseClientRequest({ jsonrpc: "2.0", id: 1, method: "pi/session/entries", params })).toThrow();
     }
   });
 });

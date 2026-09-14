@@ -20,7 +20,6 @@
  */
 import {
   RevisionFold,
-  classifyBaseRevision,
   environmentKeyOf,
   environmentTagOf,
   sessionRevisionOf,
@@ -44,6 +43,11 @@ export interface SessionRevisionResult {
   revision: string;
   environmentKey: string;
   state: RevisionState;
+}
+
+export interface ResolvedLiveRevisionBase {
+  base: RevisionBase;
+  state?: RevisionState;
 }
 
 /** One conversation's fold, checkpoints and issued states. */
@@ -94,16 +98,22 @@ export class SessionRevisionTracker {
 
   /** What a client's cached revision is worth against these entries. */
   classify(baseRevision: string, header: SessionRevisionHeader, entries: readonly unknown[], leafId: string | null): RevisionBase {
-    const { state } = this.compute(header, entries, leafId);
+    return this.resolve(baseRevision, header, entries, leafId).base;
+  }
+
+  /** Return the exact live/durable checkpoint behind a proved delta. */
+  resolve(baseRevision: string, header: SessionRevisionHeader, entries: readonly unknown[], leafId: string | null): ResolvedLiveRevisionBase {
+    const { state, revision } = this.compute(header, entries, leafId);
+    if (revision === baseRevision) return { base: "current", state };
     const branch = branchIds(entries, leafId);
-    return classifyBaseRevision({
-      hash: this.hash,
-      environmentTag: this.tag,
-      baseRevision,
-      current: state,
-      candidates: [...this.issued, ...this.checkpoints],
-      onBranch: (candidate) => candidate === null ? leafId === null : branch.has(candidate),
-    });
+    for (const candidate of [...this.issued, ...this.checkpoints].reverse()) {
+      if (candidate.count > state.count) continue;
+      if (sessionRevisionOf(this.hash, this.tag, candidate) !== baseRevision) continue;
+      if ((candidate.barrierCount ?? 0) !== (state.barrierCount ?? 0)) return { base: "stale" };
+      const onBranch = candidate.leafId === null ? leafId === null : branch.has(candidate.leafId);
+      return onBranch ? { base: "prefix", state: candidate } : { base: "stale" };
+    }
+    return { base: "stale" };
   }
 
   private restart(header: SessionRevisionHeader, token: string): void {
