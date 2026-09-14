@@ -34,6 +34,11 @@ export async function startBrowser({ root, env, life, target, timeout, playwrigh
   life.spawn(executable, ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--disable-dev-shm-usage', `--remote-debugging-port=${port}`, '--remote-debugging-address=127.0.0.1', `--user-data-dir=${join(root, 'chrome-profile')}`, 'about:blank'], { name: 'chrome', env });
   await until(async () => (await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(1000) })).ok, 'Chrome debugging endpoint (see logs/chrome.log)', timeout);
   const browser = await resolved.chromium.connectOverCDP(`http://127.0.0.1:${port}`, { timeout, artifactsDir: join(root, 'artifacts') });
+  // Close Chrome's launch-only about:blank before creating the measured context:
+  // the resource harness can then require one renderer instead of guessing
+  // which same-label process owns its target.
+  for (const existing of browser.contexts()) for (const blank of existing.pages()) await blank.close();
+  const browserCdp = await browser.newBrowserCDPSession();
   // hasTouch enables Playwright's touchscreen API. CDP below switches the actual
   // device capability on/off without destroying the page or its scroll state.
   const context = await browser.newContext({ hasTouch: true, acceptDownloads: false });
@@ -53,7 +58,7 @@ export async function startBrowser({ root, env, life, target, timeout, playwrigh
     await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: state.theme }, { name: 'prefers-reduced-motion', value: state.reducedMotion ? 'reduce' : 'no-preference' }] });
   }
   const api = {
-    page, context, state, shots,
+    page, context, cdp, browserCdp, state, shots,
     async open(path = '/') { await page.goto(new URL(path, target.url).href, { waitUntil: 'domcontentloaded' }); await api.touch(state.touch); await media(); if (target.ready) await target.ready(api); },
     async viewport(value) { const size = typeof value === 'number' ? { width: value, height: value <= 600 ? 844 : 900 } : value; await page.setViewportSize(size); Object.assign(state, size); },
     async theme(value) {

@@ -92,6 +92,7 @@ await browserCheck({ target, fixture, fixtureName: 'short', matrix: true }, asyn
 | `waitFor('text' \| {selector})` | Visible text or selector, bounded with location in errors. |
 | `metrics()` | DOM node count, long-task timings, `window.__renderCounts` when exposed. |
 | `page`, `context` | Playwright; 30-second action/navigation defaults. No forced clicks. |
+| `cdp`, `browserCdp` | Target and browser CDP sessions for bounded diagnostics; never attach to an existing browser. |
 | `fixture`, `root`, `state` | Fixture result, artifact directory, applied device/theme state. |
 
 `--timeout 30000` controls readiness and browser actions; fixture adapters bound
@@ -158,5 +159,26 @@ Electron/native acceptance, no person's browser/profile/agent directory, no
 replacement for Docker's stronger isolation or the packaged clean-machine gate.
 Every feature still needs its own interaction assertions; four screenshots alone
 do not prove keyboard, cancellation, scrolling or approval behavior.
+
+## Controlled resource soak
+
+`resource-soak.mjs` is the credential-free Linux RP-2 harness. It uses synthetic
+transcripts, a loopback provider, scratch agent/session/state roots, owned
+inspectors, `/proc` PSS/private-resident counters and bounded heap snapshots.
+It never attaches to an existing host/browser. PSS means proportional physical
+pages; private resident is separate. RSS rows overlap shared mappings and are
+never summed.
+
+```sh
+pnpm -r build
+node scripts/browser-check/resource-soak.mjs --quick --runs 1 --artifacts /tmp/resource-quick
+node scripts/browser-check/resource-soak.mjs --full --runs 2 --electron --artifacts /tmp/resource-full
+```
+
+Quick mode exercises the mechanisms but is not baseline evidence. Full mode
+requires two fresh runs. Run B is refused when run A crosses a safety ceiling or
+leaves a survivor. Raw heaps are capped at 256 MiB, parsed one at a time in a
+separate process with a declared heap ceiling, and deleted on every path. Final
+reports exclude scratch paths, inspector URLs, session IDs, commands and payloads.
 
 Tests: `pnpm test:browser-check` (also in `pnpm verify`).
