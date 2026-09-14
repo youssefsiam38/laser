@@ -1,33 +1,30 @@
-## Lighter, faster, and it stops eating your disk
+## Two things 0.6.2 got wrong, and fifty things nobody had noticed yet
 
-Nothing you can do changed in this release. What changed is how much Laser costs to run.
+### Fixed from 0.6.2
 
-### Your disk is yours again
+- **The window stopped drawing.** After one message with a formula in it, the next ordinary message could bring up "Something went wrong drawing this window". The maths renderer was being handed to React as a function to *call* rather than a value to *keep*. Fixed, with a test taken from the conversation where it happened.
+- **Scrolling up showed the same section again.** When an earlier page arrived above what you were reading, the view stayed at the top of the new page instead of moving with your place, so every wheel notch showed you page tops and you met the same messages twice on the way back down. The view now moves by exactly the height of what was inserted above you, before the frame is drawn.
+- **Changing the thinking level locked every composer.** On a conversation that has already started, a thinking or model change now applies at once — it steers the next turn, it does not wait for the current one — and a change still waiting on one conversation never disables another's composer.
 
-Laser keeps a record of every request it sends to a model so you can open **View API request** on any message. A long conversation re-sends its whole history every turn, and Laser kept a full copy each time: on one machine that record grew to 27 GB in eight days without any sign of it.
+### An independent review, fifty findings, all handled
 
-It is now bounded. The last fifty requests of every conversation are kept in full; older ones keep a summary — the model, how many messages, how large, how long — and give the bytes back. The whole record stays under 1 GB, and the space is really returned to the disk rather than left inside the file. **Settings → This device** shows how much the record takes and has a Clear button that says what goes and what stays. On first start after this update Laser tidies an existing record in the background, in small steps, so nothing stalls.
+We had every package read by reviewers with no stake in the code. Fifty findings came back; all fifty were investigated with a failing test first, forty-eight were real and are fixed, two were proven not to be bugs and now carry a test that says so. Among the ones you could have met:
 
-### Cheaper while you are not looking
+- The worker could exit — taking every conversation in that project with it — if a session was renamed at the wrong moment or a stop arrived during a runtime swap. It cannot now, and a guard keeps it alive through anything similar.
+- Forking a conversation mid-run left its background commands and agent runs filed under the old name, so the fleet lost them and a stop could not reach the run. Everything moves with the fork now.
+- Turning a Feature on or off restarted every project's worker, even one with an agent waiting on your answer. A worker with live work is never restarted underneath it.
+- Closing a conversation, or opening another one, killed its detached background commands. Only quitting does that now; the command keeps running and the next session can still read it.
+- Opening Laser in a subdirectory of a repository made it forget that its agents' worktrees were its own, so deleting a session leaked the worktree and its branch.
+- On a phone, the public relay could be made to buffer without limit by a client that never reads. It now pauses the sender.
+- A `.laser/settings.json` with a typo read as empty settings, silently; it now tells you what is wrong. A project-level write no longer deletes keys you added by hand.
+- A file called `dist`, `build` or `out` was hidden from the `@` picker.
+- Escape while typing in Settings or Logs closed the whole panel.
+- Folding a tool while a search revealed it saved that as your preference; a search reveal is transient again.
+- Tooltips that were only reachable with a mouse now open on focus and on touch.
+- On macOS and Windows, "open in editor" failed with a message about a missing text editor; it now opens the default text editor, or the button is not shown where that is not possible.
+- A landing-page draft survives a reload for an update; the pairing invite expires when it says it does; the request log releases what a finished turn left open; and thirty-odd smaller things listed in the repository's ledger.
 
-Closing the window keeps Laser running in the tray, but until now the hidden window went on drawing frames and running timers at full speed. It now idles the way any hidden window does: agents keep working, notifications still arrive, and when you come back the window shows the right state immediately — no burst of catching up.
+### Also
 
-### Faster to open
-
-- The first screen downloads a fifth less code: maths typesetting, the API request inspector, the agent map and the schema library arrive only when a conversation first needs them.
-- The desktop app reads your keychain identity and your shell environment at the same time instead of one after the other.
-- Hashed assets are cached by the browser between launches.
-
-### Smoother while it streams
-
-A streamed word used to wake almost every part of the window — the sidebar, the top bar, the fleet, the monitor — even though none of them had anything new to show. Now a word wakes the message it belongs to and nothing else: roughly seven times fewer renders per word, and no frame over 50 ms even in a 2,000-message conversation.
-
-### Small things that were wrong
-
-- **View API request** no longer blinks back to its loading state while the conversation streams.
-- On a phone, returning to a long conversation is ready to type into sooner: the sheet you dismissed kept catching taps while it faded.
-- A duration never reads "1m 60s".
-
-### Smaller installer
-
-The package leaves out 57 MB of files that could never run — workspace source, a Java archive behind a native binary, browser-only builds of Node libraries — while keeping every file the bundled engine can load.
+- The API request inspector says when an older request's body has been released, and shows its summary.
+- A pairing code that expires while you are confirming it gets a proper message, not a stack trace.
