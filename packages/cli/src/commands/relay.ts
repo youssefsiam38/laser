@@ -30,6 +30,7 @@ import {
   type DeviceEntry,
   type DeviceListBody,
   type PairingGrant,
+  PairingError,
 } from "@lasercode/crypto";
 import WebSocket from "ws";
 
@@ -338,7 +339,17 @@ async function pair(context: CommandContext): Promise<void> {
     deviceId: deviceIdFor(devicePublicKey),
     ...(config.hostName !== undefined ? { hostName: config.hostName } : {}),
   };
-  const message2 = await responder.grant(grant, { sasConfirmed: true });
+  let message2: Awaited<ReturnType<typeof responder.grant>>;
+  try {
+    message2 = await responder.grant(grant, { sasConfirmed: true });
+  } catch (error) {
+    if (!(error instanceof PairingError)) throw error;
+    message1.close(1000, "expired");
+    throw new CliError(`the pairing code expired before it was confirmed: ${error.message}`, {
+      exitCode: ExitCode.Usage,
+      fix: `run ${PRODUCT_NAME} relay link again and confirm the emoji within three minutes`,
+    });
+  }
   await message1.send(message2);
   message1.close(1000, "paired");
 
