@@ -25,6 +25,19 @@ it('searches beyond the initial page, honors ignore rules and omits deleted trac
   expect((await service.list({ query: 'secret' })).files).toEqual([]);
   expect((await service.list({ query: 'deleted' })).files).toEqual([]);
 });
+it('skips build directories by name but never a file that shares one', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'file-picker-walk-')); roots.push(cwd);
+  await writeFile(join(cwd, 'dist'), 'a shell script called dist\n');
+  await mkdir(join(cwd, 'dist-tools'));
+  await writeFile(join(cwd, 'dist-tools', 'build.ts'), '');
+  await mkdir(join(cwd, 'build'));
+  await writeFile(join(cwd, 'build', 'artifact.js'), '');
+  const service = new ProjectFilesService({ cwd });
+  const paths = (await service.list({ limit: 50 })).files.map(file => file.path);
+  expect(paths).toContain('dist');
+  expect(paths).toContain('dist-tools/build.ts');
+  expect(paths).not.toContain('build/artifact.js');
+});
 it('reads relative and absolute project files with metadata', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'file-read-')); roots.push(cwd);
   await writeFile(join(cwd, 'document.md'), '# Document\n');

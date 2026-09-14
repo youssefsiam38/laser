@@ -223,9 +223,11 @@ export class ProjectFilesService {
         continue; // an unreadable directory is not a reason to have no list
       }
       for (const entry of entries) {
-        if (SKIP_DIRECTORIES.has(entry.name)) continue;
         const full = join(dir, entry.name);
         if (entry.isDirectory()) {
+          // Only a directory is skipped by name: a *file* called `dist` or
+          // `out` is a file a person can mean in the `@` picker.
+          if (SKIP_DIRECTORIES.has(entry.name)) continue;
           queue.push(full);
           continue;
         }
