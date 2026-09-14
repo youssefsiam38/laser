@@ -2,7 +2,7 @@
 
 Status: implementation authorized and active as M18.
 
-Architecture task: MX-T9. Implementation tasks: M18-T1..T14. Decisions: D-255, D-256.
+Architecture task: MX-T9. Implementation tasks: M18-T1..T15. Decisions: D-255, D-256, D-257.
 
 ## Progress
 
@@ -11,7 +11,8 @@ Authoritative detail, evidence and ownership live in `STATUS_DETAILED.md`; `STAT
 | Slice | Task | State | Dependency |
 | --- | --- | --- | --- |
 | RP-1 | M18-T1 | done | `1628349`; build, protocol 153, host 403, desktop 160 |
-| RP-2 | M18-T2 | implementing approved scratch soak | RP-1 |
+| RP-2 initial | M18-T2 | review correction active; reproducible renderer safety refusal assigns RP-5/RP-8 | RP-1 |
+| RP-2 repeat | M18-T15 | todo — unchanged two-run baseline after containment | RP-4..RP-8 |
 | RP-3 | M18-T3 | reviewed UI checkpoint integrated; T4-T7 counters/browser gate pending | RP-1 |
 | RP-4 | M18-T4 | todo | RP-2 |
 | RP-5 | M18-T5 | todo | RP-2 |
@@ -23,7 +24,7 @@ Authoritative detail, evidence and ownership live in `STATUS_DETAILED.md`; `STAT
 | RP-11 | M18-T11 | todo | RP-10 |
 | RP-12 | M18-T12 | done — integrated `e9e3d8d` | RP-9 |
 | RP-13 | M18-T13 | in progress — host boundary integrated `00db89f`; client/storage isolation active | RP-12 |
-| RP-14 | M18-T14 | todo | RP-1..RP-13 |
+| RP-14 | M18-T14 | todo | RP-1..RP-13, M18-T15 |
 
 ## Outcome
 
@@ -113,6 +114,9 @@ RP-1 process identity and accounting
 RP-4 + RP-5
   └─ RP-8 memory-pressure policy and safety ceilings
 
+RP-4..RP-8
+  └─ RP-2 post-containment repeat baseline (M18-T15)
+
 RP-5 + RP-9 durable session revision
   └─ RP-10 bounded device tail cache
        └─ RP-11 immediate paint and reconciliation
@@ -121,7 +125,7 @@ RP-9
   └─ RP-12 worker-free authoritative reads
        └─ RP-13 deployment and enterprise policy
 
-RP-1..RP-13
+RP-1..RP-13 + RP-2 repeat baseline
   └─ RP-14 Electron/Tauri decision gate
 ```
 

@@ -2428,7 +2428,8 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 | M18-T11 | RP-11 immediate paint and authoritative reconciliation | todo | — | — | depends on M18-T10 |
 | M18-T12 | RP-12 worker-free authoritative reads | done | orchestrator-01a0a030 + revision-read worker | `e9e3d8d`; focused protocol/host/worker + typecheck/identity/direction pass | see notes |
 | M18-T13 | RP-13 remote/cloud/enterprise policy | in-progress | orchestrator-01a0a030 + environment-policy worker | — | see notes; depends on M18-T12 |
-| M18-T14 | RP-14 Electron/Tauri decision gate | todo | — | — | depends on M18-T1..T13 |
+| M18-T14 | RP-14 Electron/Tauri decision gate | todo | — | — | depends on M18-T1..T13/M18-T15 |
+| M18-T15 | RP-2 post-containment repeat baseline | todo | — | — | depends on M18-T4..T8; split by D-257 |
 
 #### M18-T1 notes
 - 2026-09-14 baseline: protocol 144/144 and host 316/316 pass at `ec1c42d`. Desktop 155/156 passes; `test/host-environment.test.ts` reproducibly expects same-version adoption but receives `failed` before this task changes code. Treat as a pre-existing baseline, not a telemetry regression; M18-T1 must keep every other desktop test green and report this exact case separately if unchanged.
@@ -2457,8 +2458,13 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 - 2026-09-14 runtime handoff H-14: prior owner became unavailable after authorization, with all uncommitted work preserved. New continuation must add bounded active-tabpanel pagination tests, skip quick, then run full A/B and final gates.
 - 2026-09-14 full pagination correction passes 31/31 focused and 40/40 browser-check tests; full A traversed all 54 views and four paged histories. A first attempt exposed a real heartbeat reconnect during host GC and the bounded retry now handles it.
 - 2026-09-14 full A second attempt reached large image streaming, then correctly refused B at renderer PSS 4,254,587,904 B (1.5 GiB ceiling), peak sample about 6.96 GiB, total PSS 5,454,442,496 B/11 processes; prior phase was 1,037,348,864 B. Teardown left zero survivors and no raw snapshots. Instrumentation remains suspect: detailed memory-infra overflowed 64 MiB and yielded no allocator owners; target heap IDs were absent; a 105,457,510 B renderer snapshot exceeded the parser's separate 96 MiB cap.
-- 2026-09-14 correction milestone: checkpoint the proven harness, then validate heap-ID lifetime with real inspector tests, parse full-scale snapshots in bounded one-at-a-time isolation under the 256 MiB raw cap, and use non-perturbing memory-infra capture with at least five allocator owners. A bounded identical-image diagnostic must distinguish product retention from instrumentation before another full run; fixture and safety ceilings stay fixed.
-- Ownership ledger: controlled reproduction · continuation `01a0a175-cc98-76c8-926f-527022b2ebb0` run `run_8221a44e` · M18-T2 · explicit existing `.worktrees/resource-soak-82910ee0/scripts/browser-check/**` and sanitized `docs/resource-soak-baseline.md`; no product/planning writes · base `1628349`, checkpoint commit pending · prerequisite M18-T1 done · repair/prove measurement harness, then full A/B and final evidence gates · handoff evidence/limits to T4-T8 and browser path to T3.
+- 2026-09-14 correction commits `1376d83` + `baaeffe`: 47/47 browser-check tests; real V8 object-move tracking fixes heap owner IDs; 107 MiB full renderer snapshot parses in bounded isolation; background/light dump yields 30 allocator owners. Corrected full A still refuses B at renderer PSS 4,461,069,312/private 4,424,474,624 B versus 1.5 GiB ceiling, zero survivors/raw heaps; isolated identical images stay below 308 MiB. This is an RP-5/RP-8 product lifetime finding, not a fixture/ceiling problem.
+- 2026-09-14 independent review changes requested: take process peaks before QueryObjects GC; generation-verify renderer and expose incomplete coverage; close slow sockets on every throw; perform explicit detach/reattach; split the 969-line runner; harden parser external-memory/index bounds, CDP timeouts, queued writes, redaction failure and trace listeners; reduce instrumentation/poll churn and make ranking thresholds category-aware.
+- 2026-09-14 D-257 splits the post-containment two-run baseline into M18-T15. T2 must still finish its reviewed harness, corrected initial full A and sanitized finding; T15 preserves the unchanged full fixtures, fixed ceilings, repeat owners/slopes/peaks, all nine scenarios and zero-survivor A/B gate after T4–T8.
+- Ownership ledger: controlled reproduction · continuation `01a0a175-cc98-76c8-926f-527022b2ebb0` run `run_b33c54e6` · M18-T2 · `.worktrees/resource-soak-82910ee0/scripts/browser-check/**` plus sanitized `docs/resource-soak-finding.md`; no product/planning writes · base `1628349`, commits `1376d83`/`baaeffe` · prerequisite M18-T1 done · one review correction + corrected full A/finding/final gates · handoff initial evidence to T4-T8 and shared harness to T15.
+
+#### M18-T15 notes
+- 2026-09-14 created by D-257: do not run until T4–T8 contain the measured renderer/task/transport lifetimes. Reuse the unchanged reviewed T2 fixtures and fixed ceilings for two clean full runs, then write `docs/resource-soak-baseline.md`.
 
 #### M18-T3 notes
 - 2026-09-14 claimed: design the permanent Advanced diagnostics surface over the RP-1 process truth, including honest unavailable/retention states, links to existing work, safe lifecycle routing, responsive/touch/keyboard/reduced-motion behavior and browser-matrix evidence. Plan approval precedes UI changes.
@@ -3493,6 +3499,11 @@ Consequences: `docs/resource-and-loading-plan.md` is the implementation source; 
 Decision: add M18-T1..T14, preserving the RP numbering and dependency graph from `docs/resource-and-loading-plan.md`, and implement it as reviewed slices rather than quietly expanding the documentation-only MX-T9 task.
 Why: the person explicitly authorized implementation of the plan. Its process telemetry, lifetime, revision/cache/read, deployment-policy and shell-gate contracts cross every package and cannot be truthfully represented as the already-finished architecture-plan deliverable.
 Consequences: M18 is the current focus. One continuing owner holds each cohesive area; protocol contracts settle before dependent UI or deployment work, every slice records focused and measurement evidence, and Electron remains until the final gate.
+
+### D-257 · 2026-09-14 · A safety refusal unlocks containment before the repeat baseline
+Decision: split RP-2. M18-T2 owns the reviewed scratch harness, its first valid full measurement and the sanitized finding. M18-T15 owns the same unchanged fixtures' two consecutive clean full runs and repeatability baseline after M18-T4 through M18-T8.
+Why: corrected full A reproducibly drives the renderer to about 4.4 GiB private memory and correctly refuses run B at the fixed 1.5 GiB ceiling. Requiring a green B before starting the renderer-lifetime fix is a dependency cycle; raising the ceiling or shrinking the fixture would erase the finding.
+Consequences: no RP-2 requirement is dropped. T4–T8 may start only after T2's review correction and finding integrate. T15 retains all nine scenarios, owner-ranking/slope/peak repeatability, raw-artifact deletion, fixed ceilings and zero-survivor gates, and becomes a prerequisite of T14.
 
 ## Open questions
 
