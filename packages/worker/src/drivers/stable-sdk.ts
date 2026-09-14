@@ -291,6 +291,11 @@ export class StableSdkDriver implements SessionDriver {
       // cost this session nothing but its MCP tools.
       const mcp = enabled.has("mcp")
         ? await mcpSessionSetup({ cwd, agentDir, ...(options.projectTrusted !== undefined ? { projectTrusted: options.projectTrusted } : {}), ...(options.projectEnv ? { projectEnv: options.projectEnv } : {}) }).catch((error: unknown) => {
+          // The person's sentence says what to do; the reason itself is a
+          // machine fact and goes to the log, where support can read it.
+          // Swallowing it entirely left "started without MCP tools" as the
+          // only trace of any MCP failure a worker ever had.
+          console.error(`${PRODUCT_NAME} worker: MCP setup failed for ${cwd}:`, error instanceof Error ? (error.stack ?? error.message) : error);
           this.push({
             kind: "extension_error",
             extension: "mcp",
@@ -519,7 +524,7 @@ export class StableSdkDriver implements SessionDriver {
     await session.bindExtensions({
       mode: "rpc",
       uiContext: this.ui.context,
-      abortHandler: () => void session.abort(),
+      abortHandler: () => this.abortFromEngine(session),
       onError: (error: ExtensionError) => {
         // Attribution comes only from the async context the error was raised
         // in — the causal invocation the extension called from, if any —
@@ -537,6 +542,22 @@ export class StableSdkDriver implements SessionDriver {
       },
     });
     this.unsubscribe = session.subscribe((event) => this.onSessionEvent(event, generation));
+  }
+
+  /**
+   * The engine's own stop path, called from an extension's abort handler.
+   *
+   * Nothing awaits it, so a rejected abort would leave the process with an
+   * unhandled rejection — and a worker that dies takes every conversation in
+   * its project with it (AGENTS.md invariant 5). The failure is logged and
+   * the session carries on; the person's own stop reports its own failure.
+   */
+  private abortFromEngine(session: AgentSession): void {
+    void Promise.resolve()
+      .then(() => session.abort())
+      .catch((error: unknown) => {
+        console.error(`${PRODUCT_NAME} worker: an extension's stop request failed:`, error instanceof Error ? error.message : error);
+      });
   }
 
   /** Rebuild this runtime around the same manager; never two live writers. */
