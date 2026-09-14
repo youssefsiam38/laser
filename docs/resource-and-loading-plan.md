@@ -11,17 +11,17 @@ Authoritative detail, evidence and ownership live in `STATUS_DETAILED.md`; `STAT
 | Slice | Task | State | Dependency |
 | --- | --- | --- | --- |
 | RP-1 | M18-T1 | done | `1628349`; build, protocol 153, host 403, desktop 160 |
-| RP-2 | M18-T2 | plan in progress | RP-1 |
-| RP-3 | M18-T3 | todo | RP-1 |
+| RP-2 | M18-T2 | implementing approved scratch soak | RP-1 |
+| RP-3 | M18-T3 | reviewed UI checkpoint integrated; T4-T7 counters/browser gate pending | RP-1 |
 | RP-4 | M18-T4 | todo | RP-2 |
 | RP-5 | M18-T5 | todo | RP-2 |
 | RP-6 | M18-T6 | todo | RP-2 |
 | RP-7 | M18-T7 | todo | RP-2 |
 | RP-8 | M18-T8 | todo | RP-4, RP-5 |
-| RP-9 | M18-T9 | approved plan; code waits for RP-1 merge | protocol integration follows RP-1 |
+| RP-9 | M18-T9 | done — integrated `dd637f3` | protocol integration follows RP-1 |
 | RP-10 | M18-T10 | todo | RP-5, RP-9 |
 | RP-11 | M18-T11 | todo | RP-10 |
-| RP-12 | M18-T12 | todo | RP-9 |
+| RP-12 | M18-T12 | implementing approved worker-free read path | RP-9 |
 | RP-13 | M18-T13 | todo | RP-12 |
 | RP-14 | M18-T14 | todo | RP-1..RP-13 |
 

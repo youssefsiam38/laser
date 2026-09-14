@@ -2417,16 +2417,16 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 | --- | --- | --- | --- | --- | --- |
 | M18-T1 | RP-1 process identity and correct accounting | done | orchestrator-01a0a030 + resource-inventory worker | `1628349`; build + protocol 153 + host 403 + desktop 160 pass | see notes; D-255/D-256 |
 | M18-T2 | RP-2 controlled reproduction and heap attribution | in-progress | orchestrator-01a0a030 + resource-soak worker | — | see notes; depends on M18-T1 |
-| M18-T3 | RP-3 Advanced resource diagnostics | todo | — | — | depends on M18-T1 |
+| M18-T3 | RP-3 Advanced resource diagnostics | in-progress | orchestrator-01a0a030 + resource-diagnostics worker | — | see notes; depends on M18-T1 |
 | M18-T4 | RP-4 bounded worker session lifetime | todo | — | — | depends on M18-T2 |
 | M18-T5 | RP-5 bounded renderer session lifetime | todo | — | — | depends on M18-T2 |
 | M18-T6 | RP-6 bounded task and transcript-delivery lifetime | todo | — | — | depends on M18-T2 |
 | M18-T7 | RP-7 bounded provider logging and transport pressure | todo | — | — | depends on M18-T2 |
 | M18-T8 | RP-8 memory-pressure policy and safety ceilings | todo | — | — | depends on M18-T4/M18-T5 |
-| M18-T9 | RP-9 durable session revision contract | in-progress | orchestrator-01a0a030 + revision-read worker | — | plan-only until M18-T1 protocol merge; see notes |
+| M18-T9 | RP-9 durable session revision contract | done | orchestrator-01a0a030 + revision-read worker | `dd637f3`; build/typecheck + protocol 165 + host 445 pass | see notes |
 | M18-T10 | RP-10 bounded device tail cache | todo | — | — | depends on M18-T5/M18-T9 |
 | M18-T11 | RP-11 immediate paint and authoritative reconciliation | todo | — | — | depends on M18-T10 |
-| M18-T12 | RP-12 worker-free authoritative reads | todo | — | — | depends on M18-T9 |
+| M18-T12 | RP-12 worker-free authoritative reads | in-progress | orchestrator-01a0a030 + revision-read worker | — | depends on M18-T9; see notes |
 | M18-T13 | RP-13 remote/cloud/enterprise policy | todo | — | — | depends on M18-T12 |
 | M18-T14 | RP-14 Electron/Tauri decision gate | todo | — | — | depends on M18-T1..T13 |
 
@@ -2440,12 +2440,31 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 
 #### M18-T2 notes
 - 2026-09-14 claimed: extend the existing browser profiler and add a credential-free scratch-host soak covering all nine RP-2 scenarios, with process/heap/cache/queue attribution and repeatable ranking evidence. Plan approval precedes source changes.
-- Ownership ledger: controlled reproduction · resource-soak worker `01a0a084-72d9-73fe-8226-e6b957867807` run `run_82910ee0` · M18-T2 · permitted `scripts/browser-check/**`, new `scripts/resource-check/**`, focused script tests and a synthetic evidence report under `docs/`; no protocol/host/worker/UI implementation edits · base `1628349` · prerequisite M18-T1 done · plan in progress · handoff evidence/limits to T4-T8.
+- 2026-09-14 plan `/tmp/m18-t2-plan.md` approved: two fresh synthetic runs, all nine scenarios, RP-1/CDP/scratch-inspector counters, concrete normalized retainers, slow-consumer and desktop lanes, repeat ranking/slopes and redacted baseline. Heap artifacts are capped at 256 MiB and parsed in bounded isolation; runtime object discovery is a mandatory early checkpoint before any source seam.
+- 2026-09-14 runtime handoff H-12: prior run disappeared without a terminal report after its scratch inspector prototype succeeded. Preserved in `.worktrees/resource-soak-82910ee0`: modified README/browser helper and new resource soak runner, target, resource modules and tests; no commit. Continue from disk, do not restart or discard the prototype.
+- 2026-09-14 Electron lane checkpoint: same main/host generation, all expected renderer/main/GPU/utility/host/worker roles and zero survivors are proven; keyboard-after-restore remains false. After repeated lane attempts, work was redirected to a narrow CDP keyboard helper/test with no further whole-lane retry absent new evidence.
+- Ownership ledger: controlled reproduction · resource-soak continuation `01a0a0ad-acc4-7552-820d-1a41526bb1ea` run `run_aa84ec19` · M18-T2 · exclusive `.worktrees/resource-soak-82910ee0/scripts/browser-check/**`, focused script tests and sanitized `docs/resource-soak-baseline.md`; no product source edits · base `1628349` with preserved uncommitted work · prerequisite M18-T1 done · targeted Electron keyboard fix, then quick/full gates · handoff evidence/limits to T4-T8 and browser path to T3.
+
+#### M18-T3 notes
+- 2026-09-14 claimed: design the permanent Advanced diagnostics surface over the RP-1 process truth, including honest unavailable/retention states, links to existing work, safe lifecycle routing, responsive/touch/keyboard/reduced-motion behavior and browser-matrix evidence. Plan approval precedes UI changes.
+- 2026-09-14 plan `/tmp/m18-t3-plan.md` approved: Advanced Resources UI over RP-1, honest partial/unavailable projections, no raw PID control, existing owner actions only, visible-only polling, designed states and matrix coverage. Browser script waits for T2 to release `scripts/browser-check/**`; T4-T7 must later populate unavailable retained-state counters before T3 closes.
+- 2026-09-14 UI checkpoint committed as `894cb4e`: projectless Advanced → Resources, RP-1 role/process/history/coverage/retention/export states, lifecycle-routed associations, visible-only polling and chart gaps; focused UI suite, typecheck, build and identity checks passed. Independent review and browser acceptance remain; T4-T7 counters still render unavailable by design.
+- 2026-09-14 independent review requested changes: row-level physical selection diverges from RP-1 fallback/coverage, retained-state records must reuse the catalog DataTable, cloned alert and internal M18/RP vocabulary must go, disconnected polling currently replaces its designed state with a transport error, and coarse-pointer targets miss the 44px floor. Human health/export states and several structural/accessibility fixes join one correction batch.
+- 2026-09-14 full review batch fixed in `8b5a269` and fast-forwarded to main: RP-1 physical fallback/coverage is canonical, retained state uses DataTable, disconnected polling and export/health/action states are truthful, pointer targets/accessibility/cycle preservation are covered. Focused 23 tests and UI typecheck passed on the final bytes. T3 remains in-progress for T4-T7 producers and the browser matrix after T2.
+- Ownership ledger: diagnostics UI · no active writer · M18-T3 integrated checkpoint at `8b5a269` · paths reserved for the same owner’s deferred browser script/counter wiring; no protocol/host/worker writes · review cycle complete · next handoff: browser gate after T2 and typed counters from T4-T7.
 
 #### M18-T9 notes
 - 2026-09-14 claimed: specify the opaque durable revision and worker-free bounded snapshot/read contract together before code, because RP-9 is the validation foundation for RP-10/RP-11/RP-12. Implementation waits for the RP-1 protocol merge to avoid competing writers in shared inventory files.
 - 2026-09-14 plan `/tmp/m18-revision-read-plan.md` approved with corrections: host-owned `session/revision`; a separate opaque environment cache key for RP-10; revisions required on successful authoritative windows; valid final JSON without newline included read-only; stronger rewrite checks and per-session index ceilings; raw environment UUID stays trusted-only; resource evidence joins focused validation.
-- Ownership ledger: revision/read path · revision-read worker `01a0a034-a0ed-73fe-8226-e612ae45b54b` run `run_ca28b200` · M18-T9 then M18-T12 sequentially · permitted protocol revision/snapshot contracts and host catalog/parser/router/worker precedence plus focused tests; no UI/cache writes · base `ec1c42d`, RP-1 protocol integration prerequisite for code · approved plan corrections only, no source until handoff · implementation after RP-1 merge.
+- 2026-09-14 T9 implementation committed as `34f2a83`: host-owned `session/revision`, opaque environment key, live/durable parity, required window revision/key, cursor v2, bounded read-only host JSONL index and real-worker cold-read coverage. Independent review is in progress; T12 has not started.
+- 2026-09-14 scratch evidence (`/tmp/m18-t9-revision-evidence.md`): two 800-read runs retained 2,052 KiB of accounted index state for four synthetic conversations; warm median 0.09–4.5 ms and cold median 0.3 ms–1.417 s across 4–20,000 messages. Physical memory stayed at its high-water after GC and is not called retained memory. Large cold-read latency must be resolved or bounded before T12 first paint.
+- 2026-09-14 independent review requested changes: per-entry index accounting is quadratic (20k cold read 1.09 s; 931 ms event-loop stall), unchanged failures are rescanned, real append-shaped compaction incorrectly validates as a prefix, cursor v2 is plain JSON rather than base64url, live environment binding is unchecked and durable reads bypass normal path ownership. Bound alignment, identity creation races, cache aliasing/fast paths and raw-id hygiene are included in one correction batch.
+- 2026-09-14 review corrections `3df0702` plus final LRU/identity-race fix `610e5ec` integrated as `dcc08d1`/`dd637f3`. Final root evidence: `pnpm -r build`, workspace typecheck, protocol 165/165, host 445/445, focused worker 41/41, focused UI 23/23. Cold 20k scan is linear/cooperative (239 ms under parallel load, maximum slice 43.46 ms); unchanged over-cap failure is cached at 0 ms. T9 done.
+- Ownership ledger: revision contract · integrated through `dd637f3` · M18-T9 done · review cycle complete · handoff: T10 device cache and T12 worker-free reads may consume the opaque revision/environment contract.
+
+#### M18-T12 notes
+- 2026-09-14 claimed: extend the existing bounded `pi/session/entries` window with live-or-durable authority, host-side line-offset materialisation and no-spawn cold reads; no second read API or transcript authority.
+- Ownership ledger: worker-free reads · revision-read continuation `01a0a0b7-f1dd-7552-820d-1a4fa6dfad94` run `run_dde9db15` · M18-T12 · permitted revision worktree protocol history-window/messages/schemas, host session index/projection/router, worker response shape and focused tests; no UI/device-cache/lifetime edits · base `610e5ec` (content integrated at root `dd637f3`) · prerequisite T9 done · implementing approved plan section 3 · handoff to T13 and T10/T11.
 
 ## MX · Cross-cutting
 
@@ -2652,6 +2671,13 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 | M17-T20 | The map never covers the conversation | todo | — | — | audit §4 |
 
 ## Handoffs
+
+### H-12 · M18-T2 · 2026-09-14 · orchestrator
+State of the work: approved resource-soak plan is partly implemented; the early scratch inspector prototype eventually exited successfully, then the agent runtime disappeared without a terminal report.
+Uncommitted: yes, preserved in `.worktrees/resource-soak-82910ee0` (README/browser helper plus new runner, target, resource modules and test).
+What is broken: completion/validation state is unknown; no commit or baseline report exists.
+Next concrete step: inspect the preserved diff and prototype result, finish the approved quick/full harness, run its gates, and commit only sanitized evidence.
+Do not: restart from scratch, touch product sources, inspect personal state, or relax the approved safety/redaction ceilings.
 
 ### H-10 · M14-T3 / M14-T6 UI findings · 2026-09-12 · mcp-settings-fixes
 State: live-review defects 2/3/5/7/8/9 fixed on `agents/mcp-settings-fixes-6f615649`; ready for review, not integrated. Scope: settings MCP components, SettingsScreen tab visibility, shared ScrollArea, MCP list element, related tests and element inventory. Full evidence: `/tmp/mcp-settings-fixes-report.md`.
