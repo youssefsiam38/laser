@@ -14,16 +14,16 @@ Authoritative detail, evidence and ownership live in `STATUS_DETAILED.md`; `STAT
 | RP-2 initial | M18-T2 | done — reviewed harness and sanitized finding integrated through `ad8c188`; full A refuses B at unchanged renderer ceiling with zero survivors | RP-1 |
 | RP-2 repeat | M18-T15 | todo — unchanged two-run baseline after containment | RP-4..RP-8 |
 | RP-3 | M18-T3 | reviewed UI checkpoint integrated; T4-T7 counters/browser gate pending | RP-1 |
-| RP-4 | M18-T4 | todo | RP-2 |
-| RP-5 | M18-T5 | todo | RP-2 |
-| RP-6 | M18-T6 | todo | RP-2 |
-| RP-7 | M18-T7 | todo | RP-2 |
+| RP-4 | M18-T4 | in progress — safety/replay/unload plan approved; waits on RP-6 membership contract | RP-2 |
+| RP-5 | M18-T5 | in progress — renderer lifetime investigation/plan | RP-2 |
+| RP-6 | M18-T6 | in progress — canonical membership/task retention plan approved; implementation active | RP-2 |
+| RP-7 | M18-T7 | in progress — decoder/provider/queue investigation/plan | RP-2 |
 | RP-8 | M18-T8 | todo | RP-4, RP-5 |
 | RP-9 | M18-T9 | done — integrated `dd637f3` | protocol integration follows RP-1 |
 | RP-10 | M18-T10 | todo | RP-5, RP-9 |
 | RP-11 | M18-T11 | todo | RP-10 |
 | RP-12 | M18-T12 | done — integrated `e9e3d8d` | RP-9 |
-| RP-13 | M18-T13 | in progress — host boundary integrated `00db89f`; client/storage isolation active | RP-12 |
+| RP-13 | M18-T13 | in progress — host boundary `00db89f` and reviewed client/storage isolation through `1e4eeba` integrated; browser matrix pending | RP-12 |
 | RP-14 | M18-T14 | todo | RP-1..RP-13, M18-T15 |
 
 ## Outcome

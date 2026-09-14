@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-14T22:10:37Z · orchestrator `01a0a030` · HEAD: ad8c188
-**Current focus:** M18 is applying the measured renderer-memory finding to worker, renderer, task and transport lifetime while finishing environment-scoped client storage.
+**Last updated:** 2026-09-14T22:42:40Z · orchestrator `01a0a030` · HEAD: 1e4eeba
+**Current focus:** M18 is implementing bounded task/delivery lifetime while worker, renderer and transport owners prepare the measured containment slices.
 
 | Milestone | State |
 | --- | --- |
@@ -27,8 +27,8 @@
 | M18 Resource containment | in-progress |
 | MX Cross-cutting | in-progress |
 
-**Blockers:** none. RP-2’s unchanged full A safely refuses B on the product’s unbounded renderer view state; D-257 assigns the clean repeat to M18-T15 after containment.
-**Next up:** approve M18-T4/T6 lifetime plans; correct and integrate RP-13B; start M18-T5/T7 after its UI/client ownership releases; complete M18-T3’s counters and browser matrix.
-**Recently done:** M18-T2 controlled finding (`ad8c188`; browser-check 67/67, zero survivors); M18-T13A host authorization (`00db89f`); M18-T12 worker-free reads (`e9e3d8d`); M18-T9 durable revisions (`dd637f3`); M18-T3 reviewed UI checkpoint (`8b5a269`).
+**Blockers:** none. RP-2’s unchanged full A safely refuses B on unbounded renderer state; D-257 assigns the clean repeat to M18-T15 after containment.
+**Next up:** implement/review M18-T6; approve T5/T7 plans; rebase and implement T4 after T6; run the shared T3/T13 browser acceptance matrix.
+**Recently done:** RP-13B client/storage isolation (`1e4eeba`; UI 1,782, protocol 184, CLI 74, desktop 160); M18-T2 finding (`ad8c188`; browser-check 67); M18-T13A authorization (`00db89f`); M18-T12 worker-free reads (`e9e3d8d`); M18-T9 revisions (`dd637f3`).
 
 Ownership and evidence: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`.
