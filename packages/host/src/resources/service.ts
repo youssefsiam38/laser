@@ -37,6 +37,7 @@ import {
   RESOURCE_SNAPSHOT_DEADLINE_MS,
   RESOURCE_SNAPSHOT_PROCESS_MAX,
   RESOURCE_START_TIME_TOLERANCE_MS,
+  RESOURCE_TABLE_CACHE_MAX_ROWS,
   boundedResourceIds,
   boundedResourceText,
   resourceAvailable,
@@ -111,6 +112,8 @@ export class ResourceService {
   private report: VerifiedReport | undefined;
   /** The claim itself, re-checked against every new table. */
   private claim: { report: ResourceDesktopReport; receivedAtMs: number } | undefined;
+  /** The last table this service read, bounded, for verifying between demands. */
+  private table: { rows: ProcessTableRow[]; atMs: number } | undefined;
   private rejectedReport: string | undefined;
   private last: { snapshot: ResourceSnapshot; atMs: number } | undefined;
   private inFlight: Promise<ResourceSnapshot> | undefined;
@@ -212,16 +215,18 @@ export class ResourceService {
    * A rejected report never displaces a verified one: the cross-check keeps
    * the last thing it could prove, and says how old it is.
    */
-  async receiveDesktopReport(report: ResourceDesktopReport): Promise<ResourceReportResult> {
+  receiveDesktopReport(report: ResourceDesktopReport): ResourceReportResult {
     const previousClaim = this.claim;
     const previousReport = this.report;
     this.claim = { report, receivedAtMs: this.now() };
-    const table = await this.readTable([]);
-    if (table.length === 0) {
-      // No table: the claim waits for the next snapshot rather than being
-      // believed or thrown away.
-      return { accepted: 0, rejected: 0, verified: false, pending: true };
-    }
+    // Receiving a report never collects. The shell reports whenever it
+    // connects, and a connection is not somebody asking a question: walking
+    // the machine's process table then would make a diagnostic that nobody
+    // opened into work the host does anyway. The claim is checked against the
+    // table we already have, if it is recent, and otherwise waits for the next
+    // demand — which re-checks it against a fresh table in either case.
+    const table = this.cachedTable();
+    if (table === undefined) return { accepted: 0, rejected: 0, verified: false, pending: true };
     const verified = this.verifyClaim(table);
     if (verified && verified !== previousReport) {
       return { accepted: verified.accepted, rejected: verified.rejected, verified: true };
@@ -244,6 +249,12 @@ export class ResourceService {
     const deadline = started + (this.options.deadlineMs ?? RESOURCE_SNAPSHOT_DEADLINE_MS);
     const collectors: ResourceCollectorStatus[] = [];
     const table = await this.readTable(collectors);
+    if (table.length > 0) {
+      // Kept so a report arriving before the next demand can be checked
+      // without reading the machine again. A copy of what we just read, cut to
+      // its bound; never a reason to read more.
+      this.table = { rows: table.slice(0, RESOURCE_TABLE_CACHE_MAX_ROWS), atMs: this.now() };
+    }
     const byPid = new Map<number, ProcessTableRow>();
     for (const row of table) byPid.set(row.pid, row);
 
@@ -605,8 +616,20 @@ export class ResourceService {
     return { status: "ok" };
   }
 
+  /** The table from the last collection, while it is recent enough to use. */
+  private cachedTable(): ProcessTableRow[] | undefined {
+    if (!this.table) return undefined;
+    return this.now() - this.table.atMs <= RESOURCE_REPORT_MAX_AGE_MS ? this.table.rows : undefined;
+  }
+
   private retention(): ResourceRetention {
-    return { ...this.history.retention(), ownershipRecords: this.ownership.size(), maxOwnershipRecords: this.ownership.maxRecordsBound };
+    const overflow = this.ownership.overflow;
+    return {
+      ...this.history.retention(),
+      ownershipRecords: this.ownership.size(),
+      maxOwnershipRecords: this.ownership.maxRecordsBound,
+      ...(overflow ? { ownershipOverflow: overflow } : {}),
+    };
   }
 
   private platformName(): ResourceSnapshot["platform"] {

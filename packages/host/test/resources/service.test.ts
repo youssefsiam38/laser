@@ -368,7 +368,7 @@ describe("failure isolation", () => {
 describe("the desktop cross-check", () => {
   it("believes a shell that owns a process tree this host can see, even when it did not start this host", async () => {
     const { resources } = service(adoptedTree());
-    expect(await resources.receiveDesktopReport(report())).toEqual({ accepted: 2, rejected: 0, verified: true });
+    expect(resources.receiveDesktopReport(report())).toEqual({ accepted: 0, rejected: 0, verified: false, pending: true });
     const { snapshot } = await resources.snapshot();
     const roles = Object.fromEntries(snapshot.processes.map((row) => [row.pid, row.role]));
     expect(roles[100]).toBe("desktop_main");
@@ -383,7 +383,8 @@ describe("the desktop cross-check", () => {
 
   it("refuses a row whose creation time is not the one this machine reports", async () => {
     const { resources } = service(adoptedTree());
-    const result = await resources.receiveDesktopReport(
+    await resources.snapshot(); // a demand, so a recent table exists to check against
+    const result = resources.receiveDesktopReport(
       report({
         processes: [
           { pid: 100, creationTime: startedAt(100), type: "Browser", workingSetBytes: 2000 },
@@ -399,7 +400,8 @@ describe("the desktop cross-check", () => {
 
   it("refuses a row that is outside the reported app's own subtree", async () => {
     const { resources } = service(adoptedTree());
-    const result = await resources.receiveDesktopReport(
+    await resources.snapshot();
+    const result = resources.receiveDesktopReport(
       report({ processes: [{ pid: 100, creationTime: startedAt(100), type: "Browser", workingSetBytes: 2000 }, { pid: 300, creationTime: startedAt(300), type: "Tab", workingSetBytes: 1 }] }),
     );
     expect(result).toEqual({ accepted: 1, rejected: 1, verified: true });
@@ -407,8 +409,9 @@ describe("the desktop cross-check", () => {
 
   it("refuses a claim about a process that is not running here, and keeps the last verified one", async () => {
     const { resources } = service(adoptedTree());
-    await resources.receiveDesktopReport(report());
-    const bad = await resources.receiveDesktopReport(report({ main: { pid: 4242, creationTime: NOW }, processes: [{ pid: 4242, creationTime: NOW, type: "Browser", workingSetBytes: 1 }] }));
+    await resources.snapshot();
+    resources.receiveDesktopReport(report());
+    const bad = resources.receiveDesktopReport(report({ main: { pid: 4242, creationTime: NOW }, processes: [{ pid: 4242, creationTime: NOW, type: "Browser", workingSetBytes: 1 }] }));
     expect(bad).toEqual({ accepted: 0, rejected: 1, verified: false });
     const { snapshot } = await resources.snapshot();
     // The good report still stands; the bad one relabelled nothing.
@@ -416,15 +419,40 @@ describe("the desktop cross-check", () => {
     expect(snapshot.health.crossCheck.status).toBe("ok");
   });
 
-  it("says a report is pending when the host has no process table to check it against", async () => {
+  it("reads nothing when a report arrives, however often the app connects", async () => {
     const { collector, resources } = service(adoptedTree());
-    collector.failTable = new Error("proc is not mounted");
-    expect(await resources.receiveDesktopReport(report())).toEqual({ accepted: 0, rejected: 0, verified: false, pending: true });
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      expect(resources.receiveDesktopReport(report())).toEqual({ accepted: 0, rejected: 0, verified: false, pending: true });
+    }
+    // A connection is not a question. Nothing has walked the machine yet.
+    expect(collector.tableCalls).toBe(0);
+    expect(collector.measureCalls).toBe(0);
+
+    // The next demand verifies the claim it was holding.
+    const { snapshot } = await resources.snapshot();
+    expect(collector.tableCalls).toBe(1);
+    expect(snapshot.health.crossCheck.status).toBe("ok");
+    expect(snapshot.processes.find((row) => row.pid === 101)!.role).toBe("desktop_renderer");
+
+    // With a recent table in hand, the next report is answered from it —
+    // still without collecting again.
+    expect(resources.receiveDesktopReport(report())).toEqual({ accepted: 2, rejected: 0, verified: true });
+    expect(collector.tableCalls).toBe(1);
+  });
+
+  it("goes back to pending when the table it held has aged out", async () => {
+    let now = NOW;
+    const { collector, resources } = service(adoptedTree(), { now: () => now });
+    await resources.snapshot();
+    now += 61_000;
+    expect(resources.receiveDesktopReport(report({ at: new Date(now).toISOString() }))).toMatchObject({ pending: true });
+    expect(collector.tableCalls).toBe(1);
   });
 
   it("sanitizes the app's own process type before keeping it", async () => {
     const { resources } = service(adoptedTree());
-    await resources.receiveDesktopReport(
+    await resources.snapshot();
+    resources.receiveDesktopReport(
       report({ processes: [{ pid: 100, creationTime: startedAt(100), type: "Browser", workingSetBytes: 2000 }, { pid: 101, creationTime: startedAt(101), type: "Tab <img src=x> s3cret/../", workingSetBytes: 2000 }] }),
     );
     const { snapshot } = await resources.snapshot();
@@ -433,11 +461,37 @@ describe("the desktop cross-check", () => {
     expect(JSON.stringify(snapshot)).not.toContain("<img");
   });
 
+  it("holds the creation-time window to the platforms' own resolution", async () => {
+    const { resources } = service(adoptedTree());
+    await resources.snapshot();
+    // A second of disagreement is what a whole-second `btime` or `lstart` can
+    // produce for the same process.
+    const near = resources.receiveDesktopReport(
+      report({ processes: [{ pid: 101, creationTime: startedAt(101) + 1400, type: "Tab", workingSetBytes: 2000 }] }),
+    );
+    expect(near).toEqual({ accepted: 1, rejected: 0, verified: true });
+    // Two seconds is not resolution any more; it is a different process.
+    const far = resources.receiveDesktopReport(
+      report({ processes: [{ pid: 101, creationTime: startedAt(101) + 2000, type: "Tab", workingSetBytes: 2000 }] }),
+    );
+    expect(far).toEqual({ accepted: 0, rejected: 1, verified: false });
+  });
+
+  it("refuses a renderer pid recycled seconds later", async () => {
+    const { resources } = service(adoptedTree());
+    await resources.snapshot();
+    // The renderer died and pid 101 came back three seconds later.
+    const result = resources.receiveDesktopReport(
+      report({ processes: [{ pid: 101, creationTime: startedAt(101) - 3000, type: "Tab", workingSetBytes: 999_999 }] }),
+    );
+    expect(result).toEqual({ accepted: 0, rejected: 1, verified: false });
+  });
+
   it("is not 'ok' when there was nothing to compare", async () => {
     const rows = adoptedTree();
     for (const row of rows) row.residentBytes = undefined; // we could not measure
     const { resources } = service(rows);
-    await resources.receiveDesktopReport(report());
+    resources.receiveDesktopReport(report());
     const { snapshot } = await resources.snapshot();
     expect(snapshot.health.crossCheck).toMatchObject({ status: "unverified" });
     expect(snapshot.health.crossCheck.detail).toContain("compare");
@@ -448,7 +502,7 @@ describe("the desktop cross-check", () => {
     const refresh = vi.fn();
     const { resources } = service(adoptedTree(), { now: () => now, requestDesktopRefresh: refresh });
     // A client claiming the metrics were taken in the future.
-    await resources.receiveDesktopReport(report({ at: new Date(NOW + 10 * 60_000).toISOString() }));
+    resources.receiveDesktopReport(report({ at: new Date(NOW + 10 * 60_000).toISOString() }));
     now += 10 * 60_000;
     const { snapshot } = await resources.snapshot();
     expect(snapshot.health.crossCheck.status).toBe("stale");
@@ -467,7 +521,7 @@ describe("the desktop cross-check", () => {
     const rows = adoptedTree();
     rows.find((row) => row.pid === 101)!.residentBytes = 100;
     const { resources } = service(rows);
-    await resources.receiveDesktopReport(report());
+    resources.receiveDesktopReport(report());
     const { snapshot } = await resources.snapshot();
     expect(snapshot.health.crossCheck.status).toBe("diverged");
     expect(snapshot.health.crossCheck.detail).toContain("working set");

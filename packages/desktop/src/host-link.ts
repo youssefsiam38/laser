@@ -193,7 +193,8 @@ export class HostLink {
 
   /**
    * Send Electron's metrics once. Called on connect and when the host asks;
-   * never on a timer. A failure is silent by design — a diagnostic cross-check
+   * never on a timer, and it makes the host collect nothing — it keeps the
+   * claim until somebody asks for a snapshot. A failure is silent by design — a diagnostic cross-check
    * that cannot be delivered must not put a line in the tray's log on every
    * reconnect, and the host already says the cross-check is unavailable.
    */

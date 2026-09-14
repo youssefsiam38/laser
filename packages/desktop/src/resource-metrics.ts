@@ -17,7 +17,9 @@
  *
  * The report is sent when the shell connects and whenever the host asks
  * (`resource/refresh_request`, which it only sends after somebody asked for a
- * snapshot). Nothing polls: with diagnostics closed, this file is idle.
+ * snapshot). Nothing polls, and reporting costs the host nothing: it retains
+ * the claim and checks it the next time somebody actually asks for a snapshot,
+ * so a connection never turns into a walk of the machine's process table.
  */
 import { RESOURCE_REPORT_PROCESS_MAX, type ResourceDesktopReport } from "@lasercode/protocol";
 

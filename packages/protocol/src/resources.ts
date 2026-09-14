@@ -129,11 +129,27 @@ export const RESOURCE_OWNERSHIP_MAX_RECORDS = 512;
 export const RESOURCE_OWNERSHIP_MAX_AGE_MS = 60 * 60_000;
 /**
  * How far a reported creation time may sit from the one the operating system
- * reports before the two are not the same process. Kernels report start times
- * at second granularity (Linux derives it from boot time and clock ticks),
- * so the window has to be wider than the precision of either side.
+ * reports before the two are not the same process.
+ *
+ * This is a resolution allowance, not a grace period. Linux derives a start
+ * time from boot time plus clock ticks and `btime` is whole seconds; macOS
+ * `ps lstart` is whole seconds; Windows is finer than either. One second of
+ * disagreement is therefore expected and anything beyond it is not the same
+ * process — so the window is a second plus a little, not long enough for a
+ * recycled pid to walk through.
+ *
+ * The limitation this cannot remove is the platforms' own: two processes that
+ * take the same pid inside a single second are indistinguishable by start
+ * time. Every other guard (the exit callback, the table reconciliation, the
+ * per-collection re-verification) is what covers that case.
  */
-export const RESOURCE_START_TIME_TOLERANCE_MS = 5000;
+export const RESOURCE_START_TIME_TOLERANCE_MS = 1500;
+/**
+ * Rows of the last collected process table kept for verifying a metrics report
+ * that arrives between snapshots. Bounded because it is a copy of something
+ * that was already read, not a reason to read again.
+ */
+export const RESOURCE_TABLE_CACHE_MAX_ROWS = 4096;
 /** A desktop metrics report older than this is stale and says so. */
 export const RESOURCE_REPORT_MAX_AGE_MS = 60_000;
 /** Rows one desktop report may carry. */
@@ -333,6 +349,13 @@ export interface ResourceRetention {
   /** Spawn records held right now, and their own independent bound. */
   ownershipRecords: number;
   maxOwnershipRecords: number;
+  /**
+   * Set when more records are held than the bound above, which happens only
+   * when that many project workers are proved live at once: a record for a
+   * running worker is the only proof of what that process is, so it is kept
+   * and the overflow is said out loud rather than implied away.
+   */
+  ownershipOverflow?: "live_workers";
 }
 
 // ---------------------------------------------------------------------------

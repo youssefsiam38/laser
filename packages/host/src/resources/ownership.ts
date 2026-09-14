@@ -52,6 +52,13 @@ export interface OwnershipRecord {
   startToken: string | undefined;
   role: ResourceProcessRole;
   registeredAtMs: number;
+  /**
+   * The most recent table showed this process. Only a record with this set is
+   * exempt from the count bound: a claim about a process nobody can find is
+   * not evidence of anything, and exempting it forever would let a stream of
+   * workers whose exits were missed push the bound aside.
+   */
+  presentInLastTable?: boolean;
   /** Host-internal. Never leaves this module as a path. */
   projectCwd?: string;
   /** Host-internal. Never leaves this module as a path. */
@@ -176,11 +183,13 @@ export class ProcessOwnershipRegistry {
       if (!row) {
         // Gone, or never there. A stale record must not become a discovery
         // root: it would add nothing and could name a stranger's subtree.
+        record.presentInLastTable = false;
         if (now - record.registeredAtMs > this.maxAgeMs) this.records.delete(pid);
         continue;
       }
       if (record.startToken === undefined) {
         if (!this.adopt(record, row, now)) {
+          record.presentInLastTable = false;
           if (now - record.registeredAtMs > UNPROVEN_ADOPTION_WINDOW_MS) this.records.delete(pid);
           continue;
         }
@@ -188,6 +197,7 @@ export class ProcessOwnershipRegistry {
         this.records.delete(pid); // The pid changed hands.
         continue;
       }
+      record.presentInLastTable = true;
       live.push(record);
     }
     this.prune();
@@ -202,6 +212,14 @@ export class ProcessOwnershipRegistry {
   /** The record bound in force, reported beside snapshot retention. */
   get maxRecordsBound(): number {
     return this.maxRecords;
+  }
+
+  /**
+   * Set when the bound is exceeded, which can only happen because that many
+   * workers are proved live at once. Reported rather than implied away.
+   */
+  get overflow(): "live_workers" | undefined {
+    return this.records.size > this.maxRecords ? "live_workers" : undefined;
   }
 
   /** The record for this exact process, or `undefined`. */
@@ -257,23 +275,42 @@ export class ProcessOwnershipRegistry {
 
   /**
    * Records are bounded on their own, independently of snapshot history: age
-   * first, then count. A live project worker is never evicted — its record is
-   * the only proof of what that process is — so the count bound drops the
-   * oldest other records, and reports honestly if there is nothing else to
-   * drop by keeping the workers.
+   * first, then count.
+   *
+   * The one exemption is a project worker the **current** table still shows —
+   * that record is the only proof of what a running process is, and losing it
+   * would turn a worker into an unknown descendant. A worker whose exit
+   * callback never arrived and which no table can find is not that: it ages
+   * out and is evicted like anything else, so churn cannot quietly push the
+   * bound aside.
    */
   private prune(): void {
     const now = this.now();
+    /**
+     * A worker the machine is running: proved present by the table we last
+     * read, or just registered and not yet given a table to be proved by.
+     * The grace is the adoption window and no longer — a claim nobody can
+     * find stops being protected, so churn with missing exits cannot hold the
+     * bound open.
+     */
+    const running = (record: OwnershipRecord): boolean =>
+      record.role === "project_worker"
+      && (record.presentInLastTable === true
+        || (record.presentInLastTable === undefined && now - record.registeredAtMs <= UNPROVEN_ADOPTION_WINDOW_MS));
+
     for (const [pid, record] of [...this.records]) {
-      if (record.role !== "project_worker" && now - record.registeredAtMs > this.maxAgeMs) this.records.delete(pid);
+      if (!running(record) && now - record.registeredAtMs > this.maxAgeMs) this.records.delete(pid);
     }
     if (this.records.size <= this.maxRecords) return;
+
     const evictable = [...this.records.values()]
-      .filter((record) => record.role !== "project_worker")
+      .filter((record) => !running(record))
       .sort((a, b) => a.registeredAtMs - b.registeredAtMs || a.generation - b.generation);
     for (const record of evictable) {
       if (this.records.size <= this.maxRecords) return;
       this.records.delete(record.pid);
     }
+    // Still over: every remaining record describes a worker this machine is
+    // running. `overflow` says so; nothing pretends the bound was met.
   }
 }

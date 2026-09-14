@@ -115,6 +115,61 @@ describe("ownership records and pid reuse", () => {
     ]);
   });
 
+  it("does not let workers whose exits were missed push the count bound aside", () => {
+    let now = 1_000_000;
+    const registry = new ProcessOwnershipRegistry({}, { now: () => now, maxRecords: 4, maxAgeMs: 30_000 });
+    // Twenty workers come and go; every exit callback is lost, and no table
+    // ever shows them again.
+    for (let pid = 100; pid < 120; pid += 1) {
+      now += 1000;
+      registry.noteWorker(`/projects/p${pid}`, pid);
+      registry.reconcile([observed(pid, now - 100)]);
+    }
+    now += 60_000;
+    // Only the one the machine still shows survives the sweep.
+    registry.noteWorker("/projects/live", 200);
+    const live = registry.reconcile([observed(200, now - 50)]);
+    expect(live.map((record) => record.pid)).toEqual([200]);
+    expect(registry.size()).toBe(1);
+    expect(registry.overflow).toBeUndefined();
+  });
+
+  it("keeps every worker the machine is actually running, and says when that is over the bound", () => {
+    let now = 1_000_000;
+    const registry = new ProcessOwnershipRegistry({}, { now: () => now, maxRecords: 2, maxAgeMs: 10 ** 9 });
+    const table = [];
+    for (let pid = 100; pid < 105; pid += 1) {
+      registry.noteWorker(`/projects/p${pid}`, pid);
+      table.push(observed(pid, now - 100));
+    }
+    now += 10;
+    expect(registry.reconcile(table)).toHaveLength(5);
+    // A running worker's record is the only proof of what that process is, so
+    // it is kept — and the overflow is reported rather than implied away.
+    expect(registry.size()).toBe(5);
+    expect(registry.overflow).toBe("live_workers");
+
+    // Once the machine stops showing them, the bound applies again.
+    now += 10 ** 6;
+    registry.reconcile([]);
+    expect(registry.size()).toBe(2);
+    expect(registry.overflow).toBeUndefined();
+  });
+
+  it("adopts a claim only inside the platforms' own start-time resolution", () => {
+    let now = 1_000_000;
+    const registry = new ProcessOwnershipRegistry({}, { now: () => now });
+    registry.noteWorker("/projects/alpha", 10);
+    // A whole-second `btime` can put the start 1.4s the wrong side of the
+    // registration for the very process we started.
+    expect(registry.reconcile([observed(10, now + 1400)])).toHaveLength(1);
+
+    const other = new ProcessOwnershipRegistry({}, { now: () => now });
+    other.noteWorker("/projects/alpha", 11);
+    // Two seconds later is the next owner of the pid, not ours.
+    expect(other.reconcile([observed(11, now + 2000)])).toEqual([]);
+  });
+
   it("forgets a command record that outlived its age bound, without touching workers", () => {
     let now = 1_000_000;
     const registry = new ProcessOwnershipRegistry({}, { now: () => now, maxAgeMs: 1000 });

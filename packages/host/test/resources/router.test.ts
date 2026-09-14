@@ -96,13 +96,20 @@ describe("resource methods at the socket boundary", () => {
     expect((remote as { error: { code: number; message: string } }).error.code).toBe(ErrorCodes.Unsupported);
     expect((remote as { error: { message: string } }).error.message).toContain("running on this machine");
 
-    const local = await router.handle(request(5, "resource/report", report), { localEnvironment: true });
+    // Before any demand the host has no table, and receiving a report does
+    // not go and read one: it says the claim is pending.
+    const pending = await router.handle(request(5, "resource/report", report), { localEnvironment: true });
+    expect(pending).toMatchObject({ result: { verified: false, pending: true } });
+
+    // After a snapshot it can answer from the table it already read.
+    await router.handle(request(6, "resource/snapshot", {}));
+    const local = await router.handle(request(7, "resource/report", report), { localEnvironment: true });
     expect(local).toMatchObject({ result: { verified: true, accepted: 1, rejected: 0 } });
   });
 
   it("refuses the family, in words, on a host started without diagnostics", async () => {
     const { router } = harness(false);
-    const response = await router.handle(request(6, "resource/snapshot", {}));
+    const response = await router.handle(request(8, "resource/snapshot", {}));
     expect((response as { error: { code: number; message: string } }).error).toMatchObject({ code: ErrorCodes.Unsupported });
     expect((response as { error: { message: string } }).error.message).toContain("resource diagnostics");
   });
@@ -110,7 +117,7 @@ describe("resource methods at the socket boundary", () => {
   it("refuses a report whose shape could name something it does not own", async () => {
     const { router } = harness();
     const response = await router.handle(
-      request(7, "resource/report", { at: new Date(NOW).toISOString(), main: { pid: 100 }, processes: [{ pid: 100, type: "Browser", role: "host" }] }),
+      request(9, "resource/report", { at: new Date(NOW).toISOString(), main: { pid: 100 }, processes: [{ pid: 100, type: "Browser", role: "host" }] }),
       { localEnvironment: true },
     );
     expect((response as { error: { code: number } }).error.code).toBe(ErrorCodes.InvalidParams);
