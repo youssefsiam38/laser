@@ -1,4 +1,5 @@
 import { afterEach, expect, it } from "vitest";
+import { LOCAL_ACCESS } from "./actors.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -46,11 +47,11 @@ it("delivers log references, not raw captures, while retaining the complete insp
   const afterBytes = traffic.flat().reduce((sum, line) => sum + Buffer.byteLength(line), 0);
   expect(afterBytes).toBeLessThan(20_000);
   console.log(JSON.stringify({ finding: "F03", beforeBytes, afterBytes }));
-  const query = await host.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/logs/query", params: { kind: "provider_request", sessionPath: "/s" } });
+  const query = await host.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/logs/query", params: { kind: "provider_request", sessionPath: "/s" } }, LOCAL_ACCESS);
   expect(query.error).toBeUndefined();
   const entry = (query.result as LogPage).entries[0]!;
   expect(entry.detailRef).toBeDefined();
-  const content = await host.router.handle({ jsonrpc: "2.0", id: 2, method: "pi/logs/content", params: { ref: entry.detailRef!.ref, maxBytes: 8 * 1024 * 1024 } });
+  const content = await host.router.handle({ jsonrpc: "2.0", id: 2, method: "pi/logs/content", params: { ref: entry.detailRef!.ref, maxBytes: 8 * 1024 * 1024 } }, LOCAL_ACCESS);
   expect(content.error).toBeUndefined();
   expect(JSON.parse((content.result as ClientRequests["pi/logs/content"]["result"]).text)).toEqual(payload);
   sockets.forEach(socket => socket.close());

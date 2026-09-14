@@ -108,6 +108,11 @@ ACP-inspired JSON-RPC:
   `agents/beam/choose-model` notifications — see [`agents.md`](agents.md).
   Remaining `pi/*` methods are internal wire compatibility and are not
   product vocabulary.
+- Every client method carries a scope and a reach in one compiler-complete
+  table at the host boundary, and `environment/describe` tells each connection
+  what this environment is and what that connection may do in it
+  (RP-13, [`environment-policy.md`](environment-policy.md)). A policy or a
+  pairing grant may narrow; nothing widens.
 - Notifications (host → client): `session/update` with a monotonically
   increasing `seq` per session; clients resume with `session/load { fromSeq }`.
 - Requests (host → client): `session/request_permission` and `pi/ui/request`

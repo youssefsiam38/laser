@@ -83,6 +83,7 @@ describe("agent parent-message modes", () => {
 
 const samples: Record<ClientMethod, unknown> = {
   "pi/host/version": {},
+  "environment/describe": {},
   "pi/host/environment": { variables: { SYNTHETIC_EXPORT: "fixture", PATH: "/bin:/usr/bin" } },
   "session/new": { cwd: "/p" },
   "session/load": { path: "/s.jsonl", fromSeq: 12, transcript: "loaded" },

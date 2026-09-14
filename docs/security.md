@@ -38,7 +38,40 @@ the original relay research notes (not kept in the repository), decision D-10.
 | Malware on the desktop | Root on the machine running the agent | **No.** Out of scope; it already has the agent |
 | A hostile Pi extension | Runs in the worker process | **No.** Pi extensions are unsandboxed upstream |
 
-A native local process can call `pi/host/environment` through the loopback socket; it already has the same authority there through session prompts and tool execution, while browser-origin and relay callers cannot change the environment.
+A native local process can call `pi/host/environment` through the loopback socket; it already has the same authority there through session prompts and tool execution, while browser-origin and relay callers cannot change the environment. That rule is no longer a special case: every method carries a scope and a reach in one table at the host boundary, and the environment describes itself to each connection (§2.1, [`environment-policy.md`](environment-policy.md)).
+
+### 2.1 The host boundary: scopes, reach and the audit (RP-13)
+
+Authority is decided at the host, from what the host itself proved about the
+connection — a loopback process, a loopback page, or a device whose Noise
+handshake authenticated its static key. A request body never contributes to
+that decision, and the decision is made from the method name alone, before the
+parameters are parsed and therefore before any session lookup, file read,
+worker start or change of state.
+
+- **`environment/describe`** tells a connection what this environment is
+  (`local`, `self_hosted`, `cloud`, `enterprise`), what it may do, what it may
+  cache, and which methods are available only on this machine.
+- **Narrowing only.** An organisation's policy and a device's pairing grant
+  intersect with the table; neither can add a scope, and neither can change a
+  method's reach. `HostServerOptions.policy` is authoritative;
+  `<stateDir>/policy.json` is an optional *local* narrowing and is not managed
+  enforcement. A policy that is present and unusable stops the host before it
+  listens.
+- **Three methods are local by nature**: `pi/host/environment` and
+  `agents/sync` (the shell's and the host's own plumbing) and `resource/report`
+  (the desktop's measurement input). The redacted inventory a phone *reads*
+  stays reachable.
+- **The audit** records the actor, the method, the scope and the outcome, and
+  nothing else: no conversation, path, payload, argv, environment variable,
+  session id or URL. The actor is an opaque value salted with this
+  environment's private identity — never the signed list's device id or the
+  device's public key. It is bounded per actor and host-globally, and a
+  reconnect does not reset either bound.
+
+The relay is unchanged by all of this: scopes, descriptors and audit rows are
+host state, and the frames that carry the requests remain padded ciphertext it
+cannot read (§5, §9).
 
 ### Machine file previews (M16-T19)
 

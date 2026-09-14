@@ -5,6 +5,7 @@
  * router does not know is refused, which is exactly the failure this covers.
  */
 import { PRODUCT_NAME } from "@lasercode/protocol";
+import { LOCAL_ACCESS } from "./actors.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -68,7 +69,7 @@ describe("Router · mcp/*", () => {
     try {
       let id = 0;
       for (const [method, params] of CALLS) {
-        const response = await h.router.handle({ jsonrpc: "2.0", id: (id += 1), method, params: { cwd: CWD, ...params } });
+        const response = await h.router.handle({ jsonrpc: "2.0", id: (id += 1), method, params: { cwd: CWD, ...params } }, LOCAL_ACCESS);
         expect(response, method).toMatchObject({ result: { answered: method } });
       }
       expect(h.requests.map((request) => request.method)).toEqual(CALLS.map(([method]) => method));
@@ -86,18 +87,18 @@ describe("a cwd under a child's worktree", () => {
     try {
       const worktree = `${CWD}/.worktrees/fixer-1a2b3c4d`;
       const read = { jsonrpc: "2.0" as const, id: 1, method: "pi/project/read", params: { cwd: worktree, path: "src/example.ts" } };
-      await router.handle(read as never);
+      await router.handle(read as never, LOCAL_ACCESS);
       expect(requests.at(-1)).toEqual({ cwd: CWD, method: "pi/project/read", params: { cwd: CWD, path: `${worktree}/src/example.ts` } });
       const settings = { jsonrpc: "2.0" as const, id: 2, method: "mcp/list", params: { cwd: worktree } };
-      await router.handle(settings as never);
+      await router.handle(settings as never, LOCAL_ACCESS);
       expect(requests.at(-1)).toEqual({ cwd: CWD, method: "mcp/list", params: { cwd: CWD } });
       // An absolute path stays as it is; a project's own cwd is untouched.
       const absolute = { jsonrpc: "2.0" as const, id: 3, method: "pi/project/read", params: { cwd: CWD, path: `${CWD}/README.md` } };
-      await router.handle(absolute as never);
+      await router.handle(absolute as never, LOCAL_ACCESS);
       expect(requests.at(-1)).toEqual({ cwd: CWD, method: "pi/project/read", params: { cwd: CWD, path: `${CWD}/README.md` } });
       // Machine-wide targets keep their identity even through worktree routing.
       const outside = { ...absolute, id: 4, params: { cwd: worktree, path: "/outside/notes.txt" } };
-      await router.handle(outside as never);
+      await router.handle(outside as never, LOCAL_ACCESS);
       expect(requests.at(-1)).toEqual({ cwd: CWD, method: "pi/project/read", params: { cwd: CWD, path: "/outside/notes.txt" } });
     } finally {
       cleanup();
@@ -110,7 +111,7 @@ it("routes session-scoped discovery diagnostics unchanged without opening anothe
   const result = { servers: [], conversations: [{ sessionPath: "/sessions/one", context: { contextWindow: null, budget: null, share: 0.02, measurement: "utf8-upper-bound", preloaded: [], preloadedTokens: 0, lastDiscoveryTokens: 123, discoveries: [] } }] };
   const h = harness(result);
   try {
-    expect(await h.router.handle({ jsonrpc: "2.0", id: 1, method: "mcp/list", params: { cwd: CWD } })).toMatchObject({ result });
+    expect(await h.router.handle({ jsonrpc: "2.0", id: 1, method: "mcp/list", params: { cwd: CWD } }, LOCAL_ACCESS)).toMatchObject({ result });
     expect(h.requests).toEqual([{ cwd: CWD, method: "mcp/list", params: { cwd: CWD } }]);
   } finally { h.cleanup(); }
 });

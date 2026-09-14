@@ -53,6 +53,40 @@ export {
 } from "./logstore.js";
 export { Router, type RouterDeps } from "./router.js";
 export {
+  AccessControl,
+  LOCAL_APP_ACTOR_ID,
+  LOCAL_BROWSER_ACTOR_ID,
+  UNPROVEN_SOCKET_ACTOR_ID,
+  defaultAccessControl,
+  localActor,
+  pairedActor,
+  pairedActorId,
+  type AccessControlOptions,
+  type ActorIdentity,
+  type Authorization,
+  type HostCapabilities,
+  type RequestAccess,
+} from "./access.js";
+export {
+  AccessAudit,
+  DEFAULT_AUDIT_BOUNDS,
+  UNKNOWN_METHOD_LABEL,
+  unknownMethodDigest,
+  type AccessAuditOptions,
+  type AccessAuditRecord,
+  type AuditBounds,
+  type AuditOutcome,
+  type AuditSink,
+} from "./access-audit.js";
+export {
+  CONFIGURED_POLICY_SOURCE,
+  ENVIRONMENT_POLICY_FILE,
+  FILE_POLICY_SOURCE,
+  loadEnvironmentPolicy,
+  type LoadEnvironmentPolicyOptions,
+  type LoadedEnvironmentPolicy,
+} from "./environment-policy.js";
+export {
   CURATED_PACKAGES,
   PackageLock,
   PackageService,

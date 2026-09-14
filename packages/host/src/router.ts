@@ -24,10 +24,12 @@
  *   pi/ui/response       every live worker (the worker that owns the dialog id
  *                        answers; the others ignore it)
  */
-import { ErrorCodes, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, PRODUCT_VERSION, ProtocolError, decisionPushPayload, isTerminalRunStatus, parseClientRequest, type AgentRun, type AgentWorktreeStatus, type JsonRpcError, type JsonRpcResponse, type NamerState, type ProjectEnvStatus, type SessionAttention, type SessionState, type SessionSummary, type TypedClientRequest } from "@lasercode/protocol";
+import { ENVIRONMENT_DESCRIBE_METHOD, ErrorCodes, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, PRODUCT_VERSION, ProtocolError, decisionPushPayload, isTerminalRunStatus, parseClientRequest, type AgentRun, type AgentWorktreeStatus, type JsonRpcError, type JsonRpcResponse, type NamerState, type ProjectEnvStatus, type SessionAttention, type SessionState, type SessionSummary, type TypedClientRequest } from "@lasercode/protocol";
 import { existsSync, statSync, unlinkSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import { HOST_ENVIRONMENT_METHOD, applyHostEnvironment, guardHostEnvironment } from "./environment.js";
+import { HOST_ENVIRONMENT_METHOD, applyHostEnvironment } from "./environment.js";
+import { defaultAccessControl, type AccessControl, type ActorIdentity, type RequestAccess } from "./access.js";
+import { unknownMethodDigest, type AccessAudit } from "./access-audit.js";
 import { destinationFor, rewriteSessionFile } from "./session-move.js";
 import type { AgentRunRegistry } from "./agents/runs.js";
 import { removeRunWorktree, worktreeStatus } from "./agents/worktrees.js";
@@ -47,7 +49,7 @@ import type { PrefsStore } from "./prefs.js";
 import type { FeatureService } from "./features.js";
 import type { ProjectRegistry } from "./projects.js";
 import type { PushService } from "./push.js";
-import { RESOURCE_REPORT_METHOD, guardResourceReport } from "./resources/guard.js";
+import { RESOURCE_REPORT_METHOD } from "./resources/guard.js";
 import type { ResourceService } from "./resources/index.js";
 import { canonical } from "./trust.js";
 import type { SessionProjection } from "./session-projection.js";
@@ -113,6 +115,14 @@ export interface RouterDeps {
    * rather than answered with an invented shape.
    */
   resources?: ResourceService | undefined;
+  /**
+   * The boundary's authorization and environment descriptor (RP-13). Absent =
+   * reach and the default scopes are still enforced, and `environment/describe`
+   * is refused rather than answered with an environment this host cannot name.
+   */
+  access?: AccessControl | undefined;
+  /** The access audit (RP-13). Absent = decisions are not recorded. */
+  audit?: AccessAudit | undefined;
 }
 
 /** Methods answered by the worker that owns `params.cwd` (M4). */
@@ -213,21 +223,71 @@ export class Router {
     for (const [id, upload] of this.uploads) if (upload.at <= cutoff) this.uploads.delete(id);
   }
 
-  async handle(raw: unknown, access: { localEnvironment?: boolean; searches?: SearchCancellation } = {}): Promise<JsonRpcResponse> {
+  /**
+   * Answer one client request.
+   *
+   * `access.actor` is who the boundary **proved** this connection to be, and
+   * it is required: a call site that could omit it would be a call site that
+   * silently defaults to trusted. Authorization runs on the method name alone,
+   * before the params are parsed and therefore before any session is looked
+   * up, any file is opened, any worker is started and anything is changed
+   * (RP-13).
+   */
+  async handle(raw: unknown, access: RequestAccess & { searches?: SearchCancellation }): Promise<JsonRpcResponse> {
     const id = (raw as { id?: string | number } | null)?.id ?? 0;
+    const method = (raw as { method?: unknown } | null)?.method;
+    const name = typeof method === "string" ? method : "";
+    const decision = this.access().authorize(name, access.actor);
+    if (!decision.ok) {
+      this.audit()?.record({
+        actorId: access.actor.id,
+        actorClass: access.actor.class,
+        method: decision.reason === "unknown_method" ? undefined : name,
+        ...(decision.reason === "unknown_method" ? { methodDigest: unknownMethodDigest(name) } : {}),
+        scope: decision.reason === "unknown_method" ? undefined : decision.policy.scope,
+        outcome: "refused",
+        reason: decision.reason,
+        code: decision.error.code,
+      });
+      return { jsonrpc: "2.0", id, error: toRpcError(decision.error) };
+    }
+
+    const startedAt = Date.now();
+    let response: JsonRpcResponse;
     try {
-      guardHostEnvironment(raw, access.localEnvironment);
-      guardResourceReport(raw, access.localEnvironment);
       const req = parseClientRequest(raw);
       const clientVersion = (raw as { clientVersion?: string }).clientVersion;
       if (req.method !== "pi/host/version" && clientVersion && clientVersion !== PRODUCT_VERSION) {
         throw new ProtocolError(ErrorCodes.VersionMismatch, "Refresh this view to match the host before continuing.", { version: PRODUCT_VERSION });
       }
-      const result = await this.dispatch(req, access.searches);
-      return { jsonrpc: "2.0", id: req.id, result };
+      const result = await this.dispatch(req, access.searches, access.actor);
+      response = { jsonrpc: "2.0", id: req.id, result };
     } catch (error) {
-      return { jsonrpc: "2.0", id, error: toRpcError(error) };
+      response = { jsonrpc: "2.0", id, error: toRpcError(error) };
     }
+    this.audit()?.record({
+      actorId: access.actor.id,
+      actorClass: access.actor.class,
+      method: name,
+      scope: decision.policy.scope,
+      outcome: response.error ? "error" : "ok",
+      ...(response.error ? { code: response.error.code } : {}),
+      durationMs: Date.now() - startedAt,
+    });
+    return response;
+  }
+
+  /**
+   * The boundary's authorization. A host built without one still refuses
+   * nothing more than it did before, but that is a wiring mistake rather than
+   * a mode: `HostServer` always supplies it.
+   */
+  private access(): AccessControl {
+    return this.deps.access ?? defaultAccessControl();
+  }
+
+  private audit(): AccessAudit | undefined {
+    return this.deps.audit;
   }
 
   private packages(): PackageService {
@@ -310,10 +370,20 @@ export class Router {
       .slice(0, limit);
   }
 
-  private async dispatch(req: TypedClientRequest, searches?: SearchCancellation): Promise<unknown> {
+  private async dispatch(req: TypedClientRequest, searches?: SearchCancellation, actor?: ActorIdentity): Promise<unknown> {
     switch (req.method) {
       case "pi/host/version":
         return { version: PRODUCT_VERSION };
+      case ENVIRONMENT_DESCRIBE_METHOD: {
+        const access = this.deps.access;
+        if (!access || !actor) {
+          throw new ProtocolError(
+            ErrorCodes.Unsupported,
+            "This host cannot describe its environment. Restart the app and try again.",
+          );
+        }
+        return { environment: access.describe(actor) };
+      }
       case HOST_ENVIRONMENT_METHOD: return applyHostEnvironment(this.pool, req.params);
       case "pi/session/list": {
         if (!req.params.page) return { sessions: this.sessions(req.params.cwd) };

@@ -5,6 +5,7 @@
  * the environment's raw identity leaving the host.
  */
 import { ErrorCodes, PRODUCT_NAME, environmentKeyOf, environmentTagOf, isEnvironmentKey, isSessionRevision, sessionRevisionOf } from "@lasercode/protocol";
+import { LOCAL_ACCESS } from "./actors.js";
 import { nodeRevisionHasher } from "@lasercode/protocol/revision-node";
 import { describe, expect, it, vi } from "vitest";
 import { appendFileSync, chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -281,7 +282,7 @@ describe("routing a revision request", () => {
   }
 
   const request = (router: Router, path: string, baseRevision?: string) =>
-    router.handle({ jsonrpc: "2.0", id: 1, method: "session/revision", params: { path, ...(baseRevision ? { baseRevision } : {}) } });
+    router.handle({ jsonrpc: "2.0", id: 1, method: "session/revision", params: { path, ...(baseRevision ? { baseRevision } : {}) } }, LOCAL_ACCESS);
 
   it("answers a cold conversation without starting a worker", async () => {
     const { path, cleanup } = fixture();
@@ -378,7 +379,7 @@ describe("routing a revision request", () => {
     const { path, cleanup } = fixture();
     const h = harness({ path, open: [path], revisions: revisions(), spawnedResult });
     try {
-      const response = await h.router.handle({ jsonrpc: "2.0", id: 1, method, params: { ...rawParams, path } }) as { error: { code: number } };
+      const response = await h.router.handle({ jsonrpc: "2.0", id: 1, method, params: { ...rawParams, path } }, LOCAL_ACCESS) as { error: { code: number } };
       expect(response.error.code).toBe(ErrorCodes.RevisionUnavailable);
     } finally {
       h.cleanup();
@@ -412,7 +413,7 @@ describe("routing a revision request", () => {
     const projection = new SessionProjection({ index, revisions: service });
     const h = harness({ path, revisions: service, projection });
     try {
-      const response = await h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/session/entries", params: { path, authority: "any" } }) as { result: { entries: unknown[]; window: { authority: string; mode: string } } };
+      const response = await h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/session/entries", params: { path, authority: "any" } }, LOCAL_ACCESS) as { result: { entries: unknown[]; window: { authority: string; mode: string } } };
       expect(response.result.entries).toHaveLength(2);
       expect(response.result.window).toMatchObject({ authority: "durable", mode: "replace" });
       expect(h.spawned).not.toHaveBeenCalled();
@@ -432,7 +433,7 @@ describe("routing a revision request", () => {
     const liveResult = { entries: [{ id: "live-only" }], leafId: "live-only", window: { revision: LIVE_REVISION, environmentKey: ENVIRONMENT_KEY, authority: "live", mode: "replace" } };
     const h = harness({ path, open: [path], revisions: service, projection, liveResult });
     try {
-      const response = await h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/session/entries", params: { path, authority: "any" } }) as { result: typeof liveResult };
+      const response = await h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/session/entries", params: { path, authority: "any" } }, LOCAL_ACCESS) as { result: typeof liveResult };
       expect(response.result).toEqual(liveResult);
       expect(read).not.toHaveBeenCalled();
       expect(h.spawned).not.toHaveBeenCalled();
@@ -451,7 +452,7 @@ describe("routing a revision request", () => {
     const livePage = { entries: [{ id: "migrated" }], leafId: "migrated", window: { revision: LIVE_REVISION, environmentKey: ENVIRONMENT_KEY, authority: "live", mode: "replace" } };
     const h = harness({ path, revisions: service, projection, spawnedResult: livePage });
     try {
-      const response = await h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/session/entries", params: { path, authority: "any", window: { tail: 40 } } }) as { result: typeof livePage };
+      const response = await h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/session/entries", params: { path, authority: "any", window: { tail: 40 } } }, LOCAL_ACCESS) as { result: typeof livePage };
       expect(response.result).toEqual(livePage);
       expect(h.spawned).toHaveBeenCalledTimes(1);
       expect(h.workerRequests.map(call => call.method)).toEqual(["session/load", "pi/session/entries"]);
@@ -470,7 +471,7 @@ describe("routing a revision request", () => {
     const projection = new SessionProjection({ index, revisions: service });
     const h = harness({ path, revisions: service, projection });
     try {
-      const response = await h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/session/entries", params: { path, authority: "any", window: { tail: 40 } } }) as { error: { code: number } };
+      const response = await h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/session/entries", params: { path, authority: "any", window: { tail: 40 } } }, LOCAL_ACCESS) as { error: { code: number } };
       expect(response.error.code).toBe(ErrorCodes.RevisionUnavailable);
       expect(h.spawned).not.toHaveBeenCalled();
       expect(h.workerRequests).toEqual([]);
@@ -487,7 +488,7 @@ describe("routing a revision request", () => {
     const projection = new SessionProjection({ index, revisions: service });
     const h = harness({ path, revisions: service, projection });
     try {
-      const response = await h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/session/entries", params: { path, authority: "any", window: { tail: 40 } } }) as { error: { code: number } };
+      const response = await h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/session/entries", params: { path, authority: "any", window: { tail: 40 } } }, LOCAL_ACCESS) as { error: { code: number } };
       expect(response.error.code).toBe(ErrorCodes.RevisionUnavailable);
       expect(h.spawned).not.toHaveBeenCalled();
       expect(h.workerRequests).toEqual([]);

@@ -6,6 +6,7 @@
  * in a sentence rather than answering with an invented shape.
  */
 import { mkdtempSync, rmSync } from "node:fs";
+import { BROWSER_ACCESS, LOCAL_ACCESS, deviceAccess } from "../actors.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -74,13 +75,13 @@ const request = (id: number, method: string, params: unknown = {}) => ({ jsonrpc
 describe("resource methods at the socket boundary", () => {
   it("answers a snapshot, its history and an export", async () => {
     const { router } = harness();
-    const snapshot = await router.handle(request(1, "resource/snapshot", { refresh: true }));
+    const snapshot = await router.handle(request(1, "resource/snapshot", { refresh: true }), LOCAL_ACCESS);
     expect(snapshot).toMatchObject({ result: { snapshot: { platform: "linux" }, retention: { maxSnapshots: 3600 } } });
 
-    const history = await router.handle(request(2, "resource/history", { limit: 5 }));
+    const history = await router.handle(request(2, "resource/history", { limit: 5 }), LOCAL_ACCESS);
     expect((history as { result: { snapshots: unknown[] } }).result.snapshots).toHaveLength(1);
 
-    const exported = await router.handle(request(3, "resource/export"));
+    const exported = await router.handle(request(3, "resource/export"), LOCAL_ACCESS);
     expect((exported as { result: { bytes: number } }).result.bytes).toBeGreaterThan(0);
   });
 
@@ -92,24 +93,28 @@ describe("resource methods at the socket boundary", () => {
       processes: [{ pid: 100, creationTime: NOW - 60_000, type: "Browser", workingSetBytes: 1000 }],
     };
 
-    const remote = await router.handle(request(4, "resource/report", report));
-    expect((remote as { error: { code: number; message: string } }).error.code).toBe(ErrorCodes.Unsupported);
-    expect((remote as { error: { message: string } }).error.message).toContain("running on this machine");
+    // A paired device — and a page, even a local one — cannot feed the host
+    // measurements of this machine's processes (RP-13, reach `native`).
+    for (const access of [deviceAccess(), BROWSER_ACCESS]) {
+      const remote = await router.handle(request(4, "resource/report", report), access);
+      expect((remote as { error: { code: number; message: string } }).error.code).toBe(ErrorCodes.Unsupported);
+      expect((remote as { error: { message: string } }).error.message).toContain("running on this machine");
+    }
 
     // Before any demand the host has no table, and receiving a report does
     // not go and read one: it says the claim is pending.
-    const pending = await router.handle(request(5, "resource/report", report), { localEnvironment: true });
+    const pending = await router.handle(request(5, "resource/report", report), LOCAL_ACCESS);
     expect(pending).toMatchObject({ result: { verified: false, pending: true } });
 
     // After a snapshot it can answer from the table it already read.
-    await router.handle(request(6, "resource/snapshot", {}));
-    const local = await router.handle(request(7, "resource/report", report), { localEnvironment: true });
+    await router.handle(request(6, "resource/snapshot", {}), LOCAL_ACCESS);
+    const local = await router.handle(request(7, "resource/report", report), LOCAL_ACCESS);
     expect(local).toMatchObject({ result: { verified: true, accepted: 1, rejected: 0 } });
   });
 
   it("refuses the family, in words, on a host started without diagnostics", async () => {
     const { router } = harness(false);
-    const response = await router.handle(request(8, "resource/snapshot", {}));
+    const response = await router.handle(request(8, "resource/snapshot", {}), LOCAL_ACCESS);
     expect((response as { error: { code: number; message: string } }).error).toMatchObject({ code: ErrorCodes.Unsupported });
     expect((response as { error: { message: string } }).error.message).toContain("resource diagnostics");
   });
@@ -118,7 +123,7 @@ describe("resource methods at the socket boundary", () => {
     const { router } = harness();
     const response = await router.handle(
       request(9, "resource/report", { at: new Date(NOW).toISOString(), main: { pid: 100 }, processes: [{ pid: 100, type: "Browser", role: "host" }] }),
-      { localEnvironment: true },
+      LOCAL_ACCESS,
     );
     expect((response as { error: { code: number } }).error.code).toBe(ErrorCodes.InvalidParams);
   });

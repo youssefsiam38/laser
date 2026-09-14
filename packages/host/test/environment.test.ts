@@ -1,4 +1,5 @@
 import { type ClientMethod, type ClientRequests, type JsonRpcMessage, type McpCallResult } from "@lasercode/protocol";
+import { deviceAccess } from "./actors.js";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -117,7 +118,7 @@ it("refuses browser and relay/default callers; malformed input is not applied", 
   const browser = await connect(url);
   const params = { variables: { SYNTHETIC_SHELL_EXPORT: "private-fixture" } };
   await expect(browser.request("pi/host/environment", params)).rejects.toThrow("only accepted from a local app or terminal");
-  const relay = await host.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/host/environment", params });
+  const relay = await host.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/host/environment", params }, deviceAccess());
   expect(relay.error?.message).toContain("only accepted from a local app or terminal");
   const local = await connect();
   await expect(local.request("pi/host/environment", { variables: { "BAD=NAME": "private-fixture" } })).rejects.toThrow("invalid params");

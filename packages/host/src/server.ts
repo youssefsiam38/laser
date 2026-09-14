@@ -32,7 +32,10 @@ import type { AddressInfo } from "node:net";
 import { basename, dirname, extname, join, normalize, relative, resolve as resolvePath, sep } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { channelIdFor, type KeyPair } from "@lasercode/crypto";
-import { ENV, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, isTerminalRunStatus, projectEnvWorkerConfig, type ClientRequests, type HostNotifications, type JsonRpcNotification, type LogEntry, type NamerState, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
+import { ENV, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, isTerminalRunStatus, projectEnvWorkerConfig, type ClientRequests, type DeviceGrants, type EnvironmentPolicyInput, type HostNotifications, type JsonRpcNotification, type LogEntry, type NamerState, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
+import { AccessControl, localActor, pairedActor, type ActorIdentity } from "./access.js";
+import { AccessAudit } from "./access-audit.js";
+import { loadEnvironmentPolicy } from "./environment-policy.js";
 import { suggestBeamModel } from "./agents/models.js";
 import { AgentRunRegistry } from "./agents/runs.js";
 import { SkillsCheck } from "./agents/skills-check.js";
@@ -120,6 +123,16 @@ export interface HostServerOptions {
    * relaying because a file happened to exist.
    */
   relay?: HostRelayOptions;
+  /**
+   * The authoritative environment policy (RP-13), from whoever started this
+   * host: the desktop shell, a hosted workspace's supervisor, an organisation's
+   * deployment. Absent means the default policy, which narrows nothing. It can
+   * only take authority away, and it is the only source that may name this
+   * environment a hosted or managed one.
+   *
+   * A policy that cannot be honoured throws here, before the host listens.
+   */
+  policy?: EnvironmentPolicyInput;
   log?: (line: string) => void;
 }
 
@@ -150,6 +163,12 @@ export interface HostRelayOptions {
 export interface HostRelayDevice {
   /** base64url device id from the signed device list, for logs. */
   id: string;
+  /**
+   * What this device was granted (RP-13). Intersected with the environment's
+   * own scopes and clamped against its cache policy, so a grant can only ever
+   * narrow. Absent means "whatever the environment allows a paired device".
+   */
+  grants?: DeviceGrants;
   /** Untrusted label. Never rendered as markup by anything reading this. */
   name: string;
   /** Raw 32-byte X25519 static public key. */
@@ -225,10 +244,16 @@ export class HostServer {
   readonly skillsCheck: SkillsCheck;
   /** Process inventory and resource snapshots (RP-1). Collects only on demand. */
   readonly resources: ResourceService;
+  /** The boundary's authorization and the environment descriptor (RP-13). */
+  readonly access: AccessControl;
+  /** The bounded, redacted record of what the boundary decided (RP-13). */
+  readonly audit: AccessAudit;
   readonly router: Router;
   private readonly http: Server;
   private readonly wss: WebSocketServer;
   private readonly clients = new Set<WebSocket>();
+  /** What the boundary proved about each local socket (RP-13). */
+  private readonly actors = new Map<WebSocket, ActorIdentity>();
   /** Session paths each client is following, for the retirement guard. */
   private readonly attached = new Map<WebSocket, Set<string>>();
   private readonly transcripts = new Map<WebSocket, TranscriptDelivery>();
@@ -264,6 +289,14 @@ export class HostServer {
     // Defense in depth: even a dependency echoing worker argv cannot put the
     // trusted identity into the host log (and therefore a log query/export).
     this.log = (line) => log(this.privateLogText(line));
+    // The policy is resolved before anything is opened or served: a host that
+    // was told to narrow and cannot understand the instruction must not come
+    // up wider than it was asked to be. This throws out of the constructor,
+    // which is before `listen()` and before any socket exists.
+    const { policy, sources } = loadEnvironmentPolicy({
+      stateDir,
+      ...(options.policy !== undefined ? { configured: options.policy } : {}),
+    });
     const workspacesRoot = options.workspacesDir ?? workspacesDir(stateDir);
     const workspaces = { beam: join(workspacesRoot, "beam"), chat: join(workspacesRoot, "chat") };
     // Created here and again when a session asks for one (router.ts refuses
@@ -311,6 +344,32 @@ export class HostServer {
       environmentId: this.environment.id,
     });
     this.projection = new SessionProjection({ index: sessionIndex, revisions: this.revisions });
+
+    // Who may do what, and the record of it. Both are host-owned: a client
+    // never carries its own authority, and an audit row never carries a
+    // conversation.
+    this.access = new AccessControl({
+      policy,
+      environmentKey: this.revisions.environmentKey,
+      capabilities: {
+        revisions: true,
+        deltas: true,
+        snapshots: true,
+        durableReads: true,
+        search: true,
+        logs: this.logs !== undefined,
+        diagnostics: true,
+        push: true,
+      },
+    });
+    this.audit = new AccessAudit({
+      sink: this.logs,
+      log: (line) => this.log(line),
+      reads: policy.audit.reads,
+    });
+    this.log(
+      `environment: ${policy.deployment}${sources.length > 0 ? ` policy from ${sources.join(" and ")}` : " policy default"}`,
+    );
 
     this.attention = new AttentionTracker({
       storePath: join(stateDir, "attention.json"),
@@ -516,6 +575,8 @@ export class HostServer {
       resources: this.resources,
       revisions: this.revisions,
       projection: this.projection,
+      access: this.access,
+      audit: this.audit,
     });
 
     this.http = createServer((req, res) => this.serveHttp(req, res));
@@ -531,8 +592,12 @@ export class HostServer {
         done(false, 403, `${PRODUCT_NAME} only accepts WebSocket connections from its own origin`);
       },
     });
-    this.wss.on("connection", (ws, req) => this.onConnection(ws,
-      !req.headers.origin && ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress ?? ""),
+    this.wss.on("connection", (ws, req) => this.onConnection(
+      ws,
+      // The same two facts the host has always used, now named: a loopback
+      // peer, and whether a browser announced itself. `verifyClient` has
+      // already refused any origin that is not this app's.
+      localActor(Boolean(req.headers.origin), ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress ?? "")),
     ));
   }
 
@@ -575,16 +640,24 @@ export class HostServer {
         );
         continue;
       }
+      // The device's identity is captured here, once, from what the host
+      // knows about the pairing. Nothing a frame carries can contribute.
+      const actor = pairedActor(this.environment.id, device.publicKey, device.grants);
       const client = new RelayClient({
         relayUrl: relay.url,
         channelId,
         staticKeyPair: relay.staticKeyPair,
         devicePublicKey: device.publicKey,
         deviceName: device.name,
-        handle: (raw, searches) => this.router.handle(raw, { searches }),
+        handle: (raw, searches) => this.router.handle(raw, { actor, searches }),
         subscribe: (listener) => {
-          this.notificationListeners.add(listener);
-          return () => this.notificationListeners.delete(listener);
+          // A device hears only what its scopes cover (RP-13). Transcript
+          // admission still applies inside the relay client itself.
+          const scoped = (notification: JsonRpcNotification): void => {
+            if (this.access.allowsNotification(notification.method, actor)) listener(notification);
+          };
+          this.notificationListeners.add(scoped);
+          return () => this.notificationListeners.delete(scoped);
         },
         ...(relay.isAuthorized ? { isAuthorized: relay.isAuthorized } : {}),
         ...(relay.shapeTiming !== undefined ? { shapeTiming: relay.shapeTiming } : {}),
@@ -617,6 +690,7 @@ export class HostServer {
     if (this.logFlush) clearTimeout(this.logFlush);
     this.logFlush = undefined;
     this.pendingLogRows = [];
+    this.audit.close();
     this.logs?.close();
     this.projects.close();
     this.attention.close();
@@ -624,6 +698,7 @@ export class HostServer {
     this.agents.close();
     for (const ws of this.clients) ws.close(1001, "host shutting down");
     this.clients.clear();
+    this.actors.clear();
     this.attached.clear();
     for (const deliveries of this.loadDeliveries.values()) for (const delivery of deliveries) delivery.dispose();
     this.loadDeliveries.clear();
@@ -945,6 +1020,9 @@ export class HostServer {
     let line: string | undefined;
     for (const ws of this.clients) {
       if (ws.readyState !== ws.OPEN || !this.transcripts.get(ws)?.accepts(notification)) continue;
+      // A connection hears only what its scopes cover (RP-13).
+      const actor = this.actors.get(ws);
+      if (actor && !this.access.allowsNotification(notification.method, actor)) continue;
       const held = [...(this.loadDeliveries.get(ws) ?? [])]
         .map((delivery) => delivery.offer(notification))
         .some(Boolean);
@@ -980,8 +1058,9 @@ export class HostServer {
     return (this.options.allowedOrigins ?? []).includes(origin);
   }
 
-  private onConnection(ws: WebSocket, localEnvironment: boolean): void {
+  private onConnection(ws: WebSocket, actor: ActorIdentity): void {
     this.clients.add(ws);
+    this.actors.set(ws, actor);
     this.attached.set(ws, new Set());
     const transcripts = new TranscriptDelivery();
     this.transcripts.set(ws, transcripts);
@@ -1009,7 +1088,7 @@ export class HostServer {
       const finishTranscript = transcripts.begin(raw);
       let transcriptResponse;
       try {
-        const response = await this.router.handle(raw, { localEnvironment, searches });
+        const response = await this.router.handle(raw, { actor, searches });
         transcriptResponse = response;
         if (!response.error) this.noteRequest(ws, request, response.result);
         const sent = await this.sendSocket(ws, JSON.stringify(response));
@@ -1072,6 +1151,7 @@ export class HostServer {
 
   private dropClient(ws: WebSocket): void {
     this.clients.delete(ws);
+    this.actors.delete(ws);
     this.attached.delete(ws);
     this.transcripts.delete(ws);
     this.searches.get(ws)?.close();

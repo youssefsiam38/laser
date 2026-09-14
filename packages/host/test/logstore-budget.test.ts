@@ -10,6 +10,7 @@
  * file that actually shrinks — proven by `fileBytes()`, never by a row count.
  */
 import { PRODUCT_NAME, WIRE_NAMESPACE, type ClientRequests, type LogPage } from "@lasercode/protocol";
+import { LOCAL_ACCESS } from "./actors.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -295,26 +296,26 @@ describe("through the host", () => {
       // The release is the timer's job, exactly as it is in the running host.
       await expect
         .poll(async () => {
-          const page = await host.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/logs/query", params: { kind: "provider_request", sessionPath: "/s/held.jsonl" } });
+          const page = await host.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/logs/query", params: { kind: "provider_request", sessionPath: "/s/held.jsonl" } }, LOCAL_ACCESS);
           return (page.result as LogPage).entries[0]?.detailRef?.released === true;
         })
         .toBe(true);
 
-      const page = await host.router.handle({ jsonrpc: "2.0", id: 2, method: "pi/logs/query", params: { kind: "provider_request", sessionPath: "/s/held.jsonl" } });
+      const page = await host.router.handle({ jsonrpc: "2.0", id: 2, method: "pi/logs/query", params: { kind: "provider_request", sessionPath: "/s/held.jsonl" } }, LOCAL_ACCESS);
       const [oldest, , newest] = (page.result as LogPage).entries;
-      const answer = await host.router.handle({ jsonrpc: "2.0", id: 3, method: "pi/logs/content", params: { ref: oldest!.detailRef!.ref } });
+      const answer = await host.router.handle({ jsonrpc: "2.0", id: 3, method: "pi/logs/content", params: { ref: oldest!.detailRef!.ref } }, LOCAL_ACCESS);
       expect(answer.error).toBeUndefined();
       const result = answer.result as ClientRequests["pi/logs/content"]["result"];
       expect(result.text).toBe("");
       expect(result.released).toMatchObject({ reason: "session-limit", summary: oldest!.summary, model: "claude-sonnet-4-5" });
 
       // The newest request in the session is still there in full.
-      const kept = await host.router.handle({ jsonrpc: "2.0", id: 4, method: "pi/logs/content", params: { ref: newest!.detailRef!.ref } });
+      const kept = await host.router.handle({ jsonrpc: "2.0", id: 4, method: "pi/logs/content", params: { ref: newest!.detailRef!.ref } }, LOCAL_ACCESS);
       const keptResult = kept.result as ClientRequests["pi/logs/content"]["result"];
       expect(keptResult.released).toBeUndefined();
       expect(JSON.parse(keptResult.text)).toMatchObject({ model: "claude-sonnet-4-5" });
 
-      const stats = await host.router.handle({ jsonrpc: "2.0", id: 5, method: "pi/logs/stats", params: {} });
+      const stats = await host.router.handle({ jsonrpc: "2.0", id: 5, method: "pi/logs/stats", params: {} }, LOCAL_ACCESS);
       expect((stats.result as { stats: { retention: { bodiesPerSession?: number } } }).stats.retention.bodiesPerSession).toBe(1);
     } finally {
       await host.close();

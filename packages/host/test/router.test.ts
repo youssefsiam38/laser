@@ -10,6 +10,7 @@
  * cheapest way to rule out.
  */
 import { ErrorCodes, PRODUCT_NAME } from "@lasercode/protocol";
+import { LOCAL_ACCESS } from "./actors.js";
 import { describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -168,18 +169,18 @@ describe("Router · paged catalog", () => {
     }));
     const h = harness({ catalogRows: rows });
     try {
-      const first = await h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/session/list", params: { page: {} } });
+      const first = await h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/session/list", params: { page: {} } }, LOCAL_ACCESS);
       expect(first).toHaveProperty("result.sessions.length", 70);
       const result = (first as { result: { sessions: SessionSummary[]; groups: Array<{ cwd: string; cursor: string }> } }).result;
       expect(result.groups).toHaveLength(10);
       const group = result.groups[0]!;
-      const next = await h.router.handle({ jsonrpc: "2.0", id: 2, method: "pi/session/list", params: { cwd: group.cwd, page: { cursor: group.cursor } } });
+      const next = await h.router.handle({ jsonrpc: "2.0", id: 2, method: "pi/session/list", params: { cwd: group.cwd, page: { cursor: group.cursor } } }, LOCAL_ACCESS);
       expect(next).toHaveProperty("result.sessions.length", 7);
       const more = (next as { result: { sessions: SessionSummary[] } }).result.sessions;
       expect(more.every(row => !result.sessions.some(firstRow => firstRow.path === row.path))).toBe(true);
-      const invalid = await h.router.handle({ jsonrpc: "2.0", id: 3, method: "pi/session/list", params: { cwd: "/another", page: { cursor: group.cursor } } });
+      const invalid = await h.router.handle({ jsonrpc: "2.0", id: 3, method: "pi/session/list", params: { cwd: "/another", page: { cursor: group.cursor } } }, LOCAL_ACCESS);
       expect(invalid).toHaveProperty("error.code", ErrorCodes.InvalidParams);
-      const full = await h.router.handle({ jsonrpc: "2.0", id: 4, method: "pi/session/list", params: {} });
+      const full = await h.router.handle({ jsonrpc: "2.0", id: 4, method: "pi/session/list", params: {} }, LOCAL_ACCESS);
       expect(full).toHaveProperty("result.sessions.length", 150);
       expect(h.workerRequests).toEqual([]);
     } finally { h.cleanup(); }
@@ -196,7 +197,7 @@ describe("Router · history windows", () => {
     const h = harness({ workerRequest: async (_method, params) => (params as { window?: unknown }).window ? page : full });
     h.bind(path, CWD_A);
     h.open[CWD_A]!.push(path);
-    const call = (id: number, window?: { tail: number }) => h.router.handle({ jsonrpc: "2.0", id, method: "pi/session/entries", params: { path, ...(window ? { window } : {}) } });
+    const call = (id: number, window?: { tail: number }) => h.router.handle({ jsonrpc: "2.0", id, method: "pi/session/entries", params: { path, ...(window ? { window } : {}) } }, LOCAL_ACCESS);
     try {
       expect(await call(1, { tail: 40 })).toMatchObject({ result: page });
       expect(h.views.get(path)).toBeUndefined();
@@ -231,14 +232,14 @@ describe("Router · dictation cancellation", () => {
       return {};
     } });
     try {
-      await h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/transcribe/begin", params: { cwd: CWD_A, mimeType: "audio/wav" } });
-      const ending = h.router.handle({ jsonrpc: "2.0", id: 2, method: "pi/transcribe/end", params: { id: "recording" } });
+      await h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/transcribe/begin", params: { cwd: CWD_A, mimeType: "audio/wav" } }, LOCAL_ACCESS);
+      const ending = h.router.handle({ jsonrpc: "2.0", id: 2, method: "pi/transcribe/end", params: { id: "recording" } }, LOCAL_ACCESS);
       await entered;
-      const discarded = await h.router.handle({ jsonrpc: "2.0", id: 3, method: "pi/transcribe/cancel", params: { id: "recording" } });
+      const discarded = await h.router.handle({ jsonrpc: "2.0", id: 3, method: "pi/transcribe/cancel", params: { id: "recording" } }, LOCAL_ACCESS);
       expect(discarded).toMatchObject({ result: {} });
       expect(h.workerRequests.at(-1)).toEqual({ cwd: CWD_A, method: "pi/transcribe/cancel", params: { id: "recording" } });
       finish({ text: "" }); await ending;
-      const gone = await h.router.handle({ jsonrpc: "2.0", id: 4, method: "pi/transcribe/chunk", params: { id: "recording", data: "AA==" } });
+      const gone = await h.router.handle({ jsonrpc: "2.0", id: 4, method: "pi/transcribe/chunk", params: { id: "recording", data: "AA==" } }, LOCAL_ACCESS);
       expect(gone).toHaveProperty("error");
     } finally { finish({ text: "" }); h.cleanup(); }
   });
@@ -251,13 +252,13 @@ describe("Router · dictation cancellation", () => {
     const h = harness({ now: () => now, workerRequest: async (method) => (method === "pi/transcribe/begin" ? { id: `rec-${++next}` } : {}) });
     const uploads = (h.router as unknown as { uploads: Map<string, unknown> }).uploads;
     try {
-      const begin = () => h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/transcribe/begin", params: { cwd: CWD_A, mimeType: "audio/wav" } });
+      const begin = () => h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/transcribe/begin", params: { cwd: CWD_A, mimeType: "audio/wav" } }, LOCAL_ACCESS);
       await begin();
       expect(uploads.size).toBe(1);
 
       // A long recording still using its route is not swept.
       now += UPLOAD_IDLE_MS - 1;
-      expect(await h.router.handle({ jsonrpc: "2.0", id: 2, method: "pi/transcribe/chunk", params: { id: "rec-1", data: "AA==" } })).toMatchObject({ result: {} });
+      expect(await h.router.handle({ jsonrpc: "2.0", id: 2, method: "pi/transcribe/chunk", params: { id: "rec-1", data: "AA==" } }, LOCAL_ACCESS)).toMatchObject({ result: {} });
       now += 2;
       await begin();
       expect([...uploads.keys()]).toEqual(["rec-1", "rec-2"]);
@@ -266,7 +267,7 @@ describe("Router · dictation cancellation", () => {
       now += UPLOAD_IDLE_MS + 1;
       await begin();
       expect([...uploads.keys()]).toEqual(["rec-3"]);
-      const gone = await h.router.handle({ jsonrpc: "2.0", id: 3, method: "pi/transcribe/chunk", params: { id: "rec-1", data: "AA==" } });
+      const gone = await h.router.handle({ jsonrpc: "2.0", id: 3, method: "pi/transcribe/chunk", params: { id: "rec-1", data: "AA==" } }, LOCAL_ACCESS);
       expect(gone).toHaveProperty("error.message", "that recording is no longer open — start dictating again");
     } finally { h.cleanup(); }
   });
@@ -288,7 +289,7 @@ describe("Router · internal storage is never a project", () => {
         ["session/new", { cwd: internal }],
         ["session/load", { path: invalid.path }],
       ] as const) {
-        const response = await h.router.handle({ jsonrpc: "2.0", id: 1, method, params });
+        const response = await h.router.handle({ jsonrpc: "2.0", id: 1, method, params }, LOCAL_ACCESS);
         expect(response).toMatchObject({ error: { code: ErrorCodes.InvalidParams, message: expect.stringContaining("internal app storage") } });
       }
       expect(h.workerRequests).toEqual([]);
@@ -304,22 +305,22 @@ describe("Router · sessions not yet on disk", () => {
     const row: SessionSummary = { path, id: "visible", cwd: CWD_A, createdAt: "2026-01-01T00:00:00Z", modifiedAt: "2026-06-01T00:00:00Z", messageCount: 1 };
     const h = harness({ catalogRows: [row, { ...row, path: "/missing-old.jsonl", modifiedAt: "2026-01-01T00:00:00Z" }, { ...row, path: "/missing-other.jsonl", cwd: CWD_B }] });
     try {
-      const response = await h.router.handle({ jsonrpc: "2.0", id: 1, method: "session/search", params: { query: "Apple", cwd: CWD_A, after: "2026-05-01T00:00:00Z", before: "2026-07-01T00:00:00Z" } });
+      const response = await h.router.handle({ jsonrpc: "2.0", id: 1, method: "session/search", params: { query: "Apple", cwd: CWD_A, after: "2026-05-01T00:00:00Z", before: "2026-07-01T00:00:00Z" } }, LOCAL_ACCESS);
       expect(response).toMatchObject({ result: { hits: [{ path, source: "user", count: 1, excerpt: "Apple" }], unreadable: 0 } });
       const { SearchCancellation } = await import("../src/search-cancellation.js");
       const searches = new SearchCancellation();
-      const pending = h.router.handle({ jsonrpc: "2.0", id: 3, method: "session/search", params: { query: "Apple", cwd: CWD_A, searchId: "active" } }, { searches });
-      const cancelled = await h.router.handle({ jsonrpc: "2.0", id: 4, method: "session/search/cancel", params: { searchId: "active" } }, { searches });
+      const pending = h.router.handle({ jsonrpc: "2.0", id: 3, method: "session/search", params: { query: "Apple", cwd: CWD_A, searchId: "active" } }, { ...LOCAL_ACCESS, searches });
+      const cancelled = await h.router.handle({ jsonrpc: "2.0", id: 4, method: "session/search/cancel", params: { searchId: "active" } }, { ...LOCAL_ACCESS, searches });
       expect(cancelled).toMatchObject({ result: {} });
       expect(await pending).toHaveProperty("error");
       expect(h.workerRequests).toEqual([]);
-      const invalid = await h.router.handle({ jsonrpc: "2.0", id: 2, method: "session/search", params: { query: "Apple", after: "yesterday" } });
+      const invalid = await h.router.handle({ jsonrpc: "2.0", id: 2, method: "session/search", params: { query: "Apple", after: "yesterday" } }, LOCAL_ACCESS);
       expect(invalid).toHaveProperty("error");
     } finally { h.cleanup(); rmSync(dir, { recursive: true, force: true }); }
   });
   it("routes a new-chat command catalogue by project before a session path exists", async () => {
     const h = harness();
-    const response = await h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/commands/list", params: { cwd: CWD_A } });
+    const response = await h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/commands/list", params: { cwd: CWD_A } }, LOCAL_ACCESS);
 
     expect(response).toMatchObject({ result: { commands: [{ name: "skill:test", source: "skill" }] } });
     expect(h.workerRequests).toEqual([{ cwd: CWD_A, method: "pi/commands/list", params: { cwd: CWD_A } }]);
@@ -395,7 +396,7 @@ describe("Router · sessions not yet on disk", () => {
   });
 });
 
-const rpc = (router: Router, method: string, params: unknown = {}) => router.handle({ jsonrpc: "2.0", id: 1, method, params });
+const rpc = (router: Router, method: string, params: unknown = {}) => router.handle({ jsonrpc: "2.0", id: 1, method, params }, LOCAL_ACCESS);
 
 describe("Router · session recovery", () => {
   it("opens a saved session before forwarding an action after its worker retired", async () => {
@@ -793,11 +794,11 @@ it("routes explorer opt-in without opening workers and keeps legacy browse shape
   writeFileSync(join(root, ".hidden.txt"), "");
   writeFileSync(join(root, "node.txt"), "");
   try {
-    const legacy = await h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/project/browse", params: { path: root } });
+    const legacy = await h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/project/browse", params: { path: root } }, LOCAL_ACCESS);
     expect(legacy).toMatchObject({ result: { entries: [], truncated: false } });
     const explorer = await h.router.handle({ jsonrpc: "2.0", id: 2, method: "pi/project/browse", params: {
       path: root, explorer: { mode: "explorer", cwd: root, prefix: "node", limit: 1 },
-    } });
+    } }, LOCAL_ACCESS);
     expect(explorer).toMatchObject({ result: { entries: [{ name: "node.txt", kind: "file" }], commonPrefix: "node.txt", truncated: false } });
     const relative = await rpc(h.router, 'pi/project/browse', { path: '.', explorer: { mode: 'explorer', cwd: root, prefix: '.hidden' } });
     expect(relative).toMatchObject({ result: { path: root, entries: [{ name: '.hidden.txt', path: join(root, '.hidden.txt'), kind: 'file' }] } });

@@ -15,6 +15,8 @@ export * from "./mcp.js";
 export * from "./jsonrpc.js";
 export * from "./messages.js";
 export * from "./environment.js";
+export * from "./method-policy.js";
+export * from "./environment-policy.js";
 export * from "./project-env.js";
 export * from "./attention.js";
 export * from "./tasks.js";

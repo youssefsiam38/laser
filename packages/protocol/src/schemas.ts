@@ -26,6 +26,7 @@ import { PROVIDER_FAILURE_CLASSES } from "./provider-failure.js";
 import { ErrorCodes, type JsonRpcRequest } from "./jsonrpc.js";
 import { PREFS_MAX_BYTES } from "./messages.js";
 import { resourceParamsSchemas } from "./resources.js";
+import { environmentParamsSchemas } from "./environment-policy.js";
 import type { ClientMethod, ClientRequests } from "./messages.js";
 import { TASK_COMMAND_MAX, TASK_LINE_MAX } from "./tasks.js";
 import { ENVIRONMENT_KEY_PATTERN, SESSION_REVISION_PATTERN } from "./session-revision.js";
@@ -875,6 +876,9 @@ export const clientParamsSchemas = {
 
   // --- RP-1 process inventory (host-owned; demand-driven). Shapes live in resources.ts ---
   ...resourceParamsSchemas,
+
+  // --- RP-13 environment descriptor. Shape lives in environment-policy.ts ---
+  ...environmentParamsSchemas,
 } satisfies Record<ClientMethod, z.ZodTypeAny>;
 
 export const clientMethods = Object.keys(clientParamsSchemas) as ClientMethod[];

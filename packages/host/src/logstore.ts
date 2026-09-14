@@ -215,6 +215,16 @@ export interface LogInput {
   requestContext?: LogEntry["requestContext"];
   detail?: unknown;
   at?: string;
+  /**
+   * Store the row without announcing it on the live append stream.
+   *
+   * The access audit (RP-13) writes a row per boundary decision. Those rows
+   * belong in the store, where a person can query them, but not in every
+   * connected client's notification stream: a speculative prepare would become
+   * network traffic, and one connection would hear about another's activity as
+   * it happened. The row is identical either way.
+   */
+  quiet?: boolean;
 }
 
 interface Row {
@@ -502,7 +512,7 @@ export class LogStore {
 
     if (++this.sincePrune >= this.pruneEvery) this.schedulePrune();
     if (detail.ref !== null) this.afterBodyIngested(input);
-    this.onAppend?.([entry]);
+    if (!input.quiet) this.onAppend?.([entry]);
     return entry;
   }
 
