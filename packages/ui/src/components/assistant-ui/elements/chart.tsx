@@ -1,7 +1,7 @@
 "use client";
 /**
- * Chart — usage and spend over time in the telemetry rail
- * (docs/ux-elements.md "Structured output"). Installed from `elements-chart`
+ * Chart — usage/spend in the telemetry rail and bounded physical memory in
+ * Advanced resource diagnostics (docs/ux-elements.md "Structured output"). Installed from `elements-chart`
  * and restyled to DESIGN.md tokens.
  *
  * Divergences from the registry copy:
@@ -14,6 +14,8 @@
  *   - The accessible name carries the last three points, not just the total.
  *   - Colours read tokens: `--live` line and area, `--line` baseline,
  *     `--ink-3` bars.
+ *   - A nullish resource sample breaks the geometry and is described as
+ *     unavailable; it is never plotted at zero or connected across.
  */
 import type { ComponentProps } from "react";
 
@@ -27,35 +29,51 @@ const W = 300;
 const H = 72;
 const PAD = 4;
 
-const scale = (points: readonly number[]) => {
-  const max = Math.max(...points, 1);
-  const min = Math.min(...points, 0);
+const scale = (points: readonly ChartPoint[]) => {
+  const available = points.filter((point): point is number => typeof point === "number" && Number.isFinite(point));
+  const max = Math.max(...available, 1);
+  const min = Math.min(...available, 0);
   const span = max - min || 1;
   return (value: number) => H - PAD - ((value - min) / span) * (H - PAD * 2);
 };
+
+export type ChartPoint = number | null | undefined;
 
 export interface ChartProps extends Omit<ComponentProps<"div">, "children"> {
   label: string;
   value: string;
   delta?: string | undefined;
-  points: readonly number[];
-  /** One label per point for the accessible description, e.g. a turn number. */
+  /** `null`/`undefined` is an unavailable sample. Lines and areas break rather than inventing zero or continuity. */
+  points: readonly ChartPoint[];
+  /** One label per available point for the accessible description, e.g. a turn number. */
   pointLabel?: ((value: number, index: number) => string) | undefined;
+  /** Accessible wording for a missing point. */
+  unavailableLabel?: ((index: number) => string) | undefined;
   variant?: ChartVariant | undefined;
 }
 
-export function Chart({ label, value, delta, points, pointLabel, variant = "area", className, ...props }: ChartProps) {
+export function Chart({ label, value, delta, points, pointLabel, unavailableLabel, variant = "area", className, ...props }: ChartProps) {
   const y = scale(points);
   const step = points.length > 1 ? (W - PAD * 2) / (points.length - 1) : 0;
   const x = (i: number) => PAD + i * step;
-  const coords = points.map((p, i) => ({ x: x(i), y: y(p) }));
-  const line = coords.map((c) => `${c.x},${c.y}`).join(" ");
-  const last = coords.at(-1);
-  const area = last ? `M ${PAD},${H - PAD} ${coords.map((c) => `L ${c.x},${c.y}`).join(" ")} L ${last.x},${H - PAD} Z` : "";
-  const lastIndex = points.length - 1;
+  const segments: Array<Array<{ x: number; y: number }>> = [];
+  for (const [index, point] of points.entries()) {
+    if (typeof point !== "number" || !Number.isFinite(point)) continue;
+    const previous = index > 0 ? points[index - 1] : undefined;
+    if (segments.length === 0 || typeof previous !== "number" || !Number.isFinite(previous)) segments.push([]);
+    segments.at(-1)!.push({ x: x(index), y: y(point) });
+  }
+  const latest = [...points.entries()].reverse().find(([, point]) => typeof point === "number" && Number.isFinite(point));
+  const last = latest ? { x: x(latest[0]), y: y(latest[1] as number) } : undefined;
+  const lastIndex = latest?.[0] ?? -1;
   const described = points
     .slice(-3)
-    .map((p, i) => (pointLabel ? pointLabel(p, points.length - 3 + i) : String(p)))
+    .map((point, offset) => {
+      const index = Math.max(0, points.length - 3) + offset;
+      return typeof point === "number" && Number.isFinite(point)
+        ? (pointLabel ? pointLabel(point, index) : String(point))
+        : (unavailableLabel?.(index) ?? `sample ${index + 1} unavailable`);
+    })
     .join(", ");
 
   return (
@@ -77,8 +95,9 @@ export function Chart({ label, value, delta, points, pointLabel, variant = "area
       >
         <line x1="0" x2={W} y1={H - PAD} y2={H - PAD} className="stroke-line" strokeWidth="1" vectorEffect="non-scaling-stroke" />
         {variant === "bars" ? (
-          points.map((p, i) => {
-            const top = y(p);
+          points.map((point, i) => {
+            if (typeof point !== "number" || !Number.isFinite(point)) return null;
+            const top = y(point);
             const barWidth = Math.max(2, step * 0.55);
             return (
               <rect
@@ -94,8 +113,20 @@ export function Chart({ label, value, delta, points, pointLabel, variant = "area
           })
         ) : (
           <>
-            {variant === "area" && points.length > 1 && <path d={area} className="fill-[color-mix(in_oklab,var(--live)_14%,transparent)]" />}
-            <polyline points={line} fill="none" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" className="stroke-live" />
+            {segments.map((segment, index) => {
+              const line = segment.map((point) => `${point.x},${point.y}`).join(" ");
+              const first = segment[0];
+              const end = segment.at(-1);
+              const area = first && end && segment.length > 1
+                ? `M ${first.x},${H - PAD} ${segment.map((point) => `L ${point.x},${point.y}`).join(" ")} L ${end.x},${H - PAD} Z`
+                : "";
+              return (
+                <g key={index} data-chart-segment>
+                  {variant === "area" && area && <path d={area} className="fill-[color-mix(in_oklab,var(--live)_14%,transparent)]" />}
+                  <polyline points={line} fill="none" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" className="stroke-live" />
+                </g>
+              );
+            })}
             {last && <circle cx={last.x} cy={last.y} r="3" className="fill-live" />}
           </>
         )}

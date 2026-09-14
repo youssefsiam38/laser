@@ -40,6 +40,7 @@ import { TrustTab } from "./TrustTab.js";
 import { ProjectsTab } from "./ProjectsTab.js";
 import { LogStoreSetting } from "./LogStoreSetting.js";
 import { UsageTab } from "./UsageTab.js";
+import { AdvancedTab, type AdvancedView } from "./AdvancedTab.js";
 
 type Tab = "general" | "advanced" | "appearance" | "features" | "mcp" | "models" | "usage" | "keyboard" | "projects" | "trust" | "device";
 
@@ -48,7 +49,7 @@ type Tab = "general" | "advanced" | "appearance" | "features" | "mcp" | "models"
  * appearance, shortcuts, account usage and browser permissions reachable
  * before a project is chosen.
  */
-const PROJECTLESS: readonly Tab[] = ["appearance", "keyboard", "projects", "trust", "device", "usage"];
+const PROJECTLESS: readonly Tab[] = ["advanced", "appearance", "keyboard", "projects", "trust", "device", "usage"];
 
 /**
  * Extensions "for every project" and the provider/model settings are global —
@@ -86,6 +87,7 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
   const [snapshotCwd, setSnapshotCwd] = useState<string>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
+  const [advancedView, setAdvancedView] = useState<AdvancedView>("resources");
 
   const tabStrip = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -182,7 +184,8 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
   // to stay on screen or Appearance, Help and shortcuts, Trust and This device become
   // unreachable on a machine with no project yet — which is every first run.
   const needsProject = !cwd && !PROJECTLESS.includes(tab);
-  const switchingProject = Boolean(cwd && snapshot && snapshotCwd !== cwd);
+  const switchingProject = Boolean(cwd && snapshot && snapshotCwd !== cwd && (tab !== "advanced" || advancedView === "configuration"));
+  const settingsControlsVisible = tab !== "advanced" || advancedView === "configuration";
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -203,7 +206,7 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
             </Button>
           ))}
         </div>
-        {tab !== "usage" && tab !== "projects" && <div className="ms-auto flex items-center gap-2">
+        {tab !== "usage" && tab !== "projects" && settingsControlsVisible && <div className="ms-auto flex items-center gap-2">
           {loading && <GenerationLoader label="Loading settings" layout="inline" />}
           <TooltipIconButton tooltip="Reload settings" onClick={() => void load()}>
             <RefreshCw />
@@ -211,7 +214,7 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
         </div>}
       </div>
 
-      {error && !needsProject && tab !== "usage" && tab !== "projects" && (
+      {error && !needsProject && tab !== "advanced" && tab !== "usage" && tab !== "projects" && (
         <div className="m-3 flex items-start gap-2 rounded-lg bg-[color-mix(in_oklab,var(--danger)_10%,transparent)] px-3 py-2 text-sm text-danger">
           <AlertTriangle className="mt-0.5 size-4 shrink-0" />
           <div className="min-w-0">
@@ -230,8 +233,21 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
           />
         ) : (
           <>
-            {(tab === "general" || tab === "advanced") && cwd && catalog && snapshot && (
-              <SettingsForm audience={tab} cwd={cwd} catalog={catalog} snapshot={snapshot} onApply={apply} />
+            {tab === "general" && cwd && catalog && snapshot && (
+              <SettingsForm audience="general" cwd={cwd} catalog={catalog} snapshot={snapshot} onApply={apply} />
+            )}
+            {tab === "advanced" && (
+              <AdvancedTab
+                view={advancedView}
+                onViewChange={setAdvancedView}
+                {...(cwd ? { cwd } : {})}
+                {...(catalog ? { catalog } : {})}
+                {...(snapshot && snapshotCwd === cwd ? { snapshot } : {})}
+                loading={loading}
+                {...(error ? { error } : {})}
+                onReload={() => void load()}
+                onApply={apply}
+              />
             )}
             {tab === "appearance" && <AppearanceTab />}
             {tab === "features" && <FeaturesScreen {...(cwd ? { cwd } : {})} onManageServers={() => setTab("mcp")} />}

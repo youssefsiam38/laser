@@ -1,0 +1,131 @@
+import { describe, expect, it } from "vitest";
+import type { AgentRun, BackgroundTask, ResourceMeasure, ResourceProcess, ResourceSnapshot, SessionSummary } from "@lasercode/protocol";
+
+import {
+  physicalMeasure,
+  processTree,
+  resolveRunAssociation,
+  resolveSessionAssociation,
+  resolveTaskAssociation,
+  retainedStoreRows,
+  roleSummaries,
+  totalPhysicalSummary,
+} from "../../src/components/settings/resources/model.js";
+
+const available = (value: number): ResourceMeasure => ({ status: "available", value });
+const unavailable = (reason: "incomplete_coverage" | "unsupported_platform" = "unsupported_platform"): ResourceMeasure => ({ status: "unavailable", reason });
+
+function process(partial: Partial<ResourceProcess> & Pick<ResourceProcess, "key" | "pid" | "role">): ResourceProcess {
+  return {
+    startToken: partial.key.split("@")[1] ?? "start",
+    label: partial.role,
+    memory: { pss: available(10), resident: available(999), peakResident: available(1_999), privateResident: available(20), commit: unavailable() },
+    cpu: { seconds: available(3) },
+    elapsedMs: available(4_000),
+    io: { readBytes: unavailable(), writeBytes: unavailable() },
+    source: "proc",
+    ...partial,
+  };
+}
+
+function snapshot(rows: ResourceProcess[], partial: Partial<ResourceSnapshot> = {}): ResourceSnapshot {
+  const known = rows.reduce((sum, row) => sum + (row.memory.pss.status === "available" ? row.memory.pss.value : 0), 0);
+  return {
+    id: "rs_1",
+    at: "2026-09-13T10:00:00.000Z",
+    platform: "linux",
+    durationMs: 12,
+    processes: rows,
+    totals: {
+      coverage: { processes: rows.length, measured: rows.length, complete: rows.length > 0 },
+      knownPhysicalBytes: known,
+      physical: rows.length ? available(known) : unavailable("incomplete_coverage"),
+      residentCoverage: { processes: rows.length, measured: rows.length, complete: rows.length > 0 },
+      knownResidentBytes: 99_999,
+      residentSum: available(99_999),
+    },
+    byRole: [...new Set(rows.map((row) => row.role))].map((role) => {
+      const matches = rows.filter((row) => row.role === role);
+      const value = matches.reduce((sum, row) => sum + (row.memory.pss.status === "available" ? row.memory.pss.value : 0), 0);
+      return { role, coverage: { processes: matches.length, measured: matches.length, complete: true }, knownPhysicalBytes: value, physical: available(value) };
+    }),
+    health: { ok: true, collectors: [{ name: "proc", status: "ok" }], truncated: false, crossCheck: { status: "unavailable" } },
+    ...partial,
+  };
+}
+
+const host = process({ key: "10@host", pid: 10, role: "host", label: "host", memory: { pss: available(100), resident: available(10_000), peakResident: available(20_000), privateResident: available(90), commit: unavailable() } });
+const renderer = process({ key: "11@renderer", pid: 11, role: "desktop_renderer", label: "renderer", memory: { pss: unavailable(), resident: available(8_000), peakResident: available(9_000), privateResident: available(200), commit: unavailable() } });
+const worker = process({ key: "12@worker", pid: 12, role: "project_worker", label: "worker", project: { id: "opaque", label: "project" }, associations: { sessionIds: ["s1"], runIds: ["r1"], taskIds: ["t1"] }, memory: { pss: available(300), resident: available(30_000), peakResident: available(40_000), privateResident: available(250), commit: unavailable() } });
+
+describe("resource diagnostics projection", () => {
+  it("uses platform physical memory, never resident, and peaks only over complete history", () => {
+    const current = snapshot([host, worker], { totals: { ...snapshot([host, worker]).totals, physical: unavailable("incomplete_coverage"), coverage: { processes: 2, measured: 1, complete: false }, knownPhysicalBytes: 100 } });
+    const old = snapshot([host, worker], { id: "old", totals: { ...snapshot([host, worker]).totals, physical: available(500), knownPhysicalBytes: 500 } });
+    const partial = snapshot([host, worker], { id: "partial", totals: { ...snapshot([host, worker]).totals, physical: unavailable("incomplete_coverage"), knownPhysicalBytes: 50_000 } });
+    const summary = totalPhysicalSummary(current, [old, partial, current]);
+    expect(summary.current).toEqual({ status: "unavailable", reason: "1 of 2 processes measured", knownValue: 100 });
+    expect(summary.peak).toEqual({ status: "available", value: 500 });
+    expect(summary.peak).not.toMatchObject({ value: 99_999 });
+    expect(physicalMeasure(renderer, "darwin")).toEqual(available(200));
+    expect(physicalMeasure(renderer, "linux")).toEqual(unavailable());
+  });
+
+  it("keeps renderer, host and workers visibly separate, including a missing role", () => {
+    const current = snapshot([renderer, host, worker], {
+      platform: "darwin",
+      byRole: [
+        { role: "desktop_renderer", coverage: { processes: 1, measured: 1, complete: true }, knownPhysicalBytes: 200, physical: available(200) },
+        { role: "host", coverage: { processes: 1, measured: 1, complete: true }, knownPhysicalBytes: 90, physical: available(90) },
+        { role: "project_worker", coverage: { processes: 1, measured: 1, complete: true }, knownPhysicalBytes: 250, physical: available(250) },
+      ],
+    });
+    expect(roleSummaries(current, [current]).map((row) => [row.label, row.processCount, row.current])).toEqual([
+      ["Renderer", 1, { status: "available", value: 200 }],
+      ["Host", 1, { status: "available", value: 90 }],
+      ["Workers", 1, { status: "available", value: 250 }],
+    ]);
+    const withoutRenderer = roleSummaries(snapshot([host, worker]), [snapshot([host, worker])])[0]!;
+    expect(withoutRenderer.current).toMatchObject({ status: "unavailable", reason: "No process with this role was discovered" });
+  });
+
+  it("groups by role and opaque work owner using pid@startToken identity", () => {
+    const child = process({ ...worker, key: "13@child", pid: 13, role: "project_worker", label: "child", parentKey: worker.key });
+    const groups = processTree(snapshot([host, child, worker]));
+    expect(groups.map((group) => group.label)).toEqual(["Host", "Project workers"]);
+    const owners = groups[1]!.owners;
+    expect(owners).toHaveLength(1);
+    expect(owners[0]!.id).toBe("opaque");
+    expect(owners[0]!.roots[0]!.process.key).toBe("12@worker");
+    expect(owners[0]!.roots[0]!.children[0]!.process.key).toBe("13@child");
+  });
+
+  it("shows exact local facts and centralizes every unavailable producer handoff", () => {
+    const inherited = process({ ...worker, key: "13@child", pid: 13, role: "unknown_descendant", associations: { ...worker.associations, truncated: true } });
+    const rows = retainedStoreRows({ snapshot: snapshot([host, worker, inherited]), savedSessions: 12, rendererViews: 3, pendingMessages: 2 });
+    expect(rows.find((row) => row.id === "associated-runs")?.count).toEqual({ status: "available", value: 1, qualifier: "at least; association list was truncated" });
+    expect(rows.find((row) => row.id === "rendererViews")?.count).toEqual({ status: "available", value: 3 });
+    for (const [id, handoff] of [["workerSessions", "T4"], ["workerReplay", "T4"], ["workerCaches", "T4"], ["rendererViews", "T5"], ["taskRegistry", "T6"], ["deliveryRegistry", "T6"], ["providerQueues", "T7"]] as const) {
+      const row = rows.find((candidate) => candidate.id === id)!;
+      expect(row.handoff).toBe(handoff);
+      expect(row.bytes).toMatchObject({ status: "unavailable", reason: `Awaiting M18-${handoff} typed producer` });
+    }
+    const withProducer = retainedStoreRows({ snapshot: snapshot([host]), rendererViews: 1, pendingMessages: 0, optional: { workerReplay: { count: 7, bytes: 8_192 } } });
+    expect(withProducer.find((row) => row.id === "workerReplay")).toMatchObject({ count: { status: "available", value: 7 }, bytes: { status: "available", value: 8_192 } });
+  });
+});
+
+const session = { id: "s1", path: "/p/s1.jsonl", cwd: "/p", createdAt: "2026-09-13T10:00:00.000Z", modifiedAt: "2026-09-13T10:00:00.000Z", messageCount: 1 } satisfies SessionSummary;
+const run = { runId: "r1", sessionId: "s1", sessionPath: session.path, rootSessionId: "s1", rootSessionPath: session.path, agentName: "worker", task: "work", status: "running", createdAt: session.createdAt, updatedAt: session.modifiedAt, startedAt: session.createdAt } as AgentRun;
+const task = { id: "t1", sessionId: "s1", sessionPath: session.path, command: "sleep", title: "sleep", status: "running", startedAt: session.createdAt, outputBytes: 0 } as BackgroundTask;
+
+it("re-resolves exact current session, run and task ownership and rejects stale or ambiguous records", () => {
+  const state = { sessions: [session], runs: { r1: run }, tasks: { t1: task }, openPaths: new Set<string>(), presence: { [session.path]: true } };
+  expect(resolveSessionAssociation("s1", state)).toEqual({ path: session.path });
+  expect(resolveRunAssociation("r1", state)).toMatchObject({ path: session.path, run });
+  expect(resolveTaskAssociation("t1", state)).toMatchObject({ path: session.path, task });
+  expect(resolveRunAssociation("gone", state).reason).toContain("no longer");
+  expect(resolveTaskAssociation("gone", state).reason).toContain("no longer");
+  expect(resolveSessionAssociation("s1", { ...state, sessions: [session, { ...session, path: "/q/s1.jsonl", cwd: "/q" }] }).reason).toContain("ambiguous");
+  expect(resolveRunAssociation("r1", { ...state, presence: { [session.path]: false } }).reason).toContain("no longer reachable");
+});

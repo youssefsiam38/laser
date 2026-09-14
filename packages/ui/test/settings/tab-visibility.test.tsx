@@ -6,6 +6,9 @@ import { afterEach, expect, it, vi } from "vitest";
 vi.mock("@/runtime", () => ({
   useLaserStable: () => ({ client: { request: async () => ({}) }, actions: {} }),
 }));
+vi.mock("../../src/components/settings/resources/ResourceDiagnostics.js", () => ({
+  ResourceDiagnostics: () => <div>Resource diagnostics</div>,
+}));
 import { SettingsScreen } from "../../src/components/settings/SettingsScreen.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { click, render } from "./mcp/harness.js";
