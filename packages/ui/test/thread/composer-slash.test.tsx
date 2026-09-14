@@ -63,6 +63,7 @@ vi.mock("@/components/thread/use-directory-page.js", () => ({
 vi.mock("@/components/shell/session-groups", () => ({ useSessionsList: () => ({ tab: "code" }) }));
 vi.mock("@/components/shell/shell-context", () => ({
   useShell: () => ({ newSession: mocks.newSession, openHistory: mocks.openHistory, setAddProjectOpen: mocks.setAddProjectOpen }),
+  errorText: (error: unknown) => (error instanceof Error ? error.message : String(error)),
 }));
 vi.mock("@/agents", () => ({ useRunsForRoot: () => [{ runId: 'audit-1', subagentName: "audit", task: "Review the changes" }, { runId: 'audit-2', subagentName: 'auth-audit', task: 'Review authentication' }] }));
 vi.mock("@/runtime", async (importActual) => ({
@@ -293,20 +294,74 @@ describe("completing a slash command", () => {
     await mount();
     // Choosing the row — with the mouse or a tap — is the person picking the
     // command, so it runs; it is still never a send.
-    await type("/fo");
-    const row = rows()[0]!;
-    expect(row.getAttribute("aria-label")).toBe("/fork");
-    await act(async () => {
-      row.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
-      row.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
-      row.click();
-    });
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
-    expect(mocks.refreshEntries).toHaveBeenCalledWith({ tail: true });
+    await chooseFork();
+    expect(mocks.client.request).toHaveBeenCalledWith("pi/session/entries", { path: "/project/session.jsonl" });
     expect(mocks.sent).not.toHaveBeenCalled();
     expect(input().value).toBe("");
+  });
+});
+
+/** Choose the `/fork` row the way a person does, and let its request settle. */
+async function chooseFork() {
+  await type("/fo");
+  const row = rows()[0]!;
+  expect(row.getAttribute("aria-label")).toBe("/fork");
+  await act(async () => {
+    row.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+    row.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+    row.click();
+  });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+/**
+ * M16-T48 / review #15: the composer's `/fork` used to close over the entries
+ * and leaf of the render that built the command list — values the composer
+ * deliberately does not re-read per streamed token — so it forked a stale leaf
+ * or warned "no prompt" about a session that has several.
+ */
+describe("/fork", () => {
+  const hostEntries = (ids: readonly string[], leafId?: string) => ({
+    entries: ids.map((id, index) => ({ id, parentId: index === 0 ? null : ids[index - 1], type: "message", message: { role: "user" } })),
+    ...(leafId ? { leafId } : {}),
+  });
+
+  it("forks the host's last prompt, not the one the composer last rendered", async () => {
+    // The rendered view is empty and stale on purpose: this is exactly the
+    // state the composer holds while a turn streams.
+    mocks.view = makeView({ path: "/project/session.jsonl", entries: [] });
+    mocks.client.request.mockImplementation(async (method: string) =>
+      method === "pi/session/entries" ? hostEntries(["e1", "e2", "e3"], "e3") : { commands: [] });
+    await mount();
+    await chooseFork();
+
+    expect(mocks.client.request).toHaveBeenCalledWith("pi/session/entries", { path: "/project/session.jsonl" });
+    expect(mocks.fork).toHaveBeenCalledWith("e3");
+    expect(mocks.toast).not.toHaveBeenCalled();
+  });
+
+  it("warns only when the host really has no prompt", async () => {
+    mocks.client.request.mockImplementation(async (method: string) =>
+      method === "pi/session/entries" ? { entries: [] } : { commands: [] });
+    await mount();
+    await chooseFork();
+
+    expect(mocks.fork).not.toHaveBeenCalled();
+    expect(mocks.toast).toHaveBeenCalledWith("warning", "Nothing to fork yet: this session has no prompt.");
+  });
+
+  it("says what went wrong when the read fails, and does not claim there is no prompt", async () => {
+    mocks.client.request.mockImplementation(async (method: string) => {
+      if (method === "pi/session/entries") throw new Error("the worker is not running");
+      return { commands: [] };
+    });
+    await mount();
+    await chooseFork();
+
+    expect(mocks.fork).not.toHaveBeenCalled();
+    expect(mocks.toast).toHaveBeenCalledWith("error", "the worker is not running");
   });
 });
 

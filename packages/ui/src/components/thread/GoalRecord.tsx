@@ -2,6 +2,7 @@ import { CheckCheck, Target } from "lucide-react";
 import { useState } from "react";
 import { ToolFallbackContent, ToolFallbackRoot, ToolFallbackTrigger } from "@/components/assistant-ui/elements/tool-fallback.aui";
 import { Timeline } from "@/components/assistant-ui/elements/timeline";
+import { Hint } from "@/components/ui/hint";
 import { useActivityDetailLevel, useLaserState } from "@/runtime";
 import { MarkdownPreview } from "@/components/preview/MarkdownPreview";
 import type { GoalRecord as RecordData } from "@/runtime/goal-history";
@@ -35,7 +36,7 @@ export function GoalRecord({ goal }: { goal: RecordData }) {
               detail: [index > 0 && moment.objective !== goal.moments[index - 1]?.objective ? moment.objective : undefined, moment.reason].filter(Boolean).join("\n") || undefined,
             }))} />
           </section>
-          {goal.continuations > 0 && <p className="text-xs text-ink-3" title="Times the goal automatically asked the agent to continue after it would otherwise stop. Not tool calls or a separate evaluation.">{goal.continuations} automatic continuation{goal.continuations === 1 ? "" : "s"}</p>}
+          {goal.continuations > 0 && <Hint className="block text-xs text-ink-3" hint="Times the goal automatically asked the agent to continue after it would otherwise stop. Not tool calls or a separate evaluation.">{goal.continuations} automatic continuation{goal.continuations === 1 ? "" : "s"}</Hint>}
         </div>
       </ToolFallbackContent>
     </ToolFallbackRoot>

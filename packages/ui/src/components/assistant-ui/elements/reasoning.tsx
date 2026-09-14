@@ -1,5 +1,5 @@
 "use client";
-import { useSearchReveal } from "@/components/thread/search-state";
+import { useSearchRevealDisclosure } from "@/components/thread/search-state";
 /**
  * Reasoning (`reasoning`, the composable half): Root, Trigger, Content, Text
  * and Fade for the assistant's thinking block. `reasoning.aui.tsx` binds them
@@ -75,20 +75,27 @@ function ReasoningRoot({
   if (manualOpen === null || manualOpen === undefined) initialOpenRef.current = defaultOpen;
 
   const isControlled = controlledOpen !== undefined;
-  const reveal = useSearchReveal();
-  const isOpen = reveal || (isControlled ? controlledOpen : (manualOpen ?? initialOpenRef.current));
+  const { revealing, open: revealOpen, fold } = useSearchRevealDisclosure();
+  const isOpen = revealing ? revealOpen : isControlled ? controlledOpen : (manualOpen ?? initialOpenRef.current);
   const isPreview = streaming === true && isOpen;
 
   const handleOpenChange = useCallback(
     (open: boolean) => {
       onAnimationStart?.();
+      // While find holds this block open, its chevron folds it for that reveal
+      // only: no `setUserOpen`, no `rememberOpen`, so closing find gives the
+      // person back exactly the disclosure they had.
+      if (revealing) {
+        fold(open);
+        return;
+      }
       if (!isControlled) {
         if (!hasDurableIdentity) setUserOpen(open);
         rememberOpen(open);
       }
       controlledOnOpenChange?.(open);
     },
-    [onAnimationStart, isControlled, hasDurableIdentity, rememberOpen, controlledOnOpenChange],
+    [onAnimationStart, revealing, fold, isControlled, hasDurableIdentity, rememberOpen, controlledOnOpenChange],
   );
 
   return (

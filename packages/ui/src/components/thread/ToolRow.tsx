@@ -19,6 +19,7 @@ import {
 } from "@/components/assistant-ui/elements/tool-fallback.aui";
 import { TOOL_ICONS } from "@/components/assistant-ui/elements/tool-group.aui";
 import { Button } from "@/components/ui/button";
+import { Hint } from "@/components/ui/hint";
 import { useIsTouch } from "@/hooks/use-mobile";
 import { DialogBody, dialogFormOf, ToolRowDialog, uiResponseFor, useRegisterToolRow } from "@/dialogs";
 import { toolDetailsDefaultOpen, toolDisplayResult, useActivityDetailLevel, useLaserStable, useLaserState } from "@/runtime";
@@ -371,11 +372,11 @@ function StartAgentRow({
           {info.cwd ? (
             // Where the child went, without opening it: its branch when it has
             // a worktree, otherwise the checkout it shares with this session.
-            <div data-slot="start-agent-where" className="mb-1 ms-6 flex min-w-0 items-center gap-1.5 text-xs leading-sm text-ink-3" title={info.cwd}>
+            <Hint data-slot="start-agent-where" className="mb-1 ms-6 flex min-w-0 items-center gap-1.5 text-xs leading-sm text-ink-3" hint={info.cwd}>
               {info.branch ? <GitBranch aria-hidden="true" className="size-3.5 shrink-0" /> : <FolderOpen aria-hidden="true" className="size-3.5 shrink-0" />}
               <span className="typed truncate">{info.branch ?? info.cwd}</span>
               {info.branch ? null : <span className="shrink-0">· this session’s checkout</span>}
-            </div>
+            </Hint>
           ) : null}
           {childPath ? (
             <div data-slot="start-agent-open" className="mb-1 ms-6 flex items-center">

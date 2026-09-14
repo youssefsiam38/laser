@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AssistantRuntimeProvider, MessagePrimitive, ThreadPrimitive, useExternalStoreRuntime } from "@assistant-ui/react";
 
@@ -30,6 +31,12 @@ vi.mock("@assistant-ui/react", async (original) => ({
 
 let container: HTMLDivElement;
 let root: Root;
+
+/**
+ * Everything here mounts real transcript rows, and a real row carries the
+ * app's tooltip (the shell mounts one provider; this is that provider).
+ */
+const render = (node: React.ReactNode) => root.render(<TooltipProvider>{node}</TooltipProvider>);
 
 beforeEach(async () => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -83,7 +90,7 @@ describe("collapsed diff summaries", () => {
       );
     }
 
-    await act(async () => root.render(<Fixture />));
+    await act(async () => render(<Fixture />));
     const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
     const content = container.querySelector<HTMLElement>('[data-slot="tool-fallback-content"]')!;
 
@@ -112,16 +119,16 @@ describe("collapsed diff summaries", () => {
       </ToolCall>
     );
 
-    await act(async () => root.render(row("done")));
+    await act(async () => render(row("done")));
     expect(container.querySelector("button")?.getAttribute("aria-label")).toBe("Run pnpm test");
     expect(container.querySelector("button")?.hasAttribute("aria-description")).toBe(false);
 
-    await act(async () => root.render(row("nonzero")));
+    await act(async () => render(row("nonzero")));
     expect(container.querySelector("button")?.getAttribute("aria-label")).toBe("Run pnpm test, exited non-zero");
   });
 
   it("lets a long non-count verb truncate on a narrow row", async () => {
-    await act(async () => root.render(
+    await act(async () => render(
       <div style={{ width: 390 }}>
         <ToolCall
           verb="extremely_long_extension_tool_name_that_must_yield_to_duration"
@@ -179,7 +186,7 @@ describe("collapsed diff summaries", () => {
       );
     }
 
-    await act(async () => root.render(<Fixture />));
+    await act(async () => render(<Fixture />));
     const groupTrigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-group-trigger"]')!;
     expect(groupTrigger.getAttribute("aria-expanded")).toBe("false");
     expect(groupTrigger.textContent).toContain("+8 −2");
@@ -204,7 +211,7 @@ describe("collapsed diff summaries", () => {
       path: "src/a/very/long/path/that/must/yield/to/stats/file.ts",
       edits: [{ oldText: "keep\nremove", newText: "keep\nfirst\nsecond" }],
     };
-    await act(async () => root.render(
+    await act(async () => render(
       <ToolRowFixture {...toolProps("edit-success", "edit", editArgs)} status={{ type: "complete", reason: "stop" }} result="Edited" />,
     ));
     let trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
@@ -216,7 +223,7 @@ describe("collapsed diff summaries", () => {
     expect(body.hasAttribute("hidden")).toBe(true);
 
     const writeArgs = { path: "src/new.ts", content: "one\ntwo\nthree" };
-    await act(async () => root.render(
+    await act(async () => render(
       <ToolRowFixture {...toolProps("write-success", "write", writeArgs)} status={{ type: "complete", reason: "stop" }} result="Wrote" />,
     ));
     trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
@@ -232,7 +239,7 @@ describe("collapsed diff summaries", () => {
     { label: "cancelled", status: { type: "incomplete" as const, reason: "cancelled" as const }, isError: false },
   ])("does not claim applied counts for a $label edit", async ({ label, status, isError }) => {
     const args = { path: `src/${label}.ts`, edits: [{ oldText: "old", newText: "new" }] };
-    await act(async () => root.render(
+    await act(async () => render(
       <ToolRowFixture {...toolProps(`edit-${label}`, "edit", args)} status={status} isError={isError} result={isError ? "Could not edit" : undefined} />,
     ));
     const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
@@ -242,7 +249,7 @@ describe("collapsed diff summaries", () => {
   });
 
   it("hides unsupported and unknown write-deletion counts", async () => {
-    await act(async () => root.render(
+    await act(async () => render(
       <ToolRowFixture {...toolProps("empty-write", "write", { path: "src/cleared.ts", content: "" })}
         status={{ type: "complete", reason: "stop" }} result="Wrote" />,
     ));
@@ -250,7 +257,7 @@ describe("collapsed diff summaries", () => {
     expect(trigger.querySelector(".text-ok, .text-danger")).toBeNull();
     expect(trigger.hasAttribute("aria-description")).toBe(false);
 
-    await act(async () => root.render(
+    await act(async () => render(
       <ToolRowFixture {...toolProps("unknown-edit", "edit", { path: "src/unknown.ts", edits: [{ replacement: "new" }] })}
         status={{ type: "complete", reason: "stop" }} result="Edited" />,
     ));
@@ -262,7 +269,7 @@ describe("collapsed diff summaries", () => {
     const added = Array.from({ length: MAX_DIFF_LINES + 27 }, (_, index) => `line ${index + 1}`);
     const patch = [`@@ -0,0 +1,${added.length} @@`, ...added.map((line) => `+${line}`)].join("\n");
     const result = { content: [{ type: "text", text: "Edited" }], details: { patch } };
-    await act(async () => root.render(
+    await act(async () => render(
       <ToolRowFixture {...toolProps("large-edit", "edit", { path: "src/large.ts" })}
         status={{ type: "complete", reason: "stop" }} result={result} />,
     ));
@@ -290,7 +297,7 @@ describe("collapsed diff summaries", () => {
     // reloaded row draws the real diff instead of falling back to arguments.
     expect(stored.result).toEqual({ content: [{ type: "text", text: "Edited" }], details: { patch } });
 
-    await act(async () => root.render(
+    await act(async () => render(
       <ToolRowFixture {...toolProps("call_1", "edit", stored.args as Record<string, unknown>)}
         status={{ type: "complete", reason: "stop" }} result={stored.result} />,
     ));
@@ -333,12 +340,12 @@ describe("collapsed diff summaries", () => {
       ],
     };
 
-    await act(async () => root.render(
+    await act(async () => render(
       <CodeDiff view={{ hunks: [hunk], stats: { added: 501, removed: 499 }, truncated: true }} />,
     ));
     expect(container.querySelector('[data-slot="code-diff"]')?.textContent).toContain("+501 −499");
 
-    await act(async () => root.render(<CodeDiff view={{ hunks: [hunk], truncated: false }} />));
+    await act(async () => render(<CodeDiff view={{ hunks: [hunk], truncated: false }} />));
     expect(container.querySelector('[data-slot="code-diff"]')?.textContent).toContain("+1 −1");
   });
 });

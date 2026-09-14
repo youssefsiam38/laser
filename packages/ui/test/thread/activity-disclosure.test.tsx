@@ -3,6 +3,7 @@ import { act } from "react";
 import { readFileSync } from "node:fs";
 import { URL as NodeURL } from "node:url";
 import { createRoot, type Root } from "react-dom/client";
+import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ActivityReasoning, ToolGroupRoot, ToolGroupTrigger, ToolGroupContent, ToolGroupSummaryRow } from "../../src/components/assistant-ui/elements/tool-group.aui.js";
 import { ToolFallback, ToolFallbackRoot, ToolFallbackTrigger, ToolFallbackContent } from "../../src/components/assistant-ui/elements/tool-fallback.aui.js";
@@ -33,6 +34,12 @@ vi.mock("@/agents/hooks", () => ({ useNamerLabel: () => undefined, useSessionMcp
 
 let container: HTMLDivElement;
 let root: Root;
+/**
+ * Everything here mounts real transcript rows, and a real row carries the
+ * app's tooltip (the shell mounts one provider; this is that provider).
+ */
+const render = (node: React.ReactNode) => root.render(<TooltipProvider>{node}</TooltipProvider>);
+
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   preferences.level = "answers";
@@ -77,18 +84,18 @@ describe("activity disclosures", () => {
       }</ThreadPrimitive.Messages></ThreadPrimitive.Root></AssistantRuntimeProvider>;
     }
     preferences.level = "everything";
-    await act(async () => root.render(<LiveFixture done={false} />));
+    await act(async () => render(<LiveFixture done={false} />));
     expect(container.querySelectorAll('[data-slot="activity-beam"]')).toHaveLength(2);
     expect(container.querySelector('[data-slot="activity-reasoning"] [data-slot="activity-beam"]')).toBeNull();
     expect(container.textContent).toContain("still working");
     expect(container.textContent).toContain("Running check-project");
     expect(container.textContent).not.toContain("Unexpected thinking");
-    await act(async () => root.render(<LiveFixture done />));
+    await act(async () => render(<LiveFixture done />));
     expect(container.querySelectorAll('[data-slot="activity-beam"]')).toHaveLength(0);
     expect(container.textContent).toContain("finished");
   });
   it("allows a waiting tool's details to collapse without hiding its approval", async () => {
-    await act(async () => root.render(<ToolFallback toolCallId="waiting" toolName="review" args={{}} argsText="{}"
+    await act(async () => render(<ToolFallback toolCallId="waiting" toolName="review" args={{}} argsText="{}"
       status={{type:"requires-action",reason:"tool-calls"}} approval={{id:"approval"}}
       addResult={vi.fn()} resume={vi.fn()} respondToApproval={vi.fn()} />));
     const button = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
@@ -108,22 +115,22 @@ describe("activity disclosures", () => {
         addResult={vi.fn()} resume={vi.fn()} respondToApproval={vi.fn()} />
     );
     preferences.level = "everything";
-    await act(async () => root.render(fixture(false)));
+    await act(async () => render(fixture(false)));
     let button = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
     expect(button.getAttribute("aria-expanded")).toBe("true");
     await act(async () => button.click());
     preferences.level = "answers";
-    await act(async () => root.render(fixture(true)));
+    await act(async () => render(fixture(true)));
     expect(button.getAttribute("aria-expanded")).toBe("false");
 
-    await act(async () => root.render(<div>away</div>));
-    await act(async () => root.render(fixture(true)));
+    await act(async () => render(<div>away</div>));
+    await act(async () => render(fixture(true)));
     button = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
     expect(button.getAttribute("aria-expanded")).toBe("false");
 
     preferences.path = "/test/other-session";
     preferences.level = "everything";
-    await act(async () => root.render(fixture(true)));
+    await act(async () => render(fixture(true)));
     expect(button.getAttribute("aria-expanded")).toBe("true");
   });
 
@@ -134,7 +141,7 @@ describe("activity disclosures", () => {
       { family: "edit", iconKind: "edit", label: "Edited 8 files" },
       { family: "bash", iconKind: "bash", label: "Ran 5 commands" },
     ] as const;
-    await act(async () => root.render(<ToolGroupRoot><ToolGroupTrigger label="Completed 40 steps" breakdown={breakdown} /><ToolGroupContent>All 40 steps</ToolGroupContent></ToolGroupRoot>));
+    await act(async () => render(<ToolGroupRoot><ToolGroupTrigger label="Completed 40 steps" breakdown={breakdown} /><ToolGroupContent>All 40 steps</ToolGroupContent></ToolGroupRoot>));
     const trigger = container.querySelector('button')!;
     expect(trigger.textContent).toContain('Completed 40 steps');
     expect(container.querySelectorAll('[data-slot="tool-group-breakdown-item"]')).toHaveLength(2);
@@ -146,7 +153,7 @@ describe("activity disclosures", () => {
   });
 
   it("opens and closes the aggregate through its actual button", async () => {
-    await act(async () => root.render(
+    await act(async () => render(
       <ToolGroupRoot>
         <ToolGroupTrigger label="Reasoned" />
         <ToolGroupContent>Full reasoning</ToolGroupContent>
@@ -164,20 +171,20 @@ describe("activity disclosures", () => {
 
   it.each(["answers", "reasoning", "everything"] as const)("lets the reader override %s and keeps that choice through live updates", async (level) => {
     preferences.level = level;
-    const render = (running: boolean) => <ActivityReasoning disclosureId="reasoning:test" running={running}>Complete reasoning, including its final line.</ActivityReasoning>;
-    await act(async () => root.render(render(false)));
+    const reasoningFixture = (running: boolean) => <ActivityReasoning disclosureId="reasoning:test" running={running}>Complete reasoning, including its final line.</ActivityReasoning>;
+    await act(async () => render(reasoningFixture(false)));
     const button = container.querySelector("button")!;
     expect(button.getAttribute("aria-expanded")).toBe(String(level !== "answers"));
     if (level === "answers") await act(async () => button.click());
     expect(container.textContent).toContain("including its final line");
     await act(async () => button.click());
-    await act(async () => root.render(render(true)));
+    await act(async () => render(reasoningFixture(true)));
     expect(button.isConnected).toBe(true);
     expect(button.getAttribute("aria-expanded")).toBe("false");
     expect(container.querySelector('[data-slot="thinking-indicator"]')).not.toBeNull();
     expect(container.querySelector('[data-slot="activity-beam"]')?.getAttribute("aria-hidden")).toBe("true");
     expect(container.textContent).not.toContain("including its final line");
-    await act(async () => root.render(render(false)));
+    await act(async () => render(reasoningFixture(false)));
     expect(container.querySelector('[data-slot="activity-beam"]')).toBeNull();
     expect(button.getAttribute("aria-expanded")).toBe("false");
     await act(async () => button.click());
@@ -203,7 +210,7 @@ describe("activity disclosures", () => {
     }
 
     preferences.level = "everything";
-    await act(async () => root.render(<Fixture />));
+    await act(async () => render(<Fixture />));
     let aggregate = container.querySelector<HTMLButtonElement>('[data-slot="tool-group-trigger"]')!;
     let tool = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
     expect(tool.getAttribute("aria-expanded")).toBe("true");
@@ -214,7 +221,7 @@ describe("activity disclosures", () => {
     await act(async () => aggregate.click());
     expect(container.querySelector('[data-tool="read"]')).toBeNull();
     preferences.level = "answers";
-    await act(async () => root.render(<Fixture />));
+    await act(async () => render(<Fixture />));
     aggregate = container.querySelector<HTMLButtonElement>('[data-slot="tool-group-trigger"]')!;
     expect(aggregate.getAttribute("aria-expanded")).toBe("false");
     await act(async () => aggregate.click());
@@ -222,8 +229,8 @@ describe("activity disclosures", () => {
     expect(tool.getAttribute("aria-expanded")).toBe("false");
     expect(container.textContent).not.toContain("Known tool body");
 
-    await act(async () => root.render(<div>Navigate away</div>));
-    await act(async () => root.render(<Fixture />));
+    await act(async () => render(<div>Navigate away</div>));
+    await act(async () => render(<Fixture />));
     aggregate = container.querySelector<HTMLButtonElement>('[data-slot="tool-group-trigger"]')!;
     expect(aggregate.getAttribute("aria-expanded")).toBe("true");
     tool = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
@@ -231,11 +238,11 @@ describe("activity disclosures", () => {
 
     preferences.path = "/test/other-known-session";
     preferences.level = "everything";
-    await act(async () => root.render(<Fixture />));
+    await act(async () => render(<Fixture />));
     tool = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
     expect(tool.getAttribute("aria-expanded")).toBe("true");
     preferences.path = "/test/session";
-    await act(async () => root.render(<Fixture />));
+    await act(async () => render(<Fixture />));
     tool = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
     expect(tool.getAttribute("aria-expanded")).toBe("false");
   });
@@ -249,7 +256,7 @@ describe("activity disclosures", () => {
           addResult={vi.fn()} resume={vi.fn()} respondToApproval={vi.fn()} />
       </AssistantRuntimeProvider>;
     }
-    await act(async () => root.render(<Fixture />));
+    await act(async () => render(<Fixture />));
     const tool = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
     expect(tool.getAttribute("aria-expanded")).toBe("false");
     expect(container.querySelector('[data-slot="tool-fallback-content"]')?.hasAttribute("hidden")).toBe(true);
@@ -284,11 +291,11 @@ describe("activity disclosures", () => {
       }</ThreadPrimitive.Messages></ThreadPrimitive.Root></AssistantRuntimeProvider>;
     }
 
-    await act(async () => root.render(<Fixture done={false} />));
+    await act(async () => render(<Fixture done={false} />));
     const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-group-trigger"]')!;
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
     expect(container.textContent).not.toContain("partial output must stay folded");
-    await act(async () => root.render(<Fixture done />));
+    await act(async () => render(<Fixture done />));
     expect(trigger.isConnected).toBe(true);
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
     expect(container.textContent).not.toContain("No such file");
@@ -303,22 +310,22 @@ describe("activity disclosures", () => {
       </ToolGroupSummaryRow>
     );
 
-    await act(async () => root.render(fixture("answers")));
+    await act(async () => render(fixture("answers")));
     let trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-group-trigger"]')!;
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
     await act(async () => trigger.click());
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
-    await act(async () => root.render(fixture("reasoning", true)));
+    await act(async () => render(fixture("reasoning", true)));
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
-    await act(async () => root.render(fixture("everything")));
+    await act(async () => render(fixture("everything")));
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
 
-    await act(async () => root.render(<div>Another session is being viewed</div>));
-    await act(async () => root.render(fixture("answers")));
+    await act(async () => render(<div>Another session is being viewed</div>));
+    await act(async () => render(fixture("answers")));
     trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-group-trigger"]')!;
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
     await act(async () => trigger.click());
-    await act(async () => root.render(fixture("everything", true)));
+    await act(async () => render(fixture("everything", true)));
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
   });
 
@@ -331,16 +338,125 @@ describe("activity disclosures", () => {
         </ToolGroupSummaryRow>
       </SearchMessageContext>
     );
-    await act(async () => root.render(fixture(false)));
+    await act(async () => render(fixture(false)));
     const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-group-trigger"]')!;
     await act(async () => trigger.click());
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
-    await act(async () => root.render(fixture(true)));
+    await act(async () => render(fixture(true)));
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
     expect(container.textContent).toContain("Find-only body");
-    await act(async () => root.render(fixture(false)));
+    await act(async () => render(fixture(false)));
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
     expect(container.textContent).not.toContain("Find-only body");
+  });
+
+  // AGENTS.md: "Search disclosure is transient. Closing find restores the
+  // user's detail preference." The chevron a person reaches for *while find
+  // holds a row open* folds that row for this reveal only — it must not write
+  // the durable override, which would apply after find closes and never before.
+  it("lets the chevron fold a revealed aggregate for that reveal only, writing no preference", async () => {
+    preferences.level = "everything";
+    const fixture = (reveal: boolean) => (
+      <SearchMessageContext value={reveal}>
+        <ToolGroupSummaryRow members={[{ toolCallId: "transient-read", toolName: "read", args: {}, running: false, awaiting: false, isError: false, cancelled: false }]}
+          reasoning={{ count: 1, running: false }} activityLevel="everything" timingKey="transient-message:activity:0" groupStatus={{ type: "complete" }}>
+          <div>Transient body</div>
+        </ToolGroupSummaryRow>
+      </SearchMessageContext>
+    );
+    // Open by preference, then find reveals it.
+    await act(async () => render(fixture(false)));
+    const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-group-trigger"]')!;
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => render(fixture(true)));
+
+    // Folding during the reveal really folds it — and hides the body.
+    await act(async () => trigger.click());
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(container.textContent).not.toContain("Transient body");
+    expect(globalThis.localStorage.getItem("lasercode-activity-disclosure-overrides")).toBeNull();
+
+    // Find closes: their preference is what comes back.
+    await act(async () => render(fixture(false)));
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(container.textContent).toContain("Transient body");
+
+    // And a second reveal starts from the reveal again, not from that fold.
+    await act(async () => render(fixture(true)));
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  // The row a person actually clicks in a find pass is a tool row, and it goes
+  // through the same Root: the rule cannot hold for the aggregate alone.
+  it("folds a revealed tool row for that reveal only, writing no preference", async () => {
+    const fixture = (reveal: boolean) => (
+      <SearchMessageContext value={reveal}>
+        <ToolFallbackRoot>
+          <ToolFallbackTrigger verb="Read" summary="README.md" />
+          <ToolFallbackContent>Transient tool body</ToolFallbackContent>
+        </ToolFallbackRoot>
+      </SearchMessageContext>
+    );
+    await act(async () => render(fixture(false)));
+    const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+
+    await act(async () => render(fixture(true)));
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => trigger.click());
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(container.textContent).not.toContain("Transient tool body");
+
+    // Out of find, the row is exactly where the person left it before find.
+    await act(async () => render(fixture(false)));
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(globalThis.localStorage.getItem("lasercode-activity-disclosure-overrides")).toBeNull();
+  });
+
+  it("folds a revealed reasoning row for that reveal only, writing no preference", async () => {
+    preferences.level = "everything";
+    const fixture = (reveal: boolean) => (
+      <SearchMessageContext value={reveal}>
+        <ActivityReasoning disclosureId="transient-message:reasoning:0">Transient reasoning body</ActivityReasoning>
+      </SearchMessageContext>
+    );
+    await act(async () => render(fixture(false)));
+    const trigger = container.querySelector<HTMLButtonElement>('[data-slot="activity-reasoning"] button')!;
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+
+    await act(async () => render(fixture(true)));
+    await act(async () => trigger.click());
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(container.textContent).not.toContain("Transient reasoning body");
+    expect(globalThis.localStorage.getItem("lasercode-activity-disclosure-overrides")).toBeNull();
+
+    await act(async () => render(fixture(false)));
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("keeps the composable reasoning root's find reveal out of the person's preference", async () => {
+    const fixture = (reveal: boolean) => (
+      <SearchMessageContext value={reveal}>
+        <ReasoningRoot sessionPath="/test/session" disclosureId="standalone:reasoning:0">
+          <ReasoningTrigger />
+          <ReasoningContent>Standalone reasoning body</ReasoningContent>
+        </ReasoningRoot>
+      </SearchMessageContext>
+    );
+    await act(async () => render(fixture(false)));
+    const trigger = container.querySelector<HTMLButtonElement>('[data-slot="reasoning-trigger"]')!;
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+
+    await act(async () => render(fixture(true)));
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => trigger.click());
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(globalThis.localStorage.getItem("lasercode-activity-disclosure-overrides")).toBeNull();
+
+    // Closed find, closed row: the reveal left nothing behind.
+    await act(async () => render(fixture(false)));
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(container.textContent).not.toContain("Standalone reasoning body");
   });
 
   it("keeps a child reasoning choice independent across aggregate collapse and reopen", async () => {
@@ -351,7 +467,7 @@ describe("activity disclosures", () => {
         <ActivityReasoning disclosureId="child-message:reasoning:0">Remember this reasoning body</ActivityReasoning>
       </ToolGroupSummaryRow>
     );
-    await act(async () => root.render(fixture()));
+    await act(async () => render(fixture()));
     const parent = container.querySelector<HTMLButtonElement>('[data-slot="tool-group-trigger"]')!;
     let child = container.querySelector<HTMLButtonElement>('[data-slot="activity-reasoning"] button')!;
     expect(child.getAttribute("aria-expanded")).toBe("true");
@@ -365,8 +481,29 @@ describe("activity disclosures", () => {
     expect(container.textContent).not.toContain("Remember this reasoning body");
   });
 
+  // M16-T48 / review #49: the per-call lines were a native `title` on the
+  // aggregate's trigger — pointer-only, and drawn in system chrome over the
+  // transcript. They are the app's tooltip now, and a focused row shows them.
+  it("shows what ran in the app's tooltip on the aggregate's own row, by keyboard", async () => {
+    const lines = Array.from({ length: 11 }, (_, index) => `Ran command ${index + 1}`);
+    await act(async () => render(
+      <ToolGroupRoot><ToolGroupTrigger label="Ran 11 commands" lines={lines} /><ToolGroupContent>Eleven rows</ToolGroupContent></ToolGroupRoot>,
+    ));
+    const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-group-trigger"]')!;
+    expect(trigger.getAttribute("title")).toBeNull();
+
+    await act(async () => trigger.focus());
+    const tip = [...document.querySelectorAll('[data-slot="tooltip-content"]')].map((node) => node.textContent).join(" ");
+    expect(tip).toContain("Ran command 1");
+    expect(tip).toContain("Ran command 8");
+    // A long run does not cover the conversation: the rest are one row away.
+    expect(tip).not.toContain("Ran command 9");
+    expect(tip).toContain("+3 more");
+    await act(async () => trigger.blur());
+  });
+
   it("keeps standalone streaming reasoning quiet until the reader opens it", async () => {
-    await act(async () => root.render(
+    await act(async () => render(
       <ReasoningRoot streaming>
         <ReasoningTrigger active />
         <ReasoningContent>Streaming reasoning body</ReasoningContent>
@@ -381,7 +518,7 @@ describe("activity disclosures", () => {
 
   it.each(["answers", "reasoning", "everything"] as const)("keeps the aggregate and each child independent in %s", async (level) => {
     preferences.level = level;
-    await act(async () => root.render(
+    await act(async () => render(
       <ToolGroupSummaryRow members={[{toolCallId:"read-test",toolName:"read",args:{path:"README.md"},running:false,awaiting:false,isError:false,cancelled:false}]}
         reasoning={{count:1,running:false}} activityLevel={level} timingKey="group-test" groupStatus={{type:"complete"}}>
         <ActivityReasoning disclosureId={`independent:${level}`}>Reasoning body</ActivityReasoning>

@@ -10,6 +10,7 @@
  */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TerminalBlock } from "../../src/components/assistant-ui/elements/terminal-block.js";
@@ -119,7 +120,13 @@ describe("the aggregate row", () => {
 describe("what is rendered", () => {
   let container: HTMLDivElement;
   let root: Root;
-  beforeEach(() => {
+  /**
+ * Everything here mounts real transcript rows, and a real row carries the
+ * app's tooltip (the shell mounts one provider; this is that provider).
+ */
+const render = (node: React.ReactNode) => root.render(<TooltipProvider>{node}</TooltipProvider>);
+
+beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true;
     preferences.level = "answers";
     localStorage.clear();
@@ -145,7 +152,7 @@ describe("what is rendered", () => {
   );
 
   it("reads exactly as it would had every command exited zero", async () => {
-    await act(async () => root.render(group([nonZeroMember(), call({ toolCallId: "b" })])));
+    await act(async () => render(group([nonZeroMember(), call({ toolCallId: "b" })])));
     const rootEl = container.querySelector('[data-slot="tool-group-root"]')!;
     const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-group-trigger"]')!;
     expect(rootEl.getAttribute("data-tone")).toBeNull();
@@ -157,7 +164,7 @@ describe("what is rendered", () => {
   });
 
   it("keeps a broken tool quiet in Answers only without painting the block", async () => {
-    await act(async () => root.render(group([brokenMember(), call({ toolCallId: "b" })])));
+    await act(async () => render(group([brokenMember(), call({ toolCallId: "b" })])));
     const rootEl = container.querySelector('[data-slot="tool-group-root"]')!;
     const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-group-trigger"]')!;
     // The failure remains in the accessible summary, but Answers only never
@@ -173,7 +180,7 @@ describe("what is rendered", () => {
 
   it("counts nothing, whichever kind of failure a group holds", async () => {
     await act(async () =>
-      root.render(group([nonZeroMember(), nonZeroMember({ toolCallId: "b" }), brokenMember({ toolCallId: "c" })])),
+      render(group([nonZeroMember(), nonZeroMember({ toolCallId: "b" }), brokenMember({ toolCallId: "c" })])),
     );
     const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-group-trigger"]')!;
     await act(async () => trigger.click());
@@ -183,7 +190,7 @@ describe("what is rendered", () => {
   });
 
   it("leaves the person's own toggle in charge", async () => {
-    await act(async () => root.render(group([nonZeroMember()])));
+    await act(async () => render(group([nonZeroMember()])));
     const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-group-trigger"]')!;
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
     await act(async () => trigger.click());
@@ -194,7 +201,7 @@ describe("what is rendered", () => {
 
   it("turns the command and nothing else on the individual row", async () => {
     await act(async () =>
-      root.render(
+      render(
         <ToolCall verb="Run" summary="grep -r nothing ." state="nonzero" open={false} onOpenChange={() => {}} toolName="bash">
           <div>body</div>
         </ToolCall>,
@@ -214,7 +221,7 @@ describe("what is rendered", () => {
 
   it("gives a row whose tool broke no rail either", async () => {
     await act(async () =>
-      root.render(
+      render(
         <ToolCall verb="Run" summary="pnpm build" state="failed" open={false} onOpenChange={() => {}} toolName="bash">
           <div>body</div>
         </ToolCall>,
@@ -230,7 +237,7 @@ describe("what is rendered", () => {
 
   it("still rails a row that is waiting on a person", async () => {
     await act(async () =>
-      root.render(
+      render(
         <ToolCall verb="Run" summary="rm -rf build" state="awaiting" open={false} onOpenChange={() => {}} toolName="bash">
           <div>body</div>
         </ToolCall>,
@@ -244,7 +251,7 @@ describe("what is rendered", () => {
 
   it("keeps the exit code visible on the terminal ground without alarm", async () => {
     await act(async () =>
-      root.render(<TerminalBlock command="pnpm test" output="1 failing" exitCode={1} running={false} isError={false} />),
+      render(<TerminalBlock command="pnpm test" output="1 failing" exitCode={1} running={false} isError={false} />),
     );
     const block = container.querySelector('[data-slot="terminal-block"]')!;
     // The `$` is its own span; the command is the one carrying the search hook.
@@ -257,7 +264,7 @@ describe("what is rendered", () => {
 
   it("keeps the loud treatment when the command could not run at all", async () => {
     await act(async () =>
-      root.render(<TerminalBlock command="nope" output="spawn nope ENOENT" running={false} isError={true} />),
+      render(<TerminalBlock command="nope" output="spawn nope ENOENT" running={false} isError={true} />),
     );
     const block = container.querySelector('[data-slot="terminal-block"]')!;
     expect(block.textContent).toContain("failed");

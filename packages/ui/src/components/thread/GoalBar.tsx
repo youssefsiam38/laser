@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
+import { Hint } from "@/components/ui/hint";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { useLaserStable, useLaserState } from "@/runtime";
 
@@ -38,9 +39,9 @@ export function GoalBar() {
               <Badge variant={goal.status === "active" ? "live" : goal.status === "complete" ? "ok" : goal.status === "blocked" ? "danger" : "attention"} className="capitalize">
                 {goal.status.replace("_", " ")}
               </Badge>
-              <span className="text-xs tabular-nums text-ink-3" title="Times the goal automatically asked the agent to continue. Not tool calls or a separate evaluation.">
+              <Hint className="text-xs tabular-nums text-ink-3" hint="Times the goal automatically asked the agent to continue. Not tool calls or a separate evaluation.">
                 {goal.iteration} automatic continuation{goal.iteration === 1 ? "" : "s"}
-              </span>
+              </Hint>
             </div>
             <p className="mt-1 whitespace-pre-wrap wrap-break-word text-sm font-medium leading-5 text-ink">{goal.objective}</p>
             {goal.latestReason && <p className="mt-1 text-xs leading-5 text-ink-2">{goal.latestReason}</p>}

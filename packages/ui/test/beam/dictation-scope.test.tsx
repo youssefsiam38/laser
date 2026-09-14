@@ -166,4 +166,46 @@ describe("the microphone in a second composer", () => {
       other.remove();
     }
   });
+
+  /**
+   * M16-T48 / review #50: the insert flash was timed by hand-parsing
+   * `--motion-morph` off the card (`parseFloat`, so `0.4s` read as 0.4ms, and
+   * an uninherited value as none at all). It reads the token through
+   * `motionMs()` now, like every other motion in the app.
+   */
+  it("clears the insert flash after the motion token's own duration", async () => {
+    document.documentElement.style.setProperty("--motion-morph", "0.4s");
+    vi.useFakeTimers();
+    try {
+      mocks.view = sessionView("/state/beam/b1.jsonl", "/state/beam");
+      mocks.dictating = true;
+      await act(async () =>
+        root.render(
+          <TooltipProvider>
+            <div data-slot="composer-card">
+              <div data-slot="composer">
+                <textarea id="bubble" />
+                <DictateButton />
+              </div>
+            </div>
+          </TooltipProvider>,
+        ),
+      );
+      const card = container.querySelector<HTMLElement>('[data-slot="composer-card"]')!;
+      const sink = mocks.sink.mock.calls.at(-1)?.[0] as (phrase: string) => void;
+      mocks.text = "spoken";
+      await act(async () => sink("spoken"));
+      // The flash is written in the frame after the phrase lands.
+      await act(async () => { vi.advanceTimersByTime(20); });
+      expect(card.dataset["dictationInsert"]).toBe("true");
+
+      await act(async () => { vi.advanceTimersByTime(380); });
+      expect(card.dataset["dictationInsert"]).toBe("true");
+      await act(async () => { vi.advanceTimersByTime(40); });
+      expect(card.dataset["dictationInsert"]).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+      document.documentElement.style.removeProperty("--motion-morph");
+    }
+  });
 });

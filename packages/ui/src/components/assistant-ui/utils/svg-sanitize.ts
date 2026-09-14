@@ -54,6 +54,23 @@ export function sanitizeSvg(svg: string): string | null {
   const root = doc.documentElement;
   if (!root || root.localName.toLowerCase() !== "svg" || doc.getElementsByTagName("parsererror").length > 0) return null;
 
+  // One rule for every element, the root included: a `<svg>` carrying
+  // `xlink:href="https://…"` or `style="background:url(…)"` fetches exactly
+  // like a child that does, so the root cannot be the one element that only
+  // loses its `on*` handlers.
+  const scrubAttributes = (el: Element): void => {
+    for (const attr of Array.from(el.attributes)) {
+      const name = attr.name.toLowerCase();
+      if (name.startsWith("on")) {
+        el.removeAttribute(attr.name);
+      } else if (URL_ATTRS.has(name) && !attr.value.trim().startsWith("#")) {
+        el.removeAttribute(attr.name);
+      } else if (name === "style" && /url\(|expression\(|@import/i.test(attr.value)) {
+        el.removeAttribute(attr.name);
+      }
+    }
+  };
+
   const walk = (el: Element): void => {
     const children = Array.from(el.children);
     for (const child of children) {
@@ -64,22 +81,11 @@ export function sanitizeSvg(svg: string): string | null {
       if (child.localName.toLowerCase() === "style") {
         child.textContent = scrubCss(child.textContent ?? "");
       }
-      for (const attr of Array.from(child.attributes)) {
-        const name = attr.name.toLowerCase();
-        if (name.startsWith("on")) {
-          child.removeAttribute(attr.name);
-        } else if (URL_ATTRS.has(name) && !attr.value.trim().startsWith("#")) {
-          child.removeAttribute(attr.name);
-        } else if (name === "style" && /url\(|expression\(|@import/i.test(attr.value)) {
-          child.removeAttribute(attr.name);
-        }
-      }
+      scrubAttributes(child);
       walk(child);
     }
   };
-  for (const attr of Array.from(root.attributes)) {
-    if (attr.name.toLowerCase().startsWith("on")) root.removeAttribute(attr.name);
-  }
+  scrubAttributes(root);
   walk(root);
   return new XMLSerializer().serializeToString(root);
 }

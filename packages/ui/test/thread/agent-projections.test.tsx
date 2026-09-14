@@ -226,18 +226,27 @@ describe("rendering", () => {
       respondToApproval: vi.fn(async () => {}),
     });
     const where = () => container.querySelector<HTMLElement>('[data-slot="start-agent-where"]');
+    // The full path is in the app's tooltip, not a native `title`: it has to
+    // arrive for the keyboard too (M16-T48 / review #49).
+    const pathOnFocus = async (): Promise<string> => {
+      await act(async () => where()!.focus());
+      const text = [...document.querySelectorAll('[data-slot="tooltip-content"]')].map((n) => n.textContent).join(" ");
+      await act(async () => where()!.blur());
+      return text;
+    };
 
     // A hydrated row has only the model's JSON view: `working_directory`.
     await mount(<ToolRow {...call({ working_directory: "/p/.worktrees/explorer-1", branch: "agents/explorer-1" })} type="tool-call" />);
     expect(where()?.textContent).toContain("agents/explorer-1");
-    expect(where()?.getAttribute("title")).toBe("/p/.worktrees/explorer-1");
+    expect(where()?.getAttribute("title")).toBeNull();
+    expect(await pathOnFocus()).toContain("/p/.worktrees/explorer-1");
     expect(where()?.textContent).not.toContain("checkout");
 
     // A live row has the harness's own details, which say `cwd`.
     const live = { ...call({}), result: { content: [{ type: "text", text: "{}" }], details: { sessionId: "child", runId: "r9", cwd: "/p/.worktrees/explorer-1", branch: "agents/explorer-1" } } };
     await mount(<ToolRow {...live} type="tool-call" />);
     expect(where()?.textContent).toContain("agents/explorer-1");
-    expect(where()?.getAttribute("title")).toBe("/p/.worktrees/explorer-1");
+    expect(await pathOnFocus()).toContain("/p/.worktrees/explorer-1");
 
     // No branch is the signal that the child is not isolated.
     await mount(<ToolRow {...call({ working_directory: "/p" })} type="tool-call" />);
