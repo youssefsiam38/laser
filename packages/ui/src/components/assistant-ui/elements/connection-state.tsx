@@ -183,7 +183,9 @@ export function EnvironmentNotice({ reason, onClear }: { reason: string; onClear
           Nothing is being kept on this device while this lasts, and nothing on the host has changed. Reconnecting continues in the background.
         </p>
       </div>
-      <Button variant="outline" size="sm" onClick={onClear}>Clear this browser&rsquo;s data and reload</Button>
+      {/* The one way out of this state, on the device most likely to be in it:
+          a coarse pointer gets the 44px target DESIGN.md requires. */}
+      <Button variant="outline" size="sm" className="pointer-coarse:min-h-11" onClick={onClear}>Clear this browser&rsquo;s data and reload</Button>
     </div>
   );
 }

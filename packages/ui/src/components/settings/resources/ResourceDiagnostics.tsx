@@ -239,7 +239,10 @@ export function ResourceDiagnostics({ optionalStores }: ResourceDiagnosticsProps
     <ScrollArea className="h-full">
       <main data-slot="resource-diagnostics" className="mx-auto flex max-w-240 flex-col gap-6 px-4 py-5 sm:px-6">
         <header className="flex flex-wrap items-start gap-3">
-          <div className="min-w-0 flex-1">
+          {/* `basis-72`: the explanation keeps a readable measure, so on a phone
+              the two actions wrap to their own row instead of squeezing this
+              column to two words a line. */}
+          <div className="min-w-0 flex-1 basis-72">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-base font-semibold text-ink">Resource diagnostics</h2>
               <Badge variant={stale ? "outline" : snapshot.health.ok ? "live" : "attention"}>{stale ? "Stale" : snapshot.health.ok ? "Healthy" : "Needs attention"}</Badge>
@@ -352,12 +355,16 @@ export function ResourceDiagnostics({ optionalStores }: ResourceDiagnosticsProps
               Counts and bytes appear only when their owner reports them. Missing counters are named plainly rather than estimated.
             </p>
           </div>
+          {/* Why a counter is missing is a sentence, and a sentence needs a
+              column: below `minWidth` the table scrolls inside its own card
+              (never the page) instead of breaking words down a narrow one. */}
           <DataTable
             data-section="retained-state"
             columns={RETAINED_STORE_COLUMNS}
             rows={stores}
             rowKey={(store) => store.id}
             caption="Retained state by store and owner"
+            minWidth="34rem"
           />
         </section>
 

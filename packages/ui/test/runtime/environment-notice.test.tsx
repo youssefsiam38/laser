@@ -57,6 +57,10 @@ it("says what happened and what to do, in words a person can read on a phone", a
   // One action, and it is the one that can actually help.
   const button = element.querySelector("button")!;
   expect(button.textContent).toMatch(/clear this browser/i);
+  // A phone is the device most likely to be in this state, and the browser
+  // matrix measured this button at 28px before it carried the coarse-pointer
+  // minimum (scripts/browser-check/test/environment-storage.mjs).
+  expect(button.className).toContain("pointer-coarse:min-h-11");
   await act(async () => button.click());
   expect(cleared).toBe(1);
 });
