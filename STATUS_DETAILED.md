@@ -2474,7 +2474,8 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 
 #### M18-T5 notes
 - 2026-09-14 claimed: owner `01a0a214-a8d0-76c8-926f-52b824a37031` maps light versus hydrated renderer state, assistant-ui runtime/projections, image/search release, pinning and generation-fenced rehydration before code. Plan: `/tmp/m18-t5-plan.md`; isolated base `1e4eeba`; mandatory assistant-ui skills; no source until approval and T6 client ownership lands.
-- Ownership ledger: renderer session lifetime · `01a0a214-a8d0-76c8-926f-52b824a37031` run `run_9b2a8767` · M18-T5 plan milestone · UI runtime/store/thread/search/image tests to be proposed; scripts/planning excluded · base `1e4eeba` · T2 done, waits T6 owner-token edit · next: approve plan then rebase after T6.
+- 2026-09-14 plan v2 `/tmp/m18-t5-plan.md` approved to wait behind T6: in-place light records keep all 50 identities while a 6-view/4 MiB UTF-8-calibrated hydrated LRU releases entries/blocks/projections/images/search; current/Beam/waiting/running/person-draft views pin; every async writer is epoch-fenced; RP-10 receives only a bounded frozen DTO after release; local renderer counters stay device-local. A full-scale one-run `--until` calibration mode is approved without changing fixtures/ceilings or baseline semantics.
+- Ownership ledger: renderer session lifetime · `01a0a214-a8d0-76c8-926f-52b824a37031` · M18-T5 waiting after plan · clean worktree base `1e4eeba`; future UI store/runtime/thread/search plus additive calibration/browser script after release, planning excluded · prerequisites T6 and scripts release · next: rebase on T6 and implement.
 
 #### M18-T6 notes
 - 2026-09-14 claimed: owner `01a0a1f8-57b2-76c8-926f-52ac71acb877` investigates task/TailBuffer durability and connection/scope delivery reference counting before code, and must settle T4 pins plus T7 queue boundaries. Plan: `/tmp/m18-t6-plan.md`; isolated base `ad8c188`; no source writes until approval.
@@ -2483,7 +2484,8 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 
 #### M18-T7 notes
 - 2026-09-14 claimed: owner `01a0a214-a8cc-76c8-926f-52b4b3d8408e` maps linear frame decoding, provider capture retention/redaction and host/client/relay/background-output high-water policies before code. Plan: `/tmp/m18-t7-plan.md`; isolated base `1e4eeba`; no source until approval, implementation waits on T6 shared stores/boundaries.
-- Ownership ledger: provider and transport pressure · `01a0a214-a8cc-76c8-926f-52b4b3d8408e` run `run_527fc637` · M18-T7 plan milestone · protocol decoder/provider logs/transport queues/tests to be proposed; T6 durable task logs and planning excluded · base `1e4eeba` · T2 done, waits T6 · next: approve plan then rebase after T6.
+- 2026-09-14 plan v2 `/tmp/m18-t7-plan.md` approved to wait behind T6: Buffer/cursor UTF-8 decoder with 64 MiB generation-fault ceiling; producer-redacted ≤16 MiB chunked captures and bounded atomic SQLite chunks; direct/paired connection byte fencing with only three compiler-declared diagnostic streams sheddable; exact omitted size/digest/reason UI; local relay remains a byte forwarder. Timing is measurement evidence, not a flaky gate.
+- Ownership ledger: provider and transport pressure · `01a0a214-a8cc-76c8-926f-52b4b3d8408e` · M18-T7 waiting after plan · clean worktree base `1e4eeba`; future protocol decoder/provider capture/host direct+relay client pressure/log UI plus feature browser script after release; excludes T6 logs/membership, packages/relay and planning · prerequisite T6 · next: rebase and implement.
 
 #### M18-T3 notes
 - 2026-09-14 claimed: design the permanent Advanced diagnostics surface over the RP-1 process truth, including honest unavailable/retention states, links to existing work, safe lifecycle routing, responsive/touch/keyboard/reduced-motion behavior and browser-matrix evidence. Plan approval precedes UI changes.
