@@ -206,6 +206,47 @@ describe("pairing", () => {
     await expect(responder.readRequest(message1)).rejects.toThrow(/expired/);
   });
 
+  it("refuses to grant on a code that expired while the approval was on screen", async () => {
+    // docs/security §4.1: the code expires after its TTL regardless. The
+    // handshake may be half done and the emoji compared; the message that
+    // discloses the desktop's keys still must not go out on a dead code.
+    let clock = 0;
+    const backend = nobleBackend;
+    const root = rootIdentityFromSeed(generateRootSeed());
+    const desktopStatic = await backend.generateKeyPair();
+    const responder = await PairingResponder.create({ relayUrl: RELAY, backend, ttlMs: 1000, now: () => clock });
+    const phone = await PairingInitiator.create({
+      link: responder.link(APP),
+      staticKeyPair: await backend.generateKeyPair(),
+      backend,
+    });
+    const { message1 } = await phone.start({ name: "phone" });
+    const { devicePublicKey } = await responder.readRequest(message1);
+    const list = signDeviceList(
+      addDevice(emptyDeviceList(root), {
+        name: "phone",
+        publicKey: toBase64Url(devicePublicKey),
+        addedAt: new Date(0).toISOString(),
+      }),
+      root,
+    );
+    const grant: PairingGrant = {
+      relayUrl: RELAY,
+      staticPublicKey: toBase64Url(desktopStatic.publicKey),
+      rootPublicKey: root.publicKey,
+      deviceList: list,
+      deviceId: deviceIdFor(devicePublicKey),
+      hostName: "desktop",
+    };
+    // A person who takes longer than the TTL to compare the emoji.
+    clock = 1001;
+    await expect(responder.grant(grant, { sasConfirmed: true })).rejects.toThrow(/expired/);
+    // …and the code is not half-spent: nothing was disclosed, and it still
+    // refuses after the fact.
+    clock = 1002;
+    await expect(responder.grant(grant, { sasConfirmed: true })).rejects.toThrow(/expired/);
+  });
+
   it("derives one channel id both peers agree on, and a different one for pairing", async () => {
     const { desktopStatic, phoneStatic, responder, backend } = await fullPairing();
     const fromDesktop = await channelIdFor(desktopStatic, phoneStatic.publicKey, { backend });
