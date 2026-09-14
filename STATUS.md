@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-14T20:33:08Z · orchestrator `01a0a030` · HEAD: 00db89f
-**Current focus:** M18 is correcting the full-scale resource measurement harness while completing environment-scoped client storage.
+**Last updated:** 2026-09-14T22:10:37Z · orchestrator `01a0a030` · HEAD: ad8c188
+**Current focus:** M18 is applying the measured renderer-memory finding to worker, renderer, task and transport lifetime while finishing environment-scoped client storage.
 
 | Milestone | State |
 | --- | --- |
@@ -27,8 +27,8 @@
 | M18 Resource containment | in-progress |
 | MX Cross-cutting | in-progress |
 
-**Blockers:** none. RP-2 full A found perturbing memory instrumentation/heap-parser limits and correctly gated B; bounded harness corrections are active. RP-13A is integrated; client/storage milestone B is planning.
-**Next up:** finish M18-T2 full A/B evidence; implement/review RP-13B; then start M18-T4/T5/T6/T7 from measurements and complete M18-T3’s counters/browser matrix.
-**Recently done:** M18-T13A host authorization (`00db89f`; protocol 184, host 507, CLI 74); M18-T12 worker-free reads (`e9e3d8d`); M18-T9 durable revisions (`dd637f3`); M18-T3 reviewed UI checkpoint (`8b5a269`); M18-T1 process inventory (`1628349`).
+**Blockers:** none. RP-2’s unchanged full A safely refuses B on the product’s unbounded renderer view state; D-257 assigns the clean repeat to M18-T15 after containment.
+**Next up:** approve M18-T4/T6 lifetime plans; correct and integrate RP-13B; start M18-T5/T7 after its UI/client ownership releases; complete M18-T3’s counters and browser matrix.
+**Recently done:** M18-T2 controlled finding (`ad8c188`; browser-check 67/67, zero survivors); M18-T13A host authorization (`00db89f`); M18-T12 worker-free reads (`e9e3d8d`); M18-T9 durable revisions (`dd637f3`); M18-T3 reviewed UI checkpoint (`8b5a269`).
 
 Ownership and evidence: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`.
