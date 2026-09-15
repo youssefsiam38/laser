@@ -156,15 +156,14 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("releasing a session's runtime
       await client.request("pi/session/detach", { path: state.path });
       expect(host.sessionMembership().holders(state.path)).toBe(0);
 
-      // With no naming model connected, this worker is still holding the queued
-      // naming work for that first prompt, and it says so rather than dropping
-      // it (RP-4, review §5). The honest cost: with a model never connected,
-      // this one runtime stays until the conversation is closed.
-      const naming = await host.pool.unloadSession(cwd, state.path, "idle");
-      expect(naming).toMatchObject({ unloaded: false, pins: [{ kind: "naming" }] });
+      // With no naming model connected, the first prompt's words are parked in
+      // case one ever appears — and nothing can perform that intent, so it does
+      // not hold the runtime (RP-4, M18-T17): the release goes through.
+      const parked = await host.pool.unloadSession(cwd, state.path, "idle");
+      expect(parked).toEqual({ unloaded: true, pins: [] });
 
-      // A new host is a new worker with nothing queued, which is the ordinary
-      // way that intent ends: the conversation is loaded again from its record.
+      // And the same conversation comes back through a new host and a new
+      // worker, which is how a person returns to it after a restart.
       client.close();
       await host.close();
       host = restartedHost();
