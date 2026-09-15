@@ -22,7 +22,7 @@ Authoritative detail, evidence and ownership live in `STATUS_DETAILED.md`; `STAT
 | RP-7 | M18-T7 | done — integrated `0542a58e`; reviewed bounded decoder/provider/body-store/direct+relay pressure, privacy/browser and unchanged-workload footprint gates pass | RP-2 |
 | RP-8 | M18-T8 | in progress — integrated-base threshold calibration complete with unchanged provisional values; source waits RP-10 schema handoff and pinned-view audit | RP-4, RP-5 |
 | RP-9 | M18-T9 | done — integrated `dd637f3` | protocol integration follows RP-1 |
-| RP-10 | M18-T10 | in progress — plan v2 approved; RP-5 immutable tail/sink and T7 client ownership are released for implementation | RP-5, RP-9 |
+| RP-10 | M18-T10 | in progress — implementation is under one reviewed correction batch for serialized deletion/readiness, full-row validation, exact age/LRU/privacy, authority decomposition and complete browser/resource evidence | RP-5, RP-9 |
 | RP-11 | M18-T11 | todo | RP-10 |
 | RP-12 | M18-T12 | done — integrated `e9e3d8d` | RP-9 |
 | RP-13 | M18-T13 | done — host policy/storage isolation through `1e4eeba`; reviewed real-host browser matrices `a0111f9` | RP-12 |

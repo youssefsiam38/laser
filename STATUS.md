@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-15T13:21:47+03:00 · orchestrator `01a0a030` · HEAD: 2430622b
-**Current focus:** M18 RP-10 is closing fail-closed cache review gaps; RP-5b, pressure policy, immediate reconciliation, the unchanged full baseline and shell gate follow in dependency order.
+**Last updated:** 2026-09-15T14:15:41+03:00 · orchestrator `01a0a030` · HEAD: 5a2fe5a9
+**Current focus:** M18 RP-10 is implementing its independent-review correction batch; RP-5b, pressure policy, immediate reconciliation, the unchanged full baseline and shell gate follow in dependency order.
 
 | Milestone | State |
 | --- | --- |
