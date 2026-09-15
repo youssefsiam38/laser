@@ -26,13 +26,17 @@ import {
   CAPTURE_MAX_BYTES,
   CAPTURE_OPEN_GLOBAL,
   CAPTURE_OPEN_SESSION,
-  findCredentialShapedKeys,
+  CredentialScanner,
   isProviderCaptureId,
-  redactForStorage,
   type ProviderCaptureMeta,
   type ProviderCaptureOmission,
+  type ScanOutcome,
 } from "@lasercode/protocol";
 import { createHash } from "node:crypto";
+
+function describe(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export interface CaptureComplete {
   cwd: string;
@@ -55,29 +59,6 @@ export interface CaptureAbsent {
   sessionPath: string;
   meta: ProviderCaptureMeta;
   reason: ProviderCaptureOmission;
-}
-
-type DefenceResult =
-  | { ok: true; body: string; redactedFields: number }
-  | { ok: false; reason: ProviderCaptureOmission };
-
-/**
- * Metadata for a body this host had to change.
- *
- * Size, digest, preview and redaction count describe the **stored** redacted
- * representation — the only thing anybody can ever read back — so they are
- * recomputed from the bytes that are about to be written rather than inherited
- * from what the producer announced. The producer's own count is kept as a
- * floor: it redacted fields too, and this pass only saw what it left behind.
- */
-function restate(meta: ProviderCaptureMeta, body: string, redactedHere: number): ProviderCaptureMeta {
-  return {
-    ...meta,
-    bytes: Buffer.byteLength(body, "utf8"),
-    sha256: createHash("sha256").update(body).digest("hex"),
-    preview: body.slice(0, meta.preview && meta.preview.length > 0 ? meta.preview.length : CAPTURE_PREVIEW_CHARS),
-    redactedFields: Math.max(meta.redactedFields, redactedHere),
-  };
 }
 
 /** Leading characters kept on a row, matching the producer's own preview. */
@@ -119,10 +100,12 @@ interface Open {
   sink: CaptureBodySink | undefined;
   /** The first characters of the body, kept for the row. */
   preview: string;
-  /** Tail of the previous piece, so a key that straddles a cut is still seen. */
-  carry: string;
-  /** Credential-shaped keys seen while the pieces went past. */
-  survivors: string[];
+  /** Reads the body as it goes past, keeping only the key token it is on. */
+  scanner: CredentialScanner;
+  /** Set once the scan can no longer prove this body is storable. */
+  scanFailure: ScanOutcome | undefined;
+  /** Set once writing to the store failed; nothing more is written or kept. */
+  storageFailed: boolean;
   /** Bytes actually received so far. */
   bytes: number;
   /** Announced size, held against every bound from `begin` until it ends. */
@@ -152,24 +135,6 @@ export interface CaptureRetention {
   /** Announced-but-not-yet-received bytes still reserved against the bounds. */
   reservedBytes: number;
 }
-
-/**
- * Look for a credential-shaped key across pieces, with an overlap so one that
- * straddles a boundary is still seen. Key names only ever leave this function.
- */
-function scanPieces(pieces: readonly string[]): string[] {
-  const found: string[] = [];
-  let carry = "";
-  for (const piece of pieces) {
-    for (const key of findCredentialShapedKeys(carry + piece)) if (!found.includes(key)) found.push(key);
-    if (found.length > 0) break;
-    carry = piece.slice(-OVERLAP_CHARS);
-  }
-  return found;
-}
-
-/** Enough to carry the longest credential-shaped key and its value across a cut. */
-const OVERLAP_CHARS = 512;
 
 function keyOf(generation: string, captureId: string): string {
   return `${generation}\u0000${captureId}`;
@@ -213,10 +178,11 @@ export class CaptureAccumulator {
       sessionPath,
       meta,
       pieces: [],
-      sink: this.options.openBody?.(meta),
+      sink: this.openSink(meta),
       preview: "",
-      carry: "",
-      survivors: [],
+      scanner: new CredentialScanner(),
+      scanFailure: undefined,
+      storageFailed: false,
       bytes: 0,
       reserved: announced,
       next: 0,
@@ -241,25 +207,25 @@ export class CaptureAccumulator {
       this.end(key, "corrupt");
       return;
     }
-    // Seen as it goes past, with an overlap so a credential-shaped key that
-    // straddles a cut is not missed.
-    for (const survivor of findCredentialShapedKeys(entry.carry + text)) {
-      if (!entry.survivors.includes(survivor)) entry.survivors.push(survivor);
-    }
-    entry.carry = text.slice(-OVERLAP_CHARS);
+    // Read as it goes past: the scanner keeps the key token it is on and
+    // nothing else, so a credential-shaped key of any length is seen however
+    // the pieces were cut.
+    entry.scanner.push(text);
+    if (entry.scanner.failed && !entry.scanFailure) entry.scanFailure = entry.scanner.end();
     if (entry.preview.length < CAPTURE_PREVIEW_CHARS) entry.preview = (entry.preview + text).slice(0, CAPTURE_PREVIEW_CHARS);
-    if (entry.sink && entry.survivors.length === 0) {
+    if (entry.sink && !entry.scanFailure && !entry.storageFailed) {
       // Written and let go: the host holds one piece, not the capture.
-      entry.sink.write(text);
-    } else {
-      if (entry.sink) {
-        // Something credential-shaped is in this body, so it cannot be stored
-        // as it came. Stop writing and keep the pieces: the whole body is
-        // needed to redact it, and only a capture that has one pays for that.
-        entry.sink.abort();
-        entry.sink = undefined;
+      if (!this.write(entry, text)) {
+        // Storage failed. Everything after this is dropped; the row still
+        // happens, and it says the body is not there.
+        entry.pieces.length = 0;
       }
+    } else if (!entry.sink && !entry.storageFailed && !entry.scanFailure) {
       entry.pieces.push(text);
+    } else if (entry.sink) {
+      // The scan cannot vouch for this body: stop writing it and keep nothing.
+      this.discard(entry);
+      entry.pieces.length = 0;
     }
     entry.bytes += bytes;
     entry.next += 1;
@@ -275,11 +241,31 @@ export class CaptureAccumulator {
       this.end(key, "corrupt");
       return;
     }
-    if (entry.sink && entry.survivors.length === 0) {
+    const outcome = entry.scanFailure ?? entry.scanner.end();
+    if (!outcome.ok) {
+      // Either something credential-shaped survived, or the body could not be
+      // proved clean. Nothing is stored either way.
+      if (outcome.reason === "unredacted") {
+        this.options.log?.(
+          `provider capture: refused a body this app could not prove safe (${outcome.keys.join(", ")})`,
+        );
+      }
+      this.discard(entry);
+      const reason = outcome.reason;
+      this.release(key);
+      this.options.onAbsent({ cwd: entry.actor.cwd, sessionPath: entry.sessionPath, meta: entry.meta, reason });
+      return;
+    }
+    if (entry.storageFailed) {
+      this.discard(entry);
+      this.release(key);
+      this.options.onAbsent({ cwd: entry.actor.cwd, sessionPath: entry.sessionPath, meta: entry.meta, reason: "interrupted" });
+      return;
+    }
+    if (entry.sink) {
       // The store took every piece as it arrived; it verifies the digest of
       // what it has, and nothing here ever held the body.
-      const stored = entry.sink.finish();
-      entry.sink = undefined;
+      const stored = this.finishSink(entry);
       const preview = entry.preview;
       this.release(key);
       if (!stored) {
@@ -296,8 +282,8 @@ export class CaptureAccumulator {
       return;
     }
 
-    // No store to stream into, or a body that has to be defended: the pieces
-    // are here, and the digest is taken over them as they are.
+    // No store to stream into (a caller with none): the pieces are here, and
+    // the digest is taken over them as they are.
     const digest = createHash("sha256");
     for (const piece of entry.pieces) digest.update(piece);
     if (digest.digest("hex") !== entry.meta.sha256) {
@@ -305,26 +291,65 @@ export class CaptureAccumulator {
       this.options.onAbsent({ cwd: entry.actor.cwd, sessionPath: entry.sessionPath, meta: entry.meta, reason: "corrupt" });
       return;
     }
-    if (entry.survivors.length === 0) {
-      const pieces = entry.pieces.slice();
-      this.release(key);
-      this.options.onComplete({ cwd: entry.actor.cwd, sessionPath: entry.sessionPath, meta: entry.meta, body: "", pieces });
-      return;
-    }
-    const body = entry.pieces.join("");
-    const survivors = entry.survivors.slice();
+    const pieces = entry.pieces.slice();
     this.release(key);
-    const defended = this.defend(body, survivors);
-    if (!defended.ok) {
-      this.options.onAbsent({ cwd: entry.actor.cwd, sessionPath: entry.sessionPath, meta: entry.meta, reason: defended.reason });
-      return;
+    this.options.onComplete({ cwd: entry.actor.cwd, sessionPath: entry.sessionPath, meta: entry.meta, body: "", pieces });
+  }
+
+  /**
+   * Every call into the store is guarded: a full disk, a busy file or an
+   * implementation that throws must not reach the notification path this runs
+   * on, and must not leave a capture or a reservation open. The capture ends
+   * as one row that says its body is not there.
+   */
+  private openSink(meta: ProviderCaptureMeta): CaptureBodySink | undefined {
+    try {
+      return this.options.openBody?.(meta);
+    } catch (error) {
+      this.options.log?.(`provider capture: the log store could not take a body (${describe(error)})`);
+      return undefined;
     }
-    this.options.onComplete({
-      cwd: entry.actor.cwd,
-      sessionPath: entry.sessionPath,
-      meta: restate(entry.meta, defended.body, defended.redactedFields),
-      body: defended.body,
-    });
+  }
+
+  private write(entry: Open, text: string): boolean {
+    try {
+      entry.sink?.write(text);
+      return true;
+    } catch (error) {
+      this.options.log?.(`provider capture: the log store stopped taking a body (${describe(error)})`);
+      entry.storageFailed = true;
+      this.discard(entry);
+      return false;
+    }
+  }
+
+  private finishSink(entry: Open): { ref: string; bytes: number } | undefined {
+    const sink = entry.sink;
+    entry.sink = undefined;
+    if (!sink) return undefined;
+    try {
+      return sink.finish();
+    } catch (error) {
+      this.options.log?.(`provider capture: the log store could not finish a body (${describe(error)})`);
+      try {
+        sink.abort();
+      } catch {
+        /* best effort: the orphan sweep collects what this could not */
+      }
+      return undefined;
+    }
+  }
+
+  /** Stop writing and remove whatever was staged. Never throws. */
+  private discard(entry: Open): void {
+    const sink = entry.sink;
+    entry.sink = undefined;
+    if (!sink) return;
+    try {
+      sink.abort();
+    } catch {
+      /* best effort: the orphan sweep collects what this could not */
+    }
   }
 
   /**
@@ -351,41 +376,6 @@ export class CaptureAccumulator {
     for (const key of [...this.open.keys()]) this.end(key, "interrupted");
   }
 
-  /**
-   * The host's own guard over a body it did not redact itself.
-   *
-   * The producer runs the same projection this package exports, so a survivor
-   * means an older worker generation, a bug or something hostile. The body is
-   * redacted again here rather than stored as it arrived, and the log line
-   * names the **keys** that were caught, never their values.
-   */
-  private defend(body: string, survivors: string[]): DefenceResult {
-    this.options.log?.(
-      `provider capture: ${survivors.length} credential-shaped field(s) were not redacted by the worker (${survivors.join(", ")}); redacted here`,
-    );
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(body);
-    } catch {
-      // Not parseable and carrying something credential-shaped: nothing is
-      // stored, and the row says so. The caller emits that outcome, and only
-      // that one.
-      return { ok: false, reason: "corrupt" };
-    }
-    // The same verified projection every durable path uses: it redacts, and
-    // then reads its own output back. If anything credential-shaped is still
-    // there, this body is not storable at all.
-    const projected = redactForStorage(parsed);
-    if (!projected.ok) {
-      this.options.log?.(
-        `provider capture: refused a body with ${projected.survivors.length} credential-shaped field(s) that redaction could not remove ` +
-          `(${projected.survivors.join(", ")})`,
-      );
-      return { ok: false, reason: "unredacted" };
-    }
-    return { ok: true, body: projected.body, redactedFields: projected.redactedFields };
-  }
-
   /** End one capture with a reason, releasing its pieces. */
   private end(key: string, reason: ProviderCaptureOmission): void {
     const entry = this.open.get(key);
@@ -398,8 +388,7 @@ export class CaptureAccumulator {
     const entry = this.open.get(key);
     if (!entry) return;
     // Anything written for a capture that is ending goes with it.
-    entry.sink?.abort();
-    entry.sink = undefined;
+    this.discard(entry);
     this.bytes = Math.max(0, this.bytes - entry.bytes);
     entry.pieces.length = 0;
     this.open.delete(key);

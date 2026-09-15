@@ -321,7 +321,10 @@ it("keeps recording rows, without bodies, when the file belongs to a newer app",
   const rows = store.query({ limit: 10 }).entries;
   expect(rows.some((entry) => entry.summary === "after")).toBe(true);
   expect(rows.find((entry) => entry.summary === "after")?.detailRef).toBeUndefined();
-  expect(store.stats().retention.retainedBodyBytes).toBe(0);
+  // Unavailable, not zero: the file may hold body bytes this release cannot
+  // read, and a zero would be a measurement nobody took.
+  expect(store.stats().retention.bodyStore).toBe("unavailable");
+  expect(store.stats().retention.retainedBodyBytes).toBeUndefined();
 });
 
 it("upgrades an existing store in place", () => {

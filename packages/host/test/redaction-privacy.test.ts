@@ -98,13 +98,11 @@ it("catches a credential that only appears at serialization time, and keeps none
   expect(JSON.stringify(entry)).toContain("[redacted]");
 });
 
-it("cleans a survivor the producer left in a chunked body, and keeps nothing of it", () => {
+it("refuses a chunked body whose credential the producer left in, and keeps none of it", () => {
   const { log, file } = open();
-  // The producer should have redacted this; the host's defence does it instead
-  // and stores the cleaned bytes under their own digest. (A body whose text
-  // still trips the scan after a parse/serialize round trip cannot be written
-  // in valid JSON, so the `unredacted` refusal is proved on the in-process
-  // paths above rather than invented here.)
+  // The producer should have redacted this. The host reads the body as it
+  // arrives, sees the credential-shaped field, stores nothing and records the
+  // request with that reason.
   const body = JSON.stringify({ model: "m", api_key: CANARY, messages: [] });
   const meta: ProviderCaptureMeta = {
     captureId: "c-0f0f0f0f0f0f0f0f",
@@ -115,45 +113,23 @@ it("cleans a survivor the producer left in a chunked body, and keeps nothing of 
     redactedFields: 0,
     summary: { model: "m", messages: 0 },
   };
-  const stored: string[] = [];
+  const reasons: string[] = [];
   const accumulator = new CaptureAccumulator({
-    onComplete: ({ cwd, sessionPath, meta: restated, body: clean }) => {
-      stored.push(clean);
-      log.recordProviderCapture(cwd, sessionPath, restated, clean);
+    openBody: (m) => log.openProviderBody(m),
+    onComplete: ({ cwd, sessionPath, meta: restated, body: clean, pieces, stored }) =>
+      stored ? log.recordProviderStored(cwd, sessionPath, restated, stored) : log.recordProviderCapture(cwd, sessionPath, restated, clean, pieces),
+    onAbsent: ({ cwd, sessionPath, meta: restated, reason }) => {
+      reasons.push(reason);
+      log.recordProviderAbsent(cwd, sessionPath, restated, reason);
     },
-    onAbsent: ({ cwd, sessionPath, meta: restated, reason }) => log.recordProviderAbsent(cwd, sessionPath, restated, reason),
     log: (message) => logs.push(message),
   });
   accumulator.begin(ACTOR, "/s", meta);
   accumulator.chunk(ACTOR, meta.captureId, 0, body);
   accumulator.finish(ACTOR, meta.captureId, 1, meta.bytes);
 
-  expect(stored).toHaveLength(1);
-  expect(JSON.parse(stored[0]!).api_key).toBe("[redacted]");
-  assertNoCanary(log, file, "defended body");
+  expect(reasons).toEqual(["unredacted"]);
+  assertNoCanary(log, file, "refused chunked body");
   expect(logs.join("\n")).toContain("api_key");
-});
-
-it("keeps it out of a capture recorded through the deep path, preview included", () => {
-  const { log, file } = open();
-  const deep = deepSecret();
-  const body = JSON.stringify(deep);
-  const meta: ProviderCaptureMeta = {
-    captureId: "c-1a1a1a1a1a1a1a1a",
-    at: new Date().toISOString(),
-    bytes: Buffer.byteLength(body, "utf8"),
-    sha256: createHash("sha256").update(body).digest("hex"),
-    preview: body.slice(0, 40),
-    redactedFields: 0,
-    summary: { model: "m", messages: 1 },
-  };
-  const accumulator = new CaptureAccumulator({
-    onComplete: ({ cwd, sessionPath, meta: stored, body: clean }) => log.recordProviderCapture(cwd, sessionPath, stored, clean),
-    onAbsent: ({ cwd, sessionPath, meta: stored, reason }) => log.recordProviderAbsent(cwd, sessionPath, stored, reason),
-    log: (message) => logs.push(message),
-  });
-  accumulator.begin(ACTOR, "/s", meta);
-  accumulator.chunk(ACTOR, meta.captureId, 0, body);
-  accumulator.finish(ACTOR, meta.captureId, 1, meta.bytes);
-  assertNoCanary(log, file, "deep capture");
+  expect(accumulator.retained()).toEqual({ open: 0, bytes: 0, reservedBytes: 0 });
 });

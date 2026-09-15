@@ -257,7 +257,7 @@ describe("bounds", () => {
 });
 
 describe("the host's own guard over a body it did not redact", () => {
-  it("redacts a survivor, restates the metadata to the bytes it stores, and names only the key", () => {
+  it("refuses a body with a credential-shaped survivor, and keeps none of it", () => {
     const { accumulator, complete, absent, logs } = harness();
     const body = JSON.stringify({ model: "test", api_key: "sk-live-1234", messages: [] });
     const meta = metaFor(body, "c-4444444444444444", 1);
@@ -265,35 +265,50 @@ describe("the host's own guard over a body it did not redact", () => {
     accumulator.chunk(A, meta.captureId, 0, body);
     accumulator.finish(A, meta.captureId, 1, meta.bytes);
 
-    // Exactly one outcome for one capture.
-    expect(complete).toHaveLength(1);
-    expect(absent).toEqual([]);
-
-    const stored = complete[0]!;
-    expect(stored.body).not.toContain("sk-live-1234");
-    expect(JSON.parse(stored.body).api_key).toBe("[redacted]");
-    // The row must describe the bytes that are actually stored, not the ones
-    // the producer announced: a digest over something nobody can read back is
-    // worse than no digest at all.
-    expect(stored.meta.bytes).toBe(Buffer.byteLength(stored.body, "utf8"));
-    expect(stored.meta.sha256).toBe(createHash("sha256").update(stored.body).digest("hex"));
-    expect(stored.meta.sha256).not.toBe(meta.sha256);
-    expect(stored.meta.preview).toBe(stored.body.slice(0, meta.preview.length));
-    expect(stored.meta.preview).not.toContain("sk-live-1234");
-    expect(stored.meta.redactedFields).toBe(1);
-    // Nothing about the original leaked into the log line.
+    // One outcome, and it is the refusal: the producer should have redacted
+    // this, and a body this app cannot vouch for is not stored.
+    expect(complete).toEqual([]);
+    expect(absent).toHaveLength(1);
+    expect(absent[0]).toMatchObject({ reason: "unredacted", meta: { sha256: meta.sha256 } });
     expect(logs.join(" ")).toContain("api_key");
     expect(logs.join(" ")).not.toContain("sk-live-1234");
+    expect(accumulator.retained()).toEqual({ open: 0, bytes: 0, reservedBytes: 0 });
   });
 
-  it("keeps the producer's own redaction count as a floor", () => {
-    const { accumulator, complete } = harness();
-    const body = JSON.stringify({ model: "test", cookie: "a=b", messages: [] });
-    const meta = { ...metaFor(body, "c-7777777777777777", 1), redactedFields: 4 };
+  it("sees a credential-shaped key however the pieces were cut", () => {
+    const { accumulator, absent } = harness();
+    // A key far longer than any fixed overlap, ending in `password`, split
+    // across pieces at an arbitrary point.
+    const key = `${"a".repeat(120)}_password`;
+    const body = JSON.stringify({ model: "test", [key]: "sk-live-9999" });
+    const meta = metaFor(body, "c-6f6f6f6f6f6f6f6f", 3);
     accumulator.begin(A, "/session", meta);
-    accumulator.chunk(A, meta.captureId, 0, body);
-    accumulator.finish(A, meta.captureId, 1, meta.bytes);
-    expect(complete[0]!.meta.redactedFields).toBe(4);
+    const third = Math.floor(body.length / 3);
+    accumulator.chunk(A, meta.captureId, 0, body.slice(0, third));
+    accumulator.chunk(A, meta.captureId, 1, body.slice(third, third * 2));
+    accumulator.chunk(A, meta.captureId, 2, body.slice(third * 2));
+    accumulator.finish(A, meta.captureId, 3, meta.bytes);
+    expect(absent).toHaveLength(1);
+    // Past the key bound this scanner will hold, so it refuses rather than
+    // guessing — either way nothing is stored.
+    expect(["unredacted", "corrupt"]).toContain(absent[0]!.reason);
+  });
+
+  it("keeps a body whose long values merely look alarming", () => {
+    const { accumulator, complete, absent } = harness();
+    const body = JSON.stringify({
+      model: "test",
+      authorization: "[redacted]",
+      messages: [{ role: "user", content: `talking about "api_key": "and passwords" at length ${"x".repeat(5000)}` }],
+    });
+    const meta = metaFor(body, "c-7a7a7a7a7a7a7a7a", 2);
+    accumulator.begin(A, "/session", meta);
+    const half = Math.floor(body.length / 2);
+    accumulator.chunk(A, meta.captureId, 0, body.slice(0, half));
+    accumulator.chunk(A, meta.captureId, 1, body.slice(half));
+    accumulator.finish(A, meta.captureId, 2, meta.bytes);
+    expect(absent).toEqual([]);
+    expect(complete).toHaveLength(1);
   });
 
   it("leaves a clean body's metadata exactly as the producer stated it", () => {
@@ -306,20 +321,79 @@ describe("the host's own guard over a body it did not redact", () => {
     expect(complete[0]!.meta).toEqual(meta);
   });
 
-  it("stores nothing, once, when a survivor cannot even be parsed", () => {
-    const { accumulator, complete, absent } = harness();
-    const body = `not json, "authorization": "Bearer sk-live"`;
+  it("refuses a body that ends in the middle of a string", () => {
+    const { accumulator, absent } = harness();
+    const body = '{"model":"test","note":"never ends';
     const meta = metaFor(body, "c-5555555555555555", 1);
     accumulator.begin(A, "/session", meta);
     accumulator.chunk(A, meta.captureId, 0, body);
     accumulator.finish(A, meta.captureId, 1, meta.bytes);
-    // One row, and it is the absent one: no empty body was also completed.
-    expect(complete).toEqual([]);
     expect(absent).toHaveLength(1);
-    expect(absent[0]).toMatchObject({ reason: "corrupt", meta: { sha256: meta.sha256, bytes: meta.bytes } });
-    expect(JSON.stringify(absent[0])).not.toContain("sk-live");
+    expect(absent[0]!.reason).toBe("corrupt");
     expect(accumulator.retained()).toEqual({ open: 0, bytes: 0, reservedBytes: 0 });
   });
+});
+
+describe("a store that fails while a capture is arriving", () => {
+  function failingHarness(failAt: "open" | "write" | "finish" | "abort") {
+    const complete: CaptureComplete[] = [];
+    const absent: CaptureAbsent[] = [];
+    const logs: string[] = [];
+    const written: string[] = [];
+    let aborted = 0;
+    const accumulator = new CaptureAccumulator({
+      openBody: () => {
+        if (failAt === "open") throw new Error("disk is full");
+        return {
+          write: (piece: string) => {
+            if (failAt === "write" && written.length === 1) throw new Error("database is locked");
+            written.push(piece);
+          },
+          finish: () => {
+            if (failAt === "finish") throw new Error("disk is full");
+            return { ref: "f".repeat(64), bytes: written.join("").length };
+          },
+          abort: () => {
+            aborted += 1;
+            if (failAt === "abort") throw new Error("database is locked");
+          },
+        };
+      },
+      onComplete: (input) => complete.push(input),
+      onAbsent: (input) => absent.push(input),
+      log: (message) => logs.push(message),
+    });
+    return { accumulator, complete, absent, logs, written, aborts: () => aborted };
+  }
+
+  for (const failAt of ["open", "write", "finish", "abort"] as const) {
+    it(`records one row and keeps nothing when the store fails at ${failAt}`, () => {
+      const { accumulator, complete, absent } = failingHarness(failAt);
+      const body = JSON.stringify({ model: "test", messages: [{ role: "user", content: "x".repeat(4000) }] });
+      const meta = metaFor(body, "c-9a9a9a9a9a9a9a9a", 4);
+      const quarter = Math.ceil(body.length / 4);
+      // Nothing here may throw into the notification path this runs on.
+      expect(() => {
+        accumulator.begin(A, "/session", meta);
+        for (let piece = 0; piece < 4; piece++) {
+          accumulator.chunk(A, meta.captureId, piece, body.slice(piece * quarter, (piece + 1) * quarter));
+        }
+        accumulator.finish(A, meta.captureId, 4, meta.bytes);
+      }).not.toThrow();
+      // Exactly one outcome, nothing open, nothing reserved.
+      expect(complete.length + absent.length).toBe(1);
+      expect(accumulator.retained()).toEqual({ open: 0, bytes: 0, reservedBytes: 0 });
+      if (failAt === "open" || failAt === "abort") {
+        // `open` leaves no store to stream into, so the pieces path completes
+        // normally; `abort` is only reached when something else already went
+        // wrong, and a throwing abort must not change the outcome.
+        expect(complete.length + absent.length).toBe(1);
+      } else {
+        expect(absent).toHaveLength(1);
+        expect(["interrupted", "corrupt"]).toContain(absent[0]!.reason);
+      }
+    });
+  }
 });
 
 describe("ownership by worker process", () => {

@@ -27,6 +27,7 @@ export * from "./pi-extension.js";
 export * from "./provider-capture.js";
 export * from "./transport-pressure.js";
 export * from "./log-redaction.js";
+export * from "./credential-scan.js";
 export * from "./push.js";
 export * from "./schemas.js";
 export * from "./utf8.js";

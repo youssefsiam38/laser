@@ -89,25 +89,99 @@ export function encodeCapture(payload: unknown): EncodedCapture {
 /**
  * Walk a body as bounded UTF-8 pieces, one at a time.
  *
- * Never cut inside a multi-byte sequence: the walk steps back over
- * continuation bytes (0b10xxxxxx) so each piece decodes on its own.
+ * Over the string's own code units, never over a Buffer of the whole body:
+ * converting it first would hold a second copy of a multi-megabyte capture,
+ * which is the thing this slice exists to not do. Each piece is measured in
+ * the bytes it will really occupy — one, two, three or four per code point,
+ * three for an unpaired surrogate, which is what a UTF-8 encoder writes for
+ * one — and no piece ever splits a surrogate pair.
  */
 export function* utf8Chunks(body: string, chunkBytes = CAPTURE_CHUNK_BYTES): Generator<string> {
-  const buffer = Buffer.from(body, "utf8");
-  if (buffer.length === 0) {
+  if (body.length === 0) {
     yield "";
     return;
   }
-  let offset = 0;
-  while (offset < buffer.length) {
-    let end = Math.min(offset + chunkBytes, buffer.length);
-    while (end > offset && end < buffer.length && (buffer[end]! & 0xc0) === 0x80) end -= 1;
-    yield buffer.toString("utf8", offset, end);
-    offset = end;
+  let start = 0;
+  let bytes = 0;
+  let index = 0;
+  while (index < body.length) {
+    const code = body.charCodeAt(index);
+    let width: number;
+    let step: number;
+    if (code < 0x80) {
+      width = 1;
+      step = 1;
+    } else if (code < 0x800) {
+      width = 2;
+      step = 1;
+    } else if (code >= 0xd800 && code <= 0xdbff && index + 1 < body.length) {
+      const low = body.charCodeAt(index + 1);
+      if (low >= 0xdc00 && low <= 0xdfff) {
+        width = 4;
+        step = 2;
+      } else {
+        // An unpaired high surrogate: an encoder writes the replacement
+        // character, which is three bytes.
+        width = 3;
+        step = 1;
+      }
+    } else {
+      width = 3;
+      step = 1;
+    }
+    if (bytes > 0 && bytes + width > chunkBytes) {
+      yield body.slice(start, index);
+      start = index;
+      bytes = 0;
+    }
+    bytes += width;
+    index += step;
   }
+  if (start < body.length) yield body.slice(start, body.length);
 }
 
-/** The same pieces, collected. */
+/** How many pieces {@link utf8Chunks} will produce, without building any. */
+export function countUtf8Chunks(body: string, chunkBytes = CAPTURE_CHUNK_BYTES): number {
+  let count = 0;
+  let bytes = 0;
+  let index = 0;
+  if (body.length === 0) return 1;
+  let started = false;
+  while (index < body.length) {
+    const code = body.charCodeAt(index);
+    let width: number;
+    let step: number;
+    if (code < 0x80) {
+      width = 1;
+      step = 1;
+    } else if (code < 0x800) {
+      width = 2;
+      step = 1;
+    } else if (code >= 0xd800 && code <= 0xdbff && index + 1 < body.length) {
+      const low = body.charCodeAt(index + 1);
+      if (low >= 0xdc00 && low <= 0xdfff) {
+        width = 4;
+        step = 2;
+      } else {
+        width = 3;
+        step = 1;
+      }
+    } else {
+      width = 3;
+      step = 1;
+    }
+    if (bytes > 0 && bytes + width > chunkBytes) {
+      count += 1;
+      bytes = 0;
+    }
+    bytes += width;
+    index += step;
+    started = true;
+  }
+  return started ? count + 1 : count;
+}
+
+/** The same pieces, collected. For callers that really want the list. */
 export function chunkBody(body: string, chunkBytes = CAPTURE_CHUNK_BYTES): string[] {
   return [...utf8Chunks(body, chunkBytes)];
 }
@@ -136,9 +210,13 @@ async function streamCapture(input: {
 }): Promise<void> {
   const { send, link, meta, body, bytes, reservation } = input;
   try {
-    const chunks = [...utf8Chunks(body, CAPTURE_CHUNK_BYTES)];
-    send({ type: "lasercode/provider/request/begin", ...meta, chunks: chunks.length });
-    for (const [index, text] of chunks.entries()) {
+    // Counted without building anything, so `begin` can declare it and the
+    // pieces are still produced one at a time.
+    const total = countUtf8Chunks(body, CAPTURE_CHUNK_BYTES);
+    send({ type: "lasercode/provider/request/begin", ...meta, chunks: total });
+    let index = -1;
+    for (const text of utf8Chunks(body, CAPTURE_CHUNK_BYTES)) {
+      index += 1;
       let pending = link?.pendingBytes() ?? 0;
       for (let attempt = 0; attempt < CAPTURE_DRAIN_ATTEMPTS && pending > WORKER_PIPE_SOFT_BYTES; attempt++) {
         // Only when it matters: an idle link never waits.
@@ -151,7 +229,7 @@ async function streamCapture(input: {
       }
       send({ type: "lasercode/provider/request/chunk", captureId: meta.captureId, index, text });
     }
-    send({ type: "lasercode/provider/request/end", captureId: meta.captureId, chunks: chunks.length, bytes });
+    send({ type: "lasercode/provider/request/end", captureId: meta.captureId, chunks: total, bytes });
   } catch {
     // A send or a drain that threw. The capture stops here and says so; the
     // turn that produced it never learns about any of this.
@@ -245,9 +323,22 @@ export const providerLogModule: LaserModule = {
     else pi.on("before_provider_request", async (event, ctx) => capture(event, ctx));
     pi.on("after_provider_response", async (event: { status: number; headers: Record<string, string> }) => {
       const at = new Date().toISOString();
-      // Bounded: a capture that cannot finish must not hold a response row for
-      // ever, and a late response row is better than a lost one.
-      await Promise.race([settling, new Promise<void>((resolve) => setTimeout(resolve, RESPONSE_WAIT_MS).unref?.())]).catch(() => {});
+      // Bounded, and the bound is cancelled the moment the capture settles: a
+      // response that waits for nothing must not leave a timer behind it. A
+      // capture that cannot finish still lets the response through — a late
+      // row is better than a lost one.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const deadline = new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, RESPONSE_WAIT_MS);
+        timer.unref?.();
+      });
+      try {
+        await Promise.race([settling, deadline]);
+      } catch {
+        /* a capture's own failure is not the response's business */
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
       send({ type: "lasercode/provider/response", at, status: event.status, headers: event.headers });
       return undefined;
     });

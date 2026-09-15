@@ -771,7 +771,10 @@ export class LogStore {
         maxAgeDays: Math.round(this.maxAgeMs / (24 * 60 * 60 * 1000)),
         bodyBudgetBytes: this.bodyBudget,
         bodiesPerSession: this.bodiesPerSession,
-        retainedBodyBytes: this.retainedBodyBytes,
+        // Omitted, not zeroed, when bodies cannot be read in this file: it may
+        // hold bytes this release cannot account for (RP-7).
+        ...(this.content_.unavailable ? {} : { retainedBodyBytes: this.retainedBodyBytes }),
+        bodyStore: this.content_.unavailable ? ("unavailable" as const) : ("available" as const),
       },
       providerResponseBodies: "unavailable",
     };

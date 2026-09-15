@@ -2,7 +2,7 @@ import { expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createHash } from "node:crypto";
 import { CAPTURE_CHUNK_BYTES, CAPTURE_MAX_BYTES, WORKER_PIPE_SOFT_BYTES, type ProviderCaptureLink } from "@lasercode/protocol";
-import { chunkBody, encodeCapture, providerLogModule, summarize } from "../src/modules/provider-log.js";
+import { chunkBody, countUtf8Chunks, encodeCapture, providerLogModule, summarize, utf8Chunks } from "../src/modules/provider-log.js";
 import { CaptureReservations } from "../../worker/src/capture-reservations.js";
 
 const ctx = {
@@ -335,10 +335,63 @@ it("keeps a response behind the request it answers", async () => {
   expect(settled).toBeGreaterThan(terminal);
 });
 
+it("leaves no timer behind an ordinary response", async () => {
+  const { handlers, send } = await activate({ pendingBytes: () => 0, retainBodies: () => true, drain: async () => {} });
+  send.mockImplementation(() => {});
+  await handlers.get("before_provider_request")!({ payload: payloadOf(2 * 1024 * 1024) }, ctx);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const before = process.getActiveResourcesInfo().filter((kind) => kind === "Timeout").length;
+  await handlers.get("after_provider_response")!({ status: 200, headers: {} }, ctx);
+  const after = process.getActiveResourcesInfo().filter((kind) => kind === "Timeout").length;
+  // The wait is cancelled when the capture wins it: an ordinary turn does not
+  // arm a two-second timer per response.
+  expect(after).toBeLessThanOrEqual(before);
+});
+
 it("still reports responses", async () => {
   const { handlers, send } = await activate();
   await handlers.get("after_provider_response")!({ status: 200, headers: { "content-type": "application/json" } }, ctx);
   expect(send.mock.calls[0]![0]).toMatchObject({ type: "lasercode/provider/response", status: 200 });
+});
+
+it("produces pieces one at a time, without a copy of the body", () => {
+  // The generator must not convert the whole body first: that was a second
+  // copy of a multi-megabyte capture, and comments said otherwise.
+  const from = Buffer.from;
+  const large: number[] = [];
+  const alloc = Buffer.allocUnsafe;
+  try {
+    (Buffer as unknown as { from: typeof Buffer.from }).from = ((value: unknown, ...rest: unknown[]) => {
+      if (typeof value === "string" && value.length > 512 * 1024) large.push(value.length);
+      return (from as (v: unknown, ...r: unknown[]) => Buffer)(value, ...rest);
+    }) as typeof Buffer.from;
+    const body = JSON.stringify({ model: "m", content: "z".repeat(4 * 1024 * 1024) });
+    const iterator = utf8Chunks(body, CAPTURE_CHUNK_BYTES);
+    const first = iterator.next();
+    expect(first.done).toBe(false);
+    expect(Buffer.byteLength(first.value as string, "utf8")).toBeLessThanOrEqual(CAPTURE_CHUNK_BYTES);
+    // Nothing body-sized was converted to produce that piece.
+    expect(large).toEqual([]);
+    expect(countUtf8Chunks(body, CAPTURE_CHUNK_BYTES)).toBe(Math.ceil(Buffer.byteLength(body, "utf8") / CAPTURE_CHUNK_BYTES));
+    expect(large).toEqual([]);
+    // And the pieces still reassemble exactly.
+    expect([...utf8Chunks(body, CAPTURE_CHUNK_BYTES)].join("")).toBe(body);
+  } finally {
+    (Buffer as unknown as { from: typeof Buffer.from }).from = from;
+    (Buffer as unknown as { allocUnsafe: typeof Buffer.allocUnsafe }).allocUnsafe = alloc;
+  }
+});
+
+it("counts and cuts multi-byte text the same way", () => {
+  for (const sample of ["日本語".repeat(20_000), "🚀".repeat(20_000), `${"a".repeat(1000)}🚀${"b".repeat(1000)}`]) {
+    const pieces = [...utf8Chunks(sample, 1024)];
+    expect(pieces.join("")).toBe(sample);
+    expect(pieces.length).toBe(countUtf8Chunks(sample, 1024));
+    for (const piece of pieces) {
+      expect(Buffer.byteLength(piece, "utf8")).toBeLessThanOrEqual(1024);
+      expect(piece).not.toContain("\ufffd");
+    }
+  }
 });
 
 it("splits chunks on UTF-8 boundaries", () => {

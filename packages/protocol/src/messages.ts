@@ -855,8 +855,19 @@ export interface LogStats {
     bodyBudgetBytes?: number;
     /** Provider requests per session whose body is kept in full (D-245). */
     bodiesPerSession?: number;
-    /** Bodies actually stored right now, in bytes. */
+    /**
+     * Bodies actually stored right now, in bytes. **Absent** when the number
+     * is not knowable — a file whose body tables a newer release wrote may
+     * hold bytes this one cannot read, and reporting zero for them would be a
+     * measurement nobody took (RP-7). `bodyStore` says which it is.
+     */
     retainedBodyBytes?: number;
+    /**
+     * Whether request bodies can be read and written in this file at all.
+     * `unavailable` means the file belongs to a newer release; rows, sessions
+     * and search are unaffected.
+     */
+    bodyStore?: "available" | "unavailable";
   };
   /**
    * Pi 0.85 gives extensions the complete provider REQUEST but only the
