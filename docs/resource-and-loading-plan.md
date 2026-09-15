@@ -13,7 +13,7 @@ Authoritative detail, evidence and ownership live in `STATUS_DETAILED.md`; `STAT
 | RP-1 | M18-T1 | done | `1628349`; build, protocol 153, host 403, desktop 160 |
 | RP-2 initial | M18-T2 | done — reviewed harness and sanitized finding integrated through `ad8c188`; full A refuses B at unchanged renderer ceiling with zero survivors | RP-1 |
 | RP-2 repeat | M18-T15 | todo — unchanged two-run baseline after containment | RP-4..RP-8 |
-| RP-3 | M18-T3 | reviewed UI checkpoint integrated; T4-T7 counters/browser gate pending | RP-1 |
+| RP-3 | M18-T3 | browser gate/review integrated `a0111f9`; T4-T7 typed counters pending | RP-1 |
 | RP-4 | M18-T4 | in progress — safety/replay/unload plan approved; waits on RP-6 membership contract | RP-2 |
 | RP-5 | M18-T5 | in progress — renderer lifetime investigation/plan | RP-2 |
 | RP-6 | M18-T6 | in progress — canonical membership/task retention plan approved; implementation active | RP-2 |
@@ -23,7 +23,7 @@ Authoritative detail, evidence and ownership live in `STATUS_DETAILED.md`; `STAT
 | RP-10 | M18-T10 | todo | RP-5, RP-9 |
 | RP-11 | M18-T11 | todo | RP-10 |
 | RP-12 | M18-T12 | done — integrated `e9e3d8d` | RP-9 |
-| RP-13 | M18-T13 | in progress — host boundary `00db89f` and reviewed client/storage isolation through `1e4eeba` integrated; browser matrix pending | RP-12 |
+| RP-13 | M18-T13 | done — host policy/storage isolation through `1e4eeba`; reviewed real-host browser matrices `a0111f9` | RP-12 |
 | RP-14 | M18-T14 | todo | RP-1..RP-13, M18-T15 |
 
 ## Outcome
