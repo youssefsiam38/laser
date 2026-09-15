@@ -86,6 +86,30 @@ describe("resource methods at the socket boundary", () => {
     expect((exported as { result: { bytes: number } }).result.bytes).toBeGreaterThan(0);
   });
 
+  it("answers the newest window without a cursor, and still pages forward with one", async () => {
+    const { router, resources } = harness();
+    for (let index = 0; index < 100; index += 1) await resources.snapshot();
+
+    // A viewer opening on a host that has been sampling for a while asks one
+    // question and gets the present, not the first minute of the hour.
+    const newest = await router.handle(request(10, "resource/history", { limit: 60 }), LOCAL_ACCESS);
+    const window = (newest as { result: { snapshots: Array<{ id: string }> } }).result.snapshots;
+    expect(window).toHaveLength(60);
+    expect(window[0]!.id).toBe("rs_41");
+    expect(window.at(-1)!.id).toBe("rs_100");
+
+    const small = await router.handle(request(11, "resource/history", { limit: 2 }), LOCAL_ACCESS);
+    expect((small as { result: { snapshots: Array<{ id: string }> } }).result.snapshots.map((entry) => entry.id)).toEqual(["rs_99", "rs_100"]);
+
+    // A cursor still means "continue from here", forward, without skipping.
+    const continued = await router.handle(request(12, "resource/history", { sinceId: "rs_2", limit: 3 }), LOCAL_ACCESS);
+    expect((continued as { result: { snapshots: Array<{ id: string }> } }).result.snapshots.map((entry) => entry.id)).toEqual(["rs_3", "rs_4", "rs_5"]);
+
+    // And an id this host never had pages from the start rather than refusing.
+    const unknown = await router.handle(request(13, "resource/history", { sinceId: "rs_nope", limit: 2 }), LOCAL_ACCESS);
+    expect((unknown as { result: { snapshots: Array<{ id: string }> } }).result.snapshots.map((entry) => entry.id)).toEqual(["rs_1", "rs_2"]);
+  });
+
   it("takes Electron metrics from the local app and refuses them from anywhere else", async () => {
     const { router } = harness();
     const report = {

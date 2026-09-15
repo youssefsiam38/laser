@@ -67,10 +67,33 @@ describe("the diagnostic export", () => {
     expect(exported.bytes).toBeLessThanOrEqual(64 * 1024);
   });
 
+  it("exports the newest retained snapshots, and says so when retention held more", async () => {
+    // Well inside the byte bound: what is under test here is *which* window
+    // the document carries, not the trimmer.
+    const resources = new ResourceService({ collector: wideCollector(2), platform: "linux", hostPid: 200, minIntervalMs: 0, now: () => NOW });
+    for (let index = 0; index < 100; index += 1) await resources.snapshot();
+
+    const exported = resources.export();
+    const parsed = JSON.parse(exported.document) as { truncated: boolean; snapshots: Array<{ id: string }>; retention: { snapshots: number } };
+    expect(parsed.retention.snapshots).toBe(100);
+    expect(parsed.snapshots).toHaveLength(60);
+    // The person exported because of something that just happened: the newest
+    // sample is in the document, and the oldest sixty are not.
+    expect(parsed.snapshots[0]!.id).toBe("rs_41");
+    expect(parsed.snapshots.at(-1)!.id).toBe("rs_100");
+    expect(parsed.snapshots.map((snapshot) => snapshot.id)).not.toContain("rs_1");
+    // Forty samples were left out by the document's own cap, with room to
+    // spare in every byte bound: that is still an omission, and it is said.
+    expect(exported.truncated).toBe(true);
+    expect(parsed.truncated).toBe(true);
+    expect(exported.bytes).toBeLessThan(RESOURCE_EXPORT_MAX_BYTES);
+  });
+
   it("is within the real bound for an ordinary machine", async () => {
     const resources = new ResourceService({ collector: wideCollector(20), platform: "linux", hostPid: 200, minIntervalMs: 0, now: () => NOW });
     await resources.snapshot();
     const exported = resources.export();
+    // Everything retained is in the document, so nothing was left out.
     expect(exported.truncated).toBe(false);
     expect(exported.bytes).toBeLessThan(RESOURCE_EXPORT_MAX_BYTES);
     expect(() => JSON.parse(exported.document)).not.toThrow();

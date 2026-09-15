@@ -78,6 +78,21 @@ export class ResourceHistory {
   }
 
   /**
+   * The newest `limit` snapshots, still oldest-first.
+   *
+   * `page()` is a forward pager and has to stay one: a caller walking with a
+   * cursor must be able to visit the middle of the history. "The last few
+   * minutes", which is what a trend and a diagnostic document actually want,
+   * is a different question — asking it by walking sixty pages would be
+   * absurd, and answering it with the *oldest* window is simply wrong.
+   */
+  recent(limit: number = RESOURCE_HISTORY_PAGE_MAX): ResourceSnapshot[] {
+    this.enforce();
+    const bounded = Math.min(Math.max(1, limit), RESOURCE_HISTORY_PAGE_MAX);
+    return this.entries.slice(-bounded).map((entry) => entry.snapshot);
+  }
+
+  /**
    * Snapshot retention only. Spawn records are bounded on their own, by the
    * ownership registry, and the service joins the two into the reply.
    */

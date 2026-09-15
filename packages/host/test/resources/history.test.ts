@@ -118,4 +118,25 @@ describe("retained history", () => {
     expect(walked).toEqual(["rs_1", "rs_2", "rs_3", "rs_4", "rs_5"]);
     expect(history.page({ sinceId: "nope" })).toHaveLength(5);
   });
+
+  it("answers the newest window in order, bounded, without walking the whole history", () => {
+    const history = new ResourceHistory();
+    for (let index = 1; index <= 100; index += 1) history.add(snapshot(`rs_${index}`, 1));
+    // The tail is the tail whatever the caller asks for, and it is still
+    // chronological: a trend drawn from it reads left to right as time.
+    expect(history.recent(3).map((entry) => entry.id)).toEqual(["rs_98", "rs_99", "rs_100"]);
+    expect(history.recent().map((entry) => entry.id)).toEqual(
+      Array.from({ length: 60 }, (_, index) => `rs_${index + 41}`),
+    );
+    // Bounded the same way a page is, at both ends.
+    expect(history.recent(1000)).toHaveLength(60);
+    expect(history.recent(0)).toHaveLength(1);
+    expect(history.recent(5).at(-1)!.id).toBe("rs_100");
+    // And it does not disturb forward paging, which still starts at the start.
+    expect(history.page({ limit: 2 }).map((entry) => entry.id)).toEqual(["rs_1", "rs_2"]);
+  });
+
+  it("has nothing to say about an empty history rather than inventing a sample", () => {
+    expect(new ResourceHistory().recent(10)).toEqual([]);
+  });
 });

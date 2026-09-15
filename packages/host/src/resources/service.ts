@@ -31,6 +31,7 @@
 import {
   RESOURCE_CROSS_CHECK_TOLERANCE,
   RESOURCE_EXPORT_MAX_BYTES,
+  RESOURCE_HISTORY_PAGE_MAX,
   RESOURCE_MEASURE_CONCURRENCY,
   RESOURCE_MIN_COLLECT_INTERVAL_MS,
   RESOURCE_REPORT_MAX_AGE_MS,
@@ -102,6 +103,9 @@ interface VerifiedReport {
   rejected: number;
 }
 
+/** How many retained snapshots one diagnostic document carries, at most. */
+const RESOURCE_EXPORT_SNAPSHOT_MAX = RESOURCE_HISTORY_PAGE_MAX;
+
 const ELECTRON_ROLES: Array<[RegExp, ResourceProcessRole]> = [
   [/^browser$/i, "desktop_main"],
   [/^(tab|renderer)$/i, "desktop_renderer"],
@@ -155,17 +159,29 @@ export class ResourceService {
     return { snapshot, retention: this.retention() };
   }
 
+  /**
+   * A cursor means "continue from here" and is answered forward, sample by
+   * sample. No cursor means "what is happening now": a viewer that opens on a
+   * host holding an hour of history must see the present, not the hour's first
+   * minute, and it must not have to walk sixty pages to get there.
+   */
   historyPage(params: { sinceId?: string; limit?: number } = {}): { snapshots: ResourceSnapshot[]; retention: ResourceRetention } {
-    return { snapshots: this.history.page(params), retention: this.retention() };
+    const snapshots = params.sinceId === undefined
+      ? this.history.recent(params.limit ?? RESOURCE_HISTORY_PAGE_MAX)
+      : this.history.page(params);
+    return { snapshots, retention: this.retention() };
   }
 
   /**
    * A diagnostic document built from the same sanitized rows — there is no
    * second, richer copy of anything to leak.
    *
-   * The byte bound is absolute: oldest snapshots go first, and if one snapshot
-   * is still too large its process rows are trimmed. The result is always
-   * valid JSON that says what was left out.
+   * The document carries the **newest** retained snapshots, because the reason
+   * a person exports is something that just happened. The byte bound is
+   * absolute on top of that: oldest snapshots go first, and if one snapshot is
+   * still too large its process rows are trimmed. The result is always valid
+   * JSON that says what was left out — including when retention held more
+   * samples than the document's own snapshot cap carries.
    *
    * Each snapshot is serialized once and its size reused, and the document is
    * emitted in the same compact form it was measured in — a bound checked
@@ -174,9 +190,13 @@ export class ResourceService {
    */
   export(): { document: string; bytes: number; truncated: boolean } {
     const retention = this.retention();
-    const serialized = this.history.page({ limit: 60 }).map((snapshot) => ({ snapshot, bytes: Buffer.byteLength(JSON.stringify(snapshot), "utf8") }));
+    const recent = this.history.recent(RESOURCE_EXPORT_SNAPSHOT_MAX);
+    const serialized = recent.map((snapshot) => ({ snapshot, bytes: Buffer.byteLength(JSON.stringify(snapshot), "utf8") }));
     const envelope = 512; // the wrapper's own fields, generously
-    let truncated = false;
+    // Retention is holding samples this document does not carry: that is an
+    // omission whether or not the byte trimmer ever runs, and a document that
+    // left something out says so.
+    let truncated = recent.length < retention.snapshots;
 
     let total = serialized.reduce((sum, entry) => sum + entry.bytes, 0) + envelope;
     while (serialized.length > 1 && total > RESOURCE_EXPORT_MAX_BYTES) {
