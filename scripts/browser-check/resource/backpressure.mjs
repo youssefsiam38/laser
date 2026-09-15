@@ -16,10 +16,17 @@
  *   harness misreading a success.
  *
  * The distinction this file exists to protect: *fenced* is an observation about
- * **one named socket**, proved by that socket's own pressure state on the host
- * or by its 1013 closure once its reader resumes. A connection that merely
+ * **one captured socket**, proved by that socket's own pressure state on the
+ * host or by its 1013 closure once its reader resumes. A connection that merely
  * disappeared, a socket error, a timeout, or a queue that stayed at zero are
  * none of those, and each one fails the scenario exactly as it did before.
+ *
+ * Identity is the object, not the port and not a byte counter. The harness
+ * captures the host-side `WebSocket` once, by the port its own client opened
+ * from, and every sample afterwards reads *that object* and asks the host
+ * separately whether it is still in `clients`. A port the kernel reuses, with
+ * any byte counter at all, is a different object and can never be mistaken for
+ * this one.
  */
 
 const sleep = ms => new Promise(done => setTimeout(done, ms));
@@ -30,24 +37,24 @@ const bound = ms => new Promise(done => { const timer = setTimeout(done, ms); ti
 export const MECHANISMS = Object.freeze({ queued: 'queued', fenced: 'fenced' });
 
 /**
- * One sample of the named connection, classified.
+ * One sample of the captured connection, classified.
  *
- * `view` is `CONNECTION_PRESSURE_FN`'s answer: how many of the host's direct
- * connections carry the caller's port (never more than one, or the observation
- * is not specific), and that connection's own queue account.
+ * `view` is `CONNECTION_PRESSURE_FN`'s answer about that exact object: whether
+ * the host still has it in `clients`, and its own queue account.
  */
-export function classifyConnection(view, { seen = false } = {}) {
-  if (view?.ambiguous) return { outcome: 'ambiguous' };
-  const connection = view?.connection ?? null;
-  if (connection) {
-    if (connection.fenced === true || connection.state === 'fenced') {
-      return { outcome: 'fenced', by: 'this connection\u2019s own host pressure state', connection };
-    }
-    return { outcome: connection.pendingBytes > 0 ? 'queued' : 'none', connection };
+export function classifyConnection(view) {
+  if (!view || view.readable !== true || typeof view.present !== 'boolean') {
+    return { outcome: 'unreadable', reason: view?.reason ?? 'the captured connection could not be read on the host' };
   }
-  // Absence is evidence only about a connection this observation already saw:
-  // "it was never there" is a broken observation, not a contained one.
-  return { outcome: seen ? 'removed' : 'absent' };
+  const connection = view.connection ?? null;
+  // The host no longer has this object. That is the only "gone" there is: no
+  // port is looked at again, so nothing else can take its place.
+  if (!view.present) return { outcome: 'removed', connection };
+  if (!connection) return { outcome: 'unreadable', reason: 'the captured connection reported no queue account' };
+  if (connection.fenced === true || connection.state === 'fenced') {
+    return { outcome: 'fenced', by: 'this connection\u2019s own host pressure state', connection };
+  }
+  return { outcome: connection.pendingBytes > 0 ? 'queued' : 'none', connection };
 }
 
 /**
@@ -101,7 +108,6 @@ export async function observeBackpressure({
   closure,
   deadlineMs,
   ceilingBytes,
-  seen = false,
   pollMs = 250,
   now = () => Date.now(),
   sleepFor = sleep,
@@ -110,12 +116,9 @@ export async function observeBackpressure({
   const deadline = now() + deadlineMs;
   let samples = 0;
   let peakBytes = 0;
-  let lastBytesWritten = -1;
-  let firstBytesWritten = null;
   let peakTotalBufferedBytes = 0;
   let lastState = null;
   let lastReadyState = null;
-  let everSeen = seen;
   let lastOutcome = 'none';
   while (true) {
     samples += 1;
@@ -124,23 +127,19 @@ export async function observeBackpressure({
     // every connection the host has, not a threshold this observation tunes.
     if (Number(view?.totalBufferedBytes) > ceilingBytes) throw new Error('slow socket crossed safety ceiling');
     peakTotalBufferedBytes = Math.max(peakTotalBufferedBytes, Number(view?.totalBufferedBytes) || 0);
-    const classified = classifyConnection(view, { seen: everSeen });
+    const classified = classifyConnection(view);
     lastOutcome = classified.outcome;
-    if (classified.outcome === 'ambiguous') {
-      throw new Error('More than one host connection carried the slow consumer\u2019s port; this observation is not about one socket.');
+    if (classified.outcome === 'unreadable') {
+      throw new Error(`The captured slow consumer\u2019s connection could not be read on the host: ${classified.reason}`);
     }
     const connection = classified.connection ?? null;
     if (connection) {
-      everSeen = true;
-      if (connection.bytesWritten < lastBytesWritten) {
-        throw new Error('The host connection carrying the slow consumer\u2019s port changed identity mid-observation.');
-      }
-      lastBytesWritten = connection.bytesWritten;
-      if (firstBytesWritten === null) firstBytesWritten = connection.bytesWritten;
       lastState = connection.state;
       lastReadyState = connection.readyState;
       if (connection.pendingBytes > ceilingBytes) throw new Error('slow socket crossed safety ceiling');
-      peakBytes = Math.max(peakBytes, connection.pendingBytes);
+      // Only while the host still holds this object: bytes left in a socket the
+      // host has already dropped are not a queue it is carrying.
+      if (classified.outcome !== 'removed') peakBytes = Math.max(peakBytes, connection.pendingBytes);
     }
     if (classified.outcome === 'fenced' || classified.outcome === 'removed') {
       const required = classified.outcome === 'removed';
@@ -155,7 +154,7 @@ export async function observeBackpressure({
         peakBytes,
         samples,
         evidence: {
-          by: classified.by ?? 'this connection was removed from the host after its byte fence closed it',
+          by: classified.by ?? 'the host no longer holds this exact connection, and it closed with the byte fence\u2019s code',
           pressureState: connection?.state ?? null,
           pressureFenced: connection?.fenced ?? null,
           highWaterBytes: connection?.highWaterBytes ?? null,
@@ -188,8 +187,7 @@ export async function observeBackpressure({
   // than a shrug: how many bytes the host wrote to this one socket while it
   // was paused says whether the workload created pressure at all.
   throw new Error('Timed out waiting for the slow consumer to be queued for or fenced by the host: '
-    + `samples=${samples} lastOutcome=${lastOutcome} peakBytes=${peakBytes} connectionSeen=${everSeen} `
-    + `bytesWrittenToThisSocket=${lastBytesWritten < 0 ? 'unavailable' : lastBytesWritten - (firstBytesWritten ?? 0)} `
+    + `samples=${samples} lastOutcome=${lastOutcome} peakBytes=${peakBytes} `
     + `pressureState=${lastState ?? 'unavailable'} readyState=${lastReadyState ?? 'unavailable'} `
     + `peakHostBufferedBytes=${peakTotalBufferedBytes}.`);
 }

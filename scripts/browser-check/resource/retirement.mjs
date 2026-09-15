@@ -21,16 +21,64 @@ function guardCount(value) {
   return Number(value) || 0;
 }
 
+/**
+ * Is this returned worker row evidence, or the worker saying it has none?
+ *
+ * `WORKER_COUNTERS_FN` answers `{ available: false, reason, …null }` when RP-4's
+ * runtime table cannot be read. That is not a quiet worker: it is a worker that
+ * did not answer, and it must be counted with the ones whose inspector call
+ * threw. One predicate decides that, and every consumer — phase sampling and
+ * the retirement guard alike — goes through it.
+ */
+export function workerEvidence(row) {
+  if (row && row.kind === 'worker' && row.available === true) return { readable: true, row, reason: null };
+  const reason = sanitizeOwner(
+    row && typeof row.reason === 'string' && row.reason !== ''
+      ? row.reason
+      : row && row.available === false
+        ? 'a worker returned no retained-state evidence'
+        : 'a worker returned a counter row this harness does not recognise',
+  );
+  return { readable: false, row: row ?? null, reason };
+}
+
+/**
+ * Split worker counter rows into evidence and reasons, in one place.
+ * `unreadable` keeps bounded, sanitized, categorical sentences — never a path.
+ */
+export function partitionWorkerCounters(rows = []) {
+  const readable = [];
+  const unreadable = [];
+  for (const row of rows) {
+    const evidence = workerEvidence(row);
+    if (evidence.readable) readable.push(evidence.row);
+    else unreadable.push(evidence.reason);
+  }
+  return { readable, unreadable };
+}
+
 export function retirementGuardSnapshot(host = {}, workers = []) {
-  const sum = key => workers.reduce((total, worker) => total + (Number(worker?.[key]) || 0), 0);
+  // Unknown propagates: one worker that did not answer, or one null count,
+  // makes the total unknown rather than a zero somebody could certify on.
+  const sum = (key) => {
+    let total = 0;
+    for (const worker of workers) {
+      if (!workerEvidence(worker).readable && worker?.available === false) return null;
+      const value = worker?.[key];
+      if (value === null) return null;
+      total += Number(value) || 0;
+    }
+    return total;
+  };
+  const withHost = (hostValue, workerTotal) => (workerTotal === null ? null : (Number(hostValue) || 0) + workerTotal);
   return {
     productConnections: guardCount(host.connections),
     attachmentRefs: guardCount(host.attachmentRefs),
     attachedPaths: guardCount(host.attachedPaths),
-    runningSessions: Number(host.runningSessions) || 0,
-    liveRuns: Number(host.liveRuns) || 0,
-    runningTasks: (Number(host.runningTasks) || 0) + sum('runningTasks'),
-    attentionDialogs: Number(host.attentionDialogs) || 0,
+    runningSessions: guardCount(host.runningSessions),
+    liveRuns: guardCount(host.liveRuns),
+    runningTasks: withHost(host.runningTasks, sum('runningTasks')),
+    attentionDialogs: guardCount(host.attentionDialogs),
     pendingQuestions: sum('pendingQuestions'),
     pendingApprovals: sum('pendingApprovals'),
     runningTools: sum('runningTools'),
@@ -67,6 +115,8 @@ export function liveWorkOf(snapshot = {}) {
 
 export function assertNoLiveWork(snapshot) {
   const work = liveWorkOf(snapshot);
+  const unknown = Object.entries(work).filter(([, value]) => value === null).map(([name]) => name);
+  assert.deepEqual(unknown, [], `retirement prerequisites are unknown, not settled: ${unknown.join(', ')} could not be read`);
   assert.deepEqual(work, {
     runningSessions: 0, liveRuns: 0, runningTasks: 0, attentionDialogs: 0,
     pendingQuestions: 0, pendingApprovals: 0, runningTools: 0,
@@ -88,6 +138,8 @@ export async function proveNoLiveWork(sample, { deadlineMs = 15_000, now = () =>
     attempts += 1;
     last = await sample();
     const work = liveWorkOf(last.guards);
+    // `0` only. `null` is a count nobody could read, and a retirement
+    // prerequisite that was not read is not a prerequisite that was met.
     if (last.unreadable.length === 0 && Object.values(work).every(value => value === 0)) {
       assertNoLiveWork(last.guards);
       return { ...last, attempts };

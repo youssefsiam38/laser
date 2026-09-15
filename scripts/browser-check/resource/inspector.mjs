@@ -136,9 +136,11 @@ export async function callFunction(client, objectId, functionDeclaration, option
   const response = await client.send('Runtime.callFunctionOn', {
     objectId, functionDeclaration, awaitPromise: true,
     returnByValue: options.returnByValue ?? false,
-    // Scalars only: a call argument here is a port number or a count, never a
-    // path, an identity or anything read out of a conversation.
-    ...(options.args ? { arguments: options.args.map(value => ({ value })) } : {}),
+    // Scalars, or a remote object this harness already captured: never a path,
+    // an identity or anything read out of a conversation.
+    ...(options.args
+      ? { arguments: options.args.map(value => (value && typeof value === 'object' && typeof value.objectId === 'string' ? value : { value })) }
+      : {}),
   });
   if (response.exceptionDetails) throw new Error(response.exceptionDetails.text ?? 'Inspector evaluation failed.');
   return options.returnByValue ? response.result?.value : response.result;
@@ -280,27 +282,46 @@ export const WORKER_COUNTERS_FN = `function(){
   }`;
 
 /**
- * One named direct connection's pressure account (RP-7), and nothing else.
+ * Find the one direct connection that opened from this loopback port, and
+ * hand the **object itself** back.
  *
- * The caller names the connection by the loopback port its own socket opened
- * from, so the answer is about exactly one socket rather than about "a
- * connection". The projection returns counts, bytes and the state machine's
- * word for what it did; it never returns an address, a path or a payload, and
- * `matched` says whether the named connection was there at all — absence is
- * reported, never rendered as a zero queue.
+ * A port is how the harness's own socket is *admitted* once: it is not an
+ * identity. The kernel can hand the same ephemeral port to another socket, and
+ * a byte counter that did not go backwards proves nothing about which socket
+ * produced it. So this runs exactly once, refuses anything but a unique match,
+ * and returns the live `WebSocket`; every later reading is taken through that
+ * object. The object id stays inside the harness and never reaches a report.
  */
-export const CONNECTION_PRESSURE_FN = `function(port){
+export const CONNECTION_TARGET_FN = `function(port){
     const server=this; const clients=Array.from(server.clients ?? []);
-    let matched=0; let found=null;
-    for(const ws of clients){
-      const socket=ws && ws._socket;
-      if(!socket || socket.remotePort!==port) continue;
-      matched+=1;
-      const pressure=server.pressure && typeof server.pressure.get==='function' ? server.pressure.get(ws) : undefined;
-      const snapshot=pressure && typeof pressure.snapshot==='function' ? pressure.snapshot() : null;
-      const socketBufferedBytes=Number(ws.bufferedAmount)||0;
-      const accountedBytes=snapshot && Number.isFinite(snapshot.queuedBytes) ? snapshot.queuedBytes : null;
-      found={ readyState:ws.readyState,
+    const matches=clients.filter(ws=>ws && ws._socket && ws._socket.remotePort===port);
+    if(matches.length===0) throw new Error('No host connection was open from that loopback port.');
+    if(matches.length>1) throw new Error('More than one host connection was open from that loopback port.');
+    return matches[0];
+  }`;
+
+/**
+ * One captured connection's pressure account (RP-7), and nothing else.
+ *
+ * The connection is the object the caller captured, not whatever is on a port
+ * now: `present` is the host's own `clients.has(target)`, checked independently
+ * of the queue account, so a connection the host dropped is reported as gone
+ * rather than as an empty queue. Counts, bytes and the state machine's word for
+ * what it did — never an address, a port, a path or a payload.
+ */
+export const CONNECTION_PRESSURE_FN = `function(target){
+    const server=this; const clients=Array.from(server.clients ?? []);
+    if(!target || typeof target!=='object') return { readable:false, reason:'the captured connection object was not passed back', present:null, connection:null, connections:clients.length, totalBufferedBytes:null };
+    const registry=server.clients;
+    const present=registry && typeof registry.has==='function' ? registry.has(target)===true : null;
+    const pressure=server.pressure && typeof server.pressure.get==='function' ? server.pressure.get(target) : undefined;
+    const snapshot=pressure && typeof pressure.snapshot==='function' ? pressure.snapshot() : null;
+    const socketBufferedBytes=Number(target.bufferedAmount)||0;
+    const accountedBytes=snapshot && Number.isFinite(snapshot.queuedBytes) ? snapshot.queuedBytes : null;
+    return { readable:present!==null,
+      reason:present===null ? 'the host does not keep a client registry this harness can check membership in' : null,
+      present,
+      connection:{ readyState:target.readyState,
         pendingBytes:Math.max(socketBufferedBytes, accountedBytes||0, (snapshot && Number(snapshot.socketBufferedBytes))||0),
         socketBufferedBytes, accountedBytes,
         highWaterBytes:snapshot ? snapshot.highWaterBytes : null,
@@ -308,13 +329,8 @@ export const CONNECTION_PRESSURE_FN = `function(port){
         fenced:pressure ? pressure.fenced===true : null,
         inFlight:snapshot ? snapshot.inFlight : null,
         shed:snapshot && snapshot.shed ? snapshot.shed.total : null,
-        // Monotonic per connection: a port the kernel handed to a different
-        // socket cannot continue these counts, so a drop is never mistaken for
-        // the same connection still being there.
-        bytesWritten:Number(socket.bytesWritten)||0, bytesRead:Number(socket.bytesRead)||0 };
-    }
-    return { connections:clients.length, matched, present:matched===1, ambiguous:matched>1,
-      connection:matched===1 ? found : null,
+        tracked:pressure !== undefined },
+      connections:clients.length,
       totalBufferedBytes:clients.reduce((n,ws)=>n+((Number(ws.bufferedAmount)||0)),0) };
   }`;
 
@@ -322,10 +338,33 @@ export async function scalarCounters(client, instanceId, kind) {
   return callFunction(client, instanceId, kind === 'host' ? HOST_COUNTERS_FN : WORKER_COUNTERS_FN, { returnByValue: true });
 }
 
-/** One bounded read of one named connection's queue state on the host. */
-export async function connectionPressure(client, instanceId, remotePort) {
-  if (!Number.isInteger(remotePort)) throw new Error('A connection can only be named by its own integer loopback port.');
-  return callFunction(client, instanceId, CONNECTION_PRESSURE_FN, { returnByValue: true, args: [remotePort] });
+/**
+ * Capture the exact host-side socket a loopback port belongs to, once.
+ *
+ * Returns a reader bound to that object and a release for its object group.
+ * Nothing about the handle — not the id, not the group — is ever reported.
+ */
+export async function captureConnectionTarget(client, instanceId, remotePort) {
+  if (!Number.isInteger(remotePort)) throw new Error('A connection can only be admitted by its own integer loopback port.');
+  const group = `connection-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const response = await client.send('Runtime.callFunctionOn', {
+    objectId: instanceId, functionDeclaration: CONNECTION_TARGET_FN,
+    arguments: [{ value: remotePort }], objectGroup: group, awaitPromise: true,
+  });
+  if (response.exceptionDetails) throw new Error(response.exceptionDetails.exception?.description?.split('\n')[0] ?? response.exceptionDetails.text ?? 'The host connection could not be captured.');
+  const objectId = response.result?.objectId;
+  if (!objectId) throw new Error('The host connection was not returned as an object this harness can hold.');
+  return {
+    group,
+    read: () => connectionPressure(client, instanceId, objectId),
+    release: () => client.send('Runtime.releaseObjectGroup', { objectGroup: group }).catch(() => {}),
+  };
+}
+
+/** One bounded read of one captured connection's queue state on the host. */
+export async function connectionPressure(client, instanceId, targetObjectId) {
+  if (typeof targetObjectId !== 'string' || targetObjectId === '') throw new Error('A connection reading needs the captured connection object.');
+  return callFunction(client, instanceId, CONNECTION_PRESSURE_FN, { returnByValue: true, args: [{ objectId: targetObjectId }] });
 }
 
 /**

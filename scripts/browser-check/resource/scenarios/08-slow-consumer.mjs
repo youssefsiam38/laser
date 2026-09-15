@@ -97,25 +97,23 @@ export default {
       slow.send(JSON.stringify({ jsonrpc: '2.0', id: rpcId, method: 'session/load', params: slowConsumerLoad(heavy.path), clientVersion: version }));
       const loadedState = await loaded;
       assert.ok(Number.isInteger(loadedState?.seq), 'the slow consumer really loaded the session it is going to stop reading');
-      // The loopback port this socket opened from names it on the host: one TCP
-      // connection, one port, so every reading below is about this socket and
-      // not about "a connection".
+      // The loopback port this socket opened from is how the host-side socket
+      // is *admitted* — once. Identity is the object that admission captures,
+      // never the port and never a byte counter.
       const port = slow._socket?.localPort;
-      assert.ok(Number.isInteger(port), 'the slow consumer must be identifiable by its own loopback port');
+      assert.ok(Number.isInteger(port), 'the slow consumer must be admissible by its own loopback port');
       slow._socket?.pause?.();
 
-      // One host connection for the whole backpressure observation: polling must
-      // not open an inspector, and must not query objects, per sample.
-      const result = await run.withHost(async ({ counters, connection }) => {
+      const observeSlowConsumer = async ({ counters, target }) => {
         const sample = async () => {
           const totals = await counters();
           // The aggregate high-water ceiling, unchanged.
           if (totals.bufferedBytes > SAFETY.socketBufferedBytes) throw new Error('slow socket crossed safety ceiling');
-          const view = await connection(port);
+          const view = await target.read();
           return { ...view, totalBufferedBytes: totals.bufferedBytes, host: totals };
         };
         const first = await sample();
-        assert.equal(first.matched, 1, 'exactly one host connection carries the slow consumer\u2019s port');
+        assert.equal(first.present, true, 'the captured connection is the one the host is holding for this client');
         // Read from the same sample the observation already takes: no extra
         // traffic, no extra connection, nothing about the measurement changed.
         whileAttached = deliveryCounts(first.host);
@@ -132,7 +130,7 @@ export default {
         for (let replay = 0; replay < config.slowReplayAttempts; replay++) {
           slow.send(JSON.stringify({ jsonrpc: '2.0', id: ++rpcId, method: 'session/load', params: slowConsumerLoad(heavy.path, 0), clientVersion: version }));
           await sleepFor(config.slowReplayPaceMs);
-          const outcome = classifyConnection(await sample(), { seen: true }).outcome;
+          const outcome = classifyConnection(await sample()).outcome;
           if (outcome === 'queued' || outcome === 'fenced' || outcome === 'removed') break;
         }
         // Sent whatever the replays did: the workload is the traffic, not the
@@ -140,11 +138,23 @@ export default {
         const accepted = await check.rpc('session/prompt', { path: heavy.path, content: [{ type: 'text', text: 'resource:large-stream slow' }] });
         assert.equal(accepted.accepted, true);
         return observeBackpressure({
-          sample, closure, seen: true,
+          sample, closure,
           ceilingBytes: SAFETY.socketBufferedBytes,
           deadlineMs: Math.min(config.phaseTimeoutMs, config.backpressureTimeoutMs),
           pollMs: config.pollIntervalMs,
         });
+      };
+
+      // One host connection for the whole backpressure observation: polling must
+      // not open an inspector, and must not query objects, per sample.
+      const result = await run.withHost(async ({ counters, captureConnection }) => {
+        // The port admits this socket exactly once; from here on every reading
+        // is of that captured object, and the host is asked separately whether
+        // it still holds it. A port the kernel reuses is a different object.
+        const target = await captureConnection(port);
+        try {
+          return await observeSlowConsumer({ counters, target });
+        } finally { await target.release(); }
       });
       if (result.mechanism === 'queued') {
         assert.ok(result.peakBytes > 0, 'a queued outcome is a real, positive pending-byte peak on this connection');
