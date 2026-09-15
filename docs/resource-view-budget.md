@@ -178,6 +178,43 @@ collection noise in a single measurement-only run, not retained growth. A slope
 is only evidence when it repeats: the two-run comparison with its declared
 coefficient-of-variation gate is M18-T15's, and this run is explicitly not it.
 
+### Re-measured after the review changes (`fc32986`)
+
+The count bound now applies to unpinned candidates, so the resident set is six
+transcripts **beside** whatever a person is using. The same unchanged command
+was run again at that tip, artifacts `/tmp/resource-soak-t5-review`, sanitized
+copy `/tmp/m18-t5-calibration-review.json`: same four scenarios complete, five
+listed not run, zero survivors, zero raw heap snapshots, `pass: false` /
+`purpose: "calibration"` / `partial: true`.
+
+| Phase | pre-GC heap | open (light) | hydrated | entries | serialized entry bytes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| baseline | 11,882,012 | 0 | 0 | 0 | 0 |
+| visited-10 | 25,117,532 | 10 | 6 | 60 | 13,751 |
+| visited-50 | 50,588,424 | 50 | 6 | 60 | 13,831 |
+| distinct-sessions | 44,256,264 | 54 | 10 | 84 | 17,351 |
+| paged-history | 49,045,864 | 54 | 11 | 218 | 67,427 |
+
+Reading it honestly:
+
+- **Every counter of retained view state is flat through the fifty visits**: six
+  transcripts, 60 entries and 13,831 serialized bytes at each of the five
+  checkpoints, with fifty identities kept. That is the bound doing its work.
+- **The pre-GC slope is positive in this run** (+727,073 bytes per opened
+  session) and was negative in the previous one. These samples are taken before
+  any collection, and across four runs of this fixture the same checkpoint has
+  ranged from 20 to 52 MB. The **post-GC** samples, which are the comparable
+  ones, are unchanged by the review batch: baseline 9,795,480 against 9,787,496,
+  `distinct-sessions` 29,115,692 against 29,446,352, `paged-history` 40,717,124
+  against 41,105,624. No retained-state counter moved, so the pre-GC slope in
+  this run is uncollected allocation, not retention — and a slope is only
+  evidence when it repeats, which is M18-T15's two-run gate.
+- **More transcripts are resident in the later phases (11 against 6)** and that
+  is the intended effect of the corrected policy: four long conversations being
+  paged, the one on screen and the workspaces holding live work are pinned, and
+  pins no longer consume the cache's six slots. Serialized retained bytes rise
+  with them (67,427) and stay far inside the 4 MiB total.
+
 ### The fitted constants
 
 - `k_content = 28` and `C_hydrated = 13,000` are kept from the base fit: this
