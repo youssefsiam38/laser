@@ -25,10 +25,27 @@ interface FakeTool {
 }
 
 const SESSION_ID = "session-under-test";
+/**
+ * The private root the worker gives the module (RP-6). Logs live under an
+ * opaque directory inside it, never at a guessable path built from a session
+ * id, so the tests look the directory up rather than construct it.
+ */
+let logRootDir = "";
+const sessionLogDir = (): string | undefined => {
+  try {
+    const entries = readdirSync(logRootDir);
+    const first = entries[0];
+    return first === undefined ? undefined : join(logRootDir, first);
+  } catch {
+    return undefined;
+  }
+};
 /** The task ids with a log file right now, so a test can find the id of a foreground command whose result carried none. */
 const logIds = (): Set<string> => {
+  const dir = sessionLogDir();
+  if (!dir) return new Set();
   try {
-    return new Set(readdirSync(join(tmpdir(), `${WIRE_NAMESPACE}-tasks`, SESSION_ID)).map((f) => f.replace(/\.log$/, "")));
+    return new Set(readdirSync(dir).filter((f) => f.endsWith(".log")).map((f) => f.replace(/\.log$/, "")));
   } catch {
     return new Set();
   }
@@ -77,7 +94,9 @@ function harness(
   const send = vi.fn();
   const cwd = mkdtempSync(join(tmpdir(), "background-work-"));
   dirs.push(cwd);
-  const ctx: ModuleContext = { pi, send, commands, backgroundWork: { cwd, foregroundCommandSeconds, ...(readTask ? { readTask } : {}), ...(commandPrefix ? { commandPrefix } : {}) } };
+  logRootDir = mkdtempSync(join(tmpdir(), "background-work-logs-"));
+  dirs.push(logRootDir);
+  const ctx: ModuleContext = { pi, send, commands, backgroundWork: { cwd, logRoot: logRootDir, foregroundCommandSeconds, ...(readTask ? { readTask } : {}), ...(commandPrefix ? { commandPrefix } : {}) } };
   backgroundWorkModule.register!(ctx);
   const dispose = backgroundWorkModule.activate(ctx) as ModuleDispose | undefined;
   if (dispose) open.push(() => dispose({ reason: "quit" }));
@@ -96,7 +115,7 @@ function harness(
   return { tools, published, sendMessage, commands, cwd, call, dispose, send };
 }
 
-const logPath = (taskId: string) => join(tmpdir(), `${WIRE_NAMESPACE}-tasks`, SESSION_ID, `${taskId}.log`);
+const logPath = (taskId: string) => join(sessionLogDir() ?? join(tmpdir(), "no-log-root"), `${taskId}.log`);
 
 /** Every word the model reads about a tool: description, snippet, guidelines, parameter text. */
 function modelText(tool: FakeTool): string {

@@ -129,10 +129,14 @@ export interface BackgroundTaskRetention {
   excerptBytes: number;
   /** Bytes this session's command logs occupy on disk. */
   logBytes: number;
+  /** Bytes accepted from commands and not yet written. Bounded by construction. */
+  pendingLogBytes: number;
   /** Records dropped by a bound since the session started. */
   evicted: number;
   /** Log segments released by a byte bound since the session started. */
   released: number;
+  /** Live tail buffers shrunk or released by the session's tail ceiling. */
+  tailsShrunk: number;
 }
 
 export type PiExtensionMessage =
@@ -167,8 +171,12 @@ export type PiExtensionMessage =
    * A pid the module knows the meaning of: the shell of one background
    * command. Consumed by the host's process inventory (RP-1) and dropped
    * before any broadcast; a client is never told a pid.
+   *
+   * There is no matching "it ended" message: a pid alone cannot identify the
+   * process it names once that process has gone, so the end of one is the
+   * host's own table's to notice, never this module's to assert.
    */
-  | { type: "lasercode/process/registration"; pid: number; taskId: string; exited?: boolean }
+  | { type: "lasercode/process/registration"; pid: number; taskId: string }
   | {
       type: "lasercode/module/log";
       module: PiExtensionModuleName | "worker";

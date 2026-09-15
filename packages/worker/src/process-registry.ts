@@ -17,12 +17,18 @@
  * Nothing here reads argv, an environment or a path: a label is a short,
  * already-sanitized word chosen by the caller, and the host validates identity
  * `(pid, startToken)` and ancestry before it believes any of it.
+ *
+ * There is deliberately no "it exited" here either. A pid with no start token
+ * is not an identity: by the time a child has gone, that number may belong to
+ * a process another worker started, and a hint saying "forget pid 412" would
+ * delete *its* attribution. The host notices the end itself, from its own
+ * process table — the pid is absent, or its start token changed — and the only
+ * exits taken on trust are the ones it issued a generation for.
  */
 import type { ResourceProcessRegistration } from "@lasercode/protocol";
 
 export interface WorkerProcessObserver {
   started(registration: ResourceProcessRegistration): void;
-  exited(pid: number): void;
 }
 
 let observer: WorkerProcessObserver | undefined;
@@ -40,15 +46,5 @@ export function noteWorkerProcess(registration: ResourceProcessRegistration): vo
     observer.started(registration);
   } catch {
     // Diagnostics must never affect the work that produced them.
-  }
-}
-
-/** It ended: a record must not outlive the process it describes. */
-export function noteWorkerProcessExit(pid: number | undefined): void {
-  if (!observer || pid === undefined || !Number.isInteger(pid) || pid <= 0) return;
-  try {
-    observer.exited(pid);
-  } catch {
-    // As above.
   }
 }

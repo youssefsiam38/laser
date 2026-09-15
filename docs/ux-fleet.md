@@ -242,9 +242,12 @@ follower asks for, aligned to a UTF-8 character boundary; a collapsed row
 reads nothing at all. The log path never crosses to a client: the host reads
 it, because the task carried it, and only for the session that owns it.
 
-What is *kept* is bounded too (RP-6). A command's log is a rotating window, so
-a command that prints for ever cannot fill the disk — and it is never paused
-or stopped to keep it inside: only bytes already written are released. A row
+What is *kept* is bounded too (RP-6). A command's log is a rotating window with
+per-task, per-session and per-worker ceilings, so neither a command that prints
+for ever nor fifty of them at once can fill the disk — and none of them is ever
+paused or stopped to keep it inside: only bytes already written are released,
+and if storage itself cannot keep up the body is abandoned rather than the
+command delayed. A row
 whose head went says `logState: truncated` and where the window starts; one
 whose bytes are gone says `released` and offers no pane (R4). Either way
 `outputBytes` is the exact number of bytes the command produced and

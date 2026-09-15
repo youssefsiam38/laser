@@ -19,24 +19,33 @@ import { parseClientRequest, type JsonRpcNotification, type JsonRpcResponse, typ
  * older than the buffer to resync instead of silently missing updates. So a
  * dropped update is re-delivered rather than lost.
  *
- * Two invariants this must not break:
+ * Three invariants this must not break:
  *
  * - **Only transcript updates are scoped.** Questions, attention, task and run
  *   events, worker status and every other small notification stay global,
  *   because they are how a person learns that something they are *not* looking
  *   at needs them.
+ * - **A connection hears a transcript only after it asks for it.** Delivery is
+ *   scoped from the first byte, not from the first `transcript: "loaded"`: a
+ *   socket that has loaded nothing is shown nothing, so a new connection can
+ *   never be handed every conversation in flight on the machine.
  * - **Nothing here is authorization.** An owner is a local label a connection
  *   chose for its own surfaces; the method's own scope and reach have already
- *   been decided by the time anything reaches this class. Bounds below exist
- *   so a client cannot grow the host's memory, not to protect data.
+ *   been decided by the time anything reaches this class. The bounds below
+ *   exist so a client cannot grow the host's memory, not to protect data — and
+ *   a load over them is refused in a sentence rather than quietly half-served.
  */
 
 /** The default owner: the connection's own main view. */
 export const DEFAULT_DELIVERY_OWNER = "view";
-/** Sessions one connection may hold at once. */
+/** Sessions one connection may hold at once, held and in flight together. */
 export const MEMBERSHIP_PATHS_MAX = 256;
 /** Surfaces of one connection that may hold the same session. */
 export const MEMBERSHIP_OWNERS_PER_PATH_MAX = 8;
+
+/** The refusal a person reads when a client asks to hold more than it may. */
+export const MEMBERSHIP_REFUSAL =
+  "This connection is already following as many conversations as it may at once. Close one before opening another.";
 
 /** What the rest of the host may ask about membership. Read-only by design. */
 export interface SessionMembershipView {
@@ -48,68 +57,86 @@ export interface SessionMembershipView {
   counts(): { paths: number; owners: number };
 }
 
-interface Admission {
-  /** Increases per admission; a detach releases the generation it saw. */
+/**
+ * One surface's hold on one session, admitted or still loading.
+ *
+ * `generation` is what makes the detach/load race decidable without keeping a
+ * record per request: a detach removes the entry, so a load that completes
+ * afterwards finds its generation gone and does not admit, while a load begun
+ * *after* the detach is a newer generation that the older detach can no longer
+ * cancel. `inFlight` counts concurrent loads of the same surface, which are
+ * one hold however many there are.
+ */
+interface Hold {
   generation: number;
+  inFlight: number;
+  admitted: boolean;
 }
 
-export class TranscriptDelivery implements SessionMembershipView {
-  private selective = false;
-  /** path → owner → the admission in force. */
-  private readonly members = new Map<string, Map<string, Admission>>();
-  /** `path\0owner` → generations of loads in flight, in order. */
-  private readonly loading = new Map<string, number[]>();
+export class TranscriptDelivery {
+  /** path → owner → hold. Held and in-flight surfaces live in one bounded map. */
+  private readonly members = new Map<string, Map<string, Hold>>();
   private creating = 0;
   private generation = 0;
 
-  begin(raw: unknown): (response?: JsonRpcResponse) => void {
+  begin(raw: unknown): { refusal?: string; finish: (response?: JsonRpcResponse) => void } {
     let request;
-    try { request = parseClientRequest(raw); } catch { return () => {}; }
+    try { request = parseClientRequest(raw); } catch { return { finish: () => {} }; }
     if (request.method === "session/load") {
-      const { path, transcript } = request.params;
+      const { path } = request.params;
       const owner = request.params.owner ?? DEFAULT_DELIVERY_OWNER;
-      if (transcript === "loaded") this.selective = true;
-      if (!this.admissible(path, owner)) return () => {};
-      // The load is admitted while it runs so replay is never dropped, and it
-      // carries its own generation: a detach that arrives in the middle
-      // releases *this* load, and a load begun after that detach is a newer
-      // generation which the older detach can no longer cancel.
-      const generation = ++this.generation;
-      this.beginLoading(path, owner, generation);
-      return response => {
-        const stillWanted = this.endLoading(path, owner, generation);
-        if (response && !response.error && stillWanted) this.admit(path, owner, generation);
+      const hold = this.claim(path, owner);
+      // Refused *before* the router runs, so a load this connection cannot
+      // follow never becomes work in a worker either.
+      if (!hold) return { refusal: MEMBERSHIP_REFUSAL, finish: () => {} };
+      const generation = hold.generation;
+      return {
+        finish: (response) => {
+          const current = this.members.get(path)?.get(owner);
+          if (!current || current.generation !== generation) return; // detached, or superseded
+          current.inFlight = Math.max(0, current.inFlight - 1);
+          if (response && !response.error) current.admitted = true;
+          else if (!current.admitted && current.inFlight === 0) this.release(path, owner);
+        },
       };
     }
     if (request.method === "pi/session/detach") {
       const { path } = request.params;
-      const owner = request.params.owner ?? DEFAULT_DELIVERY_OWNER;
       // Released at once, not at the response: the response carries nothing,
       // and a client that has stopped showing a session has stopped showing it.
-      this.release(path, owner);
-      return () => {};
+      // This also cancels a load of the same surface that is still in flight.
+      this.release(path, request.params.owner ?? DEFAULT_DELIVERY_OWNER);
+      return { finish: () => {} };
     }
     if (request.method === "session/new" || request.method === "pi/session/fork") {
       // The worker chooses the destination path. Admit its first events before
       // the response tells us which cache owns them, then narrow again.
       this.creating++;
-      return response => {
-        this.creating--;
-        const path = (response?.result as { state?: { path?: string } } | undefined)?.state?.path;
-        if (response && !response.error && path) this.admit(path, DEFAULT_DELIVERY_OWNER, ++this.generation);
+      return {
+        finish: (response) => {
+          this.creating--;
+          const path = (response?.result as { state?: { path?: string } } | undefined)?.state?.path;
+          if (!response || response.error || !path) return;
+          const hold = this.claim(path, DEFAULT_DELIVERY_OWNER);
+          if (!hold) return;
+          hold.inFlight = Math.max(0, hold.inFlight - 1);
+          hold.admitted = true;
+        },
       };
     }
-    return () => {};
+    return { finish: () => {} };
   }
 
   accepts(notification: JsonRpcNotification): boolean {
-    if (!this.selective || this.creating || notification.method !== "session/update") return true;
+    if (this.creating || notification.method !== "session/update") return true;
     const path = (notification.params as SessionUpdateParams).sessionPath;
-    return this.members.has(path) || this.isLoading(path);
+    return this.members.has(path);
   }
 
   holders(path: string): number {
-    return this.members.get(path)?.size ?? 0;
+    let held = 0;
+    for (const hold of this.members.get(path)?.values() ?? []) if (hold.admitted) held += 1;
+    return held;
   }
 
   paths(): string[] {
@@ -123,66 +150,38 @@ export class TranscriptDelivery implements SessionMembershipView {
   }
 
   /**
-   * Whether this connection may hold one more. A client that invents owner
-   * labels cannot grow this beyond the two bounds; over them the load is
-   * simply not admitted here, which costs that client its own live updates for
-   * that surface and costs the host nothing.
+   * Take (or renew) one surface's hold, or refuse it.
+   *
+   * Both bounds count held and in-flight surfaces together, so a client that
+   * opens a thousand concurrent loads under invented labels cannot grow this
+   * past 256 × 8 entries.
    */
-  private admissible(path: string, owner: string): boolean {
+  private claim(path: string, owner: string): Hold | undefined {
     const byOwner = this.members.get(path);
-    if (byOwner) return byOwner.has(owner) || byOwner.size < MEMBERSHIP_OWNERS_PER_PATH_MAX;
-    return this.members.size < MEMBERSHIP_PATHS_MAX;
-  }
-
-  private admit(path: string, owner: string, generation: number): void {
-    if (!this.admissible(path, owner)) return;
-    let byOwner = this.members.get(path);
     if (!byOwner) {
-      byOwner = new Map();
-      this.members.set(path, byOwner);
+      if (this.members.size >= MEMBERSHIP_PATHS_MAX) return undefined;
+      const hold: Hold = { generation: ++this.generation, inFlight: 1, admitted: false };
+      this.members.set(path, new Map([[owner, hold]]));
+      return hold;
     }
-    // Duplicate concurrent loads by the same owner are one hold, not two.
-    byOwner.set(owner, { generation });
+    const existing = byOwner.get(owner);
+    if (existing) {
+      // Duplicate concurrent loads of one surface are one hold; the newest
+      // generation is the one a detach will cancel.
+      existing.inFlight += 1;
+      existing.generation = ++this.generation;
+      return existing;
+    }
+    if (byOwner.size >= MEMBERSHIP_OWNERS_PER_PATH_MAX) return undefined;
+    const hold: Hold = { generation: ++this.generation, inFlight: 1, admitted: false };
+    byOwner.set(owner, hold);
+    return hold;
   }
 
   private release(path: string, owner: string): void {
     const byOwner = this.members.get(path);
-    if (byOwner) {
-      byOwner.delete(owner);
-      if (byOwner.size === 0) this.members.delete(path);
-    }
-    // A load of this exact owner that is still in flight is what the detach
-    // is about: cancelling it here is what stops its completion from bringing
-    // a released owner back to life.
-    this.loading.delete(this.key(path, owner));
-  }
-
-  private key(path: string, owner: string): string {
-    return `${path}\u0000${owner}`;
-  }
-
-  private beginLoading(path: string, owner: string, generation: number): void {
-    const key = this.key(path, owner);
-    const generations = this.loading.get(key);
-    if (generations) generations.push(generation);
-    else this.loading.set(key, [generation]);
-  }
-
-  /** Remove this load; false when a detach cancelled it while it ran. */
-  private endLoading(path: string, owner: string, generation: number): boolean {
-    const key = this.key(path, owner);
-    const generations = this.loading.get(key);
-    if (!generations) return false;
-    const at = generations.indexOf(generation);
-    if (at < 0) return false;
-    generations.splice(at, 1);
-    if (generations.length === 0) this.loading.delete(key);
-    return true;
-  }
-
-  private isLoading(path: string): boolean {
-    const prefix = `${path}\u0000`;
-    for (const key of this.loading.keys()) if (key.startsWith(prefix)) return true;
-    return false;
+    if (!byOwner) return;
+    byOwner.delete(owner);
+    if (byOwner.size === 0) this.members.delete(path);
   }
 }

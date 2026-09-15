@@ -14,8 +14,9 @@
  * `logPath` stays in this process. It is how a tail is read; it is never
  * handed to the model or a client.
  */
-import { open, stat } from "node:fs/promises";
-import { isAbsolute } from "node:path";
+import { constants } from "node:fs";
+import { open } from "node:fs/promises";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import {
   TASK_OUTPUT_MAX_BYTES,
   alignUtf8,
@@ -188,26 +189,39 @@ export class TaskIndex {
 }
 
 /**
+ * Is this path one of ours, inside the private root we were given?
+ *
+ * No root means nothing may be read: a build that forgot to pass one reads
+ * nothing rather than reading whatever a message names.
+ */
+export function isInsideRoot(candidate: string | undefined, root: string | undefined): boolean {
+  if (candidate === undefined || root === undefined) return false;
+  if (!isAbsolute(candidate) || !isAbsolute(root)) return false;
+  const within = relative(resolve(root), resolve(candidate));
+  return within !== "" && !within.startsWith(`..${sep}`) && within !== ".." && !isAbsolute(within);
+}
+
+/**
  * The last `lines` lines of a task's log, read from its tail — at most
  * `TASK_OUTPUT_MAX_BYTES`, the same bound the host's `tasks/output` keeps
  * (R9). `undefined` when there is no file to read: the caller says so rather
  * than showing an empty pane.
  */
-export async function readLogTail(logPath: string | undefined, lines: number): Promise<string | undefined> {
-  if (logPath === undefined || !isAbsolute(logPath)) return undefined;
-  let size: number;
-  try {
-    size = (await stat(logPath)).size;
-  } catch {
-    return undefined;
-  }
-  const start = Math.max(0, size - TASK_OUTPUT_MAX_BYTES);
-  const length = size - start;
-  if (length === 0) return "";
+export async function readLogTail(logPath: string | undefined, lines: number, root?: string): Promise<string | undefined> {
+  // A log path arrives from an extension message. It is only ever read when it
+  // is inside the private root this process owns, and it is opened without
+  // following a symlink: a path is a claim, not a permission (RP-6).
+  if (!isInsideRoot(logPath, root)) return undefined;
   let text: string;
   try {
-    const handle = await open(logPath, "r");
+    const handle = await open(logPath!, constants.O_RDONLY | constants.O_NOFOLLOW);
     try {
+      const stats = await handle.stat();
+      if (!stats.isFile()) return undefined;
+      const size = stats.size;
+      const start = Math.max(0, size - TASK_OUTPUT_MAX_BYTES);
+      const length = size - start;
+      if (length === 0) return "";
       const buffer = Buffer.alloc(length);
       const { bytesRead } = await handle.read(buffer, 0, length, start);
       const bytes = buffer.subarray(0, bytesRead);

@@ -143,6 +143,8 @@ export interface SessionHost {
    * then shows agents alone, and a child's command cannot be read.
    */
   tasks?(sessionPath: string): IndexedTask[];
+  /** The private directory command logs may be read from. Nothing else is. */
+  taskLogRoot?(): string;
 }
 
 export interface AgentHarnessOptions {
@@ -1410,7 +1412,9 @@ export class AgentHarness {
     const { task, owner } = found;
     const { logPath, sessionPath: _path, ...rest } = task;
     void _path;
-    const text = await readLogTail(logPath, tailLines);
+    // Only from the private root this process owns, and never through a
+    // symlink: the path came in on an extension message (RP-6).
+    const text = await readLogTail(logPath, tailLines, this.host.taskLogRoot?.());
     return {
       task: rest,
       owner,

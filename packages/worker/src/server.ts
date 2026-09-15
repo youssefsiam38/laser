@@ -10,9 +10,11 @@
  * Pending extension dialogs are re-emitted on load for the same reason.
  */
 
-import { AGENT_MAX_DEPTH_LIMIT, ENV, ErrorCodes, PRODUCT_NAME, ProtocolError, boundedHistoryWindow, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type SettingsScope, type TypedClientRequest } from "@lasercode/protocol";
+import { AGENT_MAX_DEPTH_LIMIT, ENV, ErrorCodes, PRODUCT_NAME, ProtocolError, boundedHistoryWindow, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type SettingsScope, type TypedClientRequest, WIRE_NAMESPACE } from "@lasercode/protocol";
 import { randomUUID } from "node:crypto";
-import { join, resolve } from "node:path";
+import { chmodSync, mkdirSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, resolve } from "node:path";
 import type {
   DriverAgentOptions,
   DriverEvent,
@@ -163,6 +165,8 @@ export class WorkerServer {
    * forwarded to the host below; the host keeps its own copy for clients.
    */
   private readonly tasks = new TaskIndex();
+  /** Resolved on first use; see `taskLogRoot`. */
+  private logRoot: string | undefined;
   /**
    * First prompts still waiting for a Namer model, by session path. A prompt
    * that arrives before the host's `agents/sync` (or before qualification
@@ -189,9 +193,11 @@ export class WorkerServer {
     // inventory (RP-1). Pids only: the host proves `(pid, startToken)` and
     // ancestry itself before it believes any of it, and the notification is
     // consumed by the host rather than broadcast.
+    // Registrations only: a pid this worker reports as *gone* would be a claim
+    // about a number, and the next process to take that number could be
+    // another worker's. The host's own table decides when a process ended.
     setWorkerProcessObserver({
       started: (registration) => this.notify("pi/resource/process", { registrations: [registration] }),
-      exited: (pid) => this.notify("pi/resource/process", { exited: [pid] }),
     });
     const host: SessionHost = {
       openChild: (open) => this.openChild(open),
@@ -199,6 +205,7 @@ export class WorkerServer {
       notify: (method, params) => this.notify(method, params),
       modelAvailable: (model) => this.modelAvailable(model),
       tasks: (path) => this.tasks.tasksOf(path),
+      taskLogRoot: () => this.taskLogRoot(),
     };
     this.harness = new AgentHarness({
       host,
@@ -207,6 +214,10 @@ export class WorkerServer {
       ...(options.projectTrusted !== undefined ? { projectTrusted: options.projectTrusted } : {}),
       backgroundWork: (cwd) => ({
         cwd,
+        // The private directory command logs live in: the host's, when it gave
+        // us one, and otherwise this process's own (RP-6). Never a shared,
+        // guessable path under the system temp directory.
+        logRoot: this.taskLogRoot(),
         foregroundCommandSeconds: this.definitions.policy().foregroundCommandSeconds,
         // Resolved when each Bash call starts, so a Settings save takes effect
         // without ending an open parent or child session.
@@ -230,6 +241,27 @@ export class WorkerServer {
     // qualification itself finishes seconds after the first prompt. A session
     // whose first prompt found no model is named the moment one appears.
     this.definitions.onChange(() => this.nameWaitingSessions());
+  }
+
+  /**
+   * Where this worker's command logs live, created once, privately.
+   *
+   * The host passes its own root down as environment; without one (a test, a
+   * standalone worker) this makes an unpredictable one with `mkdtemp` and
+   * `0700`. It is also the only directory anything in this process will read a
+   * command log from.
+   */
+  taskLogRoot(): string {
+    if (this.logRoot) return this.logRoot;
+    const configured = process.env[ENV.taskLogRoot];
+    if (configured && isAbsolute(configured)) {
+      mkdirSync(configured, { recursive: true, mode: 0o700 });
+      this.logRoot = configured;
+      return this.logRoot;
+    }
+    this.logRoot = mkdtempSync(join(tmpdir(), `${WIRE_NAMESPACE}-tasks-`));
+    chmodSync(this.logRoot, 0o700);
+    return this.logRoot;
   }
 
   /** The harness, for tests and for the packaged probe. */
@@ -1700,13 +1732,11 @@ export class WorkerServer {
         // machine, not conversation state, so it never joins the extension
         // message stream a client can hear.
         if (event.message.type === "lasercode/process/registration") {
-          const { pid, taskId, exited } = event.message;
-          this.notify(
-            "pi/resource/process",
-            exited
-              ? { path: live.path, exited: [pid] }
-              : { path: live.path, registrations: [{ pid, role: "background_command", sessionPath: live.path, taskId }] },
-          );
+          const { pid, taskId } = event.message;
+          this.notify("pi/resource/process", {
+            path: live.path,
+            registrations: [{ pid, role: "background_command", sessionPath: live.path, taskId }],
+          });
           return;
         }
         // A background command going past is indexed here, so the harness

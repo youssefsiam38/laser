@@ -26,13 +26,13 @@
  * and tests (which send none) keep working.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 import { basename, dirname, extname, join, normalize, relative, resolve as resolvePath, sep } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { channelIdFor, type KeyPair } from "@lasercode/crypto";
-import { ENV, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, isTerminalRunStatus, projectEnvWorkerConfig, type ClientRequests, type DeviceGrants, type EnvironmentPolicyInput, type HostNotifications, type JsonRpcNotification, type LogEntry, type NamerState, type ResourceRetainedStores, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
+import { ENV, ErrorCodes, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, isTerminalRunStatus, projectEnvWorkerConfig, type ClientRequests, type DeviceGrants, type EnvironmentPolicyInput, type HostNotifications, type JsonRpcNotification, type LogEntry, type NamerState, type ResourceRetainedStores, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
 import { AccessControl, isLoopbackAddress, localActor, pairedActor, type ActorIdentity } from "./access.js";
 import { AccessAudit } from "./access-audit.js";
 import { loadEnvironmentPolicy } from "./environment-policy.js";
@@ -263,6 +263,8 @@ export class HostServer {
   private readonly actors = new Map<WebSocket, ActorIdentity>();
   /** Session paths each client is following, for the retirement guard. */
   private readonly transcripts = new Map<WebSocket, TranscriptDelivery>();
+  /** The private directory every command log this host will read must be inside. */
+  private readonly taskLogRoot: string;
   private readonly searches = new Map<WebSocket, SearchCancellation>();
   /** Question-only response fences for concurrent session/load requests, per socket. */
   private readonly loadDeliveries = new Map<WebSocket, Set<SessionLoadDelivery>>();
@@ -290,6 +292,17 @@ export class HostServer {
     this.uiDir = options.uiDir ?? defaultUiDir();
     const agentDir = options.agentDir ?? defaultAgentDir();
     const stateDir = options.stateDir ?? defaultStateDir();
+    // Command output is a person's own bytes: it lives in a private directory
+    // of this host's state, not in a shared, guessable temporary path, and it
+    // is the only place anything here will read a command log from (RP-6).
+    this.taskLogRoot = join(stateDir, "task-logs");
+    try {
+      mkdirSync(this.taskLogRoot, { recursive: true, mode: 0o700 });
+      chmodSync(this.taskLogRoot, 0o700);
+    } catch {
+      // A state directory that cannot hold it is reported when a read fails,
+      // never as a reason to refuse to start.
+    }
     this.environment = environmentIdentity(stateDir);
     const log = options.log ?? (() => {});
     // Defense in depth: even a dependency echoing worker argv cannot put the
@@ -412,7 +425,7 @@ export class HostServer {
       onChange: (status) => this.notify("pi/project/env/changed", { status }),
     });
 
-    this.tasks = new TaskRegister({ notify: (method, params) => this.notify(method, params) });
+    this.tasks = new TaskRegister({ notify: (method, params) => this.notify(method, params), logRoot: this.taskLogRoot });
 
     this.push = new PushService({ agentDir, log: (line) => this.log(line) });
 
@@ -482,7 +495,7 @@ export class HostServer {
 
     const poolOptions: WorkerPoolOptions = {
       ...(options.agentDir ? { agentDir: options.agentDir } : {}),
-      ...(npmCommand ? { env: { [ENV.npmCommand]: JSON.stringify(npmCommand) } } : {}),
+      env: { ...(npmCommand ? { [ENV.npmCommand]: JSON.stringify(npmCommand) } : {}), [ENV.taskLogRoot]: this.taskLogRoot },
       envForCwd: (cwd) => ({
         [ENV.features]: JSON.stringify(this.features.enabled(cwd)),
         // Non-secret: the executable, its arguments and whether this exact pair
@@ -843,7 +856,11 @@ export class HostServer {
         if (params.registrations?.length) {
           this.resources.observeProcessRegistrations(cwd, params.registrations);
         }
-        for (const pid of params.exited ?? []) this.resources.ownership.noteExit(pid);
+        // No exit hints are accepted here, by design: a pid with no start token
+        // is not an identity, and honouring "pid 412 has gone" could delete the
+        // record of a process another worker started at that number. The next
+        // process table decides — a pid that is absent, or whose start token
+        // changed, loses its record there (RP-1).
         return;
       }
       case "pi/extension/message": {
@@ -1237,7 +1254,17 @@ export class HostServer {
         ? new SessionLoadDelivery(request.params.path)
         : undefined;
       if (delivery) this.loadDeliveries.get(ws)?.add(delivery);
-      const finishTranscript = transcripts.begin(raw);
+      const admission = transcripts.begin(raw);
+      if (admission.refusal !== undefined) {
+        // Refused before the router: a load this connection cannot follow must
+        // not become work in a worker, and the person is told why (RP-6).
+        delivery?.dispose();
+        if (delivery) this.loadDeliveries.get(ws)?.delete(delivery);
+        const id = (raw as { id?: string | number } | null)?.id ?? null;
+        await this.sendSocket(ws, JSON.stringify({ jsonrpc: "2.0", id, error: { code: ErrorCodes.InvalidParams, message: admission.refusal } }));
+        return;
+      }
+      const finishTranscript = admission.finish;
       let transcriptResponse;
       try {
         const response = await this.router.handle(raw, { actor, searches });

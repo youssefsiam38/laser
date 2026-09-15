@@ -584,12 +584,18 @@ declare module "./messages.js" {
      * the worker knows (a background command, a helper it spawned). It carries
      * host-internal values (a session path) and pids, so the host drops it
      * rather than forwarding it to a client or a relay listener.
+     *
+     * Registrations only, deliberately: **there is no exit hint here.** A pid
+     * on its own is not an identity (RP-1: `(pid, startToken)`, never a pid),
+     * so a message saying "pid 412 has gone" could delete the record of a
+     * *different* process that took that pid in another worker. Exits are
+     * decided by the host's own process table, which sees the pid disappear or
+     * the start token change; the only exits taken on trust are the ones the
+     * host itself issued a generation for, when it spawned the worker.
      */
     "pi/resource/process": {
       path?: string;
       registrations?: ResourceProcessRegistration[];
-      /** Pids that have exited, so a record does not outlive its process. */
-      exited?: number[];
     };
   }
 }

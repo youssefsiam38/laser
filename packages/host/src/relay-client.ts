@@ -532,7 +532,17 @@ export class RelayClient {
     const delivery = typeof path === "string" ? new SessionLoadDelivery(path) : undefined;
     if (delivery) this.loadDeliveries.add(delivery);
     const generation = this.connectionGeneration;
-    const finishTranscript = this.transcripts.begin(raw);
+    const admission = this.transcripts.begin(raw);
+    if (admission.refusal !== undefined) {
+      // As on a direct socket: refused before the router, so no worker work
+      // happens for a load this device could not be sent anyway (RP-6).
+      delivery?.dispose();
+      if (delivery) this.loadDeliveries.delete(delivery);
+      const refusal = this.encode({ jsonrpc: "2.0", id: message.id as string | number, error: { code: ErrorCodes.InvalidParams, message: admission.refusal } });
+      if (refusal) await this.sendForGeneration(refusal, generation);
+      return;
+    }
+    const finishTranscript = admission.finish;
     let transcriptResponse;
     try {
       const response = await this.options.handle(raw, this.searches);
@@ -578,20 +588,24 @@ export class RelayClient {
   }
 
   private onNotification(notification: JsonRpcNotification): void {
-    if (!this.transcripts.accepts(notification)) return;
-    const held = [...this.loadDeliveries].map((delivery) => delivery.offer(notification)).some(Boolean);
+    // The resume watermark is tracked whatever happens to the notification: a
+    // device that was not listening still resumes from the right seq.
     if (notification.method === "session/update") {
       const params = notification.params as SessionUpdateParams;
       if (params?.sessionPath && typeof params.seq === "number") {
         this.seqBySession.set(params.sessionPath, params.seq);
       }
     }
+    const held = [...this.loadDeliveries].map((delivery) => delivery.offer(notification)).some(Boolean);
     if (held) return;
     if (!this.session) {
       // Dropped on purpose: the device resumes with session/load { fromSeq }.
       this.counters.notificationsDropped++;
       return;
     }
+    // A transcript this device is not showing is not sent to it (RP-6); it
+    // reconciles from `fromSeq` when it opens the session again.
+    if (!this.transcripts.accepts(notification)) return;
     const payload = this.encode(notification) ?? this.encode(reduce(notification));
     if (!payload) {
       // Nothing sensible left to shrink. Losing one update is bad; tearing the

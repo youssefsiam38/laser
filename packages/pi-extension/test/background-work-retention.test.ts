@@ -24,11 +24,12 @@ import { backgroundWorkModule } from "../src/modules/background-work.js";
 const SESSION_ID = "retention-session";
 const open: Array<() => void> = [];
 const dirs: string[] = [];
+/** The private root the worker hands the module in production; a scratch one here. */
+let logRoot = "";
 
 afterEach(() => {
   for (const dispose of open.splice(0)) dispose();
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-  rmSync(join(tmpdir(), `${WIRE_NAMESPACE}-tasks`, SESSION_ID), { recursive: true, force: true });
 });
 
 interface FakeTool {
@@ -42,7 +43,7 @@ interface FakeTool {
   ) => Promise<{ content: Array<{ type: string; text: string }>; details: any }>;
 }
 
-function harness(options: { readTask?: (taskId: string, tailLines: number) => Promise<ReadTaskOutputResult> } = {}) {
+function harness(options: { readTask?: (taskId: string, tailLines: number) => Promise<ReadTaskOutputResult>; logRoot?: string } = {}) {
   const tools = new Map<string, FakeTool>();
   const pi = {
     on: vi.fn(),
@@ -54,11 +55,13 @@ function harness(options: { readTask?: (taskId: string, tailLines: number) => Pr
   const send = vi.fn();
   const cwd = mkdtempSync(join(tmpdir(), "background-retention-"));
   dirs.push(cwd);
+  logRoot = options.logRoot ?? mkdtempSync(join(tmpdir(), "background-retention-logs-"));
+  if (!options.logRoot) dirs.push(logRoot);
   const ctx: ModuleContext = {
     pi,
     send,
     commands,
-    backgroundWork: { cwd, foregroundCommandSeconds: 120, ...(options.readTask ? { readTask: options.readTask } : {}) },
+    backgroundWork: { cwd, logRoot, foregroundCommandSeconds: 120, ...(options.readTask ? { readTask: options.readTask } : {}) },
   };
   backgroundWorkModule.register!(ctx);
   const dispose = backgroundWorkModule.activate(ctx) as ModuleDispose | undefined;
@@ -90,13 +93,19 @@ async function settled(h: ReturnType<typeof harness>, taskId: string, timeoutMs 
   }
 }
 
-const logDir = join(tmpdir(), `${WIRE_NAMESPACE}-tasks`, SESSION_ID);
+/** Bytes under the private root, whatever opaque directory the module chose. */
 const diskBytes = (): number => {
+  let total = 0;
   try {
-    return readdirSync(logDir).reduce((sum, file) => sum + statSync(join(logDir, file)).size, 0);
+    for (const entry of readdirSync(logRoot)) {
+      const directory = join(logRoot, entry);
+      if (!statSync(directory).isDirectory()) continue;
+      for (const file of readdirSync(directory)) total += statSync(join(directory, file)).size;
+    }
   } catch {
-    return 0;
+    return total;
   }
+  return total;
 };
 
 it(
@@ -256,32 +265,96 @@ it(
 );
 
 it(
-  "names the command's own process for the inventory, and unnames it when it ends",
+  "keeps many commands running at once inside one live-tail ceiling",
+  async () => {
+    const h = harness();
+    const ids: string[] = [];
+    // Forty commands printing at once: per-command windows alone would be
+    // forty times 256 KiB, past the ceiling for the session.
+    for (let index = 0; index < 40; index++) {
+      const { details } = await h.call("bash", {
+        command: "node -e \"const line='x'.repeat(4096)+'\\n'; for (let i=0;i<400;i++) process.stdout.write(line); setTimeout(()=>{}, 30000)\"",
+        background: true,
+        notify: false,
+      });
+      ids.push((details as { taskId: string }).taskId);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    const held = h.retention()!;
+    expect(held.live).toBe(40);
+    // The ceiling holds across the session, not per command, and it had to be
+    // applied: forty full windows would have been ten megabytes.
+    expect(held.liveTailBytes).toBeLessThanOrEqual(8 * 1024 * 1024);
+    expect(held.tailsShrunk).toBeGreaterThan(0);
+    // Every row still says what its command is doing, and every command is
+    // still running: nothing was stopped to make room.
+    for (const id of ids) {
+      const row = h.updates().filter((update) => update.id === id).at(-1)!;
+      expect(row.status).toBe("running");
+      const reading = await h.call("task_output", { taskId: id, tail: 1 });
+      expect((reading.details as { status: string }).status).toBe("running");
+    }
+    for (const id of ids) await h.call("task_stop", { taskId: id });
+  },
+  180_000,
+);
+
+it(
+  "publishes the window the moment it moves, so a ranged read never uses stale offsets",
+  async () => {
+    const h = harness();
+    const { details } = await h.call("bash", {
+      command: "head -c 20000000 /dev/zero | tr '\\0' 'w'",
+      background: true,
+      notify: false,
+    });
+    const id = (details as { taskId: string }).taskId;
+    await settled(h, id);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const rows = h.updates().filter((update) => update.id === id);
+    // Several rotations happened inside one command. Each one published its
+    // own row: the offsets a host read uses are never a throttle tick behind
+    // the files they name.
+    const offsets = rows.map((row) => row.retainedFromByte ?? 0);
+    expect(new Set(offsets).size).toBeGreaterThan(1);
+    expect(offsets).toEqual([...offsets].sort((left, right) => left - right));
+    expect(rows.at(-1)!.logState).toBe("truncated");
+    // Every published offset is one a reader could have used: it never names
+    // more bytes than the command had produced at the time.
+    for (const row of rows) expect(row.retainedFromByte ?? 0).toBeLessThanOrEqual(row.outputBytes);
+  },
+  120_000,
+);
+
+it(
+  "names the command's own process for the inventory, and never claims it has ended",
   async () => {
     const h = harness();
     const { details } = await h.call("bash", { command: "printf 'pid check\\n'", background: true, notify: false });
     const id = (details as { taskId: string }).taskId;
     await settled(h, id);
     const registrations = h.send.mock.calls
-      .map(([message]) => message as { type: string; pid?: number; taskId?: string; exited?: boolean })
+      .map(([message]) => message as { type: string; pid?: number; taskId?: string })
       .filter((message) => message.type === "lasercode/process/registration");
-    // One process, named while it existed and unnamed when it ended — a record
-    // must not outlive the process it describes (RP-1).
-    expect(registrations).toHaveLength(2);
+    // Exactly one message, and it only ever says what a process *is*. A pid
+    // with no start token is not an identity once the process has gone: the
+    // host's own table notices the end, so the module never asserts it and
+    // cannot delete the attribution of whatever takes that number next (RP-1).
+    expect(registrations).toHaveLength(1);
     expect(registrations[0]).toMatchObject({ taskId: id });
-    expect(registrations[0]!.exited).toBeUndefined();
     expect(registrations[0]!.pid).toBeGreaterThan(0);
     expect(registrations[0]!.pid).not.toBe(process.pid);
-    expect(registrations[1]).toMatchObject({ taskId: id, pid: registrations[0]!.pid, exited: true });
+    expect(Object.keys(registrations[0]!).sort()).toEqual(["pid", "taskId", "type"]);
   },
   60_000,
 );
 
-it("sweeps files a crashed run left behind, and nothing younger", async () => {
-  const root = join(tmpdir(), `${WIRE_NAMESPACE}-tasks`);
-  const stale = join(root, "crashed-session-retention");
-  const fresh = join(root, "live-session-retention");
-  const { mkdirSync, writeFileSync, utimesSync } = await import("node:fs");
+it("sweeps what a crashed run left behind, in its own root and in abandoned ones, and nothing younger", async () => {
+  const { mkdirSync, utimesSync, writeFileSync } = await import("node:fs");
+  const root = mkdtempSync(join(tmpdir(), "background-retention-sweep-"));
+  dirs.push(root);
+  const stale = join(root, "0".repeat(32));
+  const fresh = join(root, "1".repeat(32));
   mkdirSync(stale, { recursive: true });
   mkdirSync(fresh, { recursive: true });
   writeFileSync(join(stale, "t-old.log"), "old");
@@ -290,11 +363,21 @@ it("sweeps files a crashed run left behind, and nothing younger", async () => {
   utimesSync(join(stale, "t-old.log"), old, old);
   utimesSync(stale, old, old);
 
-  harness();
+  // A private root a crashed process left in the system temp directory.
+  const abandoned = join(tmpdir(), `${WIRE_NAMESPACE}-tasks-abandoned-test`);
+  const running = join(tmpdir(), `${WIRE_NAMESPACE}-tasks-running-test`);
+  mkdirSync(abandoned, { recursive: true });
+  mkdirSync(running, { recursive: true });
+  writeFileSync(join(abandoned, "t.log"), "gone");
+  writeFileSync(join(running, "t.log"), "live");
+  utimesSync(abandoned, old, old);
+
+  harness({ logRoot: root });
 
   expect(existsSync(join(stale, "t-old.log"))).toBe(false);
-  // A young file may belong to a command another session is still writing.
+  // A young directory may belong to a session that is still writing.
   expect(existsSync(join(fresh, "t-new.log"))).toBe(true);
-  rmSync(fresh, { recursive: true, force: true });
-  rmSync(stale, { recursive: true, force: true });
+  expect(existsSync(abandoned)).toBe(false);
+  expect(existsSync(running)).toBe(true);
+  rmSync(running, { recursive: true, force: true });
 });

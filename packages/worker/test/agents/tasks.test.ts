@@ -3,7 +3,7 @@
  * going past, read by the harness for `inspect_fleet` and for `task_output`
  * on a child's command. And the bounded tail read behind that.
  */
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -155,20 +155,31 @@ describe("readLogTail", () => {
     dirs.push(dir);
     const log = join(dir, "t.log");
     writeFileSync(log, "one\ntwo\nthree\n");
-    expect(await readLogTail(log, 2)).toBe("two\nthree");
-    expect(await readLogTail(log, 10)).toBe("one\ntwo\nthree");
-    expect(await readLogTail(log, 0)).toBe("three");
+    expect(await readLogTail(log, 2, dir)).toBe("two\nthree");
+    expect(await readLogTail(log, 10, dir)).toBe("one\ntwo\nthree");
+    expect(await readLogTail(log, 0, dir)).toBe("three");
     writeFileSync(log, "");
-    expect(await readLogTail(log, 5)).toBe("");
-    expect(await readLogTail(join(dir, "missing.log"), 5)).toBeUndefined();
-    expect(await readLogTail(undefined, 5)).toBeUndefined();
-    expect(await readLogTail("relative.log", 5)).toBeUndefined();
+    expect(await readLogTail(log, 5, dir)).toBe("");
+    expect(await readLogTail(join(dir, "missing.log"), 5, dir)).toBeUndefined();
+    expect(await readLogTail(undefined, 5, dir)).toBeUndefined();
+    expect(await readLogTail("relative.log", 5, dir)).toBeUndefined();
+    // A path outside the private root is a claim, not a permission (RP-6), and
+    // neither is a symlink out of it.
+    const outside = mkdtempSync(join(tmpdir(), "task-tail-outside-"));
+    dirs.push(outside);
+    writeFileSync(join(outside, "secret.log"), "not yours");
+    expect(await readLogTail(join(outside, "secret.log"), 5, dir)).toBeUndefined();
+    symlinkSync(join(outside, "secret.log"), join(dir, "link.log"));
+    expect(await readLogTail(join(dir, "link.log"), 5, dir)).toBeUndefined();
+    // Without a root nothing is read at all.
+    writeFileSync(log, "one\n");
+    expect(await readLogTail(log, 5)).toBeUndefined();
     // Past the window only the tail is read, aligned to a character boundary.
     const big = join(dir, "big.log");
     const line = "é".repeat(50) + "\n";
     const lines = Math.ceil((TASK_OUTPUT_MAX_BYTES * 1.5) / Buffer.byteLength(line));
     writeFileSync(big, line.repeat(lines) + "last\n");
-    const tail = await readLogTail(big, 3);
+    const tail = await readLogTail(big, 3, dir);
     expect(tail).toBe(`${"é".repeat(50)}\n${"é".repeat(50)}\nlast`);
     expect(tail).not.toContain("�");
   });

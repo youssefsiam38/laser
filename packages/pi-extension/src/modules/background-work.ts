@@ -36,8 +36,8 @@
  * `triggerTurn: false` — recorded and shown with the next turn, never waking
  * one. `notify` without `background` is ignored.
  */
-import { randomBytes } from "node:crypto";
-import { readdirSync, rmSync, statSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -62,7 +62,7 @@ import {
 import { Type } from "typebox";
 import type { BackgroundWorkOptions } from "../agents-bridge.js";
 import type { LaserModule, ModuleContext } from "./index.js";
-import { TaskLog } from "./task-log.js";
+import { LOG_DIR_MODE, TaskLog } from "./task-log.js";
 
 /**
  * Give every process this module starts the project's environment.
@@ -114,8 +114,18 @@ const TERMINAL_TASK_MAX_AGE_MS = 60 * 60_000;
 const TERMINAL_EXCERPT_BYTES_MAX = 2 * 1024 * 1024;
 /** Bytes this session's command logs may occupy on disk, unless the worker lowers it. */
 const SESSION_LOG_BYTES_MAX = 128 * 1024 * 1024;
-/** Smallest budget the worker may impose: one segment for the newest command. */
-const SESSION_LOG_BYTES_MIN = 8 * 1024 * 1024;
+/**
+ * Live tail buffers, across every running command of one session.
+ *
+ * A per-command window is not a bound: fifty commands running at once would be
+ * fifty windows. Over this ceiling the oldest live tails are shrunk to a small
+ * activity excerpt and then released — their output is still on disk and still
+ * counted, their rows still say what they are doing, and not one command is
+ * paused or stopped for it.
+ */
+const SESSION_LIVE_TAIL_BYTES_MAX = 8 * 1024 * 1024;
+/** What a shrunk live tail keeps: enough for the row's line and the exit message. */
+const SHRUNK_TAIL_BYTES = 16 * 1024;
 /** How much a command may write between two checks of the session's disk budget. */
 const BUDGET_CHECK_BYTES = 1024 * 1024;
 /** How old a file left by a crashed run must be before a sweep may remove it. */
@@ -183,6 +193,12 @@ interface State {
   publishRetention?: () => void;
   /** Bytes this session's logs may occupy; the worker may lower it (RP-6). */
   logBudget: number;
+  /** The private directory this session's logs live in, once one exists. */
+  logRoot?: string;
+  /** Per process: a session id never becomes a directory name. */
+  logSalt: Buffer;
+  /** Live tail buffers shrunk or released to stay inside the session's ceiling. */
+  tailsShrunk: number;
   /** Logs of records a bound forgot: still ours to account for and release. */
   orphanLogs: TaskLog[];
   /** Bytes written since the last budget check; the check is not per chunk. */
@@ -216,6 +232,13 @@ export class TailBuffer {
         this.size -= excess;
       }
     }
+  }
+  /** Keep only the last `limit` bytes. Used by the session's tail ceiling. */
+  shrink(limit: number): void {
+    if (this.size <= limit) return;
+    const kept = Buffer.concat(this.chunks).subarray(this.size - limit);
+    this.chunks = [kept];
+    this.size = kept.length;
   }
   text(): string {
     return Buffer.concat(this.chunks).toString("utf8");
@@ -379,18 +402,62 @@ function sessionLogBytes(state: State): number {
  */
 function enforceLogBudget(state: State): void {
   if (sessionLogBytes(state) <= state.logBudget) return;
-  for (const entry of logsOf(state)) {
+  const entries = logsOf(state);
+  // First everything nobody is writing to any more, oldest first.
+  for (const entry of entries) {
     if (sessionLogBytes(state) <= state.logBudget) break;
-    if (entry.live) {
-      if (entry.log.releaseOldest() > 0) state.released += 1;
-    } else {
-      entry.log.release();
-      state.released += 1;
-    }
+    if (entry.live) continue;
+    entry.log.release();
+    state.released += 1;
   }
-  // Still over after every finished log went: the live windows themselves are
-  // the floor, and they are already one segment each.
+  // Then the older half of a running command's window.
+  for (const entry of entries) {
+    if (sessionLogBytes(state) <= state.logBudget) break;
+    if (!entry.live) continue;
+    if (entry.log.releaseOldest() > 0) state.released += 1;
+  }
+  // Then a running command's window entirely. The command is not touched: it
+  // keeps printing, its bytes keep being counted and digested, and its row
+  // says the body is gone. A ceiling that a long-running command could hold
+  // open is not a ceiling.
+  for (const entry of entries) {
+    if (sessionLogBytes(state) <= state.logBudget) break;
+    if (!entry.live) continue;
+    if (entry.log.release() > 0) state.released += 1;
+  }
   state.orphanLogs = state.orphanLogs.filter((log) => log.usable);
+}
+
+/**
+ * Keep the memory of live commands inside one ceiling for the whole session.
+ *
+ * Oldest first: the tail is shrunk to an excerpt, and then released
+ * altogether. Nothing is paused and no row is lost — the command's output is
+ * on disk (or accounted for as released), and its `activity` line still comes
+ * from what is left.
+ */
+function enforceLiveTailBudget(state: State): void {
+  const live = [...state.tasks.values()].filter((task) => task.status === "running" && task.tail);
+  let total = live.reduce((sum, task) => sum + (task.tail?.bytes ?? 0), 0);
+  if (total <= SESSION_LIVE_TAIL_BYTES_MAX) return;
+  for (const task of live) {
+    if (total <= SESSION_LIVE_TAIL_BYTES_MAX) break;
+    const before = task.tail?.bytes ?? 0;
+    if (before <= SHRUNK_TAIL_BYTES) continue;
+    task.tail!.shrink(SHRUNK_TAIL_BYTES);
+    total -= before - (task.tail?.bytes ?? 0);
+    state.tailsShrunk += 1;
+  }
+  for (const task of live) {
+    if (total <= SESSION_LIVE_TAIL_BYTES_MAX) break;
+    const before = task.tail?.bytes ?? 0;
+    if (before === 0) continue;
+    // Its last line survives as the excerpt the row draws.
+    task.excerpt = tailBytesOf(task.tail!.text(), TASK_EXCERPT_BYTES);
+    task.tail = undefined;
+    total -= before;
+    state.tailsShrunk += 1;
+  }
 }
 
 /** What this session's commands are holding, for RP-3 and the worker's budget. */
@@ -415,8 +482,10 @@ export function retentionOf(state: State): BackgroundTaskRetention {
     liveTailBytes,
     excerptBytes,
     logBytes: sessionLogBytes(state),
+    pendingLogBytes: [...state.tasks.values()].reduce((sum, task) => sum + task.log.pendingBytes, 0),
     evicted: state.evicted,
     released: state.released,
+    tailsShrunk: state.tailsShrunk,
   };
 }
 
@@ -429,6 +498,40 @@ export function retentionOf(state: State): BackgroundTaskRetention {
  * released by its owner through the budget above, never by a guess about who
  * wrote it.
  */
+/**
+ * Private roots a crashed process left in the system temp directory.
+ *
+ * Only ours by name, only when nothing has touched them for a day, and bounded
+ * like every other sweep. A young one may belong to a worker that is running
+ * right now.
+ */
+function sweepAbandonedRoots(parent: string, now = Date.now()): number {
+  let removed = 0;
+  let names: string[];
+  try {
+    // The system temp directory belongs to the whole machine: ours are picked
+    // out by name first, and only then bounded — a bound applied to somebody
+    // else's thousand files would hide our own.
+    names = readdirSync(parent)
+      .filter((name) => name.startsWith(`${WIRE_NAMESPACE}-tasks-`))
+      .slice(0, SWEEP_NAMES_MAX);
+  } catch {
+    return 0;
+  }
+  for (const name of names) {
+    if (removed >= SWEEP_DIRS_MAX) break;
+    const directory = join(parent, name);
+    try {
+      if (now - statSync(directory).mtimeMs <= STALE_LOG_AGE_MS) continue;
+      rmSync(directory, { recursive: true, force: true });
+      removed += 1;
+    } catch {
+      // Somebody else's, or gone already.
+    }
+  }
+  return removed;
+}
+
 function sweepStaleLogs(root: string, now = Date.now()): number {
   let removed = 0;
   let examined = 0;
@@ -555,14 +658,40 @@ function sessionIdFor(state: State, toolCtx: ExtensionContext): string {
   return state.sessionId;
 }
 
-/** Where this session's command logs live: one directory, one writer. */
-function logRoot(): string {
-  return join(tmpdir(), `${WIRE_NAMESPACE}-tasks`);
+/**
+ * Where this worker's command logs live.
+ *
+ * The worker hands down a private directory (the host made it, inside its own
+ * state). Without one — a test, a standalone run — this makes its own, with
+ * `mkdtemp` so the name is unpredictable and `0700` so nobody else can read
+ * it. A shared, guessable directory under the system temp is not somewhere to
+ * put a person's command output.
+ */
+function logRoot(state: State, options: BackgroundWorkOptions): string {
+  if (state.logRoot) return state.logRoot;
+  if (options.logRoot) {
+    mkdirSync(options.logRoot, { recursive: true, mode: LOG_DIR_MODE });
+    state.logRoot = options.logRoot;
+    return state.logRoot;
+  }
+  state.logRoot = mkdtempSync(join(tmpdir(), `${WIRE_NAMESPACE}-tasks-`), { encoding: "utf8" });
+  chmodSync(state.logRoot, LOG_DIR_MODE);
+  return state.logRoot;
+}
+
+/**
+ * The directory name for one session: an opaque, bounded id salted per
+ * process. A session's own id is a durable identifier of a person's
+ * conversation and has no business being a directory name on a shared
+ * filesystem.
+ */
+function logDirOf(state: State, sessionId: string): string {
+  return createHash("sha256").update(state.logSalt).update(sessionId).digest("hex").slice(0, 32);
 }
 
 function startTask(ctx: ModuleContext, state: State, options: BackgroundWorkOptions, input: StartInput, publish: (task: TaskRecord) => void): TaskRecord {
   const id = newTaskId();
-  const dir = join(logRoot(), sessionIdFor(state, input.toolCtx));
+  const dir = join(logRoot(state, options), logDirOf(state, sessionIdFor(state, input.toolCtx)));
   const controller = new AbortController();
   let forwardUpdates = true;
   let settle: () => void = () => {};
@@ -574,6 +703,12 @@ function startTask(ctx: ModuleContext, state: State, options: BackgroundWorkOpti
   const log = new TaskLog({
     dir,
     id,
+    // A rotation or a release moves the window the host reads through. It is
+    // published the moment it happens, not on the next throttle tick: a ranged
+    // read against a stale `retainedFromByte` would name the wrong bytes.
+    onWindowChange: () => {
+      if (state.tasks.get(id) === task) publish(task);
+    },
     onError: (error) => {
       if (loggedLogFailure) return;
       loggedLogFailure = true;
@@ -629,7 +764,6 @@ function startTask(ctx: ModuleContext, state: State, options: BackgroundWorkOpti
         // an exact-version patch (docs/upstream.md).
         onSpawn: (pid: number) => {
           if (!Number.isInteger(pid) || pid <= 0) return;
-          shellPid = pid;
           ctx.send({ type: "lasercode/process/registration", pid, taskId: task.id });
         },
         onData: (data) => {
@@ -643,6 +777,12 @@ function startTask(ctx: ModuleContext, state: State, options: BackgroundWorkOpti
           if (state.bytesSinceBudgetCheck >= BUDGET_CHECK_BYTES) {
             state.bytesSinceBudgetCheck = 0;
             enforceLogBudget(state);
+            enforceLiveTailBudget(state);
+            // What a live command holds changes as it prints, so the counters
+            // are published on this same bounded cadence rather than only when
+            // a task starts or ends: a diagnostic that says a running command
+            // holds nothing is worse than one that says nothing at all.
+            state.publishRetention?.();
           }
           execOptions.onData(data);
           schedulePublish();
@@ -687,7 +827,6 @@ function startTask(ctx: ModuleContext, state: State, options: BackgroundWorkOpti
       task.publishTimer = undefined;
     }
     task.log.close();
-    if (shellPid !== undefined) ctx.send({ type: "lasercode/process/registration", pid: shellPid, taskId: task.id, exited: true });
     publish(task);
     // The rule (D-162): a foreground call carried its own result; every other
     // exit is a message to the model, and `task.notify` says whether it
@@ -790,16 +929,27 @@ export const backgroundWorkModule: LaserModule = {
     const options = ctx.backgroundWork;
     if (!options) return;
     const { pi } = ctx;
-    const state: State = { tasks: new Map(), logBudget: SESSION_LOG_BYTES_MAX, orphanLogs: [], bytesSinceBudgetCheck: 0, evicted: 0, released: 0 };
+    const state: State = {
+      tasks: new Map(),
+      logBudget: SESSION_LOG_BYTES_MAX,
+      logSalt: randomBytes(16),
+      orphanLogs: [],
+      bytesSinceBudgetCheck: 0,
+      evicted: 0,
+      released: 0,
+      tailsShrunk: 0,
+    };
     states.set(ctx, state);
     const seconds = options.foregroundCommandSeconds;
 
     // Housekeeping for runs that are gone: bounded, age-only, and never a
-    // guess about who owns a young file (see `sweepStaleLogs`).
+    // guess about who owns a young file (see `sweepStaleLogs`). Both this
+    // worker's own root and any private root a crashed process left behind.
     try {
-      sweepStaleLogs(logRoot());
+      sweepStaleLogs(logRoot(state, options));
+      sweepAbandonedRoots(tmpdir());
     } catch {
-      // A missing or unreadable temp directory is not a reason to fail a session.
+      // A missing or unreadable directory is not a reason to fail a session.
     }
 
     let lastRetention = "";
@@ -1023,7 +1173,10 @@ export const backgroundWorkModule: LaserModule = {
       // never deletes another runtime's files; it says how much this one may
       // keep, and this runtime releases its own bytes (RP-6).
       if (command.type === "lasercode/task/log-budget") {
-        state.logBudget = Math.max(SESSION_LOG_BYTES_MIN, Math.min(SESSION_LOG_BYTES_MAX, Math.floor(command.bytes)));
+        // Zero is a legitimate share: a worker with many busy sessions can
+        // ask one to keep nothing, and that session's commands carry on with
+        // their size and digest exact and their bodies released.
+        state.logBudget = Math.max(0, Math.min(SESSION_LOG_BYTES_MAX, Math.floor(command.bytes)));
         enforceLogBudget(state);
         state.publishRetention?.();
         return true;

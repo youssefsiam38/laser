@@ -11,7 +11,7 @@
  * Git is always spawned with an argument array; no shell string, ever.
  */
 import { execFile, spawn } from "node:child_process";
-import { noteWorkerProcess, noteWorkerProcessExit } from "../process-registry.js";
+import { noteWorkerProcess } from "../process-registry.js";
 import { accessSync, closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { PROJECT_DIR_NAME, WORKTREES_DIR_NAME, type WorktreeEnvironment, type WorktreeSetup } from "@lasercode/protocol";
@@ -301,9 +301,8 @@ async function runWorktreeSetup(projectCwd: string, tree: Worktree, signal: Abor
     // A process this worker started on purpose, so the inventory can name it
     // instead of calling it an unknown descendant (RP-1).
     if (child.pid !== undefined) noteWorkerProcess({ pid: child.pid, role: "helper", label: "worktree-setup" });
-    child.once("error", () => { noteWorkerProcessExit(child.pid); finish({ status: "failed", logPath, exitCode: null }); });
+    child.once("error", () => finish({ status: "failed", logPath, exitCode: null }));
     child.once("exit", (code) => {
-      noteWorkerProcessExit(child.pid);
       finish(code === 0 ? { status: "ok", logPath } : { status: "failed", logPath, exitCode: code });
     });
     timer = setTimeout(() => { kill(); finish({ status: "timed-out", logPath }); }, 600_000);

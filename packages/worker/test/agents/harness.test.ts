@@ -225,6 +225,10 @@ function makeWorld(projectCwd = "/repo", projectTrusted = true) {
     notify: (method, params) => notifications.push({ method, params }),
     modelAvailable: async () => !unavailable,
     tasks: (path) => tasks.get(path) ?? [],
+    // The private root a command log must be inside to be read (RP-6). The
+    // tests write their scratch logs under the system temp directory, which is
+    // where this harness's root points.
+    taskLogRoot: () => tmpdir(),
   };
   const definitions = new DefinitionsCache();
   const harness = new AgentHarness({ host, definitions, worktrees, projectTrusted, backgroundWork: (cwd) => ({ cwd, foregroundCommandSeconds: 120, commandPrefix: projectBashPrefix("source scripts/project-shell.sh") }), now: () => Date.now() });

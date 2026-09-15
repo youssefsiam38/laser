@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -13,9 +13,9 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function world() {
+function world(logRoot?: string) {
   const notify = vi.fn();
-  const register = new TaskRegister({ notify });
+  const register = new TaskRegister({ notify, ...(logRoot ? { logRoot } : {}) });
   const broadcast = (): BackgroundTask[] => notify.mock.calls.map(([, params]) => (params as { task: BackgroundTask }).task);
   return { register, notify, broadcast };
 }
@@ -49,7 +49,7 @@ describe("TaskRegister", () => {
     dirs.push(dir);
     const logPath = join(dir, "t-1.log");
     writeFileSync(logPath, "hello world");
-    const w = world();
+    const w = world(dir);
     w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ logPath }) });
     w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ logPath }) });
     expect(w.broadcast()).toHaveLength(1);
@@ -60,15 +60,39 @@ describe("TaskRegister", () => {
     expect(await w.register.read(PATH, "t-1", 6)).toMatchObject({ from: 6, chunk: "world", eof: true });
   });
 
-  it("refuses a read for a task of another session, and one with no file", async () => {
-    const w = world();
-    w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ logPath: "/tmp/gone/t-1.log" }) });
+  it("refuses a read for a task of another session, one with no file, and one outside the private root", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "task-register-root-"));
+    dirs.push(dir);
+    const w = world(dir);
+    w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ logPath: join(dir, "t-1.log") }) });
     w.register.observeExtensionMessage(OTHER, { type: "lasercode/task/update", task: update({ id: "t-2" }) });
     await expect(w.register.read(OTHER, "t-1", 0)).rejects.toThrow(ProtocolError);
     await expect(w.register.read(OTHER, "t-1", 0)).rejects.toThrow(/does not belong to this session/);
     // No log file at all is a different, nameable thing from a missing one.
     await expect(w.register.read(OTHER, "t-2", 0)).rejects.toThrow(/kept no log file/);
     await expect(w.register.read(PATH, "t-1", 0)).rejects.toThrow(/has been cleaned up/);
+
+    // A path an extension message named outside the private root is a claim,
+    // not a permission: the host will not read it, whatever is there (RP-6).
+    const outside = mkdtempSync(join(tmpdir(), "task-register-outside-"));
+    dirs.push(outside);
+    writeFileSync(join(outside, "secrets.log"), "not yours");
+    w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ id: "t-outside", logPath: join(outside, "secrets.log") }) });
+    await expect(w.register.read(PATH, "t-outside", 0)).rejects.toThrow(/kept no log file/);
+    // Nor one that is a symlink into somebody else's file.
+    writeFileSync(join(outside, "target.log"), "also not yours");
+    symlinkSync(join(outside, "target.log"), join(dir, "t-link.log"));
+    w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ id: "t-link", logPath: join(dir, "t-link.log") }) });
+    await expect(w.register.read(PATH, "t-link", 0)).rejects.toThrow(/has been cleaned up/);
+  });
+
+  it("counts retained bytes in UTF-8, not in string units", () => {
+    const w = world();
+    const command = "echo \u201c\u4f60\u597d\u4e16\u754c\ud83d\ude80\u201d";
+    w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ command, title: command, activity: command }) });
+    const serialized = JSON.stringify(w.register.list(PATH)[0]);
+    expect(w.register.retained()).toEqual({ count: 1, bytes: Buffer.byteLength(serialized, "utf8") });
+    expect(Buffer.byteLength(serialized, "utf8")).toBeGreaterThan(serialized.length);
   });
 
   it("ends running tasks when the worker that ran them goes away, and says why", () => {
@@ -94,7 +118,7 @@ describe("TaskRegister", () => {
     writeFileSync(`${logPath}.prev`, "middle-part");
     writeFileSync(logPath, "latest-part");
     const digest = "a".repeat(64);
-    const w = world();
+    const w = world(dir);
     w.register.observeExtensionMessage(PATH, {
       type: "lasercode/task/update",
       task: update({ logPath, outputBytes: 1_000_000, retainedFromByte: 999_978, logState: "truncated", outputDigest: digest }),
@@ -111,7 +135,7 @@ describe("TaskRegister", () => {
     dirs.push(dir);
     const logPath = join(dir, "t-1.log");
     writeFileSync(logPath, "stale");
-    const w = world();
+    const w = world(dir);
     w.register.observeExtensionMessage(PATH, {
       type: "lasercode/task/update",
       task: update({ logPath, status: "completed", exitCode: 0, outputBytes: 5_000, logState: "released", retainedFromByte: 5_000 }),

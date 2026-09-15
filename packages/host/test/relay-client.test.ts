@@ -275,6 +275,18 @@ async function harness(options: {
   return { url, channelId, desktop, device, client, requests, errors, notify: (n: JsonRpcNotification) => emit(n) };
 }
 
+/**
+ * The device says which session it is showing before it can be sent that
+ * session's transcript (RP-6). Delivery is scoped per connection from the
+ * first byte, so this is what a phone's first screen does for real.
+ */
+async function following(phone: Phone, h: { requests: unknown[] }, path: string, id = 900): Promise<void> {
+  const before = h.requests.length;
+  await phone.send({ jsonrpc: "2.0", id, method: "session/load", params: { path, fromSeq: 0, transcript: "loaded" } });
+  await until(() => h.requests.length > before, 2000, `the ${path} load to reach the host`);
+  await until(() => phone.messages.some((message) => (message as { id?: number }).id === id), 2000, `the ${path} load reply`);
+}
+
 describe("RelayClient", () => {
   it("answers a device's JSON-RPC request through the relay", async () => {
     const h = await harness();
@@ -375,9 +387,10 @@ describe("RelayClient", () => {
     await phone.ready();
     await until(() => h.client.state === "connected", 2000, "connected");
 
+    await following(phone, h, "/s/a.jsonl");
     h.notify(update("/s/a.jsonl", 8));
-    await until(() => phone.messages.length > 0, 2000, "the notification");
-    expect(phone.messages[0]).toMatchObject({ method: "session/update", params: { seq: 8 } });
+    await until(() => phone.messages.some((message) => (message as { method?: string }).method === "session/update"), 2000, "the notification");
+    expect(phone.messages.find((message) => (message as { method?: string }).method === "session/update")).toMatchObject({ method: "session/update", params: { seq: 8 } });
     expect(h.client.lastSeq.get("/s/a.jsonl")).toBe(8);
   });
 
@@ -391,6 +404,7 @@ describe("RelayClient", () => {
     await phone.ready();
     await until(() => h.client.state === "connected", 2000, "connected");
 
+    await following(phone, h, "/s/a.jsonl");
     h.notify({
       jsonrpc: "2.0",
       method: "session/update",
@@ -401,15 +415,16 @@ describe("RelayClient", () => {
         update: { kind: "tool_execution_end", toolCallId: "t1", isError: false, result: "x".repeat(200_000) },
       },
     });
-    await until(() => phone.messages.length > 0, 2000, "the reduced notification");
-    expect(phone.messages[0]).toMatchObject({
+    const updates = () => phone.messages.filter((message) => (message as { method?: string }).method === "session/update");
+    await until(() => updates().length > 0, 2000, "the reduced notification");
+    expect(updates()[0]).toMatchObject({
       method: "session/update",
       params: { seq: 1, update: { kind: "tool_execution_end", oversized: true } },
     });
 
     // And the session is still usable afterwards.
     h.notify(update("/s/a.jsonl", 2));
-    await until(() => phone.messages.length > 1, 2000, "a following notification");
+    await until(() => updates().length > 1, 2000, "a following notification");
     expect(h.client.state).toBe("connected");
   });
 
@@ -593,19 +608,21 @@ describe("RelayClient", () => {
     await phone.ready();
     await until(() => h.client.state === "connected", 2000, "connected");
 
+    await following(phone, h, "/s/a.jsonl");
+    const delivered = () => phone.messages.filter((message) => (message as { method?: string }).method === "session/update");
     // Forty updates enqueued in one synchronous burst: nothing has drained yet,
     // so everything past the cap is dropped and counted, as the shaped path's
     // own `maxQueue` does.
     for (let seq = 1; seq <= 40; seq++) h.notify(update("/s/a.jsonl", seq));
     await until(() => h.client.statistics().outboundQueueDropped > 0, 2000, "the queue to refuse a frame");
-    await until(() => phone.messages.length >= 4, 2000, "the frames that were accepted");
+    await until(() => delivered().length >= 4, 2000, "the frames that were accepted");
     expect(h.client.statistics().outboundQueueDropped).toBe(36);
-    expect(phone.messages).toHaveLength(4);
+    expect(delivered()).toHaveLength(4);
     expect(h.errors.at(-1)?.message).toMatch(/outbound queue is full \(4 frames\)/);
 
     // And the connection still works: this is backpressure, not a failure.
     h.notify(update("/s/a.jsonl", 41));
-    await until(() => phone.messages.length === 5, 2000, "a later notification");
+    await until(() => delivered().length === 5, 2000, "a later notification");
   });
 
   it("backs off and retries when the relay refuses the upgrade outright", async () => {
@@ -657,15 +674,17 @@ describe("RelayClient", () => {
     await phone.ready();
     await until(() => h.client.state === "connected", 2000, "connected");
 
+    await following(phone, h, "/s/a.jsonl");
+    const shaped = () => phone.messages.filter((message) => (message as { method?: string }).method === "session/update");
     h.notify(update("/s/a.jsonl", 1));
-    await until(() => phone.messages.length > 0, 2000, "the shaped notification");
-    expect(phone.messages[0]).toMatchObject({ method: "session/update" });
+    await until(() => shaped().length > 0, 2000, "the shaped notification");
+    expect(shaped()[0]).toMatchObject({ method: "session/update" });
     // Chaff keeps arriving after the last real frame and the phone drops it, so
     // the message count stays at one while frames keep moving.
     const framesAfterFirst = h.client.statistics().framesSent;
     await new Promise((resolve) => setTimeout(resolve, 120));
     expect(h.client.statistics().framesSent).toBeGreaterThan(framesAfterFirst);
-    expect(phone.messages).toHaveLength(1);
+    expect(shaped()).toHaveLength(1);
   });
 });
 

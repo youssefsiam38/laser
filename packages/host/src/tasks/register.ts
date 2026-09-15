@@ -16,8 +16,9 @@
  * are seen, `list` / `read` in the router, and `sessionClosed` when a worker
  * drops a session.
  */
-import { open, stat } from "node:fs/promises";
-import { isAbsolute } from "node:path";
+import { constants } from "node:fs";
+import { open, type FileHandle } from "node:fs/promises";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import {
   ErrorCodes,
   ProtocolError,
@@ -31,6 +32,21 @@ import {
 
 export interface TaskRegisterDeps {
   notify(method: "tasks/update", params: HostNotifications["tasks/update"]): void;
+  /**
+   * The private directory a command log must be inside for this host to read
+   * it (RP-6). A `logPath` arrives on an extension message: it is a claim
+   * about where bytes are, not a permission to read a file. Without a root
+   * nothing is read at all.
+   */
+  logRoot?: string;
+}
+
+/** Is this path inside `root`? Compared after resolution, never by prefix string. */
+export function isInsideRoot(candidate: string | undefined, root: string | undefined): boolean {
+  if (candidate === undefined || root === undefined) return false;
+  if (!isAbsolute(candidate) || !isAbsolute(root)) return false;
+  const within = relative(resolve(root), resolve(candidate));
+  return within !== "" && within !== ".." && !within.startsWith(`..${sep}`) && !isAbsolute(within);
 }
 
 interface Held {
@@ -86,7 +102,10 @@ export class TaskRegister {
     const previous = tasks.get(task.id);
     // At-least-once delivery is normal; the wire carries changes, not heartbeats.
     if (previous?.serialized === serialized && previous.logPath === (logPath ?? previous.logPath)) return;
-    this.bytes += serialized.length - (previous?.serialized.length ?? 0);
+    // Exact UTF-8 bytes, not JS string units: a command with a single emoji in
+    // it costs more bytes than characters, and a budget that cannot see that
+    // is not a byte budget.
+    this.bytes += Buffer.byteLength(serialized, "utf8") - (previous ? Buffer.byteLength(previous.serialized, "utf8") : 0);
     tasks.set(task.id, { task, logPath: logPath ?? previous?.logPath, serialized });
     this.prune(tasks);
     this.pruneSessions(path);
@@ -137,7 +156,7 @@ export class TaskRegister {
       );
     }
     const file = held.logPath;
-    if (file === undefined || !isAbsolute(file) || held.task.logState === "released") {
+    if (file === undefined || held.task.logState === "released" || !isInsideRoot(file, this.deps.logRoot)) {
       throw new ProtocolError(
         ErrorCodes.Unsupported,
         "That task kept no log file, so there is nothing to read. Its last line is on the row.",
@@ -149,24 +168,38 @@ export class TaskRegister {
     // of it. Offsets stay stream offsets, so a follower's byte arithmetic is
     // unchanged; it only ever learns that the head is gone.
     const retainedFrom = held.task.retainedFromByte ?? 0;
-    const segments: Array<{ file: string; size: number }> = [];
-    let previous = 0;
-    try {
-      previous = (await stat(`${file}.prev`)).size;
-      if (previous > 0) segments.push({ file: `${file}.prev`, size: previous });
-    } catch {
-      // No older segment: the window is one file, which is the normal case.
-    }
-    let current: number;
-    try {
-      current = (await stat(file)).size;
-    } catch {
+    // Both halves of the window are opened once, without following a symlink,
+    // and measured through the handle that will be read: a rotation between a
+    // `stat` and an `open` would otherwise describe one file and read another.
+    const segments: Array<{ file: string; handle: FileHandle; size: number }> = [];
+    const openSegment = async (path: string): Promise<{ handle: FileHandle; size: number } | undefined> => {
+      let handle: FileHandle | undefined;
+      try {
+        handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+        const stats = await handle.stat();
+        if (!stats.isFile()) {
+          await handle.close();
+          return undefined;
+        }
+        return { handle, size: stats.size };
+      } catch {
+        if (handle) await handle.close().catch(() => {});
+        return undefined;
+      }
+    };
+    const older = await openSegment(`${file}.prev`);
+    if (older && older.size > 0) segments.push({ file: `${file}.prev`, ...older });
+    else if (older) await older.handle.close();
+    const current = await openSegment(file);
+    if (!current) {
+      for (const segment of segments) await segment.handle.close();
       throw new ProtocolError(
         ErrorCodes.InvalidParams,
         "That output is gone — the file it was written to has been cleaned up.",
       );
     }
-    segments.push({ file, size: current });
+    segments.push({ file, ...current });
+    const previous = older && older.size > 0 ? older.size : 0;
     const retainedBytes = segments.reduce((sum, segment) => sum + segment.size, 0);
     const total = Math.max(held.task.outputBytes, retainedFrom + retainedBytes);
     // Below the window: answer from its first byte and say where that is, so a
@@ -188,18 +221,17 @@ export class TaskRegister {
     // a character the previous window already carried, so a follower that
     // appends `from + byteLength(chunk)` stays exact and no seam grows a U+FFFD.
     let chunkStart = start;
-    if (length > 0) {
-      const handle = await open(segment.file, "r");
-      try {
+    try {
+      if (length > 0) {
         const buffer = Buffer.alloc(length);
-        const { bytesRead } = await handle.read(buffer, 0, length, start);
+        const { bytesRead } = await segment.handle.read(buffer, 0, length, start);
         const bytes = buffer.subarray(0, bytesRead);
         const aligned = alignUtf8(bytes, start === 0 && segment === segments[0]);
         chunkStart = start + aligned.start;
         chunk = bytes.toString("utf8", aligned.start, aligned.end);
-      } finally {
-        await handle.close();
       }
+    } finally {
+      for (const open of segments) await open.handle.close().catch(() => {});
     }
     const base = segment.file === file ? retainedFrom + (segments.length > 1 ? previous : 0) : retainedFrom;
     const from = base + chunkStart;
@@ -220,7 +252,7 @@ export class TaskRegister {
     for (const [id, held] of tasks) {
       if (tasks.size <= MAX_TASKS_PER_SESSION) return;
       if (held.task.status === "running") continue;
-      this.bytes -= held.serialized.length;
+      this.bytes -= Buffer.byteLength(held.serialized, "utf8");
       tasks.delete(id);
     }
   }
@@ -237,7 +269,7 @@ export class TaskRegister {
       if (this.bySession.size <= MAX_SESSIONS_WITH_TASKS && this.bytes <= MAX_REGISTER_BYTES) return;
       if (path === touched) continue;
       if ([...tasks.values()].some((held) => held.task.status === "running")) continue;
-      for (const held of tasks.values()) this.bytes -= held.serialized.length;
+      for (const held of tasks.values()) this.bytes -= Buffer.byteLength(held.serialized, "utf8");
       this.bySession.delete(path);
     }
   }
