@@ -7,12 +7,26 @@ import { sanitizeError, sanitizeOwner } from './report.mjs';
 
 const sleep = ms => new Promise(done => setTimeout(done, ms));
 
+/**
+ * A count the host actually answered.
+ *
+ * `null` is the host saying it could not read that evidence (RP-6 membership
+ * that does not publish its view, for instance), and it stays `null`: folding
+ * it into 0 would turn "unknown" into "nothing is attached", which is the
+ * shape of every vacuous guard. A key that was never produced at all is still
+ * 0, so a caller passing a partial row keeps its old meaning.
+ */
+function guardCount(value) {
+  if (value === null) return null;
+  return Number(value) || 0;
+}
+
 export function retirementGuardSnapshot(host = {}, workers = []) {
   const sum = key => workers.reduce((total, worker) => total + (Number(worker?.[key]) || 0), 0);
   return {
-    productConnections: Number(host.connections) || 0,
-    attachmentRefs: Number(host.attachmentRefs) || 0,
-    attachedPaths: Number(host.attachedPaths) || 0,
+    productConnections: guardCount(host.connections),
+    attachmentRefs: guardCount(host.attachmentRefs),
+    attachedPaths: guardCount(host.attachedPaths),
     runningSessions: Number(host.runningSessions) || 0,
     liveRuns: Number(host.liveRuns) || 0,
     runningTasks: (Number(host.runningTasks) || 0) + sum('runningTasks'),
@@ -21,6 +35,29 @@ export function retirementGuardSnapshot(host = {}, workers = []) {
     pendingApprovals: sum('pendingApprovals'),
     runningTools: sum('runningTools'),
   };
+}
+
+/**
+ * What one host reading says about RP-6 transcript membership, or why it says
+ * nothing.
+ *
+ * The host projects `transcriptDelivery` from the canonical public view
+ * (`counts()`, `paths()`, `admittedHolders()`); this is the harness side of
+ * that contract. Evidence that is absent, refused or not a set of counts is
+ * `available: false` with every number `null` — a caller must never read it as
+ * "no connection is holding anything".
+ */
+export function deliveryCounts(host = {}) {
+  const evidence = host.transcriptDelivery;
+  const unavailable = reason => ({ available: false, reason, connections: Number.isInteger(evidence?.connections) ? evidence.connections : null,
+    paths: null, owners: null, admittedOwners: null, loadingOwners: null });
+  if (!evidence) return unavailable('the host reported no transcript delivery evidence');
+  if (evidence.available !== true) return unavailable(evidence.reason ?? 'the host could not read its transcript delivery');
+  if (![evidence.paths, evidence.owners, evidence.admittedOwners, evidence.loadingOwners].every(Number.isInteger)) {
+    return unavailable('the transcript delivery evidence is not a set of counts');
+  }
+  return { available: true, reason: null, connections: evidence.connections ?? null,
+    paths: evidence.paths, owners: evidence.owners, admittedOwners: evidence.admittedOwners, loadingOwners: evidence.loadingOwners };
 }
 
 export function liveWorkOf(snapshot = {}) {

@@ -147,22 +147,61 @@ export async function callFunction(client, objectId, functionDeclaration, option
 /**
  * The host's scalar projection. Counts, bytes and statuses; never a path, a
  * payload or a socket address.
+ *
+ * Transcript delivery and attachment are one thing since RP-6 (M18-T6): a
+ * connection is following a conversation because it holds it, and the
+ * per-connection `TranscriptDelivery` is where that is written down. The maps
+ * this used to read — `HostServer.attached`, and `TranscriptDelivery.loaded` /
+ * `.loading` — no longer exist, so every attachment and delivery row was a
+ * zero while clients held transcripts, and the retirement guard that reads
+ * them was proving nothing.
+ *
+ * It now reads only the canonical public membership view — `counts()`,
+ * `paths()` and `admittedHolders(path)` — never the private table behind it,
+ * and returns counts alone: the path set is built and measured inside the host
+ * and never leaves it. A delivery record that cannot answer all three makes
+ * every membership number `null`, with the reason beside it: unreadable
+ * evidence is not an empty host.
  */
 export const HOST_COUNTERS_FN = `function(){
     const s=this; const sockets=Array.from(s.clients ?? []);
-    const deliveries=Array.from((s.transcripts ?? new Map()).values());
+    const table=s.transcripts;
+    const deliveries=table && typeof table.values==='function' ? Array.from(table.values()) : null;
+    const complete=deliveries !== null && deliveries.every(d=>d && typeof d.counts==='function' && typeof d.paths==='function' && typeof d.admittedHolders==='function');
+    let membership;
+    if(!complete){
+      membership={ available:false,
+        reason:deliveries===null ? 'the host keeps no per-connection transcript delivery table' : 'a transcript delivery record does not publish the membership view',
+        connections:deliveries===null ? null : deliveries.length, paths:null, owners:null, admittedOwners:null, loadingOwners:null };
+    } else {
+      // Bounded by the product's own membership caps (256 paths × 8 owners per
+      // connection). Only the size of this set is returned.
+      const distinct=new Set(); let owners=0; let admitted=0; let failed=null;
+      try {
+        for(const delivery of deliveries){
+          owners+=delivery.counts().owners;
+          for(const path of delivery.paths()){ distinct.add(path); admitted+=delivery.admittedHolders(path); }
+        }
+      } catch(error) { failed='the membership view could not be read'; }
+      membership=failed
+        ? { available:false, reason:failed, connections:deliveries.length, paths:null, owners:null, admittedOwners:null, loadingOwners:null }
+        : { available:true, reason:null, connections:deliveries.length, paths:distinct.size, owners,
+            admittedOwners:admitted, loadingOwners:Math.max(0, owners-admitted) };
+    }
     const workers=Array.from(s.pool?.entries?.values?.() ?? []);
     const tasks=s.tasks?.list?.() ?? [];
-    const attachmentSets=Array.from(s.attached?.values?.() ?? []);
-    const attachedPaths=new Set(); for(const paths of attachmentSets) for(const path of paths) attachedPaths.add(path);
     const runs=s.runs?.list?.() ?? []; const terminalRuns=new Set(['completed','blocked','failed','cancelled']);
     const attentionRows=Array.from(s.attention?.live?.values?.() ?? []);
     return { kind:'host', connections:sockets.length, bufferedBytes:sockets.reduce((n,w)=>n+(w.bufferedAmount||0),0),
       queuedSockets:sockets.filter(w=>(w.bufferedAmount||0)>0).length,
-      attachmentRefs:attachmentSets.reduce((n,paths)=>n+(paths?.size||0),0), attachedPaths:attachedPaths.size,
+      // An attachment is a membership hold: surfaces holding conversations, and
+      // the conversations they hold.
+      attachmentRefs:membership.owners, attachedPaths:membership.paths,
       runningSessions:workers.reduce((n,w)=>n+(w.running?.size||0),0), liveRuns:runs.filter(run=>!terminalRuns.has(run.status)).length,
       attentionDialogs:attentionRows.reduce((n,row)=>n+(row.dialogs?.size||0),0),
-      transcriptLoaded:deliveries.reduce((n,d)=>n+(d.loaded?.size||0),0), transcriptLoading:deliveries.reduce((n,d)=>n+(d.loading?.size||0),0),
+      // Owners admitted to delivery, and owners whose load is still in flight.
+      transcriptLoaded:membership.admittedOwners, transcriptLoading:membership.loadingOwners,
+      transcriptPaths:membership.paths, transcriptDelivery:membership,
       loadDeliveries:Array.from(s.loadDeliveries?.values?.() ?? []).reduce((n,set)=>n+set.size,0),
       pendingLogRows:s.pendingLogRows?.length||0, tasks:tasks.length, runningTasks:tasks.filter(t=>t.status==='running').length,
       taskStatuses:tasks.reduce((o,t)=>(o[t.status]=(o[t.status]||0)+1,o),{}), workers:workers.length,

@@ -12,7 +12,7 @@ import { promisify } from 'node:util';
 import { modeConfig, expected, SAFETY } from '../resource/config.mjs';
 import { syntheticPng, imagePayload } from '../resource/fixtures.mjs';
 import { theilSen, compareRuns, assertRedacted, sanitizeOwner, sanitizeError, COMPARISON_POLICY, SLOPE_POLICY } from '../resource/report.mjs';
-import { CONNECTION_PRESSURE_FN, WORKER_COUNTERS_FN, connectInspector, connectionPressure, InspectorClient, scalarCounters } from '../resource/inspector.mjs';
+import { CONNECTION_PRESSURE_FN, HOST_COUNTERS_FN, WORKER_COUNTERS_FN, connectInspector, connectionPressure, InspectorClient, scalarCounters } from '../resource/inspector.mjs';
 import { FENCE_CLOSE_CODE, classifyConnection, observeBackpressure, watchFenceClosure } from '../resource/backpressure.mjs';
 import { captureHeap } from '../resource/heap.mjs';
 import { captureMemoryInfra, dumpAllocators } from '../resource/memory-infra.mjs';
@@ -20,7 +20,7 @@ import { memoryLabels } from '../resource/process-sampler.mjs';
 import { dispatchFindShortcut, findShortcutEvents } from '../resource/keyboard.mjs';
 import { partialFailureReport, providerAccounting, runResourceSoak, writeAtomicJson, writePartialReport } from '../resource-soak.mjs';
 import { SoakRun, classifySampledProcess, closedPageMetrics, connectWorkerInspector, safetyRefusalDetail, safetyRefusalMessage } from '../resource/context.mjs';
-import { assertNoLiveWork, dormantViews, proveNoLiveWork, reconcileDelivery, retirementGuardSnapshot, traverseRetainedViews } from '../resource/retirement.mjs';
+import { assertNoLiveWork, deliveryCounts, dormantViews, proveNoLiveWork, reconcileDelivery, retirementGuardSnapshot, traverseRetainedViews } from '../resource/retirement.mjs';
 import { expectedRetainedCounts } from '../resource/retention.mjs';
 import { revealSessionRow, sidebarRowView } from '../resource/sidebar.mjs';
 import { DiscoveryRegistry, PUBLISHED } from '../resource/discovery.mjs';
@@ -992,6 +992,105 @@ test('scalar counters send the host or worker projection and return its value', 
   await assert.rejects(connectionPressure(client, 'instance-1', '54321'), /integer loopback port/);
   await connectionPressure(client, 'instance-1', 54_321);
   assert.deepEqual(sent.at(-1)[1].arguments, [{ value: 54_321 }], 'a connection is named by a port number and nothing else');
+});
+
+// --- host transcript membership (RP-6) ----------------------------------------
+
+const projectHost = new Function(`return ${HOST_COUNTERS_FN}`)();
+
+/** The real per-connection delivery record when the host is built. */
+async function transcriptDeliveryClass() {
+  const module = await import(new URL('packages/host/dist/transcript-delivery.js', CHECKOUT).href);
+  return module.TranscriptDelivery;
+}
+
+const load = (id, path, owner) => ({ jsonrpc: '2.0', id, method: 'session/load', params: owner ? { path, owner } : { path } });
+const detach = (id, path, owner) => ({ jsonrpc: '2.0', id, method: 'pi/session/detach', params: owner ? { path, owner } : { path } });
+const hostWithDeliveries = deliveries => ({
+  clients: new Set(deliveries.map((_, index) => ({ bufferedAmount: 0, readyState: 1, _socket: { remotePort: 50_000 + index } }))),
+  transcripts: new Map(deliveries.map((delivery, index) => [index, delivery])),
+  loadDeliveries: new Map(),
+});
+
+test('host attachment and delivery rows are read from the RP-6 membership view of a real connection', async () => {
+  const TranscriptDelivery = await transcriptDeliveryClass();
+  const delivery = new TranscriptDelivery();
+  const path = '/scratch/sessions/session-abcdef.jsonl';
+  const other = '/scratch/sessions/session-ghijkl.jsonl';
+  const empty = projectHost.call(hostWithDeliveries([delivery]));
+  assert.deepEqual([empty.transcriptLoaded, empty.transcriptLoading, empty.transcriptPaths, empty.attachmentRefs, empty.attachedPaths], [0, 0, 0, 0, 0]);
+  assert.equal(empty.transcriptDelivery.available, true, 'a connection holding nothing is a measured zero');
+
+  // Attached: one admitted surface, one still loading, on two conversations.
+  delivery.begin(load(1, path)).finish({ jsonrpc: '2.0', id: 1, result: {} });
+  delivery.begin(load(2, path, 'beam'));
+  delivery.begin(load(3, other)).finish({ jsonrpc: '2.0', id: 3, result: {} });
+  const attached = projectHost.call(hostWithDeliveries([delivery]));
+  assert.deepEqual([attached.transcriptLoaded, attached.transcriptLoading, attached.transcriptPaths], [2, 1, 2],
+    `admitted, loading and retained counts: ${JSON.stringify(attached.transcriptDelivery)}`);
+  assert.deepEqual([attached.attachmentRefs, attached.attachedPaths], [3, 2], 'an attachment is a membership hold');
+  assert.equal(attached.transcriptDelivery.connections, 1);
+  assert.doesNotMatch(JSON.stringify(attached), /session-|scratch|jsonl/, 'the projection counts paths, it never carries one');
+  assert.doesNotThrow(() => assertRedacted(JSON.stringify(attached.transcriptDelivery)));
+
+  // Two connections holding the same conversation: owners add up, the path is
+  // counted once.
+  const second = new TranscriptDelivery();
+  second.begin(load(4, path)).finish({ jsonrpc: '2.0', id: 4, result: {} });
+  const both = projectHost.call(hostWithDeliveries([delivery, second]));
+  assert.deepEqual([both.transcriptLoaded, both.attachmentRefs, both.attachedPaths, both.transcriptDelivery.connections], [3, 4, 2, 2]);
+
+  // Detached: the same counters come back down, on the real release path.
+  for (const [id, target, owner] of [[5, path], [6, path, 'beam'], [7, other]]) delivery.begin(detach(id, target, owner));
+  const released = projectHost.call(hostWithDeliveries([delivery]));
+  assert.deepEqual([released.transcriptLoaded, released.transcriptLoading, released.transcriptPaths, released.attachmentRefs, released.attachedPaths], [0, 0, 0, 0, 0]);
+  assert.equal(released.transcriptDelivery.available, true);
+});
+
+test('membership evidence the host cannot read is null everywhere, never an empty host', () => {
+  const partial = { counts: () => ({ paths: 1, owners: 1 }), paths: () => ['/scratch/sessions/session-abcdef.jsonl'].values() };
+  const stale = projectHost.call(hostWithDeliveries([partial]));
+  assert.equal(stale.transcriptDelivery.available, false);
+  assert.match(stale.transcriptDelivery.reason, /does not publish the membership view/);
+  assert.deepEqual([stale.transcriptLoaded, stale.transcriptLoading, stale.transcriptPaths, stale.attachmentRefs, stale.attachedPaths], [null, null, null, null, null]);
+  assert.equal(stale.connections, 1, 'the connections it can count are still counted');
+
+  const missing = projectHost.call({ clients: new Set(), loadDeliveries: new Map() });
+  assert.equal(missing.transcriptDelivery.available, false);
+  assert.match(missing.transcriptDelivery.reason, /no per-connection transcript delivery table/);
+  assert.deepEqual([missing.attachmentRefs, missing.attachedPaths, missing.transcriptLoaded], [null, null, null]);
+
+  const throwing = { counts: () => ({ paths: 1, owners: 1 }), paths: () => { throw new Error('torn down'); }, admittedHolders: () => 1 };
+  const failed = projectHost.call(hostWithDeliveries([throwing]));
+  assert.equal(failed.transcriptDelivery.available, false);
+  assert.match(failed.transcriptDelivery.reason, /could not be read/);
+  assert.equal(failed.transcriptLoaded, null);
+
+  // The harness side of the same contract, and the guard that reads it.
+  assert.deepEqual(deliveryCounts(stale), { available: false, reason: stale.transcriptDelivery.reason, connections: 1, paths: null, owners: null, admittedOwners: null, loadingOwners: null });
+  assert.equal(deliveryCounts({}).available, false);
+  assert.equal(deliveryCounts({ transcriptDelivery: { available: true, connections: 1, paths: 1, owners: 1, admittedOwners: 1, loadingOwners: null } }).available, false);
+  const guards = retirementGuardSnapshot(stale);
+  assert.deepEqual([guards.attachmentRefs, guards.attachedPaths], [null, null], 'an unreadable attachment count must not become zero');
+  assert.equal(guards.productConnections, 1);
+  assert.equal(retirementGuardSnapshot({ connections: 2, attachmentRefs: 3, attachedPaths: 2 }).attachedPaths, 2);
+  assert.equal(retirementGuardSnapshot().attachedPaths, 0, 'a row that never carried the key keeps its old meaning');
+});
+
+test('the host projection names fields the host source really has', async () => {
+  const read = async path => readFile(new URL(path, CHECKOUT), 'utf8');
+  const server = await read('packages/host/src/server.ts');
+  assert.match(server, /private readonly transcripts = new Map<WebSocket, TranscriptDelivery>/);
+  assert.doesNotMatch(server, /private readonly attached\b/, 'the removed attachment map must not come back unnoticed');
+  const delivery = await read('packages/host/src/transcript-delivery.ts');
+  for (const member of [/counts\(\): \{ paths: number; owners: number \}/, /paths\(\): IterableIterator<string>/, /admittedHolders\(path: string\): number/]) {
+    assert.match(delivery, member, `TranscriptDelivery must still expose ${member}`);
+  }
+  assert.doesNotMatch(delivery, /private readonly (?:loaded|loading)\b/, 'the maps the old projection read are gone for good');
+  // The projection reads the published view and nothing behind it.
+  assert.doesNotMatch(HOST_COUNTERS_FN, /\.members\b/, 'the private membership table is not the harness’s to read');
+  assert.doesNotMatch(HOST_COUNTERS_FN, /\.loaded\b|\.loading\b|s\.attached\b/);
+  assert.match(HOST_COUNTERS_FN, /admittedHolders/);
 });
 
 // --- one named connection’s pressure account (RP-7) --------------------------

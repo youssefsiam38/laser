@@ -58,7 +58,9 @@ export default {
       'the dormant set covers every retained view the run created');
     const detached = await run.withHost(({ counters }) => run.until(async () => {
       const guards = retirementGuardSnapshot(await counters());
-      return guards.attachedPaths <= 1 ? guards : false;
+      // `null` is the host saying it could not read its own membership: never a
+      // reason to call the attachment set collapsed.
+      return Number.isInteger(guards.attachedPaths) && guards.attachedPaths <= 1 ? guards : false;
     }, 'the app to detach every dormant retained view', Math.min(config.phaseTimeoutMs, config.teardownTimeoutMs)));
     // The product detaches eagerly, so after visiting every retained view the
     // host holds at most the one on screen — never a set that grew with the

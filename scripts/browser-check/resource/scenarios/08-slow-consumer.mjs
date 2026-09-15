@@ -7,6 +7,7 @@ import { closeNodeWebSocket } from '../websocket.mjs';
 import { SAFETY } from '../config.mjs';
 import { sleep } from '../context.mjs';
 import { classifyConnection, observeBackpressure, watchFenceClosure } from '../backpressure.mjs';
+import { deliveryCounts } from '../retirement.mjs';
 
 const sleepFor = sleep;
 
@@ -59,7 +60,14 @@ export default {
   async run(run) {
     const { check, config, report, state } = run;
     const heavy = state.heavy;
+    let whileAttached = null;
     const version = JSON.parse(await readFile(join(run.checkout, 'packages/cli/package.json'), 'utf8')).version;
+    // What the host's membership evidence says before this connection exists.
+    // Scenario 1 proves the baseline zero is measured; these three readings
+    // prove the same counters move for a real connection that attaches and
+    // then goes away, which is the only way a zero here means anything.
+    const beforeAttach = deliveryCounts(await run.hostCounters());
+    assert.equal(beforeAttach.available, true, `transcript delivery evidence is unreadable: ${beforeAttach.reason}`);
     const slow = new NodeWebSocket(`${check.fixture.hostRecord.url.replace('http:', 'ws:')}/ws`);
     // Recorded from the moment the socket exists: the host's byte fence closes
     // with 1013, and a paused reader only hears it once it is resumed.
@@ -104,10 +112,19 @@ export default {
           // The aggregate high-water ceiling, unchanged.
           if (totals.bufferedBytes > SAFETY.socketBufferedBytes) throw new Error('slow socket crossed safety ceiling');
           const view = await connection(port);
-          return { ...view, totalBufferedBytes: totals.bufferedBytes };
+          return { ...view, totalBufferedBytes: totals.bufferedBytes, host: totals };
         };
         const first = await sample();
         assert.equal(first.matched, 1, 'exactly one host connection carries the slow consumer\u2019s port');
+        // Read from the same sample the observation already takes: no extra
+        // traffic, no extra connection, nothing about the measurement changed.
+        whileAttached = deliveryCounts(first.host);
+        assert.equal(whileAttached.available, true, `transcript delivery evidence is unreadable: ${whileAttached.reason}`);
+        assert.ok(whileAttached.admittedOwners >= beforeAttach.admittedOwners + 1,
+          `a connection that loaded a conversation must be counted: ${beforeAttach.admittedOwners} → ${whileAttached.admittedOwners} admitted owners`);
+        assert.ok(whileAttached.owners >= beforeAttach.owners + 1 && whileAttached.paths >= 1,
+          `membership must hold this connection's surface and its conversation: ${JSON.stringify(whileAttached)}`);
+        assert.equal(whileAttached.connections, first.host.connections, 'every connected client has a delivery record');
 
         // Replaying the already-loaded synthetic state makes kernel backpressure
         // deterministic even with TCP receive autotuning. The ordinary UI client
@@ -138,6 +155,13 @@ export default {
       await settle(check.rpc, heavy.path, run.until.bind(run), config.phaseTimeoutMs);
       return result;
     });
+    // The socket is closed by `withStalledClient`; the host must give its
+    // membership back. Bounded, and about counts only.
+    const afterClose = await run.withHost(({ counters }) => run.until(async () => {
+      const counts = deliveryCounts(await counters());
+      return counts.available && counts.admittedOwners <= beforeAttach.admittedOwners && counts.owners <= beforeAttach.owners ? counts : false;
+    }, 'the host to release the closed slow consumer\u2019s transcript membership', Math.min(config.phaseTimeoutMs, config.teardownTimeoutMs)));
+
     const finalState = await check.rpc('session/load', slowConsumerLoad(heavy.path));
     const recovered = await check.rpc('session/load', slowConsumerLoad(heavy.path, Math.max(0, finalState.seq - 5)));
     assert.equal(recovered.seq, finalState.seq, 'a fresh consumer recovers the authoritative watermark');
@@ -152,6 +176,8 @@ export default {
       evidence: observation.evidence,
       consumer: 'one real paused TCP reader on an owned loopback connection',
       recovered: true,
+      // RP-6 membership around this one connection: counts only, no path.
+      delivery: { beforeAttach, whileAttached, afterClose },
     };
     const phase = await run.samplePhase('slow-consumer');
     return { phase };
