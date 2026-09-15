@@ -2431,7 +2431,7 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 | M18-T14 | RP-14 Electron/Tauri decision gate | todo | — | — | depends on M18-T1..T13/M18-T15 |
 | M18-T15 | RP-2 post-containment repeat baseline | in-progress | soak-harness-readiness `01a0a434-bd43-76c8-926f-53918d27a39b` | — | harness prerequisites active; full A/B waits M18-T8/M18-T16/M18-T17 |
 | M18-T16 | RP-5b bounded single-conversation hydration and rendering | todo | — | — | added by D-258; depends on M18-T10; blocks M18-T8 renderer gate/M18-T15 |
-| M18-T17 | RP-4 impossible naming-pin correction | in-progress | naming-pin-correction (assigning) | — | added by D-259; blocks M18-T15 scenario 9 |
+| M18-T17 | RP-4 impossible naming-pin correction | in-progress | naming-pin-correction `01a0a464-3123-76c8-926f-53c73cf80a31` | — | added by D-259; blocks M18-T15 scenario 9 |
 
 #### M18-T1 notes
 - 2026-09-14 baseline: protocol 144/144 and host 316/316 pass at `ec1c42d`. Desktop 155/156 passes; `test/host-environment.test.ts` reproducibly expects same-version adoption but receives `failed` before this task changes code. Treat as a pre-existing baseline, not a telemetry regression; M18-T1 must keep every other desktop test green and report this exact case separately if unchanged.
