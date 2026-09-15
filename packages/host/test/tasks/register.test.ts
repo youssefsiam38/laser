@@ -35,10 +35,11 @@ describe("TaskRegister", () => {
   it("keeps the log path to itself and broadcasts the task with its session", () => {
     const w = world();
     const logPath = "/tmp/whatever/t-1.log";
-    expect(w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ logPath }) })).toBe(true);
+    expect(w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ logPath, logSegments: [0] }) })).toBe(true);
     expect(w.broadcast()).toEqual([expect.objectContaining({ id: "t-1", sessionPath: PATH })]);
-    // The path a client is never told.
+    // Neither the path nor the files are ever told to a client.
     expect(JSON.stringify(w.broadcast())).not.toContain(logPath);
+    expect(JSON.stringify(w.broadcast())).not.toContain("logSegments");
     expect(w.register.list(PATH)).toHaveLength(1);
     // Any other extension message is somebody else's.
     expect(w.register.observeExtensionMessage(PATH, { type: "lasercode/capabilities", active: [], failed: [] })).toBe(false);
@@ -52,8 +53,9 @@ describe("TaskRegister", () => {
     const logPath = join(dir, "t-1");
     writeFileSync(`${logPath}.0.log`, "hello world");
     const w = world(dir);
-    w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ logPath }) });
-    w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ logPath }) });
+    // The writer names its own segments; the host reads those and nothing else.
+    w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ logPath, logSegments: [0] }) });
+    w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ logPath, logSegments: [0] }) });
     expect(w.broadcast()).toHaveLength(1);
     // A later update need not repeat the path for the read to still work.
     w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ outputBytes: 11 }) });
@@ -66,7 +68,7 @@ describe("TaskRegister", () => {
     const dir = mkdtempSync(join(tmpdir(), "task-register-root-"));
     dirs.push(dir);
     const w = world(dir);
-    w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ logPath: join(dir, "t-1") }) });
+    w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ logPath: join(dir, "t-1"), logSegments: [0] }) });
     w.register.observeExtensionMessage(OTHER, { type: "lasercode/task/update", task: update({ id: "t-2" }) });
     await expect(w.register.read(OTHER, "t-1", 0)).rejects.toThrow(ProtocolError);
     await expect(w.register.read(OTHER, "t-1", 0)).rejects.toThrow(/does not belong to this session/);
@@ -79,12 +81,12 @@ describe("TaskRegister", () => {
     const outside = mkdtempSync(join(tmpdir(), "task-register-outside-"));
     dirs.push(outside);
     writeFileSync(join(outside, "secrets.log"), "not yours");
-    w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ id: "t-outside", logPath: join(outside, "secrets.log") }) });
+    w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ id: "t-outside", logPath: join(outside, "secrets"), logSegments: [0] }) });
     await expect(w.register.read(PATH, "t-outside", 0)).rejects.toThrow(/kept no log file/);
     // Nor one that is a symlink into somebody else's file.
     writeFileSync(join(outside, "target.log"), "also not yours");
     symlinkSync(join(outside, "target.log"), join(dir, "t-link.0.log"));
-    w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ id: "t-link", logPath: join(dir, "t-link") }) });
+    w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ id: "t-link", logPath: join(dir, "t-link"), logSegments: [0] }) });
     await expect(w.register.read(PATH, "t-link", 0)).rejects.toThrow(/has been cleaned up/);
     // A symlinked *directory* inside the root escapes it just as well, and
     // `O_NOFOLLOW` would not have noticed: containment is decided on the
@@ -93,7 +95,7 @@ describe("TaskRegister", () => {
     dirs.push(elsewhere);
     writeFileSync(join(elsewhere, "secret.log"), "still not yours");
     symlinkSync(elsewhere, join(dir, "opaque"));
-    w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ id: "t-dir", logPath: join(dir, "opaque", "secret") }) });
+    w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ id: "t-dir", logPath: join(dir, "opaque", "secret"), logSegments: [0] }) });
     await expect(w.register.read(PATH, "t-dir", 0)).rejects.toThrow(/kept no log file/);
   });
 
@@ -150,13 +152,37 @@ describe("TaskRegister", () => {
       type: "lasercode/task/update",
       // Deliberately stale: the record still says the window began 12 bytes
       // earlier than it does. The read must not believe it.
-      task: update({ logPath, outputBytes: 1_000_000, retainedFromByte: 999_966, logState: "truncated", outputDigest: digest }),
+      task: update({ logPath, logSegments: [999_978, 999_989], outputBytes: 1_000_000, retainedFromByte: 999_966, logState: "truncated", outputDigest: digest }),
     });
 
     const head = await w.register.read(PATH, "t-1", 0);
     expect(head).toMatchObject({ from: 999_978, chunk: "middle-part", retainedFrom: 999_978, digest, bytes: 1_000_000, eof: false });
     const tail = await w.register.read(PATH, "t-1", 999_989);
     expect(tail).toMatchObject({ from: 999_989, chunk: "latest-part", eof: true });
+  });
+
+  it("reads only the segments the writer named, whatever else is in the directory", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "task-register-decoys-"));
+    dirs.push(dir);
+    const logPath = join(dir, "t-1");
+    writeFileSync(`${logPath}.0.log`, "the real bytes");
+    // Ten thousand names that look exactly like segments of this task. A read
+    // that listed the directory would open, measure and sort all of them, and
+    // would believe whichever one came last; this one never looks at them,
+    // because the writer said which two files it has (RP-6).
+    for (let index = 1; index <= 10_000; index++) writeFileSync(`${logPath}.${index * 1000}.log`, `decoy ${index}`);
+    const w = world(dir);
+    w.register.observeExtensionMessage(PATH, {
+      type: "lasercode/task/update",
+      task: update({ logPath, logSegments: [0], outputBytes: 14, status: "completed", exitCode: 0 }),
+    });
+
+    const started = Date.now();
+    const chunk = await w.register.read(PATH, "t-1", 0);
+    expect(chunk).toMatchObject({ from: 0, chunk: "the real bytes", bytes: 14, eof: true });
+    // Nothing about the answer, or the work behind it, grew with the decoys.
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(JSON.stringify(chunk)).not.toContain("decoy");
   });
 
   it("says a released log is gone rather than reading a file that is not it", async () => {
@@ -167,7 +193,7 @@ describe("TaskRegister", () => {
     const w = world(dir);
     w.register.observeExtensionMessage(PATH, {
       type: "lasercode/task/update",
-      task: update({ logPath, status: "completed", exitCode: 0, outputBytes: 5_000, logState: "released", retainedFromByte: 5_000 }),
+      task: update({ logPath, logSegments: [0], status: "completed", exitCode: 0, outputBytes: 5_000, logState: "released", retainedFromByte: 5_000 }),
     });
     await expect(w.register.read(PATH, "t-1", 0)).rejects.toThrow(/kept no log file/);
   });

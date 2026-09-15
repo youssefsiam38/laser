@@ -28,7 +28,7 @@ import { PREFS_MAX_BYTES } from "./messages.js";
 import { resourceParamsSchemas } from "./resources.js";
 import { environmentParamsSchemas } from "./environment-policy.js";
 import type { ClientMethod, ClientRequests } from "./messages.js";
-import { TASK_COMMAND_MAX, TASK_LINE_MAX } from "./tasks.js";
+import { TASK_COMMAND_MAX, TASK_LINE_MAX, TASK_LOG_SEGMENTS_MAX } from "./tasks.js";
 import { ENVIRONMENT_KEY_PATTERN, SESSION_REVISION_PATTERN } from "./session-revision.js";
 
 /** Opt-in browse replies must not silently reinterpret legacy folders as files. */
@@ -359,6 +359,8 @@ export const backgroundTaskUpdateSchema = z
     error: z.string().max(4000).optional(),
     /** Host-side only; the host reads it and never forwards it to a client. */
     logPath: z.string().min(1).max(4096).optional(),
+    /** Host-side only: the stream offsets of the segments that exist (RP-6). */
+    logSegments: z.array(z.number().int().nonnegative()).max(TASK_LOG_SEGMENTS_MAX).optional(),
     logState: z.enum(["retained", "truncated", "released"]).optional(),
     retainedFromByte: z.number().int().nonnegative().optional(),
     outputDigest: z.string().regex(/^[0-9a-f]{64}$/).optional(),

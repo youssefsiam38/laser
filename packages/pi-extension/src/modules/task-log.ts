@@ -187,6 +187,16 @@ export class TaskLog {
     return this.segments[0]?.from ?? this.bytes;
   }
 
+  /**
+   * The stream offsets of the segments that exist right now, oldest first and
+   * never more than two. This is what a reader is given, instead of listing a
+   * directory it does not own.
+   */
+  get segmentOffsets(): number[] {
+    if (this.released || this.broken) return [];
+    return this.segments.map((segment) => segment.from);
+  }
+
   /** Bytes this command currently occupies on disk. */
   get diskBytes(): number {
     if (this.released || this.broken) return 0;
@@ -408,13 +418,19 @@ export class TaskLog {
   /** Open the segment that starts at `from`, privately and without following a link. */
   private open(from: number): void {
     const path = join(this.dir, segmentName(this.id, from));
-    const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND | constants.O_NOFOLLOW;
+    // `O_EXCL`: a segment is created, never joined. If anything already holds
+    // that name — another command's file after an id collision, a leftover, a
+    // symlink — this fails rather than appending one command's output to
+    // another command's bytes. There is no reopening: the descriptor lives as
+    // long as the segment does.
+    const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW;
     const fd = openSync(path, flags, FILE_MODE);
     try {
       const stats = fstatSync(fd);
       if (!stats.isFile()) throw new Error("the log path is not a regular file");
       this.fd = fd;
-      this.segments.push({ from, size: stats.size, path });
+      this.segments.push({ from, size: 0, path });
+      void stats;
     } catch (error) {
       closeSync(fd);
       throw error;

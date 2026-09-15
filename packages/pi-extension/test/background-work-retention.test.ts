@@ -472,76 +472,32 @@ it(
   60_000,
 );
 
-it("sweeps what a crashed run left behind, in its own root and in abandoned ones, and nothing younger", async () => {
+it("never removes a directory it did not write, however long it has been quiet", async () => {
+  // Every worker of a host writes into one root, and a quiet command holding a
+  // segment open for days leaves a directory that looks exactly like a crashed
+  // run's. A runtime that deleted "old" directories there would eventually
+  // delete another worker's live session, so it deletes none of them: crash
+  // cleanup is the host's, before any worker exists (RP-6).
   const { mkdirSync, utimesSync, writeFileSync } = await import("node:fs");
-  const { runSweep, STALE_LOG_AGE_MS } = await import("../src/modules/task-retention.js");
-  const root = mkdtempSync(join(tmpdir(), "background-retention-sweep-"));
-  dirs.push(root);
-  const temp = mkdtempSync(join(tmpdir(), "background-retention-temp-"));
-  dirs.push(temp);
-  const stale = join(root, "0".repeat(32));
-  const fresh = join(root, "1".repeat(32));
-  mkdirSync(stale, { recursive: true });
-  mkdirSync(fresh, { recursive: true });
-  writeFileSync(join(stale, "t-old.0.log"), "old");
-  writeFileSync(join(fresh, "t-new.0.log"), "new");
+  const shared = mkdtempSync(join(tmpdir(), "background-retention-shared-"));
+  dirs.push(shared);
+
+  // Worker A: a session whose command has been quiet for two days.
+  const quietLive = join(shared, "a".repeat(32));
+  mkdirSync(quietLive, { recursive: true });
+  writeFileSync(join(quietLive, "t-quiet.0.log"), "still writing, slowly");
   const old = Date.now() / 1000 - 48 * 60 * 60;
-  utimesSync(join(stale, "t-old.0.log"), old, old);
-  utimesSync(stale, old, old);
+  utimesSync(join(quietLive, "t-quiet.0.log"), old, old);
+  utimesSync(quietLive, old, old);
 
-  // Private roots other processes left behind, and one that is young enough to
-  // belong to a worker running right now. Plus far more candidates than any
-  // single pass may look at, to prove the walk has a cursor rather than a
-  // slice it takes for ever.
-  const abandoned = join(temp, `${WIRE_NAMESPACE}-tasks-abandoned`);
-  const running = join(temp, `${WIRE_NAMESPACE}-tasks-running`);
-  mkdirSync(abandoned, { recursive: true });
-  mkdirSync(running, { recursive: true });
-  utimesSync(abandoned, old, old);
-  for (let index = 0; index < 600; index++) {
-    const noise = join(temp, `${WIRE_NAMESPACE}-tasks-noise-${index}`);
-    mkdirSync(noise, { recursive: true });
-    utimesSync(noise, old, old);
-  }
+  // Worker B starts in the same root and runs a command of its own.
+  const h = harness({ logRoot: shared });
+  const { details } = await h.call("bash", { command: "printf 'mine\\n'", background: true, notify: false });
+  await settled(h, (details as { taskId: string }).taskId);
 
-  let paused = 0;
-  const removed = await runSweep(
-    root,
-    temp,
-    {
-      entries: async function* (directory: string) {
-        const { opendir } = await import("node:fs/promises");
-        const handle = await opendir(directory);
-        for await (const entry of handle) yield { name: entry.name, isDirectory: entry.isDirectory() };
-      },
-      modifiedAt: async (path: string) => {
-        const { stat } = await import("node:fs/promises");
-        try {
-          return (await stat(path)).mtimeMs;
-        } catch {
-          return undefined;
-        }
-      },
-      remove: async (path: string, recursive: boolean) => {
-        const { rm } = await import("node:fs/promises");
-        await rm(path, { recursive, force: true });
-      },
-      now: () => Date.now(),
-      pause: async () => {
-        paused += 1;
-      },
-    },
-    `${WIRE_NAMESPACE}-tasks-`,
-  );
-
-  expect(existsSync(join(stale, "t-old.0.log"))).toBe(false);
-  // A young directory may belong to a session that is still writing.
-  expect(existsSync(join(fresh, "t-new.0.log"))).toBe(true);
-  // Every candidate was reached, not just the first slice of a listing.
-  expect(existsSync(abandoned)).toBe(false);
-  expect(existsSync(running)).toBe(true);
-  expect(removed).toBeGreaterThan(600);
-  // And it yielded to the event loop rather than doing it all in one go.
-  expect(paused).toBeGreaterThan(2);
-  expect(STALE_LOG_AGE_MS).toBe(24 * 60 * 60 * 1000);
+  expect(existsSync(join(quietLive, "t-quiet.0.log"))).toBe(true);
+  expect(existsSync(quietLive)).toBe(true);
+  // And it wrote its own, in its own directory.
+  const mine = readdirSync(shared).filter((entry) => entry !== "a".repeat(32));
+  expect(mine).toHaveLength(1);
 });

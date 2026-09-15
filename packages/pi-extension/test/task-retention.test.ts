@@ -18,6 +18,8 @@ import {
   SessionRetention,
   TERMINAL_TASKS_MAX,
   TERMINAL_TASK_MAX_AGE_MS,
+  ageSchedulerState,
+  setAgeScheduler,
   type RetainedTask,
 } from "../src/modules/task-retention.js";
 
@@ -65,9 +67,6 @@ function session(options: { budget?: number; now?: () => number } = {}) {
   const retention = new SessionRetention({
     forget: (id) => forgotten.push(id),
     ...(options.now ? { now: options.now } : {}),
-    // No wall clock in a unit test: age is driven explicitly.
-    setInterval: () => ({ unref: () => {} }),
-    clearInterval: () => {},
   });
   sessions.push(retention);
   if (options.budget !== undefined) retention.setBudget(options.budget);
@@ -278,4 +277,55 @@ it("holds live tail memory to one ceiling for the session, without touching a co
   expect(held.tailsShrunk).toBeGreaterThan(0);
   // Still forty running commands: memory was released, work was not.
   expect(held.live).toBe(40);
+});
+
+it("ages every session of a process on one timer, and stops it when the last one goes", () => {
+  // One clock for the whole process, however many sessions a worker holds: the
+  // bound is a property of a record, but it is the same property everywhere.
+  const ticks: Array<() => void> = [];
+  let cleared = 0;
+  setAgeScheduler({
+    setInterval: (fn) => {
+      ticks.push(fn);
+      return { unref: () => {} };
+    },
+    clearInterval: () => {
+      cleared += 1;
+    },
+  });
+  try {
+    const before = ageSchedulerState().timersCreated;
+    const now = Date.now();
+    let clock = now;
+    const made = [];
+    const dir = scratch();
+    for (let index = 0; index < 100; index++) {
+      const { retention, forgotten } = session({ budget: 1024 * 1024, now: () => clock });
+      const id = `t-${index}`;
+      const task = fakeTask(id, stalledLog(dir, id, retention), now);
+      retention.track(task);
+      task.endedAtMs = now;
+      retention.markTerminal(id);
+      made.push({ retention, forgotten });
+    }
+    // A hundred sessions, one timer.
+    expect(ageSchedulerState().timersCreated).toBe(before + 1);
+    expect(ageSchedulerState().sessions).toBe(100);
+    expect(ticks).toHaveLength(1);
+
+    // Nothing has aged out yet.
+    expect(made.every((entry) => entry.forgotten.length === 0)).toBe(true);
+    // And that one timer sweeps all of them when it does.
+    clock = now + TERMINAL_TASK_MAX_AGE_MS * 2;
+    ticks[0]!();
+    expect(made.every((entry) => entry.forgotten.length === 1)).toBe(true);
+
+    // The last session leaving stops the clock; nothing is left ticking.
+    for (const entry of made) entry.retention.dispose();
+    expect(ageSchedulerState().sessions).toBe(0);
+    expect(ageSchedulerState().running).toBe(false);
+    expect(cleared).toBe(1);
+  } finally {
+    setAgeScheduler(undefined);
+  }
 });

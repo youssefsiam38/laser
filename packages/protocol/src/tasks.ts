@@ -76,6 +76,8 @@ export const TASK_OUTPUT_MAX_BYTES = 256 * 1024;
 export const TASK_COMMAND_MAX = 8 * 1024;
 /** Bytes of `title` / `activity` kept on the wire. */
 export const TASK_LINE_MAX = 1000;
+/** Segments one command's window may have: the one being written, and one before it. */
+export const TASK_LOG_SEGMENTS_MAX = 2;
 
 export interface TaskOutputChunk {
   id: string;
@@ -99,8 +101,25 @@ export interface TaskOutputChunk {
  * client is told.
  */
 export interface BackgroundTaskUpdate extends Omit<BackgroundTask, "sessionPath"> {
-  /** Absolute path of the file the task streams into, on the host's machine. */
+  /**
+   * Base path of the window on the host's machine: its segments are
+   * `<logPath>.<first stream byte>.log`. Host-internal, like everything here
+   * that names a file.
+   */
   logPath?: string;
+  /**
+   * The stream offsets of the segments that exist right now, oldest first and
+   * at most {@link TASK_LOG_SEGMENTS_MAX} of them (RP-6).
+   *
+   * The writer says which files it has rather than letting a reader list a
+   * directory: a listing is unbounded in a session with many commands, and a
+   * name somebody else put there is not a segment of this command. A
+   * descriptor that a rotation has made stale is harmless — segment files are
+   * immutable, so an offset either names the bytes it always named or names a
+   * file that is gone. Host-internal: stripped before any client, model or
+   * export, exactly as `logPath` is.
+   */
+  logSegments?: number[];
 }
 
 // ---------------------------------------------------------------------------

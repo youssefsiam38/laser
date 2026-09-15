@@ -100,8 +100,68 @@ export interface SessionRetentionOptions {
   now?: () => number;
   /** Called when the totals change materially, so the session can publish them. */
   onChange?: () => void;
-  setInterval?: (fn: () => void, ms: number) => { unref?: () => void };
-  clearInterval?: (handle: unknown) => void;
+}
+
+/**
+ * The age bound's clock: **one** timer for the whole process, however many
+ * sessions a worker holds.
+ *
+ * Age is a property of a record, so it cannot wait for another command to
+ * finish; but it is the same property in every session, so it does not need a
+ * timer each. Sessions register here and are swept together; the timer exists
+ * only while somebody is registered, and it never keeps the process alive.
+ */
+interface AgeScheduler {
+  setInterval(fn: () => void, ms: number): { unref?: () => void };
+  clearInterval(handle: unknown): void;
+}
+
+const aging = new Set<{ enforceRecordBounds(): void }>();
+let ageHandle: { unref?: () => void } | undefined;
+let ageTimersCreated = 0;
+let ageScheduler: AgeScheduler = {
+  setInterval: (fn, ms) => setInterval(fn, ms),
+  clearInterval: (handle) => clearInterval(handle as NodeJS.Timeout),
+};
+
+/** Test seam: drive the one timer without a wall clock. */
+export function setAgeScheduler(next: AgeScheduler | undefined): void {
+  if (ageHandle !== undefined) {
+    ageScheduler.clearInterval(ageHandle);
+    ageHandle = undefined;
+  }
+  ageScheduler = next ?? {
+    setInterval: (fn, ms) => setInterval(fn, ms),
+    clearInterval: (handle) => clearInterval(handle as NodeJS.Timeout),
+  };
+  if (aging.size > 0) startAging();
+}
+
+/** Evidence for a test: timers ever created, and sessions registered now. */
+export function ageSchedulerState(): { timersCreated: number; running: boolean; sessions: number } {
+  return { timersCreated: ageTimersCreated, running: ageHandle !== undefined, sessions: aging.size };
+}
+
+function startAging(): void {
+  if (ageHandle !== undefined) return;
+  ageTimersCreated += 1;
+  const handle = ageScheduler.setInterval(() => {
+    for (const session of [...aging]) session.enforceRecordBounds();
+  }, AGE_SWEEP_INTERVAL_MS);
+  handle?.unref?.();
+  ageHandle = handle;
+}
+
+function registerAging(session: { enforceRecordBounds(): void }): void {
+  aging.add(session);
+  startAging();
+}
+
+function unregisterAging(session: { enforceRecordBounds(): void }): void {
+  aging.delete(session);
+  if (aging.size > 0 || ageHandle === undefined) return;
+  ageScheduler.clearInterval(ageHandle);
+  ageHandle = undefined;
 }
 
 export class SessionRetention {
@@ -118,24 +178,16 @@ export class SessionRetention {
   evicted = 0;
   released = 0;
   tailsShrunk = 0;
-  private ageTimer: unknown;
-
   constructor(private readonly options: SessionRetentionOptions) {
     this.now = options.now ?? Date.now;
-    // Age is a property of a record, not of somebody else's command finishing:
-    // it is checked on its own bounded, unref'd timer rather than whenever the
-    // next task happens to end.
-    const start = options.setInterval ?? ((fn, ms) => setInterval(fn, ms));
-    const handle = start(() => this.enforceRecordBounds(), AGE_SWEEP_INTERVAL_MS);
-    handle?.unref?.();
-    this.ageTimer = handle;
+    // Age is checked for every session of this process on one shared timer,
+    // not on a timer each: fifty sessions are fifty registrations, one clock.
+    registerAging(this);
   }
 
-  /** Stop the age timer. The records themselves are the runtime's to drop. */
+  /** Leave the shared age sweep. The records themselves are the runtime's to drop. */
   dispose(): void {
-    const stop = this.options.clearInterval ?? ((handle: unknown) => clearInterval(handle as NodeJS.Timeout));
-    if (this.ageTimer !== undefined) stop(this.ageTimer);
-    this.ageTimer = undefined;
+    unregisterAging(this);
   }
 
   /** Bytes this session's logs may occupy. Zero is a legitimate share. */
@@ -379,7 +431,6 @@ let processSalt: Buffer | undefined;
 export function resetLogRootForTests(): void {
   processRoot = undefined;
   processSalt = undefined;
-  sweepStarted = false;
 }
 
 export function logRootFor(configured: string | undefined, make: () => string): string {
@@ -393,90 +444,18 @@ export function logSalt(make: () => Buffer): Buffer {
   return processSalt;
 }
 
-/** How old a file left by a crashed run must be before a sweep may remove it. */
-export const STALE_LOG_AGE_MS = 24 * 60 * 60_000;
-/** Entries one pass of the sweep looks at before yielding to the event loop. */
-export const SWEEP_PASS_ENTRIES = 200;
-/** Files one whole sweep may remove. Housekeeping, not a reclamation job. */
-export const SWEEP_REMOVALS_MAX = 5_000;
-
-let sweepStarted = false;
-
-export interface SweepIo {
-  /** Directory entries, as an async iterator: bounded memory, however large. */
-  entries(directory: string): AsyncIterable<{ name: string; isDirectory: boolean }>;
-  modifiedAt(path: string): Promise<number | undefined>;
-  remove(path: string, recursive: boolean): Promise<void>;
-  now(): number;
-  /** Yield to the event loop between passes. */
-  pause(): Promise<void>;
-}
-
 /**
- * Remove what a run that is gone left behind: stale session directories inside
- * this process's root, and whole private roots other processes abandoned.
+ * There is deliberately **no sweep here.**
  *
- * Once per process, asynchronously, and cooperatively: it walks *every*
- * candidate through an async directory iterator with a cursor, pausing every
- * `SWEEP_PASS_ENTRIES` entries, rather than taking the same first slice of a
- * listing for ever. Only age decides, and only for crash recovery — a young
- * file may belong to a command another session is still writing.
+ * Every worker of a host writes into the same private root, and a directory's
+ * modification time says nothing about whether a command is still writing into
+ * it: a quiet command holding one segment open for a day leaves a directory
+ * that looks exactly like a crashed run's. A worker that deleted "old"
+ * directories from that shared root would eventually delete another worker's
+ * live session.
+ *
+ * So a runtime removes only what it owns — its own tasks' segments, through
+ * the budget and the bounds above — and crash recovery belongs to the host,
+ * which does it once at start, before any worker exists to be writing
+ * (`packages/host/src/tasks/cleanup.ts`).
  */
-export function sweepAbandonedLogs(root: string, tempDir: string, io: SweepIo, namespacePrefix: string): Promise<number> {
-  if (sweepStarted) return Promise.resolve(0);
-  sweepStarted = true;
-  return runSweep(root, tempDir, io, namespacePrefix);
-}
-
-/** The same walk, for a test that wants to await it without the once-per-process guard. */
-export async function runSweep(root: string, tempDir: string, io: SweepIo, namespacePrefix = ""): Promise<number> {
-  let removed = 0;
-  let seen = 0;
-  const step = async (): Promise<void> => {
-    seen += 1;
-    if (seen % SWEEP_PASS_ENTRIES === 0) await io.pause();
-  };
-  // This process's own root: session directories nothing has written to for a
-  // day, and then the files inside them.
-  try {
-    for await (const entry of io.entries(root)) {
-      await step();
-      if (removed >= SWEEP_REMOVALS_MAX) return removed;
-      if (!entry.isDirectory) continue;
-      const directory = `${root}/${entry.name}`;
-      const modified = await io.modifiedAt(directory);
-      if (modified === undefined || io.now() - modified <= STALE_LOG_AGE_MS) continue;
-      try {
-        await io.remove(directory, true);
-        removed += 1;
-      } catch {
-        // Somebody else's, or gone already.
-      }
-    }
-  } catch {
-    // No root yet, or not readable: nothing to reclaim.
-  }
-  // Private roots other processes abandoned, recognised by name alone.
-  if (namespacePrefix) {
-    try {
-      for await (const entry of io.entries(tempDir)) {
-        await step();
-        if (removed >= SWEEP_REMOVALS_MAX) return removed;
-        if (!entry.isDirectory || !entry.name.startsWith(namespacePrefix)) continue;
-        const directory = `${tempDir}/${entry.name}`;
-        if (directory === root) continue;
-        const modified = await io.modifiedAt(directory);
-        if (modified === undefined || io.now() - modified <= STALE_LOG_AGE_MS) continue;
-        try {
-          await io.remove(directory, true);
-          removed += 1;
-        } catch {
-          // As above.
-        }
-      }
-    } catch {
-      // A temp directory that cannot be listed is not a reason to fail.
-    }
-  }
-  return removed;
-}

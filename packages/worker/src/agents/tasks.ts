@@ -15,9 +15,10 @@
  * handed to the model or a client.
  */
 import { constants } from "node:fs";
-import { open, readdir, realpath, type FileHandle } from "node:fs/promises";
+import { open, realpath, type FileHandle } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
+  TASK_LOG_SEGMENTS_MAX,
   TASK_OUTPUT_MAX_BYTES,
   alignUtf8,
   type BackgroundTask,
@@ -29,6 +30,8 @@ import {
 /** A task as the worker holds it: the wire record plus where its bytes are. */
 export interface IndexedTask extends BackgroundTask {
   logPath?: string;
+  /** The writer's own bounded segment offsets (RP-6). Never leaves this process. */
+  logSegments?: number[];
 }
 
 /** How many finished tasks one session keeps before the oldest is forgotten (the host keeps the same). */
@@ -71,7 +74,7 @@ export class TaskIndex {
       return true;
     }
     if (message.type !== "lasercode/task/update") return false;
-    const { logPath, ...rest } = message.task;
+    const { logPath, logSegments, ...rest } = message.task;
     let tasks = this.bySession.get(path);
     if (!tasks) {
       tasks = new Map();
@@ -80,7 +83,13 @@ export class TaskIndex {
     this.reopened(path);
     const previous = tasks.get(rest.id);
     const kept = logPath ?? previous?.logPath;
-    tasks.set(rest.id, { ...rest, sessionPath: path, ...(kept !== undefined ? { logPath: kept } : {}) });
+    const keptSegments = logSegments ?? previous?.logSegments;
+    tasks.set(rest.id, {
+      ...rest,
+      sessionPath: path,
+      ...(kept !== undefined ? { logPath: kept } : {}),
+      ...(keptSegments !== undefined ? { logSegments: keptSegments } : {}),
+    });
     this.prune(tasks);
     return true;
   }
@@ -221,33 +230,27 @@ export async function isInsideRoot(candidate: string | undefined, root: string |
  * (R9). `undefined` when there is no file to read: the caller says so rather
  * than showing an empty pane.
  */
-export async function readLogTail(logPath: string | undefined, lines: number, root?: string): Promise<string | undefined> {
+export async function readLogTail(logPath: string | undefined, lines: number, root?: string, logSegments?: number[]): Promise<string | undefined> {
   // A log path arrives from an extension message. It is only ever read when it
   // is inside the private root this process owns, and it is opened without
   // following a symlink: a path is a claim, not a permission (RP-6).
   if (!(await isInsideRoot(logPath, root))) return undefined;
   const directory = dirname(logPath!);
   const name = basename(logPath!);
-  let entries: string[];
-  try {
-    entries = await readdir(directory);
-  } catch {
-    return undefined;
-  }
-  // The window is immutable segments named for the stream byte they start at,
-  // newest last. Reading the newest backwards gives the tail whatever a
-  // rotation did in the meantime.
-  const segments = entries
-    .map((entry) => ({ entry, from: segmentOffset(name, entry) }))
-    .filter((candidate): candidate is { entry: string; from: number } => candidate.from !== undefined)
-    .sort((left, right) => right.from - left.from);
-  if (segments.length === 0) return undefined;
+  // The writer says which segments exist — at most two — rather than this
+  // process listing a directory of somebody else's commands. A stale offset is
+  // safe: a segment file never changes meaning.
+  const offsets = [...new Set(logSegments ?? [])]
+    .filter((offset) => Number.isSafeInteger(offset) && offset >= 0)
+    .sort((left, right) => right - left)
+    .slice(0, TASK_LOG_SEGMENTS_MAX);
+  if (offsets.length === 0) return undefined;
   const parts: Buffer[] = [];
   let want = TASK_OUTPUT_MAX_BYTES;
   let read = false;
-  for (const segment of segments) {
+  for (const offset of offsets) {
     if (want <= 0) break;
-    const bytes = await readEnd(join(directory, segment.entry), want);
+    const bytes = await readEnd(join(directory, `${name}.${offset}.log`), want);
     if (bytes === undefined) continue;
     read = true;
     if (bytes.length === 0) continue;
@@ -281,13 +284,4 @@ async function readEnd(path: string, maxBytes: number): Promise<Buffer | undefin
   } finally {
     await handle?.close().catch(() => {});
   }
-}
-
-/** The stream offset a segment file's name declares, or `undefined` (RP-6). */
-export function segmentOffset(id: string, name: string): number | undefined {
-  if (!name.startsWith(`${id}.`) || !name.endsWith(".log")) return undefined;
-  const middle = name.slice(id.length + 1, -".log".length);
-  if (!/^\d+$/.test(middle)) return undefined;
-  const from = Number(middle);
-  return Number.isSafeInteger(from) ? from : undefined;
 }

@@ -1199,7 +1199,7 @@ describe("AgentHarness", () => {
       const rootPath = root.path;
       const log = join(mkdtempSync(join(tmpdir(), "own-log-")), "t-own");
       writeFileSync(`${log}.0.log`, "first\nsecond\n");
-      world.tasks.set(rootPath, [task("t-own", rootPath, "completed", { exitCode: 0, outputBytes: 13, logPath: log })]);
+      world.tasks.set(rootPath, [task("t-own", rootPath, "completed", { exitCode: 0, outputBytes: 13, logPath: log, logSegments: [0] })]);
       const read = await root.handle.backgroundWork("/repo")!.readTask!("t-own", 1);
       expect(read.task).toMatchObject({ id: "t-own", status: "completed", exitCode: 0 });
       expect(read.text).toBe("second");
@@ -1207,7 +1207,7 @@ describe("AgentHarness", () => {
       expect(read.owner.sessionId).toBeDefined();
       // Still refused for a command of a session that is not the caller's and
       // not under it.
-      world.tasks.set("/sessions/stranger.jsonl", [task("t-stranger", "/sessions/stranger.jsonl", "running", { logPath: log })]);
+      world.tasks.set("/sessions/stranger.jsonl", [task("t-stranger", "/sessions/stranger.jsonl", "running", { logPath: log, logSegments: [0] })]);
       await expect(root.handle.backgroundWork("/repo")!.readTask!("t-stranger", 5)).rejects.toThrow(/is not in the tree under this session/);
     });
 
@@ -1220,8 +1220,8 @@ describe("AgentHarness", () => {
       // at; the record carries their base name (RP-6).
       const log = join(mkdtempSync(join(tmpdir(), "fleet-log-")), "t-grand");
       writeFileSync(`${log}.0.log`, "one\ntwo\nthree\n");
-      world.tasks.set("/sessions/child-2.jsonl", [task("t-grand", "/sessions/child-2.jsonl", "completed", { exitCode: 0, outputBytes: 14, logPath: log }), task("t-quiet", "/sessions/child-2.jsonl", "running", { activity: "still going" })]);
-      world.tasks.set("/sessions/other.jsonl", [task("t-other", "/sessions/other.jsonl", "running", { logPath: log })]);
+      world.tasks.set("/sessions/child-2.jsonl", [task("t-grand", "/sessions/child-2.jsonl", "completed", { exitCode: 0, outputBytes: 14, logPath: log, logSegments: [0] }), task("t-quiet", "/sessions/child-2.jsonl", "running", { activity: "still going" })]);
+      world.tasks.set("/sessions/other.jsonl", [task("t-other", "/sessions/other.jsonl", "running", { logPath: log, logSegments: [0] })]);
       const readTask = world.opened[0]!.agent.backgroundWork!.readTask!;
       // The child's options read its own child's command; the root's read the grandchild's too.
       const read = await readTask("t-grand", 2);
@@ -1236,7 +1236,7 @@ describe("AgentHarness", () => {
       await expect(readTask("t-other", 5)).rejects.toThrow(/"t-other" is not in the tree under this session.*inspect_fleet/s);
       await expect(readTask("t-nope", 5)).rejects.toThrow(/is not in the tree under this session/);
       // A grandchild reads nothing of its parent's.
-      world.tasks.set(childPath, [task("t-child", childPath, "running", { logPath: log })]);
+      world.tasks.set(childPath, [task("t-child", childPath, "running", { logPath: log, logSegments: [0] })]);
       await expect(world.opened[1]!.agent.backgroundWork!.readTask!("t-child", 5)).rejects.toThrow(/is not in the tree under this session/);
       void child;
     });

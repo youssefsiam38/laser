@@ -158,38 +158,41 @@ describe("readLogTail", () => {
     // A window is immutable segments; `logPath` is their base name (RP-6).
     const log = join(dir, "t");
     writeFileSync(`${log}.0.log`, "one\ntwo\nthree\n");
-    expect(await readLogTail(log, 2, dir)).toBe("two\nthree");
-    expect(await readLogTail(log, 10, dir)).toBe("one\ntwo\nthree");
-    expect(await readLogTail(log, 0, dir)).toBe("three");
+    expect(await readLogTail(log, 2, dir, [0])).toBe("two\nthree");
+    expect(await readLogTail(log, 10, dir, [0])).toBe("one\ntwo\nthree");
+    expect(await readLogTail(log, 0, dir, [0])).toBe("three");
+    // Without the writer's own segment list there is nothing to read: this
+    // process never lists a directory of somebody else's commands (RP-6).
+    expect(await readLogTail(log, 2, dir)).toBeUndefined();
     writeFileSync(`${log}.0.log`, "");
-    expect(await readLogTail(log, 5, dir)).toBe("");
-    expect(await readLogTail(join(dir, "missing"), 5, dir)).toBeUndefined();
-    expect(await readLogTail(undefined, 5, dir)).toBeUndefined();
-    expect(await readLogTail("relative.log", 5, dir)).toBeUndefined();
+    expect(await readLogTail(log, 5, dir, [0])).toBe("");
+    expect(await readLogTail(join(dir, "missing"), 5, dir, [0])).toBeUndefined();
+    expect(await readLogTail(undefined, 5, dir, [0])).toBeUndefined();
+    expect(await readLogTail("relative.log", 5, dir, [0])).toBeUndefined();
     // A path outside the private root is a claim, not a permission (RP-6), and
     // neither is a symlink out of it.
     const outside = mkdtempSync(join(tmpdir(), "task-tail-outside-"));
     dirs.push(outside);
     writeFileSync(join(outside, "secret.0.log"), "not yours");
-    expect(await readLogTail(join(outside, "secret"), 5, dir)).toBeUndefined();
+    expect(await readLogTail(join(outside, "secret"), 5, dir, [0])).toBeUndefined();
     symlinkSync(join(outside, "secret.0.log"), join(dir, "link.0.log"));
-    expect(await readLogTail(join(dir, "link"), 5, dir)).toBeUndefined();
+    expect(await readLogTail(join(dir, "link"), 5, dir, [0])).toBeUndefined();
     // And a symlinked *directory* inside the root: `O_NOFOLLOW` only refuses
     // the last component, so containment is decided on the resolved parent.
     const elsewhere = mkdtempSync(join(tmpdir(), "task-tail-elsewhere-"));
     dirs.push(elsewhere);
     writeFileSync(join(elsewhere, "secret.0.log"), "still not yours");
     symlinkSync(elsewhere, join(dir, "opaque"));
-    expect(await readLogTail(join(dir, "opaque", "secret"), 5, dir)).toBeUndefined();
+    expect(await readLogTail(join(dir, "opaque", "secret"), 5, dir, [0])).toBeUndefined();
     // Without a root nothing is read at all.
     writeFileSync(`${log}.0.log`, "one\n");
-    expect(await readLogTail(log, 5)).toBeUndefined();
+    expect(await readLogTail(log, 5, undefined, [0])).toBeUndefined();
     // Past the window only the tail is read, aligned to a character boundary.
     const big = join(dir, "big");
     const line = "é".repeat(50) + "\n";
     const lines = Math.ceil((TASK_OUTPUT_MAX_BYTES * 1.5) / Buffer.byteLength(line));
     writeFileSync(`${big}.0.log`, line.repeat(lines) + "last\n");
-    const tail = await readLogTail(big, 3, dir);
+    const tail = await readLogTail(big, 3, dir, [0]);
     expect(tail).toBe(`${"é".repeat(50)}\n${"é".repeat(50)}\nlast`);
     expect(tail).not.toContain("�");
   });

@@ -17,11 +17,12 @@
  * drops a session.
  */
 import { constants } from "node:fs";
-import { open, readdir, realpath, type FileHandle } from "node:fs/promises";
+import { open, realpath, type FileHandle } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   ErrorCodes,
   ProtocolError,
+  TASK_LOG_SEGMENTS_MAX,
   TASK_OUTPUT_MAX_BYTES,
   alignUtf8,
   type BackgroundTask,
@@ -29,7 +30,7 @@ import {
   type PiExtensionMessage,
   type TaskOutputChunk,
 } from "@lasercode/protocol";
-import { segmentOffset } from "./segments.js";
+
 
 export interface TaskRegisterDeps {
   notify(method: "tasks/update", params: HostNotifications["tasks/update"]): void;
@@ -72,6 +73,8 @@ interface Held {
   task: BackgroundTask;
   /** Absolute path on this machine; never sent to a client. */
   logPath: string | undefined;
+  /** The writer's own bounded segment offsets; never sent to a client. */
+  logSegments: number[] | undefined;
   /** Serialized last broadcast, so an identical re-emit is not re-sent. */
   serialized: string;
 }
@@ -99,6 +102,13 @@ export const MAX_TASKS_PER_SESSION = 200;
 export const MAX_SESSIONS_WITH_TASKS = 200;
 export const MAX_REGISTER_BYTES = 8 * 1024 * 1024;
 
+/** Two bounded lists of offsets, compared without allocating. */
+function sameSegments(left: number[] | undefined, right: number[] | undefined): boolean {
+  if (left === right) return true;
+  if (!left || !right || left.length !== right.length) return false;
+  return left.every((value, index) => value === right[index]);
+}
+
 export class TaskRegister {
   /** path → id → record, insertion-ordered so pruning drops the oldest. */
   private readonly bySession = new Map<string, Map<string, Held>>();
@@ -113,12 +123,14 @@ export class TaskRegister {
    */
   observeExtensionMessage(path: string, message: PiExtensionMessage): boolean {
     if (message.type !== "lasercode/task/update") return false;
-    const { logPath, ...rest } = message.task;
-    this.upsert(path, { ...rest, sessionPath: path }, logPath);
+    // Both file-bearing fields stop here: a client is told a task's size, never
+    // where its bytes are or which files hold them.
+    const { logPath, logSegments, ...rest } = message.task;
+    this.upsert(path, { ...rest, sessionPath: path }, logPath, logSegments);
     return true;
   }
 
-  upsert(path: string, task: BackgroundTask, logPath?: string): void {
+  upsert(path: string, task: BackgroundTask, logPath?: string, logSegments?: number[]): void {
     let tasks = this.bySession.get(path);
     if (!tasks) {
       tasks = new Map();
@@ -127,12 +139,13 @@ export class TaskRegister {
     const serialized = JSON.stringify(task);
     const previous = tasks.get(task.id);
     // At-least-once delivery is normal; the wire carries changes, not heartbeats.
-    if (previous?.serialized === serialized && previous.logPath === (logPath ?? previous.logPath)) return;
+    const segments = logSegments ?? previous?.logSegments;
+    if (previous?.serialized === serialized && previous.logPath === (logPath ?? previous.logPath) && sameSegments(previous.logSegments, segments)) return;
     // Exact UTF-8 bytes, not JS string units: a command with a single emoji in
     // it costs more bytes than characters, and a budget that cannot see that
     // is not a byte budget.
     this.bytes += Buffer.byteLength(serialized, "utf8") - (previous ? Buffer.byteLength(previous.serialized, "utf8") : 0);
-    tasks.set(task.id, { task, logPath: logPath ?? previous?.logPath, serialized });
+    tasks.set(task.id, { task, logPath: logPath ?? previous?.logPath, logSegments: segments, serialized });
     this.prune(tasks);
     this.pruneSessions(path);
     this.deps.notify("tasks/update", { task });
@@ -189,28 +202,18 @@ export class TaskRegister {
       );
     }
     // A long command's log is a bounded window of **immutable** segments, and
-    // every segment's name says which stream byte it begins at (RP-6). The
-    // offsets a read answers with therefore come from the files themselves,
-    // never from this record: a record a rotation has just made stale reads a
-    // correctly labelled segment, or finds none and says the output is gone.
-    // Nothing here can label bytes with an offset that belongs to another file.
+    // the writer says which ones exist: at most two offsets, carried beside the
+    // path (RP-6). Listing the directory instead would be unbounded in a busy
+    // session and would trust names this host did not write. A descriptor a
+    // rotation has made stale is safe, because a segment file never changes
+    // meaning: it names the bytes it always named, or it is gone.
     const directory = dirname(base);
     const name = basename(base);
-    let entries: string[];
-    try {
-      entries = await readdir(directory);
-    } catch {
-      throw new ProtocolError(
-        ErrorCodes.InvalidParams,
-        "That output is gone — the file it was written to has been cleaned up.",
-      );
-    }
-    const segments: Array<{ file: string; from: number }> = [];
-    for (const entry of entries) {
-      const from = segmentOffset(name, entry);
-      if (from !== undefined) segments.push({ file: join(directory, entry), from });
-    }
-    segments.sort((left, right) => left.from - right.from);
+    const offsets = [...new Set(held.logSegments ?? [])]
+      .filter((offset) => Number.isSafeInteger(offset) && offset >= 0)
+      .sort((left, right) => left - right)
+      .slice(-TASK_LOG_SEGMENTS_MAX);
+    const segments = offsets.map((from) => ({ file: join(directory, `${name}.${from}.log`), from }));
     if (segments.length === 0) {
       throw new ProtocolError(
         ErrorCodes.InvalidParams,

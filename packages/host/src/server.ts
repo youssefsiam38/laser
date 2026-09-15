@@ -57,6 +57,7 @@ import { RelayClient, type RelayClientState, type RelayClientStats } from "./rel
 import { Router } from "./router.js";
 import { SessionLoadDelivery } from "./session-load-delivery.js";
 import { TranscriptDelivery, type SessionMembershipView } from "./transcript-delivery.js";
+import { cleanupTaskLogsBeforeWorkers } from "./tasks/cleanup.js";
 import { SearchCancellation } from "./search-cancellation.js";
 import { SessionIndexCache } from "./session-index.js";
 import { SessionProjection } from "./session-projection.js";
@@ -265,6 +266,8 @@ export class HostServer {
   private readonly transcripts = new Map<WebSocket, TranscriptDelivery>();
   /** The private directory every command log this host will read must be inside. */
   private readonly taskLogRoot: string;
+  /** Crash cleanup of that directory, started before any worker exists. */
+  private taskLogCleanup: Promise<number> = Promise.resolve(0);
   private readonly searches = new Map<WebSocket, SearchCancellation>();
   /** Question-only response fences for concurrent session/load requests, per socket. */
   private readonly loadDeliveries = new Map<WebSocket, Set<SessionLoadDelivery>>();
@@ -299,6 +302,12 @@ export class HostServer {
     try {
       mkdirSync(this.taskLogRoot, { recursive: true, mode: 0o700 });
       chmodSync(this.taskLogRoot, 0o700);
+      // Whatever is in there now is from a run that is gone: this host has not
+      // spawned a worker yet, so nothing can be writing. That is the only
+      // moment at which leftovers can be identified without guessing, which is
+      // why no worker ever removes a directory it did not write
+      // (`tasks/cleanup.ts`).
+      this.taskLogCleanup = cleanupTaskLogsBeforeWorkers(this.taskLogRoot).catch(() => 0);
     } catch {
       // A state directory that cannot hold it is reported when a read fails,
       // never as a reason to refuse to start.
@@ -702,6 +711,11 @@ export class HostServer {
   }
 
   /** Live relay clients, for `pi/worker/*`-style status surfaces and tests. */
+  /** Resolves when the start-time command-log cleanup has finished (RP-6). */
+  taskLogsCleaned(): Promise<number> {
+    return this.taskLogCleanup;
+  }
+
   relayStats(): RelayClientStats[] {
     return this.relayClients.map((client) => client.statistics());
   }

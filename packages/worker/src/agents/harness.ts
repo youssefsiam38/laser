@@ -1410,11 +1410,12 @@ export class AgentHarness {
       throw new HarnessError(`The command "${id}" is not in the tree under this session. inspect_fleet lists every command you can read, with its taskId.`);
     }
     const { task, owner } = found;
-    const { logPath, sessionPath: _path, ...rest } = task;
+    const { logPath, logSegments, sessionPath: _path, ...rest } = task;
     void _path;
-    // Only from the private root this process owns, and never through a
-    // symlink: the path came in on an extension message (RP-6).
-    const text = await readLogTail(logPath, tailLines, this.host.taskLogRoot?.());
+    // Only from the private root this process owns, only the segments the
+    // writer named, and never through a symlink: the path came in on an
+    // extension message (RP-6).
+    const text = await readLogTail(logPath, tailLines, this.host.taskLogRoot?.(), logSegments);
     return {
       task: rest,
       owner,

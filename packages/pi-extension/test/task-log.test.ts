@@ -376,3 +376,37 @@ function mkdirBlocking(path: string): void {
   const { mkdirSync } = require("node:fs") as typeof import("node:fs");
   mkdirSync(path, { recursive: true });
 }
+
+it("creates a segment, never joins one: an id collision fails released and touches no bytes", async () => {
+  const dir = scratch();
+  // Somebody else's file already has the name this command's first segment
+  // would take.
+  const taken = join(dir, segmentName("t-collide", 0));
+  writeFileSync(taken, "another command's output");
+  const errors: unknown[] = [];
+  const log = new TaskLog({ dir, id: "t-collide", segmentBytes: 1024, onError: (error) => errors.push(error) });
+  log.append(Buffer.from("mine"));
+  await log.drained();
+  expect(errors).toHaveLength(1);
+  expect(log.state).toBe("released");
+  expect(log.bytes).toBe(4);
+  // Not one byte of the other file was written, and it is still there.
+  expect(readFileSync(taken, "utf8")).toBe("another command's output");
+});
+
+it("fails a rotation onto an existing name rather than appending to it", async () => {
+  const dir = scratch();
+  const log = new TaskLog({ dir, id: "t-rotate-collide", segmentBytes: 512 });
+  // The name the next segment will take is already somebody's.
+  const next = join(dir, segmentName("t-rotate-collide", 512));
+  writeFileSync(next, "not this command's bytes");
+  log.append(chunk("a", 512));
+  await log.drained();
+  log.append(chunk("b", 64));
+  await log.drained();
+  expect(log.state).toBe("released");
+  expect(log.bytes).toBe(576);
+  expect(readFileSync(next, "utf8")).toBe("not this command's bytes");
+  // Its own segments went with the failure; the stranger's file did not.
+  expect(existsSync(join(dir, segmentName("t-rotate-collide", 0)))).toBe(false);
+});

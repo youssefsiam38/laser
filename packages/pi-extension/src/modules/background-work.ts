@@ -38,7 +38,6 @@
  */
 import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync } from "node:fs";
-import { opendir, rm, stat as promiseStat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -77,15 +76,7 @@ import {
   text,
   type StoppedBy,
 } from "./task-messages.js";
-import {
-  SessionRetention,
-  TASK_EXCERPT_BYTES,
-  logRootFor,
-  logSalt,
-  sweepAbandonedLogs,
-  type RetainedTask,
-  type SweepIo,
-} from "./task-retention.js";
+import { SessionRetention, TASK_EXCERPT_BYTES, logRootFor, logSalt, type RetainedTask } from "./task-retention.js";
 
 /**
  * Give every process this module starts the project's environment.
@@ -307,7 +298,7 @@ export function taskUpdate(task: TaskRecord): BackgroundTaskUpdate {
     // The *base* path of the window: its segments are `<base>.<from>.log`, and
     // each one's name says where it starts, so a reader takes its offsets from
     // the files rather than from this record (RP-6).
-    ...(task.log.usable ? { logPath: task.log.path } : {}),
+    ...(task.log.usable ? { logPath: task.log.path, logSegments: task.log.segmentOffsets } : {}),
     logState: task.log.state,
     retainedFromByte: task.log.retainedFromByte,
     outputDigest: task.log.digest(),
@@ -378,26 +369,6 @@ function logDirOf(sessionId: string): string {
   return createHash("sha256").update(logSalt(() => randomBytes(16))).update(sessionId).digest("hex").slice(0, 32);
 }
 
-/** The sweep's view of the filesystem: an async iterator, and nothing cached. */
-function nodeSweepIo(): SweepIo {
-  return {
-    entries: async function* (directory: string) {
-      const handle = await opendir(directory);
-      for await (const entry of handle) yield { name: entry.name, isDirectory: entry.isDirectory() };
-    },
-    modifiedAt: async (path) => {
-      try {
-        return (await promiseStat(path)).mtimeMs;
-      } catch {
-        return undefined;
-      }
-    },
-    remove: (path, recursive) => rm(path, { recursive, force: true }),
-    now: () => Date.now(),
-    pause: () => new Promise<void>((resolve) => setImmediate(resolve)),
-  };
-}
-
 function startTask(ctx: ModuleContext, state: State, options: BackgroundWorkOptions, input: StartInput, publish: (task: TaskRecord) => void): TaskRecord {
   const id = newTaskId();
   const dir = join(logRoot(options), logDirOf(sessionIdFor(state, input.toolCtx)));
@@ -409,6 +380,11 @@ function startTask(ctx: ModuleContext, state: State, options: BackgroundWorkOpti
   });
 
   let loggedLogFailure = false;
+  // Declared before the log, because a log that cannot even be opened reports
+  // it from its own constructor: a callback that read a `const` declared below
+  // would throw out of it, and a command must never fail because its output
+  // could not be written.
+  let task: TaskRecord | undefined;
   const log: TaskLog = new TaskLog({
     dir,
     id,
@@ -419,6 +395,7 @@ function startTask(ctx: ModuleContext, state: State, options: BackgroundWorkOpti
     // or a release, and that is published at once rather than on the next
     // throttle tick, so a reader never uses offsets a moment out of date.
     onChange: (reason) => {
+      if (!task) return;
       state.retention.note(id);
       if (reason === "window" && state.tasks.get(id) === task) publish(task);
     },
@@ -429,7 +406,7 @@ function startTask(ctx: ModuleContext, state: State, options: BackgroundWorkOpti
     },
   });
 
-  const task: TaskRecord = {
+  task = {
     id,
     command: input.command,
     status: "running",
@@ -632,10 +609,10 @@ export const backgroundWorkModule: LaserModule = {
     states.set(ctx, state);
     const seconds = options.foregroundCommandSeconds;
 
-    // Housekeeping for runs that are gone: once per process, asynchronously,
-    // and cooperatively (`task-retention.ts`). Age-only, so a young file that
-    // may belong to a command another session is still writing is safe.
-    void sweepAbandonedLogs(logRoot(options), tmpdir(), nodeSweepIo(), `${WIRE_NAMESPACE}-tasks-`).catch(() => {});
+    // No sweep here, on purpose (`task-retention.ts`): every worker of a host
+    // shares one root, and a quiet command's directory is indistinguishable
+    // from a crashed run's. Crash cleanup is the host's, at start, before any
+    // worker exists to be writing.
 
     let lastRetention = "";
     state.publishRetention = () => {
