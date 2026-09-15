@@ -357,6 +357,96 @@ describe("the attachments an authority finds inside a prompt", () => {
   });
 });
 
+describe("what counts as an attachment at all", () => {
+  const hasher = () => {
+    const chunks: string[] = [];
+    return { update: (chunk: string) => { chunks.push(chunk); }, digest: () => sha256Of(chunks.join("")) };
+  };
+  // The canonical writer, spelled out here so the authority's recogniser is
+  // pinned to the same format the composer produces (it cannot import it).
+  const escapeText = (text: string) => text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+  const escapeAttribute = (text: string) => escapeText(text).replaceAll("\n", "&#10;").replaceAll("\r", "&#13;").replaceAll("\t", "&#9;");
+  const wrap = (name: string, type: string, content: string) =>
+    `<attached-file name="${escapeAttribute(name)}" type="${escapeAttribute(type)}" size="${utf8ByteLength(content)}">\n${escapeText(content)}\n</attached-file>`;
+  const found = (text: string) => attachmentRegions(text, hasher).items;
+
+  it("names a wrapper whose content and attributes need escaping, and addresses the stored bytes", () => {
+    const content = '<script>alert("1 & 2")</script>\n\tdone';
+    const text = `prose here\n\n${wrap('a & b"c.txt', "text/plain", content)}`;
+    const items = found(text);
+    expect(items).toHaveLength(1);
+    const item = items[0]!;
+    expect(item.name).toBe('a & b"c.txt');
+    // The region is the stored, escaped payload — not the decoded file.
+    const stored = sliceUtf8RangeFrom(text, item.offset, item.bytes)!.text;
+    expect(stored).toBe(escapeText(content));
+    expect(stored).not.toBe(content);
+    expect(item.bytes).toBe(utf8ByteLength(escapeText(content)));
+    expect(item.contentDigest).toBe(sha256Of(escapeText(content)));
+    // Decoding happens after reconstruction, and gives the file back exactly.
+    expect(stored.replace(/&(amp|lt|gt|quot|#10|#13|#9);/g, (_, entity: string) =>
+      ({ amp: "&", lt: "<", gt: ">", quot: '"', "#10": "\n", "#13": "\r", "#9": "\t" })[entity]!)).toBe(content);
+  });
+
+  it("names nothing that is not a complete canonical wrapper", () => {
+    const content = "real content";
+    const stored = escapeText(content);
+    const size = utf8ByteLength(content);
+    const cases: Array<[string, string]> = [
+      ["an opener with no closer", `<attached-file name="a.txt" type="text/plain" size="${size}">\n${stored}`],
+      ["a closer with no opener", `prose\n\n${stored}\n</attached-file>`],
+      ["a declared size that is not the decoded size", `<attached-file name="a.txt" type="text/plain" size="${size + 5}">\n${stored}\n</attached-file>`],
+      ["a declared size measured on the stored bytes", `<attached-file name="a.txt" type="text/plain" size="${utf8ByteLength(escapeText('a & b'))}">\n${escapeText("a & b")}x\n</attached-file>`],
+      ["a payload that is not canonically escaped", `<attached-file name="a.txt" type="text/plain" size="5">\na & b\n</attached-file>`],
+      ["an unknown entity", `<attached-file name="a.txt" type="text/plain" size="7">\na&nbsp;b\n</attached-file>`],
+      ["a NUL in the payload", `<attached-file name="a.txt" type="text/plain" size="3">\na\0b\n</attached-file>`],
+      ["no blank line before it", `prose <attached-file name="a.txt" type="text/plain" size="${size}">\n${stored}\n</attached-file>`],
+      ["no blank line after it", `<attached-file name="a.txt" type="text/plain" size="${size}">\n${stored}\n</attached-file>trailing`],
+      ["an empty name", `<attached-file name="" type="text/plain" size="${size}">\n${stored}\n</attached-file>`],
+      ["a newline inside an attribute", `<attached-file name="a\n.txt" type="text/plain" size="${size}">\n${stored}\n</attached-file>`],
+      ["a quote inside an attribute", `<attached-file name="a".txt" type="text/plain" size="${size}">\n${stored}\n</attached-file>`],
+      ["attributes out of order", `<attached-file name="a.txt" size="${size}" type="text/plain">\n${stored}\n</attached-file>`],
+      ["a size that is not a number", `<attached-file name="a.txt" type="text/plain" size="12x">\n${stored}\n</attached-file>`],
+      ["a size past what may be attached", `<attached-file name="a.txt" type="text/plain" size="999999999">\n${stored}\n</attached-file>`],
+      ["a lookalike tag", `<attached-files name="a.txt" type="text/plain" size="${size}">\n${stored}\n</attached-files>`],
+      ["a wrapper written about, not written", `here is what one looks like: &lt;attached-file name="a.txt"&gt;`],
+    ];
+    for (const [why, text] of cases) expect(found(text), why).toEqual([]);
+  });
+
+  it("names a real wrapper that follows prose and one that follows a rejected lookalike", () => {
+    const content = "real";
+    const good = wrap("ok.txt", "text/plain", content);
+    const broken = `<attached-file name="bad.txt" type="text/plain" size="99">\n${escapeText(content)}\n</attached-file>`;
+    expect(found(`some prose\n\n${good}`).map(item => item.name)).toEqual(["ok.txt"]);
+    expect(found(`${broken}\n\n${good}`).map(item => item.name)).toEqual(["ok.txt"]);
+    // Nested markup inside a valid payload is content, not a second wrapper.
+    const nested = wrap("outer.txt", "text/plain", `<attached-file name="inner.txt" type="text/plain" size="4">\ntext\n</attached-file>`);
+    expect(found(nested).map(item => item.name)).toEqual(["outer.txt"]);
+  });
+
+  it("reassembles a stored region through the range contract and matches its digest", () => {
+    const content = "答 & <tag>\n".repeat(3_000);
+    const text = `prose\n\n${wrap("big.md", "text/markdown", content)}`;
+    const entry = { id: "u3", parentId: null, type: "message", message: { role: "user", content: [{ type: "text", text }] } };
+    const item = attachmentRegions(text, hasher).items[0]!;
+    let offset = item.offset;
+    let assembled = "";
+    for (let step = 0; step < 200; step++) {
+      const answer = bodyRangeSlice(entry, { component: { kind: "user_text" }, offset, limit: 4096, region: { offset: item.offset, bytes: item.bytes } }, "r1", "durable", digestOfText);
+      expect(answer.ok).toBe(true);
+      if (!answer.ok) return;
+      assembled += answer.result.text;
+      expect(answer.result.regionDigest).toBe(item.contentDigest);
+      if (answer.result.next === undefined) break;
+      offset = answer.result.next;
+    }
+    expect(utf8ByteLength(assembled)).toBe(item.bytes);
+    expect(digestOfText(assembled)).toBe(item.contentDigest);
+    expect(assembled).toBe(escapeText(content));
+  });
+});
+
 describe("reading one attachment inside a prompt", () => {
   const hasher = () => {
     const chunks: string[] = [];

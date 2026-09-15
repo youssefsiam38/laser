@@ -51,13 +51,18 @@ export interface BodyRegion {
  * excerpt and every range read use — so nothing is ever rebased silently.
  */
 export interface AttachmentRegion {
-  /** Where the attachment's content begins, in the component's bytes. */
+  /**
+   * Where the attachment's **stored** payload begins, in the component's own
+   * bytes — the escaped form as it sits in the record, because that is the
+   * space `session/entry_range` addresses. A reader reconstructs exactly this
+   * range, checks it against `contentDigest`, and unescapes it afterwards.
+   */
   offset: number;
-  /** How many bytes of content there are. */
+  /** How many stored (escaped) bytes that payload takes. */
   bytes: number;
   name: string;
   mediaType: string;
-  /** SHA-256 of the region's bytes, not the component's. */
+  /** SHA-256 of the **stored** region bytes, not of the decoded file. */
   contentDigest: string;
   nameTruncated?: true;
   mediaTypeTruncated?: true;
@@ -100,15 +105,71 @@ export const BODY_REGION_METADATA_MAX_BYTES = 16 * 1024;
 const REGION_NAME_MAX_BYTES = 256;
 const REGION_MEDIA_TYPE_MAX_BYTES = 128;
 
-const WRAPPER = /(?:^|\n\n)<attached-file name="([^"\n]*)" type="([^"\n]*)" size="(\d+)">\n/g;
+/**
+ * The canonical attachment wrapper, recognised here exactly as the composer
+ * writes it and the prompt reader takes it apart — same opener, same attribute
+ * escaping, same blank-line separators, same closing tag. This module does not
+ * import that code (nothing above the worker may), so the two are kept in step
+ * by their tests, not by a shared import.
+ */
+const OPENER = '<attached-file name="';
+const CLOSER = "\n</attached-file>";
+
+/** The largest attachment the composer will accept, mirrored here. */
+export const ATTACHMENT_MAX_BYTES = 256 * 1024;
+
+/**
+ * The most stored characters an attachment's escaped payload can take: every
+ * character of a 256 KiB file could be escaped to six (`&quot;`), and a single
+ * byte is at least one character.
+ */
+const MAX_PAYLOAD_CHARS = ATTACHMENT_MAX_BYTES * 6;
+
+const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', "#10": "\n", "#13": "\r", "#9": "\t" };
+
+const escapeText = (text: string): string =>
+  text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+const escapeAttribute = (text: string): string =>
+  escapeText(text).replaceAll("\n", "&#10;").replaceAll("\r", "&#13;").replaceAll("\t", "&#9;");
+const unescapeText = (text: string): string =>
+  text.replace(/&(amp|lt|gt|quot|#10|#13|#9);/g, (_, entity: string) => ENTITIES[entity]!);
+
+/** Bytes between two character positions, counted without copying either. */
+function utf8BytesBetween(text: string, fromChar: number, toChar: number): number {
+  let bytes = 0;
+  for (let index = fromChar; index < toChar; index++) {
+    const code = text.charCodeAt(index);
+    if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    else if (code >= 0xd800 && code <= 0xdbff && index + 1 < toChar) {
+      const next = text.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) { bytes += 4; index += 1; }
+      else bytes += 3;
+    } else bytes += 3;
+  }
+  return bytes;
+}
 
 /**
  * Find the attachments inside one component's text, bounded in what it
  * describes and in how far it looks.
  *
- * Wrappers anywhere in the component are found — not only the ones inside an
- * excerpt — because this runs at the authority, which has the record. Nothing
- * of the content is copied: each region is hashed where it already is.
+ * Only a **complete canonical wrapper** counts: the opener at the start of the
+ * component or after a blank line, attributes that survive a re-encode
+ * unchanged, the closing tag, a blank line or the end after it, a payload with
+ * no NUL whose entities are the ones this format defines, and a decoded size
+ * that is exactly the size the wrapper declares. Anything else is prose that
+ * happens to look like markup, and naming it would point a reader at bytes that
+ * are not a file.
+ *
+ * **What a region addresses**: the **stored, escaped payload** — the bytes as
+ * they are in the component, because that is the space `session/entry_range`
+ * addresses and digests. A reader reconstructs that exact range, verifies it
+ * against `contentDigest`, and only then unescapes it into the file's own text.
+ *
+ * Bounded work: one forward pass, `indexOf` rather than a regular expression
+ * over the whole component, no second copy of it, and per-candidate work capped
+ * by the largest attachment the composer accepts.
  */
 export function attachmentRegions(
   text: string,
@@ -119,50 +180,127 @@ export function attachmentRegions(
   const maxBytes = Math.max(256, Math.min(options.maxBytes ?? BODY_REGION_METADATA_MAX_BYTES, BODY_REGION_METADATA_MAX_BYTES));
   const scanBytes = Math.min(options.scanBytes ?? BODY_REGION_SCAN_MAX_BYTES, BODY_REGION_SCAN_MAX_BYTES);
   const from = safeOffset(options.from) ?? 0;
-  const total = utf8ByteLength(text);
   const items: AttachmentRegion[] = [];
   let omitted = 0;
   let metadata = 0;
   let next: number | undefined;
-  // A scan the authority cannot complete claims no count at all.
-  const truncated = total > scanBytes ? (true as const) : undefined;
-  const window = truncated ? sliceUtf8RangeFrom(text, 0, scanBytes)?.text ?? "" : text;
-  WRAPPER.lastIndex = 0;
-  for (let match = WRAPPER.exec(window); match !== null; match = WRAPPER.exec(window)) {
-    const size = Number(match[3]);
-    if (!Number.isSafeInteger(size) || size < 0) continue;
-    // Where the content begins, in the component's own bytes.
-    const contentStart = utf8ByteLength(window.slice(0, match.index + match[0].length));
-    if (contentStart + size > total) continue;
-    const content = sliceUtf8RangeFrom(text, contentStart, size);
-    if (!content || content.bytes !== size) continue;
-    // Pages are asked for by where they start; everything before is skipped.
-    if (contentStart < from) continue;
-    if (items.length >= maxItems) { next ??= contentStart; omitted += 1; continue; }
-    const name = boundedField(match[1] ?? "", REGION_NAME_MAX_BYTES);
-    const mediaType = boundedField(match[2] ?? "", REGION_MEDIA_TYPE_MAX_BYTES);
-    const hasher = createHasher();
-    hasher.update(content.text);
-    const region: AttachmentRegion = {
-      offset: contentStart,
-      bytes: size,
-      name: name.text,
-      mediaType: mediaType.text,
-      contentDigest: hasher.digest(),
-      ...(name.cut ? { nameTruncated: true as const } : {}),
-      ...(mediaType.cut ? { mediaTypeTruncated: true as const } : {}),
-    };
-    const cost = utf8ByteLength(JSON.stringify(region));
-    if (metadata + cost > maxBytes) { next ??= contentStart; omitted += 1; continue; }
-    metadata += cost;
-    items.push(region);
+  let truncated: true | undefined;
+  // One forward pass, counting bytes as it goes: no copy of the component and
+  // no regular expression over it.
+  let charPos = 0;
+  let bytePos = 0;
+  for (;;) {
+    const at = text.indexOf(OPENER, charPos);
+    if (at < 0) {
+      if (utf8BytesBetween(text, charPos, text.length) + bytePos > scanBytes) truncated = true;
+      break;
+    }
+    bytePos += utf8BytesBetween(text, charPos, at);
+    charPos = at;
+    if (bytePos > scanBytes) { truncated = true; break; }
+    // A wrapper begins the component or follows a blank line; anything else is
+    // prose that mentions the markup.
+    const separated = at === 0 || (at >= 2 && text.charCodeAt(at - 1) === 10 && text.charCodeAt(at - 2) === 10);
+    const candidate = separated ? readWrapper(text, at) : undefined;
+    if (!candidate) {
+      // Move one character on, counting its bytes, and keep looking.
+      bytePos += utf8BytesBetween(text, at, at + 1);
+      charPos = at + 1;
+      continue;
+    }
+    const contentStart = bytePos + utf8BytesBetween(text, at, candidate.payloadFrom);
+    const storedBytes = utf8BytesBetween(text, candidate.payloadFrom, candidate.payloadTo);
+    // Where the scan continues, in both spaces, whatever this candidate costs.
+    const afterBytes = contentStart + storedBytes + utf8BytesBetween(text, candidate.payloadTo, candidate.end);
+    if (contentStart >= from) {
+      if (items.length >= maxItems) {
+        next ??= contentStart;
+        omitted += 1;
+      } else {
+        const name = boundedField(candidate.name, REGION_NAME_MAX_BYTES);
+        const mediaType = boundedField(candidate.mediaType, REGION_MEDIA_TYPE_MAX_BYTES);
+        const hasher = createHasher();
+        hasher.update(candidate.payload);
+        const region: AttachmentRegion = {
+          offset: contentStart,
+          bytes: storedBytes,
+          name: name.text,
+          mediaType: mediaType.text,
+          contentDigest: hasher.digest(),
+          ...(name.cut ? { nameTruncated: true as const } : {}),
+          ...(mediaType.cut ? { mediaTypeTruncated: true as const } : {}),
+        };
+        const cost = utf8ByteLength(JSON.stringify(region));
+        if (metadata + cost > maxBytes) { next ??= contentStart; omitted += 1; }
+        else { metadata += cost; items.push(region); }
+      }
+    }
+    bytePos = afterBytes;
+    charPos = candidate.end;
+    if (bytePos > scanBytes) { truncated = true; break; }
   }
   return {
     items,
-    ...(truncated ? { truncated } : omitted > 0 ? { omitted } : {}),
+    ...(truncated ? { truncated: true as const } : omitted > 0 ? { omitted } : {}),
     ...(next !== undefined ? { next } : {}),
-    scannedBytes: utf8ByteLength(window),
+    scannedBytes: Math.min(bytePos, scanBytes),
   };
+}
+
+/**
+ * One complete canonical wrapper starting at `at`, or undefined.
+ *
+ * Every check the prompt reader makes, made here: attributes with no quote or
+ * newline in them, a numeric size within the accepted bound, a closing tag, a
+ * blank line or the end after it, no NUL, only this format's entities, a
+ * decoded size equal to the declared one, and a re-encode identical to what is
+ * stored — so nothing that merely looks like a wrapper is ever named as a file.
+ */
+function readWrapper(text: string, at: number): { name: string; mediaType: string; payload: string; payloadFrom: number; payloadTo: number; end: number } | undefined {
+  const nameFrom = at + OPENER.length;
+  const nameTo = text.indexOf('"', nameFrom);
+  if (nameTo < 0 || text.indexOf("\n", nameFrom) !== -1 && text.indexOf("\n", nameFrom) < nameTo) return undefined;
+  const TYPE = ' type="';
+  if (!text.startsWith(TYPE, nameTo + 1)) return undefined;
+  const typeFrom = nameTo + 1 + TYPE.length;
+  const typeTo = text.indexOf('"', typeFrom);
+  if (typeTo < 0 || text.indexOf("\n", typeFrom) !== -1 && text.indexOf("\n", typeFrom) < typeTo) return undefined;
+  const SIZE = ' size="';
+  if (!text.startsWith(SIZE, typeTo + 1)) return undefined;
+  const sizeFrom = typeTo + 1 + SIZE.length;
+  const sizeTo = text.indexOf('"', sizeFrom);
+  if (sizeTo < 0) return undefined;
+  if (!text.startsWith('">\n', sizeTo)) return undefined;
+  const digits = text.slice(sizeFrom, sizeTo);
+  if (!/^\d{1,9}$/.test(digits)) return undefined;
+  const declared = Number(digits);
+  if (!Number.isSafeInteger(declared) || declared > ATTACHMENT_MAX_BYTES) return undefined;
+
+  const payloadFrom = sizeTo + 3;
+  // A payload longer than the largest attachment the composer accepts, at its
+  // worst escaping, cannot be one: the search for the closer is bounded by it.
+  const searchTo = Math.min(text.length, payloadFrom + MAX_PAYLOAD_CHARS + CLOSER.length);
+  const closerAt = text.lastIndexOf(CLOSER, searchTo) >= payloadFrom ? text.indexOf(CLOSER, payloadFrom) : -1;
+  if (closerAt < payloadFrom || closerAt > searchTo) return undefined;
+  const end = closerAt + CLOSER.length;
+  // A blank line or the end of the component after it, and nothing else.
+  if (end !== text.length && !text.startsWith("\n\n", end)) return undefined;
+
+  const payload = text.slice(payloadFrom, closerAt);
+  if (payload.includes("\0")) return undefined;
+  const name = unescapeText(text.slice(nameFrom, nameTo));
+  const mediaType = unescapeText(text.slice(typeFrom, typeTo));
+  if (!name) return undefined;
+  const content = unescapeText(payload);
+  if (content.includes("\0")) return undefined;
+  if (utf8ByteLength(content) !== declared) return undefined;
+  // The canonical form of what was decoded must be exactly what is stored:
+  // that rejects a half-escaped payload, an unknown entity and an attribute
+  // that would not survive a re-encode.
+  if (escapeText(content) !== payload) return undefined;
+  if (escapeAttribute(name) !== text.slice(nameFrom, nameTo)) return undefined;
+  if (escapeAttribute(mediaType) !== text.slice(typeFrom, typeTo)) return undefined;
+  return { name, mediaType, payload, payloadFrom, payloadTo: closerAt, end };
 }
 
 function boundedField(raw: string, maxBytes: number): { text: string; cut: boolean } {
