@@ -27,6 +27,7 @@ import { revealInFleet } from "@/fleet/fleet-state";
 import { dateTime, duration, formatBytes, formatElapsed, relativeTime } from "@/format";
 import { cn } from "@/lib/utils";
 import { useLaserStable, useLaserState } from "@/runtime";
+import { rendererViewsStore } from "@/runtime/view-cache";
 import { startVisiblePoll } from "@/runtime/visible-poll";
 
 import {
@@ -73,7 +74,7 @@ function mergeHistory(current: readonly ResourceSnapshot[], incoming: readonly R
 }
 
 export function ResourceDiagnostics({ optionalStores }: ResourceDiagnosticsProps) {
-  const { client } = useLaserStable();
+  const { client, rendererViews } = useLaserStable();
   const open = useLaserState((state) => state.open);
   const catalogGroups = useLaserState((state) => state.catalogGroups);
   const sessionsLoaded = useLaserState((state) => state.sessionsLoaded);
@@ -225,12 +226,13 @@ export function ResourceDiagnostics({ optionalStores }: ResourceDiagnosticsProps
   const historyPoints = history.map((sample) => sample.totals.physical.status === "available" ? sample.totals.physical.value : null);
   const completeHistory = historyPoints.filter((point): point is number => point !== null).length;
   const savedSessions = sessionsLoaded && catalogGroups ? catalogGroups.reduce((sum, group) => sum + group.total, 0) : undefined;
+  const localRendererViews = rendererViewsStore(rendererViews());
   const stores = retainedStoreRows({
     snapshot,
     ...(savedSessions !== undefined ? { savedSessions } : {}),
-    rendererViews: Object.keys(open).length,
+    rendererViews: localRendererViews.count,
     pendingMessages: Object.values(open).reduce((sum, view) => sum + view.pending.length + view.queue.steering.length + view.queue.followUp.length, 0),
-    ...(optionalStores ? { optional: optionalStores } : {}),
+    optional: { rendererViews: localRendererViews, ...optionalStores },
   });
   const stale = Boolean(error) || connection !== "open";
   const manualBusy = collecting || exportState === "saving";

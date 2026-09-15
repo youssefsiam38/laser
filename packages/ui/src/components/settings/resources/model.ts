@@ -375,7 +375,7 @@ export function retainedStoreRows(input: RetainedStoreInputs): RetainedStoreRow[
     // Host-only, so it is exact whatever the workers did: membership lives in
     // this process and nothing was waited on to count it.
     store("deliveryRegistry", "Transcript delivery paths and queues", "Host", "T6"),
-    store("providerQueues", "Provider-log and request queues", "Workers", "T7", true),
+    store("providerQueues", "Provider-log and request queues", "Host / workers", "T7", true),
   ];
 }
 

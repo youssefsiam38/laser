@@ -166,7 +166,7 @@ describe("resource diagnostics projection", () => {
     // A key no producer reports is still named plainly, never a zero.
     expect(rows.find((row) => row.id === "providerQueues")!.count).toEqual({
       status: "unavailable",
-      reason: "This count is not currently reported by Workers",
+      reason: "This count is not currently reported by Host / workers",
     });
   });
 

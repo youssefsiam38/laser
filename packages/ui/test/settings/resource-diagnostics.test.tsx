@@ -20,7 +20,11 @@ const fixture = vi.hoisted(() => ({
 }));
 
 vi.mock("@/runtime", () => ({
-  useLaserStable: () => ({ client: fixture.client, actions: fixture.actions }),
+  useLaserStable: () => ({
+    client: fixture.client,
+    actions: fixture.actions,
+    rendererViews: () => ({ hydrated: Object.keys(fixture.state.open).length, bytes: 4_096 }),
+  }),
   useLaserState: (selector: (state: unknown) => unknown) => selector(fixture.state),
 }));
 vi.mock("@/components/workbench", () => ({ useWorkbench: () => ({ close: fixture.close }) }));
@@ -286,8 +290,11 @@ it("renders the retained counters the host reports, and says what is still missi
   expect(rowOf("taskRegistry").textContent).not.toContain("not currently reported");
   expect(rowOf("deliveryRegistry").textContent).toContain("4");
   expect(rowOf("deliveryRegistry").textContent).not.toContain("This count is not currently reported");
+  expect(rowOf("rendererViews").textContent).toContain("1");
+  expect(rowOf("rendererViews").textContent).toContain("4.0 KB");
+  expect(rowOf("rendererViews").textContent).not.toContain("Retained bytes are not currently reported");
   // A counter with no producer yet is still named, never drawn as zero.
-  expect(rowOf("providerQueues").textContent).toContain("This count is not currently reported by Workers");
+  expect(rowOf("providerQueues").textContent).toContain("This count is not currently reported by Host / workers");
 
   const partial: ResourceSnapshot = {
     ...snapshot,
