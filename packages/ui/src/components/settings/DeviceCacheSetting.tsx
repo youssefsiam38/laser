@@ -19,7 +19,7 @@
  *   sentence and, where there is one, a next step.
  */
 import { PRODUCT_NAME } from "@lasercode/protocol";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { HardDrive, Trash2 } from "lucide-react";
 
 import { SpecSheet } from "@/components/assistant-ui/elements/spec-sheet";
@@ -89,22 +89,41 @@ export function DeviceCacheSetting({ className }: { className?: string }) {
   const [clearing, setClearing] = useState(false);
   const [stuck, setStuck] = useState(false);
 
+  // A clear resolves after the dialog has gone; a person can close this screen
+  // in between, and a resolved promise must not set state on a gone tree.
+  const mounted = useRef(true);
+  useEffect(() => () => {
+    mounted.current = false;
+  }, []);
+
   const read = useCallback(() => setCounters(tailCache.counters()), []);
   useEffect(() => {
     read();
     return tailCache.subscribe(read);
   }, [read]);
 
-  const clear = useCallback(async () => {
+  /**
+   * Clear what is kept here, and say what happened.
+   *
+   * Which clear depends on the state, and this is the recovery a refused cache
+   * needs: when the environment's own store is closed — data from an earlier
+   * session that could not be checked, a browser that will not store anything
+   * — there is no in-place pass to run, so the whole database is deleted
+   * instead. That path needs no open store, which is exactly why it is the one
+   * offered here.
+   */
+  const clear = useCallback(async (scope: "environment" | "all") => {
     setConfirming(false);
     setStuck(false);
     setClearing(true);
     try {
-      const cleared = await tailCache.clear("environment");
-      setStuck(!cleared);
+      const cleared = await tailCache.clear(scope);
+      if (mounted.current) setStuck(!cleared);
     } finally {
-      setClearing(false);
-      read();
+      if (mounted.current) {
+        setClearing(false);
+        read();
+      }
     }
   }, [read]);
 
@@ -198,7 +217,7 @@ export function DeviceCacheSetting({ className }: { className?: string }) {
             <Button type="button" variant="ghost" autoFocus onClick={() => setConfirming(false)}>
               Keep them
             </Button>
-            <Button type="button" variant="destructive" className="gap-1.5" onClick={() => void clear()}>
+            <Button type="button" variant="destructive" className="gap-1.5" onClick={() => void clear(open ? "environment" : "all")}>
               <Trash2 /> Clear cached conversations
             </Button>
           </DialogFooter>

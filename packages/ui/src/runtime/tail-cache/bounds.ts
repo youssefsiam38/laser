@@ -21,7 +21,7 @@
 import type { CachePolicy } from "@lasercode/protocol";
 
 /** Record generation. Any change to the stored shape changes this string. */
-export const TAIL_RECORD_SCHEMA = "tail-cache/1";
+export const TAIL_RECORD_SCHEMA = "tail-cache/2";
 
 /** Ceilings that apply however generous an environment's policy is. */
 export const TAIL_HARD_LIMITS = {

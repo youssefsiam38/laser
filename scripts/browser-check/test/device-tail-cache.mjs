@@ -123,6 +123,74 @@ export default async function deviceTailCache(check) {
     open.close();
   }, { name: database, mutation, payload });
 
+  /** Open Settings → This device and hand back what the section says. */
+  const openDeviceTab = async () => {
+    const section = page.locator('[data-slot=device-cache-setting]');
+    const showing = async (timeout = 5_000) => section.waitFor({ timeout }).then(() => true, () => false);
+    for (let attempt = 0; attempt < 3 && !(await showing(attempt === 0 ? 2_000 : 5_000)); attempt += 1) {
+      const tab = page.getByRole('button', { name: 'This device', exact: true });
+      if (await tab.count() === 0) {
+        if (phone) await activate(page.getByRole('button', { name: 'Sessions', exact: true }));
+        await activate(page.getByRole('button', { name: 'Settings', exact: true }).first());
+      }
+      const reachable = page.getByRole('button', { name: 'This device', exact: true });
+      await reachable.waitFor({ timeout: 15_000 });
+      await reachable.scrollIntoViewIfNeeded();
+      await reachable.focus();
+      await reachable.press('Enter');
+    }
+    await section.waitFor();
+    return scrub(await section.innerText());
+  };
+
+  /**
+   * The harness's own reset: delete the database from the page and reload.
+   *
+   * Deliberately not a product claim — the person-facing recovery is asserted
+   * on its own, with and without a blocker. This is how a phase leaves a known
+   * state behind for the next one.
+   */
+  const resetDatabase = async () => {
+    await page.evaluate(async name => {
+      await new Promise(resolve => {
+        const request = indexedDB.deleteDatabase(name);
+        request.onsuccess = resolve;
+        request.onerror = resolve;
+        request.onblocked = resolve;
+        setTimeout(resolve, 2_000);
+      });
+    }, database);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await composer.waitFor({ timeout: 60_000 });
+  };
+
+  /** Press the section's own clear, confirm it, and wait for the answer. */
+  const clearFromSettings = async () => {
+    await openDeviceTab();
+    const section = page.locator('[data-slot=device-cache-setting]');
+    const button = section.getByRole('button', { name: /Clear cached conversations/ });
+    await button.waitFor();
+    if (!await button.isEnabled()) {
+      await page.keyboard.press('Escape');
+      await composer.waitFor();
+      return;
+    }
+    await button.focus();
+    await button.press('Enter');
+    const dialog = page.getByRole('dialog');
+    await dialog.waitFor();
+    await activate(dialog.getByRole('button', { name: /Clear cached conversations/ }));
+    await page.waitForTimeout(1_000);
+    await page.keyboard.press('Escape');
+    await composer.waitFor();
+  };
+
+  // Each matrix case shares one browser profile with the ones before it, and
+  // the last phases here deliberately leave a hostile database behind. So a
+  // case starts from a known device rather than inheriting one: the harness's
+  // own reset, never the product's.
+  await resetDatabase();
+
   // ------------------------------------------------- 1. records really appear
   /**
    * Poll from here, not in the page: a `waitForFunction` whose body is `async`
@@ -165,6 +233,31 @@ export default async function deviceTailCache(check) {
     if (page.viewportSize().width < 1024) await sessions.waitFor({ state: 'hidden' });
   };
 
+  // The accepted fixture (`long`) has one conversation, and the cache is fed
+  // by what the renderer *releases* — which needs more open conversations than
+  // the renderer's own budget. The fixture is not changed for that: the extras
+  // are created through the host's own real RPCs, exactly as the navigation
+  // script already does, and then visited like any other row.
+  const existing = await check.rpc('pi/session/list', { cwd: check.fixture.project });
+  const shortfall = VISITS - (existing.sessions?.length ?? 0);
+  for (let index = 0; index < shortfall; index += 1) {
+    const { state } = await check.rpc('session/new', { cwd: check.fixture.project });
+    await check.rpc('pi/session/rename', { path: state.path, name: `Cache probe ${index + 1} ${label}` });
+    await check.rpc('session/prompt', {
+      path: state.path,
+      content: [{ type: 'text', text: `Review checkpoint ${index + 1}: verify the implementation and explain the next step.` }],
+    });
+    const deadline = Date.now() + 30_000;
+    while ((await check.rpc('session/load', { path: state.path })).state.isStreaming) {
+      assert.ok(Date.now() < deadline, 'the synthetic turn settles');
+      await page.waitForTimeout(25);
+    }
+  }
+  if (shortfall > 0) {
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await composer.waitFor({ timeout: 60_000 });
+  }
+
   // The sidebar pages its own list, and on a phone it closes after every
   // choice and reopens on its first page \u2014 so the next conversation is
   // discovered each time round rather than assumed from one early reading.
@@ -195,7 +288,7 @@ export default async function deviceTailCache(check) {
 
   const stored = await rows();
   assert.deepEqual(stored.keyPath, ['environmentKey', 'sessionId'], 'rows are keyed by opaque environment and session identity');
-  assert.deepEqual(stored.indexes, ['by-path'], 'the path is an index, never key material');
+  assert.deepEqual(stored.indexes, [], 'nothing is indexed: opaque identity is the only way to a row');
   assert.ok(stored.rows.length > 0, `visiting ${VISITS} conversations leaves tails on this device (${stored.rows.length})`);
   assert.ok(stored.rows.length <= 24, `the record count stays inside the bound (${stored.rows.length})`);
 
@@ -205,18 +298,31 @@ export default async function deviceTailCache(check) {
     assert.ok(typeof row.key[1] === 'string' && row.key[1].length > 0, 'the opaque session id is required in the key');
     assert.ok(!row.key[1].includes('/'), `no path in key material: ${row.key[1]}`);
     sessionIds.add(row.key[1]);
-    assert.match(row.revision, SESSION_REVISION_PATTERN, 'each record carries the revision it can be validated by');
-    assert.equal(row.schema, 'tail-cache/1');
+    assert.equal(row.schema, 'tail-cache/2');
     assert.ok(row.bytes > 0 && row.bytes <= 256 * 1024, `each record stays inside its own byte bound (${row.bytes})`);
-    const keyText = JSON.stringify(row.key);
-    for (const [what, secret] of [['raw environment id', rawEnvironmentId], ['project path', check.fixture.project], ['session path', check.fixture.path]]) {
-      assert.ok(!keyText.includes(secret), `no ${what} in key material`);
-    }
-    // Identity fields may name the path (it is how a navigation finds a row);
-    // nothing may carry the host's private identity or a device id.
+    // Nothing outside the payload but opaque identity and bounding numbers:
+    // no path, no path fragment, no hash of one, no raw environment id, no
+    // device or actor id, and nothing derived from the conversation.
+    assert.deepEqual(
+      Object.keys(row).filter(name => !['key', 'bodyKind', 'bodyBytes', 'bodyText', 'body'].includes(name)).sort(),
+      ['appVersion', 'bytes', 'capturedAt', 'environmentKey', 'lastUsedAt', 'schema', 'sessionId'],
+      'the stored row carries only what is needed to find and bound it',
+    );
     const rowText = JSON.stringify({ ...row, bodyText: undefined });
-    assert.ok(!rowText.includes(rawEnvironmentId), 'no raw environment id anywhere in a row');
-    assert.ok(!/deviceId|actorId/.test(rowText), `no device or actor identity in a row: ${rowText.slice(0, 200)}`);
+    for (const [what, secret] of [
+      ['raw environment id', rawEnvironmentId],
+      ['project path', check.fixture.project],
+      ['session path', check.fixture.path],
+    ]) {
+      assert.ok(!rowText.includes(secret), `no ${what} anywhere outside the payload`);
+    }
+    assert.ok(!/\//.test(rowText.replace(/tail-cache\/2/g, '')), `no path separator outside the payload: ${rowText.slice(0, 200)}`);
+    assert.ok(!/deviceId|actorId|mimeType|checksum|revision/.test(rowText), `no content-derived metadata in the clear: ${rowText.slice(0, 200)}`);
+    // The payload itself carries the revision, and it is a revision.
+    const payload = row.bodyText ? JSON.parse(row.bodyText) : undefined;
+    assert.ok(payload, 'a browser stores the payload as text, which is what it says it does');
+    assert.match(payload.revision, SESSION_REVISION_PATTERN, 'the payload carries the revision it can be validated by');
+    assert.ok(!JSON.stringify(payload).includes(check.fixture.project), 'and not even the payload carries a path');
   }
   assert.equal(sessionIds.size, stored.rows.length, 'one record per conversation, never two');
   const totalBytes = stored.rows.reduce((sum, row) => sum + row.bytes, 0);
@@ -227,7 +333,7 @@ export default async function deviceTailCache(check) {
 
   // ------------- 2. this device is ready before the connection opens its work
   await page.addInitScript(() => {
-    const probe = { steps: [] };
+    const probe = { steps: [], read: [] };
     globalThis.__tailProbe = probe;
     const at = what => probe.steps.push({ what, at: performance.now() });
     const open = IDBFactory.prototype.open;
@@ -244,7 +350,19 @@ export default async function deviceTailCache(check) {
       const request = getAll.apply(this, args);
       if (this.name === 'records') {
         at('db-read');
-        request.addEventListener?.('success', () => at('db-rows'));
+        request.addEventListener?.('success', () => {
+          at('db-rows');
+          // What the app actually had in its hands at that moment: the
+          // payloads it read, which is what a synchronous read can answer from.
+          for (const row of request.result ?? []) {
+            try {
+              const payload = row?.body?.kind === 'plain' ? JSON.parse(row.body.text) : undefined;
+              if (payload?.revision) probe.read.push({ sessionId: row.sessionId, revision: payload.revision });
+            } catch {
+              // A row this probe cannot read is not this probe's business.
+            }
+          }
+        });
       }
       return request;
     };
@@ -274,7 +392,22 @@ export default async function deviceTailCache(check) {
     first('db-rows') < first('send:session/load'),
     `the cache is read before the first conversation is asked of the host: ${steps.join(' → ')}`,
   );
-  console.log(`readiness ${label}: ${steps.slice(0, 8).join(' → ')}`);
+  // What was readable at that moment, and whether the host agrees it is current.
+  const readAtOpen = await page.evaluate(() => globalThis.__tailProbe.read);
+  assert.ok(readAtOpen.length > 0, 'the app had at least one validated record in hand before it asked the host for anything');
+  const sessions = await check.rpc('pi/session/list', { cwd: check.fixture.project });
+  const pathOf = new Map((sessions.sessions ?? []).map(summary => [summary.id, summary.path]));
+  let classified = 0;
+  for (const record of readAtOpen.slice(0, 3)) {
+    const path = pathOf.get(record.sessionId);
+    if (!path) continue;
+    const answer = await check.rpc('session/revision', { path, baseRevision: record.revision });
+    assert.equal(answer.base, 'current', `the host classifies the cached revision as current (${record.revision})`);
+    assert.equal(answer.revision, record.revision, 'and it is the same revision');
+    classified += 1;
+  }
+  assert.ok(classified > 0, 'at least one cached record was classified by the host itself');
+  console.log(`readiness ${label}: ${steps.slice(0, 8).join(' → ')} · ${readAtOpen.length} readable, ${classified} classified current`);
 
   // ------------------------------------- 3. damage cannot block the authority
   const survivor = (await rows()).rows[0];
@@ -307,6 +440,44 @@ export default async function deviceTailCache(check) {
   assert.ok(!cleaned.rows.some(row => row.checksum === 'deadbeef-1'), 'the corrupt record was discarded');
   await check.shot(`device-cache-after-damage-${label}`);
 
+  // ------------------------- 3a. an interrupted transaction leaves no half row
+  // A write is started and the page is reloaded before it can commit. Either
+  // the row is there in full or it is not there at all: that is what an atomic
+  // write means, and it is only provable against a real database.
+  const before = (await rows()).rows.length;
+  await page.evaluate(async name => {
+    const open = await new Promise(resolve => {
+      const request = indexedDB.open(name);
+      request.onsuccess = () => resolve(request.result);
+    });
+    const store = open.transaction('records', 'readwrite').objectStore('records');
+    const rows = await new Promise(resolve => {
+      const request = store.getAll();
+      request.onsuccess = () => resolve(request.result);
+    });
+    const template = rows[0];
+    // Two rows in one transaction, then the transaction is interrupted. Either
+    // both are there or neither is — which is what an atomic write means, and
+    // it is only provable against a real database.
+    const owner = store.transaction;
+    store.put({ ...template, sessionId: 'interrupted-a' });
+    store.put({ ...template, sessionId: 'interrupted-b' });
+    owner.abort();
+    await new Promise(resolve => {
+      owner.onabort = resolve;
+      owner.onerror = resolve;
+      setTimeout(resolve, 1_000);
+    });
+    open.close();
+  }, database);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await composer.waitFor({ timeout: 60_000 });
+  const afterInterrupt = await rows();
+  assert.ok(
+    !afterInterrupt.rows.some(row => String(row.sessionId).startsWith('interrupted-')),
+    'an aborted transaction leaves no partial row behind',
+  );
+  assert.ok(afterInterrupt.rows.length >= Math.min(before, 1), 'and everything committed before it is still there');
   // ------------------------------- 4. nothing of a transcript is in a SW cache
   const cachedTranscript = await page.evaluate(async () => {
     if (typeof caches === 'undefined') return false;
@@ -320,28 +491,22 @@ export default async function deviceTailCache(check) {
   });
   assert.equal(cachedTranscript, false, `no transcript request is in a service-worker cache: ${cachedTranscript}`);
 
+  // --------------------- 4a. a near-bound device still opens inside its budget
+  // Preparation validates and authenticates every retained row, so a device
+  // holding its full allowance is the slow case. The connection must still
+  // open, and inside the readiness budget rather than whenever it finishes.
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  const startedAt = Date.now();
+  await composer.waitFor({ timeout: 60_000 });
+  const openedIn = Date.now() - startedAt;
+  const heldNow = (await rows()).rows.length;
+  console.log(`readiness budget ${label}: ${heldNow} rows on this device, app usable in ${openedIn} ms`);
+  assert.ok(heldNow > 0, 'the device really is holding records for this measurement');
+  assert.ok(openedIn < 30_000, `a device holding ${heldNow} records still opens promptly (${openedIn} ms)`);
+
   // --------------------------------------- 5. the surface, and the real clear
   const section = page.locator('[data-slot=device-cache-setting]');
-  const showing = async (timeout = 5_000) => section.waitFor({ timeout }).then(() => true, () => false);
-  // The install reminder can appear over any surface and swallow the choice
-  // that opened this one (its handler dismisses it, but the tap is gone), so
-  // getting here is retried rather than assumed.
-  for (let attempt = 0; attempt < 3 && !(await showing(attempt === 0 ? 2_000 : 5_000)); attempt += 1) {
-    const tab = page.getByRole('button', { name: 'This device', exact: true });
-    if (await tab.count() === 0) {
-      if (phone) await activate(page.getByRole('button', { name: 'Sessions', exact: true }));
-      await activate(page.getByRole('button', { name: 'Settings', exact: true }).first());
-    }
-    const reachable = page.getByRole('button', { name: 'This device', exact: true });
-    await reachable.waitFor({ timeout: 15_000 });
-    // The tab strip scrolls inside itself on a phone, so it is reached the way
-    // a keyboard reaches it: focus the tab, then press it. A tap on a strip
-    // that is still settling lands on the tab next door.
-    await reachable.scrollIntoViewIfNeeded();
-    await reachable.focus();
-    await reachable.press('Enter');
-  }
-  await section.waitFor();
+  await openDeviceTab();
   const surface = scrub(await section.innerText());
   assert.match(surface, /Conversations on this device/, `the section names itself: ${surface}`);
   assert.match(surface, /kept here/, `it says what is kept: ${surface}`);
@@ -405,6 +570,145 @@ export default async function deviceTailCache(check) {
   assert.equal(emptied.rows.length, 0, 'the clear really cleared');
   assert.match(scrub(await section.innerText()), /0 of \d+/, 'and the surface says so');
   await check.shot(`device-cache-cleared-${label}`);
+
+
+  // ------------------- 6. an incompatible database refuses storage (B11)
+  // A database left at a version this build cannot open: the cache refuses,
+  // the conversation still loads from its host, and a reload proves there is
+  // no in-memory substitute quietly standing in for durable storage.
+  await page.evaluate(async name => {
+    const open = await new Promise(resolve => {
+      const request = indexedDB.open(name);
+      request.onsuccess = () => resolve(request.result);
+    });
+    const version = open.version;
+    open.close();
+    await new Promise(resolve => {
+      const upgrade = indexedDB.open(name, version + 5);
+      upgrade.onsuccess = () => {
+        upgrade.result.close();
+        resolve();
+      };
+      upgrade.onerror = () => resolve();
+      upgrade.onblocked = () => resolve();
+    });
+  }, database);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await composer.waitFor({ timeout: 60_000 });
+  await page.getByText('is complete.', { exact: false }).first().waitFor({ timeout: 60_000 });
+  const refusedSurface = await openDeviceTab();
+  assert.match(refusedSurface, /will not store anything|could not verify/, `the surface says why nothing is kept: ${refusedSurface}`);
+  await check.shot(`device-cache-refused-${label}`);
+  await page.keyboard.press('Escape');
+  await composer.waitFor();
+  // Nothing was kept in memory instead: after a reload there is still nothing.
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await composer.waitFor({ timeout: 60_000 });
+  const stillRefused = await openDeviceTab();
+  assert.match(stillRefused, /will not store anything|could not verify/, 'and it is still refusing, not warm');
+  await page.keyboard.press('Escape');
+  await composer.waitFor();
+
+  // The recovery a refused cache offers really recovers.
+  await clearFromSettings();
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await composer.waitFor({ timeout: 60_000 });
+  await until('the cache to be usable again after the recovery', async () => {
+    const surface = await openDeviceTab();
+    await page.keyboard.press('Escape');
+    await composer.waitFor();
+    return /kept here/.test(surface);
+  });
+
+  // ------------------------ 7. past the scan ceiling, fail closed (B12)
+  await page.evaluate(async ({ name, count }) => {
+    const open = await new Promise(resolve => {
+      const request = indexedDB.open(name);
+      request.onsuccess = () => resolve(request.result);
+    });
+    const template = (await new Promise(resolve => {
+      const request = open.transaction('records', 'readonly').objectStore('records').getAll();
+      request.onsuccess = () => resolve(request.result);
+    }))[0] ?? {
+      schema: 'tail-cache/2',
+      appVersion: 'unknown',
+      environmentKey: 'e1.AAAAAAAAAAAAAAAAAAAAAA',
+      capturedAt: new Date().toISOString(),
+      lastUsedAt: new Date().toISOString(),
+      bytes: 10,
+      body: { kind: 'plain', text: '{}' },
+    };
+    for (let batch = 0; batch < count / 200; batch += 1) {
+      const transaction = open.transaction('records', 'readwrite');
+      const store = transaction.objectStore('records');
+      for (let index = 0; index < 200; index += 1) {
+        store.put({ ...template, sessionId: `flood-${batch}-${index}` });
+      }
+      await new Promise(resolve => {
+        transaction.oncomplete = resolve;
+        transaction.onerror = resolve;
+        transaction.onabort = resolve;
+      });
+    }
+    open.close();
+  }, { name: database, count: 2_200 });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await composer.waitFor({ timeout: 60_000 });
+  await page.getByText('is complete.', { exact: false }).first().waitFor({ timeout: 60_000 });
+  const flooded = await openDeviceTab();
+  assert.match(flooded, /could not verify|will not store anything/, `a database past the ceiling fails closed, and says so: ${flooded}`);
+  await check.shot(`device-cache-ceiling-${label}`);
+  // Recover through the person's own control (this is the last phase that
+  // needs anything of this device). The surface is asked, not the
+  // database: a poll that opens its own connection would block the very
+  // deletion it is waiting for. Either it recovered, or it says the browser is
+  // still holding on — never a silent claim.
+  await clearFromSettings();
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await composer.waitFor({ timeout: 60_000 });
+  const recovered = await openDeviceTab();
+  assert.match(
+    recovered,
+    /kept here|still holding on|could not verify|will not store anything/,
+    `the recovery reports what happened: ${recovered}`,
+  );
+  await check.shot(`device-cache-recovered-${label}`);
+  await page.keyboard.press('Escape');
+  await composer.waitFor();
+
+  // ------------------------ 8. a blocked deletion is reported (B13)
+  await openDeviceTab();
+  await page.evaluate(async name => {
+    // A connection this page keeps open, which is what blocks a delete.
+    globalThis.__blocker = await new Promise(resolve => {
+      const request = indexedDB.open(name);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => resolve(undefined);
+    });
+  }, database);
+  const blockedSection = page.locator('[data-slot=device-cache-setting]');
+  const blockedClear = blockedSection.getByRole('button', { name: /Clear cached conversations/ });
+  if (await blockedClear.isEnabled()) {
+    await activate(blockedClear);
+    const dialog = page.getByRole('dialog');
+    await dialog.waitFor();
+    await activate(dialog.getByRole('button', { name: /Clear cached conversations/ }));
+    // Either the in-place pass succeeded (nothing was blocked) or the person is
+    // told the browser is still holding on — never a silent claim of success.
+    await page.waitForTimeout(1_500);
+    const afterBlocked = scrub(await blockedSection.innerText());
+    assert.ok(
+      /still holding on|kept here|0 of/.test(afterBlocked),
+      `a blocked clear is reported rather than assumed: ${afterBlocked}`,
+    );
+    if (/still holding on/.test(afterBlocked)) await check.shot(`device-cache-blocked-${label}`);
+  }
+  await page.evaluate(() => {
+    globalThis.__blocker?.close();
+    delete globalThis.__blocker;
+  });
+  await page.keyboard.press('Escape');
+  await composer.waitFor();
 
   await page.keyboard.press('Escape');
   await composer.waitFor();

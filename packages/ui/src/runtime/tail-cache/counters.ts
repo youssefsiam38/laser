@@ -58,6 +58,12 @@ export interface DeviceCacheCounters {
   readonly durable: boolean;
   readonly bounds?: TailBounds | undefined;
   readonly lastClearedAt?: string | undefined;
+  /**
+   * What the one mutation queue is holding right now. Writes and touches can
+   * be shed; control ops (deletion, clearing, purging) never are, so this is
+   * also the evidence that a deletion is not waiting behind a full write lane.
+   */
+  readonly queued?: { readonly writes: number; readonly touches: number; readonly control: number } | undefined;
 }
 
 /** The `deviceCache` entry of RP-3's retained-store counters. */

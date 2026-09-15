@@ -2,10 +2,9 @@
  * Where a cached tail actually lives (RP-10).
  *
  * One IndexedDB database, one object store, rows keyed by
- * `[environmentKey, sessionId]` — opaque identity and nothing else. The path is
- * an index, because that is what a navigation has in its hand; it is never part
- * of a key, and a row is refused whatever its path says when its environment is
- * not the live one.
+ * `[environmentKey, sessionId]` — opaque identity, and **nothing else**. There
+ * is no second index: a path is a private locator and never reaches this file,
+ * so the only way to a row is the identity the app already holds.
  *
  * One database rather than one per environment on purpose: purging a foreign
  * environment is then a bounded cursor delete inside a store this build already
@@ -19,41 +18,45 @@
  * reaches a ceiling stops and says which one.
  *
  * `TailStore` is a port with exactly one production implementation. There is
- * deliberately **no** in-memory production store: a cache that a reload
- * disproves would make the durability this device's settings screen claims a
- * lie. The in-memory store used by the focused tests lives under `test/`.
+ * deliberately **no** in-memory production store: a cache a reload disproves
+ * would make the durability this device's settings screen claims a lie.
  */
 import { storageKey } from "@lasercode/protocol";
 import { byteLength } from "../view-measure.js";
 import type { SealedBody } from "./vault.js";
 import { TAIL_SCAN_LIMITS, type ScanOutcome } from "./bounds.js";
-import type { TailAttachmentRef, TailKey } from "./record.js";
+import type { TailKey } from "./record.js";
 
 /** `laser-tails`. The product's own prefix, generated, never spelled out. */
 export const TAIL_DATABASE_NAME = storageKey("tails");
-export const TAIL_DATABASE_VERSION = 1;
+export const TAIL_DATABASE_VERSION = 2;
 export const TAIL_STORE_NAME = "records";
-export const TAIL_PATH_INDEX = "by-path";
 
-/** Exactly what is persisted. Identity in the clear, body sealed. */
+/**
+ * Exactly what is persisted, and no more.
+ *
+ * Everything derived from the conversation — entries, attachment references,
+ * the revision, the branch leaf, the engine epoch and sequence, the checksum —
+ * lives inside `body`, which the desktop seals. Outside it there is only what
+ * this device needs to find the row and bound it. No path, and nothing shaped
+ * like one.
+ */
 export interface TailRow {
   schema: string;
   appVersion: string;
   environmentKey: string;
   sessionId: string;
-  path: string;
-  revision: string;
-  leafId: string | null;
-  epoch: string;
-  seq: number;
-  truncated: boolean;
-  attachments: TailAttachmentRef[];
-  attachmentsOmitted: number;
-  bytes: number;
   capturedAt: string;
   lastUsedAt: string;
-  checksum: string;
+  /** Exact UTF-8 bytes of the payload inside `body`. Verified on every read. */
+  bytes: number;
   body: SealedBody;
+}
+
+/** A row as the store hands it over: its primary key beside its unvalidated self. */
+export interface StoredRow {
+  readonly key: unknown;
+  readonly row: unknown;
 }
 
 export interface ScanOptions {
@@ -63,7 +66,7 @@ export interface ScanOptions {
   bytes: number;
   /** Rows per transaction before yielding. */
   batch: number;
-  /** A deadline in `Date.now()` terms, or `undefined` for no clock bound. */
+  /** A deadline in the caller's own clock, or `undefined` for no clock bound. */
   deadline?: number | undefined;
 }
 
@@ -77,7 +80,7 @@ export interface ScanReport {
 export interface RemoveBounds {
   /** Keys one pass may delete. More than this is refused, not truncated. */
   rows?: number | undefined;
-  /** A `Date.now()` deadline for the whole pass, including its verification. */
+  /** A deadline in the caller's clock for the whole pass, verification included. */
   deadline?: number | undefined;
 }
 
@@ -85,10 +88,10 @@ export interface TailStore {
   /** True for real storage. Always true in production (there is one store). */
   readonly durable: boolean;
   /**
-   * Visit rows in key order, bounded. The visitor is called for every row the
-   * pass examines; returning `false` stops the pass as `complete`.
+   * Visit rows in key order, bounded, **with their primary keys**, so a row
+   * whose own fields are malformed can still be removed.
    */
-  scan(options: ScanOptions, visit: (row: TailRow) => boolean | void): Promise<ScanReport>;
+  scan(options: ScanOptions, visit: (stored: StoredRow) => boolean | void): Promise<ScanReport>;
   /** One atomic write. `false` means the transaction did not commit. */
   put(row: TailRow): Promise<boolean>;
   /**
@@ -106,32 +109,18 @@ export interface TailStore {
 /** One macrotask. Never a busy loop. */
 export const yieldToLoop = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, TAIL_SCAN_LIMITS.yieldMs));
 
-/**
- * What a row actually cost to read, measured rather than believed.
- *
- * Deliberately **not** `row.bytes`: that field is what some build of this app
- * claimed the plaintext weighed, and a row this one did not write can claim
- * anything. Trusting it let a single hostile row exhaust the scan's byte
- * ceiling, and a pass that fails closed then never reaches the delete that
- * would have removed it — a row that could not be read would have made the
- * cache permanently refuse. Only the bytes really read are counted, plus a
- * fixed allowance for the identity fields beside them.
- */
-export function rowStoredBytes(row: TailRow): number {
-  const body = row.body as SealedBody | undefined;
+/** Identity and accounting fields beside a body, generously. */
+export const ROW_IDENTITY_ALLOWANCE = 2_048;
+
+/** What a row really cost to read, measured rather than believed. */
+export function storedRowBytes(body: SealedBody | undefined): number {
   const bytes = body === undefined
     ? 0
-    // Exact UTF-8, never `String.length`: a stored body is measured the way a
-    // quota measures it, so a transcript in a non-Latin script is not
-    // accounted at a third of its real size.
     : body.kind === "plain"
       ? byteLength(body.text)
       : (body.data?.byteLength ?? 0) + (body.iv?.byteLength ?? 0);
   return bytes + ROW_IDENTITY_ALLOWANCE;
 }
-
-/** Identity, accounting and reference fields beside a body, generously. */
-export const ROW_IDENTITY_ALLOWANCE = 2_048;
 
 const request = <T>(value: IDBRequest<T>): Promise<T> =>
   new Promise((resolve, reject) => {
@@ -140,19 +129,44 @@ const request = <T>(value: IDBRequest<T>): Promise<T> =>
   });
 
 /**
+ * Databases whose deletion has been asked for and has not settled.
+ *
+ * An IndexedDB delete request cannot be cancelled. When one is blocked past its
+ * deadline the caller is told `blocked`, but the request stays live — and if
+ * something opened the database again in the meantime, that late delete would
+ * take the *successor*. So a pending deletion is tracked here, and no open is
+ * allowed while one is outstanding: there is nothing for the late delete to
+ * destroy but the database it was asked about.
+ */
+const pendingDeletions = new Map<string, Promise<void>>();
+
+/** Is a deletion of this database still outstanding? */
+export function deletionPending(name: string = TAIL_DATABASE_NAME): boolean {
+  return pendingDeletions.has(name);
+}
+
+/** For tests and for an orderly shutdown: await whatever is outstanding. */
+export function whenDeletionSettles(name: string = TAIL_DATABASE_NAME): Promise<void> {
+  return pendingDeletions.get(name) ?? Promise.resolve();
+}
+
+/**
  * Open the database, bounded.
  *
  * `undefined` means this device will not give us storage — a private window,
  * blocked site data, a leftover database at a newer version this build cannot
- * read, or another connection holding an upgrade open past `blockedMs`. Every
- * one of those is the same honest answer to the caller: no durable cache, and
- * **never** an in-memory substitute.
+ * read, another connection holding an upgrade open past `blockedMs`, or a
+ * deletion of this database that has not settled yet. Every one of those is the
+ * same honest answer to the caller: no durable cache, and **never** an
+ * in-memory substitute.
  */
 export async function openTailStore(
   factory: IDBFactory | undefined,
   options: { blockedMs?: number | undefined; now?: (() => number) | undefined } = {},
 ): Promise<TailStore | undefined> {
   if (!factory) return undefined;
+  // Never race a deletion that is still outstanding.
+  if (pendingDeletions.has(TAIL_DATABASE_NAME)) return undefined;
   const blockedMs = options.blockedMs ?? TAIL_SCAN_LIMITS.blockedMs;
   // One clock for the store and its caller: every deadline that reaches here
   // was computed from the *caller's* clock, and comparing it against a
@@ -175,9 +189,7 @@ export async function openTailStore(
         return;
       }
       // A blocked open is given `blockedMs` and then refused. If the request
-      // succeeds afterwards, that connection is closed rather than left open:
-      // a timed-out attempt must not hold a database it will never be used for,
-      // and must never become a cache somebody reads.
+      // succeeds afterwards, that connection is closed rather than left open.
       const blocked = setTimeout(() => {
         settle(undefined);
         try {
@@ -188,15 +200,15 @@ export async function openTailStore(
       }, blockedMs);
       open.onupgradeneeded = () => {
         const db = open.result;
-        if (!db.objectStoreNames.contains(TAIL_STORE_NAME)) {
-          const store = db.createObjectStore(TAIL_STORE_NAME, { keyPath: ["environmentKey", "sessionId"] });
-          store.createIndex(TAIL_PATH_INDEX, ["environmentKey", "path"], { unique: false });
-        }
+        // Generation 2 keys by identity alone and indexes nothing. An earlier
+        // generation's store (which carried a path index) is replaced outright:
+        // its rows are a schema this build refuses anyway.
+        if (db.objectStoreNames.contains(TAIL_STORE_NAME)) db.deleteObjectStore(TAIL_STORE_NAME);
+        db.createObjectStore(TAIL_STORE_NAME, { keyPath: ["environmentKey", "sessionId"] });
       };
       open.onsuccess = () => {
         clearTimeout(blocked);
         if (settled) {
-          // Too late: this attempt was already refused.
           try {
             open.result.close();
           } catch {
@@ -210,8 +222,6 @@ export async function openTailStore(
         clearTimeout(blocked);
         settle(undefined);
       };
-      // Another tab is holding an older generation open. Bounded, then refused:
-      // half a database is not something to read a conversation out of.
       open.onblocked = () => {};
     });
   } catch {
@@ -223,7 +233,6 @@ export async function openTailStore(
     return undefined;
   }
   let closed = false;
-  // Another context asking for a version change must not be blocked by us.
   database.onversionchange = () => {
     closed = true;
     database?.close();
@@ -249,24 +258,26 @@ export async function openTailStore(
         if (closed) return { ...report, outcome: "failed" };
         const store = transaction("readonly");
         if (!store) return { ...report, outcome: "failed" };
-        let batch: TailRow[];
+        let keys: IDBValidKey[];
+        let rows: unknown[];
         try {
           const range = cursorKey === undefined ? null : IDBKeyRange.lowerBound(cursorKey, true);
-          batch = await request(store.getAll(range, options.batch)) as TailRow[];
+          keys = await request(store.getAllKeys(range, options.batch));
+          rows = await request(store.getAll(range, options.batch)) as unknown[];
         } catch {
           return { ...report, outcome: "failed" };
         }
-        if (batch.length === 0) return report;
-        for (const row of batch) {
+        if (keys.length === 0) return report;
+        for (let index = 0; index < keys.length; index += 1) {
+          const row = rows[index];
           report.rowsSeen += 1;
-          report.bytesSeen += rowStoredBytes(row);
+          report.bytesSeen += storedRowBytes((row as { body?: SealedBody } | undefined)?.body);
           if (report.rowsSeen > options.rows) return { ...report, outcome: "over-rows" };
           if (report.bytesSeen > options.bytes) return { ...report, outcome: "over-bytes" };
-          if (visit(row) === false) return report;
+          if (visit({ key: keys[index], row }) === false) return report;
         }
-        const last = batch[batch.length - 1]!;
-        cursorKey = [last.environmentKey, last.sessionId];
-        if (batch.length < options.batch) return report;
+        cursorKey = keys[keys.length - 1]!;
+        if (keys.length < options.batch) return report;
         if (options.deadline !== undefined && now() > options.deadline) return { ...report, outcome: "over-time" };
         await yieldToLoop();
       }
@@ -313,10 +324,8 @@ export async function openTailStore(
         if (!committed) return false;
         if (index + batch < keys.length) await yieldToLoop();
       }
-      // Verified, not assumed: a delete that did not take must not leave the
-      // cache open over bytes it believes are gone. The proof is batched and
-      // yields like the deletion itself — two thousand reads in one
-      // transaction would be a frame, not a check.
+      // Verified, not assumed, and batched like the deletion itself: two
+      // thousand reads in one transaction would be a frame, not a check.
       for (let index = 0; index < keys.length; index += batch) {
         if (expired()) return false;
         const store = transaction("readonly");
@@ -353,7 +362,9 @@ export type DestroyOutcome = "deleted" | "absent" | "blocked" | "failed";
  * The person's "forget everything" recovery promises removal, so this resolves
  * only when the delete has completed — or says `blocked`, which the caller
  * turns into "your browser is still holding this" rather than a reload that
- * claims success. Own connections must be closed by the caller first.
+ * claims success. Own connections must be closed by the caller first, and while
+ * a blocked request is outstanding {@link openTailStore} refuses to open, so
+ * nothing can be created for the late delete to take.
  */
 export function destroyTailDatabase(
   factory: IDBFactory | undefined,
@@ -374,13 +385,24 @@ export function destroyTailDatabase(
       settle("failed");
       return;
     }
+    // Track it until it really settles: an uncancellable request must not be
+    // able to delete a database opened after it was given up on.
+    let finish: (() => void) | undefined;
+    pendingDeletions.set(TAIL_DATABASE_NAME, new Promise<void>((done) => {
+      finish = () => {
+        pendingDeletions.delete(TAIL_DATABASE_NAME);
+        done();
+      };
+    }));
     const timer = setTimeout(() => settle("blocked"), blockedMs);
     deletion.onsuccess = () => {
       clearTimeout(timer);
+      finish?.();
       settle("deleted");
     };
     deletion.onerror = () => {
       clearTimeout(timer);
+      finish?.();
       settle("failed");
     };
     deletion.onblocked = () => {

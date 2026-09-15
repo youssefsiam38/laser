@@ -48,9 +48,28 @@ describe("the device cache is the only thing that stores conversation content", 
     expect(migration.text).not.toMatch(/indexedDB\.open|factory\.open/);
   });
 
-  it("never reaches the in-memory store the tests use", () => {
-    const offenders = files.filter((file) => /MemoryTailStore|memory-store/.test(file.text)).map((file) => file.path);
+  it("never reaches the ports the tests use, and takes no database dependency", () => {
+    const offenders = files.filter((file) => /createTestStore|fake-indexeddb/.test(file.text)).map((file) => file.path);
     expect(offenders).toEqual([]);
+    // The milestone takes no new dependency: real IndexedDB semantics are
+    // proved in browser acceptance, where there is a browser to prove them in.
+    const manifest = readFileSync(fileURLToPath(new URL("../../../package.json", import.meta.url)), "utf8");
+    expect(manifest).not.toContain("fake-indexeddb");
+  });
+
+  it("keeps no path, and nothing shaped like one, in what it stores", () => {
+    const cache = files.filter((file) => file.path.startsWith("runtime/tail-cache/"));
+    const row = files.find((file) => file.path === "runtime/tail-cache/store.ts")!;
+    // The stored row's own declaration names no path field, and the store
+    // indexes nothing: identity is the only way to a record.
+    const declaration = /export interface TailRow \{([\s\S]*?)\n\}/.exec(row.text)?.[1] ?? "";
+    expect(declaration).not.toMatch(/\bpath\b/);
+    expect(row.text).not.toContain("createIndex");
+    // And nothing under the cache reads a path off the released tail.
+    for (const file of cache) {
+      const code = file.text.replaceAll(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "");
+      expect(code, file.path).not.toMatch(/tail\.path|record\.path|row\.path/);
+    }
   });
 
   it("never touches the draft key, so eviction cannot cost a person their draft", () => {
@@ -67,5 +86,18 @@ describe("the device cache is the only thing that stores conversation content", 
   it("builds its database name from the product's own identity, never a literal", () => {
     const store = files.find((file) => file.path === "runtime/tail-cache/store.ts")!;
     expect(store.text).toContain('storageKey("tails")');
+  });
+
+  it("awaits the deletion at both places a conversation is deleted", () => {
+    // A deletion that is not awaited is a deletion the caller cannot rely on,
+    // and one keyed by a path would put a private locator in the cache. Both
+    // call sites resolve the session's own opaque id from canonical state and
+    // await the proof.
+    const provider = files.find((file) => file.path === "runtime/LaserProvider.tsx")!;
+    const calls = [...provider.text.matchAll(/tailCache\.forget\([^)]*\)/g)].map((match) => match[0]);
+    expect(calls.length).toBe(2);
+    for (const call of calls) expect(call).toBe("tailCache.forget({ sessionId })");
+    expect(provider.text.match(/await tailCache\.forget/g)?.length).toBe(2);
+    expect(provider.text).not.toContain("tailCache.forget({ path");
   });
 });

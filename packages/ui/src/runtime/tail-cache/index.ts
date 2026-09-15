@@ -67,7 +67,19 @@ export function installTailCacheSink(): void {
   installViewTailSink({ release: (tail) => tailCache.release(tail) });
 }
 
-export { createTailCache, type TailCache, type TailCacheState } from "./cache.js";
+export { createTailCache, type TailCache, type TailCacheDeps } from "./cache.js";
+export { createLifecycle, type Lifecycle, type TailCacheState } from "./lifecycle.js";
+export { createRecencyIndex, DURABLE_TOUCH_INTERVAL_MS, type HeldRow, type RecencyIndex } from "./recency.js";
+export { QUEUE_LIMITS, createMutationOwner, type MutationOwner } from "./mutations.js";
+export {
+  carriesOnlyKnownFields,
+  fitRelease,
+  openPayload,
+  parseStoredRow,
+  readableAge,
+  storedBytesOf,
+  type ValidatedRow,
+} from "./admission.js";
 export { deviceCacheStore, type DeviceCacheCounters, type TailDiscardReason } from "./counters.js";
 export {
   TAIL_HARD_LIMITS,
@@ -80,18 +92,31 @@ export {
   type TailRefusal,
 } from "./bounds.js";
 export {
+  TAIL_ATTACHMENT_MARKER_KEY,
   TAIL_OMITTED_ATTACHMENT,
+  TAIL_PAYLOAD_VERSION,
   checksumOf,
+  contentText,
+  identityAad,
+  payloadBytes,
+  payloadText,
   type TailAttachmentRef,
   type TailEntryRecord,
   type TailKey,
+  type TailPayload,
   type TailRecord,
 } from "./record.js";
 export {
   TAIL_DATABASE_NAME,
+  TAIL_DATABASE_VERSION,
+  TAIL_STORE_NAME,
+  deletionPending,
   destroyTailDatabase,
   indexedDbFactory,
   openTailStore,
+  storedRowBytes,
+  whenDeletionSettles,
+  type StoredRow,
   type TailRow,
   type TailStore,
 } from "./store.js";

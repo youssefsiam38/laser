@@ -13,6 +13,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { DeviceCacheCounters } from "../../src/runtime/tail-cache/counters.js";
 import type { TailBounds } from "../../src/runtime/tail-cache/bounds.js";
 
+// React needs to be told this is an act environment, or every state update
+// through the component's own subscription warns.
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+
 const listeners = new Set<() => void>();
 let counters: DeviceCacheCounters;
 const clear = vi.fn(async () => true);
@@ -137,4 +141,15 @@ it("does not claim a clear that the browser would not finish", async () => {
   const confirm = [...document.querySelectorAll("button")].filter((button) => button.textContent?.includes("Clear cached conversations")).at(-1);
   await act(async () => confirm!.click());
   expect(text()).toContain("still holding on to the data");
+});
+
+it("recovers a refused cache by deleting the whole database, which needs no open store", async () => {
+  // The in-place pass has no store to run against in this state, so the button
+  // offers the one path that works — and says so by which clear it calls.
+  counters = state({ status: "refused", refusal: "purge", records: 0, bytes: 0, bounds: undefined });
+  root = (await render(<DeviceCacheSetting />)).root;
+  await click("Clear cached conversations");
+  const confirm = [...document.querySelectorAll("button")].filter((button) => button.textContent?.includes("Clear cached conversations")).at(-1);
+  await act(async () => confirm!.click());
+  expect(clear).toHaveBeenCalledWith("all");
 });
