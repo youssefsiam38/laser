@@ -19,7 +19,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { WIRE_NAMESPACE, backgroundTaskUpdateSchema, type BackgroundTaskRetention } from "@lasercode/protocol";
 import type { ReadTaskOutputResult } from "../src/agents-bridge.js";
 import { createCommandBus, type ModuleContext, type ModuleDispose } from "../src/modules/index.js";
-import { backgroundWorkModule } from "../src/modules/background-work.js";
+import { backgroundWorkModule, backgroundWorkRetention } from "../src/modules/background-work.js";
 
 const SESSION_ID = "retention-session";
 const open: Array<() => void> = [];
@@ -43,7 +43,12 @@ interface FakeTool {
   ) => Promise<{ content: Array<{ type: string; text: string }>; details: any }>;
 }
 
-function harness(options: { readTask?: (taskId: string, tailLines: number) => Promise<ReadTaskOutputResult>; logRoot?: string } = {}) {
+function harness(options: {
+  readTask?: (taskId: string, tailLines: number) => Promise<ReadTaskOutputResult>;
+  logRoot?: string;
+  /** Held write callbacks: storage that has stopped draining, on purpose. */
+  write?: (fd: number, chunk: Buffer) => Promise<void>;
+} = {}) {
   const tools = new Map<string, FakeTool>();
   const pi = {
     on: vi.fn(),
@@ -61,7 +66,13 @@ function harness(options: { readTask?: (taskId: string, tailLines: number) => Pr
     pi,
     send,
     commands,
-    backgroundWork: { cwd, logRoot, foregroundCommandSeconds: 120, ...(options.readTask ? { readTask: options.readTask } : {}) },
+    backgroundWork: {
+      cwd,
+      logRoot,
+      foregroundCommandSeconds: 120,
+      ...(options.readTask ? { readTask: options.readTask } : {}),
+      ...(options.write ? { logWrite: options.write } : {}),
+    },
   };
   backgroundWorkModule.register!(ctx);
   const dispose = backgroundWorkModule.activate(ctx) as ModuleDispose | undefined;
@@ -79,7 +90,7 @@ function harness(options: { readTask?: (taskId: string, tailLines: number) => Pr
       .map(([message]) => message as { type: string; task?: unknown })
       .filter((message) => message.type === "lasercode/task/update")
       .map((message) => backgroundTaskUpdateSchema.parse(message.task));
-  return { call, commands, retention, updates, send, cwd };
+  return { call, commands, retention, updates, send, cwd, held: () => backgroundWorkRetention(ctx)! };
 }
 
 /** Wait for a task to leave `running`, the way the model would: by reading it. */
@@ -299,35 +310,50 @@ it(
   180_000,
 );
 
+/** Storage that has stopped draining: every write is held until the test lets it go. */
+function stalledWriter() {
+  const settlers: Array<() => void> = [];
+  const write = (_fd: number, _chunk: Buffer): Promise<void> => new Promise<void>((resolve) => settlers.push(resolve));
+  return { write, settlers, settle: () => { for (const settle of settlers.splice(0)) settle(); } };
+}
+
 it(
-  "holds a session's stalled logs inside one aggregate ceiling, and keeps every command running",
+  "never exceeds the session's share, even for an instant, when storage stops draining",
   async () => {
-    // The worker's share for this session, made small so the ceiling is
-    // reachable with a handful of commands rather than a gigabyte of output.
-    const h = harness();
-    expect(h.commands.deliver({ type: "lasercode/task/log-budget", bytes: 4 * 1024 * 1024 })).toBe(true);
+    const storage = stalledWriter();
+    const h = harness({ write: storage.write });
+    const share = 4 * 1024 * 1024;
+    expect(h.commands.deliver({ type: "lasercode/task/log-budget", bytes: share })).toBe(true);
 
     const ids: string[] = [];
-    for (let index = 0; index < 8; index++) {
-      const { details } = await h.call("bash", {
-        command: "node -e \"const l='y'.repeat(65536); for(let i=0;i<64;i++) process.stdout.write(l); setTimeout(()=>{},30000)\"",
-        background: true,
-        notify: false,
-      });
-      ids.push((details as { taskId: string }).taskId);
+    const breaches: Array<{ logBytes: number; pendingLogBytes: number }> = [];
+    // Watch the aggregate far more often than it can change: nothing drains,
+    // so it only moves when a command prints, and this samples between prints.
+    const watching = setInterval(() => {
+      const held = h.held();
+      if (held.logBytes + held.pendingLogBytes > share) breaches.push({ logBytes: held.logBytes, pendingLogBytes: held.pendingLogBytes });
+    }, 1);
+    try {
+      // Ten commands, each printing several megabytes into storage that never
+      // acknowledges a write: per-log queues alone would be ten times 16 MiB.
+      for (let index = 0; index < 10; index++) {
+        const { details } = await h.call("bash", {
+          command: "node -e \"const l='z'.repeat(65536); for(let i=0;i<96;i++) process.stdout.write(l); setTimeout(()=>{},30000)\"",
+          background: true,
+          notify: false,
+        });
+        ids.push((details as { taskId: string }).taskId);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+    } finally {
+      clearInterval(watching);
     }
-    await new Promise((resolve) => setTimeout(resolve, 2000));
 
-    const held = h.retention()!;
-    // Disk *and* the bytes on their way there, together, inside the share: a
-    // per-log queue bound alone would have allowed eight of them.
-    expect(held.logBytes + held.pendingLogBytes).toBeLessThanOrEqual(4 * 1024 * 1024);
-    expect(diskBytes()).toBeLessThanOrEqual(4 * 1024 * 1024);
-    expect(held.released).toBeGreaterThan(0);
-    expect(held.live).toBe(8);
-
-    // Every command is still running, and every one of them still tells the
-    // exact truth about its output whether its body survived or not.
+    const held = h.held();
+    expect(breaches).toEqual([]);
+    expect(held.logBytes + held.pendingLogBytes).toBeLessThanOrEqual(share);
+    expect(held.live).toBe(10);
+    // Not one command was stopped, and every row still tells the exact truth.
     for (const id of ids) {
       const row = h.updates().filter((update) => update.id === id).at(-1)!;
       expect(row.status).toBe("running");
@@ -335,9 +361,73 @@ it(
       expect(row.outputDigest).toMatch(/^[0-9a-f]{64}$/);
       expect(["retained", "truncated", "released"]).toContain(row.logState);
     }
+
+    // Storage comes back: the held writes settle, the abandoned bodies are
+    // cleaned up, and nothing is left holding bytes or descriptors.
+    storage.settle();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(h.held().pendingLogBytes).toBe(0);
     for (const id of ids) await h.call("task_stop", { taskId: id });
+    storage.settle();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(h.held().pendingLogBytes).toBe(0);
+    expect(diskBytes()).toBeLessThanOrEqual(share);
   },
   180_000,
+);
+
+it(
+  "keeps a zero share and a tiny share honest: no body, exact facts, commands untouched",
+  async () => {
+    const h = harness();
+    expect(h.commands.deliver({ type: "lasercode/task/log-budget", bytes: 0 })).toBe(true);
+    const zero = (await h.call("bash", { command: "printf 'nothing kept\\n'", background: true, notify: false })) as { details: { taskId: string } };
+    await settled(h, zero.details.taskId);
+    const zeroRow = h.updates().filter((update) => update.id === zero.details.taskId).at(-1)!;
+    expect(zeroRow.status).toBe("completed");
+    expect(zeroRow.logState).toBe("released");
+    expect(zeroRow.outputBytes).toBe(13);
+    expect(zeroRow.outputDigest).toBe(createHash("sha256").update("nothing kept\n").digest("hex"));
+    expect(diskBytes()).toBe(0);
+    const read = await h.call("task_output", { taskId: zero.details.taskId, tail: 5 });
+    expect(read.content[0]!.text).toContain("was released");
+
+    // A share large enough for one window, and a command far larger than it.
+    expect(h.commands.deliver({ type: "lasercode/task/log-budget", bytes: 2 * 1024 * 1024 })).toBe(true);
+    const small = (await h.call("bash", { command: "head -c 6000000 /dev/zero | tr '\\0' 's'", background: true, notify: false })) as { details: { taskId: string } };
+    await settled(h, small.details.taskId);
+    const smallRow = h.updates().filter((update) => update.id === small.details.taskId).at(-1)!;
+    expect(smallRow.status).toBe("completed");
+    expect(smallRow.outputBytes).toBe(6_000_000);
+    expect(["truncated", "released"]).toContain(smallRow.logState);
+    expect(diskBytes()).toBeLessThanOrEqual(2 * 1024 * 1024);
+  },
+  120_000,
+);
+
+it(
+  "keeps the default share as its ceiling without a worker saying anything",
+  async () => {
+    const h = harness();
+    const ids: string[] = [];
+    for (let index = 0; index < 4; index++) {
+      const { details } = await h.call("bash", { command: "head -c 9000000 /dev/zero | tr '\\0' 'd'", background: true, notify: false });
+      ids.push((details as { taskId: string }).taskId);
+    }
+    for (const id of ids) await settled(h, id);
+    const held = h.held();
+    // 128 MiB by default; four commands of 9 MB each keep their windows.
+    expect(held.logBytes + held.pendingLogBytes).toBeLessThanOrEqual(128 * 1024 * 1024);
+    expect(diskBytes()).toBeLessThanOrEqual(128 * 1024 * 1024);
+    // And each one is inside its own per-task window, not the session's.
+    for (const id of ids) {
+      const row = h.updates().filter((update) => update.id === id).at(-1)!;
+      expect(row.outputBytes).toBe(9_000_000);
+      expect(row.logState).toBe("truncated");
+    }
+    expect(diskBytes()).toBeLessThanOrEqual(4 * 8 * 1024 * 1024);
+  },
+  120_000,
 );
 
 it(

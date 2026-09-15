@@ -388,4 +388,11 @@ export interface BackgroundWorkOptions {
    * instead — never a well-known path.
    */
   logRoot?: string;
+  /**
+   * Test seam: the asynchronous write a command log uses. Production leaves it
+   * unset and the module writes with `fs.write`; a test hands in one whose
+   * callbacks it holds, which is the only way to observe a session whose
+   * storage has stopped draining.
+   */
+  logWrite?: (fd: number, chunk: Buffer) => Promise<void>;
 }

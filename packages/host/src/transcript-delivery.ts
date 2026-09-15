@@ -49,7 +49,11 @@ export const MEMBERSHIP_REFUSAL =
 
 /** What the rest of the host may ask about membership. Read-only by design. */
 export interface SessionMembershipView {
-  /** Connection-and-scope owners holding this path right now. */
+  /**
+   * Connection-and-scope owners holding this path right now, **in-flight
+   * attaches included**: a session somebody is in the middle of opening is
+   * pinned, not free to unload (RP-4 consumes this as one of its guards).
+   */
   holders(path: string): number;
   /** Every path this connection is holding. */
   paths(): string[];
@@ -93,8 +97,14 @@ export class TranscriptDelivery {
       return {
         finish: (response) => {
           const current = this.members.get(path)?.get(owner);
-          if (!current || current.generation !== generation) return; // detached, or superseded
+          // A detach removed this hold, or a claim after that detach replaced
+          // it with a new generation: either way this reply is about something
+          // that no longer exists and must not touch what does.
+          if (!current || current.generation !== generation) return;
           current.inFlight = Math.max(0, current.inFlight - 1);
+          // One success admits the surface, whatever its siblings answered; a
+          // failure only releases it when nothing succeeded and nothing else
+          // is still trying.
           if (response && !response.error) current.admitted = true;
           else if (!current.admitted && current.inFlight === 0) this.release(path, owner);
         },
@@ -133,7 +143,21 @@ export class TranscriptDelivery {
     return this.members.has(path);
   }
 
+  /**
+   * Surfaces holding this path, **including ones whose load is still in
+   * flight**.
+   *
+   * An attach that has been asked for but not yet answered is a hold: the
+   * worker it needs must not be retired between the request and its reply, and
+   * a client that is opening a session is as much a reason to keep it as one
+   * that has opened it. Admission decides *delivery*; this decides *pinning*.
+   */
   holders(path: string): number {
+    return this.members.get(path)?.size ?? 0;
+  }
+
+  /** Of those, the ones already admitted to delivery. Evidence, not a guard. */
+  admittedHolders(path: string): number {
     let held = 0;
     for (const hold of this.members.get(path)?.values() ?? []) if (hold.admitted) held += 1;
     return held;
@@ -166,10 +190,13 @@ export class TranscriptDelivery {
     }
     const existing = byOwner.get(owner);
     if (existing) {
-      // Duplicate concurrent loads of one surface are one hold; the newest
-      // generation is the one a detach will cancel.
+      // Duplicate concurrent loads of one surface are one hold and **share its
+      // generation**: each of them decrements when it finishes, so a first
+      // reply cannot orphan the count a second reply is still holding. Moving
+      // the generation here used to do exactly that — the first load saw a
+      // mismatch, never decremented, and a later failure could leave a hold
+      // pinned for ever or throw away the only success.
       existing.inFlight += 1;
-      existing.generation = ++this.generation;
       return existing;
     }
     if (byOwner.size >= MEMBERSHIP_OWNERS_PER_PATH_MAX) return undefined;

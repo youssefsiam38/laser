@@ -66,6 +66,13 @@ export interface TaskLogOptions {
   queueBytes?: number;
   /** Test seam: the asynchronous write. Defaults to `fs.write`. */
   write?: TaskLogWrite;
+  /**
+   * The session's own admission, asked **before** a chunk is retained: may
+   * this log hold `bytes` more? It may release other logs to make room, and a
+   * `false` means this command's body is abandoned rather than the session's
+   * ceiling exceeded, even for an instant.
+   */
+  admit?: (bytes: number) => boolean;
   /** Reported once, in the module's own log, when the file cannot be written. */
   onError?: (error: unknown) => void;
   /** The retained window moved or went: publish it now, not on the next tick. */
@@ -81,6 +88,7 @@ export class TaskLog {
   private readonly segmentBytes: number;
   private readonly queueBytes: number;
   private readonly io: TaskLogWrite;
+  private readonly admit: ((bytes: number) => boolean) | undefined;
   private readonly onError: ((error: unknown) => void) | undefined;
   private readonly onWindowChange: (() => void) | undefined;
   private fd: number | undefined;
@@ -111,6 +119,7 @@ export class TaskLog {
     this.segmentBytes = options.segmentBytes ?? LOG_SEGMENT_BYTES;
     this.queueBytes = options.queueBytes ?? LOG_QUEUE_BYTES;
     this.io = options.write ?? writeToFd;
+    this.admit = options.admit;
     this.onError = options.onError;
     this.onWindowChange = options.onWindowChange;
     try {
@@ -171,6 +180,10 @@ export class TaskLog {
     this.bytes += chunk.length;
     this.hash.update(chunk);
     if (this.released || this.broken || this.fd === undefined) return;
+    // Admission comes before retention, never after: a chunk that would take
+    // this log past its own queue bound, or the session past its share, is
+    // never queued at all. Bytes already in flight cannot be taken back, so
+    // the only way to hold the ceiling exactly is to refuse before growing.
     if (this.pendingBytes + chunk.length > this.queueBytes) {
       // Storage cannot keep up. Abandoning the body is the only answer that
       // neither slows the command down nor grows this process without bound;
@@ -179,6 +192,14 @@ export class TaskLog {
       this.release();
       return;
     }
+    if (this.admit && !this.admit(chunk.length)) {
+      // The session could not make room for it. This command's body goes; the
+      // command itself, its byte count and its digest carry on.
+      this.release();
+      return;
+    }
+    // Making room may have released this very log.
+    if (this.released || this.broken || this.fd === undefined) return;
     if (this.queue.length === 0) {
       this.idle = new Promise<void>((resolve) => {
         this.settleIdle = resolve;

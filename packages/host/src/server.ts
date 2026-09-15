@@ -1139,7 +1139,10 @@ export class HostServer {
    * Holders of one session across every connection, and the totals behind
    * them. Read-only, and the only thing anything outside this file may use:
    * RP-4's unload policy consumes `holders(path) > 0` as one of its guards and
-   * never writes membership itself.
+   * never writes membership itself. A hold counts from the moment a client
+   * asks to attach, not from the moment the attach is answered: retiring a
+   * worker between the request and its reply is exactly the race that guard
+   * exists to stop.
    */
   sessionMembership(): { holders(path: string): number; counts(): { connections: number; paths: number; owners: number } } {
     return {

@@ -134,8 +134,16 @@ const STALE_LOG_AGE_MS = 24 * 60 * 60_000;
 const SWEEP_ENTRIES_MAX = 500;
 /** Session directories one sweep may clean, oldest first. */
 const SWEEP_DIRS_MAX = 64;
-/** Directory names one sweep will even look at. */
-const SWEEP_NAMES_MAX = 512;
+/**
+ * Directory names one sweep will even look at.
+ *
+ * Generous on purpose: a directory listing is not ordered, so a small bound
+ * applied before staleness is decided does not sample the directory — it hides
+ * whatever the filesystem happened to list last, for ever. Statting a few
+ * thousand names once at session start costs milliseconds; missing every stale
+ * root on a machine that has had many workers costs disk for ever.
+ */
+const SWEEP_NAMES_MAX = 4096;
 
 export type TaskStatus = "running" | "completed" | "failed" | "stopped";
 type TaskMode = "foreground" | "promoted" | "background";
@@ -402,6 +410,38 @@ function sessionHeldBytes(state: State): number {
 }
 
 /**
+ * May this command retain `bytes` more, and if not, can room be made?
+ *
+ * This is the session's ceiling, and it is asked **before** a byte is kept,
+ * because bytes already handed to the platform cannot be taken back: enforcing
+ * afterwards would mean the ceiling is exceeded for as long as a stalled write
+ * takes to settle. Room is made from the logs nobody is writing to, then from
+ * the older halves of running windows, then from whole windows of *other*
+ * running commands, oldest first. If it still does not fit — a share of zero,
+ * a chunk larger than the whole share, or a session whose in-flight bytes are
+ * all there is — this command's body is refused and it continues with its byte
+ * count and digest alone.
+ */
+function admitLogBytes(state: State, own: TaskLog, bytes: number): boolean {
+  if (sessionHeldBytes(state) + bytes <= state.logBudget) return true;
+  const target = state.logBudget - bytes;
+  for (const entry of logsOf(state)) {
+    if (sessionHeldBytes(state) <= target) break;
+    if (entry.log === own) continue;
+    if (!entry.live) {
+      entry.log.release();
+      state.released += 1;
+      continue;
+    }
+    if (entry.log.releaseOldest() > 0) state.released += 1;
+    if (sessionHeldBytes(state) <= target) break;
+    if (entry.log.release() >= 0) state.released += 1;
+  }
+  state.orphanLogs = state.orphanLogs.filter((log) => log.usable);
+  return sessionHeldBytes(state) + bytes <= state.logBudget;
+}
+
+/**
  * Keep this session's commands inside their share of the disk.
  *
  * Order: logs nobody holds a record for, then finished commands oldest first,
@@ -473,6 +513,20 @@ function enforceLiveTailBudget(state: State): void {
   }
 }
 
+/**
+ * What one session's commands are holding right now, read from its module
+ * context.
+ *
+ * The same numbers the session publishes; this reads them at any instant
+ * rather than on the publishing cadence, which is what an assertion about a
+ * ceiling needs — "it was inside the bound whenever anybody looked" is not the
+ * same claim as "it was inside the bound every time it changed".
+ */
+export function backgroundWorkRetention(ctx: ModuleContext): BackgroundTaskRetention | undefined {
+  const state = states.get(ctx);
+  return state ? retentionOf(state) : undefined;
+}
+
 /** What this session's commands are holding, for RP-3 and the worker's budget. */
 export function retentionOf(state: State): BackgroundTaskRetention {
   let live = 0;
@@ -523,23 +577,30 @@ function sweepAbandonedRoots(parent: string, now = Date.now()): number {
   let names: string[];
   try {
     // The system temp directory belongs to the whole machine: ours are picked
-    // out by name first, and only then bounded — a bound applied to somebody
-    // else's thousand files would hide our own.
-    names = readdirSync(parent)
-      .filter((name) => name.startsWith(`${WIRE_NAMESPACE}-tasks-`))
-      .slice(0, SWEEP_NAMES_MAX);
+    // out by name first, and the oldest go first — a bound applied to an
+    // arbitrary ordering would leave the stale ones behind on a machine that
+    // has had many workers.
+    names = readdirSync(parent).filter((name) => name.startsWith(`${WIRE_NAMESPACE}-tasks-`));
   } catch {
     return 0;
   }
-  for (const name of names) {
-    if (removed >= SWEEP_DIRS_MAX) break;
+  const stale: Array<{ directory: string; mtimeMs: number }> = [];
+  for (const name of names.slice(0, SWEEP_NAMES_MAX)) {
     const directory = join(parent, name);
     try {
-      if (now - statSync(directory).mtimeMs <= STALE_LOG_AGE_MS) continue;
+      const { mtimeMs } = statSync(directory);
+      if (now - mtimeMs > STALE_LOG_AGE_MS) stale.push({ directory, mtimeMs });
+    } catch {
+      // Somebody else's, or gone already.
+    }
+  }
+  stale.sort((left, right) => left.mtimeMs - right.mtimeMs);
+  for (const { directory } of stale.slice(0, SWEEP_DIRS_MAX)) {
+    try {
       rmSync(directory, { recursive: true, force: true });
       removed += 1;
     } catch {
-      // Somebody else's, or gone already.
+      // Not ours to remove after all.
     }
   }
   return removed;
@@ -713,9 +774,12 @@ function startTask(ctx: ModuleContext, state: State, options: BackgroundWorkOpti
   });
 
   let loggedLogFailure = false;
-  const log = new TaskLog({
+  const log: TaskLog = new TaskLog({
     dir,
     id,
+    ...(options.logWrite ? { write: options.logWrite } : {}),
+    // The session's ceiling, asked before anything is kept (RP-6).
+    admit: (bytes) => admitLogBytes(state, log, bytes),
     // A rotation or a release moves the window the host reads through. It is
     // published the moment it happens, not on the next throttle tick: a ranged
     // read against a stale `retainedFromByte` would name the wrong bytes.

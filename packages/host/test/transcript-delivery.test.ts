@@ -2,6 +2,8 @@ import { expect, it } from "vitest";
 import type { JsonRpcNotification } from "@lasercode/protocol";
 import { MEMBERSHIP_OWNERS_PER_PATH_MAX, MEMBERSHIP_PATHS_MAX, MEMBERSHIP_REFUSAL, TranscriptDelivery } from "../src/transcript-delivery.js";
 
+const failure = { jsonrpc: "2.0" as const, id: 1, error: { code: -1, message: "gone" } };
+
 const update = (path: string): JsonRpcNotification => ({ jsonrpc: "2.0", method: "session/update", params: { sessionPath: path, seq: 1, at: new Date(0).toISOString(), update: { kind: "text_delta", text: "x".repeat(1000) } } });
 const success = { jsonrpc: "2.0" as const, id: 1, result: {} };
 const load = (d: TranscriptDelivery, path: string, options: { owner?: string } = {}) =>
@@ -90,6 +92,58 @@ it("treats duplicate concurrent loads by one owner as one hold", () => {
   expect(d.counts()).toEqual({ paths: 1, owners: 1 });
   detach(d, "/b");
   expect(d.holders("/b")).toBe(0);
+});
+
+it("settles duplicate concurrent loads in every order, leaving no hold pinned and no success thrown away", () => {
+  // Two loads of one surface overlap. Whichever reply arrives first, and
+  // whatever each one says, the hold must end in exactly one of two states:
+  // admitted (something succeeded) or gone (nothing did).
+  const cases: Array<{ name: string; replies: Array<typeof success | typeof failure>; admitted: boolean }> = [
+    { name: "both succeed", replies: [success, success], admitted: true },
+    { name: "first fails, second succeeds", replies: [failure, success], admitted: true },
+    { name: "first succeeds, second fails", replies: [success, failure], admitted: true },
+    { name: "both fail", replies: [failure, failure], admitted: false },
+  ];
+  for (const { name, replies, admitted } of cases) {
+    for (const reversed of [false, true]) {
+      const d = new TranscriptDelivery();
+      const first = load(d, "/dup");
+      const second = load(d, "/dup");
+      // Both are holds from the moment they are asked for.
+      expect(d.holders("/dup"), name).toBe(1);
+      const order = reversed ? [second, first] : [first, second];
+      const answers = reversed ? [replies[1]!, replies[0]!] : [replies[0]!, replies[1]!];
+      order[0]!.finish(answers[0]);
+      order[1]!.finish(answers[1]);
+      expect(d.admittedHolders("/dup"), `${name}${reversed ? " (reversed)" : ""}`).toBe(admitted ? 1 : 0);
+      expect(d.holders("/dup"), `${name}${reversed ? " (reversed)" : ""}`).toBe(admitted ? 1 : 0);
+      expect(d.accepts(update("/dup")), name).toBe(admitted);
+      expect(d.counts().owners, name).toBe(admitted ? 1 : 0);
+    }
+  }
+});
+
+it("counts an attach that is still in flight as a hold, so nothing is unloaded underneath it", () => {
+  const d = new TranscriptDelivery();
+  const opening = load(d, "/opening");
+  // Asked for, not yet answered: the worker it needs must not be retired here.
+  expect(d.holders("/opening")).toBe(1);
+  expect(d.admittedHolders("/opening")).toBe(0);
+  opening.finish(success);
+  expect(d.holders("/opening")).toBe(1);
+  expect(d.admittedHolders("/opening")).toBe(1);
+
+  // A detach during a load still releases it, and the late reply cannot bring
+  // it back or decrement a hold a later claim took.
+  const second = load(d, "/opening", { owner: "scope:1" });
+  detach(d, "/opening", "scope:1");
+  expect(d.holders("/opening")).toBe(1);
+  const reclaimed = load(d, "/opening", { owner: "scope:1" });
+  second.finish(success);
+  expect(d.holders("/opening")).toBe(2);
+  reclaimed.finish(failure);
+  expect(d.holders("/opening")).toBe(1);
+  expect(d.admittedHolders("/opening")).toBe(1);
 });
 
 it("does not lose first events of new or forked sessions", () => {
