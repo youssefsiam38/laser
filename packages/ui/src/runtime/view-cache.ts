@@ -32,7 +32,7 @@ import { captureViewTail, VIEW_TAIL_MAX_BYTES, viewTailRetainedBytes, viewTailSi
 import { byteLength, EMPTY_MEASURE, measureView, type ViewMeasure } from "./view-measure.js";
 import { isTerminalRunStatus, type SessionUpdate } from "@lasercode/protocol";
 import { mainPath, pendingSessionPath } from "./main-destination.js";
-import { anchoredMessages } from "./anchored-messages.js";
+import { anchoredMessages, standingRows } from "./anchored-messages.js";
 
 /**
  * The bounds. Calibrated against measured renderer heap, not guessed from
@@ -753,7 +753,17 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
       // The rows the transcript is standing on travel with the transaction, so
       // the reducer stays a function of its action (RP-5b).
       const anchored = anchoredMessages(path);
-      options.dispatch({ type: "views/trim", paths: [path], keepBytes, at, ...(anchored.length > 0 ? { anchored } : {}) });
+      // What this surface is standing on, told apart, so the stamp can be
+      // checked against an authoritative replacement (RP-5b §7).
+      const standing = standingRows(path);
+      options.dispatch({
+        type: "views/trim",
+        paths: [path],
+        keepBytes,
+        at,
+        ...(anchored.length > 0 ? { anchored } : {}),
+        ...(standing ? { standing } : {}),
+      });
       if (options.read().open[path] === before) continue;
       moved = true;
       trims += 1;

@@ -4,7 +4,7 @@ import { useLaserState } from "@/runtime";
 import { activityDetailLevel } from "@/runtime/sessionPreferences";
 import { motionMs } from "@/motion";
 import { HeightIndex, windowRanges } from "./transcript-window.js";
-import { clearAnchoredMessages, setAnchoredMessages } from "@/runtime/anchored-messages";
+import { clearAnchoredMessages, setAnchoredMessages, setAtLiveEdge, setStandingRows } from "@/runtime/anchored-messages";
 import { ThreadMessage } from "./messages.js";
 
 export interface TranscriptTarget { messageId: string; toolCallId?: string; leafId?: string | null }
@@ -77,6 +77,14 @@ export class TranscriptViewport {
     if (!this.path) return;
     setAnchoredMessages(this.path, [this.place.anchor?.messageId, this.focused, this.target?.messageId, ...this.pins.keys()]
       .flatMap(id => (id ? [id] : [])));
+    // The same rows, told apart, for a trim's stamp (RP-5b §7), and whether
+    // this surface is showing the newest turn.
+    setStandingRows(this.path, {
+      anchor: this.place.anchor?.messageId,
+      focused: this.focused,
+      targets: [this.target?.messageId, ...this.pins.keys()],
+    });
+    setAtLiveEdge(this.path, this.place.following === true);
   }
   private cacheKey(id: string) { return JSON.stringify([this.path, this.signature, id]); }
   configure(path: string, leafId?: string | null, loaded?: string) {

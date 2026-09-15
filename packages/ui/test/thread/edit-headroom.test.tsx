@@ -18,7 +18,7 @@ function harness() {
   const cache = createViewCache({
     read: store.getSnapshot,
     dispatch: store.dispatch,
-    environment: { hasDraft: () => false, heldPaths: () => [], environmentKey: () => "env" } as never,
+    environment: { scoped: () => [], hasDraft: () => false, heldPaths: () => [], environmentKey: () => "env" } as never,
     schedule: (run: () => void) => { run(); return () => {}; },
   } as never);
   return { store, cache };

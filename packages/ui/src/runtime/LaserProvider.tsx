@@ -65,6 +65,7 @@ import { createTasksActions, type TasksActions } from "../fleet/actions.js";
 import { HostClient } from "../client.js";
 import { initialState, reduce, type Action, type AppState, type SessionView } from "../store.js";
 import { hydrationEpochOf, isDormantView } from "../view-summary.js";
+import { atLiveEdge, onStanding } from "./anchored-messages.js";
 import { createViewCache, type ActionReservation, type RendererViewCounters, type ViewCache } from "./view-cache.js";
 import { createThreadAdapter, sendToSession, type SendBehavior } from "./adapter.js";
 import { firstTurnFromRunConfig, useDiscardFirstTurnOnLeave } from "./first-turn.js";
@@ -800,6 +801,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   windows.owner(MAIN_WINDOW_SCOPE, mainWindowPath);
   useEffect(() => () => windows.forget(MAIN_WINDOW_SCOPE, mainWindowPath), [windows, mainWindowPath]);
   const historyLoader = useMemo(() => createHistoryLoader({
+    isCurrent: (candidate: string) => mainPath(readState().destination) === candidate,
     get: path => readState().open[path],
     request: params => client.request("pi/session/entries", params),
     dispatch,
@@ -959,22 +961,53 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
 
   const agentsActions = useMemo(() => createAgentsActions({ client, dispatch, guard }), [client, guard]);
   /**
-   * RP-5b §7: when the current view is trimmed, read the conversation's recent
-   * history once for that stamp and commit it only if it still contains what
-   * the surface is standing on. A stamp that has already spent its reads waits
-   * for a safe transition — the live edge, or coming back to the conversation
-   * — and nothing is read while it waits.
+   * RP-5b §7: replacing what a trim released.
+   *
+   * The first read happens as soon as the current view carries a new trim
+   * stamp. If its page did not contain what the surface was standing on, the
+   * view keeps what it has and waits: the second — and last — read is spent at
+   * the first safe moment, which is the transcript reaching the live edge, a
+   * person coming back to this conversation, or a person asking for it. Losing
+   * focus and ordinary scrolling are not safe moments and do nothing.
    */
-  const reconciledStamp = useRef(new Map<string, string>());
   const currentPath = mainPath(state.destination);
   const trimmedStamp = currentPath ? state.open[currentPath]?.trimmed?.at : undefined;
+  const deferredStamp = currentPath && state.open[currentPath]?.trimmed?.deferred ? trimmedStamp : undefined;
+  const firstRead = useRef(new Map<string, string>());
+  /** Called by an action once the engine has accepted it, never before. */
+  const reconcileAfterAction = useRef<(path: string) => void>(() => {});
+  const reconcileNow = useCallback((path: string) => {
+    const epoch = openEpochs.current.get(path);
+    return historyLoader.reconcile(path, () => !moving.current.has(path) && openEpochs.current.get(path) === epoch);
+  }, [historyLoader]);
+  // One read the moment a new stamp appears on the conversation on screen.
   useEffect(() => {
     if (!currentPath || trimmedStamp === undefined) return;
-    if (reconciledStamp.current.get(currentPath) === trimmedStamp) return;
-    reconciledStamp.current.set(currentPath, trimmedStamp);
-    const epoch = openEpochs.current.get(currentPath);
-    void historyLoader.reconcile(currentPath, () => !moving.current.has(currentPath) && openEpochs.current.get(currentPath) === epoch);
-  }, [currentPath, historyLoader, trimmedStamp]);
+    if (firstRead.current.get(currentPath) === trimmedStamp) return;
+    firstRead.current.set(currentPath, trimmedStamp);
+    void reconcileNow(currentPath);
+  }, [currentPath, reconcileNow, trimmedStamp]);
+  // The second, at the first safe moment: the live edge, or coming back here.
+  useEffect(() => {
+    if (!currentPath || deferredStamp === undefined) return;
+    if (atLiveEdge(currentPath)) { void reconcileNow(currentPath); return; }
+    return onStanding(currentPath, () => {
+      if (atLiveEdge(currentPath)) void reconcileNow(currentPath);
+    });
+  }, [currentPath, deferredStamp, reconcileNow]);
+  // Coming back to this conversation is the other safe moment.
+  const previousPath = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const returned = previousPath.current !== undefined && previousPath.current !== currentPath;
+    previousPath.current = currentPath;
+    if (!returned || !currentPath) return;
+    if (state.open[currentPath]?.trimmed?.deferred) void reconcileNow(currentPath);
+  }, [currentPath, reconcileNow, state.open]);
+  /** After an accepted action on an old row, and never before it. */
+  const afterAction = useCallback((path: string) => {
+    if (readState().open[path]?.trimmed?.deferred) void reconcileNow(path);
+  }, [reconcileNow]);
+  reconcileAfterAction.current = afterAction;
 
   const tasksActions = useMemo(() => createTasksActions({ client, dispatch, guard }), [client, guard]);
 
@@ -1291,6 +1324,9 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         moving.current.delete(path);
       }
       dispatch({ type: "forked", from: path, state: session });
+      // The action was accepted and the row it named has done its work; only
+      // now may a replacement page be read (RP-5b §7).
+      reconcileAfterAction.current(session.path);
       if (readScoped === readState) destination.replaceMainSession(path, session);
       if (editorText) {
         // A fork hands back the prompt it forked from. That prompt can be far
@@ -1331,6 +1367,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           return false;
         }
         await history.read(path);
+        reconcileAfterAction.current(path);
         if (editorText === undefined) return {};
         // The same gate on the way back from a move: an oversized prompt does
         // not enter this renderer's state just because the engine returned it.
@@ -1435,7 +1472,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       reloadRecentHistory: () => guard(async () => {
         const path = requireCurrent();
         const epoch = openEpochs.current.get(path);
-        await history.reconcile(path, () => !moving.current.has(path) && openEpochs.current.get(path) === epoch, { explicit: true });
+        await history.reconcile(path, () => !moving.current.has(path) && openEpochs.current.get(path) === epoch);
         return true;
       }).then(Boolean),
       loadEarlierEntries: () => guard(async () => {
@@ -2051,13 +2088,15 @@ export function LaserThreadScope({ path, onPathChange, filter, createIn, unavail
     : { phase: "ready-code", intent: 0, code: workspace ? { kind: "project-landing", project: workspace } : { kind: "no-project-landing" } }, [path, workspace]);
   const scopedStore = useMemo(() => createScopedStateStore(store, path, scopedDestination, owner), [store, path, scopedDestination, owner]);
   const scopedHistory = useMemo(() => createHistoryLoader({
+    // A scoped surface shows exactly one conversation: the one it was given.
+    isCurrent: (target: string) => target === path,
     get: target => scopedStore.getSnapshot().open[target],
     request: params => client.request("pi/session/entries", params),
     dispatch: owner.dispatch,
     // Generation adoption and watermarks belong to the canonical session.
     adoptEpoch: () => {},
     track: () => {},
-  }), [client, owner, scopedStore]);
+  }), [client, owner, path, scopedStore]);
 
   const stable = useMemo<LaserStable>(() => ({
     ...parent,

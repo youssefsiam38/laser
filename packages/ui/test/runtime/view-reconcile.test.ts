@@ -20,6 +20,14 @@ const window = (over: Record<string, unknown> = {}) => ({
   branchesUnloaded: false, hasHistory: true, context: [], priorGoalIds: [], ...over,
 });
 
+/** A long hydrated transcript, before any trim. */
+function trimmedSource(): AppState {
+  let state: AppState = reduce({ ...initialState, connection: "open" }, { type: "opened", state: sessionState({ path: PATH }) as never });
+  const entries = Array.from({ length: 60 }, (_, index) => entry(`u${index}`, index === 0 ? null : `u${index - 1}`, "x".repeat(2000)));
+  state = reduce(state, { type: "hydrate", path: PATH, entries, leafId: "u59" });
+  return state;
+}
+
 /** A view with a long transcript, trimmed while the surface stands on `anchor`. */
 function trimmed(anchor: string, options: { path?: string } = {}) {
   const path = options.path ?? PATH;
@@ -31,10 +39,11 @@ function trimmed(anchor: string, options: { path?: string } = {}) {
   return state;
 }
 
-function loader(state: { current: AppState }, reply: () => Promise<unknown>) {
+function loader(state: { current: AppState }, reply: () => Promise<unknown>, current = PATH) {
   const request = vi.fn(async () => (await reply()) as never);
   const dispatch = vi.fn((action: never) => { state.current = reduce(state.current, action); });
   const history = createHistoryLoader({
+    isCurrent: (path: string) => path === current,
     get: (path: string) => state.current.open[path],
     request: request as never,
     dispatch: dispatch as never,
@@ -43,6 +52,44 @@ function loader(state: { current: AppState }, reply: () => Promise<unknown>) {
   });
   return { history, request, dispatch };
 }
+
+describe("what a production trim records", () => {
+  it("puts the rows the transcript is standing on into the stamp, through the cache's own pass", async () => {
+    const { setStandingRows, resetAnchoredMessages } = await import("../../src/runtime/anchored-messages.js");
+    const { createViewCache, VIEW_CACHE_LIMITS } = await import("../../src/runtime/view-cache.js");
+    const { createStateStore } = await import("../../src/runtime/LaserProvider.js");
+    resetAnchoredMessages();
+    const store = createStateStore(reduce({ ...initialState, connection: "open" }, { type: "opened", state: sessionState({ path: PATH }) as never }));
+    // What the viewport publishes: message ids, of which only the persisted
+    // ones name an entry.
+    setStandingRows(PATH, { anchor: "entry:u30", focused: "entry:u31", targets: ["entry:u32", "live-block-7", "entry:u32"] });
+    const cache = createViewCache({
+      read: store.getSnapshot,
+      dispatch: store.dispatch,
+      environment: { scoped: () => [], hasDraft: () => false, heldPaths: () => [], environmentKey: () => "env" } as never,
+      schedule: (run: () => void) => { run(); return () => {}; },
+      limits: { ...VIEW_CACHE_LIMITS, viewBytes: 16 * 1024 },
+    } as never);
+    // The cache learns about this conversation the way it always does: by
+    // watching the transaction that hydrated it.
+    const before = store.getSnapshot();
+    const entries = Array.from({ length: 60 }, (_, index) => entry(`u${index}`, index === 0 ? null : `u${index - 1}`, "x".repeat(2000)));
+    const action = { type: "hydrate", path: PATH, entries, leafId: "u59" } as never;
+    store.dispatch(action);
+    cache.observeTransaction(action, before, store.getSnapshot());
+    cache.maintain();
+    const view = store.getSnapshot().open[PATH];
+    const stamp = view?.trimmed;
+    if (!stamp) throw new Error(`no trim happened: ${JSON.stringify({ blocks: view?.blocks.length, dormant: view?.dormant })}`);
+    expect(stamp?.identities?.anchorEntryId).toBe("u30");
+    expect(stamp?.identities?.focusedEntryId).toBe("u31");
+    // Canonical entry ids, deduplicated, and nothing that names no entry.
+    expect(stamp?.identities?.actionTargetEntryIds).toEqual(["u32"]);
+    expect(JSON.stringify(stamp).length).toBeLessThan(400);
+    resetAnchoredMessages();
+    cache.dispose();
+  });
+});
 
 describe("reconciling a trimmed view", () => {
   it("keeps only identity strings in the stamp, and measures them", () => {
@@ -85,30 +132,59 @@ describe("reconciling a trimmed view", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
-  it("spends at most two reads for one stamp, and a person may still ask", async () => {
+  it("spends two reads for one stamp and never a third, however it is asked", async () => {
     const state = { current: trimmed("u10") };
     const { history, request } = loader(state, async () => ({ entries: [entry("u58", "u57", "tail")], leafId: "u59", window: window() }));
     for (let attempt = 0; attempt < 5; attempt++) await history.reconcile(PATH);
     expect(request).toHaveBeenCalledTimes(RECONCILE_MAX_READS);
     expect(state.current.open[PATH]!.trimmed?.reads).toBe(RECONCILE_MAX_READS);
-    // Explicitly asked for: allowed, and it succeeds this time.
-    const containing = [entry("u10", "u9", "kept"), entry("u59", "u10", "tail")];
-    const explicit = loader(state, async () => ({ entries: containing, leafId: "u59", window: window() }));
-    await explicit.history.reconcile(PATH, () => true, { explicit: true });
-    expect(explicit.request).toHaveBeenCalledTimes(1);
+    // A person asking is one of the two, not an exception to them: the budget
+    // is spent, so nothing more is read for this stamp.
+    const asked = loader(state, async () => ({ entries: [entry("u10", "u9", "kept")], leafId: "u59", window: window() }));
+    await asked.history.reconcile(PATH);
+    expect(asked.request).not.toHaveBeenCalled();
+    expect(state.current.open[PATH]!.trimmed?.reads).toBe(RECONCILE_MAX_READS);
+
+    // A genuinely new trim starts a new budget, and a page that contains what
+    // the surface stands on is committed with its cursor.
+    state.current = trimmed("u58");
+    const fresh = loader(state, async () => ({ entries: [entry("u58", "u57", "kept"), entry("u59", "u58", "tail")], leafId: "u59", window: window() }));
+    await fresh.history.reconcile(PATH);
+    expect(fresh.request).toHaveBeenCalledTimes(1);
     expect(state.current.open[PATH]!.trimmed).toBeUndefined();
-    // And the cursor is back: ordinary paging works from here.
     expect(state.current.open[PATH]!.history).toBeDefined();
   });
 
-  it("does nothing for a background view, and nothing for a failed read beyond spending it", async () => {
+  it("reads nothing at all for a conversation that is not on screen", async () => {
     const state = { current: trimmed("u10", { path: OTHER }) };
-    const { history, request } = loader(state, async () => { throw new Error("network"); });
     const before = measureView(state.current.open[OTHER]!).bytes;
-    await history.reconcile(OTHER);
+    const stamp = state.current.open[OTHER]!.trimmed!.at;
+    // PATH is the conversation on screen; OTHER is not.
+    const { history, request } = loader(state, async () => ({ entries: [], leafId: null, window: window() }), PATH);
+    for (let attempt = 0; attempt < 3; attempt++) await history.reconcile(OTHER);
+    expect(request).not.toHaveBeenCalled();
+    const background = state.current.open[OTHER]!;
+    expect(background.trimmed).toEqual(state.current.open[OTHER]!.trimmed);
+    expect(background.trimmed?.reads).toBeUndefined();
+    expect(background.trimmed?.deferred).toBeUndefined();
+    expect(measureView(background).bytes).toBe(before);
+
+    // Coming back to it makes it eligible, and then it reads once.
+    const entered = loader(state, async () => ({ entries: [entry("u10", "u9", "kept")], leafId: "u59", window: window() }), OTHER);
+    await entered.history.reconcile(OTHER);
+    expect(entered.request).toHaveBeenCalledTimes(1);
+    expect(state.current.open[OTHER]!.trimmed?.at).not.toBe(stamp);
+  });
+
+  it("spends a read on a failure and keeps not one byte of it", async () => {
+    const state = { current: trimmed("u10") };
+    const { history, request } = loader(state, async () => { throw new Error("network"); });
+    const before = measureView(state.current.open[PATH]!).bytes;
+    await history.reconcile(PATH);
     expect(request).toHaveBeenCalledTimes(1);
-    const view = state.current.open[OTHER]!;
+    const view = state.current.open[PATH]!;
     expect(view.trimmed?.deferred).toBe(true);
+    expect(view.trimmed?.reads).toBe(1);
     expect(measureView(view).bytes).toBe(before);
   });
 

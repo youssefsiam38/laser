@@ -230,6 +230,8 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
 
 interface HistoryLoaderDeps {
   get(path: string): SessionView | undefined;
+  /** Whether this is the conversation on screen (RP-5b §7). */
+  isCurrent(path: string): boolean;
   request(params: ClientRequests["pi/session/entries"]["params"]): Promise<ClientRequests["pi/session/entries"]["result"]>;
   dispatch(action: Action): void;
   adoptEpoch(path: string, seq: number): void;
@@ -358,15 +360,17 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
    * committed in one transaction or discarded entirely; nothing of a refused
    * page is kept beside a view that is already at its bound.
    */
-  const reconcile = async (path: string, accepting: () => boolean = () => true, options: { explicit?: boolean } = {}): Promise<void> => {
+  const reconcile = async (path: string, accepting: () => boolean = () => true): Promise<void> => {
+    // Only the conversation on screen. One that is not rehydrates when a
+    // person comes back to it, through the ordinary re-entry read.
+    if (!deps.isCurrent(path)) return;
     const view = deps.get(path);
     const stamp = view?.trimmed;
     if (!view || !stamp) return;
-    // At most two reads for one stamp: the one at the trim, and one at the
-    // first safe transition after it.
-    // A person asking for it is the safest moment there is, and is allowed
-    // whatever this stamp has already spent.
-    if (!options.explicit && (stamp.reads ?? 0) >= RECONCILE_MAX_READS) return;
+    // Two reads for one stamp, and that is all: the one at the trim, and one
+    // at the first safe moment after it. A person asking is one of the two,
+    // not an exception to them.
+    if ((stamp.reads ?? 0) >= RECONCILE_MAX_READS) return;
     const at = stamp.at;
     if (reconciling.get(path) === at) return;
     reconciling.set(path, at);
