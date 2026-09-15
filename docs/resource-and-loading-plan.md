@@ -16,6 +16,7 @@ Authoritative detail, evidence and ownership live in `STATUS_DETAILED.md`; `STAT
 | RP-3 | M18-T3 | browser gate/review `a0111f9` + correction `66ac605` + T4/T5/T6/T7 counter mapping `4ba58bd4`; final pressure subsection/closeout waits RP-8 | RP-1 |
 | RP-4 | M18-T4 | done — worker-owned atomic release/retirement, fair LRU unload and hard replay floors integrated at `eb18e147`; exact-head convergence verified | RP-2 |
 | RP-4b | M18-T17 | done — bounded token-safe naming lifecycle integrated at `890e6a86`; no-model parked intents retire while actual naming pins; focused worker 45, real-host E2E 4 and host 636 pass | RP-4 |
+| RP-4c | M18-T18 | todo — host route lease must serialize safe unload with ensure-open plus path-routed mutation; plan `/tmp/m18-t15-session-reopen-plan.md`; blocks the unchanged repeat baseline | RP-4, RP-4b |
 | RP-5 | M18-T5 | done — byte/count-bounded unpinned hydrated views, light identities, complete pins, exact revision-fenced tail handoff and incremental counters integrated at `4f34a614` | RP-2 |
 | RP-5b | M18-T16 | in progress — accepted implementation plan hard-bounds every hydrated view and adds revision-fenced authoritative range reads over the integrated device-cache seam | RP-5, RP-10 |
 | RP-6 | M18-T6 | done — integrated `a256efe`; reviewed membership, task/log retention and cleanup/security gates | RP-2 |
