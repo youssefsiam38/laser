@@ -10,9 +10,19 @@
  *
  * Args: --cwd <dir> [--agent-dir <dir>] [--session-dir <dir>] [--state-dir <dir>]
  *       [--project-trusted yes|no] [--environment-id <id>]
+ *       [--provider-payloads full|summary]
  */
 import { Socket } from "node:net";
-import { ENV, FEATURE_MANIFESTS, LineDecoder, PRODUCT_NAME, parseJsonLine, type FeatureId, type JsonRpcMessage } from "@lasercode/protocol";
+import {
+  ENV,
+  FEATURE_MANIFESTS,
+  FRAME_MAX_BYTES,
+  LineDecoder,
+  PRODUCT_NAME,
+  parseJsonLine,
+  type FeatureId,
+  type JsonRpcMessage,
+} from "@lasercode/protocol";
 import { StableSdkDriver } from "./drivers/stable-sdk.js";
 import { alignEngineAgentDir, extendRuntimePath } from "./runtime-env.js";
 import { installUnhandledRejectionGuard } from "./process-guards.js";
@@ -34,16 +44,23 @@ function arg(name: string): string | undefined {
   return i >= 0 ? process.argv[i + 1] : undefined;
 }
 
-function openTransport(): { input: NodeJS.ReadableStream; write: (line: string) => void } {
+interface WorkerTransport {
+  input: NodeJS.ReadableStream;
+  write: (line: string) => void;
+  /** Bytes accepted for the host and not yet handed to the kernel (RP-7). */
+  pending: () => number;
+}
+
+function openTransport(): WorkerTransport {
   try {
     const socket = new Socket({ fd: PROTOCOL_FD, readable: true, writable: true });
-    return { input: socket, write: (line) => socket.write(line) };
+    return { input: socket, write: (line) => socket.write(line), pending: () => socket.writableLength };
   } catch {
     // No fd 3: fall back to stdio and keep the protocol stream clean.
     const realStdoutWrite = process.stdout.write.bind(process.stdout);
     console.log = (...args: unknown[]) => console.error(...args);
     console.info = console.log;
-    return { input: process.stdin, write: (line) => realStdoutWrite(line) };
+    return { input: process.stdin, write: (line) => realStdoutWrite(line), pending: () => process.stdout.writableLength };
   }
 }
 
@@ -76,6 +93,10 @@ async function main(): Promise<void> {
   // Which environment the durable revisions this worker mints belong to
   // (RP-9). Never logged, never published: only its derived key is public.
   const environmentId = arg("environment-id");
+  // Whether this installation's log store keeps provider request bodies
+  // (RP-7). `summary` means a capture is recorded without one, and the body is
+  // never serialized here at all.
+  const providerPayloads = arg("provider-payloads");
   alignEngineAgentDir(agentDir, sessionDir);
   extendRuntimePath();
   if (projectTrusted !== undefined && projectTrusted !== "yes" && projectTrusted !== "no") {
@@ -105,7 +126,25 @@ async function main(): Promise<void> {
   }
 
   const transport = openTransport();
-  const send = (message: JsonRpcMessage) => transport.write(`${JSON.stringify(message)}\n`);
+  const send = (message: JsonRpcMessage) => {
+    const line = `${JSON.stringify(message)}\n`;
+    // Nothing we produce may be a message the host has to fault on (RP-7). A
+    // frame this large can only be a bug in something that should have bounded
+    // itself; refusing it here keeps the link, and every conversation on it,
+    // alive. Notifications are dropped with a note on stderr, requests answer
+    // with an error the caller can show.
+    if (Buffer.byteLength(line, "utf8") > FRAME_MAX_BYTES) {
+      const id = (message as { id?: string | number }).id;
+      console.error(`${PRODUCT_NAME} worker: refused to send a ${Buffer.byteLength(line, "utf8")} byte message`);
+      if (id !== undefined) {
+        transport.write(
+          `${JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32603, message: "that answer is too large to send" } })}\n`,
+        );
+      }
+      return;
+    }
+    transport.write(line);
+  };
 
   const server = new WorkerServer({
     cwd,
@@ -118,11 +157,24 @@ async function main(): Promise<void> {
     ...(environmentId ? { environmentId } : {}),
     ...(npmCommand ? { npmCommand } : {}),
     features,
+    transportPending: () => transport.pending(),
+    retainProviderBodies: providerPayloads !== "summary",
   });
 
-  const decoder = new LineDecoder();
-  transport.input.setEncoding("utf8");
-  transport.input.on("data", (chunk: string) => {
+  let framesFaulted = false;
+  const decoder = new LineDecoder({
+    maxFrameBytes: FRAME_MAX_BYTES,
+    onOverflow: ({ bytes }) => {
+      // The host frames everything it sends us; a message this large means the
+      // link is not carrying what we think it is. Continuing past a frame we
+      // could not read would leave the host waiting for an answer for ever.
+      framesFaulted = true;
+      console.error(`${PRODUCT_NAME} worker: the app sent a ${bytes} byte message, past the limit for one message`);
+      void shutdown(1);
+    },
+  });
+  transport.input.on("data", (chunk: Buffer) => {
+    if (framesFaulted) return;
     for (const line of decoder.push(chunk)) {
       let raw: unknown;
       try {

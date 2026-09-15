@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext, SessionShutdownEvent } from "@earendil-works/pi-coding-agent";
 import type { AgentHarnessBridge, BackgroundWorkOptions } from "../agents-bridge.js";
 import type { PromptProvenanceObserver } from "../prompt-provenance.js";
-import type { PiExtensionCommand, PiExtensionMessage, PiExtensionModuleName } from "@lasercode/protocol";
+import type { PiExtensionCommand, PiExtensionMessage, PiExtensionModuleName, ProviderCaptureLink } from "@lasercode/protocol";
 import { accountUsageModule } from "./account-usage.js";
 import { backgroundWorkModule } from "./background-work.js";
 import { fileFreshnessModule } from "./file-freshness.js";
@@ -31,6 +31,13 @@ export interface CommandBus {
 
 export interface ModuleContext {
   requestProvenance?: PromptProvenanceObserver;
+  /**
+   * What the provider-capture producer may know about its link to the app
+   * (RP-7): how far behind it is, and whether request bodies are kept here at
+   * all. Absent from a worker that predates it, which simply means captures
+   * cross as they always did.
+   */
+  captureLink?: ProviderCaptureLink;
   pi: ExtensionAPI;
   webSearch?: WebSearchHandler;
   /** Fresh context for the session_start currently activating modules. */

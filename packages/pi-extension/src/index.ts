@@ -25,7 +25,7 @@ import type { ExtensionAPI, InlineExtension } from "@earendil-works/pi-coding-ag
 import type { AgentHarnessBridge, BackgroundWorkOptions } from "./agents-bridge.js";
 import type { PromptProvenanceObserver } from "./prompt-provenance.js";
 export { createPromptProvenanceObserver, recordInstructionWrite } from "./prompt-provenance.js";
-import { WIRE_NAMESPACE } from "@lasercode/protocol";
+import { WIRE_NAMESPACE, type ProviderCaptureLink } from "@lasercode/protocol";
 import {
   modules,
   type CommandBus,
@@ -79,6 +79,8 @@ export type {
 
 export interface LaserExtensionOptions {
   requestProvenance?: PromptProvenanceObserver;
+  /** Link facts the provider-capture producer answers to (RP-7). */
+  captureLink?: ProviderCaptureLink;
   /** Credential/policy-aware search supplied only when its feature is enabled. */
   webSearch?: WebSearchHandler;
   /** The worker's agent harness for this session; omit when the agents feature is off. */
@@ -118,6 +120,7 @@ export function createLaserExtension(options: LaserExtensionOptions): InlineExte
         pi,
         send: options.send,
         ...(options.requestProvenance ? { requestProvenance: options.requestProvenance } : {}),
+        ...(options.captureLink ? { captureLink: options.captureLink } : {}),
         ...(options.webSearch ? { webSearch: options.webSearch } : {}),
         ...(options.agents ? { agents: options.agents } : {}),
         ...(options.backgroundWork ? { backgroundWork: options.backgroundWork } : {}),

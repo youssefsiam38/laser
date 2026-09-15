@@ -58,6 +58,7 @@ import type {
   ModelRef,
   PiExtensionCommand,
   PromptInfo,
+  ProviderCaptureLink,
   SessionFirstTurnOverrides,
   SessionGoal,
   SessionState,
@@ -152,6 +153,8 @@ export class StableSdkDriver implements SessionDriver {
   private unsubscribe: (() => void) | undefined;
   private cwd = "";
   private projectTrusted: boolean | undefined;
+  /** Link facts the companion's capture producer answers to (RP-7). */
+  private captureLink: ProviderCaptureLink | undefined;
   /** The MCP servers this runtime started with; absent when the engine is not loaded. */
   private mcpServers: Array<{ name: string; label?: string }> | undefined;
   /** A settings reload asked for mid-turn, owed once the session is idle (M13-T55). */
@@ -236,6 +239,7 @@ export class StableSdkDriver implements SessionDriver {
     if (this.runtime) throw new DriverUnavailableError(this.kind, "session already open");
     this.cwd = options.cwd;
     this.projectTrusted = options.projectTrusted;
+    this.captureLink = options.captureLink;
 
     const agentDir = options.agentDir ?? getAgentDir();
     this.agentDir = agentDir;
@@ -252,6 +256,9 @@ export class StableSdkDriver implements SessionDriver {
     ) => {
       const companion: LaserExtensionOptions = {
         requestProvenance,
+        // A provider capture is a diagnostic and is the only thing on this
+        // link that pressure may shape (RP-7).
+        ...(this.captureLink ? { captureLink: this.captureLink } : {}),
         ...(search ? { webSearch: search.search.bind(search) } : {}),
         ...(mcp ? { mcp: { statusEvent: mcp.statusEvent } } : {}),
         send: (message) => {
@@ -259,7 +266,9 @@ export class StableSdkDriver implements SessionDriver {
           // The only structured failure signal the engine exposes: the status
           // and headers of the response this attempt received. A new request
           // clears it, so it can never describe an older attempt (M15-T3).
-          if (message.type === "lasercode/provider/request") this.providerResponse = undefined;
+          if (message.type === "lasercode/provider/request" || message.type === "lasercode/provider/request/begin" || message.type === "lasercode/provider/request/omitted") {
+            this.providerResponse = undefined;
+          }
           if (message.type === "lasercode/provider/response") this.providerResponse = { status: message.status, headers: message.headers };
           this.emit({ type: "extension", message });
         },
