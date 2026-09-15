@@ -22,9 +22,28 @@
  * growing the process.
  */
 
-import { AGENT_MAX_DEPTH_LIMIT, ENV, ErrorCodes, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TypedClientRequest, WIRE_NAMESPACE } from "@lasercode/protocol";
+import { AGENT_MAX_DEPTH_LIMIT, EDITABLE_TEXT_MAX_BYTES, ENV, ErrorCodes, createBodyRangeReader, entryRegionsPage, utf8ByteLength, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TypedClientRequest, WIRE_NAMESPACE } from "@lasercode/protocol";
 import { CaptureReservations } from "./capture-reservations.js";
-import { randomUUID } from "node:crypto";
+
+/** RP-5b body digests. The one hash both authorities sign a body with. */
+const sha256Hex = (text: string): string => createHash("sha256").update(text, "utf8").digest("hex");
+
+/**
+ * A prompt handed back for editing, bounded before it is serialized (RP-5b B3).
+ *
+ * An edit puts the whole message in a renderer, so a message larger than a
+ * composer may hold is not sent back at all: the answer says how large it is
+ * and that it was left out, and the surface reads it deliberately, with room
+ * reserved, or says plainly that it cannot be edited there.
+ */
+function boundedEditorText(text: string | undefined): { editorText?: string; editorTextBytes?: number; editorTextOmitted?: true } {
+  if (text === undefined) return {};
+  const bytes = utf8ByteLength(text);
+  return bytes > EDITABLE_TEXT_MAX_BYTES
+    ? { editorTextBytes: bytes, editorTextOmitted: true }
+    : { editorText: text, editorTextBytes: bytes };
+}
+import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
@@ -222,6 +241,8 @@ export class WorkerServer {
   /** M13 · agents: the host's definitions, the harness that runs them, and Namer. */
   private readonly definitions: DefinitionsCache;
   private readonly harness: AgentHarness;
+  /** RP-5b: one body at a time, so slicing a large one stays linear. */
+  private readonly bodyRanges = createBodyRangeReader();
   private readonly namer: NamerService;
   /**
    * Every background command a session of this worker published, kept beside
@@ -418,6 +439,8 @@ export class WorkerServer {
 
   async dispose(): Promise<void> {
     this.runtimes.clearLease();
+    // Nothing of a body outlives this worker's service (RP-5b, RP-4).
+    this.bodyRanges.forget();
     this.transcribeService?.dispose();
     this.transcribeService = undefined;
     await this.mcpService?.dispose().catch(() => {});
@@ -568,16 +591,22 @@ export class WorkerServer {
             this.rekeySessionState(previous, state.path);
           }
           this.onDriverEvent(live, { type: "update", update: { kind: "state", state } });
-          return { ...forked, state: this.decorate(live, forked.state) } satisfies Result<"pi/session/fork">;
+          // Strip the driver's raw handback before adding the bounded form. A
+          // spread cannot remove a property, so spreading `forked` verbatim
+          // would put an oversized editorText on the wire beside `omitted`.
+          const { editorText: _editorText, ...boundedFork } = forked;
+          return { ...boundedFork, ...boundedEditorText(forked.editorText), state: this.decorate(live, forked.state) } satisfies Result<"pi/session/fork">;
         });
       }
       case "pi/session/navigate": {
         const live = this.live(req.params.path);
-        return this.firstTurnLock.run(live.path, () => live.driver.navigateTree(req.params.entryId, {
+        const moved = await this.firstTurnLock.run(live.path, () => live.driver.navigateTree(req.params.entryId, {
           ...(req.params.summarize !== undefined ? { summarize: req.params.summarize } : {}),
           ...(req.params.label !== undefined ? { label: req.params.label } : {}),
           ...(req.params.stopFirst !== undefined ? { stopFirst: req.params.stopFirst } : {}),
         }));
+        const { editorText: _editorText, ...boundedMove } = moved;
+        return { ...boundedMove, ...boundedEditorText(moved.editorText) } satisfies Result<"pi/session/navigate">;
       }
       case "pi/session/rename": {
         const live = this.live(req.params.path);
@@ -630,17 +659,20 @@ export class WorkerServer {
             // Only a live-edge tail can be spliced onto a cached revision.
             // Older-page, search-anchor and all-history requests retain their
             // exact tree semantics even when the base is current or a prefix.
+            // RP-5b: a caller that cannot hold a large body asks for the page
+            // without it; the record is listed in `elided` instead of rewritten.
+            const bodies = req.params.bodyLimit === undefined ? undefined : { limit: req.params.bodyLimit, digest: sha256Hex };
             if ("tail" in req.params.window && resolved?.base !== "stale" && resolved?.state) {
               const delta = boundedHistoryWindow(snapshot, req.params.window, {
                 ...common,
                 selection: { kind: "delta", after: resolved.state.leafId },
-              });
+              }, bodies);
               if (delta) return delta;
             }
             const replacement = boundedHistoryWindow(snapshot, req.params.window, {
               ...common,
               selection: { kind: "replace" },
-            });
+            }, bodies);
             if (replacement) return replacement;
             throw new ProtocolError(
               ErrorCodes.RevisionUnavailable,
@@ -654,6 +686,82 @@ export class WorkerServer {
         // does not replace the runtime. Its live canonical reads must remain
         // available so a no-signal question can be answered after reconnect.
         return (await live.driver.entries()) satisfies Result<"pi/session/entries">;
+      }
+      // RP-5b: one body of one entry, from the authority that owns this
+      // session right now. The revision is computed from the very snapshot the
+      // bytes come from, so a caller reading at an older state is refused
+      // rather than handed another state's offsets.
+      case "session/entry_range": {
+        const live = this.live(req.params.path);
+        const snapshot = await live.driver.entries();
+        if (this.runtimes.get(live.path) !== live) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation was closed. Open it again.");
+        const { revision, environmentKey } = this.revisionOf(live, snapshot);
+        if (environmentKey !== req.params.environmentKey) {
+          throw new ProtocolError(ErrorCodes.InvalidParams, "That conversation belongs to a different connection.");
+        }
+        if (revision !== req.params.revision) {
+          throw new ProtocolError(
+            ErrorCodes.RevisionUnavailable,
+            "This conversation moved on since that message was read. Open it again to see the rest.",
+          );
+        }
+        const entry = snapshot.entries.find((row) => (row as { id?: unknown } | null)?.id === req.params.entryId);
+        if (entry === undefined) {
+          throw new ProtocolError(ErrorCodes.InvalidParams, "That message is not part of this conversation any more.");
+        }
+        // One body at a time, keyed by the exact snapshot it came from, so a
+        // large body read in slices is walked and hashed once, not per slice.
+        const sliced = this.bodyRanges.read(
+          { path: live.path, revision, entryId: req.params.entryId, component: req.params.component },
+          () => entry,
+          { ...req.params, entryId: req.params.entryId },
+          "live",
+          sha256Hex,
+        );
+        if (!sliced.ok) {
+          if (sliced.refusal.reason === "bad-range") {
+            throw new ProtocolError(ErrorCodes.InvalidParams, "That is not a readable part of this message. Open it again from the start.");
+          }
+          if (sliced.refusal.reason === "bad-region") {
+            throw new ProtocolError(ErrorCodes.InvalidParams, "That is not a part of this message. Open the message again to see what it holds.");
+          }
+          throw new ProtocolError(ErrorCodes.InvalidParams, `That message has no ${req.params.component.kind.replaceAll("_", " ")} to read.`, { available: sliced.refusal.available });
+        }
+        return sliced.result satisfies Result<"session/entry_range">;
+      }
+      // RP-5b §2: the same page of attachments, from the session this worker
+      // owns, at the revision computed from its own entries.
+      case "session/entry_regions": {
+        const live = this.live(req.params.path);
+        const snapshot = await live.driver.entries();
+        if (this.runtimes.get(live.path) !== live) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation was closed. Open it again.");
+        const { revision, environmentKey } = this.revisionOf(live, snapshot);
+        if (environmentKey !== req.params.environmentKey) {
+          throw new ProtocolError(ErrorCodes.InvalidParams, "That conversation belongs to a different connection.");
+        }
+        if (revision !== req.params.revision) {
+          throw new ProtocolError(
+            ErrorCodes.RevisionUnavailable,
+            "This conversation moved on since that message was read. Open it again to see the rest.",
+          );
+        }
+        const entry = snapshot.entries.find((row) => (row as { id?: unknown } | null)?.id === req.params.entryId);
+        if (entry === undefined) {
+          throw new ProtocolError(ErrorCodes.InvalidParams, "That message is not part of this conversation any more.");
+        }
+        const page = entryRegionsPage(
+          entry,
+          { component: req.params.component, ...(req.params.from !== undefined ? { from: req.params.from } : {}), ...(req.params.limit !== undefined ? { limit: req.params.limit } : {}) },
+          revision,
+          "live",
+          () => { const hash = createHash("sha256"); return { update: (chunk: string) => { hash.update(chunk, "utf8"); }, digest: () => hash.digest("hex") }; },
+        );
+        if (!page.ok) {
+          throw page.refusal.reason === "unknown-component"
+            ? new ProtocolError(ErrorCodes.InvalidParams, `That message has no ${req.params.component.kind.replaceAll("_", " ")} to read.`, { available: page.refusal.available })
+            : new ProtocolError(ErrorCodes.InvalidParams, "That is not a part of this message. Open the message again to see what it holds.");
+        }
+        return page.result satisfies Result<"session/entry_regions">;
       }
       case "pi/session/compact": {
         const live = this.live(req.params.path);
@@ -2010,7 +2118,21 @@ export class WorkerServer {
     this.harness.onDriverEvent(live.path, event);
     switch (event.type) {
       case "update": {
-        const update = event.update.kind === "state" ? { kind: "state" as const, state: this.decorate(live, event.update.state) } : event.update;
+        let update = event.update.kind === "state" ? { kind: "state" as const, state: this.decorate(live, event.update.state) } : event.update;
+        // A body a client cannot hold is shown as an excerpt and read back by
+        // reference, and a reference is only trustworthy at a named revision.
+        // The engine has just written this entry, so the revision of the state
+        // it belongs to is the one computed from the entries as they are in
+        // this very tick — no await, so nothing is reordered (RP-5b).
+        if (update.kind === "message_end" && update.entry && update.entry.revision === undefined && update.entry.bodies) {
+          const snapshot = live.driver.entriesNow?.();
+          if (snapshot) {
+            try {
+              const { revision } = live.revisions.compute(this.revisionHeader(live), snapshot.entries, snapshot.leafId);
+              update = { ...update, entry: { ...update.entry, revision } };
+            } catch { /* an identity without a revision is still refused safely by the client */ }
+          }
+        }
         const params: SessionUpdateParams = {
           sessionPath: live.path,
           epoch: live.historyEpoch,
@@ -2082,6 +2204,10 @@ export class WorkerServer {
         // One holder fewer: the rest of this worker's sessions may keep more.
         this.applyLogBudgets();
         this.gitService?.forget(live.path);
+        // RP-5b: the range reader holds at most one body, and that body belongs
+        // to a session that is open. A closed session leaves none behind, so
+        // nothing can serve its bytes afterwards and nothing keeps its memory.
+        this.bodyRanges.forget();
         this.runningTools.delete(live.path);
         this.unnamed.delete(live.path);
         // The runtime a naming attempt would have renamed is gone, so the

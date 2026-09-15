@@ -31,6 +31,8 @@ import { environmentParamsSchemas } from "./environment-policy.js";
 import type { ClientMethod, ClientRequests } from "./messages.js";
 import { TASK_COMMAND_MAX, TASK_LINE_MAX, TASK_LOG_SEGMENTS_MAX } from "./tasks.js";
 import { ENVIRONMENT_KEY_PATTERN, SESSION_REVISION_PATTERN } from "./session-revision.js";
+import { BODY_COMPONENT_KINDS, BODY_REGION_MAX_ITEMS, ENTRY_RANGE_MAX_BYTES } from "./body-range.js";
+import { HISTORY_PAGE_BYTE_LIMIT } from "./history-window.js";
 
 /** Opt-in browse replies must not silently reinterpret legacy folders as files. */
 export const explorerListingSchema = z.object({
@@ -691,6 +693,42 @@ export const clientParamsSchemas = {
     ]).optional(),
     authority: z.enum(["live", "any"]).optional(),
     baseRevision: z.string().min(1).max(1024).optional(),
+    // RP-5b: a caller that cannot hold a large body asks for the page without
+    // it. No record is rewritten — an oversized one is listed in `elided`.
+    bodyLimit: z.number().int().min(1024).max(HISTORY_PAGE_BYTE_LIMIT).optional(),
+  }).strict(),
+  // RP-5b: one body of one entry, bound to the revision the caller read it at.
+  "session/entry_range": z.object({
+    path: sessionPath,
+    environmentKey: z.string().min(1).max(256),
+    revision: z.string().min(1).max(1024),
+    entryId: z.string().min(1).max(256),
+    component: z.object({
+      kind: z.enum(BODY_COMPONENT_KINDS),
+      index: z.number().int().min(0).max(4096).optional(),
+    }).strict(),
+    offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+    // Four bytes is the largest single character, so no limit a caller may ask
+    // for can be smaller than the character it is standing on.
+    limit: z.number().int().min(4).max(ENTRY_RANGE_MAX_BYTES).optional(),
+    // An attachment inside this body. Absolute offsets, safe integers only.
+    region: z.object({
+      offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+      bytes: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+    }).strict().optional(),
+  }).strict(),
+  // RP-5b: the attachments inside one body, one bounded page at a time.
+  "session/entry_regions": z.object({
+    path: sessionPath,
+    environmentKey: z.string().min(1).max(256),
+    revision: z.string().min(1).max(1024),
+    entryId: z.string().min(1).max(256),
+    component: z.object({
+      kind: z.enum(BODY_COMPONENT_KINDS),
+      index: z.number().int().min(0).max(4096).optional(),
+    }).strict(),
+    from: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+    limit: z.number().int().min(1).max(BODY_REGION_MAX_ITEMS).optional(),
   }).strict(),
   "pi/session/compact": z.object({ path: sessionPath, instructions: z.string().optional() }).strict(),
   "pi/model/list": z.object({ path: sessionPath }).strict(),

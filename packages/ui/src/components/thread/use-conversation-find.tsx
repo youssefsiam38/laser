@@ -188,7 +188,7 @@ export function useConversationFind({ partial = false, loadAll }: { partial?: bo
     return () => abort.abort();
   }, [active?.id, query, controller]);
   return {
-    root, open, selectedMessage: active?.messageId,
+    root, open, selectedMessage: active?.messageId, query: open ? query : "",
     bar: open ? <ConversationSearch inputRef={input} query={query} hits={hits} activeIndex={activeIndex}
       aria-busy={loadingAll} status={loadingAll ? "Loading…" : undefined}
       toolbar={partial ? <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-3 py-2 text-xs text-ink-2">

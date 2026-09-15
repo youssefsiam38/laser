@@ -2,6 +2,7 @@ import type { HistoryLiveSnapshot, HistoryWindow, HistoryWindowRequest } from ".
 import { goalPromptId } from "./goal-presentation.js";
 import { ErrorCodes } from "./jsonrpc.js";
 import { ProtocolError } from "./schemas.js";
+import { elideOversizedEntries } from "./body-range.js";
 
 const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" ? value as Record<string, unknown> : {};
 const changed = (): never => { throw new ProtocolError(ErrorCodes.InvalidParams, "This history changed. Reload the conversation and try again."); };
@@ -288,13 +289,49 @@ export function historyWindowFits(
   return historyContentSerializedBytes(entries, context) <= HISTORY_PAGE_BYTE_LIMIT;
 }
 
-/** Plan, bound and materialize a live page with the same limits as durable reads. */
+/**
+ * Plan, bound and materialize a live page with the same limits as durable
+ * reads.
+ *
+ * `bodies`, when given, is RP-5b's per-body limit and the digest the producer
+ * signs elided bodies with: a record carrying a larger body is left out of the
+ * page and listed in `window.elided` with its identity and body metadata, so a
+ * conversation with one enormous turn is still readable a page at a time. No
+ * record is ever rewritten.
+ */
 export function boundedHistoryWindow(
   snapshot: { entries: unknown[]; leafId: string | null },
   request: HistoryWindowRequest,
   scope: HistoryWindowScope,
+  bodies?: { limit: number; digest: (text: string) => string },
 ): { entries: unknown[]; leafId: string | null; window: HistoryWindow } | undefined {
   const nodes = snapshot.entries.map(historyWindowNode);
-  const plan = fitHistoryWindowPlan(nodes, snapshot.leafId, request, scope, candidate => historyWindowFits(snapshot, candidate));
-  return plan ? materializeHistoryWindow(snapshot, plan) : undefined;
+  const fits = (candidate: HistoryWindowPlan): boolean => {
+    if (!bodies) return historyWindowFits(snapshot, candidate);
+    const page = elideOversizedEntries(candidate.entryIndices.map(index => snapshot.entries[index]), bodies.limit, bodies.digest);
+    const context = elideOversizedEntries(candidate.contextIndices.map(index => snapshot.entries[index]), bodies.limit, bodies.digest);
+    if (page.entries.length + context.entries.length + page.elided.length + context.elided.length > HISTORY_PAGE_ENTRY_LIMIT) return false;
+    return historyContentSerializedBytes(page.entries, context.entries)
+      + historyContentSerializedBytes(page.elided, context.elided) <= HISTORY_PAGE_BYTE_LIMIT;
+  };
+  const plan = fitHistoryWindowPlan(nodes, snapshot.leafId, request, scope, fits);
+  if (!plan) return undefined;
+  const materialized = materializeHistoryWindow(snapshot, plan);
+  return bodies ? withElidedBodies(materialized, bodies.limit, bodies.digest) : materialized;
+}
+
+/** Apply RP-5b's per-body limit to an already materialized page. */
+export function withElidedBodies(
+  page: { entries: unknown[]; leafId: string | null; window: HistoryWindow },
+  bodyLimit: number,
+  digest: (text: string) => string,
+): { entries: unknown[]; leafId: string | null; window: HistoryWindow } {
+  const selected = elideOversizedEntries(page.entries, bodyLimit, digest);
+  const context = elideOversizedEntries(page.window.context, bodyLimit, digest);
+  const elided = [...selected.elided, ...context.elided];
+  return {
+    entries: selected.entries,
+    leafId: page.leafId,
+    window: { ...page.window, context: context.entries, ...(elided.length > 0 ? { elided } : {}) },
+  };
 }

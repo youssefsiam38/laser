@@ -5,6 +5,12 @@ export interface UseCopy {
   copied: boolean;
   /** Copies text; resolves true on success. */
   copy: (text: string) => Promise<boolean>;
+  /**
+   * Say that something was copied by another route — a whole body written to
+   * the clipboard as a `Blob`, which never passes through `copy` — so the
+   * action gives the same feedback, on the same clock, as any other copy.
+   */
+  markCopied: () => void;
   reset: () => void;
 }
 
@@ -46,22 +52,24 @@ export function useCopy(resetMs = 1500): UseCopy {
     setCopied(false);
   }, []);
 
+  const markCopied = useCallback(() => {
+    setCopied(true);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setCopied(false), resetMs);
+  }, [resetMs]);
+
   const copy = useCallback(
     async (text: string) => {
       const ok = await writeClipboard(text);
-      if (ok) {
-        setCopied(true);
-        if (timer.current) clearTimeout(timer.current);
-        timer.current = setTimeout(() => setCopied(false), resetMs);
-      }
+      if (ok) markCopied();
       return ok;
     },
-    [resetMs],
+    [markCopied],
   );
 
   useEffect(() => () => {
     if (timer.current) clearTimeout(timer.current);
   }, []);
 
-  return { copied, copy, reset };
+  return { copied, copy, markCopied, reset };
 }

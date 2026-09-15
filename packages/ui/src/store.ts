@@ -32,6 +32,10 @@ import type {
 } from "@lasercode/protocol";
 
 import { activePathIds } from "./components/thread/entries.js";
+import { appendLive, BODY_EXCERPT_MAX_BYTES, excerptHead, excerptLiveTail, LIVE_TAIL_MAX_BYTES, type BodyRef } from "./runtime/body-excerpt.js";
+import { retainEntries, stubOfElided, retainedRows, type EntryStub } from "./runtime/retained-entries.js";
+import { boundedBodyText, sameBodyComponent, utf8ByteLength, type BodyComponent } from "@lasercode/protocol";
+import { blockBytes, entryBytes, imageMeasure, UNKNOWN_IMAGE_DECODED_BYTES } from "./runtime/view-measure.js";
 import { initialMainDestination, mainPath, type MainDestination } from "./runtime/main-destination.js";
 import { receiveHistoryUpdate, reduceHistory, type HistoryAction } from "./runtime/history-loader.js";
 
@@ -59,6 +63,31 @@ export interface SentByParent {
  * `at`, or the persisted entry's `timestamp`). Optional: a block assembled by
  * `applyUpdate` outside the reducer has none.
  */
+/**
+ * Where the parts of a block that this view does not hold in full actually
+ * live (RP-5b). A field is here only when its body was larger than the excerpt
+ * bound; a block with no `bodies` is holding all of itself.
+ */
+export interface BlockBodies {
+  text?: BodyRef;
+  thinking?: BodyRef;
+  args?: BodyRef;
+  result?: BodyRef;
+  partial?: BodyRef;
+  details?: BodyRef;
+  /** One per image, in the prompt's own order; a gap means that one is held. */
+  images?: Array<BodyRef | undefined>;
+  /** One per attachment chip: the stored bytes of that file inside the prompt. */
+  files?: Array<BodyRef | undefined>;
+}
+
+/**
+ * Attachments a prompt has that are not chips on its row. `omitted` is an
+ * exact count the authority gave; `unknown` means it could not see the whole
+ * prompt and said so, and then no number is shown (RP-5b §2).
+ */
+export type FileOverflow = { omitted: number } | { unknown: true };
+
 export type Block =
   | {
       kind: "user";
@@ -67,6 +96,8 @@ export type Block =
       text: string;
       images: ImageContent[];
       files: AttachedFile[];
+      /** Attachments this prompt has beyond the chips on its row (RP-5b §2). */
+      fileOverflow?: FileOverflow;
       optimistic?: boolean;
       sentBy?: SentByParent;
       /**
@@ -77,6 +108,8 @@ export type Block =
        * that case.
        */
       entryId?: string;
+      /** Bodies too large to hold; the excerpt above says what is shown. */
+      bodies?: BlockBodies;
     }
   | {
       kind: "assistant";
@@ -97,8 +130,12 @@ export type Block =
       usage?: Usage;
       /** Set only when something other than the session's own agent spoke. */
       speaker?: MessageSpeaker;
+      /** Bodies too large to hold; the excerpt above says what is shown. */
+      bodies?: BlockBodies;
+      /** The persisted entry this turn is, when it has been written (RP-5b). */
+      entryId?: string;
     }
-  | { kind: "tool"; id: string; at?: string; name: string; args: unknown; partial?: string; result?: unknown; isError?: boolean; done: boolean }
+  | { kind: "tool"; id: string; at?: string; name: string; args: unknown; partial?: string; result?: unknown; isError?: boolean; done: boolean; bodies?: BlockBodies; entryId?: string }
   | { kind: "notice"; id: string; at?: string; level: "info" | "warning" | "error"; text: string }
   /**
    * A custom message the transcript draws itself (Lane U2, agents leap): an
@@ -108,12 +145,12 @@ export type Block =
    * {@link CUSTOM_MESSAGE_BLOCK_TYPES} become blocks; every other custom
    * message stays invisible, as before.
    */
-  | { kind: "custom"; id: string; at?: string; customType: string; text: string; details: unknown };
+  | { kind: "custom"; id: string; at?: string; customType: string; text: string; details: unknown; bodies?: BlockBodies; entryId?: string };
 
 /** Custom message types that render as transcript blocks. */
 export const CUSTOM_MESSAGE_BLOCK_TYPES: ReadonlySet<string> = new Set([AGENT_EVENT_MESSAGE_TYPE, TASK_EVENT_MESSAGE_TYPE]);
 
-import { awake, dehydrateView, hasUnsentWork, isDormantView } from "./view-summary.js";
+import { awake, dehydrateView, hasUnsentWork, isDormantView, trimView } from "./view-summary.js";
 export type { EvictionReason, SessionViewSummary, ValidatedRevision } from "./view-summary.js";
 export { awake, dehydrateView, hasUnsentWork, hydrationEpochOf, isDormantView, summaryOfView, viewFirstUserText, viewHasHistory, viewHasUserMessage } from "./view-summary.js";
 import type { EvictionReason, SessionViewSummary, ValidatedRevision } from "./view-summary.js";
@@ -146,8 +183,19 @@ export interface SessionView {
    */
   openedAt: string;
   hydrated: boolean;
-  /** Loaded entries; history distinguishes incomplete messages from unloaded versions. */
+  /**
+   * Loaded entries; history distinguishes incomplete messages from unloaded
+   * versions. Every record here is complete and exactly as its authority
+   * produced it: a record carrying a body larger than the excerpt bound is not
+   * rewritten to fit, it is kept as a {@link stubs} pointer instead (RP-5b).
+   */
   entries: unknown[];
+  /**
+   * Records this view points at rather than holds, by identity: their place in
+   * the tree and the exact size of every body they carry. Never a body, and
+   * never presented as an entry (RP-5b).
+   */
+  stubs?: EntryStub[];
   history?: Omit<HistoryWindow, "live"> | undefined;
   /** Owner-local accepted recent-tail replacement, not a worker generation. */
   historyRevision?: string | undefined;
@@ -211,6 +259,29 @@ export interface SessionView {
    * read captures it and refuses to land when it has moved (RP-5 fences).
    */
   hydrationEpoch?: number | undefined;
+  /**
+   * The older part of this view's transcript was released to stay inside the
+   * per-view byte bound (RP-5b). The session is open and everything the person
+   * is doing with it is untouched; the released prompts are counted so the
+   * transcript can say so and read them again.
+   */
+  /**
+   * What a trim released, and what the surface was standing on when it did
+   * (RP-5b §7): identity strings only — the anchored message, the row a person
+   * had focused, the rows an open action targets, and the leaf. They are what
+   * an authoritative replacement has to contain before it may be committed.
+   *
+   * `deferred` says a replacement was read and did not contain them, so this
+   * view keeps what it has and offers to read again; `reads` is how many
+   * reconciliation reads this stamp has spent (at most two).
+   */
+  trimmed?: {
+    at: string;
+    prompts: number;
+    identities?: { anchorEntryId?: string; focusedEntryId?: string; actionTargetEntryIds?: readonly string[]; leafId?: string | null };
+    deferred?: true;
+    reads?: number;
+  } | undefined;
   /**
    * Set while the transcript has been released and not read again. Its
    * presence — not `hydrated` — is what makes a view dormant: a view that has
@@ -358,6 +429,30 @@ export type Action =
    * the session again from its authoritative host.
    */
   | { type: "views/evict"; paths: readonly string[]; reason: EvictionReason; at: string }
+  /**
+   * Release the older settled part of these views so each stays inside the
+   * per-view byte bound (RP-5b). Not eviction: the sessions stay open and
+   * usable, the streaming turn, questions, approvals and unsent prompts stay,
+   * and what went is read again through the ordinary bounded tail read.
+   */
+  | {
+      type: "views/trim";
+      paths: readonly string[];
+      keepBytes: number;
+      at: string;
+      anchored?: readonly string[];
+      /** What the surface is standing on, so a replacement can be checked. */
+      standing?: { anchorEntryId?: string; focusedEntryId?: string; actionTargetEntryIds?: readonly string[] };
+    }
+  /**
+   * An authoritative `{tail:40}` page read to replace what a trim released
+   * (RP-5b §7). It is committed only if it contains every identity the trim
+   * preserved; otherwise the page is discarded here and the view keeps what it
+   * has, with its stamp marked deferred. Nothing of a refused page is retained.
+   */
+  | { type: "views/reconcile"; path: string; at: string; token: string; entries: unknown[]; leafId?: string | null | undefined; window: HistoryWindow }
+  /** A reconciliation read that failed or was refused; the stamp spent a read. */
+  | { type: "views/reconcileFailed"; path: string; at: string; token: string }
   /**
    * Replace the transcript from a persisted snapshot. `expectSeq` guards the
    * round trip: when live updates advanced `lastSeq` while `pi/session/entries`
@@ -510,6 +605,40 @@ export function reduce(state: AppState, action: Action): AppState {
       const { [action.path]: _load, ...sessionLoads } = state.sessionLoads;
       return { ...state, open: rest, sessionLoads };
     }
+    case "views/trim": {
+      let open: Record<string, SessionView> | undefined;
+      for (const path of action.paths) {
+        const view = state.open[path];
+        if (!view || isDormantView(view)) continue;
+        // A row a person is being asked about is never released, whatever its age.
+        const answerable = new Set<string>();
+        for (const dialog of view.dialogs) if (dialog.toolCallId) answerable.add(dialog.toolCallId);
+        // A turn costs what its block holds *and* what its record holds: both
+        // go together, so the budget has to see both.
+        const records = new Map<string, number>();
+        for (const entry of view.entries) {
+          const id = (entry as { id?: unknown } | null)?.id;
+          if (typeof id === "string") records.set(id, entryBytes(entry));
+        }
+        const measure = (block: Block): number => {
+          const id = "entryId" in block ? block.entryId : undefined;
+          return blockBytes(block) + (id !== undefined ? records.get(id) ?? 0 : 0);
+        };
+        const result = trimView(view, {
+          keepBytes: action.keepBytes,
+          measure,
+          answerable,
+          // The message the viewport is anchored to, the focused one, and
+          // anything a surface pinned while it is open.
+          ...(action.anchored ? { anchored: new Set(action.anchored) } : {}),
+          ...(action.standing ? { standing: action.standing } : {}),
+        }, action.at);
+        if (result.releasedBlocks === 0) continue;
+        open ??= { ...state.open };
+        open[path] = result.view;
+      }
+      return open ? { ...state, open } : state;
+    }
     case "views/evict": {
       let open: Record<string, SessionView> | undefined;
       for (const path of action.paths) {
@@ -529,6 +658,52 @@ export function reduce(state: AppState, action: Action): AppState {
     case "historyMetadata":
     case "historyPrepend":
       return updateView(state, action.path, v => reduceHistory(v, action, historyFold));
+    case "views/reconcile":
+      return updateView(state, action.path, (v) => {
+        const stamp = v.trimmed;
+        // Only the stamp this page was read for, and only a view still trimmed.
+        if (!stamp || stamp.at !== action.at) return reduceHistory(v, { type: "historyEnd", path: action.path, token: action.token }, historyFold);
+        const spent = (stamp.reads ?? 0) + 1;
+        // The candidate is built by the **canonical** snapshot fold: the live
+        // turn the answer carries, the updates that arrived while it was in
+        // flight, the person's unsent prompts, sequence and epoch, and the
+        // blocks it can share with what is on screen. There is no second,
+        // weaker fold here (RP-5b B2).
+        const candidate = reduceHistory(
+          v,
+          { type: "historySnapshot", path: action.path, token: action.token, entries: action.entries, window: action.window, replaceWindow: true,
+            ...(action.leafId !== undefined ? { leafId: action.leafId } : {}) },
+          historyFold,
+        );
+        // Nothing was applied (a stale token): leave the view as it is.
+        if (candidate === v) return reduceHistory(v, { type: "historyEnd", path: action.path, token: action.token }, historyFold);
+        const wanted = new Set<string>([
+          ...(stamp.identities?.anchorEntryId ? [stamp.identities.anchorEntryId] : []),
+          ...(stamp.identities?.focusedEntryId ? [stamp.identities.focusedEntryId] : []),
+          ...(stamp.identities?.actionTargetEntryIds ?? []),
+        ]);
+        const arriving = new Set<string>();
+        for (const entry of candidate.entries) {
+          const id = (entry as { id?: unknown } | null)?.id;
+          if (typeof id === "string") arriving.add(id);
+        }
+        for (const stub of candidate.stubs ?? []) arriving.add(stub.id);
+        if (![...wanted].every((id) => arriving.has(id))) {
+          // The page is dropped here, whole: a view already at its bound must
+          // not hold a replacement beside itself. What the view keeps is what
+          // it had, plus the updates that arrived meanwhile.
+          const kept = reduceHistory(v, { type: "historyEnd", path: action.path, token: action.token }, historyFold);
+          return { ...kept, trimmed: { ...stamp, deferred: true as const, reads: spent } };
+        }
+        return candidate;
+      });
+    case "views/reconcileFailed":
+      return updateView(state, action.path, (v) => {
+        const ended = reduceHistory(v, { type: "historyEnd", path: action.path, token: action.token }, historyFold);
+        const stamp = ended.trimmed;
+        if (!stamp || stamp.at !== action.at) return ended;
+        return { ...ended, trimmed: { ...stamp, deferred: true as const, reads: (stamp.reads ?? 0) + 1 } };
+      });
     case "hydrate":
       return updateView(state, action.path, (view) => {
         const v = awake(view);
@@ -539,12 +714,18 @@ export function reduce(state: AppState, action: Action): AppState {
         // carry what the snapshot has, plus what it does not.
         // A read with no window carries no revision, so this view can claim
         // none: whatever it was valid at, it is not that set of entries now.
+        // Records larger than this view may hold are pointed at, not held
+        // (RP-5b); the incoming array is dropped with this fold.
+        const retained = retainEntries(action.entries);
         return action.expectSeq !== undefined && v.lastSeq !== action.expectSeq
-          ? { ...v, entries: action.entries, leafId: action.leafId, history: undefined, historyPending: undefined, hydrated: true, lastSeq, validated: undefined }
-          : { ...v, blocks: blocksFromEntries(action.entries, action.leafId, modelNamesOf(v.state)), entries: action.entries, leafId: action.leafId, history: undefined, historyPending: undefined, hydrated: true, pendingSentBy: undefined, lastSeq, validated: undefined };
+          ? { ...v, entries: retained.entries, stubs: retained.stubs, leafId: action.leafId, history: undefined, historyPending: undefined, hydrated: true, lastSeq, validated: undefined }
+          : { ...v, blocks: blocksFromEntries(retained.entries, action.leafId, modelNamesOf(v.state), { stubs: retained.stubs }), entries: retained.entries, stubs: retained.stubs, leafId: action.leafId, history: undefined, historyPending: undefined, hydrated: true, pendingSentBy: undefined, lastSeq, validated: undefined };
       });
     case "entries":
-      return updateView(state, action.path, (v) => ({ ...v, entries: action.entries, leafId: action.leafId, validated: undefined }));
+      return updateView(state, action.path, (v) => {
+        const retained = retainEntries(action.entries);
+        return { ...v, entries: retained.entries, stubs: retained.stubs, leafId: action.leafId, validated: undefined };
+      });
     case "goal":
       return updateView(state, action.path, (v) => ({ ...v, goal: action.goal }));
     case "editorTextTaken":
@@ -1030,15 +1211,35 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
       }
       return v;
     }
+    // A streamed turn is bounded while it streams: the newest bytes are kept,
+    // the ones before them are counted exactly, and the whole reply becomes
+    // readable from its authority the moment it is written (RP-5b).
     case "text_delta": {
       const a = lastAssistant(v.blocks);
-      if (!a) return { ...v, blocks: [...v.blocks, { kind: "assistant", id: nextBlockId(), text: u.delta, thinking: "", streaming: true }] };
-      return { ...v, blocks: replaceLast(v.blocks, { ...a, text: a.text + u.delta }) };
+      if (!a) {
+        // The first token of a turn can be the whole reply in one delta.
+        const opened = excerptLiveTail(u.delta, { component: { kind: "assistant_text" } });
+        const openedBodies = blockBodies({ text: opened.ref });
+        return { ...v, blocks: [...v.blocks, { kind: "assistant", id: nextBlockId(), text: opened.text, thinking: "", streaming: true,
+          ...(openedBodies ? { bodies: openedBodies } : {}) }] };
+      }
+      const grown = appendLive(a.text, u.delta, a.bodies?.text, { entryId: a.entryId, component: { kind: "assistant_text" } });
+      const bodies = blockBodies({ ...a.bodies, text: grown.ref });
+      const { bodies: _previous, ...rest } = a;
+      return { ...v, blocks: replaceLast(v.blocks, { ...rest, text: grown.text, ...(bodies ? { bodies } : {}) }) };
     }
     case "thinking_delta": {
       const a = lastAssistant(v.blocks);
-      if (!a) return { ...v, blocks: [...v.blocks, { kind: "assistant", id: nextBlockId(), text: "", thinking: u.delta, streaming: true }] };
-      return { ...v, blocks: replaceLast(v.blocks, { ...a, thinking: a.thinking + u.delta }) };
+      if (!a) {
+        const opened = excerptLiveTail(u.delta, { component: { kind: "reasoning" } });
+        const openedBodies = blockBodies({ thinking: opened.ref });
+        return { ...v, blocks: [...v.blocks, { kind: "assistant", id: nextBlockId(), text: "", thinking: opened.text, streaming: true,
+          ...(openedBodies ? { bodies: openedBodies } : {}) }] };
+      }
+      const grown = appendLive(a.thinking, u.delta, a.bodies?.thinking, { entryId: a.entryId, component: { kind: "reasoning" } });
+      const bodies = blockBodies({ ...a.bodies, thinking: grown.ref });
+      const { bodies: _previous, ...rest } = a;
+      return { ...v, blocks: replaceLast(v.blocks, { ...rest, thinking: grown.text, ...(bodies ? { bodies } : {}) }) };
     }
     case "message_end": {
       const msg = u.message as { role?: string; content?: unknown } | undefined;
@@ -1048,31 +1249,62 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
         const index = optimistic !== -1 ? optimistic : v.blocks.at(-1)?.kind === "user" ? v.blocks.length - 1 : -1;
         if (index === -1) return v;
         const block = v.blocks[index] as Extract<Block, { kind: "user" }>;
-        const blocks = replaceAt(v.blocks, index, { ...block, ...splitAttachedFiles(text), images: imagesOfContent(msg.content), optimistic: false, ...(u.entry ? { id: `entry:${u.entry.id}`, entryId: u.entry.id } : {}) });
+        // The prompt as it was persisted, bounded the same way a read one is:
+        // the person's own unsent copy is replaced by the canonical record.
+        const bounded = boundUserContent(splitAttached(text), imagesOfContent(msg.content), { entryId: u.entry?.id });
+        const { bodies: _previous, ...restBlock } = block;
+        const blocks = replaceAt(v.blocks, index, { ...restBlock, text: bounded.text, files: bounded.files, images: bounded.images,
+          ...(bounded.bodies ? { bodies: bounded.bodies } : {}), optimistic: false, ...(u.entry ? { id: `entry:${u.entry.id}`, entryId: u.entry.id } : {}) });
         // The prompt's place in the tree arrives with it, so its actions (fork,
         // jump, edit, versions, the request it produced) work while the turn
         // runs. The tree holds a copy until the next full read: the entry is
         // real, only the read of the file has not happened yet. The leaf stays
         // where the last read put it — the entries between are not here, and
         // a path that cannot be walked would strip every older prompt of its id.
-        if (!u.entry || v.entries.some((raw) => (raw as { id?: string } | null)?.id === u.entry!.id)) return { ...v, blocks };
-        return { ...v, blocks, entries: [...v.entries, { type: "message", id: u.entry.id, parentId: u.entry.parentId, message: msg }] };
+        if (!u.entry || v.entries.some((raw) => (raw as { id?: string } | null)?.id === u.entry!.id)
+          || (v.stubs ?? []).some((stub) => stub.id === u.entry!.id)) return { ...v, blocks };
+        // The record itself is retained only when it fits; a large prompt is
+        // pointed at, never rewritten to fit (RP-5b).
+        const retained = retainEntries([{ type: "message", id: u.entry.id, parentId: u.entry.parentId, message: msg }]);
+        return { ...v, blocks, entries: [...v.entries, ...retained.entries],
+          ...(retained.stubs.length > 0 ? { stubs: [...(v.stubs ?? []), ...retained.stubs] } : {}) };
       }
       // A custom message the transcript renders (an agent event, a task exit)
       // becomes its own block. It carries no speaker, so nothing above claims it.
       if (msg?.role === "custom" && !u.speaker) {
         const block = customBlock(msg, undefined);
-        return block ? { ...v, blocks: [...closeStreaming(v.blocks), block] } : v;
+        if (!block) return v;
+        const settled = settleBodies(block.bodies, u.entry as PersistedEntry | undefined);
+        return { ...v, blocks: [...closeStreaming(v.blocks), settled ? { ...block, bodies: settled } : block] };
+      }
+      // A tool result is its own record; it is matched by the call it answers,
+      // never by position, and only its own block's references are settled.
+      const answered = (msg as { toolCallId?: unknown } | undefined)?.toolCallId;
+      if (msg?.role === "toolResult" && typeof answered === "string") {
+        const entry = u.entry as PersistedEntry | undefined;
+        if (!entry?.bodies) return v;
+        return { ...v, blocks: v.blocks.map((b) => {
+          if (b.kind !== "tool" || b.id !== answered) return b;
+          const settled = settleBodies(b.bodies, entry);
+          return settled === undefined || settled === b.bodies ? b : { ...b, bodies: settled, entryId: entry.id };
+        }) };
       }
       if (msg?.role === "assistant" || (msg?.role === "custom" && u.speaker)) {
         const a = lastAssistant(v.blocks);
         if (!a) return v;
-        const finalText = textOf(msg.content);
+        // The final text replaces the streamed one, bounded exactly as it was
+        // while streaming: this is the moment the old code put a whole reply
+        // back into the view (RP-5b).
+        const settled = textOf(msg.content);
+        const finalText = settled ? excerptLiveTail(settled, { entryId: a.entryId, component: { kind: "assistant_text" } }) : undefined;
+        const bodies = settleBodies(blockBodies({ ...a.bodies, ...(finalText ? { text: finalText.ref } : {}) }), u.entry as PersistedEntry | undefined);
+        const { bodies: _previous, ...restAssistant } = a;
         return {
           ...v,
           blocks: replaceLast(v.blocks, {
-            ...a,
-            text: finalText || a.text,
+            ...restAssistant,
+            text: finalText ? finalText.text : a.text,
+            ...(bodies ? { bodies } : {}),
             streaming: false,
             ...(u.stopReason !== undefined ? { stopReason: u.stopReason } : {}),
             ...(u.errorMessage !== undefined ? { errorMessage: u.errorMessage } : {}),
@@ -1083,14 +1315,34 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
       }
       return v;
     }
-    case "tool_execution_start":
-      return { ...v, blocks: [...closeStreaming(v.blocks), { kind: "tool", id: u.toolCallId, name: u.toolName, args: u.args, done: false }] };
+    case "tool_execution_start": {
+      // A call's request is a body like any other: a large one is excerpted
+      // and referenced, never held whole.
+      const args = boundValue(u.args, { component: { kind: "tool_args", index: 0 } });
+      const bodies = blockBodies({ args: args.ref });
+      return { ...v, blocks: [...closeStreaming(v.blocks), { kind: "tool", id: u.toolCallId, name: u.toolName, args: args.value, done: false,
+        ...(bodies ? { bodies } : {}) }] };
+    }
     case "tool_execution_update":
-      return { ...v, blocks: v.blocks.map((b) => (b.kind === "tool" && b.id === u.toolCallId ? { ...b, partial: String(stringify(u.partial)) } : b)) };
+      return { ...v, blocks: v.blocks.map((b) => {
+        if (b.kind !== "tool" || b.id !== u.toolCallId) return b;
+        // Partial output is live and can be enormous; the newest bytes are what
+        // a person is watching, and the rest arrives with the result.
+        const partial = boundPartial(u.partial, { entryId: b.entryId, component: { kind: "tool_partial" } });
+        const bodies = blockBodies({ ...b.bodies, partial: partial.ref });
+        const { bodies: _previous, ...rest } = b;
+        return { ...rest, partial: partial.text, ...(bodies ? { bodies } : {}) };
+      }) };
     case "tool_execution_end":
       return {
         ...v,
-        blocks: v.blocks.map((b) => (b.kind === "tool" && b.id === u.toolCallId ? { ...b, result: u.result, isError: u.isError, done: true } : b)),
+        blocks: v.blocks.map((b) => {
+          if (b.kind !== "tool" || b.id !== u.toolCallId) return b;
+          const result = boundValue(u.result, { entryId: b.entryId, component: { kind: "tool_result" } });
+          const bodies = blockBodies({ ...b.bodies, result: result.ref });
+          const { bodies: _previous, ...rest } = b;
+          return { ...rest, result: result.value, isError: u.isError, done: true, ...(bodies ? { bodies } : {}) };
+        }),
       };
     case "queue_update":
       return { ...v, queue: { steering: u.steering.map(displayQueuedText), followUp: u.followUp.map(displayQueuedText) } };
@@ -1122,10 +1374,21 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
 }
 
 /** A `custom` block for a message whose type the transcript draws; `undefined` for the rest. */
-function customBlock(message: { customType?: unknown; content?: unknown; details?: unknown } | undefined, at: string | undefined): Extract<Block, { kind: "custom" }> | undefined {
+function customBlock(
+  message: { customType?: unknown; content?: unknown; details?: unknown } | undefined,
+  at: string | undefined,
+  source?: { entryId?: string | undefined; revision?: string | undefined },
+): Extract<Block, { kind: "custom" }> | undefined {
   const customType = message?.customType;
   if (typeof customType !== "string" || !CUSTOM_MESSAGE_BLOCK_TYPES.has(customType)) return undefined;
-  return { kind: "custom", id: nextBlockId(), ...(at ? { at } : {}), customType, text: textOf(message?.content), details: message?.details };
+  // Both halves of a custom record are bodies: the line the model read and the
+  // payload the module attached. A large one is excerpted and referenced —
+  // addressably when the record has been written, honestly live when not.
+  const prose = excerptHead(textOf(message?.content), { ...source, component: { kind: "custom_details" } });
+  const details = boundValue(message?.details, { ...source, component: { kind: "custom_details", index: 1 } });
+  const bodies = blockBodies({ text: prose.ref, details: details.ref });
+  return { kind: "custom", id: nextBlockId(), ...(at ? { at } : {}), customType, text: prose.text, details: details.value,
+    ...(source?.entryId !== undefined ? { entryId: source.entryId } : {}), ...(bodies ? { bodies } : {}) };
 }
 
 function closeStreaming(blocks: Block[]): Block[] {
@@ -1206,6 +1469,235 @@ function stringify(value: unknown): string {
 /** The stop reasons that draw a stopped row; every other ending is an ordinary one. */
 const STOPPED_SHORT = new Set<string>(["aborted", "length", "error", "deferred"]);
 
+/** The identity row a stub contributes to the branch walk. Never an entry. */
+function stubNode(stub: EntryStub): unknown {
+  return { type: stub.type, id: stub.id, parentId: stub.parentId, message: { role: stub.role } };
+}
+
+/**
+ * Attachments only when the text can hold one. `splitAttachedFiles` runs a
+ * regular expression over the whole prompt; a multi-megabyte message with no
+ * wrapper in it is scanned once, cheaply, rather than rewritten (RP-5b §3.2).
+ */
+/**
+ * Give a live reference the identity its authority has just published.
+ *
+ * A body shown as an excerpt while it streamed points at nothing until the
+ * engine has written the entry it belongs to. When the settle carries that
+ * entry's canonical identity — its id, the revision it was written at, and the
+ * exact size and digest of each body — the reference becomes readable without
+ * reopening the conversation. Anything that does not match exactly, or was not
+ * described at all, stays live and unreadable: a guessed identity would read
+ * another state's bytes under this one's offsets (RP-5b).
+ */
+function settleBodies(bodies: BlockBodies | undefined, entry: PersistedEntry | undefined): BlockBodies | undefined {
+  if (!bodies || !entry?.bodies) return bodies;
+  let changed = false;
+  const settled: Record<string, BodyRef> = {};
+  for (const [label, ref] of Object.entries(bodies) as Array<[string, BodyRef | undefined]>) {
+    if (!ref) continue;
+    // A reference that already names its entry is canonical; one that does not
+    // is what this settles, whether or not it was marked live.
+    if (ref.entryId !== undefined) { settled[label] = ref; continue; }
+    const identity = entry.bodies.find(row => sameBodyComponent(row.component, ref.component));
+    // Fail closed: a component nobody described, or one whose size does not
+    // match what this view measured, keeps its live reference.
+    if (!identity || identity.totalBytes !== ref.totalBytes) { settled[label] = ref; continue; }
+    const { live: _live, ...rest } = ref;
+    // The revision this was written at is not pinned into the reference: the
+    // conversation moves on, and pinning it would make the body unreadable a
+    // moment later. What is pinned is the body's own digest, which the reader
+    // verifies against every slice and against the whole — so bytes from any
+    // other state are refused, whatever revision they were served at.
+    settled[label] = { ...rest, entryId: entry.id, contentDigest: identity.contentDigest };
+    changed = true;
+  }
+  return changed ? (settled as BlockBodies) : bodies;
+}
+
+type PersistedEntry = { id: string; parentId: string | null; revision?: string; bodies?: Array<{ component: BodyComponent; totalBytes: number; contentDigest: string }> };
+
+function splitAttached(text: string): { text: string; files: AttachedFile[] } {
+  // A prompt larger than this view may hold is kept as an excerpt of the
+  // canonical text — wrappers and all — and read back from its authority. Its
+  // attachments are *not* pulled out of it here: a chip offering half a file,
+  // with no way to say so and no way to reconstruct it, would be a lie
+  // (RP-5b §7.3). Under the bound the prompt is held whole and its files with
+  // it, exactly as before.
+  if (utf8ByteLength(text) > BODY_EXCERPT_MAX_BYTES) return { text, files: [] };
+  return text.includes("<attached-file ") ? splitAttachedFiles(text) : { text, files: [] };
+}
+
+/** Only the fields that actually reference something; `undefined` when none do. */
+type PartialBodies = { [K in keyof BlockBodies]?: BlockBodies[K] | undefined };
+
+function blockBodies(bodies: PartialBodies): BlockBodies | undefined {
+  const rows = Object.entries(bodies).filter(([, value]) =>
+    Array.isArray(value) ? value.some((row) => row !== undefined) : value !== undefined);
+  return rows.length === 0 ? undefined : Object.fromEntries(rows) as BlockBodies;
+}
+
+/**
+ * A value that is not a string — tool arguments, a tool result, a custom
+ * payload — bounded the same way text is. Over the bound it becomes the
+ * excerpt of its own display text plus a reference; nothing holds the value.
+ */
+function boundValue(value: unknown, source: { entryId?: string | undefined; component: BodyComponent; revision?: string | undefined }): { value: unknown; ref?: BodyRef } {
+  // Bounded projection, never a whole-body copy: a twelve-megabyte structured
+  // result is walked once and only the excerpt is written (RP-5b §3.2).
+  const bounded = boundedBodyText(value, BODY_EXCERPT_MAX_BYTES);
+  if (!bounded.truncated) return { value };
+  // A body this projection could not predict is referenced with no size rather
+  // than with a guess; the surface says so and reads it from its authority.
+  const totalBytes = bounded.totalBytes ?? Number.MAX_SAFE_INTEGER;
+  return {
+    value: bounded.text,
+    ref: {
+      ...(source.entryId !== undefined ? { entryId: source.entryId } : {}),
+      component: source.component,
+      totalBytes,
+      ...(source.revision !== undefined ? { revision: source.revision } : {}),
+      excerpt: { offset: 0, bytes: utf8ByteLength(bounded.text) },
+    },
+  };
+}
+
+/**
+ * Live partial output, bounded. A string keeps its newest bytes — what a
+ * person watching a command is reading — and anything structured is projected
+ * head-first without ever building all of it (RP-5b §3.2).
+ */
+function boundPartial(value: unknown, source: { entryId?: string | undefined; component: BodyComponent }): { text: string; ref?: BodyRef } {
+  if (typeof value === "string") return excerptLiveTail(value, source);
+  const bounded = boundedBodyText(value, LIVE_TAIL_MAX_BYTES);
+  if (!bounded.truncated) return { text: bounded.text };
+  return {
+    text: bounded.text,
+    ref: {
+      ...(source.entryId !== undefined ? { entryId: source.entryId } : {}),
+      component: source.component,
+      totalBytes: bounded.totalBytes ?? Number.MAX_SAFE_INTEGER,
+      excerpt: { offset: 0, bytes: utf8ByteLength(bounded.text) },
+      ...(source.entryId === undefined ? { live: true as const } : {}),
+    },
+  };
+}
+
+/**
+ * A prompt as this view keeps it: its prose bounded, its attached files
+ * bounded as regions of that prose, and an image that is too large to hold
+ * kept as its reference alone — never as base64 in the store.
+ */
+function boundUserContent(
+  split: { text: string; files: AttachedFile[] },
+  images: ImageContent[],
+  source: { entryId?: string | undefined; revision?: string | undefined },
+): { text: string; files: AttachedFile[]; images: ImageContent[]; bodies?: BlockBodies } {
+  const prose = excerptHead(split.text, { ...source, component: { kind: "user_text" } });
+  // Files are here only when the whole prompt is here (see `splitAttached`), so
+  // every one of them is complete; a truncated attachment is never retained.
+  const files = split.files;
+  const imageRefs: Array<BodyRef | undefined> = [];
+  const bounded = images.map((image, index) => {
+    const bytes = utf8ByteLength(image.data);
+    if (bytes <= BODY_EXCERPT_MAX_BYTES) { imageRefs.push(undefined); return image; }
+    // Dimensions from a bounded prefix of the image's own bytes, so what it
+    // will cost as a decoded surface is known before it is ever shown.
+    const measured = imageMeasure(image);
+    imageRefs.push({
+      ...(source.entryId !== undefined ? { entryId: source.entryId } : {}),
+      component: { kind: "image", index },
+      totalBytes: bytes,
+      ...(source.revision !== undefined ? { revision: source.revision } : {}),
+      excerpt: { offset: 0, bytes: 0 },
+      image: {
+        ...(measured.dimensions ? { width: measured.dimensions.width, height: measured.dimensions.height } : {}),
+        decodedBytes: measured.decoded ?? UNKNOWN_IMAGE_DECODED_BYTES,
+      },
+    });
+    // The payload is never retained: what stays is its type and where to read it.
+    return { ...image, data: "" };
+  });
+  const bodies = blockBodies({ text: prose.ref, images: imageRefs });
+  return { text: prose.text, files, images: bounded, ...(bodies ? { bodies } : {}) };
+}
+
+/**
+ * The blocks of a record this view points at. Everything a row needs is here —
+ * identity, place, kind, the exact size of every body — and no body is.
+ */
+function stubBlocks(stub: EntryStub, revision: string | undefined): { blocks: Block[]; toolResult?: { toolCallId: string; ref: BodyRef | undefined } } {
+  const refOf = (component: BodyComponent): BodyRef | undefined => {
+    const body = stub.bodies.find((row) => row.component.kind === component.kind && (row.component.index ?? 0) === (component.index ?? 0));
+    return body === undefined ? undefined : {
+      entryId: stub.id,
+      component: body.component,
+      totalBytes: body.totalBytes,
+      // The digest the page gave for this body: every range reply is fenced
+      // against it rather than against the first answer that arrives.
+      ...(body.contentDigest !== undefined ? { contentDigest: body.contentDigest } : {}),
+      ...(revision !== undefined ? { revision } : {}),
+      excerpt: { offset: 0, bytes: 0 },
+    };
+  };
+  const when = stub.at ? { at: stub.at } : {};
+  if (stub.role === "user") {
+    const images = stub.bodies.filter((row) => row.component.kind === "image");
+    // The attachments the authority named inside this prompt. Each chip is a
+    // reference to the exact stored bytes of one file, with that region's own
+    // digest; nothing about them is worked out from an excerpt (RP-5b §2).
+    const prose = stub.bodies.find((row) => row.component.kind === "user_text");
+    const regions = prose?.regions;
+    const fileRefs: Array<BodyRef | undefined> = [];
+    const files: AttachedFile[] = (regions?.items ?? []).map((item) => {
+      const ref = refOf({ kind: "user_text" });
+      fileRefs.push(ref ? { ...ref, region: { offset: item.offset, bytes: item.bytes }, contentDigest: item.contentDigest } : undefined);
+      return { name: item.name, mediaType: item.mediaType, size: item.bytes, content: "" };
+    });
+    const bodies = blockBodies({
+      text: refOf({ kind: "user_text" }),
+      ...(fileRefs.length > 0 ? { files: fileRefs } : {}),
+
+      // A record this view only points at carries no header to read, so its
+      // surface is charged the declared floor rather than nothing.
+      images: images.map((row) => {
+        const ref = refOf(row.component);
+        return ref ? { ...ref, image: { decodedBytes: UNKNOWN_IMAGE_DECODED_BYTES } } : undefined;
+      }),
+    });
+    const fileOverflow: FileOverflow | undefined = regions && (regions.omitted || regions.truncated)
+      ? (regions.truncated ? { unknown: true as const } : { omitted: regions.omitted! })
+      : undefined;
+    return { blocks: [{ kind: "user", id: `entry:${stub.id}`, ...when, text: "", files, entryId: stub.id,
+      ...(fileOverflow ? { fileOverflow } : {}),
+      images: images.map(() => ({ type: "image", mimeType: "image/*", data: "" }) as ImageContent),
+      ...(bodies ? { bodies } : {}) }] };
+  }
+  if (stub.role === "assistant") {
+    const bodies = blockBodies({ text: refOf({ kind: "assistant_text" }), thinking: refOf({ kind: "reasoning" }) });
+    const blocks: Block[] = [{ kind: "assistant", id: `entry:${stub.id}`, ...when, text: "", thinking: "", streaming: false, entryId: stub.id,
+      ...(bodies ? { bodies } : {}) }];
+    // A record this view points at still made the calls it made: their rows
+    // keep their identity, their name and their own reference to the request.
+    (stub.toolCalls ?? []).forEach((call, index) => {
+      const args = refOf({ kind: "tool_args", index });
+      const callBodies = blockBodies({ args });
+      blocks.push({ kind: "tool", id: call.id, ...when, name: call.name, args: undefined, done: false, entryId: stub.id,
+        ...(callBodies ? { bodies: callBodies } : {}) });
+    });
+    return { blocks };
+  }
+  // A result belongs to the call that is already a row: it becomes a reference
+  // on that row, exactly as a delivered result would have become its body.
+  if (stub.role === "toolResult" && stub.toolCallId !== undefined) {
+    return { blocks: [], toolResult: { toolCallId: stub.toolCallId, ref: refOf({ kind: "tool_result" }) } };
+  }
+  const details = refOf({ kind: "custom_details", index: 1 }) ?? refOf({ kind: "custom_details" });
+  const bodies = blockBodies({ details });
+  return { blocks: [{ kind: "custom", id: `entry:${stub.id}`, ...when, customType: stub.type, text: "", details: undefined, entryId: stub.id,
+    ...(bodies ? { bodies } : {}) }] };
+}
+
 /**
  * Rebuild blocks from persisted Pi entries (session-format.md). Unknown shapes
  * are ignored.
@@ -1217,14 +1709,44 @@ const STOPPED_SHORT = new Set<string>(["aborted", "length", "error", "deferred"]
  * through the message's version picker instead. Passing no `leafId` reads the
  * last entry as the leaf, which is what the engine does on re-open.
  */
-export function blocksFromEntries(entries: unknown[], leafId?: string | null, names?: ModelNames): Block[] {
+export interface BlocksFromEntriesOptions {
+  /** Records this view points at rather than holds (RP-5b). */
+  stubs?: readonly EntryStub[] | undefined;
+  /** The revision those records were read at, so their bodies stay readable. */
+  revision?: string | undefined;
+}
+
+export function blocksFromEntries(entries: unknown[], leafId?: string | null, names?: ModelNames, options?: BlocksFromEntriesOptions): Block[] {
   const blocks: Block[] = [];
   const toolIndex = new Map<string, number>();
-  const branch = activePathIds(entries, leafId);
+  const stubs = options?.stubs ?? [];
+  const revision = options?.revision;
+  const rows = retainedRows(entries, stubs);
+  const branch = activePathIds(stubs.length === 0 ? entries : rows.map(row => row.kind === "entry" ? row.value : stubNode(row.value)), leafId);
   /** Armed by a run-started marker; the prompt that follows it is the parent's. */
   let armed: SentByParent | undefined;
-  for (const raw of entries) {
-    if (branch && !branch.has((raw as { id?: string } | null)?.id ?? "")) continue;
+  for (const row of rows) {
+    if (branch && !branch.has(row.id ?? "")) continue;
+    // A record this view only points at still has its place, its identity and
+    // the exact size of everything it carries; its bodies are read on demand.
+    if (row.kind === "stub") {
+      const built = stubBlocks(row.value, revision);
+      for (const block of built.blocks) {
+        if (block.kind === "tool") toolIndex.set(block.id, blocks.length);
+        blocks.push(block);
+      }
+      if (built.toolResult) {
+        const index = toolIndex.get(built.toolResult.toolCallId);
+        if (index !== undefined) {
+          const call = blocks[index] as Extract<Block, { kind: "tool" }>;
+          const bodies = blockBodies({ ...call.bodies, result: built.toolResult.ref });
+          blocks[index] = { ...call, result: "", done: true, ...(bodies ? { bodies } : {}) };
+        }
+      }
+      armed = undefined;
+      continue;
+    }
+    const raw = row.value;
     const e = raw as {
       type?: string;
       id?: unknown;
@@ -1244,7 +1766,8 @@ export function blocksFromEntries(entries: unknown[], leafId?: string | null, na
     // A custom message the transcript draws (an agent event, a task exit) is
     // persisted as its own entry type, with the message fields at the top.
     if (e.type === "custom_message") {
-      const block = customBlock(raw as { customType?: unknown; content?: unknown; details?: unknown }, entryTimestamp(e.timestamp));
+      const block = customBlock(raw as { customType?: unknown; content?: unknown; details?: unknown }, entryTimestamp(e.timestamp),
+        { ...(typeof e.id === "string" ? { entryId: e.id } : {}), revision });
       if (block) blocks.push(typeof e.id === "string" ? { ...block, id: `entry:${e.id}` } : block);
       continue;
     }
@@ -1269,14 +1792,19 @@ export function blocksFromEntries(entries: unknown[], leafId?: string | null, na
     const sentBy = armed;
     armed = undefined;
     if (m.role === "user") {
+      const entryId = typeof e.id === "string" ? e.id : undefined;
+      const split = splitAttached(textOf(m.content));
+      const bounded = boundUserContent(split, imagesOfContent(m.content), { entryId, revision });
       blocks.push({
         kind: "user",
-        id: typeof e.id === "string" ? `entry:${e.id}` : nextBlockId(),
+        id: entryId !== undefined ? `entry:${entryId}` : nextBlockId(),
         ...(at ? { at } : {}),
-        ...splitAttachedFiles(textOf(m.content)),
-        images: imagesOfContent(m.content),
+        text: bounded.text,
+        files: bounded.files,
+        images: bounded.images,
+        ...(bounded.bodies ? { bodies: bounded.bodies } : {}),
         ...(sentBy ? { sentBy } : {}),
-        ...(typeof e.id === "string" ? { entryId: e.id } : {}),
+        ...(entryId !== undefined ? { entryId } : {}),
       });
     } else if (m.role === "assistant") {
       const parts = Array.isArray(m.content) ? (m.content as Array<{ type?: string; text?: string; thinking?: string; id?: string; name?: string; arguments?: unknown }>) : [];
@@ -1293,33 +1821,50 @@ export function blocksFromEntries(entries: unknown[], leafId?: string | null, na
       // footer shows the same accounting the live one did.
       const usage = usageOfEntry((m as { usage?: unknown }).usage);
       if (text || thinking || stopReason || parts.some(part => part.type === "toolCall")) {
+        const entryId = typeof e.id === "string" ? e.id : undefined;
+        const prose = excerptHead(text, { entryId, component: { kind: "assistant_text" }, revision });
+        const reasoning = excerptHead(thinking, { entryId, component: { kind: "reasoning" }, revision });
+        const bodies = blockBodies({ text: prose.ref, thinking: reasoning.ref });
         blocks.push({
           kind: "assistant",
-          id: typeof e.id === "string" ? `entry:${e.id}` : nextBlockId(),
+          id: entryId !== undefined ? `entry:${entryId}` : nextBlockId(),
           ...(at ? { at } : {}),
-          text,
-          thinking,
+          text: prose.text,
+          thinking: reasoning.text,
           streaming: false,
+          ...(entryId !== undefined ? { entryId } : {}),
+          ...(bodies ? { bodies } : {}),
           ...(stopReason ? { stopReason } : {}),
           ...(errorMessage ? { errorMessage } : {}),
           ...(usage ? { usage } : {}),
         });
       }
+      let callIndex = 0;
       for (const p of parts) {
         if (p.type === "toolCall" && p.id) {
+          const entryId = typeof e.id === "string" ? e.id : undefined;
+          const args = boundValue(p.arguments, { entryId, component: { kind: "tool_args", index: callIndex }, revision });
+          callIndex += 1;
           toolIndex.set(p.id, blocks.length);
-          blocks.push({ kind: "tool", id: p.id, ...(at ? { at } : {}), name: p.name ?? "tool", args: p.arguments, done: false });
+          const bodies = blockBodies({ args: args.ref });
+          blocks.push({ kind: "tool", id: p.id, ...(at ? { at } : {}), name: p.name ?? "tool", args: args.value, done: false,
+            ...(entryId !== undefined ? { entryId } : {}), ...(bodies ? { bodies } : {}) });
         }
       }
     } else if (m.role === "custom") {
-      const block = customBlock(m as { customType?: unknown; content?: unknown; details?: unknown }, at);
+      const block = customBlock(m as { customType?: unknown; content?: unknown; details?: unknown }, at,
+        { ...(typeof e.id === "string" ? { entryId: e.id } : {}), revision });
       if (block) blocks.push(block);
     } else if (m.role === "toolResult" && m.toolCallId) {
       const i = toolIndex.get(m.toolCallId);
-      const result = storedToolResult(m);
+      const entryId = typeof e.id === "string" ? e.id : undefined;
+      const result = boundValue(storedToolResult(m), { entryId, component: { kind: "tool_result" }, revision });
       if (i !== undefined) {
         const b = blocks[i] as Extract<Block, { kind: "tool" }>;
-        blocks[i] = { ...b, result, isError: m.isError ?? false, done: true };
+        const bodies = blockBodies({ ...b.bodies, result: result.ref });
+        const { bodies: _previous, ...rest } = b;
+        blocks[i] = { ...rest, result: result.value, isError: m.isError ?? false, done: true,
+          ...(entryId !== undefined ? { entryId } : {}), ...(bodies ? { bodies } : {}) };
       }
     }
   }

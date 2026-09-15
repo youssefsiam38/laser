@@ -8,7 +8,7 @@ import { AgentEventMessage } from "./AgentEventMessage.js";
 import { TaskEventNotice } from "./TaskEventNotice.js";
 import { AGENT_COMPLETION_DATA_PART, AGENT_EVENT_DATA_PART, GOAL_DATA_PART, TASK_EVENT_DATA_PART, type AgentCompletionData } from "@/runtime/projection";
 import type { GoalRecord as GoalRecordData } from "@/runtime/goal-history";
-import { memo, useContext, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentPropsWithoutRef } from "react";
+import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentPropsWithoutRef } from "react";
 import { useTranscriptViewport } from "./transcript-viewport.js";
 import { useTranscriptPresentation } from "@/runtime/LaserProvider";
 import { MessageEditPresentation } from "@/runtime/transcript-presentation";
@@ -24,7 +24,7 @@ import { EditMessage } from "@/components/assistant-ui/elements/edit-message";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import { File } from "@/components/assistant-ui/elements/file";
 import { Image } from "@/components/assistant-ui/elements/image";
-import { MarkdownText } from "@/components/assistant-ui/elements/markdown-text";
+import { ExcerptedMessage, MarkdownText } from "@/components/assistant-ui/elements/markdown-text";
 import { MessageActions } from "@/components/assistant-ui/elements/message-actions";
 import { MessageImages, MessageAttachments, type MessageAttachmentItem } from "@/components/assistant-ui/elements/message-attachment";
 import { MessageBranches } from "@/components/assistant-ui/elements/message-branches";
@@ -41,6 +41,11 @@ import { readProviderFailure } from "./provider-error.js";
 import { StreamingText } from "@/components/assistant-ui/elements/streaming-text";
 import { ActivityReasoning, ToolGroup } from "@/components/assistant-ui/elements/tool-group.aui";
 import { useCopy } from "@/hooks/use-copy";
+import { bodyReadMessage, canCopyWholeBody, copyWholeBody, readAttachment, streamBody } from "@/runtime/body-reader";
+import type { ActionReservation } from "@/runtime/view-cache";
+import { EDITABLE_TEXT_MAX_BYTES, utf8ByteLength } from "@lasercode/protocol";
+import { isReadable, omittedBytes } from "@/runtime/body-excerpt";
+import { partial } from "./LargeBodyViewer.js";
 import { duration as formatDuration } from "@/format";
 import { cn } from "@/lib/utils";
 import { NOTICE_DATA_PART, sessionTitle, useLaserStable, useLaserState } from "@/runtime";
@@ -49,6 +54,11 @@ import { THINKING_LEVELS, useSupportedThinkingLevels } from "@/components/assist
 import { useElapsed } from "./timing.js";
 import { toolGroupKey } from "./tool-groups.js";
 import { ToolRow } from "./ToolRow.js";
+import { AttachmentOverflow, usePromptAttachments, usePromptEdit, useHonestCopy } from "./prompt-actions.js";
+import { BodyOverflow } from "./BodyOverflow.js";
+import { useImageBodies } from "./use-image-bodies.js";
+import type { BodyRef } from "@/runtime/body-excerpt";
+import type { BlockBodies, FileOverflow } from "@/store";
 import { ApiRequestDialog } from "@/components/logs/ApiRequestDialog";
 
 /** `metadata.custom.laser` the projection stamps on every message. */
@@ -57,6 +67,8 @@ interface LaserMeta {
   kind?: "user" | "turn" | "notice" | "custom";
   images?: readonly ImageContent[];
   files?: readonly AttachedFile[];
+  /** Attachments this prompt has beyond the chips shown (RP-5b §2). */
+  fileOverflow?: FileOverflow;
   optimistic?: boolean;
   userOrdinal?: number;
   prompt?: { ordinal: number; entryId?: string };
@@ -66,6 +78,8 @@ interface LaserMeta {
   /** Set when a parent agent, not the person, sent this prompt into a child session. */
   sentBy?: { parentPath: string; runId?: string };
   level?: "info" | "warning" | "error";
+  /** RP-5b: bodies this window holds an excerpt of, and where the rest is. */
+  bodies?: BlockBodies | readonly { label: string; body: BodyRef }[];
   /** Which agent produced this message, when the session is a child run. */
   speaker?: Speaker;
 }
@@ -166,7 +180,15 @@ export function UserMessage() {
   const { actions } = useLaserStable();
   const text = useMessageText();
   const images = useAuiState((s) => laserMeta(s.message).images ?? EMPTY_IMAGES);
+  // RP-5b: a very long prompt keeps its start here and the rest with the
+  // conversation; the row says so rather than showing a silent cut.
+  const promptBodies = useAuiState((s) => {
+    const bodies = laserMeta(s.message).bodies;
+    return Array.isArray(bodies) ? undefined : bodies as BlockBodies | undefined;
+  });
+  const imageSource = useImageBodies(useSessionPath(), images, promptBodies);
   const files = useAuiState((s) => laserMeta(s.message).files ?? EMPTY_FILES);
+  const fileOverflow = useAuiState((s) => laserMeta(s.message).fileOverflow);
   const optimistic = useAuiState((s) => laserMeta(s.message).optimistic === true);
   const goalSetter = useAuiState((s) => laserMeta(s.message).goalSetter === true);
   // A primitive, so the selector keeps its identity across re-renders.
@@ -177,10 +199,11 @@ export function UserMessage() {
   const leafId = useLeafId();
   const userOffset = useUserOffset();
   const partialHistory = usePartialHistory();
-  const { copied, copy } = useCopy();
   const id = useAuiState(s => s.message.id);
   const presentation = useTranscriptPresentation();
   const viewport = useTranscriptViewport();
+  const { copied, copying, partial: copiedPartial, copy: copyMessage } = useHonestCopy(path, text, promptBodies?.text);
+  const { copy: copyText } = useCopy();
   const editOwner = useMemo(() => (path ? presentation.edit(path, id) : undefined) ?? new MessageEditPresentation(text), [presentation, path, id]);
   const { editing, draft, sending } = useSyncExternalStore(editOwner.subscribe, editOwner.getSnapshot, editOwner.getSnapshot);
   const setDraft = (draft: string) => editOwner.update({ draft });
@@ -189,6 +212,7 @@ export function UserMessage() {
     if (path) { if (editing) presentation.rememberEdit(path, id, editOwner); else presentation.releaseEdit(path, id); }
   };
   const setSending = (sending: boolean) => editOwner.update({ sending });
+  const { editRefusal, rebuildForEdit, releaseEditRoom, rebuiltFiles, editAttempt } = usePromptEdit({ path, setDraft, setEditing, editOwner });
   const [requestOpen, setRequestOpen] = useState(false);
   useLayoutEffect(() => editing || requestOpen ? viewport.pin(id) : undefined, [viewport, id, editing, requestOpen]);
   const requestAt = useAuiState(s => s.message.createdAt?.toISOString());
@@ -217,11 +241,31 @@ export function UserMessage() {
   const versionIndex = entryId ? versions.indexOf(entryId) : -1;
   const { quote, rest } = useMemo(() => splitLeadingQuote(text), [text]);
   const opener = useFileOpener();
+  const { problem: attachmentProblem, openRegionFile, openAttachment } = usePromptAttachments({ path, files, refs: promptBodies?.files, opener });
+  // Is this prompt only shown in part? Anything copied out of it says so.
+  const promptExcerpted = promptBodies?.text !== undefined && omittedBytes(promptBodies.text) > 0;
+  const { client } = useLaserStable();
+  const environmentKey = useLaserState(s => s.environment?.environmentKey) ?? "";
+  /**
+   * Open one attachment chip. A file this window is holding opens as it is; one
+   * it only points at is read back from its authority, verified whole against
+   * the digest that authority published for it, and unescaped only then —
+   * never shown from an excerpt or from empty retained bytes (RP-5b §2).
+   */
   const attachments = useMemo<MessageAttachmentItem[]>(
     () => files.map((file, index) => ({ id: String(index), name: file.name, kind: "document", detail: `${describeMediaType(file.mediaType)} · ${formatBytes(file.size)}` })),
     [files],
   );
-  const editContent = () => [{ type: "text" as const, text: [draft, ...files.map(wrapFileAttachment)].filter(Boolean).join("\n\n") }, ...images];
+  /**
+   * What an edit sends: the prose in the box, and the attachments this prompt
+   * had — the ones this window is holding, or the ones it rebuilt and verified
+   * — wrapped exactly once. A chip whose content this window never had is
+   * never sent as an empty wrapper (RP-5b §2).
+   */
+  const editContent = () => {
+    const attachments = rebuiltFiles.current ?? files.filter((file) => file.content !== "");
+    return [{ type: "text" as const, text: [draft, ...attachments.map(wrapFileAttachment)].filter(Boolean).join("\n\n") }, ...images];
+  };
 
   // The engine will not move the leaf while a turn streams, so during one
   // each of these asks the worker to stop the reply first and then move —
@@ -231,11 +275,26 @@ export function UserMessage() {
   const move = { stopFirst: busy };
   const fork = entryId ? () => { viewport.startAction(); void actions.fork(entryId, move); } : undefined;
   const jump = entryId ? () => { viewport.startAction(); void actions.jump(entryId, move); } : undefined;
-  const copyPath = path ? () => void copy(path) : undefined;
+  const copyPath = path ? () => void copyText(path) : undefined;
+  /**
+   * Editing a prompt this window is only showing part of (RP-5b §2).
+   *
+   * The editor holds the whole message, so the whole message has to fit: room
+   * is taken from the renderer's own accounting first, then the body is read
+   * back at one revision in bounded slices and verified as a whole, and only a
+   * verified body is turned into a draft and its attachments. Nothing is ever
+   * edited from an excerpt, and if the room is not there the action says so and
+   * changes nothing.
+   */
   const startEdit = entryId
     ? () => {
-        setDraft(text);
-        setEditing(true);
+        const body = promptBodies?.text;
+        if (!body || omittedBytes(body) <= 0) {
+          setDraft(text);
+          setEditing(true);
+          return;
+        }
+        void rebuildForEdit(body);
       }
     : undefined;
   /**
@@ -258,12 +317,14 @@ export function UserMessage() {
         if (!(await actions.navigate(entryId, move))) return;
         await actions.send(editContent(), "prompt");
         setEditing(false);
+        releaseEditRoom();
         void viewport.afterAction(location);
         return;
       }
       await actions.fork(entryId, move);
       await actions.send(editContent(), "prompt");
       setEditing(false);
+      releaseEditRoom();
       clearHandedBackPrompt(aui, [text, ...files.map(wrapFileAttachment)].filter(Boolean).join("\n\n"));
     } finally {
       setSending(false);
@@ -279,13 +340,15 @@ export function UserMessage() {
             onValueChange={setDraft}
             onSend={() => void sendEdit("here")}
             onSendInNewSession={() => void sendEdit("fork")}
-            onCancel={() => setEditing(false)}
+            onCancel={() => { editAttempt.current += 1; releaseEditRoom(); setEditing(false); }}
             laterMessages={laterMessages}
             stopsReply={busy}
             busy={sending}
           />
         ) : (
+          <ExcerptedMessage value={promptExcerpted}>
           <UserBubble
+            data-excerpted={promptExcerpted || undefined}
             data-sent-by={parentPath ? "parent" : undefined}
             className={cn(
               optimistic && "opacity-70",
@@ -296,15 +359,31 @@ export function UserMessage() {
           >
             {parentPath ? <ParentTask parentPath={parentPath} /> : null}
             {goalSetter && <span className="mb-1 flex items-center gap-1.5 text-xs font-medium text-ink-2"><Target className="size-3.5 text-live" aria-hidden="true" />Goal set</span>}
-            <MessageImages images={images} onOpen={opener ? (index, trigger) => opener.openFile({ file: attachmentFile(images[index]!, `Image ${index + 1}`) }, trigger) : undefined} />
+            <MessageImages images={images} sourceFor={imageSource} onOpen={opener ? (index, trigger) => {
+              const image = images[index]!;
+              // A picture this window rebuilt is opened from the pool's own
+              // blob; only a genuinely inline image has bytes to hand over.
+              const picture = imageSource.pictureFor?.(index, `Image ${index + 1}`);
+              opener.openFile(picture ?? { file: attachmentFile(image, `Image ${index + 1}`) }, trigger);
+            } : undefined} />
             {quote ? <QuoteReply text={quote} /> : null}
             {rest ? (
               <p className="wrap-break-word whitespace-pre-wrap">
                 <DirectiveString text={rest} />
               </p>
             ) : null}
-            <MessageAttachments attachments={attachments} className="mt-2 self-end" onOpen={opener ? (id, trigger) => opener.openFile({ file: attachedFileContent(files[Number(id)]!) }, trigger) : undefined} />
+            <MessageAttachments attachments={attachments} className="mt-2 self-end" onOpen={opener ? (id, trigger) => void openAttachment(Number(id), trigger) : undefined} />
+            {attachmentProblem ? <p role="alert" className="mt-1 self-end text-xs text-ink-2">{attachmentProblem}</p> : null}
+            {editRefusal ? <p role="alert" data-slot="edit-refusal" className="mt-1 self-end text-xs text-ink-2">{editRefusal}</p> : null}
+            <AttachmentOverflow
+              overflow={fileOverflow}
+              body={promptBodies?.text}
+              path={path}
+              onOpen={opener ? (file: { name: string; mediaType: string; ref: BodyRef }, trigger: HTMLElement) => void openRegionFile(file, trigger) : undefined}
+            />
+            <BodyOverflow body={promptBodies?.text} path={path} label="message" />
           </UserBubble>
+          </ExcerptedMessage>
         )}
         <MessageFooter className="ms-0 me-0 h-auto min-h-6 justify-end">
           <MessageBranches
@@ -329,8 +408,9 @@ export function UserMessage() {
           <MessageActions
             onLoadHistory={partialHistory ? () => void actions.loadAllEntries() : undefined}
             className={hoverReveal}
-            copied={copied}
-            onCopy={() => void copy(text)}
+            copied={copied || copiedPartial}
+            copyLabel={copying ? "Copying the whole message…" : copiedPartial ? "Copied what is shown" : undefined}
+            onCopy={() => void copyMessage()}
             onEdit={startEdit}
             onFork={fork}
             onJump={jump}
@@ -419,8 +499,27 @@ function stopReason(reason: string, detail: string | undefined): { reason: strin
   }
 }
 
+/** One row per reply or reasoning trace this window is holding an excerpt of. */
+function TurnOverflow() {
+  const path = useSessionPath();
+  const rows = useAuiState(s => {
+    const bodies = laserMeta(s.message).bodies;
+    return Array.isArray(bodies) ? bodies as readonly { label: string; body: BodyRef }[] : EMPTY_BODIES;
+  });
+  if (rows.length === 0) return null;
+  return <>{rows.map((row, index) => <BodyOverflow key={`${row.label}:${index}`} body={row.body} path={path} label={row.label} />)}</>;
+}
+
+const EMPTY_BODIES: readonly { label: string; body: BodyRef }[] = [];
+
 export function AssistantMessage() {
   const searchReveal = useSearchReveal();
+  // Is this reply only shown in part? Code copied out of it must say so.
+  const excerpted = useAuiState((s) => {
+    const bodies = laserMeta(s.message).bodies;
+    const text = Array.isArray(bodies) ? undefined : (bodies as BlockBodies | undefined)?.text;
+    return text !== undefined && omittedBytes(text) > 0;
+  });
   const streaming = useAuiState((s) => s.message.role === "assistant" && s.message.status?.type === "running");
   // Notices and the custom messages the transcript draws (agent events, task
   // exits) are records, not replies: no actions, no regenerate, a clock only.
@@ -444,7 +543,11 @@ export function AssistantMessage() {
   return (
     <MessageRoot data-role="assistant" data-search-selected={searchReveal || undefined} data-streaming={streaming || undefined} className={cn("group/message flex flex-col", MESSAGE_ROOT)}>
       {speaker ? <SpeakerIdentity {...speaker} /> : null}
+      {/* A reply this window is only showing part of: code copied out of it
+          says so in its own bytes (RP-5b §2). */}
+      <ExcerptedMessage value={excerpted}>
       <AssistantBody streaming={streaming}>
+        <TurnOverflow />
         <MessagePrimitive.GroupedParts groupBy={groupBy} indicator="empty">
           {({ part, children }) => {
             switch (part.type) {
@@ -506,6 +609,7 @@ export function AssistantMessage() {
           }}
         </MessagePrimitive.GroupedParts>
       </AssistantBody>
+      </ExcerptedMessage>
       {stopped ? <AssistantStopped {...stopped} /> : null}
       {!isNotice && !streaming ? <AssistantFooter /> : null}
       {isNotice && !streaming ? (
@@ -574,8 +678,15 @@ function AssistantFooter() {
   const viewport = useTranscriptViewport();
   const { actions } = useLaserStable();
   const text = useMessageText();
-  const { copied, copy } = useCopy();
   const path = useSessionPath();
+  // The reply this row shows may be an excerpt of a much larger one; copying it
+  // goes through the authority and is verified, or is marked (RP-5b).
+  const replyBody = useAuiState((s) => {
+    const bodies = laserMeta(s.message).bodies;
+    return Array.isArray(bodies) ? undefined : (bodies as BlockBodies | undefined)?.text;
+  });
+  const { copied, copying, partial: copiedPartial, copy: copyMessage } = useHonestCopy(path, text, replyBody);
+  const { copy } = useCopy();
   const entries = useEntries();
   const leafId = useLeafId();
   const userOffset = useUserOffset();
@@ -619,8 +730,9 @@ function AssistantFooter() {
       <MessageActions
         onLoadHistory={partialHistory ? () => void actions.loadAllEntries() : undefined}
         className={hoverReveal}
-        copied={copied}
-        onCopy={() => void copy(text)}
+        copied={copied || copiedPartial}
+        copyLabel={copying ? "Copying the whole reply…" : copiedPartial ? "Copied what is shown" : undefined}
+        onCopy={() => void copyMessage()}
         onCopyPath={path ? () => void copy(path) : undefined}
         onRegenerate={promptEntryId ? () => void rerun("here") : undefined}
         onRegenerateFork={promptEntryId ? () => void rerun("fork") : undefined}

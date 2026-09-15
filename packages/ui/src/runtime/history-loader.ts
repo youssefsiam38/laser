@@ -1,6 +1,9 @@
 import { ErrorCodes, type ClientRequests, type HistoryWindow, type HistoryWindowRequest, type SessionUpdateParams } from "@lasercode/protocol";
 import type { applyUpdate, blocksFromEntries, modelNamesOf, stampNewBlocks, textOf, Action, Block, SessionView, ValidatedRevision } from "../store.js";
 import { awake } from "../view-summary.js";
+import { retainEntries, stubOfElided, mergeStubs, type EntryStub } from "./retained-entries.js";
+import { BODY_EXCERPT_MAX_BYTES, tailOfParts, type BodyRef } from "./body-excerpt.js";
+
 import { deepEqual } from "./projection.js";
 
 export type HistoryAction =
@@ -52,6 +55,12 @@ function sessionIdOf(view: SessionView): string | undefined {
 
 export const hasCompleteTree = (view: SessionView | undefined): boolean =>
   view?.history ? view.history.complete && !view.history.branchesUnloaded : Boolean(view?.hydrated);
+
+/** The bodies a live message is only holding the tail of, if any. */
+function liveBodies(text: BodyRef | undefined, thinking: BodyRef | undefined): { text?: BodyRef; thinking?: BodyRef } | undefined {
+  if (!text && !thinking) return undefined;
+  return { ...(text ? { text } : {}), ...(thinking ? { thinking } : {}) };
+}
 
 /** User/tool ids are canonical. Only assistants lack persisted ids in live events. */
 function shareHistoryBlocks(next: Block[], previous: Block[]): Block[] {
@@ -122,7 +131,10 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
       // message this surface has already sent is not history and stays.
       if (v.historyPending?.token !== action.token) return v;
       const { history: _window, historyRevision: _revision, ...rest } = v;
-      return { ...awake(rest as SessionView), entries: [], blocks: v.blocks.filter(block => block.kind === "user" && block.optimistic), hydrated: false };
+      // A fresh authoritative read replaces what a trim released, cursor and
+      // all: this view is what the authority just said it is (RP-5b).
+      const { trimmed: _trimmed, ...reset } = rest as SessionView;
+      return { ...awake(reset as SessionView), entries: [], stubs: [], blocks: v.blocks.filter(block => block.kind === "user" && block.optimistic), hydrated: false };
     }
     case "historyEnd": return v.historyPending?.token === action.token ? { ...v, historyPending: undefined } : v;
     case "historySnapshot": {
@@ -135,18 +147,31 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
       // into that tree so known siblings remain immediately navigable. A new
       // epoch or an authoritative complete snapshot still replaces the cache.
       const retainTree = !action.replaceWindow && oldEpoch === window.epoch && hasCompleteTree(v) && (!window.complete || window.branchesUnloaded);
-      const entries = retainTree ? [...new Map([...v.entries, ...action.entries].map(entry => [(entry as { id: string }).id, entry])).values()] : action.entries;
+      // RP-5b: records larger than this view may hold are pointed at, never
+      // rewritten, and the producer's own elisions fold in the same way.
+      const incoming = retainEntries(action.entries);
+      const elided = (action.window.elided ?? []).map(stubOfElided);
+      const entries = retainTree ? [...new Map([...v.entries, ...incoming.entries].map(entry => [(entry as { id: string }).id, entry])).values()] : incoming.entries;
+      const stubs = retainTree ? mergeStubs(v.stubs ?? [], [...incoming.stubs, ...elided]) : [...incoming.stubs, ...elided];
       const history = retainTree ? { ...window, complete: true, branchesUnloaded: false, userOffset: 0, context: [], priorGoalIds: [] } : window;
       if (retainTree) delete history.before;
-      let next: SessionView = { ...awake(v), entries, leafId: action.leafId, history, hydrated: true, validated: validatedOf(window, v),
+      const { trimmed: _released, ...base } = v;
+      let next: SessionView = { ...awake(base as SessionView), entries, stubs, leafId: action.leafId, history, hydrated: true, validated: validatedOf(window, v),
         historyRevision: action.replaceWindow ? action.token : v.historyRevision,
-        blocks: blocksFromEntries(entries, action.leafId, modelNamesOf(v.state)),
+        blocks: blocksFromEntries(entries, action.leafId, modelNamesOf(v.state), { stubs, revision: window.revision }),
         running: live?.running ?? v.running, lastSeq: action.window.seq, updateEpoch: history.epoch, pendingSentBy: undefined, historyPending: undefined };
       if (live?.message) {
+        // A turn in flight can be megabytes, and it arrives beside a page this
+        // view has already bounded. It goes through the same live tail as a
+        // streamed one: newest bytes kept, the rest counted and readable when
+        // the turn is written. No durable identity is invented for it.
         const message = live.message.value as { content?: unknown };
-        const parts = Array.isArray(message.content) ? message.content as { type?: string; thinking?: string }[] : [];
-        next.blocks.push({ kind: "assistant", id: live.message.id, text: textOf(message.content),
-          thinking: parts.filter(p => p.type === "thinking").map(p => p.thinking ?? "").join(""), streaming: true,
+        const parts = Array.isArray(message.content) ? message.content as { type?: string; text?: string; thinking?: string }[] : [];
+        const prose = tailOfParts(parts.filter(part => part.type === "text").map(part => part.text ?? ""), { component: { kind: "assistant_text" } });
+        const reasoning = tailOfParts(parts.filter(part => part.type === "thinking").map(part => part.thinking ?? ""), { component: { kind: "reasoning" } });
+        const bodies = liveBodies(prose.ref, reasoning.ref);
+        next.blocks.push({ kind: "assistant", id: live.message.id, text: prose.text, thinking: reasoning.text, streaming: true,
+          ...(bodies ? { bodies } : {}),
           ...(live.message.speaker ? { speaker: live.message.speaker } : {}) });
       }
       for (const tool of live?.tools ?? []) {
@@ -178,29 +203,35 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
       // Splicing a new continuation at its parent would put it before older
       // siblings abandoned by an edit, reversing their version numbers.
       // Replace known records in place and append only newly persisted ids.
-      const entries = [...new Map([...v.entries, ...action.entries].map(entry => [(entry as { id: string }).id, entry])).values()];
+      const incoming = retainEntries(action.entries);
+      const entries = [...new Map([...v.entries, ...incoming.entries].map(entry => [(entry as { id: string }).id, entry])).values()];
+      const stubs = mergeStubs(v.stubs ?? [], [...incoming.stubs, ...(action.window.elided ?? []).map(stubOfElided)]);
       const { live: _live, before: _before, ...history } = action.window;
       const merged = v.history ? { ...v.history, seq: history.seq, hasHistory: v.history.hasHistory || history.hasHistory } : { ...history, userOffset: 0, context: [], priorGoalIds: [], complete: true };
       // The merged set spans this read and what was already held. That is one
       // describable state only when both came from the same durable revision;
       // across revisions the tuple would name entries it does not cover.
-      return adopt({ ...v, entries, leafId: action.leafId, history: merged }, v, action.window);
+      return adopt({ ...v, entries, stubs, leafId: action.leafId, history: merged }, v, action.window);
     }
     case "historyPrepend": {
       if (v.historyRevision !== action.revision || v.history?.before !== action.before || v.history.epoch !== action.window.epoch) return v;
-      const ids = new Set(v.entries.map(e => (e as { id?: string }).id));
-      const entries = action.entries.filter(e => !ids.has((e as { id?: string }).id));
+      const ids = new Set([...v.entries.map(e => (e as { id?: string }).id), ...(v.stubs ?? []).map(stub => stub.id)]);
+      const incoming = retainEntries(action.entries.filter(e => !ids.has((e as { id?: string }).id)));
+      const entries = incoming.entries;
+      const stubs = mergeStubs([...incoming.stubs, ...(action.window.elided ?? []).map(stubOfElided)], v.stubs ?? []);
       const { live: _live, ...history } = action.window;
       // The page plus the existing suffix covers the branch exactly when no
       // earlier cursor remains. Alternative versions are a separate scope.
-      return adopt({ ...v, history: { ...history, complete: history.before === undefined }, entries: [...entries, ...v.entries],
-        blocks: [...blocksFromEntries(entries, undefined, modelNamesOf(v.state)), ...v.blocks] }, v, action.window);
+      return adopt({ ...v, history: { ...history, complete: history.before === undefined }, entries: [...entries, ...v.entries], stubs,
+        blocks: [...blocksFromEntries(entries, undefined, modelNamesOf(v.state), { stubs: incoming.stubs, revision: action.window.revision }), ...v.blocks] }, v, action.window);
     }
   }
 }
 
 interface HistoryLoaderDeps {
   get(path: string): SessionView | undefined;
+  /** Whether this is the conversation on screen (RP-5b §7). */
+  isCurrent(path: string): boolean;
   request(params: ClientRequests["pi/session/entries"]["params"]): Promise<ClientRequests["pi/session/entries"]["result"]>;
   dispatch(action: Action): void;
   adoptEpoch(path: string, seq: number): void;
@@ -214,8 +245,15 @@ let nextToken = 0;
 export type HistoryReads = ReturnType<typeof createHistoryLoader>;
 
 /** One request owner for tail/all reads, generation adoption and cursor recovery. */
+/** How many reads one trim stamp may ever spend (RP-5b §7). */
+export const RECONCILE_MAX_READS = 2;
+/** The window a reconciliation asks for: the conversation's recent tail. */
+const HISTORY_TAIL = 40;
+
 export function createHistoryLoader(deps: HistoryLoaderDeps) {
   const reads = new Map<string, Promise<void>>();
+  /** The stamp a reconciliation is in flight for, per path. */
+  const reconciling = new Map<string, string>();
   const generations = new Map<string, number>();
   const fence = (path: string, accepting: () => boolean) => {
     const generation = generations.get(path) ?? 0;
@@ -247,9 +285,13 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     const work = (async () => {
       const anchor = policy === "recent" ? undefined : deps.get(path)?.history?.anchor;
       const window: HistoryWindowRequest = policy === "recent" ? { tail: 40 } : all ? { all: true } : anchor ? { from: anchor } : { tail: 40 };
-      const result = await deps.request({ path, window }).catch(error => {
+      // RP-5b: this surface cannot hold a body larger than its excerpt bound,
+      // so every page it asks for leaves those bodies out and lists the records
+      // that carry them — which is also what lets a page of a conversation with
+      // one enormous turn still carry the turns around it.
+      const result = await deps.request({ path, window, bodyLimit: BODY_EXCERPT_MAX_BYTES }).catch(error => {
         if (!("from" in window) || (error as { code?: number }).code !== ErrorCodes.InvalidParams) throw error;
-        return deps.request({ path, window: { tail: 40 } });
+        return deps.request({ path, window: { tail: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES });
       });
       const current = deps.get(path);
       if (!active() || !current || current.historyPending?.token !== token) return;
@@ -278,7 +320,7 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     const before = deps.get(path)?.history?.before;
     const revision = deps.get(path)?.historyRevision;
     if (!before || !active()) return false;
-    const result = await deps.request({ path, window: { before, limit: 40 } }).catch(async error => {
+    const result = await deps.request({ path, window: { before, limit: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES }).catch(async error => {
       if (!active()) return undefined;
       if ((error as { code?: number }).code !== ErrorCodes.InvalidParams) throw error;
       await read(path, false, active); return undefined;
@@ -292,7 +334,7 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     if (!active()) return;
     const from = deps.get(path)?.leafId;
     const revision = deps.get(path)?.historyRevision;
-    const result = await deps.request({ path, window: from ? { from } : { all: true } }).catch(async error => {
+    const result = await deps.request({ path, window: from ? { from } : { all: true }, bodyLimit: BODY_EXCERPT_MAX_BYTES }).catch(async error => {
       if (!active()) return undefined;
       if ((error as { code?: number }).code !== ErrorCodes.InvalidParams) throw error;
       await read(path, false, active); return undefined;
@@ -309,5 +351,63 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     await read(path, true, accepting);
   };
   const recent = (path: string, accepting: () => boolean, legacySeq?: number) => read(path, false, accepting, legacySeq, "recent");
-  return { read, recent, all, earlier, metadata, ensure };
+  /**
+   * Replace what a trim released, if the replacement really contains what the
+   * surface is standing on (RP-5b §7).
+   *
+   * One read per trim stamp, and one more at the first safe moment if the
+   * first did not contain them — never a third for the same stamp. The page is
+   * committed in one transaction or discarded entirely; nothing of a refused
+   * page is kept beside a view that is already at its bound.
+   */
+  const reconcile = async (path: string, accepting: () => boolean = () => true): Promise<void> => {
+    // Only the conversation on screen. One that is not rehydrates when a
+    // person comes back to it, through the ordinary re-entry read.
+    if (!deps.isCurrent(path)) return;
+    const eligible = (): string | undefined => {
+      const stamp = deps.get(path)?.trimmed;
+      if (!stamp) return undefined;
+      // Two reads for one stamp, and that is all: the one at the trim, and one
+      // at the first safe moment after it. A person asking is one of the two,
+      // not an exception to them.
+      if ((stamp.reads ?? 0) >= RECONCILE_MAX_READS) return undefined;
+      if (reconciling.get(path) === stamp.at) return undefined;
+      return stamp.at;
+    };
+    if (eligible() === undefined) return;
+    // One at a time, and never beside another history read.
+    const pending = reads.get(path);
+    if (pending) await pending.catch(() => {});
+    // That read may have replaced the trim, or spent the stamp, or left this
+    // surface somewhere else entirely: everything is asked again before a
+    // request of our own goes out (RP-5b B2).
+    if (!deps.isCurrent(path)) return;
+    const at = eligible();
+    if (at === undefined) return;
+    reconciling.set(path, at);
+    const active = fence(path, accepting);
+    const token = String(++nextToken);
+    // The updates that arrive while this is in flight are buffered by the
+    // canonical fold rather than lost.
+    deps.dispatch({ type: "historyBegin", path, token });
+    try {
+      const result = await deps.request({ path, window: { tail: HISTORY_TAIL }, bodyLimit: BODY_EXCERPT_MAX_BYTES });
+      if (!active() || deps.get(path)?.trimmed?.at !== at) {
+        deps.dispatch({ type: "historyEnd", path, token });
+        return;
+      }
+      if (!result.window) {
+        deps.dispatch({ type: "views/reconcileFailed", path, at, token });
+        return;
+      }
+      deps.dispatch({ type: "views/reconcile", path, at, token, entries: result.entries, leafId: result.leafId, window: result.window });
+    } catch {
+      if (active() && deps.get(path)?.trimmed?.at === at) deps.dispatch({ type: "views/reconcileFailed", path, at, token });
+      else deps.dispatch({ type: "historyEnd", path, token });
+    } finally {
+      if (reconciling.get(path) === at) reconciling.delete(path);
+    }
+  };
+
+  return { read, recent, all, earlier, metadata, ensure, reconcile };
 }

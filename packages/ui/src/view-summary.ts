@@ -7,7 +7,7 @@
  *
  * Pure: no React, no DOM.
  */
-import type { SessionView } from "./store.js";
+import type { Block, SessionView } from "./store.js";
 
 /** Why a view's transcript was released. Reported, never guessed. */
 export type EvictionReason = "count" | "bytes" | "pressure";
@@ -116,6 +116,7 @@ export function dehydrateView(view: SessionView, reason: EvictionReason, at: str
     ...rest,
     blocks: [],
     entries: [],
+    stubs: [],
     hydrated: false,
     namerLabels: {},
     summary: summaryOfView(view),
@@ -133,4 +134,135 @@ export function awake<T extends SessionView>(view: T): T {
   if (view.dormant === undefined) return view;
   const { dormant: _gone, ...rest } = view;
   return rest as T;
+}
+
+/**
+ * Release the **older settled part** of one view, keeping the newest turns
+ * (RP-5b).
+ *
+ * This is what makes the per-view byte bound true for a conversation somebody
+ * is using: a view that is pinned — current, running, holding a question,
+ * holding a draft — is never dehydrated, so without this it could grow without
+ * limit. It is not eviction: the session stays open, its transcript stays on
+ * screen, and everything the person is doing with it is untouched.
+ *
+ * Never released: the streaming turn, a row carrying a question or an
+ * approval, the person's own unsent prompt, and the rows the caller names as
+ * anchored (the message the viewport sits on and the focused one). Goal
+ * records, drafts, the tray, the queue and every identity are untouched.
+ *
+ * `userOffset` rises by exactly the prompts that went, so ordinals, "the first
+ * message of this conversation" and every message action keep their meaning;
+ * the page cursor is dropped rather than invented, because only a producer can
+ * mint one. What was released is read again through the ordinary bounded tail
+ * read, exactly like re-entering a released conversation.
+ */
+export interface TrimOptions {
+  /** Exact UTF-8 bytes of hydrated content this view may keep. */
+  keepBytes: number;
+  /** Exact bytes of one block, from the same estimator the cache uses. */
+  measure: (block: Block) => number;
+  /** Rows that must not be released whatever their age. */
+  anchored?: ReadonlySet<string> | undefined;
+  /** Entry ids carrying a question or an approval. */
+  answerable?: ReadonlySet<string> | undefined;
+  /**
+   * What the surface is standing on: identity strings only, carried into the
+   * stamp so a replacement page can be checked against them (RP-5b §7).
+   */
+  standing?: { anchorEntryId?: string; focusedEntryId?: string; actionTargetEntryIds?: readonly string[] } | undefined;
+}
+
+export interface TrimResult {
+  view: SessionView;
+  releasedBlocks: number;
+  releasedBytes: number;
+  releasedPrompts: number;
+}
+
+export function trimView(view: SessionView, options: TrimOptions, at: string): TrimResult {
+  const none: TrimResult = { view, releasedBlocks: 0, releasedBytes: 0, releasedPrompts: 0 };
+  if (view.dormant !== undefined) return none;
+  const keep = Math.max(0, options.keepBytes);
+  const sizes = view.blocks.map(options.measure);
+  const total = sizes.reduce((sum, bytes) => sum + bytes, 0);
+  if (total <= keep) return none;
+
+  // Walk from the newest backwards, keeping whole turns until the budget is
+  // spent; a turn starts at the prompt that began it.
+  const held = new Set<number>();
+  let bytes = 0;
+  let cut = view.blocks.length;
+  for (let index = view.blocks.length - 1; index >= 0; index--) {
+    const block = view.blocks[index]!;
+    const keepAlways = isUnreleasable(block, options);
+    const next = bytes + sizes[index]!;
+    if (!keepAlways && next > keep && index < view.blocks.length - 1) { cut = index + 1; break; }
+    bytes = next;
+    held.add(index);
+    cut = index;
+  }
+  // Anything above the cut that must not be released stays where it is.
+  for (let index = 0; index < cut; index++) if (isUnreleasable(view.blocks[index]!, options)) held.add(index);
+  if (held.size === view.blocks.length) return none;
+
+  const blocks = view.blocks.filter((_, index) => held.has(index));
+  const releasedPrompts = view.blocks.filter((block, index) => !held.has(index) && block.kind === "user").length;
+  const releasedBytes = sizes.reduce((sum, size, index) => held.has(index) ? sum : sum + size, 0);
+  // Only the records of the rows that were actually released go with them. A
+  // record whose row carries no entry id — a turn this surface watched arrive
+  // and has not read back yet — is nobody's to drop.
+  const releasedIds = new Set(view.blocks.flatMap((block, index) =>
+    held.has(index) ? [] : entryIdOf(block) ? [entryIdOf(block)!] : []));
+  const entries = view.entries.filter(entry => !releasedIds.has(idOfEntry(entry) ?? ""));
+  const stubs = (view.stubs ?? []).filter(stub => !releasedIds.has(stub.id));
+  const anchor = entries.length > 0 ? idOfEntry(entries[0]) : undefined;
+  const { history, ...rest } = view;
+  let window: SessionView["history"];
+  if (history) {
+    // A cursor is the producer's to mint; this view simply no longer has one.
+    const { before: _cursor, anchor: _anchor, ...page } = history;
+    window = { ...page, complete: false, userOffset: history.userOffset + releasedPrompts, ...(anchor !== undefined ? { anchor } : {}) };
+  }
+  const trimmed: SessionView = {
+    ...rest,
+    blocks,
+    entries,
+    stubs,
+    ...(window ? { history: window } : {}),
+    trimmed: {
+      at,
+      prompts: releasedPrompts,
+      // Tens of bytes, measured with the view like everything else it keeps.
+      ...(options.standing || view.leafId !== undefined
+        ? {
+            identities: {
+              ...(options.standing?.anchorEntryId ? { anchorEntryId: options.standing.anchorEntryId } : {}),
+              ...(options.standing?.focusedEntryId ? { focusedEntryId: options.standing.focusedEntryId } : {}),
+              ...(options.standing?.actionTargetEntryIds?.length ? { actionTargetEntryIds: [...options.standing.actionTargetEntryIds] } : {}),
+              ...(view.leafId !== undefined ? { leafId: view.leafId } : {}),
+            },
+          }
+        : {}),
+    },
+  };
+  return { view: trimmed, releasedBlocks: view.blocks.length - blocks.length, releasedBytes, releasedPrompts };
+}
+
+function isUnreleasable(block: Block, options: TrimOptions): boolean {
+  if (block.kind === "user" && block.optimistic === true) return true;
+  if (block.kind === "assistant" && block.streaming) return true;
+  if (block.kind === "tool" && !block.done) return true;
+  const id = entryIdOf(block);
+  if (id !== undefined && (options.anchored?.has(id) || options.answerable?.has(id))) return true;
+  return options.anchored?.has(block.id) === true || options.answerable?.has(block.id) === true;
+}
+
+function entryIdOf(block: Block): string | undefined {
+  return "entryId" in block ? block.entryId : undefined;
+}
+
+function idOfEntry(entry: unknown): string | undefined {
+  const id = (entry as { id?: unknown } | null)?.id;
+  return typeof id === "string" ? id : undefined;
 }

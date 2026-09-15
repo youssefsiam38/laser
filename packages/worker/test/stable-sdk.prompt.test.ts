@@ -385,11 +385,18 @@ describe("StableSdkDriver.prompt", () => {
     // not when the turn ends (M13-T44). The tree on disk is the witness.
     const userEnd = updates.find((u): u is Extract<SessionUpdate, { kind: "message_end" }> => u.kind === "message_end" && u.role === "user");
     const userEntry = lines.find((l) => l.type === "message" && l.message.role === "user");
-    expect(userEnd?.entry).toEqual({ id: userEntry.id, parentId: userEntry.parentId });
+    expect(userEnd?.entry).toMatchObject({ id: userEntry.id, parentId: userEntry.parentId });
     expect(updates.indexOf(userEnd!)).toBeLessThan(firstDelta);
     expect(updates.indexOf(userEnd!)).toBeGreaterThan(first("message_start"));
-    // Assistant messages carry no entry: the field is about prompts.
-    expect(updates.find((u) => u.kind === "message_end" && u.role === "assistant")).not.toHaveProperty("entry");
+    // An assistant message is named the same way now (RP-5b): a body too large
+    // for a client to hold is shown as an excerpt and read back by reference,
+    // and the reference needs the entry the engine wrote it into.
+    const settledAssistant = updates.find((u) => u.kind === "message_end" && u.role === "assistant") as Extract<SessionUpdate, { kind: "message_end" }> | undefined;
+    const assistantEntry = lines.findLast((l) => l.type === "message" && l.message.role === "assistant");
+    expect(settledAssistant?.entry).toMatchObject({ id: assistantEntry.id, parentId: assistantEntry.parentId });
+    // Its identity names the bodies exactly, and is bounded.
+    expect(settledAssistant!.entry!.bodies!.length).toBeLessThanOrEqual(16);
+    expect(settledAssistant!.entry!.bodies!.some((body) => body.component.kind === "assistant_text")).toBe(true);
     // Note: Pi emits `entry_appended` only for extension custom entries
     // (pi.appendEntry), never for message persistence. Transcript state must be
     // built from message_*/tool_execution_* events, not from entry_appended.

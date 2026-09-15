@@ -15,6 +15,7 @@ import {
   fitHistoryWindowPlan,
   historyContentSerializedBytes,
   historyWindowNode,
+  withElidedBodies,
   type ClientRequests,
   type HistoryWindow,
   type HistoryWindowRequest,
@@ -22,6 +23,7 @@ import {
 } from "@lasercode/protocol";
 import type { FileIdentity, IndexedEntry, SessionIndex, SessionIndexCache, SessionIndexFailure } from "./session-index.js";
 import type { SessionRevisions } from "./session-revision.js";
+import { sha256Hex } from "./session-body-range.js";
 
 const MATERIALISE_ATTEMPTS = 2;
 
@@ -42,7 +44,7 @@ export type ProjectionAnswer =
 export class SessionProjection {
   constructor(private readonly options: SessionProjectionOptions) {}
 
-  async read(path: string, requested: HistoryWindowRequest | undefined, baseRevision?: string): Promise<ProjectionAnswer> {
+  async read(path: string, requested: HistoryWindowRequest | undefined, baseRevision?: string, bodyLimit?: number): Promise<ProjectionAnswer> {
     for (let attempt = 0; attempt < MATERIALISE_ATTEMPTS; attempt++) {
       const indexed = await this.options.index.read(path);
       if (!indexed.ok) {
@@ -68,7 +70,7 @@ export class SessionProjection {
           : undefined;
       let scope: HistoryWindowScope = deltaScope ?? { ...common, selection: { kind: "replace" } };
       let plan = deltaScope
-        ? fitHistoryWindowPlan(index.entries, index.leafId, request, deltaScope, candidate => withinPlannedBounds(index.entries, candidate.entryIndices, candidate.contextIndices))
+        ? fitHistoryWindowPlan(index.entries, index.leafId, request, deltaScope, candidate => withinPlannedBounds(index.entries, candidate.entryIndices, candidate.contextIndices, bodyLimit))
         : undefined;
 
       // A delta must contain the complete suffix. If it does not fit, plan the
@@ -76,7 +78,7 @@ export class SessionProjection {
       // shapes never enter delta planning in the first place.
       if (!plan) {
         scope = { ...common, selection: { kind: "replace" } };
-        plan = fitHistoryWindowPlan(index.entries, index.leafId, request, scope, candidate => withinPlannedBounds(index.entries, candidate.entryIndices, candidate.contextIndices));
+        plan = fitHistoryWindowPlan(index.entries, index.leafId, request, scope, candidate => withinPlannedBounds(index.entries, candidate.entryIndices, candidate.contextIndices, bodyLimit));
       }
       if (!plan) {
         const detail = "all" in request || "from" in request
@@ -94,39 +96,52 @@ export class SessionProjection {
       }
       if (materialized.kind === "unreadable") return { kind: "refuse", error: unavailable() };
 
-      const entries = plan.entryIndices.map(index => materialized.values.get(index));
-      const context = plan.contextIndices.map(index => materialized.values.get(index));
-      if (historyContentSerializedBytes(entries, context) > HISTORY_PAGE_BYTE_LIMIT) {
+      const selected = plan.entryIndices.map(index => materialized.values.get(index));
+      const contextRows = plan.contextIndices.map(index => materialized.values.get(index));
+      // RP-5b: with a per-body limit, a record carrying a larger body is left
+      // out and listed with its identity and body metadata instead. Records
+      // themselves are never rewritten.
+      const page = bodyLimit === undefined
+        ? { entries: selected, leafId: plan.leafId, window: { ...plan.window, context: contextRows } satisfies HistoryWindow }
+        : withElidedBodies({ entries: selected, leafId: plan.leafId, window: { ...plan.window, context: contextRows } satisfies HistoryWindow }, bodyLimit, sha256Hex);
+      if (historyContentSerializedBytes(page.entries, page.window.context)
+        + historyContentSerializedBytes(page.window.elided ?? [], []) > HISTORY_PAGE_BYTE_LIMIT) {
         // Raw line lengths are conservative, but enforce the exact two-array
         // wire-body size at the final authority boundary too.
         return { kind: "refuse", error: unavailable("The selected history page is too large to transfer safely.") };
       }
-      return {
-        kind: "answer",
-        result: {
-          entries,
-          leafId: plan.leafId,
-          window: { ...plan.window, context } satisfies HistoryWindow,
-        },
-      };
+      return { kind: "answer", result: { entries: page.entries, leafId: page.leafId, window: page.window } };
     }
     return { kind: "refuse", error: changed() };
   }
 }
 
-function withinPlannedBounds(entries: readonly IndexedEntry[], selected: readonly number[], context: readonly number[]): boolean {
+/**
+ * What one elided row costs on the wire: identity plus one metadata row per
+ * body. Conservative, and only used to plan — the exact size is checked again
+ * on the real page before it is answered.
+ */
+const ELIDED_ROW_ESTIMATE = 1024;
+
+function withinPlannedBounds(entries: readonly IndexedEntry[], selected: readonly number[], context: readonly number[], bodyLimit?: number): boolean {
   const unique = new Set([...selected, ...context]);
   if (unique.size > HISTORY_PAGE_ENTRY_LIMIT) return false;
   // Two JSON arrays contribute four brackets and their own commas. The index
   // retained each row's exact parse/stringify UTF-8 length, so this is the same
   // body accounting used after materialization and by the live authority.
   let bytes = 4 + Math.max(0, selected.length - 1) + Math.max(0, context.length - 1);
+  const cost = (index: number): number => {
+    const length = entries[index]!.serializedLength;
+    // A row no larger than the caller's per-body limit cannot carry a body
+    // larger than it; a bigger row may be elided, and is planned as such.
+    return bodyLimit !== undefined && length > bodyLimit ? ELIDED_ROW_ESTIMATE : length;
+  };
   for (const index of selected) {
-    bytes += entries[index]!.serializedLength;
+    bytes += cost(index);
     if (bytes > HISTORY_PAGE_BYTE_LIMIT) return false;
   }
   for (const index of context) {
-    bytes += entries[index]!.serializedLength;
+    bytes += cost(index);
     if (bytes > HISTORY_PAGE_BYTE_LIMIT) return false;
   }
   return true;

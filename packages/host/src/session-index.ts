@@ -32,7 +32,19 @@ export interface SessionIndexLimits {
  * about 6.8 MiB. Unusually long ids bind on `indexBytes` first.
  */
 export const DEFAULT_SESSION_INDEX_LIMITS: SessionIndexLimits = {
-  lineBytes: 16 * 1024 * 1024,
+  /**
+   * One stored record, with its JSON framing and escaping around it.
+   *
+   * RP-5b reads a large body back a slice at a time from the conversation it
+   * belongs to, and a body is a field of exactly one record: a ceiling below
+   * the bodies a model actually produces would make those conversations
+   * unreadable without a live worker, which is the one thing a worker-free
+   * read cannot ask for. Sixty-four mebibytes admits a thirty-two mebibyte
+   * body with room for escaping, and stays a finite, declared ceiling — one
+   * record is read at a time, and pages remain bounded by
+   * `HISTORY_PAGE_BYTE_LIMIT` regardless.
+   */
+  lineBytes: 64 * 1024 * 1024,
   entries: 32_000,
   indexBytes: 8 * 1024 * 1024,
   fileBytes: 256 * 1024 * 1024,
@@ -158,6 +170,7 @@ export interface SessionIndexCacheOptions {
 }
 
 export class SessionIndexCache {
+  private readonly invalidationListeners = new Set<(path: string) => void>();
   private readonly cache = new Map<string, Cached>();
   private readonly negative = new Map<string, NegativeCached>();
   private readonly inflight = new Map<string, Promise<SessionIndexResult>>();
@@ -191,7 +204,13 @@ export class SessionIndexCache {
     return [...this.cache.keys()];
   }
 
+  /** Told whenever a cached index is dropped, so a reader can let go too. */
+  onInvalidate(listener: (path: string) => void): void {
+    this.invalidationListeners.add(listener);
+  }
+
   invalidate(path: string): void {
+    for (const listener of this.invalidationListeners) listener(path);
     this.retained -= this.cache.get(path)?.bytes ?? 0;
     this.cache.delete(path);
     this.negative.delete(path);

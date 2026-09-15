@@ -45,7 +45,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { goalExtensionPath, goalStateFromEntries } from "@lasercode/pi-goal";
 import { createCommandBus, createLaserExtension, createPromptProvenanceObserver, toSessionGoal, type LaserExtensionOptions } from "@lasercode/pi-extension";
-import { ErrorCodes, modelKey, ProtocolError, PRODUCT_NAME, PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE, SESSION_FALLBACK_ENTRY_TYPE, SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE } from "@lasercode/protocol";
+import { createHash } from "node:crypto";
+import { entryBodyIdentities, ErrorCodes, modelKey, ProtocolError, PRODUCT_NAME, PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE, SESSION_FALLBACK_ENTRY_TYPE, SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE } from "@lasercode/protocol";
 import type {
   CommandInfo,
   ContentBlock,
@@ -175,9 +176,11 @@ export class StableSdkDriver implements SessionDriver {
   private heldSettled: { invocation?: DriverInvocationRef } | undefined;
   private agentDir = "";
   /**
-   * A user `message_end` waiting one microtask for Pi to persist its message
-   * (see the header). It leaves first if anything else arrives, so the order
-   * of updates a client sees never changes.
+   * A `message_end` waiting one microtask for Pi to persist its message (see
+   * the header). It leaves first if anything else arrives, so the order of
+   * updates a client sees never changes. Every role is held the same way: a
+   * body a client cannot hold is shown as an excerpt with a reference, and the
+   * reference needs the entry the engine wrote it into (RP-5b).
    */
   private heldUserEnd: {
     update: Extract<SessionUpdate, { kind: "message_end" }>;
@@ -877,6 +880,15 @@ export class StableSdkDriver implements SessionDriver {
     };
   }
 
+  entriesNow(): { entries: unknown[]; leafId: string | null } | undefined {
+    try {
+      const manager = this.session().sessionManager;
+      return { entries: manager.getEntries(), leafId: manager.getLeafId() };
+    } catch {
+      return undefined;
+    }
+  }
+
   async entries(options?: { live?: boolean }): Promise<{ entries: unknown[]; leafId: string | null; live?: HistoryLiveSnapshot }> {
     const session = this.session();
     const manager = session.sessionManager;
@@ -1497,10 +1509,11 @@ export class StableSdkDriver implements SessionDriver {
       return;
     }
     const update = mapEvent(event);
-    if (update?.kind === "message_end" && update.role === "user" && event.type === "message_end") {
+    if (update?.kind === "message_end" && event.type === "message_end") {
       // Pi writes the entry right after this listener returns; the id is
-      // readable one microtask from now (header). Nothing else is pushed for
-      // a user message_end, so holding it changes no order.
+      // readable one microtask from now (header). Nothing else is pushed for a
+      // message_end, and anything that arrives meanwhile flushes this first,
+      // so holding it changes no order.
       this.heldUserEnd = {
         update,
         message: event.message,
@@ -1619,13 +1632,35 @@ export class StableSdkDriver implements SessionDriver {
     this.runDeferredSettingsReload();
   }
 
-  /** Send the held user `message_end`, with its entry when Pi has written it. */
+  /**
+   * Send the held `message_end`, with its persisted identity when Pi has
+   * written it: the entry, and — because a reference to a body needs more than
+   * a row id — the size and digest of each of that entry's bodies, hashed from
+   * the record itself without building any of them, and bounded so a record
+   * with very many components cannot make an unbounded frame.
+   */
   private flushHeldUserEnd(): void {
     const held = this.heldUserEnd;
     if (!held) return;
     this.heldUserEnd = undefined;
     const entry = this.persistedEntryOf(held.message);
-    this.push(entry ? { ...held.update, entry } : held.update, held.invocation);
+    if (!entry) {
+      this.push(held.update, held.invocation);
+      return;
+    }
+    const identities = entryBodyIdentities(
+      { type: "message", id: entry.id, parentId: entry.parentId, message: held.message },
+      () => { const hash = createHash("sha256"); return { update: (chunk: string) => { hash.update(chunk, "utf8"); }, digest: () => hash.digest("hex") }; },
+    );
+    this.push({
+      ...held.update,
+      entry: {
+        ...entry,
+        ...(identities.bodies.length > 0 ? { bodies: identities.bodies } : {}),
+        ...(identities.omitted > 0 ? { omitted: identities.omitted } : {}),
+        ...(identities.truncated ? { truncated: true as const } : {}),
+      },
+    }, held.invocation);
   }
 
   /**

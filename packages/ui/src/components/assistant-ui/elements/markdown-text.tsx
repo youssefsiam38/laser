@@ -86,8 +86,20 @@ const useShallowStable = <T extends Record<string, unknown> | undefined>(value: 
   return ref.current;
 };
 
+/**
+ * Whether the message this Markdown belongs to is only part of what was said
+ * (RP-5b §2). A code block inside an excerpt cannot claim to be whole: the
+ * positions of code in a body are not something any authority addresses, so
+ * what goes to the clipboard says, in its own bytes, that it is a part.
+ */
+export const ExcerptedMessage = createContext(false);
+
 function CodeHeader({ language, code }: CodeHeaderProps) {
   const { copied, copy } = useCopy();
+  const excerpted = useContext(ExcerptedMessage);
+  const copyCode = (): void => {
+    void copy(excerpted ? `${PARTIAL_CODE_NOTE}\n${code}` : code);
+  };
   return (
     <div
       data-slot="code-header"
@@ -98,9 +110,9 @@ function CodeHeader({ language, code }: CodeHeaderProps) {
           for "js" must not land on every code block (docs/search-content.md). */}
       <span data-search-exclude className="eyebrow">{language || "code"}</span>
       <TooltipIconButton
-        tooltip={copied ? "Copied" : "Copy code"}
+        tooltip={copied ? (excerpted ? "Copied partial code" : "Copied") : excerpted ? "Copy this part of the code" : "Copy code"}
         size="icon-xs"
-        onClick={() => void copy(code)}
+        onClick={copyCode}
         className={cn(copied && "text-ok hover:text-ok")}
       >
         {copied ? <Check /> : <Copy />}
@@ -108,6 +120,12 @@ function CodeHeader({ language, code }: CodeHeaderProps) {
     </div>
   );
 }
+
+/** The line the clipboard carries when the message itself is only a part. */
+export const PARTIAL_CODE_NOTE = "[… this message is shown in part; the code below may be incomplete]";
+
+/** The code header on its own, for tests of what it copies. */
+export const CodeHeaderForTest = CodeHeader;
 
 const defaultComponents = memoizeMarkdownComponents({
   h1: ({ className, ...props }) => (

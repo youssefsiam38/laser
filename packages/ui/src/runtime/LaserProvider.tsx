@@ -20,7 +20,7 @@ import { TranscriptPresentation } from "./transcript-presentation.js";
  * a small external store that this component keeps in sync, and reads no
  * closed-over state at all.
  */
-import { PRODUCT_NAME } from "@lasercode/protocol";
+import { EDITABLE_TEXT_MAX_BYTES, PRODUCT_NAME, utf8ByteLength } from "@lasercode/protocol";
 import {
   AssistantRuntimeProvider,
   AuiConfig,
@@ -65,7 +65,8 @@ import { createTasksActions, type TasksActions } from "../fleet/actions.js";
 import { HostClient } from "../client.js";
 import { initialState, reduce, type Action, type AppState, type SessionView } from "../store.js";
 import { hydrationEpochOf, isDormantView } from "../view-summary.js";
-import { createViewCache, type RendererViewCounters } from "./view-cache.js";
+import { atLiveEdge, onStanding } from "./anchored-messages.js";
+import { createViewCache, type ActionReservation, type RendererViewCounters, type ViewCache } from "./view-cache.js";
 import { createThreadAdapter, sendToSession, type SendBehavior } from "./adapter.js";
 import { firstTurnFromRunConfig, useDiscardFirstTurnOnLeave } from "./first-turn.js";
 import { createSessionLauncher, type NewSessionOptions } from "./new-session.js";
@@ -185,6 +186,8 @@ export interface LaserActions {
   expandCatalog(): () => void;
   refreshEntries(options?: { tail?: boolean }): Promise<void>;
   loadEarlierEntries(): Promise<boolean>;
+  /** Replace what a trim released with the conversation's recent history. */
+  reloadRecentHistory(): Promise<boolean>;
   loadAllEntries(): Promise<boolean>;
   /** Refresh cross-app allowance for the session's account provider. */
   refreshAccountUsage(): Promise<void>;
@@ -258,6 +261,12 @@ export interface LaserContextValue {
    * its own view state and this says nothing about it.
    */
   rendererViews: () => RendererViewCounters;
+  /**
+   * Hold room in the renderer for something a person is about to do — today,
+   * rebuilding an oversized prompt so it can be edited (RP-5b §2). The caller
+   * keeps the token for as long as it holds those bytes.
+   */
+  reserveViewAction: (path: string, bytes: number) => ActionReservation | undefined;
 }
 
 /** Everything that does not change when the transcript does. */
@@ -285,6 +294,20 @@ interface LaserInternals {
   attach: (path: string) => () => void;
 }
 const LaserInternalsContext = createContext<LaserInternals | null>(null);
+
+/**
+ * Whether this renderer can take a prompt the engine handed back (RP-5b B3).
+ *
+ * The worker has already refused to serialize anything past the editable bound,
+ * so what arrives is bounded; this is the renderer's own accounting on top of
+ * it. The reservation it takes belongs to the composer from here on, and is
+ * released when the composer lets the text go — not when this returns.
+ */
+function admitEditorText(cache: { reserveAction: ViewCache["reserveAction"] }, path: string, text: string) {
+  const bytes = utf8ByteLength(text);
+  if (!Number.isSafeInteger(bytes) || bytes > EDITABLE_TEXT_MAX_BYTES) return undefined;
+  return cache.reserveAction(path, bytes * 2);
+}
 
 export function useLaserStable(): LaserStable {
   const value = useContext(LaserStableContext);
@@ -730,16 +753,47 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
    * thread runtime as its composer changes (RP-5); an empty composer reports
    * nothing and pins nothing.
    */
-  const composerDrafts = useRef(new Set<string>());
+  const composerDrafts = useRef(new Map<string, number>());
   const notifyPins = useRef<() => void>(() => {});
-  const setComposerDraft = useCallback((path: string, held: boolean) => {
-    const before = composerDrafts.current.has(path);
-    if (held) composerDrafts.current.add(path);
-    else composerDrafts.current.delete(path);
+  /**
+   * What a composer is holding, in bytes (RP-5, RP-5b B3). A boolean said a
+   * draft was there; a message read back for editing can be tens of kilobytes,
+   * and the bound must count them for as long as the composer owns them.
+   */
+  const setComposerDraft = useCallback((path: string, held: boolean | number) => {
+    const before = composerDrafts.current.get(path) ?? 0;
+    const bytes = typeof held === "number" ? Math.max(0, held) : held ? Math.max(before, 1) : 0;
+    if (bytes <= 0) {
+      composerDrafts.current.delete(path);
+      composerRooms.current.get(path)?.release();
+      composerRooms.current.delete(path);
+    } else composerDrafts.current.set(path, bytes);
     // Words appearing or going is a change in what is held, and the store did
     // not move: the bound has to be told (RP-5).
-    if (before !== held) notifyPins.current();
+    if (before !== bytes) notifyPins.current();
   }, []);
+  /**
+   * Room a composer is holding with the words it was given (RP-5b B3). It is
+   * released when those words go — sent, cleared, the path closed, the
+   * environment changed — and a handover that arrives after any of that gives
+   * its room straight back rather than taking a successor's.
+   */
+  const composerRooms = useRef(new Map<string, ActionReservation>());
+  const releaseComposerRoom = useCallback((path: string) => {
+    const held = composerRooms.current.get(path);
+    if (!held) return;
+    composerRooms.current.delete(path);
+    held.release();
+  }, []);
+  const holdForComposer = useCallback((path: string, text: string, room: ActionReservation) => {
+    releaseComposerRoom(path);
+    composerRooms.current.set(path, room);
+    setComposerDraft(path, utf8ByteLength(text));
+  }, [releaseComposerRoom, setComposerDraft]);
+  useEffect(() => () => {
+    for (const [path] of composerRooms.current) releaseComposerRoom(path);
+  }, [releaseComposerRoom]);
+
   const windows = useMemo(() => createHistoryWindows(store), [store]);
   useEffect(() => () => windows.dispose(), [windows]);
 
@@ -755,6 +809,9 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     environment: {
       scoped: () => scopedPaths.current.keys(),
       hasDraft: (path) => composerDrafts.current.has(path) || store.presentation.hasEditDraft(path),
+      // Exact bytes, so a draft read back from a conversation is counted for
+      // as long as the composer holds it, not merely pinned (RP-5b B3).
+      draftBytes: (path) => composerDrafts.current.get(path) ?? 0,
     },
     onRelease: (paths) => {
       // A released transcript is not resumed on the next reconnect: it would
@@ -779,6 +836,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   windows.owner(MAIN_WINDOW_SCOPE, mainWindowPath);
   useEffect(() => () => windows.forget(MAIN_WINDOW_SCOPE, mainWindowPath), [windows, mainWindowPath]);
   const historyLoader = useMemo(() => createHistoryLoader({
+    isCurrent: (candidate: string) => mainPath(readState().destination) === candidate,
     get: path => readState().open[path],
     request: params => client.request("pi/session/entries", params),
     dispatch,
@@ -937,6 +995,55 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   // --- agents -------------------------------------------------------------
 
   const agentsActions = useMemo(() => createAgentsActions({ client, dispatch, guard }), [client, guard]);
+  /**
+   * RP-5b §7: replacing what a trim released.
+   *
+   * The first read happens as soon as the current view carries a new trim
+   * stamp. If its page did not contain what the surface was standing on, the
+   * view keeps what it has and waits: the second — and last — read is spent at
+   * the first safe moment, which is the transcript reaching the live edge, a
+   * person coming back to this conversation, or a person asking for it. Losing
+   * focus and ordinary scrolling are not safe moments and do nothing.
+   */
+  const currentPath = mainPath(state.destination);
+  const trimmedStamp = currentPath ? state.open[currentPath]?.trimmed?.at : undefined;
+  const deferredStamp = currentPath && state.open[currentPath]?.trimmed?.deferred ? trimmedStamp : undefined;
+  const firstRead = useRef(new Map<string, string>());
+  /** Called by an action once the engine has accepted it, never before. */
+  const reconcileAfterAction = useRef<(path: string) => void>(() => {});
+  const reconcileNow = useCallback((path: string) => {
+    const epoch = openEpochs.current.get(path);
+    return historyLoader.reconcile(path, () => !moving.current.has(path) && openEpochs.current.get(path) === epoch);
+  }, [historyLoader]);
+  // One read the moment a new stamp appears on the conversation on screen.
+  useEffect(() => {
+    if (!currentPath || trimmedStamp === undefined) return;
+    if (firstRead.current.get(currentPath) === trimmedStamp) return;
+    firstRead.current.set(currentPath, trimmedStamp);
+    void reconcileNow(currentPath);
+  }, [currentPath, reconcileNow, trimmedStamp]);
+  // The second, at the first safe moment: the live edge, or coming back here.
+  useEffect(() => {
+    if (!currentPath || deferredStamp === undefined) return;
+    if (atLiveEdge(currentPath)) { void reconcileNow(currentPath); return; }
+    return onStanding(currentPath, () => {
+      if (atLiveEdge(currentPath)) void reconcileNow(currentPath);
+    });
+  }, [currentPath, deferredStamp, reconcileNow]);
+  // Coming back to this conversation is the other safe moment.
+  const previousPath = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const returned = previousPath.current !== undefined && previousPath.current !== currentPath;
+    previousPath.current = currentPath;
+    if (!returned || !currentPath) return;
+    if (state.open[currentPath]?.trimmed?.deferred) void reconcileNow(currentPath);
+  }, [currentPath, reconcileNow, state.open]);
+  /** After an accepted action on an old row, and never before it. */
+  const afterAction = useCallback((path: string) => {
+    if (readState().open[path]?.trimmed?.deferred) void reconcileNow(path);
+  }, [reconcileNow]);
+  reconcileAfterAction.current = afterAction;
+
   const tasksActions = useMemo(() => createTasksActions({ client, dispatch, guard }), [client, guard]);
 
   // Definitions and the run registry come up with the connection and again
@@ -1237,11 +1344,15 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       moving.current.add(path);
       let session: SessionState;
       let editorText: string | undefined;
+      let omitted = false;
       try {
         // A stop asked for here reaches this store as the original session's
         // own updates (the aborted reply, then settled) before the reply
         // below: its transcript records the stop before it is left behind.
-        ({ state: session, editorText } = await client.request("pi/session/fork", { path, entryId, ...(options?.stopFirst ? { stopFirst: true } : {}) }));
+        const forked = await client.request("pi/session/fork", { path, entryId, ...(options?.stopFirst ? { stopFirst: true } : {}) });
+        session = forked.state;
+        editorText = forked.editorText;
+        omitted = forked.editorTextOmitted === true;
         client.untrack(path);
         client.track(session.path, 0);
         // Prepare the fork in its own cached view; the visible source survives
@@ -1252,13 +1363,30 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         moving.current.delete(path);
       }
       dispatch({ type: "forked", from: path, state: session });
+      // The action was accepted and the row it named has done its work; only
+      // now may a replacement page be read (RP-5b §7).
+      reconcileAfterAction.current(session.path);
       if (readScoped === readState) destination.replaceMainSession(path, session);
-      if (editorText) {
-        dispatch({
-          type: "notification",
-          method: "pi/ui/event",
-          params: { path: session.path, method: "setEditorText", text: editorText },
-        });
+      if (omitted) {
+        dispatch({ type: "toast", level: "warning", text: "That message is too large to put back in the composer here. It is unchanged in the conversation you forked from." });
+      } else if (editorText) {
+        // A fork hands back the prompt it forked from. That prompt can be far
+        // larger than this surface may hold, so it is admitted only when the
+        // renderer's own accounting has room for it — and refused in words
+        // otherwise, leaving the fork itself untouched (RP-5b §2).
+        const room = admitEditorText(viewCache, session.path, editorText);
+        if (room) {
+          dispatch({
+            type: "notification",
+            method: "pi/ui/event",
+            params: { path: session.path, method: "setEditorText", text: editorText },
+          });
+          // The composer holds these bytes now, and holds the room with them:
+          // the reservation is handed over, not given back (RP-5b B3).
+          holdForComposer(session.path, editorText, room);
+        } else {
+          dispatch({ type: "toast", level: "warning", text: "That message is too large to put back in the composer here. It is unchanged in the conversation you forked from." });
+        }
       }
       void refreshSessions();
     };
@@ -1275,13 +1403,30 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       try {
         // The worker owns stop-then-move: a failure after the stop leaves the
         // session stopped and unmoved, and the error reaches `guard` as usual.
-        const { editorText, cancelled } = await client.request("pi/session/navigate", { path, entryId, ...(options?.stopFirst ? { stopFirst: true } : {}) });
+        const { editorText, editorTextOmitted, cancelled } = await client.request("pi/session/navigate", { path, entryId, ...(options?.stopFirst ? { stopFirst: true } : {}) });
         if (cancelled) {
           dispatch({ type: "toast", level: "warning", text: "A feature stopped that change." });
           return false;
         }
         await history.read(path);
-        return editorText !== undefined ? { editorText } : {};
+        reconcileAfterAction.current(path);
+        if (editorTextOmitted) {
+          // The move has already happened — this is the conversation's own
+          // leaf, moved by the engine — so the only thing that did not happen
+          // is the handback. Say exactly that (RP-5b B3).
+          dispatch({ type: "toast", level: "warning", text: "The conversation moved to that message, but it is too large to put back in the composer here. Open it to read or copy what you need." });
+          return {};
+        }
+        if (editorText === undefined) return {};
+        // The same gate on the way back from a move, and the room stays held
+        // for as long as the composer holds the words.
+        const room = admitEditorText(viewCache, path, editorText);
+        if (!room) {
+          dispatch({ type: "toast", level: "warning", text: "The conversation moved to that message, but there is no room to put it back in the composer here. Open it to read or copy what you need." });
+          return {};
+        }
+        holdForComposer(path, editorText, room);
+        return { editorText };
       } finally {
         moving.current.delete(path);
       }
@@ -1367,6 +1512,17 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         const path = requireCurrent();
         const epoch = openEpochs.current.get(path);
         return history.all(path, () => !moving.current.has(path) && openEpochs.current.get(path) === epoch);
+      }).then(Boolean),
+      /**
+       * RP-5b §7: read this conversation's recent history again, to replace
+       * what a trim released. A person asking for it is the safest moment
+       * there is, so this spends a read even when the stamp already has one.
+       */
+      reloadRecentHistory: () => guard(async () => {
+        const path = requireCurrent();
+        const epoch = openEpochs.current.get(path);
+        await history.reconcile(path, () => !moving.current.has(path) && openEpochs.current.get(path) === epoch);
+        return true;
       }).then(Boolean),
       loadEarlierEntries: () => guard(async () => {
         const path = requireCurrent();
@@ -1656,6 +1812,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       archive,
       actions,
       rendererViews: viewCache.counters,
+      reserveViewAction: viewCache.reserveAction,
     }),
     [actions, archive, client, currentProject, dispatch, projectInfo, projects, setCurrentProject, startupRestoring, state.destination, trustRequests, viewCache],
   );
@@ -1980,13 +2137,15 @@ export function LaserThreadScope({ path, onPathChange, filter, createIn, unavail
     : { phase: "ready-code", intent: 0, code: workspace ? { kind: "project-landing", project: workspace } : { kind: "no-project-landing" } }, [path, workspace]);
   const scopedStore = useMemo(() => createScopedStateStore(store, path, scopedDestination, owner), [store, path, scopedDestination, owner]);
   const scopedHistory = useMemo(() => createHistoryLoader({
+    // A scoped surface shows exactly one conversation: the one it was given.
+    isCurrent: (target: string) => target === path,
     get: target => scopedStore.getSnapshot().open[target],
     request: params => client.request("pi/session/entries", params),
     dispatch: owner.dispatch,
     // Generation adoption and watermarks belong to the canonical session.
     adoptEpoch: () => {},
     track: () => {},
-  }), [client, owner, scopedStore]);
+  }), [client, owner, path, scopedStore]);
 
   const stable = useMemo<LaserStable>(() => ({
     ...parent,

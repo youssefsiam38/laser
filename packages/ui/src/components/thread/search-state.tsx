@@ -21,6 +21,13 @@ export function useSearchRevealDisclosure(): { revealing: boolean; open: boolean
   return { revealing, open, fold };
 }
 export const FindSelectionContext = createContext<string | undefined>(undefined);
+/**
+ * What find is looking for right now, so a row holding only an excerpt can
+ * offer to look for it in the rest of that body (RP-5b). Transient, like every
+ * other find state here.
+ */
+export const FindQueryContext = createContext<string>("");
+export const useFindQuery = (): string => useContext(FindQueryContext);
 export type SearchSource = "user" | "assistant" | "reasoning" | "tool";
 export function openConversationFind(query?: string, source?: SearchSource) {
   window.dispatchEvent(new CustomEvent("conversation-find", { detail: { query, source } }));

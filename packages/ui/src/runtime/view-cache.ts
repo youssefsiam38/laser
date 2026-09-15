@@ -32,6 +32,7 @@ import { captureViewTail, VIEW_TAIL_MAX_BYTES, viewTailRetainedBytes, viewTailSi
 import { byteLength, EMPTY_MEASURE, measureView, type ViewMeasure } from "./view-measure.js";
 import { isTerminalRunStatus, type SessionUpdate } from "@lasercode/protocol";
 import { mainPath, pendingSessionPath } from "./main-destination.js";
+import { anchoredMessages, standingRows } from "./anchored-messages.js";
 
 /**
  * The bounds. Calibrated against measured renderer heap, not guessed from
@@ -66,7 +67,9 @@ export type PinReason =
   | "unstarted"
   | "loading"
   | "draft"
-  | "unsent";
+  | "unsent"
+  /** A person's action is holding room in this view (an edit being rebuilt). */
+  | "action";
 
 export interface ReleasedView {
   path: string;
@@ -99,6 +102,20 @@ export interface RendererViewCounters {
   readonly bytes: number;
   /** What that is worth in retained heap, through the calibrated model. */
   readonly heapEquivalentBytes: number;
+  /**
+   * The largest hydrated view; the largest single block (every body of it
+   * together, which is what one message renders); and the largest single body
+   * inside any block, which is what one part of a message renders.
+   */
+  readonly largestViewBytes: number;
+  readonly largestBlockBytes: number;
+  readonly largestBodyBytes: number;
+  /** Canonical bytes the views point at and do not hold (RP-5b). */
+  readonly referencedBytes: number;
+  /** Decoded image surface those references imply, reported beside the budget. */
+  readonly referencedImageBytes: number;
+  /** Views whose older settled part was released to stay inside the bound. */
+  readonly trims: number;
   /** Threads holding words a person wrote and nobody else has. */
   readonly drafts: number;
   readonly evictions: number;
@@ -112,7 +129,14 @@ export interface RendererViewCounters {
   /** Records shed because the queue was full. Best-effort data, said out loud. */
   readonly tailsDropped: number;
   readonly limits: ViewCacheLimits;
-  readonly overflow?: "pinned" | "drafts";
+  /**
+   * A state in passing, never a settled one (RP-5b): a pass has not brought
+   * every view inside the bounds yet, and the next one continues. No view ever
+   * settles above its bound, so there is no value here that means "allowed to
+   * hold more" — the old `pinned`/`drafts` overflow was exactly that, and it
+   * is gone.
+   */
+  readonly overflow?: "transition";
   readonly calibration: { model: string; fittedAt: string };
 }
 
@@ -143,6 +167,12 @@ export interface ViewCacheEnvironment {
    * An empty composer is not a draft and pins nothing.
    */
   hasDraft(path: string): boolean;
+  /**
+   * Exact bytes a composer is holding for this path (RP-5b B3): a message read
+   * back for editing is retained renderer state and is counted as such, not
+   * merely pinned.
+   */
+  draftBytes?(path: string): number;
 }
 
 export interface ViewCacheOptions {
@@ -246,6 +276,20 @@ export interface ViewCache {
   /** RP-8: release under memory pressure. Never a pinned view, never work. */
   releaseUnder(pressure: "warning" | "critical"): ReleaseOutcome;
   counters(): RendererViewCounters;
+  /**
+   * Hold room for something a person is about to do (RP-5b §2).
+   *
+   * Rebuilding an oversized prompt so it can be edited puts its whole body in
+   * the renderer, and that has to fit — beside this view's own bound and
+   * beside every other view's. The room is taken **before** the body is read,
+   * counted while it is held, released when the action ends, and never quietly
+   * exceeded: a token that no longer belongs to this cache's generation gives
+   * its bytes back to nobody.
+   *
+   * Dormant views are released first, so an action is refused only when the
+   * room really is not there.
+   */
+  reserveAction(path: string, bytes: number): ActionReservation | undefined;
   /** Measurement of one view, for tests and counters. */
   measure(path: string): ViewMeasure;
   /**
@@ -260,6 +304,16 @@ export interface ViewCache {
    */
   reset(): void;
   dispose(): void;
+}
+
+/** Room held for one action in flight. */
+export interface ActionReservation {
+  readonly path: string;
+  readonly bytes: number;
+  /** Grow or shrink what is held; false when the larger size does not fit. */
+  resize(bytes: number): boolean;
+  /** Give it back. Safe to call more than once, and after a reset. */
+  release(): void;
 }
 
 /** What this cache keeps about one path, so a pass never walks the others. */
@@ -327,6 +381,12 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
   const used = new Map<string, number>();
   /** What this cache knows about each path, kept up to date by the actions. */
   const owned = new Map<string, Owned>();
+  /** Room held for actions in flight, by token (RP-5b §2). */
+  const reservations = new Map<symbol, { path: string; bytes: number }>();
+  let reservedBytes = 0;
+  /** Bumped by `reset`/`dispose`: tokens from before belong to nobody. */
+  let actionGeneration = 0;
+
   /** Counted here so nothing has to add up the paths to answer `counters()`. */
   const totals = { entriesBytes: 0, blocksBytes: 0, imagesBytes: 0, imagesEstimated: 0, bytes: 0, hydrated: 0 };
   /**
@@ -344,6 +404,7 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
   let snapshot: RendererViewCounters | undefined;
   let passAt = 0;
   let evictions = 0;
+  let trims = 0;
   let overflow: RendererViewCounters["overflow"];
   let disposed = false;
   /** Everything captured in one environment; a reset abandons that generation. */
@@ -548,6 +609,13 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
     pendingBytes = 0;
   };
 
+  /** Bytes held for actions on one path. */
+  const heldForAction = (path: string): number => {
+    let bytes = 0;
+    for (const row of reservations.values()) if (row.path === path) bytes += row.bytes;
+    return bytes;
+  };
+
   /** Everything the pass needs, from what is already measured. */
   const survey = (state: AppState) => {
     settle(state);
@@ -562,18 +630,31 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
       // A prompt this surface sent and the engine has not persisted is the
       // person's words; nothing else holds them.
       const unsent = view.blocks.some((block) => block.kind === "user" && block.optimistic === true);
-      const pin = unsent ? ("unsent" as const) : pinReason(state, path, options.environment, live);
-      const cost = row.measure.bytes + row.appended;
+      // A view holding room for an action a person started is never a
+      // candidate, and never trimmed out from under the draft it is building.
+      const acting = heldForAction(path) + (options.environment.draftBytes?.(path) ?? 0);
+      const pin = acting ? ("action" as const) : unsent ? ("unsent" as const) : pinReason(state, path, options.environment, live);
+      const cost = row.measure.bytes + row.appended + acting;
       held.push({ path, bytes: cost, measure: row.measure, appended: row.appended, pin });
       bytes += cost;
       if (pin) pinnedBytes += cost;
     }
     for (const path of Object.keys(state.open)) if (options.environment.hasDraft(path)) drafts += 1;
+    // Room held for an action on a view this cache has not measured yet is
+    // still room held: it is counted, or a reservation would be free.
+    for (const row of reservations.values()) {
+      if (!owned.has(row.path)) bytes += row.bytes;
+    }
     return { held, bytes, pinnedBytes, drafts };
   };
 
-  const plan = (state: AppState, effective: ViewCacheLimits): { paths: Array<{ path: string; bytes: number; reason: EvictionReason }>; refused: Array<{ path: string; pin: PinReason }>; overflow: RendererViewCounters["overflow"] } => {
+  const plan = (state: AppState, effective: ViewCacheLimits): { paths: Array<{ path: string; bytes: number; reason: EvictionReason }>; trims: Map<string, number>; refused: Array<{ path: string; pin: PinReason }>; overflow: RendererViewCounters["overflow"] } => {
     const { held, bytes, pinnedBytes, drafts } = survey(state);
+    // RP-5b: the per-view bound is a bound, not a trigger. Every hydrated view
+    // over it — pinned, current, running, holding a draft — releases its older
+    // settled turns. Nothing is evicted for it and no work is touched.
+    const trims = new Map<string, number>();
+    for (const row of held) if (row.bytes > effective.viewBytes) trims.set(row.path, effective.viewBytes);
     const candidates = held
       .filter((row) => row.pin === undefined)
       .sort((a, b) => (used.get(a.path) ?? 0) - (used.get(b.path) ?? 0));
@@ -612,16 +693,38 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
       count -= 1;
     }
 
+    // The total binds every view too, pinned or not. What eviction cannot
+    // reach — a conversation somebody is using — is brought inside it by
+    // releasing its older settled turns, largest first.
+    let projected = 0;
+    for (const row of held) if (!taken.has(row.path)) projected += Math.min(row.bytes, trims.get(row.path) ?? row.bytes);
+    if (projected > effective.bytes) {
+      for (const row of [...held].sort((a, b) => b.bytes - a.bytes)) {
+        if (projected <= effective.bytes) break;
+        if (taken.has(row.path)) continue;
+        const current = Math.min(row.bytes, trims.get(row.path) ?? row.bytes);
+        const target = Math.max(0, current - (projected - effective.bytes));
+        trims.set(row.path, target);
+        projected -= current - target;
+      }
+    }
+    for (const path of taken) trims.delete(path);
+
     // The total and the per-view share still count everything hydrated,
     // pinned or not: they are about memory, not about the cache's own slots.
-    const over = total > effective.bytes || count > effective.views;
+    const over = total > effective.bytes || count > effective.views || trims.size > 0;
     const refused = over
       ? held.filter((row) => row.pin !== undefined).map((row) => ({ path: row.path, pin: row.pin! }))
       : [];
+    // Being over is a state in passing: this pass releases and trims, and the
+    // next one measures what it left. `drafts`/`pinnedBytes` are still surveyed
+    // for the counters, never as permission to stay over.
+    void drafts; void pinnedBytes;
     return {
       paths: chosen,
+      trims,
       refused,
-      overflow: over ? (drafts > 0 && pinnedBytes >= total ? "drafts" : "pinned") : undefined,
+      overflow: over ? "transition" : undefined,
     };
   };
 
@@ -629,17 +732,51 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
     if (disposed) return NOTHING_RELEASED;
     passAt = Date.now();
     const state = options.read();
-    const { paths, refused, overflow: over } = plan(state, limits);
-    if (over !== overflow) snapshot = undefined;
-    overflow = over;
+    const { paths, trims: overSized, refused, overflow: over } = plan(state, limits);
     const outcome = release(paths);
+    // Views the release did not let go of are brought inside the per-view
+    // bound in the same pass, so nothing settles above it.
+    const trimmed = trim(overSized);
+    if (trimmed) {
+      const after = plan(options.read(), limits);
+      overflow = after.overflow;
+      snapshot = undefined;
+    } else {
+      if (over !== overflow) snapshot = undefined;
+      overflow = over;
+    }
     return refused.length === 0 ? outcome : { ...outcome, refused };
   }
 
-  /** The delta a streamed update appends, when it appends one and nothing else. */
-  const appendedBytes = (update: SessionUpdate): number | undefined => {
-    if (update.kind === "text_delta" || update.kind === "thinking_delta") return byteLength(update.delta);
-    return undefined;
+  /** Release the older settled part of each named view. Returns what moved. */
+  const trim = (targets: ReadonlyMap<string, number>): boolean => {
+    let moved = false;
+    const at = now().toISOString();
+    for (const [path, keepBytes] of targets) {
+      const view = options.read().open[path];
+      if (!view || isDormantView(view)) continue;
+      const before = options.read().open[path];
+      // The rows the transcript is standing on travel with the transaction, so
+      // the reducer stays a function of its action (RP-5b).
+      const anchored = anchoredMessages(path);
+      // What this surface is standing on, told apart, so the stamp can be
+      // checked against an authoritative replacement (RP-5b §7).
+      const standing = standingRows(path);
+      options.dispatch({
+        type: "views/trim",
+        paths: [path],
+        keepBytes,
+        at,
+        ...(anchored.length > 0 ? { anchored } : {}),
+        ...(standing ? { standing } : {}),
+      });
+      if (options.read().open[path] === before) continue;
+      moved = true;
+      trims += 1;
+      remeasure(options.read(), path);
+    }
+    if (moved) snapshot = undefined;
+    return moved;
   };
 
   const markDirty = (path: string): void => {
@@ -667,18 +804,12 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
           const path = params.sessionPath ?? params.path;
           if (path === undefined) break;
           const view = after.open[path];
-          const row = owned.get(path);
-          const delta = action.method === "session/update" && params.update ? appendedBytes(params.update) : undefined;
-          // An appended token costs its own bytes and nothing else: no walk of
-          // the transcript it was appended to, and no pass of its own.
-          if (delta !== undefined && row && view && before.open[path] !== view && !row.dirty) {
-            row.appended += delta;
-            totals.blocksBytes += delta;
-            totals.bytes += delta;
-            snapshot = undefined;
-            grew = true;
-            break;
-          }
+          // A streamed token is not simply added any more: the live body it
+          // lands in is capped, so it drops as many bytes as it takes and the
+          // old incremental shortcut would grow this accounting without bound
+          // while the view itself stayed flat (RP-5b §4.2). The path is marked
+          // instead, and the next pass measures what is actually held — the
+          // per-block measures are memoised, so that costs the live tail.
           if (before.open[path] !== view) { dirty(path); grew = true; }
           break;
         }
@@ -769,11 +900,72 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
         viewBytes: Math.max(0, Math.floor(limits.viewBytes / factor)),
       };
       const state = options.read();
-      const { paths, refused, overflow: over } = plan(state, effective);
-      if (over !== overflow) snapshot = undefined;
-      overflow = over;
+      const { paths, trims: overSized, refused, overflow: over } = plan(state, effective);
       const outcome = release(paths.map((row) => ({ ...row, reason: "pressure" as const })));
+      // Under pressure the per-view share is tighter, and it still binds every
+      // view: a conversation somebody is reading keeps its newest turns.
+      if (trim(overSized)) {
+        overflow = plan(options.read(), effective).overflow;
+        snapshot = undefined;
+      } else {
+        if (over !== overflow) snapshot = undefined;
+        overflow = over;
+      }
       return { ...outcome, refused };
+    },
+    reserveAction(path, bytes) {
+      if (!Number.isSafeInteger(bytes) || bytes < 0) return undefined;
+      // Give back what can be given back before refusing anybody.
+      maintain();
+      const generation = actionGeneration;
+      const fits = (want: number, ignore?: symbol): boolean => {
+        const state = options.read();
+        const { held, bytes: total } = survey(state);
+        // `survey` already counts every reservation, here and elsewhere. Take
+        // them back out first, then add the ones that will still be held —
+        // every one exactly once — plus what is being asked for now.
+        const row = held.find((entry) => entry.path === path);
+        // A view this cache has not measured contributes nothing but its
+        // reservations; one it has measured contributes its own bytes only.
+        const measuredHere = row ? Math.max(0, row.bytes - heldForAction(path)) : 0;
+        let reservedHere = 0;
+        let reservedAnywhere = 0;
+        for (const [token, row] of reservations) {
+          if (token === ignore) continue;
+          if (row.path === path) reservedHere += row.bytes;
+          reservedAnywhere += row.bytes;
+        }
+        if (measuredHere + reservedHere + want > limits.viewBytes) return false;
+        return (total - reservedBytes) + reservedAnywhere + want <= limits.bytes;
+      };
+      if (!fits(bytes)) return undefined;
+      const token = Symbol("action");
+      reservations.set(token, { path, bytes });
+      reservedBytes += bytes;
+      snapshot = undefined;
+      const reservation: ActionReservation = {
+        path,
+        get bytes() { return reservations.get(token)?.bytes ?? 0; },
+        resize(next: number) {
+          if (!Number.isSafeInteger(next) || next < 0) return false;
+          if (generation !== actionGeneration) return false;
+          const row = reservations.get(token);
+          if (!row) return false;
+          if (next > row.bytes && !fits(next, token)) return false;
+          reservedBytes += next - row.bytes;
+          reservations.set(token, { path, bytes: next });
+          snapshot = undefined;
+          return true;
+        },
+        release() {
+          const row = reservations.get(token);
+          if (!row) return;
+          reservations.delete(token);
+          reservedBytes -= row.bytes;
+          snapshot = undefined;
+        },
+      };
+      return reservation;
     },
     counters() {
       // The same frozen answer until one of its numbers moves: a diagnostics
@@ -783,6 +975,18 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
       const { held, bytes, drafts } = survey(state);
       const paths = Object.keys(state.open);
       const pinned = held.filter((row) => row.pin !== undefined).length;
+      let largestViewBytes = 0;
+      let largestBlockBytes = 0;
+      let largestBodyBytes = 0;
+      let referencedBytes = 0;
+      let referencedImageBytes = 0;
+      for (const row of held) {
+        largestViewBytes = Math.max(largestViewBytes, row.bytes);
+        largestBlockBytes = Math.max(largestBlockBytes, row.measure.largestBlockBytes);
+        largestBodyBytes = Math.max(largestBodyBytes, row.measure.largestBodyBytes);
+        referencedBytes += row.measure.referencedBytes;
+        referencedImageBytes += row.measure.referencedImageBytes;
+      }
       const heap = VIEW_HEAP_MODEL.lightBytes * paths.length
         + VIEW_HEAP_MODEL.hydratedBytes * held.length
         + VIEW_HEAP_MODEL.contentFactor * (totals.entriesBytes + totals.blocksBytes)
@@ -800,6 +1004,12 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
         imagesEstimated: totals.imagesEstimated,
         bytes,
         heapEquivalentBytes: heap,
+        largestViewBytes,
+        largestBlockBytes,
+        largestBodyBytes,
+        referencedBytes,
+        referencedImageBytes,
+        trims,
         drafts,
         evictions,
         tailsPending: pending.size,
@@ -816,6 +1026,11 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
     },
     reset() {
       generation += 1;
+      // Room held for an action in the environment this device just left is
+      // given back here, once; the tokens for it can do nothing afterwards.
+      actionGeneration += 1;
+      reservations.clear();
+      reservedBytes = 0;
       cancelPass?.();
       cancelPass = undefined;
       // A record captured in the environment this device just left is never
@@ -826,12 +1041,16 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
       for (const path of [...owned.keys()]) forget(path);
       passAt = 0;
       evictions = 0;
+      trims = 0;
       overflow = undefined;
       snapshot = undefined;
     },
     dispose() {
       disposed = true;
       generation += 1;
+      actionGeneration += 1;
+      reservations.clear();
+      reservedBytes = 0;
       cancelPass?.();
       cancelPass = undefined;
       clearPending();

@@ -42,7 +42,9 @@ import { cn } from "@/lib/utils";
 import { motionMs } from "@/motion";
 import { toolDetailsDefaultOpen, toolDisplayResult, useActivityDetailLevel, useLaserState } from "@/runtime";
 import { useActivityDisclosureOverride } from "@/runtime/sessionPreferences";
+import { BodyOverflow } from "@/components/thread/BodyOverflow";
 import { JsonViewer, parseJsonText } from "./json-viewer.js";
+import type { BlockBodies } from "@/store";
 import { toolOutputText } from "@lasercode/protocol";
 
 import { activityRow, activityTrigger, collapsePanel, mono, pressable } from "./surfaces.js";
@@ -687,6 +689,18 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
   const open = manualOpen ?? toolDetailsDefaultOpen(activityLevel);
 
   const hasBody = Boolean(argsText) || result !== undefined || status?.type === "incomplete";
+  // RP-5b: what this window is not holding of this call, and the way to read
+  // the rest. It belongs outside the fold — a row whose output was elided shows
+  // nothing at all inside one — and before the approval footer, which stays
+  // last. A tool with no typed row of its own draws here, so it must say the
+  // same thing `ToolRow` does rather than quietly showing less.
+  const bodies = (artifact as { bodies?: BlockBodies } | undefined)?.bodies;
+  const overflow = bodies ? (
+    <>
+      <BodyOverflow body={bodies.result} path={path ?? undefined} label="output" />
+      <BodyOverflow body={bodies.args} path={path ?? undefined} label="request" />
+    </>
+  ) : null;
   const tone = state === "failed" ? "danger" : state === "awaiting" ? "attention" : undefined;
 
   return (
@@ -705,6 +719,7 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
           {state !== "cancelled" ? <ToolFallbackResult result={result} /> : null}
         </ToolFallbackContent>
       ) : null}
+      {overflow}
       {shouldRenderApproval ? (
         <ToolFallbackApproval
           addResult={addResult}

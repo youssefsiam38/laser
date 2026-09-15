@@ -37,6 +37,7 @@ export {
   type SessionIndexResult,
 } from "./session-index.js";
 export { SessionProjection, type ProjectionAnswer, type SessionProjectionOptions } from "./session-projection.js";
+export { SessionBodyRange, sha256Hex, sliceAnswer, type BodyRangeAnswer, type SessionBodyRangeOptions } from "./session-body-range.js";
 export { SessionRevisions, type ResolvedRevisionBase, type RevisionAnswer, type SessionRevisionsOptions } from "./session-revision.js";
 export {
   canonical,

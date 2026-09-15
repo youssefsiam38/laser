@@ -42,6 +42,8 @@ import { iconSwap, iconSwapIn, iconSwapOut } from "./surfaces.js";
 export interface MessageActionsProps extends Omit<ComponentProps<"div">, "children"> {
   copied: boolean;
   onCopy: () => void;
+  /** What the copy action is doing or did, when it is not a plain whole copy. */
+  copyLabel?: string | undefined;
   /** Edit this message in this session. */
   onEdit?: (() => void) | undefined;
   /** Run the prompt behind this reply again, in this session. */
@@ -68,12 +70,12 @@ export interface MessageActionsProps extends Omit<ComponentProps<"div">, "childr
 /** What the tree actions mean while a turn runs, said once. */
 const STOPS_REPLY = "stops the reply";
 
-export function MessageActions({ copied, onCopy, onEdit, onRegenerate, onRegenerateFork, onFork, onJump, onCopyPath, onViewRequest, onLoadHistory, regenerate, busy = false, className, ...props }: MessageActionsProps) {
+export function MessageActions({ copied, onCopy, copyLabel, onEdit, onRegenerate, onRegenerateFork, onFork, onJump, onCopyPath, onViewRequest, onLoadHistory, regenerate, busy = false, className, ...props }: MessageActionsProps) {
   const hasMenu =
     onFork !== undefined || onJump !== undefined || onCopyPath !== undefined || onViewRequest !== undefined || onRegenerateFork !== undefined || onLoadHistory !== undefined;
   return (
     <div data-slot="message-actions" className={cn("flex items-center", className)} {...props}>
-      <TooltipIconButton tooltip={copied ? "Copied" : "Copy"} size="icon-xs" onClick={onCopy} className={cn("grid place-items-center text-ink-3", copied && "text-ok hover:text-ok")}>
+      <TooltipIconButton tooltip={copyLabel ?? (copied ? "Copied" : "Copy")} size="icon-xs" onClick={onCopy} className={cn("grid place-items-center text-ink-3", copied && "text-ok hover:text-ok")}>
         <Copy className={cn(iconSwap, "size-3.5", copied ? iconSwapOut : iconSwapIn)} />
         <Check className={cn(iconSwap, "size-3.5", copied ? iconSwapIn : iconSwapOut)} />
       </TooltipIconButton>

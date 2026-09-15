@@ -23,6 +23,8 @@ import { Hint } from "@/components/ui/hint";
 import { useIsTouch } from "@/hooks/use-mobile";
 import { DialogBody, dialogFormOf, ToolRowDialog, uiResponseFor, useRegisterToolRow } from "@/dialogs";
 import { toolDetailsDefaultOpen, toolDisplayResult, useActivityDetailLevel, useLaserStable, useLaserState } from "@/runtime";
+import { BodyOverflow } from "./BodyOverflow.js";
+import type { BlockBodies } from "@/store";
 import { useActivityDisclosureOverride } from "@/runtime/sessionPreferences";
 import { FileCard } from "./FileCard.js";
 import { activeToolLabel } from "./tool-groups.js";
@@ -111,8 +113,13 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
     ? (diffView.stats ?? diffStats(diffView.hunks))
     : undefined;
   const diffDescription = appliedDiffStats ? diffStatDescription(appliedDiffStats) : undefined;
+  // RP-5b: what of this call's output the window is not holding, and the way
+  // to read the rest. Outside the fold, like every other decision row.
+  const bodies = (props.artifact as { bodies?: BlockBodies } | undefined)?.bodies;
   const footer = (
     <>
+      <BodyOverflow body={bodies?.result} path={path ?? undefined} label="output" />
+      <BodyOverflow body={bodies?.args} path={path ?? undefined} label="request" />
       {approval ? <RowApproval {...props} /> : null}
       {interrupt && isInterruptPayload(interrupt.payload) ? (
         <InterruptFooter payload={interrupt.payload} resume={props.resume} />

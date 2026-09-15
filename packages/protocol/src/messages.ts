@@ -19,6 +19,7 @@ import type { PushConfig, PushDeviceInfo, PushSubscriptionJson } from "./push.js
 // Type-only, and erased: `pending.ts` augments the interfaces below, so the
 // cycle exists in the type graph and never in the emitted modules.
 import type { PendingMessage } from "./pending.js";
+import type { BodyComponent, BodyRegion, ElidedEntry, EntryRegionsResult, PersistedBodyIdentity } from "./body-range.js";
 
 // ---------- Shared value types (no Pi types allowed here) ----------
 
@@ -62,6 +63,12 @@ export interface HistoryWindow {
   hasHistory: boolean;
   context: unknown[];
   priorGoalIds: string[];
+  /**
+   * Records this page did not carry because a body of theirs is larger than
+   * the caller's `bodyLimit` (RP-5b). Identity and body metadata only; the
+   * bytes are read with `session/entry_range`.
+   */
+  elided?: ElidedEntry[];
   live?: HistoryLiveSnapshot;
   /** The authority that produced this page. Durable pages never carry live work or actions. */
   authority?: "live" | "durable";
@@ -314,12 +321,37 @@ export type SessionUpdate =
       /** This turn's usage. Absent when the provider reported none. */
       usage?: Usage;
       /**
-       * Where a user message landed in the session tree, known the moment the
-       * engine writes it — before the provider request goes out, not when the
-       * turn ends. `parentId` is the entry it continues (`null` at the root).
-       * Absent for other roles, and for a user message never persisted.
+       * Where this message landed in the session tree, known the moment the
+       * engine writes it. `parentId` is the entry it continues (`null` at the
+       * root). Absent for a message the engine never persisted.
+       *
+       * `bodies` is the canonical identity of that entry's bodies — exact size
+       * and digest per component, hashed from the record without building any
+       * of it — so a surface holding an excerpt of a settled body can address
+       * the rest without reopening the conversation (RP-5b). It is bounded:
+       * `omitted` counts components left out, `truncated` says a cap was
+       * reached, and a client leaves any ref it did not receive exactly as it
+       * was rather than guessing it.
        */
-      entry?: { id: string; parentId: string | null };
+      entry?: {
+        id: string;
+        parentId: string | null;
+        bodies?: PersistedBodyIdentity[];
+        omitted?: number;
+        truncated?: true;
+        /**
+         * The revision of the state this entry was written into, for
+         * diagnostics and cache keys only — **not** a read fence.
+         *
+         * A turn keeps writing after a message settles, so by the time anyone
+         * reads this body that revision is usually already behind, and a
+         * request pinned to it would be refused. A client obtains a current
+         * revision, fences every slice of one read to that single value, and
+         * relies on `bodies[].contentDigest` to prove the bytes are this body
+         * — which they cannot be if the record changed (RP-5b).
+         */
+        revision?: string;
+      };
     }
   | { kind: "tool_execution_start"; toolCallId: string; toolName: string; args: unknown }
   | { kind: "tool_execution_update"; toolCallId: string; partial: unknown }
@@ -1109,6 +1141,92 @@ export interface ClientRequests {
   };
   "session/cancel": { params: { path: string }; result: {} };
   "session/set_mode": { params: { path: string; mode: string }; result: {} };
+  /**
+   * One body of one entry, as bytes (RP-5b).
+   *
+   * A surface holds a bounded excerpt of a large reply, tool result or image
+   * and reads the rest from here, a slice at a time. The address is
+   * (environment, session, revision, entry, component) — never a path, an
+   * offset into storage or anything else about how a conversation is stored.
+   *
+   * Answered by the worker that owns the session when one is live, otherwise
+   * by the host's read-only projection of the stored conversation, which never
+   * starts a worker. A `revision` that is not the one being served is refused
+   * with `RevisionUnavailable`; the caller re-reads the conversation rather
+   * than receiving bytes from a state it did not ask about.
+   */
+  "session/entry_range": {
+    params: {
+      path: string;
+      environmentKey: string;
+      revision: string;
+      entryId: string;
+      component: BodyComponent;
+      /** Exact UTF-8 offset into that body. An offset inside a character is refused. */
+      offset: number;
+      /** At most `ENTRY_RANGE_MAX_BYTES`, which is also the default. */
+      limit?: number;
+      /**
+       * Read only this part of the component — an attachment inside a prompt.
+       * `offset` stays absolute in the component's bytes; a read that begins
+       * outside the region is refused rather than moved into it.
+       */
+      region?: BodyRegion;
+    };
+    result: {
+      authority: "live" | "durable";
+      revision: string;
+      /** The entry asked about, always echoed: no answer is another's. */
+      entryId: string;
+      component: BodyComponent;
+      /** Exact UTF-8 size of the whole body. */
+      totalBytes: number;
+      offset: number;
+      bytes: number;
+      /** Where the next slice starts; absent at the end. */
+      next?: number;
+      truncated: boolean;
+      /** SHA-256 of this slice, and of the whole body. */
+      sliceDigest: string;
+      contentDigest: string;
+      /** Echo of the region asked for, and that region's own digest. */
+      region?: BodyRegion;
+      regionDigest?: string;
+      text: string;
+    };
+  };
+
+  /**
+   * The attachments inside one body, one bounded page at a time (RP-5b).
+   *
+   * A prompt with files in it is stored as one text with wrappers around them.
+   * A surface holding an excerpt cannot find those wrappers — they are mostly
+   * in bytes it does not have — so the authority, which has the record, names
+   * them: where each attachment's content is, how big it is, what it is called
+   * and the digest of its own bytes. Reading one is then an ordinary range
+   * read with `region`.
+   *
+   * Bounded in what it describes and in how far it looks, so a reply is always
+   * small. `omitted` is exact when the whole component was scanned; when it
+   * was not, `truncated` is set and no count is claimed at all.
+   *
+   * Answered by the owning worker when one is live, otherwise by the host's
+   * read-only projection — which never starts a worker.
+   */
+  "session/entry_regions": {
+    params: {
+      path: string;
+      environmentKey: string;
+      revision: string;
+      entryId: string;
+      component: BodyComponent;
+      /** Where this page starts, in component bytes. Absent: the first page. */
+      from?: number;
+      /** How many attachments to describe; at most `BODY_REGION_MAX_ITEMS`. */
+      limit?: number;
+    };
+    result: EntryRegionsResult;
+  };
 
   "pi/session/list": {
     params: { cwd?: string; page?: { cursor?: string; size?: number; sizes?: Record<string, number>; exclude?: string[]; include?: string[]; probe?: string[] } };
@@ -1185,11 +1303,35 @@ export interface ClientRequests {
    * request, so a fork that fails leaves the session stopped and untouched
    * rather than half-moved (M13-T46). Idle sessions ignore it.
    */
-  "pi/session/fork": { params: { path: string; entryId: string; stopFirst?: boolean }; result: { state: SessionState; editorText?: string } };
+  "pi/session/fork": {
+    params: { path: string; entryId: string; stopFirst?: boolean };
+    result: {
+      state: SessionState;
+      /**
+       * The forked entry's text, for editing and resending — and only when it
+       * fits what a composer may hold ({@link MESSAGE_RENDER_MAX_BYTES}). A
+       * larger prompt is never serialized back into a renderer: `editorText`
+       * is absent and `editorTextBytes` says how large it is, so the surface
+       * can say so honestly and read it deliberately if it has the room
+       * (RP-5b B3).
+       */
+      editorText?: string;
+      /** Exact UTF-8 size of that entry's text, whether or not it was sent. */
+      editorTextBytes?: number;
+      /** The text was left out because it is larger than a composer may hold. */
+      editorTextOmitted?: true;
+    };
+  };
   /** `stopFirst` as on `pi/session/fork`: stop the running turn, then move. */
   "pi/session/navigate": {
     params: { path: string; entryId: string; summarize?: boolean; label?: string; stopFirst?: boolean };
-    result: { editorText?: string; cancelled: boolean };
+    result: {
+      /** Bounded exactly as `pi/session/fork`'s is (RP-5b B3). */
+      editorText?: string;
+      editorTextBytes?: number;
+      editorTextOmitted?: true;
+      cancelled: boolean;
+    };
   };
   "pi/session/rename": { params: { path: string; name: string }; result: {} };
   /**
@@ -1228,6 +1370,15 @@ export interface ClientRequests {
        * keep their requested page/tree semantics and return a replacement.
        */
       baseRevision?: string;
+      /**
+       * RP-5b. The largest body this caller is willing to receive inside one
+       * record, in exact UTF-8 bytes. A record carrying a larger body is left
+       * out of `entries` and listed in `window.elided` with its identity and
+       * the exact size and digest of every body it has, so the caller can read
+       * what it needs with `session/entry_range`. No record is ever rewritten:
+       * an entry is delivered whole or not delivered at all.
+       */
+      bodyLimit?: number;
     };
     result: { entries: unknown[]; leafId?: string | null; window?: HistoryWindow };
   };

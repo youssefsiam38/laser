@@ -1,5 +1,6 @@
 import { AuiConfig, AuiIf, AuiProvider, Suggestions, ThreadPrimitive, useAui } from "@assistant-ui/react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { RECONCILE_MAX_READS } from "@/runtime/history-loader";
 
 import { ConversationMapAui } from "@/components/assistant-ui/elements/conversation-map.aui";
 import { ThreadFollowupSuggestions } from "@/components/assistant-ui/elements/follow-up-suggestions.aui";
@@ -21,7 +22,7 @@ import { Composer } from "./Composer.js";
 import { EmptyState } from "./EmptyState.js";
 import { ThreadSlotsProvider, type ThreadSlots } from "./thread-slots.js";
 import { useConversationFind } from "./use-conversation-find.js";
-import { FindSelectionContext } from "./search-state.js";
+import { FindQueryContext, FindSelectionContext } from "./search-state.js";
 import { TranscriptViewportProvider, TranscriptViewportBinding, WindowedMessages, useTranscriptViewport } from "./transcript-viewport.js";
 
 /**
@@ -90,6 +91,7 @@ function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
     <>
     <SessionSeenBridge ready={connected && open.phase === "ready"} covered={page !== null} />
     <FindSelectionContext value={find.selectedMessage}>
+    <FindQueryContext value={find.query}>
     <ThreadSlotsProvider slots={slots}>
       <TooltipProvider>
         <AuiProvider extends={aui} config={suggestions}>
@@ -150,6 +152,7 @@ function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
         </AuiProvider>
       </TooltipProvider>
     </ThreadSlotsProvider>
+    </FindQueryContext>
     </FindSelectionContext>
     </>
   );
@@ -209,7 +212,7 @@ function EntriesRefresh() {
 }
 
 /** History is explicit, and upward reading fetches the next complete turn page. */
-function HistoryControls() {
+export function HistoryControls() {
   const { actions } = useLaserStable();
   const controller = useTranscriptViewport();
   const history = useLaserState(s => s.current ? s.open[s.current]?.history : undefined);
@@ -220,6 +223,24 @@ function HistoryControls() {
   const interacted = useRef(false);
   const [loading, setLoading] = useState<"earlier" | "all" | null>(null);
   const [announcement, setAnnouncement] = useState("");
+  const path = useLaserState(s => s.current);
+  const stamp = useLaserState(s => (s.current ? s.open[s.current]?.trimmed : undefined));
+  const deferred = stamp !== undefined;
+  // Two reads for one stamp, and no more: after that the control says what is
+  // true rather than pretending another press would do something.
+  const spent = (stamp?.reads ?? 0) >= RECONCILE_MAX_READS;
+  const [reloading, setReloading] = useState(false);
+  const reload = useCallback(async () => {
+    if (!path || reloading) return;
+    setReloading(true);
+    controller.capture();
+    try {
+      await actions.reloadRecentHistory();
+      setAnnouncement("Recent history reloaded.");
+    } finally {
+      setReloading(false);
+    }
+  }, [actions, controller, path, reloading]);
   const load = useCallback(async (all = false) => {
     if (busy.current || (history?.complete && (!all || !history.branchesUnloaded))) return;
     busy.current = true;
@@ -284,6 +305,20 @@ function HistoryControls() {
       viewport.removeEventListener("scroll", scroll);
     };
   }, [history?.before, load]);
+  // RP-5b §7: a view whose older turns were released has no cursor — only the
+  // authority can mint one — so it never offers to load earlier messages as if
+  // it could. It offers to read the conversation's recent history again, which
+  // is the thing that restores the cursor.
+  if (deferred) {
+    return <div ref={root} className="flex flex-wrap items-center justify-center gap-2 py-2 text-sm text-ink-2" aria-busy={reloading}>
+      {spent
+        ? <span data-slot="reload-exhausted">Earlier messages are not loaded here. Open this conversation again to read them.</span>
+        : <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" aria-disabled={reloading} onClick={() => void reload()}>
+            {reloading ? "Reading recent history…" : "Reload recent history"}
+          </Button>}
+      <span role="status" className="sr-only">{announcement}</span>
+    </div>;
+  }
   if (!history || (history.complete && !requestedHistory.current)) return null;
   return <div ref={root} className="flex flex-wrap items-center justify-center gap-2 py-2 text-sm text-ink-2" aria-busy={loading !== null}>
     {history.before && <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" aria-disabled={loading !== null} onClick={() => void load()}>
