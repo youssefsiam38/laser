@@ -10,6 +10,15 @@
  * counts are mono and tabular), long values truncate with the full text in
  * the tooltip, and a row with nothing to say is not drawn rather than drawn
  * as "—" (R3).
+ *
+ * **Narrow containers stack.** A label column is `max-content`, so a long
+ * label ("peak resident (not additive)") leaves a phone with sixty pixels for
+ * the value it explains — which then truncates behind a `title` no touch
+ * screen can open, or breaks a word down the column. Below `@sm` the row
+ * therefore becomes label-over-value across the full width and nothing
+ * truncates; at `@sm` and wider it is the same compact two-column sheet it
+ * always was. The measurement is the *container*, not the viewport: this
+ * element lives in rails and sheets that are narrow on a wide screen.
  */
 import type { ComponentProps } from "react";
 
@@ -60,21 +69,21 @@ export interface SpecSheetProps extends Omit<ComponentProps<"div">, "children" |
 export function SpecSheet({ title, subtitle, rows, bare = false, className, ...props }: SpecSheetProps) {
   if (rows.length === 0) return null;
   return (
-    <div data-slot="spec-sheet" className={cn("flex w-full min-w-0 flex-col gap-2", !bare && cn(paper, "rounded-lg p-3"), className)} {...props}>
+    <div data-slot="spec-sheet" className={cn("@container flex w-full min-w-0 flex-col gap-2", !bare && cn(paper, "rounded-lg p-3"), className)} {...props}>
       {title || subtitle ? (
         <div className="flex min-w-0 flex-col gap-0.5">
           {title ? <span className="truncate text-sm font-medium text-ink">{title}</span> : null}
           {subtitle ? <span className="truncate text-xs text-ink-2">{subtitle}</span> : null}
         </div>
       ) : null}
-      <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1">
+      <dl className="grid grid-cols-[minmax(0,1fr)] gap-x-3 gap-y-2 @sm:grid-cols-[max-content_minmax(0,1fr)] @sm:gap-y-1">
         {rows.map((r) => (
-          <div key={r.label} className="contents">
+          <div key={r.label} className="flex min-w-0 flex-col gap-0.5 @sm:contents">
             <dt className="eyebrow self-baseline pt-px">{r.label}</dt>
             <dd
               className={cn(
-                "min-w-0 text-end",
-                r.wrap ? "wrap-break-word whitespace-normal" : "truncate",
+                "min-w-0 wrap-break-word whitespace-normal @sm:text-end",
+                r.wrap ? "@sm:wrap-break-word @sm:whitespace-normal" : "@sm:truncate",
                 r.typed ? cn(mono, "tnum") : "text-sm",
                 r.emphasis ? "font-medium text-ink" : "text-ink-2",
               )}
