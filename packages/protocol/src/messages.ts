@@ -747,6 +747,17 @@ export interface LogContentRef {
 }
 
 /**
+ * Why a body cannot be read in full (RP-7 / D-245). The first three are the
+ * store letting go of something it once had; the rest are a capture whose body
+ * was never kept, and the row says which.
+ */
+export type LogBodyAbsence =
+  | "budget"
+  | "session-limit"
+  | "retention"
+  | import("./provider-capture.js").ProviderCaptureOmission;
+
+/**
  * What is left of a body the store released (D-245). Bodies are the whole
  * conversation of one turn; the store keeps the most recent ones per session
  * inside a byte budget and reduces the rest to the line the row already had.
@@ -757,9 +768,15 @@ export interface LogBodySummary {
    * `session-limit` — newer requests in this session took its place.
    * `retention` — the rows that referenced it are gone.
    */
-  reason: "budget" | "session-limit" | "retention";
-  /** Size of the body when it was stored. */
+  reason: LogBodyAbsence;
+  /**
+   * Size of the **redacted stored representation** in UTF-8 bytes — the only
+   * thing that could ever have been read back, not the size of the original
+   * request.
+   */
   bytes: number;
+  /** SHA-256 of exactly those redacted bytes, so the body stays identifiable. */
+  sha256?: string;
   /** The row's own line: model, message count, size. */
   summary: string;
   /** Leading characters of the body, kept on the row. */
@@ -1399,7 +1416,16 @@ export interface ClientRequests {
    */
   "pi/logs/content": {
     params: { ref: string; maxBytes?: number };
-    result: { ref: string; contentType: string; bytes: number; truncated: boolean; text: string; released?: LogBodySummary };
+    result: {
+      ref: string;
+      contentType: string;
+      bytes: number;
+      truncated: boolean;
+      /** Bytes actually returned when `truncated`; `bytes` stays the stored size. */
+      truncatedAt?: number;
+      text: string;
+      released?: LogBodySummary;
+    };
   };
   "pi/logs/stats": { params: {}; result: { stats: LogStats } };
   /** Delete rows. Omit `sections` to clear everything. */
