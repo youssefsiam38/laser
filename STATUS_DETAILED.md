@@ -2429,7 +2429,7 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 | M18-T12 | RP-12 worker-free authoritative reads | done | orchestrator-01a0a030 + revision-read worker | `e9e3d8d`; focused protocol/host/worker + typecheck/identity/direction pass | see notes |
 | M18-T13 | RP-13 remote/cloud/enterprise policy | done | orchestrator-01a0a030 + environment-policy/browser workers | `a0111f9`; real host/browser 4×2 matrices + UI 1789 + browser-check 69 | see notes; depends on M18-T12 |
 | M18-T14 | RP-14 Electron/Tauri decision gate | todo | — | — | depends on M18-T1..T13/M18-T15 |
-| M18-T15 | RP-2 post-containment repeat baseline | todo | — | — | depends on M18-T4..T8; split by D-257 |
+| M18-T15 | RP-2 post-containment repeat baseline | in-progress | soak-harness-readiness `01a0a434-bd43-76c8-926f-53918d27a39b` | — | harness prerequisites active; full A/B waits M18-T8 |
 
 #### M18-T1 notes
 - 2026-09-14 baseline: protocol 144/144 and host 316/316 pass at `ec1c42d`. Desktop 155/156 passes; `test/host-environment.test.ts` reproducibly expects same-version adoption but receives `failed` before this task changes code. Treat as a pre-existing baseline, not a telemetry regression; M18-T1 must keep every other desktop test green and report this exact case separately if unchanged.
@@ -2466,7 +2466,7 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 
 #### M18-T15 notes
 - 2026-09-14 created by D-257: do not run until T4–T8 contain the measured renderer/task/transport lifetimes. Reuse the unchanged reviewed T2 fixtures and fixed ceilings for two clean full runs, then write `docs/resource-soak-baseline.md`.
-- 2026-09-15 T8 calibration found two harness prerequisites for T15: scenario 8 still times out waiting for real WebSocket buffered bytes after T7, and worker inspector counters still read removed `sessions` instead of T4's `runtimes`, falsely returning zero. T15 must correct both without changing fixture workload/ceilings before its two clean runs.
+- 2026-09-15 T8 calibration found two harness prerequisites for T15: scenario 8 still times out waiting for real WebSocket buffered bytes after T7, and worker inspector counters still read removed `sessions` instead of T4's `runtimes`, falsely returning zero. Harness-readiness owner `01a0a434-bd43-76c8-926f-53918d27a39b` run `run_4b19dd9b` owns only those two `scripts/browser-check/resource/**` corrections and an unchanged quick proof on base `dfd0e4b0`; final full A/B remains gated on T8.
 
 #### M18-T4 notes
 - 2026-09-14 claimed: owner `01a0a1f8-57b0-76c8-926f-52a825867a5f` investigates the worker/runtime attachment, pin, replay-floor and unload state machines before code, and must settle its read-only task-ownership interface with T6. Plan: `/tmp/m18-t4-plan.md`; isolated base `ad8c188`; no source writes until approval.
