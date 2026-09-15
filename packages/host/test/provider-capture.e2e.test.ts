@@ -161,12 +161,16 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("a large provider capture, end
     expect(short.bytes).toBe(stored!.detailRef!.bytes);
     expect(body.startsWith(short.text)).toBe(true);
 
-    // The same path at the ceiling: prompts until the request Pi builds is
-    // past 16 MiB, which the producer records without its body. This is the
-    // real worker, the real companion and the real link — the ceiling is not
-    // a unit-test constant here.
-    let ceiling: { reason: string; bytes: number; sha256?: string } | undefined;
-    for (let turn = 0; turn < 8 && !ceiling; turn++) {
+    // A near-ceiling capture, completed for real. Prompts grow the
+    // conversation until one request is within a couple of megabytes of the
+    // 16 MiB ceiling; the producer sends it cooperatively, the host reassembles
+    // it, and the store keeps all of it. The public content RPC caps one read
+    // at 8 MiB, so the prefix is verified through it and the whole body is
+    // verified through the store itself — never assembled through a client.
+    const store = host.logs!;
+    let nearCeiling: { ref: string; bytes: number } | undefined;
+    let ceiling: { reason: string; bytes?: number; sha256?: string } | undefined;
+    for (let turn = 0; turn < 10 && !ceiling; turn++) {
       await send("session/prompt", { path: state.path, content: [{ type: "text", text: `${marker} ${turn}: ${"y".repeat(2 * 1024 * 1024)}` }] });
       await expect
         .poll(async () => (await send<{ state: SessionState }>("session/load", { path: state.path })).state.isStreaming === false, {
@@ -183,17 +187,34 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("a large provider capture, end
         { jsonrpc: "2.0", id: 200 + turn, method: "pi/logs/content", params: { ref: newest.detailRef.ref, maxBytes: 8 * 1024 * 1024 } },
         LOCAL_ACCESS,
       );
-      const released = (read.result as { released?: { reason: string; bytes: number; sha256?: string } }).released;
+      const released = (read.result as { released?: { reason: string; bytes?: number; sha256?: string } }).released;
       if (released?.reason === "over-ceiling") ceiling = released;
+      else if (newest.detailRef.bytes > 12 * 1024 * 1024) nearCeiling = { ref: newest.detailRef.ref, bytes: newest.detailRef.bytes };
     }
+
+    expect(nearCeiling, "no capture between 12 MiB and the ceiling completed").toBeDefined();
+    // Through the store's own seam: every byte, its digest, and the chunk
+    // integrity the read validates on the way.
+    const whole = store.content(nearCeiling!.ref, 64 * 1024 * 1024);
+    expect(whole.released).toBeUndefined();
+    expect(whole.truncated).toBe(false);
+    expect(Buffer.byteLength(whole.text, "utf8")).toBe(nearCeiling!.bytes);
+    expect(createHash("sha256").update(whole.text).digest("hex")).toBe(nearCeiling!.ref);
+    // And through the public RPC, which reads a bounded prefix of the same body.
+    const prefix = await host.router.handle(
+      { jsonrpc: "2.0", id: 300, method: "pi/logs/content", params: { ref: nearCeiling!.ref, maxBytes: 8 * 1024 * 1024 } },
+      LOCAL_ACCESS,
+    );
+    const prefixRead = prefix.result as { text: string; truncated: boolean; truncatedAt?: number; bytes: number };
+    expect(prefixRead.truncated).toBe(true);
+    expect(prefixRead.bytes).toBe(nearCeiling!.bytes);
+    expect(whole.text.startsWith(prefixRead.text)).toBe(true);
+
+    // The ceiling case is still recorded, without a body, with what it knows.
     expect(ceiling, "no request past the 16 MiB ceiling was recorded").toBeDefined();
     expect(ceiling!.bytes).toBeGreaterThan(16 * 1024 * 1024);
     expect(ceiling!.sha256).toMatch(/^[0-9a-f]{64}$/);
 
-    // Nothing of the capture reached the client on the way: not the body, not
-    // a chunk, not the metadata.
-    // (The prompt's own text does reach the client, as the transcript: that is
-    // the conversation. What must not reach it is the capture.)
     // (The prompt's own text reaches the client as the transcript: that is the
     // conversation. A log row's digest reaches it through `pi/logs/append`,
     // which is the row, not the body. What must never cross is a capture

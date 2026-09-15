@@ -139,11 +139,27 @@ export function isSheddable(method: string): boolean {
  * never does.
  */
 export interface ProviderCaptureLink {
-  /** Bytes accepted for the app and not yet written. */
+  /** Bytes accepted for the app and not yet written. Raw: never net of anyone. */
   pendingBytes: () => number;
   /** False when the store keeps summaries only, so no body is worth sending. */
   retainBodies: () => boolean;
+  /**
+   * Give the link a turn to write what it is holding.
+   *
+   * A large capture is sent as bounded pieces, and the loop that sends them
+   * must let the pipe drain between pieces or it would put the whole capture
+   * behind the session's own updates in one go. Awaited only when the backlog
+   * is at its mark, so an idle link costs nothing.
+   */
+  drain?: () => Promise<void>;
 }
+
+/**
+ * Turns a capture will wait for its link before giving up on it. Each is one
+ * pass of the event loop; eight of them with no progress is a link nobody is
+ * reading, not a busy moment.
+ */
+export const CAPTURE_DRAIN_ATTEMPTS = 8;
 
 /** What one connection released, in numbers. Never a payload, never a path. */
 export interface ShedCounters {

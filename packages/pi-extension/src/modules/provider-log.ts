@@ -22,6 +22,7 @@ import type { LaserModule } from "./index.js";
 import type { BeforeProviderRequestEvent, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   CAPTURE_CHUNKED_ABOVE_BYTES,
+  CAPTURE_DRAIN_ATTEMPTS,
   CAPTURE_CHUNK_BYTES,
   CAPTURE_MAX_BYTES,
   WORKER_PIPE_SOFT_BYTES,
@@ -33,6 +34,7 @@ import {
   type ProviderCaptureSummary,
   type ProviderRequestContext,
 } from "@lasercode/protocol";
+import type { OutboundMessage as OutboundCapture } from "./index.js";
 
 /** Leading characters kept on the row, matching the store's own preview. */
 const PREVIEW_CHARS = 240;
@@ -100,6 +102,41 @@ function newCaptureId(): string {
   return `c-${randomBytes(8).toString("hex")}`;
 }
 
+/**
+ * Hand a large capture to the link, a bounded piece at a time.
+ *
+ * Before every piece the **raw** backlog is read — not net of what this
+ * capture has written, which would exempt a capture from the mark it is
+ * supposed to respect. Over the mark, the loop gives the link turns to write
+ * what it holds; a link that takes them finishes the capture, and one that
+ * does not gets an abort. What a stalled link is left holding is therefore the
+ * mark, plus the chunk in flight, plus the small terminal frame.
+ */
+async function streamCapture(input: {
+  send: (message: OutboundCapture) => void;
+  link: ProviderCaptureLink | undefined;
+  meta: ProviderCaptureMeta;
+  chunks: string[];
+  bytes: number;
+}): Promise<void> {
+  const { send, link, meta, chunks, bytes } = input;
+  send({ type: "lasercode/provider/request/begin", ...meta, chunks: chunks.length });
+  for (const [index, text] of chunks.entries()) {
+    let pending = link?.pendingBytes() ?? 0;
+    for (let attempt = 0; attempt < CAPTURE_DRAIN_ATTEMPTS && pending > WORKER_PIPE_SOFT_BYTES; attempt++) {
+      // Only when it matters: an idle link never waits.
+      await (link?.drain?.() ?? Promise.resolve());
+      pending = link?.pendingBytes() ?? 0;
+    }
+    if (pending > WORKER_PIPE_SOFT_BYTES) {
+      send({ type: "lasercode/provider/request/abort", captureId: meta.captureId, reason: "link-busy" });
+      return;
+    }
+    send({ type: "lasercode/provider/request/chunk", captureId: meta.captureId, index, text });
+  }
+  send({ type: "lasercode/provider/request/end", captureId: meta.captureId, chunks: chunks.length, bytes });
+}
+
 export const providerLogModule: LaserModule = {
   name: "provider-log",
   detect: () => true,
@@ -122,9 +159,10 @@ export const providerLogModule: LaserModule = {
       };
       const meta: ProviderCaptureMeta = encoded.ok
         ? { ...base, bytes: encoded.bytes, sha256: encoded.sha256, preview: encoded.preview, redactedFields: encoded.redactedFields }
-        : // A body that could not be cleaned has no size, digest or preview to
-          // report: none of them may be computed over text nobody may keep.
-          { ...base, bytes: 0, sha256: "", preview: "", redactedFields: 0 };
+        : // A body that could not be made safe has no stored representation, so
+          // it has no size, digest or preview either. They are left out rather
+          // than reported as zero: nothing here was measured.
+          { ...base, redactedFields: 0 };
       const omit = (reason: ProviderCaptureOmission): undefined => {
         send({ type: "lasercode/provider/request/omitted", ...meta, reason });
         return undefined;
@@ -142,31 +180,11 @@ export const providerLogModule: LaserModule = {
       }
 
       const chunks = chunkBody(encoded.body);
-      send({ type: "lasercode/provider/request/begin", ...meta, chunks: chunks.length });
-      let written = 0;
-      for (const [index, text] of chunks.entries()) {
-        // The link is re-read before every piece, not once at the start: a
-        // clear pipe at the first chunk says nothing about the tenth.
-        //
-        // What is measured is the backlog **this capture did not cause**. A
-        // large capture puts itself over any mark — the loop does not yield,
-        // so nothing can drain while it runs — and aborting on that would mean
-        // no large capture is ever kept. Somebody else's backlog past the mark
-        // is the real signal: the session's own updates are waiting behind a
-        // diagnostic, and the diagnostic is the one that gives way. It stops
-        // where it is with one small abort, the host releases the pieces it
-        // holds, and the request is still recorded, without its body and with
-        // the reason. The total a capture can ever hand the link is bounded by
-        // the capture ceiling regardless.
-        const others = (captureLink?.pendingBytes() ?? 0) - written;
-        if (others > WORKER_PIPE_SOFT_BYTES) {
-          send({ type: "lasercode/provider/request/abort", captureId: meta.captureId, reason: "link-busy" });
-          return undefined;
-        }
-        written += Buffer.byteLength(text, "utf8");
-        send({ type: "lasercode/provider/request/chunk", captureId: meta.captureId, index, text });
-      }
-      send({ type: "lasercode/provider/request/end", captureId: meta.captureId, chunks: chunks.length, bytes: encoded.bytes });
+      // Sent cooperatively, and not on the turn's way: the hook returns now,
+      // and the pieces go as the link takes them. Nothing about a turn, a tool
+      // or a command waits for this — a capture is a diagnostic, and the one
+      // thing it may cost is itself.
+      void streamCapture({ send, link: captureLink, meta, chunks, bytes: encoded.bytes });
       return undefined;
     };
     if (requestProvenance) requestProvenance.onRequest(capture);

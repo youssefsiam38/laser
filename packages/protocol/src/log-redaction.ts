@@ -94,6 +94,29 @@ export type StorageProjection =
   | { ok: false; reason: "unredacted"; survivors: string[] };
 
 export function redactForStorage(value: unknown): StorageProjection {
+  const first = project(value);
+  if (findCredentialShapedKeys(first.body).length === 0) return { ok: true, ...first };
+  // Something credential-shaped is in the text that the walk did not see —
+  // `toJSON`, a getter, a shape that serializes differently from how it reads.
+  // Canonicalise (so what the walk sees is exactly what serialization
+  // produces) and redact that. A second serialization only ever happens for a
+  // payload that needed one.
+  let canonical: unknown;
+  try {
+    canonical = JSON.parse(first.body) as unknown;
+  } catch {
+    canonical = undefined;
+  }
+  const second = project(canonical ?? { laser: "payload was not JSON-serializable", type: typeof value });
+  const survivors = findCredentialShapedKeys(second.body);
+  // Still not clean: nothing is stored, and the caller records the row without
+  // a body rather than keeping text it cannot vouch for.
+  if (survivors.length > 0) return { ok: false, reason: "unredacted", survivors };
+  return { ok: true, ...second };
+}
+
+/** Redact, annotate and serialize once. */
+function project(value: unknown): { body: string; redactedFields: number; depthOmissions: number } {
   const { value: safe, count, depthOmissions } = redact(value);
   // Say so rather than lying by omission: a row that dropped fields shows it.
   const annotated =
@@ -111,9 +134,7 @@ export function redactForStorage(value: unknown): StorageProjection {
     // A payload with a cycle or a BigInt is still worth a row.
     body = JSON.stringify({ laser: "payload was not JSON-serializable", type: typeof value });
   }
-  const survivors = findCredentialShapedKeys(body);
-  if (survivors.length > 0) return { ok: false, reason: "unredacted", survivors };
-  return { ok: true, body, redactedFields: count, depthOmissions };
+  return { body, redactedFields: count, depthOmissions };
 }
 
 /** Same JSON-key grammar as {@link SECRET_KEY}, matched inside serialized text. */

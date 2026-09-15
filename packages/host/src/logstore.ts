@@ -1165,7 +1165,7 @@ export class LogStore {
         summary: describeProviderCapture(meta.summary, stored.bytes),
         ...(meta.context ? { requestContext: meta.context } : {}),
       },
-      { inline: null, ref: stored.ref, bytes: stored.bytes, contentType: stored.contentType, preview: meta.preview },
+      { inline: null, ref: stored.ref, bytes: stored.bytes, contentType: stored.contentType, preview: meta.preview ?? "" },
     );
     if (entry) this.noteOpenProviderRequest(sessionPath, entry.id, meta.at);
   }
@@ -1177,6 +1177,11 @@ export class LogStore {
    */
   recordProviderAbsent(cwd: string, sessionPath: string, meta: ProviderCaptureMeta, reason: ProviderCaptureOmission): void {
     if (this.closed) return;
+    // A capture with no safe stored representation has nothing to measure: no
+    // size, no digest, no preview, and so no body reference either. The row
+    // says the request happened and why its text is not here, instead of
+    // publishing a zero somebody could read as a measurement.
+    const measured = meta.sha256 !== undefined && meta.bytes !== undefined;
     const entry = this.recordEncoded(
       {
         section: "provider",
@@ -1184,12 +1189,15 @@ export class LogStore {
         cwd,
         sessionPath,
         at: meta.at,
-        summary: describeProviderCapture(meta.summary, meta.bytes),
+        summary: `${describeProviderCapture(meta.summary, meta.bytes)}${measured ? "" : ` · ${UNREDACTABLE_BODY}`}`,
         ...(meta.context ? { requestContext: meta.context } : {}),
       },
-      { inline: null, ref: meta.sha256, bytes: meta.bytes, contentType: "application/json", preview: meta.preview },
+      measured
+        ? { inline: null, ref: meta.sha256!, bytes: meta.bytes!, contentType: "application/json", preview: meta.preview ?? "" }
+        : { inline: null, ref: null, bytes: null, contentType: null, preview: null },
     );
     if (!entry) return;
+    if (!measured) return;
     // The very same bytes may already be on disk from an earlier turn: content
     // is shared by digest, so that row opens and this one must not claim
     // otherwise. Only a body nobody has is marked absent.
@@ -1529,14 +1537,15 @@ export function summaryModel(summary: string): string | undefined {
  * size when it recognises nothing.
  */
 /** The same line, from a summary the producer computed (RP-7). */
-export function describeProviderCapture(summary: ProviderCaptureSummary, bytes: number): string {
+export function describeProviderCapture(summary: ProviderCaptureSummary, bytes?: number): string {
   const parts: string[] = [];
   if (summary.model) parts.push(summary.model);
   if (summary.messages !== undefined) parts.push(`${summary.messages} message${summary.messages === 1 ? "" : "s"}`);
   if (summary.tools !== undefined && summary.tools > 0) parts.push(`${summary.tools} tools`);
   if (summary.stream) parts.push("stream");
   if (summary.thinking) parts.push("thinking");
-  parts.push(formatBytes(bytes));
+  // No size when nothing was measured: a row says what it knows.
+  if (bytes !== undefined) parts.push(formatBytes(bytes));
   return parts.join(" · ");
 }
 

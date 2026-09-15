@@ -114,6 +114,8 @@ export interface WorkerServerOptions {
    * updates. Work is never paused by this — only a diagnostic is.
    */
   transportPending?: () => number;
+  /** Give that link a turn to write what it is holding (RP-7). */
+  transportDrain?: () => Promise<void>;
   /**
    * False when the log store keeps request summaries only. The body is then
    * not serialized or sent at all, instead of crossing the link so the host
@@ -1496,6 +1498,7 @@ export class WorkerServer {
   private readonly captureLink: ProviderCaptureLink = {
     pendingBytes: () => this.options.transportPending?.() ?? 0,
     retainBodies: () => this.options.retainProviderBodies !== false,
+    drain: () => this.options.transportDrain?.() ?? Promise.resolve(),
   };
 
   /**

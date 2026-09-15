@@ -56,12 +56,18 @@ export interface ProviderCaptureMeta {
   /** Opaque, fixed-width, unique within one worker generation. */
   captureId: string;
   at: string;
-  /** Size of the redacted, stored representation in UTF-8 bytes. */
-  bytes: number;
-  /** SHA-256 of exactly those bytes. */
-  sha256: string;
-  /** Leading characters of the redacted body, for the collapsed row. */
-  preview: string;
+  /**
+   * Size of the redacted, stored representation in UTF-8 bytes.
+   *
+   * Absent — not zero — when there is no such representation to measure,
+   * which is the case for a body that could not be made safe to keep. A
+   * measurement nobody took is never published as one.
+   */
+  bytes?: number;
+  /** SHA-256 of exactly those bytes; absent for the same reason. */
+  sha256?: string;
+  /** Leading characters of the redacted body; absent when there is no safe body. */
+  preview?: string;
   /** How many credential-shaped fields the producer replaced. */
   redactedFields: number;
   /** Chunks the body was split into; absent when there is no body to send. */

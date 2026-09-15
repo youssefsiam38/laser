@@ -77,11 +77,12 @@ it("keeps a deeply nested credential out of an ordinary row", () => {
   expect(JSON.stringify(entry)).toContain("hello");
 });
 
-it("refuses to keep a body whose credential the projection cannot remove", () => {
+it("catches a credential that only appears at serialization time, and keeps none of it", () => {
   const { log, file } = open();
   // A value the structural walk never sees, because it is produced at
-  // serialization time. This is the shape the refusal exists for: the scan
-  // reads the serialized text back and the row keeps no body at all.
+  // serialization time. The projection scans its own output, canonicalises
+  // what it finds and redacts that, so the row keeps a body with no secret in
+  // it — and if it still could not clean it, the row would keep no body at all.
   const hostile = {
     model: "m",
     evidence: {
@@ -92,11 +93,9 @@ it("refuses to keep a body whose credential the projection cannot remove", () =>
   };
   log.record({ section: "tools", kind: "tool_end", summary: "a tool", sessionPath: "/s", detail: hostile });
 
-  assertNoCanary(log, file, "refused body");
+  assertNoCanary(log, file, "late credential");
   const entry = log.query({ limit: 10 }).entries[0]!;
-  expect(JSON.stringify(entry)).toContain("credential-shaped field could not be removed");
-  // The key was named in the host's own log; the value never was.
-  expect(logs.join("\n")).toContain("api_key");
+  expect(JSON.stringify(entry)).toContain("[redacted]");
 });
 
 it("cleans a survivor the producer left in a chunked body, and keeps nothing of it", () => {

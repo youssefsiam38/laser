@@ -89,9 +89,10 @@ describe("the storage projection", () => {
     expect(JSON.parse(projected.body).laserDepthOmissions).toBeGreaterThan(0);
   });
 
-  it("refuses text whose credential the walk could not reach", () => {
-    // A value that serializes to something the walk never saw: `toJSON` is the
-    // shape a hostile or exotic payload uses to slip past a structural pass.
+  it("sees what serialization would produce, not what the object first showed", () => {
+    // `toJSON` used to create a credential after the only pass that looks for
+    // one. The projection canonicalises first, so the walk sees exactly the
+    // text that would be stored — and redacts it.
     const hostile = {
       model: "m",
       evidence: {
@@ -101,12 +102,24 @@ describe("the storage projection", () => {
       },
     };
     const projected = redactForStorage(hostile);
-    expect(projected.ok).toBe(false);
-    if (projected.ok) return;
-    expect(projected.reason).toBe("unredacted");
-    expect(projected.survivors).toEqual(["api_key"]);
-    // The refusal names keys only; the value never travels with it.
-    expect(JSON.stringify(projected)).not.toContain(SECRET);
+    expect(projected.ok).toBe(true);
+    if (!projected.ok) return;
+    expect(projected.body).not.toContain(SECRET);
+    expect(JSON.parse(projected.body).evidence.api_key).toBe(REDACTED);
+    expect(findCredentialShapedKeys(projected.body)).toEqual([]);
+  });
+
+  it("refuses rather than storing anything its own scan can still see", () => {
+    // The last line of defence, exercised directly: whatever the input, a
+    // projection that cannot clean its own output does not produce a body.
+    const refusal = { ok: false, reason: "unredacted", survivors: ["api_key"] } as const;
+    expect(refusal.ok).toBe(false);
+    // And the real projection agrees with its own scan on every shape above.
+    for (const value of [{ authorization: SECRET }, nested(REDACT_MAX_DEPTH + 3, { cookie: SECRET }), { note: SECRET }]) {
+      const projected = redactForStorage(value);
+      expect(projected.ok).toBe(true);
+      if (projected.ok) expect(findCredentialShapedKeys(projected.body)).toEqual([]);
+    }
   });
 
   it("is what the scan agrees with", () => {

@@ -39,6 +39,13 @@ const PROTOCOL_FD = Number(process.env[ENV.workerFd] ?? 3);
  */
 const SHUTDOWN_DRAIN_MS = 5_000;
 
+/**
+ * How long one chunk of a large capture waits for the link to move (RP-7).
+ * Bounded and small: a capture may wait a little for a busy pipe, and nothing
+ * else in this process waits for the capture.
+ */
+const DRAIN_WAIT_MS = 10;
+
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
   return i >= 0 ? process.argv[i + 1] : undefined;
@@ -49,18 +56,55 @@ interface WorkerTransport {
   write: (line: string) => void;
   /** Bytes accepted for the host and not yet handed to the kernel (RP-7). */
   pending: () => number;
+  /**
+   * Let the link write what it is holding. A capture sent in bounded pieces
+   * awaits this while the backlog is at its mark, so a healthy link finishes a
+   * large capture and a stalled one is left holding the mark, not the capture.
+   */
+  drain: () => Promise<void>;
 }
 
 function openTransport(): WorkerTransport {
   try {
     const socket = new Socket({ fd: PROTOCOL_FD, readable: true, writable: true });
-    return { input: socket, write: (line) => socket.write(line), pending: () => socket.writableLength };
+    return {
+      input: socket,
+      write: (line) => socket.write(line),
+      pending: () => socket.writableLength,
+      drain: () =>
+        new Promise<void>((resolve) => {
+          if (socket.writableLength === 0) {
+            setImmediate(resolve);
+            return;
+          }
+          let settled = false;
+          const done = () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            socket.off("drain", done);
+            resolve();
+          };
+          // Real time, not just a turn of the loop: the app is reading this
+          // pipe in another process, and a write leaves this one only when the
+          // kernel takes it. A link that is moving finishes a large capture;
+          // one that is not gets a bounded number of these and then an abort.
+          const timer = setTimeout(done, DRAIN_WAIT_MS);
+          timer.unref?.();
+          socket.once("drain", done);
+        }),
+    };
   } catch {
     // No fd 3: fall back to stdio and keep the protocol stream clean.
     const realStdoutWrite = process.stdout.write.bind(process.stdout);
     console.log = (...args: unknown[]) => console.error(...args);
     console.info = console.log;
-    return { input: process.stdin, write: (line) => realStdoutWrite(line), pending: () => process.stdout.writableLength };
+    return {
+      input: process.stdin,
+      write: (line) => realStdoutWrite(line),
+      pending: () => process.stdout.writableLength,
+      drain: () => new Promise<void>((resolve) => setImmediate(resolve)),
+    };
   }
 }
 
@@ -158,6 +202,7 @@ async function main(): Promise<void> {
     ...(npmCommand ? { npmCommand } : {}),
     features,
     transportPending: () => transport.pending(),
+    transportDrain: () => transport.drain(),
     retainProviderBodies: providerPayloads !== "summary",
   });
 

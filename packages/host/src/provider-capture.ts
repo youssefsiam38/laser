@@ -67,7 +67,7 @@ function restate(meta: ProviderCaptureMeta, body: string, redactedHere: number):
     ...meta,
     bytes: Buffer.byteLength(body, "utf8"),
     sha256: createHash("sha256").update(body).digest("hex"),
-    preview: body.slice(0, meta.preview.length > 0 ? meta.preview.length : CAPTURE_PREVIEW_CHARS),
+    preview: body.slice(0, meta.preview && meta.preview.length > 0 ? meta.preview.length : CAPTURE_PREVIEW_CHARS),
     redactedFields: Math.max(meta.redactedFields, redactedHere),
   };
 }
@@ -144,7 +144,10 @@ export class CaptureAccumulator {
 
   begin(actor: CaptureActor, sessionPath: string, meta: ProviderCaptureMeta): void {
     if (!isProviderCaptureId(meta.captureId, CAPTURE_ID_MAX)) return;
-    if (!Number.isInteger(meta.bytes) || meta.bytes < 0 || meta.bytes > CAPTURE_MAX_BYTES) {
+    // A capture that announces no size or digest announces no body: there is
+    // nothing to reassemble and nothing to verify it against.
+    const announced = meta.bytes;
+    if (announced === undefined || meta.sha256 === undefined || !Number.isInteger(announced) || announced < 0 || announced > CAPTURE_MAX_BYTES) {
       this.options.onAbsent({ cwd: actor.cwd, sessionPath, meta, reason: "corrupt" });
       return;
     }
@@ -160,7 +163,7 @@ export class CaptureAccumulator {
       meta,
       pieces: [],
       bytes: 0,
-      reserved: meta.bytes,
+      reserved: announced,
       next: 0,
       startedAt: Date.now(),
     };
@@ -179,7 +182,7 @@ export class CaptureAccumulator {
       return;
     }
     const bytes = Buffer.byteLength(text, "utf8");
-    if (entry.bytes + bytes > entry.meta.bytes) {
+    if (entry.bytes + bytes > (entry.meta.bytes ?? 0)) {
       this.end(key, "corrupt");
       return;
     }
@@ -194,7 +197,7 @@ export class CaptureAccumulator {
     const key = keyOf(actor.generation, captureId);
     const entry = this.open.get(key);
     if (!entry) return;
-    if (entry.next !== chunks || entry.bytes !== bytes || entry.bytes !== entry.meta.bytes) {
+    if (entry.next !== chunks || entry.bytes !== bytes || entry.bytes !== (entry.meta.bytes ?? -1)) {
       this.end(key, "corrupt");
       return;
     }
