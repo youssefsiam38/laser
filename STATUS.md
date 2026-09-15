@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-14T22:42:40Z · orchestrator `01a0a030` · HEAD: 1e4eeba
-**Current focus:** M18 is implementing bounded task/delivery lifetime while worker, renderer and transport owners prepare the measured containment slices.
+**Last updated:** 2026-09-15T01:07:14Z · orchestrator `01a0a030` · HEAD: 8d03460
+**Current focus:** M18 is correcting the reviewed canonical task/delivery lifetime before worker, renderer and transport containment rebase onto it.
 
 | Milestone | State |
 | --- | --- |
@@ -28,7 +28,7 @@
 | MX Cross-cutting | in-progress |
 
 **Blockers:** none. RP-2’s unchanged full A safely refuses B on unbounded renderer state; D-257 assigns the clean repeat to M18-T15 after containment.
-**Next up:** implement/review M18-T6; approve T5/T7 plans; rebase and implement T4 after T6; run the shared T3/T13 browser acceptance matrix.
-**Recently done:** RP-13B client/storage isolation (`1e4eeba`; UI 1,782, protocol 184, CLI 74, desktop 160); M18-T2 finding (`ad8c188`; browser-check 67); M18-T13A authorization (`00db89f`); M18-T12 worker-free reads (`e9e3d8d`); M18-T9 revisions (`dd637f3`).
+**Next up:** finish and integrate M18-T6 review fixes; rebase/implement T4, T5 and T7; wire their typed counters into T3.
+**Recently done:** M18-T13 environment policy/browser gate (`a0111f9`; two 4/4 matrices, browser-check 69); M18-T2 finding (`ad8c188`); M18-T13A authorization (`00db89f`); M18-T12 worker-free reads (`e9e3d8d`); M18-T9 revisions (`dd637f3`).
 
 Ownership and evidence: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`.
