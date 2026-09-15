@@ -97,6 +97,13 @@ export default async function resourceDiagnostics(check) {
   for (const [name, value] of [['Host', hostValue], ['Workers', workersValue], ['Whole application', wholeValue]]) {
     assert.match(value, bytes, `${name} reports real physical memory: ${value}`);
   }
+  // The rolling digits must not eat the space the formatter put in: a card read
+  // "259.9MB" against "356.0 MB" in the row below it.
+  const spaces = await root.locator('[data-slot=number-ticker]').first().evaluate(node => [...node.querySelectorAll('span')]
+    .filter(span => span.textContent === ' ')
+    .map(span => ({ whiteSpace: getComputedStyle(span).whiteSpace, width: span.getBoundingClientRect().width })));
+  assert.equal(spaces.length, 1, 'the formatted value keeps its one space');
+  assert.ok(spaces[0].width > 0, `the space is drawn, not collapsed: ${JSON.stringify(spaces[0])}`);
   assert.notEqual(hostValue.replace('Host', ''), workersValue.replace('Workers', ''), 'host and worker totals are different numbers, not one repeated total');
   // A browser is not the packaged desktop, so there is no renderer process to
   // measure. The card says exactly that instead of showing a zero.
@@ -172,9 +179,33 @@ export default async function resourceDiagnostics(check) {
   await page.keyboard.press('Enter');
   const details = root.getByText('identity', { exact: true }).last();
   await details.waitFor();
-  const detailText = scrub(await details.locator('xpath=ancestor::div[@data-slot="spec-sheet"][1]').innerText());
+  const sheet = details.locator('xpath=ancestor::div[@data-slot="spec-sheet"][1]');
+  const detailText = scrub(await sheet.innerText());
   assert.match(detailText, /physical \((PSS|private resident)\)/i, `the row says which counter it used: ${detailText}`);
   assert.match(detailText, /resident \(not additive\)/i, 'resident is present but never additive');
+  // Every value is readable where it is: stacked under its label on a phone,
+  // compact beside it when the sheet has room, and never cut off behind a
+  // `title` a touch screen cannot open.
+  const sheetRows = await sheet.evaluate(node => [...node.querySelectorAll('dd')].map(value => {
+    const label = value.previousElementSibling ?? value.parentElement?.querySelector('dt');
+    const style = getComputedStyle(value);
+    return {
+      text: value.textContent.slice(0, 40),
+      stacked: label.getBoundingClientRect().bottom <= value.getBoundingClientRect().top + 1,
+      width: Math.round(value.getBoundingClientRect().width),
+      size: Math.round(parseFloat(style.fontSize) * 10) / 10,
+      clipped: style.textOverflow === 'ellipsis' && value.scrollWidth > value.clientWidth + 1,
+    };
+  }));
+  for (const detail of sheetRows) {
+    assert.equal(detail.clipped, false, `nothing in a process row is cut off: ${detail.text}`);
+    assert.ok(detail.size >= 12, `process details stay above the legibility floor (${detail.size}px on "${detail.text}")`);
+    assert.equal(detail.stacked, phone, `${phone ? 'a phone stacks' : 'a wide sheet keeps two columns'}: ${detail.text}`);
+  }
+  if (phone) {
+    const narrowest = Math.min(...sheetRows.map(detail => detail.width));
+    assert.ok(narrowest >= 200, `a stacked value gets the whole row to read on (${narrowest}px)`);
+  }
   await page.keyboard.press('Enter');
   await details.waitFor({ state: 'hidden' });
   await activate(trigger);

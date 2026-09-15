@@ -21,6 +21,37 @@ export function configureStubProvider(root, url) {
 }
 
 /**
+ * The app's own notification deep link, which is how this target lands a case
+ * on the fixture's session (`packages/ui/src/pwa/deep-link.ts`,
+ * `main-destination-controller.ts`). It is consumed by the same startup path a
+ * person's notification tap uses — after the environment handshake, through
+ * the app's own `openSession` — so the harness never builds a storage key or
+ * an environment key of its own.
+ */
+export function sessionDeepLink(url, path) {
+  return `${url.replace(/\/$/, '')}/#/session/${encodeURIComponent(path)}`;
+}
+
+/**
+ * The session the app itself says it is showing, read from the destination it
+ * recorded through its own device-storage authority. Read-only, and by suffix:
+ * the environment namespace belongs to the app, and this never reconstructs or
+ * assumes one. `undefined` means "it has not said yet".
+ */
+export function openedSessionPath(entries) {
+  for (const [key, value] of entries) {
+    if (!key.endsWith(':destination')) continue;
+    try {
+      const code = JSON.parse(value)?.code;
+      if (code?.kind === 'project-session' && typeof code.path === 'string') return code.path;
+    } catch {
+      // A record this harness cannot read is not a destination it can trust.
+    }
+  }
+  return undefined;
+}
+
+/**
  * `options.provider` is the module that runs the stub provider process; it must
  * accept `--provider <root>` and write `provider.json` as this file does.
  * Everything else — host, fixtures, theme, RPC — is identical for every target
@@ -30,7 +61,7 @@ export async function target(runtime, options = {}) {
   for (const path of ['packages/cli/dist/main.js', 'packages/host/dist/index.js', 'packages/worker/dist/main.js', 'packages/ui/dist/index.html']) {
     if (!existsSync(join(checkout, path))) throw new Error('The app is not built; run pnpm -r build from the target checkout.');
   }
-  const { ENV, storageKey, dottedStorageKey } = await import('../../../packages/protocol/dist/index.js');
+  const { ENV, dottedStorageKey } = await import('../../../packages/protocol/dist/index.js');
   const { PI_AGENT_DIR_ENV, PI_SESSION_DIR_ENV } = await import('../../../packages/cli/dist/config.js');
   const agentDir = join(runtime.root, 'agent'), sessionDir = join(runtime.root, 'sessions'), stateDir = join(runtime.root, 'state');
   for (const path of [agentDir, sessionDir, stateDir]) mkdirSync(path, { recursive: true });
@@ -42,6 +73,8 @@ export async function target(runtime, options = {}) {
   const url = `http://127.0.0.1:${port}`;
   await runtime.until(async () => (await fetch(`${url}/healthz`, { signal: AbortSignal.timeout(1000) })).ok, 'built host (see logs/host.log)', runtime.timeout);
   const version = JSON.parse(readFileSync(join(checkout, 'packages/cli/package.json'), 'utf8')).version;
+  /** The fixture session every case opens, decided once the fixture exists. */
+  let landing;
   // One short-lived socket per call: timeout/error always closes it, and fixture
   // setup never leaves an unowned transport keeping the harness alive.
   const rpc = (method, params = {}) => new Promise((resolve, reject) => {
@@ -55,15 +88,30 @@ export async function target(runtime, options = {}) {
   return {
     url, rpc, env, agentDir, sessionDir,
     build: Object.fromEntries(['host', 'worker', 'ui'].map(name => [name, artifactTreeSha256(join(checkout, `packages/${name}/dist`))])),
-    async preparePage(check, fixture) {
-      if (!fixture?.project) return;
-      await check.context.addInitScript(({ fixture, projectKey, sessionKey }) => {
-        localStorage.setItem(projectKey, fixture.project);
-        if (fixture.path) localStorage.setItem(sessionKey, JSON.stringify({ [fixture.project]: fixture.path }));
-      }, { fixture, projectKey: storageKey('project'), sessionKey: storageKey('session') });
+    async preparePage(_check, fixture) {
+      // Which session every case of this run should be looking at. Seeding it
+      // into storage is not possible any more and never was safe: those keys
+      // belonged to no environment, and the app purges them before it reads
+      // anything (RP-13 B). `ready` navigates instead.
+      landing = fixture?.path;
     },
     async ready(check) {
+      if (landing) {
+        await check.page.goto(sessionDeepLink(url, landing), { waitUntil: 'domcontentloaded' });
+        // A navigation can restore the context's initial touch/media overrides.
+        await check.touch(check.state.touch);
+        await check.reducedMotion(check.state.reducedMotion);
+      }
       await check.page.getByRole('textbox', { name: 'Message', exact: true }).waitFor({ timeout: runtime.timeout });
+      if (!landing) return;
+      // The app has to agree, in its own words, that this is where it is: a
+      // case that started on a different session would make every assertion
+      // about "the fixture session" a coincidence.
+      await runtime.until(
+        async () => openedSessionPath(await check.page.evaluate(() => Object.entries(localStorage))) === landing,
+        `the app to open the fixture session ${landing}`,
+        runtime.timeout,
+      );
     },
     async theme(check) {
       const key = dottedStorageKey('theme');

@@ -159,6 +159,12 @@ shipped seam, and clean it up before the next matrix case opens the app.
 | `projects` | 10 disposable projects × 15 sessions, 4 messages per session. |
 | `mcp` | Repository's offline stdio MCP fixture, registered and inspected through the host. |
 
+Every case lands on the fixture's session through the app's own notification
+deep link (`#/session/<path>`), consumed after the environment handshake by the
+app's own startup path, and the target then waits until the app's recorded
+destination names that session. The harness never writes a device-storage key:
+unscoped pre-environment keys are purged before anything reads them (RP-13 B).
+
 Content is deterministic; runtime IDs/timestamps are real. The adapter gives the
 stub a large context window and disables automatic compaction so long/huge message
 counts remain exact. Theme follows system through `pi/prefs/set` using the app's

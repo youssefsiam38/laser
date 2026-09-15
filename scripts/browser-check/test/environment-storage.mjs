@@ -151,7 +151,24 @@ export default async function environmentStorage(check) {
   const strip = page.locator('[data-slot=connection-state]');
   await strip.waitFor({ timeout: 60_000 });
   assert.equal(await strip.getAttribute('data-phase'), 'dropped', 'the socket really dropped');
+  // Back to the conversation, where the line is the only thing on screen
+  // saying the host is gone — Settings covers it while it is open.
   await page.keyboard.press('Escape');
+  await composer.waitFor();
+  assert.equal(await strip.getAttribute('data-phase'), 'dropped', 'the line is still the dropped line');
+  // Its one action is reachable with a thumb, and the line grew to hold it
+  // rather than clipping it.
+  const retry = await strip.evaluate(node => {
+    const button = node.querySelector('button');
+    if (!button) return undefined;
+    const line = node.getBoundingClientRect();
+    const box = button.getBoundingClientRect();
+    return { height: Math.round(box.height), inside: box.top >= line.top - 1 && box.bottom <= line.bottom + 1, line: Math.round(line.height) };
+  });
+  assert.ok(retry, 'a dropped connection offers a way back');
+  assert.ok(retry.inside, `the retry sits inside the line (${JSON.stringify(retry)})`);
+  if (phone) assert.ok(retry.height >= 44, `the retry clears the coarse-pointer floor (${retry.height}px in a ${retry.line}px line)`);
+  await check.shot(`environment-dropped-${label}`);
   await offline(false);
   await strip.waitFor({ state: 'detached', timeout: 30_000 });
   unplugged = false;

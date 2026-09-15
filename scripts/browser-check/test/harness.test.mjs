@@ -8,6 +8,7 @@ import { isolatedEnvironment, lifecycle, liveOwnedProcesses, until, freePort } f
 import { shotName, matrixCases } from '../browser.mjs';
 import { outsideCheckout } from '../index.mjs';
 import { fixturePlan, answer } from '../targets/fixtures.mjs';
+import { openedSessionPath, sessionDeepLink } from '../targets/app.mjs';
 
 function temporary(t) { const root = mkdtempSync(join(tmpdir(), 'browser-check-test-')); t.after(() => rmSync(root, { recursive: true, force: true })); return root; }
 test('environment is allowlisted, isolated, and can spawn sh', async t => {
@@ -36,6 +37,23 @@ test('fixture plans have exact message and project counts', () => {
   assert.ok(answer({ messages: [{ role: 'user', content: 'Show fixture reasoning' }] }).reasoning);
   assert.equal(answer({ messages: [{ role: 'user', content: [{ type: 'text', text: 'Run fixture tools' }] }] }).toolCall.name, 'bash');
   assert.equal(answer({ messages: [{ role: 'user', content: [{ type: 'text', text: 'Start fixture-asking' }] }] }).toolCall.name, 'start_agent');
+});
+test('the app target lands a case on its fixture session through the app itself', () => {
+  const path = '/tmp/run-1/sessions/2026-09-14T22-45-37-170Z_01a0.jsonl';
+  // The product's own notification link, so the environment handshake and the
+  // storage authority both still run: the harness writes no key of its own.
+  assert.equal(sessionDeepLink('http://127.0.0.1:8080', path), `http://127.0.0.1:8080/#/session/${encodeURIComponent(path)}`);
+  assert.equal(sessionDeepLink('http://127.0.0.1:8080/', path), sessionDeepLink('http://127.0.0.1:8080', path));
+  assert.ok(!sessionDeepLink('http://127.0.0.1:8080', path).includes(' '));
+
+  // Where it landed is read back from the app's own record, by suffix: no
+  // environment key is assumed, reconstructed or required to be known.
+  const destination = key => [[key, JSON.stringify({ v: 2, tab: 'code', code: { kind: 'project-session', project: '/tmp/run-1/project-01', path } })]];
+  assert.equal(openedSessionPath(destination('lasercode-env:e1.AAAAAAAAAAAAAAAAAAAAAA:destination')), path);
+  assert.equal(openedSessionPath(destination('anything-env:e1.ZZZZZZZZZZZZZZZZZZZZZZ:destination')), path);
+  assert.equal(openedSessionPath([['x-env:e1.A:destination', '{'], ['x-env:e1.A:project', path]]), undefined);
+  assert.equal(openedSessionPath([['x-env:e1.A:destination', JSON.stringify({ v: 2, code: { kind: 'project-landing', project: '/tmp/p' } })]]), undefined);
+  assert.equal(openedSessionPath([]), undefined);
 });
 test('teardown bookkeeping tracks owned groups, ignores unrelated processes and zombies', () => {
   const processes = [{ pid: 11, group: 10, state: 'S' }, { pid: 12, group: 10, state: 'Z' }, { pid: 21, group: 20, state: 'S' }];
