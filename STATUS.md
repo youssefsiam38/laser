@@ -1,6 +1,6 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-15T10:59:00Z · orchestrator `01a0a030` · HEAD: 722c7ecc
+**Last updated:** 2026-09-15T11:06:00Z · orchestrator `01a0a030` · HEAD: 4ba58bd4
 **Current focus:** M18 transport containment is integrated; the device-tail cache is implementing while memory-pressure thresholds are calibrated on the same post-containment base.
 
 | Milestone | State |
@@ -29,6 +29,6 @@
 
 **Blockers:** none. RP-2’s unchanged full A safely refused B on the pre-containment renderer ceiling; D-257 assigns the clean repeat to M18-T15 after RP-8.
 **Next up:** complete T10 cache and T8 calibration; implement T8 controllers/ceilings; implement T11 immediate paint; wire T3 counters; run T15.
-**Recently done:** M18-T7 transport pressure (`0542a58e`; reviewed focused/full/E2E/browser/privacy/footprint gates); M18-T5 renderer lifetime (`4f34a614`); M18-T4 worker lifetime (`eb18e147`); M18-T6 task/delivery lifetime (`a256efe`); M18-T13 browser gate (`a0111f9`).
+**Recently done:** M18-T7 transport pressure (`0542a58e`; reviewed focused/full/E2E/browser/privacy/footprint gates); T3 containment-counter checkpoint (`4ba58bd4`); M18-T5 renderer lifetime (`4f34a614`); M18-T4 worker lifetime (`eb18e147`); M18-T6 task/delivery lifetime (`a256efe`).
 
 Ownership and evidence: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`.
