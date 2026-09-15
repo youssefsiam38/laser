@@ -51,7 +51,7 @@ const stable = vi.hoisted(() => ({
       const bytes = Math.max(0, Math.min(limit, total - offset));
       const text = "x".repeat(bytes);
       return {
-        authority: "durable", revision: "r1.env.1", component: params.component, totalBytes: total,
+        authority: "durable", revision: "r1.env.1", entryId: params.entryId as string, component: params.component, totalBytes: total,
         offset, bytes, ...(offset + bytes < total ? { next: offset + bytes } : {}),
         truncated: offset + bytes < total, sliceDigest: await digestOf(text), contentDigest: WHOLE_DIGEST, text,
       };
@@ -251,6 +251,10 @@ describe("the bounded window over one body", () => {
     };
     const hostile: Array<[string, Record<string, unknown>]> = [
       ["another message", { entryId: "e9" }],
+      ["no message at all", { entryId: undefined }],
+      ["an empty message id", { entryId: "" }],
+      ["text that is not text", { text: 42 }],
+      ["a sum past what a number can hold", { offset: Number.MAX_SAFE_INTEGER - 1, bytes: 8, totalBytes: Number.MAX_SAFE_INTEGER }],
       ["no offset at all", { offset: Number.NaN }],
       ["a fractional offset", { offset: 0.5 }],
       ["an unsafe total", { totalBytes: Number.MAX_SAFE_INTEGER + 2 }],
@@ -288,7 +292,7 @@ describe("the bounded window over one body", () => {
       call += 1;
       const total = call === 1 ? HUGE_TOTAL : HUGE_TOTAL + 1;
       return {
-        authority: "durable", revision: "r1.env.1", component: params.component, totalBytes: total,
+        authority: "durable", revision: "r1.env.1", entryId: params.entryId as string, component: params.component, totalBytes: total,
         offset: params.offset, bytes: 8, next: params.offset + 8, truncated: true, sliceDigest: await digestOf("xxxxxxxx"),
         contentDigest: call === 1 ? WHOLE_DIGEST : "d".repeat(64), text: "xxxxxxxx",
       } as never;
@@ -308,7 +312,7 @@ describe("the bounded window over one body", () => {
       // another size, another digest.
       const text = old ? "oldold88" : "newnew88";
       return {
-        authority: "durable", revision: old ? "r1.env.1" : "r2.env.9", component: params.component,
+        authority: "durable", revision: old ? "r1.env.1" : "r2.env.9", entryId: params.entryId as string, component: params.component,
         totalBytes: old ? HUGE_TOTAL : HUGE_TOTAL + 4096, offset: params.offset as number, bytes: 8,
         next: (params.offset as number) + 8, truncated: true,
         sliceDigest: await digestOf(text), contentDigest: old ? "a".repeat(64) : "b".repeat(64), text,
@@ -356,7 +360,7 @@ describe("the bounded window over one body", () => {
       const text = slice?.text ?? "";
       const total = utf8ByteLength(served);
       const bytes = utf8ByteLength(text);
-      return { authority: "durable", revision: servedRevision, component: params.component, totalBytes: total, offset, bytes,
+      return { authority: "durable", revision: servedRevision, entryId: params.entryId as string, component: params.component, totalBytes: total, offset, bytes,
         ...(offset + bytes < total ? { next: offset + bytes } : {}), truncated: offset + bytes < total,
         sliceDigest: await digestOf(text), contentDigest: await digestOf(served), text };
     });
@@ -409,7 +413,7 @@ describe("a prompt whose image the window points at", () => {
       if (method !== "session/entry_range") return {};
       const offset = params.offset as number;
       const text = data.slice(offset, offset + 65_536);
-      return { authority: "durable", revision: "r1.env.1", component: params.component, totalBytes: data.length, offset,
+      return { authority: "durable", revision: "r1.env.1", entryId: params.entryId as string, component: params.component, totalBytes: data.length, offset,
         bytes: text.length, ...(offset + text.length < data.length ? { next: offset + text.length } : {}),
         truncated: offset + text.length < data.length, sliceDigest: await digestOf(text), contentDigest: imageDigest, text };
     });
@@ -443,7 +447,7 @@ describe("finding and copying what the window does not hold", () => {
       const slice = sliceUtf8RangeFrom(body, offset, (params.limit as number) ?? 65536);
       const text = slice?.text ?? "";
       const bytes = utf8ByteLength(text);
-      return { authority: "durable", revision: "r", component: params.component, totalBytes: total, offset, bytes,
+      return { authority: "durable", revision: "r", entryId: params.entryId as string, component: params.component, totalBytes: total, offset, bytes,
         ...(offset + bytes < total ? { next: offset + bytes } : {}), truncated: offset + bytes < total,
         sliceDigest: await digestOf(text), contentDigest: whole, text };
     });
@@ -471,7 +475,7 @@ describe("finding and copying what the window does not hold", () => {
       const offset = params.offset as number;
       const limit = params.limit as number;
       const text = body.slice(offset, offset + limit);
-      return { authority: "durable", revision: "r", component: params.component, totalBytes: body.length, offset,
+      return { authority: "durable", revision: "r", entryId: params.entryId as string, component: params.component, totalBytes: body.length, offset,
         bytes: text.length, ...(offset + text.length < body.length ? { next: offset + text.length } : {}),
         truncated: offset + text.length < body.length, sliceDigest: await digestOf(text), contentDigest: WHOLE_DIGEST, text };
     });
@@ -490,7 +494,7 @@ describe("finding and copying what the window does not hold", () => {
       const offset = params.offset as number;
       const bytes = Math.max(0, Math.min(params.limit as number, total - offset));
       const text = "y".repeat(bytes);
-      return { authority: "durable", revision: "r", component: params.component, totalBytes: total, offset, bytes,
+      return { authority: "durable", revision: "r", entryId: params.entryId as string, component: params.component, totalBytes: total, offset, bytes,
         ...(offset + bytes < total ? { next: offset + bytes } : {}), truncated: offset + bytes < total,
         sliceDigest: await digestOf(text), contentDigest: wholeDigest, text };
     });
@@ -555,7 +559,7 @@ describe("images the window points at", () => {
       const offset = params.offset as number;
       const bytes = Math.max(0, Math.min(params.limit as number, total - offset));
       const text = "QUJD".repeat(bytes / 4);
-      return { authority: "durable", revision: "r", component: params.component, totalBytes: total, offset, bytes,
+      return { authority: "durable", revision: "r", entryId: params.entryId as string, component: params.component, totalBytes: total, offset, bytes,
         ...(offset + bytes < total ? { next: offset + bytes } : {}), truncated: offset + bytes < total,
         sliceDigest: await digestOf(text), contentDigest: await whole, text };
     });
@@ -622,7 +626,7 @@ describe("images the window points at", () => {
     const gate = new Promise<void>(resolve => { release = resolve; });
     const request = vi.fn(async (params: Record<string, unknown>) => {
       await gate;
-      return { authority: "durable", revision: "r", component: params.component, totalBytes: 4, offset: 0, bytes: 4,
+      return { authority: "durable", revision: "r", entryId: params.entryId as string, component: params.component, totalBytes: 4, offset: 0, bytes: 4,
         truncated: false, sliceDigest: await digestOf("QUJD"), contentDigest: await digestOf("QUJD"), text: "QUJD" };
     });
     const blobs = new ImageBlobs(request as never, "env");
@@ -662,7 +666,7 @@ describe("images the window points at", () => {
       const slice = sliceUtf8RangeFrom(body, offset, want);
       const text = slice?.text ?? "";
       const bytes = utf8ByteLength(text);
-      return { authority: "durable", revision: "r", component: params.component, totalBytes, offset, bytes,
+      return { authority: "durable", revision: "r", entryId: params.entryId as string, component: params.component, totalBytes, offset, bytes,
         ...(offset + bytes < totalBytes ? { next: offset + bytes } : {}), truncated: offset + bytes < totalBytes,
         sliceDigest: await digestOf(text), contentDigest: whole, text };
     });
@@ -701,7 +705,7 @@ describe("images the window points at", () => {
       const bytes = Math.max(0, Math.min(params.limit as number, total - offset));
       const text = "QUJD".repeat(bytes / 4);
       // Every slice digest is honest; the body as a whole is a different one.
-      return { authority: "durable", revision: "r", component: params.component, totalBytes: total, offset, bytes,
+      return { authority: "durable", revision: "r", entryId: params.entryId as string, component: params.component, totalBytes: total, offset, bytes,
         ...(offset + bytes < total ? { next: offset + bytes } : {}), truncated: offset + bytes < total,
         sliceDigest: await digestOf(text), contentDigest: await digestOf("something else"), text };
     });
@@ -729,7 +733,7 @@ describe("images the window points at", () => {
       const offset = params.offset as number;
       const bytes = Math.max(0, Math.min(params.limit as number, total - offset));
       const text = "QUJD".repeat(bytes / 4);
-      return { authority: "durable", revision: "r", component: params.component, totalBytes: total, offset, bytes,
+      return { authority: "durable", revision: "r", entryId: params.entryId as string, component: params.component, totalBytes: total, offset, bytes,
         ...(offset + bytes < total ? { next: offset + bytes } : {}), truncated: offset + bytes < total,
         sliceDigest: await digestOf(text), contentDigest: await whole, text };
     });
@@ -767,7 +771,7 @@ describe("images the window points at", () => {
       const offset = params.offset as number;
       const bytes = Math.max(0, Math.min(params.limit as number, total - offset));
       const text = "QUJD".repeat(bytes / 4);
-      return { authority: "durable", revision: "r", component: params.component, totalBytes: total, offset, bytes,
+      return { authority: "durable", revision: "r", entryId: params.entryId as string, component: params.component, totalBytes: total, offset, bytes,
         ...(offset + bytes < total ? { next: offset + bytes } : {}), truncated: offset + bytes < total,
         sliceDigest: await digestOf(text), contentDigest: await whole, text };
     });

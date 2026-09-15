@@ -1411,8 +1411,10 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         await history.read(path);
         reconcileAfterAction.current(path);
         if (editorTextOmitted) {
-          // The worker refused to send it rather than putting it in a renderer.
-          dispatch({ type: "toast", level: "warning", text: "That message is too large to put back in the composer here. Nothing in the conversation has changed." });
+          // The move has already happened — this is the conversation's own
+          // leaf, moved by the engine — so the only thing that did not happen
+          // is the handback. Say exactly that (RP-5b B3).
+          dispatch({ type: "toast", level: "warning", text: "The conversation moved to that message, but it is too large to put back in the composer here. Open it to read or copy what you need." });
           return {};
         }
         if (editorText === undefined) return {};
@@ -1420,7 +1422,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         // for as long as the composer holds the words.
         const room = admitEditorText(viewCache, path, editorText);
         if (!room) {
-          dispatch({ type: "toast", level: "warning", text: "That message is too large to put back in the composer here. Nothing in the conversation has changed." });
+          dispatch({ type: "toast", level: "warning", text: "The conversation moved to that message, but there is no room to put it back in the composer here. Open it to read or copy what you need." });
           return {};
         }
         holdForComposer(path, editorText, room);

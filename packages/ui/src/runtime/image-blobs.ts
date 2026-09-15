@@ -308,7 +308,6 @@ export class ImageBlobs {
       );
       seenTotal = reply.totalBytes;
       seenAuthority = reply.authority;
-    seenAuthority = reply.authority;
       digest = reply.contentDigest;
       running.updateText(reply.text);
       const decoded = decodeBase64(reply.text);

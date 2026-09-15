@@ -97,25 +97,34 @@ export interface ReplyExpectation {
  */
 export function validateRangeReply(reply: RangeResult, expected: ReplyExpectation): RangeResult {
   const fail = (detail: string): never => { throw new BodyReplyRefused(detail); };
-  // Numbers first, and only safe integers: nothing is added, compared or used
-  // to slice before it is known to be one (RP-5b).
+  // Shape before arithmetic: every number a safe integer, the text really a
+  // string, and one end-of-slice computed once and proved safe before it is
+  // compared with anything (RP-5b).
   for (const [name, value] of [["offset", reply.offset], ["bytes", reply.bytes], ["total", reply.totalBytes]] as const) {
     if (!Number.isSafeInteger(value) || value < 0) fail(`${name}-shape`);
   }
   if (reply.next !== undefined && (!Number.isSafeInteger(reply.next) || reply.next < 0)) fail("next-shape");
+  if (typeof reply.text !== "string") fail("text");
+  const bytes = utf8ByteLength(reply.text);
+  if (reply.bytes !== bytes) fail("bytes");
+  const sliceEnd = reply.offset + bytes;
+  if (!Number.isSafeInteger(sliceEnd)) fail("slice-end-unsafe");
   // Exactly the two authorities this protocol has, and the same one all the
   // way through one read: a window cannot be half live and half stored.
   if (reply.authority !== "live" && reply.authority !== "durable") fail("authority");
   if (expected.authority !== undefined && reply.authority !== expected.authority) fail("authority-changed");
-  if (expected.entryId !== undefined && reply.entryId !== undefined && reply.entryId !== expected.entryId) fail("entry");
+  // The entry a body belongs to is always said, and is always the one asked
+  // about: an answer that names nothing could be any message's.
+  if (typeof reply.entryId !== "string" || reply.entryId === "") fail("entry-missing");
+  if (expected.entryId !== undefined && reply.entryId !== expected.entryId) fail("entry");
   if (reply.revision !== expected.revision) fail("revision");
   if (!sameBodyComponent(reply.component, expected.component)) fail("component");
   if (reply.offset !== expected.offset) fail("offset");
-  if (!Number.isInteger(reply.totalBytes) || reply.totalBytes < 0) fail("total");
   if (expected.totalBytes !== undefined && reply.totalBytes !== expected.totalBytes) fail("total-changed");
   if (typeof reply.contentDigest !== "string" || !DIGEST.test(reply.contentDigest)) fail("content-digest-shape");
   if (expected.contentDigest !== undefined && reply.contentDigest !== expected.contentDigest) fail("content-digest");
   if (typeof reply.sliceDigest !== "string" || !DIGEST.test(reply.sliceDigest)) fail("slice-digest-shape");
+  let regionEnd: number | undefined;
   if (expected.region !== undefined) {
     // A region read is answered for exactly the region asked for, in the
     // component's own offsets, with that region's own digest.
@@ -123,33 +132,31 @@ export function validateRangeReply(reply: RangeResult, expected: ReplyExpectatio
     if (!echo || echo.offset !== expected.region.offset || echo.bytes !== expected.region.bytes) fail("region-echo");
     if (typeof reply.regionDigest !== "string" || !DIGEST.test(reply.regionDigest)) fail("region-digest-shape");
     if (expected.regionDigest !== undefined && reply.regionDigest !== expected.regionDigest) fail("region-digest");
+    if (!Number.isSafeInteger(expected.region.offset) || !Number.isSafeInteger(expected.region.bytes)) fail("region-unsafe");
+    regionEnd = expected.region.offset + expected.region.bytes;
+    if (!Number.isSafeInteger(regionEnd)) fail("region-unsafe");
     if (reply.offset < expected.region.offset) fail("region-before");
-    const end = expected.region.offset + expected.region.bytes;
-    if (!Number.isSafeInteger(end)) fail("region-unsafe");
-    if (reply.offset + utf8ByteLength(reply.text) > end) fail("region-past-end");
+    if (sliceEnd > regionEnd) fail("region-past-end");
   } else if (reply.region !== undefined) {
     fail("region-unasked");
   }
-  if (typeof reply.text !== "string") fail("text");
-  const bytes = utf8ByteLength(reply.text);
-  if (reply.bytes !== bytes) fail("bytes");
   if (bytes > Math.min(expected.limit, ENTRY_RANGE_MAX_BYTES)) fail("over-limit");
-  if (reply.offset + bytes > reply.totalBytes) fail("past-end");
+  if (sliceEnd > reply.totalBytes) fail("past-end");
   // `truncated` is not decoration: it says exactly whether there is more, and
   // must agree with the cursor the reply carries.
   if (reply.truncated !== (reply.next !== undefined)) fail("truncated");
   // For a region read the body ends at the region's end, even though the
   // component carries on past it.
-  const endOfRead = expected.region ? expected.region.offset + expected.region.bytes : reply.totalBytes;
+  const endOfRead = regionEnd ?? reply.totalBytes;
   if (reply.next !== undefined) {
-    if (reply.next !== reply.offset + bytes) fail("next");
+    if (reply.next !== sliceEnd) fail("next");
     // A continuation that advances nothing is a loop, not an answer.
     if (bytes === 0) fail("zero-progress");
     if (reply.next <= reply.offset) fail("not-monotonic");
     if (reply.next > endOfRead) fail("next-past-end");
   } else {
     // The last slice ends the read exactly; an empty one only at its very end.
-    if (reply.offset + bytes !== endOfRead) fail("unterminated");
+    if (sliceEnd !== endOfRead) fail("unterminated");
     if (bytes === 0 && reply.offset !== endOfRead) fail("empty");
   }
   return reply;

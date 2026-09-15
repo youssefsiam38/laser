@@ -19,7 +19,9 @@ import {
   bodyRangeSlice,
   createAttachmentScanner,
   sliceUtf8RangeFrom,
+  streamBodyText,
   elideOversizedEntries,
+  displayBodyText,
   entryBodies,
   entryBodyIdentities,
   entryRegionsPage,
@@ -199,6 +201,70 @@ describe("an excerpt is a prefix of the canonical body, byte for byte", () => {
       }
     });
   }
+});
+
+describe("one serializer for the excerpt, the hash and the body", () => {
+  it("writes the same text three ways, and never escapes a whole huge string to do it", () => {
+    const value = { note: `a "quoted" ${"€".repeat(200_000)} <tail>`, rows: [1, "two", null, true] };
+    const whole = JSON.stringify(value, null, 2)!;
+
+    // Streamed: the authority's hash sees exactly the canonical text.
+    const streamed: string[] = [];
+    let longest = 0;
+    expect(streamBodyText(value, (chunk) => { streamed.push(chunk); longest = Math.max(longest, chunk.length); })).toBe(true);
+    expect(streamed.join("")).toBe(whole);
+    // Nothing built an escaped copy of the big string: it arrived in pieces.
+    expect(streamed.length).toBeGreaterThan(3);
+    expect(longest).toBeLessThan(whole.length);
+
+    // Materialized: the body an authority answers with is the same text.
+    expect(displayBodyText(value)).toBe(whole);
+
+    // Excerpted: a prefix of it, byte for byte.
+    const bounded = boundedBodyText(value, 16 * 1024);
+    expect(whole.startsWith(bounded.text)).toBe(true);
+    expect(bounded.totalBytes).toBe(utf8ByteLength(whole));
+
+    // And a range read of that body continues exactly where the excerpt ends.
+    const entry = { id: "e1", parentId: null, type: "message", message: { role: "assistant",
+      content: [{ type: "toolCall", id: "c1", name: "write", arguments: value }] } };
+    const answer = bodyRangeSlice(entry, { entryId: "e1", component: { kind: "tool_args", index: 0 }, offset: utf8ByteLength(bounded.text), limit: 4096 }, "r1", "durable", digestOfText);
+    expect(answer.ok).toBe(true);
+    if (answer.ok) expect(whole.startsWith(bounded.text + answer.result.text)).toBe(true);
+  });
+
+  it("writes only the excerpt of a huge structured body, however much escaping it needs", () => {
+    // Every character of this needs escaping, so a serializer that escaped a
+    // prefix — or the whole string — would build megabytes to throw away.
+    const value = { note: '"'.repeat(2_000_000) };
+    resetBodyProjectionWork();
+    let written = 0;
+    const bounded = boundedBodyText(value, 16 * 1024);
+    written = bodyProjectionWork().emittedChars;
+    expect(bounded.totalBytes).toBe(utf8ByteLength(JSON.stringify(value, null, 2)!));
+    expect(utf8ByteLength(bounded.text)).toBeLessThanOrEqual(16 * 1024);
+    // What was written is the excerpt, not the body.
+    expect(written).toBeLessThanOrEqual(32 * 1024);
+
+    // And the streamed form of the same body arrives in fragments, never as
+    // one escaped copy of it.
+    let longest = 0;
+    let total = 0;
+    expect(streamBodyText(value, (chunk) => { longest = Math.max(longest, chunk.length); total += chunk.length; })).toBe(true);
+    expect(total).toBe(JSON.stringify(value, null, 2)!.length);
+    expect(longest).toBeLessThanOrEqual(8);
+  });
+
+  it("still fails closed on a value it cannot predict", () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    for (const value of [{ at: new Date("2026-01-01T00:00:00Z") }, cyclic, { big: 10n }]) {
+      expect(streamBodyText(value, () => {})).toBe(false);
+      const bounded = boundedBodyText(value, 1024);
+      expect(bounded.unknown).toBe(true);
+      expect(bounded.totalBytes).toBeUndefined();
+    }
+  });
 });
 
 describe("the bounded canonical projection", () => {

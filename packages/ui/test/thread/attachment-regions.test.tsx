@@ -41,7 +41,7 @@ function authority(over: Partial<Record<string, unknown>> = {}) {
     const bytes = utf8ByteLength(text);
     const next = offset + bytes < end ? offset + bytes : undefined;
     return {
-      authority: "durable", revision: "r1.env.2", component: params.component, totalBytes: utf8ByteLength(prompt),
+      authority: "durable", revision: "r1.env.2", entryId: params.entryId as string, component: params.component, totalBytes: utf8ByteLength(prompt),
       offset, bytes, ...(next !== undefined ? { next } : {}), truncated: next !== undefined,
       sliceDigest: sha(text), contentDigest: sha(prompt), text,
       ...(region ? { region, regionDigest: sha(Buffer.from(prompt, "utf8").subarray(region.offset, region.offset + region.bytes).toString("utf8")) } : {}),
@@ -115,7 +115,7 @@ describe("one page of attachments at a time", () => {
       const take = Math.min((params.limit as number) ?? 65536, buffer.length - offset);
       const text = buffer.subarray(offset, offset + take).toString("utf8");
       const next = offset + take < buffer.length ? offset + take : undefined;
-      return { authority: "durable", revision: "r1.env.2", component: params.component, totalBytes: buffer.length, offset,
+      return { authority: "durable", revision: "r1.env.2", entryId: params.entryId as string, component: params.component, totalBytes: buffer.length, offset,
         bytes: utf8ByteLength(text), ...(next !== undefined ? { next } : {}), truncated: next !== undefined,
         sliceDigest: sha(text), contentDigest: sha(body), text };
     });

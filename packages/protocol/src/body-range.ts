@@ -172,105 +172,26 @@ export function boundedBodyText(value: unknown, maxBytes: number): BoundedBody {
   const parts: string[] = [];
   let bytes = 0;
   let emitted = 0;
-  /** Write while there is room; count always. */
-  /**
-   * Write while there is room; count always. Once the room is gone nothing
-   * more is written, ever — what comes out is a strict prefix of the whole
-   * text, so an offset into it means the same thing to the authority.
-   */
+  // Once the room is gone nothing more is written, ever: what comes out is a
+  // strict prefix of the canonical text, so an offset into it means the same
+  // thing to the authority that serves the rest.
   let full = false;
-  /** Write, cutting on a character boundary when the room runs out. */
-  const write = (text: string, size = utf8ByteLength(text)): void => {
-    if (full) return;
-    if (emitted + size <= maxBytes) { parts.push(text); emitted += size; return; }
-    const room = maxBytes - emitted;
-    const fitted = room > 0 ? sliceUtf8RangeFrom(text, 0, room) : undefined;
-    if (fitted) { parts.push(fitted.text); emitted += fitted.bytes; }
-    full = true;
-  };
-  const put = (text: string, size = utf8ByteLength(text)): void => {
-    write(text, size);
-    bytes += size;
-  };
-  /**
-   * A JSON string, written the way the canonical text writes it: the opening
-   * quote, then each character escaped exactly as `JSON.stringify` escapes it,
-   * then the closing quote — and the closing quote only when the whole string
-   * has been written. A cut in the middle of a string therefore ends where the
-   * canonical text is at that byte, never with a quote that closes nothing
-   * (RP-5b B1).
-   */
-  const putString = (text: string): void => {
-    projection.scannedChars += text.length;
-    // The canonical size of this string is known without writing it, so the
-    // count is exact whether or not the room runs out part way through.
-    const size = jsonStringBytes(text);
+  const take = (chunk: string): void => {
+    const size = utf8ByteLength(chunk);
+    projection.scannedChars += chunk.length;
     if (!full) {
-      write('"', 1);
-      let plain = 0;
-      for (let index = 0; index < text.length && !full; index++) {
-        const escape = jsonEscapeOf(text, index);
-        if (escape === undefined) continue;
-        if (index > plain) write(text.slice(plain, index));
-        if (!full) write(escape, escape.length);
-        plain = index + 1;
+      if (emitted + size <= maxBytes) { parts.push(chunk); emitted += size; }
+      else {
+        const room = maxBytes - emitted;
+        const fitted = room > 0 ? sliceUtf8RangeFrom(chunk, 0, room) : undefined;
+        if (fitted) { parts.push(fitted.text); emitted += fitted.bytes; }
+        full = true;
       }
-      if (!full && plain < text.length) write(text.slice(plain));
-      // The closing quote is written only when the whole string was: a cut in
-      // the middle of a string ends exactly where the canonical text is at
-      // that byte, never with a quote that closes nothing (RP-5b B1).
-      if (!full) write('"', 1);
     }
     bytes += size;
   };
-
-  /** A value that writes itself is not modelled here; the projection refuses. */
-  let unmodelled = false;
-  const seen = new Set<object>();
-  const walk = (node: unknown, indent: string): void => {
-    if (node === null) return put("null", 4);
-    if (typeof node === "object") {
-      if (seen.has(node)) { unmodelled = true; return; }
-      seen.add(node);
-    }
-    if (typeof node === "object" && typeof (node as { toJSON?: unknown }).toJSON === "function") { unmodelled = true; return; }
-    if (typeof node === "string") return putString(node);
-    if (typeof node === "number") return put(Number.isFinite(node) ? String(node) : "null");
-    if (typeof node === "boolean") return put(node ? "true" : "false");
-    if (typeof node === "bigint") { unmodelled = true; return; }
-    if (typeof node === "function" || typeof node === "symbol" || node === undefined) return put("null", 4);
-    const inner = `${indent}  `;
-    if (Array.isArray(node)) {
-      if (node.length === 0) return put("[]", 2);
-      put("[\n", 2);
-      node.forEach((row, index) => {
-        put(inner, inner.length);
-        walk(row === undefined ? null : row, inner);
-        put(index === node.length - 1 ? "\n" : ",\n", index === node.length - 1 ? 1 : 2);
-      });
-      return put(`${indent}]`, indent.length + 1);
-    }
-    if (typeof node === "object") {
-      const rows = Object.entries(node as Record<string, unknown>).filter(([, row]) => row !== undefined && typeof row !== "function" && typeof row !== "symbol");
-      if (rows.length === 0) return put("{}", 2);
-      put("{\n", 2);
-      rows.forEach(([key, row], index) => {
-        put(inner, inner.length);
-        putString(key);
-        put(": ", 2);
-        walk(row, inner);
-        put(index === rows.length - 1 ? "\n" : ",\n", index === rows.length - 1 ? 1 : 2);
-      });
-      return put(`${indent}}`, indent.length + 1);
-    }
-    put("null", 4);
-  };
-  try {
-    walk(value, "");
-  } catch {
-    unmodelled = true;
-  }
-  if (unmodelled) {
+  const modelled = canonicalBodyJson(value, take, { stopped: () => full, countString: (size) => { bytes += size; } });
+  if (!modelled) {
     // A value whose canonical text this projection cannot predict — one with
     // its own `toJSON`, a cycle, a `BigInt` — gets no excerpt and is declared
     // unknown. It is never built here to find out how big it is, and "unknown"
@@ -353,9 +274,51 @@ export function entryBodyIdentities(
 export function streamBodyText(value: unknown, sink: (chunk: string) => void): boolean {
   if (typeof value === "string") { sink(value); return true; }
   if (value === undefined) return true;
+  return canonicalBodyJson(value, sink);
+}
+
+/**
+ * The canonical text of a value, written a fragment at a time (RP-5b B1).
+ *
+ * This is the **one** serializer: the bounded excerpt, the hash of a body and
+ * the text an authority materializes all come through here, so a byte offset
+ * means the same thing to every one of them. It is what `JSON.stringify(value,
+ * null, 2)` produces, emitted incrementally — a string is written as its
+ * opening quote, its characters escaped exactly as stringification escapes
+ * them, and its closing quote — so nothing ever builds an escaped copy of a
+ * body to throw most of it away.
+ *
+ * Returns false for a value whose canonical text cannot be predicted: one with
+ * its own `toJSON`, a cycle, a `BigInt`. Those fail closed, and nothing
+ * partial written before the refusal may be used.
+ */
+export function canonicalBodyJson(
+  value: unknown,
+  emit: (chunk: string) => void,
+  options: { stopped?: () => boolean; countString?: (bytes: number) => void } = {},
+): boolean {
   let unmodelled = false;
   const seen = new Set<object>();
-  const put = (text: string): void => { if (!unmodelled) sink(text); };
+  const put = (text: string): void => { if (!unmodelled) emit(text); };
+  const putString = (text: string): void => {
+    // Once nothing more will be written, a string is only counted, and counted
+    // without escaping it: naming a thirty-megabyte body costs no copy of it.
+    if (options.stopped?.() && options.countString) { options.countString(jsonStringBytes(text)); return; }
+    put('"');
+    let plain = 0;
+    for (let index = 0; index < text.length; index++) {
+      // What is left of this string, and the closing quote that will never be
+      // written: the opening one already was.
+      if (options.stopped?.() && options.countString) { options.countString(jsonStringBytes(text.slice(plain)) - 1); return; }
+      const escape = jsonEscapeOf(text, index);
+      if (escape === undefined) continue;
+      if (index > plain) put(text.slice(plain, index));
+      put(escape);
+      plain = index + 1;
+    }
+    if (plain < text.length) put(text.slice(plain));
+    put('"');
+  };
   const walk = (node: unknown, indent: string): void => {
     if (unmodelled) return;
     if (node === null) return put("null");
@@ -364,7 +327,7 @@ export function streamBodyText(value: unknown, sink: (chunk: string) => void): b
       seen.add(node);
       if (typeof (node as { toJSON?: unknown }).toJSON === "function") { unmodelled = true; return; }
     }
-    if (typeof node === "string") return put(JSON.stringify(node));
+    if (typeof node === "string") return putString(node);
     if (typeof node === "number") return put(Number.isFinite(node) ? String(node) : "null");
     if (typeof node === "boolean") return put(node ? "true" : "false");
     if (typeof node === "bigint") { unmodelled = true; return; }
@@ -385,7 +348,7 @@ export function streamBodyText(value: unknown, sink: (chunk: string) => void): b
     put("{\n");
     rows.forEach(([key, row], index) => {
       put(inner);
-      put(JSON.stringify(key));
+      putString(key);
       put(": ");
       walk(row, inner);
       put(index === rows.length - 1 ? "\n" : ",\n");
@@ -431,6 +394,11 @@ function jsonEscapeOf(text: string, index: number): string | undefined {
 export function displayBodyText(value: unknown): string {
   if (value === undefined) return "";
   if (typeof value === "string") return value;
+  // The same serializer the excerpt and the hash use, so an authority's text
+  // and a client's offsets can never disagree. It is assembled once, because
+  // an authority answering with a body has to have it.
+  const parts: string[] = [];
+  if (canonicalBodyJson(value, (chunk) => { parts.push(chunk); })) return parts.join("");
   try {
     return JSON.stringify(value, null, 2) ?? "";
   } catch {
@@ -671,8 +639,8 @@ export function largestBodyBytes(entry: unknown): number {
 
 /** What a range request asks for, independent of who answers it. */
 export interface BodyRangeRequest {
-  /** The entry being read, echoed in the answer. */
-  entryId?: string;
+  /** The entry being read; the answer echoes it. */
+  entryId: string;
   component: BodyComponent;
   offset: number;
   limit?: number;
@@ -689,8 +657,8 @@ export interface BodyRangeRequest {
 export interface BodyRangeAnswerResult {
   authority: "live" | "durable";
   revision: string;
-  /** The entry this is a body of, echoed so no reply can be mistaken. */
-  entryId?: string;
+  /** The entry this is a body of, always echoed so no reply can be mistaken. */
+  entryId: string;
   component: BodyComponent;
   /** Always the **whole component's** size, never the region's. */
   totalBytes: number;
@@ -746,8 +714,7 @@ export function bodyRangeSlice(
   return {
     ok: true,
     result: regionAnswer({
-      authority, revision, component: request.component, totalBytes, slice, body, digest, region: bounds,
-      ...(request.entryId !== undefined ? { entryId: request.entryId } : {}),
+      authority, revision, entryId: request.entryId, component: request.component, totalBytes, slice, body, digest, region: bounds,
     }),
   };
 }
@@ -781,7 +748,7 @@ function regionLimit(request: BodyRangeRequest, bounds: { offset: number; end: n
 function regionAnswer(input: {
   authority: "live" | "durable";
   revision: string;
-  entryId?: string | undefined;
+  entryId: string;
   component: BodyComponent;
   totalBytes: number;
   slice: { offset: number; bytes: number; next?: number; truncated: boolean; text: string };
@@ -796,7 +763,7 @@ function regionAnswer(input: {
   return {
     authority: input.authority,
     revision: input.revision,
-    ...(input.entryId !== undefined ? { entryId: input.entryId } : {}),
+    entryId: input.entryId,
     component: input.component,
     totalBytes: input.totalBytes,
     offset: slice.offset,

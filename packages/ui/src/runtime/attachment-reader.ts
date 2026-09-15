@@ -204,4 +204,3 @@ const ATTACHMENT_ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">"
 function unescapeAttachment(text: string): string {
   return text.replace(/&(amp|lt|gt|quot|#10|#13|#9);/g, (_, entity: string) => ATTACHMENT_ENTITIES[entity]!);
 }
-

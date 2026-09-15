@@ -1176,8 +1176,8 @@ export interface ClientRequests {
     result: {
       authority: "live" | "durable";
       revision: string;
-      /** The entry asked about, echoed: no answer can be taken for another's. */
-      entryId?: string;
+      /** The entry asked about, always echoed: no answer is another's. */
+      entryId: string;
       component: BodyComponent;
       /** Exact UTF-8 size of the whole body. */
       totalBytes: number;

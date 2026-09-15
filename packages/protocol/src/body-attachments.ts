@@ -401,4 +401,3 @@ function boundedField(raw: string, maxBytes: number): { text: string; cut: boole
   if (utf8ByteLength(value) <= maxBytes) return { text: value, cut: false };
   return { text: sliceUtf8RangeFrom(value, 0, maxBytes)?.text ?? "", cut: true };
 }
-

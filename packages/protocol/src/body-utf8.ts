@@ -156,4 +156,3 @@ export function sliceUtf8Range(text: string, offset: number, limit: number): Utf
  * prove a twelve-megabyte structured result was never materialised as a
  * string. Counting only; nothing reads it to make a decision.
  */
-
