@@ -92,22 +92,47 @@ export class OutboundPressure {
    *
    * `method` is a notification's method; a response has none and is never
    * sheddable — somebody asked for it and is waiting.
+   *
+   * `bytes` makes this the whole decision rather than half of it: the frame is
+   * admitted only if it fits, so one large response cannot be handed to a
+   * socket that the same call then fences. The frame that would cross the hard
+   * mark is never accounted and never written; the connection is closed, and
+   * the peer's reconnect re-reads it. That is not shedding — nothing is lost
+   * quietly, and it applies to state and responses exactly as it does to
+   * anything else.
    */
-  admit(method?: string): "send" | "shed" | "fenced" {
+  admit(method?: string, bytes = 0): "send" | "shed" | "fenced" {
     if (this.state === "fenced") return "fenced";
     if (this.state === "shedding" && method !== undefined && isSheddable(method)) {
       this.countShed(method);
       return "shed";
     }
+    if (this.queued + bytes > this.hard) {
+      this.fence("hard-limit", this.queued + bytes);
+      return "fenced";
+    }
     return "send";
   }
 
-  /** Bytes handed to the socket. Counted once, here, until `settle`. */
-  charge(bytes: number): void {
+  /**
+   * Bytes handed to the socket. Counted once, here, until `settle`.
+   *
+   * Returns false when the frame does not fit: the caller must not write it.
+   * `admit(method, bytes)` has normally answered that already; this is the
+   * same guard at the moment of the write, so a charge that races another
+   * connection's settle cannot slip past the mark either.
+   */
+  charge(bytes: number): boolean {
+    if (this.state === "fenced") return false;
+    if (this.queued + bytes > this.hard) {
+      this.fence("hard-limit", this.queued + bytes);
+      return false;
+    }
     this.queued += bytes;
     this.inFlight += 1;
     if (this.queued > this.highWater) this.highWater = this.queued;
     this.evaluate();
+    return true;
   }
 
   /** The socket took them (or failed to); the account is square either way. */
@@ -138,7 +163,7 @@ export class OutboundPressure {
   private evaluate(): void {
     if (this.state === "fenced") return;
     if (this.queued > this.hard) {
-      this.fence("hard-limit");
+      this.fence("hard-limit", this.queued);
       return;
     }
     if (this.queued > this.soft) {
@@ -146,7 +171,7 @@ export class OutboundPressure {
       // Hysteresis, like the relay's own: a burst that drains is not a peer
       // that has stopped reading.
       if (this.now() - this.softSince > this.stuckMs) {
-        this.fence("stuck");
+        this.fence("stuck", this.queued);
         return;
       }
       this.state = "shedding";
@@ -158,9 +183,13 @@ export class OutboundPressure {
     }
   }
 
-  private fence(reason: "hard-limit" | "stuck"): void {
+  /**
+   * `queuedBytes` is what this connection would have been holding: the bytes it
+   * owes plus, for a frame that was refused, the frame that did not fit. The
+   * account itself never includes a frame nobody wrote.
+   */
+  private fence(reason: "hard-limit" | "stuck", queuedBytes: number): void {
     this.state = "fenced";
-    const queuedBytes = this.queued;
     this.softSince = undefined;
     this.options.onFence?.({ reason, queuedBytes });
   }

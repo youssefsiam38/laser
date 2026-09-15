@@ -281,9 +281,7 @@ export class HostServer {
    * that cannot complete is still recorded, with its size, digest and reason.
    */
   private readonly captures = new CaptureAccumulator({
-    onComplete: ({ cwd, sessionPath, meta, body }) => {
-      if (body.length > 0) this.logs?.recordProviderCapture(cwd, sessionPath, meta, body);
-    },
+    onComplete: ({ cwd, sessionPath, meta, body }) => this.logs?.recordProviderCapture(cwd, sessionPath, meta, body),
     onAbsent: ({ cwd, sessionPath, meta, reason }) => this.logs?.recordProviderAbsent(cwd, sessionPath, meta, reason),
     log: (message) => this.log(message),
   });
@@ -1426,11 +1424,14 @@ export class HostServer {
     if (held) return true;
     // Pressure is the last gate, after admission (RP-7): a connection that is
     // behind releases the three notifications it can read back explicitly, and
-    // one that has fallen too far behind is closed rather than queued for.
+    // one that would fall too far behind is closed rather than queued for.
+    // The size is part of that decision, so the frame that would cross the
+    // mark is refused before it is written rather than after.
     const pressure = this.pressure.get(ws);
-    const verdict = pressure?.admit(notification.method) ?? "send";
+    const line = serialize ? serialize() : JSON.stringify(notification);
+    const verdict = pressure?.admit(notification.method, Buffer.byteLength(line, "utf8")) ?? "send";
     if (verdict !== "send") return false;
-    void this.sendSocket(ws, serialize ? serialize() : JSON.stringify(notification));
+    void this.sendSocket(ws, line);
     return true;
   }
 
@@ -1518,9 +1519,10 @@ export class HostServer {
   private sendSocket(ws: WebSocket, line: string): Promise<boolean> {
     if (ws.readyState !== ws.OPEN || !this.clients.has(ws)) return Promise.resolve(false);
     const pressure = this.pressure.get(ws);
-    if (pressure?.fenced) return Promise.resolve(false);
     const bytes = Buffer.byteLength(line, "utf8");
-    pressure?.charge(bytes);
+    // The same guard at the moment of the write: a frame that does not fit is
+    // not written and not accounted, and the connection is fenced instead.
+    if (pressure && !pressure.charge(bytes)) return Promise.resolve(false);
     return new Promise<boolean>((resolve) => {
       try {
         ws.send(line, (error) => {

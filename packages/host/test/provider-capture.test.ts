@@ -154,29 +154,68 @@ describe("bounds", () => {
 });
 
 describe("the host's own guard over a body it did not redact", () => {
-  it("redacts a credential-shaped survivor and names only the key", () => {
-    const { accumulator, complete, logs } = harness();
+  it("redacts a survivor, restates the metadata to the bytes it stores, and names only the key", () => {
+    const { accumulator, complete, absent, logs } = harness();
     const body = JSON.stringify({ model: "test", api_key: "sk-live-1234", messages: [] });
     const meta = metaFor(body, "c-4444444444444444", 1);
     accumulator.begin("/project", "/session", meta);
     accumulator.chunk(meta.captureId, 0, body);
     accumulator.finish(meta.captureId, 1, meta.bytes);
+
+    // Exactly one outcome for one capture.
     expect(complete).toHaveLength(1);
-    expect(complete[0]!.body).not.toContain("sk-live-1234");
-    expect(JSON.parse(complete[0]!.body).api_key).toBe("[redacted]");
+    expect(absent).toEqual([]);
+
+    const stored = complete[0]!;
+    expect(stored.body).not.toContain("sk-live-1234");
+    expect(JSON.parse(stored.body).api_key).toBe("[redacted]");
+    // The row must describe the bytes that are actually stored, not the ones
+    // the producer announced: a digest over something nobody can read back is
+    // worse than no digest at all.
+    expect(stored.meta.bytes).toBe(Buffer.byteLength(stored.body, "utf8"));
+    expect(stored.meta.sha256).toBe(createHash("sha256").update(stored.body).digest("hex"));
+    expect(stored.meta.sha256).not.toBe(meta.sha256);
+    expect(stored.meta.preview).toBe(stored.body.slice(0, meta.preview.length));
+    expect(stored.meta.preview).not.toContain("sk-live-1234");
+    expect(stored.meta.redactedFields).toBe(1);
+    // Nothing about the original leaked into the log line.
     expect(logs.join(" ")).toContain("api_key");
     expect(logs.join(" ")).not.toContain("sk-live-1234");
   });
 
-  it("stores nothing when a survivor cannot even be parsed", () => {
+  it("keeps the producer's own redaction count as a floor", () => {
+    const { accumulator, complete } = harness();
+    const body = JSON.stringify({ model: "test", cookie: "a=b", messages: [] });
+    const meta = { ...metaFor(body, "c-7777777777777777", 1), redactedFields: 4 };
+    accumulator.begin("/project", "/session", meta);
+    accumulator.chunk(meta.captureId, 0, body);
+    accumulator.finish(meta.captureId, 1, meta.bytes);
+    expect(complete[0]!.meta.redactedFields).toBe(4);
+  });
+
+  it("leaves a clean body's metadata exactly as the producer stated it", () => {
+    const { accumulator, complete } = harness();
+    const body = JSON.stringify({ model: "test", messages: [{ role: "user", content: "hello" }] });
+    const meta = metaFor(body, "c-8888888888888888", 1);
+    accumulator.begin("/project", "/session", meta);
+    accumulator.chunk(meta.captureId, 0, body);
+    accumulator.finish(meta.captureId, 1, meta.bytes);
+    expect(complete[0]!.meta).toEqual(meta);
+  });
+
+  it("stores nothing, once, when a survivor cannot even be parsed", () => {
     const { accumulator, complete, absent } = harness();
     const body = `not json, "authorization": "Bearer sk-live"`;
     const meta = metaFor(body, "c-5555555555555555", 1);
     accumulator.begin("/project", "/session", meta);
     accumulator.chunk(meta.captureId, 0, body);
     accumulator.finish(meta.captureId, 1, meta.bytes);
-    expect(complete[0]!.body).toBe("");
-    expect(absent[0]!.reason).toBe("corrupt");
+    // One row, and it is the absent one: no empty body was also completed.
+    expect(complete).toEqual([]);
+    expect(absent).toHaveLength(1);
+    expect(absent[0]).toMatchObject({ reason: "corrupt", meta: { sha256: meta.sha256, bytes: meta.bytes } });
+    expect(JSON.stringify(absent[0])).not.toContain("sk-live");
+    expect(accumulator.retained()).toEqual({ open: 0, bytes: 0 });
   });
 });
 

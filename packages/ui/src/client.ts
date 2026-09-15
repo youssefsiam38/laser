@@ -82,19 +82,28 @@ export interface HostClientOptions {
   shouldResume?: (path: string) => boolean;
 }
 
+/** One encoder for the whole module: constructing one per update is not free. */
+const UPDATE_ENCODER = new TextEncoder();
+
 /**
- * What one coalesced delta weighs, without serializing it.
+ * What one coalesced delta weighs, in exact UTF-8 bytes.
  *
- * Text and reasoning deltas are the ones that arrive in bursts, and they are
- * the ones whose size is knowable for free. Anything else counts as a small
- * fixed cost: this is a backstop for a hidden tab, not an accountant.
+ * The buffer's bound is a byte bound, so this measures the actual queued
+ * representation rather than guessing from a field or counting UTF-16 code
+ * units — a CJK transcript would otherwise be accounted at a third of its
+ * size, and an emoji at half. A structural update with no text is measured the
+ * same way, because "a small fixed cost" is a guess too.
+ *
+ * `JSON.stringify` can throw on a value the wire could not have carried; such
+ * an update is impossible here, and if one ever appeared it counts as zero
+ * rather than taking the socket down.
  */
-function estimateUpdateBytes(params: SessionUpdateParams): number {
-  const update = params.update as { delta?: unknown; text?: unknown; content?: unknown };
-  if (typeof update.delta === "string") return update.delta.length;
-  if (typeof update.text === "string") return update.text.length;
-  if (typeof update.content === "string") return update.content.length;
-  return 256;
+function updateBytes(params: SessionUpdateParams): number {
+  try {
+    return UPDATE_ENCODER.encode(JSON.stringify(params)).length;
+  } catch {
+    return 0;
+  }
 }
 
 /** Backstop flush cadence when `requestAnimationFrame` is absent or paused. */
@@ -134,7 +143,7 @@ export class HostClient {
   private timerHandle: ReturnType<typeof setTimeout> | undefined;
   /** Transcript deltas waiting for the next frame, in arrival (seq) order. */
   private readonly pendingUpdates: SessionUpdateParams[] = [];
-  /** Roughly what those deltas weigh, so the buffer has a size and not only a clock. */
+  /** Exact UTF-8 bytes of the queued deltas, so the buffer has a size and not only a clock. */
   private pendingBytes = 0;
   /** Extra notification listeners registered with `subscribe()`. */
   private readonly listeners = new Set<NotificationHandler>();
@@ -459,8 +468,9 @@ export class HostClient {
     // A frame's worth of streaming text is tens of kilobytes; a megabyte
     // waiting here means this view is throttled or hidden and the timer is
     // still a third of a second away (RP-7). Flush it now — holding it costs
-    // more than delivering it, and nothing is ever dropped to make room.
-    this.pendingBytes += estimateUpdateBytes(params);
+    // more than delivering it, and nothing is ever dropped to make room. One
+    // update that is already past the mark goes out on its own.
+    this.pendingBytes += updateBytes(params);
     if (this.pendingBytes >= PENDING_UPDATE_FLUSH_BYTES) {
       this.flushUpdates();
       return;

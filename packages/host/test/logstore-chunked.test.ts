@@ -76,6 +76,82 @@ it("reads at most the budget asked for, plus nothing else", () => {
   expect(body.startsWith(content.text)).toBe(true);
 });
 
+it("steps only the chunks a small budget needs, never the whole body", () => {
+  const log = open();
+  const body = largeBody(4);
+  const meta = metaFor(body);
+  log.recordProviderCapture("/project", "/session", meta, body);
+
+  // Count what the read actually pulls out of SQLite. `all()` would hand back
+  // every 256 KiB chunk before the loop that is supposed to stop early.
+  const db = (log as unknown as {
+    db: { prepare(sql: string): { iterate(...params: unknown[]): IterableIterator<unknown> } };
+    statements: Map<string, unknown>;
+  });
+  const realPrepare = db.db.prepare.bind(db.db);
+  let stepped = 0;
+  db.statements.clear();
+  db.db.prepare = (sql: string) => {
+    const statement = realPrepare(sql);
+    if (!sql.includes("content_chunks")) return statement;
+    return {
+      iterate: (...params: unknown[]) => {
+        const rows = statement.iterate(...params);
+        return (function* counted() {
+          for (const row of rows) {
+            stepped += 1;
+            yield row;
+          }
+        })();
+      },
+    } as never;
+  };
+
+  const read = log.content(meta.sha256, 512 * 1024);
+  db.db.prepare = realPrepare;
+  db.statements.clear();
+  expect(read.truncated).toBe(true);
+  expect(Buffer.byteLength(read.text, "utf8")).toBeLessThanOrEqual(512 * 1024);
+  // 512 KiB of budget is two 256 KiB chunks, plus the one that crosses it.
+  expect(stepped).toBeLessThanOrEqual(3);
+  const total = (log as unknown as { db: { prepare(sql: string): { get(...p: unknown[]): unknown } } }).db
+    .prepare("SELECT COUNT(*) AS n FROM content_chunks WHERE ref = ?")
+    .get(meta.sha256) as { n: number };
+  expect(Number(total.n)).toBeGreaterThan(8);
+});
+
+it("reports a gap inside the part it must trust, rather than stitching it together", () => {
+  const log = open();
+  const body = largeBody(3);
+  const meta = metaFor(body);
+  log.recordProviderCapture("/project", "/session", meta, body);
+  // Remove a chunk inside the first megabyte: a small-budget read has to cross
+  // it, and must not hand back a body with a hole in it.
+  (log as unknown as { db: { exec(sql: string): void } }).db.exec(`DELETE FROM content_chunks WHERE ref = '${meta.sha256}' AND idx = 1`);
+  const read = log.content(meta.sha256, 1024 * 1024);
+  expect(read.text).toBe("");
+  expect(read.released).toMatchObject({ reason: "corrupt", bytes: meta.bytes, sha256: meta.sha256 });
+});
+
+it("reads the prefix it was asked for even when a later chunk is missing", () => {
+  const log = open();
+  const body = largeBody(3);
+  const meta = metaFor(body);
+  log.recordProviderCapture("/project", "/session", meta, body);
+  const last = (log as unknown as { db: { prepare(sql: string): { get(...p: unknown[]): unknown } } }).db
+    .prepare("SELECT MAX(idx) AS n FROM content_chunks WHERE ref = ?")
+    .get(meta.sha256) as { n: number };
+  (log as unknown as { db: { exec(sql: string): void } }).db.exec(
+    `DELETE FROM content_chunks WHERE ref = '${meta.sha256}' AND idx = ${Number(last.n)}`,
+  );
+  // The budget stops well before the damage, so this read is complete and
+  // truthful about being partial; nothing later is read at all.
+  const read = log.content(meta.sha256, 256 * 1024);
+  expect(read.truncated).toBe(true);
+  expect(body.startsWith(read.text)).toBe(true);
+  expect(read.released).toBeUndefined();
+});
+
 it("releases a chunked body and its pieces together, and says why", () => {
   const log = open({ bodyBudgetBytes: 1 });
   const body = largeBody();

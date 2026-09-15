@@ -49,6 +49,32 @@ export interface CaptureAbsent {
   reason: ProviderCaptureOmission;
 }
 
+type DefenceResult =
+  | { ok: true; body: string; redactedFields: number }
+  | { ok: false; reason: ProviderCaptureOmission };
+
+/**
+ * Metadata for a body this host had to change.
+ *
+ * Size, digest, preview and redaction count describe the **stored** redacted
+ * representation — the only thing anybody can ever read back — so they are
+ * recomputed from the bytes that are about to be written rather than inherited
+ * from what the producer announced. The producer's own count is kept as a
+ * floor: it redacted fields too, and this pass only saw what it left behind.
+ */
+function restate(meta: ProviderCaptureMeta, body: string, redactedHere: number): ProviderCaptureMeta {
+  return {
+    ...meta,
+    bytes: Buffer.byteLength(body, "utf8"),
+    sha256: createHash("sha256").update(body).digest("hex"),
+    preview: body.slice(0, meta.preview.length > 0 ? meta.preview.length : CAPTURE_PREVIEW_CHARS),
+    redactedFields: Math.max(meta.redactedFields, redactedHere),
+  };
+}
+
+/** Leading characters kept on a row, matching the producer's own preview. */
+const CAPTURE_PREVIEW_CHARS = 240;
+
 export interface CaptureAccumulatorOptions {
   /** A capture arrived whole; store it. */
   onComplete: (input: CaptureComplete) => void;
@@ -139,7 +165,19 @@ export class CaptureAccumulator {
       this.options.onAbsent({ cwd: entry.actor, sessionPath: entry.sessionPath, meta: entry.meta, reason: "corrupt" });
       return;
     }
-    this.options.onComplete({ cwd: entry.actor, sessionPath: entry.sessionPath, meta: entry.meta, body: this.defend(body, entry) });
+    // Exactly one terminal outcome per capture, and the metadata on it always
+    // describes the bytes that are actually stored.
+    const defended = this.defend(body);
+    if (!defended.ok) {
+      this.options.onAbsent({ cwd: entry.actor, sessionPath: entry.sessionPath, meta: entry.meta, reason: defended.reason });
+      return;
+    }
+    this.options.onComplete({
+      cwd: entry.actor,
+      sessionPath: entry.sessionPath,
+      meta: defended.body === body ? entry.meta : restate(entry.meta, defended.body, defended.redactedFields),
+      body: defended.body,
+    });
   }
 
   /** A worker generation is gone: nothing it opened can ever complete. */
@@ -162,21 +200,25 @@ export class CaptureAccumulator {
    * redacted again here rather than stored as it arrived, and the log line
    * names the **keys** that were caught, never their values.
    */
-  private defend(body: string, entry: Open): string {
+  private defend(body: string): DefenceResult {
     const survivors = findCredentialShapedKeys(body);
-    if (survivors.length === 0) return body;
+    if (survivors.length === 0) return { ok: true, body, redactedFields: 0 };
     this.options.log?.(
       `provider capture: ${survivors.length} credential-shaped field(s) were not redacted by the worker (${survivors.join(", ")}); redacted here`,
     );
+    let parsed: unknown;
     try {
-      const { value } = redact(JSON.parse(body));
-      return JSON.stringify(value) ?? body;
+      parsed = JSON.parse(body);
     } catch {
-      // Not parseable and carrying something credential-shaped: the row keeps
-      // its size, digest and reason, and no body is stored.
-      this.options.onAbsent({ cwd: entry.actor, sessionPath: entry.sessionPath, meta: entry.meta, reason: "corrupt" });
-      return "";
+      // Not parseable and carrying something credential-shaped: nothing is
+      // stored, and the row says so. The caller emits that outcome, and only
+      // that one.
+      return { ok: false, reason: "corrupt" };
     }
+    const { value, count } = redact(parsed);
+    const redacted = JSON.stringify(value);
+    if (redacted === undefined) return { ok: false, reason: "corrupt" };
+    return { ok: true, body: redacted, redactedFields: count };
   }
 
   /** End one capture with a reason, releasing its pieces. */

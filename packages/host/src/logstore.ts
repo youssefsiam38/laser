@@ -282,6 +282,12 @@ type Database = {
     run(...params: unknown[]): { lastInsertRowid: number | bigint; changes: number | bigint };
     get(...params: unknown[]): unknown;
     all(...params: unknown[]): unknown[];
+    /**
+     * Step rows one at a time. The only way to read part of a chunked body
+     * without materialising all of it: `all()` would hand back every TEXT
+     * column before the loop that is supposed to stop early (RP-7).
+     */
+    iterate(...params: unknown[]): IterableIterator<unknown>;
   };
   close(): void;
 };
@@ -797,26 +803,43 @@ export class LogStore {
    * body is never assembled here.
    */
   private readChunked(ref: string, maxBytes: number): { text: string; truncated: boolean } | undefined {
-    const rows = this.db
-      .prepare("SELECT idx, bytes, body FROM content_chunks WHERE ref = ? ORDER BY idx ASC")
-      .all(ref) as Array<{ idx: number; bytes: number; body: string }>;
-    if (rows.length === 0) return undefined;
+    // Stepped, not collected: at most the budget plus the one chunk that
+    // crosses it is ever in this process, whatever the body weighs. `all()`
+    // here would materialise all 16 MiB of a large capture to hand back one.
+    const rows = this
+      .statement("SELECT idx, bytes, body FROM content_chunks WHERE ref = ? ORDER BY idx ASC")
+      .iterate(ref) as IterableIterator<{ idx: number; bytes: number; body: string }>;
     const pieces: string[] = [];
     let taken = 0;
     let truncated = false;
     let expected = 0;
-    for (const chunk of rows) {
-      if (chunk.idx !== expected) return undefined;
-      expected += 1;
-      if (taken + chunk.bytes > maxBytes) {
-        // Fill the rest of the budget from this chunk, on a UTF-8 boundary.
-        if (taken < maxBytes) pieces.push(truncateUtf8(chunk.body, maxBytes - taken));
-        truncated = true;
-        break;
+    let corrupt = false;
+    try {
+      for (const chunk of rows) {
+        // Contiguity is checked over exactly the prefix this read must trust:
+        // a gap inside it is a body nobody can read, and it is reported rather
+        // than silently stitched together.
+        if (chunk.idx !== expected) {
+          corrupt = true;
+          break;
+        }
+        expected += 1;
+        if (taken + chunk.bytes > maxBytes) {
+          // Fill the rest of the budget from this chunk, on a UTF-8 boundary,
+          // and stop: nothing after it is read.
+          if (taken < maxBytes) pieces.push(truncateUtf8(chunk.body, maxBytes - taken));
+          truncated = true;
+          break;
+        }
+        pieces.push(chunk.body);
+        taken += chunk.bytes;
       }
-      pieces.push(chunk.body);
-      taken += chunk.bytes;
+    } finally {
+      // Stop the statement where it stands; a half-stepped iterator would hold
+      // the read open for as long as the store lives.
+      rows.return?.();
     }
+    if (corrupt || expected === 0) return undefined;
     return { text: pieces.join(""), truncated };
   }
 

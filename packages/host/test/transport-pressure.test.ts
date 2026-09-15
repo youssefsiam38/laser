@@ -55,15 +55,55 @@ describe("the account and the state machine", () => {
     expect(pressure.snapshot().state).toBe("flowing");
   });
 
-  it("fences past the hard mark and says why", () => {
+  it("refuses a frame that would cross the hard mark rather than writing it first", () => {
     const fences: Array<{ reason: string; queuedBytes: number }> = [];
     const pressure = new OutboundPressure({ softBytes: 100, hardBytes: 1000, onFence: (info) => fences.push(info) });
-    pressure.charge(1500);
-    expect(fences).toEqual([{ reason: "hard-limit", queuedBytes: 1500 }]);
+    // One frame, larger than the whole allowance: it is never accounted and
+    // never handed to the socket, and the connection is fenced instead. This
+    // is not shedding — a response and a state frame are treated alike, and
+    // what the peer missed it re-reads when it reconnects.
+    expect(pressure.admit("session/update", 1500)).toBe("fenced");
+    expect(pressure.charge(1500)).toBe(false);
+    expect(fences[0]).toEqual({ reason: "hard-limit", queuedBytes: 1500 });
     expect(pressure.fenced).toBe(true);
+    const snapshot = pressure.snapshot();
+    // The high-water is what was really held, never a frame nobody wrote.
+    expect(snapshot.highWaterBytes).toBeLessThanOrEqual(1000);
+    expect(snapshot.queuedBytes).toBe(0);
+    expect(snapshot.inFlight).toBe(0);
+    expect(snapshot.shed.total).toBe(0);
     // Nothing more is written for a fenced peer — including its own state.
     expect(pressure.admit("session/update")).toBe("fenced");
     expect(pressure.admit(undefined)).toBe("fenced");
+  });
+
+  it("never lets the account cross the hard mark, frame by frame", () => {
+    const pressure = new OutboundPressure({ softBytes: 400, hardBytes: 1000 });
+    let accepted = 0;
+    for (let i = 0; i < 20; i++) {
+      if (pressure.admit("session/update", 300) !== "send") break;
+      expect(pressure.charge(300)).toBe(true);
+      accepted += 1;
+      expect(pressure.snapshot().queuedBytes).toBeLessThanOrEqual(1000);
+    }
+    expect(accepted).toBe(3);
+    expect(pressure.fenced).toBe(true);
+    expect(pressure.snapshot().highWaterBytes).toBe(900);
+  });
+
+  it("settles a frame that was already in flight when the fence came, and retains nothing", () => {
+    const pressure = new OutboundPressure({ softBytes: 100, hardBytes: 1000 });
+    expect(pressure.charge(600)).toBe(true);
+    // A second frame does not fit: refused, fenced, not accounted.
+    expect(pressure.charge(600)).toBe(false);
+    expect(pressure.fenced).toBe(true);
+    expect(pressure.snapshot().queuedBytes).toBe(600);
+    // The callback for the frame that *was* written still arrives afterwards.
+    pressure.settle(600);
+    expect(pressure.snapshot()).toMatchObject({ queuedBytes: 0, inFlight: 0, state: "fenced" });
+    // And a late settle for a frame that was never charged cannot go negative.
+    pressure.settle(600);
+    expect(pressure.snapshot().queuedBytes).toBe(0);
   });
 
   it("fences a peer that sits above the soft mark without draining", () => {

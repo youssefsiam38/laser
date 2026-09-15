@@ -641,8 +641,11 @@ export class RelayClient {
     // (RP-7): only the three notifications it can read back explicitly are
     // ever released, and a device too far behind for that is fenced rather
     // than fed a selection of its own state.
-    if (this.pressure.admit(notification.method) !== "send") return;
     const payload = this.encode(notification) ?? this.encode(reduce(notification));
+    // The size is part of the decision (RP-7): a frame that would take this
+    // device past its mark is refused before anything is encrypted for it, and
+    // the channel is fenced rather than the frame quietly dropped.
+    if (this.pressure.admit(notification.method, payload?.length ?? 0) !== "send") return;
     if (!payload) {
       // Nothing sensible left to shrink. Losing one update is bad; tearing the
       // session down and reconnecting into the same frame is worse.
@@ -678,7 +681,7 @@ export class RelayClient {
     if (this.shaper) {
       // The shaper holds the frame until its grid releases it, so those bytes
       // are still this host's until it does.
-      this.pressure.charge(payload.length);
+      if (!this.pressure.charge(payload.length)) return false;
       this.shaper.enqueue(payload, () => this.pressure.settle(payload.length));
       return generation === this.connectionGeneration && this.session !== null;
     }
@@ -693,9 +696,11 @@ export class RelayClient {
       this.options.onError?.(new Error(this.lastError));
       return false;
     }
+    // Counted from acceptance through Noise encryption and the socket, once —
+    // and refused outright if it does not fit, so one frame cannot take this
+    // device past the mark on its way in.
+    if (!this.pressure.charge(payload.length)) return false;
     this.pendingSends++;
-    // Counted from acceptance through Noise encryption and the socket, once.
-    this.pressure.charge(payload.length);
     return this.enqueueSend(async () => {
       try {
         if (generation !== this.connectionGeneration || !this.session || !this.ws || this.ws.readyState !== this.ws.OPEN) return false;
