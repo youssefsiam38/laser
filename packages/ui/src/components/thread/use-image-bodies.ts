@@ -70,7 +70,7 @@ export function useImageBodies(path: string | undefined, images: readonly ImageC
     };
   }, [blobs, images, path, refs]);
 
-  return useMemo(() => (index: number, image: ImageContent): ImageSource => {
+  const sourceFor = useMemo(() => (index: number, image: ImageContent): ImageSource => {
     if (image.data) return { src: `data:${image.mimeType};base64,${image.data}`, state: "ready" };
     const url = urls[index];
     if (url) return { src: url, state: "ready" };
@@ -78,4 +78,23 @@ export function useImageBodies(path: string | undefined, images: readonly ImageC
     if (failed[index] || !ref || !isReadable(ref)) return { state: "unavailable" };
     return { state: "loading" };
   }, [failed, refs, urls]);
+
+  /**
+   * The rebuilt picture itself, for opening, copying or saving it: the pool's
+   * own blob, held while the viewer is open and given back on close. Nothing is
+   * fetched back from the object URL, so nothing is charged twice (RP-5b).
+   */
+  const pictureFor = useMemo(() => (index: number, name: string) => {
+    const ref = refs?.[index];
+    if (!ref || !isReadable(ref) || images[index]?.data) return undefined;
+    const key = `${ref.entryId}:${ref.component.kind}:${ref.component.index ?? 0}:${ref.revision ?? ""}`;
+    const held = blobs.source(key);
+    if (!held) return undefined;
+    return {
+      picture: { url: held.url, blob: held.blob, name, mediaType: images[index]?.mimeType ?? "image/png", bytes: held.bytes },
+      release: () => blobs.release(key),
+    };
+  }, [blobs, images, refs]);
+
+  return useMemo(() => Object.assign(sourceFor, { pictureFor }), [pictureFor, sourceFor]);
 }

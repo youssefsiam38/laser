@@ -11,8 +11,11 @@ export function FileOpenerProvider({ children, scope }: { children: ReactNode; s
   const [opened, setOpened] = useState<{ source: FileViewerSource; trigger: HTMLElement; scope: string | undefined }>();
   useEffect(() => setOpened(undefined), [scope]);
   const opener = useMemo<FileOpener>(() => ({ readFile: cache.read, openFile: (source, trigger) => setOpened({ source, trigger, scope }) }), [cache, scope]);
+  // A picture shown from the image pool is held while it is open and given
+  // back the moment it is not, so nothing decoded outlives what is on screen.
+  const close = () => setOpened(current => { current?.source.release?.(); return undefined; });
   return <FileOpenerContext value={opener}>
     {children}
-    {opened && opened.scope === scope ? <FileViewer source={opened.source} open onOpenChange={open => { if (!open) setOpened(undefined); }} returnFocus={opened.trigger} /> : null}
+    {opened && opened.scope === scope ? <FileViewer source={opened.source} open onOpenChange={open => { if (!open) close(); }} returnFocus={opened.trigger} /> : null}
   </FileOpenerContext>;
 }

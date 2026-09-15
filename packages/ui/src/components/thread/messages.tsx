@@ -8,7 +8,7 @@ import { AgentEventMessage } from "./AgentEventMessage.js";
 import { TaskEventNotice } from "./TaskEventNotice.js";
 import { AGENT_COMPLETION_DATA_PART, AGENT_EVENT_DATA_PART, GOAL_DATA_PART, TASK_EVENT_DATA_PART, type AgentCompletionData } from "@/runtime/projection";
 import type { GoalRecord as GoalRecordData } from "@/runtime/goal-history";
-import { memo, useContext, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentPropsWithoutRef } from "react";
+import { memo, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentPropsWithoutRef } from "react";
 import { useTranscriptViewport } from "./transcript-viewport.js";
 import { useTranscriptPresentation } from "@/runtime/LaserProvider";
 import { MessageEditPresentation } from "@/runtime/transcript-presentation";
@@ -41,6 +41,9 @@ import { readProviderFailure } from "./provider-error.js";
 import { StreamingText } from "@/components/assistant-ui/elements/streaming-text";
 import { ActivityReasoning, ToolGroup } from "@/components/assistant-ui/elements/tool-group.aui";
 import { useCopy } from "@/hooks/use-copy";
+import { canCopyWholeBody, copyWholeBody } from "@/runtime/body-reader";
+import { isReadable, omittedBytes } from "@/runtime/body-excerpt";
+import { partial } from "./LargeBodyViewer.js";
 import { duration as formatDuration } from "@/format";
 import { cn } from "@/lib/utils";
 import { NOTICE_DATA_PART, sessionTitle, useLaserStable, useLaserState } from "@/runtime";
@@ -92,6 +95,47 @@ const MESSAGE_ROOT = "[content-visibility:auto] [contain-intrinsic-size:auto_320
  * limit and took the whole tree down with it — a black window until the app
  * was quit. A row that leaves the window is gone, not un-hovered.
  */
+/**
+ * Copy a message honestly (RP-5b).
+ *
+ * A body this window holds whole is copied as it is. A body it holds an
+ * excerpt of is read from its authority a slice at a time and verified against
+ * the digest the conversation published, so what lands on the clipboard is the
+ * whole message or nothing. When this window cannot take a whole body that way,
+ * the excerpt goes — carrying, in the bytes themselves, an exact line saying
+ * what is missing. Nothing is copied as if it were whole when it is not.
+ */
+function useHonestCopy(path: string | undefined, text: string, body: BodyRef | undefined) {
+  const { client } = useLaserStable();
+  const environmentKey = useLaserState(s => s.environment?.environmentKey) ?? "";
+  const { copied, copy } = useCopy();
+  const [state, setState] = useState<"idle" | "copying" | "partial">("idle");
+  const run = useCallback(async () => {
+    if (body === undefined || omittedBytes(body) <= 0 || !isReadable(body) || path === undefined) {
+      await copy(text);
+      setState("idle");
+      return;
+    }
+    setState("copying");
+    const outcome = canCopyWholeBody()
+      ? await copyWholeBody(
+          (params) => client.request("session/entry_range", params),
+          path,
+          body,
+          { environmentKey, revisionOf: async (candidate) => (await client.request("session/revision", { path: candidate })).revision },
+        ).catch(() => ({ ok: false as const, reason: "short" as const }))
+      : { ok: false as const, reason: "unsupported" as const };
+    if (outcome.ok) {
+      setState("idle");
+      return;
+    }
+    await copy(partial(text, body.excerpt.offset, body.excerpt.offset + body.excerpt.bytes, body.totalBytes));
+    setState("partial");
+    setTimeout(() => setState("idle"), 2500);
+  }, [body, client, copy, environmentKey, path, text]);
+  return { copied, copying: state === "copying", partial: state === "partial", copy: run };
+}
+
 export function MessageRoot(props: ComponentPropsWithoutRef<"div">) {
   const messageId = useAuiState((s) => s.message.id);
   return <div {...props} data-message-id={messageId} />;
@@ -190,10 +234,11 @@ export function UserMessage() {
   const leafId = useLeafId();
   const userOffset = useUserOffset();
   const partialHistory = usePartialHistory();
-  const { copied, copy } = useCopy();
   const id = useAuiState(s => s.message.id);
   const presentation = useTranscriptPresentation();
   const viewport = useTranscriptViewport();
+  const { copied, copying, partial: copiedPartial, copy: copyMessage } = useHonestCopy(path, text, promptBodies?.text);
+  const { copy: copyText } = useCopy();
   const editOwner = useMemo(() => (path ? presentation.edit(path, id) : undefined) ?? new MessageEditPresentation(text), [presentation, path, id]);
   const { editing, draft, sending } = useSyncExternalStore(editOwner.subscribe, editOwner.getSnapshot, editOwner.getSnapshot);
   const setDraft = (draft: string) => editOwner.update({ draft });
@@ -244,7 +289,7 @@ export function UserMessage() {
   const move = { stopFirst: busy };
   const fork = entryId ? () => { viewport.startAction(); void actions.fork(entryId, move); } : undefined;
   const jump = entryId ? () => { viewport.startAction(); void actions.jump(entryId, move); } : undefined;
-  const copyPath = path ? () => void copy(path) : undefined;
+  const copyPath = path ? () => void copyText(path) : undefined;
   const startEdit = entryId
     ? () => {
         setDraft(text);
@@ -309,7 +354,13 @@ export function UserMessage() {
           >
             {parentPath ? <ParentTask parentPath={parentPath} /> : null}
             {goalSetter && <span className="mb-1 flex items-center gap-1.5 text-xs font-medium text-ink-2"><Target className="size-3.5 text-live" aria-hidden="true" />Goal set</span>}
-            <MessageImages images={images} sourceFor={imageSource} onOpen={opener ? (index, trigger) => opener.openFile({ file: attachmentFile(images[index]!, `Image ${index + 1}`) }, trigger) : undefined} />
+            <MessageImages images={images} sourceFor={imageSource} onOpen={opener ? (index, trigger) => {
+              const image = images[index]!;
+              // A picture this window rebuilt is opened from the pool's own
+              // blob; only a genuinely inline image has bytes to hand over.
+              const picture = imageSource.pictureFor?.(index, `Image ${index + 1}`);
+              opener.openFile(picture ?? { file: attachmentFile(image, `Image ${index + 1}`) }, trigger);
+            } : undefined} />
             {quote ? <QuoteReply text={quote} /> : null}
             {rest ? (
               <p className="wrap-break-word whitespace-pre-wrap">
@@ -343,8 +394,9 @@ export function UserMessage() {
           <MessageActions
             onLoadHistory={partialHistory ? () => void actions.loadAllEntries() : undefined}
             className={hoverReveal}
-            copied={copied}
-            onCopy={() => void copy(text)}
+            copied={copied || copiedPartial}
+            copyLabel={copying ? "Copying the whole message…" : copiedPartial ? "Copied what is shown" : undefined}
+            onCopy={() => void copyMessage()}
             onEdit={startEdit}
             onFork={fork}
             onJump={jump}
@@ -602,8 +654,15 @@ function AssistantFooter() {
   const viewport = useTranscriptViewport();
   const { actions } = useLaserStable();
   const text = useMessageText();
-  const { copied, copy } = useCopy();
   const path = useSessionPath();
+  // The reply this row shows may be an excerpt of a much larger one; copying it
+  // goes through the authority and is verified, or is marked (RP-5b).
+  const replyBody = useAuiState((s) => {
+    const bodies = laserMeta(s.message).bodies;
+    return Array.isArray(bodies) ? undefined : (bodies as BlockBodies | undefined)?.text;
+  });
+  const { copied, copying, partial: copiedPartial, copy: copyMessage } = useHonestCopy(path, text, replyBody);
+  const { copy } = useCopy();
   const entries = useEntries();
   const leafId = useLeafId();
   const userOffset = useUserOffset();
@@ -647,8 +706,9 @@ function AssistantFooter() {
       <MessageActions
         onLoadHistory={partialHistory ? () => void actions.loadAllEntries() : undefined}
         className={hoverReveal}
-        copied={copied}
-        onCopy={() => void copy(text)}
+        copied={copied || copiedPartial}
+        copyLabel={copying ? "Copying the whole reply…" : copiedPartial ? "Copied what is shown" : undefined}
+        onCopy={() => void copyMessage()}
         onCopyPath={path ? () => void copy(path) : undefined}
         onRegenerate={promptEntryId ? () => void rerun("here") : undefined}
         onRegenerateFork={promptEntryId ? () => void rerun("fork") : undefined}

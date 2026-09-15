@@ -577,7 +577,7 @@ export const IMAGE_MAX_ENCODED_BYTES = 48 * 1024 * 1024;
  */
 export const IMAGE_SURFACE_MAX_BYTES = 256 * 1024 * 1024;
 
-interface BlobEntry { url: string; bytes: number; holders: number; surface: number }
+interface BlobEntry { url: string; blob: Blob; bytes: number; holders: number; surface: number }
 
 export class ImageBlobs {
   private readonly entries = new Map<string, BlobEntry>();
@@ -621,6 +621,21 @@ export class ImageBlobs {
 
   url(key: string): string | undefined {
     return this.entries.get(key)?.url;
+  }
+
+  /**
+   * The image itself, for something that needs the bytes rather than a picture
+   * — opening it, copying it, saving it. Taking it is a hold, so nothing
+   * revokes the URL while a viewer is showing it, and the caller releases it
+   * the way a row does. Nothing is copied: this is the blob the pool already
+   * charged for, so opening an image costs no memory at all.
+   */
+  source(key: string): { url: string; blob: Blob; bytes: number } | undefined {
+    const entry = this.entries.get(key);
+    if (!entry) return undefined;
+    entry.holders += 1;
+    this.holds.set(key, (this.holds.get(key) ?? 0) + 1);
+    return { url: entry.url, blob: entry.blob, bytes: entry.bytes };
   }
 
   private revision(path: string, ref: BodyRef): Promise<string> {
@@ -712,7 +727,7 @@ export class ImageBlobs {
       // first slice of its bytes: a record this view only points at carries no
       // dimensions, and a declared floor would let a 2048² image in as if it
       // were a small one (RP-5b §7.3).
-      if (!this.keep(key, loaded.url, loaded.bytes, loaded.surface)) {
+      if (!this.keep(key, loaded.url, loaded.blob, loaded.bytes, loaded.surface)) {
         URL.revokeObjectURL(loaded.url);
         this.drop(key);
         return undefined;
@@ -778,7 +793,7 @@ export class ImageBlobs {
       && committed.surface + claim.surface <= IMAGE_SURFACE_MAX_BYTES;
   }
 
-  private keep(key: string, url: string, bytes: number, surface: number): boolean {
+  private keep(key: string, url: string, blob: Blob, bytes: number, surface: number): boolean {
     const fits = (): boolean =>
       this.entries.size + this.reserved.images + 1 <= IMAGE_BLOB_MAX
       && this.bytes + this.reserved.bytes + bytes <= IMAGE_BLOB_MAX_BYTES
@@ -791,7 +806,7 @@ export class ImageBlobs {
       this.bytes -= victim[1].bytes;
       this.surface -= victim[1].surface;
     }
-    this.entries.set(key, { url, bytes, holders: this.holds.get(key) ?? 1, surface });
+    this.entries.set(key, { url, blob, bytes, holders: this.holds.get(key) ?? 1, surface });
     this.bytes += bytes;
     this.surface += surface;
     return true;
@@ -803,7 +818,7 @@ export class ImageBlobs {
     mimeType: string,
     generation: number,
     claim: (surface: number) => boolean,
-  ): Promise<{ url: string; bytes: number; surface: number } | undefined> {
+  ): Promise<{ url: string; blob: Blob; bytes: number; surface: number } | undefined> {
     if (ref.totalBytes > IMAGE_MAX_ENCODED_BYTES) return undefined;
     const revision = await this.revision(path, ref);
     let digest: string | undefined = ref.contentDigest;
@@ -859,7 +874,7 @@ export class ImageBlobs {
     // An image is published only when what was read is the image the
     // conversation holds, whole.
     if (digest === undefined || running.digest() !== digest) return undefined;
-    return { url: URL.createObjectURL(blob), bytes, surface: surface ?? UNKNOWN_IMAGE_DECODED_BYTES };
+    return { url: URL.createObjectURL(blob), blob, bytes, surface: surface ?? UNKNOWN_IMAGE_DECODED_BYTES };
   }
 }
 

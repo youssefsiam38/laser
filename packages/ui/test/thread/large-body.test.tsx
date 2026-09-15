@@ -19,6 +19,7 @@ import { initialState, reduce } from "../../src/store.js";
 import { ThreadMessage } from "../../src/components/thread/messages.js";
 import { BODY_VIEWER_AGGREGATE_MAX_BYTES, BodyReplyRefused, BodyWindow, COPY_INFLIGHT_MAX_BYTES, copyWholeBody, FIND_QUERY_MAX_BYTES, findInBody, IMAGE_BLOB_MAX, IMAGE_SURFACE_MAX_BYTES, ImageBlobs, indexOfFolded, streamBody } from "../../src/runtime/body-reader.js";
 import { sliceUtf8RangeFrom, utf8ByteLength } from "@lasercode/protocol";
+import { partial } from "../../src/components/thread/LargeBodyViewer.js";
 import { sessionState } from "../agents/fixtures.js";
 import { LIVE_TAIL_MAX_BYTES, MESSAGE_RENDER_MAX_BYTES } from "../../src/runtime/body-excerpt.js";
 import { measureView } from "../../src/runtime/view-measure.js";
@@ -303,6 +304,49 @@ describe("the bounded window over one body", () => {
     expect(next.totalBytes).toBe(HUGE_TOTAL + 4096);
   });
 
+  it("reads a newly settled body at one current revision, and refuses another body served at a newer one", async () => {
+    const body = "設".repeat(50_000);
+    const digest = await digestOf(body);
+    let revisions = 0;
+    let served = body;
+    let servedRevision = "r5.env.9";
+    const seen: string[] = [];
+    const request = vi.fn(async (params: Record<string, unknown>) => {
+      seen.push(params.revision as string);
+      const offset = params.offset as number;
+      const slice = sliceUtf8RangeFrom(served, offset, 64 * 1024);
+      const text = slice?.text ?? "";
+      const total = utf8ByteLength(served);
+      const bytes = utf8ByteLength(text);
+      return { authority: "durable", revision: servedRevision, component: params.component, totalBytes: total, offset, bytes,
+        ...(offset + bytes < total ? { next: offset + bytes } : {}), truncated: offset + bytes < total,
+        sliceDigest: await digestOf(text), contentDigest: await digestOf(served), text };
+    });
+    // The reference a settle produced: an entry and the body's own digest, and
+    // deliberately no revision — the conversation has moved on since.
+    const settledRef = { entryId: "a1", component: { kind: "assistant_text" as const }, totalBytes: utf8ByteLength(body),
+      contentDigest: digest, excerpt: { offset: 0, bytes: 0 } };
+    const window = new BodyWindow(request as never, SESSION, settledRef, BODY_VIEWER_AGGREGATE_MAX_BYTES, "env",
+      async () => { revisions += 1; return servedRevision; });
+
+    await window.more();
+    await window.more();
+    // One authoritative revision was obtained and every slice was fenced to it.
+    expect(revisions).toBe(1);
+    expect(new Set(seen)).toEqual(new Set([servedRevision]));
+    expect(window.getSnapshot().slices.length).toBeGreaterThan(0);
+
+    // The conversation moves on and the record is replaced. A fresh read at the
+    // new revision is refused, because the digest this reference trusts is the
+    // one the settle published: a newer revision is not permission to show
+    // different bytes under the same reference.
+    window.clear();
+    served = `${body}more`;
+    servedRevision = "r6.env.9";
+    await expect(window.more()).rejects.toThrow(BodyReplyRefused);
+    expect(window.getSnapshot().slices).toHaveLength(0);
+  });
+
   it("jumps to a named place and holds only what it shows", async () => {
     const window = new BodyWindow(params => stable.client.request("session/entry_range", params) as never, SESSION, ref, BODY_VIEWER_AGGREGATE_MAX_BYTES, "env");
     await window.jump(1_000_000);
@@ -352,6 +396,37 @@ describe("a prompt whose image the window points at", () => {
 });
 
 describe("finding and copying what the window does not hold", () => {
+  it("copies a whole excerpted message through its authority, and marks it when it cannot", async () => {
+    const body = "答".repeat(120_000);
+    const total = utf8ByteLength(body);
+    const whole = await digestOf(body);
+    const request = vi.fn(async (params: Record<string, unknown>) => {
+      const offset = params.offset as number;
+      const slice = sliceUtf8RangeFrom(body, offset, (params.limit as number) ?? 65536);
+      const text = slice?.text ?? "";
+      const bytes = utf8ByteLength(text);
+      return { authority: "durable", revision: "r", component: params.component, totalBytes: total, offset, bytes,
+        ...(offset + bytes < total ? { next: offset + bytes } : {}), truncated: offset + bytes < total,
+        sliceDigest: await digestOf(text), contentDigest: whole, text };
+    });
+    const ref_ = { entryId: "e1", component: { kind: "assistant_text" as const }, totalBytes: total, revision: "r",
+      excerpt: { offset: 0, bytes: 16_384 } };
+    const written: unknown[] = [];
+    const outcome = await copyWholeBody(request as never, SESSION, ref_, { clipboard: { write: async (items) => { written.push(items[0]); } } });
+    expect(outcome.ok).toBe(true);
+    // Read in slices and verified as a whole; nothing was assembled as a string.
+    expect(request.mock.calls.length).toBeGreaterThan(1);
+    expect(written).toHaveLength(1);
+
+    // A window that cannot take a blob gets the marked excerpt instead, and the
+    // marker is in the bytes — not only in a label that disappears.
+    const shown = body.slice(0, 4000);
+    const marked = partial(shown, 0, utf8ByteLength(shown), total);
+    expect(marked.startsWith(shown)).toBe(true);
+    expect(marked).toContain("more of this message is not included");
+  });
+
+
   it("finds a match in the rest of a body and says where it is, without hydrating it", async () => {
     const body = `${"a".repeat(200_000)}needle${"b".repeat(200_000)}`;
     const request = vi.fn(async (params: Record<string, unknown>) => {
@@ -682,6 +757,32 @@ describe("images the window points at", () => {
     expect(blobs.url("same-key")).toBeUndefined();
     expect(blobs.held).toEqual({ images: 0, bytes: 0, surface: 0 });
     expect(blobs.committed).toEqual({ images: 0, bytes: 0, surface: 0 });
+  });
+
+  it("hands a rebuilt picture out from the pool, held and never copied", async () => {
+    const blobs = new ImageBlobs(payload(1) as never, "env");
+    const url = await blobs.load("open-me", SESSION, refOf(1, 64 * 1024, 1024), "image/png");
+    expect(typeof url).toBe("string");
+    const before = blobs.held;
+    const fetchSpy = vi.spyOn(globalThis, "fetch" as never);
+
+    const source = blobs.source("open-me")!;
+    // The pool's own blob and URL, and not one byte more charged for opening it.
+    expect(source.url).toBe(url);
+    expect(source.bytes).toBe(before.bytes);
+    expect(blobs.held).toEqual(before);
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    // The row goes; the viewer is still open, so nothing is revoked.
+    blobs.release("open-me");
+    expect(revoked).not.toContain(url);
+    expect(blobs.url("open-me")).toBe(url);
+    // The viewer closes: now it goes.
+    blobs.release("open-me");
+    expect(revoked).toContain(url);
+    expect(blobs.url("open-me")).toBeUndefined();
+    expect(blobs.held).toEqual({ images: 0, bytes: 0, surface: 0 });
+    fetchSpy.mockRestore();
   });
 
   it("refuses a malformed payload rather than showing something else", async () => {

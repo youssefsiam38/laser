@@ -12,7 +12,8 @@ import { ImagePreview } from "@/components/preview/ImagePreview";
 import { MarkdownPreview } from "@/components/preview/MarkdownPreview";
 import { TextPreview } from "@/components/preview/TextPreview";
 import { OpenExternally } from "@/components/preview/OpenExternally";
-import { fileDescription, previewKindFor } from "@/components/preview/media";
+import { describeMediaType, fileDescription, previewKindFor } from "@/components/preview/media";
+import { formatBytes } from "@/format";
 import { fileDirectory, projectFilePath } from "@/lib/file-links";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -34,7 +35,51 @@ export function FileViewer({ source, open, onOpenChange, returnFocus }: {
   </Dialog>;
 }
 
+/**
+ * A picture this window rebuilt from the conversation (RP-5b).
+ *
+ * It is shown from the blob the image pool already holds and paid for: never
+ * fetched back from its own object URL, never turned into base64, never copied.
+ * Copy and save hand that same blob to the platform.
+ */
+function PictureContents({ picture }: { picture: NonNullable<FileViewerSource["picture"]> }) {
+  const [copied, setCopied] = useState(false);
+  const [problem, setProblem] = useState<string>();
+  const copyPicture = async (): Promise<void> => {
+    try {
+      if (typeof ClipboardItem === "undefined" || typeof navigator?.clipboard?.write !== "function") {
+        setProblem("This window cannot copy an image. Save it instead.");
+        return;
+      }
+      await navigator.clipboard.write([new ClipboardItem({ [picture.mediaType]: picture.blob })]);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setProblem("That image could not be copied just now. Try again, or save it.");
+    }
+  };
+  return <>
+    <DialogHeader className="shrink-0 border-b border-line p-4 pe-12">
+      <DialogTitle className="break-all">{picture.name}</DialogTitle>
+      <DialogDescription>{describeMediaType(picture.mediaType)} · {formatBytes(picture.bytes)}</DialogDescription>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <Button variant="ghost" size="sm" className="pointer-coarse:min-h-11" onClick={() => void copyPicture()}>{copied ? "Copied" : "Copy image"}</Button>
+        <Button variant="outline" size="sm" className="pointer-coarse:min-h-11" asChild>
+          <a href={picture.url} download={picture.name}>Save image</a>
+        </Button>
+      </div>
+      {problem ? <p role="alert" className="mt-2 text-sm text-ink-2">{problem}</p> : null}
+    </DialogHeader>
+    <ImagePreview className="flex-1" src={picture.url} alt={picture.name} />
+  </>;
+}
+
 function ViewerContents({ source }: { source: FileViewerSource }) {
+  if (source.picture) return <PictureContents picture={source.picture} />;
+  return <FileContents source={source} />;
+}
+
+function FileContents({ source }: { source: FileViewerSource }) {
   const { client } = useLaserStable();
   const { copy, copied } = useCopy();
   const [fetched, setFile] = useState<ProjectFileContent>();

@@ -339,7 +339,17 @@ export type SessionUpdate =
         bodies?: PersistedBodyIdentity[];
         omitted?: number;
         truncated?: true;
-        /** The revision this identity belongs to, when the authority knows it. */
+        /**
+         * The revision of the state this entry was written into, for
+         * diagnostics and cache keys only — **not** a read fence.
+         *
+         * A turn keeps writing after a message settles, so by the time anyone
+         * reads this body that revision is usually already behind, and a
+         * request pinned to it would be refused. A client obtains a current
+         * revision, fences every slice of one read to that single value, and
+         * relies on `bodies[].contentDigest` to prove the bytes are this body
+         * — which they cannot be if the record changed (RP-5b).
+         */
         revision?: string;
       };
     }
