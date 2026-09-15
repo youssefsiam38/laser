@@ -296,12 +296,15 @@ it("renders the retained counters the host reports, and says what is still missi
       coverage: { workers: 2, answered: 1, complete: false, reason: "collector_failed" },
     },
   };
+  // A producer that sends a byte total anyway is still only half the machine.
+  partial.stores!.entries.taskRegistry!.bytes = 65_536;
   fixture.client.request.mockImplementation((method: string) => method === "resource/snapshot"
     ? Promise.resolve({ snapshot: partial, retention })
     : Promise.resolve({ snapshots: [partial], retention }));
   await click("Refresh");
   expect(rowOf("taskRegistry").textContent).toContain("at least; 1 of 2 workers answered");
-  expect(rowOf("taskRegistry").textContent).toContain("Unavailable");
+  expect(rowOf("taskRegistry").textContent).toContain("Retained bytes are complete only when every live worker answers");
+  expect(rowOf("taskRegistry").textContent).not.toContain("64 KB");
   // The host counted delivery itself, so a silent worker cannot soften it.
   expect(rowOf("deliveryRegistry").textContent).not.toContain("at least");
 });

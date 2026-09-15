@@ -276,9 +276,12 @@ export function retainedStoreRows(input: RetainedStoreInputs): RetainedStoreRow[
    * One retained-state row, from whichever producer reports it: the host's own
    * typed snapshot first, then the local adapter. `aggregated` marks a counter
    * summed across live workers — when one did not answer, its count is *at
-   * least* that many and its bytes stay unavailable, because a partial sum
-   * presented as a total is the one thing this surface exists not to do. A
-   * counter nobody reports is still named plainly, never a zero.
+   * least* that many and its bytes are refused outright, because a partial sum
+   * presented as a total is the one thing this surface exists not to do. The
+   * refusal does not depend on the producer having left the figure out: a byte
+   * total that arrives while a worker is still silent is a partial total, and
+   * this surface will not draw one however it was sent. A counter nobody
+   * reports is still named plainly, never a zero.
    */
   const store = (
     id: ResourceOptionalStoreKey,
@@ -296,8 +299,8 @@ export function retainedStoreRows(input: RetainedStoreInputs): RetainedStoreRow[
       count: value?.count === undefined
         ? unavailable(`This count is not currently reported by ${owner}`)
         : available(value.count, partial ? `at least; ${incomplete}` : undefined),
-      bytes: value?.bytes === undefined
-        ? unavailable(partial && value?.count !== undefined
+      bytes: partial || value?.bytes === undefined
+        ? unavailable(partial && value !== undefined
           ? `Retained bytes are complete only when every live worker answers; ${incomplete}`
           : `Retained bytes are not currently reported by ${owner}`)
         : available(value.bytes),

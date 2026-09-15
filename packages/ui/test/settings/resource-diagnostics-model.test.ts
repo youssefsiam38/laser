@@ -173,15 +173,20 @@ describe("resource diagnostics projection", () => {
   it("qualifies a worker-aggregated count as at-least while a live worker has not answered", () => {
     const partial = snapshot([host, worker], {
       stores: {
-        entries: { taskRegistry: { count: 5 }, deliveryRegistry: { count: 2 } },
+        // A byte total that arrives while two workers are still silent is a
+        // partial total, whoever sent it: the surface must refuse it.
+        entries: { taskRegistry: { count: 5, bytes: 9_999 }, deliveryRegistry: { count: 2 } },
         coverage: { workers: 3, answered: 1, complete: false, reason: "collector_failed" },
       },
     });
     const rows = retainedStoreRows({ snapshot: partial, rendererViews: 1, pendingMessages: 0 });
     const tasks = rows.find((row) => row.id === "taskRegistry")!;
     expect(tasks.count).toEqual({ status: "available", value: 5, qualifier: "at least; 1 of 3 workers answered" });
-    expect(tasks.bytes).toMatchObject({ status: "unavailable" });
-    expect(tasks.bytes.status === "unavailable" ? tasks.bytes.reason : "").toContain("1 of 3 workers answered");
+    expect(tasks.bytes).toEqual({
+      status: "unavailable",
+      reason: "Retained bytes are complete only when every live worker answers; 1 of 3 workers answered",
+    });
+    expect(JSON.stringify(tasks.bytes)).not.toContain("9999");
     // Host-only, so incomplete worker coverage cannot make it an estimate.
     expect(rows.find((row) => row.id === "deliveryRegistry")!.count).toEqual({ status: "available", value: 2 });
     // Nothing reported stays unreported: partial coverage does not invent one.
