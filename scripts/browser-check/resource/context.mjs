@@ -6,14 +6,14 @@
  */
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { waitForRegistrations, connectInspector, queryInstances, scalarCounters, tailBufferCounters, linuxStartToken } from './inspector.mjs';
+import { waitForRegistrations, captureConnectionTarget, connectInspector, queryInstances, scalarCounters, tailBufferCounters, linuxStartToken } from './inspector.mjs';
 import { DiscoveryRegistry } from './discovery.mjs';
 import { ProcessCensus, censusTotals, verdictFor } from './sampling.mjs';
 import { captureHeap } from './heap.mjs';
 import { SAFETY } from './config.mjs';
 import { addHeapOwners, addRendererProjection } from './rankings.mjs';
 import { sanitizeError, sanitizeOwner } from './report.mjs';
-import { retirementGuardSnapshot } from './retirement.mjs';
+import { partitionWorkerCounters, retirementGuardSnapshot } from './retirement.mjs';
 
 export const sleep = ms => new Promise(done => setTimeout(done, ms));
 
@@ -115,6 +115,10 @@ export class SoakRun {
       return await fn({
         set,
         counters: () => scalarCounters(set.host.client, set.host.handle.objectId, 'host'),
+        // Capture one host-side socket by the port its client opened from, once,
+        // and read that object afterwards. On the same host connection this
+        // activity already holds: no extra inspector, no queried objects.
+        captureConnection: remotePort => captureConnectionTarget(set.host.client, set.host.handle.objectId, remotePort),
       });
     } finally { await this.closeInspectorSet(set); }
   }
@@ -128,13 +132,23 @@ export class SoakRun {
     const set = await this.inspectorSet();
     try {
       const host = await scalarCounters(set.host.client, set.host.handle.objectId, 'host');
-      const workers = [];
+      const rows = [];
       const unreadable = set.unreadableWorkers.map(row => row.reason);
       for (const worker of set.workers) {
-        try { workers.push(await scalarCounters(worker.client, worker.handle.objectId, 'worker')); }
+        try { rows.push(await scalarCounters(worker.client, worker.handle.objectId, 'worker')); }
         catch (error) { unreadable.push(sanitizeError(error)); }
       }
-      return { guards: retirementGuardSnapshot(host, workers), readable: workers.length, unreadable };
+      // One boundary for both ways a worker fails to answer: a throw, and a row
+      // that says it has no evidence. Neither is a readable zero.
+      const counters = partitionWorkerCounters(rows);
+      return {
+        // Every row, so a worker that answered "no evidence" makes the totals
+        // unknown instead of leaving the workers that did answer looking
+        // complete; `readable` counts only the ones that really answered.
+        guards: retirementGuardSnapshot(host, rows),
+        readable: counters.readable.length,
+        unreadable: [...unreadable, ...counters.unreadable],
+      };
     } finally { await this.closeInspectorSet(set); }
   }
 
@@ -231,12 +245,17 @@ export class SoakRun {
     let phase;
     try {
       const hostCounters = await scalarCounters(set.host.client, set.host.handle.objectId, 'host');
-      const workerCounters = [];
+      const rows = [];
       const unreadableWorkers = [...set.unreadableWorkers];
       for (const worker of set.workers) {
-        try { workerCounters.push(await scalarCounters(worker.client, worker.handle.objectId, 'worker')); }
+        try { rows.push(await scalarCounters(worker.client, worker.handle.objectId, 'worker')); }
         catch (error) { unreadableWorkers.push({ reason: sanitizeError(error) }); }
       }
+      // The same boundary as the retirement guard: a worker that answered
+      // "no evidence" is an unreadable worker, never a row of zeros in `workers`.
+      const partitioned = partitionWorkerCounters(rows);
+      const workerCounters = partitioned.readable;
+      for (const reason of partitioned.unreadable) unreadableWorkers.push({ reason });
       // TailBuffer instances have no single published handle, so finding them
       // costs a Runtime.queryObjects collection. It runs only here, after the
       // natural sample, and its numbers are labelled for what they are.

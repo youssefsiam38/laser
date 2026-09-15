@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { sleep } from '../context.mjs';
+import { deliveryCounts } from '../retirement.mjs';
 
 /** Scenario 1 — clean start and idle baseline. */
 export default {
@@ -26,7 +27,17 @@ export default {
     const baseline = await run.samplePhase('baseline', { heap: true });
     assert.equal(baseline.host.tasks, 0, 'baseline host task register is empty');
     assert.equal(baseline.host.workers, 0, 'baseline host worker pool is empty');
-    assert.equal(baseline.host.transcriptLoaded, 0, 'baseline transcript delivery holds no loaded paths');
+    // A measured zero, not a missing one: the host must say it could read its
+    // per-connection membership before "nothing is held" means anything. The
+    // same numbers are proved non-zero, and zero again, against a real
+    // connection that attaches and closes in scenario 8.
+    const delivery = deliveryCounts(baseline.host);
+    assert.equal(delivery.available, true, `baseline transcript delivery evidence is unreadable: ${delivery.reason}`);
+    assert.deepEqual([delivery.paths, delivery.owners, delivery.admittedOwners, delivery.loadingOwners], [0, 0, 0, 0],
+      'baseline holds no conversation on any connection');
+    assert.deepEqual([baseline.host.transcriptLoaded, baseline.host.transcriptLoading, baseline.host.attachmentRefs, baseline.host.attachedPaths],
+      [0, 0, 0, 0], 'the guard rows agree with the membership view they are read from');
+    assert.equal(delivery.connections, baseline.host.connections, 'every connected client has a delivery record the guard can read');
     report.temporaryPeaks = { baselinePssBytes: Number.isFinite(baseline.postGc?.totalPssBytes)
       ? Math.max(...natural.map(row => row.totalPssBytes).filter(Number.isFinite), baseline.totalPssBytes ?? 0) - baseline.postGc.totalPssBytes : null };
     return { phase: baseline, state: { baselineNatural: natural } };

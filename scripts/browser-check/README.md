@@ -230,6 +230,30 @@ live instance is re-acquired through `Runtime.queryObjects` immediately before
 its own capture. Final reports exclude scratch paths, inspector URLs, session
 IDs, commands and payloads.
 
+Two projections read product state through an owned inspector, and both refuse
+to answer a question they cannot answer. The **worker retained-state** row is
+read from `WorkerServer.runtimes` — RP-4's `SessionRuntimes` table — with each
+live row's replay buffer and the engine's own synchronous entry accessor: a
+worker whose table is missing is `available: false`, and a live row whose entry
+count cannot be read makes the total `null` beside `entriesKnown` and
+`entriesUnreadable`, never a zero. A worker that answers "no evidence" is an
+unreadable worker in one place for every consumer, so it can never be certified
+as an idle one. The same holds for host attachment and transcript delivery,
+which are read from RP-6's public membership view (`counts()`, `paths()`,
+`admittedHolders()`) as exact admitted/loading owners and retained paths.
+
+The **slow consumer** (scenario 8) uses the loopback port its own client opened
+from to *admit* the host-side socket exactly once, captures that `WebSocket` as
+an inspector object, and reads every later sample through it while asking the
+host separately whether it is still in `clients`. A port the kernel reuses is a
+different object, whatever its byte counters say. The host may contain the
+connection by holding bytes for it (`mechanism: "queued"`, a positive
+pending-byte peak under the unchanged high-water ceiling) or by fencing it for
+reconnect (`"fenced"`, proved by that connection's own pressure state, or — when
+the host has dropped it — by its 1013 closure once its reader resumes). A
+connection that merely disappeared, a socket error, a timeout, an unreadable
+reading or a queue that stayed at zero are none of those and fail the scenario.
+
 Native allocator ownership comes from one bounded Chrome memory dump taken after
 the measured workload, at the least intrusive level of detail that still names
 real allocator owners. Tracing never runs across the workload itself. To compare
@@ -239,4 +263,8 @@ instrumentation against the same image payload the soak uses:
 node scripts/browser-check/resource-image-diagnostic.mjs --artifacts /tmp/resource-image-diagnostic
 ```
 
-Tests: `pnpm test:browser-check` (also in `pnpm verify`).
+Tests: `pnpm test:browser-check` (also in `pnpm verify`). The resource harness's
+suites are split by boundary: `test/resource-soak.test.mjs` for the runner,
+reports and phase sampling, `test/resource-inspector.test.mjs` for the
+projections and the worker-evidence boundary, `test/resource-backpressure.test.mjs`
+for scenario 8's containment state machine.

@@ -666,25 +666,29 @@ test('in-worker retention expectations: no finished command keeps a tail buffer,
   assert.deepEqual(expectedRetainedCounts(), { tailBuffers: 0, workerBackgroundTasks: 0, sameGenerationCalls: 0, replacedGenerationCalls: 0, heavyToolGenerationSurvived: false });
 });
 
+const workerGuardRow = (overrides = {}) => ({
+  kind: 'worker', available: true, runningTasks: 0, pendingQuestions: 0, pendingApprovals: 0, runningTools: 0, ...overrides,
+});
+
 test('guard proof re-samples a worker that vanished between connect and read, then asserts zero work', async () => {
   const samples = [
     { guards: retirementGuardSnapshot({ connections: 1, attachmentRefs: 1, attachedPaths: 1 }), readable: 1, unreadable: ['Expected exactly 1 live WorkerServer; found 0.'] },
-    { guards: retirementGuardSnapshot({ connections: 1, attachmentRefs: 1, attachedPaths: 1, runningTasks: 1 }, [{ runningTools: 1 }]), readable: 2, unreadable: [] },
-    { guards: retirementGuardSnapshot({ connections: 1, attachmentRefs: 1, attachedPaths: 1 }, [{ runningTools: 0 }]), readable: 2, unreadable: [] },
+    { guards: retirementGuardSnapshot({ connections: 1, attachmentRefs: 1, attachedPaths: 1, runningTasks: 1 }, [workerGuardRow({ runningTools: 1 })]), readable: 2, unreadable: [] },
+    { guards: retirementGuardSnapshot({ connections: 1, attachmentRefs: 1, attachedPaths: 1 }, [workerGuardRow()]), readable: 2, unreadable: [] },
   ];
   let taken = 0; const slept = [];
   const proved = await proveNoLiveWork(async () => samples[taken++], { deadlineMs: 1_000, sleepFor: async ms => slept.push(ms) });
   assert.equal(taken, 3);
   assert.equal(proved.attempts, 3);
   assert.deepEqual([proved.readable, proved.unreadable], [2, []]);
-  assert.deepEqual(proved.guards, retirementGuardSnapshot({ connections: 1, attachmentRefs: 1, attachedPaths: 1 }, [{ runningTools: 0 }]));
+  assert.deepEqual(proved.guards, retirementGuardSnapshot({ connections: 1, attachmentRefs: 1, attachedPaths: 1 }, [workerGuardRow()]));
   assert.equal(slept.length, 2);
 });
 
 test('guard proof fails with sanitized reasons, readable/unreadable counts and the last guards', async () => {
   let clock = 0;
   const sample = async () => ({
-    guards: retirementGuardSnapshot({ connections: 2, attachmentRefs: 2, attachedPaths: 1, runningSessions: 1 }, [{ pendingApprovals: 1 }]),
+    guards: retirementGuardSnapshot({ connections: 2, attachmentRefs: 2, attachedPaths: 1, runningSessions: 1 }, [workerGuardRow({ pendingApprovals: 1 })]),
     readable: 1,
     unreadable: ['/home/person/project/worker.js: counters unreachable for 123e4567-e89b-12d3-a456-426614174000'],
   });
@@ -705,7 +709,7 @@ test('guard proof fails with sanitized reasons, readable/unreadable counts and t
 test('retirement guard projection is count-only and distinguishes every blocker', () => {
   const snapshot = retirementGuardSnapshot(
     { connections: 2, attachmentRefs: 3, attachedPaths: 2, runningSessions: 1, liveRuns: 1, runningTasks: 1, attentionDialogs: 1, cwd: '/secret/project' },
-    [{ runningTasks: 1, pendingQuestions: 1, pendingApprovals: 1, runningTools: 1, path: '/secret/session' }],
+    [workerGuardRow({ runningTasks: 1, pendingQuestions: 1, pendingApprovals: 1, runningTools: 1, path: '/secret/session' })],
   );
   assert.deepEqual(snapshot, { productConnections: 2, attachmentRefs: 3, attachedPaths: 2, runningSessions: 1, liveRuns: 1,
     runningTasks: 2, attentionDialogs: 1, pendingQuestions: 1, pendingApprovals: 1, runningTools: 1 });
@@ -721,7 +725,7 @@ function fakeInspectorClient(counters = { connections: 0 }) {
     async send(method, params = {}) {
       if (method === 'Runtime.callFunctionOn') {
         const worker = String(params.functionDeclaration).includes("kind:'worker'");
-        return { result: { value: worker ? { kind: 'worker', sessions: 1, tasks: 0, runningTasks: 0, pendingQuestions: 0, pendingApprovals: 0, runningTools: 0 } : { kind: 'host', ...counters } } };
+        return { result: { value: worker ? { kind: 'worker', available: true, sessions: 1, tasks: 0, runningTasks: 0, pendingQuestions: 0, pendingApprovals: 0, runningTools: 0 } : { kind: 'host', ...counters } } };
       }
       if (method === 'Runtime.evaluate') return { result: { objectId: 'published-1' } };
       return {};
