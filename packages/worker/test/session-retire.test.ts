@@ -12,9 +12,21 @@
  */
 import { describe, expect, it } from "vitest";
 import { ErrorCodes, LIFETIME_RETRY } from "@lasercode/protocol";
-import type { ClientRequests, ContentBlock, JsonRpcMessage, ModelRef, SessionState, UiDialogRequest } from "@lasercode/protocol";
+import type { AgentsSnapshot, ClientRequests, ContentBlock, JsonRpcMessage, ModelRef, SessionState, UiDialogRequest } from "@lasercode/protocol";
 import type { DriverEvent, DriverListener, DriverReleaseReadiness, SessionDriver } from "../src/driver.js";
+import { fallbackSnapshot } from "../src/agents/definitions.js";
 import { WorkerServer } from "../src/server.js";
+
+/** The agents snapshot the host sends once a model Namer may use exists. */
+function namerReady(): AgentsSnapshot {
+  const snapshot = fallbackSnapshot();
+  return { ...snapshot, namer: { ...snapshot.namer, status: "ready", model: { provider: "stub", id: "stub-1" } } };
+}
+
+/** First prompts parked for want of a naming model, read where the worker keeps them. */
+function parked(server: WorkerServer): Map<string, string> {
+  return (server as unknown as { unnamed: Map<string, string> }).unnamed;
+}
 
 const PATH = "/tmp/retire/s1.jsonl";
 
@@ -122,7 +134,14 @@ describe("pi/worker/retire", () => {
     const driver = w.drivers[0]!;
     let finishPrompt = () => {};
     driver.promptGate = new Promise<void>((resolve) => { finishPrompt = resolve; });
-    const prompting = new Promise<void>((resolve) => { driver.prompting = resolve; });
+    const prompting = new Promise<void>((resolve) => {
+      driver.prompting = () => {
+        // The turn this accepted handler started keeps running after the
+        // handler answers, which is what the recheck under the fence must see.
+        driver.patch({ isStreaming: true });
+        resolve();
+      };
+    });
     const prompt = w.send("session/prompt", { path: PATH, content: text("hello") });
     await prompting;
 
@@ -134,7 +153,8 @@ describe("pi/worker/retire", () => {
     expect(prompt.reply()).toHaveProperty("result");
     // The drain waited for it; the recheck then saw the session it had touched.
     const answer = (retiring.reply() as { result: ClientRequests["pi/worker/retire"]["result"] }).result;
-    expect(answer.retiring).toBe(false);
+    expect(answer).toMatchObject({ retiring: false, reason: "pinned" });
+    expect(answer.retiring === false && answer.pins[0]!.pins.map((pin) => pin.kind)).toEqual(["streaming"]);
     expect(w.drivers[0]!.disposed).toBe(false);
   });
 
@@ -158,13 +178,26 @@ describe("pi/worker/retire", () => {
   it("lets an explicit stop through an advisory pin, where the idle sweep would refuse", async () => {
     const w = world();
     await w.call("session/load", { path: PATH });
-    // A first prompt waiting to be named is advisory: real work, but not work
-    // a person asking for a stop should be made to wait for.
-    const unnamed = (w.server as unknown as { unnamed: Map<string, string> }).unnamed;
-    unnamed.set(PATH, "name me");
+    // A first prompt waiting to be named, with a model there to name it, is
+    // advisory: real work, but not work a person asking for a stop should be
+    // made to wait for.
+    await w.call("agents/sync", { snapshot: namerReady() });
+    parked(w.server).set(PATH, "name me");
 
     expect(await w.retire("automatic")).toMatchObject({ retiring: false, reason: "pinned" });
     expect(await w.retire("explicit")).toEqual({ retiring: true });
+  });
+
+  it("retires naturally with a first prompt parked for want of a naming model", async () => {
+    const w = world();
+    await w.call("session/load", { path: PATH });
+    // Credential-free: the prompt's words are parked in case a model ever
+    // appears, and nothing can perform that intent meanwhile. It must not keep
+    // this worker alive for the life of the process.
+    expect(await w.call("session/prompt", { path: PATH, content: text("explore the repo") })).toHaveProperty("result");
+    expect(parked(w.server).get(PATH)).toBe("explore the repo");
+    expect(w.server.sessionSafety().sessions).toEqual([{ path: PATH, pins: [] }]);
+    expect(await w.retire("automatic")).toEqual({ retiring: true });
   });
 
   it("goes back to work when the acknowledgement was lost and the pipe never closed", async () => {

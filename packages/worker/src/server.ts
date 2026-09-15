@@ -1595,13 +1595,23 @@ export class WorkerServer {
       trayMessages: live.pending?.list().length ?? 0,
       runningTasks: this.tasks.tasksOf(live.path).filter((task) => task.status === "running").length,
       // A first prompt waiting to be named is work this runtime is the only
-      // holder of: `nameWaitingSessions()` performs it, and closing the session
-      // erases it. The wait is bounded in count (`UNNAMED_MAX`) but **not in
-      // time**: with no model ever connected, this pin keeps that one runtime
-      // until the conversation is closed. That is the honest trade — an
-      // untitled conversation is a small loss, silently erasing queued work is
-      // not — and it is what the approved plan asked for.
-      naming: this.unnamed.has(live.path),
+      // holder of — `nameWaitingSessions()` performs it, and closing the
+      // session erases it — but only while there is a model to perform it
+      // with. A prompt parked because nothing was connected is waiting for
+      // something that may never arrive, and a pin for it is a refusal with no
+      // end: with no model ever connected it would hold that runtime, and the
+      // whole worker's automatic retirement, for the life of the process. An
+      // untitled conversation is the smaller loss, so the pin says what
+      // `SessionSafetySnapshot.naming` documents: a prompt is waiting **and** a
+      // model is there.
+      //
+      // Nothing is dropped by that: the parked text stays in `unnamed` until
+      // the session closes, so a model that appears first still names it. A
+      // model that appears while this session is being released races the
+      // release and loses harmlessly — `nameSession()` re-checks `runtimes`
+      // after its completion and applies no name to a runtime that has gone,
+      // so the cost is the title, never a crash, a lost prompt or a stale pin.
+      naming: this.unnamed.has(live.path) && this.namer.enabled(),
       runningTools: this.runningTools.get(live.path)?.size ?? 0,
       hasRecord,
       ...(live.closeFailed ? { closeFailed: true } : {}),

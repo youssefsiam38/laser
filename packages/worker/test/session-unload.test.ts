@@ -11,11 +11,23 @@ import { describe, expect, it } from "vitest";
 import { SESSION_PIN_DETAIL_MAX, SESSION_SAFETY_MAX, sessionPinSchema } from "@lasercode/protocol";
 import type { DriverReleaseReadiness } from "../src/driver.js";
 import { ErrorCodes, LIFETIME_RETRY } from "@lasercode/protocol";
-import type { ClientRequests, ContentBlock, JsonRpcMessage, ModelRef, SessionState, SessionUpdateParams, UiDialogRequest } from "@lasercode/protocol";
+import type { AgentsSnapshot, ClientRequests, ContentBlock, JsonRpcMessage, ModelRef, SessionState, SessionUpdateParams, UiDialogRequest } from "@lasercode/protocol";
 import { WorkerServer } from "../src/server.js";
+import { fallbackSnapshot } from "../src/agents/definitions.js";
 import type { DriverEvent, DriverListener, SessionDriver } from "../src/driver.js";
 
 const PATH = "/tmp/unload/s1.jsonl";
+
+/** The agents snapshot the host sends with, and without, a model Namer may use. */
+function namerSnapshot(model: { provider: string; id: string } | null): AgentsSnapshot {
+  const snapshot = fallbackSnapshot();
+  return { ...snapshot, namer: { ...snapshot.namer, status: model ? "ready" : "unqualified", model } };
+}
+
+/** First prompts parked for want of a naming model, read where the worker keeps them. */
+function parked(server: WorkerServer): Map<string, string> {
+  return (server as unknown as { unnamed: Map<string, string> }).unnamed;
+}
 
 class FakeDriver implements SessionDriver {
   readonly kind = "stable-sdk" as const;
@@ -243,6 +255,69 @@ describe("pi/session/unload", () => {
     await reading.answered;
     expect(reading.reply()).toHaveProperty("result");
     expect(await w.unload()).toEqual({ unloaded: true, pins: [] });
+  });
+
+  it("releases a session whose first prompt is parked because no Namer model exists", async () => {
+    const w = world();
+    await w.load();
+    // Credential-free: naming is off, so the first prompt's words are parked
+    // in case a model ever appears. That intent cannot be performed by anyone,
+    // so it is not a refusal — an untitled conversation is the smaller loss.
+    expect(await w.call("session/prompt", { path: PATH, content: text("explore the repo") })).toHaveProperty("result");
+    expect(parked(w.server).get(PATH)).toBe("explore the repo");
+    expect((await w.safety()).sessions).toEqual([{ path: PATH, pins: [] }]);
+
+    expect(await w.unload()).toEqual({ unloaded: true, pins: [] });
+    expect(w.drivers[0]!.disposed).toBe(true);
+    // Still a release and not a cancellation, and the parked words went with
+    // the session rather than being left behind in the worker.
+    expect(w.drivers[0]!.aborts).toBe(0);
+    expect(parked(w.server).has(PATH)).toBe(false);
+  });
+
+  it("refuses while a parked first prompt has a model to name it with, and keeps the prompt", async () => {
+    const w = world();
+    await w.load();
+    // A model is there first, so nothing is drained from under the test; then a
+    // first prompt is waiting to be named, which is the pin's real case.
+    await w.call("agents/sync", { snapshot: namerSnapshot({ provider: "stub", id: "stub-1" }) });
+    parked(w.server).set(PATH, "explore the repo");
+    expect(await w.unload()).toMatchObject({ unloaded: false, pins: [{ kind: "naming", detail: "a first prompt is waiting to be named" }] });
+    expect(w.drivers[0]!.disposed).toBe(false);
+    // A refusal changes nothing: the words are still there to be named.
+    expect(parked(w.server).get(PATH)).toBe("explore the repo");
+
+    // The model goes away again (a provider disconnected, a person switched
+    // naming off): the same parked prompt stops being a refusal without
+    // anything dropping it.
+    await w.call("agents/sync", { snapshot: namerSnapshot(null) });
+    expect(parked(w.server).get(PATH)).toBe("explore the repo");
+    expect((await w.safety()).sessions).toEqual([{ path: PATH, pins: [] }]);
+    expect(await w.unload()).toEqual({ unloaded: true, pins: [] });
+  });
+
+  it("still refuses a parked prompt's session for every other reason it holds", async () => {
+    const w = world();
+    await w.load();
+    expect(await w.call("session/prompt", { path: PATH, content: text("explore the repo") })).toHaveProperty("result");
+    expect(parked(w.server).get(PATH)).toBe("explore the repo");
+    // Naming is not a pin here, and that weakens nothing else: a turn, a
+    // question, an approval, queued work, a tray message and a degraded runtime
+    // each still hold this session on their own.
+    w.drivers[0]!.patch({ isStreaming: true });
+    expect((await w.unload()).pins.map((pin) => pin.kind)).toEqual(["streaming"]);
+    w.drivers[0]!.patch({ isStreaming: false, pendingMessageCount: 2 });
+    expect((await w.unload()).pins.map((pin) => pin.kind)).toEqual(["queued_work"]);
+    w.drivers[0]!.patch({ pendingMessageCount: 0 });
+    w.drivers[0]!.pending = [{ id: "d1", kind: "confirm", message: "Proceed?" } as UiDialogRequest];
+    expect((await w.unload()).pins.map((pin) => pin.kind)).toEqual(["question"]);
+    w.drivers[0]!.pending = [{ id: "d2", kind: "confirm", message: "Run it?", toolCallId: "call-1" } as UiDialogRequest];
+    expect((await w.unload()).pins.map((pin) => pin.kind)).toEqual(["approval"]);
+    w.drivers[0]!.pending = [];
+    await w.call("session/pending/add", { path: PATH, content: text("do this next") });
+    expect((await w.unload()).pins.map((pin) => pin.kind)).toEqual(["pending_tray"]);
+    expect(w.drivers[0]!.disposed).toBe(false);
+    expect(parked(w.server).get(PATH)).toBe("explore the repo");
   });
 
   it("reopens the same conversation, with a fresh epoch that forces a resync", async () => {
