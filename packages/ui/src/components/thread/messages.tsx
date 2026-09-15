@@ -105,35 +105,51 @@ const MESSAGE_ROOT = "[content-visibility:auto] [contain-intrinsic-size:auto_320
  * the excerpt goes — carrying, in the bytes themselves, an exact line saying
  * what is missing. Nothing is copied as if it were whole when it is not.
  */
-function useHonestCopy(path: string | undefined, text: string, body: BodyRef | undefined) {
+export function useHonestCopy(path: string | undefined, text: string, body: BodyRef | undefined) {
   const { client } = useLaserStable();
   const environmentKey = useLaserState(s => s.environment?.environmentKey) ?? "";
-  const { copied, copy } = useCopy();
-  const [state, setState] = useState<"idle" | "copying" | "partial">("idle");
+  const { copied, copy, markCopied } = useCopy();
+  const [copying, setCopying] = useState(false);
+  const [wasPartial, setWasPartial] = useState(false);
   const run = useCallback(async () => {
-    if (body === undefined || omittedBytes(body) <= 0 || !isReadable(body) || path === undefined) {
+    // Only a body this window holds whole is copied as it is.
+    if (body === undefined || omittedBytes(body) <= 0) {
+      setWasPartial(false);
       await copy(text);
-      setState("idle");
       return;
     }
-    setState("copying");
-    const outcome = canCopyWholeBody()
-      ? await copyWholeBody(
-          (params) => client.request("session/entry_range", params),
-          path,
-          body,
-          { environmentKey, revisionOf: async (candidate) => (await client.request("session/revision", { path: candidate })).revision },
-        ).catch(() => ({ ok: false as const, reason: "short" as const }))
-      : { ok: false as const, reason: "unsupported" as const };
-    if (outcome.ok) {
-      setState("idle");
+    // Everything else is an excerpt. It is copied whole from its authority, or
+    // it goes with the marker in its bytes — never plain, and never because a
+    // reference happened to be live or a path was not to hand.
+    const marked = async (): Promise<void> => {
+      setWasPartial(true);
+      await copy(partial(text, body.excerpt.offset, body.excerpt.offset + body.excerpt.bytes, body.totalBytes));
+    };
+    if (!isReadable(body) || path === undefined || !canCopyWholeBody()) {
+      await marked();
       return;
     }
-    await copy(partial(text, body.excerpt.offset, body.excerpt.offset + body.excerpt.bytes, body.totalBytes));
-    setState("partial");
-    setTimeout(() => setState("idle"), 2500);
-  }, [body, client, copy, environmentKey, path, text]);
-  return { copied, copying: state === "copying", partial: state === "partial", copy: run };
+    setCopying(true);
+    try {
+      const outcome = await copyWholeBody(
+        (params) => client.request("session/entry_range", params),
+        path,
+        body,
+        { environmentKey, revisionOf: async (candidate) => (await client.request("session/revision", { path: candidate })).revision },
+      ).catch(() => ({ ok: false as const, reason: "short" as const }));
+      if (outcome.ok) {
+        // The clipboard took the blob itself, so the shared copy lifecycle is
+        // told rather than driven: same feedback, same clock.
+        setWasPartial(false);
+        markCopied();
+        return;
+      }
+      await marked();
+    } finally {
+      setCopying(false);
+    }
+  }, [body, client, copy, environmentKey, markCopied, path, text]);
+  return { copied, copying, partial: copied && wasPartial, copy: run };
 }
 
 export function MessageRoot(props: ComponentPropsWithoutRef<"div">) {

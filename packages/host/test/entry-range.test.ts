@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { ErrorCodes, PRODUCT_NAME, utf8ByteLength, type ClientRequests } from "@lasercode/protocol";
+import { BODY_REGION_SCAN_MAX_BYTES, ErrorCodes, PRODUCT_NAME, utf8ByteLength, type ClientRequests } from "@lasercode/protocol";
 import { DEFAULT_SESSION_INDEX_LIMITS, SessionIndexCache } from "../src/session-index.js";
 import { BODY_MEMO_IDLE_MS, SessionBodyRange, sha256Hex } from "../src/session-body-range.js";
 import { SessionRevisions } from "../src/session-revision.js";
@@ -91,6 +91,13 @@ describe("what the reader keeps between slices", () => {
 });
 
 describe("reading one body from the stored conversation", () => {
+  it("can honour the protocol's complete-scan ceiling for attachments", () => {
+    // The scan that makes an attachment count exact assumes the stored
+    // authority cannot hold a record larger than this; the shipped line bound
+    // is what makes that true (RP-5b §2).
+    expect(DEFAULT_SESSION_INDEX_LIMITS.lineBytes).toBeGreaterThanOrEqual(BODY_REGION_SCAN_MAX_BYTES);
+  });
+
   it("admits a thirty-two mebibyte body under shipped defaults", () => {
     // The ceiling is declared, finite and above the acceptance body plus its
     // JSON framing; nothing here relies on a test-only configuration.

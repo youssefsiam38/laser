@@ -1,7 +1,7 @@
 "use client";
 import type { FileViewerSource } from "@/lib/file-opener";
 import type { ProjectFileContent } from "@lasercode/protocol";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Tabs } from "radix-ui";
 import { CodeDiffRows } from "@/components/assistant-ui/elements/code-diff";
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
@@ -43,8 +43,11 @@ export function FileViewer({ source, open, onOpenChange, returnFocus }: {
  * Copy and save hand that same blob to the platform.
  */
 function PictureContents({ picture }: { picture: NonNullable<FileViewerSource["picture"]> }) {
-  const [copied, setCopied] = useState(false);
+  // The shared copy lifecycle owns how long "Copied" lasts, here as everywhere.
+  const { copied, markCopied } = useCopy();
   const [problem, setProblem] = useState<string>();
+  const open = useRef(true);
+  useEffect(() => () => { open.current = false; }, []);
   const copyPicture = async (): Promise<void> => {
     try {
       if (typeof ClipboardItem === "undefined" || typeof navigator?.clipboard?.write !== "function") {
@@ -52,10 +55,10 @@ function PictureContents({ picture }: { picture: NonNullable<FileViewerSource["p
         return;
       }
       await navigator.clipboard.write([new ClipboardItem({ [picture.mediaType]: picture.blob })]);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      // A viewer that has closed hears nothing back.
+      if (open.current) markCopied();
     } catch {
-      setProblem("That image could not be copied just now. Try again, or save it.");
+      if (open.current) setProblem("That image could not be copied just now. Try again, or save it.");
     }
   };
   return <>

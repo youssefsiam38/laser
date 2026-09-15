@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { FileOpenerContext, type FileOpener, type FileViewerSource } from "@/lib/file-opener";
 import { ProjectFileCache } from "@/runtime/project-file-cache";
 import { useLaserStable } from "@/runtime";
@@ -9,11 +9,29 @@ export function FileOpenerProvider({ children, scope }: { children: ReactNode; s
   const { client } = useLaserStable();
   const cache = useMemo(() => new ProjectFileCache((cwd, path) => client.request("pi/project/read", { cwd, path })), [client, scope]);
   const [opened, setOpened] = useState<{ source: FileViewerSource; trigger: HTMLElement; scope: string | undefined }>();
-  useEffect(() => setOpened(undefined), [scope]);
-  const opener = useMemo<FileOpener>(() => ({ readFile: cache.read, openFile: (source, trigger) => setOpened({ source, trigger, scope }) }), [cache, scope]);
-  // A picture shown from the image pool is held while it is open and given
-  // back the moment it is not, so nothing decoded outlives what is on screen.
-  const close = () => setOpened(current => { current?.source.release?.(); return undefined; });
+  /**
+   * A picture is shown from the image pool's own blob, and showing it is a
+   * hold. There is exactly one place that gives a hold back — here — so every
+   * way a viewer can go away releases once and only once: closing it, opening
+   * something else over it, the thread changing underneath it, and this
+   * provider going away. A release that has already run does nothing.
+   */
+  const show = useCallback((next: { source: FileViewerSource; trigger: HTMLElement; scope: string | undefined } | undefined) => {
+    setOpened(current => {
+      if (current === next) return current;
+      current?.source.release?.();
+      return next;
+    });
+  }, []);
+  const held = useRef<typeof opened>(undefined);
+  held.current = opened;
+  useEffect(() => () => {
+    // Unmount, or the thread changed: whatever is open is let go.
+    held.current?.source.release?.();
+    held.current = undefined;
+  }, [scope]);
+  const opener = useMemo<FileOpener>(() => ({ readFile: cache.read, openFile: (source, trigger) => show({ source, trigger, scope }) }), [cache, scope, show]);
+  const close = () => show(undefined);
   return <FileOpenerContext value={opener}>
     {children}
     {opened && opened.scope === scope ? <FileViewer source={opened.source} open onOpenChange={open => { if (!open) close(); }} returnFocus={opened.trigger} /> : null}

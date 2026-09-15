@@ -11,8 +11,13 @@ import {
   BODY_COMPONENT_KINDS,
   ENTRY_RANGE_MAX_BYTES,
   bodyComponentKey,
+  attachmentRegions,
+  BODY_REGION_MAX_ITEMS,
+  BODY_REGION_METADATA_MAX_BYTES,
+  BODY_REGION_SCAN_MAX_BYTES,
   bodyProjectionWork,
   bodyRangeSlice,
+  sliceUtf8RangeFrom,
   entryBodies,
   entryBodyIdentities,
   PERSISTED_IDENTITY_MAX_BYTES,
@@ -269,6 +274,82 @@ describe("the identity an authority publishes when a message settles", () => {
     const update = { kind: "message_end", message: entry.message, role: "assistant",
       entry: { id: "e1", parentId: "e0", revision: "r1.env.2", bodies: identity.bodies } } as const;
     expect(JSON.parse(JSON.stringify(update))).toEqual(update);
+  });
+});
+
+describe("the attachments an authority finds inside a prompt", () => {
+  const hasher = () => {
+    const chunks: string[] = [];
+    return { update: (chunk: string) => { chunks.push(chunk); }, digest: () => sha256Of(chunks.join("")) };
+  };
+  const wrap = (name: string, type: string, content: string) =>
+    `<attached-file name="${name}" type="${type}" size="${utf8ByteLength(content)}">\n${content}\n</attached-file>`;
+
+  it("finds wrappers anywhere in the component, not only inside an excerpt", () => {
+    const first = "ü".repeat(40_000);
+    const last = "answer";
+    const text = `prose\n\n${wrap("notes.md", "text/markdown", first)}\n\n${"filler ".repeat(20_000)}\n\n${wrap("tail.txt", "text/plain", last)}`;
+    const found = attachmentRegions(text, hasher);
+    expect(found.items.map(item => item.name)).toEqual(["notes.md", "tail.txt"]);
+    expect(found.truncated).toBeUndefined();
+    // Offsets are absolute in the component's own byte space, and the bytes at
+    // them are exactly the attachment's.
+    for (const [index, content] of [first, last].entries()) {
+      const item = found.items[index]!;
+      expect(item.bytes).toBe(utf8ByteLength(content));
+      expect(sliceUtf8RangeFrom(text, item.offset, item.bytes)?.text).toBe(content);
+      // The digest is the region's own, not the component's.
+      expect(item.contentDigest).toBe(sha256Of(content));
+      expect(item.contentDigest).not.toBe(sha256Of(text));
+    }
+  });
+
+  it("is bounded in items and bytes, counts what it left out exactly, and pages", () => {
+    const many = Array.from({ length: 80 }, (_, index) => wrap(`f${index}.txt`, "text/plain", `body ${index}`)).join("\n\n");
+    const page = attachmentRegions(many, hasher, { maxItems: 8 });
+    expect(page.items).toHaveLength(8);
+    expect(page.omitted).toBe(72);
+    expect(page.truncated).toBeUndefined();
+    expect(page.next).toBeGreaterThan(page.items.at(-1)!.offset);
+    // The next page starts where the last one stopped and does not repeat it.
+    const second = attachmentRegions(many, hasher, { maxItems: 8, from: page.next });
+    expect(second.items[0]!.offset).toBe(page.next);
+    expect(second.items.map(item => item.name)).not.toContain(page.items[0]!.name);
+    // The byte budget stops earlier still and says so through `omitted`.
+    const tight = attachmentRegions(many, hasher, { maxBytes: 600 });
+    expect(tight.items.length).toBeLessThan(8);
+    expect(tight.items.length + (tight.omitted ?? 0)).toBe(80);
+  });
+
+  it("claims no count when it could not see the whole component", () => {
+    const text = `${wrap("small.txt", "text/plain", "hello")}\n\n${"x".repeat(5000)}`;
+    const partial = attachmentRegions(text, hasher, { scanBytes: 256 });
+    expect(partial.truncated).toBe(true);
+    expect(partial.omitted).toBeUndefined();
+    expect(partial.scannedBytes).toBeLessThanOrEqual(256);
+  });
+
+  it("cuts a name and a media type rather than carrying them whole, and says it cut them", () => {
+    const text = wrap(`${"n".repeat(1000)}.txt`, `text/${"x".repeat(500)}`, "body");
+    const found = attachmentRegions(text, hasher);
+    const item = found.items[0]!;
+    expect(utf8ByteLength(item.name)).toBeLessThanOrEqual(256);
+    expect(utf8ByteLength(item.mediaType)).toBeLessThanOrEqual(128);
+    expect(item.nameTruncated).toBe(true);
+    expect(item.mediaTypeTruncated).toBe(true);
+  });
+
+  it("refuses a wrapper whose declared size is not the size it has", () => {
+    const honest = wrap("ok.txt", "text/plain", "real");
+    const lying = '<attached-file name="bad.txt" type="text/plain" size="9007199254740993">\nshort\n</attached-file>';
+    const found = attachmentRegions(`${honest}\n\n${lying}`, hasher);
+    expect(found.items.map(item => item.name)).toEqual(["ok.txt"]);
+  });
+
+  it("declares a complete-scan ceiling the stored authority can honour", () => {
+    expect(BODY_REGION_SCAN_MAX_BYTES).toBe(64 * 1024 * 1024);
+    expect(BODY_REGION_MAX_ITEMS).toBe(64);
+    expect(BODY_REGION_METADATA_MAX_BYTES).toBe(16 * 1024);
   });
 });
 

@@ -44,6 +44,138 @@ export interface BodyRegion {
   bytes: number;
 }
 
+/**
+ * One attachment inside a prompt, as the authority found it.
+ *
+ * Offsets are absolute in the component's own byte space — the same space the
+ * excerpt and every range read use — so nothing is ever rebased silently.
+ */
+export interface AttachmentRegion {
+  /** Where the attachment's content begins, in the component's bytes. */
+  offset: number;
+  /** How many bytes of content there are. */
+  bytes: number;
+  name: string;
+  mediaType: string;
+  /** SHA-256 of the region's bytes, not the component's. */
+  contentDigest: string;
+  nameTruncated?: true;
+  mediaTypeTruncated?: true;
+}
+
+/**
+ * What one component's attachments look like, bounded.
+ *
+ * `omitted` is exact: the scan saw those wrappers and did not describe them.
+ * `truncated` means the scan could not see the whole component, and then **no
+ * count is claimed** — a surface says "more attachments" without a number
+ * rather than one it cannot stand behind.
+ */
+export interface AttachmentRegions {
+  items: AttachmentRegion[];
+  omitted?: number;
+  truncated?: true;
+  scannedBytes: number;
+  /** Where a next page of metadata would start, in component bytes. */
+  next?: number;
+}
+
+/**
+ * How far a scan for attachments will look into one component.
+ *
+ * The durable authority cannot hold a record larger than its own line ceiling,
+ * so a scan that completes within this has seen the whole component and the
+ * count it reports is exact. The host asserts its shipped line bound against
+ * this value; the protocol never imports the host.
+ */
+export const BODY_REGION_SCAN_MAX_BYTES = 64 * 1024 * 1024;
+
+/** How many attachments one answer describes. */
+export const BODY_REGION_MAX_ITEMS = 64;
+
+/** How many UTF-8 bytes of attachment metadata one answer may carry. */
+export const BODY_REGION_METADATA_MAX_BYTES = 16 * 1024;
+
+/** The longest name and media type a region describes before it is cut. */
+const REGION_NAME_MAX_BYTES = 256;
+const REGION_MEDIA_TYPE_MAX_BYTES = 128;
+
+const WRAPPER = /(?:^|\n\n)<attached-file name="([^"\n]*)" type="([^"\n]*)" size="(\d+)">\n/g;
+
+/**
+ * Find the attachments inside one component's text, bounded in what it
+ * describes and in how far it looks.
+ *
+ * Wrappers anywhere in the component are found — not only the ones inside an
+ * excerpt — because this runs at the authority, which has the record. Nothing
+ * of the content is copied: each region is hashed where it already is.
+ */
+export function attachmentRegions(
+  text: string,
+  createHasher: () => { update(chunk: string): void; digest(): string },
+  options: { from?: number; maxItems?: number; maxBytes?: number; scanBytes?: number } = {},
+): AttachmentRegions {
+  const maxItems = Math.max(1, Math.min(options.maxItems ?? BODY_REGION_MAX_ITEMS, BODY_REGION_MAX_ITEMS));
+  const maxBytes = Math.max(256, Math.min(options.maxBytes ?? BODY_REGION_METADATA_MAX_BYTES, BODY_REGION_METADATA_MAX_BYTES));
+  const scanBytes = Math.min(options.scanBytes ?? BODY_REGION_SCAN_MAX_BYTES, BODY_REGION_SCAN_MAX_BYTES);
+  const from = safeOffset(options.from) ?? 0;
+  const total = utf8ByteLength(text);
+  const items: AttachmentRegion[] = [];
+  let omitted = 0;
+  let metadata = 0;
+  let next: number | undefined;
+  // A scan the authority cannot complete claims no count at all.
+  const truncated = total > scanBytes ? (true as const) : undefined;
+  const window = truncated ? sliceUtf8RangeFrom(text, 0, scanBytes)?.text ?? "" : text;
+  WRAPPER.lastIndex = 0;
+  for (let match = WRAPPER.exec(window); match !== null; match = WRAPPER.exec(window)) {
+    const size = Number(match[3]);
+    if (!Number.isSafeInteger(size) || size < 0) continue;
+    // Where the content begins, in the component's own bytes.
+    const contentStart = utf8ByteLength(window.slice(0, match.index + match[0].length));
+    if (contentStart + size > total) continue;
+    const content = sliceUtf8RangeFrom(text, contentStart, size);
+    if (!content || content.bytes !== size) continue;
+    // Pages are asked for by where they start; everything before is skipped.
+    if (contentStart < from) continue;
+    if (items.length >= maxItems) { next ??= contentStart; omitted += 1; continue; }
+    const name = boundedField(match[1] ?? "", REGION_NAME_MAX_BYTES);
+    const mediaType = boundedField(match[2] ?? "", REGION_MEDIA_TYPE_MAX_BYTES);
+    const hasher = createHasher();
+    hasher.update(content.text);
+    const region: AttachmentRegion = {
+      offset: contentStart,
+      bytes: size,
+      name: name.text,
+      mediaType: mediaType.text,
+      contentDigest: hasher.digest(),
+      ...(name.cut ? { nameTruncated: true as const } : {}),
+      ...(mediaType.cut ? { mediaTypeTruncated: true as const } : {}),
+    };
+    const cost = utf8ByteLength(JSON.stringify(region));
+    if (metadata + cost > maxBytes) { next ??= contentStart; omitted += 1; continue; }
+    metadata += cost;
+    items.push(region);
+  }
+  return {
+    items,
+    ...(truncated ? { truncated } : omitted > 0 ? { omitted } : {}),
+    ...(next !== undefined ? { next } : {}),
+    scannedBytes: utf8ByteLength(window),
+  };
+}
+
+function boundedField(raw: string, maxBytes: number): { text: string; cut: boolean } {
+  const value = raw.replaceAll("&quot;", '"').replaceAll("&amp;", "&");
+  if (utf8ByteLength(value) <= maxBytes) return { text: value, cut: false };
+  return { text: sliceUtf8RangeFrom(value, 0, maxBytes)?.text ?? "", cut: true };
+}
+
+/** A non-negative safe integer, or undefined. */
+export function safeOffset(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
 /** Hard ceiling on one range response's payload, in exact UTF-8 bytes. */
 export const ENTRY_RANGE_MAX_BYTES = 64 * 1024;
 
