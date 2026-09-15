@@ -17,13 +17,14 @@ import { LaserStoreProvider, createStateStore } from "../../src/runtime/LaserPro
 import { projectMessages } from "../../src/runtime/projection.js";
 import { initialState, reduce } from "../../src/store.js";
 import { ThreadMessage } from "../../src/components/thread/messages.js";
-import { BODY_VIEWER_AGGREGATE_MAX_BYTES, BodyWindow, IMAGE_BLOB_MAX, ImageBlobs } from "../../src/runtime/body-reader.js";
+import { BODY_VIEWER_AGGREGATE_MAX_BYTES, BodyReplyRefused, BodyWindow, findInBody, IMAGE_BLOB_MAX, IMAGE_SURFACE_MAX_BYTES, ImageBlobs, streamBody } from "../../src/runtime/body-reader.js";
 import { sessionState } from "../agents/fixtures.js";
 import { LIVE_TAIL_MAX_BYTES, MESSAGE_RENDER_MAX_BYTES } from "../../src/runtime/body-excerpt.js";
 import { measureView } from "../../src/runtime/view-measure.js";
 
 const SESSION = "/project/session.jsonl";
-const BODY = "answer ".repeat(600_000); // ~4 MB
+const BODY = "answer ".repeat(600_000); // ~4 MB, for the transcript rows
+const HUGE_TOTAL = 32 * 1024 * 1024; // the acceptance body: 32 MiB, paged never held
 
 const slices = vi.hoisted(() => ({ calls: [] as Array<{ offset: number; limit?: number }> }));
 const stable = vi.hoisted(() => ({
@@ -33,11 +34,15 @@ const stable = vi.hoisted(() => ({
       const offset = params.offset as number;
       const limit = (params.limit as number | undefined) ?? 65536;
       slices.calls.push({ offset, limit });
-      const text = "answer ".repeat(600_000).slice(offset, offset + limit);
+      // A 32 MiB body, generated per slice: the fake authority never holds it
+      // either, so the test measures the client's own behaviour.
+      const total = 32 * 1024 * 1024;
+      const bytes = Math.max(0, Math.min(limit, total - offset));
+      const text = "x".repeat(bytes);
       return {
-        authority: "durable", revision: "r1.env.1", component: params.component, totalBytes: 4_200_000,
-        offset, bytes: text.length, ...(offset + text.length < 4_200_000 ? { next: offset + text.length } : {}),
-        truncated: offset + text.length < 4_200_000, sliceDigest: "s", contentDigest: "c", text,
+        authority: "durable", revision: "r1.env.1", component: params.component, totalBytes: total,
+        offset, bytes, ...(offset + bytes < total ? { next: offset + bytes } : {}),
+        truncated: offset + bytes < total, sliceDigest: "s", contentDigest: "c", text,
       };
     }),
   },
@@ -153,7 +158,24 @@ describe("what one message renders", () => {
 });
 
 describe("the bounded window over one body", () => {
-  const ref = { entryId: "e1", component: { kind: "assistant_text" as const }, totalBytes: 4_200_000, revision: "r1.env.1", excerpt: { offset: 0, bytes: 16_384 } };
+  const ref = { entryId: "e1", component: { kind: "assistant_text" as const }, totalBytes: HUGE_TOTAL, revision: "r1.env.1", excerpt: { offset: 0, bytes: 16_384 } };
+
+  it("pages a thirty-two megabyte body end to end without ever holding it", async () => {
+    const window = new BodyWindow(params => stable.client.request("session/entry_range", params) as never, SESSION, ref, 128 * 1024, "env");
+    let steps = 0;
+    while (window.getSnapshot().next !== undefined || steps === 0) {
+      await window.more();
+      steps += 1;
+      if (steps > 1000) break;
+    }
+    const end = window.getSnapshot();
+    expect(end.totalBytes).toBe(HUGE_TOTAL);
+    expect(end.next).toBeUndefined();
+    expect(steps).toBeGreaterThan(500);
+    // Whatever it read, it never held more than its aggregate.
+    expect(end.heldBytes).toBeLessThanOrEqual(128 * 1024);
+    expect(end.evicted).toBeGreaterThan(500);
+  });
 
   it("pages forward and evicts rather than growing", async () => {
     const window = new BodyWindow(params => stable.client.request("session/entry_range", params) as never, SESSION, ref, 128 * 1024, "env");
@@ -167,6 +189,62 @@ describe("the bounded window over one body", () => {
     expect(slices.calls[0]!.offset).toBe(16_384);
     // The first slice read starts where the excerpt ends: nothing is re-read.
     expect(new Set(slices.calls.map(call => call.offset)).size).toBe(slices.calls.length);
+  });
+
+  it("reads one slice at a time however hard it is asked", async () => {
+    const window = new BodyWindow(params => stable.client.request("session/entry_range", params) as never, SESSION, ref, 128 * 1024, "env");
+    // A held key and a click at the same moment: one read, one answer.
+    await Promise.all([window.more(), window.more(), window.more()]);
+    const offsets = slices.calls.map(call => call.offset);
+    expect(new Set(offsets).size).toBe(offsets.length);
+    expect(offsets).toHaveLength(1);
+  });
+
+  it("pages backwards, and stops at the start", async () => {
+    const window = new BodyWindow(params => stable.client.request("session/entry_range", params) as never, SESSION, ref, 128 * 1024, "env");
+    await window.jump(1_000_000);
+    expect(window.previous).toBe(1_000_000 - 64 * 1024);
+    await window.back();
+    expect(window.getSnapshot().slices[0]!.offset).toBe(1_000_000 - 64 * 1024);
+    await window.jump(0);
+    expect(window.previous).toBeUndefined();
+    await window.back();
+    expect(window.getSnapshot().slices[0]!.offset).toBe(0);
+  });
+
+  it("refuses a reply that does not describe the body it asked for", async () => {
+    const hostile = [
+      { revision: "r9.other" },
+      { component: { kind: "reasoning" as const } },
+      { offset: 4096 },
+      { bytes: 999_999 },
+      { next: 5 },
+      { totalBytes: 12 },
+    ];
+    for (const over of hostile) {
+      const window = new BodyWindow(async (params) => ({
+        authority: "durable", revision: "r1.env.1", component: params.component, totalBytes: HUGE_TOTAL,
+        offset: params.offset, bytes: 8, next: params.offset + 8, truncated: true, sliceDigest: "s", contentDigest: "c", text: "xxxxxxxx",
+        ...over,
+      }) as never, SESSION, ref, 128 * 1024, "env");
+      await expect(window.more()).rejects.toThrow(BodyReplyRefused);
+      expect(window.getSnapshot().slices).toHaveLength(0);
+    }
+  });
+
+  it("refuses a second reply that changes the body under it", async () => {
+    let call = 0;
+    const window = new BodyWindow(async (params) => {
+      call += 1;
+      const total = call === 1 ? HUGE_TOTAL : HUGE_TOTAL + 1;
+      return {
+        authority: "durable", revision: "r1.env.1", component: params.component, totalBytes: total,
+        offset: params.offset, bytes: 8, next: params.offset + 8, truncated: true, sliceDigest: "s",
+        contentDigest: call === 1 ? "c" : "different", text: "xxxxxxxx",
+      } as never;
+    }, SESSION, ref, 128 * 1024, "env");
+    await window.more();
+    await expect(window.more()).rejects.toThrow(BodyReplyRefused);
   });
 
   it("jumps to a named place and holds only what it shows", async () => {
@@ -216,26 +294,190 @@ describe("a prompt whose image the window points at", () => {
   });
 });
 
+describe("finding and copying what the window does not hold", () => {
+  it("finds a match in the rest of a body and says where it is, without hydrating it", async () => {
+    const body = `${"a".repeat(200_000)}needle${"b".repeat(200_000)}`;
+    const request = vi.fn(async (params: Record<string, unknown>) => {
+      const offset = params.offset as number;
+      const limit = params.limit as number;
+      const text = body.slice(offset, offset + limit);
+      return { authority: "durable", revision: "r", component: params.component, totalBytes: body.length, offset,
+        bytes: text.length, ...(offset + text.length < body.length ? { next: offset + text.length } : {}), truncated: false,
+        sliceDigest: "s", contentDigest: "c", text };
+    });
+    const at = await findInBody(request as never, SESSION, { entryId: "e1", component: { kind: "tool_result" }, totalBytes: body.length, revision: "r", excerpt: { offset: 0, bytes: 0 } }, "NEEDLE");
+    expect(at).toBe(200_000);
+    // Read in slices; nothing of the body is retained by the search itself.
+    expect(request.mock.calls.length).toBeGreaterThan(3);
+    const absent = await findInBody(request as never, SESSION, { entryId: "e1", component: { kind: "tool_result" }, totalBytes: body.length, revision: "r", excerpt: { offset: 0, bytes: 0 } }, "not-in-there");
+    expect(absent).toBeUndefined();
+  });
+
+  it("streams a whole body to a consumer without keeping it", async () => {
+    const total = 4 * 1024 * 1024;
+    const request = vi.fn(async (params: Record<string, unknown>) => {
+      const offset = params.offset as number;
+      const bytes = Math.max(0, Math.min(params.limit as number, total - offset));
+      return { authority: "durable", revision: "r", component: params.component, totalBytes: total, offset, bytes,
+        ...(offset + bytes < total ? { next: offset + bytes } : {}), truncated: offset + bytes < total,
+        sliceDigest: "s", contentDigest: "c", text: "y".repeat(bytes) };
+    });
+    let seen = 0;
+    let peak = 0;
+    const outcome = await streamBody(request as never, SESSION, { entryId: "e1", component: { kind: "tool_result" }, totalBytes: total, revision: "r", excerpt: { offset: 0, bytes: 0 } }, {}, slice => {
+      peak = Math.max(peak, slice.length);
+      seen += slice.length;
+    });
+    expect(outcome.bytes).toBe(total);
+    expect(outcome.totalBytes).toBe(total);
+    expect(seen).toBe(total);
+    expect(peak).toBeLessThanOrEqual(64 * 1024);
+  });
+
+  it("says what a copied part is not", async () => {
+    const { partial } = await import("../../src/components/thread/LargeBodyViewer.js");
+    const marked = partial("middle", 1024, 2048, 10_000);
+    expect(marked).toMatch(/earlier in this message is not included/);
+    expect(marked).toMatch(/more of this message is not included/);
+    expect(marked).toContain("middle");
+    // A part that is the whole body is copied as itself.
+    expect(partial("all", 0, 10, 10)).toBe("all");
+  });
+});
+
 describe("images the window points at", () => {
-  it("rebuilds them outside the heap, bounded, and revokes what it drops", async () => {
-    const created: string[] = [];
-    const revoked: string[] = [];
+  const surface = (bytes: number) => ({ decodedBytes: bytes });
+  const refOf = (index: number, total: number, decoded = 16 * 1024 * 1024) => ({
+    entryId: `e${index}`, component: { kind: "image" as const, index: 0 }, totalBytes: total, revision: "r",
+    excerpt: { offset: 0, bytes: 0 }, image: surface(decoded),
+  });
+  let created: string[];
+  let revoked: string[];
+  let blobParts: number[];
+
+  beforeEach(() => {
+    created = []; revoked = []; blobParts = [];
     let counter = 0;
     globalThis.URL.createObjectURL = vi.fn(() => { const url = `blob:${++counter}`; created.push(url); return url; });
     globalThis.URL.revokeObjectURL = vi.fn((url: string) => { revoked.push(url); });
-    const data = btoa("image-bytes");
-    const request = vi.fn(async () => ({ authority: "durable", revision: "r", component: { kind: "image" as const, index: 0 }, totalBytes: data.length, offset: 0, bytes: data.length, truncated: false, sliceDigest: "s", contentDigest: "c", text: data }));
-    // A small pool, so the bound is the subject rather than the numbers.
-    const blobs = new ImageBlobs(request as never, "env");
-    for (let index = 0; index < 30; index++) {
-      await blobs.load(`key-${index}`, SESSION, { entryId: `e${index}`, component: { kind: "image", index: 0 }, totalBytes: data.length, revision: "r", excerpt: { offset: 0, bytes: 0 } }, "image/png");
+    // A Blob that records how many parts it was built from, so the test can
+    // see that slices are folded in as they arrive rather than collected.
+    class RecordingBlob {
+      size = 0;
+      constructor(parts: Array<{ size?: number; byteLength?: number }> = []) {
+        blobParts.push(parts.length);
+        for (const part of parts) this.size += part?.size ?? part?.byteLength ?? 0;
+      }
     }
-    expect(created).toHaveLength(30);
-    // Bounded by count, oldest revoked: the transcript never holds thirty images.
-    expect(revoked.length).toBe(30 - IMAGE_BLOB_MAX);
-    expect(blobs.url("key-29")).toBe("blob:30");
-    expect(blobs.url("key-0")).toBeUndefined();
-    blobs.clear();
+    (globalThis as { Blob: unknown }).Blob = RecordingBlob as never;
+  });
+
+  /** A payload of `slices` slices of base64, generated per request. */
+  const payload = (slices: number) => {
+    const sliceChars = 64 * 1024;
+    const total = slices * sliceChars;
+    return vi.fn(async (params: Record<string, unknown>) => {
+      const offset = params.offset as number;
+      const bytes = Math.max(0, Math.min(params.limit as number, total - offset));
+      return { authority: "durable", revision: "r", component: params.component, totalBytes: total, offset, bytes,
+        ...(offset + bytes < total ? { next: offset + bytes } : {}), truncated: offset + bytes < total,
+        sliceDigest: "s", contentDigest: "c", text: "QUJD".repeat(bytes / 4) };
+    });
+  };
+
+  it("folds slices into the blob as they arrive instead of collecting them", async () => {
+    const request = payload(40); // 2.5 MB of base64 in forty slices
+    const blobs = new ImageBlobs(request as never, "env");
+    const url = await blobs.load("k", SESSION, refOf(1, 40 * 64 * 1024), "image/png");
+    expect(url).toBe("blob:1");
+    // Never more than the in-flight allowance in hand: each fold takes a few
+    // slices, so the parts array is short and bounded, not forty long.
+    // Each fold is the blob so far plus the few slices that fit the in-flight
+    // allowance — never the forty slices of the whole image.
+    expect(Math.max(...blobParts)).toBeLessThanOrEqual(8);
+    expect(blobParts.length).toBeGreaterThan(5);
+  });
+
+  it("refuses an image larger than one window may rebuild", async () => {
+    const blobs = new ImageBlobs(payload(1) as never, "env");
+    const huge = { ...refOf(2, 64 * 1024 * 1024 + 1), image: surface(16 * 1024 * 1024) };
+    expect(await blobs.load("huge", SESSION, huge, "image/png")).toBeUndefined();
+    // …and one whose decoded surface alone would not fit the budget.
+    const wide = { ...refOf(3, 4096), image: surface(IMAGE_SURFACE_MAX_BYTES + 1) };
+    expect(await blobs.load("wide", SESSION, wide, "image/png")).toBeUndefined();
+  });
+
+  it("admits the unchanged twelve-image fixture and stays inside its surface budget", async () => {
+    const blobs = new ImageBlobs(payload(2) as never, "env");
+    const urls = await Promise.all(Array.from({ length: 12 }, (_, index) =>
+      blobs.load(`fixture-${index}`, SESSION, refOf(index, 2 * 64 * 1024), "image/png")));
+    expect(urls.every(url => typeof url === "string")).toBe(true);
+    expect(blobs.held.images).toBe(12);
+    expect(blobs.held.surface).toBe(12 * 16 * 1024 * 1024);
+    expect(blobs.held.surface).toBeLessThanOrEqual(IMAGE_SURFACE_MAX_BYTES);
+  });
+
+  it("drops the oldest nobody is showing when the budget is reached", async () => {
+    const blobs = new ImageBlobs(payload(1) as never, "env");
+    for (let index = 0; index < 30; index++) {
+      await blobs.load(`k${index}`, SESSION, refOf(index, 64 * 1024, 1024), "image/png");
+      blobs.release(`k${index}`);
+      // A row that has gone releases its hold; the URL is revoked at once.
+    }
     expect(revoked.length).toBe(30);
+    expect(blobs.held.images).toBe(0);
+  });
+
+  it("revokes when the last row showing an image goes", async () => {
+    const blobs = new ImageBlobs(payload(1) as never, "env");
+    await blobs.load("shared", SESSION, refOf(1, 64 * 1024, 1024), "image/png");
+    await blobs.load("shared", SESSION, refOf(1, 64 * 1024, 1024), "image/png"); // a second row
+    blobs.release("shared");
+    expect(revoked).toHaveLength(0);
+    expect(blobs.url("shared")).toBe("blob:1");
+    blobs.release("shared");
+    expect(revoked).toEqual(["blob:1"]);
+    expect(blobs.url("shared")).toBeUndefined();
+    expect(blobs.held).toEqual({ images: 0, bytes: 0, surface: 0 });
+  });
+
+  it("fences a read that lands after the cache was cleared", async () => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const request = vi.fn(async (params: Record<string, unknown>) => {
+      await gate;
+      return { authority: "durable", revision: "r", component: params.component, totalBytes: 4, offset: 0, bytes: 4,
+        truncated: false, sliceDigest: "s", contentDigest: "c", text: "QUJD" };
+    });
+    const blobs = new ImageBlobs(request as never, "env");
+    const pending = blobs.load("late", SESSION, refOf(1, 4, 1024), "image/png");
+    blobs.clear();
+    release!();
+    expect(await pending).toBeUndefined();
+    expect(blobs.url("late")).toBeUndefined();
+    // Whatever it built was revoked rather than published into the new environment.
+    expect(revoked.length).toBe(created.length);
+    expect(blobs.held.images).toBe(0);
+  });
+
+  it("does not read the same image twice while one read is in flight", async () => {
+    const request = payload(1);
+    const blobs = new ImageBlobs(request as never, "env");
+    const [first, second] = await Promise.all([
+      blobs.load("same", SESSION, refOf(1, 64 * 1024, 1024), "image/png"),
+      blobs.load("same", SESSION, refOf(1, 64 * 1024, 1024), "image/png"),
+    ]);
+    expect(first).toBe(second);
+    expect(created).toHaveLength(1);
+  });
+
+  it("refuses a malformed payload rather than showing something else", async () => {
+    const malformed = vi.fn(async (params: Record<string, unknown>) => ({
+      authority: "durable", revision: "r", component: params.component, totalBytes: 8, offset: 0, bytes: 8,
+      truncated: false, sliceDigest: "s", contentDigest: "c", text: "!!not base64!!",
+    }));
+    const blobs = new ImageBlobs(malformed as never, "env");
+    expect(await blobs.load("bad", SESSION, refOf(1, 8, 1024), "image/png")).toBeUndefined();
+    expect(created).toHaveLength(0);
   });
 });

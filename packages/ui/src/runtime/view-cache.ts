@@ -32,6 +32,7 @@ import { captureViewTail, VIEW_TAIL_MAX_BYTES, viewTailRetainedBytes, viewTailSi
 import { byteLength, EMPTY_MEASURE, measureView, type ViewMeasure } from "./view-measure.js";
 import { isTerminalRunStatus, type SessionUpdate } from "@lasercode/protocol";
 import { mainPath, pendingSessionPath } from "./main-destination.js";
+import { anchoredMessages } from "./anchored-messages.js";
 
 /**
  * The bounds. Calibrated against measured renderer heap, not guessed from
@@ -109,6 +110,8 @@ export interface RendererViewCounters {
   readonly largestBodyBytes: number;
   /** Canonical bytes the views point at and do not hold (RP-5b). */
   readonly referencedBytes: number;
+  /** Decoded image surface those references imply, reported beside the budget. */
+  readonly referencedImageBytes: number;
   /** Views whose older settled part was released to stay inside the bound. */
   readonly trims: number;
   /** Threads holding words a person wrote and nobody else has. */
@@ -700,7 +703,10 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
       const view = options.read().open[path];
       if (!view || isDormantView(view)) continue;
       const before = options.read().open[path];
-      options.dispatch({ type: "views/trim", paths: [path], keepBytes, at });
+      // The rows the transcript is standing on travel with the transaction, so
+      // the reducer stays a function of its action (RP-5b).
+      const anchored = anchoredMessages(path);
+      options.dispatch({ type: "views/trim", paths: [path], keepBytes, at, ...(anchored.length > 0 ? { anchored } : {}) });
       if (options.read().open[path] === before) continue;
       moved = true;
       trims += 1;
@@ -868,11 +874,13 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
       let largestBlockBytes = 0;
       let largestBodyBytes = 0;
       let referencedBytes = 0;
+      let referencedImageBytes = 0;
       for (const row of held) {
         largestViewBytes = Math.max(largestViewBytes, row.bytes);
         largestBlockBytes = Math.max(largestBlockBytes, row.measure.largestBlockBytes);
         largestBodyBytes = Math.max(largestBodyBytes, row.measure.largestBodyBytes);
         referencedBytes += row.measure.referencedBytes;
+        referencedImageBytes += row.measure.referencedImageBytes;
       }
       const heap = VIEW_HEAP_MODEL.lightBytes * paths.length
         + VIEW_HEAP_MODEL.hydratedBytes * held.length
@@ -895,6 +903,7 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
         largestBlockBytes,
         largestBodyBytes,
         referencedBytes,
+        referencedImageBytes,
         trims,
         drafts,
         evictions,

@@ -16,6 +16,7 @@ import { createViewCache, VIEW_CACHE_LIMITS, type ViewCacheEnvironment } from ".
 import { initialState, isDormantView, reduce, type AppState, type Block } from "../../src/store.js";
 import { BODY_EXCERPT_MAX_BYTES, LIVE_TAIL_MAX_BYTES, omittedBytes } from "../../src/runtime/body-excerpt.js";
 import { measureView, measurementWork, resetMeasurementWork } from "../../src/runtime/view-measure.js";
+import { bodyProjectionWork, resetBodyProjectionWork } from "@lasercode/protocol";
 
 const CWD = "/p";
 const path = `${CWD}/heavy.jsonl`;
@@ -40,12 +41,23 @@ function heavyView(): AppState {
       message: { role: index % 2 === 0 ? "user" : "assistant", content: [{ type: "text", text: `turn ${index} ${"x".repeat(4096)}` }] },
     });
   }
+  // The acceptance workload, exactly: an eight-megabyte reply with its own
+  // reasoning, a twelve-megabyte tool result, and twelve full-size images, all
+  // in the one conversation this view is showing.
   entries.push({
     id: "e-huge", parentId: "e19", type: "message",
-    message: { role: "assistant", content: [{ type: "text", text: "R".repeat(2 * MIB) }, { type: "thinking", thinking: "T".repeat(2 * MIB) }] },
+    message: { role: "assistant", content: [
+      { type: "text", text: "R".repeat(8 * MIB) },
+      { type: "thinking", thinking: "T".repeat(2 * MIB) },
+      { type: "toolCall", id: "call-1", name: "bash", arguments: { command: "cat build.log" } },
+    ] },
   });
   entries.push({
-    id: "e-images", parentId: "e-huge", type: "message",
+    id: "e-tool", parentId: "e-huge", type: "message",
+    message: { role: "toolResult", toolCallId: "call-1", content: [{ type: "text", text: "O".repeat(12 * MIB) }] },
+  });
+  entries.push({
+    id: "e-images", parentId: "e-tool", type: "message",
     message: { role: "user", content: [{ type: "text", text: "look" },
       ...Array.from({ length: 12 }, () => ({ type: "image", mimeType: "image/png", data: "A".repeat(4 * MIB / 3) }))] },
   });
@@ -101,7 +113,7 @@ describe("A1 · every hydrated view settles inside the bound", () => {
       if (block.kind === "user") for (const image of block.images) expect(image.data).toBe("");
     }
     // The oversized records are pointed at, never rewritten to fit.
-    expect((view.stubs ?? []).map(stub => stub.id).sort()).toEqual(["e-huge", "e-images"]);
+    expect((view.stubs ?? []).map(stub => stub.id).sort()).toEqual(["e-huge", "e-images", "e-tool"]);
     for (const entry of view.entries) {
       expect(JSON.stringify(entry).length).toBeLessThan(BODY_EXCERPT_MAX_BYTES * 2);
     }
@@ -123,6 +135,28 @@ describe("A1 · every hydrated view settles inside the bound", () => {
 });
 
 describe("A2 · one fold's own work is bounded", () => {
+  it("never materialises a structured body before excerpting it", () => {
+    // A twelve-megabyte structured result: the old path ran the whole value
+    // through JSON.stringify before cutting it, which is the copy this bound
+    // exists to prevent.
+    const structured = { lines: Array.from({ length: 2000 }, (_, index) => ({ n: index, text: "s".repeat(6000) })) };
+    let state = reduce({ ...initialState, connection: "open" }, { type: "opened", state: sessionState() });
+    state = update(state, 1, { kind: "tool_execution_start", toolCallId: "t2", toolName: "bash", args: { command: "ls" } });
+    resetBodyProjectionWork();
+    state = update(state, 2, { kind: "tool_execution_end", toolCallId: "t2", result: structured, isError: false });
+
+    const work = bodyProjectionWork();
+    const tool = state.open[path]!.blocks.find(block => block.kind === "tool") as Extract<Block, { kind: "tool" }>;
+    // Exactly the prefix the authority's own text would have, and its size.
+    const whole = JSON.stringify(structured, null, 2);
+    expect(whole.startsWith(String(tool.result))).toBe(true);
+    expect(tool.bodies?.result?.totalBytes).toBe(new TextEncoder().encode(whole).byteLength);
+    // What the fold wrote is the excerpt, not the body.
+    expect(work.emittedChars).toBeLessThanOrEqual(BODY_EXCERPT_MAX_BYTES + 4096);
+    expect(work.emittedChars * 50).toBeLessThan(whole.length);
+    expect(bytesOf(state)).toBeLessThanOrEqual(VIEW_CACHE_LIMITS.viewBytes);
+  });
+
   it("excerpts a twelve-megabyte tool result without holding or re-walking it", () => {
     let state = reduce({ ...initialState, connection: "open" }, { type: "opened", state: sessionState() });
     state = update(state, 1, { kind: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: { command: "ls" } });
@@ -215,10 +249,16 @@ describe("A5 · identity, ordinals and actions are untouched", () => {
     const view = state.open[path]!;
     const ids = view.blocks.flatMap(block => "entryId" in block && block.entryId ? [block.entryId] : []);
     // Every record is still a row, in the conversation's own order.
-    expect(ids).toEqual([...Array.from({ length: 20 }, (_, index) => `e${index}`), "e-huge", "e-images"]);
+    expect(ids.slice(0, 20)).toEqual(Array.from({ length: 20 }, (_, index) => `e${index}`));
+    // The oversized reply is two rows — its prose and its tool call — and the
+    // result belongs to that call; every one of them names its own record.
+    expect(ids.slice(20)).toEqual(["e-huge", "e-huge", "e-images"]);
     // Prompts keep their ordinals, so message actions address the same entries.
     const prompts = view.blocks.filter(block => block.kind === "user");
     expect(prompts).toHaveLength(11);
+    // The tool call is a row of its own, with its result as a reference.
+    const tool = view.blocks.find(block => block.kind === "tool") as Extract<Block, { kind: "tool" }>;
+    expect(tool.bodies?.result?.totalBytes).toBe(12 * MIB);
     expect(view.leafId).toBe("e-images");
   });
 });

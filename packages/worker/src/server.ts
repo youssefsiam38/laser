@@ -22,7 +22,7 @@
  * growing the process.
  */
 
-import { AGENT_MAX_DEPTH_LIMIT, ENV, ErrorCodes, bodyRangeSlice, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TypedClientRequest, WIRE_NAMESPACE } from "@lasercode/protocol";
+import { AGENT_MAX_DEPTH_LIMIT, ENV, ErrorCodes, createBodyRangeReader, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TypedClientRequest, WIRE_NAMESPACE } from "@lasercode/protocol";
 import { CaptureReservations } from "./capture-reservations.js";
 
 /** RP-5b body digests. The one hash both authorities sign a body with. */
@@ -225,6 +225,8 @@ export class WorkerServer {
   /** M13 · agents: the host's definitions, the harness that runs them, and Namer. */
   private readonly definitions: DefinitionsCache;
   private readonly harness: AgentHarness;
+  /** RP-5b: one body at a time, so slicing a large one stays linear. */
+  private readonly bodyRanges = createBodyRangeReader();
   private readonly namer: NamerService;
   /**
    * Every background command a session of this worker published, kept beside
@@ -683,7 +685,15 @@ export class WorkerServer {
         if (entry === undefined) {
           throw new ProtocolError(ErrorCodes.InvalidParams, "That message is not part of this conversation any more.");
         }
-        const sliced = bodyRangeSlice(entry, req.params, revision, "live", sha256Hex);
+        // One body at a time, keyed by the exact snapshot it came from, so a
+        // large body read in slices is walked and hashed once, not per slice.
+        const sliced = this.bodyRanges.read(
+          { path: live.path, revision, entryId: req.params.entryId, component: req.params.component },
+          () => entry,
+          req.params,
+          "live",
+          sha256Hex,
+        );
         if (!sliced.ok) {
           throw sliced.refusal.reason === "bad-range"
             ? new ProtocolError(ErrorCodes.InvalidParams, "That is not a readable part of this message. Open it again from the start.")

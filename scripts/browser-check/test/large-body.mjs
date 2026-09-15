@@ -100,9 +100,24 @@ export default async function largeBody(check) {
     assert.ok(afterBytes <= 512 * 1024, `the viewer holds a bounded window (${afterBytes} characters)`);
   }
 
-  // Copying says what it copied, rather than pretending to copy everything.
-  const copy = dialog.getByRole('button', { name: /Copy what is shown/ });
-  assert.equal(await copy.count(), 1, 'the copy control says exactly what it copies');
+  // Copying says what it copied, and offers the whole message separately.
+  const copyPart = dialog.getByRole('button', { name: /Copy this part/ });
+  const copyAll = dialog.getByRole('button', { name: /Copy all of it/ });
+  assert.equal(await copyPart.count(), 1, 'the copy control says exactly what it copies');
+  assert.equal(await copyAll.count(), 1, 'the whole message can be copied without being held');
+
+  // Paging backwards is a real control and a real key.
+  const earlier = dialog.getByRole('button', { name: 'Show earlier' });
+  assert.equal(await earlier.count(), 1, 'the viewer can go back as well as forward');
+  await status.focus();
+  await page.keyboard.press('PageDown');
+  await page.waitForTimeout(500);
+  await page.keyboard.press('PageUp');
+  await page.waitForTimeout(500);
+  await page.keyboard.press('Home');
+  await page.waitForTimeout(500);
+  const home = scrub(await dialog.locator('[data-slot="dialog-description"], p').first().textContent());
+  assert.match(home, /Showing 0/, `Home returns to the start of the message: ${home}`);
 
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => document.querySelector('[role="dialog"]') === null, undefined, { timeout: 30_000 });

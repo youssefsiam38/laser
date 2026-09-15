@@ -4,6 +4,7 @@ import { useLaserState } from "@/runtime";
 import { activityDetailLevel } from "@/runtime/sessionPreferences";
 import { motionMs } from "@/motion";
 import { HeightIndex, windowRanges } from "./transcript-window.js";
+import { clearAnchoredMessages, setAnchoredMessages } from "@/runtime/anchored-messages";
 import { ThreadMessage } from "./messages.js";
 
 export interface TranscriptTarget { messageId: string; toolCallId?: string; leafId?: string | null }
@@ -64,7 +65,19 @@ export class TranscriptViewport {
   private disposed = false;
   getSnapshot = () => this.revision;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
-  private publish() { this.revision++; for (const listener of this.listeners) listener(); }
+  private publish() { this.revision++; this.publishAnchors(); for (const listener of this.listeners) listener(); }
+
+  /**
+   * The rows this surface is standing on, so releasing the older part of the
+   * conversation never pulls one out from under a person (RP-5b): the anchor
+   * the viewport is holding, the focused row, anything a surface pinned while
+   * it is open, and the row a navigation is on its way to.
+   */
+  private publishAnchors() {
+    if (!this.path) return;
+    setAnchoredMessages(this.path, [this.place.anchor?.messageId, this.focused, this.target?.messageId, ...this.pins.keys()]
+      .flatMap(id => (id ? [id] : [])));
+  }
   private cacheKey(id: string) { return JSON.stringify([this.path, this.signature, id]); }
   configure(path: string, leafId?: string | null, loaded?: string) {
     this.leafId = leafId;
@@ -93,6 +106,7 @@ export class TranscriptViewport {
     this.heights = new HeightIndex([]);
     this.pins.clear(); this.selected = undefined; this.focused = undefined;
     this.nodes.clear();
+    this.publishAnchors();
   }
   retain(paths: readonly string[]) {
     const open = new Set(paths);
@@ -516,7 +530,7 @@ export class TranscriptViewport {
     document.fonts?.addEventListener("loadingdone", this.schedule);
     this.schedule();
     return () => {
-      this.cancel(); this.disposed = true; cancelAnimationFrame(this.frame); this.frame = 0; if (this.reading) { clearTimeout(this.reading); this.reading = undefined; }
+      this.cancel(); this.disposed = true; clearAnchoredMessages(this.path); cancelAnimationFrame(this.frame); this.frame = 0; if (this.reading) { clearTimeout(this.reading); this.reading = undefined; }
       this.observer?.disconnect(); this.observer = undefined; theme.disconnect();
       viewport.removeEventListener("scroll", scroll); viewport.removeEventListener("wheel", user); viewport.removeEventListener("touchstart", user);
       viewport.removeEventListener("pointerdown", pointer);

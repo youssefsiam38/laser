@@ -51,18 +51,23 @@ export function useImageBodies(path: string | undefined, images: readonly ImageC
   useEffect(() => {
     if (!refs || path === undefined) return;
     let live = true;
+    // Every image this row shows is one holder of its blob; the last row to go
+    // revokes the URL, so nothing decoded outlives what is on screen.
+    const holding: string[] = [];
     for (const [index, ref] of refs.entries()) {
       if (!ref || !isReadable(ref) || images[index]?.data) continue;
-      const key = `${ref.entryId}:${ref.component.kind}:${ref.component.index ?? 0}:${ref.revision}`;
-      const held = blobs.url(key);
-      if (held) { setUrls(current => current[index] === held ? current : { ...current, [index]: held }); continue; }
+      const key = `${ref.entryId}:${ref.component.kind}:${ref.component.index ?? 0}:${ref.revision ?? ""}`;
+      holding.push(key);
       void blobs.load(key, path, ref, images[index]?.mimeType ?? "image/png").then(url => {
         if (!live) return;
-        if (url) setUrls(current => ({ ...current, [index]: url }));
+        if (url) setUrls(current => (current[index] === url ? current : { ...current, [index]: url }));
         else setFailed(current => ({ ...current, [index]: true }));
       });
     }
-    return () => { live = false; };
+    return () => {
+      live = false;
+      for (const key of holding) blobs.release(key);
+    };
   }, [blobs, images, path, refs]);
 
   return useMemo(() => (index: number, image: ImageContent): ImageSource => {

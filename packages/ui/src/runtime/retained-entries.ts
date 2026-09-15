@@ -15,7 +15,7 @@
  *
  * Pure: no React, no DOM, no network, no allocation proportional to a body.
  */
-import { entryBodies, utf8ByteLength, type BodyComponent, type ElidedEntry } from "@lasercode/protocol";
+import { entryBodies, entryToolCalls, utf8ByteLength, type BodyComponent, type ElidedEntry } from "@lasercode/protocol";
 import { BODY_EXCERPT_MAX_BYTES } from "./body-excerpt.js";
 
 /**
@@ -29,6 +29,8 @@ export interface EntryStub {
   role?: string;
   /** The call a `toolResult` answers, so its row finds its tool. */
   toolCallId?: string;
+  /** The calls an assistant record made, so their rows survive the elision. */
+  toolCalls?: Array<{ id: string; name: string }>;
   at?: string;
   bodies: Array<{ component: BodyComponent; totalBytes: number; contentDigest?: string }>;
 }
@@ -52,6 +54,7 @@ export function stubOf(entry: unknown, bodies = entryBodies(entry)): EntryStub |
     type: typeof value.type === "string" ? value.type : "",
     ...(typeof message.role === "string" ? { role: message.role } : {}),
     ...(typeof message.toolCallId === "string" ? { toolCallId: message.toolCallId } : {}),
+    ...(entryToolCalls(entry).length > 0 ? { toolCalls: entryToolCalls(entry) } : {}),
     ...(timestampOf(value) ? { at: timestampOf(value)! } : {}),
     bodies: bodies.map((body) => ({ component: body.component, totalBytes: utf8ByteLength(body.text) })),
   };
@@ -65,6 +68,7 @@ export function stubOfElided(elided: ElidedEntry): EntryStub {
     type: elided.type,
     ...(elided.role !== undefined ? { role: elided.role } : {}),
     ...(elided.toolCallId !== undefined ? { toolCallId: elided.toolCallId } : {}),
+    ...(elided.toolCalls ? { toolCalls: elided.toolCalls } : {}),
     bodies: elided.bodies.map((body) => ({ component: body.component, totalBytes: body.totalBytes, contentDigest: body.contentDigest })),
   };
 }

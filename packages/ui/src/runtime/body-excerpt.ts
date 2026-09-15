@@ -66,6 +66,13 @@ export interface BodyRef {
   revision?: string;
   /** A live turn: the excerpt is its tail, and nothing can be read yet. */
   live?: true;
+  /**
+   * What an image reference costs once it is shown: its validated dimensions
+   * read from a bounded prefix of its own bytes, and the decoded surface they
+   * imply. Absent when no header could be validated — then the surface is
+   * charged the declared floor instead, never zero (RP-5b §7.3).
+   */
+  image?: { width?: number; height?: number; decodedBytes: number } | undefined;
 }
 
 export interface Excerpt {

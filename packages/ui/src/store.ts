@@ -32,10 +32,10 @@ import type {
 } from "@lasercode/protocol";
 
 import { activePathIds } from "./components/thread/entries.js";
-import { appendLive, BODY_EXCERPT_MAX_BYTES, excerptHead, excerptLiveTail, type BodyRef } from "./runtime/body-excerpt.js";
+import { appendLive, BODY_EXCERPT_MAX_BYTES, excerptHead, excerptLiveTail, LIVE_TAIL_MAX_BYTES, type BodyRef } from "./runtime/body-excerpt.js";
 import { retainEntries, retainedRows, type EntryStub } from "./runtime/retained-entries.js";
-import { displayBodyText, utf8ByteLength, type BodyComponent } from "@lasercode/protocol";
-import { blockBytes, entryBytes } from "./runtime/view-measure.js";
+import { boundedBodyText, utf8ByteLength, type BodyComponent } from "@lasercode/protocol";
+import { blockBytes, entryBytes, imageMeasure, UNKNOWN_IMAGE_DECODED_BYTES } from "./runtime/view-measure.js";
 import { initialMainDestination, mainPath, type MainDestination } from "./runtime/main-destination.js";
 import { receiveHistoryUpdate, reduceHistory, type HistoryAction } from "./runtime/history-loader.js";
 
@@ -409,7 +409,7 @@ export type Action =
    * usable, the streaming turn, questions, approvals and unsent prompts stay,
    * and what went is read again through the ordinary bounded tail read.
    */
-  | { type: "views/trim"; paths: readonly string[]; keepBytes: number; at: string }
+  | { type: "views/trim"; paths: readonly string[]; keepBytes: number; at: string; anchored?: readonly string[] }
   /**
    * Replace the transcript from a persisted snapshot. `expectSeq` guards the
    * round trip: when live updates advanced `lastSeq` while `pi/session/entries`
@@ -581,7 +581,14 @@ export function reduce(state: AppState, action: Action): AppState {
           const id = "entryId" in block ? block.entryId : undefined;
           return blockBytes(block) + (id !== undefined ? records.get(id) ?? 0 : 0);
         };
-        const result = trimView(view, { keepBytes: action.keepBytes, measure, answerable }, action.at);
+        const result = trimView(view, {
+          keepBytes: action.keepBytes,
+          measure,
+          answerable,
+          // The message the viewport is anchored to, the focused one, and
+          // anything a surface pinned while it is open.
+          ...(action.anchored ? { anchored: new Set(action.anchored) } : {}),
+        }, action.at);
         if (result.releasedBlocks === 0) continue;
         open ??= { ...state.open };
         open[path] = result.view;
@@ -1200,7 +1207,7 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
         if (b.kind !== "tool" || b.id !== u.toolCallId) return b;
         // Partial output is live and can be enormous; the newest bytes are what
         // a person is watching, and the rest arrives with the result.
-        const partial = excerptLiveTail(String(stringify(u.partial)), { entryId: b.entryId, component: { kind: "tool_partial" } });
+        const partial = boundPartial(u.partial, { entryId: b.entryId, component: { kind: "tool_partial" } });
         const bodies = blockBodies({ ...b.bodies, partial: partial.ref });
         const { bodies: _previous, ...rest } = b;
         return { ...rest, partial: partial.text, ...(bodies ? { bodies } : {}) };
@@ -1350,10 +1357,41 @@ function blockBodies(bodies: PartialBodies): BlockBodies | undefined {
  * excerpt of its own display text plus a reference; nothing holds the value.
  */
 function boundValue(value: unknown, source: { entryId?: string | undefined; component: BodyComponent; revision?: string | undefined }): { value: unknown; ref?: BodyRef } {
-  const text = displayBodyText(value);
-  if (utf8ByteLength(text) <= BODY_EXCERPT_MAX_BYTES) return { value };
-  const excerpt = excerptHead(text, source);
-  return { value: excerpt.text, ...(excerpt.ref ? { ref: excerpt.ref } : {}) };
+  // Bounded projection, never a whole-body copy: a twelve-megabyte structured
+  // result is walked once and only the excerpt is written (RP-5b §3.2).
+  const bounded = boundedBodyText(value, BODY_EXCERPT_MAX_BYTES);
+  if (!bounded.truncated) return { value };
+  return {
+    value: bounded.text,
+    ref: {
+      ...(source.entryId !== undefined ? { entryId: source.entryId } : {}),
+      component: source.component,
+      totalBytes: bounded.totalBytes,
+      ...(source.revision !== undefined ? { revision: source.revision } : {}),
+      excerpt: { offset: 0, bytes: utf8ByteLength(bounded.text) },
+    },
+  };
+}
+
+/**
+ * Live partial output, bounded. A string keeps its newest bytes — what a
+ * person watching a command is reading — and anything structured is projected
+ * head-first without ever building all of it (RP-5b §3.2).
+ */
+function boundPartial(value: unknown, source: { entryId?: string | undefined; component: BodyComponent }): { text: string; ref?: BodyRef } {
+  if (typeof value === "string") return excerptLiveTail(value, source);
+  const bounded = boundedBodyText(value, LIVE_TAIL_MAX_BYTES);
+  if (!bounded.truncated) return { text: bounded.text };
+  return {
+    text: bounded.text,
+    ref: {
+      ...(source.entryId !== undefined ? { entryId: source.entryId } : {}),
+      component: source.component,
+      totalBytes: bounded.totalBytes,
+      excerpt: { offset: 0, bytes: utf8ByteLength(bounded.text) },
+      ...(source.entryId === undefined ? { live: true as const } : {}),
+    },
+  };
 }
 
 /**
@@ -1377,12 +1415,19 @@ function boundUserContent(
   const bounded = images.map((image, index) => {
     const bytes = utf8ByteLength(image.data);
     if (bytes <= BODY_EXCERPT_MAX_BYTES) { imageRefs.push(undefined); return image; }
+    // Dimensions from a bounded prefix of the image's own bytes, so what it
+    // will cost as a decoded surface is known before it is ever shown.
+    const measured = imageMeasure(image);
     imageRefs.push({
       ...(source.entryId !== undefined ? { entryId: source.entryId } : {}),
       component: { kind: "image", index },
       totalBytes: bytes,
       ...(source.revision !== undefined ? { revision: source.revision } : {}),
       excerpt: { offset: 0, bytes: 0 },
+      image: {
+        ...(measured.dimensions ? { width: measured.dimensions.width, height: measured.dimensions.height } : {}),
+        decodedBytes: measured.decoded ?? UNKNOWN_IMAGE_DECODED_BYTES,
+      },
     });
     // The payload is never retained: what stays is its type and where to read it.
     return { ...image, data: "" };
@@ -1409,15 +1454,32 @@ function stubBlocks(stub: EntryStub, revision: string | undefined): { blocks: Bl
   const when = stub.at ? { at: stub.at } : {};
   if (stub.role === "user") {
     const images = stub.bodies.filter((row) => row.component.kind === "image");
-    const bodies = blockBodies({ text: refOf({ kind: "user_text" }), images: images.map((row) => refOf(row.component)) });
+    const bodies = blockBodies({
+      text: refOf({ kind: "user_text" }),
+      // A record this view only points at carries no header to read, so its
+      // surface is charged the declared floor rather than nothing.
+      images: images.map((row) => {
+        const ref = refOf(row.component);
+        return ref ? { ...ref, image: { decodedBytes: UNKNOWN_IMAGE_DECODED_BYTES } } : undefined;
+      }),
+    });
     return { blocks: [{ kind: "user", id: `entry:${stub.id}`, ...when, text: "", files: [], entryId: stub.id,
       images: images.map(() => ({ type: "image", mimeType: "image/*", data: "" }) as ImageContent),
       ...(bodies ? { bodies } : {}) }] };
   }
   if (stub.role === "assistant") {
     const bodies = blockBodies({ text: refOf({ kind: "assistant_text" }), thinking: refOf({ kind: "reasoning" }) });
-    return { blocks: [{ kind: "assistant", id: `entry:${stub.id}`, ...when, text: "", thinking: "", streaming: false, entryId: stub.id,
-      ...(bodies ? { bodies } : {}) }] };
+    const blocks: Block[] = [{ kind: "assistant", id: `entry:${stub.id}`, ...when, text: "", thinking: "", streaming: false, entryId: stub.id,
+      ...(bodies ? { bodies } : {}) }];
+    // A record this view points at still made the calls it made: their rows
+    // keep their identity, their name and their own reference to the request.
+    (stub.toolCalls ?? []).forEach((call, index) => {
+      const args = refOf({ kind: "tool_args", index });
+      const callBodies = blockBodies({ args });
+      blocks.push({ kind: "tool", id: call.id, ...when, name: call.name, args: undefined, done: false, entryId: stub.id,
+        ...(callBodies ? { bodies: callBodies } : {}) });
+    });
+    return { blocks };
   }
   // A result belongs to the call that is already a row: it becomes a reference
   // on that row, exactly as a delivered result would have become its body.
@@ -1463,7 +1525,10 @@ export function blocksFromEntries(entries: unknown[], leafId?: string | null, na
     // the exact size of everything it carries; its bodies are read on demand.
     if (row.kind === "stub") {
       const built = stubBlocks(row.value, revision);
-      for (const block of built.blocks) blocks.push(block);
+      for (const block of built.blocks) {
+        if (block.kind === "tool") toolIndex.set(block.id, blocks.length);
+        blocks.push(block);
+      }
       if (built.toolResult) {
         const index = toolIndex.get(built.toolResult.toolCallId);
         if (index !== undefined) {

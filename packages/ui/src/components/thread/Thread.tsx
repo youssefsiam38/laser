@@ -21,7 +21,7 @@ import { Composer } from "./Composer.js";
 import { EmptyState } from "./EmptyState.js";
 import { ThreadSlotsProvider, type ThreadSlots } from "./thread-slots.js";
 import { useConversationFind } from "./use-conversation-find.js";
-import { FindSelectionContext } from "./search-state.js";
+import { FindQueryContext, FindSelectionContext } from "./search-state.js";
 import { TranscriptViewportProvider, TranscriptViewportBinding, WindowedMessages, useTranscriptViewport } from "./transcript-viewport.js";
 
 /**
@@ -90,6 +90,7 @@ function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
     <>
     <SessionSeenBridge ready={connected && open.phase === "ready"} covered={page !== null} />
     <FindSelectionContext value={find.selectedMessage}>
+    <FindQueryContext value={find.query}>
     <ThreadSlotsProvider slots={slots}>
       <TooltipProvider>
         <AuiProvider extends={aui} config={suggestions}>
@@ -150,6 +151,7 @@ function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
         </AuiProvider>
       </TooltipProvider>
     </ThreadSlotsProvider>
+    </FindQueryContext>
     </FindSelectionContext>
     </>
   );

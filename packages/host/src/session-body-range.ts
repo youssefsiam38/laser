@@ -18,9 +18,11 @@ import {
   ErrorCodes,
   ProtocolError,
   bodyRangeSlice,
+  createBodyRangeReader,
   historyWindowNode,
   type BodyComponent,
   type BodyComponentKind,
+  type BodyRangeReader,
   type ClientRequests,
 } from "@lasercode/protocol";
 import type { FileIdentity, IndexedEntry, SessionIndex, SessionIndexCache, SessionIndexFailure } from "./session-index.js";
@@ -45,6 +47,14 @@ export function sha256Hex(text: string): string {
 }
 
 export class SessionBodyRange {
+  /**
+   * One body at a time, keyed by the exact state it came from. Reading a very
+   * large body in slices must not re-read, re-hash and re-walk the whole of it
+   * for every slice; the key carries the file's own identity, so any change to
+   * the stored conversation drops it (RP-9 fences unchanged).
+   */
+  private readonly reader: BodyRangeReader = createBodyRangeReader();
+
   constructor(private readonly options: SessionBodyRangeOptions) {}
 
   async read(path: string, params: ClientRequests["session/entry_range"]["params"]): Promise<BodyRangeAnswer> {
@@ -66,14 +76,42 @@ export class SessionBodyRange {
     const rowIndex = index.entries.findIndex((entry) => entry.id === params.entryId);
     if (rowIndex < 0) return { kind: "refuse", error: unknownEntry() };
     const row = index.entries[rowIndex]!;
-    this.options.onRead?.(row);
-    const value = readRecord(path, index, row);
-    if (value.kind === "changed") {
-      this.options.index.invalidate(path);
-      return { kind: "refuse", error: changed() };
-    }
-    if (value.kind === "unreadable") return { kind: "refuse", error: unavailable() };
-    return sliceAnswer(value.value, params, revision, "durable");
+    const identity = index.identity;
+    let failure: BodyRangeAnswer | undefined;
+    const sliced = this.reader.read(
+      {
+        path,
+        revision,
+        entryId: params.entryId,
+        component: params.component,
+        // The exact bytes on disk this body was read from: a file that moved
+        // under the read drops the memo rather than answering from it.
+        fence: `${identity.dev}:${identity.ino}:${identity.size}:${identity.mtimeMs}:${identity.ctimeMs}`,
+      },
+      () => {
+        this.options.onRead?.(row);
+        const value = readRecord(path, index, row);
+        if (value.kind === "changed") {
+          this.options.index.invalidate(path);
+          failure = { kind: "refuse", error: changed() };
+          return undefined;
+        }
+        if (value.kind === "unreadable") {
+          failure = { kind: "refuse", error: unavailable() };
+          return undefined;
+        }
+        return value.value;
+      },
+      params,
+      "durable",
+      sha256Hex,
+    );
+    if (failure) return failure;
+    if (sliced.ok) return { kind: "answer", result: sliced.result };
+    return {
+      kind: "refuse",
+      error: sliced.refusal.reason === "bad-range" ? badRange() : unknownComponent(params.component, sliced.refusal.available),
+    };
   }
 }
 

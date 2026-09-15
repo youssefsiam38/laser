@@ -13,13 +13,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ErrorCodes, PRODUCT_NAME, utf8ByteLength, type ClientRequests } from "@lasercode/protocol";
-import { SessionIndexCache } from "../src/session-index.js";
+import { DEFAULT_SESSION_INDEX_LIMITS, SessionIndexCache } from "../src/session-index.js";
 import { SessionBodyRange, sha256Hex } from "../src/session-body-range.js";
 import { SessionRevisions } from "../src/session-revision.js";
 
 const ENVIRONMENT = "11111111-2222-4333-8444-555555555555";
 const CWD = "/projects/a";
-const HUGE = "µ".repeat(400_000); // multi-byte throughout: 800 KB of UTF-8
+const HUGE = "µ".repeat(16 * 1024 * 1024); // multi-byte throughout: 32 MiB of UTF-8
 
 const header = JSON.stringify({ type: "session", version: 3, id: "session-1", cwd: CWD, timestamp: "2026-01-01T00:00:00.000Z" });
 const prompt = { type: "message", id: "e0", parentId: null, timestamp: "2026-01-01T00:00:01.000Z", message: { role: "user", content: [{ type: "text", text: "start" }] } };
@@ -34,7 +34,10 @@ function fixture() {
 
 function services() {
   const reads: string[] = [];
-  const index = new SessionIndexCache();
+  // The acceptance body is 32 MiB in one record; the shipped index refuses a
+  // line that large by default, so the reader is exercised with limits that
+  // admit it. Nothing else about the reader changes.
+  const index = new SessionIndexCache({ limits: { ...DEFAULT_SESSION_INDEX_LIMITS, lineBytes: 64 * 1024 * 1024, fileBytes: 256 * 1024 * 1024, indexBytes: 16 * 1024 * 1024 } });
   const revisions = new SessionRevisions({ index, environmentId: ENVIRONMENT });
   const range = new SessionBodyRange({ index, revisions, onRead: (entry) => reads.push(entry.id ?? "") });
   return { index, revisions, range, reads };
@@ -94,7 +97,7 @@ describe("reading one body from the stored conversation", () => {
       }
       expect(total).toBe(utf8ByteLength(HUGE));
       expect(hash.digest("hex")).toBe(sha256Hex(HUGE));
-      expect(slices).toBeGreaterThan(10);
+      expect(slices).toBeGreaterThan(500);
       // Never more than one payload in hand at any point.
       expect(peak).toBeLessThanOrEqual(64 * 1024);
     } finally { file.cleanup(); }
