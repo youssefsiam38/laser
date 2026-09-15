@@ -501,3 +501,54 @@ it("never removes a directory it did not write, however long it has been quiet",
   const mine = readdirSync(shared).filter((entry) => entry !== "a".repeat(32));
   expect(mine).toHaveLength(1);
 });
+
+it("never lets a log file's path reach a diagnostic, a row or a model, whatever failed", async () => {
+  // The canary is in the directory name, so any error message that quoted the
+  // file — "EACCES: permission denied, open '<root>/<dir>/<id>.0.log'" — would
+  // carry it. Nothing the module says may.
+  const canary = "CANARY-PRIVATE-ARTIFACT-PATH";
+  const root = join(mkdtempSync(join(tmpdir(), "background-retention-canary-")), canary);
+  dirs.push(root);
+  const { mkdirSync, writeFileSync, chmodSync } = await import("node:fs");
+  mkdirSync(root, { recursive: true });
+
+  const h = harness({ logRoot: root });
+  // Take the name the first segment of the next command will want, so opening
+  // it fails with a real platform error.
+  const opened = await h.call("bash", { command: "printf 'one\\n'", background: true, notify: false });
+  await settled(h, (opened.details as { taskId: string }).taskId);
+  const sessionDir = join(root, readdirSync(root)[0]!);
+  chmodSync(sessionDir, 0o500);
+  const refused = await h.call("bash", { command: "printf 'two\\n'", background: true, notify: false });
+  const refusedId = (refused.details as { taskId: string }).taskId;
+  await settled(h, refusedId);
+  chmodSync(sessionDir, 0o700);
+
+  // Something was said, and it says what kind of failure it was.
+  const logs = h.send.mock.calls
+    .map(([message]) => message as { type: string; message?: string })
+    .filter((message) => message.type === "lasercode/module/log");
+  expect(logs.length).toBeGreaterThan(0);
+  expect(logs.at(-1)!.message).toMatch(/kept no log file \((permission denied|the directory is read-only|unavailable)\)/);
+
+  // Nothing the module says carries the path. The one field that does is
+  // `logPath` on a task update, which is how the host finds the bytes and is
+  // stripped before any client (`tasks/register.ts`); every other field of
+  // every message, including the whole of a module log, a retention report and
+  // a process registration, is free of it.
+  for (const [message] of h.send.mock.calls as Array<[Record<string, unknown>]>) {
+    const withoutPaths = { ...message };
+    if (message["type"] === "lasercode/task/update") {
+      const { logPath: _path, logSegments: _segments, ...task } = message["task"] as Record<string, unknown>;
+      withoutPaths["task"] = task;
+    }
+    expect(JSON.stringify(withoutPaths), String(message["type"])).not.toContain(canary);
+  }
+  // Nor does anything the model reads.
+  const read = await h.call("task_output", { taskId: refusedId, tail: 5 });
+  expect(JSON.stringify(read)).not.toContain(canary);
+  const row = h.updates().filter((update) => update.id === refusedId).at(-1)!;
+  expect(row.logState).toBe("released");
+  expect(row.outputBytes).toBe(4);
+  expect(JSON.stringify(row)).not.toContain(canary);
+});

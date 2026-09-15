@@ -111,6 +111,36 @@ type BashUpdate = AgentToolUpdateCallback<BashToolDetails | undefined>;
 /** The engine's own details, or the task handle the override adds. */
 export type BashOverrideDetails = BashToolDetails | { taskId: string; promoted: true } | { taskId: string; background: true } | undefined;
 
+/**
+ * Why a command's log could not be written, as a bounded category.
+ *
+ * Only the platform's own error code decides, and only from a fixed list:
+ * neither the message nor the path it names may reach a diagnostic, a client
+ * or an export. Anything unrecognised is `unavailable` rather than a sentence
+ * somebody wrote about a file.
+ */
+const LOG_FAILURE_REASONS: Readonly<Record<string, string>> = {
+  EACCES: "permission denied",
+  EPERM: "permission denied",
+  EEXIST: "that name was already taken",
+  ELOOP: "not a regular file",
+  ENOTDIR: "not a regular file",
+  EISDIR: "not a regular file",
+  ENOENT: "the directory is gone",
+  ENOSPC: "no space left",
+  EDQUOT: "no space left",
+  EROFS: "the directory is read-only",
+  EMFILE: "too many open files",
+  ENFILE: "too many open files",
+  EIO: "the device reported an error",
+};
+
+export function logFailureReason(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code;
+  if (typeof code !== "string") return "unavailable";
+  return LOG_FAILURE_REASONS[code] ?? "unavailable";
+}
+
 /** Released at compaction; a shared one costs a finished task nothing. */
 const NOOP = (): void => {};
 
@@ -402,7 +432,11 @@ function startTask(ctx: ModuleContext, state: State, options: BackgroundWorkOpti
     onError: (error) => {
       if (loggedLogFailure) return;
       loggedLogFailure = true;
-      ctx.send({ type: "lasercode/module/log", module: "background-work", level: "warn", message: `task ${id} has no log file: ${describe(error)}` });
+      // A category, never the error's own words: a failure to open or write a
+      // log file names the file, and that path is a private artifact of this
+      // machine. The diagnostic says what kind of failure it was and which
+      // command it belonged to, which is what a person can act on (RP-6).
+      ctx.send({ type: "lasercode/module/log", module: "background-work", level: "warn", message: `task ${id} kept no log file (${logFailureReason(error)})` });
     },
   });
 

@@ -113,6 +113,21 @@ describe("TaskRegister", () => {
     expect(w.register.list().filter((task) => task.status === "running")).toHaveLength(MAX_SESSIONS_WITH_TASKS + 20);
   });
 
+  it("keeps a private artifact path out of everything a client can see", () => {
+    const canary = "/tmp/CANARY-PRIVATE-ARTIFACT-PATH/t-1";
+    const w = world("/tmp/CANARY-PRIVATE-ARTIFACT-PATH");
+    w.register.observeExtensionMessage(PATH, {
+      type: "lasercode/task/update",
+      task: update({ logPath: canary, logSegments: [0], activity: "still going" }),
+    });
+    // The broadcast, the list and the single-row read: none of them names a
+    // file, and neither does the retention the diagnostics surface publishes.
+    expect(JSON.stringify(w.broadcast())).not.toContain("CANARY");
+    expect(JSON.stringify(w.register.list())).not.toContain("CANARY");
+    expect(JSON.stringify(w.register.get(PATH, "t-1"))).not.toContain("CANARY");
+    expect(JSON.stringify(w.register.retained())).not.toContain("CANARY");
+  });
+
   it("counts retained bytes in UTF-8, not in string units", () => {
     const w = world();
     const command = "echo \u201c\u4f60\u597d\u4e16\u754c\ud83d\ude80\u201d";

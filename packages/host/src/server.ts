@@ -572,6 +572,9 @@ export class HostServer {
         }
         return this.projects.ensureTrusted(cwd);
       },
+      // No worker starts until the command-log root has been cleaned: that
+      // cleanup is only safe while nothing is writing there (RP-6).
+      beforeSpawn: () => this.taskLogCleanup,
       isAttached: (cwd) => this.isAttached(cwd),
       hasLiveRun: (cwd) => this.runs.hasLiveRun(cwd),
       // The pid is only knowable at spawn. Recording it reads nothing and
