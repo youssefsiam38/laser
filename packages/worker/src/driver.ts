@@ -268,6 +268,15 @@ export interface SessionDriver {
   entries(options?: { live?: boolean }): Promise<{ entries: unknown[]; leafId: string | null; live?: HistoryLiveSnapshot }>;
 
   /**
+   * The same entries and leaf, **synchronously**, when this driver can answer
+   * without awaiting. Used only to name the revision a message was persisted
+   * at, in the same tick the engine wrote it — an await there would reorder
+   * updates. A driver that cannot answer synchronously returns undefined and
+   * the reference resolves its revision when it is first read instead.
+   */
+  entriesNow?(): { entries: unknown[]; leafId: string | null } | undefined;
+
+  /**
    * The stored session's own header, which is what binds a durable revision to
    * a session identity (RP-9). Optional: a driver with no session file has
    * none, and its revisions then bind to the state's identity instead.

@@ -170,6 +170,7 @@ export interface SessionIndexCacheOptions {
 }
 
 export class SessionIndexCache {
+  private readonly invalidationListeners = new Set<(path: string) => void>();
   private readonly cache = new Map<string, Cached>();
   private readonly negative = new Map<string, NegativeCached>();
   private readonly inflight = new Map<string, Promise<SessionIndexResult>>();
@@ -203,7 +204,13 @@ export class SessionIndexCache {
     return [...this.cache.keys()];
   }
 
+  /** Told whenever a cached index is dropped, so a reader can let go too. */
+  onInvalidate(listener: (path: string) => void): void {
+    this.invalidationListeners.add(listener);
+  }
+
   invalidate(path: string): void {
+    for (const listener of this.invalidationListeners) listener(path);
     this.retained -= this.cache.get(path)?.bytes ?? 0;
     this.cache.delete(path);
     this.negative.delete(path);

@@ -390,6 +390,120 @@ export function boundedBodyText(value: unknown, maxBytes: number): BoundedBody {
   return { text, totalBytes: bytes, truncated: bytes > emitted };
 }
 
+/**
+ * Persisted identity of one entry's bodies: what a client needs to address a
+ * body it does not hold, and nothing else.
+ *
+ * Bounded on purpose. An entry with very many components must not produce an
+ * unbounded frame, so at most {@link PERSISTED_IDENTITY_MAX_ITEMS} components
+ * are described and at most {@link PERSISTED_IDENTITY_MAX_BYTES} of metadata is
+ * emitted; anything left out is counted, and a client leaves the refs it did
+ * not receive exactly as they were — live, unreadable, never guessed.
+ */
+export interface PersistedBodyIdentity {
+  component: BodyComponent;
+  totalBytes: number;
+  contentDigest: string;
+}
+
+/** How many components one entry may describe. */
+export const PERSISTED_IDENTITY_MAX_ITEMS = 16;
+
+/** How many UTF-8 bytes that description may take. */
+export const PERSISTED_IDENTITY_MAX_BYTES = 4 * 1024;
+
+/**
+ * Hash one entry's bodies without building them.
+ *
+ * A string body is hashed where it already is. A structured body is walked
+ * through the same canonical projection the excerpts and the offsets come from,
+ * fed to the hash a fragment at a time and never assembled — so naming a
+ * thirty-two megabyte body costs a hash, not a copy.
+ *
+ * `createHasher` comes from the caller's own crypto (Node's `createHash` in the
+ * worker and the host); this module links none.
+ */
+export function entryBodyIdentities(
+  entry: unknown,
+  createHasher: () => { update(chunk: string): void; digest(): string },
+  limits: { items?: number; bytes?: number } = {},
+): { bodies: PersistedBodyIdentity[]; omitted: number; truncated?: true } {
+  const maxItems = limits.items ?? PERSISTED_IDENTITY_MAX_ITEMS;
+  const maxBytes = limits.bytes ?? PERSISTED_IDENTITY_MAX_BYTES;
+  const bodies: PersistedBodyIdentity[] = [];
+  let omitted = 0;
+  let truncated: true | undefined;
+  let metadataBytes = 0;
+  for (const source of entryBodySources(entry)) {
+    if (bodies.length >= maxItems) { omitted += 1; continue; }
+    const hasher = createHasher();
+    let bytes = 0;
+    const sink = (chunk: string): void => { hasher.update(chunk); bytes += utf8ByteLength(chunk); };
+    const complete = streamBodyText(source.value, sink);
+    // A body this projection cannot predict has no digest anyone could trust.
+    if (!complete) { omitted += 1; continue; }
+    const row = { component: source.component, totalBytes: bytes, contentDigest: hasher.digest() };
+    // `component` (kind plus optional index), size and a 64-character digest:
+    // a little over a hundred bytes, counted exactly rather than estimated.
+    const size = utf8ByteLength(JSON.stringify(row));
+    if (metadataBytes + size > maxBytes) { omitted += 1; truncated = true; continue; }
+    metadataBytes += size;
+    bodies.push(row);
+  }
+  return { bodies, omitted, ...(truncated ? { truncated } : {}) };
+}
+
+/**
+ * Feed a body's canonical text to a sink, a fragment at a time, never holding
+ * it. Returns false for a value this projection cannot predict (its own
+ * `toJSON`, a cycle, a `BigInt`) — the same refusal `boundedBodyText` makes.
+ */
+export function streamBodyText(value: unknown, sink: (chunk: string) => void): boolean {
+  if (typeof value === "string") { sink(value); return true; }
+  if (value === undefined) return true;
+  let unmodelled = false;
+  const seen = new Set<object>();
+  const put = (text: string): void => { if (!unmodelled) sink(text); };
+  const walk = (node: unknown, indent: string): void => {
+    if (unmodelled) return;
+    if (node === null) return put("null");
+    if (typeof node === "object") {
+      if (seen.has(node)) { unmodelled = true; return; }
+      seen.add(node);
+      if (typeof (node as { toJSON?: unknown }).toJSON === "function") { unmodelled = true; return; }
+    }
+    if (typeof node === "string") return put(JSON.stringify(node));
+    if (typeof node === "number") return put(Number.isFinite(node) ? String(node) : "null");
+    if (typeof node === "boolean") return put(node ? "true" : "false");
+    if (typeof node === "bigint") { unmodelled = true; return; }
+    if (typeof node === "function" || typeof node === "symbol" || node === undefined) return put("null");
+    const inner = `${indent}  `;
+    if (Array.isArray(node)) {
+      if (node.length === 0) return put("[]");
+      put("[\n");
+      node.forEach((row, index) => {
+        put(inner);
+        walk(row === undefined ? null : row, inner);
+        put(index === node.length - 1 ? "\n" : ",\n");
+      });
+      return put(`${indent}]`);
+    }
+    const rows = Object.entries(node as Record<string, unknown>).filter(([, row]) => row !== undefined && typeof row !== "function" && typeof row !== "symbol");
+    if (rows.length === 0) return put("{}");
+    put("{\n");
+    rows.forEach(([key, row], index) => {
+      put(inner);
+      put(JSON.stringify(key));
+      put(": ");
+      walk(row, inner);
+      put(index === rows.length - 1 ? "\n" : ",\n");
+    });
+    put(`${indent}}`);
+  };
+  try { walk(value, ""); } catch { unmodelled = true; }
+  return !unmodelled;
+}
+
 /** Canonical display text of a value that may not be a string. */
 export function displayBodyText(value: unknown): string {
   if (value === undefined) return "";
@@ -431,6 +545,56 @@ export function toolResultValue(message: unknown): unknown {
 export interface EntryBody {
   component: BodyComponent;
   text: string;
+}
+
+/**
+ * Every addressable body of an entry as its **source value**, not its text: a
+ * string stays the string it already is and a structured value stays the value,
+ * so a caller that only needs to hash or measure never pays for a copy.
+ */
+export function entryBodySources(entry: unknown): Array<{ component: BodyComponent; value: unknown }> {
+  const value = record(entry);
+  const type = typeof value.type === "string" ? value.type : "";
+  const rows: Array<{ component: BodyComponent; value: unknown }> = [];
+  if (type === "custom_message") {
+    const text = textPartsOf(value.content, "text", "text");
+    if (text) rows.push({ component: { kind: "custom_details" }, value: text });
+    if (value.details !== undefined) rows.push({ component: { kind: "custom_details", index: 1 }, value: value.details });
+    return rows;
+  }
+  if (type !== "message") return rows;
+  const message = record(value.message);
+  const role = typeof message.role === "string" ? message.role : "";
+  const content = Array.isArray(message.content) ? message.content : [];
+  if (role === "user") {
+    rows.push({ component: { kind: "user_text" }, value: textPartsOf(message.content, "text", "text") });
+    let image = 0;
+    for (const part of content) {
+      const row = record(part);
+      if (row.type === "image" && typeof row.data === "string") rows.push({ component: { kind: "image", index: image++ }, value: row.data });
+    }
+    return rows;
+  }
+  if (role === "assistant") {
+    rows.push({ component: { kind: "assistant_text" }, value: textPartsOf(message.content, "text", "text") });
+    const thinking = textPartsOf(message.content, "thinking", "thinking");
+    if (thinking) rows.push({ component: { kind: "reasoning" }, value: thinking });
+    let call = 0;
+    for (const part of content) {
+      const row = record(part);
+      if (row.type === "toolCall") rows.push({ component: { kind: "tool_args", index: call++ }, value: row.arguments });
+    }
+    return rows;
+  }
+  if (role === "toolResult") {
+    rows.push({ component: { kind: "tool_result" }, value: toolResultValue(message) });
+    return rows;
+  }
+  if (role === "custom") {
+    rows.push({ component: { kind: "custom_details" }, value: textPartsOf(message.content, "text", "text") });
+    if (message.details !== undefined) rows.push({ component: { kind: "custom_details", index: 1 }, value: message.details });
+  }
+  return rows;
 }
 
 /**

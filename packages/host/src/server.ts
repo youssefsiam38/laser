@@ -412,6 +412,10 @@ export class HostServer {
     });
     this.projection = new SessionProjection({ index: sessionIndex, revisions: this.revisions });
     this.bodyRange = new SessionBodyRange({ index: sessionIndex, revisions: this.revisions });
+    // The memo holds one body so a sliced read walks it once; it is let go the
+    // moment the conversation it belongs to changes underneath it (RP-5b), and
+    // on a timer while nothing reads.
+    sessionIndex.onInvalidate(() => this.bodyRange.forget());
 
     // Who may do what, and the record of it. Both are host-owned: a client
     // never carries its own authority, and an audit row never carries a

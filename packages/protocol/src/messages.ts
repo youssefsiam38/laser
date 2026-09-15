@@ -19,7 +19,7 @@ import type { PushConfig, PushDeviceInfo, PushSubscriptionJson } from "./push.js
 // Type-only, and erased: `pending.ts` augments the interfaces below, so the
 // cycle exists in the type graph and never in the emitted modules.
 import type { PendingMessage } from "./pending.js";
-import type { BodyComponent, ElidedEntry } from "./body-range.js";
+import type { BodyComponent, ElidedEntry, PersistedBodyIdentity } from "./body-range.js";
 
 // ---------- Shared value types (no Pi types allowed here) ----------
 
@@ -321,12 +321,27 @@ export type SessionUpdate =
       /** This turn's usage. Absent when the provider reported none. */
       usage?: Usage;
       /**
-       * Where a user message landed in the session tree, known the moment the
-       * engine writes it — before the provider request goes out, not when the
-       * turn ends. `parentId` is the entry it continues (`null` at the root).
-       * Absent for other roles, and for a user message never persisted.
+       * Where this message landed in the session tree, known the moment the
+       * engine writes it. `parentId` is the entry it continues (`null` at the
+       * root). Absent for a message the engine never persisted.
+       *
+       * `bodies` is the canonical identity of that entry's bodies — exact size
+       * and digest per component, hashed from the record without building any
+       * of it — so a surface holding an excerpt of a settled body can address
+       * the rest without reopening the conversation (RP-5b). It is bounded:
+       * `omitted` counts components left out, `truncated` says a cap was
+       * reached, and a client leaves any ref it did not receive exactly as it
+       * was rather than guessing it.
        */
-      entry?: { id: string; parentId: string | null };
+      entry?: {
+        id: string;
+        parentId: string | null;
+        bodies?: PersistedBodyIdentity[];
+        omitted?: number;
+        truncated?: true;
+        /** The revision this identity belongs to, when the authority knows it. */
+        revision?: string;
+      };
     }
   | { kind: "tool_execution_start"; toolCallId: string; toolName: string; args: unknown }
   | { kind: "tool_execution_update"; toolCallId: string; partial: unknown }

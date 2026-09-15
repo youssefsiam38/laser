@@ -11,10 +11,10 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ErrorCodes, PRODUCT_NAME, utf8ByteLength, type ClientRequests } from "@lasercode/protocol";
 import { DEFAULT_SESSION_INDEX_LIMITS, SessionIndexCache } from "../src/session-index.js";
-import { SessionBodyRange, sha256Hex } from "../src/session-body-range.js";
+import { BODY_MEMO_IDLE_MS, SessionBodyRange, sha256Hex } from "../src/session-body-range.js";
 import { SessionRevisions } from "../src/session-revision.js";
 
 const ENVIRONMENT = "11111111-2222-4333-8444-555555555555";
@@ -44,6 +44,50 @@ function services() {
 
 const params = (over: Partial<ClientRequests["session/entry_range"]["params"]> = {}): ClientRequests["session/entry_range"]["params"] => ({
   path: "/unused", environmentKey: "", revision: "", entryId: "e1", component: { kind: "assistant_text" }, offset: 0, ...over,
+});
+
+describe("what the reader keeps between slices", () => {
+  it("walks the record once for a sliced read, and lets it go on request", async () => {
+    const file = fixture();
+    try {
+      const { range, revisions, index, reads } = services();
+      const indexed = await index.read(file.path);
+      const revision = revisions.revisionOf(indexed.ok ? indexed.index : (undefined as never));
+      const read = (offset: number) => range.read(file.path, params({ path: file.path, environmentKey: revisions.environmentKey, revision, offset, limit: 4096 }));
+      await read(0);
+      const first = reads.length;
+      await read(4096);
+      // The second slice came from the body the first one walked.
+      expect(reads.length).toBe(first);
+      // Letting go is explicit, and the next read starts from the file again.
+      range.forget();
+      await read(8192);
+      expect(reads.length).toBeGreaterThan(first);
+    } finally {
+      file.cleanup();
+    }
+  });
+
+  it("lets go while nothing is reading, without a later read to trigger it", async () => {
+    const file = fixture();
+    vi.useFakeTimers();
+    try {
+      const { range, revisions, index, reads } = services();
+      const indexed = await index.read(file.path);
+      const revision = revisions.revisionOf(indexed.ok ? indexed.index : (undefined as never));
+      const read = (offset: number) => range.read(file.path, params({ path: file.path, environmentKey: revisions.environmentKey, revision, offset, limit: 4096 }));
+      await read(0);
+      const first = reads.length;
+      // Nothing reads for a minute: the body goes on its own, so an idle host
+      // is not holding a conversation nobody is looking at (RP-5b, RP-8).
+      await vi.advanceTimersByTimeAsync(BODY_MEMO_IDLE_MS + 1);
+      await read(4096);
+      expect(reads.length).toBeGreaterThan(first);
+    } finally {
+      vi.useRealTimers();
+      file.cleanup();
+    }
+  });
 });
 
 describe("reading one body from the stored conversation", () => {

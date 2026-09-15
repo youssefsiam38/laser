@@ -46,6 +46,9 @@ export function sha256Hex(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
+/** How long a body may sit unread in the memo before it is let go. */
+export const BODY_MEMO_IDLE_MS = 60_000;
+
 export class SessionBodyRange {
   /**
    * One body at a time, keyed by the exact state it came from. Reading a very
@@ -54,8 +57,37 @@ export class SessionBodyRange {
    * the stored conversation drops it (RP-9 fences unchanged).
    */
   private readonly reader: BodyRangeReader = createBodyRangeReader();
+  /** Which read the idle timer belongs to; a later read retires the earlier. */
+  private generation = 0;
+  private idle: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private readonly options: SessionBodyRangeOptions) {}
+
+  /**
+   * Let go of the body this is holding.
+   *
+   * The memo exists so that reading one large body in slices walks and hashes
+   * it once. It must not outlive the reading: a conversation that was unloaded,
+   * a file that changed, a host asked to give memory back (RP-8) — each of them
+   * calls this, and the next read starts again from the file.
+   */
+  forget(): void {
+    this.generation += 1;
+    if (this.idle !== undefined) { clearTimeout(this.idle); this.idle = undefined; }
+    this.reader.forget();
+  }
+
+  /** Release on a timer as well, so an idle host does not keep a body resident. */
+  private arm(): void {
+    if (this.idle !== undefined) clearTimeout(this.idle);
+    const generation = ++this.generation;
+    this.idle = setTimeout(() => {
+      // Only if nothing has read since: a later read owns the memo now.
+      if (generation === this.generation) this.reader.forget();
+    }, BODY_MEMO_IDLE_MS);
+    // Never a reason for the process to stay alive.
+    this.idle.unref?.();
+  }
 
   async read(path: string, params: ClientRequests["session/entry_range"]["params"]): Promise<BodyRangeAnswer> {
     if (params.environmentKey !== this.options.revisions.environmentKey) {
@@ -107,7 +139,10 @@ export class SessionBodyRange {
       sha256Hex,
     );
     if (failure) return failure;
-    if (sliced.ok) return { kind: "answer", result: sliced.result };
+    if (sliced.ok) {
+      this.arm();
+      return { kind: "answer", result: sliced.result };
+    }
     return {
       kind: "refuse",
       error: sliced.refusal.reason === "bad-range" ? badRange() : unknownComponent(params.component, sliced.refusal.available),

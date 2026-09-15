@@ -34,7 +34,7 @@ import type {
 import { activePathIds } from "./components/thread/entries.js";
 import { appendLive, BODY_EXCERPT_MAX_BYTES, excerptHead, excerptLiveTail, LIVE_TAIL_MAX_BYTES, type BodyRef } from "./runtime/body-excerpt.js";
 import { retainEntries, retainedRows, type EntryStub } from "./runtime/retained-entries.js";
-import { boundedBodyText, utf8ByteLength, type BodyComponent } from "@lasercode/protocol";
+import { boundedBodyText, sameBodyComponent, utf8ByteLength, type BodyComponent } from "@lasercode/protocol";
 import { blockBytes, entryBytes, imageMeasure, UNKNOWN_IMAGE_DECODED_BYTES } from "./runtime/view-measure.js";
 import { initialMainDestination, mainPath, type MainDestination } from "./runtime/main-destination.js";
 import { receiveHistoryUpdate, reduceHistory, type HistoryAction } from "./runtime/history-loader.js";
@@ -1183,7 +1183,21 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
       // becomes its own block. It carries no speaker, so nothing above claims it.
       if (msg?.role === "custom" && !u.speaker) {
         const block = customBlock(msg, undefined);
-        return block ? { ...v, blocks: [...closeStreaming(v.blocks), block] } : v;
+        if (!block) return v;
+        const settled = settleBodies(block.bodies, u.entry as PersistedEntry | undefined);
+        return { ...v, blocks: [...closeStreaming(v.blocks), settled ? { ...block, bodies: settled } : block] };
+      }
+      // A tool result is its own record; it is matched by the call it answers,
+      // never by position, and only its own block's references are settled.
+      const answered = (msg as { toolCallId?: unknown } | undefined)?.toolCallId;
+      if (msg?.role === "toolResult" && typeof answered === "string") {
+        const entry = u.entry as PersistedEntry | undefined;
+        if (!entry?.bodies) return v;
+        return { ...v, blocks: v.blocks.map((b) => {
+          if (b.kind !== "tool" || b.id !== answered) return b;
+          const settled = settleBodies(b.bodies, entry);
+          return settled === undefined || settled === b.bodies ? b : { ...b, bodies: settled, entryId: entry.id };
+        }) };
       }
       if (msg?.role === "assistant" || (msg?.role === "custom" && u.speaker)) {
         const a = lastAssistant(v.blocks);
@@ -1193,7 +1207,7 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
         // back into the view (RP-5b).
         const settled = textOf(msg.content);
         const finalText = settled ? excerptLiveTail(settled, { entryId: a.entryId, component: { kind: "assistant_text" } }) : undefined;
-        const bodies = blockBodies({ ...a.bodies, ...(finalText ? { text: finalText.ref } : {}) });
+        const bodies = settleBodies(blockBodies({ ...a.bodies, ...(finalText ? { text: finalText.ref } : {}) }), u.entry as PersistedEntry | undefined);
         const { bodies: _previous, ...restAssistant } = a;
         return {
           ...v,
@@ -1375,6 +1389,44 @@ function stubNode(stub: EntryStub): unknown {
  * regular expression over the whole prompt; a multi-megabyte message with no
  * wrapper in it is scanned once, cheaply, rather than rewritten (RP-5b §3.2).
  */
+/**
+ * Give a live reference the identity its authority has just published.
+ *
+ * A body shown as an excerpt while it streamed points at nothing until the
+ * engine has written the entry it belongs to. When the settle carries that
+ * entry's canonical identity — its id, the revision it was written at, and the
+ * exact size and digest of each body — the reference becomes readable without
+ * reopening the conversation. Anything that does not match exactly, or was not
+ * described at all, stays live and unreadable: a guessed identity would read
+ * another state's bytes under this one's offsets (RP-5b).
+ */
+function settleBodies(bodies: BlockBodies | undefined, entry: PersistedEntry | undefined): BlockBodies | undefined {
+  if (!bodies || !entry?.bodies) return bodies;
+  let changed = false;
+  const settled: Record<string, BodyRef> = {};
+  for (const [label, ref] of Object.entries(bodies) as Array<[string, BodyRef | undefined]>) {
+    if (!ref) continue;
+    // A reference that already names its entry is canonical; one that does not
+    // is what this settles, whether or not it was marked live.
+    if (ref.entryId !== undefined) { settled[label] = ref; continue; }
+    const identity = entry.bodies.find(row => sameBodyComponent(row.component, ref.component));
+    // Fail closed: a component nobody described, or one whose size does not
+    // match what this view measured, keeps its live reference.
+    if (!identity || identity.totalBytes !== ref.totalBytes) { settled[label] = ref; continue; }
+    const { live: _live, ...rest } = ref;
+    // The revision this was written at is not pinned into the reference: the
+    // conversation moves on, and pinning it would make the body unreadable a
+    // moment later. What is pinned is the body's own digest, which the reader
+    // verifies against every slice and against the whole — so bytes from any
+    // other state are refused, whatever revision they were served at.
+    settled[label] = { ...rest, entryId: entry.id, contentDigest: identity.contentDigest };
+    changed = true;
+  }
+  return changed ? (settled as BlockBodies) : bodies;
+}
+
+type PersistedEntry = { id: string; parentId: string | null; revision?: string; bodies?: Array<{ component: BodyComponent; totalBytes: number; contentDigest: string }> };
+
 function splitAttached(text: string): { text: string; files: AttachedFile[] } {
   // A prompt larger than this view may hold is kept as an excerpt of the
   // canonical text — wrappers and all — and read back from its authority. Its

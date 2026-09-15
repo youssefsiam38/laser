@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 /**
  * RP-5b acceptance A6: the addressing contract itself.
  *
@@ -12,6 +13,10 @@ import {
   bodyComponentKey,
   bodyProjectionWork,
   bodyRangeSlice,
+  entryBodies,
+  entryBodyIdentities,
+  PERSISTED_IDENTITY_MAX_BYTES,
+  PERSISTED_IDENTITY_MAX_ITEMS,
   boundedBodyText,
   clientMethods,
   entryBodyMetadata,
@@ -195,6 +200,75 @@ describe("the bounded canonical projection", () => {
     const args = entryBodyMetadata(unpredictable).find(row => row.component.kind === "tool_args");
     expect(args?.unknown).toBe(true);
     expect(args?.totalBytes).toBe(Number.MAX_SAFE_INTEGER);
+  });
+});
+
+const sha256Of = (text: string): string => createHash("sha256").update(text, "utf8").digest("hex");
+
+describe("the identity an authority publishes when a message settles", () => {
+  const hasher = () => {
+    const chunks: string[] = [];
+    return { update: (chunk: string) => { chunks.push(chunk); }, digest: () => sha256Of(chunks.join("")) };
+  };
+
+  it("names every body exactly as a reader of the same record would", () => {
+    const entry = { id: "e1", parentId: "e0", type: "message", message: { role: "assistant", content: [
+      { type: "text", text: "答".repeat(50_000) },
+      { type: "thinking", thinking: "because" },
+      { type: "toolCall", id: "c1", name: "bash", arguments: { command: "ls", deep: { list: [1, "two", null, true] } } },
+    ] } };
+    const identity = entryBodyIdentities(entry, hasher);
+    const expected = entryBodies(entry).map(body => ({
+      component: body.component, totalBytes: utf8ByteLength(body.text), contentDigest: sha256Of(body.text),
+    }));
+    expect(identity.bodies).toEqual(expected);
+    expect(identity.omitted).toBe(0);
+    expect(identity.truncated).toBeUndefined();
+  });
+
+  it("never builds the body it is naming", () => {
+    const entry = { id: "e1", parentId: null, type: "message", message: { role: "toolResult", toolCallId: "c1",
+      content: [], details: { rows: Array.from({ length: 4000 }, (_, index) => ({ index, text: "s".repeat(2000) })) } } };
+    let peak = 0;
+    const streaming = () => {
+      let bytes = 0;
+      return { update: (chunk: string) => { bytes += chunk.length; peak = Math.max(peak, chunk.length); }, digest: () => String(bytes) };
+    };
+    const identity = entryBodyIdentities(entry, streaming);
+    expect(Number(identity.bodies[0]!.contentDigest)).toBeGreaterThan(8_000_000);
+    // Nothing ever held more than a fragment of it at once.
+    expect(peak).toBeLessThan(4096);
+  });
+
+  it("is bounded in items and in bytes, and says what it left out", () => {
+    const entry = { id: "e1", parentId: null, type: "message", message: { role: "assistant", content: [
+      { type: "text", text: "a" },
+      ...Array.from({ length: 40 }, (_, index) => ({ type: "toolCall", id: `c${index}`, name: "t", arguments: { index } })),
+    ] } };
+    const identity = entryBodyIdentities(entry, hasher);
+    expect(identity.bodies.length).toBe(PERSISTED_IDENTITY_MAX_ITEMS);
+    expect(identity.omitted).toBe(41 - PERSISTED_IDENTITY_MAX_ITEMS);
+    expect(utf8ByteLength(JSON.stringify(identity.bodies))).toBeLessThanOrEqual(PERSISTED_IDENTITY_MAX_BYTES);
+    // A tiny byte budget stops earlier still, and says so rather than lying.
+    const tight = entryBodyIdentities(entry, hasher, { bytes: 400 });
+    expect(tight.truncated).toBe(true);
+    expect(tight.bodies.length + tight.omitted).toBe(41);
+  });
+
+  it("names nothing it cannot predict, and never zero", () => {
+    const entry = { id: "e1", parentId: null, type: "message", message: { role: "toolResult", toolCallId: "c1",
+      content: [], details: { at: new Date("2026-01-01T00:00:00Z") } } };
+    const identity = entryBodyIdentities(entry, hasher);
+    expect(identity.bodies).toEqual([]);
+    expect(identity.omitted).toBe(1);
+  });
+
+  it("round-trips through JSON on a message_end", () => {
+    const entry = { id: "e1", parentId: "e0", type: "message", message: { role: "assistant", content: [{ type: "text", text: "hello" }] } };
+    const identity = entryBodyIdentities(entry, hasher);
+    const update = { kind: "message_end", message: entry.message, role: "assistant",
+      entry: { id: "e1", parentId: "e0", revision: "r1.env.2", bodies: identity.bodies } } as const;
+    expect(JSON.parse(JSON.stringify(update))).toEqual(update);
   });
 });
 

@@ -2058,7 +2058,21 @@ export class WorkerServer {
     this.harness.onDriverEvent(live.path, event);
     switch (event.type) {
       case "update": {
-        const update = event.update.kind === "state" ? { kind: "state" as const, state: this.decorate(live, event.update.state) } : event.update;
+        let update = event.update.kind === "state" ? { kind: "state" as const, state: this.decorate(live, event.update.state) } : event.update;
+        // A body a client cannot hold is shown as an excerpt and read back by
+        // reference, and a reference is only trustworthy at a named revision.
+        // The engine has just written this entry, so the revision of the state
+        // it belongs to is the one computed from the entries as they are in
+        // this very tick — no await, so nothing is reordered (RP-5b).
+        if (update.kind === "message_end" && update.entry && update.entry.revision === undefined && update.entry.bodies) {
+          const snapshot = live.driver.entriesNow?.();
+          if (snapshot) {
+            try {
+              const { revision } = live.revisions.compute(this.revisionHeader(live), snapshot.entries, snapshot.leafId);
+              update = { ...update, entry: { ...update.entry, revision } };
+            } catch { /* an identity without a revision is still refused safely by the client */ }
+          }
+        }
         const params: SessionUpdateParams = {
           sessionPath: live.path,
           epoch: live.historyEpoch,

@@ -274,6 +274,73 @@ describe("A2 · every write path is bounded, not only the ones the soak walks", 
   });
 });
 
+describe("A2b · a settled body gains the identity its authority published", () => {
+  const bytesIn = (text: string) => new TextEncoder().encode(text).byteLength;
+  const HUGE = "答".repeat(200_000);
+  const digestOf = (text: string) => `sha-${bytesIn(text)}`;
+
+  it("makes an oversized reply readable at once, without reopening the conversation", () => {
+    let state = reduce({ ...initialState, connection: "open" }, { type: "opened", state: sessionState({ isStreaming: true }) });
+    state = update(state, 1, { kind: "message_start", role: "assistant" });
+    state = update(state, 2, { kind: "text_delta", delta: HUGE });
+    const live = (state.open[path]!.blocks.at(-1) as Extract<Block, { kind: "assistant" }>).bodies?.text;
+    // While it streams there is no entry to point at, and it says so.
+    expect(live?.live).toBe(true);
+    expect(live?.entryId).toBeUndefined();
+
+    state = update(state, 3, { kind: "message_end", role: "assistant",
+      message: { role: "assistant", content: [{ type: "text", text: HUGE }] },
+      entry: { id: "a1", parentId: "u0", revision: "r7.env.9", bodies: [
+        { component: { kind: "assistant_text" }, totalBytes: bytesIn(HUGE), contentDigest: digestOf(HUGE) },
+      ] } });
+    const settled = (state.open[path]!.blocks.at(-1) as Extract<Block, { kind: "assistant" }>).bodies?.text;
+    expect(settled?.live).toBeUndefined();
+    expect(settled?.entryId).toBe("a1");
+    expect(settled?.contentDigest).toBe(digestOf(HUGE));
+    expect(settled?.totalBytes).toBe(bytesIn(HUGE));
+    // The body itself did not come back into the view.
+    expect(bytesOf(state)).toBeLessThanOrEqual(VIEW_CACHE_LIMITS.viewBytes);
+  });
+
+  it("keeps a reference live when the identity does not match, rather than guessing", () => {
+    const cases: Array<{ name: string; entry: unknown }> = [
+      { name: "no identity at all", entry: { id: "a1", parentId: null } },
+      { name: "another component", entry: { id: "a1", parentId: null, revision: "r", bodies: [{ component: { kind: "reasoning" }, totalBytes: bytesIn(HUGE), contentDigest: "x" }] } },
+      { name: "another size", entry: { id: "a1", parentId: null, revision: "r", bodies: [{ component: { kind: "assistant_text" }, totalBytes: 12, contentDigest: "x" }] } },
+    ];
+    for (const shape of cases) {
+      let state = reduce({ ...initialState, connection: "open" }, { type: "opened", state: sessionState({ isStreaming: true }) });
+      state = update(state, 1, { kind: "message_start", role: "assistant" });
+      state = update(state, 2, { kind: "text_delta", delta: HUGE });
+      state = update(state, 3, { kind: "message_end", role: "assistant",
+        message: { role: "assistant", content: [{ type: "text", text: HUGE }] }, entry: shape.entry } as never);
+      const settled = (state.open[path]!.blocks.at(-1) as Extract<Block, { kind: "assistant" }>).bodies?.text;
+      expect(settled?.live, shape.name).toBe(true);
+      expect(settled?.entryId, shape.name).toBeUndefined();
+    }
+  });
+
+  it("settles a tool result through the call it answers, and no other row", () => {
+    let state = reduce({ ...initialState, connection: "open" }, { type: "opened", state: sessionState({ isStreaming: true }) });
+    state = update(state, 1, { kind: "tool_execution_start", toolCallId: "t1", toolName: "read", args: { path: "a" } });
+    state = update(state, 2, { kind: "tool_execution_start", toolCallId: "t2", toolName: "read", args: { path: "b" } });
+    state = update(state, 3, { kind: "tool_execution_end", toolCallId: "t2", result: HUGE, isError: false });
+    state = update(state, 4, { kind: "message_end", role: "tool",
+      message: { role: "toolResult", toolCallId: "t2", content: [{ type: "text", text: HUGE }] },
+      entry: { id: "r2", parentId: "a1", revision: "r8.env.9", bodies: [
+        { component: { kind: "tool_result" }, totalBytes: bytesIn(HUGE), contentDigest: digestOf(HUGE) },
+      ] } });
+    const rows = state.open[path]!.blocks.filter(block => block.kind === "tool") as Array<Extract<Block, { kind: "tool" }>>;
+    const answered = rows.find(row => row.id === "t2")!;
+    const untouched = rows.find(row => row.id === "t1")!;
+    expect(answered.bodies?.result?.entryId).toBe("r2");
+    expect(answered.bodies?.result?.live).toBeUndefined();
+    expect(answered.entryId).toBe("r2");
+    expect(untouched.entryId).toBeUndefined();
+    expect(untouched.bodies?.args?.entryId).toBeUndefined();
+  });
+});
+
 describe("A3 · a live turn is bounded while it streams", () => {
   it("keeps the tail of eight megabytes of deltas and counts the rest exactly", () => {
     let state = reduce({ ...initialState, connection: "open" }, { type: "opened", state: sessionState({ isStreaming: true }) });
