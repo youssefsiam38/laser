@@ -153,14 +153,14 @@ async function runBrowserSoak(check, mode, report) {
     hostServer: run.discovery.proved('HostServer'),
     workerServer: run.discovery.proved('WorkerServer'),
     rendererStore: run.state.rendererStoreProved === true,
-    tailBuffer: (run.state.tailBufferCount ?? 0) >= 1,
-    tailBufferCountAtCheckpoint: run.state.tailBufferCount ?? 0,
+    tailBuffer: run.state.tailBufferProjectionProved === true,
+    tailBufferCountAtCheckpoint: run.state.tailBufferCount ?? null,
     queryObjectsCheckpoints: run.discovery.checkpoints().length,
-    note: 'Runtime.queryObjects runs once per process generation; later phases read the handle it published',
+    note: 'TailBuffer projection was queried after a real tool call; zero instances is the required post-terminal RP-6 result. Runtime.queryObjects runs once per process generation; later phases read the handle it published',
   };
   // A measurement-only run proves what the scenarios it ran can prove. The
-  // tail buffers live in the children-and-commands scenario, so a run stopped
-  // before it says "not reached" rather than claiming or failing on them.
+  // TailBuffer projection is proved after the real tool call in scenario 4;
+  // a run stopped earlier says "not reached" rather than claiming or failing.
   if (report.stoppedAfter !== undefined) report.discovery.tailBuffer = 'not reached in this measurement-only run';
   assert.ok(report.discovery.hostServer && report.discovery.workerServer && report.discovery.rendererStore
     && (report.stoppedAfter !== undefined || report.discovery.tailBuffer),

@@ -79,6 +79,6 @@ export default {
     report.temporaryPeaks.heavyRendererJsBytes = Number.isFinite(phase.postGc?.renderer?.jsHeapUsedBytes)
       ? Math.max(afterReasoning.renderer?.jsHeapUsedBytes ?? 0, afterTool.renderer?.jsHeapUsedBytes ?? 0, phase.renderer?.jsHeapUsedBytes ?? 0)
         - phase.postGc.renderer.jsHeapUsedBytes : null;
-    return { phase, state: { heavy, heavyToolGeneration, tailBufferCount, images: images.length } };
+    return { phase, state: { heavy, heavyToolGeneration, tailBufferProjectionProved: tailBufferReadable, tailBufferCount, images: images.length } };
   },
 };

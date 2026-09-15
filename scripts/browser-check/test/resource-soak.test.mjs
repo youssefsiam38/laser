@@ -1111,3 +1111,12 @@ test('the calibration stop is a scenario the full fixture really has, and stops 
     { projects: 5, sessionsPerProject: 10, longMessages: 240 });
   assert.equal(SAFETY.processPssBytes, Math.floor(1.5 * 1024 * 1024 * 1024));
 });
+
+test('terminal TailBuffer discovery is proved by a readable zero, not a retained leak', async () => {
+  const scenario = await readFile(new URL('../resource/scenarios/04-large-content-and-images.mjs', import.meta.url), 'utf8');
+  const runner = await readFile(new URL('../resource-soak.mjs', import.meta.url), 'utf8');
+  assert.match(scenario, /tailBufferProjectionProved: tailBufferReadable/);
+  assert.match(scenario, /assert\.equal\(tailBufferCount, 0/);
+  assert.match(runner, /tailBuffer: run\.state\.tailBufferProjectionProved === true/);
+  assert.doesNotMatch(runner, /tailBuffer: \(run\.state\.tailBufferCount[^\n]+>= 1/);
+});
