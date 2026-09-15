@@ -22,11 +22,27 @@
  * growing the process.
  */
 
-import { AGENT_MAX_DEPTH_LIMIT, ENV, ErrorCodes, createBodyRangeReader, entryRegionsPage, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TypedClientRequest, WIRE_NAMESPACE } from "@lasercode/protocol";
+import { AGENT_MAX_DEPTH_LIMIT, EDITABLE_TEXT_MAX_BYTES, ENV, ErrorCodes, createBodyRangeReader, entryRegionsPage, utf8ByteLength, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TypedClientRequest, WIRE_NAMESPACE } from "@lasercode/protocol";
 import { CaptureReservations } from "./capture-reservations.js";
 
 /** RP-5b body digests. The one hash both authorities sign a body with. */
 const sha256Hex = (text: string): string => createHash("sha256").update(text, "utf8").digest("hex");
+
+/**
+ * A prompt handed back for editing, bounded before it is serialized (RP-5b B3).
+ *
+ * An edit puts the whole message in a renderer, so a message larger than a
+ * composer may hold is not sent back at all: the answer says how large it is
+ * and that it was left out, and the surface reads it deliberately, with room
+ * reserved, or says plainly that it cannot be edited there.
+ */
+function boundedEditorText(text: string | undefined): { editorText?: string; editorTextBytes?: number; editorTextOmitted?: true } {
+  if (text === undefined) return {};
+  const bytes = utf8ByteLength(text);
+  return bytes > EDITABLE_TEXT_MAX_BYTES
+    ? { editorTextBytes: bytes, editorTextOmitted: true }
+    : { editorText: text, editorTextBytes: bytes };
+}
 import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -575,16 +591,17 @@ export class WorkerServer {
             this.rekeySessionState(previous, state.path);
           }
           this.onDriverEvent(live, { type: "update", update: { kind: "state", state } });
-          return { ...forked, state: this.decorate(live, forked.state) } satisfies Result<"pi/session/fork">;
+          return { ...forked, ...boundedEditorText(forked.editorText), state: this.decorate(live, forked.state) } satisfies Result<"pi/session/fork">;
         });
       }
       case "pi/session/navigate": {
         const live = this.live(req.params.path);
-        return this.firstTurnLock.run(live.path, () => live.driver.navigateTree(req.params.entryId, {
+        const moved = await this.firstTurnLock.run(live.path, () => live.driver.navigateTree(req.params.entryId, {
           ...(req.params.summarize !== undefined ? { summarize: req.params.summarize } : {}),
           ...(req.params.label !== undefined ? { label: req.params.label } : {}),
           ...(req.params.stopFirst !== undefined ? { stopFirst: req.params.stopFirst } : {}),
         }));
+        return { ...moved, ...boundedEditorText(moved.editorText) } satisfies Result<"pi/session/navigate">;
       }
       case "pi/session/rename": {
         const live = this.live(req.params.path);
@@ -692,7 +709,7 @@ export class WorkerServer {
         const sliced = this.bodyRanges.read(
           { path: live.path, revision, entryId: req.params.entryId, component: req.params.component },
           () => entry,
-          req.params,
+          { ...req.params, entryId: req.params.entryId },
           "live",
           sha256Hex,
         );

@@ -20,7 +20,7 @@ import { TranscriptPresentation } from "./transcript-presentation.js";
  * a small external store that this component keeps in sync, and reads no
  * closed-over state at all.
  */
-import { PRODUCT_NAME, utf8ByteLength } from "@lasercode/protocol";
+import { EDITABLE_TEXT_MAX_BYTES, PRODUCT_NAME, utf8ByteLength } from "@lasercode/protocol";
 import {
   AssistantRuntimeProvider,
   AuiConfig,
@@ -296,15 +296,16 @@ interface LaserInternals {
 const LaserInternalsContext = createContext<LaserInternals | null>(null);
 
 /**
- * Whether this renderer can take a prompt the engine handed back (RP-5b §2).
+ * Whether this renderer can take a prompt the engine handed back (RP-5b B3).
  *
- * The same accounting an edit uses: room for the text itself and for the
- * composer's own copy of it, taken and given straight back — the point is the
- * decision, not the holding, because from here on the composer owns the bytes.
+ * The worker has already refused to serialize anything past the editable bound,
+ * so what arrives is bounded; this is the renderer's own accounting on top of
+ * it. The reservation it takes belongs to the composer from here on, and is
+ * released when the composer lets the text go — not when this returns.
  */
 function admitEditorText(cache: { reserveAction: ViewCache["reserveAction"] }, path: string, text: string) {
   const bytes = utf8ByteLength(text);
-  if (!Number.isSafeInteger(bytes)) return undefined;
+  if (!Number.isSafeInteger(bytes) || bytes > EDITABLE_TEXT_MAX_BYTES) return undefined;
   return cache.reserveAction(path, bytes * 2);
 }
 
@@ -752,16 +753,47 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
    * thread runtime as its composer changes (RP-5); an empty composer reports
    * nothing and pins nothing.
    */
-  const composerDrafts = useRef(new Set<string>());
+  const composerDrafts = useRef(new Map<string, number>());
   const notifyPins = useRef<() => void>(() => {});
-  const setComposerDraft = useCallback((path: string, held: boolean) => {
-    const before = composerDrafts.current.has(path);
-    if (held) composerDrafts.current.add(path);
-    else composerDrafts.current.delete(path);
+  /**
+   * What a composer is holding, in bytes (RP-5, RP-5b B3). A boolean said a
+   * draft was there; a message read back for editing can be tens of kilobytes,
+   * and the bound must count them for as long as the composer owns them.
+   */
+  const setComposerDraft = useCallback((path: string, held: boolean | number) => {
+    const before = composerDrafts.current.get(path) ?? 0;
+    const bytes = typeof held === "number" ? Math.max(0, held) : held ? Math.max(before, 1) : 0;
+    if (bytes <= 0) {
+      composerDrafts.current.delete(path);
+      composerRooms.current.get(path)?.release();
+      composerRooms.current.delete(path);
+    } else composerDrafts.current.set(path, bytes);
     // Words appearing or going is a change in what is held, and the store did
     // not move: the bound has to be told (RP-5).
-    if (before !== held) notifyPins.current();
+    if (before !== bytes) notifyPins.current();
   }, []);
+  /**
+   * Room a composer is holding with the words it was given (RP-5b B3). It is
+   * released when those words go — sent, cleared, the path closed, the
+   * environment changed — and a handover that arrives after any of that gives
+   * its room straight back rather than taking a successor's.
+   */
+  const composerRooms = useRef(new Map<string, ActionReservation>());
+  const releaseComposerRoom = useCallback((path: string) => {
+    const held = composerRooms.current.get(path);
+    if (!held) return;
+    composerRooms.current.delete(path);
+    held.release();
+  }, []);
+  const holdForComposer = useCallback((path: string, text: string, room: ActionReservation) => {
+    releaseComposerRoom(path);
+    composerRooms.current.set(path, room);
+    setComposerDraft(path, utf8ByteLength(text));
+  }, [releaseComposerRoom, setComposerDraft]);
+  useEffect(() => () => {
+    for (const [path] of composerRooms.current) releaseComposerRoom(path);
+  }, [releaseComposerRoom]);
+
   const windows = useMemo(() => createHistoryWindows(store), [store]);
   useEffect(() => () => windows.dispose(), [windows]);
 
@@ -777,6 +809,9 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     environment: {
       scoped: () => scopedPaths.current.keys(),
       hasDraft: (path) => composerDrafts.current.has(path) || store.presentation.hasEditDraft(path),
+      // Exact bytes, so a draft read back from a conversation is counted for
+      // as long as the composer holds it, not merely pinned (RP-5b B3).
+      draftBytes: (path) => composerDrafts.current.get(path) ?? 0,
     },
     onRelease: (paths) => {
       // A released transcript is not resumed on the next reconnect: it would
@@ -1309,11 +1344,15 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       moving.current.add(path);
       let session: SessionState;
       let editorText: string | undefined;
+      let omitted = false;
       try {
         // A stop asked for here reaches this store as the original session's
         // own updates (the aborted reply, then settled) before the reply
         // below: its transcript records the stop before it is left behind.
-        ({ state: session, editorText } = await client.request("pi/session/fork", { path, entryId, ...(options?.stopFirst ? { stopFirst: true } : {}) }));
+        const forked = await client.request("pi/session/fork", { path, entryId, ...(options?.stopFirst ? { stopFirst: true } : {}) });
+        session = forked.state;
+        editorText = forked.editorText;
+        omitted = forked.editorTextOmitted === true;
         client.untrack(path);
         client.track(session.path, 0);
         // Prepare the fork in its own cached view; the visible source survives
@@ -1328,7 +1367,9 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       // now may a replacement page be read (RP-5b §7).
       reconcileAfterAction.current(session.path);
       if (readScoped === readState) destination.replaceMainSession(path, session);
-      if (editorText) {
+      if (omitted) {
+        dispatch({ type: "toast", level: "warning", text: "That message is too large to put back in the composer here. It is unchanged in the conversation you forked from." });
+      } else if (editorText) {
         // A fork hands back the prompt it forked from. That prompt can be far
         // larger than this surface may hold, so it is admitted only when the
         // renderer's own accounting has room for it — and refused in words
@@ -1340,8 +1381,9 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
             method: "pi/ui/event",
             params: { path: session.path, method: "setEditorText", text: editorText },
           });
-          // The composer holds it now; the reservation was only the gate.
-          room.release();
+          // The composer holds these bytes now, and holds the room with them:
+          // the reservation is handed over, not given back (RP-5b B3).
+          holdForComposer(session.path, editorText, room);
         } else {
           dispatch({ type: "toast", level: "warning", text: "That message is too large to put back in the composer here. It is unchanged in the conversation you forked from." });
         }
@@ -1361,22 +1403,27 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       try {
         // The worker owns stop-then-move: a failure after the stop leaves the
         // session stopped and unmoved, and the error reaches `guard` as usual.
-        const { editorText, cancelled } = await client.request("pi/session/navigate", { path, entryId, ...(options?.stopFirst ? { stopFirst: true } : {}) });
+        const { editorText, editorTextOmitted, cancelled } = await client.request("pi/session/navigate", { path, entryId, ...(options?.stopFirst ? { stopFirst: true } : {}) });
         if (cancelled) {
           dispatch({ type: "toast", level: "warning", text: "A feature stopped that change." });
           return false;
         }
         await history.read(path);
         reconcileAfterAction.current(path);
+        if (editorTextOmitted) {
+          // The worker refused to send it rather than putting it in a renderer.
+          dispatch({ type: "toast", level: "warning", text: "That message is too large to put back in the composer here. Nothing in the conversation has changed." });
+          return {};
+        }
         if (editorText === undefined) return {};
-        // The same gate on the way back from a move: an oversized prompt does
-        // not enter this renderer's state just because the engine returned it.
+        // The same gate on the way back from a move, and the room stays held
+        // for as long as the composer holds the words.
         const room = admitEditorText(viewCache, path, editorText);
         if (!room) {
           dispatch({ type: "toast", level: "warning", text: "That message is too large to put back in the composer here. Nothing in the conversation has changed." });
           return {};
         }
-        room.release();
+        holdForComposer(path, editorText, room);
         return { editorText };
       } finally {
         moving.current.delete(path);

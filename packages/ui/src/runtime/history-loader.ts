@@ -364,30 +364,46 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     // Only the conversation on screen. One that is not rehydrates when a
     // person comes back to it, through the ordinary re-entry read.
     if (!deps.isCurrent(path)) return;
-    const view = deps.get(path);
-    const stamp = view?.trimmed;
-    if (!view || !stamp) return;
-    // Two reads for one stamp, and that is all: the one at the trim, and one
-    // at the first safe moment after it. A person asking is one of the two,
-    // not an exception to them.
-    if ((stamp.reads ?? 0) >= RECONCILE_MAX_READS) return;
-    const at = stamp.at;
-    if (reconciling.get(path) === at) return;
-    reconciling.set(path, at);
-    const active = fence(path, accepting);
-    // One in flight per path, and never beside another history read.
+    const eligible = (): string | undefined => {
+      const stamp = deps.get(path)?.trimmed;
+      if (!stamp) return undefined;
+      // Two reads for one stamp, and that is all: the one at the trim, and one
+      // at the first safe moment after it. A person asking is one of the two,
+      // not an exception to them.
+      if ((stamp.reads ?? 0) >= RECONCILE_MAX_READS) return undefined;
+      if (reconciling.get(path) === stamp.at) return undefined;
+      return stamp.at;
+    };
+    if (eligible() === undefined) return;
+    // One at a time, and never beside another history read.
     const pending = reads.get(path);
     if (pending) await pending.catch(() => {});
+    // That read may have replaced the trim, or spent the stamp, or left this
+    // surface somewhere else entirely: everything is asked again before a
+    // request of our own goes out (RP-5b B2).
+    if (!deps.isCurrent(path)) return;
+    const at = eligible();
+    if (at === undefined) return;
+    reconciling.set(path, at);
+    const active = fence(path, accepting);
+    const token = String(++nextToken);
+    // The updates that arrive while this is in flight are buffered by the
+    // canonical fold rather than lost.
+    deps.dispatch({ type: "historyBegin", path, token });
     try {
       const result = await deps.request({ path, window: { tail: HISTORY_TAIL }, bodyLimit: BODY_EXCERPT_MAX_BYTES });
-      if (!active() || deps.get(path)?.trimmed?.at !== at) return;
-      if (!result.window) {
-        deps.dispatch({ type: "views/reconcileFailed", path, at });
+      if (!active() || deps.get(path)?.trimmed?.at !== at) {
+        deps.dispatch({ type: "historyEnd", path, token });
         return;
       }
-      deps.dispatch({ type: "views/reconcile", path, at, entries: result.entries, leafId: result.leafId, window: result.window });
+      if (!result.window) {
+        deps.dispatch({ type: "views/reconcileFailed", path, at, token });
+        return;
+      }
+      deps.dispatch({ type: "views/reconcile", path, at, token, entries: result.entries, leafId: result.leafId, window: result.window });
     } catch {
-      if (active() && deps.get(path)?.trimmed?.at === at) deps.dispatch({ type: "views/reconcileFailed", path, at });
+      if (active() && deps.get(path)?.trimmed?.at === at) deps.dispatch({ type: "views/reconcileFailed", path, at, token });
+      else deps.dispatch({ type: "historyEnd", path, token });
     } finally {
       if (reconciling.get(path) === at) reconciling.delete(path);
     }

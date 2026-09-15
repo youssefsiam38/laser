@@ -206,6 +206,79 @@ describe("reconciling a trimmed view", () => {
     expect(reads).toBeLessThanOrEqual(RECONCILE_MAX_READS * 6);
   });
 
+  it("keeps a streaming turn, a running tool and an unsent prompt that arrived while it was reading", async () => {
+    const state = { current: trimmed("u58") };
+    // A live turn, a tool and the person's own unsent words land while the
+    // replacement page is in flight.
+    let release: ((value: unknown) => void) | undefined;
+    const gate = new Promise(resolve => { release = resolve; });
+    const { history, request } = loader(state, async () => {
+      await gate;
+      return { entries: [entry("u58", "u57", "kept"), entry("u59", "u58", "tail")], leafId: "u59", window: window({ live: { running: true, tools: [] } }) };
+    });
+    const reading = history.reconcile(PATH);
+    await Promise.resolve();
+    const update = (seq: number, value: unknown) => {
+      state.current = reduce(state.current, { type: "notification", method: "session/update", params: { sessionPath: PATH, seq, at: "", update: value } } as never);
+    };
+    update(100, { kind: "message_start", role: "assistant" });
+    update(101, { kind: "text_delta", delta: "a live answer", contentIndex: 0 });
+    update(102, { kind: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: { command: "ls" } });
+    state.current = reduce(state.current, { type: "optimisticUser", path: PATH, text: "mine, not sent", images: [], id: "unsent" } as never);
+    release!(undefined);
+    await reading;
+
+    const view = state.current.open[PATH]!;
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(view.trimmed).toBeUndefined();
+    // Everything that was in flight is still here.
+    expect(view.blocks.some(block => block.kind === "assistant" && block.text.includes("a live answer"))).toBe(true);
+    expect(view.blocks.some(block => block.kind === "tool" && block.id === "t1")).toBe(true);
+    expect(view.blocks.some(block => block.kind === "user" && block.optimistic === true)).toBe(true);
+    // And the page itself was committed.
+    expect(view.entries.map(row => (row as { id: string }).id)).toEqual(["u58", "u59"]);
+    expect(view.lastSeq).toBeGreaterThanOrEqual(102);
+  });
+
+  it("settles a turn that ended while it was reading, rather than rewinding it", async () => {
+    const state = { current: trimmed("u58") };
+    let release: ((value: unknown) => void) | undefined;
+    const gate = new Promise(resolve => { release = resolve; });
+    const { history } = loader(state, async () => {
+      await gate;
+      return { entries: [entry("u58", "u57", "kept")], leafId: "u58", window: window() };
+    });
+    const reading = history.reconcile(PATH);
+    await Promise.resolve();
+    const update = (seq: number, value: unknown) => {
+      state.current = reduce(state.current, { type: "notification", method: "session/update", params: { sessionPath: PATH, seq, at: "", update: value } } as never);
+    };
+    update(200, { kind: "message_start", role: "assistant" });
+    update(201, { kind: "text_delta", delta: "done", contentIndex: 0 });
+    update(202, { kind: "message_end", role: "assistant", message: { role: "assistant", content: [{ type: "text", text: "done" }] } });
+    update(203, { kind: "agent_settled" });
+    release!(undefined);
+    await reading;
+    const view = state.current.open[PATH]!;
+    expect(view.blocks.some(block => block.kind === "assistant" && block.text.includes("done") && block.streaming !== true)).toBe(true);
+    expect(view.lastSeq).toBeGreaterThanOrEqual(203);
+  });
+
+  it("sends no page of its own when an ordinary read already replaced the trim", async () => {
+    const state = { current: trimmed("u58") };
+    const { history, request } = loader(state, async () => ({
+      entries: [entry("u58", "u57", "kept"), entry("u59", "u58", "tail")], leafId: "u59", window: window(),
+    }));
+    // An ordinary history read is already in flight for this path. It clears
+    // the trim when it commits, so the reconciliation that queues behind it
+    // must ask nothing of its own.
+    const ordinary = history.read(PATH);
+    const reconciled = history.reconcile(PATH);
+    await Promise.all([ordinary, reconciled]);
+    expect(state.current.open[PATH]!.trimmed).toBeUndefined();
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
   it("refuses a page that belongs to another stamp", async () => {
     const state = { current: trimmed("u58") };
     const at = state.current.open[PATH]!.trimmed!.at;

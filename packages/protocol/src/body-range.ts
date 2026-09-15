@@ -18,6 +18,12 @@
  * `user_text` and is addressed with {@link BodyRegion}.
  */
 
+import { safeOffset, sliceUtf8Range, sliceUtf8RangeFrom, utf8ByteLength, type CursoredSlice, type Utf8Cursor, type Utf8Slice } from "./body-utf8.js";
+import { attachmentRegions, type AttachmentRegion, type AttachmentRegions } from "./body-attachments.js";
+
+export * from "./body-utf8.js";
+export * from "./body-attachments.js";
+
 /** Every body a client may address. Closed: an unknown name is refused. */
 export const BODY_COMPONENT_KINDS = [
   "user_text",
@@ -44,400 +50,19 @@ export interface BodyRegion {
   bytes: number;
 }
 
-/**
- * One attachment inside a prompt, as the authority found it.
- *
- * Offsets are absolute in the component's own byte space — the same space the
- * excerpt and every range read use — so nothing is ever rebased silently.
- */
-export interface AttachmentRegion {
-  /**
-   * Where the attachment's **stored** payload begins, in the component's own
-   * bytes — the escaped form as it sits in the record, because that is the
-   * space `session/entry_range` addresses. A reader reconstructs exactly this
-   * range, checks it against `contentDigest`, and unescapes it afterwards.
-   */
-  offset: number;
-  /** How many stored (escaped) bytes that payload takes. */
-  bytes: number;
-  name: string;
-  mediaType: string;
-  /** SHA-256 of the **stored** region bytes, not of the decoded file. */
-  contentDigest: string;
-  nameTruncated?: true;
-  mediaTypeTruncated?: true;
-}
-
-/**
- * What one component's attachments look like, bounded.
- *
- * `omitted` is exact: the scan saw those wrappers and did not describe them.
- * `truncated` means the scan could not see the whole component, and then **no
- * count is claimed** — a surface says "more attachments" without a number
- * rather than one it cannot stand behind.
- */
-export interface AttachmentRegions {
-  items: AttachmentRegion[];
-  omitted?: number;
-  truncated?: true;
-  scannedBytes: number;
-  /** Where a next page of metadata would start, in component bytes. */
-  next?: number;
-}
-
-/**
- * How far a scan for attachments will look into one component.
- *
- * The durable authority cannot hold a record larger than its own line ceiling,
- * so a scan that completes within this has seen the whole component and the
- * count it reports is exact. The host asserts its shipped line bound against
- * this value; the protocol never imports the host.
- */
-export const BODY_REGION_SCAN_MAX_BYTES = 64 * 1024 * 1024;
-
-/** How many attachments one answer describes. */
-export const BODY_REGION_MAX_ITEMS = 64;
-
-/** How many UTF-8 bytes of attachment metadata one answer may carry. */
-export const BODY_REGION_METADATA_MAX_BYTES = 16 * 1024;
 
 /** The longest name and media type a region describes before it is cut. */
 const REGION_NAME_MAX_BYTES = 256;
 const REGION_MEDIA_TYPE_MAX_BYTES = 128;
 
 /**
- * The canonical attachment wrapper, recognised here exactly as the composer
- * writes it and the prompt reader takes it apart — same opener, same attribute
- * escaping, same blank-line separators, same closing tag. This module does not
- * import that code (nothing above the worker may), so the two are kept in step
- * by their tests, not by a shared import.
- */
-const OPENER = '<attached-file name="';
-const CLOSER = "\n</attached-file>";
-
-/** The largest attachment the composer will accept, mirrored here. */
-export const ATTACHMENT_MAX_BYTES = 256 * 1024;
-
-/**
- * The most stored characters an attachment's escaped payload can take: every
- * character of a 256 KiB file could be escaped to six (`&quot;`), and a single
- * byte is at least one character.
- */
-const MAX_PAYLOAD_CHARS = ATTACHMENT_MAX_BYTES * 6;
-
-const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', "#10": "\n", "#13": "\r", "#9": "\t" };
-
-const escapeText = (text: string): string =>
-  text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
-const escapeAttribute = (text: string): string =>
-  escapeText(text).replaceAll("\n", "&#10;").replaceAll("\r", "&#13;").replaceAll("\t", "&#9;");
-const unescapeText = (text: string): string =>
-  text.replace(/&(amp|lt|gt|quot|#10|#13|#9);/g, (_, entity: string) => ENTITIES[entity]!);
-
-/** Bytes between two character positions, counted without copying either. */
-function utf8BytesBetween(text: string, fromChar: number, toChar: number): number {
-  let bytes = 0;
-  for (let index = fromChar; index < toChar; index++) {
-    const code = text.charCodeAt(index);
-    if (code < 0x80) bytes += 1;
-    else if (code < 0x800) bytes += 2;
-    else if (code >= 0xd800 && code <= 0xdbff && index + 1 < toChar) {
-      const next = text.charCodeAt(index + 1);
-      if (next >= 0xdc00 && next <= 0xdfff) { bytes += 4; index += 1; }
-      else bytes += 3;
-    } else bytes += 3;
-  }
-  return bytes;
-}
-
-/**
- * Find the attachments inside one component's text, bounded in what it
- * describes and in how far it looks.
+ * The most editable text a composer may hold, in exact UTF-8 bytes.
  *
- * Only a **complete canonical wrapper** counts: the opener at the start of the
- * component or after a blank line, attributes that survive a re-encode
- * unchanged, the closing tag, a blank line or the end after it, a payload with
- * no NUL whose entities are the ones this format defines, and a decoded size
- * that is exactly the size the wrapper declares. Anything else is prose that
- * happens to look like markup, and naming it would point a reader at bytes that
- * are not a file.
- *
- * **What a region addresses**: the **stored, escaped payload** — the bytes as
- * they are in the component, because that is the space `session/entry_range`
- * addresses and digests. A reader reconstructs that exact range, verifies it
- * against `contentDigest`, and only then unescapes it into the file's own text.
- *
- * Bounded work: one forward pass, `indexOf` rather than a regular expression
- * over the whole component, no second copy of it, and per-candidate work capped
- * by the largest attachment the composer accepts.
+ * An edit puts a whole message in the renderer, so a prompt larger than this is
+ * never handed back into one: the worker leaves it out of its answer and says
+ * how large it is instead (RP-5b B3).
  */
-export function attachmentRegions(
-  text: string,
-  createHasher: () => { update(chunk: string): void; digest(): string },
-  options: { from?: number; maxItems?: number; maxBytes?: number; scanBytes?: number } = {},
-): AttachmentRegions {
-  const maxItems = Math.max(1, Math.min(options.maxItems ?? BODY_REGION_MAX_ITEMS, BODY_REGION_MAX_ITEMS));
-  const maxBytes = Math.max(256, Math.min(options.maxBytes ?? BODY_REGION_METADATA_MAX_BYTES, BODY_REGION_METADATA_MAX_BYTES));
-  const scanBytes = Math.min(options.scanBytes ?? BODY_REGION_SCAN_MAX_BYTES, BODY_REGION_SCAN_MAX_BYTES);
-  const from = safeOffset(options.from) ?? 0;
-  const items: AttachmentRegion[] = [];
-  let omitted = 0;
-  let metadata = 0;
-  let next: number | undefined;
-  let truncated: true | undefined;
-  // One forward pass, counting bytes as it goes: no copy of the component and
-  // no regular expression over it.
-  let charPos = 0;
-  let bytePos = 0;
-  for (;;) {
-    const at = text.indexOf(OPENER, charPos);
-    if (at < 0) {
-      if (utf8BytesBetween(text, charPos, text.length) + bytePos > scanBytes) truncated = true;
-      break;
-    }
-    bytePos += utf8BytesBetween(text, charPos, at);
-    charPos = at;
-    if (bytePos > scanBytes) { truncated = true; break; }
-    // A wrapper begins the component or follows a blank line; anything else is
-    // prose that mentions the markup.
-    const separated = at === 0 || (at >= 2 && text.charCodeAt(at - 1) === 10 && text.charCodeAt(at - 2) === 10);
-    const found = separated ? readWrapper(text, at) : undefined;
-    const candidate = found === "incomplete" ? undefined : found;
-    if (!candidate) {
-      // Move one character on, counting its bytes, and keep looking.
-      bytePos += utf8BytesBetween(text, at, at + 1);
-      charPos = at + 1;
-      continue;
-    }
-    const contentStart = bytePos + utf8BytesBetween(text, at, candidate.payloadFrom);
-    const storedBytes = utf8BytesBetween(text, candidate.payloadFrom, candidate.payloadTo);
-    // Where the scan continues, in both spaces, whatever this candidate costs.
-    const afterBytes = contentStart + storedBytes + utf8BytesBetween(text, candidate.payloadTo, candidate.end);
-    if (contentStart >= from) {
-      if (items.length >= maxItems) {
-        next ??= contentStart;
-        omitted += 1;
-      } else {
-        const name = boundedField(candidate.name, REGION_NAME_MAX_BYTES);
-        const mediaType = boundedField(candidate.mediaType, REGION_MEDIA_TYPE_MAX_BYTES);
-        const hasher = createHasher();
-        hasher.update(candidate.payload);
-        const region: AttachmentRegion = {
-          offset: contentStart,
-          bytes: storedBytes,
-          name: name.text,
-          mediaType: mediaType.text,
-          contentDigest: hasher.digest(),
-          ...(name.cut ? { nameTruncated: true as const } : {}),
-          ...(mediaType.cut ? { mediaTypeTruncated: true as const } : {}),
-        };
-        const cost = utf8ByteLength(JSON.stringify(region));
-        if (metadata + cost > maxBytes) { next ??= contentStart; omitted += 1; }
-        else { metadata += cost; items.push(region); }
-      }
-    }
-    bytePos = afterBytes;
-    charPos = candidate.end;
-    if (bytePos > scanBytes) { truncated = true; break; }
-  }
-  return {
-    items,
-    ...(truncated ? { truncated: true as const } : omitted > 0 ? { omitted } : {}),
-    ...(next !== undefined ? { next } : {}),
-    scannedBytes: Math.min(bytePos, scanBytes),
-  };
-}
-
-/**
- * The same recogniser, fed a component a piece at a time (RP-5b §2).
- *
- * An authority that does not know about attachment regions cannot be asked for
- * them, so a reader streams the parent body through ordinary range replies and
- * finds the wrappers itself — with the **same** semantics as
- * {@link attachmentRegions}, because it is the same recogniser: this holds only
- * a bounded carry (a candidate wrapper, capped at what the composer accepts)
- * and never the parent.
- */
-export function createAttachmentScanner(
-  createHasher: () => { update(chunk: string): void; digest(): string },
-  options: { maxItems?: number; maxBytes?: number; from?: number } = {},
-): { push(chunk: string): void; end(): AttachmentRegions } {
-  const maxItems = Math.max(1, Math.min(options.maxItems ?? BODY_REGION_MAX_ITEMS, BODY_REGION_MAX_ITEMS));
-  const maxBytes = Math.max(256, Math.min(options.maxBytes ?? BODY_REGION_METADATA_MAX_BYTES, BODY_REGION_METADATA_MAX_BYTES));
-  const from = safeOffset(options.from) ?? 0;
-  const items: AttachmentRegion[] = [];
-  let omitted = 0;
-  let metadata = 0;
-  let next: number | undefined;
-  // What has been seen but not yet resolved: at most one candidate wrapper.
-  let carry = "";
-  let carryOffset = 0;
-  let scanned = 0;
-
-  const drain = (final: boolean): void => {
-    for (;;) {
-      const at = carry.indexOf(OPENER);
-      if (at < 0) {
-        // Keep only enough to recognise an opener split across two chunks, and
-        // the blank line that would have to come before it.
-        const keep = Math.min(carry.length, OPENER.length + 2);
-        carryOffset += utf8BytesBetween(carry, 0, carry.length - keep);
-        carry = carry.slice(carry.length - keep);
-        return;
-      }
-      // A wrapper starts the body or follows a blank line.
-      const separated = carryOffset === 0 && at === 0
-        ? true
-        : at >= 2 && carry.charCodeAt(at - 1) === 10 && carry.charCodeAt(at - 2) === 10;
-      if (!separated) {
-        carryOffset += utf8BytesBetween(carry, 0, at + 1);
-        carry = carry.slice(at + 1);
-        continue;
-      }
-      const wrapper = readWrapper(carry, at, { partial: !final });
-      if (wrapper === "incomplete") {
-        // Wait for more bytes — unless the candidate is already past anything
-        // that could be a wrapper, in which case it is prose.
-        if (carry.length - at <= MAX_PAYLOAD_CHARS + 4096) {
-          // Keep the separator before it too: the recogniser needs it.
-          const from = Math.max(0, at - 2);
-          carryOffset += utf8BytesBetween(carry, 0, from);
-          carry = carry.slice(from);
-          return;
-        }
-        carryOffset += utf8BytesBetween(carry, 0, at + 1);
-        carry = carry.slice(at + 1);
-        continue;
-      }
-      if (wrapper === undefined) {
-        carryOffset += utf8BytesBetween(carry, 0, at + 1);
-        carry = carry.slice(at + 1);
-        continue;
-      }
-      const offset = carryOffset + utf8BytesBetween(carry, 0, wrapper.payloadFrom);
-      const bytes = utf8BytesBetween(carry, wrapper.payloadFrom, wrapper.payloadTo);
-      // One page at a time, bounded exactly as the authority's own answer is:
-      // a page's worth of items, a page's worth of metadata, and where the next
-      // page would start.
-      if (offset < from) {
-        // Before this page; not this page's business and not counted in it.
-      } else if (items.length >= maxItems) {
-        next ??= offset;
-        omitted += 1;
-      } else {
-        const name = boundedField(wrapper.name, REGION_NAME_MAX_BYTES);
-        const mediaType = boundedField(wrapper.mediaType, REGION_MEDIA_TYPE_MAX_BYTES);
-        const hasher = createHasher();
-        hasher.update(wrapper.payload);
-        const region: AttachmentRegion = {
-          offset,
-          bytes,
-          name: name.text,
-          mediaType: mediaType.text,
-          contentDigest: hasher.digest(),
-          ...(name.cut ? { nameTruncated: true as const } : {}),
-          ...(mediaType.cut ? { mediaTypeTruncated: true as const } : {}),
-        };
-        const cost = utf8ByteLength(JSON.stringify(region));
-        if (metadata + cost > maxBytes) { next ??= offset; omitted += 1; }
-        else { metadata += cost; items.push(region); }
-      }
-      carryOffset += utf8BytesBetween(carry, 0, wrapper.end);
-      carry = carry.slice(wrapper.end);
-    }
-  };
-
-  return {
-    push(chunk: string) {
-      scanned += utf8ByteLength(chunk);
-      carry += chunk;
-      drain(false);
-    },
-    end() {
-      drain(true);
-      return {
-        items,
-        ...(omitted > 0 ? { omitted } : {}),
-        ...(next !== undefined ? { next } : {}),
-        scannedBytes: scanned,
-      };
-    },
-  };
-}
-
-/**
- * One complete canonical wrapper starting at `at`, or undefined.
- *
- * Every check the prompt reader makes, made here: attributes with no quote or
- * newline in them, a numeric size within the accepted bound, a closing tag, a
- * blank line or the end after it, no NUL, only this format's entities, a
- * decoded size equal to the declared one, and a re-encode identical to what is
- * stored — so nothing that merely looks like a wrapper is ever named as a file.
- */
-function readWrapper(text: string, at: number, options: { partial?: boolean } = {}): { name: string; mediaType: string; payload: string; payloadFrom: number; payloadTo: number; end: number } | undefined | "incomplete" {
-  // While streaming, "not yet" is different from "no": a wrapper cut by the
-  // end of a chunk is waited for, never rejected.
-  const unfinished = options.partial ? ("incomplete" as const) : undefined;
-  const nameFrom = at + OPENER.length;
-  const nameTo = text.indexOf('"', nameFrom);
-  if (nameTo < 0) return unfinished;
-  if (text.indexOf("\n", nameFrom) !== -1 && text.indexOf("\n", nameFrom) < nameTo) return undefined;
-  const TYPE = ' type="';
-  if (!text.startsWith(TYPE, nameTo + 1)) return text.length < nameTo + 1 + TYPE.length ? unfinished : undefined;
-  const typeFrom = nameTo + 1 + TYPE.length;
-  const typeTo = text.indexOf('"', typeFrom);
-  if (typeTo < 0) return unfinished;
-  if (text.indexOf("\n", typeFrom) !== -1 && text.indexOf("\n", typeFrom) < typeTo) return undefined;
-  const SIZE = ' size="';
-  if (!text.startsWith(SIZE, typeTo + 1)) return text.length < typeTo + 1 + SIZE.length ? unfinished : undefined;
-  const sizeFrom = typeTo + 1 + SIZE.length;
-  const sizeTo = text.indexOf('"', sizeFrom);
-  if (sizeTo < 0) return unfinished;
-  if (!text.startsWith('">\n', sizeTo)) return text.length < sizeTo + 3 ? unfinished : undefined;
-  const digits = text.slice(sizeFrom, sizeTo);
-  if (!/^\d{1,9}$/.test(digits)) return undefined;
-  const declared = Number(digits);
-  if (!Number.isSafeInteger(declared) || declared > ATTACHMENT_MAX_BYTES) return undefined;
-
-  const payloadFrom = sizeTo + 3;
-  // A payload longer than the largest attachment the composer accepts, at its
-  // worst escaping, cannot be one: the search for the closer is bounded by it.
-  const searchTo = Math.min(text.length, payloadFrom + MAX_PAYLOAD_CHARS + CLOSER.length);
-  const closerAt = text.lastIndexOf(CLOSER, searchTo) >= payloadFrom ? text.indexOf(CLOSER, payloadFrom) : -1;
-  if (closerAt < payloadFrom) return text.length <= searchTo ? unfinished : undefined;
-  if (closerAt > searchTo) return undefined;
-  const end = closerAt + CLOSER.length;
-  // A blank line or the end of the component after it, and nothing else.
-  if (options.partial && end + 2 > text.length) return unfinished;
-  if (end !== text.length && !text.startsWith("\n\n", end)) return undefined;
-
-  const payload = text.slice(payloadFrom, closerAt);
-  if (payload.includes("\0")) return undefined;
-  const name = unescapeText(text.slice(nameFrom, nameTo));
-  const mediaType = unescapeText(text.slice(typeFrom, typeTo));
-  if (!name) return undefined;
-  const content = unescapeText(payload);
-  if (content.includes("\0")) return undefined;
-  if (utf8ByteLength(content) !== declared) return undefined;
-  // The canonical form of what was decoded must be exactly what is stored:
-  // that rejects a half-escaped payload, an unknown entity and an attribute
-  // that would not survive a re-encode.
-  if (escapeText(content) !== payload) return undefined;
-  if (escapeAttribute(name) !== text.slice(nameFrom, nameTo)) return undefined;
-  if (escapeAttribute(mediaType) !== text.slice(typeFrom, typeTo)) return undefined;
-  return { name, mediaType, payload, payloadFrom, payloadTo: closerAt, end };
-}
-
-function boundedField(raw: string, maxBytes: number): { text: string; cut: boolean } {
-  const value = raw.replaceAll("&quot;", '"').replaceAll("&amp;", "&");
-  if (utf8ByteLength(value) <= maxBytes) return { text: value, cut: false };
-  return { text: sliceUtf8RangeFrom(value, 0, maxBytes)?.text ?? "", cut: true };
-}
-
-/** A non-negative safe integer, or undefined. */
-export function safeOffset(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
-}
+export const EDITABLE_TEXT_MAX_BYTES = 64 * 1024;
 
 /** Hard ceiling on one range response's payload, in exact UTF-8 bytes. */
 export const ENTRY_RANGE_MAX_BYTES = 64 * 1024;
@@ -462,150 +87,6 @@ export function sameBodyComponent(a: BodyComponent, b: BodyComponent): boolean {
   return a.kind === b.kind && (a.index ?? 0) === (b.index ?? 0);
 }
 
-/**
- * Exact UTF-8 byte length, counted rather than produced: measuring a megabyte
- * of Markdown must not allocate a megabyte to find out how big it is. The two
- * cases a naive version gets wrong are handled the way `TextEncoder` does — a
- * surrogate pair is one four-byte character, a lone surrogate is the
- * three-byte replacement character.
- */
-export function utf8ByteLength(text: string): number {
-  let bytes = 0;
-  for (let index = 0; index < text.length; index++) {
-    const code = text.charCodeAt(index);
-    if (code < 0x80) bytes += 1;
-    else if (code < 0x800) bytes += 2;
-    else if (code >= 0xd800 && code <= 0xdbff) {
-      const low = index + 1 < text.length ? text.charCodeAt(index + 1) : 0;
-      if (low >= 0xdc00 && low <= 0xdfff) { bytes += 4; index += 1; } else bytes += 3;
-    } else bytes += 3;
-  }
-  return bytes;
-}
-
-export interface Utf8Slice {
-  /** The slice, always valid UTF-8 and never a character the source did not have. */
-  text: string;
-  /** Exact UTF-8 offset this slice starts at. */
-  offset: number;
-  /** Exact UTF-8 bytes it carries. */
-  bytes: number;
-  /** Where the next slice starts; absent at the end of the component. */
-  next?: number;
-  /** A limit or a code-point boundary shortened this slice. */
-  truncated: boolean;
-}
-
-/**
- * Slice a string by exact UTF-8 byte offsets without encoding it.
- *
- * `offset` must fall on a character boundary of the source; a request that
- * lands inside a character is refused by the caller, never silently moved. The
- * end is moved *back* to the nearest boundary so a slice never carries half a
- * character and never invents a replacement one.
- */
-/**
- * Where a byte offset sits in a string, so the next slice does not start its
- * walk at the beginning again. Reading a thirty-megabyte body in sixty-four
- * kilobyte slices is O(total) once, not O(total) per slice.
- */
-export interface Utf8Cursor {
-  byteOffset: number;
-  charIndex: number;
-}
-
-export interface CursoredSlice extends Utf8Slice {
-  /** Where this slice ended, to hand to the next call. */
-  cursor: Utf8Cursor;
-  /** Exact UTF-8 size of the whole string, computed once per body. */
-  totalBytes: number;
-}
-
-const ZERO: Utf8Cursor = { byteOffset: 0, charIndex: 0 };
-
-/** The size in bytes of the character at `index`, and how many code units it spans. */
-function charAt(text: string, index: number): { size: number; step: number } {
-  const code = text.charCodeAt(index);
-  if (code < 0x80) return { size: 1, step: 1 };
-  if (code < 0x800) return { size: 2, step: 1 };
-  if (code >= 0xd800 && code <= 0xdbff) {
-    const low = index + 1 < text.length ? text.charCodeAt(index + 1) : 0;
-    return low >= 0xdc00 && low <= 0xdfff ? { size: 4, step: 2 } : { size: 3, step: 1 };
-  }
-  return { size: 3, step: 1 };
-}
-
-/**
- * Slice a string by exact UTF-8 byte offsets without encoding it, continuing
- * from a cursor when one is supplied.
- *
- * `offset` must fall on a character boundary of the source; a request that
- * lands inside a character is refused by the caller, never silently moved. The
- * end is moved *back* to the nearest boundary so a slice never carries half a
- * character and never invents a replacement one.
- */
-export function sliceUtf8RangeFrom(
-  text: string,
-  offset: number,
-  limit: number,
-  hint?: Utf8Cursor,
-  knownTotal?: number,
-): CursoredSlice | undefined {
-  if (!Number.isInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit <= 0) return undefined;
-  const total = knownTotal ?? utf8ByteLength(text);
-  if (offset > total) return undefined;
-  if (offset === total) return { text: "", offset, bytes: 0, truncated: false, totalBytes: total, cursor: { byteOffset: total, charIndex: text.length } };
-
-  // Walk forward from the nearest known position rather than from the start.
-  const from = hint && hint.byteOffset <= offset && hint.charIndex <= text.length ? hint : ZERO;
-  let bytes = from.byteOffset;
-  let index = from.charIndex;
-  while (bytes < offset && index < text.length) {
-    const { size, step } = charAt(text, index);
-    // An offset inside a character addresses no slice; it is refused, never moved.
-    if (bytes + size > offset) return undefined;
-    bytes += size;
-    index += step;
-  }
-  if (bytes !== offset) return undefined;
-  const start = index;
-  let taken = 0;
-  while (index < text.length) {
-    const { size, step } = charAt(text, index);
-    if (taken + size > limit) break;
-    taken += size;
-    index += step;
-  }
-  // A limit smaller than the first character addresses nothing; refuse rather
-  // than answer an empty slice a caller would loop on forever.
-  if (taken === 0) return undefined;
-  const consumed = offset + taken;
-  return {
-    text: text.slice(start, index),
-    offset,
-    bytes: taken,
-    ...(consumed < total ? { next: consumed } : {}),
-    truncated: consumed < total,
-    totalBytes: total,
-    cursor: { byteOffset: consumed, charIndex: index },
-  };
-}
-
-/** The same slice, without a cursor, for callers that read one range and stop. */
-export function sliceUtf8Range(text: string, offset: number, limit: number): Utf8Slice | undefined {
-  const sliced = sliceUtf8RangeFrom(text, offset, limit);
-  if (!sliced) return undefined;
-  const { cursor: _cursor, totalBytes: _total, ...slice } = sliced;
-  return slice;
-}
-
-/**
- * What a bounded projection actually looked at and produced, so a test can
- * prove a twelve-megabyte structured result was never materialised as a
- * string. Counting only; nothing reads it to make a decision.
- */
-const projection = { calls: 0, emittedChars: 0, scannedChars: 0 };
-
 export interface ProjectionWork {
   readonly calls: number;
   /** Characters actually written into the excerpt. */
@@ -613,6 +94,9 @@ export interface ProjectionWork {
   /** Characters of the source looked at, including the ones only counted. */
   readonly scannedChars: number;
 }
+
+/** What the projection has done, for tests and counters. */
+const projection = { calls: 0, emittedChars: 0, scannedChars: 0 };
 
 export const bodyProjectionWork = (): ProjectionWork => ({ ...projection });
 export const resetBodyProjectionWork = (): void => { projection.calls = 0; projection.emittedChars = 0; projection.scannedChars = 0; };
@@ -695,38 +179,51 @@ export function boundedBodyText(value: unknown, maxBytes: number): BoundedBody {
    * text, so an offset into it means the same thing to the authority.
    */
   let full = false;
+  /** Write, cutting on a character boundary when the room runs out. */
+  const write = (text: string, size = utf8ByteLength(text)): void => {
+    if (full) return;
+    if (emitted + size <= maxBytes) { parts.push(text); emitted += size; return; }
+    const room = maxBytes - emitted;
+    const fitted = room > 0 ? sliceUtf8RangeFrom(text, 0, room) : undefined;
+    if (fitted) { parts.push(fitted.text); emitted += fitted.bytes; }
+    full = true;
+  };
   const put = (text: string, size = utf8ByteLength(text)): void => {
-    if (!full) {
-      if (emitted + size <= maxBytes) { parts.push(text); emitted += size; }
-      else {
-        const room = maxBytes - emitted;
-        const fitted = room > 0 ? sliceUtf8RangeFrom(text, 0, room) : undefined;
-        if (fitted) { parts.push(fitted.text); emitted += fitted.bytes; }
-        full = true;
-      }
-    }
+    write(text, size);
     bytes += size;
   };
+  /**
+   * A JSON string, written the way the canonical text writes it: the opening
+   * quote, then each character escaped exactly as `JSON.stringify` escapes it,
+   * then the closing quote — and the closing quote only when the whole string
+   * has been written. A cut in the middle of a string therefore ends where the
+   * canonical text is at that byte, never with a quote that closes nothing
+   * (RP-5b B1).
+   */
   const putString = (text: string): void => {
     projection.scannedChars += text.length;
+    // The canonical size of this string is known without writing it, so the
+    // count is exact whether or not the room runs out part way through.
     const size = jsonStringBytes(text);
     if (!full) {
-      if (emitted + size <= maxBytes) { parts.push(JSON.stringify(text)); emitted += size; }
-      else {
-        // Only as much of the string as fits is ever escaped, so a huge value
-        // is never copied to be thrown away.
-        const room = maxBytes - emitted;
-        // The escape of a prefix is a prefix of the escape, so cutting the
-        // written form is safe and keeps the result an exact prefix.
-        const head = room > 0 ? sliceUtf8RangeFrom(text, 0, room) : undefined;
-        const written = head ? JSON.stringify(head.text) : "";
-        const fitted = room > 0 ? sliceUtf8RangeFrom(written, 0, room) : undefined;
-        if (fitted) { parts.push(fitted.text); emitted += fitted.bytes; }
-        full = true;
+      write('"', 1);
+      let plain = 0;
+      for (let index = 0; index < text.length && !full; index++) {
+        const escape = jsonEscapeOf(text, index);
+        if (escape === undefined) continue;
+        if (index > plain) write(text.slice(plain, index));
+        if (!full) write(escape, escape.length);
+        plain = index + 1;
       }
+      if (!full && plain < text.length) write(text.slice(plain));
+      // The closing quote is written only when the whole string was: a cut in
+      // the middle of a string ends exactly where the canonical text is at
+      // that byte, never with a quote that closes nothing (RP-5b B1).
+      if (!full) write('"', 1);
     }
     bytes += size;
   };
+
   /** A value that writes itself is not modelled here; the projection refuses. */
   let unmodelled = false;
   const seen = new Set<object>();
@@ -897,6 +394,37 @@ export function streamBodyText(value: unknown, sink: (chunk: string) => void): b
   };
   try { walk(value, ""); } catch { unmodelled = true; }
   return !unmodelled;
+}
+
+/**
+ * The escape `JSON.stringify` writes for the character at `index`, or
+ * undefined when that character is written as itself. Lone surrogates are
+ * escaped, exactly as well-formed stringification does.
+ */
+function jsonEscapeOf(text: string, index: number): string | undefined {
+  const code = text.charCodeAt(index);
+  if (code === 0x22) return '\\"';
+  if (code === 0x5c) return "\\\\";
+  if (code < 0x20) {
+    switch (code) {
+      case 0x08: return "\\b";
+      case 0x09: return "\\t";
+      case 0x0a: return "\\n";
+      case 0x0c: return "\\f";
+      case 0x0d: return "\\r";
+      default: return `\\u${code.toString(16).padStart(4, "0")}`;
+    }
+  }
+  if (code >= 0xd800 && code <= 0xdbff) {
+    const low = index + 1 < text.length ? text.charCodeAt(index + 1) : 0;
+    return low >= 0xdc00 && low <= 0xdfff ? undefined : `\\u${code.toString(16).padStart(4, "0")}`;
+  }
+  if (code >= 0xdc00 && code <= 0xdfff) {
+    // The second half of a real pair is written as itself, with its first.
+    const high = index > 0 ? text.charCodeAt(index - 1) : 0;
+    return high >= 0xd800 && high <= 0xdbff ? undefined : `\\u${code.toString(16).padStart(4, "0")}`;
+  }
+  return undefined;
 }
 
 /** Canonical display text of a value that may not be a string. */
@@ -1143,6 +671,8 @@ export function largestBodyBytes(entry: unknown): number {
 
 /** What a range request asks for, independent of who answers it. */
 export interface BodyRangeRequest {
+  /** The entry being read, echoed in the answer. */
+  entryId?: string;
   component: BodyComponent;
   offset: number;
   limit?: number;
@@ -1159,6 +689,8 @@ export interface BodyRangeRequest {
 export interface BodyRangeAnswerResult {
   authority: "live" | "durable";
   revision: string;
+  /** The entry this is a body of, echoed so no reply can be mistaken. */
+  entryId?: string;
   component: BodyComponent;
   /** Always the **whole component's** size, never the region's. */
   totalBytes: number;
@@ -1215,6 +747,7 @@ export function bodyRangeSlice(
     ok: true,
     result: regionAnswer({
       authority, revision, component: request.component, totalBytes, slice, body, digest, region: bounds,
+      ...(request.entryId !== undefined ? { entryId: request.entryId } : {}),
     }),
   };
 }
@@ -1248,6 +781,7 @@ function regionLimit(request: BodyRangeRequest, bounds: { offset: number; end: n
 function regionAnswer(input: {
   authority: "live" | "durable";
   revision: string;
+  entryId?: string | undefined;
   component: BodyComponent;
   totalBytes: number;
   slice: { offset: number; bytes: number; next?: number; truncated: boolean; text: string };
@@ -1262,6 +796,7 @@ function regionAnswer(input: {
   return {
     authority: input.authority,
     revision: input.revision,
+    ...(input.entryId !== undefined ? { entryId: input.entryId } : {}),
     component: input.component,
     totalBytes: input.totalBytes,
     offset: slice.offset,
@@ -1406,6 +941,7 @@ export function createBodyRangeReader(): BodyRangeReader {
         result: regionAnswer({
           authority,
           revision: key.revision,
+          entryId: key.entryId,
           component: request.component,
           totalBytes: held.totalBytes,
           slice,

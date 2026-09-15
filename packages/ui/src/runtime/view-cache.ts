@@ -167,6 +167,12 @@ export interface ViewCacheEnvironment {
    * An empty composer is not a draft and pins nothing.
    */
   hasDraft(path: string): boolean;
+  /**
+   * Exact bytes a composer is holding for this path (RP-5b B3): a message read
+   * back for editing is retained renderer state and is counted as such, not
+   * merely pinned.
+   */
+  draftBytes?(path: string): number;
 }
 
 export interface ViewCacheOptions {
@@ -626,7 +632,7 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
       const unsent = view.blocks.some((block) => block.kind === "user" && block.optimistic === true);
       // A view holding room for an action a person started is never a
       // candidate, and never trimmed out from under the draft it is building.
-      const acting = heldForAction(path);
+      const acting = heldForAction(path) + (options.environment.draftBytes?.(path) ?? 0);
       const pin = acting ? ("action" as const) : unsent ? ("unsent" as const) : pinReason(state, path, options.environment, live);
       const cost = row.measure.bytes + row.appended + acting;
       held.push({ path, bytes: cost, measure: row.measure, appended: row.appended, pin });

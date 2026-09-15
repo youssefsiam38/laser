@@ -154,6 +154,53 @@ describe("leaving an oversized record out of a page", () => {
   });
 });
 
+describe("an excerpt is a prefix of the canonical body, byte for byte", () => {
+  /** Every bound this surface actually uses, and every width of character. */
+  const caps = [16 * 1024, 32 * 1024, 64 * 1024];
+  const bodies: Array<[string, unknown]> = [
+    ["two-byte", { kkk: "ü".repeat(60_000) }],
+    ["three-byte", { kkk: "€".repeat(40_000) }],
+    ["four-byte", { kkk: "😀".repeat(30_000) }],
+    ["escapes", { kkk: `quote " backslash \\ tab \t newline \n ${"€".repeat(30_000)}` }],
+    ["control characters", { kkk: `\u0001\u001f${"ü".repeat(40_000)}` }],
+    ["unpaired surrogates", { kkk: `\ud800lone \udc00also ${"答".repeat(30_000)}` }],
+    ["mixed widths", { a: "x".repeat(9_000), b: "ü".repeat(9_000), c: "€".repeat(9_000), d: "😀".repeat(9_000) }],
+  ];
+
+  for (const [name, value] of bodies) {
+    it(`cuts ${name} where the canonical text is, and can be continued from there`, () => {
+      const whole = JSON.stringify(value, null, 2)!;
+      const wholeBytes = Buffer.from(whole, "utf8");
+      for (const cap of caps) {
+        const bounded = boundedBodyText(value, cap);
+        const emitted = utf8ByteLength(bounded.text);
+        expect(emitted, `${name} @${cap}`).toBeLessThanOrEqual(cap);
+        expect(bounded.totalBytes, `${name} @${cap}`).toBe(wholeBytes.length);
+        // Byte for byte, the start of the authoritative body.
+        expect(Buffer.from(bounded.text, "utf8").equals(wholeBytes.subarray(0, emitted)), `${name} @${cap}`).toBe(true);
+        // A string that was cut never closes itself.
+        expect(bounded.truncated && bounded.text.endsWith('"') && !whole.startsWith(`${bounded.text}`), `${name} @${cap}`).toBe(false);
+        // And the byte after it is a character boundary, so the authority can
+        // serve the continuation this excerpt asks for.
+        const next = wholeBytes[emitted];
+        if (next !== undefined) expect((next & 0xc0) !== 0x80, `${name} @${cap} continuation`).toBe(true);
+
+        // The authority really does continue from exactly there.
+        // The same value as a tool call's request: its canonical body is
+        // exactly the text this excerpt is a prefix of.
+        const entry = { id: "e1", parentId: null, type: "message", message: { role: "assistant",
+          content: [{ type: "toolCall", id: "c1", name: "write", arguments: value }] } };
+        const answer = bodyRangeSlice(entry, { component: { kind: "tool_args", index: 0 }, offset: emitted, limit: 4096 }, "r1", "durable", digestOfText);
+        expect(answer.ok, `${name} @${cap} continuation read`).toBe(true);
+        if (answer.ok) {
+          expect(answer.result.offset).toBe(emitted);
+          expect(whole.startsWith(bounded.text + answer.result.text)).toBe(true);
+        }
+      }
+    });
+  }
+});
+
 describe("the bounded canonical projection", () => {
   const exact = (value: unknown) => {
     const whole = JSON.stringify(value, null, 2)!;

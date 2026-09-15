@@ -244,6 +244,44 @@ describe("the bounded window over one body", () => {
     }
   });
 
+  it("refuses a reply that names another message, a number that is not one, or an authority it does not know", async () => {
+    const base = {
+      authority: "durable" as const, revision: "r1.env.1", entryId: "e1", component: { kind: "assistant_text" as const },
+      totalBytes: HUGE_TOTAL, offset: 0, bytes: 8, next: 8, truncated: true, text: "xxxxxxxx",
+    };
+    const hostile: Array<[string, Record<string, unknown>]> = [
+      ["another message", { entryId: "e9" }],
+      ["no offset at all", { offset: Number.NaN }],
+      ["a fractional offset", { offset: 0.5 }],
+      ["an unsafe total", { totalBytes: Number.MAX_SAFE_INTEGER + 2 }],
+      ["a negative size", { bytes: -1 }],
+      ["a cursor that is not a number", { next: "8" }],
+      ["an authority nobody has", { authority: "index" }],
+      ["no authority", { authority: undefined }],
+    ];
+    for (const [why, over] of hostile) {
+      const window = new BodyWindow(async (params) => ({
+        ...base, component: params.component, sliceDigest: await digestOf("xxxxxxxx"), contentDigest: WHOLE_DIGEST, ...over,
+      }) as never, SESSION, ref, 128 * 1024, "env");
+      await expect(window.more(), why).rejects.toThrow(BodyReplyRefused);
+      expect(window.getSnapshot().slices, why).toHaveLength(0);
+    }
+  });
+
+  it("refuses a window that changes authority half way through", async () => {
+    let call = 0;
+    const window = new BodyWindow(async (params) => {
+      call += 1;
+      return {
+        authority: call === 1 ? "durable" : "live", revision: "r1.env.1", entryId: "e1", component: params.component,
+        totalBytes: HUGE_TOTAL, offset: params.offset as number, bytes: 8, next: (params.offset as number) + 8, truncated: true,
+        sliceDigest: await digestOf("xxxxxxxx"), contentDigest: WHOLE_DIGEST, text: "xxxxxxxx",
+      } as never;
+    }, SESSION, ref, 128 * 1024, "env");
+    await window.more();
+    await expect(window.more()).rejects.toThrow(BodyReplyRefused);
+  });
+
   it("refuses a second reply that changes the body under it", async () => {
     let call = 0;
     const window = new BodyWindow(async (params) => {

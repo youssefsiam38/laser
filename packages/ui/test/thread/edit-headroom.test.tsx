@@ -7,6 +7,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createStateStore } from "../../src/runtime/LaserProvider.js";
 import { createViewCache, VIEW_CACHE_LIMITS } from "../../src/runtime/view-cache.js";
+import { EDITABLE_TEXT_MAX_BYTES, utf8ByteLength } from "@lasercode/protocol";
 import { initialState, reduce } from "../../src/store.js";
 import { sessionState } from "../agents/fixtures.js";
 import { splitAttachedFiles, wrapFileAttachment } from "../../src/runtime/attachments.js";
@@ -22,6 +23,12 @@ function harness() {
     schedule: (run: () => void) => { run(); return () => {}; },
   } as never);
   return { store, cache };
+}
+
+/** The worker's own bound on an editor handback, as it applies it. */
+function boundedEditorTextFor(text: string): { editorText?: string; editorTextBytes?: number; editorTextOmitted?: true } {
+  const bytes = utf8ByteLength(text);
+  return bytes > EDITABLE_TEXT_MAX_BYTES ? { editorTextBytes: bytes, editorTextOmitted: true } : { editorText: text, editorTextBytes: bytes };
 }
 
 describe("room for an edit", () => {
@@ -189,5 +196,47 @@ describe("what an edit of a rebuilt prompt sends", () => {
     const sendable = chips.filter(file => file.content !== "");
     expect(sendable).toEqual([]);
     expect(sendable.map(wrapFileAttachment).join("")).toBe("");
+  });
+});
+
+describe("a prompt the engine hands back for editing", () => {
+  it("is never serialized into a renderer when it is larger than a composer may hold", () => {
+    // What the worker does before it answers: the bound is enforced where the
+    // bytes are, not after they have crossed into a renderer (RP-5b B3).
+    const small = "x".repeat(1_000);
+    const huge = "x".repeat(EDITABLE_TEXT_MAX_BYTES + 1);
+    expect(boundedEditorTextFor(small)).toEqual({ editorText: small, editorTextBytes: 1_000 });
+    const refused = boundedEditorTextFor(huge);
+    expect(refused.editorText).toBeUndefined();
+    expect(refused.editorTextOmitted).toBe(true);
+    expect(refused.editorTextBytes).toBe(EDITABLE_TEXT_MAX_BYTES + 1);
+  });
+
+  it("counts what a composer holds as bytes, until the composer lets it go", () => {
+    const drafts = new Map<string, number>();
+    const store = createStateStore(reduce({ ...initialState, connection: "open" }, { type: "opened", state: sessionState({ path: PATH }) as never }));
+    const cache = createViewCache({
+      read: store.getSnapshot,
+      dispatch: store.dispatch,
+      environment: { scoped: () => [], hasDraft: (path: string) => drafts.has(path), draftBytes: (path: string) => drafts.get(path) ?? 0 } as never,
+      schedule: (run: () => void) => { run(); return () => {}; },
+    } as never);
+    const before = store.getSnapshot();
+    const action = { type: "hydrate", path: PATH, entries: [{ id: "e1", parentId: null, type: "message", message: { role: "user", content: [{ type: "text", text: "hello" }] } }], leafId: "e1" } as never;
+    store.dispatch(action);
+    cache.observeTransaction(action, before, store.getSnapshot());
+    const base = cache.counters().bytes;
+
+    // The words a composer was handed are retained renderer state, counted
+    // exactly — a boolean pin would have said nothing about their size.
+    drafts.set(PATH, 48 * 1024);
+    cache.notifyPins();
+    expect(cache.counters().bytes).toBe(base + 48 * 1024);
+
+    // And when the composer lets them go, they stop being counted.
+    drafts.delete(PATH);
+    cache.notifyPins();
+    expect(cache.counters().bytes).toBe(base);
+    cache.dispose();
   });
 });

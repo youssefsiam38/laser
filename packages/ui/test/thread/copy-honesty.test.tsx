@@ -15,7 +15,7 @@ import { useFileOpener, type FileViewerSource } from "@/lib/file-opener";
 import { LaserStoreProvider, createStateStore } from "../../src/runtime/LaserProvider.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { initialState } from "../../src/store.js";
-import { useHonestCopy } from "../../src/components/thread/messages.js";
+import { useHonestCopy } from "../../src/components/thread/prompt-actions.js";
 
 const stable = vi.hoisted(() => ({
   client: { request: vi.fn(async () => ({})) },

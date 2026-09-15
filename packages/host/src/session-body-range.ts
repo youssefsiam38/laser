@@ -194,7 +194,7 @@ export class SessionBodyRange {
         }
         return value.value;
       },
-      params,
+      { ...params, entryId: params.entryId },
       "durable",
       sha256Hex,
     );
@@ -223,7 +223,7 @@ export function sliceAnswer(
   revision: string,
   authority: "live" | "durable",
 ): BodyRangeAnswer {
-  const sliced = bodyRangeSlice(entry, params, revision, authority, sha256Hex);
+  const sliced = bodyRangeSlice(entry, { ...params, entryId: params.entryId }, revision, authority, sha256Hex);
   if (sliced.ok) return { kind: "answer", result: sliced.result };
   if (sliced.refusal.reason === "bad-range") return { kind: "refuse", error: badRange() };
   if (sliced.refusal.reason === "bad-region") return { kind: "refuse", error: badRegion() };

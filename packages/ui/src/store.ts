@@ -450,9 +450,9 @@ export type Action =
    * preserved; otherwise the page is discarded here and the view keeps what it
    * has, with its stamp marked deferred. Nothing of a refused page is retained.
    */
-  | { type: "views/reconcile"; path: string; at: string; entries: unknown[]; leafId?: string | null | undefined; window: HistoryWindow }
+  | { type: "views/reconcile"; path: string; at: string; token: string; entries: unknown[]; leafId?: string | null | undefined; window: HistoryWindow }
   /** A reconciliation read that failed or was refused; the stamp spent a read. */
-  | { type: "views/reconcileFailed"; path: string; at: string }
+  | { type: "views/reconcileFailed"; path: string; at: string; token: string }
   /**
    * Replace the transcript from a persisted snapshot. `expectSeq` guards the
    * round trip: when live updates advanced `lastSeq` while `pi/session/entries`
@@ -662,48 +662,47 @@ export function reduce(state: AppState, action: Action): AppState {
       return updateView(state, action.path, (v) => {
         const stamp = v.trimmed;
         // Only the stamp this page was read for, and only a view still trimmed.
-        if (!stamp || stamp.at !== action.at) return v;
+        if (!stamp || stamp.at !== action.at) return reduceHistory(v, { type: "historyEnd", path: action.path, token: action.token }, historyFold);
         const spent = (stamp.reads ?? 0) + 1;
+        // The candidate is built by the **canonical** snapshot fold: the live
+        // turn the answer carries, the updates that arrived while it was in
+        // flight, the person's unsent prompts, sequence and epoch, and the
+        // blocks it can share with what is on screen. There is no second,
+        // weaker fold here (RP-5b B2).
+        const candidate = reduceHistory(
+          v,
+          { type: "historySnapshot", path: action.path, token: action.token, entries: action.entries, window: action.window, replaceWindow: true,
+            ...(action.leafId !== undefined ? { leafId: action.leafId } : {}) },
+          historyFold,
+        );
+        // Nothing was applied (a stale token): leave the view as it is.
+        if (candidate === v) return reduceHistory(v, { type: "historyEnd", path: action.path, token: action.token }, historyFold);
         const wanted = new Set<string>([
           ...(stamp.identities?.anchorEntryId ? [stamp.identities.anchorEntryId] : []),
           ...(stamp.identities?.focusedEntryId ? [stamp.identities.focusedEntryId] : []),
           ...(stamp.identities?.actionTargetEntryIds ?? []),
         ]);
         const arriving = new Set<string>();
-        for (const entry of action.entries) {
+        for (const entry of candidate.entries) {
           const id = (entry as { id?: unknown } | null)?.id;
           if (typeof id === "string") arriving.add(id);
         }
-        for (const elided of action.window.elided ?? []) arriving.add(elided.id);
-        const contained = [...wanted].every((id) => arriving.has(id));
-        if (!contained) {
+        for (const stub of candidate.stubs ?? []) arriving.add(stub.id);
+        if (![...wanted].every((id) => arriving.has(id))) {
           // The page is dropped here, whole: a view already at its bound must
-          // not hold a replacement beside itself (RP-5b §7).
-          return { ...v, trimmed: { ...stamp, deferred: true as const, reads: spent } };
+          // not hold a replacement beside itself. What the view keeps is what
+          // it had, plus the updates that arrived meanwhile.
+          const kept = reduceHistory(v, { type: "historyEnd", path: action.path, token: action.token }, historyFold);
+          return { ...kept, trimmed: { ...stamp, deferred: true as const, reads: spent } };
         }
-        // Committed in one transaction: there is no frame in between.
-        const incoming = retainEntries(action.entries);
-        const elided = (action.window.elided ?? []).map(stubOfElided);
-        const entries = incoming.entries;
-        const stubs: EntryStub[] = [...incoming.stubs, ...elided];
-        const { live: _live, ...window } = action.window;
-        const { trimmed: _stamp, ...base } = v;
-        const next: SessionView = {
-          ...(base as SessionView),
-          entries,
-          stubs,
-          leafId: action.leafId ?? v.leafId,
-          history: window,
-          hydrated: true,
-          blocks: blocksFromEntries(entries, action.leafId ?? v.leafId, modelNamesOf(v.state), { stubs, revision: window.revision }),
-        };
-        return next;
+        return candidate;
       });
     case "views/reconcileFailed":
       return updateView(state, action.path, (v) => {
-        const stamp = v.trimmed;
-        if (!stamp || stamp.at !== action.at) return v;
-        return { ...v, trimmed: { ...stamp, deferred: true as const, reads: (stamp.reads ?? 0) + 1 } };
+        const ended = reduceHistory(v, { type: "historyEnd", path: action.path, token: action.token }, historyFold);
+        const stamp = ended.trimmed;
+        if (!stamp || stamp.at !== action.at) return ended;
+        return { ...ended, trimmed: { ...stamp, deferred: true as const, reads: (stamp.reads ?? 0) + 1 } };
       });
     case "hydrate":
       return updateView(state, action.path, (view) => {

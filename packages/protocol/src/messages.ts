@@ -1176,6 +1176,8 @@ export interface ClientRequests {
     result: {
       authority: "live" | "durable";
       revision: string;
+      /** The entry asked about, echoed: no answer can be taken for another's. */
+      entryId?: string;
       component: BodyComponent;
       /** Exact UTF-8 size of the whole body. */
       totalBytes: number;
@@ -1301,11 +1303,35 @@ export interface ClientRequests {
    * request, so a fork that fails leaves the session stopped and untouched
    * rather than half-moved (M13-T46). Idle sessions ignore it.
    */
-  "pi/session/fork": { params: { path: string; entryId: string; stopFirst?: boolean }; result: { state: SessionState; editorText?: string } };
+  "pi/session/fork": {
+    params: { path: string; entryId: string; stopFirst?: boolean };
+    result: {
+      state: SessionState;
+      /**
+       * The forked entry's text, for editing and resending — and only when it
+       * fits what a composer may hold ({@link MESSAGE_RENDER_MAX_BYTES}). A
+       * larger prompt is never serialized back into a renderer: `editorText`
+       * is absent and `editorTextBytes` says how large it is, so the surface
+       * can say so honestly and read it deliberately if it has the room
+       * (RP-5b B3).
+       */
+      editorText?: string;
+      /** Exact UTF-8 size of that entry's text, whether or not it was sent. */
+      editorTextBytes?: number;
+      /** The text was left out because it is larger than a composer may hold. */
+      editorTextOmitted?: true;
+    };
+  };
   /** `stopFirst` as on `pi/session/fork`: stop the running turn, then move. */
   "pi/session/navigate": {
     params: { path: string; entryId: string; summarize?: boolean; label?: string; stopFirst?: boolean };
-    result: { editorText?: string; cancelled: boolean };
+    result: {
+      /** Bounded exactly as `pi/session/fork`'s is (RP-5b B3). */
+      editorText?: string;
+      editorTextBytes?: number;
+      editorTextOmitted?: true;
+      cancelled: boolean;
+    };
   };
   "pi/session/rename": { params: { path: string; name: string }; result: {} };
   /**

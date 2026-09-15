@@ -320,7 +320,10 @@ describe("a trim while somebody is reading", () => {
 
     // A recent tail that does not carry the rows this surface stands on.
     await act(async () => {
-      store.dispatch({ type: "views/reconcile", path: SESSION, at: stamp, leafId: "e23",
+      // Exactly what the loader does: begin the read, so anything that arrives
+      // while it is in flight is buffered by the canonical fold.
+      store.dispatch({ type: "historyBegin", path: SESSION, token: "rec-1" } as never);
+      store.dispatch({ type: "views/reconcile", path: SESSION, at: stamp, token: "rec-1", leafId: "e23",
         entries: [entry(22), entry(23)], window: page({}) } as never);
     });
     const deferred = store.getSnapshot().open[SESSION]!;
@@ -335,7 +338,8 @@ describe("a trim while somebody is reading", () => {
     // A safe read that does contain them restores the conversation and its
     // cursor, and the row a person was on is still there.
     await act(async () => {
-      store.dispatch({ type: "views/reconcile", path: SESSION, at: stamp, leafId: "e23",
+      store.dispatch({ type: "historyBegin", path: SESSION, token: "rec-2" } as never);
+      store.dispatch({ type: "views/reconcile", path: SESSION, at: stamp, token: "rec-2", leafId: "e23",
         entries: Array.from({ length: 24 }, (_, index) => entry(index)), window: page({ before: "cursor-older" }) } as never);
     });
     await act(async () => { await Promise.resolve(); });
