@@ -266,6 +266,46 @@ it("shows honest summaries, retained-state table semantics, human copy and keybo
   expect(text()).toContain("They do not divide or allocate its memory");
 });
 
+it("renders the retained counters the host reports, and says what is still missing from them", async () => {
+  const complete: ResourceSnapshot = {
+    ...snapshot,
+    stores: {
+      entries: { taskRegistry: { count: 12, bytes: 65_536 }, deliveryRegistry: { count: 4 } },
+      coverage: { workers: 1, answered: 1, complete: true },
+    },
+  };
+  fixture.client.request.mockImplementation((method: string) => method === "resource/snapshot"
+    ? Promise.resolve({ snapshot: complete, retention })
+    : Promise.resolve({ snapshots: [complete], retention }));
+  ({ root, container } = await render(<TooltipProvider><ResourceDiagnostics /></TooltipProvider>));
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+  const rowOf = (store: string) => container!.querySelector(`[data-section="retained-state"] [data-store="${store}"]`)!.closest("tr")!;
+  expect(rowOf("taskRegistry").textContent).toContain("12");
+  expect(rowOf("taskRegistry").textContent).toContain("64 KB");
+  expect(rowOf("taskRegistry").textContent).not.toContain("not currently reported");
+  expect(rowOf("deliveryRegistry").textContent).toContain("4");
+  expect(rowOf("deliveryRegistry").textContent).not.toContain("This count is not currently reported");
+  // A counter with no producer yet is still named, never drawn as zero.
+  expect(rowOf("providerQueues").textContent).toContain("This count is not currently reported by Workers");
+
+  const partial: ResourceSnapshot = {
+    ...snapshot,
+    stores: {
+      entries: { taskRegistry: { count: 12 }, deliveryRegistry: { count: 4 } },
+      coverage: { workers: 2, answered: 1, complete: false, reason: "collector_failed" },
+    },
+  };
+  fixture.client.request.mockImplementation((method: string) => method === "resource/snapshot"
+    ? Promise.resolve({ snapshot: partial, retention })
+    : Promise.resolve({ snapshots: [partial], retention }));
+  await click("Refresh");
+  expect(rowOf("taskRegistry").textContent).toContain("at least; 1 of 2 workers answered");
+  expect(rowOf("taskRegistry").textContent).toContain("Unavailable");
+  // The host counted delivery itself, so a silent worker cannot soften it.
+  expect(rowOf("deliveryRegistry").textContent).not.toContain("at least");
+});
+
 it("re-resolves navigation and native lifecycle ownership at click time without a PID action", async () => {
   (globalThis as { desktop?: unknown }).desktop = {};
   await mount();
@@ -331,12 +371,14 @@ it("surfaces host export truncation and a retryable export failure", async () =>
     : Promise.resolve({ snapshot, retention }));
   vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
   await click("Download redacted report");
-  const truncated = [...container!.querySelectorAll('[role="status"]')].find((node) => node.textContent?.includes("Older samples were omitted"));
+  const truncated = [...container!.querySelectorAll('[role="status"]')].find((node) => node.textContent?.includes("older ones were omitted"));
   expect(truncated).toBeDefined();
+  // What was omitted is the *older* end: the host exports the newest window.
+  expect(truncated?.textContent).toContain("most recent samples");
   expect(truncated?.classList.contains("sr-only")).toBe(false);
   fixture.client.request.mockRejectedValueOnce(new Error("export unavailable"));
   await click("Download redacted report");
-  expect(text()).not.toContain("Older samples were omitted");
+  expect(text()).not.toContain("older ones were omitted");
   expect(text()).toContain("Could not download the redacted report");
   expect(text()).toContain("export unavailable");
 });

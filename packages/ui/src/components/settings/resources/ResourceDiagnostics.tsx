@@ -310,7 +310,7 @@ export function ResourceDiagnostics({ optionalStores }: ResourceDiagnosticsProps
         ) : null}
         {exportState === "truncated" ? (
           <p role="status" className="rounded-lg bg-surface-2 px-3 py-2 text-sm text-ink-2">
-            Redacted resource report downloaded. Older samples were omitted to keep the report within its size limit.
+            Redacted resource report downloaded. It carries the most recent samples; older ones were omitted to keep the report within its bounds.
           </p>
         ) : (
           <p role="status" className="sr-only">

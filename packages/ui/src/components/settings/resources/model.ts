@@ -5,7 +5,9 @@ import {
   type ResourceMeasure,
   type ResourceProcess,
   type ResourceProcessRole,
+  type ResourceRetainedStores,
   type ResourceSnapshot,
+  type ResourceStoreKey,
   type SessionSummary,
 } from "@lasercode/protocol";
 
@@ -203,21 +205,22 @@ function nodesFor(processes: readonly ResourceProcess[]): ProcessNode[] {
   return roots;
 }
 
-export type ResourceOptionalStoreKey =
-  | "workerSessions"
-  | "workerReplay"
-  | "workerCaches"
-  | "rendererViews"
-  | "taskRegistry"
-  | "deliveryRegistry"
-  | "providerQueues";
+/**
+ * The same key set the host publishes, so a producer added there cannot drift
+ * away from the row that displays it.
+ */
+export type ResourceOptionalStoreKey = ResourceStoreKey;
 
 export interface OptionalStoreValue {
   count?: number | undefined;
   bytes?: number | undefined;
 }
 
-/** One adapter for retained-state counters as their owning subsystems expose them. */
+/**
+ * One adapter for retained-state counters a viewer knows locally, or that a
+ * later slice reports before the host's snapshot carries it. The snapshot's
+ * own typed entries win where both exist.
+ */
 export type ResourceOptionalStores = Partial<Record<ResourceOptionalStoreKey, OptionalStoreValue>>;
 
 export interface RetainedStoreInputs {
@@ -252,23 +255,55 @@ export function associatedIds(snapshot: ResourceSnapshot, kind: "sessionIds" | "
   return { ids: [...ids].sort(), truncated };
 }
 
+/** How much of a worker-aggregated counter the host actually heard back. */
+function coverageContext(coverage: ResourceRetainedStores["coverage"] | undefined): string | undefined {
+  if (!coverage || coverage.complete) return undefined;
+  return `${coverage.answered} of ${coverage.workers} workers answered`;
+}
+
 export function retainedStoreRows(input: RetainedStoreInputs): RetainedStoreRow[] {
   const sessions = associatedIds(input.snapshot, "sessionIds");
   const runs = associatedIds(input.snapshot, "runIds");
   const tasks = associatedIds(input.snapshot, "taskIds");
   const optional = input.optional ?? {};
+  const entries = input.snapshot.stores?.entries ?? {};
+  const incomplete = coverageContext(input.snapshot.stores?.coverage);
   const association = (value: { ids: string[]; truncated: boolean }): MetricCell => available(
     value.ids.length,
     value.truncated ? "at least; association list was truncated" : undefined,
   );
-  const future = (id: ResourceOptionalStoreKey, label: string, owner: string, handoff: RetainedStoreRow["handoff"]): RetainedStoreRow => ({
-    id,
-    label,
-    owner,
-    count: optionalCell(optional[id]?.count, `This count is not currently reported by ${owner}`),
-    bytes: optionalCell(optional[id]?.bytes, `Retained bytes are not currently reported by ${owner}`),
-    handoff,
-  });
+  /**
+   * One retained-state row, from whichever producer reports it: the host's own
+   * typed snapshot first, then the local adapter. `aggregated` marks a counter
+   * summed across live workers — when one did not answer, its count is *at
+   * least* that many and its bytes stay unavailable, because a partial sum
+   * presented as a total is the one thing this surface exists not to do. A
+   * counter nobody reports is still named plainly, never a zero.
+   */
+  const store = (
+    id: ResourceOptionalStoreKey,
+    label: string,
+    owner: string,
+    handoff: RetainedStoreRow["handoff"],
+    aggregated = false,
+  ): RetainedStoreRow => {
+    const value = entries[id] ?? optional[id];
+    const partial = aggregated && incomplete !== undefined;
+    return {
+      id,
+      label,
+      owner,
+      count: value?.count === undefined
+        ? unavailable(`This count is not currently reported by ${owner}`)
+        : available(value.count, partial ? `at least; ${incomplete}` : undefined),
+      bytes: value?.bytes === undefined
+        ? unavailable(partial && value?.count !== undefined
+          ? `Retained bytes are complete only when every live worker answers; ${incomplete}`
+          : `Retained bytes are not currently reported by ${owner}`)
+        : available(value.bytes),
+      handoff,
+    };
+  };
   return [
     {
       id: "processes",
@@ -330,12 +365,14 @@ export function retainedStoreRows(input: RetainedStoreInputs): RetainedStoreRow[
       bytes: optionalCell(optional.rendererViews?.bytes, "Retained bytes are not currently reported by this viewer"),
       handoff: "T5",
     },
-    future("workerSessions", "Worker session runtimes", "Project workers", "T4"),
-    future("workerReplay", "Worker replay buffers", "Project workers", "T4"),
-    future("workerCaches", "Worker project and session caches", "Project workers", "T4"),
-    future("taskRegistry", "Task records and retained tails", "Workers / host", "T6"),
-    future("deliveryRegistry", "Transcript delivery paths and queues", "Host", "T6"),
-    future("providerQueues", "Provider-log and request queues", "Workers", "T7"),
+    store("workerSessions", "Worker session runtimes", "Project workers", "T4", true),
+    store("workerReplay", "Worker replay buffers", "Project workers", "T4", true),
+    store("workerCaches", "Worker project and session caches", "Project workers", "T4", true),
+    store("taskRegistry", "Task records and retained tails", "Workers / host", "T6", true),
+    // Host-only, so it is exact whatever the workers did: membership lives in
+    // this process and nothing was waited on to count it.
+    store("deliveryRegistry", "Transcript delivery paths and queues", "Host", "T6"),
+    store("providerQueues", "Provider-log and request queues", "Workers", "T7", true),
   ];
 }
 

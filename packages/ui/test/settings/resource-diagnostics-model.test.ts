@@ -143,6 +143,57 @@ describe("resource diagnostics projection", () => {
     const withProducer = retainedStoreRows({ snapshot: snapshot([host]), rendererViews: 1, pendingMessages: 0, optional: { workerReplay: { count: 7, bytes: 8_192 } } });
     expect(withProducer.find((row) => row.id === "workerReplay")).toMatchObject({ count: { status: "available", value: 7 }, bytes: { status: "available", value: 8_192 } });
   });
+
+  it("shows the counters the host actually reports instead of claiming they are unreported", () => {
+    const reported = snapshot([host, worker], {
+      stores: {
+        entries: { taskRegistry: { count: 9, bytes: 4_096 }, deliveryRegistry: { count: 3 } },
+        coverage: { workers: 2, answered: 2, complete: true },
+      },
+    });
+    const rows = retainedStoreRows({ snapshot: reported, rendererViews: 1, pendingMessages: 0 });
+    const tasks = rows.find((row) => row.id === "taskRegistry")!;
+    const delivery = rows.find((row) => row.id === "deliveryRegistry")!;
+    expect(tasks.count).toEqual({ status: "available", value: 9 });
+    expect(tasks.bytes).toEqual({ status: "available", value: 4_096 });
+    expect(delivery.count).toEqual({ status: "available", value: 3 });
+    // Membership holds no payload, so its bytes stay unavailable rather than 0.
+    expect(delivery.bytes).toMatchObject({ status: "unavailable" });
+    // The false sentence this replaced: neither count claims non-reporting.
+    for (const row of [tasks, delivery]) {
+      expect(JSON.stringify(row.count)).not.toContain("not currently reported");
+    }
+    // A key no producer reports is still named plainly, never a zero.
+    expect(rows.find((row) => row.id === "providerQueues")!.count).toEqual({
+      status: "unavailable",
+      reason: "This count is not currently reported by Workers",
+    });
+  });
+
+  it("qualifies a worker-aggregated count as at-least while a live worker has not answered", () => {
+    const partial = snapshot([host, worker], {
+      stores: {
+        entries: { taskRegistry: { count: 5 }, deliveryRegistry: { count: 2 } },
+        coverage: { workers: 3, answered: 1, complete: false, reason: "collector_failed" },
+      },
+    });
+    const rows = retainedStoreRows({ snapshot: partial, rendererViews: 1, pendingMessages: 0 });
+    const tasks = rows.find((row) => row.id === "taskRegistry")!;
+    expect(tasks.count).toEqual({ status: "available", value: 5, qualifier: "at least; 1 of 3 workers answered" });
+    expect(tasks.bytes).toMatchObject({ status: "unavailable" });
+    expect(tasks.bytes.status === "unavailable" ? tasks.bytes.reason : "").toContain("1 of 3 workers answered");
+    // Host-only, so incomplete worker coverage cannot make it an estimate.
+    expect(rows.find((row) => row.id === "deliveryRegistry")!.count).toEqual({ status: "available", value: 2 });
+    // Nothing reported stays unreported: partial coverage does not invent one.
+    expect(rows.find((row) => row.id === "workerCaches")!.count).toEqual({
+      status: "unavailable",
+      reason: "This count is not currently reported by Project workers",
+    });
+    expect(rows.find((row) => row.id === "workerCaches")!.bytes).toEqual({
+      status: "unavailable",
+      reason: "Retained bytes are not currently reported by Project workers",
+    });
+  });
 });
 
 const session = { id: "s1", path: "/p/s1.jsonl", cwd: "/p", createdAt: "2026-09-13T10:00:00.000Z", modifiedAt: "2026-09-13T10:00:00.000Z", messageCount: 1 } satisfies SessionSummary;
