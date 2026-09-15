@@ -231,11 +231,18 @@ it("labels timestamp fallback and excludes captures linked to a different messag
   expect(document.querySelectorAll("select option")).toHaveLength(1);
   expect(client.request).toHaveBeenCalledWith("pi/logs/query",expect.objectContaining({afterAt:entry.at,beforeAt:"2026-09-06T10:01:00.000Z"}));
 });
-it("opens a log's referenced payload without a message lookup and explains truncation",async()=>{
-  client.request.mockResolvedValue({text:'{"incomplete":',truncated:true});
+it("opens a log's referenced payload without a message lookup and says exactly what is missing",async()=>{
+  // RP-7: a truncated body carries how much of how much is shown, and the
+  // fingerprint of the redacted copy the app stores, so a reader knows both
+  // that search here is partial and which body this is.
+  client.request.mockResolvedValue({text:'{"incomplete":',truncated:true,bytes:9e6,truncatedAt:14,ref:"a".repeat(64)});
   await mount(<ApiRequestDialog target={{kind:"log",entry:{...entry,detail:undefined,detailRef:{ref:"a".repeat(64),bytes:9e6,preview:"payload"}}}} onClose={()=>{}}/>);
   expect(client.request).toHaveBeenCalledWith("pi/logs/content",{ref:"a".repeat(64),maxBytes:8*1024*1024});
-  expect(document.body.textContent).toContain("truncated capture");
+  const text=document.body.textContent??"";
+  expect(text).toContain("Showing the first 14 B of a 8.6 MB request");
+  expect(text).toContain("aaaaaaaaaaaa…");
+  expect(text).toContain("redacted copy this app keeps");
+  expect(document.querySelector('[role="alert"]')).not.toBeNull();
 });
 it("explains summary-only logging without inventing an API body",async()=>{
   const {detail:_,...summary}=entry;

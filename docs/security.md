@@ -321,6 +321,15 @@ disagreement between two resume paths is how output goes missing.
 Transport sequence numbers are a separate counter and are *not* the protocol's
 `seq`. A reconnection is a fresh Noise session starting at 0.
 
+Backpressure keeps that rule (RP-7). Bytes queued for one paired device are
+counted from acceptance through Noise encryption to the socket; past a soft
+mark only the three notifications the device can read back with a request it
+already makes are released, and past a hard mark **that channel's socket is
+closed**. Nothing is retained for it in the meantime, so there is still exactly
+one resume path, and the fence is that device's alone: other devices, direct
+clients, workers and every command are untouched. The relay is unchanged — it
+remains a byte forwarder with its own `bufferedAmount` pause/resume (§9).
+
 ## 8. Keystroke-timing defence
 
 Modelled on OpenSSH 9.5's `ObscureKeystrokeTiming`. **Both halves matter**;

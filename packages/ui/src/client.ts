@@ -10,7 +10,13 @@
  * `session/update` notifications are coalesced to one flush per animation
  * frame; every other message flushes the buffer first, so order is preserved.
  */
-import { ENVIRONMENT_CONTRACT_VERSION, ENVIRONMENT_DESCRIBE_METHOD, PRODUCT_VERSION, environmentDescriptorSchema } from "@lasercode/protocol";
+import {
+  ENVIRONMENT_CONTRACT_VERSION,
+  ENVIRONMENT_DESCRIBE_METHOD,
+  PENDING_UPDATE_FLUSH_BYTES,
+  PRODUCT_VERSION,
+  environmentDescriptorSchema,
+} from "@lasercode/protocol";
 import type {
   ClientMethod,
   ClientRequests,
@@ -76,6 +82,21 @@ export interface HostClientOptions {
   shouldResume?: (path: string) => boolean;
 }
 
+/**
+ * What one coalesced delta weighs, without serializing it.
+ *
+ * Text and reasoning deltas are the ones that arrive in bursts, and they are
+ * the ones whose size is knowable for free. Anything else counts as a small
+ * fixed cost: this is a backstop for a hidden tab, not an accountant.
+ */
+function estimateUpdateBytes(params: SessionUpdateParams): number {
+  const update = params.update as { delta?: unknown; text?: unknown; content?: unknown };
+  if (typeof update.delta === "string") return update.delta.length;
+  if (typeof update.text === "string") return update.text.length;
+  if (typeof update.content === "string") return update.content.length;
+  return 256;
+}
+
 /** Backstop flush cadence when `requestAnimationFrame` is absent or paused. */
 const FLUSH_INTERVAL_MS = 33;
 
@@ -113,6 +134,8 @@ export class HostClient {
   private timerHandle: ReturnType<typeof setTimeout> | undefined;
   /** Transcript deltas waiting for the next frame, in arrival (seq) order. */
   private readonly pendingUpdates: SessionUpdateParams[] = [];
+  /** Roughly what those deltas weigh, so the buffer has a size and not only a clock. */
+  private pendingBytes = 0;
   /** Extra notification listeners registered with `subscribe()`. */
   private readonly listeners = new Set<NotificationHandler>();
 
@@ -176,6 +199,7 @@ export class HostClient {
       document.removeEventListener("visibilitychange", this.onVisible);
     }
     this.pendingUpdates.length = 0;
+    this.pendingBytes = 0;
     this.flushUpdates(); // clears the scheduled frame; the buffer is already empty
     this.ws?.close();
   }
@@ -432,6 +456,15 @@ export class HostClient {
    */
   private queueUpdate(params: SessionUpdateParams): void {
     this.pendingUpdates.push(params);
+    // A frame's worth of streaming text is tens of kilobytes; a megabyte
+    // waiting here means this view is throttled or hidden and the timer is
+    // still a third of a second away (RP-7). Flush it now — holding it costs
+    // more than delivering it, and nothing is ever dropped to make room.
+    this.pendingBytes += estimateUpdateBytes(params);
+    if (this.pendingBytes >= PENDING_UPDATE_FLUSH_BYTES) {
+      this.flushUpdates();
+      return;
+    }
     // A hidden tab never paints, so rAF alone would buffer forever: the timer
     // is the backstop, and whichever fires first cancels the other.
     if (this.frameHandle === undefined && typeof globalThis.requestAnimationFrame === "function") {
@@ -459,6 +492,7 @@ export class HostClient {
     }
     if (this.pendingUpdates.length === 0) return;
     const batch = this.pendingUpdates.splice(0, this.pendingUpdates.length);
+    this.pendingBytes = 0;
     const deliver = () => {
       for (const params of batch) this.deliver("session/update", params);
     };

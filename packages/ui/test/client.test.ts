@@ -312,6 +312,33 @@ describe("delta coalescing", () => {
     expect(notifications.map((n) => (n.params as { seq: number }).seq)).toEqual([1, 2]);
   });
 
+  it("flushes a heavy burst by size, not only by clock, and drops nothing (RP-7)", () => {
+    // A hidden or throttled view still receives deltas; without a byte bound
+    // the buffer is whatever arrives before the next timer. It flushes early
+    // instead — and everything that arrived is delivered, in order.
+    vi.stubGlobal("requestAnimationFrame", undefined);
+    vi.useFakeTimers();
+    const { client, notifications } = build();
+    client.connect();
+    const socket = FakeSocket.instances[0]!;
+    socket.accept();
+
+    const wide = "x".repeat(64 * 1024);
+    for (let seq = 1; seq <= 24; seq++) {
+      socket.deliver({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: { sessionPath: "/s.jsonl", seq, at: "", update: { kind: "text_delta", delta: wide, contentIndex: 0 } },
+      });
+    }
+    // 24 × 64 KiB is past the megabyte mark, so the buffer already went out.
+    expect(notifications.length).toBeGreaterThan(0);
+    vi.advanceTimersByTime(50);
+    expect(notifications.map((n) => (n.params as { seq: number }).seq)).toEqual(
+      Array.from({ length: 24 }, (_value, index) => index + 1),
+    );
+  });
+
   it("flushes buffered deltas before any other message, keeping order", () => {
     const { client, notifications } = build();
     client.connect();

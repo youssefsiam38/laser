@@ -18,6 +18,7 @@ import { GenerationLoader } from "@/components/assistant-ui/elements/loading-sta
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ChevronRight } from "lucide-react";
 import { activityRow, activityTrigger, collapsePanel } from "@/components/assistant-ui/elements/surfaces";
+import { formatBytes } from "@/format";
 import { useCopy } from "@/hooks";
 import { cn } from "@/lib/utils";
 import { useLaserStable } from "@/runtime";
@@ -130,6 +131,8 @@ function RequestBody({entry}:{entry:LogEntry}) {
   // (D-245). That is an answer, not a failure, so it has its own state.
   const [released,setReleased]=useState<LogBodySummary>();
   const [truncated,setTruncated]=useState(false);
+  /** Stored size, shown bytes and fingerprint, when only part of a body is here (RP-7). */
+  const [cut,setCut]=useState<{stored:number;shown:number;sha256:string}>();
   const [section,setSection]=useState<Section>("instructions");
   const [search,setSearch]=useState("");
   // Closed until asked for: the page is for reading the request, the find bar is a tool.
@@ -168,6 +171,7 @@ function RequestBody({entry}:{entry:LogEntry}) {
       setReleased(result.released);
       if(result.released)return;
       setTruncated(result.truncated);
+      setCut(result.truncated?{stored:result.bytes,shown:result.truncatedAt??result.text.length,sha256:detailRef}:undefined);
       try { setPayload(JSON.parse(result.text)); } catch {setPayload(result.text);}
     }).catch(()=>{if(live)setError("This payload could not be loaded. It may have expired under log retention.");})
       .finally(()=>{if(live)setLoading(false);});
@@ -239,7 +243,11 @@ function RequestBody({entry}:{entry:LogEntry}) {
           <span className="ms-auto hidden text-xs text-ink-3 sm:inline">{scope==="request"?"All keys and values":"This section"}</span>
         </div>}/>}
       <div ref={find.viewport} data-slot="request-viewport" className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4">
-        {truncated&&<p role="alert" className="mb-3 text-sm text-attention">Payload exceeds the 8 MB inspection limit. This is a truncated capture; structured sections may be unavailable.</p>}
+        {truncated&&<p role="alert" className="mb-3 text-sm text-attention">
+          Showing the first {formatBytes(cut?.shown??0)} of a {formatBytes(cut?.stored??0)} request
+          {cut?<> · fingerprint <span className="typed">{cut.sha256.slice(0,12)}…</span></>:null}. The rest is stored and is not on this
+          page, so structured sections and search cover only what is shown here. Sizes describe the redacted copy this app keeps.
+        </p>}
         {/* Full search indexes the payload ONCE, never a concatenation of tabs.
             Section cards index their main text, not previews or duplicate JSON. */}
         {fullSearch||section==="json"?<RequestJson value={payload} search={searching} getText={jsonText} literalText={truncated&&typeof payload==="string"?payload:undefined}/>

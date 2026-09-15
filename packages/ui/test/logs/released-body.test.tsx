@@ -112,6 +112,40 @@ it("still renders a body that is stored, with no released notice", async () => {
   expect(document.body.textContent).toContain("hello");
 });
 
+it("explains a capture whose body was never kept, with its size, fingerprint and reason", async () => {
+  // RP-7: the request happened and is recorded; only its text is missing, and
+  // the page says which body this was and why it is not here.
+  answer({
+    ref: entry.detailRef!.ref, contentType: "application/json", bytes: 18_874_368, truncated: false, text: "",
+    released: { ...released, reason: "over-ceiling", bytes: 18_874_368, sha256: "b".repeat(64) },
+  });
+  await mount(<ApiRequestDialog target={{ kind: "log", entry }} onClose={() => {}} />);
+  const text = document.body.textContent ?? "";
+  expect(text).toContain("larger than the size kept in full");
+  expect(text).toContain("18.0 MB");
+  expect(text).toContain("bbbbbbbbbbbb…bbbb");
+  expect(text).toContain("redacted copy this app would have kept");
+  expect(document.querySelector('[role="alert"]')).toBeNull();
+});
+
+it("names every reason the store or the capture can give", async () => {
+  const sentences: Record<string, string> = {
+    "link-busy": "busy receiving this session's own updates",
+    "summary-mode": "keep request summaries only",
+    interrupted: "stopped before all of it had arrived",
+    corrupt: "did not match the size and fingerprint",
+  };
+  for (const [reason, sentence] of Object.entries(sentences)) {
+    answer({
+      ref: entry.detailRef!.ref, contentType: "application/json", bytes: released.bytes, truncated: false, text: "",
+      released: { ...released, reason: reason as never },
+    });
+    await mount(<ApiRequestDialog target={{ kind: "log", entry }} onClose={() => {}} />);
+    expect(document.body.textContent, reason).toContain(sentence);
+    await act(async () => root.render(<></>));
+  }
+});
+
 it("says the same thing in the log detail pane", async () => {
   answer({ ref: entry.detailRef!.ref, contentType: "application/json", bytes: released.bytes, truncated: false, text: "", released });
   await act(async () => root.render(<TooltipProvider><LogDetail entry={entry} /></TooltipProvider>));
