@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-15T05:41:05Z · orchestrator `01a0a030` · HEAD: 4f34a614
-**Current focus:** M18 has bounded worker and renderer session lifetimes; transport-pressure review corrections are rebasing before T3, T8 and T10 consume the settled seams.
+**Last updated:** 2026-09-15T07:09:48Z · orchestrator `01a0a030` · HEAD: 477d7b8e
+**Current focus:** M18 has bounded worker and renderer session lifetimes; transport pressure is closing its final verified producer/count/storage/footprint batch before T3, T8 and T10 consume the settled seams.
 
 | Milestone | State |
 | --- | --- |
@@ -28,7 +28,7 @@
 | MX Cross-cutting | in-progress |
 
 **Blockers:** none. RP-2’s unchanged full A safely refuses B on the pre-containment renderer ceiling; D-257 assigns the clean repeat to M18-T15 after RP-7/RP-8.
-**Next up:** integrate reviewed M18-T7; wire T4/T5/T7 typed counters into T3; implement ready T8 and approved T10, then T11.
+**Next up:** integrate corrected M18-T7; start approved T8 and T10 on that base; wire T4/T5/T7/T8 typed diagnostics into T3; implement T11.
 **Recently done:** M18-T5 renderer lifetime (`4f34a614`; reviewed focused/full/UI/browser/calibration gates); M18-T4 worker lifetime (`eb18e147`); M18-T6 task/delivery lifetime (`a256efe`); M18-T13 browser gate (`a0111f9`); M18-T2 finding (`ad8c188`).
 
 Ownership and evidence: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`.
