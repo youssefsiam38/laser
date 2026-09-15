@@ -6,11 +6,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SessionState } from "@lasercode/protocol";
 
-import { captureViewTail, installViewTailSink, NO_TAIL_SINK, VIEW_TAIL_MAX_BYTES, VIEW_TAIL_MAX_ENTRIES, viewTailSink } from "../../src/runtime/view-tail.js";
+import { captureViewTail, installViewTailSink, NO_TAIL_SINK, VIEW_TAIL_MAX_BYTES, VIEW_TAIL_MAX_ENTRIES, VIEW_TAIL_SESSION_ID_MAX, viewTailSink } from "../../src/runtime/view-tail.js";
 import type { SessionView, ValidatedRevision } from "../../src/store.js";
 
 const AT = "2026-09-15T02:00:00.000Z";
-const validated: ValidatedRevision = { revision: "r1.env.abc", environmentKey: "e1.key", epoch: "w1", seq: 12, hasHistory: true, at: AT };
+const validated: ValidatedRevision = { revision: "r1.env.abc", sessionId: "01a0a319-1f1c-75f3", environmentKey: "e1.key", epoch: "w1", seq: 12, hasHistory: true, at: AT };
 
 const view = (over: Partial<SessionView> = {}): SessionView => ({
   path: "/p/a.jsonl",
@@ -35,6 +35,7 @@ describe("the released tail", () => {
     expect(tail.entries.every((entry) => Object.isFrozen(entry) && typeof entry.json === "string")).toBe(true);
     expect(tail.entries.map((entry) => entry.id)).toEqual(entries(10).map((row) => (row as { id: string }).id));
     expect(tail.revision).toBe("r1.env.abc");
+    expect(tail.sessionId).toBe("01a0a319-1f1c-75f3");
     expect(tail.environmentKey).toBe("e1.key");
     expect(tail.leafId).toBe("e3");
     expect(tail.truncated).toBe(false);
@@ -65,6 +66,28 @@ describe("the released tail", () => {
     expect(tail.bytes).toBeLessThanOrEqual(VIEW_TAIL_MAX_BYTES);
     expect(tail.truncated).toBe(true);
     expect(tail.entries.length).toBeLessThan(20);
+  });
+
+  it("counts exactly the UTF-8 bytes of what it carries, identity included", () => {
+    const rows = entries(3, 24);
+    const tail = captureViewTail(view({ entries: rows }), AT);
+    const expected = tail.entries.reduce((sum, entry) => sum + new TextEncoder().encode(entry.json).length, 0);
+    expect(tail.bytes).toBe(expected);
+    // The session id is identity, not content: it changes no byte accounting.
+    const other = captureViewTail(view({ entries: rows, validated: { ...validated, sessionId: "a-much-longer-session-identity" } }), AT);
+    expect(other.bytes).toBe(tail.bytes);
+  });
+
+  it("refuses a record RP-10 could not key: no session id, or one out of bounds", () => {
+    const { sessionId: _none, ...withoutId } = validated;
+    const anonymous = captureViewTail(view({ entries: entries(4), validated: withoutId }), AT);
+    expect(anonymous.omitted).toBe("no-session-id");
+    expect(anonymous.sessionId).toBe("");
+    expect(anonymous.entries).toEqual([]);
+
+    const huge = captureViewTail(view({ entries: entries(4), validated: { ...validated, sessionId: "x".repeat(VIEW_TAIL_SESSION_ID_MAX + 1) } }), AT);
+    expect(huge.omitted).toBe("no-session-id");
+    expect(huge.entries).toEqual([]);
   });
 
   it("writes nothing it could not validate later", () => {

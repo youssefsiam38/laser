@@ -158,6 +158,7 @@ export {
 } from "./LaserProvider.js";
 
 export {
+  DELIVERY_FALLBACK_MS,
   VIEW_CACHE_LIMITS,
   VIEW_HEAP_MODEL,
   createViewCache,
@@ -176,6 +177,7 @@ export {
   VIEW_TAIL_MAX_BYTES,
   VIEW_TAIL_MAX_ENTRIES,
   VIEW_TAIL_SCHEMA,
+  VIEW_TAIL_SESSION_ID_MAX,
   captureViewTail,
   installViewTailSink,
   viewTailSink,

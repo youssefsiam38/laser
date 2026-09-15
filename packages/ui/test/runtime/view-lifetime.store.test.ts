@@ -17,6 +17,7 @@ import {
   type AppState,
 } from "../../src/store.js";
 import { projectSessionView } from "../../src/runtime/projection.js";
+import { captureViewTail } from "../../src/runtime/view-tail.js";
 import { measureView } from "../../src/runtime/view-measure.js";
 
 /** A 64×64 PNG header with enough payload to be worth releasing. */
@@ -32,8 +33,9 @@ const pngBase64 = ((): string => {
 const PATH = "/p/a.jsonl";
 const AT = "2026-09-15T01:00:00.000Z";
 
+const SESSION_ID = "01a0a319-1f1c-75f3";
 const sessionState = (over: Partial<SessionState> = {}): SessionState => ({
-  path: PATH, cwd: "/p", messageCount: 2, pendingMessageCount: 0, isStreaming: false, isCompacting: false, ...over,
+  path: PATH, id: SESSION_ID, cwd: "/p", messageCount: 2, pendingMessageCount: 0, isStreaming: false, isCompacting: false, ...over,
 } as SessionState);
 
 const window = (over: Partial<HistoryWindow> = {}): HistoryWindow => ({
@@ -65,7 +67,7 @@ describe("releasing one view's transcript", () => {
     state = reduce(state, { type: "notification", method: "pi/ui/request", params: { path: PATH, id: "q1", method: "confirm", title: "Run it?" } });
     state = reduce(state, { type: "notification", method: "pi/ui/event", params: { path: PATH, method: "setTitle", title: "Counting" } });
     const before = state.open[PATH]!;
-    expect(before.validated).toMatchObject({ revision: "r1.env.abc", environmentKey: "e1.key", epoch: "w1", seq: 7, hasHistory: true });
+    expect(before.validated).toMatchObject({ revision: "r1.env.abc", sessionId: SESSION_ID, environmentKey: "e1.key", epoch: "w1", seq: 7, hasHistory: true });
 
     const view = evict(state).open[PATH]!;
 
@@ -110,6 +112,29 @@ describe("releasing one view's transcript", () => {
     expect(twice).toBe(once);
     const empty = opened();
     expect(evict(empty)).toBe(empty);
+  });
+});
+
+describe("the identity a released record keeps", () => {
+  it("takes the session's own id from its authoritative state, not from its path", () => {
+    const view = hydrated().open[PATH]!;
+    expect(view.validated?.sessionId).toBe(SESSION_ID);
+    expect(view.validated?.sessionId).not.toContain("/");
+    const tail = captureViewTail(view, AT);
+    expect(tail.sessionId).toBe(SESSION_ID);
+    expect(tail.omitted).toBeUndefined();
+    // And it survives the release, so a dormant record can still be keyed.
+    expect(evict(hydrated()).open[PATH]!.validated?.sessionId).toBe(SESSION_ID);
+  });
+
+  it("keeps none, and refuses the record, when the state carries no id", () => {
+    let state = reduce(initialState, { type: "opened", state: { ...sessionState(), id: undefined } as SessionState });
+    state = reduce(state, { type: "historyBegin", path: PATH, token: "t1" });
+    state = reduce(state, { type: "historySnapshot", path: PATH, token: "t1", entries, leafId: "e2", window: window() });
+    const view = state.open[PATH]!;
+    expect(view.validated?.revision).toBe("r1.env.abc");
+    expect(view.validated?.sessionId).toBeUndefined();
+    expect(captureViewTail(view, AT).omitted).toBe("no-session-id");
   });
 });
 

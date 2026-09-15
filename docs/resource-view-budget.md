@@ -47,8 +47,18 @@ fitted rather than guessed:
   costing nothing.
 
 Measurement is incremental: a streamed token costs the delta, never a walk of
-the transcript, and a maintenance pass runs only when the hydrated set changes,
-the pinned set changes, or enough content transactions have accumulated.
+the transcript, and each view object is measured once. A maintenance pass runs
+immediately when what is *held* changes — the hydrated set, the selection, a
+run or command going terminal, a turn or queue ending, a draft or scope let go
+of outside the store — and after content growth with a 250 ms gap between such
+passes, so one large tool result reconciles at once while a streamed turn does
+not measure itself on every frame.
+
+An image whose decoded size could not be read is counted honestly as estimated
+**and makes its view non-retainable**: a few encoded kilobytes can be an
+enormous decoded surface, so an unpinned conversation holding one is released
+rather than kept on a number nobody measured. A pinned one stays and shows in
+the overflow.
 
 ## The model
 
@@ -185,8 +195,16 @@ const previous = installViewTailSink(cache);   // install; keep what it replaced
 installViewTailSink(previous);                 // restore when the cache goes
 ```
 
+The DTO carries the session's own durable id from the authoritative
+`SessionState.id` — never a path and never a value read out of an entry —
+bounded at 128 characters. A record that cannot carry one, or cannot carry a
+revision, is emitted empty and `omitted` (`"no-session-id"`, `"no-revision"`)
+so a cache refuses it rather than adapting it.
+
 The default is a sink that does nothing. The cache reads the installed sink
-**at delivery time** — after the release has been published and painted — so a
+**at delivery time** — after the frame that shows the release, through a frame
+callback plus a task, with a bounded 250 ms fallback for a page that never
+paints, running exactly once and cancelled by a reset or a disposal — so a
 device cache installed a moment later still receives that tail, and one that has
 been removed never does. Persistence, expiry, reading a tail back and deleting
 one belong to RP-10; nothing here writes anything durable.

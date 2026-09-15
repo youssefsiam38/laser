@@ -16,9 +16,22 @@ export type HistoryAction =
  * revision it was valid at, the environment that revision belongs to, and
  * whether the session has any history at all.
  */
-function validatedOf(window: Omit<HistoryWindow, "live">): ValidatedRevision {
+function validatedOf(window: Omit<HistoryWindow, "live">, view: SessionView): ValidatedRevision {
   return { revision: window.revision, environmentKey: window.environmentKey, epoch: window.epoch, seq: window.seq,
-    hasHistory: window.hasHistory, at: new Date().toISOString() };
+    hasHistory: window.hasHistory, at: new Date().toISOString(), ...(sessionIdOf(view) ? { sessionId: sessionIdOf(view)! } : {}) };
+}
+
+/** Characters of a session id this keeps. Bounded before it is retained. */
+const SESSION_ID_MAX = 128;
+
+/**
+ * The session's own durable id, from the state the worker published. Bounded,
+ * and never invented: a view whose state carries none keeps none, and the
+ * record it releases says so rather than carrying a guess.
+ */
+function sessionIdOf(view: SessionView): string | undefined {
+  const id = (view.state as { id?: unknown } | undefined)?.id;
+  return typeof id === "string" && id !== "" && id.length <= SESSION_ID_MAX ? id : undefined;
 }
 
 export const hasCompleteTree = (view: SessionView | undefined): boolean =>
@@ -95,7 +108,7 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
       const entries = retainTree ? [...new Map([...v.entries, ...action.entries].map(entry => [(entry as { id: string }).id, entry])).values()] : action.entries;
       const history = retainTree ? { ...window, complete: true, branchesUnloaded: false, userOffset: 0, context: [], priorGoalIds: [] } : window;
       if (retainTree) delete history.before;
-      let next: SessionView = { ...awake(v), entries, leafId: action.leafId, history, hydrated: true, validated: validatedOf(window),
+      let next: SessionView = { ...awake(v), entries, leafId: action.leafId, history, hydrated: true, validated: validatedOf(window, v),
         historyRevision: action.replaceWindow ? action.token : v.historyRevision,
         blocks: blocksFromEntries(entries, action.leafId, modelNamesOf(v.state)),
         running: live?.running ?? v.running, lastSeq: action.window.seq, updateEpoch: history.epoch, pendingSentBy: undefined, historyPending: undefined };
@@ -132,7 +145,7 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
       const entries = [...new Map([...v.entries, ...action.entries].map(entry => [(entry as { id: string }).id, entry])).values()];
       const { live: _live, before: _before, ...history } = action.window;
       const merged = v.history ? { ...v.history, seq: history.seq, hasHistory: v.history.hasHistory || history.hasHistory } : { ...history, userOffset: 0, context: [], priorGoalIds: [], complete: true };
-      return { ...v, entries, leafId: action.leafId, history: merged, validated: validatedOf(merged) };
+      return { ...v, entries, leafId: action.leafId, history: merged, validated: validatedOf(merged, v) };
     }
     case "historyPrepend": {
       if (v.historyRevision !== action.revision || v.history?.before !== action.before || v.history.epoch !== action.window.epoch) return v;

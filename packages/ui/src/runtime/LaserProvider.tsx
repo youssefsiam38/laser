@@ -723,9 +723,14 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
    * nothing and pins nothing.
    */
   const composerDrafts = useRef(new Set<string>());
+  const notifyPins = useRef<() => void>(() => {});
   const setComposerDraft = useCallback((path: string, held: boolean) => {
+    const before = composerDrafts.current.has(path);
     if (held) composerDrafts.current.add(path);
     else composerDrafts.current.delete(path);
+    // Words appearing or going is a change in what is held, and the store did
+    // not move: the bound has to be told (RP-5).
+    if (before !== held) notifyPins.current();
   }, []);
   const windows = useMemo(() => createHistoryWindows(store), [store]);
   useEffect(() => () => windows.dispose(), [windows]);
@@ -750,6 +755,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       for (const path of paths) client.untrack(path);
     },
   }), [client, store]);
+  notifyPins.current = viewCache.notifyPins;
   useEffect(() => {
     const stop = store.subscribe(() => viewCache.observe(store.getSnapshot()));
     viewCache.observe(store.getSnapshot());
@@ -980,6 +986,8 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     scopedPaths.current.set(path, (scopedPaths.current.get(path) ?? 0) + 1);
     scopeClaims.current.set(owner, path);
     claimScope(owner, path);
+    // A scope now holds this session, and letting go below releases it.
+    notifyPins.current();
     setScopeRevision((n) => n + 1);
     return () => {
       const left = (scopedPaths.current.get(path) ?? 1) - 1;
@@ -988,6 +996,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       scopeClaims.current.delete(owner);
       scopeClaimedAt.current.delete(owner);
       client.request("pi/session/detach", { path, owner }).catch(() => {});
+      notifyPins.current();
       setScopeRevision((n) => n + 1);
     };
   }, [claimScope, client]);

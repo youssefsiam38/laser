@@ -18,6 +18,13 @@ export type EvictionReason = "count" | "bytes" | "pressure";
  */
 export interface ValidatedRevision {
   revision: string;
+  /**
+   * The session's own durable id, as the authoritative session state gives it
+   * (`SessionState.id`). Never a path and never read out of an entry: a cache
+   * (RP-10) keys by this, and an identity guessed from storage is not one.
+   * Absent only when the state carried none or one this refused to bound.
+   */
+  sessionId?: string | undefined;
   environmentKey: string;
   epoch: string;
   seq: number;

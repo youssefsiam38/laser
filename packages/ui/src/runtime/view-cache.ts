@@ -27,6 +27,7 @@
  * Pure of React. The provider owns one instance and feeds it the store.
  */
 import type { Action, AppState, EvictionReason, SessionView } from "../store.js";
+import { hasUnsentWork, isDormantView } from "../view-summary.js";
 import { captureViewTail, viewTailSink, type ViewTailDto, type ViewTailSink } from "./view-tail.js";
 import { EMPTY_MEASURE, measureView, type ViewMeasure } from "./view-measure.js";
 import { isTerminalRunStatus } from "@lasercode/protocol";
@@ -148,31 +149,64 @@ export interface ViewCacheOptions {
   limits?: ViewCacheLimits;
   now?: () => Date;
   /** Run a maintenance pass later, coalesced. */
-  defer?: (run: () => void) => (() => void);
-  /** Hand a captured tail over after the release has been published and painted. */
-  deliver?: (run: () => void) => void;
+  defer?: (run: () => void, delayMs?: number) => (() => void);
+  /**
+   * Hand a captured tail over after the release has been published and
+   * painted. Returns a cancel, so a reset or a disposal drops what it was
+   * about to hand over.
+   */
+  deliver?: (run: () => void) => (() => void);
   /** Called when a transcript is released, so its reads stop being resumed. */
   onRelease?: (paths: readonly string[]) => void;
 }
 
 /**
- * Content transactions a hydrated view may absorb before the next pass. A
- * streamed token must not cost a measurement of the whole transcript, so
- * growth is counted rather than measured, and the pass that follows measures
- * once. Hydration and pin changes schedule a pass immediately.
+ * The shortest gap between two passes caused by content alone.
+ *
+ * Growth always schedules a pass — one large tool result is one transaction and
+ * must not wait for a second — but a streamed turn produces a transaction per
+ * token, and measuring on each of them would cost the transcript per frame. So
+ * the first growth since the last pass schedules one, and the ones behind it
+ * wait for this gap. A change to what is *pinned* never waits: it schedules
+ * immediately, because that is when a view stops being held.
  */
-const GROWTH_TRANSACTIONS = 256;
+const GROWTH_PASS_INTERVAL_MS = 250;
 
-const defaultDefer = (run: () => void): (() => void) => {
-  const timer = setTimeout(run, 0);
+const defaultDefer = (run: () => void, delayMs = 0): (() => void) => {
+  const timer = setTimeout(run, delayMs);
   return () => clearTimeout(timer);
 };
 
-// Deliberately a macrotask: a microtask still runs before paint, and a slow or
-// throwing cache must not be able to delay the frame that shows the release.
-const defaultDeliver = (run: () => void): void => {
-  setTimeout(run, 0);
+/**
+ * Hand the tail over after the frame that shows the release.
+ *
+ * A frame callback plus a task is the real post-paint point on a visible page;
+ * a hidden or throttled page never paints, so a bounded timer runs it anyway
+ * rather than letting captured records pile up behind a frame that will not
+ * come. Whichever arrives first runs, exactly once.
+ */
+const defaultDeliver = (run: () => void): (() => void) => {
+  let done = false;
+  const once = () => {
+    if (done) return;
+    done = true;
+    clearTimeout(fallback);
+    if (frame !== undefined) cancelAnimationFrame(frame);
+    run();
+  };
+  const fallback = setTimeout(once, DELIVERY_FALLBACK_MS);
+  const frame = typeof requestAnimationFrame === "function"
+    ? requestAnimationFrame(() => { setTimeout(once, 0); })
+    : undefined;
+  return () => {
+    done = true;
+    clearTimeout(fallback);
+    if (frame !== undefined) cancelAnimationFrame(frame);
+  };
 };
+
+/** How long a page that never paints may hold a captured record. */
+export const DELIVERY_FALLBACK_MS = 250;
 
 export interface ViewCache {
   /** Fold one store publication. Cheap: reference comparisons, no measuring. */
@@ -187,6 +221,12 @@ export interface ViewCache {
   /** Measurement of one view, for tests and counters. */
   measure(path: string): ViewMeasure;
   /**
+   * Something outside the store changed what is held: a composer draft was
+   * written or cleared, a scope took or let go of a session. Neither moves the
+   * reducer, so neither can be observed — they are said here.
+   */
+  notifyPins(): void;
+  /**
    * A new environment: recency, counters and any captured tail that has not
    * been handed over belong to the one this device just left (RP-13).
    */
@@ -198,7 +238,19 @@ interface Tracked {
   blocks: unknown;
   entries: unknown;
   hydrated: boolean;
+  /** Everything about this view a pin is decided from, as one cheap string. */
+  pins: string;
 }
+
+/**
+ * What a pin is decided from, per view, without walking anything: references
+ * the reducer replaces when it changes, and three lengths. Two readings with
+ * the same fingerprint cannot differ in whether this view is held.
+ */
+const pinFingerprint = (view: SessionView): string =>
+  `${view.running ? 1 : 0}${view.state.isStreaming ? 1 : 0}${view.state.isCompacting ? 1 : 0}`
+  + `:${view.dialogs.length}:${view.pending.length}:${view.queue.steering.length}:${view.queue.followUp.length}`
+  + `:${view.historyPending ? 1 : 0}:${view.state.messageCount}:${view.state.pendingMessageCount}`;
 
 /**
  * Which pin holds this view, or `undefined` when nothing does. Reads scalars
@@ -240,31 +292,62 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
 
   const used = new Map<string, number>();
   const tracked = new Map<string, Tracked>();
+  /** One measurement per view object: an unchanged view is never walked again. */
+  const measured = new WeakMap<SessionView, ViewMeasure>();
+  const deliveries = new Set<() => void>();
   let clock = 0;
-  let growth = 0;
   let lastOpen: AppState["open"] | undefined;
+  /** The registries and selections a pin is decided from, as references. */
+  let lastPinSources: readonly unknown[] = [];
   let cancelPass: (() => void) | undefined;
+  let passAt = 0;
   let evictions = 0;
   let overflow: RendererViewCounters["overflow"];
   let disposed = false;
   /** Everything captured in one environment; a reset abandons that generation. */
   let generation = 0;
 
-  const schedule = (): void => {
-    if (disposed || cancelPass) return;
+  /**
+   * Run a pass. `urgency: "pins"` is something that stopped holding a view and
+   * never waits; `"growth"` is content, and waits out the gap that keeps a
+   * streamed turn from measuring itself on every frame.
+   */
+  const schedule = (urgency: "pins" | "growth"): void => {
+    if (disposed) return;
+    const wait = urgency === "pins" ? 0 : Math.max(0, passAt + GROWTH_PASS_INTERVAL_MS - Date.now());
+    if (cancelPass) {
+      // A pin change overtakes a pass that was waiting out the content gap.
+      if (urgency !== "pins" || wait > 0) return;
+      cancelPass();
+    }
     cancelPass = defer(() => {
       cancelPass = undefined;
       maintain();
-    });
+    }, wait);
   };
 
-  const measureOf = (view: SessionView): ViewMeasure =>
-    view.hydrated || view.blocks.length > 0 || view.entries.length > 0 ? measureView(view) : EMPTY_MEASURE;
+  const measureOf = (view: SessionView): ViewMeasure => {
+    const cached = measured.get(view);
+    if (cached) return cached;
+    const measure = view.hydrated || view.blocks.length > 0 || view.entries.length > 0 ? measureView(view) : EMPTY_MEASURE;
+    measured.set(view, measure);
+    return measure;
+  };
 
-  const release = (paths: readonly { path: string; bytes: number; reason: EvictionReason }[]): ReleaseOutcome => {
-    if (paths.length === 0) return NOTHING_RELEASED;
+  const release = (candidates: readonly { path: string; bytes: number; reason: EvictionReason }[]): ReleaseOutcome => {
+    if (candidates.length === 0) return NOTHING_RELEASED;
     const state = options.read();
     const at = now().toISOString();
+    // Only what the store will actually release. The reducer refuses a view
+    // that is already dormant, holds an unsent prompt, or has nothing to give
+    // up; reporting one of those as released would be a lie, and handing over
+    // its tail would cache a transcript that is still on screen.
+    const paths = candidates.filter(({ path }) => {
+      const view = state.open[path];
+      return view !== undefined && !isDormantView(view) && !hasUnsentWork(view)
+        && (view.hydrated || view.blocks.length > 0 || view.entries.length > 0);
+    });
+    if (paths.length === 0) return NOTHING_RELEASED;
     // Captured before the release, from bytes that are still here; the record
     // shares nothing with the view it was taken from.
     const tails: ViewTailDto[] = [];
@@ -273,7 +356,12 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
       if (view) tails.push(captureViewTail(view, at));
     }
     const released = paths.map(({ path }) => path);
-    options.dispatch({ type: "views/evict", paths: released, reason: paths[0]!.reason, at });
+    // Each record says why it was released, so a mixed pass does not stamp one
+    // reason on views that were let go of for another.
+    for (const reason of new Set(paths.map((row) => row.reason))) {
+      const group = paths.filter((row) => row.reason === reason).map((row) => row.path);
+      options.dispatch({ type: "views/evict", paths: group, reason, at });
+    }
     for (const path of released) {
       used.delete(path);
       tracked.delete(path);
@@ -283,7 +371,9 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
     // After the store has published and the frame has been painted: a
     // synchronous, slow or throwing sink can delay neither.
     const captured = generation;
-    deliver(() => {
+    let cancel: (() => void) | undefined;
+    const hand = () => {
+      if (cancel) deliveries.delete(cancel);
       if (disposed || captured !== generation) return;
       // Read now, not when the release was decided: a cache installed in the
       // meantime receives this tail, and one that has gone never does.
@@ -296,7 +386,9 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
           // is already released and the conversation is read from its host.
         }
       }
-    });
+    };
+    cancel = deliver(hand);
+    deliveries.add(cancel);
     return {
       released: paths.map(({ path, bytes, reason }) => ({ path, bytes, reason })),
       bytesReleased: paths.reduce((sum, row) => sum + row.bytes, 0),
@@ -345,9 +437,12 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
     let total = bytes;
     let count = hydrated.length;
 
-    // One transcript over its own share goes first, whatever the count says.
+    // One transcript over its own share goes first, whatever the count says —
+    // and so does one holding an image whose decoded size could not be read.
+    // A few encoded kilobytes can be an enormous surface once decoded, and a
+    // number nobody could measure must not buy a conversation a place here.
     for (const row of candidates) {
-      if (row.measure.bytes <= effective.viewBytes) continue;
+      if (row.measure.bytes <= effective.viewBytes && row.measure.imagesEstimated === 0) continue;
       chosen.push({ path: row.path, bytes: row.measure.bytes, reason: "bytes" });
       taken.add(row.path);
       total -= row.measure.bytes;
@@ -383,7 +478,7 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
 
   function maintain(): ReleaseOutcome {
     if (disposed) return NOTHING_RELEASED;
-    growth = 0;
+    passAt = Date.now();
     const state = options.read();
     const { paths, refused, overflow: over } = plan(state, limits);
     overflow = over;
@@ -393,31 +488,52 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
 
   return {
     observe(state) {
-      if (disposed || state.open === lastOpen) return;
+      if (disposed) return;
+      // What a pin is decided from outside a view: the selection, the two
+      // registries, and the loads in flight. A run going terminal or a task
+      // ending replaces its registry and nothing else, so `open` alone would
+      // never notice that a view stopped being held.
+      const sources = [state.current, state.destination, state.agents.runs, state.tasks.tasks, state.sessionLoads];
+      const pinsChanged = sources.some((source, index) => source !== lastPinSources[index]);
+      lastPinSources = sources;
+      if (state.open === lastOpen && !pinsChanged) return;
+      const openChanged = state.open !== lastOpen;
       lastOpen = state.open;
       let hydratedCount = 0;
-      let structural = tracked.size === 0;
+      let structural = tracked.size === 0 || pinsChanged;
+      let grew = false;
       const seen = new Set<string>();
       for (const [path, view] of Object.entries(state.open)) {
         seen.add(path);
         const hydrated = view.hydrated && view.dormant === undefined;
         if (hydrated) hydratedCount += 1;
+        const pins = pinFingerprint(view);
         const previous = tracked.get(path);
         if (!previous) {
-          tracked.set(path, { blocks: view.blocks, entries: view.entries, hydrated });
+          tracked.set(path, { blocks: view.blocks, entries: view.entries, hydrated, pins });
           if (hydrated) structural = true;
           continue;
         }
-        if (previous.hydrated !== hydrated) structural = true;
-        // A streamed token replaces the blocks array and nothing else: it is
-        // growth, counted here and measured only when a pass runs.
-        else if (previous.blocks !== view.blocks || previous.entries !== view.entries) growth += 1;
+        // A turn ending, a queue emptying, a question answered: this view may
+        // have stopped being held, and that is never made to wait.
+        if (previous.hydrated !== hydrated || previous.pins !== pins) structural = true;
+        // A streamed token replaces the blocks array and nothing else. One such
+        // transaction can also be one enormous tool result, so it schedules a
+        // pass too — just one that waits out the gap between content passes.
+        else if (previous.blocks !== view.blocks || previous.entries !== view.entries) grew = true;
         previous.blocks = view.blocks;
         previous.entries = view.entries;
         previous.hydrated = hydrated;
+        previous.pins = pins;
       }
-      for (const path of [...tracked.keys()]) if (!seen.has(path)) tracked.delete(path);
-      if (structural || hydratedCount > limits.views || growth >= GROWTH_TRANSACTIONS) schedule();
+      if (openChanged) for (const path of [...tracked.keys()]) if (!seen.has(path)) tracked.delete(path);
+      if (structural || hydratedCount > limits.views) schedule("pins");
+      else if (grew) schedule("growth");
+    },
+    notifyPins() {
+      // A draft written or cleared, a scope taking or letting go of a session:
+      // the store did not move, so nothing could have observed it.
+      schedule("pins");
     },
     touch(path) {
       used.set(path, ++clock);
@@ -473,10 +589,15 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
       generation += 1;
       cancelPass?.();
       cancelPass = undefined;
+      // A record captured in the environment this device just left is never
+      // handed to the cache of the one it is in now.
+      for (const cancel of deliveries) cancel();
+      deliveries.clear();
       used.clear();
       tracked.clear();
       lastOpen = undefined;
-      growth = 0;
+      lastPinSources = [];
+      passAt = 0;
       evictions = 0;
       overflow = undefined;
     },
@@ -485,6 +606,8 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
       generation += 1;
       cancelPass?.();
       cancelPass = undefined;
+      for (const cancel of deliveries) cancel();
+      deliveries.clear();
       used.clear();
       tracked.clear();
     },

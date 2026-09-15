@@ -3,12 +3,12 @@
  * against which limits, and what it costs to keep it up to date while an agent
  * streams.
  */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentRun, BackgroundTask, SessionState } from "@lasercode/protocol";
 
 import { createStateStore } from "../../src/runtime/LaserProvider.js";
-import { createViewCache, pinReason, rendererViewsStore, type ViewCacheEnvironment, type ViewCacheLimits } from "../../src/runtime/view-cache.js";
-import { VIEW_TAIL_MAX_ENTRIES, type ViewTailDto } from "../../src/runtime/view-tail.js";
+import { createViewCache, DELIVERY_FALLBACK_MS, pinReason, rendererViewsStore, type ViewCacheEnvironment, type ViewCacheLimits } from "../../src/runtime/view-cache.js";
+import { VIEW_TAIL_MAX_ENTRIES, type ViewTailDto, type ViewTailSink } from "../../src/runtime/view-tail.js";
 import { initialState, isDormantView, reduce, type AppState } from "../../src/store.js";
 import { MessageEditPresentation, TranscriptPresentation } from "../../src/runtime/transcript-presentation.js";
 
@@ -16,7 +16,7 @@ const CWD = "/p";
 const pathOf = (index: number): string => `${CWD}/s${index}.jsonl`;
 
 const sessionState = (path: string, over: Partial<SessionState> = {}): SessionState => ({
-  path, cwd: CWD, messageCount: 4, pendingMessageCount: 0, isStreaming: false, isCompacting: false, ...over,
+  path, id: `id-${path}`, cwd: CWD, messageCount: 4, pendingMessageCount: 0, isStreaming: false, isCompacting: false, ...over,
 } as SessionState);
 
 const entryOf = (path: string, index: number, size: number) => ({
@@ -67,7 +67,8 @@ function harness({ limits, environment = noDrafts, deliverNow = true }: { limits
     limits: { views: 2, bytes: 4096, viewBytes: 2048, ...limits },
     now: () => new Date("2026-09-15T02:00:00.000Z"),
     defer: (run) => { deferred = () => { passes += 1; run(); }; return () => { deferred = undefined; }; },
-    deliver: (run) => { delivery = run; if (deliverNow) run(); },
+    
+    deliver: (run) => { delivery = run; if (deliverNow) run(); return () => { delivery = undefined; }; },
     onRelease: (paths) => untracked.push(...paths),
   });
   store.subscribe(() => cache.observe(store.getSnapshot()));
@@ -259,6 +260,7 @@ describe("what a release hands over", () => {
         // By the time the sink is even offered the tail, the view is dormant.
         expect(isDormantView(store.getSnapshot().open[pathOf(1)])).toBe(true);
         run();
+        return () => {};
       },
     });
     const path = pathOf(1);
@@ -371,5 +373,273 @@ describe("what it costs while an agent streams", () => {
     expect(during).toBe(0);
     expect(h.passes() - before).toBeLessThanOrEqual(1);
     expect(isDormantView(h.store.getSnapshot().open[path])).toBe(false);
+  });
+});
+
+describe("when a pass happens", () => {
+  it("runs after one large content transaction, without waiting for a stream of them", () => {
+    const h = harness({ limits: { views: 6, bytes: 1 << 24, viewBytes: 4096 } });
+    load(h, pathOf(1), { entries: 2, size: 32 });
+    h.runDeferred();
+    // One tool result, one transaction, far over the per-view share.
+    h.store.dispatch({ type: "notification", method: "session/update", params: { sessionPath: pathOf(1), seq: 90, at: "",
+      update: { kind: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: { command: "ls" } } } as never });
+    h.store.dispatch({ type: "notification", method: "session/update", params: { sessionPath: pathOf(1), seq: 91, at: "",
+      update: { kind: "tool_execution_end", toolCallId: "t1", result: "x".repeat(200_000), isError: false } } as never });
+
+    h.runDeferred();
+
+    expect(isDormantView(h.store.getSnapshot().open[pathOf(1)])).toBe(true);
+  });
+
+  it("reconciles when a run goes terminal and `open` never changes", () => {
+    // One transcript, well over the byte bound, held only by its agent run.
+    const h = harness({ limits: { views: 6, bytes: 2048, viewBytes: 2048 } });
+    load(h, pathOf(1), { entries: 8, size: 400 });
+    const running: AgentRun = { runId: "r1", sessionPath: pathOf(1), rootSessionPath: pathOf(1), agentName: "worker", subagentName: "w", status: "running", origin: "agent", startedAt: "", updatedAt: "2026-09-15T00:00:00.000Z", cwd: CWD } as AgentRun;
+    h.store.dispatch({ type: "agents/run", run: running });
+    h.runDeferred();
+    expect(isDormantView(h.store.getSnapshot().open[pathOf(1)])).toBe(false);
+    expect(h.cache.counters().overflow).toBe("pinned");
+    const open = h.store.getSnapshot().open;
+
+    h.store.dispatch({ type: "agents/run", run: { ...running, status: "completed", updatedAt: "2026-09-15T00:01:00.000Z" } as AgentRun });
+
+    // The run registry moved and the open map did not.
+    expect(h.store.getSnapshot().open).toBe(open);
+    h.runDeferred();
+    expect(isDormantView(h.store.getSnapshot().open[pathOf(1)])).toBe(true);
+  });
+
+  it("reconciles when a background command stops and `open` never changes", () => {
+    const h = harness({ limits: { views: 6, bytes: 2048, viewBytes: 2048 } });
+    load(h, pathOf(1), { entries: 8, size: 400 });
+    const task: BackgroundTask = { id: "t1", sessionPath: pathOf(1), command: "pnpm test", status: "running", outputBytes: 0, startedAt: "" } as BackgroundTask;
+    h.store.dispatch({ type: "tasks/update", task });
+    h.runDeferred();
+    expect(isDormantView(h.store.getSnapshot().open[pathOf(1)])).toBe(false);
+    const open = h.store.getSnapshot().open;
+
+    h.store.dispatch({ type: "tasks/update", task: { ...task, status: "completed", exitCode: 0 } as BackgroundTask });
+
+    expect(h.store.getSnapshot().open).toBe(open);
+    h.runDeferred();
+    expect(isDormantView(h.store.getSnapshot().open[pathOf(1)])).toBe(true);
+  });
+
+  it("reconciles when a turn ends", () => {
+    const h = harness({ limits: { views: 6, bytes: 2048, viewBytes: 2048 } });
+    load(h, pathOf(1), { entries: 8, size: 400, over: { isStreaming: true } });
+    h.runDeferred();
+    expect(isDormantView(h.store.getSnapshot().open[pathOf(1)])).toBe(false);
+
+    h.store.dispatch({ type: "notification", method: "session/update", params: { sessionPath: pathOf(1), seq: 95, at: "",
+      update: { kind: "state", state: { ...h.store.getSnapshot().open[pathOf(1)]!.state, isStreaming: false } } } as never });
+    h.runDeferred();
+
+    expect(isDormantView(h.store.getSnapshot().open[pathOf(1)])).toBe(true);
+  });
+
+  it("reconciles when a draft is cleared outside the store", () => {
+    const drafts = new Set<string>([pathOf(1)]);
+    const h = harness({ limits: { views: 6, bytes: 2048, viewBytes: 2048 }, environment: { scoped: () => [], hasDraft: (path) => drafts.has(path) } });
+    load(h, pathOf(1), { entries: 8, size: 400 });
+    h.runDeferred();
+    expect(isDormantView(h.store.getSnapshot().open[pathOf(1)])).toBe(false);
+    expect(h.cache.counters().overflow).toBe("drafts");
+
+    // The person sent or cleared their words. The reducer never hears of it.
+    drafts.delete(pathOf(1));
+    h.cache.notifyPins();
+    h.runDeferred();
+
+    expect(isDormantView(h.store.getSnapshot().open[pathOf(1)])).toBe(true);
+  });
+});
+
+describe("an image whose decoded size nobody could read", () => {
+  const unknownImage = { type: "image" as const, mimeType: "image/svg+xml", data: btoa('<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"/>') };
+
+  const withUnknownImage = (h: Harness, path: string) => {
+    load(h, path, { entries: 2, size: 8 });
+    h.store.dispatch({ type: "optimisticUser", path, text: "a diagram", images: [unknownImage], id: `${path}:shown` });
+    h.store.dispatch({ type: "notification", method: "session/update", params: { sessionPath: path, seq: 80, at: "",
+      update: { kind: "message_end", message: { role: "user", content: [{ type: "text", text: "a diagram" }, unknownImage] } } } as never });
+  };
+
+  it("is released rather than kept on a number nobody measured", () => {
+    const h = harness({ limits: { views: 6, bytes: 1 << 24, viewBytes: 1 << 24 } });
+    withUnknownImage(h, pathOf(1));
+    load(h, pathOf(2), { entries: 2 });
+
+    // A few encoded bytes, under every bound, and an unknown decoded surface.
+    expect(h.cache.measure(pathOf(1)).imagesEstimated).toBe(1);
+    const outcome = h.cache.maintain();
+
+    expect(outcome.released.map((row) => row.path)).toEqual([pathOf(1)]);
+    expect(outcome.released[0]!.reason).toBe("bytes");
+    expect(h.cache.counters().imagesEstimated).toBe(0);
+    expect(isDormantView(h.store.getSnapshot().open[pathOf(2)])).toBe(false);
+  });
+
+  it("is kept while somebody is using it, and counted honestly", () => {
+    const h = harness({ limits: { views: 6, bytes: 1 << 24, viewBytes: 1 << 24 }, environment: { scoped: () => [pathOf(1)], hasDraft: () => false } });
+    withUnknownImage(h, pathOf(1));
+
+    const outcome = h.cache.maintain();
+
+    expect(outcome.released).toEqual([]);
+    expect(isDormantView(h.store.getSnapshot().open[pathOf(1)])).toBe(false);
+    expect(h.cache.counters().imagesEstimated).toBe(1);
+  });
+});
+
+describe("what each released record says about itself", () => {
+  it("gives every view its own reason when one pass releases for two", () => {
+    const h = harness({ limits: { views: 1, bytes: 1 << 24, viewBytes: 4096 } });
+    load(h, pathOf(1), { entries: 2, size: 16 });
+    load(h, pathOf(2), { entries: 20, size: 800 });
+    load(h, pathOf(3), { entries: 2, size: 16 });
+    h.store.dispatch({ type: "destination", destination: { phase: "ready-chat", intent: 1, target: { kind: "session", path: pathOf(3), visibleTab: "chat" }, path: pathOf(3), rememberedCode: { kind: "no-project-landing" } } as AppState["destination"] });
+
+    const outcome = h.cache.maintain();
+
+    expect(new Map(outcome.released.map((row) => [row.path, row.reason])))
+      .toEqual(new Map([[pathOf(2), "bytes"], [pathOf(1), "count"]]));
+    const open = h.store.getSnapshot().open;
+    expect(open[pathOf(2)]!.dormant?.reason).toBe("bytes");
+    expect(open[pathOf(1)]!.dormant?.reason).toBe("count");
+  });
+
+  it("reports only what the store actually released", () => {
+    // The view stops being releasable between the decision and the release.
+    const hydratedState = (() => {
+      const h = harness();
+      load(h, pathOf(1), { entries: 4 });
+      return h.store.getSnapshot();
+    })();
+    const dormant = reduce(hydratedState, { type: "views/evict", paths: [pathOf(1)], reason: "count", at: "2026-09-15T02:00:00.000Z" });
+    let reads = 0;
+    const dispatch = vi.fn();
+    const released: ViewTailDto[] = [];
+    const cache = createViewCache({
+      read: () => (++reads === 1 ? hydratedState : dormant),
+      dispatch,
+      environment: noDrafts,
+      limits: { views: 0, bytes: 0, viewBytes: 0 },
+      sink: { release: (tail) => released.push(tail) },
+      deliver: (run) => { run(); return () => {}; },
+    });
+
+    const outcome = cache.maintain();
+
+    expect(outcome.released).toEqual([]);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(released).toEqual([]);
+    expect(cache.counters().evictions).toBe(0);
+  });
+});
+
+describe("when the tail is handed over", () => {
+  const load1 = (cache: ReturnType<typeof createViewCache>, store: ReturnType<typeof createStateStore>) => {
+    const path = pathOf(1);
+    const built = hydrate(initialState, path, { entries: 4 });
+    const rows = built.open[path]!.entries;
+    store.dispatch({ type: "opened", state: built.open[path]!.state });
+    store.dispatch({ type: "historyBegin", path, token: `${path}:t` });
+    store.dispatch({ type: "historySnapshot", path, token: `${path}:t`, entries: rows, leafId: (rows.at(-1) as { id: string }).id, window: window(4) });
+    void cache;
+  };
+
+  const realFrame = globalThis.requestAnimationFrame;
+  const realCancel = globalThis.cancelAnimationFrame;
+  let frames: Array<() => void>;
+
+  const useFrames = (available: boolean) => {
+    frames = [];
+    if (available) {
+      globalThis.requestAnimationFrame = ((callback: FrameRequestCallback) => {
+        frames.push(() => callback(0));
+        return frames.length;
+      }) as typeof requestAnimationFrame;
+      globalThis.cancelAnimationFrame = ((handle: number) => { frames[handle - 1] = () => {}; }) as typeof cancelAnimationFrame;
+    } else {
+      (globalThis as { requestAnimationFrame?: unknown }).requestAnimationFrame = undefined;
+      (globalThis as { cancelAnimationFrame?: unknown }).cancelAnimationFrame = undefined;
+    }
+  };
+
+  const cacheOver = (store: ReturnType<typeof createStateStore>, sink: ViewTailSink) => createViewCache({
+    read: () => store.getSnapshot(), dispatch: store.dispatch, environment: noDrafts,
+    limits: { views: 0, bytes: 0, viewBytes: 0 }, sink,
+  });
+
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => {
+    vi.useRealTimers();
+    globalThis.requestAnimationFrame = realFrame;
+    globalThis.cancelAnimationFrame = realCancel;
+  });
+
+  it("waits for the frame that shows the release, then hands it over exactly once", () => {
+    useFrames(true);
+    const store = createStateStore({ ...initialState, connection: "open" });
+    const release = vi.fn();
+    const cache = cacheOver(store, { release });
+    load1(cache, store);
+
+    cache.maintain();
+
+    // Released, painted by nobody yet: the record has not moved.
+    expect(isDormantView(store.getSnapshot().open[pathOf(1)])).toBe(true);
+    expect(release).not.toHaveBeenCalled();
+
+    for (const frame of frames) frame();
+    expect(release).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(0);
+    expect(release).toHaveBeenCalledTimes(1);
+
+    // The bounded fallback cannot hand the same record over a second time.
+    vi.advanceTimersByTime(1000);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands it over anyway on a page that never paints", () => {
+    useFrames(false);
+    const store = createStateStore({ ...initialState, connection: "open" });
+    const release = vi.fn();
+    const cache = cacheOver(store, { release });
+    load1(cache, store);
+
+    cache.maintain();
+    expect(release).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(DELIVERY_FALLBACK_MS);
+
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops what it was about to hand over when the environment changes, or it goes away", () => {
+    useFrames(true);
+    const store = createStateStore({ ...initialState, connection: "open" });
+    const release = vi.fn();
+    const cache = cacheOver(store, { release });
+    load1(cache, store);
+    cache.maintain();
+    cache.reset();
+
+    for (const frame of frames) frame();
+    vi.advanceTimersByTime(1000);
+    expect(release).not.toHaveBeenCalled();
+
+    const second = createStateStore({ ...initialState, connection: "open" });
+    const other = vi.fn();
+    const disposed = cacheOver(second, { release: other });
+    load1(disposed, second);
+    disposed.maintain();
+    disposed.dispose();
+    for (const frame of frames) frame();
+    vi.advanceTimersByTime(1000);
+    expect(other).not.toHaveBeenCalled();
   });
 });

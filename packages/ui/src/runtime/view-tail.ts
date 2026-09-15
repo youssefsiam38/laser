@@ -33,11 +33,20 @@ export interface ViewTailEntryDto {
   readonly json: string;
 }
 
-export type ViewTailOmission = "no-revision" | "over-bounds" | "unserializable";
+export type ViewTailOmission = "no-revision" | "no-session-id" | "over-bounds" | "unserializable";
+
+/** Characters of the session's own durable id. Bounded before it is carried. */
+export const VIEW_TAIL_SESSION_ID_MAX = 128;
 
 export interface ViewTailDto {
   readonly schema: typeof VIEW_TAIL_SCHEMA;
   readonly path: string;
+  /**
+   * The session's own durable id, from the authoritative session state — never
+   * derived from a path or from an entry. A cache keys by this; a record that
+   * cannot carry one is refused rather than adapted (RP-10).
+   */
+  readonly sessionId: string;
   readonly environmentKey: string;
   readonly revision: string;
   readonly epoch: string;
@@ -98,9 +107,13 @@ const identityOf = (entry: unknown): { id: string; parentId: string | null } | u
  */
 export function captureViewTail(view: SessionView, capturedAt: string): ViewTailDto {
   const validated = view.validated;
+  // The identity comes from the session state the worker published, and is
+  // preserved on the light record; nothing here reads a path or an entry for it.
+  const sessionId = validated?.sessionId ?? "";
   const base = {
     schema: VIEW_TAIL_SCHEMA,
     path: view.path,
+    sessionId,
     environmentKey: validated?.environmentKey ?? "",
     revision: validated?.revision ?? "",
     epoch: validated?.epoch ?? view.updateEpoch ?? "",
@@ -108,8 +121,13 @@ export function captureViewTail(view: SessionView, capturedAt: string): ViewTail
     leafId: view.leafId,
     capturedAt,
   } as const;
+  const empty = (omitted: ViewTailOmission): ViewTailDto =>
+    Object.freeze({ ...base, entries: Object.freeze([]), truncated: false, bytes: 0, omitted });
   // A tail nothing can validate is not a cache entry; it is a guess.
-  if (!validated) return Object.freeze({ ...base, entries: Object.freeze([]), truncated: false, bytes: 0, omitted: "no-revision" as const });
+  if (!validated) return empty("no-revision");
+  // A tail nothing can identify is the same: a cache keys by the session's own
+  // id, and an unidentified record would have to be adapted to be usable.
+  if (sessionId === "" || sessionId.length > VIEW_TAIL_SESSION_ID_MAX) return empty("no-session-id");
 
   const entries: ViewTailEntryDto[] = [];
   let bytes = 0;
