@@ -332,7 +332,7 @@ Rules for a bridge:
 
 | Module | Bridges | Detection | What it produces |
 | --- | --- | --- | --- |
-| `provider-log` | Pi's own provider hooks | always | `laser/provider/*` for the logs page |
+| `provider-log` | Pi's own provider hooks | always | `laser/provider/*` for the logs page: the request redacted and serialized once here, whole when small, in bounded chunks when large, and recorded with its size, digest and reason when its body is not kept (§ below) |
 | `account-usage` | the subscription allowance route | an account-authenticated provider | `laser/account-usage/state` |
 | `goal` | `@narumitw/pi-goal` state entries | Goals feature enabled | `laser/goal/state` |
 | `subagents` | the worker's agent harness (`AgentHarnessBridge`) | `ctx.agents` present | the harness tools, the child's role block, `laser/agent-event` custom messages in the parent |
@@ -423,6 +423,56 @@ pins both verbatim.
 
 Deliberately **not** implemented: requiring a read before editing a file that
 was never read. That is a stricter rule, and it is not this one.
+
+---
+
+## 9. Provider captures: bounded, redacted where they are made (RP-7)
+
+A provider request is the whole conversation of that turn, every tool result
+included, and one is made on **every** model call. It used to cross to the host
+as one extension message carrying the live payload object, which the host then
+parsed, redacted (a second copy), re-serialized (a third) and hashed — through a
+decoder that re-scanned its buffer on every chunk, so a 16 MiB request cost the
+host about 700 ms of event loop and a ~200 MiB transient peak, for a body most
+people never open.
+
+`provider-log` now owns the shape of that crossing:
+
+- **Redacted, serialized and verified once, here.** The shared projection in
+  `@lasercode/protocol` (`redactForStorage`) is the same code the host runs on
+  every other row: it redacts, serializes, and then reads its own output back
+  looking for a credential-shaped field that survived. Nothing deeper than the
+  redaction ceiling is kept at all — past it the subtree is replaced by a
+  sentinel and counted, so a credential below it cannot be stored unexamined —
+  and a survivor means the body is **not kept**: the request is recorded with
+  reason `unredacted` instead. The host applies the same projection to a body
+  it did not make, and a defence log names keys, never values.
+- **Small captures are unchanged.** At or below 1 MiB it is the same single
+  message it always was.
+- **Large captures travel in bounded chunks** — `begin` with size, SHA-256,
+  preview and the row's summary, then 256 KiB pieces cut on UTF-8 boundaries,
+  then `end`. The link is re-read before every piece, because a clear pipe at
+  the first chunk says nothing about the tenth and the loop does not yield; if
+  the backlog this capture did not cause is past the mark — the session's own
+  updates waiting behind a diagnostic — the capture stops with one small
+  `abort` and becomes a row without a body. Its own bytes are not that signal:
+  a large capture puts itself over any mark, and the ceiling is what bounds it. The host reassembles under per-session, per-worker-generation and
+  global bounds, verifies order, count, size and digest, and releases the pieces
+  on every outcome — abort included, which is the one atomic path keyed by the
+  capture id, so a capture is never two rows.
+- **A capture with no body is still a row.** Larger than 16 MiB, the link to the
+  app backed up with somebody else's traffic, an installation that keeps
+  summaries only, an interrupted stream, a digest that did not match, a
+  credential that could not be removed: each records the request with its exact
+  redacted size, its digest and its reason, and the inspector says which in a
+  person's words. Sizes and digests always describe the redacted copy the app
+  keeps, and every surface that shows them says so.
+- **Only the diagnostic waits.** Shedding a capture because the link is busy
+  never delays a turn, a question, a task or a command.
+
+None of these messages reaches a client, a relay listener or an audit line: the
+host's broadcast drops every one of them before serialization, and a person
+reads the row back through `pi/logs/query` and `pi/logs/content` like any other.
 
 ---
 

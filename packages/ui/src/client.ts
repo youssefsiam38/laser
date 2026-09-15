@@ -10,7 +10,13 @@
  * `session/update` notifications are coalesced to one flush per animation
  * frame; every other message flushes the buffer first, so order is preserved.
  */
-import { ENVIRONMENT_CONTRACT_VERSION, ENVIRONMENT_DESCRIBE_METHOD, PRODUCT_VERSION, environmentDescriptorSchema } from "@lasercode/protocol";
+import {
+  ENVIRONMENT_CONTRACT_VERSION,
+  ENVIRONMENT_DESCRIBE_METHOD,
+  PENDING_UPDATE_FLUSH_BYTES,
+  PRODUCT_VERSION,
+  environmentDescriptorSchema,
+} from "@lasercode/protocol";
 import type {
   ClientMethod,
   ClientRequests,
@@ -76,6 +82,30 @@ export interface HostClientOptions {
   shouldResume?: (path: string) => boolean;
 }
 
+/** One encoder for the whole module: constructing one per update is not free. */
+const UPDATE_ENCODER = new TextEncoder();
+
+/**
+ * What one coalesced delta weighs, in exact UTF-8 bytes.
+ *
+ * The buffer's bound is a byte bound, so this measures the actual queued
+ * representation rather than guessing from a field or counting UTF-16 code
+ * units — a CJK transcript would otherwise be accounted at a third of its
+ * size, and an emoji at half. A structural update with no text is measured the
+ * same way, because "a small fixed cost" is a guess too.
+ *
+ * `JSON.stringify` can throw on a value the wire could not have carried; such
+ * an update is impossible here, and if one ever appeared it counts as zero
+ * rather than taking the socket down.
+ */
+function updateBytes(params: SessionUpdateParams): number {
+  try {
+    return UPDATE_ENCODER.encode(JSON.stringify(params)).length;
+  } catch {
+    return 0;
+  }
+}
+
 /** Backstop flush cadence when `requestAnimationFrame` is absent or paused. */
 const FLUSH_INTERVAL_MS = 33;
 
@@ -113,6 +143,8 @@ export class HostClient {
   private timerHandle: ReturnType<typeof setTimeout> | undefined;
   /** Transcript deltas waiting for the next frame, in arrival (seq) order. */
   private readonly pendingUpdates: SessionUpdateParams[] = [];
+  /** Exact UTF-8 bytes of the queued deltas, so the buffer has a size and not only a clock. */
+  private pendingBytes = 0;
   /** Extra notification listeners registered with `subscribe()`. */
   private readonly listeners = new Set<NotificationHandler>();
 
@@ -176,6 +208,7 @@ export class HostClient {
       document.removeEventListener("visibilitychange", this.onVisible);
     }
     this.pendingUpdates.length = 0;
+    this.pendingBytes = 0;
     this.flushUpdates(); // clears the scheduled frame; the buffer is already empty
     this.ws?.close();
   }
@@ -432,6 +465,16 @@ export class HostClient {
    */
   private queueUpdate(params: SessionUpdateParams): void {
     this.pendingUpdates.push(params);
+    // A frame's worth of streaming text is tens of kilobytes; a megabyte
+    // waiting here means this view is throttled or hidden and the timer is
+    // still a third of a second away (RP-7). Flush it now — holding it costs
+    // more than delivering it, and nothing is ever dropped to make room. One
+    // update that is already past the mark goes out on its own.
+    this.pendingBytes += updateBytes(params);
+    if (this.pendingBytes >= PENDING_UPDATE_FLUSH_BYTES) {
+      this.flushUpdates();
+      return;
+    }
     // A hidden tab never paints, so rAF alone would buffer forever: the timer
     // is the backstop, and whichever fires first cancels the other.
     if (this.frameHandle === undefined && typeof globalThis.requestAnimationFrame === "function") {
@@ -459,6 +502,7 @@ export class HostClient {
     }
     if (this.pendingUpdates.length === 0) return;
     const batch = this.pendingUpdates.splice(0, this.pendingUpdates.length);
+    this.pendingBytes = 0;
     const deliver = () => {
       for (const params of batch) this.deliver("session/update", params);
     };

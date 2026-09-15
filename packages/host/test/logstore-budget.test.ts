@@ -196,12 +196,19 @@ describe("the space comes back", () => {
     // went — but the pages it freed are still in the file until they are given
     // back, which is the thing this test is about.
     expect(grown).toBeLessThan(30 * 1024 * 1024);
-    expect(grown).toBeGreaterThan(budget + 4 * 1024 * 1024);
+    // Above the budget, because freed pages are still in the file. It is no
+    // longer *far* above it: chunked bodies are checkpointed as they land
+    // (RP-7), so the WAL no longer carries a burst of them.
+    expect(grown).toBeGreaterThan(budget);
 
     const { bytes } = store.maintain();
     expect(retained(store)).toBeLessThanOrEqual(budget);
-    // Not the row count: the bytes on disk.
-    expect(bytes).toBeLessThan(grown - 4 * 1024 * 1024);
+    // Not the row count: the bytes on disk. The reclaim no longer has to
+    // recover a WAL-sized burst, because chunked bodies are checkpointed as
+    // they land (RP-7) — so the file never got far above the budget in the
+    // first place. What matters is unchanged: after it, the store is inside
+    // its budget.
+    expect(bytes).toBeLessThanOrEqual(grown);
     expect(bytes).toBeLessThan(budget + 2 * 1024 * 1024);
     expect(statSync(join(base, "shrink.db")).size).toBeLessThan(grownFile);
     // Everything still retained still opens.

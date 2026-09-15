@@ -23,9 +23,26 @@ function why(summary: LogBodySummary): string {
       return "This session has had newer requests since, and the full text is kept for the most recent ones.";
     case "budget":
       return "Kept request bodies had reached the size limit for the whole store, so the oldest were released first.";
+    case "over-ceiling":
+      return "This request was larger than the size kept in full, so it was recorded without its text.";
+    case "link-busy":
+      return "The app was busy receiving this session's own updates when the request was captured, so its text was skipped and the request itself was still recorded.";
+    case "summary-mode":
+      return "This installation is set to keep request summaries only, so no request text is stored.";
+    case "interrupted":
+      return "The capture stopped before all of it had arrived, so no partial text was kept.";
+    case "corrupt":
+      return "What arrived did not match the size and fingerprint the capture announced, so none of it was kept.";
+    case "unredacted":
+      return "A credential-shaped field could not be removed from this request, so none of its text was kept. The request itself is still recorded.";
     default:
       return "The rows that referred to it were removed when older logs were cleaned up.";
   }
+}
+
+/** Grouped digits: an exact count a person can read and compare. */
+function exactBytes(bytes: number): string {
+  return `${bytes.toLocaleString()} bytes (${formatBytes(bytes)})`;
 }
 
 export function ReleasedBody({
@@ -43,7 +60,8 @@ export function ReleasedBody({
     ...(summary.messages !== undefined
       ? [{ label: "messages", value: `${summary.messages}`, typed: true }]
       : []),
-    { label: "size", value: formatBytes(summary.bytes), typed: true },
+    { label: "size", value: exactBytes(summary.bytes), typed: true },
+    ...(summary.sha256 ? [{ label: "fingerprint", value: summary.sha256, typed: true }] : []),
     ...(summary.at ? [{ label: "captured", value: dateTime(summary.at) }] : []),
     ...(summary.durationMs !== undefined ? [{ label: "took", value: duration(summary.durationMs), typed: true }] : []),
   ];
@@ -59,7 +77,9 @@ export function ReleasedBody({
             Only this request&rsquo;s summary was kept
           </h3>
           <p className="mt-1 text-sm leading-6 text-ink-2">
-            {why(summary)} Everything below is what the log recorded about it at the time.
+            {why(summary)} Everything below is what the log recorded about it at the time. The size and
+            fingerprint describe the redacted copy this app would have kept, not the request as the
+            provider received it.
           </p>
         </div>
       </div>

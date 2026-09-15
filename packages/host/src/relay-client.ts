@@ -34,9 +34,11 @@ import {
   type CryptoBackend,
   type KeyPair,
 } from "@lasercode/crypto";
-import { ErrorCodes, type JsonRpcNotification, type JsonRpcResponse, type SessionUpdateParams, WIRE_NAMESPACE } from "@lasercode/protocol";
+import { ErrorCodes, RELAY_QUEUE_HARD_BYTES, RELAY_QUEUE_SOFT_BYTES, type JsonRpcNotification, type JsonRpcResponse, type SessionUpdateParams, WIRE_NAMESPACE } from "@lasercode/protocol";
 import WebSocket from "ws";
 import { SessionLoadDelivery } from "./session-load-delivery.js";
+import { OutboundPressure, fenceReasonText } from "./transport-pressure.js";
+import { refusalText, refuse, type RelayRefusal } from "./relay-pressure.js";
 import { TranscriptDelivery, type SessionMembershipView } from "./transcript-delivery.js";
 import { SearchCancellation } from "./search-cancellation.js";
 
@@ -115,6 +117,15 @@ export interface RelayClientStats {
    * the shaper's own `maxQueue`; neither grows without bound.
    */
   outboundQueueDropped: number;
+  /**
+   * Diagnostic notifications released because this device was behind (RP-7).
+   * Each is something it can read back with a request it already makes;
+   * nothing carrying state, a question or a terminal event is counted here.
+   */
+  diagnosticsShed: number;
+  /** Plaintext bytes queued for this device now, and the most it ever held. */
+  queuedBytes: number;
+  queuedHighWaterBytes: number;
   lastError?: string;
 }
 
@@ -185,7 +196,35 @@ export class RelayClient {
     notificationsDropped: 0,
     oversizedMessages: 0,
     outboundQueueDropped: 0,
+    diagnosticsShed: 0,
   };
+  /**
+   * What this one device costs the host in queued plaintext (RP-7): counted
+   * from the moment a frame is accepted for it, through Noise encryption and
+   * the socket, until the send settles. Crossing the soft mark releases the
+   * three notifications the device can read back; crossing the hard one closes
+   * **this** channel and nothing else — other devices, direct clients, workers
+   * and every command keep going, and the device resumes with `session/load
+   * { fromSeq }` when it reconnects.
+   */
+  private readonly pressure = new OutboundPressure({
+    softBytes: RELAY_QUEUE_SOFT_BYTES,
+    hardBytes: RELAY_QUEUE_HARD_BYTES,
+    onShed: ({ method, total }) => {
+      this.counters.diagnosticsShed = total;
+      this.log(`relay: ${this.deviceLabel()} is behind; released ${total} ${method} notification(s) it can read back`);
+    },
+    onFence: ({ reason, queuedBytes }) => {
+      this.lastError = `relay: ${fenceReasonText(reason)} (${queuedBytes} bytes queued for ${this.deviceLabel()})`;
+      this.log(this.lastError);
+      this.options.onError?.(new Error(this.lastError));
+      // Close this channel's socket only, and keep nothing for it. Backoff
+      // reconnects it, and the device re-reads what it missed.
+      this.fenceChannel();
+    },
+    // What the socket is still holding, as a second opinion on our own account.
+    bufferedAmount: () => this.ws?.bufferedAmount ?? 0,
+  });
   /**
    * The relay's own ceiling, from its `hello`. Frames above it are refused by
    * the relay with a socket close, so anything that would exceed it is reduced
@@ -224,10 +263,26 @@ export class RelayClient {
   }
 
   statistics(): RelayClientStats {
+    const pressure = this.pressure.snapshot();
     return {
       state: this.currentState,
       ...this.counters,
+      queuedBytes: pressure.queuedBytes,
+      queuedHighWaterBytes: pressure.highWaterBytes,
       ...(this.lastError !== undefined ? { lastError: this.lastError } : {}),
+    };
+  }
+
+  /** Queued bytes for this device, for the RP-3 retained-store counters. */
+  transportPressure(): { queuedBytes: number; highWaterBytes: number; shed: number; pendingFrames: number } {
+    const pressure = this.pressure.snapshot();
+    return {
+      queuedBytes: pressure.queuedBytes,
+      highWaterBytes: pressure.highWaterBytes,
+      shed: pressure.shed.total,
+      // Frames this device owes us: waiting on encryption and the socket, plus
+      // anything the shaper's grid is still holding.
+      pendingFrames: pressure.inFlight + (this.shaper?.pending ?? 0),
     };
   }
 
@@ -553,8 +608,8 @@ export class RelayClient {
         return;
       }
       this.counters.oversizedMessages++;
-      // Better an error the device can show than a frame that closes the socket.
-      // It is not a usable load response, so its questions are discarded.
+      // An answer the relay cannot carry is still an answer somebody asked
+      // for: the device is told, in a frame that does fit.
       await this.sendForGeneration(
         utf8(
           JSON.stringify({
@@ -594,13 +649,60 @@ export class RelayClient {
     if (!this.transcripts.accepts(notification)) return;
     const payload = this.encode(notification) ?? this.encode(reduce(notification));
     if (!payload) {
-      // Nothing sensible left to shrink. Losing one update is bad; tearing the
-      // session down and reconnecting into the same frame is worse.
-      this.counters.oversizedMessages++;
-      this.log(`relay: dropped a ${notification.method} notification that does not fit the relay's frame size`);
+      // Nothing sensible left to shrink. Only a notification the device can
+      // read back may be released here; anything else means this channel is
+      // no longer carrying its conversation (RP-7).
+      this.deny("oversize", notification.method);
       return;
     }
-    void this.send(payload).catch((error: unknown) => this.fail(asError(error)));
+    // Exact wire size, before anything is encrypted: bucket padding, frame
+    // header and AEAD tag are bytes this host holds too.
+    if (this.pressure.admit(notification.method, this.wireSize(payload)) !== "send") return;
+    void this.send(payload, notification.method).catch((error: unknown) => this.fail(asError(error)));
+  }
+
+  /**
+   * One frame could not be sent. The three declared diagnostics are released
+   * and counted; anything else — state, a question, a terminal event, an
+   * answer — fences this channel so the device reconnects and re-reads. One
+   * channel only: other devices, direct clients and every command carry on.
+   */
+  private deny(refusal: RelayRefusal, method?: string): void {
+    const verdict = refuse(refusal, method);
+    if (verdict.kind === "shed") {
+      this.counters.diagnosticsShed++;
+      if (refusal === "oversize") this.counters.oversizedMessages++;
+      else this.counters.outboundQueueDropped++;
+      this.log(`relay: ${this.deviceLabel()} is behind; released a ${verdict.method} notification it can read back`);
+      return;
+    }
+    this.lastError = `relay: ${refusalText(refusal, this.deviceLabel())}`;
+    this.log(this.lastError);
+    this.options.onError?.(new Error(this.lastError));
+    this.fenceChannel();
+  }
+
+  /**
+   * Close this channel and keep nothing for it. There is no second resume
+   * path (`docs/security.md` §7): the device reconnects and replays with
+   * `session/load { fromSeq }`, pending questions are re-emitted, and durable
+   * task and run state is read back.
+   */
+  private fenceChannel(): void {
+    this.pressure.reset();
+    // The shaper settles every reservation it was holding as it stops.
+    this.shaper?.stop();
+    this.shaper = null;
+    this.ws?.close(4408, "device is not draining");
+  }
+
+  /** What this payload really costs on the wire, padding and tag included. */
+  private wireSize(payload: Uint8Array): number {
+    try {
+      return frameSizeFor(payload.length);
+    } catch {
+      return payload.length;
+    }
   }
 
   /**
@@ -618,27 +720,44 @@ export class RelayClient {
     return payload;
   }
 
-  private async send(payload: Uint8Array): Promise<void> {
-    await this.sendForGeneration(payload, this.connectionGeneration);
+  private async send(payload: Uint8Array, method?: string): Promise<void> {
+    await this.sendForGeneration(payload, this.connectionGeneration, method);
   }
 
-  /** Confirm delivery only to the Noise/WebSocket generation that received the request. */
-  private async sendForGeneration(payload: Uint8Array, generation: number): Promise<boolean> {
+  /**
+   * Confirm delivery only to the Noise/WebSocket generation that received the
+   * request, and account the exact wire frame from reservation to callback.
+   *
+   * Every refusal on this path goes through `deny()`, so a cap can never
+   * quietly swallow something the device cannot ask for again.
+   */
+  private async sendForGeneration(payload: Uint8Array, generation: number, method?: string): Promise<boolean> {
     if (generation !== this.connectionGeneration || !this.session || !this.ws || this.ws.readyState !== this.ws.OPEN) return false;
+    if (this.pressure.fenced) return false;
+    const wire = this.wireSize(payload);
     if (this.shaper) {
-      this.shaper.enqueue(payload);
+      // The shaper holds the frame until its grid releases it, so those bytes
+      // are still this host's until it does.
+      if (!this.pressure.charge(wire)) return false;
+      let settled = false;
+      const settle = () => {
+        if (settled) return;
+        settled = true;
+        this.pressure.settle(wire);
+      };
+      if (!this.shaper.enqueue(payload, settle)) {
+        settle();
+        this.deny("shaper-full", method);
+        return false;
+      }
       return generation === this.connectionGeneration && this.session !== null;
     }
     const maxQueue = this.options.maxOutboundQueue ?? MAX_OUTBOUND_QUEUE;
     if (this.pendingSends >= maxQueue) {
-      // Bounded exactly like the shaped path: drop the frame, count it, say so.
-      // A device resumes with `session/load { fromSeq }`, so a lost update is
-      // recoverable; an unbounded queue on the desktop is not.
-      this.counters.outboundQueueDropped++;
-      this.lastError = `the relay's outbound queue is full (${maxQueue} frames); dropped one. ${this.deviceLabel()} is not draining.`;
-      this.options.onError?.(new Error(this.lastError));
+      this.deny("queue-full", method);
       return false;
     }
+    if (!this.pressure.charge(wire)) return false;
     this.pendingSends++;
     return this.enqueueSend(async () => {
       try {
@@ -659,6 +778,7 @@ export class RelayClient {
         });
       } finally {
         this.pendingSends--;
+        this.pressure.settle(wire);
       }
     });
   }
@@ -669,13 +789,34 @@ export class RelayClient {
     return queued;
   }
 
+  /**
+   * Put one shaped frame on the wire — a real one, or chaff.
+   *
+   * Chaff is privacy, not filler (`docs/security.md` §8): it is charged and
+   * settled exactly like a real frame, and if it cannot be charged the channel
+   * is fenced rather than quietly sent without its timing protection.
+   */
   private async writeFrame(payload: Uint8Array | null): Promise<void> {
     const session = this.session;
     const ws = this.ws;
     if (!session || !ws || ws.readyState !== ws.OPEN) return;
     const frame = payload === null ? await session.encryptChaff() : await session.encrypt(payload);
-    ws.send(frame, { binary: true });
-    this.counters.framesSent++;
+    if (payload === null && !this.pressure.charge(frame.byteLength)) {
+      this.deny("pressure");
+      return;
+    }
+    let settled = false;
+    const settle = () => {
+      if (settled || payload !== null) return;
+      settled = true;
+      this.pressure.settle(frame.byteLength);
+    };
+    try {
+      ws.send(frame, { binary: true }, () => settle());
+      this.counters.framesSent++;
+    } catch {
+      settle();
+    }
   }
 
   private startShaper(): void {
@@ -690,6 +831,9 @@ export class RelayClient {
 
   private teardown(reason: string): void {
     this.connectionGeneration++;
+    // Nothing is owed for a connection that is gone, and nothing is kept for
+    // it: the device resumes by asking, which is the only resume path there is.
+    this.pressure.reset();
     this.transcripts = new TranscriptDelivery();
     this.searches.close();
     this.searches = new SearchCancellation();

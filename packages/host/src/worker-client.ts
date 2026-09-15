@@ -5,9 +5,22 @@
  * entry file path.
  */
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
 import type { Duplex } from "node:stream";
-import { ENV, ErrorCodes, LineDecoder, isNotification, isResponse, type JsonRpcError, type JsonRpcMessage, type JsonRpcNotification, type WorkerNotifications } from "@lasercode/protocol";
+import {
+  ENV,
+  ErrorCodes,
+  FRAME_MAX_BYTES,
+  LineDecoder,
+  isNotification,
+  isResponse,
+  type JsonRpcError,
+  type JsonRpcMessage,
+  type JsonRpcNotification,
+  type LineDecoderStats,
+  type WorkerNotifications,
+} from "@lasercode/protocol";
 
 export interface WorkerClientOptions {
   cwd: string;
@@ -32,6 +45,13 @@ export interface WorkerClientOptions {
    * but never published: only its derived key reaches a client.
    */
   environmentId?: string;
+  /**
+   * Whether this installation's log store keeps provider request bodies
+   * (RP-7). `"summary"` is passed down as `--provider-payloads summary` and
+   * the worker never serializes a body at all; a worker that does not know the
+   * flag ignores it.
+   */
+  providerPayloads?: "full" | "summary";
   /** Path to the worker entry; defaults to the workspace `@lasercode/worker` build. */
   workerMain?: string;
   /** Node binary to run the worker with; defaults to the current one. */
@@ -75,6 +95,13 @@ export function defaultWorkerMain(): string {
 }
 
 export class WorkerClient {
+  /**
+   * This process's identity for anything the host keys by "which worker said
+   * that" (RP-7 captures). Opaque and random on purpose: a pid, a start token
+   * or a directory would be host-internal data with meaning elsewhere, and
+   * this value is never logged, never stored and never sent to a client.
+   */
+  readonly generation: string = randomBytes(8).toString("hex");
   private readonly child: ChildProcess;
   private readonly pipe: Duplex;
   private readonly pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
@@ -92,6 +119,10 @@ export class WorkerClient {
    * to tell "never started" from "exited", and to say which in the UI.
    */
   private startError: Error | undefined;
+  private decoder: LineDecoder | undefined;
+  /** Complete messages handed to the pipe and not yet written. */
+  private inFlightWrites = 0;
+  private rejectReady: ((error: Error) => void) | undefined;
   readonly ready: Promise<void>;
 
   constructor(private readonly options: WorkerClientOptions) {
@@ -101,6 +132,7 @@ export class WorkerClient {
     if (options.stateDir) args.push("--state-dir", options.stateDir);
     if (options.projectTrusted !== undefined) args.push("--project-trusted", options.projectTrusted ? "yes" : "no");
     if (options.environmentId) args.push("--environment-id", options.environmentId);
+    if (options.providerPayloads) args.push("--provider-payloads", options.providerPayloads);
 
     this.child = spawn(options.nodeBinary ?? process.execPath, args, {
       // --cwd configures the driver; it does not change the process directory.
@@ -120,10 +152,17 @@ export class WorkerClient {
       resolveReady = res;
       rejectReady = rej;
     });
+    this.rejectReady = rejectReady;
 
-    const decoder = new LineDecoder();
-    this.pipe.setEncoding("utf8");
-    this.pipe.on("data", (chunk: string) => {
+    // Bytes, not text: the decoder owns the UTF-8 boundary, so a frame's size
+    // is its exact byte count and a multi-byte character split across two pipe
+    // chunks is simply two pieces that are joined before they are decoded.
+    const decoder = new LineDecoder({
+      maxFrameBytes: FRAME_MAX_BYTES,
+      onOverflow: ({ bytes }) => this.faultGeneration(bytes),
+    });
+    this.decoder = decoder;
+    this.pipe.on("data", (chunk: Buffer) => {
       for (const line of decoder.push(chunk)) {
         let message: JsonRpcMessage;
         try {
@@ -160,6 +199,18 @@ export class WorkerClient {
     });
   }
 
+  /**
+   * One line to the worker, counted from here until the pipe has taken it.
+   * The count is what the diagnostics call a queued message; the bytes beside
+   * it are the stream's own.
+   */
+  private writeLine(line: string): void {
+    this.inFlightWrites += 1;
+    this.pipe.write(line, () => {
+      this.inFlightWrites = Math.max(0, this.inFlightWrites - 1);
+    });
+  }
+
   /** Fail everything in flight and report the exit, exactly once. */
   private settle(
     error: Error,
@@ -169,10 +220,52 @@ export class WorkerClient {
   ): void {
     if (this.reported) return;
     this.reported = true;
+    // Nothing is owed on a link that is gone, and a late callback cannot make
+    // it negative or resurrect a count.
+    this.inFlightWrites = 0;
     rejectReady(error);
     for (const entry of this.pending.values()) entry.reject(error);
     this.pending.clear();
     this.options.onExit(code, signal);
+  }
+
+  /**
+   * A frame crossed the transport ceiling (RP-7).
+   *
+   * This link is trusted and framed by us, so a frame that large means the
+   * worker generation is producing something we cannot read — corruption, or a
+   * bug. Skipping to the next newline would be worse than the fault: if the
+   * lost frame was a response, its request would wait for ever. So the
+   * generation ends here, every pending request is rejected with a reason, and
+   * the pool's normal crash handling starts a fresh worker. Nothing about the
+   * message is logged: it is a provider payload as far as we know.
+   */
+  private faultGeneration(bytes: number): void {
+    if (this.reported) return;
+    this.exited = true;
+    const error = new Error(
+      `the worker for ${this.options.cwd} sent a message of ${bytes} bytes, past the ${FRAME_MAX_BYTES} byte limit for one message`,
+    );
+    this.options.onStderr?.(`${error.message}\n`);
+    try {
+      this.pipe.destroy();
+    } catch {
+      // Already gone; the settle below is what matters.
+    }
+    this.settle(error, this.rejectReady ?? ((): void => {}), null, null);
+  }
+
+  /**
+   * What this link is holding right now (RP-7): the messages written to the
+   * worker and not yet taken, what they weigh, and the partial frame being
+   * read — which is bytes, never a message.
+   */
+  transportPressure(): { decoder: LineDecoderStats | undefined; pending: number; pendingFrames: number } {
+    return {
+      decoder: this.decoder?.stats,
+      pending: this.pipe.writableLength ?? 0,
+      pendingFrames: this.inFlightWrites,
+    };
   }
 
   /** Non-undefined when the child process could not be started at all. */
@@ -238,7 +331,7 @@ export class WorkerClient {
     return new Promise<R>((resolve, reject) => {
       this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
       try {
-        this.pipe.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+        this.writeLine(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
       } catch (error) {
         // The pipe closed between the check above and the write. The caller
         // gets a refusal it can report; the process does not get an unhandled
@@ -253,7 +346,7 @@ export class WorkerClient {
   notify<M extends keyof WorkerNotifications>(method: M, params: WorkerNotifications[M]): void {
     if (!this.alive) return;
     try {
-      this.pipe.write(`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`);
+      this.writeLine(`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`);
     } catch {
       // The worker closed concurrently; future workers still get the base.
     }

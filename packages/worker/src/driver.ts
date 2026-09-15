@@ -26,6 +26,7 @@ import type {
   PromptInfo,
   PiExtensionCommand,
   PiExtensionMessage,
+  ProviderCaptureLink,
   SessionAgentRecord,
   SessionState,
   SessionUpdate,
@@ -87,6 +88,12 @@ export interface DriverOpenOptions {
   projectEnv?: (base: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
   /** The agent this session runs as. Absent for ephemeral, catalogue-only opens. */
   agent?: DriverAgentOptions;
+  /**
+   * What the companion's provider-capture producer may know about its link to
+   * the app (RP-7): how far behind it is, and whether bodies are kept at all.
+   * A capture answers to both; nothing else in the session does.
+   */
+  captureLink?: ProviderCaptureLink;
 }
 
 export interface DriverInvocationRef {

@@ -747,6 +747,17 @@ export interface LogContentRef {
 }
 
 /**
+ * Why a body cannot be read in full (RP-7 / D-245). The first three are the
+ * store letting go of something it once had; the rest are a capture whose body
+ * was never kept, and the row says which.
+ */
+export type LogBodyAbsence =
+  | "budget"
+  | "session-limit"
+  | "retention"
+  | import("./provider-capture.js").ProviderCaptureOmission;
+
+/**
  * What is left of a body the store released (D-245). Bodies are the whole
  * conversation of one turn; the store keeps the most recent ones per session
  * inside a byte budget and reduces the rest to the line the row already had.
@@ -757,9 +768,15 @@ export interface LogBodySummary {
    * `session-limit` — newer requests in this session took its place.
    * `retention` — the rows that referenced it are gone.
    */
-  reason: "budget" | "session-limit" | "retention";
-  /** Size of the body when it was stored. */
+  reason: LogBodyAbsence;
+  /**
+   * Size of the **redacted stored representation** in UTF-8 bytes — the only
+   * thing that could ever have been read back, not the size of the original
+   * request.
+   */
   bytes: number;
+  /** SHA-256 of exactly those redacted bytes, so the body stays identifiable. */
+  sha256?: string;
   /** The row's own line: model, message count, size. */
   summary: string;
   /** Leading characters of the body, kept on the row. */
@@ -838,8 +855,19 @@ export interface LogStats {
     bodyBudgetBytes?: number;
     /** Provider requests per session whose body is kept in full (D-245). */
     bodiesPerSession?: number;
-    /** Bodies actually stored right now, in bytes. */
+    /**
+     * Bodies actually stored right now, in bytes. **Absent** when the number
+     * is not knowable — a file whose body tables a newer release wrote may
+     * hold bytes this one cannot read, and reporting zero for them would be a
+     * measurement nobody took (RP-7). `bodyStore` says which it is.
+     */
     retainedBodyBytes?: number;
+    /**
+     * Whether request bodies can be read and written in this file at all.
+     * `unavailable` means the file belongs to a newer release; rows, sessions
+     * and search are unaffected.
+     */
+    bodyStore?: "available" | "unavailable";
   };
   /**
    * Pi 0.85 gives extensions the complete provider REQUEST but only the
@@ -1399,7 +1427,16 @@ export interface ClientRequests {
    */
   "pi/logs/content": {
     params: { ref: string; maxBytes?: number };
-    result: { ref: string; contentType: string; bytes: number; truncated: boolean; text: string; released?: LogBodySummary };
+    result: {
+      ref: string;
+      contentType: string;
+      bytes: number;
+      truncated: boolean;
+      /** Bytes actually returned when `truncated`; `bytes` stays the stored size. */
+      truncatedAt?: number;
+      text: string;
+      released?: LogBodySummary;
+    };
   };
   "pi/logs/stats": { params: {}; result: { stats: LogStats } };
   /** Delete rows. Omit `sections` to clear everything. */

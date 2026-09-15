@@ -119,6 +119,33 @@ ACP-inspired JSON-RPC:
   policy.
 - Notifications (host → client): `session/update` with a monotonically
   increasing `seq` per session; clients resume with `session/load { fromSeq }`.
+- Transport pressure is byte-accounted per connection (RP-7). Every frame a
+  connection is handed — response or notification — is counted from enqueue to
+  send callback. Past a soft mark only the three notifications a client can
+  read back explicitly (`pi/logs/append`, `pi/packages/progress`,
+  `resource/refresh_request`, classified compiler-complete in
+  `NOTIFICATION_PRESSURE`) are released, counted and reported. Past a hard mark
+  — or sitting above the soft one without draining — that one connection is
+  closed with `1013`, and the peer's ordinary reconnect re-reads what it
+  missed. State, attention, questions, tasks, runs and terminal frames are
+  never dropped, nothing is queued for a fenced peer (there is no second resume
+  path, `security.md` §7), a fence is one connection's and never another
+  device's, and no command is ever cancelled, paused or throttled by any of it.
+- Frames are bounded in exact UTF-8 bytes. `LineDecoder` scans each chunk once
+  from a cursor and joins a frame at most once; a frame past
+  `FRAME_MAX_BYTES` (64 MiB) is a transport fault that ends that worker
+  generation — pending requests reject and the pool restarts it — rather than
+  something to resynchronise past, because a skipped response would leave its
+  request waiting for ever. The host's own WebSocket refuses an oversize
+  inbound frame before any JSON is parsed, closing only that socket.
+- A stored request body larger than 1 MiB lives as bounded chunks, each with
+  its own size and digest. A read validates every chunk it hands back and, when
+  it returns the whole body, the aggregate against the row's own digest, so an
+  altered, reordered, short or missing piece is reported as damaged instead of
+  being returned under a digest it no longer matches. The body tables are
+  versioned (`user_version`) and migrate one atomic step at a time, and a
+  database a newer release wrote is left alone rather than reshaped. Reads stay lazy: at most
+  the requested budget plus the one chunk that crosses it is ever in memory.
 - Requests (host → client): `session/request_permission` and `pi/ui/request`
   (select, confirm, input, editor). Fire-and-forget: `pi/ui/notify`,
   `pi/ui/status`, `pi/ui/widget`, `pi/ui/title`, `pi/ui/editor_text`.

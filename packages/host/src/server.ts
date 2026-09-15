@@ -32,7 +32,7 @@ import type { AddressInfo } from "node:net";
 import { basename, dirname, extname, join, normalize, relative, resolve as resolvePath, sep } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { channelIdFor, type KeyPair } from "@lasercode/crypto";
-import { ENV, ErrorCodes, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, isTerminalRunStatus, projectEnvWorkerConfig, type ClientRequests, type DeviceGrants, type EnvironmentPolicyInput, type HostNotifications, type JsonRpcNotification, type LogEntry, type NamerState, type ResourceRetainedStores, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
+import { ENV, ErrorCodes, FRAME_MAX_BYTES, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, isProviderCaptureMessage, isTerminalRunStatus, projectEnvWorkerConfig, type ClientRequests, type DeviceGrants, type EnvironmentPolicyInput, type HostNotifications, type JsonRpcNotification, type LogEntry, type NamerState, type ProviderCaptureMeta, type ProviderCaptureOmission, type ResourceRetainedStores, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
 import { AccessControl, isLoopbackAddress, localActor, pairedActor, type ActorIdentity } from "./access.js";
 import { AccessAudit } from "./access-audit.js";
 import { loadEnvironmentPolicy } from "./environment-policy.js";
@@ -45,6 +45,10 @@ import { FeatureService } from "./features.js";
 import { PrefsStore } from "./prefs.js";
 import { SessionCatalog, defaultSessionDir } from "./catalog.js";
 import { LogStore } from "./logstore.js";
+import { CaptureAccumulator, type CaptureActor } from "./provider-capture.js";
+import { collectTransportQueues, type TransportQueueSource, type TransportQueues } from "./transport-snapshot.js";
+import { observeCapture } from "./capture-ingress.js";
+import { OutboundPressure, fenceReasonText } from "./transport-pressure.js";
 import { PackageService, SetupService } from "./packages.js";
 import { ResourceService } from "./resources/index.js";
 import { TaskRegister } from "./tasks/register.js";
@@ -273,11 +277,27 @@ export class HostServer {
    * whole worker would be retired.
    */
   readonly sessionLifetime: SessionLifetime;
+  /**
+   * Large provider captures, reassembled before they become one log row
+   * (RP-7). Bounded per session, per worker generation and globally; a capture
+   * that cannot complete is still recorded, with its size, digest and reason.
+   */
+  private readonly captures = new CaptureAccumulator({
+    openBody: (meta) => this.logs?.openProviderBody(meta),
+    onComplete: ({ cwd, sessionPath, meta, body, pieces, stored }) => {
+      if (stored) this.logs?.recordProviderStored(cwd, sessionPath, meta, stored);
+      else this.logs?.recordProviderCapture(cwd, sessionPath, meta, body, pieces);
+    },
+    onAbsent: ({ cwd, sessionPath, meta, reason }) => this.logs?.recordProviderAbsent(cwd, sessionPath, meta, reason),
+    log: (message) => this.log(message),
+  });
   private readonly http: Server;
   private readonly wss: WebSocketServer;
   private readonly clients = new Set<WebSocket>();
   /** What the boundary proved about each local socket (RP-13). */
   private readonly actors = new Map<WebSocket, ActorIdentity>();
+  /** What each direct socket costs this host right now (RP-7). */
+  private readonly pressure = new Map<WebSocket, OutboundPressure>();
   /** Session paths each client is following, for the retirement guard. */
   private readonly transcripts = new Map<WebSocket, TranscriptDelivery>();
   /** The private directory every command log this host will read must be inside. */
@@ -533,6 +553,9 @@ export class HostServer {
       ...(options.sessionDir ? { sessionDir: options.sessionDir } : {}),
       stateDir,
       environmentId: this.environment.id,
+      // A store that keeps summaries only never receives a body: the capture
+      // is recorded, without one, in the worker that holds it (RP-7).
+      ...(options.logRetention?.providerPayloads ? { providerPayloads: options.logRetention.providerPayloads } : {}),
       ...(options.workerMain ? { workerMain: options.workerMain } : {}),
       ...(options.nodeBinary ? { nodeBinary: options.nodeBinary } : {}),
       ...(options.workerIdleMs !== undefined ? { idleMs: options.workerIdleMs } : {}),
@@ -551,16 +574,22 @@ export class HostServer {
       onPreparedUse: (client, cwd) => {
         setImmediate(() => void this.qualifyNamer(cwd, client));
       },
-      onNotification: (cwd, n) => {
-        this.observe(cwd, n);
+      onNotification: (cwd, n, source) => {
+        this.observe(cwd, n, source);
         this.broadcast(n);
       },
+      // The process that opened a capture is the only one that may advance or
+      // end it (RP-7): its exit ends what it started, and cannot touch the
+      // successor that took its place.
+      onWorkerGone: ({ generation }) => this.captures.generationGone(generation),
       onStderr: (cwd, text) => {
         const safe = this.privateLogText(text);
         this.log(`[worker ${cwd}] ${safe.trimEnd()}`);
         this.logs?.observeWorkerStderr(cwd, safe);
       },
       onStatus: (info) => {
+        // Captures are ended by `onWorkerGone`, which names the exact process
+        // (RP-7); a status is about a directory and could end a successor's.
         if (info.status === "crashed") {
           this.attention.workerCrashed(info.cwd, info.message ?? "worker crashed");
           this.forgetSessionsOf(info.cwd, "the worker stopped");
@@ -652,6 +681,10 @@ export class HostServer {
     this.wss = new WebSocketServer({
       server: this.http,
       path: "/ws",
+      // A frame this large is not a request anybody meant to make (RP-7). `ws`
+      // refuses it before any JSON is parsed and before the router sees it,
+      // and closes that one socket; every other connection is untouched.
+      maxPayload: FRAME_MAX_BYTES,
       verifyClient: ({ origin, req }, done) => {
         // A direct socket is this machine talking to itself, or it is nothing.
         // Reaching this host from elsewhere means the relay's authenticated
@@ -768,6 +801,8 @@ export class HostServer {
     // person-owned ending; crash cleanup uses the same close path.
     if (options.initiator === "user") this.runs.hostStopping();
     else this.runs.hostCrashed();
+    // Captures in flight end as rows, not as retained bytes in a closing host.
+    this.captures.clear();
     await Promise.all(this.relayClients.map((client) => client.stop("host shutting down").catch(() => {})));
     this.relayClients.length = 0;
     this.notificationListeners.clear();
@@ -852,7 +887,7 @@ export class HostServer {
    * The host is the only observer that sees every session, so this cannot live
    * in a client.
    */
-  private observe(cwd: string, notification: JsonRpcNotification): void {
+  private observe(cwd: string, notification: JsonRpcNotification, source?: { generation: string }): void {
     switch (notification.method) {
       case "session/update": {
         const params = notification.params as SessionUpdateParams;
@@ -923,6 +958,15 @@ export class HostServer {
         const params = notification.params as HostNotifications["pi/extension/message"];
         // Task messages become `tasks/update` broadcasts; nothing else needs them.
         if (this.tasks.observeExtensionMessage(params.path, params.message)) return;
+        // A chunked provider capture is reassembled before it is a row (RP-7).
+        if (
+          source &&
+          observeCapture(this.captures, { cwd, generation: source.generation }, params.path, params.message, (actor, path, meta, reason) =>
+            this.logs?.recordProviderAbsent(actor.cwd, path, meta, reason),
+          )
+        ) {
+          return;
+        }
         this.logs?.observeExtensionMessage(cwd, params.path, params.message);
         return;
       }
@@ -1184,6 +1228,8 @@ export class HostServer {
     let replayCount = 0;
     let replayBytes = 0;
     let caches = 0;
+    let workerQueueBytes = 0;
+    let workerQueueFrames = 0;
     for (const answer of answered) {
       workerTaskCount += answer.stores.taskRegistry?.count ?? 0;
       workerTaskBytes += answer.stores.taskRegistry?.bytes ?? 0;
@@ -1191,8 +1237,15 @@ export class HostServer {
       replayCount += answer.stores.workerReplay?.count ?? 0;
       replayBytes += answer.stores.workerReplay?.bytes ?? 0;
       caches += answer.stores.workerCaches?.count ?? 0;
+      workerQueueBytes += answer.stores.providerQueues?.bytes ?? 0;
+      workerQueueFrames += answer.stores.providerQueues?.count ?? 0;
     }
     const complete = answered.length === live.length;
+    // Bytes in transit, and the captures being reassembled from them (RP-7).
+    // The host's own outbound queues and its links to each worker are exact;
+    // the workers' own side is only added when every one of them answered.
+    const captures = this.captures.retained();
+    const queues = this.transportQueues();
     return {
       entries: {
         taskRegistry: {
@@ -1208,6 +1261,12 @@ export class HostServer {
               workerCaches: { count: caches },
             }
           : {}),
+        providerQueues: {
+          // Frames in flight and captures being reassembled — never a count of
+          // connections, which an idle socket would inflate.
+          count: queues.frames + workerQueueFrames + captures.open,
+          ...(complete ? { bytes: queues.bytes + captures.bytes + captures.reservedBytes + workerQueueBytes } : {}),
+        },
         deliveryRegistry: {
           count: delivery.owners,
           // Queued transport bytes belong to the transport (RP-7); membership
@@ -1222,6 +1281,41 @@ export class HostServer {
         ...(complete ? {} : { reason: "collector_failed" as const }),
       },
     };
+  }
+
+  /**
+   * Bytes this host is holding for somebody else right now (RP-7): queued for
+   * direct sockets, queued for each paired device, and sitting in the pipes to
+   * its own workers. Counted once each, and never containing anything but
+   * numbers.
+   */
+  private transportQueues(): TransportQueues {
+    const sources: TransportQueueSource[] = [];
+    for (const pressure of this.pressure.values()) {
+      sources.push({
+        pendingFrames: () => pressure.snapshot().inFlight,
+        queuedBytes: () => pressure.snapshot().queuedBytes,
+      });
+    }
+    for (const client of this.relayClients) {
+      sources.push({
+        pendingFrames: () => client.transportPressure().pendingFrames,
+        queuedBytes: () => client.transportPressure().queuedBytes,
+      });
+    }
+    for (const { client } of this.pool.liveClients()) {
+      sources.push({
+        // Messages this host has written to that worker and it has not taken.
+        // A partial frame being read is bytes, not a message: it is counted in
+        // the bytes below and never as a frame.
+        pendingFrames: () => client.transportPressure().pendingFrames,
+        queuedBytes: () => {
+          const link = client.transportPressure();
+          return link.pending + (link.decoder?.retained ?? 0);
+        },
+      });
+    }
+    return collectTransportQueues(sources);
   }
 
   /** Every connection's membership: direct sockets first, then paired devices. */
@@ -1265,8 +1359,9 @@ export class HostServer {
     if (notification.method === "pi/resource/process") return;
     if (notification.method === "pi/extension/message") {
       const { message } = notification.params as HostNotifications["pi/extension/message"];
-      const type = (message as { type?: unknown } | null)?.type;
-      if (type === `${WIRE_NAMESPACE}/provider/request` || type === `${WIRE_NAMESPACE}/provider/response`) return;
+      // One predicate over every capture message, so a new one cannot slip
+      // past this filter into a client, a relay listener or an audit line.
+      if (isProviderCaptureMessage(message)) return;
     }
     let line: string | undefined;
     for (const ws of this.clients) this.emit(ws, notification, () => (line ??= JSON.stringify(notification)));
@@ -1321,13 +1416,40 @@ export class HostServer {
       .map((delivery) => delivery.offer(notification))
       .some(Boolean);
     if (held) return true;
-    ws.send(serialize ? serialize() : JSON.stringify(notification));
+    // Pressure is the last gate, after admission (RP-7): a connection that is
+    // behind releases the three notifications it can read back explicitly, and
+    // one that would fall too far behind is closed rather than queued for.
+    // The size is part of that decision, so the frame that would cross the
+    // mark is refused before it is written rather than after.
+    const pressure = this.pressure.get(ws);
+    const line = serialize ? serialize() : JSON.stringify(notification);
+    const verdict = pressure?.admit(notification.method, Buffer.byteLength(line, "utf8")) ?? "send";
+    if (verdict !== "send") return false;
+    void this.sendSocket(ws, line);
     return true;
   }
 
   private onConnection(ws: WebSocket, actor: ActorIdentity): void {
     this.clients.add(ws);
     this.actors.set(ws, actor);
+    this.pressure.set(
+      ws,
+      new OutboundPressure({
+        // The socket's own view, as a second opinion: a `ws` callback settles
+        // our account when the frame leaves our queue, not when the kernel
+        // takes it (RP-7).
+        bufferedAmount: () => ws.bufferedAmount,
+        onShed: ({ method, total }) => this.log(`a client is behind: released ${total} ${method} notification(s) it can read back`),
+        onFence: ({ reason, queuedBytes }) => {
+          this.log(`disconnecting a client: ${fenceReasonText(reason)} (${queuedBytes} bytes queued)`);
+          try {
+            ws.close(1013, "reconnect to catch up");
+          } catch {
+            /* already closing; `dropClient` still runs on close */
+          }
+        },
+      }),
+    );
     const transcripts = new TranscriptDelivery();
     this.transcripts.set(ws, transcripts);
     const searches = new SearchCancellation();
@@ -1343,7 +1465,10 @@ export class HostServer {
       try {
         raw = JSON.parse(data.toString());
       } catch {
-        ws.send(JSON.stringify({ jsonrpc: "2.0", id: 0, error: { code: -32700, message: "invalid JSON" } }));
+        // Through the same bounded sender as every other reply: a peer that
+        // never reads must not be able to build an uncharged queue by sending
+        // malformed JSON (RP-7).
+        await this.sendSocket(ws, JSON.stringify({ jsonrpc: "2.0", id: 0, error: { code: -32700, message: "invalid JSON" } }));
         return;
       }
       const request = raw as { method?: unknown; params?: { path?: unknown; id?: unknown } } | null;
@@ -1387,12 +1512,26 @@ export class HostServer {
     ws.on("error", () => this.dropClient(ws));
   }
 
+  /**
+   * The one place bytes reach a direct socket, and the one place they are
+   * counted (RP-7): responses and notifications alike, from the moment they
+   * are enqueued until the send callback settles them.
+   */
   private sendSocket(ws: WebSocket, line: string): Promise<boolean> {
     if (ws.readyState !== ws.OPEN || !this.clients.has(ws)) return Promise.resolve(false);
+    const pressure = this.pressure.get(ws);
+    const bytes = Buffer.byteLength(line, "utf8");
+    // The same guard at the moment of the write: a frame that does not fit is
+    // not written and not accounted, and the connection is fenced instead.
+    if (pressure && !pressure.charge(bytes)) return Promise.resolve(false);
     return new Promise<boolean>((resolve) => {
       try {
-        ws.send(line, (error) => resolve(!error && ws.readyState === ws.OPEN && this.clients.has(ws)));
+        ws.send(line, (error) => {
+          pressure?.settle(bytes);
+          resolve(!error && ws.readyState === ws.OPEN && this.clients.has(ws));
+        });
       } catch {
+        pressure?.settle(bytes);
         resolve(false);
       }
     });
@@ -1401,6 +1540,8 @@ export class HostServer {
   private dropClient(ws: WebSocket): void {
     this.clients.delete(ws);
     this.actors.delete(ws);
+    this.pressure.get(ws)?.reset();
+    this.pressure.delete(ws);
     this.transcripts.delete(ws);
     this.searches.get(ws)?.close();
     this.searches.delete(ws);

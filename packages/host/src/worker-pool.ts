@@ -43,13 +43,26 @@ export interface WorkerPoolOptions {
   stateDir?: string;
   /** Passed to every worker as `--environment-id`, so revisions agree (RP-9). */
   environmentId?: string;
+  /**
+   * Whether the log store keeps provider request bodies at all. `"summary"`
+   * reaches the worker as `--provider-payloads summary`, so a capture is never
+   * serialized or sent for a store that would discard it (RP-7).
+   */
+  providerPayloads?: "full" | "summary";
   workerMain?: string;
   nodeBinary?: string;
   /** Extra environment for every worker (the bundled package manager, M10-T5). */
   env?: Readonly<Record<string, string>>;
   /** Environment resolved at spawn time, so project feature overrides apply. */
   envForCwd?: (cwd: string) => Readonly<Record<string, string>>;
-  onNotification: (cwd: string, notification: JsonRpcNotification) => void;
+  /**
+   * `source.generation` names the exact worker process the notification came
+   * from, so a late message from a process that has been replaced cannot be
+   * mistaken for its successor's (RP-7). Opaque and host-internal.
+   */
+  onNotification: (cwd: string, notification: JsonRpcNotification, source: { generation: string }) => void;
+  /** That process is gone: nothing it started can still be completed. */
+  onWorkerGone?: (source: { cwd: string; generation: string }) => void;
   onStderr?: (cwd: string, text: string) => void;
   /** Called for every lifecycle change, after the notification is sent. */
   onStatus?: (info: WorkerInfo) => void;
@@ -721,13 +734,14 @@ export class WorkerPool {
       ...(this.options.sessionDir ? { sessionDir: this.options.sessionDir } : {}),
       ...(this.options.stateDir ? { stateDir: this.options.stateDir } : {}),
       ...(this.options.environmentId ? { environmentId: this.options.environmentId } : {}),
+      ...(this.options.providerPayloads ? { providerPayloads: this.options.providerPayloads } : {}),
       ...(this.options.workerMain ? { workerMain: this.options.workerMain } : {}),
       ...(this.options.nodeBinary ? { nodeBinary: this.options.nodeBinary } : {}),
       ...((this.options.env || this.options.envForCwd)
         ? { env: { ...(this.options.env ?? {}), ...(this.options.envForCwd?.(entry.cwd) ?? {}) } }
         : {}),
       ...(projectTrusted !== undefined ? { projectTrusted } : {}),
-      onNotification: (n) => this.onWorkerNotification(entry, n),
+      onNotification: (n) => this.onWorkerNotification(entry, client, n),
       onExit: (code, signal) => this.onExit(entry, client, code, signal),
       ...(this.options.onStderr ? { onStderr: (t: string) => { if (!entry.warm) this.options.onStderr?.(entry.cwd, t); } } : {}),
     };
@@ -767,7 +781,7 @@ export class WorkerPool {
    * restarts) so a client sees one shape for every lifecycle event, and keep
    * the pool's bookkeeping in step with the update stream.
    */
-  private onWorkerNotification(entry: Entry, notification: JsonRpcNotification): void {
+  private onWorkerNotification(entry: Entry, client: WorkerClient, notification: JsonRpcNotification): void {
     entry.lastActivity = this.now();
     if (notification.method === "pi/worker/status") {
       const status = (notification.params as { status?: WorkerStatus } | null)?.status;
@@ -797,10 +811,12 @@ export class WorkerPool {
         if (kind === "agent_end" || kind === "agent_settled") entry.running.delete(path);
       }
     }
-    if (!entry.warm) this.options.onNotification(entry.cwd, notification);
+    if (!entry.warm) this.options.onNotification(entry.cwd, notification, { generation: client.generation });
   }
 
   private onExit(entry: Entry, client: WorkerClient, code: number | null, signal: NodeJS.Signals | null): void {
+    // Even a superseded process's exit ends what that process started.
+    this.options.onWorkerGone?.({ cwd: entry.cwd, generation: client.generation });
     if (entry.client !== client) return; // a superseded process; ignore
     entry.client = undefined;
     this.options.resources?.noteExit(client.pid, entry.resourceRegistration);
@@ -990,7 +1006,11 @@ export class WorkerPool {
     if (entry.warm) return;
     const info = this.infoOf(entry, reopened);
     const params: HostNotifications["pi/worker/status"] = info;
-    this.options.onNotification(entry.cwd, { jsonrpc: "2.0", method: "pi/worker/status", params });
+    // A lifecycle notification is the pool's own, not a worker process's: it
+    // carries the generation of the client it describes when there is one.
+    this.options.onNotification(entry.cwd, { jsonrpc: "2.0", method: "pi/worker/status", params }, {
+      generation: entry.client?.generation ?? "",
+    });
     this.options.onStatus?.(info);
   }
 }

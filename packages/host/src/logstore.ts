@@ -62,8 +62,18 @@
  * so the file is created 0600, and `providerPayloads: "summary"` drops the
  * bodies entirely for anyone who wants that trade.
  */
-import { PRODUCT_NAME, type AgentRun } from "@lasercode/protocol";
+import {
+  PRODUCT_NAME,
+  redact,
+  redactForStorage,
+  type AgentRun,
+  type ProviderCaptureMeta,
+  type ProviderCaptureOmission,
+  type ProviderCaptureSummary,
+} from "@lasercode/protocol";
 import { createHash } from "node:crypto";
+import { CHUNKED_BODY_ABOVE, CONTENT_SCHEMA_VERSION, ContentStore } from "./content-store.js";
+import type { CaptureBodySink } from "./provider-capture.js";
 import { chmodSync, mkdirSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
@@ -89,6 +99,36 @@ const DEFAULT_BYTE_BUDGET = 256 * 1024;
 /** Prunes between full orphaned-body sweeps (an unindexed anti-join). */
 const ORPHAN_SWEEP_EVERY = 10;
 const DEFAULT_LIMIT = 200;
+
+/** Every reason a body cannot be opened, as the row records it. */
+const BODY_ABSENCE: readonly string[] = [
+  "budget",
+  "session-limit",
+  "retention",
+  "over-ceiling",
+  "link-busy",
+  "summary-mode",
+  "interrupted",
+  "corrupt",
+];
+
+function isBodyAbsence(value: string | null): value is LogBodySummary["reason"] {
+  return value !== null && BODY_ABSENCE.includes(value);
+}
+
+/** Split on UTF-8 boundaries: a chunk is never half a character. */
+function splitUtf8(text: string, chunkBytes: number): string[] {
+  const buffer = Buffer.from(text, "utf8");
+  const chunks: string[] = [];
+  let offset = 0;
+  while (offset < buffer.length) {
+    let end = Math.min(offset + chunkBytes, buffer.length);
+    while (end > offset && end < buffer.length && (buffer[end]! & 0xc0) === 0x80) end -= 1;
+    chunks.push(buffer.toString("utf8", offset, end));
+    offset = end;
+  }
+  return chunks;
+}
 
 /** Provider requests per session whose body is kept in full (D-245). */
 export const BODIES_PER_SESSION = 50;
@@ -164,42 +204,17 @@ export interface LogStoreOptions {
 }
 
 /**
- * Field names whose values never belong in a log row.
- *
- * Anchored, with up to two vendor prefix segments (`x-api-key`,
- * `anthropic-api-key`, `x-goog-api-key`) — deliberately not a substring match,
- * because Pi's own payloads are full of `max_tokens`, `reserveTokens` and
- * `thinkingBudgets`, and redacting those would make every row a lie in the other
- * direction.
+ * The credential projection lives in `@lasercode/protocol` (RP-7), because the
+ * worker now redacts a provider capture before it crosses the link and both
+ * sides must run identical code. Re-exported here so every existing caller,
+ * and every test, keeps the same import.
  */
-const SECRET_KEY =
-  /^([a-z0-9]+[-_]){0,2}(authorization|proxy-authorization|www-authenticate|api[-_]?key|apikey|access[-_]?token|refresh[-_]?token|id[-_]?token|secret|client[-_]?secret|password|passwd|cookie|set-cookie|session[-_]?token|auth[-_]?token|bearer|credential|credentials)$/i;
+export { redact };
 
-/** Deepest structure walked when redacting; a payload is JSON, not a graph. */
-const REDACT_MAX_DEPTH = 12;
-
-/**
- * Replace credential-shaped values with `[redacted]`, everywhere, and say how
- * many were replaced. Structure is preserved so the row still reads normally.
- */
-export function redact(value: unknown): { value: unknown; count: number } {
-  let count = 0;
-  const walk = (node: unknown, depth: number): unknown => {
-    if (depth > REDACT_MAX_DEPTH || node === null || typeof node !== "object") return node;
-    if (Array.isArray(node)) return node.map((item) => walk(item, depth + 1));
-    const out: Record<string, unknown> = {};
-    for (const [key, item] of Object.entries(node as Record<string, unknown>)) {
-      if (SECRET_KEY.test(key)) {
-        out[key] = "[redacted]";
-        count += 1;
-        continue;
-      }
-      out[key] = walk(item, depth + 1);
-    }
-    return out;
-  };
-  return { value: walk(value, 0), count };
-}
+/** What a row keeps instead of a body that could not be cleaned (RP-7). */
+const UNREDACTABLE_BODY = "not recorded: a credential-shaped field could not be removed";
+/** What a row says when this file's bodies belong to a newer release (RP-7). */
+const BODIES_UNAVAILABLE = "request text not kept: this file was written by a newer version";
 
 /** What a caller hands `record()`. `id` and `at` are the store's business. */
 export interface LogInput {
@@ -266,6 +281,12 @@ type Database = {
     run(...params: unknown[]): { lastInsertRowid: number | bigint; changes: number | bigint };
     get(...params: unknown[]): unknown;
     all(...params: unknown[]): unknown[];
+    /**
+     * Step rows one at a time. The only way to read part of a chunked body
+     * without materialising all of it: `all()` would hand back every TEXT
+     * column before the loop that is supposed to stop early (RP-7).
+     */
+    iterate(...params: unknown[]): IterableIterator<unknown>;
   };
   close(): void;
 };
@@ -311,6 +332,13 @@ function openDatabase(file: string): Database {
   db.exec(`
     PRAGMA journal_mode = WAL;
     PRAGMA synchronous = NORMAL;
+    -- A bounded page cache (RP-7). The default grows with what has been
+    -- touched, and a burst of multi-megabyte bodies touches a great many pages;
+    -- this is a memory bound on SQLite's own convenience, not on what the
+    -- store keeps. Retention, integrity and partial reads are unchanged.
+    PRAGMA cache_size = -2000;
+    -- Cap the WAL between checkpoints for the same reason.
+    PRAGMA journal_size_limit = 8388608;
     CREATE TABLE IF NOT EXISTS entries (
       id             INTEGER PRIMARY KEY AUTOINCREMENT,
       at             TEXT    NOT NULL,
@@ -365,6 +393,8 @@ function openDatabase(file: string): Database {
 
 export class LogStore {
   private readonly db: Database;
+  /** Where bodies live: their tables, their schema, their integrity (RP-7). */
+  private readonly content_: ContentStore;
   private readonly statements = new Map<string, ReturnType<Database["prepare"]>>();
   private readonly maxRows: number;
   private readonly maxAgeMs: number;
@@ -410,7 +440,19 @@ export class LogStore {
 
   constructor(options: LogStoreOptions) {
     this.file = options.file;
+    this.log = options.log ?? (() => {});
     this.db = openDatabase(options.file);
+    // Bodies own their tables and their schema. The migration is versioned and
+    // atomic, and refuses a database a newer Laser wrote rather than reshaping
+    // it (RP-7).
+    this.content_ = new ContentStore(this.db);
+    const migration = this.content_.migrate();
+    if (migration.ahead) {
+      this.log(
+        `log store: this file's body tables are version ${migration.from}, newer than this app understands (${CONTENT_SCHEMA_VERSION}); ` +
+          "leaving them as they are.",
+      );
+    }
     // 0 would make the OFFSET negative, which SQLite clamps to 0 — keeping one
     // row rather than none. A store has to hold at least one row to be a store.
     this.maxRows = Math.max(1, Math.trunc(options.maxRows ?? 200_000));
@@ -418,11 +460,10 @@ export class LogStore {
     this.maxAgeMs = (options.maxAgeDays ?? 14) * 24 * 60 * 60 * 1000;
     this.pruneEvery = options.pruneEvery ?? 500;
     this.onAppend = options.onAppend;
-    this.log = options.log ?? (() => {});
     this.bodyBudget = Math.max(0, Math.trunc(options.bodyBudgetBytes ?? DEFAULT_BODY_BUDGET_BYTES));
     this.bodiesPerSession = Math.max(1, Math.trunc(options.bodiesPerSession ?? BODIES_PER_SESSION));
     this.autoVacuum = this.pragma("auto_vacuum");
-    this.retainedBodyBytes = this.sumRetainedBodyBytes();
+    this.retainedBodyBytes = this.content_.totalBytes();
     this.prune();
     // What this store already holds is decided off the request path: an
     // upgrade from a version with no budget can have gigabytes to release.
@@ -435,6 +476,7 @@ export class LogStore {
     if (this.pruneTimer) clearTimeout(this.pruneTimer);
     this.pruneTimer = undefined;
     this.statements.clear();
+    this.content_.dispose();
     this.db.close();
   }
 
@@ -524,37 +566,53 @@ export class LogStore {
     preview: string | null;
   } {
     if (detail === undefined) return { inline: null, ref: null, bytes: null, contentType: null, preview: null };
-    const { value, count } = redact(detail);
-    // Say so rather than lying by omission: a row that dropped fields shows it.
-    const safe =
-      count > 0 && value !== null && typeof value === "object" && !Array.isArray(value)
-        ? { ...(value as Record<string, unknown>), laserRedactedFields: count }
-        : value;
-    let body: string;
-    try {
-      body = JSON.stringify(safe) ?? "null";
-    } catch {
-      // A payload with a cycle or a BigInt is still worth a row.
-      body = JSON.stringify({ laser: "payload was not JSON-serializable", type: typeof detail });
-    }
+    const projected = redactForStorage(detail);
+    // A body carrying a credential-shaped field the projection could not
+    // remove is not stored at all, and neither is a preview of it: the row
+    // keeps the placeholder below and says what happened. Only key names ever
+    // reach the log line.
+    const body = projected.ok
+      ? projected.body
+      : (() => {
+          this.log(
+            `log store: refused to keep a payload with ${projected.survivors.length} credential-shaped field(s) ` +
+              `(${projected.survivors.join(", ")})`,
+          );
+          return JSON.stringify({ laser: UNREDACTABLE_BODY });
+        })();
     const bytes = Buffer.byteLength(body, "utf8");
     const preview = body.slice(0, PREVIEW_CHARS);
     if (bytes <= INLINE_LIMIT) {
       return { inline: body, ref: null, bytes, contentType: "application/json", preview };
     }
-    const ref = createHash("sha256").update(body).digest("hex");
-    const stored = this
-      .statement("INSERT OR IGNORE INTO content (ref, bytes, content_type, body) VALUES (?,?,?,?)")
-      .run(ref, bytes, "application/json", body);
-    // A body already on disk (same hash) costs nothing more, so it must not be
-    // charged twice against the budget.
-    if (Number(stored.changes) > 0) {
-      this.retainedBodyBytes += bytes;
+    const stored = this.content_.put(body, bytes);
+    // Bodies are not being kept in this file (a newer release wrote its body
+    // tables): the row keeps its line, its size and nothing else. Rows,
+    // sessions and search are unaffected.
+    if (!stored) return { inline: null, ref: null, bytes, contentType: "application/json", preview };
+    if (stored.inserted) {
+      this.retainedBodyBytes += stored.bytes;
       // The same body back on disk: rows that had it released have it again,
       // and must not go on saying "summary only" over a body that opens.
-      this.statement("UPDATE entries SET body_released = NULL WHERE detail_ref = ? AND body_released IS NOT NULL").run(ref);
+      this.statement("UPDATE entries SET body_released = NULL WHERE detail_ref = ? AND body_released IS NOT NULL").run(stored.ref);
     }
-    return { inline: null, ref, bytes, contentType: "application/json", preview };
+    return { inline: null, ref: stored.ref, bytes: stored.bytes, contentType: stored.contentType, preview };
+  }
+
+  /** One statement group, or none of it. */
+  private transaction(work: () => void): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      work();
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* the transaction was already gone; the original failure is the one that matters */
+      }
+      throw error;
+    }
   }
 
   /** A bounded cache also admits recurring query shapes without retaining every
@@ -664,28 +722,29 @@ export class LogStore {
     text: string;
     released?: LogBodySummary;
   } {
-    const row = this.db.prepare("SELECT * FROM content WHERE ref = ?").get(ref) as
-      | { ref: string; bytes: number; content_type: string; body: string }
-      | undefined;
-    if (!row) {
+    const read = this.content_.read(ref, maxBytes);
+    if (!read) {
       const released = this.releasedSummary(ref);
       if (released) return { ref, contentType: "application/json", bytes: released.bytes, truncated: false, text: "", released };
       throw new Error(
         `Log payload ${ref.slice(0, 12)}… is no longer stored. Retention removed the rows that referenced it.`,
       );
     }
-    // `maxBytes` is a byte budget, so it is measured in bytes: a string index
-    // let three times that much UTF-8 through for non-Latin text, and cutting
-    // mid-code-point would hand the UI a replacement character.
-    const bodyBytes = Buffer.byteLength(row.body, "utf8");
-    const truncated = bodyBytes > maxBytes;
-    return {
-      ref: row.ref,
-      contentType: row.content_type,
-      bytes: row.bytes,
-      truncated,
-      text: truncated ? truncateUtf8(row.body, maxBytes) : row.body,
-    };
+    if (read.corrupt) {
+      // The row exists and what is stored for it cannot be trusted: a chunk
+      // was altered, reordered, shortened or lost. Say that, with the size and
+      // digest the row still knows, rather than handing back something that
+      // reads like the request.
+      return {
+        ref,
+        contentType: "application/json",
+        bytes: read.bytes,
+        truncated: false,
+        text: "",
+        released: this.absentSummary(ref, "corrupt", read.bytes),
+      };
+    }
+    return read;
   }
 
   stats(): LogStats {
@@ -712,7 +771,10 @@ export class LogStore {
         maxAgeDays: Math.round(this.maxAgeMs / (24 * 60 * 60 * 1000)),
         bodyBudgetBytes: this.bodyBudget,
         bodiesPerSession: this.bodiesPerSession,
-        retainedBodyBytes: this.retainedBodyBytes,
+        // Omitted, not zeroed, when bodies cannot be read in this file: it may
+        // hold bytes this release cannot account for (RP-7).
+        ...(this.content_.unavailable ? {} : { retainedBodyBytes: this.retainedBodyBytes }),
+        bodyStore: this.content_.unavailable ? ("unavailable" as const) : ("available" as const),
       },
       providerResponseBodies: "unavailable",
     };
@@ -786,12 +848,8 @@ export class LogStore {
     const excess = Number(this.statement(`DELETE FROM entries WHERE id IN (
       SELECT id FROM entries WHERE id < (SELECT id FROM entries ORDER BY id DESC LIMIT 1 OFFSET ?) LIMIT 256
     )`).run(this.maxRows - 1).changes);
-    const orphans = this.sweepOrphans && aged < 256 && excess < 256
-      ? Number(this.statement(`DELETE FROM content WHERE ref IN (
-          SELECT ref FROM content WHERE NOT EXISTS (SELECT 1 FROM entries WHERE detail_ref = content.ref) LIMIT 256
-        )`).run().changes)
-      : 0;
-    if (orphans > 0) this.retainedBodyBytes = this.sumRetainedBodyBytes();
+    const orphans = this.sweepOrphans && aged < 256 && excess < 256 ? this.content_.collectOrphans(256) : 0;
+    if (orphans > 0) this.retainedBodyBytes = this.content_.totalBytes();
     const more = aged === 256 || excess === 256 || orphans === 256;
     if (!more) {
       this.pruneDue = false;
@@ -932,15 +990,20 @@ export class LogStore {
    */
   private releaseBody(id: number, ref: string, reason: LogBodySummary["reason"]): void {
     this.statement("UPDATE entries SET body_released = ? WHERE id = ?").run(reason, id);
-    const stored = this.statement("SELECT bytes FROM content WHERE ref = ?").get(ref) as { bytes: number } | undefined;
-    if (!stored) return;
-    const dropped = Number(
-      this.statement(
-        `DELETE FROM content WHERE ref = ?
-           AND NOT EXISTS (SELECT 1 FROM entries WHERE detail_ref = ? AND body_released IS NULL)`,
-      ).run(ref, ref).changes,
-    );
-    if (dropped > 0) this.retainedBodyBytes = Math.max(0, this.retainedBodyBytes - stored.bytes);
+    const bytes = this.content_.sizeOf(ref);
+    if (bytes === 0) return;
+    if (this.content_.release(ref)) this.retainedBodyBytes = Math.max(0, this.retainedBodyBytes - bytes);
+  }
+
+  /**
+   * The same summary, for a body the store never had or can no longer read
+   * (RP-7): the reason is the caller's, the size and digest are the row's.
+   */
+  private absentSummary(ref: string, reason: LogBodySummary["reason"], bytes: number): LogBodySummary {
+    const summary = this.releasedSummary(ref);
+    return summary
+      ? { ...summary, reason, bytes }
+      : { reason, bytes, sha256: ref, summary: "", preview: "" };
   }
 
   /** What the row still knows about a body that is no longer stored. */
@@ -960,9 +1023,13 @@ export class LogStore {
     const reason = row.body_released;
     return {
       // A body missing without a marker is a body retention took with its
-      // rows; saying "budget" there would be a guess.
-      reason: reason === "budget" || reason === "session-limit" ? reason : "retention",
+      // rows; saying "budget" there would be a guess. A capture recorded
+      // without its body wrote its own reason here when the row was made.
+      reason: isBodyAbsence(reason) ? reason : "retention",
       bytes: row.detail_bytes ?? 0,
+      // The digest of the redacted bytes that would have been stored: it
+      // identifies the body even when nothing can open it.
+      sha256: ref,
       summary: row.summary,
       preview: row.detail_preview ?? "",
       at: row.at,
@@ -972,19 +1039,9 @@ export class LogStore {
     };
   }
 
-  private sumRetainedBodyBytes(): number {
-    try {
-      return Number((this.db.prepare("SELECT COALESCE(SUM(bytes), 0) AS n FROM content").get() as { n: number }).n);
-    } catch {
-      return 0;
-    }
-  }
-
   private collectOrphanedContent(): void {
-    this.db.exec(
-      "DELETE FROM content WHERE ref NOT IN (SELECT detail_ref FROM entries WHERE detail_ref IS NOT NULL)",
-    );
-    this.retainedBodyBytes = this.sumRetainedBodyBytes();
+    this.content_.collectAllOrphans();
+    this.retainedBodyBytes = this.content_.totalBytes();
   }
 
   // ------------------------------------------------------------- reclaiming
@@ -1107,6 +1164,152 @@ export class LogStore {
    * carries the whole payload, the response row closes it with status,
    * headers and latency.
    */
+  /**
+   * A capture that arrived whole through the chunked path (RP-7): already
+   * redacted, already measured, stored once. Nothing is re-serialized here.
+   */
+  /**
+   * Take a large capture's pieces as they arrive (RP-7). The store writes each
+   * one and lets it go, so the host never holds a whole request.
+   */
+  openProviderBody(meta: ProviderCaptureMeta): CaptureBodySink | undefined {
+    if (this.closed || this.providerPayloads !== "full") return undefined;
+    if (meta.sha256 === undefined || meta.bytes === undefined || meta.bytes <= CHUNKED_BODY_ABOVE) return undefined;
+    const stream = this.content_.openStream(meta.sha256);
+    return {
+      write: (piece) => stream.write(piece),
+      finish: () => {
+        const stored = stream.finish();
+        if (!stored) return undefined;
+        if (stored.inserted) this.retainedBodyBytes += stored.bytes;
+        return { ref: stored.ref, bytes: stored.bytes };
+      },
+      abort: () => stream.abort(),
+    };
+  }
+
+  /** The row for a capture the store already wrote, piece by piece. */
+  recordProviderStored(
+    cwd: string,
+    sessionPath: string,
+    meta: ProviderCaptureMeta,
+    stored: { ref: string; bytes: number; preview: string },
+  ): void {
+    if (this.closed) return;
+    const entry = this.recordEncoded(
+      {
+        section: "provider",
+        kind: "provider_request",
+        cwd,
+        sessionPath,
+        at: meta.at,
+        summary: describeProviderCapture(meta.summary, stored.bytes),
+        ...(meta.context ? { requestContext: meta.context } : {}),
+      },
+      { inline: null, ref: stored.ref, bytes: stored.bytes, contentType: "application/json", preview: stored.preview.slice(0, PREVIEW_CHARS) },
+    );
+    if (entry) this.noteOpenProviderRequest(sessionPath, entry.id, meta.at);
+  }
+
+  recordProviderCapture(cwd: string, sessionPath: string, meta: ProviderCaptureMeta, body: string, pieces?: readonly string[]): void {
+    if (this.closed) return;
+    // The pieces a capture arrived in are the shape this store keeps, so they
+    // are written as they are when the caller still has them: joining and
+    // re-cutting a multi-megabyte body held two more copies of it.
+    const stored = pieces && pieces.length > 0 && body.length === 0
+      ? this.content_.putPieces(pieces, meta.bytes ?? 0, meta.sha256 ?? "")
+      : this.content_.put(body);
+    if (!stored) {
+      // Same as above: the request is recorded, its text is not kept, and the
+      // row says so rather than pointing at a body nobody can read.
+      this.recordEncoded(
+        {
+          section: "provider",
+          kind: "provider_request",
+          cwd,
+          sessionPath,
+          at: meta.at,
+          summary: `${describeProviderCapture(meta.summary, meta.bytes ?? Buffer.byteLength(body, "utf8"))} · ${BODIES_UNAVAILABLE}`,
+          ...(meta.context ? { requestContext: meta.context } : {}),
+        },
+        { inline: null, ref: null, bytes: null, contentType: null, preview: null },
+      );
+      return;
+    }
+    if (stored.inserted) this.retainedBodyBytes += stored.bytes;
+    const entry = this.recordEncoded(
+      {
+        section: "provider",
+        kind: "provider_request",
+        cwd,
+        sessionPath,
+        at: meta.at,
+        summary: describeProviderCapture(meta.summary, stored.bytes),
+        ...(meta.context ? { requestContext: meta.context } : {}),
+      },
+      // The preview is taken from the bytes this host is storing, never from
+      // what the producer said they were: a preview is body text, and body
+      // text is only safe once this host has defended it.
+      {
+        inline: null,
+        ref: stored.ref,
+        bytes: stored.bytes,
+        contentType: stored.contentType,
+        preview: (body.length > 0 ? body : (pieces?.[0] ?? "")).slice(0, PREVIEW_CHARS),
+      },
+    );
+    if (entry) this.noteOpenProviderRequest(sessionPath, entry.id, meta.at);
+  }
+
+  /**
+   * The request happened; its body is not kept, and the row says why (RP-7).
+   * Size and digest are the redacted representation that would have been
+   * stored, so the row stays identifiable and honest about what it is.
+   */
+  recordProviderAbsent(cwd: string, sessionPath: string, meta: ProviderCaptureMeta, reason: ProviderCaptureOmission): void {
+    if (this.closed) return;
+    // A capture with no safe stored representation has nothing to measure: no
+    // size, no digest, no preview, and so no body reference either. The row
+    // says the request happened and why its text is not here, instead of
+    // publishing a zero somebody could read as a measurement.
+    const measured = meta.sha256 !== undefined && meta.bytes !== undefined;
+    const entry = this.recordEncoded(
+      {
+        section: "provider",
+        kind: "provider_request",
+        cwd,
+        sessionPath,
+        at: meta.at,
+        summary: `${describeProviderCapture(meta.summary, meta.bytes)}${measured ? "" : ` · ${UNREDACTABLE_BODY}`}`,
+        ...(meta.context ? { requestContext: meta.context } : {}),
+      },
+      // No preview for a capture whose body is not here: the only preview this
+      // host may keep is one it took from text it defended itself, and for an
+      // absent capture there is no such text.
+      measured
+        ? { inline: null, ref: meta.sha256!, bytes: meta.bytes!, contentType: "application/json", preview: null }
+        : { inline: null, ref: null, bytes: null, contentType: null, preview: null },
+    );
+    if (!entry) return;
+    if (!measured) return;
+    // The very same bytes may already be on disk from an earlier turn: content
+    // is shared by digest, so that row opens and this one must not claim
+    // otherwise. Only a body nobody has is marked absent.
+    const present = this.statement("SELECT 1 AS present FROM content WHERE ref = ?").get(meta.sha256) as { present: number } | undefined;
+    if (!present) this.statement("UPDATE entries SET body_released = ? WHERE id = ?").run(reason, entry.id);
+    this.noteOpenProviderRequest(sessionPath, entry.id, meta.at);
+  }
+
+  /** Correlate the response that will follow, with a bound on a queue nothing answers. */
+  private noteOpenProviderRequest(sessionPath: string, id: number, at: string): void {
+    const queue = this.openProviderRequests.get(sessionPath) ?? [];
+    queue.push({ id, startedAt: Date.parse(at) || Date.now() });
+    // A request nothing ever answered (a killed engine, a dropped hook) must
+    // not keep its session's queue growing.
+    if (queue.length > MAX_OPEN_PER_SESSION) queue.splice(0, queue.length - MAX_OPEN_PER_SESSION);
+    this.openProviderRequests.set(sessionPath, queue);
+  }
+
   observeExtensionMessage(cwd: string, sessionPath: string, message: PiExtensionMessage): void {
     switch (message.type) {
       case "lasercode/provider/request": {
@@ -1121,14 +1324,7 @@ export class LogStore {
           summary: describeProviderRequest(message.payload, detail.bytes ?? undefined),
           ...(message.context ? { requestContext: message.context } : {}),
         }, detail);
-        if (entry) {
-          const queue = this.openProviderRequests.get(sessionPath) ?? [];
-          queue.push({ id: entry.id, startedAt: Date.parse(message.at) || Date.now() });
-          // A request nothing ever answered (a killed engine, a dropped hook)
-          // must not keep its session's queue growing.
-          if (queue.length > MAX_OPEN_PER_SESSION) queue.splice(0, queue.length - MAX_OPEN_PER_SESSION);
-          this.openProviderRequests.set(sessionPath, queue);
-        }
+        if (entry) this.noteOpenProviderRequest(sessionPath, entry.id, message.at);
         return;
       }
       case "lasercode/provider/response": {
@@ -1360,19 +1556,6 @@ export class LogStore {
 
 // ------------------------------------------------------------------ helpers
 
-/**
- * The longest prefix of `text` that fits `maxBytes` UTF-8 bytes, cut on a code
- * point boundary: the first dropped byte is never a continuation byte, so no
- * character is half-sent and no reader sees U+FFFD where data used to be.
- */
-function truncateUtf8(text: string, maxBytes: number): string {
-  if (maxBytes <= 0) return "";
-  const buffer = Buffer.from(text, "utf8");
-  if (buffer.length <= maxBytes) return text;
-  let end = maxBytes;
-  while (end > 0 && (buffer[end]! & 0xc0) === 0x80) end--;
-  return buffer.subarray(0, end).toString("utf8");
-}
 
 function toEntry(row: Row): LogEntry {
   return {
@@ -1447,6 +1630,19 @@ export function summaryModel(summary: string): string | undefined {
  * (Anthropic messages, OpenAI completions, OpenAI responses) and degrades to a
  * size when it recognises nothing.
  */
+/** The same line, from a summary the producer computed (RP-7). */
+export function describeProviderCapture(summary: ProviderCaptureSummary, bytes?: number): string {
+  const parts: string[] = [];
+  if (summary.model) parts.push(summary.model);
+  if (summary.messages !== undefined) parts.push(`${summary.messages} message${summary.messages === 1 ? "" : "s"}`);
+  if (summary.tools !== undefined && summary.tools > 0) parts.push(`${summary.tools} tools`);
+  if (summary.stream) parts.push("stream");
+  if (summary.thinking) parts.push("thinking");
+  // No size when nothing was measured: a row says what it knows.
+  if (bytes !== undefined) parts.push(formatBytes(bytes));
+  return parts.join(" · ");
+}
+
 export function describeProviderRequest(payload: unknown, retainedBytes?: number): string {
   const body = payload as Record<string, unknown> | null;
   const size = retainedBytes ?? (() => {

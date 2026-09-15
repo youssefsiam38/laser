@@ -312,6 +312,116 @@ describe("delta coalescing", () => {
     expect(notifications.map((n) => (n.params as { seq: number }).seq)).toEqual([1, 2]);
   });
 
+  it("measures queued deltas in exact UTF-8 bytes, including multi-byte text (RP-7)", () => {
+    // A CJK or emoji transcript weighs two to four bytes per code unit. Counting
+    // UTF-16 length would let a byte bound hold three times what it says.
+    vi.stubGlobal("requestAnimationFrame", undefined);
+    vi.useFakeTimers();
+    const { client, notifications } = build();
+    client.connect();
+    const socket = FakeSocket.instances[0]!;
+    socket.accept();
+
+    // 450,000 characters of three-byte text: under a megabyte of UTF-16 code
+    // units, comfortably over it in the bytes that are actually queued.
+    const cjk = "日本語".repeat(150_000);
+    socket.deliver({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: { sessionPath: "/s.jsonl", seq: 1, at: "", update: { kind: "text_delta", delta: cjk, contentIndex: 0 } },
+    });
+    expect(notifications).toHaveLength(1);
+    expect((notifications[0]!.params as { update: { delta: string } }).update.delta).toBe(cjk);
+
+    // The same for a surrogate pair, whose UTF-8 form is twice its UTF-16 one.
+    const emoji = "🚀".repeat(300_000);
+    socket.deliver({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: { sessionPath: "/s.jsonl", seq: 2, at: "", update: { kind: "text_delta", delta: emoji, contentIndex: 0 } },
+    });
+    expect(notifications).toHaveLength(2);
+    expect((notifications[1]!.params as { update: { delta: string } }).update.delta).toBe(emoji);
+  });
+
+  it("measures a structural update by what it really weighs, not by a guess", () => {
+    vi.stubGlobal("requestAnimationFrame", undefined);
+    vi.useFakeTimers();
+    const { client, notifications } = build();
+    client.connect();
+    const socket = FakeSocket.instances[0]!;
+    socket.accept();
+
+    // No `delta`, no `text`: a tool result, which used to count as 256 bytes
+    // however large it was.
+    socket.deliver({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionPath: "/s.jsonl",
+        seq: 1,
+        at: "",
+        update: { kind: "tool_execution_end", toolCallId: "t1", result: { output: "x".repeat(2 * 1024 * 1024) } },
+      },
+    });
+    expect(notifications).toHaveLength(1);
+  });
+
+  it("never holds a batch over the threshold between callbacks", () => {
+    vi.stubGlobal("requestAnimationFrame", undefined);
+    vi.useFakeTimers();
+    const { client, notifications } = build();
+    client.connect();
+    const socket = FakeSocket.instances[0]!;
+    socket.accept();
+
+    const piece = "y".repeat(200 * 1024);
+    let delivered = 0;
+    for (let seq = 1; seq <= 30; seq++) {
+      socket.deliver({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: { sessionPath: "/s.jsonl", seq, at: "", update: { kind: "text_delta", delta: piece, contentIndex: 0 } },
+      });
+      const pending = (client as unknown as { pendingBytes: number }).pendingBytes;
+      expect(pending).toBeLessThanOrEqual(1024 * 1024);
+      delivered = notifications.length;
+    }
+    vi.advanceTimersByTime(50);
+    expect(notifications.length).toBeGreaterThanOrEqual(delivered);
+    expect(notifications.map((n) => (n.params as { seq: number }).seq)).toEqual(
+      Array.from({ length: 30 }, (_value, index) => index + 1),
+    );
+    expect((client as unknown as { pendingBytes: number }).pendingBytes).toBe(0);
+  });
+
+  it("flushes a heavy burst by size, not only by clock, and drops nothing (RP-7)", () => {
+    // A hidden or throttled view still receives deltas; without a byte bound
+    // the buffer is whatever arrives before the next timer. It flushes early
+    // instead — and everything that arrived is delivered, in order.
+    vi.stubGlobal("requestAnimationFrame", undefined);
+    vi.useFakeTimers();
+    const { client, notifications } = build();
+    client.connect();
+    const socket = FakeSocket.instances[0]!;
+    socket.accept();
+
+    const wide = "x".repeat(64 * 1024);
+    for (let seq = 1; seq <= 24; seq++) {
+      socket.deliver({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: { sessionPath: "/s.jsonl", seq, at: "", update: { kind: "text_delta", delta: wide, contentIndex: 0 } },
+      });
+    }
+    // 24 × 64 KiB is past the megabyte mark, so the buffer already went out.
+    expect(notifications.length).toBeGreaterThan(0);
+    vi.advanceTimersByTime(50);
+    expect(notifications.map((n) => (n.params as { seq: number }).seq)).toEqual(
+      Array.from({ length: 24 }, (_value, index) => index + 1),
+    );
+  });
+
   it("flushes buffered deltas before any other message, keeping order", () => {
     const { client, notifications } = build();
     client.connect();
