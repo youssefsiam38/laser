@@ -144,6 +144,7 @@ export const METHOD_POLICY = {
   "session/search": { scope: "read", reach: "any" },
   // RP-5b: a bounded slice of one body of one stored entry. Read-only.
   "session/entry_range": { scope: "read", reach: "any" },
+  "session/entry_regions": { scope: "read", reach: "any" },
   "session/search/cancel": { scope: "read", reach: "any" },
   "session/goal/get": { scope: "read", reach: "any" },
   "session/pending/list": { scope: "read", reach: "any" },

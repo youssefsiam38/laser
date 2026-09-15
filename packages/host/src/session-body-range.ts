@@ -19,6 +19,7 @@ import {
   ProtocolError,
   bodyRangeSlice,
   createBodyRangeReader,
+  entryRegionsPage,
   historyWindowNode,
   type BodyComponent,
   type BodyComponentKind,
@@ -32,6 +33,13 @@ export type BodyRangeResult = ClientRequests["session/entry_range"]["result"];
 
 export type BodyRangeAnswer =
   | { kind: "answer"; result: BodyRangeResult }
+  | { kind: "route-live"; reason: SessionIndexFailure }
+  | { kind: "refuse"; error: ProtocolError };
+
+export type RegionsResult = ClientRequests["session/entry_regions"]["result"];
+
+export type RegionsAnswer =
+  | { kind: "answer"; result: RegionsResult }
   | { kind: "route-live"; reason: SessionIndexFailure }
   | { kind: "refuse"; error: ProtocolError };
 
@@ -89,6 +97,58 @@ export class SessionBodyRange {
     this.idle.unref?.();
   }
 
+  /**
+   * The attachments inside one body, one bounded page at a time, read from the
+   * stored conversation with no worker (RP-5b §2).
+   */
+  async regions(path: string, params: ClientRequests["session/entry_regions"]["params"]): Promise<RegionsAnswer> {
+    const resolved = await this.resolve(path, params);
+    if (resolved.kind !== "record") return resolved;
+    const page = entryRegionsPage(
+      resolved.value,
+      { component: params.component, ...(params.from !== undefined ? { from: params.from } : {}), ...(params.limit !== undefined ? { limit: params.limit } : {}) },
+      resolved.revision,
+      "durable",
+      () => hasher(),
+    );
+    if (page.ok) return { kind: "answer", result: page.result };
+    return {
+      kind: "refuse",
+      error: page.refusal.reason === "unknown-component"
+        ? unknownComponent(params.component, page.refusal.available)
+        : badRange(),
+    };
+  }
+
+  /** The record this request names, at the revision it asked about. */
+  private async resolve(
+    path: string,
+    params: { environmentKey: string; revision: string; entryId: string },
+  ): Promise<{ kind: "record"; value: unknown; revision: string } | { kind: "refuse"; error: ProtocolError } | { kind: "route-live"; reason: SessionIndexFailure }> {
+    if (params.environmentKey !== this.options.revisions.environmentKey) {
+      return { kind: "refuse", error: foreignEnvironment() };
+    }
+    const indexed = await this.options.index.read(path);
+    if (!indexed.ok) {
+      return indexed.failure.reason === "unsupported-version"
+        ? { kind: "route-live", reason: indexed.failure }
+        : { kind: "refuse", error: refusal(indexed.failure) };
+    }
+    const index = indexed.index;
+    const revision = this.options.revisions.revisionOf(index);
+    if (revision !== params.revision) return { kind: "refuse", error: staleRevision() };
+    const row = index.entries.find((entry) => entry.id === params.entryId);
+    if (!row) return { kind: "refuse", error: unknownEntry() };
+    this.options.onRead?.(row);
+    const value = readRecord(path, index, row);
+    if (value.kind === "changed") {
+      this.options.index.invalidate(path);
+      return { kind: "refuse", error: changed() };
+    }
+    if (value.kind === "unreadable") return { kind: "refuse", error: unavailable() };
+    return { kind: "record", value: value.value, revision };
+  }
+
   async read(path: string, params: ClientRequests["session/entry_range"]["params"]): Promise<BodyRangeAnswer> {
     if (params.environmentKey !== this.options.revisions.environmentKey) {
       return { kind: "refuse", error: foreignEnvironment() };
@@ -143,9 +203,12 @@ export class SessionBodyRange {
       this.arm();
       return { kind: "answer", result: sliced.result };
     }
+    if (sliced.refusal.reason === "bad-region") return { kind: "refuse", error: badRegion() };
     return {
       kind: "refuse",
-      error: sliced.refusal.reason === "bad-range" ? badRange() : unknownComponent(params.component, sliced.refusal.available),
+      error: sliced.refusal.reason === "bad-range"
+        ? badRange()
+        : unknownComponent(params.component, sliced.refusal.available),
     };
   }
 }
@@ -162,10 +225,9 @@ export function sliceAnswer(
 ): BodyRangeAnswer {
   const sliced = bodyRangeSlice(entry, params, revision, authority, sha256Hex);
   if (sliced.ok) return { kind: "answer", result: sliced.result };
-  return {
-    kind: "refuse",
-    error: sliced.refusal.reason === "bad-range" ? badRange() : unknownComponent(params.component, sliced.refusal.available),
-  };
+  if (sliced.refusal.reason === "bad-range") return { kind: "refuse", error: badRange() };
+  if (sliced.refusal.reason === "bad-region") return { kind: "refuse", error: badRegion() };
+  return { kind: "refuse", error: unknownComponent(params.component, sliced.refusal.available) };
 }
 
 type Record_ = { kind: "ok"; value: unknown } | { kind: "changed" } | { kind: "unreadable" };
@@ -226,6 +288,16 @@ function unknownComponent(component: BodyComponent, available: readonly BodyComp
     `That message has no ${component.kind.replaceAll("_", " ")} to read.`,
     { available: [...available] },
   );
+}
+
+function badRegion(): ProtocolError {
+  return new ProtocolError(ErrorCodes.InvalidParams, "That is not a part of this message. Open the message again to see what it holds.");
+}
+
+/** One hash over whatever it is given, from this host's own crypto. */
+function hasher(): { update(chunk: string): void; digest(): string } {
+  const hash = createHash("sha256");
+  return { update: (chunk: string) => { hash.update(chunk, "utf8"); }, digest: () => hash.digest("hex") };
 }
 
 function badRange(): ProtocolError {

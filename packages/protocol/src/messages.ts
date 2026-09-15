@@ -19,7 +19,7 @@ import type { PushConfig, PushDeviceInfo, PushSubscriptionJson } from "./push.js
 // Type-only, and erased: `pending.ts` augments the interfaces below, so the
 // cycle exists in the type graph and never in the emitted modules.
 import type { PendingMessage } from "./pending.js";
-import type { BodyComponent, ElidedEntry, PersistedBodyIdentity } from "./body-range.js";
+import type { BodyComponent, BodyRegion, ElidedEntry, EntryRegionsResult, PersistedBodyIdentity } from "./body-range.js";
 
 // ---------- Shared value types (no Pi types allowed here) ----------
 
@@ -1166,6 +1166,12 @@ export interface ClientRequests {
       offset: number;
       /** At most `ENTRY_RANGE_MAX_BYTES`, which is also the default. */
       limit?: number;
+      /**
+       * Read only this part of the component — an attachment inside a prompt.
+       * `offset` stays absolute in the component's bytes; a read that begins
+       * outside the region is refused rather than moved into it.
+       */
+      region?: BodyRegion;
     };
     result: {
       authority: "live" | "durable";
@@ -1181,8 +1187,43 @@ export interface ClientRequests {
       /** SHA-256 of this slice, and of the whole body. */
       sliceDigest: string;
       contentDigest: string;
+      /** Echo of the region asked for, and that region's own digest. */
+      region?: BodyRegion;
+      regionDigest?: string;
       text: string;
     };
+  };
+
+  /**
+   * The attachments inside one body, one bounded page at a time (RP-5b).
+   *
+   * A prompt with files in it is stored as one text with wrappers around them.
+   * A surface holding an excerpt cannot find those wrappers — they are mostly
+   * in bytes it does not have — so the authority, which has the record, names
+   * them: where each attachment's content is, how big it is, what it is called
+   * and the digest of its own bytes. Reading one is then an ordinary range
+   * read with `region`.
+   *
+   * Bounded in what it describes and in how far it looks, so a reply is always
+   * small. `omitted` is exact when the whole component was scanned; when it
+   * was not, `truncated` is set and no count is claimed at all.
+   *
+   * Answered by the owning worker when one is live, otherwise by the host's
+   * read-only projection — which never starts a worker.
+   */
+  "session/entry_regions": {
+    params: {
+      path: string;
+      environmentKey: string;
+      revision: string;
+      entryId: string;
+      component: BodyComponent;
+      /** Where this page starts, in component bytes. Absent: the first page. */
+      from?: number;
+      /** How many attachments to describe; at most `BODY_REGION_MAX_ITEMS`. */
+      limit?: number;
+    };
+    result: EntryRegionsResult;
   };
 
   "pi/session/list": {

@@ -9,7 +9,7 @@
  */
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { boundedHistoryWindow, bodyRangeSlice, utf8ByteLength } from "@lasercode/protocol";
+import { boundedHistoryWindow, bodyRangeSlice, entryRegionsPage, utf8ByteLength } from "@lasercode/protocol";
 import { SessionRevisionTracker } from "../src/history-revision.js";
 
 const sha256Hex = (text: string): string => createHash("sha256").update(text, "utf8").digest("hex");
@@ -19,6 +19,44 @@ const HUGE = "答".repeat(1_000_000); // 3 MB of UTF-8, every character multi-by
 
 const prompt = { type: "message", id: "e0", parentId: null, timestamp: "2026-01-01T00:00:00.000Z", message: { role: "user", content: [{ type: "text", text: "go" }] } };
 const reply = { type: "message", id: "e1", parentId: "e0", timestamp: "2026-01-01T00:00:01.000Z", message: { role: "assistant", content: [{ type: "text", text: HUGE }] } };
+
+describe("the attachments the owning worker names", () => {
+  const content = "答".repeat(20_000);
+  const promptText = `look at this\n\n<attached-file name="notes.md" type="text/markdown" size="${utf8ByteLength(content)}">\n${content}\n</attached-file>`;
+  const withFile = { type: "message", id: "u9", parentId: null, timestamp: "2026-01-01T00:00:00.000Z", message: { role: "user", content: [{ type: "text", text: promptText }] } };
+  const hasher = () => { const hash = createHash("sha256"); return { update: (chunk: string) => { hash.update(chunk, "utf8"); }, digest: () => hash.digest("hex") }; };
+
+  it("names them the way the stored reader does, and reads one exactly", () => {
+    const tracker = new SessionRevisionTracker(ENVIRONMENT);
+    const { revision } = tracker.compute(header, [withFile], "u9");
+    const page = entryRegionsPage(withFile, { component: { kind: "user_text" } }, revision, "live", hasher);
+    expect(page.ok).toBe(true);
+    if (!page.ok) return;
+    expect(page.result.authority).toBe("live");
+    const item = page.result.items[0]!;
+    expect(item.name).toBe("notes.md");
+    expect(item.contentDigest).toBe(sha256Hex(content));
+    expect(page.result.totalBytes).toBe(utf8ByteLength(promptText));
+
+    // Read it back through the ordinary range contract, in region bytes.
+    let offset = item.offset;
+    let assembled = "";
+    for (let step = 0; step < 100; step++) {
+      const answer = bodyRangeSlice(withFile, { component: { kind: "user_text" }, offset, limit: 64 * 1024, region: { offset: item.offset, bytes: item.bytes } }, revision, "live", sha256Hex);
+      expect(answer.ok).toBe(true);
+      if (!answer.ok) return;
+      expect(answer.result.regionDigest).toBe(sha256Hex(content));
+      expect(answer.result.text.includes("\uFFFD")).toBe(false);
+      assembled += answer.result.text;
+      if (answer.result.next === undefined) break;
+      offset = answer.result.next;
+    }
+    expect(assembled).toBe(content);
+    // The same bytes a worker-free read of the same record would produce.
+    const durable = entryRegionsPage(withFile, { component: { kind: "user_text" } }, revision, "durable", hasher);
+    expect(durable.ok && durable.result.items).toEqual(page.result.items);
+  });
+});
 
 describe("a body read from the owning worker", () => {
   it("slices exactly, on character boundaries, with the whole body's digest", () => {

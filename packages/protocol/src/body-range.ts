@@ -883,25 +883,46 @@ export interface BodyRangeRequest {
   component: BodyComponent;
   offset: number;
   limit?: number;
+  /**
+   * Read only this part of the component — an attachment inside a prompt.
+   *
+   * `offset` stays absolute in the component's own byte space; the region
+   * narrows what may be served, so nothing is silently rebased. The answer
+   * echoes the region and carries the region's own digest.
+   */
+  region?: BodyRegion;
 }
 
 export interface BodyRangeAnswerResult {
   authority: "live" | "durable";
   revision: string;
   component: BodyComponent;
+  /** Always the **whole component's** size, never the region's. */
   totalBytes: number;
   offset: number;
   bytes: number;
+  /**
+   * Where the next slice starts. For a region read it is absent at the
+   * region's end — `region.offset + region.bytes` — even though the component
+   * continues past it.
+   */
   next?: number;
+  /** For a region read: this reply did not carry the whole **region**. */
   truncated: boolean;
   sliceDigest: string;
   contentDigest: string;
+  /** Echo of the region asked for, exactly as asked. */
+  region?: BodyRegion;
+  /** SHA-256 of the region's bytes, when a region was asked for. */
+  regionDigest?: string;
   text: string;
 }
 
 export type BodyRangeRefusal =
   | { reason: "unknown-component"; available: BodyComponentKind[] }
-  | { reason: "bad-range" };
+  | { reason: "bad-range" }
+  /** The region is not a part of this component at all. */
+  | { reason: "bad-region" };
 
 /**
  * Slice one body of one entry. The one implementation both authorities use, so
@@ -920,9 +941,123 @@ export function bodyRangeSlice(
   if (body === undefined) {
     return { ok: false, refusal: { reason: "unknown-component", available: [...new Set(entryBodies(entry).map((row) => row.component.kind))] } };
   }
-  const limit = Math.min(request.limit ?? ENTRY_RANGE_MAX_BYTES, ENTRY_RANGE_MAX_BYTES);
+  const totalBytes = utf8ByteLength(body);
+  const bounds = regionBounds(request.region, totalBytes);
+  if (bounds === "refuse") return { ok: false, refusal: { reason: "bad-region" } };
+  const limit = regionLimit(request, bounds);
+  if (limit === undefined) return { ok: false, refusal: { reason: "bad-range" } };
   const slice = sliceUtf8Range(body, request.offset, limit);
   if (!slice) return { ok: false, refusal: { reason: "bad-range" } };
+  return {
+    ok: true,
+    result: regionAnswer({
+      authority, revision, component: request.component, totalBytes, slice, body, digest, region: bounds,
+    }),
+  };
+}
+
+/**
+ * Where a region begins and ends, validated: non-negative safe integers that
+ * name a part of this component, and nothing else. No arithmetic is done on a
+ * value before it is known to be a safe integer.
+ */
+export function regionBounds(region: BodyRegion | undefined, totalBytes: number): { offset: number; bytes: number; end: number } | undefined | "refuse" {
+  if (region === undefined) return undefined;
+  const offset = safeOffset(region.offset);
+  const bytes = safeOffset(region.bytes);
+  if (offset === undefined || bytes === undefined) return "refuse";
+  const end = offset + bytes;
+  if (!Number.isSafeInteger(end) || end > totalBytes) return "refuse";
+  return { offset, bytes, end };
+}
+
+/** How much may be served, so a region read never reaches past its region. */
+function regionLimit(request: BodyRangeRequest, bounds: { offset: number; end: number } | undefined | "refuse"): number | undefined {
+  const asked = Math.min(request.limit ?? ENTRY_RANGE_MAX_BYTES, ENTRY_RANGE_MAX_BYTES);
+  if (bounds === undefined || bounds === "refuse") return asked;
+  // The offset is absolute; a read that starts outside the region is refused
+  // rather than moved into it.
+  if (request.offset < bounds.offset || request.offset > bounds.end) return undefined;
+  return Math.max(0, Math.min(asked, bounds.end - request.offset));
+}
+
+/** The answer for one slice, with region echo, region digest and region end. */
+function regionAnswer(input: {
+  authority: "live" | "durable";
+  revision: string;
+  component: BodyComponent;
+  totalBytes: number;
+  slice: { offset: number; bytes: number; next?: number; truncated: boolean; text: string };
+  body: string;
+  digest: (text: string) => string;
+  region: { offset: number; bytes: number; end: number } | undefined | "refuse";
+  contentDigest?: string;
+}): BodyRangeAnswerResult {
+  const { slice, region } = input;
+  const inRegion = region !== undefined && region !== "refuse";
+  const reachedEnd = inRegion ? slice.offset + slice.bytes >= region.end : slice.next === undefined;
+  return {
+    authority: input.authority,
+    revision: input.revision,
+    component: input.component,
+    totalBytes: input.totalBytes,
+    offset: slice.offset,
+    bytes: slice.bytes,
+    ...(!reachedEnd && slice.next !== undefined ? { next: slice.next } : {}),
+    truncated: !reachedEnd,
+    sliceDigest: input.digest(slice.text),
+    contentDigest: input.contentDigest ?? input.digest(input.body),
+    ...(inRegion
+      ? {
+          region: { offset: region.offset, bytes: region.bytes },
+          regionDigest: input.digest(sliceUtf8RangeFrom(input.body, region.offset, region.bytes)?.text ?? ""),
+        }
+      : {}),
+    text: slice.text,
+  };
+}
+
+/** What one page of attachment metadata answers with. */
+export interface EntryRegionsResult {
+  authority: "live" | "durable";
+  revision: string;
+  component: BodyComponent;
+  /** The whole component's size. */
+  totalBytes: number;
+  items: AttachmentRegion[];
+  /** Exact count of wrappers seen and not described. Absent when `truncated`. */
+  omitted?: number;
+  /** The scan could not see the whole component, so no count is claimed. */
+  truncated?: true;
+  scannedBytes: number;
+  /** Where the next page starts, in component bytes. */
+  next?: number;
+}
+
+/**
+ * One page of the attachments inside one component.
+ *
+ * Bounded twice over: what it describes ({@link BODY_REGION_MAX_ITEMS},
+ * {@link BODY_REGION_METADATA_MAX_BYTES}) and how far it looks
+ * ({@link BODY_REGION_SCAN_MAX_BYTES}). A reply is therefore far inside the
+ * transport's own ceiling, whatever the component holds.
+ */
+export function entryRegionsPage(
+  entry: unknown,
+  request: { component: BodyComponent; from?: number; limit?: number },
+  revision: string,
+  authority: "live" | "durable",
+  createHasher: () => { update(chunk: string): void; digest(): string },
+): { ok: true; result: EntryRegionsResult } | { ok: false; refusal: BodyRangeRefusal } {
+  const body = entryBody(entry, request.component);
+  if (body === undefined) {
+    return { ok: false, refusal: { reason: "unknown-component", available: [...new Set(entryBodies(entry).map((row) => row.component.kind))] } };
+  }
+  const from = safeOffset(request.from);
+  if (request.from !== undefined && from === undefined) return { ok: false, refusal: { reason: "bad-region" } };
+  const limit = safeOffset(request.limit);
+  if (request.limit !== undefined && (limit === undefined || limit === 0)) return { ok: false, refusal: { reason: "bad-range" } };
+  const found = attachmentRegions(body, createHasher, { ...(from !== undefined ? { from } : {}), ...(limit !== undefined ? { maxItems: limit } : {}) });
   return {
     ok: true,
     result: {
@@ -930,13 +1065,10 @@ export function bodyRangeSlice(
       revision,
       component: request.component,
       totalBytes: utf8ByteLength(body),
-      offset: slice.offset,
-      bytes: slice.bytes,
-      ...(slice.next !== undefined ? { next: slice.next } : {}),
-      truncated: slice.truncated,
-      sliceDigest: digest(slice.text),
-      contentDigest: digest(body),
-      text: slice.text,
+      items: found.items,
+      ...(found.truncated ? { truncated: found.truncated } : found.omitted !== undefined ? { omitted: found.omitted } : {}),
+      ...(found.next !== undefined ? { next: found.next } : {}),
+      scannedBytes: found.scannedBytes,
     },
   };
 }
@@ -999,25 +1131,26 @@ export function createBodyRangeReader(): BodyRangeReader {
         }
         held = { key: id, text: body, totalBytes: utf8ByteLength(body), contentDigest: digest(body), cursor: { byteOffset: 0, charIndex: 0 } };
       }
-      const limit = Math.min(request.limit ?? ENTRY_RANGE_MAX_BYTES, ENTRY_RANGE_MAX_BYTES);
+      const bounds = regionBounds(request.region, held.totalBytes);
+      if (bounds === "refuse") return { ok: false, refusal: { reason: "bad-region" } };
+      const limit = regionLimit(request, bounds);
+      if (limit === undefined) return { ok: false, refusal: { reason: "bad-range" } };
       const slice = sliceUtf8RangeFrom(held.text, request.offset, limit, held.cursor, held.totalBytes);
       if (!slice) return { ok: false, refusal: { reason: "bad-range" } };
       held.cursor = slice.cursor;
       return {
         ok: true,
-        result: {
+        result: regionAnswer({
           authority,
           revision: key.revision,
           component: request.component,
           totalBytes: held.totalBytes,
-          offset: slice.offset,
-          bytes: slice.bytes,
-          ...(slice.next !== undefined ? { next: slice.next } : {}),
-          truncated: slice.truncated,
-          sliceDigest: digest(slice.text),
+          slice,
+          body: held.text,
+          digest,
+          region: bounds,
           contentDigest: held.contentDigest,
-          text: slice.text,
-        },
+        }),
       };
     },
     forget() { held = undefined; },
@@ -1039,7 +1172,13 @@ export interface ElidedEntry {
   /** The calls an assistant record made, so their rows survive the elision. */
   toolCalls?: Array<{ id: string; name: string }>;
   /** Exact size and digest of every body, so a client can address them. */
-  bodies: Array<{ component: BodyComponent; totalBytes: number; contentDigest: string }>;
+  bodies: Array<{ component: BodyComponent; totalBytes: number; contentDigest: string; regions?: AttachmentRegions }>;
+}
+
+/** A one-shot hasher around an authority's own digest function. */
+function hasherOf(digest: (text: string) => string): { update(chunk: string): void; digest(): string } {
+  let held = "";
+  return { update(chunk: string) { held += chunk; }, digest: () => digest(held) };
 }
 
 /** The tool calls one assistant record made, identity and name only. */
@@ -1082,7 +1221,20 @@ export function elideOversizedEntries(
       ...(typeof record(value.message).role === "string" ? { role: record(value.message).role as string } : {}),
       ...(typeof record(value.message).toolCallId === "string" ? { toolCallId: record(value.message).toolCallId as string } : {}),
       ...(entryToolCalls(entry).length > 0 ? { toolCalls: entryToolCalls(entry) } : {}),
-      bodies: bodies.map((body) => ({ component: body.component, totalBytes: utf8ByteLength(body.text), contentDigest: digest(body.text) })),
+      bodies: bodies.map((body) => {
+        // A prompt's attachments are named here, bounded, so a surface holding
+        // only an excerpt still shows its file chips and can read one of them
+        // without scanning the body it does not have (RP-5b §2).
+        const regions = body.component.kind === "user_text"
+          ? attachmentRegions(body.text, () => hasherOf(digest))
+          : undefined;
+        return {
+          component: body.component,
+          totalBytes: utf8ByteLength(body.text),
+          contentDigest: digest(body.text),
+          ...(regions && (regions.items.length > 0 || regions.truncated || regions.omitted) ? { regions } : {}),
+        };
+      }),
     });
   }
   return { entries: kept, elided };

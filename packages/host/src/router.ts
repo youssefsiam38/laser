@@ -517,6 +517,28 @@ export class Router {
         return await (await this.workerFor(path)).request(req.method, req.params);
       }
 
+      // RP-5b §2: the attachments inside one body. Same authorization, same
+      // ownership rule and the same read-only projection as a range read; a
+      // conversation with no live worker is never started for one.
+      case "session/entry_regions": {
+        const { path } = req.params;
+        const bodyRange = this.deps.bodyRange;
+        if (!this.deps.revisions || !bodyRange) {
+          throw new ProtocolError(
+            ErrorCodes.RevisionUnavailable,
+            "This host has no configured durable history reader. Restart the app and try again.",
+          );
+        }
+        this.assertDurableReadPath(path);
+        const live = this.liveWorkerFor(path);
+        if (live) return await live.request(req.method, req.params);
+        if (!existsSync(path)) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation is no longer stored here.");
+        const answer = await bodyRange.regions(path, req.params);
+        if (answer.kind === "answer") return answer.result;
+        if (answer.kind === "refuse") throw answer.error;
+        return await (await this.workerFor(path)).request(req.method, req.params);
+      }
+
       case "pi/session/move":
         return this.moveSession(req.params.path, req.params.cwd);
 

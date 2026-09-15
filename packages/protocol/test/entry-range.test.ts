@@ -18,8 +18,11 @@ import {
   bodyProjectionWork,
   bodyRangeSlice,
   sliceUtf8RangeFrom,
+  elideOversizedEntries,
   entryBodies,
   entryBodyIdentities,
+  entryRegionsPage,
+  type BodyRegion,
   PERSISTED_IDENTITY_MAX_BYTES,
   PERSISTED_IDENTITY_MAX_ITEMS,
   boundedBodyText,
@@ -208,6 +211,7 @@ describe("the bounded canonical projection", () => {
   });
 });
 
+const digestOfText = (text: string): string => createHash("sha256").update(text, "utf8").digest("hex");
 const sha256Of = (text: string): string => createHash("sha256").update(text, "utf8").digest("hex");
 
 describe("the identity an authority publishes when a message settles", () => {
@@ -350,6 +354,110 @@ describe("the attachments an authority finds inside a prompt", () => {
     expect(BODY_REGION_SCAN_MAX_BYTES).toBe(64 * 1024 * 1024);
     expect(BODY_REGION_MAX_ITEMS).toBe(64);
     expect(BODY_REGION_METADATA_MAX_BYTES).toBe(16 * 1024);
+  });
+});
+
+describe("reading one attachment inside a prompt", () => {
+  const hasher = () => {
+    const chunks: string[] = [];
+    return { update: (chunk: string) => { chunks.push(chunk); }, digest: () => sha256Of(chunks.join("")) };
+  };
+  const content = "答".repeat(30_000); // multi-byte throughout
+  const prompt = `have a look\n\n<attached-file name="notes.md" type="text/markdown" size="${utf8ByteLength(content)}">\n${content}\n</attached-file>\n\ntail`;
+  const entry = { id: "u1", parentId: null, type: "message", message: { role: "user", content: [{ type: "text", text: prompt }] } };
+  const region = () => entryRegionsPage(entry, { component: { kind: "user_text" } }, "r1", "durable", hasher).ok
+    ? (entryRegionsPage(entry, { component: { kind: "user_text" } }, "r1", "durable", hasher) as { result: { items: Array<{ offset: number; bytes: number; contentDigest: string }> } }).result.items[0]!
+    : undefined as never;
+
+  it("names the attachment and reads exactly it, in the component's own offsets", () => {
+    const item = region();
+    expect(item.bytes).toBe(utf8ByteLength(content));
+    expect(item.contentDigest).toBe(sha256Of(content));
+
+    let offset = item.offset;
+    let assembled = "";
+    for (let step = 0; step < 100; step++) {
+      const answer = bodyRangeSlice(entry, { component: { kind: "user_text" }, offset, limit: 8192, region: { offset: item.offset, bytes: item.bytes } }, "r1", "durable", digestOfText);
+      expect(answer.ok).toBe(true);
+      if (!answer.ok) return;
+      // The parent's size, never the region's; and the region echoed exactly.
+      expect(answer.result.totalBytes).toBe(utf8ByteLength(prompt));
+      expect(answer.result.region).toEqual({ offset: item.offset, bytes: item.bytes });
+      expect(answer.result.regionDigest).toBe(digestOfText(content));
+      assembled += answer.result.text;
+      // Never a partial character.
+      expect(answer.result.text.includes("\uFFFD")).toBe(false);
+      if (answer.result.next === undefined) {
+        // The region's end, even though the component continues past it.
+        expect(answer.result.truncated).toBe(false);
+        expect(item.offset + item.bytes).toBeLessThan(utf8ByteLength(prompt));
+        break;
+      }
+      expect(answer.result.next).toBeLessThanOrEqual(item.offset + item.bytes);
+      offset = answer.result.next;
+    }
+    expect(assembled).toBe(content);
+  });
+
+  it("refuses a region that is not part of this component, and one that is not a safe integer", () => {
+    const item = region();
+    const cases: BodyRegion[] = [
+      { offset: -1, bytes: 10 },
+      { offset: 0, bytes: -1 },
+      { offset: 0.5, bytes: 10 },
+      { offset: 0, bytes: Number.MAX_SAFE_INTEGER },
+      { offset: utf8ByteLength(prompt), bytes: 1 },
+      { offset: Number.NaN, bytes: 1 },
+    ];
+    for (const bad of cases) {
+      const answer = bodyRangeSlice(entry, { component: { kind: "user_text" }, offset: 0, region: bad }, "r1", "durable", digestOfText);
+      expect(answer.ok, JSON.stringify(bad)).toBe(false);
+      if (!answer.ok) expect(answer.refusal.reason).toBe("bad-region");
+    }
+    // An offset outside the region is refused rather than quietly moved in.
+    const outside = bodyRangeSlice(entry, { component: { kind: "user_text" }, offset: 0, region: { offset: item.offset, bytes: item.bytes } }, "r1", "durable", digestOfText);
+    expect(outside.ok).toBe(false);
+  });
+
+  it("pages the attachments of one component and says what it left out", () => {
+    const many = Array.from({ length: 20 }, (_, index) => {
+      const body = `file ${index}`;
+      return `<attached-file name="f${index}.txt" type="text/plain" size="${utf8ByteLength(body)}">\n${body}\n</attached-file>`;
+    }).join("\n\n");
+    const record = { id: "u2", parentId: null, type: "message", message: { role: "user", content: [{ type: "text", text: many }] } };
+    const first = entryRegionsPage(record, { component: { kind: "user_text" }, limit: 5 }, "r1", "live", hasher);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.result.authority).toBe("live");
+    expect(first.result.items).toHaveLength(5);
+    expect(first.result.omitted).toBe(15);
+    expect(first.result.truncated).toBeUndefined();
+    expect(first.result.totalBytes).toBe(utf8ByteLength(many));
+    // A reply is far inside the transport's own ceiling.
+    expect(utf8ByteLength(JSON.stringify(first.result))).toBeLessThanOrEqual(64 * 1024);
+
+    const second = entryRegionsPage(record, { component: { kind: "user_text" }, from: first.result.next, limit: 5 }, "r1", "live", hasher);
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.result.items[0]!.offset).toBe(first.result.next);
+    expect(second.result.items.map(item => item.name)).not.toContain(first.result.items[0]!.name);
+  });
+
+  it("refuses a component the entry does not have, and a malformed page cursor", () => {
+    const missing = entryRegionsPage(entry, { component: { kind: "tool_result" } }, "r1", "durable", hasher);
+    expect(missing.ok).toBe(false);
+    if (!missing.ok) expect(missing.refusal.reason).toBe("unknown-component");
+    const bad = entryRegionsPage(entry, { component: { kind: "user_text" }, from: -5 }, "r1", "durable", hasher);
+    expect(bad.ok).toBe(false);
+  });
+
+  it("publishes the same names on an elided page, bounded", () => {
+    const { elided } = elideOversizedEntries([entry], 1024, digestOfText);
+    const body = elided[0]!.bodies.find(row => row.component.kind === "user_text")!;
+    expect(body.regions?.items).toHaveLength(1);
+    expect(body.regions!.items[0]!.name).toBe("notes.md");
+    expect(body.regions!.items[0]!.contentDigest).toBe(digestOfText(content));
+    expect(utf8ByteLength(JSON.stringify(body.regions))).toBeLessThanOrEqual(16 * 1024);
   });
 });
 

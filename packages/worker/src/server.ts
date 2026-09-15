@@ -22,7 +22,7 @@
  * growing the process.
  */
 
-import { AGENT_MAX_DEPTH_LIMIT, ENV, ErrorCodes, createBodyRangeReader, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TypedClientRequest, WIRE_NAMESPACE } from "@lasercode/protocol";
+import { AGENT_MAX_DEPTH_LIMIT, ENV, ErrorCodes, createBodyRangeReader, entryRegionsPage, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TypedClientRequest, WIRE_NAMESPACE } from "@lasercode/protocol";
 import { CaptureReservations } from "./capture-reservations.js";
 
 /** RP-5b body digests. The one hash both authorities sign a body with. */
@@ -697,11 +697,49 @@ export class WorkerServer {
           sha256Hex,
         );
         if (!sliced.ok) {
-          throw sliced.refusal.reason === "bad-range"
-            ? new ProtocolError(ErrorCodes.InvalidParams, "That is not a readable part of this message. Open it again from the start.")
-            : new ProtocolError(ErrorCodes.InvalidParams, `That message has no ${req.params.component.kind.replaceAll("_", " ")} to read.`, { available: sliced.refusal.available });
+          if (sliced.refusal.reason === "bad-range") {
+            throw new ProtocolError(ErrorCodes.InvalidParams, "That is not a readable part of this message. Open it again from the start.");
+          }
+          if (sliced.refusal.reason === "bad-region") {
+            throw new ProtocolError(ErrorCodes.InvalidParams, "That is not a part of this message. Open the message again to see what it holds.");
+          }
+          throw new ProtocolError(ErrorCodes.InvalidParams, `That message has no ${req.params.component.kind.replaceAll("_", " ")} to read.`, { available: sliced.refusal.available });
         }
         return sliced.result satisfies Result<"session/entry_range">;
+      }
+      // RP-5b §2: the same page of attachments, from the session this worker
+      // owns, at the revision computed from its own entries.
+      case "session/entry_regions": {
+        const live = this.live(req.params.path);
+        const snapshot = await live.driver.entries();
+        if (this.runtimes.get(live.path) !== live) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation was closed. Open it again.");
+        const { revision, environmentKey } = this.revisionOf(live, snapshot);
+        if (environmentKey !== req.params.environmentKey) {
+          throw new ProtocolError(ErrorCodes.InvalidParams, "That conversation belongs to a different connection.");
+        }
+        if (revision !== req.params.revision) {
+          throw new ProtocolError(
+            ErrorCodes.RevisionUnavailable,
+            "This conversation moved on since that message was read. Open it again to see the rest.",
+          );
+        }
+        const entry = snapshot.entries.find((row) => (row as { id?: unknown } | null)?.id === req.params.entryId);
+        if (entry === undefined) {
+          throw new ProtocolError(ErrorCodes.InvalidParams, "That message is not part of this conversation any more.");
+        }
+        const page = entryRegionsPage(
+          entry,
+          { component: req.params.component, ...(req.params.from !== undefined ? { from: req.params.from } : {}), ...(req.params.limit !== undefined ? { limit: req.params.limit } : {}) },
+          revision,
+          "live",
+          () => { const hash = createHash("sha256"); return { update: (chunk: string) => { hash.update(chunk, "utf8"); }, digest: () => hash.digest("hex") }; },
+        );
+        if (!page.ok) {
+          throw page.refusal.reason === "unknown-component"
+            ? new ProtocolError(ErrorCodes.InvalidParams, `That message has no ${req.params.component.kind.replaceAll("_", " ")} to read.`, { available: page.refusal.available })
+            : new ProtocolError(ErrorCodes.InvalidParams, "That is not a part of this message. Open the message again to see what it holds.");
+        }
+        return page.result satisfies Result<"session/entry_regions">;
       }
       case "pi/session/compact": {
         const live = this.live(req.params.path);
