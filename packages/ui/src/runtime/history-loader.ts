@@ -1,5 +1,6 @@
 import { ErrorCodes, type ClientRequests, type HistoryWindow, type HistoryWindowRequest, type SessionUpdateParams } from "@lasercode/protocol";
-import type { applyUpdate, blocksFromEntries, modelNamesOf, stampNewBlocks, textOf, Action, Block, SessionView } from "../store.js";
+import type { applyUpdate, blocksFromEntries, modelNamesOf, stampNewBlocks, textOf, Action, Block, SessionView, ValidatedRevision } from "../store.js";
+import { awake } from "../view-summary.js";
 import { deepEqual } from "./projection.js";
 
 export type HistoryAction =
@@ -9,6 +10,16 @@ export type HistoryAction =
   | { type: "historySnapshot"; path: string; token: string; entries: unknown[]; leafId?: string | null; window: HistoryWindow; replaceWindow?: true }
   | { type: "historyPrepend"; path: string; before: string; entries: unknown[]; window: HistoryWindow; revision?: string | undefined }
   | { type: "historyMetadata"; path: string; from?: string | null | undefined; entries: unknown[]; leafId?: string | null | undefined; window: HistoryWindow; revision?: string | undefined };
+
+/**
+ * What a dormant view keeps of an accepted window (RP-5/RP-9): the durable
+ * revision it was valid at, the environment that revision belongs to, and
+ * whether the session has any history at all.
+ */
+function validatedOf(window: Omit<HistoryWindow, "live">): ValidatedRevision {
+  return { revision: window.revision, environmentKey: window.environmentKey, epoch: window.epoch, seq: window.seq,
+    hasHistory: window.hasHistory, at: new Date().toISOString() };
+}
 
 export const hasCompleteTree = (view: SessionView | undefined): boolean =>
   view?.history ? view.history.complete && !view.history.branchesUnloaded : Boolean(view?.hydrated);
@@ -58,14 +69,17 @@ export function receiveHistoryUpdate(v: SessionView, p: SessionUpdateParams, { a
 /** The store routes history actions here; its ordinary event fold stays authoritative. */
 export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpdate, blocksFromEntries, modelNamesOf, stampNewBlocks, textOf }: HistoryFold): SessionView {
   switch (action.type) {
-    case "historyBegin": return { ...v, historyPending: { token: action.token, updates: [] } };
+    // A read of this surface's own window has started: it is no longer a
+    // released transcript, and the updates that arrive while it is in flight
+    // belong in the buffer below rather than being dropped as dormant.
+    case "historyBegin": return { ...awake(v), historyPending: { token: action.token, updates: [] } };
     case "historyReset": {
       // The loaded window goes before its replacement is requested, so no older
       // expanded transcript is on screen while the recent one is in flight. A
       // message this surface has already sent is not history and stays.
       if (v.historyPending?.token !== action.token) return v;
       const { history: _window, historyRevision: _revision, ...rest } = v;
-      return { ...rest, entries: [], blocks: v.blocks.filter(block => block.kind === "user" && block.optimistic), hydrated: false };
+      return { ...awake(rest as SessionView), entries: [], blocks: v.blocks.filter(block => block.kind === "user" && block.optimistic), hydrated: false };
     }
     case "historyEnd": return v.historyPending?.token === action.token ? { ...v, historyPending: undefined } : v;
     case "historySnapshot": {
@@ -81,7 +95,7 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
       const entries = retainTree ? [...new Map([...v.entries, ...action.entries].map(entry => [(entry as { id: string }).id, entry])).values()] : action.entries;
       const history = retainTree ? { ...window, complete: true, branchesUnloaded: false, userOffset: 0, context: [], priorGoalIds: [] } : window;
       if (retainTree) delete history.before;
-      let next: SessionView = { ...v, entries, leafId: action.leafId, history, hydrated: true,
+      let next: SessionView = { ...awake(v), entries, leafId: action.leafId, history, hydrated: true, validated: validatedOf(window),
         historyRevision: action.replaceWindow ? action.token : v.historyRevision,
         blocks: blocksFromEntries(entries, action.leafId, modelNamesOf(v.state)),
         running: live?.running ?? v.running, lastSeq: action.window.seq, updateEpoch: history.epoch, pendingSentBy: undefined, historyPending: undefined };
@@ -117,8 +131,8 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
       // Replace known records in place and append only newly persisted ids.
       const entries = [...new Map([...v.entries, ...action.entries].map(entry => [(entry as { id: string }).id, entry])).values()];
       const { live: _live, before: _before, ...history } = action.window;
-      return { ...v, entries, leafId: action.leafId,
-        history: v.history ? { ...v.history, seq: history.seq, hasHistory: v.history.hasHistory || history.hasHistory } : { ...history, userOffset: 0, context: [], priorGoalIds: [], complete: true } };
+      const merged = v.history ? { ...v.history, seq: history.seq, hasHistory: v.history.hasHistory || history.hasHistory } : { ...history, userOffset: 0, context: [], priorGoalIds: [], complete: true };
+      return { ...v, entries, leafId: action.leafId, history: merged, validated: validatedOf(merged) };
     }
     case "historyPrepend": {
       if (v.historyRevision !== action.revision || v.history?.before !== action.before || v.history.epoch !== action.window.epoch) return v;
@@ -154,7 +168,11 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
   const fence = (path: string, accepting: () => boolean) => {
     const generation = generations.get(path) ?? 0;
     const revision = deps.get(path)?.historyRevision;
-    return () => accepting() && (generations.get(path) ?? 0) === generation && deps.get(path)?.historyRevision === revision;
+    // The transcript this read is for can be released while it is in flight
+    // (RP-5). Its epoch moves when that happens, so the answer lands nowhere.
+    const hydration = deps.get(path)?.hydrationEpoch ?? 0;
+    return () => accepting() && (generations.get(path) ?? 0) === generation && deps.get(path)?.historyRevision === revision
+      && (deps.get(path)?.hydrationEpoch ?? 0) === hydration;
   };
   const read = async (path: string, all = false, accepting: () => boolean = () => true, legacySeq?: number, policy?: "recent"): Promise<void> => {
     if (!accepting()) return;

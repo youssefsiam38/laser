@@ -156,3 +156,32 @@ export {
   type ThreadScopeRefusal,
   type Toasts,
 } from "./LaserProvider.js";
+
+export {
+  VIEW_CACHE_LIMITS,
+  VIEW_HEAP_MODEL,
+  createViewCache,
+  pinReason,
+  rendererViewsStore,
+  type PinReason,
+  type ReleaseOutcome,
+  type RendererViewCounters,
+  type ViewCache,
+  type ViewCacheEnvironment,
+  type ViewCacheLimits,
+} from "./view-cache.js";
+
+export {
+  NO_TAIL_SINK,
+  VIEW_TAIL_MAX_BYTES,
+  VIEW_TAIL_MAX_ENTRIES,
+  VIEW_TAIL_SCHEMA,
+  captureViewTail,
+  installViewTailSink,
+  viewTailSink,
+  type ViewTailDto,
+  type ViewTailEntryDto,
+  type ViewTailSink,
+} from "./view-tail.js";
+
+export { byteLength, measureView, type ViewMeasure } from "./view-measure.js";

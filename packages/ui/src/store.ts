@@ -113,6 +113,11 @@ export type Block =
 /** Custom message types that render as transcript blocks. */
 export const CUSTOM_MESSAGE_BLOCK_TYPES: ReadonlySet<string> = new Set([AGENT_EVENT_MESSAGE_TYPE, TASK_EVENT_MESSAGE_TYPE]);
 
+import { awake, dehydrateView, hasUnsentWork, isDormantView } from "./view-summary.js";
+export type { EvictionReason, SessionViewSummary, ValidatedRevision } from "./view-summary.js";
+export { awake, dehydrateView, hasUnsentWork, hydrationEpochOf, isDormantView, summaryOfView, viewFirstUserText, viewHasHistory, viewHasUserMessage } from "./view-summary.js";
+import type { EvictionReason, SessionViewSummary, ValidatedRevision } from "./view-summary.js";
+
 export interface SessionView {
   path: string;
   state: SessionState;
@@ -188,7 +193,33 @@ export interface SessionView {
    * the file's own marker takes over.
    */
   pendingSentBy?: SentByParent | undefined;
+  /**
+   * What the last accepted authoritative window said about this session
+   * (RP-5, RP-9). Light: it survives the transcript being released, so a
+   * dormant view still knows which durable revision it was last valid at and
+   * whether the session has any history at all. Opaque — compared, never
+   * parsed — and the seam RP-10 keys its device cache by.
+   */
+  validated?: ValidatedRevision | undefined;
+  /**
+   * The few words a dormant session's row needs once its blocks are gone
+   * (RP-5). Computed once, when the transcript is released.
+   */
+  summary?: SessionViewSummary | undefined;
+  /**
+   * Bumped every time this view's transcript is released. Every asynchronous
+   * read captures it and refuses to land when it has moved (RP-5 fences).
+   */
+  hydrationEpoch?: number | undefined;
+  /**
+   * Set while the transcript has been released and not read again. Its
+   * presence — not `hydrated` — is what makes a view dormant: a view that has
+   * simply never been read is not dormant, and its first read still folds the
+   * updates that arrive while it is in flight.
+   */
+  dormant?: { at: string; reason: EvictionReason } | undefined;
 }
+
 
 /**
  * Everything the agents feature holds outside a session: the definitions
@@ -321,6 +352,12 @@ export type Action =
   /** Controller-owned atomic main-window transition; `current` is its projection. */
   | { type: "destination"; destination: MainDestination }
   | { type: "closeView"; path: string }
+  /**
+   * Release the transcript of these views, keeping their light records (RP-5).
+   * Nothing canonical, person-authored or live is touched; the next open reads
+   * the session again from its authoritative host.
+   */
+  | { type: "views/evict"; paths: readonly string[]; reason: EvictionReason; at: string }
   /**
    * Replace the transcript from a persisted snapshot. `expectSeq` guards the
    * round trip: when live updates advanced `lastSeq` while `pi/session/entries`
@@ -473,6 +510,18 @@ export function reduce(state: AppState, action: Action): AppState {
       const { [action.path]: _load, ...sessionLoads } = state.sessionLoads;
       return { ...state, open: rest, sessionLoads };
     }
+    case "views/evict": {
+      let open: Record<string, SessionView> | undefined;
+      for (const path of action.paths) {
+        const view = state.open[path];
+        // Already dormant, never read, or holding words nobody else has: leave it.
+        if (!view || isDormantView(view) || hasUnsentWork(view)) continue;
+        if (view.blocks.length === 0 && view.entries.length === 0 && !view.hydrated) continue;
+        open ??= { ...state.open };
+        open[path] = dehydrateView(view, action.reason, action.at);
+      }
+      return open ? { ...state, open } : state;
+    }
     case "historyBegin":
     case "historyReset":
     case "historyEnd":
@@ -481,7 +530,8 @@ export function reduce(state: AppState, action: Action): AppState {
     case "historyPrepend":
       return updateView(state, action.path, v => reduceHistory(v, action, historyFold));
     case "hydrate":
-      return updateView(state, action.path, (v) => {
+      return updateView(state, action.path, (view) => {
+        const v = awake(view);
         // The snapshot came from the worker at `seq`; a live update that
         // overtook it is further ahead, so the watermark never goes backwards.
         const lastSeq = action.seq !== undefined && action.seq > v.lastSeq ? action.seq : v.lastSeq;
@@ -717,7 +767,11 @@ function applyNotification(state: AppState, method: HostNotificationMethod, para
   switch (method) {
     case "session/update": {
       const p = params as HostNotifications["session/update"];
-      return updateView(state, p.sessionPath, v => receiveHistoryUpdate(v, p, historyFold));
+      // A dormant view holds no transcript, so a content update has nothing to
+      // append to: folding one would build a transcript out of its own tail.
+      // Only what a row still says about the session lands, and the watermark
+      // stays where it was so the next open reads the session again.
+      return updateView(state, p.sessionPath, v => isDormantView(v) ? applyDormantUpdate(v, p.update) : receiveHistoryUpdate(v, p, historyFold));
     }
     case "pi/ui/request": {
       const p = params as HostNotifications["pi/ui/request"];
@@ -846,6 +900,34 @@ function applyUiEvent(state: AppState, path: string, event: UiFireAndForget): Ap
       return updateView(state, path, (v) => ({ ...v, title: event.title }));
     case "setEditorText":
       return updateView(state, path, (v) => ({ ...v, editorText: event.text }));
+  }
+}
+
+/**
+ * The only updates a dormant view folds: what a row says about the session,
+ * never its words. Its `lastSeq` deliberately stands still — the transcript it
+ * would number is gone, and the next open re-reads the session's recent tail.
+ */
+function applyDormantUpdate(v: SessionView, u: SessionUpdate): SessionView {
+  switch (u.kind) {
+    case "state":
+      return { ...v, state: u.state, running: u.state.isStreaming };
+    case "agent_start":
+      return v.running ? v : { ...v, running: true };
+    case "agent_end":
+      return u.willRetry ? (v.running ? v : { ...v, running: true }) : v.running ? { ...v, running: false } : v;
+    case "agent_settled":
+      return v.running ? { ...v, running: false } : v;
+    case "queue_update":
+      return { ...v, queue: { steering: u.steering.map(displayQueuedText), followUp: u.followUp.map(displayQueuedText) } };
+    case "pending_update":
+      return { ...v, pending: displayPending(u.pending) };
+    case "compaction_start":
+      return { ...v, state: { ...v.state, isCompacting: true } };
+    case "compaction_end":
+      return { ...v, state: { ...v.state, isCompacting: false } };
+    default:
+      return v;
   }
 }
 

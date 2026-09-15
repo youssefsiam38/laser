@@ -19,7 +19,7 @@ import { modeConfig, expected, SAFETY } from './resource/config.mjs';
 import { enforceSafety } from './resource/process-sampler.mjs';
 import { runElectronLane } from './resource/electron.mjs';
 import { SoakRun, moduleUrls, closedPageMetrics } from './resource/context.mjs';
-import { BROWSER_SCENARIOS, DESKTOP_SCENARIO } from './resource/scenarios/index.mjs';
+import { BROWSER_SCENARIOS, DESKTOP_SCENARIO, SCENARIO_IDS } from './resource/scenarios/index.mjs';
 import { setCategory } from './resource/rankings.mjs';
 import { writeReport, compareRuns, assertRedacted, sanitizeError, sanitizeOwner, scanArtifacts } from './resource/report.mjs';
 
@@ -130,12 +130,21 @@ async function runBrowserSoak(check, mode, report) {
     physicalDecodedImageOwnership: 'unavailable', relayConsumer: 'not measured; local host WebSocket backpressure only' };
 
   for (const scenario of BROWSER_SCENARIOS) {
+    // A measurement-only run stops after a named scenario. The fixture, the
+    // workload, the ceilings and the safety verdict are untouched: only the
+    // number of scenarios reached changes, and the report says which ones it
+    // never ran so it can never read as a baseline.
+    if (report.stoppedAfter !== undefined) {
+      for (const id of scenario.ids ?? [scenario.id]) report.scenarios[id] = 'not-run: measurement-only run stopped earlier';
+      continue;
+    }
     const result = await scenario.run(run);
     // "Complete" means measured: the scenario has to hand back the phase sample
     // that is already in the report.
     assert.ok(result?.phase && report.phases.includes(result.phase), `${scenario.id} finished without a phase sample of its own`);
     Object.assign(run.state, result.state ?? {});
     for (const id of scenario.ids ?? [scenario.id]) report.scenarios[id] = 'complete';
+    if (report.until && (scenario.ids ?? [scenario.id]).includes(report.until)) report.stoppedAfter = scenario.id;
   }
 
   // Discovery is reported from what was actually proved by a query, never from
@@ -149,16 +158,22 @@ async function runBrowserSoak(check, mode, report) {
     queryObjectsCheckpoints: run.discovery.checkpoints().length,
     note: 'Runtime.queryObjects runs once per process generation; later phases read the handle it published',
   };
-  assert.ok(report.discovery.hostServer && report.discovery.workerServer && report.discovery.rendererStore && report.discovery.tailBuffer,
+  // A measurement-only run proves what the scenarios it ran can prove. The
+  // tail buffers live in the children-and-commands scenario, so a run stopped
+  // before it says "not reached" rather than claiming or failing on them.
+  if (report.stoppedAfter !== undefined) report.discovery.tailBuffer = 'not reached in this measurement-only run';
+  assert.ok(report.discovery.hostServer && report.discovery.workerServer && report.discovery.rendererStore
+    && (report.stoppedAfter !== undefined || report.discovery.tailBuffer),
     `runtime discovery was not proved: ${JSON.stringify(report.discovery)}`);
   return run;
 }
 
-async function oneRun(mode, artifacts, implementationSha, electron) {
+async function oneRun(mode, artifacts, implementationSha, electron, until) {
   const config = modeConfig(mode);
   const exp = expected(config);
   const report = { mode, implementationSha, startedAtMs: Date.now(), phases: [], rankings: {}, slopes: {}, scenarios: {},
-    unsupported: ['physical decoded-image bytes per DOM owner', 'relay-client memory in the local stalled-reader lane'], pass: false };
+    unsupported: ['physical decoded-image bytes per DOM owner', 'relay-client memory in the local stalled-reader lane'], pass: false,
+    ...(until ? { until, purpose: 'calibration', partial: true } : {}) };
   let evidence;
   try {
     evidence = await browserCheck({ checkout, target: resourceTarget(mode), fixture, fixtureName: mode, artifacts, timeout: config.phaseTimeoutMs },
@@ -181,7 +196,10 @@ async function oneRun(mode, artifacts, implementationSha, electron) {
   report.build = evidence.build;
   const counters = JSON.parse(await readFile(join(evidence.root, 'provider-counters.json'), 'utf8'));
   report.provider = providerAccounting(counters, config, exp);
-  assert.deepEqual(report.provider.mismatches, [], `provider route accounting did not match the workload: ${report.provider.mismatches.join('; ')}`);
+  // The accounting is of the whole workload; a run that stopped early has not
+  // executed all of it, so its differences are recorded, not asserted.
+  if (until) report.provider.partial = true;
+  else assert.deepEqual(report.provider.mismatches, [], `provider route accounting did not match the workload: ${report.provider.mismatches.join('; ')}`);
   report.survivors = evidence.survivors.length;
   const evidenceSummary = { survivors: evidence.survivors.length };
   if (evidence.survivors.length === 0) await rm(evidence.root, { recursive: true, force: true });
@@ -197,14 +215,28 @@ async function oneRun(mode, artifacts, implementationSha, electron) {
   }
   report.pass = report.survivors === 0
     && Object.entries(report.scenarios).every(([name, value]) => name === DESKTOP_SCENARIO ? (electron ? value === 'complete' : mode === 'quick') : value === 'complete');
+  if (until) {
+    // Measurement only. A run that did not execute every scenario is never a
+    // pass and never a baseline, whatever its phases measured.
+    report.remainingScenarios = Object.entries(report.scenarios)
+      .filter(([, value]) => value !== 'complete').map(([name]) => name).sort();
+    report.pass = false;
+  }
   report.startedAtMs = undefined;
   return { report, evidence: evidenceSummary };
 }
 
-export async function runResourceSoak({ mode = 'quick', runs = 1, artifacts = '/tmp/resource-soak', electron = false } = {}) {
+export async function runResourceSoak({ mode = 'quick', runs = 1, artifacts = '/tmp/resource-soak', electron = false, until } = {}) {
   if (process.platform !== 'linux') throw new Error('The full resource soak requires Linux /proc PSS accounting.');
-  if (mode === 'full' && runs !== 2) throw new Error('Full baseline evidence requires exactly two clean runs.');
-  if (mode === 'full' && !electron) throw new Error('Full baseline evidence requires the real Electron hide/restore lane.');
+  // Measurement-only calibration (RP-5): the unchanged full workload, stopped
+  // after a named scenario. It is one run, it is never a baseline, and it can
+  // never be combined with the two-run comparison the baseline is made of.
+  if (until !== undefined) {
+    if (!SCENARIO_IDS.includes(until)) throw new Error(`There is no scenario called ${until}.`);
+    if (runs !== 1) throw new Error('A measurement-only run is exactly one run; it is not a baseline and has nothing to compare.');
+  }
+  if (mode === 'full' && until === undefined && runs !== 2) throw new Error('Full baseline evidence requires exactly two clean runs.');
+  if (mode === 'full' && until === undefined && !electron) throw new Error('Full baseline evidence requires the real Electron hide/restore lane.');
   await mkdir(artifacts, { recursive: true, mode: 0o700 });
   const implementationSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: checkout, encoding: 'utf8' }).trim();
   const results = [];
@@ -220,7 +252,7 @@ export async function runResourceSoak({ mode = 'quick', runs = 1, artifacts = '/
     }
     const root = join(artifacts, `run-${String.fromCharCode(97 + index)}`);
     await mkdir(root, { recursive: true, mode: 0o700 });
-    const result = await oneRun(mode, root, implementationSha, electron);
+    const result = await oneRun(mode, root, implementationSha, electron, until);
     await writeReport(root, result.report);
     results.push(result);
   }
@@ -239,7 +271,9 @@ export async function runResourceSoak({ mode = 'quick', runs = 1, artifacts = '/
       writeFile(join(artifacts, 'comparison.md'), markdown, { mode: 0o600 }),
     ]);
   }
-  const manifest = { schemaVersion: 1, implementationSha, mode, runs, electron, build: results[0]?.report.build,
+  const manifest = { schemaVersion: 1, implementationSha, mode, runs, electron,
+    ...(until ? { until, purpose: 'calibration', partial: true, remainingScenarios: results[0]?.report.remainingScenarios ?? null } : {}),
+    build: results[0]?.report.build,
     runtime: results[0]?.report.runtime, fixture: results[0]?.report.fixture, capabilities: results[0]?.report.capabilities,
     comparisonPolicy: comparison?.policy ?? null,
     allRunsPassed: results.every(result => result.report.pass), comparisonPassed: comparison?.pass ?? null };
@@ -257,9 +291,10 @@ export async function runResourceSoak({ mode = 'quick', runs = 1, artifacts = '/
 export { closedPageMetrics };
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
-  const { values } = parseArgs({ options: { quick: { type: 'boolean' }, full: { type: 'boolean' }, runs: { type: 'string' }, artifacts: { type: 'string' }, electron: { type: 'boolean' } } });
+  const { values } = parseArgs({ options: { quick: { type: 'boolean' }, full: { type: 'boolean' }, runs: { type: 'string' }, artifacts: { type: 'string' }, electron: { type: 'boolean' }, until: { type: 'string' } } });
   const mode = values.full ? 'full' : 'quick';
-  const result = await runResourceSoak({ mode, runs: Number(values.runs ?? (mode === 'full' ? 2 : 1)), electron: values.electron ?? false,
+  const result = await runResourceSoak({ mode, runs: Number(values.runs ?? (values.until ? 1 : mode === 'full' ? 2 : 1)), electron: values.electron ?? false,
+    ...(values.until ? { until: values.until } : {}),
     artifacts: resolve(values.artifacts ?? `/tmp/resource-soak-${mode}`) });
   console.log(JSON.stringify({ implementationSha: result.implementationSha, pass: result.results.every(run => run.pass) && (result.comparison?.pass ?? true) }, null, 2));
 }

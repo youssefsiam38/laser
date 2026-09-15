@@ -64,8 +64,10 @@ import { takeWorktreeDisposition } from "../agents/worktree.js";
 import { createTasksActions, type TasksActions } from "../fleet/actions.js";
 import { HostClient } from "../client.js";
 import { initialState, reduce, type Action, type AppState, type SessionView } from "../store.js";
+import { hydrationEpochOf, isDormantView } from "../view-summary.js";
+import { createViewCache, type RendererViewCounters } from "./view-cache.js";
 import { createThreadAdapter, sendToSession, type SendBehavior } from "./adapter.js";
-import { useDiscardFirstTurnOnLeave } from "./first-turn.js";
+import { firstTurnFromRunConfig, useDiscardFirstTurnOnLeave } from "./first-turn.js";
 import { createSessionLauncher, type NewSessionOptions } from "./new-session.js";
 import {
   codeProjectForSession,
@@ -248,6 +250,13 @@ export interface LaserContextValue {
   trustRequests: TrustRequest[];
   archive: ArchiveStore;
   actions: LaserActions;
+  /**
+   * What this renderer is holding of the conversations it has shown (RP-5).
+   * A snapshot, read on demand: the diagnostics surface asks for it, nothing
+   * pushes it, and it is this device's own — a renderer somewhere else has
+   * its own view state and this says nothing about it.
+   */
+  rendererViews: () => RendererViewCounters;
 }
 
 /** Everything that does not change when the transcript does. */
@@ -426,6 +435,11 @@ interface RuntimeSnapshot {
   dispatch: (action: Action) => void;
   onError: (error: unknown) => void;
   openSession: (path: string) => Promise<void>;
+  /**
+   * Report whether this thread's composer holds words a person wrote and
+   * nobody else has (RP-5). A session with one is never released.
+   */
+  setDraft?: ((path: string, held: boolean) => void) | undefined;
   /** Main adapters are fenced by the canonical destination; scoped adapters are not. */
   main?: boolean | undefined;
 }
@@ -563,8 +577,13 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           rehydrate.current(path);
         }
       },
-      // Never re-open a Pi session the app has dropped.
-      shouldResume: (path) => readState().open[path] !== undefined,
+      // Never re-open a Pi session the app has dropped, and never re-read one
+      // whose transcript was released: it is opened again when somebody opens
+      // it, not because a socket came back (RP-5).
+      shouldResume: (path) => {
+        const view = readState().open[path];
+        return view !== undefined && !isDormantView(view);
+      },
     });
     environmentLifecycle.current = createEnvironmentLifecycle({
       forgetAttachments: () => created.forgetAttachments(),
@@ -691,8 +710,51 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
    * The move re-hydrates when it lands, so the re-read has nothing to add.
    */
   const moving = useRef(new Set<string>());
+  /**
+   * Sessions a `LaserThreadScope` is showing (the Beam bubble). They are on
+   * screen too, so they stay attached for as long as the scope holds them;
+   * the counter re-runs the effect when a scope comes or goes.
+   */
+  const scopedPaths = useRef(new Map<string, number>());
+  /**
+   * Threads whose composer holds words a person wrote and nobody else has:
+   * text, an attachment, or a tentative first-turn choice. Reported by each
+   * thread runtime as its composer changes (RP-5); an empty composer reports
+   * nothing and pins nothing.
+   */
+  const composerDrafts = useRef(new Set<string>());
+  const setComposerDraft = useCallback((path: string, held: boolean) => {
+    if (held) composerDrafts.current.add(path);
+    else composerDrafts.current.delete(path);
+  }, []);
   const windows = useMemo(() => createHistoryWindows(store), [store]);
   useEffect(() => () => windows.dispose(), [windows]);
+
+  /**
+   * The bound on retained transcripts (RP-5). Every session keeps its light
+   * record; only a bounded set keeps the entries, blocks, images and
+   * projections that cost memory. It releases nothing a person is using, and
+   * releasing stops this window resuming that path until it is opened again.
+   */
+  const viewCache = useMemo(() => createViewCache({
+    read: () => store.getSnapshot(),
+    dispatch: store.dispatch,
+    environment: {
+      scoped: () => scopedPaths.current.keys(),
+      hasDraft: (path) => composerDrafts.current.has(path) || store.presentation.hasEditDraft(path),
+    },
+    onRelease: (paths) => {
+      // A released transcript is not resumed on the next reconnect: it would
+      // arrive as a replay with nothing to apply it to, and re-read fifty
+      // conversations nobody is looking at.
+      for (const path of paths) client.untrack(path);
+    },
+  }), [client, store]);
+  useEffect(() => {
+    const stop = store.subscribe(() => viewCache.observe(store.getSnapshot()));
+    viewCache.observe(store.getSnapshot());
+    return () => { stop(); viewCache.dispose(); };
+  }, [store, viewCache]);
   // The main window is registered wherever it is, so a scope that shows the
   // same session keeps its own loaded transcript instead of sharing this one.
   const mainWindowPath = mainPath(state.destination) ?? state.current;
@@ -715,9 +777,14 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       dispatch({ type: "sessionLoad", path, phase: "opening" });
       const epoch = Symbol();
       openEpochs.current.set(path, epoch);
-      // Optional reads may outlive readiness, but not a newer open or Retry.
+      // A person is here: this conversation is the most recently used one.
+      viewCache.touch(path);
+      // Optional reads may outlive readiness, but not a newer open or Retry —
+      // and not a release of the transcript this read is for (RP-5).
       let failed = false;
-      const accepting = () => !failed && openEpochs.current.get(path) === epoch;
+      const hydration = hydrationEpochOf(readState().open[path]);
+      const accepting = () => !failed && openEpochs.current.get(path) === epoch
+        && hydrationEpochOf(readState().open[path]) === hydration;
       const work = (async () => {
         // The page and the socket come up together: without this the first
         // session someone clicks after a reload was a dead click.
@@ -869,12 +936,6 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
    */
   const detached = useRef(new Set<string>());
   /**
-   * Sessions a `LaserThreadScope` is showing (the Beam bubble). They are on
-   * screen too, so they stay attached for as long as the scope holds them;
-   * the counter re-runs the effect when a scope comes or goes.
-   */
-  const scopedPaths = useRef(new Map<string, number>());
-  /**
    * The label each live scope holds its session with (RP-6).
    *
    * The host counts transcript delivery per connection *and* per surface, so a
@@ -988,6 +1049,10 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   resetEnvironmentState.current = () => {
     seenSeq.current.clear();
     scopedPaths.current.clear();
+    composerDrafts.current.clear();
+    // Counters, recency and any tail captured but not handed over belong to
+    // the environment they were taken in (RP-13).
+    viewCache.reset();
     scopeClaims.current.clear();
     scopeClaimedAt.current.clear();
     detached.current.clear();
@@ -1065,7 +1130,9 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         if (info.status !== "ready" || !info.reopened?.length) return;
         const open = readState().open;
         for (const path of info.reopened) {
-          if (open[path]) rehydrate.current(path);
+          // A released transcript has nothing to re-read into; its next open
+          // reads the session again anyway (RP-5).
+          if (open[path] && !isDormantView(open[path])) rehydrate.current(path);
         }
         return;
       }
@@ -1441,14 +1508,14 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   // --- runtime ------------------------------------------------------------
 
   const snapshotStore = useMemo(
-    () => createSnapshotStore<RuntimeSnapshot>({ store, client, dispatch, onError, openSession: (path) => openSession(path, { select: false }), main: true }),
+    () => createSnapshotStore<RuntimeSnapshot>({ store, client, dispatch, onError, openSession: (path) => openSession(path, { select: false }), setDraft: setComposerDraft, main: true }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- created once; kept in sync below
     [],
   );
 
   useEffect(() => {
-    snapshotStore.set({ store, client, dispatch, onError, openSession: (path) => openSession(path, { select: false }), main: true });
-  }, [snapshotStore, store, client, dispatch, onError, openSession]);
+    snapshotStore.set({ store, client, dispatch, onError, openSession: (path) => openSession(path, { select: false }), setDraft: setComposerDraft, main: true });
+  }, [snapshotStore, store, client, dispatch, onError, openSession, setComposerDraft]);
 
   const initializationTokens = useRef(new Map<number, MainInitializationToken>());
 
@@ -1549,8 +1616,9 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       trustRequests,
       archive,
       actions,
+      rendererViews: viewCache.counters,
     }),
-    [actions, archive, client, currentProject, dispatch, projectInfo, projects, setCurrentProject, startupRestoring, state.destination, trustRequests],
+    [actions, archive, client, currentProject, dispatch, projectInfo, projects, setCurrentProject, startupRestoring, state.destination, trustRequests, viewCache],
   );
 
   const internals = useMemo<LaserInternals>(
@@ -1722,6 +1790,25 @@ function useThreadRuntime(store: SnapshotStore<RuntimeSnapshot>): AssistantRunti
   useEffect(() => {
     composerRef.current = runtime.thread.composer;
   }, [runtime]);
+  // Words this person wrote and nobody else has yet (RP-5). The composer of a
+  // thread they are not looking at still holds them, so the session keeps its
+  // transcript until they are sent or cleared. An empty composer holds nothing.
+  const setDraft = snapshot.setDraft;
+  useEffect(() => {
+    if (!path || !setDraft) return;
+    const composer = runtime.thread.composer;
+    const report = () => {
+      const state = composer.getState();
+      setDraft(path, state.text.trim() !== "" || state.attachments.length > 0
+        || firstTurnFromRunConfig(state.runConfig) !== undefined);
+    };
+    report();
+    const stop = composer.subscribe(report);
+    return () => {
+      stop();
+      setDraft(path, false);
+    };
+  }, [path, runtime, setDraft]);
   // A tentative first-turn choice lives only while this thread is the one on
   // screen (M13-T89 U2): keyed on this thread's composer, never on the current one.
   useDiscardFirstTurnOnLeave(runtime.thread.composer, isMain);

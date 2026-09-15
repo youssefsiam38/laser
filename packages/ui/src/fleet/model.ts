@@ -25,6 +25,7 @@ import { highestAttention, isTerminalRunStatus, type AgentRun, type Attention, t
 import { buildAgentTree, createAncestryIndex, type AgentTreeNode } from "../agents/run-tree.js";
 import { runStatusTone, type AgentStatusTone } from "../agents/model.js";
 import { sessionTitle } from "../runtime/threadList.js";
+import { viewFirstUserText } from "../view-summary.js";
 import type { SessionView } from "../store.js";
 import { samePresentationViews } from "../runtime/presentation-state.js";
 
@@ -379,13 +380,13 @@ export function createFleetSelector(build: typeof buildFleet = buildFleet): type
 
 export const selectFleet = createFleetSelector();
 
-/** The transcript's first user line, for a root the catalog has no row for (mirrors the top bar). */
+/**
+ * The transcript's first user line, for a root the catalog has no row for
+ * (mirrors the top bar). A released transcript keeps it (RP-5).
+ */
 function firstUserLine(view: SessionView | undefined): string | undefined {
-  if (!view) return undefined;
-  for (const block of view.blocks) {
-    if (block.kind === "user" && block.text?.trim()) return block.text.replace(/\s+/g, " ").trim().slice(0, 60);
-  }
-  return undefined;
+  const text = viewFirstUserText(view)?.trim();
+  return text ? text.replace(/\s+/g, " ").slice(0, 60) : undefined;
 }
 
 /** Every item of a group, flattened depth-first — summaries, counts and tests. */

@@ -17,7 +17,7 @@ import { captureHeap } from '../resource/heap.mjs';
 import { captureMemoryInfra, dumpAllocators } from '../resource/memory-infra.mjs';
 import { memoryLabels } from '../resource/process-sampler.mjs';
 import { dispatchFindShortcut, findShortcutEvents } from '../resource/keyboard.mjs';
-import { partialFailureReport, providerAccounting, writeAtomicJson, writePartialReport } from '../resource-soak.mjs';
+import { partialFailureReport, providerAccounting, runResourceSoak, writeAtomicJson, writePartialReport } from '../resource-soak.mjs';
 import { SoakRun, classifySampledProcess, closedPageMetrics, connectWorkerInspector, safetyRefusalDetail, safetyRefusalMessage } from '../resource/context.mjs';
 import { assertNoLiveWork, dormantViews, proveNoLiveWork, reconcileDelivery, retirementGuardSnapshot, traverseRetainedViews } from '../resource/retirement.mjs';
 import { expectedRetainedCounts } from '../resource/retention.mjs';
@@ -1079,4 +1079,31 @@ test('a slope repeats only when it points the same way and stays inside the decl
   const missing = compareRuns(withSlope(1_000_000), { scenarios, rankings, slopes: { growth: { status: 'unavailable', value: null } } }).slopes.growth;
   assert.deepEqual([missing.available, missing.coefficientOfVariation, missing.pass], [false, null, false]);
   assert.equal(SLOPE_POLICY.maximumCoefficientOfVariation, 0.25);
+});
+
+test('a measurement-only calibration run cannot be mistaken for a baseline (RP-5)', async () => {
+  // The two-run baseline is what a repeatability claim is made of; a run that
+  // stops after one scenario is measurement, and the two can never be mixed.
+  await assert.rejects(runResourceSoak({ mode: 'full', runs: 2, until: '3-backward-pagination' }),
+    /exactly one run/, 'a stopped run refuses the two-run comparison');
+  await assert.rejects(runResourceSoak({ mode: 'full', runs: 3, until: '3-backward-pagination' }),
+    /exactly one run/);
+  await assert.rejects(runResourceSoak({ mode: 'full', runs: 1, until: 'scenario-that-does-not-exist' }),
+    /no scenario called/, 'only a real scenario can stop a run');
+  // The default baseline path is untouched: still two runs, still Electron.
+  await assert.rejects(runResourceSoak({ mode: 'full', runs: 1 }), /exactly two clean runs/);
+  await assert.rejects(runResourceSoak({ mode: 'full', runs: 2 }), /Electron hide\/restore lane/);
+});
+
+test('the calibration stop is a scenario the full fixture really has, and stops after the paged history', () => {
+  assert.ok(SCENARIO_IDS.includes('3-backward-pagination'));
+  const ids = BROWSER_SCENARIOS.flatMap(scenario => scenario.ids ?? [scenario.id]);
+  const stop = ids.indexOf('3-backward-pagination');
+  assert.ok(stop > ids.indexOf('2-distinct-sessions'), 'fifty distinct sessions are measured before the stop');
+  assert.ok(stop < ids.length - 1, 'and scenarios after it exist, so the report must list them as not run');
+  // The workload behind those scenarios is the unchanged full fixture.
+  const full = modeConfig('full');
+  assert.deepEqual({ projects: full.projects, sessionsPerProject: full.sessionsPerProject, longMessages: full.longMessages },
+    { projects: 5, sessionsPerProject: 10, longMessages: 240 });
+  assert.equal(SAFETY.processPssBytes, Math.floor(1.5 * 1024 * 1024 * 1024));
 });

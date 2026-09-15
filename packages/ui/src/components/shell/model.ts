@@ -6,6 +6,7 @@ import { PRODUCT_DISPLAY_NAME } from "@lasercode/protocol";
 import type { AgentRun, ProjectInfo, ProjectTrust, SessionSummary } from "@lasercode/protocol";
 import { mergeSessions, sessionAttention, sessionTitle, sortSessions } from "../../runtime/threadList.js";
 import { textOf, type Block, type SessionView } from "../../store.js";
+import { viewFirstUserText } from "../../view-summary.js";
 import { shortCwd, summariseArgs } from "../../format.js";
 import { aggregateStatus, statusRank, type Status } from "../status/status.js";
 
@@ -122,10 +123,7 @@ const lastTool = (blocks: readonly Block[]): Extract<Block, { kind: "tool" }> | 
   return undefined;
 };
 
-const firstUserText = (blocks: readonly Block[]): string | undefined => {
-  for (const b of blocks) if (b.kind === "user") return b.text;
-  return undefined;
-};
+
 
 export interface SessionSubtitle {
   text: string;
@@ -142,7 +140,9 @@ export function sessionSubtitle(summary: SessionSummary, view: SessionView | und
     const args = summariseArgs(tool.name, tool.args);
     return { text: args ? `${tool.name}  ${args}` : tool.name, mono: true, tone: "default" };
   }
-  const first = (view && (view.history?.userOffset ?? 0) === 0 ? firstUserText(view.blocks) : undefined) ?? summary.firstMessage?.trim();
+  // A released transcript keeps the line it was named by; nothing here reads
+  // the session file to say what it is called (RP-5).
+  const first = viewFirstUserText(view) ?? summary.firstMessage?.trim();
   if (first) return { text: first.replace(/\s+/g, " "), mono: false, tone: "default" };
   return { text: "No messages yet", mono: false, tone: "muted" };
 }
@@ -157,7 +157,7 @@ export function sessionSubtitle(summary: SessionSummary, view: SessionView | und
  * the placeholder is still dimmed.
  */
 export function isUntitled(summary: SessionSummary, view: SessionView | undefined): boolean {
-  return !(summary.name ?? view?.title ?? summary.firstMessage?.trim() ?? (view && (view.history?.userOffset ?? 0) === 0 ? firstUserText(view.blocks) : undefined));
+  return !(summary.name ?? view?.title ?? summary.firstMessage?.trim() ?? viewFirstUserText(view));
 }
 
 /** One vocabulary for the dot and the words next to it (DESIGN.md "Status language"). */
