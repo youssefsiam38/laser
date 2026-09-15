@@ -17,6 +17,7 @@ import { WORKTREES_DIR_NAME } from "@lasercode/protocol";
 import { DEVICE_KEYS, deviceStore } from "./device-storage.js";
 import type { RemoteThreadListAdapter } from "@assistant-ui/react";
 import type { ProjectInfo, SessionAttention, SessionSummary } from "@lasercode/protocol";
+import { viewFirstUserText, viewHasUserMessage } from "../view-summary.js";
 import type { SessionView } from "../store.js";
 
 /**
@@ -74,18 +75,15 @@ export function sessionAttention(summary: SessionSummary, view?: SessionView | u
 export function sessionTitle(summary: SessionSummary, view?: SessionView | undefined): string {
   const named = summary.name ?? view?.title;
   if (named) return named;
-  const first = firstUserText(view) ?? summary.firstMessage?.trim();
+  // The transcript's own first user line, for a session opened before the
+  // catalog scanned it; a released transcript keeps it (RP-5).
+  const first = viewFirstUserText(view) ?? summary.firstMessage?.trim();
   if (first) return clipToTitle(first);
   const subagent = summary.agent?.subagentName ?? view?.state.agent?.subagentName;
   return subagent ? clipToTitle(subagent) : "New session";
 }
 
-/** The transcript's own first user line, for a session opened before the catalog scanned it. */
-function firstUserText(view: SessionView | undefined): string | undefined {
-  if (!view || (view.history?.userOffset ?? 0) > 0) return undefined;
-  for (const block of view.blocks) if (block.kind === "user") return block.text;
-  return undefined;
-}
+
 
 /** One line, no runs of whitespace, and an ellipsis rather than a hard cut mid-word. */
 function clipToTitle(text: string, max = 60): string {
@@ -158,7 +156,7 @@ export function mergeSessions(
 /** A first prompt is visible locally before the catalog or state snapshot catches up. */
 export function sessionIsEmpty(summary: SessionSummary, view: SessionView | undefined): boolean {
   return summary.messageCount === 0 && (view?.state.messageCount ?? 0) === 0
-    && !view?.blocks.some(block => block.kind === "user");
+    && !viewHasUserMessage(view);
 }
 
 export function toThreadMetadata(

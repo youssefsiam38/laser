@@ -59,6 +59,17 @@ export class TranscriptPresentation {
     session.set(id, edit);
   }
   releaseEdit(path: string, id: string) { const session = this.edits.get(path); session?.delete(id); if (!session?.size) this.edits.delete(path); }
+  /**
+   * This session holds a message edit a person has started and not sent
+   * (RP-5). Their words, held nowhere else: the transcript under them is never
+   * released while it is here. An edit whose draft is empty holds nothing.
+   */
+  hasEditDraft(path: string): boolean {
+    const session = this.edits.get(path);
+    if (!session) return false;
+    for (const edit of session.values()) if (edit.getSnapshot().draft.trim() !== "") return true;
+    return false;
+  }
   question(path: string, form: DialogForm, declining = false): QuestionPresentation {
     let session = this.questions.get(path);
     if (!session) this.questions.set(path, session = new Map());

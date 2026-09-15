@@ -25,6 +25,9 @@ export function samePresentationView(a: SessionView | undefined, b: SessionView 
   if (a === b) return true;
   if (!a || !b || a.path !== b.path || a.state !== b.state || a.running !== b.running
     || a.title !== b.title || a.dialogs !== b.dialogs || a.openedAt !== b.openedAt
+    // A released transcript is a different reading of the same session: the
+    // row's name comes from the summary it kept, not from blocks (RP-5).
+    || a.dormant !== b.dormant || a.summary !== b.summary
     || a.history?.userOffset !== b.history?.userOffset || a.history?.hasHistory !== b.history?.hasHistory) return false;
   const l = titleInputs(a), r = titleInputs(b);
   return l[0] === r[0] && l[1] === r[1];

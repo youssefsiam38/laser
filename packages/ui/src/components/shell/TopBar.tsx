@@ -26,6 +26,8 @@ import { ContextRingButton } from "@/components/assistant-ui/elements/context-di
 // Beam: the quiet mark on one of its sessions (view styling, not an entry point).
 import { BeamSessionMark } from "@/components/beam/BeamSessionMark";
 import { StatusDot } from "@/components/status";
+import { viewFirstUserText } from "@/view-summary";
+import type { SessionView } from "@/store";
 import { openConversationFind } from "@/components/thread/search-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -79,10 +81,13 @@ import { SessionIdentity } from "./SessionIdentity.js";
  * more menu; the composer owns model and thinking.
  */
 
-/** The transcript's first user line, for a session the catalog has not scanned yet. */
-const firstUserLine = (view: { blocks: readonly { kind: string; text?: string }[] }): string | undefined => {
-  for (const block of view.blocks) if (block.kind === "user" && block.text?.trim()) return block.text.replace(/\s+/g, " ").trim().slice(0, 60);
-  return undefined;
+/**
+ * The transcript's first user line, for a session the catalog has not scanned
+ * yet. A released transcript keeps it (RP-5).
+ */
+const firstUserLine = (view: SessionView | undefined): string | undefined => {
+  const text = viewFirstUserText(view)?.trim();
+  return text ? text.replace(/\s+/g, " ").slice(0, 60) : undefined;
 };
 
 function useRoomyTopBar(): { roomy: boolean; markerRef: RefObject<HTMLSpanElement | null> } {

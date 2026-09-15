@@ -4,6 +4,7 @@ import { useAui, useAuiState } from "@assistant-ui/react";
 import type { ModelRef, ThinkingLevel } from "@lasercode/protocol";
 import { useLaserState } from "../../runtime/LaserProvider.js";
 import { firstTurnFromRunConfig, mergeRunConfigCustom, withFirstTurn, type TentativeFirstTurn } from "../../runtime/first-turn.js";
+import { viewHasHistory } from "../../view-summary.js";
 
 interface SessionPreparationValue {
   pending: boolean;
@@ -62,7 +63,9 @@ export function SessionPreparationProvider({ children }: { children: ReactNode }
     if (!view) return undefined;
     // Optimistic bubbles appear before the worker answers. Read only canonical
     // persisted history so a refused first-turn send remains retryable.
-    return view.state.messageCount > 0 || view.history?.hasHistory === true || view.entries.some((entry) => {
+    // A released transcript still knows whether this session has history, from
+    // the last authoritative window it accepted (RP-5/RP-9).
+    return view.state.messageCount > 0 || viewHasHistory(view) || view.entries.some((entry) => {
       if (!entry || typeof entry !== "object") return false;
       const item = entry as { type?: unknown };
       return item.type === "message" || item.type === "custom_message";

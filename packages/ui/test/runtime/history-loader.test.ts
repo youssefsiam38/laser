@@ -266,3 +266,38 @@ describe("history request ownership", () => {
     expect(f.view().blocks.at(-1)).toMatchObject({ text: "before after" });
   });
 });
+
+describe("a read whose transcript was released while it was in flight (RP-5)", () => {
+  it("lands nowhere, and leaves the dormant view empty", async () => {
+    const pending = deferred<Result>();
+    const f = fixture(async params => params.window && "all" in params.window
+      ? pending.promise : historyWindow(source, params.window!, scope));
+    await f.loader.read(state.path, false);
+    expect(f.view().blocks).toHaveLength(40);
+
+    const expanding = f.loader.all(state.path, () => true);
+    // The bound released this conversation's transcript while the worker was
+    // still answering: the answer is for a transcript that no longer exists.
+    f.dispatch({ type: "views/evict", paths: [state.path], reason: "count", at: "2026-09-15T02:00:00.000Z" });
+    pending.resolve(historyWindow(source, { all: true }, scope));
+    expect(await expanding).toBe(false);
+
+    expect(f.view().entries).toEqual([]);
+    expect(f.view().blocks).toEqual([]);
+    expect(f.view().hydrated).toBe(false);
+    expect(f.view().dormant).toBeDefined();
+  });
+
+  it("refuses an older page and a metadata refresh for the same reason", async () => {
+    const f = fixture(async params => historyWindow(source, params.window!, scope));
+    await f.loader.read(state.path, false);
+    expect(f.view().blocks).toHaveLength(40);
+    f.dispatch({ type: "views/evict", paths: [state.path], reason: "bytes", at: "2026-09-15T02:00:00.000Z" });
+
+    expect(await f.loader.earlier(state.path, () => true)).toBe(false);
+    await f.loader.metadata(state.path, () => true);
+
+    expect(f.view().entries).toEqual([]);
+    expect(f.view().blocks).toEqual([]);
+  });
+});

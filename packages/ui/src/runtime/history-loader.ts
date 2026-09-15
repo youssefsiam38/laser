@@ -1,5 +1,6 @@
 import { ErrorCodes, type ClientRequests, type HistoryWindow, type HistoryWindowRequest, type SessionUpdateParams } from "@lasercode/protocol";
-import type { applyUpdate, blocksFromEntries, modelNamesOf, stampNewBlocks, textOf, Action, Block, SessionView } from "../store.js";
+import type { applyUpdate, blocksFromEntries, modelNamesOf, stampNewBlocks, textOf, Action, Block, SessionView, ValidatedRevision } from "../store.js";
+import { awake } from "../view-summary.js";
 import { deepEqual } from "./projection.js";
 
 export type HistoryAction =
@@ -9,6 +10,45 @@ export type HistoryAction =
   | { type: "historySnapshot"; path: string; token: string; entries: unknown[]; leafId?: string | null; window: HistoryWindow; replaceWindow?: true }
   | { type: "historyPrepend"; path: string; before: string; entries: unknown[]; window: HistoryWindow; revision?: string | undefined }
   | { type: "historyMetadata"; path: string; from?: string | null | undefined; entries: unknown[]; leafId?: string | null | undefined; window: HistoryWindow; revision?: string | undefined };
+
+/**
+ * What a dormant view keeps of an accepted window (RP-5/RP-9): the durable
+ * revision it was valid at, the environment that revision belongs to, and
+ * whether the session has any history at all.
+ */
+/**
+ * Take the window's identity for a merged read, or take none.
+ *
+ * A page read and what this view already held describe one state when they
+ * came from the same durable revision. When they did not, the merge is a set
+ * no single revision names, and a record released from it would claim to be
+ * something it is not.
+ */
+function adopt(next: SessionView, previous: SessionView, window: Omit<HistoryWindow, "live">): SessionView {
+  if (previous.validated === undefined || previous.validated.revision !== window.revision) {
+    const { validated: _stale, ...rest } = next;
+    return rest as SessionView;
+  }
+  return { ...next, validated: validatedOf(window, next) };
+}
+
+function validatedOf(window: Omit<HistoryWindow, "live">, view: SessionView): ValidatedRevision {
+  return { revision: window.revision, environmentKey: window.environmentKey, epoch: window.epoch, seq: window.seq,
+    hasHistory: window.hasHistory, at: new Date().toISOString(), ...(sessionIdOf(view) ? { sessionId: sessionIdOf(view)! } : {}) };
+}
+
+/** Characters of a session id this keeps. Bounded before it is retained. */
+const SESSION_ID_MAX = 128;
+
+/**
+ * The session's own durable id, from the state the worker published. Bounded,
+ * and never invented: a view whose state carries none keeps none, and the
+ * record it releases says so rather than carrying a guess.
+ */
+function sessionIdOf(view: SessionView): string | undefined {
+  const id = (view.state as { id?: unknown } | undefined)?.id;
+  return typeof id === "string" && id !== "" && id.length <= SESSION_ID_MAX ? id : undefined;
+}
 
 export const hasCompleteTree = (view: SessionView | undefined): boolean =>
   view?.history ? view.history.complete && !view.history.branchesUnloaded : Boolean(view?.hydrated);
@@ -45,27 +85,44 @@ interface HistoryFold {
   textOf: typeof textOf;
 }
 
+/**
+ * The tuple a released record is keyed by describes an exact set of entries on
+ * an exact leaf. A live update that appends an entry or moves the leaf makes
+ * that no longer true, and nothing here can compute the new revision: the
+ * honest answer is to stop claiming one until an authoritative window says
+ * what it is (RP-5/RP-10).
+ */
+function keepValidated(before: SessionView, after: SessionView): SessionView {
+  if (after.validated === undefined) return after;
+  if (before.entries === after.entries && before.leafId === after.leafId) return after;
+  const { validated: _stale, ...rest } = after;
+  return rest as SessionView;
+}
+
 /** Keep lower-sequence new-generation events until a snapshot can adopt them. */
 export function receiveHistoryUpdate(v: SessionView, p: SessionUpdateParams, { applyUpdate, stampNewBlocks }: HistoryFold): SessionView {
   const historyPending = v.historyPending ? { ...v.historyPending, updates: [...v.historyPending.updates, p] } : undefined;
   const epoch = v.history?.epoch ?? v.updateEpoch;
   if (p.seq <= v.lastSeq || (p.epoch && epoch && p.epoch !== epoch)) return historyPending ? { ...v, historyPending } : v;
   const next = applyUpdate(v, p.update);
-  return { ...next, blocks: stampNewBlocks(v.blocks, next.blocks, p.at), lastSeq: p.seq,
-    ...(p.epoch ? { updateEpoch: p.epoch } : {}), ...(historyPending ? { historyPending } : {}) };
+  return keepValidated(v, { ...next, blocks: stampNewBlocks(v.blocks, next.blocks, p.at), lastSeq: p.seq,
+    ...(p.epoch ? { updateEpoch: p.epoch } : {}), ...(historyPending ? { historyPending } : {}) });
 }
 
 /** The store routes history actions here; its ordinary event fold stays authoritative. */
 export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpdate, blocksFromEntries, modelNamesOf, stampNewBlocks, textOf }: HistoryFold): SessionView {
   switch (action.type) {
-    case "historyBegin": return { ...v, historyPending: { token: action.token, updates: [] } };
+    // A read of this surface's own window has started: it is no longer a
+    // released transcript, and the updates that arrive while it is in flight
+    // belong in the buffer below rather than being dropped as dormant.
+    case "historyBegin": return { ...awake(v), historyPending: { token: action.token, updates: [] } };
     case "historyReset": {
       // The loaded window goes before its replacement is requested, so no older
       // expanded transcript is on screen while the recent one is in flight. A
       // message this surface has already sent is not history and stays.
       if (v.historyPending?.token !== action.token) return v;
       const { history: _window, historyRevision: _revision, ...rest } = v;
-      return { ...rest, entries: [], blocks: v.blocks.filter(block => block.kind === "user" && block.optimistic), hydrated: false };
+      return { ...awake(rest as SessionView), entries: [], blocks: v.blocks.filter(block => block.kind === "user" && block.optimistic), hydrated: false };
     }
     case "historyEnd": return v.historyPending?.token === action.token ? { ...v, historyPending: undefined } : v;
     case "historySnapshot": {
@@ -81,7 +138,7 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
       const entries = retainTree ? [...new Map([...v.entries, ...action.entries].map(entry => [(entry as { id: string }).id, entry])).values()] : action.entries;
       const history = retainTree ? { ...window, complete: true, branchesUnloaded: false, userOffset: 0, context: [], priorGoalIds: [] } : window;
       if (retainTree) delete history.before;
-      let next: SessionView = { ...v, entries, leafId: action.leafId, history, hydrated: true,
+      let next: SessionView = { ...awake(v), entries, leafId: action.leafId, history, hydrated: true, validated: validatedOf(window, v),
         historyRevision: action.replaceWindow ? action.token : v.historyRevision,
         blocks: blocksFromEntries(entries, action.leafId, modelNamesOf(v.state)),
         running: live?.running ?? v.running, lastSeq: action.window.seq, updateEpoch: history.epoch, pendingSentBy: undefined, historyPending: undefined };
@@ -105,7 +162,13 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
       const optimistic = v.blocks.filter(b => b.kind === "user" && b.optimistic);
       const existingIds = new Set(next.blocks.map(b => b.id));
       next.blocks = [...next.blocks, ...optimistic.filter(b => !existingIds.has(b.id))];
-      return { ...next, blocks: shareHistoryBlocks(next.blocks, v.blocks), lastSeq: changedEpoch ? next.lastSeq : Math.max(next.lastSeq, v.lastSeq) };
+      const settled: SessionView = { ...next, blocks: shareHistoryBlocks(next.blocks, v.blocks),
+        lastSeq: changedEpoch ? next.lastSeq : Math.max(next.lastSeq, v.lastSeq) };
+      // The buffered updates replayed above can have appended an entry or moved
+      // the leaf since the window was read: then the window's revision no
+      // longer describes what this view holds.
+      return settled.entries === entries && settled.leafId === action.leafId
+        ? settled : keepValidated({ ...settled, entries, leafId: action.leafId }, settled);
     }
     case "historyMetadata": {
       if (v.historyRevision !== action.revision || (v.history && v.history.epoch !== action.window.epoch)) return v;
@@ -117,8 +180,11 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
       // Replace known records in place and append only newly persisted ids.
       const entries = [...new Map([...v.entries, ...action.entries].map(entry => [(entry as { id: string }).id, entry])).values()];
       const { live: _live, before: _before, ...history } = action.window;
-      return { ...v, entries, leafId: action.leafId,
-        history: v.history ? { ...v.history, seq: history.seq, hasHistory: v.history.hasHistory || history.hasHistory } : { ...history, userOffset: 0, context: [], priorGoalIds: [], complete: true } };
+      const merged = v.history ? { ...v.history, seq: history.seq, hasHistory: v.history.hasHistory || history.hasHistory } : { ...history, userOffset: 0, context: [], priorGoalIds: [], complete: true };
+      // The merged set spans this read and what was already held. That is one
+      // describable state only when both came from the same durable revision;
+      // across revisions the tuple would name entries it does not cover.
+      return adopt({ ...v, entries, leafId: action.leafId, history: merged }, v, action.window);
     }
     case "historyPrepend": {
       if (v.historyRevision !== action.revision || v.history?.before !== action.before || v.history.epoch !== action.window.epoch) return v;
@@ -127,8 +193,8 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
       const { live: _live, ...history } = action.window;
       // The page plus the existing suffix covers the branch exactly when no
       // earlier cursor remains. Alternative versions are a separate scope.
-      return { ...v, history: { ...history, complete: history.before === undefined }, entries: [...entries, ...v.entries],
-        blocks: [...blocksFromEntries(entries, undefined, modelNamesOf(v.state)), ...v.blocks] };
+      return adopt({ ...v, history: { ...history, complete: history.before === undefined }, entries: [...entries, ...v.entries],
+        blocks: [...blocksFromEntries(entries, undefined, modelNamesOf(v.state)), ...v.blocks] }, v, action.window);
     }
   }
 }
@@ -154,7 +220,11 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
   const fence = (path: string, accepting: () => boolean) => {
     const generation = generations.get(path) ?? 0;
     const revision = deps.get(path)?.historyRevision;
-    return () => accepting() && (generations.get(path) ?? 0) === generation && deps.get(path)?.historyRevision === revision;
+    // The transcript this read is for can be released while it is in flight
+    // (RP-5). Its epoch moves when that happens, so the answer lands nowhere.
+    const hydration = deps.get(path)?.hydrationEpoch ?? 0;
+    return () => accepting() && (generations.get(path) ?? 0) === generation && deps.get(path)?.historyRevision === revision
+      && (deps.get(path)?.hydrationEpoch ?? 0) === hydration;
   };
   const read = async (path: string, all = false, accepting: () => boolean = () => true, legacySeq?: number, policy?: "recent"): Promise<void> => {
     if (!accepting()) return;
