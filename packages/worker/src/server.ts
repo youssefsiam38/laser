@@ -591,7 +591,11 @@ export class WorkerServer {
             this.rekeySessionState(previous, state.path);
           }
           this.onDriverEvent(live, { type: "update", update: { kind: "state", state } });
-          return { ...forked, ...boundedEditorText(forked.editorText), state: this.decorate(live, forked.state) } satisfies Result<"pi/session/fork">;
+          // Strip the driver's raw handback before adding the bounded form. A
+          // spread cannot remove a property, so spreading `forked` verbatim
+          // would put an oversized editorText on the wire beside `omitted`.
+          const { editorText: _editorText, ...boundedFork } = forked;
+          return { ...boundedFork, ...boundedEditorText(forked.editorText), state: this.decorate(live, forked.state) } satisfies Result<"pi/session/fork">;
         });
       }
       case "pi/session/navigate": {
@@ -601,7 +605,8 @@ export class WorkerServer {
           ...(req.params.label !== undefined ? { label: req.params.label } : {}),
           ...(req.params.stopFirst !== undefined ? { stopFirst: req.params.stopFirst } : {}),
         }));
-        return { ...moved, ...boundedEditorText(moved.editorText) } satisfies Result<"pi/session/navigate">;
+        const { editorText: _editorText, ...boundedMove } = moved;
+        return { ...boundedMove, ...boundedEditorText(moved.editorText) } satisfies Result<"pi/session/navigate">;
       }
       case "pi/session/rename": {
         const live = this.live(req.params.path);

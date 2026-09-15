@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ErrorCodes, PRODUCT_NAME, PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE, isEnvironmentKey, isSessionRevision } from "@lasercode/protocol";
+import { EDITABLE_TEXT_MAX_BYTES, ErrorCodes, PRODUCT_NAME, PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE, isEnvironmentKey, isSessionRevision } from "@lasercode/protocol";
 import type { ContentBlock, JsonRpcMessage, SessionState, UiDialogRequest } from "@lasercode/protocol";
 import { WorkerServer } from "../src/server.js";
 import type { DriverEvent, DriverListener, ExtensionModelWorkHandler, FirstTurnOptions, PromptOptions, SessionDriver } from "../src/driver.js";
@@ -137,8 +137,18 @@ class FakeDriver implements SessionDriver {
   async compact() { this.routed.push({ route: "compact", generation: this.generation }); }
   /** Every move, with the options the server handed over. */
   moves: Array<{ op: "navigate" | "fork"; entryId: string; options: unknown }> = [];
-  async navigateTree(entryId: string, options?: unknown) { this.routed.push({ route: "navigate", generation: this.generation }); this.moves.push({ op: "navigate", entryId, options }); return { cancelled: false }; }
-  async fork(entryId: string, options?: unknown) { this.moves.push({ op: "fork", entryId, options }); this.st = { ...this.st, path: `/tmp/fake/fork-${entryId}.jsonl` }; return { state: this.st, editorText: "redo" }; }
+  /** What Pi hands back for a move; tests use this to prove the server's wire bound. */
+  moveEditorText: string | undefined;
+  async navigateTree(entryId: string, options?: unknown) {
+    this.routed.push({ route: "navigate", generation: this.generation });
+    this.moves.push({ op: "navigate", entryId, options });
+    return { cancelled: false, ...(this.moveEditorText !== undefined ? { editorText: this.moveEditorText } : {}) };
+  }
+  async fork(entryId: string, options?: unknown) {
+    this.moves.push({ op: "fork", entryId, options });
+    this.st = { ...this.st, path: `/tmp/fake/fork-${entryId}.jsonl` };
+    return { state: this.st, editorText: this.moveEditorText ?? "redo" };
+  }
   respondToUi(r: unknown) { this.answered.push(r); }
   deliverExtensionCommand(command: unknown) { this.extensionCommands.push(command); return true; }
   /** The server's admission for extension work that can enter the model; a test drives it the way an extension's `sendMessage` would. */
@@ -886,6 +896,26 @@ describe("WorkerServer", () => {
     expect((await h.call(6, "session/set_mode", { path: "/none", mode: "x" })).error?.code).toBe(-32004);
     await h.server.handle("not an object");
     expect(h.out.at(-1)).toMatchObject({ error: { code: -32600 } });
+  });
+
+  it("omits oversized editor text from real navigate and fork replies before it reaches the wire", async () => {
+    const h = harness();
+    await h.call(1, "session/new", { cwd: "/tmp/fake" });
+    const driver = h.drivers[0]!;
+    driver.moveEditorText = "x".repeat(EDITABLE_TEXT_MAX_BYTES + 1);
+
+    const moved = await h.call(2, "pi/session/navigate", { path: "/tmp/fake/s1.jsonl", entryId: "large" });
+    expect(moved.result).toMatchObject({ cancelled: false, editorTextBytes: EDITABLE_TEXT_MAX_BYTES + 1, editorTextOmitted: true });
+    expect((moved.result as { editorText?: unknown }).editorText).toBeUndefined();
+    expect(JSON.stringify(moved.result)).not.toContain("editorText\":\"x");
+
+    const forked = await h.call(3, "pi/session/fork", { path: "/tmp/fake/s1.jsonl", entryId: "large" });
+    expect(forked.result).toMatchObject({
+      state: { path: "/tmp/fake/fork-large.jsonl" },
+      editorTextBytes: EDITABLE_TEXT_MAX_BYTES + 1,
+      editorTextOmitted: true,
+    });
+    expect((forked.result as { editorText?: unknown }).editorText).toBeUndefined();
   });
 
   it("re-keys a forked session under its new path and announces the state", async () => {
