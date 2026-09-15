@@ -239,6 +239,21 @@ export class WorkerServer {
    * Bounded, because a run with naming off must not grow this for ever.
    */
   private readonly unnamed = new Map<string, string>();
+  /**
+   * Naming actually under way, one record per attempt (RP-4).
+   *
+   * This is the state safety reads: a session is pinned while a Namer
+   * completion for it is in flight, because that completion ends in a rename
+   * **through this runtime** and nothing else can finish it. A record is added
+   * before the await and removed in a `finally`, so it is bounded by Namer's
+   * own 8 s completion ceiling — no timer, lease or queue of ours.
+   *
+   * One record per attempt rather than one flag per path: two first prompts
+   * can overlap, a fork moves an attempt's path under it, and a late
+   * completion of a session that has closed must not be able to clear (or
+   * invent) the state of whatever holds that path next.
+   */
+  private readonly namingInFlight = new Set<{ path: string }>();
   /** Tool calls currently running, by session path: a label for a finished call is never shown. */
   private readonly runningTools = new Map<string, Set<string>>();
   /** Held only through prompt preflight; prevents runtime replacement races. */
@@ -408,6 +423,10 @@ export class WorkerServer {
     this.runtimes.clear();
     this.runningTools.clear();
     this.unnamed.clear();
+    // Every runtime this worker could have renamed is gone, so no attempt can
+    // still be holding one. A completion that lands after this finds its
+    // record already removed and its `finally` is a no-op.
+    this.namingInFlight.clear();
   }
 
   // ------------------------------------------------------------- dispatch
@@ -1369,6 +1388,13 @@ export class WorkerServer {
    * `DriverUnavailableError` out of `state()`. An unhandled rejection would
    * end the worker process, and with it every conversation in this project
    * (AGENTS.md invariant 5), because a session could not be given a title.
+   *
+   * With no model this parks the words instead (`waitToName`), which is not a
+   * pin: nothing can perform that intent, so a runtime kept for it would be
+   * kept for the life of the worker. Once a model is there the attempt is
+   * real, bounded and answered through this runtime, and it is registered in
+   * {@link namingInFlight} for exactly as long as it runs — including the
+   * rename, which is the part that needs the runtime.
    */
   private async nameSession(live: Live, text: string): Promise<void> {
     try {
@@ -1376,12 +1402,28 @@ export class WorkerServer {
         this.waitToName(live.path, text);
         return;
       }
-      const name = await this.namer.nameSession(text);
-      if (!name || !this.runtimes.has(live.path) || live.driver.state().name) return;
-      await live.driver.rename(name).catch(() => undefined);
+      // Registered before the await, so there is no moment in which the work
+      // is neither parked nor in flight. Its own record, so a model taken away
+      // mid-completion cannot erase it and an overlapping attempt cannot end
+      // it: only this attempt's `finally` removes this attempt.
+      const attempt = { path: live.path };
+      this.namingInFlight.add(attempt);
+      try {
+        const name = await this.namer.nameSession(text);
+        if (!name || !this.runtimes.has(attempt.path) || live.driver.state().name) return;
+        await live.driver.rename(name).catch(() => undefined);
+      } finally {
+        this.namingInFlight.delete(attempt);
+      }
     } catch (error) {
       console.error(`${PRODUCT_NAME} worker: could not name ${live.path}:`, error instanceof Error ? error.message : error);
     }
+  }
+
+  /** Whether a Namer completion for this session is in flight right now. */
+  private naming(path: string): boolean {
+    for (const attempt of this.namingInFlight) if (attempt.path === path) return true;
+    return false;
   }
 
   /** Hold a first prompt until a Namer model exists, oldest dropped past the cap. */
@@ -1594,24 +1636,15 @@ export class WorkerServer {
       queuedWork: queued,
       trayMessages: live.pending?.list().length ?? 0,
       runningTasks: this.tasks.tasksOf(live.path).filter((task) => task.status === "running").length,
-      // A first prompt waiting to be named is work this runtime is the only
-      // holder of — `nameWaitingSessions()` performs it, and closing the
-      // session erases it — but only while there is a model to perform it
-      // with. A prompt parked because nothing was connected is waiting for
-      // something that may never arrive, and a pin for it is a refusal with no
-      // end: with no model ever connected it would hold that runtime, and the
-      // whole worker's automatic retirement, for the life of the process. An
-      // untitled conversation is the smaller loss, so the pin says what
-      // `SessionSafetySnapshot.naming` documents: a prompt is waiting **and** a
-      // model is there.
-      //
-      // Nothing is dropped by that: the parked text stays in `unnamed` until
-      // the session closes, so a model that appears first still names it. A
-      // model that appears while this session is being released races the
-      // release and loses harmlessly — `nameSession()` re-checks `runtimes`
-      // after its completion and applies no name to a runtime that has gone,
-      // so the cost is the title, never a crash, a lost prompt or a stale pin.
-      naming: this.unnamed.has(live.path) && this.namer.enabled(),
+      // Naming this session is under way: a bounded Namer completion is in
+      // flight and it ends in a rename through this runtime, which nothing
+      // else can do. A first prompt merely *parked* for want of a model is
+      // not a pin — nothing can perform that intent, so a refusal for it
+      // would have no end and would hold this runtime, and the whole
+      // worker's automatic retirement, for the life of the process. The words
+      // stay in `unnamed` regardless, so a model that appears later still
+      // names the session; that is the moment this becomes a pin.
+      naming: this.naming(live.path),
       runningTools: this.runningTools.get(live.path)?.size ?? 0,
       hasRecord,
       ...(live.closeFailed ? { closeFailed: true } : {}),
@@ -1634,11 +1667,12 @@ export class WorkerServer {
 
   /**
    * Per-session tables this worker keeps beside a runtime (RP-3/RP-4): the
-   * person's tray, tool labels in flight and first prompts waiting to be named.
+   * person's tray, tool labels in flight, first prompts waiting to be named and
+   * the naming attempts running for them.
    * Counts of records, never a claim about bytes of memory.
    */
   private cacheRecords(): number {
-    let records = this.unnamed.size;
+    let records = this.unnamed.size + this.namingInFlight.size;
     for (const live of this.runtimes.values()) records += live.pending?.list().length ?? 0;
     for (const ids of this.runningTools.values()) records += ids.size;
     return records;
@@ -2023,6 +2057,11 @@ export class WorkerServer {
         this.gitService?.forget(live.path);
         this.runningTools.delete(live.path);
         this.unnamed.delete(live.path);
+        // The runtime a naming attempt would have renamed is gone, so the
+        // attempt can no longer finish its work: its record goes with the
+        // session rather than being left to pin whatever opens this path next.
+        // Its own `finally` then removes nothing.
+        for (const attempt of [...this.namingInFlight]) if (attempt.path === live.path) this.namingInFlight.delete(attempt);
         this.namer.forget(live.path);
         return;
     }
@@ -2077,6 +2116,10 @@ export class WorkerServer {
       this.unnamed.delete(oldPath);
       this.unnamed.set(newPath, waiting);
     }
+    // A naming completion already in flight is naming *this* conversation,
+    // which now lives at the new path: the pin moves with it, so the fork's
+    // runtime is the one held until the rename it is about to attempt lands.
+    for (const attempt of this.namingInFlight) if (attempt.path === oldPath) attempt.path = newPath;
   }
 
   /** Tool calls running in one session; the set is dropped when the session closes. */

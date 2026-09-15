@@ -15,6 +15,7 @@ import { ErrorCodes, LIFETIME_RETRY } from "@lasercode/protocol";
 import type { AgentsSnapshot, ClientRequests, ContentBlock, JsonRpcMessage, ModelRef, SessionState, UiDialogRequest } from "@lasercode/protocol";
 import type { DriverEvent, DriverListener, DriverReleaseReadiness, SessionDriver } from "../src/driver.js";
 import { fallbackSnapshot } from "../src/agents/definitions.js";
+import type { NamerCompletion, NamerContext, NamerModelRuntime } from "../src/agents/namer.js";
 import { WorkerServer } from "../src/server.js";
 
 /** The agents snapshot the host sends once a model Namer may use exists. */
@@ -23,10 +24,33 @@ function namerReady(): AgentsSnapshot {
   return { ...snapshot, namer: { ...snapshot.namer, status: "ready", model: { provider: "stub", id: "stub-1" } } };
 }
 
-/** First prompts parked for want of a naming model, read where the worker keeps them. */
-function parked(server: WorkerServer): Map<string, string> {
-  return (server as unknown as { unnamed: Map<string, string> }).unnamed;
+/**
+ * A naming model whose completion this test releases by hand, so a real Namer
+ * completion is in flight while retirement is decided — driven only through
+ * `agents/sync` and `session/prompt`.
+ */
+function gatedNamer() {
+  const waiting: Array<(text: string) => void> = [];
+  return {
+    asked: [] as string[],
+    getModel: (provider: string, id: string) => ({ provider, id }),
+    completeSimple(_model: { provider: string; id: string }, context: NamerContext): Promise<NamerCompletion> {
+      this.asked.push(context.messages.map((message) => message.content).join("\n"));
+      return new Promise<NamerCompletion>((resolve) => {
+        waiting.push((text) => resolve({ content: [{ type: "text", text }] }));
+      });
+    },
+    /** Let the oldest completion still waiting return this title. */
+    answerWith(text: string) {
+      waiting.shift()?.(text);
+    },
+  };
 }
+
+/** Let the floated naming promise reach its next step (it never delays a turn). */
+const settle = async () => {
+  for (let step = 0; step < 4; step += 1) await new Promise<void>((resolve) => setTimeout(resolve, 0));
+};
 
 const PATH = "/tmp/retire/s1.jsonl";
 
@@ -77,13 +101,14 @@ class FakeDriver implements SessionDriver {
   async dispose() { this.disposed = true; this.emit({ type: "closed", reason: "disposed" }); }
 }
 
-function world(options: { retireLeaseMs?: number } = {}) {
+function world(options: { retireLeaseMs?: number; namer?: NamerModelRuntime } = {}) {
   const out: JsonRpcMessage[] = [];
   const drivers: FakeDriver[] = [];
   const server = new WorkerServer({
     cwd: "/tmp/retire",
     createDriver: () => { const driver = new FakeDriver(); drivers.push(driver); return driver; },
     send: (message) => out.push(message),
+    ...(options.namer ? { namerModels: async () => options.namer! } : {}),
     ...(options.retireLeaseMs !== undefined ? { retireLeaseMs: options.retireLeaseMs } : {}),
   });
   let id = 0;
@@ -176,26 +201,40 @@ describe("pi/worker/retire", () => {
   });
 
   it("lets an explicit stop through an advisory pin, where the idle sweep would refuse", async () => {
-    const w = world();
+    const namer = gatedNamer();
+    const w = world({ namer });
     await w.call("session/load", { path: PATH });
-    // A first prompt waiting to be named, with a model there to name it, is
-    // advisory: real work, but not work a person asking for a stop should be
-    // made to wait for.
+    // A session actually being named is advisory: real work, but not work a
+    // person asking for a stop should be made to wait for.
     await w.call("agents/sync", { snapshot: namerReady() });
-    parked(w.server).set(PATH, "name me");
+    await w.call("session/prompt", { path: PATH, content: text("explore the repo") });
+    await settle();
+    expect(namer.asked.join("\n")).toContain("explore the repo");
+    expect(w.server.sessionSafety().sessions[0]!.pins.map((pin) => pin.kind)).toEqual(["naming"]);
 
-    expect(await w.retire("automatic")).toMatchObject({ retiring: false, reason: "pinned" });
+    const refused = await w.retire("automatic");
+    expect(refused).toMatchObject({ retiring: false, reason: "pinned" });
+    expect(refused.retiring === false && refused.pins[0]!.pins.map((pin) => pin.kind)).toEqual(["naming"]);
     expect(await w.retire("explicit")).toEqual({ retiring: true });
+
+    // The completion lands after the stop was granted: it finds no one to
+    // rename, and settles without taking the worker with it.
+    namer.answerWith("Explore the repo");
+    await settle();
+    expect(w.server.sessionSafety().sessions[0]!.pins).toEqual([]);
   });
 
-  it("retires naturally with a first prompt parked for want of a naming model", async () => {
-    const w = world();
+  it("retires naturally with a first prompt no naming model can name", async () => {
+    const namer = gatedNamer();
+    const w = world({ namer });
     await w.call("session/load", { path: PATH });
     // Credential-free: the prompt's words are parked in case a model ever
-    // appears, and nothing can perform that intent meanwhile. It must not keep
-    // this worker alive for the life of the process.
+    // appears, nothing is asked of any model, and nothing can perform that
+    // intent meanwhile. It must not keep this worker alive for the life of the
+    // process.
     expect(await w.call("session/prompt", { path: PATH, content: text("explore the repo") })).toHaveProperty("result");
-    expect(parked(w.server).get(PATH)).toBe("explore the repo");
+    await settle();
+    expect(namer.asked).toEqual([]);
     expect(w.server.sessionSafety().sessions).toEqual([{ path: PATH, pins: [] }]);
     expect(await w.retire("automatic")).toEqual({ retiring: true });
   });
