@@ -13,7 +13,7 @@ Authoritative detail, evidence and ownership live in `STATUS_DETAILED.md`; `STAT
 | RP-1 | M18-T1 | done | `1628349`; build, protocol 153, host 403, desktop 160 |
 | RP-2 initial | M18-T2 | done — reviewed harness and sanitized finding integrated through `ad8c188`; full A refuses B at unchanged renderer ceiling with zero survivors | RP-1 |
 | RP-2 repeat | M18-T15 | todo — unchanged two-run baseline after containment | RP-4..RP-8 |
-| RP-3 | M18-T3 | browser gate/review integrated `a0111f9`; T4-T7 typed counters pending | RP-1 |
+| RP-3 | M18-T3 | browser gate/review `a0111f9` + history/export/RP-6 counter correction `66ac605`; T4/T5/T7 typed counters pending | RP-1 |
 | RP-4 | M18-T4 | in progress — safety/replay/unload plan approved; RP-6 contract integrated | RP-2 |
 | RP-5 | M18-T5 | in progress — renderer lifetime plan approved; RP-6 contract integrated | RP-2 |
 | RP-6 | M18-T6 | done — integrated `a256efe`; reviewed membership, task/log retention and cleanup/security gates | RP-2 |
