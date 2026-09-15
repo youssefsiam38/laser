@@ -905,16 +905,22 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
       const fits = (want: number, ignore?: symbol): boolean => {
         const state = options.read();
         const { held, bytes: total } = survey(state);
-        const mine = (held.find((row) => row.path === path)?.bytes ?? 0);
-        let others = 0;
-        let here = 0;
+        // `survey` already counts every reservation, here and elsewhere. Take
+        // them back out first, then add the ones that will still be held —
+        // every one exactly once — plus what is being asked for now.
+        const row = held.find((entry) => entry.path === path);
+        // A view this cache has not measured contributes nothing but its
+        // reservations; one it has measured contributes its own bytes only.
+        const measuredHere = row ? Math.max(0, row.bytes - heldForAction(path)) : 0;
+        let reservedHere = 0;
+        let reservedAnywhere = 0;
         for (const [token, row] of reservations) {
           if (token === ignore) continue;
-          if (row.path === path) here += row.bytes;
-          others += row.bytes;
+          if (row.path === path) reservedHere += row.bytes;
+          reservedAnywhere += row.bytes;
         }
-        if (mine + here + want > limits.viewBytes) return false;
-        return total + others + want <= limits.bytes;
+        if (measuredHere + reservedHere + want > limits.viewBytes) return false;
+        return (total - reservedBytes) + reservedAnywhere + want <= limits.bytes;
       };
       if (!fits(bytes)) return undefined;
       const token = Symbol("action");

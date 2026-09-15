@@ -55,6 +55,30 @@ describe("copying code out of a message", () => {
     }
   });
 
+  it("marks code in every kind of excerpted message, and nowhere else", async () => {
+    const { CodeHeaderForTest } = await import("../../src/components/assistant-ui/elements/markdown-text.js");
+    // The same context carries a prompt, a reply and a tool's own output: what
+    // matters is whether the message it belongs to is whole.
+    for (const where of ["user", "assistant", "tool"] as const) {
+      for (const excerpted of [true, false]) {
+        act(() => root.render(
+          <TooltipProvider>
+            <ExcerptedMessage value={excerpted}>
+              <div data-role={where}><CodeHeaderForTest language="ts" code={CODE} /></div>
+            </ExcerptedMessage>
+          </TooltipProvider>,
+        ));
+        const button = container.querySelector("button")!;
+        await act(async () => { button.click(); await new Promise(resolve => setTimeout(resolve, 0)); });
+        const copied = written.at(-1)!;
+        expect(copied.startsWith(PARTIAL_CODE_NOTE), `${where} ${excerpted}`).toBe(excerpted);
+        expect(copied.includes(CODE), `${where} ${excerpted}`).toBe(true);
+        // Nothing raw is ever handed over as if it were the whole of it.
+        if (excerpted) expect(copied).not.toBe(CODE);
+      }
+    }
+  });
+
   it("says what it did, and says nothing after it is gone", async () => {
     const { CodeHeaderForTest } = await import("../../src/components/assistant-ui/elements/markdown-text.js");
     act(() => root.render(

@@ -328,6 +328,8 @@ export function UserMessage() {
   const { quote, rest } = useMemo(() => splitLeadingQuote(text), [text]);
   const opener = useFileOpener();
   const [attachmentProblem, setAttachmentProblem] = useState<string>();
+  // Is this prompt only shown in part? Anything copied out of it says so.
+  const promptExcerpted = promptBodies?.text !== undefined && omittedBytes(promptBodies.text) > 0;
   const { client } = useLaserStable();
   const environmentKey = useLaserState(s => s.environment?.environmentKey) ?? "";
   /**
@@ -365,8 +367,19 @@ export function UserMessage() {
   /** Which rebuild owns the editor; a late one belongs to nobody. */
   const editAttempt = useRef(0);
   const { reserveViewAction } = useLaserStable();
-  const releaseEditRoom = useCallback(() => { editRoom.current?.release(); editRoom.current = undefined; }, []);
-  useEffect(() => releaseEditRoom, [releaseEditRoom]);
+  /** The attachments a rebuild decoded, held beside the draft they belong to. */
+  const rebuiltFiles = useRef<AttachedFile[] | undefined>(undefined);
+  const releaseEditRoom = useCallback(() => {
+    // Everything an edit was holding goes together, exactly once.
+    editAttempt.current += 1;
+    editRoom.current?.release();
+    editRoom.current = undefined;
+    rebuiltFiles.current = undefined;
+  }, []);
+  // Unmount, a different conversation, a different environment: an edit being
+  // rebuilt belongs to none of them, and a read still in flight is fenced out
+  // by the same counter that releases the room.
+  useEffect(() => releaseEditRoom, [releaseEditRoom, path, environmentKey, entryId]);
   const [editRefusal, setEditRefusal] = useState<string>();
 
   const rebuildForEdit = useCallback(async (body: BodyRef): Promise<void> => {
@@ -396,21 +409,27 @@ export function UserMessage() {
       );
       // A conversation that moved on, a scope that changed, or a person who
       // gave up: the bytes are dropped and nothing is edited.
+      // Cancelled, unmounted, or another rebuild started: this one's room goes
+      // back here, once, and nothing it read is assigned anywhere.
       if (mine !== editAttempt.current) { room.release(); return; }
       if (!outcome.verified || utf8ByteLength(assembled) !== body.totalBytes) {
         room.release();
+        if (mine !== editAttempt.current) return;
         setEditRefusal("This message could not be read in full just now, so it was not opened for editing. Nothing has changed.");
         return;
       }
-      // Complete canonical wrappers, split from a body that is whole.
+      // Complete canonical wrappers, split from a body that is whole. The
+      // editor shows the person's prose; the files are held beside it, under
+      // the same reservation, and are wrapped again only on the way out.
       const { text: prose, files: attached } = splitAttachedFiles(assembled);
       editRoom.current?.release();
       editRoom.current = room;
+      rebuiltFiles.current = attached;
       setDraft(prose);
       setEditing(true);
-      if (attached.length > 0) editOwner.update({ draft: assembled });
     } catch (failure) {
       room.release();
+      if (mine !== editAttempt.current) return;
       setEditRefusal(bodyReadMessage(failure));
     }
   }, [client, editOwner, environmentKey, path, reserveViewAction, setDraft, setEditing]);
@@ -445,7 +464,16 @@ export function UserMessage() {
     () => files.map((file, index) => ({ id: String(index), name: file.name, kind: "document", detail: `${describeMediaType(file.mediaType)} · ${formatBytes(file.size)}` })),
     [files],
   );
-  const editContent = () => [{ type: "text" as const, text: [draft, ...files.map(wrapFileAttachment)].filter(Boolean).join("\n\n") }, ...images];
+  /**
+   * What an edit sends: the prose in the box, and the attachments this prompt
+   * had — the ones this window is holding, or the ones it rebuilt and verified
+   * — wrapped exactly once. A chip whose content this window never had is
+   * never sent as an empty wrapper (RP-5b §2).
+   */
+  const editContent = () => {
+    const attachments = rebuiltFiles.current ?? files.filter((file) => file.content !== "");
+    return [{ type: "text" as const, text: [draft, ...attachments.map(wrapFileAttachment)].filter(Boolean).join("\n\n") }, ...images];
+  };
 
   // The engine will not move the leaf while a turn streams, so during one
   // each of these asks the worker to stop the reply first and then move —
@@ -526,7 +554,9 @@ export function UserMessage() {
             busy={sending}
           />
         ) : (
+          <ExcerptedMessage value={promptExcerpted}>
           <UserBubble
+            data-excerpted={promptExcerpted || undefined}
             data-sent-by={parentPath ? "parent" : undefined}
             className={cn(
               optimistic && "opacity-70",
@@ -561,6 +591,7 @@ export function UserMessage() {
             />
             <BodyOverflow body={promptBodies?.text} path={path} label="message" />
           </UserBubble>
+          </ExcerptedMessage>
         )}
         <MessageFooter className="ms-0 me-0 h-auto min-h-6 justify-end">
           <MessageBranches

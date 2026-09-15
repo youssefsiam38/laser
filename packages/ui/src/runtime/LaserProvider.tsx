@@ -20,7 +20,7 @@ import { TranscriptPresentation } from "./transcript-presentation.js";
  * a small external store that this component keeps in sync, and reads no
  * closed-over state at all.
  */
-import { PRODUCT_NAME } from "@lasercode/protocol";
+import { PRODUCT_NAME, utf8ByteLength } from "@lasercode/protocol";
 import {
   AssistantRuntimeProvider,
   AuiConfig,
@@ -65,7 +65,7 @@ import { createTasksActions, type TasksActions } from "../fleet/actions.js";
 import { HostClient } from "../client.js";
 import { initialState, reduce, type Action, type AppState, type SessionView } from "../store.js";
 import { hydrationEpochOf, isDormantView } from "../view-summary.js";
-import { createViewCache, type ActionReservation, type RendererViewCounters } from "./view-cache.js";
+import { createViewCache, type ActionReservation, type RendererViewCounters, type ViewCache } from "./view-cache.js";
 import { createThreadAdapter, sendToSession, type SendBehavior } from "./adapter.js";
 import { firstTurnFromRunConfig, useDiscardFirstTurnOnLeave } from "./first-turn.js";
 import { createSessionLauncher, type NewSessionOptions } from "./new-session.js";
@@ -291,6 +291,19 @@ interface LaserInternals {
   attach: (path: string) => () => void;
 }
 const LaserInternalsContext = createContext<LaserInternals | null>(null);
+
+/**
+ * Whether this renderer can take a prompt the engine handed back (RP-5b §2).
+ *
+ * The same accounting an edit uses: room for the text itself and for the
+ * composer's own copy of it, taken and given straight back — the point is the
+ * decision, not the holding, because from here on the composer owns the bytes.
+ */
+function admitEditorText(cache: { reserveAction: ViewCache["reserveAction"] }, path: string, text: string) {
+  const bytes = utf8ByteLength(text);
+  if (!Number.isSafeInteger(bytes)) return undefined;
+  return cache.reserveAction(path, bytes * 2);
+}
 
 export function useLaserStable(): LaserStable {
   const value = useContext(LaserStableContext);
@@ -1260,11 +1273,22 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       dispatch({ type: "forked", from: path, state: session });
       if (readScoped === readState) destination.replaceMainSession(path, session);
       if (editorText) {
-        dispatch({
-          type: "notification",
-          method: "pi/ui/event",
-          params: { path: session.path, method: "setEditorText", text: editorText },
-        });
+        // A fork hands back the prompt it forked from. That prompt can be far
+        // larger than this surface may hold, so it is admitted only when the
+        // renderer's own accounting has room for it — and refused in words
+        // otherwise, leaving the fork itself untouched (RP-5b §2).
+        const room = admitEditorText(viewCache, session.path, editorText);
+        if (room) {
+          dispatch({
+            type: "notification",
+            method: "pi/ui/event",
+            params: { path: session.path, method: "setEditorText", text: editorText },
+          });
+          // The composer holds it now; the reservation was only the gate.
+          room.release();
+        } else {
+          dispatch({ type: "toast", level: "warning", text: "That message is too large to put back in the composer here. It is unchanged in the conversation you forked from." });
+        }
       }
       void refreshSessions();
     };
@@ -1287,7 +1311,16 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           return false;
         }
         await history.read(path);
-        return editorText !== undefined ? { editorText } : {};
+        if (editorText === undefined) return {};
+        // The same gate on the way back from a move: an oversized prompt does
+        // not enter this renderer's state just because the engine returned it.
+        const room = admitEditorText(viewCache, path, editorText);
+        if (!room) {
+          dispatch({ type: "toast", level: "warning", text: "That message is too large to put back in the composer here. Nothing in the conversation has changed." });
+          return {};
+        }
+        room.release();
+        return { editorText };
       } finally {
         moving.current.delete(path);
       }
