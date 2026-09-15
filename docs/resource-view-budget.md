@@ -126,21 +126,22 @@ repeatability baseline remains M18-T15's, with its command unchanged.
 
 ### Result
 
-One run on Linux, artifacts `/tmp/resource-soak-t5`, four scenarios complete
-(`1-baseline`, `2-distinct-sessions`, `6-multiple-projects-and-workspaces`,
-`3-backward-pagination`), five listed as not run, zero survivors,
-`pass: false` by construction.
+One run on Linux at the reviewed tip `c724cad`, artifacts `/tmp/resource-soak-t5-final`
+(sanitized report copied to `/tmp/m18-t5-calibration-final.json`). Four scenarios
+complete (`1-baseline`, `2-distinct-sessions`, `6-multiple-projects-and-workspaces`,
+`3-backward-pagination`), five listed as not run, zero survivors, zero retained
+raw heap snapshots, `pass: false` / `purpose: "calibration"` / `partial: true`.
 
 | Phase | renderer JS heap | open (light) | hydrated | entries | serialized entry bytes |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| baseline | 11,308,500 | 0 | 0 | 0 | 0 |
-| visited-10 | 35,101,080 | 10 | 6 | 60 | 13,751 |
-| visited-20 | 49,276,276 | 20 | 6 | 60 | 13,771 |
-| visited-30 | 33,816,800 | 30 | 6 | 60 | 13,791 |
-| visited-40 | 41,759,760 | 40 | 6 | 60 | 13,811 |
-| visited-50 | 26,150,748 | 50 | 6 | 60 | 13,831 |
-| distinct-sessions | 81,727,780 | 54 | 6 | 44 | 8,199 |
-| paged-history | 39,366,536 | 54 | 6 | 106 | 32,090 |
+| baseline | 12,012,156 | 0 | 0 | 0 | 0 |
+| visited-10 | 45,369,476 | 10 | 6 | 60 | 13,751 |
+| visited-20 | 38,193,944 | 20 | 6 | 60 | 13,771 |
+| visited-30 | 52,556,908 | 30 | 6 | 60 | 13,791 |
+| visited-40 | 36,631,168 | 40 | 6 | 60 | 13,811 |
+| visited-50 | 25,033,716 | 50 | 6 | 60 | 13,831 |
+| distinct-sessions | 28,783,924 | 54 | 6 | 44 | 8,199 |
+| paged-history | 49,208,580 | 54 | 6 | 106 | 32,090 |
 
 Against the same fixture before the bound existed:
 
@@ -150,15 +151,22 @@ Against the same fixture before the bound existed:
 | Transcripts retained at that moment | 50 | **6** |
 | Retained entries | 624 | **60** |
 | Serialized entry bytes | 162,303 | **13,831** |
-| Renderer JS heap at visited-50 | 29,501,576 | 26,150,748 |
-| Heap per opened session (published slope) | **+77,645.8** | **−223,758.3** |
-| Heap per loaded history page (published slope) | **+257,710.4** | **−14,270.9** |
+| Renderer JS heap at visited-50 | 29,501,576 | 25,033,716 |
+| Heap per opened session (published slope) | **+77,645.8** | **−438,674.3** |
 
-The two slopes are the criterion "fifty distinct session visits converge to a
-bounded post-GC renderer heap": both were positive and are now negative, and the
-heap at fifty visits is below the heap at ten. What is left is collection noise
-around a flat line, not growth — the retained transcript state stopped scaling
-with the number of conversations visited, which is what the bound is for.
+The criterion "fifty distinct session visits converge to a bounded post-GC
+renderer heap" holds: the retained set is flat at six transcripts, 60 entries and
+13,831 serialized bytes from the tenth visit to the fiftieth, the per-session
+slope is negative, and the heap at fifty visits is below the heap at ten.
+
+**One number to read carefully.** `rendererPagedHistoryHeapBytesPerPage` is
+**+1,928,927.6** in this run, against −14,270.9 in the run of the previous tip.
+It is five pre-collection samples (48.5, 49.2, 67.8, 49.0, 49.2 MB) and one of
+them dominates the fit. The retained state those phases describe is identical in
+both runs — six transcripts, 106 entries, 32,090 serialized bytes — so this is
+collection noise in a single measurement-only run, not retained growth. A slope
+is only evidence when it repeats: the two-run comparison with its declared
+coefficient-of-variation gate is M18-T15's, and this run is explicitly not it.
 
 ### The fitted constants
 
