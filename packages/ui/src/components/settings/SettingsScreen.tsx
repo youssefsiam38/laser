@@ -38,6 +38,7 @@ import { FeaturesScreen } from "./FeaturesScreen.js";
 import { SettingsForm } from "./SettingsForm.js";
 import { TrustTab } from "./TrustTab.js";
 import { ProjectsTab } from "./ProjectsTab.js";
+import { DeviceCacheSetting } from "./DeviceCacheSetting.js";
 import { LogStoreSetting } from "./LogStoreSetting.js";
 import { UsageTab } from "./UsageTab.js";
 import { AdvancedTab, type AdvancedView } from "./AdvancedTab.js";
@@ -290,6 +291,7 @@ export function DeviceTab() {
     <ScrollArea className="h-full">
       <div className="mx-auto flex max-w-160 flex-col gap-6 px-6 py-6">
         <NotificationsSetting />
+        <DeviceCacheSetting />
         <LogStoreSetting />
         <RunSetupAgain />
       </div>

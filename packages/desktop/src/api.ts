@@ -80,6 +80,19 @@ export interface IdentitySummary {
   degraded?: string;
 }
 
+/**
+ * The key this computer keeps for conversations cached in the renderer (RP-10).
+ *
+ * `key` is 32 bytes, base64url, held in the operating system's own secret
+ * store (`store` names it, for the settings screen). `available: false` is the
+ * honest answer and carries a sentence written for a person: a machine with no
+ * usable keyring gets no key at all rather than a key in a file, because a key
+ * beside the ciphertext is not encryption.
+ */
+export type DeviceCacheKey =
+  | { available: true; key: string; store: string }
+  | { available: false; reason: string };
+
 export type UpdateState =
   | "unsupported"
   | "idle"
@@ -163,6 +176,19 @@ export interface LaserDesktop {
   };
 
   identity(): Promise<IdentitySummary>;
+
+  /**
+   * Encryption for the device conversation cache (RP-10).
+   *
+   * Absent in a browser and on a phone, exactly as `openSourceFile` is: the
+   * renderer then stores what it caches in the browser's own storage and says
+   * so, and never claims encryption it cannot prove.
+   */
+  deviceCache?: {
+    key(): Promise<DeviceCacheKey>;
+    /** Replace the key. Everything already cached becomes unreadable. */
+    reset(): Promise<DeviceCacheKey>;
+  };
 
   updates: {
     /** Ask before restarting this desktop and its host together. */

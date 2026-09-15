@@ -42,9 +42,11 @@ export interface StorageMigrationResult {
   dropped: string[];
   /** Cache Storage buckets deleted because they belong to a former name. */
   caches: string[];
+  /** Transcript databases deleted because they belong to a former name. */
+  databases: string[];
 }
 
-const EMPTY: StorageMigrationResult = { moved: [], kept: [], dropped: [], caches: [] };
+const EMPTY: StorageMigrationResult = { moved: [], kept: [], dropped: [], caches: [], databases: [] };
 
 /** `laser-` and `laser.` — both separators this app has ever used. */
 function prefixesFor(name: string): string[] {
@@ -106,7 +108,7 @@ export function migrateStorageKeys(
     // Storage is unavailable or full. The app opens with its defaults, which is
     // what happens on a fresh install too.
   }
-  return { moved, kept, dropped, caches: [] };
+  return { moved, kept, dropped, caches: [], databases: [] };
 }
 
 /**
@@ -133,6 +135,57 @@ export async function dropFormerCaches(): Promise<string[]> {
 }
 
 /**
+ * Delete the transcript databases a former name left behind.
+ *
+ * Dropped, never migrated, for the same reason a former name's environment
+ * keys are dropped: a database written under another name cannot be proved to
+ * belong to the environment this build will connect to, and it holds
+ * conversation content (RP-10). The current name's database is never touched.
+ */
+export async function dropFormerDatabases(): Promise<string[]> {
+  if (FORMER_NAMES.length === 0) return [];
+  let factory: IDBFactory | undefined;
+  try {
+    factory = globalThis.indexedDB ?? undefined;
+  } catch {
+    factory = undefined;
+  }
+  if (!factory) return [];
+  const current = `${STORAGE_PREFIX}-tails`;
+  const dropped: string[] = [];
+  for (const former of FORMER_NAMES) {
+    const name = `${former.storagePrefix}-tails`;
+    if (name === current) continue;
+    const gone = await new Promise<boolean>((resolve) => {
+      let settled = false;
+      const settle = (value: boolean): void => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+      try {
+        const deletion = factory.deleteDatabase(name);
+        // Bounded: another tab holding the old name open is not worth waiting
+        // on at boot, and the next start tries again.
+        const timer = setTimeout(() => settle(false), 250);
+        deletion.onsuccess = () => {
+          clearTimeout(timer);
+          settle(true);
+        };
+        deletion.onerror = () => {
+          clearTimeout(timer);
+          settle(false);
+        };
+      } catch {
+        settle(false);
+      }
+    });
+    if (gone) dropped.push(name);
+  }
+  return dropped;
+}
+
+/**
  * The whole migration, for the app's boot path. Never throws, never blocks
  * first paint on the cache half.
  */
@@ -145,5 +198,6 @@ export function migrateFormerBrowserStorage(): StorageMigrationResult {
   }
   const result = migrateStorageKeys(storage);
   void dropFormerCaches().then((caches) => result.caches.push(...caches));
+  void dropFormerDatabases().then((databases) => result.databases.push(...databases));
   return result;
 }

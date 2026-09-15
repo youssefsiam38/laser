@@ -21,6 +21,7 @@ import type {
   DesktopChrome,
   DesktopHostInfo,
   DesktopPlatform,
+  DeviceCacheKey,
   IdentitySummary,
   MicrophoneStatus,
   UpdateStatus,
@@ -60,6 +61,8 @@ const IPC = {
   microphoneRequest: "laser:microphone/request",
   microphoneSettings: "laser:microphone/settings",
   identity: "laser:identity",
+  cacheKey: "laser:cache/key",
+  cacheKeyReset: "laser:cache/key/reset",
   updateStatus: "laser:update/status",
   updateCheck: "laser:update/check",
   updateInstall: "laser:update/install",
@@ -165,6 +168,13 @@ const api = {
   },
 
   identity: (): Promise<IdentitySummary> => ipcRenderer.invoke(IPC.identity) as Promise<IdentitySummary>,
+
+  // The key the renderer seals its conversation cache with. The main process
+  // owns where it lives and whether there is one at all; this only forwards.
+  deviceCache: {
+    key: (): Promise<DeviceCacheKey> => ipcRenderer.invoke(IPC.cacheKey) as Promise<DeviceCacheKey>,
+    reset: (): Promise<DeviceCacheKey> => ipcRenderer.invoke(IPC.cacheKeyReset) as Promise<DeviceCacheKey>,
+  },
 
   updates: {
     restart: (): void => { ipcRenderer.send(IPC.updateInstall, { relaunch: true }); },

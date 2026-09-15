@@ -85,7 +85,7 @@ describe("browser storage across a rename", () => {
 
   it("does nothing at all with no former names, which is the usual case", () => {
     const storage = fakeStorage({ [`${STORAGE_PREFIX}-panels`]: "{}" });
-    expect(migrateStorageKeys(storage, [])).toEqual({ moved: [], kept: [], dropped: [], caches: [] });
+    expect(migrateStorageKeys(storage, [])).toEqual({ moved: [], kept: [], dropped: [], caches: [], databases: [] });
     expect(storage.getItem(`${STORAGE_PREFIX}-panels`)).toBe("{}");
   });
 
@@ -96,6 +96,6 @@ describe("browser storage across a rename", () => {
       },
     } as unknown as Storage;
     expect(() => migrateStorageKeys(hostile, OLD)).not.toThrow();
-    expect(migrateStorageKeys(null, OLD)).toEqual({ moved: [], kept: [], dropped: [], caches: [] });
+    expect(migrateStorageKeys(null, OLD)).toEqual({ moved: [], kept: [], dropped: [], caches: [], databases: [] });
   });
 });

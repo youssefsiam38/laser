@@ -37,7 +37,27 @@ export type ConnectionState = "connecting" | "open" | "closed";
  * not make this device safe for this environment, so nothing may be read,
  * written, resumed or requested in it.
  */
-export type EnvironmentAcceptance = { ok: true } | { ok: false; reason: string };
+export type EnvironmentAcceptance =
+  | { ok: false; reason: string }
+  | {
+    ok: true;
+    /**
+     * Bounded device preparation for *this* environment (RP-10).
+     *
+     * The connection does not publish `open` until this settles or its budget
+     * expires, so what this device can read locally is established **before**
+     * anything is resumed or requested — local-first as a contract rather than
+     * a race against an asynchronous store.
+     *
+     * It must never reject and never block the host: a browser that refuses
+     * storage, a locked keychain or a database that cannot be established is
+     * the app's own business (a refused cache), and the connection opens
+     * regardless. A promise that never settles is bounded by the budget.
+     */
+    ready?: Promise<unknown> | undefined;
+    /** Override the default budget. Clamped to {@link MAX_READY_BUDGET_MS}. */
+    readyBudgetMs?: number | undefined;
+  };
 
 /** Handshake ids. Negative and zero, so they can never be a request id. */
 const VERSION_ID = 0;
@@ -45,6 +65,18 @@ const ENVIRONMENT_ID = -1;
 
 /** How long each handshake step may take before the socket is replaced. */
 const HANDSHAKE_TIMEOUT_MS = 5000;
+
+/**
+ * How long the connection waits for this device to be ready (RP-10).
+ *
+ * Short on purpose. The wait buys a guarantee — a previously seen conversation
+ * is readable the moment the app is connected — and it is paid before every
+ * open, including a reconnect, so it may never become something a person can
+ * feel. Expiry is not a failure: the connection opens and the cache says it is
+ * not ready.
+ */
+export const READY_BUDGET_MS = 600;
+export const MAX_READY_BUDGET_MS = 2000;
 
 export interface HostClientOptions {
   onVersionMismatch?: (hostVersion: string) => void;
@@ -412,6 +444,41 @@ export class HostClient {
       this.failEnvironment(acceptance.reason, socket);
       return;
     }
+    if (acceptance.ready) {
+      this.openWhenReady(acceptance.ready, acceptance.readyBudgetMs, socket);
+      return;
+    }
+    this.openEnvironment(socket);
+  }
+
+  /**
+   * Wait for this device, bounded, then open **this** socket.
+   *
+   * Fenced twice: the handshake record stays alive so a replacement socket
+   * retires this wait, and the settle re-checks that this socket is still the
+   * one. A late answer from a socket that has been replaced opens nothing,
+   * sets no state and sends nothing.
+   */
+  private openWhenReady(ready: Promise<unknown>, budgetMs: number | undefined, socket: WebSocket): void {
+    const handshake = this.handshake;
+    if (!handshake || handshake.socket !== socket) return;
+    const budget = Math.max(0, Math.min(budgetMs ?? READY_BUDGET_MS, MAX_READY_BUDGET_MS));
+    let settled = false;
+    const settle = (): void => {
+      if (settled) return;
+      settled = true;
+      if (handshake.timer) clearTimeout(handshake.timer);
+      delete handshake.timer;
+      // The only fence that matters: is this still the live handshake's socket?
+      if (this.handshake?.socket !== socket || this.ws !== socket) return;
+      this.openEnvironment(socket);
+    };
+    handshake.timer = setTimeout(settle, budget);
+    ready.then(settle, settle);
+  }
+
+  /** The unchanged open: state, buffered frames, then resume what we hold. */
+  private openEnvironment(socket: WebSocket): void {
     this.retireHandshake();
     this.environmentReason = undefined;
     this.backoffMs = 500;

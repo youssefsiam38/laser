@@ -190,3 +190,18 @@ export {
 } from "./view-tail.js";
 
 export { byteLength, measureView, type ViewMeasure } from "./view-measure.js";
+
+export {
+  TAIL_DATABASE_NAME,
+  TAIL_HARD_LIMITS,
+  TAIL_OMITTED_ATTACHMENT,
+  TAIL_RECORD_SCHEMA,
+  TAIL_SCAN_LIMITS,
+  deviceCacheStore,
+  tailCache,
+  type DeviceCacheCounters,
+  type TailBounds,
+  type TailCacheState,
+  type TailRecord,
+  type TailRefusal,
+} from "./tail-cache/index.js";

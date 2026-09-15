@@ -329,7 +329,13 @@ export interface ResourceHealth {
  * Retained-state stores a diagnostics surface can name, one key per owning
  * subsystem (RP-3). Declared once, here, so a producer is added without
  * touching the shape: RP-6 fills `taskRegistry` and `deliveryRegistry`, RP-4
- * the three worker keys, RP-7 `providerQueues`, and the renderer its own.
+ * the three worker keys, RP-7 `providerQueues`, and the renderer its own —
+ * `rendererViews` for the transcripts it is holding in memory (RP-5) and
+ * `deviceCache` for the bounded tails it has written to this device (RP-10).
+ *
+ * Both renderer keys are **per device**: they describe the viewer that is
+ * asking, never the host's own process, so a phone reading a desktop host's
+ * diagnostics reports its own and leaves the other unavailable.
  */
 export const RESOURCE_STORE_KEYS = [
   "workerSessions",
@@ -339,6 +345,7 @@ export const RESOURCE_STORE_KEYS = [
   "deliveryRegistry",
   "providerQueues",
   "rendererViews",
+  "deviceCache",
 ] as const;
 
 export type ResourceStoreKey = (typeof RESOURCE_STORE_KEYS)[number];

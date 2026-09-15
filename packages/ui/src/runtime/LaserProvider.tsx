@@ -92,6 +92,7 @@ import {
 import { createCatalogLoader } from "./catalog-loader.js";
 import { DEVICE_KEYS, deviceStore } from "./device-storage.js";
 import { createEnvironmentLifecycle, useEnvironmentSubtreeKey, type EnvironmentLifecycle } from "./environment-lifecycle.js";
+import { tailCache } from "./tail-cache/index.js";
 import { createHistoryLoader, type HistoryReads } from "./history-loader.js";
 import { createHistoryWindows, MAIN_WINDOW_SCOPE, type HistoryWindowOwner, type HistoryWindows } from "./history-owners.js";
 import { sessionsList } from "../components/shell/session-groups.js";
@@ -1568,6 +1569,9 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           // The delete confirmation left its answer about the child's worktree
           // here; absent, the host keeps it (M13-T42).
           await client.request("pi/session/delete", { path, worktree: takeWorktreeDisposition(path) });
+          // A conversation the person deleted loses what this device cached of
+          // it, now rather than eventually (RP-10).
+          void tailCache.forget({ path });
         },
         loadSession: (path) => openSession(path, { select: false }),
         refreshSessions,
@@ -2046,6 +2050,7 @@ export function LaserThreadScope({ path, onPathChange, filter, createIn, unavail
         },
         deleteSession: async (target) => {
           await client.request("pi/session/delete", { path: target, worktree: takeWorktreeDisposition(target) });
+          void tailCache.forget({ path: target });
         },
         loadSession: (target) =>
           openSession(target, { select: false }).then(async () => {

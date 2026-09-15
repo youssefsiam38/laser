@@ -38,10 +38,12 @@ import {
   type RootIdentityStore,
 } from "@lasercode/crypto";
 import { FileRootIdentityStore } from "@lasercode/crypto/node";
-import type { IdentitySummary } from "./api.js";
+import type { DeviceCacheKey, IdentitySummary } from "./api.js";
 import type { DesktopLog } from "./log.js";
 
 const HOST_TOKEN_ACCOUNT = "host-token";
+/** The renderer's device conversation cache key (RP-10). */
+const CACHE_KEY_ACCOUNT = "device-cache-key";
 
 export interface SecretsOptions {
   /** `<state-dir>`, where the fallback files live when there is no keychain. */
@@ -162,6 +164,62 @@ function loadHostToken(stateDir: string, degraded: boolean, log: DesktopLog): st
 }
 
 /**
+ * The key the renderer seals cached conversations with (RP-10).
+ *
+ * Deliberately unlike the host token: there is **no file fallback**. A key in a
+ * 0600 file sitting beside the ciphertext it decrypts is not encryption, and
+ * the cache's whole contract is that it says what is true about this device. So
+ * a machine with no usable keyring is told it has none, in a sentence, and the
+ * renderer stores what it caches unencrypted and says so.
+ *
+ * Never throws: every failure is an `available: false` with a reason, and the
+ * reason never carries the key, a path inside it, or a raw platform error dump.
+ */
+export function loadDeviceCacheKey(log: DesktopLog, reset = false): DeviceCacheKey {
+  const unavailable = keychainAvailable(log);
+  if (unavailable) {
+    return {
+      available: false,
+      reason: `This system has no keychain ${PRODUCT_NAME} can use, so there is no key to encrypt cached conversations with.`,
+    };
+  }
+  const store = keychainDescription();
+  try {
+    adoptFormerKeychainEntry(CACHE_KEY_ACCOUNT, log);
+    const entry = new Entry(KEYCHAIN_SERVICE, CACHE_KEY_ACCOUNT);
+    if (reset) {
+      try {
+        entry.deletePassword();
+      } catch {
+        // Nothing stored under that account yet, or the store refused the
+        // removal; writing the new key below is what matters either way.
+      }
+    } else {
+      const stored = entry.getPassword();
+      // 32 bytes as base64url is 43 characters. A shorter value is not a key.
+      if (stored && stored.length >= 43) return { available: true, key: stored, store };
+    }
+    const fresh = randomBytes(32).toString("base64url");
+    entry.setPassword(fresh);
+    return { available: true, key: fresh, store };
+  } catch {
+    return {
+      available: false,
+      reason: `This computer's keychain would not give ${PRODUCT_NAME} a key for cached conversations. It may be locked.`,
+    };
+  }
+}
+
+/** What a person should be told the secret store is called, on this platform. */
+function keychainDescription(): string {
+  return process.platform === "darwin"
+    ? "the macOS keychain"
+    : process.platform === "win32"
+      ? "Windows Credential Manager"
+      : "the system keyring";
+}
+
+/**
  * Load both secrets, creating them on first run. Never throws for a missing
  * keychain — only for a keychain that exists and holds something damaged,
  * which is a case a person has to be told about rather than silently
@@ -176,10 +234,7 @@ export async function loadSecrets(options: SecretsOptions): Promise<DesktopSecre
     store = new FileRootIdentityStore(join(stateDir, "identity.key"));
   } else {
     adoptFormerKeychainEntry(KEYCHAIN_ROOT_ACCOUNT, log);
-    store = createKeyringRootIdentityStore(
-      new Entry(KEYCHAIN_SERVICE, KEYCHAIN_ROOT_ACCOUNT),
-      process.platform === "darwin" ? "the macOS keychain" : process.platform === "win32" ? "Windows Credential Manager" : "the system keyring",
-    );
+    store = createKeyringRootIdentityStore(new Entry(KEYCHAIN_SERVICE, KEYCHAIN_ROOT_ACCOUNT), keychainDescription());
   }
 
   const { identity, created } = await loadOrCreateRootIdentity(store);
