@@ -28,7 +28,7 @@
  */
 import type { Action, AppState, EvictionReason, SessionView } from "../store.js";
 import { hasUnsentWork, isDormantView } from "../view-summary.js";
-import { captureViewTail, viewTailSink, type ViewTailDto, type ViewTailSink } from "./view-tail.js";
+import { captureViewTail, VIEW_TAIL_MAX_BYTES, viewTailSink, type ViewTailDto, type ViewTailSink } from "./view-tail.js";
 import { EMPTY_MEASURE, measureView, type ViewMeasure } from "./view-measure.js";
 import { isTerminalRunStatus } from "@lasercode/protocol";
 import { mainPath, pendingSessionPath } from "./main-destination.js";
@@ -102,6 +102,11 @@ export interface RendererViewCounters {
   /** Threads holding words a person wrote and nobody else has. */
   readonly drafts: number;
   readonly evictions: number;
+  /** Records waiting for the next frame, and their bytes. Bounded (see above). */
+  readonly tailsPending: number;
+  readonly tailsPendingBytes: number;
+  /** Records shed because the queue was full. Best-effort data, said out loud. */
+  readonly tailsDropped: number;
   readonly limits: ViewCacheLimits;
   readonly overflow?: "pinned" | "drafts";
   readonly calibration: { model: string; fittedAt: string };
@@ -208,6 +213,17 @@ const defaultDeliver = (run: () => void): (() => void) => {
 /** How long a page that never paints may hold a captured record. */
 export const DELIVERY_FALLBACK_MS = 250;
 
+/**
+ * Records that may wait for the next frame at once, and their bytes.
+ *
+ * A hydrate/evict loop can release faster than a page paints, and a tail is a
+ * hint a cache may keep, not something anybody is waiting for. So the queue is
+ * bounded on both axes and sheds its oldest records rather than growing: eight
+ * full tails' worth of bytes, thirty-two records, counted when they go.
+ */
+export const PENDING_TAIL_MAX_ENTRIES = 32;
+export const PENDING_TAIL_MAX_BYTES = 8 * VIEW_TAIL_MAX_BYTES;
+
 export interface ViewCache {
   /** Fold one store publication. Cheap: reference comparisons, no measuring. */
   observe(state: AppState): void;
@@ -294,7 +310,11 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
   const tracked = new Map<string, Tracked>();
   /** One measurement per view object: an unchanged view is never walked again. */
   const measured = new WeakMap<SessionView, ViewMeasure>();
-  const deliveries = new Set<() => void>();
+  /** Records waiting for the next frame, newest per session, oldest first. */
+  const pending = new Map<string, ViewTailDto>();
+  let pendingBytes = 0;
+  let tailsDropped = 0;
+  let cancelDelivery: (() => void) | undefined;
   let clock = 0;
   let lastOpen: AppState["open"] | undefined;
   /** The registries and selections a pin is decided from, as references. */
@@ -368,17 +388,63 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
     }
     evictions += released.length;
     options.onRelease?.(released);
-    // After the store has published and the frame has been painted: a
-    // synchronous, slow or throwing sink can delay neither.
+    // Into the one queue waiting for the next frame, never a timer and a
+    // closure per release: a fast hydrate/evict loop must not turn best-effort
+    // cache data into unbounded memory of its own.
+    for (const tail of tails) enqueueTail(tail);
+    scheduleDelivery();
+    return {
+      released: paths.map(({ path, bytes, reason }) => ({ path, bytes, reason })),
+      bytesReleased: paths.reduce((sum, row) => sum + row.bytes, 0),
+      refused: [],
+    };
+  };
+
+  /**
+   * Take one record into the queue, newest per session, inside hard bounds.
+   *
+   * This is a cache hint and nothing depends on it, so when it is full the
+   * oldest records go, deterministically, and are counted. A record for a
+   * session already waiting replaces it: two tails of one conversation are
+   * the same conversation, and only the later one is true.
+   */
+  const enqueueTail = (tail: ViewTailDto): void => {
+    const cost = tail.bytes;
+    const existing = pending.get(tail.path);
+    if (existing) pendingBytes -= existing.bytes;
+    pending.delete(tail.path);
+    // A single record larger than the whole queue is refused outright rather
+    // than emptying the queue for itself.
+    if (cost > PENDING_TAIL_MAX_BYTES) {
+      tailsDropped += 1;
+      return;
+    }
+    pending.set(tail.path, tail);
+    pendingBytes += cost;
+    while (pending.size > PENDING_TAIL_MAX_ENTRIES || pendingBytes > PENDING_TAIL_MAX_BYTES) {
+      const oldest = pending.keys().next();
+      if (oldest.done) break;
+      const dropped = pending.get(oldest.value)!;
+      pending.delete(oldest.value);
+      pendingBytes -= dropped.bytes;
+      tailsDropped += 1;
+    }
+  };
+
+  /** One scheduler for the whole queue, whatever it holds. */
+  const scheduleDelivery = (): void => {
+    if (disposed || cancelDelivery || pending.size === 0) return;
     const captured = generation;
-    let cancel: (() => void) | undefined;
-    const hand = () => {
-      if (cancel) deliveries.delete(cancel);
+    cancelDelivery = deliver(() => {
+      cancelDelivery = undefined;
+      const waiting = [...pending.values()];
+      pending.clear();
+      pendingBytes = 0;
       if (disposed || captured !== generation) return;
       // Read now, not when the release was decided: a cache installed in the
-      // meantime receives this tail, and one that has gone never does.
+      // meantime receives these tails, and one that has gone never does.
       const target = sink ?? viewTailSink();
-      for (const tail of tails) {
+      for (const tail of waiting) {
         try {
           target.release(tail);
         } catch {
@@ -386,14 +452,14 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
           // is already released and the conversation is read from its host.
         }
       }
-    };
-    cancel = deliver(hand);
-    deliveries.add(cancel);
-    return {
-      released: paths.map(({ path, bytes, reason }) => ({ path, bytes, reason })),
-      bytesReleased: paths.reduce((sum, row) => sum + row.bytes, 0),
-      refused: [],
-    };
+    });
+  };
+
+  const clearPending = (): void => {
+    cancelDelivery?.();
+    cancelDelivery = undefined;
+    pending.clear();
+    pendingBytes = 0;
   };
 
   /** Everything the pass needs, measured once. */
@@ -576,6 +642,9 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
         heapEquivalentBytes: heap,
         drafts,
         evictions,
+        tailsPending: pending.size,
+        tailsPendingBytes: pendingBytes,
+        tailsDropped,
         limits,
         ...(overflow ? { overflow } : {}),
         calibration: { model: VIEW_HEAP_MODEL.model, fittedAt: VIEW_HEAP_MODEL.fittedAt },
@@ -591,8 +660,8 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
       cancelPass = undefined;
       // A record captured in the environment this device just left is never
       // handed to the cache of the one it is in now.
-      for (const cancel of deliveries) cancel();
-      deliveries.clear();
+      clearPending();
+      tailsDropped = 0;
       used.clear();
       tracked.clear();
       lastOpen = undefined;
@@ -606,8 +675,7 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
       generation += 1;
       cancelPass?.();
       cancelPass = undefined;
-      for (const cancel of deliveries) cancel();
-      deliveries.clear();
+      clearPending();
       used.clear();
       tracked.clear();
     },

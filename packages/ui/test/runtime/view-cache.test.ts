@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentRun, BackgroundTask, SessionState } from "@lasercode/protocol";
 
 import { createStateStore } from "../../src/runtime/LaserProvider.js";
-import { createViewCache, DELIVERY_FALLBACK_MS, pinReason, rendererViewsStore, type ViewCacheEnvironment, type ViewCacheLimits } from "../../src/runtime/view-cache.js";
+import { createViewCache, DELIVERY_FALLBACK_MS, PENDING_TAIL_MAX_BYTES, PENDING_TAIL_MAX_ENTRIES, pinReason, rendererViewsStore, type ViewCacheEnvironment, type ViewCacheLimits } from "../../src/runtime/view-cache.js";
 import { VIEW_TAIL_MAX_ENTRIES, type ViewTailDto, type ViewTailSink } from "../../src/runtime/view-tail.js";
 import { initialState, isDormantView, reduce, type AppState } from "../../src/store.js";
 import { MessageEditPresentation, TranscriptPresentation } from "../../src/runtime/transcript-presentation.js";
@@ -67,7 +67,6 @@ function harness({ limits, environment = noDrafts, deliverNow = true }: { limits
     limits: { views: 2, bytes: 4096, viewBytes: 2048, ...limits },
     now: () => new Date("2026-09-15T02:00:00.000Z"),
     defer: (run) => { deferred = () => { passes += 1; run(); }; return () => { deferred = undefined; }; },
-    
     deliver: (run) => { delivery = run; if (deliverNow) run(); return () => { delivery = undefined; }; },
     onRelease: (paths) => untracked.push(...paths),
   });
@@ -641,5 +640,119 @@ describe("when the tail is handed over", () => {
     for (const frame of frames) frame();
     vi.advanceTimersByTime(1000);
     expect(other).not.toHaveBeenCalled();
+  });
+});
+
+describe("the records waiting for that frame", () => {
+  const realFrame = globalThis.requestAnimationFrame;
+  const realCancel = globalThis.cancelAnimationFrame;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    (globalThis as { requestAnimationFrame?: unknown }).requestAnimationFrame = undefined;
+    (globalThis as { cancelAnimationFrame?: unknown }).cancelAnimationFrame = undefined;
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    globalThis.requestAnimationFrame = realFrame;
+    globalThis.cancelAnimationFrame = realCancel;
+  });
+
+  /** A cache with no bounds at all, so every load releases on the next pass. */
+  const releasing = (sink: ViewTailSink) => {
+    const store = createStateStore({ ...initialState, connection: "open" });
+    const cache = createViewCache({
+      read: () => store.getSnapshot(), dispatch: store.dispatch, environment: noDrafts,
+      limits: { views: 0, bytes: 0, viewBytes: 0 }, sink,
+    });
+    const put = (path: string, options?: { entries?: number; size?: number }) => {
+      const built = hydrate(initialState, path, options);
+      const rows = built.open[path]!.entries;
+      store.dispatch({ type: "opened", state: built.open[path]!.state });
+      store.dispatch({ type: "historyBegin", path, token: `${path}:t` });
+      store.dispatch({ type: "historySnapshot", path, token: `${path}:t`, entries: rows, leafId: (rows.at(-1) as { id: string }).id, window: window(rows.length) });
+      cache.maintain();
+    };
+    return { store, cache, put };
+  };
+
+  it("keeps one scheduler and one record per session, however fast the loop is", () => {
+    const released: ViewTailDto[] = [];
+    const { cache, put } = releasing({ release: (tail) => released.push(tail) });
+    const scheduled = vi.spyOn(globalThis, "setTimeout");
+
+    // The same three conversations, hydrated and released again and again,
+    // all inside one frame.
+    for (let round = 0; round < 40; round++) for (const index of [1, 2, 3]) put(pathOf(index), { entries: 2, size: 16 });
+
+    const counters = cache.counters();
+    expect(counters.tailsPending).toBe(3);
+    expect(counters.tailsDropped).toBe(0);
+    // One timer for the whole queue, not one per release.
+    expect(scheduled.mock.calls.length).toBe(1);
+    scheduled.mockRestore();
+
+    vi.advanceTimersByTime(DELIVERY_FALLBACK_MS);
+
+    expect(released.map((tail) => tail.path).sort()).toEqual([pathOf(1), pathOf(2), pathOf(3)]);
+    // The one that arrives is the last release of that conversation.
+    expect(released.every((tail) => tail.capturedAt !== undefined)).toBe(true);
+    expect(cache.counters().tailsPending).toBe(0);
+    expect(cache.counters().tailsPendingBytes).toBe(0);
+  });
+
+  it("sheds its oldest records rather than growing past its bounds", () => {
+    const released: ViewTailDto[] = [];
+    const { cache, put } = releasing({ release: (tail) => released.push(tail) });
+
+    // Far more distinct conversations than the queue may hold, in one frame.
+    for (let index = 1; index <= PENDING_TAIL_MAX_ENTRIES * 4; index++) put(pathOf(index), { entries: 2, size: 16 });
+
+    const counters = cache.counters();
+    expect(counters.tailsPending).toBe(PENDING_TAIL_MAX_ENTRIES);
+    expect(counters.tailsPendingBytes).toBeLessThanOrEqual(PENDING_TAIL_MAX_BYTES);
+    expect(counters.tailsDropped).toBe(PENDING_TAIL_MAX_ENTRIES * 3);
+
+    vi.advanceTimersByTime(DELIVERY_FALLBACK_MS);
+
+    // The newest are what survived, deterministically.
+    expect(released).toHaveLength(PENDING_TAIL_MAX_ENTRIES);
+    expect(released.at(-1)!.path).toBe(pathOf(PENDING_TAIL_MAX_ENTRIES * 4));
+    expect(released[0]!.path).toBe(pathOf(PENDING_TAIL_MAX_ENTRIES * 3 + 1));
+  });
+
+  it("stays inside its byte bound with large records", () => {
+    const released: ViewTailDto[] = [];
+    const { cache, put } = releasing({ release: (tail) => released.push(tail) });
+
+    // Each tail near its own 256 KiB ceiling: the byte bound bites long before
+    // the entry bound does.
+    for (let index = 1; index <= 20; index++) put(pathOf(index), { entries: 40, size: 12_000 });
+
+    const counters = cache.counters();
+    expect(counters.tailsPendingBytes).toBeLessThanOrEqual(PENDING_TAIL_MAX_BYTES);
+    expect(counters.tailsPending).toBeLessThan(PENDING_TAIL_MAX_ENTRIES);
+    expect(counters.tailsDropped).toBe(20 - counters.tailsPending);
+
+    vi.advanceTimersByTime(DELIVERY_FALLBACK_MS);
+    expect(released.reduce((sum, tail) => sum + tail.bytes, 0)).toBeLessThanOrEqual(PENDING_TAIL_MAX_BYTES);
+  });
+
+  it("holds nothing through a reset or a disposal", () => {
+    const released: ViewTailDto[] = [];
+    const first = releasing({ release: (tail) => released.push(tail) });
+    first.put(pathOf(1), { entries: 2 });
+    expect(first.cache.counters().tailsPending).toBe(1);
+
+    first.cache.reset();
+    expect(first.cache.counters().tailsPending).toBe(0);
+    expect(first.cache.counters().tailsPendingBytes).toBe(0);
+    vi.advanceTimersByTime(1000);
+    expect(released).toEqual([]);
+
+    const second = releasing({ release: (tail) => released.push(tail) });
+    second.put(pathOf(2), { entries: 2 });
+    second.cache.dispose();
+    vi.advanceTimersByTime(1000);
+    expect(released).toEqual([]);
   });
 });

@@ -206,5 +206,10 @@ The default is a sink that does nothing. The cache reads the installed sink
 callback plus a task, with a bounded 250 ms fallback for a page that never
 paints, running exactly once and cancelled by a reset or a disposal — so a
 device cache installed a moment later still receives that tail, and one that has
-been removed never does. Persistence, expiry, reading a tail back and deleting
-one belong to RP-10; nothing here writes anything durable.
+been removed never does. Records waiting for that frame sit in one coalesced queue — the newest record
+per session, at most 32 of them and at most 2 MiB (eight full tails), oldest
+shed first and counted in `tailsDropped` — with one scheduler for the whole
+queue. A hydrate/evict loop faster than the page paints therefore costs a
+bounded amount of memory, which is the right trade for data no one is waiting
+for. Persistence, expiry, reading a tail back and deleting one belong to RP-10;
+nothing here writes anything durable.
