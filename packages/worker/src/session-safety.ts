@@ -46,10 +46,14 @@ export interface SessionSafetySnapshot {
   /** Foreground or background commands of this session that are running. */
   runningTasks: number;
   /**
-   * A first prompt is waiting for a model to name its session, **and** a model
-   * is there to do it. A prompt parked because nothing was connected is not a
-   * pin: the name it is waiting for may never arrive, and a runtime kept for
-   * the life of the worker is a worse loss than an untitled conversation.
+   * Naming this session is under way: a bounded model completion for its first
+   * prompt is in flight, and it ends in a rename through this runtime.
+   *
+   * A prompt merely parked because no naming model was connected is **not** a
+   * pin: nothing can perform that intent, so the refusal would have no end,
+   * and a runtime kept for the life of the worker is a worse loss than an
+   * untitled conversation. The parked words are kept, so the pin appears if a
+   * model arrives and the naming actually starts.
    */
   naming: boolean;
   /** Tool calls still running, whose labels are still being produced. */
@@ -96,7 +100,7 @@ export function sessionPins(snapshot: SessionSafetySnapshot): SessionPin[] {
   if (snapshot.queuedWork > 0) pins.push(pin("queued_work", `${snapshot.queuedWork} queued message(s)`));
   if (snapshot.trayMessages > 0) pins.push(pin("pending_tray", `${snapshot.trayMessages} message(s) waiting in the tray`));
   if (snapshot.runningTasks > 0) pins.push(pin("task", `${snapshot.runningTasks} command(s) running`));
-  if (snapshot.naming) pins.push(pin("naming", "a first prompt is waiting to be named"));
+  if (snapshot.naming) pins.push(pin("naming", "this session is being named"));
   if (snapshot.runningTools > 0) pins.push(pin("tool_labeling", `${snapshot.runningTools} tool call(s) running`));
   if (!snapshot.hasRecord) pins.push(pin("no_record", "there is no durable record to reopen from"));
   if (snapshot.closeFailed) pins.push(pin("close_failed", "this conversation's runtime would not close"));

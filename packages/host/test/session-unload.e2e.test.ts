@@ -156,15 +156,13 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("releasing a session's runtime
       await client.request("pi/session/detach", { path: state.path });
       expect(host.sessionMembership().holders(state.path)).toBe(0);
 
-      // With no naming model connected, this worker is still holding the queued
-      // naming work for that first prompt, and it says so rather than dropping
-      // it (RP-4, review §5). The honest cost: with a model never connected,
-      // this one runtime stays until the conversation is closed.
-      const naming = await host.pool.unloadSession(cwd, state.path, "idle");
-      expect(naming).toMatchObject({ unloaded: false, pins: [{ kind: "naming" }] });
+      // The turn is over and nothing else is holding the conversation, so the
+      // release goes through on the first ask.
+      const released0 = await host.pool.unloadSession(cwd, state.path, "idle");
+      expect(released0).toEqual({ unloaded: true, pins: [] });
 
-      // A new host is a new worker with nothing queued, which is the ordinary
-      // way that intent ends: the conversation is loaded again from its record.
+      // And the same conversation comes back through a new host and a new
+      // worker, which is how a person returns to it after a restart.
       client.close();
       await host.close();
       host = restartedHost();
@@ -206,6 +204,62 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("releasing a session's runtime
         && (message as { params: SessionUpdateParams }).params.update.kind === "agent_settled"
         && (message as { params: SessionUpdateParams }).params.epoch !== epochBefore);
       expect(settled).toBeDefined();
+    } finally {
+      client.close();
+    }
+  }, 120_000);
+
+  it("releases a conversation nothing can name, on the first ask, with its record intact", async () => {
+    // Deterministically Namer-less, and not by what a model answers: this
+    // fixture connects no provider credential at all, so the host's benchmark
+    // stops before it runs (`configured.length === 0` in `qualifyNamer`) and
+    // the worker's naming model stays null for the whole test. A first prompt's
+    // words are then parked in case one ever appears — a retained record, which
+    // the diagnostics count, and not a hold on the runtime (RP-4, M18-T17).
+    writeFileSync(
+      join(base, "agent", "models.json"),
+      JSON.stringify({ providers: { stub: { baseUrl: stub.url, api: "openai-completions", models: [{ id: "stub-1", contextWindow: 8000, maxTokens: 500 }] } } }),
+    );
+    const client = new Client();
+    await client.connect((await host.listen()).url);
+    const cwd = join(base, "project");
+    try {
+      const { state } = await client.request<{ state: SessionState }>("session/new", { cwd });
+      // The person's words go in. Whether the turn can run without a
+      // credential is not what this test is about — naming them is the intent
+      // that gets parked, and it is parked before the engine is asked.
+      await client.request("session/prompt", { path: state.path, content: [{ type: "text", text: "explore the repo" }] }).catch(() => {});
+      const before = await client.request<{ revision: string; authority: string }>("session/revision", { path: state.path });
+      expect(isSessionRevision(before.revision)).toBe(true);
+      const entriesBefore = await client.request<{ entries: unknown[]; leafId: string | null }>("pi/session/entries", { path: state.path });
+      const bytesBefore = readFileSync(state.path, "utf8");
+
+      // The parked prompt exists, said as a count by the surface that is
+      // already allowed to say it: no session path, no words, no new seam.
+      const { snapshot } = await client.request<{
+        snapshot: { stores?: { entries: Record<string, { count?: number }>; coverage: { complete: boolean } } };
+      }>("resource/snapshot", { refresh: true });
+      expect(snapshot.stores?.coverage.complete).toBe(true);
+      // Exactly one: this worker holds no tray message and no tool label, so
+      // the one retained record is the prompt waiting for a model.
+      expect(snapshot.stores?.entries.workerCaches?.count).toBe(1);
+
+      // The person leaves, and the first ask releases the runtime.
+      await client.request("pi/session/detach", { path: state.path });
+      expect(host.sessionMembership().holders(state.path)).toBe(0);
+      const released = await host.pool.unloadSession(cwd, state.path, "idle");
+      expect(released).toEqual({ unloaded: true, pins: [] });
+      expect(host.pool.openSessions(cwd)).toEqual([]);
+
+      // Nothing was written, moved or deleted by the release, and the
+      // conversation comes back from its record exactly as it was.
+      expect(readFileSync(state.path, "utf8")).toBe(bytesBefore);
+      const reopened = await client.request<{ state: SessionState; revision?: string }>("session/load", { path: state.path });
+      expect(reopened.state.path).toBe(state.path);
+      expect(reopened.revision).toBe(before.revision);
+      const entriesAfter = await client.request<{ entries: unknown[]; leafId: string | null }>("pi/session/entries", { path: state.path });
+      expect(entriesAfter.leafId).toBe(entriesBefore.leafId);
+      expect(entriesAfter.entries).toEqual(entriesBefore.entries);
     } finally {
       client.close();
     }

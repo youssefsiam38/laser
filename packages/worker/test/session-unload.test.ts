@@ -11,11 +11,48 @@ import { describe, expect, it } from "vitest";
 import { SESSION_PIN_DETAIL_MAX, SESSION_SAFETY_MAX, sessionPinSchema } from "@lasercode/protocol";
 import type { DriverReleaseReadiness } from "../src/driver.js";
 import { ErrorCodes, LIFETIME_RETRY } from "@lasercode/protocol";
-import type { ClientRequests, ContentBlock, JsonRpcMessage, ModelRef, SessionState, SessionUpdateParams, UiDialogRequest } from "@lasercode/protocol";
+import type { AgentsSnapshot, ClientRequests, ContentBlock, JsonRpcMessage, ModelRef, SessionState, SessionUpdateParams, UiDialogRequest } from "@lasercode/protocol";
 import { WorkerServer } from "../src/server.js";
+import { fallbackSnapshot } from "../src/agents/definitions.js";
+import type { NamerCompletion, NamerContext, NamerModelRuntime } from "../src/agents/namer.js";
 import type { DriverEvent, DriverListener, SessionDriver } from "../src/driver.js";
 
 const PATH = "/tmp/unload/s1.jsonl";
+
+/** The agents snapshot the host sends with, and without, a model Namer may use. */
+function namerSnapshot(model: { provider: string; id: string } | null): AgentsSnapshot {
+  const snapshot = fallbackSnapshot();
+  return { ...snapshot, namer: { ...snapshot.namer, status: model ? "ready" : "unqualified", model } };
+}
+
+/**
+ * A naming model whose completion this test releases by hand, which is how a
+ * real Namer completion in flight is represented without a private field: the
+ * worker is driven entirely through `session/prompt` and `agents/sync`.
+ */
+function gatedNamer() {
+  const waiting: Array<(text: string) => void> = [];
+  return {
+    /** What Namer was actually asked about, one entry per completion. */
+    asked: [] as string[],
+    getModel: (provider: string, id: string) => ({ provider, id }),
+    completeSimple(_model: { provider: string; id: string }, context: NamerContext): Promise<NamerCompletion> {
+      this.asked.push(context.messages.map((message) => message.content).join("\n"));
+      return new Promise<NamerCompletion>((resolve) => {
+        waiting.push((text) => resolve({ content: [{ type: "text", text }] }));
+      });
+    },
+    /** Let the oldest completion still waiting return this title. */
+    answerWith(text: string) {
+      waiting.shift()?.(text);
+    },
+  };
+}
+
+/** Let the floated naming promise reach its next step (it never delays a turn). */
+const settle = async () => {
+  for (let step = 0; step < 4; step += 1) await new Promise<void>((resolve) => setTimeout(resolve, 0));
+};
 
 class FakeDriver implements SessionDriver {
   readonly kind = "stable-sdk" as const;
@@ -71,7 +108,7 @@ class FakeDriver implements SessionDriver {
   async listModels(): Promise<ModelRef[]> { return []; }
   async setModel() { return this.st; }
   async setThinkingLevel() { return this.st; }
-  async rename() {}
+  async rename(name: string) { this.st = { ...this.st, name }; }
   async compact() {}
   async navigateTree() { return { cancelled: false }; }
   async fork() { return { state: this.st }; }
@@ -104,7 +141,7 @@ class FakeDriver implements SessionDriver {
   }
 }
 
-function world() {
+function world(options: { namer?: NamerModelRuntime } = {}) {
   const out: JsonRpcMessage[] = [];
   const drivers: FakeDriver[] = [];
   let pendingOpenGate: Promise<void> | undefined;
@@ -120,6 +157,7 @@ function world() {
       return driver;
     },
     send: (message) => out.push(message),
+    ...(options.namer ? { namerModels: async () => options.namer! } : {}),
     replayBuffer: 50,
   });
   let id = 0;
@@ -243,6 +281,158 @@ describe("pi/session/unload", () => {
     await reading.answered;
     expect(reading.reply()).toHaveProperty("result");
     expect(await w.unload()).toEqual({ unloaded: true, pins: [] });
+  });
+
+  it("releases a session whose first prompt has no naming model to name it", async () => {
+    const namer = gatedNamer();
+    const w = world({ namer });
+    await w.load();
+    // Credential-free: naming is off, so the first prompt's words are parked in
+    // case a model ever appears, and nothing is asked of any model. That intent
+    // cannot be performed by anyone, so it is not a refusal — an untitled
+    // conversation is the smaller loss.
+    expect(await w.call("session/prompt", { path: PATH, content: text("explore the repo") })).toHaveProperty("result");
+    await settle();
+    expect(namer.asked).toEqual([]);
+    expect((await w.safety()).sessions).toEqual([{ path: PATH, pins: [] }]);
+
+    expect(await w.unload()).toEqual({ unloaded: true, pins: [] });
+    expect(w.drivers[0]!.disposed).toBe(true);
+    // Still a release and not a cancellation.
+    expect(w.drivers[0]!.aborts).toBe(0);
+  });
+
+  it("refuses while a parked first prompt is actually being named, and releases once the title lands", async () => {
+    const namer = gatedNamer();
+    const w = world({ namer });
+    await w.load();
+    expect(await w.call("session/prompt", { path: PATH, content: text("explore the repo") })).toHaveProperty("result");
+    await settle();
+    // The host qualifies Namer while the session is idle. The words it parked
+    // go in as a real completion — which is also what proves they were kept.
+    await w.call("agents/sync", { snapshot: namerSnapshot({ provider: "stub", id: "stub-1" }) });
+    await settle();
+    expect(namer.asked.join("\n")).toContain("explore the repo");
+
+    // Now it is work this runtime is the only holder of, and it says so.
+    expect((await w.safety()).sessions[0]!.pins).toEqual([{ kind: "naming", detail: "this session is being named" }]);
+    expect(await w.unload()).toMatchObject({ unloaded: false, pins: [{ kind: "naming" }] });
+    expect(w.drivers[0]!.disposed).toBe(false);
+
+    // It lands on the runtime the refusal kept alive, and then nothing holds
+    // the session: no record of the attempt survives it.
+    namer.answerWith("Explore the repo");
+    await settle();
+    expect(w.drivers[0]!.state().name).toBe("Explore the repo");
+    expect((await w.safety()).sessions).toEqual([{ path: PATH, pins: [] }]);
+    expect(await w.unload()).toEqual({ unloaded: true, pins: [] });
+  });
+
+  it("keeps the pin when the naming model is taken away while its completion is still running", async () => {
+    const namer = gatedNamer();
+    const w = world({ namer });
+    await w.load();
+    await w.call("agents/sync", { snapshot: namerSnapshot({ provider: "stub", id: "stub-1" }) });
+    expect(await w.call("session/prompt", { path: PATH, content: text("explore the repo") })).toHaveProperty("result");
+    await settle();
+    expect(namer.asked.join("\n")).toContain("explore the repo");
+    expect((await w.safety()).sessions[0]!.pins.map((pin) => pin.kind)).toEqual(["naming"]);
+
+    // Namer's model selection is cleared (a person switched naming off, or a
+    // new snapshot arrived without one). The completion already started is
+    // still running against this runtime, so the evidence of it must not be
+    // erased by the setting going away.
+    await w.call("agents/sync", { snapshot: namerSnapshot(null) });
+    expect((await w.safety()).sessions[0]!.pins.map((pin) => pin.kind)).toEqual(["naming"]);
+    expect(await w.unload()).toMatchObject({ unloaded: false, pins: [{ kind: "naming" }] });
+
+    namer.answerWith("Explore the repo");
+    await settle();
+    expect((await w.safety()).sessions).toEqual([{ path: PATH, pins: [] }]);
+    expect(await w.unload()).toEqual({ unloaded: true, pins: [] });
+  });
+
+  it("leaves no naming record behind when the session ends under a running completion", async () => {
+    const namer = gatedNamer();
+    const w = world({ namer });
+    await w.load();
+    await w.call("agents/sync", { snapshot: namerSnapshot({ provider: "stub", id: "stub-1" }) });
+    await w.call("session/prompt", { path: PATH, content: text("explore the repo") });
+    await settle();
+    expect((await w.safety()).sessions[0]!.pins.map((pin) => pin.kind)).toEqual(["naming"]);
+
+    // The engine ends the session under the completion (a crash, a close it
+    // decided itself): the attempt can no longer be finished.
+    w.drivers[0]!.emit({ type: "closed", reason: "disposed" });
+    expect(w.server.openSessions()).toEqual([]);
+    namer.answerWith("Explore the repo");
+    await settle();
+
+    // The same conversation opens again on a new runtime, and the finished
+    // attempt left nothing behind that could pin it.
+    await w.load();
+    expect(w.drivers[1]!.state().name).toBeUndefined();
+    expect((await w.safety()).sessions).toEqual([{ path: PATH, pins: [] }]);
+    expect(await w.unload()).toEqual({ unloaded: true, pins: [] });
+  });
+
+  it("names a session once: a second message during the completion starts no second attempt", async () => {
+    const namer = gatedNamer();
+    const w = world({ namer });
+    await w.load();
+    await w.call("agents/sync", { snapshot: namerSnapshot({ provider: "stub", id: "stub-1" }) });
+    // Two eligible messages on an idle, still unnamed session. The session is
+    // named from its first prompt, so the second does not ask a model the same
+    // question again — one completion, one record, whatever a person types
+    // while it runs.
+    await w.call("session/prompt", { path: PATH, content: text("explore the repo") });
+    await w.call("session/prompt", { path: PATH, content: text("and read the build config") });
+    await settle();
+    expect(namer.asked).toHaveLength(1);
+    expect(namer.asked[0]).toContain("explore the repo");
+    expect((await w.safety()).sessions[0]!.pins).toEqual([{ kind: "naming", detail: "this session is being named" }]);
+    expect(await w.unload()).toMatchObject({ unloaded: false, pins: [{ kind: "naming" }] });
+
+    // The person names it while the completion is still running: theirs wins,
+    // the attempt clears, and nothing asks again afterwards.
+    await w.call("pi/session/rename", { path: PATH, name: "Mine" });
+    namer.answerWith("Explore the repo");
+    await settle();
+    expect(w.drivers[0]!.state().name).toBe("Mine");
+    expect(namer.asked).toHaveLength(1);
+    expect((await w.safety()).sessions).toEqual([{ path: PATH, pins: [] }]);
+    expect(await w.unload()).toEqual({ unloaded: true, pins: [] });
+  });
+
+  it("keeps refusing a session with a parked first prompt while any real guard holds it", async () => {
+    const namer = gatedNamer();
+    const w = world({ namer });
+    await w.load();
+    expect(await w.call("session/prompt", { path: PATH, content: text("explore the repo") })).toHaveProperty("result");
+    await settle();
+    expect(namer.asked).toEqual([]);
+    // Naming is not a pin for a prompt nothing can name, and that weakens none
+    // of the guards exercised here: a turn, a compaction, queued engine work, a
+    // question, an approval, a tray message and a record that cannot be proved
+    // reopenable each still hold this session on their own.
+    w.drivers[0]!.patch({ isStreaming: true });
+    expect((await w.unload()).pins.map((pin) => pin.kind)).toEqual(["streaming"]);
+    w.drivers[0]!.patch({ isStreaming: false, isCompacting: true });
+    expect((await w.unload()).pins.map((pin) => pin.kind)).toEqual(["compacting"]);
+    w.drivers[0]!.patch({ isCompacting: false, pendingMessageCount: 2 });
+    expect((await w.unload()).pins.map((pin) => pin.kind)).toEqual(["queued_work"]);
+    w.drivers[0]!.patch({ pendingMessageCount: 0 });
+    w.drivers[0]!.pending = [{ id: "d1", kind: "confirm", message: "Proceed?" } as UiDialogRequest];
+    expect((await w.unload()).pins.map((pin) => pin.kind)).toEqual(["question"]);
+    w.drivers[0]!.pending = [{ id: "d2", kind: "confirm", message: "Run it?", toolCallId: "call-1" } as UiDialogRequest];
+    expect((await w.unload()).pins.map((pin) => pin.kind)).toEqual(["approval"]);
+    w.drivers[0]!.pending = [];
+    await w.call("session/pending/add", { path: PATH, content: text("do this next") });
+    expect((await w.unload()).pins.map((pin) => pin.kind)).toEqual(["pending_tray"]);
+    await w.call("session/pending/clear", { path: PATH });
+    w.drivers[0]!.readiness = { ok: false, refusal: "no_record" };
+    expect((await w.unload()).pins.map((pin) => pin.kind)).toEqual(["no_record"]);
+    expect(w.drivers[0]!.disposed).toBe(false);
   });
 
   it("reopens the same conversation, with a fresh epoch that forces a resync", async () => {
