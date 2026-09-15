@@ -179,4 +179,3 @@ test('a failing backpressure observation still resumes and closes the stalled cl
     { close: async () => { closed += 1; } }), /Timed out waiting for the slow consumer/);
   assert.deepEqual([resumed, closed], [1, 1]);
 });
-
