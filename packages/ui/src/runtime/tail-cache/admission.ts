@@ -242,7 +242,11 @@ export function parseStoredRow(
   // free-form and is checked here.
   for (const name of ["appVersion", "environmentKey", "sessionId", "capturedAt", "lastUsedAt"] as const) {
     const value = row[name];
-    if (typeof value === "string" && value.includes("/")) return { discard: "invalid" };
+    // Both separators, and a drive letter: a locator is a locator on every
+    // platform, and an opaque id has none of them.
+    if (typeof value === "string" && (value.includes("/") || value.includes("\\") || /^[A-Za-z]:/.test(value))) {
+      return { discard: "invalid" };
+    }
   }
   if (Object.keys(row).length !== 8) return { discard: "invalid" };
 

@@ -144,6 +144,10 @@ export function row(overrides: Partial<TailRow> = {}, payload = payloadOf()): Ta
 }
 
 export interface StoreFaults {
+  /** `put` never settles. */
+  stuckPut?: boolean;
+  /** A row whose metadata is a Windows-style locator. */
+  windowsLocatorRows?: number;
   /** `scan` rejects outright (a store that throws rather than reports). */
   rejectScan?: boolean;
   /** `scan` never settles. */
@@ -207,6 +211,22 @@ export function createTestStore(seed: readonly TailRow[] = [], faults: StoreFaul
         row: value,
         stored: key,
       }));
+      for (let index = 0; index < (store.faults.windowsLocatorRows ?? 0); index += 1) {
+        // A locator is a locator on every platform.
+        all.unshift({
+          key: [ENV_A, `C:\\Users\\someone\\sessions\\${index}.jsonl`],
+          row: {
+            schema: TAIL_RECORD_SCHEMA,
+            appVersion: PRODUCT_VERSION,
+            environmentKey: ENV_A,
+            sessionId: `C:\\Users\\someone\\sessions\\${index}.jsonl`,
+            capturedAt: new Date(1_699_999_000_000).toISOString(),
+            lastUsedAt: new Date(1_699_999_000_000).toISOString(),
+            bytes: 10,
+            body: { kind: "plain", text: "{}" },
+          },
+        });
+      }
       for (let index = 0; index < (store.faults.unaddressableRows ?? 0); index += 1) {
         // No usable primary key at all: nothing can delete this row, which is
         // why a pass that meets one must fail closed.
@@ -243,6 +263,7 @@ export function createTestStore(seed: readonly TailRow[] = [], faults: StoreFaul
     },
 
     put(stored) {
+      if (store.faults.stuckPut) return new Promise<never>(() => {});
       transactions.put += 1;
       puts += 1;
       if (closed || store.faults.refusePut) return Promise.resolve(false);
@@ -294,6 +315,8 @@ export function harness(options: {
   destroy?: () => Promise<"deleted" | "absent" | "blocked" | "failed">;
   appVersion?: string;
   store?: TestStore;
+  /** How long one queued mutation may take. Small, so a stuck port is quick. */
+  budgetMs?: number;
 } = {}): Harness {
   clock.now = BASE_NOW;
   const store = options.store ?? createTestStore(options.rows ?? [], options.faults ?? {}, clock);
@@ -304,6 +327,7 @@ export function harness(options: {
     destroy: options.destroy ?? (() => Promise.resolve("deleted")),
     appVersion: options.appVersion ?? PRODUCT_VERSION,
     now: () => clock.now,
+    ...(options.budgetMs !== undefined ? { budgetMs: options.budgetMs } : {}),
     defer: (task) => tasks.push(task),
   });
   return {

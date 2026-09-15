@@ -44,6 +44,8 @@ export interface HeldRow {
   readonly capturedAt: string;
   readonly epoch: string;
   readonly seq: number;
+  /** RP-9's opaque revision, so a supersession can be fenced by it. */
+  readonly revision: string;
 }
 
 export interface RecencyIndex {
@@ -68,6 +70,8 @@ export interface RecencyIndex {
   touch(sessionId: string, usedAt: number): boolean;
   /** What was last persisted for this session, for a failed touch to restore. */
   persistedAt(sessionId: string): number;
+  /** When this session was last used, for the same reason. */
+  usedAt(sessionId: string): number;
   /**
    * A durable touch did not commit: forget that it was ever persisted.
    *
@@ -75,7 +79,7 @@ export interface RecencyIndex {
    * in-memory use stands — somebody did read it — but the watermark goes back,
    * so the next read tries again instead of believing a write that failed.
    */
-  untouch(sessionId: string, persistedAt: number): void;
+  untouch(sessionId: string, previous: { usedAt: number; persistedAt: number }): void;
   /** Everything past its age, oldest first. */
   expired(now: number, ageMs: number): readonly HeldRow[];
   /**
@@ -133,6 +137,7 @@ export function createRecencyIndex(limits: HotLimits): RecencyIndex {
 
   return {
     persistedAt,
+    usedAt: (sessionId) => held.get(sessionId)?.usedAt ?? 0,
 
     adopt(rows, hot) {
       held.clear();
@@ -154,6 +159,7 @@ export function createRecencyIndex(limits: HotLimits): RecencyIndex {
         capturedAt: record.capturedAt,
         epoch: record.epoch,
         seq: record.seq,
+        revision: record.revision,
       });
       objects.set(record.sessionId, record);
       persisted.set(record.sessionId, usedAt);
@@ -204,12 +210,17 @@ export function createRecencyIndex(limits: HotLimits): RecencyIndex {
       return true;
     },
 
-    untouch(sessionId, persistedAt) {
-      if (!held.has(sessionId)) {
+    untouch(sessionId, previous) {
+      const row = held.get(sessionId);
+      if (!row) {
         persisted.delete(sessionId);
         return;
       }
-      persisted.set(sessionId, persistedAt);
+      // Both halves go back: the watermark **and** the use itself. Leaving the
+      // in-memory recency forward would make eviction treat an unpersisted
+      // time as the record's own, which is the durable claim that failed.
+      held.set(sessionId, { ...row, usedAt: previous.usedAt });
+      persisted.set(sessionId, previous.persistedAt);
     },
 
     expired(now, ageMs) {

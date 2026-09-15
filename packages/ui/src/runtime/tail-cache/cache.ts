@@ -28,6 +28,8 @@ import type { TailRecord } from "./record.js";
 export type { TailCacheState } from "./lifecycle.js";
 
 export interface TailCacheDeps extends LifecycleDeps {
+  /** How long one queued mutation may take, in total (default: the pass budget). */
+  budgetMs?: number | undefined;
   /** Deferred work: a write never runs on the path that released a transcript. */
   defer(task: () => void): void;
 }
@@ -124,8 +126,11 @@ export function createTailCache(deps: TailCacheDeps): TailCache {
       // Recency lives outside the frozen record, so a hit allocates nothing.
       // The watermark is read before the use is marked, so a durable write
       // that does not commit can put it back.
-      const persistedBefore = live.recency.persistedAt(target.sessionId);
-      if (live.recency.touch(target.sessionId, deps.now())) live.mutations.touch(target.sessionId, persistedBefore);
+      const previous = {
+        usedAt: live.recency.usedAt(target.sessionId),
+        persistedAt: live.recency.persistedAt(target.sessionId),
+      };
+      if (live.recency.touch(target.sessionId, deps.now())) live.mutations.touch(target.sessionId, previous);
       return record;
     },
 
@@ -138,8 +143,14 @@ export function createTailCache(deps: TailCacheDeps): TailCache {
     supersede(sessionId, revision) {
       const live = lifecycle.open();
       if (!live) return;
-      const record = live.recency.hot(sessionId);
-      if (record && record.revision !== revision) live.recency.cool(sessionId);
+      const held = live.recency.held(sessionId);
+      if (!held || held.revision === revision) return;
+      // Superseded, so it stops being a candidate **now** — synchronously, off
+      // the paint path — and its row is deleted and proved by the one owner
+      // that deletes anything. The session is not tombstoned for good: a later,
+      // fresh release of the same conversation is accepted as usual.
+      live.recency.forget(sessionId);
+      void live.mutations.supersede(sessionId, held.revision);
     },
 
     async forget(target) {

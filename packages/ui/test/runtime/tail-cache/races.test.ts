@@ -614,3 +614,231 @@ describe("the deletion registry is single-flight", () => {
     expect(cache.state().kind).toBe("open");
   });
 });
+
+describe("no queued operation can hold the queue, and deletion is never starved", () => {
+  /** A stuck port, and a small budget so the give-up is quick. */
+  const stuck = (faults, seeded = [row()]) => harness({ rows: seeded, faults, budgetMs: 20 });
+
+  it("gives up on a seal that never settles, and still completes a forget", async () => {
+    const view = harness({
+      rows: [row()],
+      budgetMs: 20,
+      vault: { ...NULL_VAULT, seal: () => new Promise(() => {}) },
+    });
+    await view.cache.prepare(descriptor());
+    view.cache.release(tail({ sessionId: "stuck-session" }));
+    view.deliver();
+    // The deletion is admitted and answered, not queued behind a stuck write.
+    expect(await view.cache.forget({ sessionId: "session-a" })).toBe(true);
+    await view.flush();
+    expect(view.store.rows.size).toBe(0);
+    expect(peek(view.cache, "stuck-session")).toBeUndefined();
+  });
+
+  it("gives up on a put that never commits, and holds nothing", async () => {
+    const view = stuck({ stuckPut: true });
+    await view.cache.prepare(descriptor());
+    view.cache.release(tail({ sessionId: "never" }));
+    await view.flush();
+    expect(peek(view.cache, "never")).toBeUndefined();
+    expect([...view.store.rows.values()].some((stored) => stored.sessionId === "never")).toBe(false);
+    expect(await view.cache.clear("environment")).toBe(true);
+  });
+
+  it("gives up on a promotion whose scan never settles, and answers a clear", async () => {
+    const store = createTestStore([row()], {});
+    const view = harness({ store, budgetMs: 20 });
+    await view.cache.prepare(descriptor());
+    store.rows.set(`${ENV_A}\u0000cold`, row({ sessionId: "cold" }));
+    store.faults = { ...store.faults, stuckScan: true };
+    const promoting = view.cache.prime(["cold"]);
+    const clearing = view.cache.clear("environment");
+    await Promise.all([promoting, clearing]);
+    expect(peek(view.cache, "cold")).toBeUndefined();
+  });
+
+  it("gives up on a promotion whose decrypt never settles", async () => {
+    const store = createTestStore([row()], {});
+    const view = harness({
+      store,
+      budgetMs: 20,
+      vault: { ...NULL_VAULT, open: () => new Promise(() => {}) },
+    });
+    await view.cache.prepare(descriptor(), 10);
+    store.rows.set(`${ENV_A}\u0000cold`, row({ sessionId: "cold" }));
+    await view.cache.prime(["cold"]);
+    expect(peek(view.cache, "cold")).toBeUndefined();
+  });
+
+  it("gives up on a removal that never settles, and fails closed", async () => {
+    const store = createTestStore([row()], {});
+    const view = harness({ store, budgetMs: 20 });
+    await view.cache.prepare(descriptor());
+    store.faults = { ...store.faults, stuckRemove: true };
+    expect(await view.cache.forget({ sessionId: "session-a" })).toBe(false);
+    expect(view.cache.state()).toMatchObject({ kind: "refused", reason: "purge" });
+  });
+});
+
+describe("control coalescing holds while an operation is running", () => {
+  it("joins a duplicate asked for during the operation instead of queueing another", async () => {
+    const store = createTestStore([row(), row({ sessionId: "other" })], {});
+    let removals = 0;
+    const counting = {
+      ...store,
+      remove: (keys, batch, bounds) => {
+        removals += 1;
+        return store.remove(keys, batch, bounds);
+      },
+    };
+    const view = harness({ store: counting });
+    await view.cache.prepare(descriptor());
+    const first = view.cache.forget({ sessionId: "session-a" });
+    const second = view.cache.forget({ sessionId: "session-a" });
+    const third = view.cache.forget({ sessionId: "session-a" });
+    expect(await Promise.all([first, second, third])).toEqual([true, true, true]);
+    // One deletion for one session, however many times it was asked for.
+    expect(removals).toBe(1);
+    expect(view.cache.counters().queued).toEqual({ writes: 0, touches: 0, control: 0 });
+  });
+
+  it("keeps the control lane inside its bound while an operation is blocked", async () => {
+    const store = createTestStore([row()], {});
+    const view = harness({ store, budgetMs: 40 });
+    await view.cache.prepare(descriptor());
+    store.faults = { ...store.faults, stuckRemove: true };
+    const asks = [];
+    for (let index = 0; index < 50; index += 1) asks.push(view.cache.forget({ sessionId: "session-a" }));
+    for (let index = 0; index < 20; index += 1) asks.push(view.cache.clear("environment"));
+    // One op per identity, whatever the volume: the bound is static.
+    const depth = view.cache.counters().queued!;
+    expect(depth.control).toBeLessThanOrEqual(TAIL_SCAN_LIMITS.warmRecords + 24 + 4);
+    expect(depth.control).toBeLessThanOrEqual(2);
+    await Promise.all(asks);
+  });
+
+  it("gives a promotion asked for mid-pass exactly one follow-up", async () => {
+    const store = createTestStore([row()], {});
+    let scans = 0;
+    const counting = {
+      ...store,
+      scan: (options, visit) => {
+        scans += 1;
+        return store.scan(options, visit);
+      },
+    };
+    const view = harness({ store: counting });
+    await view.cache.prepare(descriptor());
+    const before = scans;
+    store.rows.set(`${ENV_A}\u0000one`, row({ sessionId: "one" }));
+    store.rows.set(`${ENV_A}\u0000two`, row({ sessionId: "two" }));
+    const first = view.cache.prime(["one"]);
+    const second = view.cache.prime(["two"]);
+    await Promise.all([first, second]);
+    await view.flush();
+    // The second ask was not folded into a pass that could not answer for it,
+    // and it did not queue an unbounded chain either.
+    expect(peek(view.cache, "two")).toBeDefined();
+    // One pass, and exactly one bounded follow-up for what it could not answer.
+    expect(scans - before).toBeLessThanOrEqual(2);
+  });
+});
+
+describe("a failed or cancelled touch leaves no durable claim", () => {
+  it("puts the in-memory recency back when the write does not commit", async () => {
+    const older = row({ sessionId: "older", lastUsedAt: new Date(1_699_000_000_000).toISOString() });
+    const store = createTestStore([older, row()], {});
+    const view = harness({ store });
+    await view.cache.prepare(descriptor(ENV_A, { maxSessions: 2 }));
+    // Read the older record with the store refusing writes.
+    view.clock.now += 2 * 60 * 60 * 1000;
+    store.faults = { ...store.faults, refusePut: true };
+    expect(peek(view.cache, "older")).toBeDefined();
+    await view.flush();
+    store.faults = { ...store.faults, refusePut: false };
+
+    // The unpersisted read must not make `older` look like the newest record:
+    // a write now evicts it, exactly as it would have before the failed touch.
+    view.clock.now += 1_000;
+    view.cache.release(tail({ sessionId: "fresh" }));
+    await view.flush();
+    expect([...store.rows.values()].map((stored) => stored.sessionId).sort()).toEqual(["fresh", "session-a"]);
+  });
+
+  it("puts it back when the touch is cancelled by a clear", async () => {
+    const view = harness({ rows: [row()] });
+    await view.cache.prepare(descriptor());
+    view.clock.now += 2 * 60 * 60 * 1000;
+    const before = view.cache.counters().records;
+    expect(peek(view.cache)).toBeDefined();
+    expect(await view.cache.clear("environment")).toBe(true);
+    await view.flush();
+    expect(before).toBe(1);
+    expect(view.cache.counters()).toMatchObject({ records: 0, hotRecords: 0 });
+  });
+});
+
+describe("a Windows locator is refused like any other", () => {
+  it("discards a row whose identity is a drive path", async () => {
+    const view = harness({ rows: [row()], faults: { windowsLocatorRows: 2 } });
+    expect((await view.cache.prepare(descriptor())).kind).toBe("open");
+    expect(view.cache.counters().discarded.invalid).toBe(2);
+    expect([...view.store.rows.values()].map((stored) => stored.sessionId)).toEqual(["session-a"]);
+  });
+});
+
+describe("supersession is a proved deletion, not a hidden object", () => {
+  it("deletes a superseded cold record, and a reload does not find it", async () => {
+    const rows = Array.from({ length: TAIL_SCAN_LIMITS.warmRecords + 2 }, (_, index) => row({
+      sessionId: `session-${index}`,
+      lastUsedAt: new Date(1_699_000_000_000 + index * 1_000).toISOString(),
+    }));
+    rows[0] = row({ sessionId: "cold", lastUsedAt: new Date(1_699_000_000_000).toISOString() }, payloadOf({ revision: REVISION }));
+    const view = harness({ rows });
+    await view.cache.prepare(descriptor());
+    expect(peek(view.cache, "cold")).toBeUndefined();
+
+    view.cache.supersede("cold", REVISION_2);
+    // Out of the candidates synchronously, and out of the store when the
+    // queued deletion has proved itself.
+    expect(view.cache.counters().records).toBe(rows.length - 1);
+    await view.flush();
+    expect([...view.store.rows.values()].some((stored) => stored.sessionId === "cold")).toBe(false);
+
+    const again = harness({ store: view.store });
+    expect((await again.cache.prepare(descriptor())).kind).toBe("open");
+    expect(again.cache.peek({ sessionId: "cold" })).toBeUndefined();
+  });
+
+  it("accepts a later fresh release of the same conversation", async () => {
+    const view = harness({ rows: [row()] });
+    await view.cache.prepare(descriptor());
+    view.cache.supersede("session-a", REVISION_2);
+    await view.flush();
+    expect(view.store.rows.size).toBe(0);
+
+    view.cache.release(tail({ revision: REVISION_2, seq: 20 }));
+    await view.flush();
+    expect(peek(view.cache)).toMatchObject({ revision: REVISION_2 });
+    expect(view.store.rows.size).toBe(1);
+  });
+
+  it("leaves a newer record alone when the superseded revision is not the one held", async () => {
+    const view = harness({ rows: [row({}, payloadOf({ revision: REVISION_2, seq: 40 }))] });
+    await view.cache.prepare(descriptor());
+    // RP-11 supersedes what it painted; a newer record has landed since.
+    view.cache.supersede("session-a", REVISION_2);
+    await view.flush();
+    expect(view.store.rows.size).toBe(1);
+    expect(view.cache.peek({ sessionId: "session-a" })?.revision).toBe(REVISION_2);
+  });
+
+  it("closes the cache when a superseded row cannot be proved gone", async () => {
+    const store = createTestStore([row()], { silentRemove: true });
+    const view = harness({ store });
+    await view.cache.prepare(descriptor());
+    view.cache.supersede("session-a", REVISION_2);
+    await view.flush();
+    expect(view.cache.state()).toMatchObject({ kind: "refused", reason: "purge" });
+  });
+});

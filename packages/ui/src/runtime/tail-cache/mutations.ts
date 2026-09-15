@@ -69,6 +69,12 @@ export interface MutationDeps {
   environmentKey: string;
   appVersion: string;
   now(): number;
+  /**
+   * How long one queued operation may take, in total, including every store
+   * and vault call inside it. A stuck dependency must never be able to hold
+   * the queue — and with it a person's deletion — for ever.
+   */
+  budgetMs?: number | undefined;
   /** The pass this owner belongs to. A dead pass runs nothing. */
   live(): boolean;
   /** A deletion that could not be proved, or storage that gave up. */
@@ -98,9 +104,16 @@ export interface MutationOwner {
    * `persistedBefore` is the watermark to restore if the write does not commit:
    * this device must never claim recency it did not write.
    */
-  touch(sessionId: string, persistedBefore: number): void;
+  touch(sessionId: string, previous: { usedAt: number; persistedAt: number }): void;
   /** Tombstone a session, then delete and prove it. */
   forget(sessionId: string): Promise<boolean>;
+  /**
+   * A record RP-11 replaced is no longer worth keeping: delete it, proved, and
+   * **without** tombstoning the conversation for good — a later, fresh release
+   * of the same session is ordinary work. Fenced by the revision that was
+   * superseded, so a newer record written in the meantime survives.
+   */
+  supersede(sessionId: string, revision: string): Promise<boolean>;
   /** Stop writing, drain what was accepted, then delete this environment. */
   clearEnvironment(): Promise<boolean>;
   /** Remove expired rows, bounded and proved. */
@@ -115,8 +128,9 @@ export interface MutationOwner {
 
 type Op =
   | { kind: "write"; sessionId: string; request: WriteRequest }
-  | { kind: "touch"; sessionId: string; persistedBefore: number }
+  | { kind: "touch"; sessionId: string; previous: { usedAt: number; persistedAt: number } }
   | { kind: "forget"; sessionId: string }
+  | { kind: "supersede"; sessionId: string; revision: string }
   | { kind: "clear" }
   | { kind: "purge" }
   | { kind: "promote" };
@@ -138,9 +152,15 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
    * asks, and nothing is ever dropped or run twice.
    */
   const forgetWaiters = new Map<string, Waiters>();
+  const supersedeWaiters = new Map<string, Waiters>();
   let clearWaiters: Waiters | undefined;
   let purgeWaiters: Waiters | undefined;
   let promoteWaiters: Waiters | undefined;
+  /** The set the queued promotion will read, once it starts. */
+  let promoteRunning: Set<string> | undefined;
+  /** Waiters for the one bounded follow-up, when one is needed. */
+  let promoteNext: Waiters | undefined;
+  let promoteQueued = false;
   let promoteWanted = new Set<string>();
   const tombstoned = new Set<string>();
   const pendingTouch = new Set<string>();
@@ -151,8 +171,34 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
   let idle: Array<() => void> = [];
 
   const key = (sessionId: string): TailKey => [deps.environmentKey, sessionId];
-  const deadline = (): number => deps.now() + TAIL_SCAN_LIMITS.prepareMs;
-  const removeBounds = () => ({ rows: TAIL_SCAN_LIMITS.deleteRows, deadline: deadline() });
+  const budget = (): number => deps.budgetMs ?? TAIL_SCAN_LIMITS.prepareMs;
+  const deadline = (): number => deps.now() + budget();
+  const removeBounds = (until = deadline()) => ({ rows: TAIL_SCAN_LIMITS.deleteRows, deadline: until });
+
+  /**
+   * Await one dependency, or give up on it.
+   *
+   * Every store and vault call in this file goes through here. A `seal` that
+   * never resolves, a `put` that never commits, a `scan` that hangs: any of
+   * them would otherwise hold this queue open and, with it, the deletion a
+   * person asked for. The value is what the call produced, or `fallback` — and
+   * a late answer is ignored, never acted on.
+   */
+  const bounded = async <T>(work: Promise<T>, fallback: T, until: number): Promise<T> => {
+    const remaining = Math.max(0, until - deps.now());
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expiry = new Promise<{ late: true }>((resolve) => {
+      timer = setTimeout(() => resolve({ late: true }), remaining);
+    });
+    try {
+      const answer = await Promise.race([work.then((value) => ({ value })), expiry]);
+      return "value" in answer ? answer.value : fallback;
+    } catch {
+      return fallback;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
 
   const answer = (waiters: Waiters | undefined, ok: boolean): void => {
     for (const settle of waiters?.settle ?? []) settle(ok);
@@ -197,37 +243,69 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
         }
         if (op.kind === "touch") {
           pendingTouch.delete(op.sessionId);
-          if (!deps.live() || nonWriting || tombstoned.has(op.sessionId)) continue;
-          await persistTouch(op.sessionId, op.persistedBefore);
+          if (!deps.live() || nonWriting || tombstoned.has(op.sessionId)) {
+            // Dropped before it could be written: the in-memory recency it
+            // moved goes back with it.
+            deps.recency.untouch(op.sessionId, op.previous);
+            continue;
+          }
+          await persistTouch(op.sessionId, op.previous);
           continue;
         }
         if (op.kind === "forget") {
+          // The registry stays live **through** the operation, so a duplicate
+          // asked for while this runs joins it instead of queueing a second
+          // pass. That is what makes the control lane's bound static rather
+          // than merely usual.
+          const ok = await deleteSessions([op.sessionId]);
           const waiters = forgetWaiters.get(op.sessionId);
           forgetWaiters.delete(op.sessionId);
-          const ok = await deleteSessions([op.sessionId]);
           // The tombstone outlives the deletion only for as long as a write for
           // that session could still be queued behind it.
           releaseTombstone(op.sessionId);
           answer(waiters, ok);
           continue;
         }
+        if (op.kind === "supersede") {
+          const ok = await supersedePass(op.sessionId, op.revision);
+          const waiters = supersedeWaiters.get(op.sessionId);
+          supersedeWaiters.delete(op.sessionId);
+          releaseTombstone(op.sessionId);
+          answer(waiters, ok);
+          continue;
+        }
         if (op.kind === "purge") {
+          const ok = await purge();
           const waiters = purgeWaiters;
           purgeWaiters = undefined;
-          answer(waiters, await purge());
+          answer(waiters, ok);
           continue;
         }
         if (op.kind === "promote") {
+          // A promotion asked for *while* this one runs may want sessions this
+          // pass never looked at, so it gets exactly one bounded follow-up
+          // rather than joining a pass that cannot answer for it.
+          const wanted = promoteRunning ?? new Set<string>();
           const waiters = promoteWaiters;
-          const wanted = promoteWanted;
+          promoteRunning = undefined;
           promoteWaiters = undefined;
-          promoteWanted = new Set();
-          answer(waiters, await promotePass(wanted));
+          const ok = await promotePass(wanted);
+          answer(waiters, ok);
+          promoteQueued = false;
+          if (promoteWanted.size > 0) {
+            promoteQueued = true;
+            promoteRunning = promoteWanted;
+            promoteWanted = new Set();
+            promoteWaiters = promoteNext;
+            promoteNext = undefined;
+            control.push({ kind: "promote" });
+          }
           continue;
         }
+        const cleared = await clearAll();
         const waiters = clearWaiters;
         clearWaiters = undefined;
-        answer(waiters, await clearAll());
+        answer(waiters, cleared);
       }
     } finally {
       writing = false;
@@ -247,7 +325,8 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
     });
     if (!plan.fits) return false;
     if (plan.doomed.length === 0) return true;
-    const removed = await deps.store.remove(plan.doomed.map(key), TAIL_SCAN_LIMITS.batchRows, removeBounds());
+    const until = deadline();
+    const removed = await bounded(deps.store.remove(plan.doomed.map(key), TAIL_SCAN_LIMITS.batchRows, removeBounds(until)), false, until);
     if (!removed) return false;
     for (const sessionId of plan.doomed) deps.recency.forget(sessionId);
     deps.onEvicted(plan.doomed.length);
@@ -258,24 +337,26 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
   async function purge(): Promise<boolean> {
     const gone = deps.recency.expired(deps.now(), deps.bounds.ageMs);
     if (gone.length === 0) return true;
-    const removed = await deps.store.remove(
+    const until = deadline();
+    const removed = await bounded(deps.store.remove(
       gone.map((row) => key(row.sessionId)),
       TAIL_SCAN_LIMITS.batchRows,
-      removeBounds(),
-    );
+      removeBounds(until),
+    ), false, until);
     if (!removed) return false;
     for (const row of gone) deps.recency.forget(row.sessionId);
     return true;
   }
 
   async function commit(request: WriteRequest): Promise<void> {
-    const sealedBody = await deps.vault.seal(request.text, identityAad({
+    const until = deadline();
+    const sealedBody = await bounded(deps.vault.seal(request.text, identityAad({
       schema: TAIL_RECORD_SCHEMA,
       appVersion: deps.appVersion,
       environmentKey: deps.environmentKey,
       sessionId: request.sessionId,
       capturedAt: request.capturedAt,
-    }));
+    })), undefined, until);
     if (!deps.live() || nonWriting || tombstoned.has(request.sessionId)) return;
     if (!sealedBody) {
       // Nothing could be written, so nothing is held: said in the counters
@@ -294,7 +375,7 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
       bytes: request.bytes,
       body: sealedBody,
     };
-    let written = await deps.store.put(row);
+    let written = await bounded(deps.store.put(row, { deadline: until }), false, until);
     if (!written) {
       deps.onWriteRefused();
       // A refused transaction is the storage layer saying it has no room, so
@@ -306,7 +387,7 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
         return;
       }
       if (!deps.live() || nonWriting || tombstoned.has(request.sessionId)) return;
-      written = await deps.store.put(row);
+      written = await bounded(deps.store.put(row, { deadline: until }), false, until);
       if (!written) {
         // Still no room after making some: counted, and nothing is held.
         deps.onWriteRefused();
@@ -323,9 +404,12 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
     if ("discard" in record) {
       // Its own payload does not validate: nothing is held, and the row goes.
       deps.onWriteRefused();
-      if (!(await deps.store.remove([key(request.sessionId)], TAIL_SCAN_LIMITS.batchRows, removeBounds()))) {
-        deps.onFault("purge");
-      }
+      const cleaned = await bounded(
+        deps.store.remove([key(request.sessionId)], TAIL_SCAN_LIMITS.batchRows, removeBounds(until)),
+        false,
+        until,
+      );
+      if (!cleaned) deps.onFault("purge");
       return;
     }
     deps.recency.remember(record, deps.now());
@@ -337,29 +421,35 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
     }
   }
 
-  async function persistTouch(sessionId: string, persistedBefore: number): Promise<void> {
+  async function persistTouch(sessionId: string, previous: { usedAt: number; persistedAt: number }): Promise<void> {
     // Only a row this build fully validated is ever re-persisted: `held` holds
     // nothing else, and a touch for anything absent is simply dropped.
     const held = deps.recency.held(sessionId);
     const hot = deps.recency.hot(sessionId);
     if (!held || !hot) {
-      deps.recency.untouch(sessionId, persistedBefore);
+      deps.recency.untouch(sessionId, previous);
       return;
     }
-    const sealedBody = await deps.vault.seal(textOfHot(hot), identityAad({
+    const until = deadline();
+    const sealedBody = await bounded(deps.vault.seal(textOfHot(hot), identityAad({
       schema: TAIL_RECORD_SCHEMA,
       appVersion: deps.appVersion,
       environmentKey: deps.environmentKey,
       sessionId,
       capturedAt: hot.capturedAt,
-    }));
-    if (!deps.live() || nonWriting || tombstoned.has(sessionId)) return;
+    })), undefined, until);
+    if (!deps.live() || nonWriting || tombstoned.has(sessionId)) {
+      // Cancelled after the in-memory recency had already moved: put it back
+      // rather than leaving an unpersisted time standing as this record's own.
+      deps.recency.untouch(sessionId, previous);
+      return;
+    }
     if (!sealedBody) {
-      deps.recency.untouch(sessionId, persistedBefore);
+      deps.recency.untouch(sessionId, previous);
       deps.onWriteRefused();
       return;
     }
-    const written = await deps.store.put({
+    const written = await bounded(deps.store.put({
       schema: TAIL_RECORD_SCHEMA,
       appVersion: deps.appVersion,
       environmentKey: deps.environmentKey,
@@ -368,12 +458,12 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
       lastUsedAt: new Date(deps.now()).toISOString(),
       bytes: hot.bytes,
       body: sealedBody,
-    });
-    if (written || !deps.live()) return;
+    }, { deadline: until }), false, until);
+    if (written) return;
     // Recency this device claims to have written has to be recency it wrote:
     // the watermark goes back, so the next read tries again instead of
     // believing a transaction that never committed. The use itself stands.
-    deps.recency.untouch(sessionId, persistedBefore);
+    deps.recency.untouch(sessionId, previous);
     deps.onWriteRefused();
   }
 
@@ -382,8 +472,34 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
       deps.onFault("purge");
       return false;
     }
-    const removed = await deps.store.remove(sessionIds.map(key), TAIL_SCAN_LIMITS.batchRows, removeBounds());
+    const until = deadline();
+    const removed = await bounded(deps.store.remove(sessionIds.map(key), TAIL_SCAN_LIMITS.batchRows, removeBounds(until)), false, until);
     for (const sessionId of sessionIds) deps.recency.forget(sessionId);
+    if (!removed) {
+      deps.onFault("purge");
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Delete one superseded record, fenced by the revision it superseded.
+   *
+   * If a newer record for that session has been written since, it is not the
+   * one that was superseded and it stays. The tombstone is transient: it keeps
+   * a write that was queued *before* the supersession from resurrecting the
+   * stale revision, and is released the moment the queue no longer holds one.
+   */
+  async function supersedePass(sessionId: string, revision: string): Promise<boolean> {
+    const held = deps.recency.held(sessionId);
+    if (held && held.revision !== revision) return true;
+    const until = deadline();
+    const removed = await bounded(
+      deps.store.remove([key(sessionId)], TAIL_SCAN_LIMITS.batchRows, removeBounds(until)),
+      false,
+      until,
+    );
+    deps.recency.forget(sessionId);
     if (!removed) {
       deps.onFault("purge");
       return false;
@@ -393,12 +509,13 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
 
   async function clearAll(): Promise<boolean> {
     const doomed: TailKey[] = [];
-    const report = await deps.store.scan(
+    const until = deadline();
+    const report = await bounded(deps.store.scan(
       {
         rows: TAIL_SCAN_LIMITS.scanRows,
         bytes: TAIL_SCAN_LIMITS.scanBytes,
         batch: TAIL_SCAN_LIMITS.batchRows,
-        deadline: deadline(),
+        deadline: until,
       },
       (stored) => {
         const key = stored.key;
@@ -406,7 +523,7 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
           doomed.push([key[0] as string, key[1]]);
         }
       },
-    );
+    ), { outcome: "failed" as const, rowsSeen: 0, bytesSeen: 0 }, until);
     deps.recency.clear();
     // A pass that stopped at a ceiling has seen a prefix of what is here, so
     // deleting what it found would empty part of this device and report it as
@@ -420,7 +537,7 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
       deps.onFault("purge");
       return false;
     }
-    const removed = await deps.store.remove(doomed, TAIL_SCAN_LIMITS.batchRows, removeBounds());
+    const removed = await bounded(deps.store.remove(doomed, TAIL_SCAN_LIMITS.batchRows, removeBounds(until)), false, until);
     if (!removed) {
       deps.onFault("purge");
       return false;
@@ -442,12 +559,13 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
     if (!deps.live() || nonWriting) return false;
     const found: ValidatedRow[] = [];
     const poisoned: TailKey[] = [];
-    const report = await deps.store.scan(
+    const until = deadline();
+    const report = await bounded(deps.store.scan(
       {
         rows: TAIL_SCAN_LIMITS.scanRows,
         bytes: TAIL_SCAN_LIMITS.scanBytes,
         batch: TAIL_SCAN_LIMITS.batchRows,
-        deadline: deadline(),
+        deadline: until,
       },
       (stored) => {
         const parsed = parseStoredRow(stored, { appVersion: deps.appVersion, environmentKey: deps.environmentKey });
@@ -462,7 +580,7 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
         found.push(parsed);
         return found.length < wanted.size;
       },
-    );
+    ), { outcome: "failed" as const, rowsSeen: 0, bytesSeen: 0 }, until);
     if (!deps.live() || nonWriting) return false;
     // A partial pass proves nothing about what is there, so nothing is
     // promoted from one.
@@ -476,7 +594,11 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
         poisoned.push(row.key as TailKey);
         continue;
       }
-      const text = await deps.vault.open(row.body, identityAad({ ...row, schema: row.schema, appVersion: row.appVersion }));
+      const text = await bounded(
+        deps.vault.open(row.body, identityAad({ ...row, schema: row.schema, appVersion: row.appVersion })),
+        undefined,
+        until,
+      );
       if (!deps.live() || nonWriting) return false;
       // Deleted or cleared while this body was decrypting: it is not a record
       // this device holds, and remembering it would resurrect it.
@@ -493,7 +615,7 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
       deps.recency.remember(record, deps.now());
     }
     if (poisoned.length === 0) return true;
-    const removed = await deps.store.remove(poisoned, TAIL_SCAN_LIMITS.batchRows, removeBounds());
+    const removed = await bounded(deps.store.remove(poisoned, TAIL_SCAN_LIMITS.batchRows, removeBounds(until)), false, until);
     if (!deps.live()) return false;
     for (const row of poisoned) deps.recency.forget(row[1]);
     if (!removed) {
@@ -512,14 +634,20 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
       if (sealed || !deps.live() || nonWriting) return Promise.resolve(false);
       const wanted = sessionIds.filter((sessionId) => deps.recency.hot(sessionId) === undefined);
       if (wanted.length === 0) return Promise.resolve(true);
-      for (const sessionId of wanted) promoteWanted.add(sessionId);
       return new Promise<boolean>((resolve) => {
-        if (promoteWaiters) {
-          promoteWaiters.settle.push(resolve);
-        } else {
-          promoteWaiters = { settle: [resolve] };
-          control.push({ kind: "promote" });
+        if (promoteRunning) {
+          // One promotion is queued or running: ask for these sessions in the
+          // single follow-up, which is the only extra op this can ever add.
+          for (const sessionId of wanted) promoteWanted.add(sessionId);
+          if (promoteNext) promoteNext.settle.push(resolve);
+          else promoteNext = { settle: [resolve] };
+          pump();
+          return;
         }
+        promoteRunning = new Set(wanted);
+        promoteWaiters = { settle: [resolve] };
+        promoteQueued = true;
+        control.push({ kind: "promote" });
         pump();
       });
     },
@@ -544,11 +672,14 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
       return true;
     },
 
-    touch(sessionId, persistedBefore) {
-      if (sealed || nonWriting || !deps.live()) return;
+    touch(sessionId, previous) {
+      if (sealed || nonWriting || !deps.live()) {
+        deps.recency.untouch(sessionId, previous);
+        return;
+      }
       if (pendingTouch.has(sessionId) || pendingTouch.size >= QUEUE_LIMITS.touches) return;
       pendingTouch.add(sessionId);
-      work.push({ kind: "touch", sessionId, persistedBefore });
+      work.push({ kind: "touch", sessionId, previous });
       pump();
     },
 
@@ -566,6 +697,24 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
         } else {
           forgetWaiters.set(sessionId, { settle: [resolve] });
           control.push({ kind: "forget", sessionId });
+        }
+        pump();
+      });
+    },
+
+    supersede(sessionId, revision) {
+      if (sealed || !deps.live()) return Promise.resolve(false);
+      // Transient, not permanent: it stops a write queued before this from
+      // bringing the stale revision back, and `releaseTombstone` drops it as
+      // soon as nothing is queued for that session.
+      tombstoned.add(sessionId);
+      return new Promise<boolean>((resolve) => {
+        const waiting = supersedeWaiters.get(sessionId);
+        if (waiting) {
+          waiting.settle.push(resolve);
+        } else {
+          supersedeWaiters.set(sessionId, { settle: [resolve] });
+          control.push({ kind: "supersede", sessionId, revision });
         }
         pump();
       });
@@ -622,13 +771,19 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
       pendingTouch.clear();
       tombstoned.clear();
       promoteWanted = new Set();
+      promoteRunning = undefined;
+      promoteQueued = false;
       // Whoever was waiting on a control op is told, rather than left holding
       // a promise this pass will never settle.
-      const waiting = [...forgetWaiters.values(), clearWaiters, purgeWaiters, promoteWaiters];
+      const waiting = [...forgetWaiters.values(), ...supersedeWaiters.values(), clearWaiters, purgeWaiters, promoteWaiters];
       forgetWaiters.clear();
+      supersedeWaiters.clear();
       clearWaiters = undefined;
       purgeWaiters = undefined;
       promoteWaiters = undefined;
+      const next = promoteNext;
+      promoteNext = undefined;
+      answer(next, false);
       control.length = 0;
       for (const waiters of waiting) answer(waiters, false);
     },

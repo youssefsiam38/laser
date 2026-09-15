@@ -51,6 +51,8 @@ export type TailCacheState =
   | { kind: "refused"; environmentKey?: string | undefined; reason: TailRefusal; stoppedBy?: ScanOutcome | undefined };
 
 export interface LifecycleDeps {
+  /** How long one queued mutation may take, in total (default: the pass budget). */
+  budgetMs?: number | undefined;
   openStore(): Promise<TailStore | undefined>;
   resolveVault(): Promise<TailVault>;
   destroy(): Promise<"deleted" | "absent" | "blocked" | "failed">;
@@ -379,6 +381,7 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
           capturedAt: record.capturedAt,
           epoch: record.epoch,
           seq: record.seq,
+          revision: record.revision,
         });
         if (warm.length < TAIL_SCAN_LIMITS.warmRecords) warm.push(record);
       }
@@ -394,10 +397,13 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
         return refuse("purge", key, mine);
       }
       if (doomed.length > 0) {
+        // The **pass's own** deadline, not a fresh one: vault, open, scan,
+        // every decrypt and this purge share one budget, so preparation cannot
+        // quietly run to twice what it declared.
         const purged = await within(active.remove(doomed, TAIL_SCAN_LIMITS.batchRows, {
           rows: TAIL_SCAN_LIMITS.deleteRows,
-          deadline: deps.now() + TAIL_SCAN_LIMITS.prepareMs,
-        }), mine, deps.now() + TAIL_SCAN_LIMITS.prepareMs);
+          deadline,
+        }), mine, deadline);
         if (mine !== pass || !mine.live) return state;
         if (!purged.ok || !purged.value) {
           stoppedBy = purged.ok ? "failed" : purged.reason === "expired" ? "over-time" : "failed";
@@ -418,6 +424,7 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
         environmentKey: key,
         appVersion: deps.appVersion,
         now: deps.now,
+        ...(deps.budgetMs !== undefined ? { budgetMs: deps.budgetMs } : {}),
         live: () => mine === pass && mine.live,
         onFault: (fault) => onFault(fault, mine, key),
         onWriteRefused: () => {

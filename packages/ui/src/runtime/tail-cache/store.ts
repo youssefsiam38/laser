@@ -92,8 +92,14 @@ export interface TailStore {
    * whose own fields are malformed can still be removed.
    */
   scan(options: ScanOptions, visit: (stored: StoredRow) => boolean | void): Promise<ScanReport>;
-  /** One atomic write. `false` means the transaction did not commit. */
-  put(row: TailRow): Promise<boolean>;
+  /**
+   * One atomic write, bounded. `false` means the transaction did not commit.
+   *
+   * A deadline is not a race the caller can win on its own: a transaction that
+   * is merely abandoned could still commit afterwards, so the store **aborts**
+   * it and then answers `false`. What did not commit stays uncommitted.
+   */
+  put(row: TailRow, bounds?: { deadline?: number | undefined }): Promise<boolean>;
   /**
    * Delete these keys in bounded batches, then prove they are gone.
    *
@@ -122,10 +128,36 @@ export function storedRowBytes(body: SealedBody | undefined): number {
   return bytes + ROW_IDENTITY_ALLOWANCE;
 }
 
-const request = <T>(value: IDBRequest<T>): Promise<T> =>
+/**
+ * One IndexedDB request, bounded.
+ *
+ * Checking the clock between batches is not enough: a single request that never
+ * answers would hold the pass open for ever. Past the deadline the transaction
+ * is aborted and the request rejects, so the caller fails closed rather than
+ * waiting on a database that has stopped answering.
+ */
+const request = <T>(value: IDBRequest<T>, until?: number, now: () => number = () => Date.now()): Promise<T> =>
   new Promise((resolve, reject) => {
-    value.onsuccess = () => resolve(value.result);
-    value.onerror = () => reject(value.error ?? new Error("request failed"));
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (settle: () => void): void => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      settle();
+    };
+    value.onsuccess = () => finish(() => resolve(value.result));
+    value.onerror = () => finish(() => reject(value.error ?? new Error("request failed")));
+    if (until !== undefined) {
+      timer = setTimeout(() => {
+        try {
+          value.transaction?.abort();
+        } catch {
+          // Already finishing.
+        }
+        finish(() => reject(new Error("request outlived its deadline")));
+      }, Math.max(0, until - now()));
+    }
   });
 
 /**
@@ -269,8 +301,8 @@ export async function openTailStore(
         let rows: unknown[];
         try {
           const range = cursorKey === undefined ? null : IDBKeyRange.lowerBound(cursorKey, true);
-          keys = await request(store.getAllKeys(range, options.batch));
-          rows = await request(store.getAll(range, options.batch)) as unknown[];
+          keys = await request(store.getAllKeys(range, options.batch), options.deadline, now);
+          rows = await request(store.getAll(range, options.batch), options.deadline, now) as unknown[];
         } catch {
           return { ...report, outcome: "failed" };
         }
@@ -290,18 +322,38 @@ export async function openTailStore(
       }
     },
 
-    put(row) {
+    put(row, bounds) {
       const store = transaction("readwrite");
       if (!store) return Promise.resolve(false);
       return new Promise((resolve) => {
         const owner = store.transaction;
-        owner.oncomplete = () => resolve(true);
-        owner.onerror = () => resolve(false);
-        owner.onabort = () => resolve(false);
+        let settled = false;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const settle = (committed: boolean): void => {
+          if (settled) return;
+          settled = true;
+          if (timer) clearTimeout(timer);
+          resolve(committed);
+        };
+        owner.oncomplete = () => settle(true);
+        owner.onerror = () => settle(false);
+        owner.onabort = () => settle(false);
+        if (bounds?.deadline !== undefined) {
+          // Aborted, not abandoned: a transaction left running could commit
+          // after the caller had been told it did not.
+          timer = setTimeout(() => {
+            try {
+              owner.abort();
+            } catch {
+              // Already finishing; the handlers above answer.
+            }
+            settle(false);
+          }, Math.max(0, bounds.deadline - now()));
+        }
         try {
           store.put(row);
         } catch {
-          resolve(false);
+          settle(false);
         }
       });
     },
@@ -319,13 +371,31 @@ export async function openTailStore(
         if (!store) return false;
         const committed = await new Promise<boolean>((resolve) => {
           const owner = store.transaction;
-          owner.oncomplete = () => resolve(true);
-          owner.onerror = () => resolve(false);
-          owner.onabort = () => resolve(false);
+          let settled = false;
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const settle = (value: boolean): void => {
+            if (settled) return;
+            settled = true;
+            if (timer) clearTimeout(timer);
+            resolve(value);
+          };
+          owner.oncomplete = () => settle(true);
+          owner.onerror = () => settle(false);
+          owner.onabort = () => settle(false);
+          if (limits?.deadline !== undefined) {
+            timer = setTimeout(() => {
+              try {
+                owner.abort();
+              } catch {
+                // Already finishing.
+              }
+              settle(false);
+            }, Math.max(0, limits.deadline - now()));
+          }
           try {
             for (const key of slice) store.delete(key as unknown as IDBValidKey);
           } catch {
-            resolve(false);
+            settle(false);
           }
         });
         if (!committed) return false;
@@ -339,7 +409,7 @@ export async function openTailStore(
         if (!store) return false;
         try {
           for (const key of keys.slice(index, index + batch)) {
-            const found = await request(store.getKey(key as unknown as IDBValidKey));
+            const found = await request(store.getKey(key as unknown as IDBValidKey), limits?.deadline, now);
             if (found !== undefined) return false;
           }
         } catch {
