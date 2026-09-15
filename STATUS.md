@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-15T14:15:41+03:00 · orchestrator `01a0a030` · HEAD: 5a2fe5a9
-**Current focus:** M18 RP-10 is implementing its independent-review correction batch; RP-5b, pressure policy, immediate reconciliation, the unchanged full baseline and shell gate follow in dependency order.
+**Last updated:** 2026-09-15T16:56:00+03:00 · orchestrator `01a0a030` · HEAD: c7375791
+**Current focus:** M18 RP-5b is implementing hard per-view hydration/render bounds over the integrated device-cache seam; pressure policy and immediate reconciliation follow.
 
 | Milestone | State |
 | --- | --- |
@@ -27,8 +27,8 @@
 | M18 Resource containment | in-progress |
 | MX Cross-cutting | in-progress |
 
-**Blockers:** none. RP-2’s pre-containment full A safely refused B at the fixed renderer ceiling; the reviewed unchanged quick now passes all nine scenarios with zero survivors.
-**Next up:** integrate T10; implement RP-5b and T8; implement T11; close T3; run unchanged full A/B; execute RP-14.
-**Recently done:** M18-T17 naming-pin correction (`890e6a86`; worker 45 + host E2E 4 + host 636); T15 harness readiness (`cec6c07a`, `2430622b`; browser-check 96 + nine-scenario quick); M18-T7 transport pressure (`0542a58e`); T3 counter checkpoint (`4ba58bd4`); M18-T5 renderer lifetime (`4f34a614`).
+**Blockers:** none. RP-2’s pre-containment full A safely refused B at the fixed renderer ceiling; the reviewed unchanged quick passes all nine scenarios with zero survivors.
+**Next up:** implement RP-5b; implement RP-8; implement RP-11; close RP-3; run unchanged full A/B; execute RP-14.
+**Recently done:** M18-T10 device tail cache (`c7375791`; exact-tip cache 113 + readiness 18 + UI types/build); T17 naming-pin correction (`890e6a86`); T15 harness readiness (`cec6c07a`, `2430622b`); T7 transport pressure (`0542a58e`); T3 counter checkpoint (`4ba58bd4`).
 
 Ownership and evidence: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`.

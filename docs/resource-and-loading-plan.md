@@ -17,12 +17,12 @@ Authoritative detail, evidence and ownership live in `STATUS_DETAILED.md`; `STAT
 | RP-4 | M18-T4 | done — worker-owned atomic release/retirement, fair LRU unload and hard replay floors integrated at `eb18e147`; exact-head convergence verified | RP-2 |
 | RP-4b | M18-T17 | done — bounded token-safe naming lifecycle integrated at `890e6a86`; no-model parked intents retire while actual naming pins; focused worker 45, real-host E2E 4 and host 636 pass | RP-4 |
 | RP-5 | M18-T5 | done — byte/count-bounded unpinned hydrated views, light identities, complete pins, exact revision-fenced tail handoff and incremental counters integrated at `4f34a614` | RP-2 |
-| RP-5b | M18-T16 | todo — no-snapshot full evidence proves one pinned/current message bypasses the per-view bound; hard-bound render excerpts and canonical range reads are being specified | RP-5, RP-10 |
+| RP-5b | M18-T16 | in progress — accepted implementation plan hard-bounds every hydrated view and adds revision-fenced authoritative range reads over the integrated device-cache seam | RP-5, RP-10 |
 | RP-6 | M18-T6 | done — integrated `a256efe`; reviewed membership, task/log retention and cleanup/security gates | RP-2 |
 | RP-7 | M18-T7 | done — integrated `0542a58e`; reviewed bounded decoder/provider/body-store/direct+relay pressure, privacy/browser and unchanged-workload footprint gates pass | RP-2 |
 | RP-8 | M18-T8 | in progress — integrated-base threshold calibration complete with unchanged provisional values; source waits RP-10 schema handoff and pinned-view audit | RP-4, RP-5 |
 | RP-9 | M18-T9 | done — integrated `dd637f3` | protocol integration follows RP-1 |
-| RP-10 | M18-T10 | in progress — implementation is under one reviewed correction batch for serialized deletion/readiness, full-row validation, exact age/LRU/privacy, authority decomposition and complete browser/resource evidence | RP-5, RP-9 |
+| RP-10 | M18-T10 | done — reviewed bounded device tail cache integrated at `c7375791`; parent exact-tip cache 113 + readiness 18, UI types/build, lifecycle/race browser matrices and same-workload memory evidence pass | RP-5, RP-9 |
 | RP-11 | M18-T11 | todo | RP-10 |
 | RP-12 | M18-T12 | done — integrated `e9e3d8d` | RP-9 |
 | RP-13 | M18-T13 | done — host policy/storage isolation through `1e4eeba`; reviewed real-host browser matrices `a0111f9` | RP-12 |
