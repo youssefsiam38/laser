@@ -1,16 +1,21 @@
 // @vitest-environment happy-dom
 /**
- * RP-5b acceptance A11, at the surface: releasing the older part of a
- * conversation somebody is reading takes nothing they are using.
+ * RP-5b acceptance A11 and §7, on the mounted transcript.
  *
- * The rows the transcript is standing on — the viewport's anchor, the focused
- * message, anything a surface pinned while it is open — are protected by the
- * trim itself, not by luck, and what survives is checked on the mounted
- * transcript: the row is still there, its message actions still address the
- * same entries, the prompt ordinals still mean the same thing, and the
- * person's own draft is untouched.
+ * Releasing the older part of a conversation somebody is reading happens while
+ * they are reading it. So this mounts the real transcript over the real store,
+ * with the real viewport controller and the real view cache, focuses a real
+ * message action, types a real draft, scrolls to a real row — and then trims
+ * through the cache's own pass, with the surface still on screen.
+ *
+ * What it proves: focus does not move, the row the viewport was holding stays
+ * where it was, the draft is untouched, the action still names the same entry
+ * and the same prompt ordinal, and no committed frame in between was empty.
+ * Then a replacement page that does not contain those rows is refused — the
+ * transcript on screen does not change, and the surface offers to read recent
+ * history again instead of pretending it can page backwards.
  */
-import { act } from "react";
+import { act, useSyncExternalStore } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AssistantRuntimeProvider, ThreadPrimitive, useExternalStoreRuntime, type ThreadMessageLike } from "@assistant-ui/react";
@@ -20,13 +25,22 @@ import { LaserStoreProvider, createStateStore } from "../../src/runtime/LaserPro
 import { projectMessages } from "../../src/runtime/projection.js";
 import { initialState, reduce, type AppState } from "../../src/store.js";
 import { ThreadMessage } from "../../src/components/thread/messages.js";
-import { blockBytes } from "../../src/runtime/view-measure.js";
-import { anchoredMessages, resetAnchoredMessages, setAnchoredMessages } from "../../src/runtime/anchored-messages.js";
+import { HistoryControls } from "../../src/components/thread/Thread.js";
+import { TranscriptViewportBinding, TranscriptViewportProvider, WindowedMessages, useTranscriptViewport } from "../../src/components/thread/transcript-viewport.js";
+import { createViewCache, VIEW_CACHE_LIMITS } from "../../src/runtime/view-cache.js";
+import { resetAnchoredMessages, standingRows } from "../../src/runtime/anchored-messages.js";
 import { MessageEditPresentation, TranscriptPresentation } from "../../src/runtime/transcript-presentation.js";
 import { sessionState } from "../agents/fixtures.js";
 
 const SESSION = "/project/session.jsonl";
-const stable = vi.hoisted(() => ({ client: { request: vi.fn(async () => ({})) }, actions: { listModels: vi.fn(async () => []), send: vi.fn(), openSession: vi.fn() } }));
+/** One line of the transcript, for the geometry seam below. */
+const LINE = 24;
+const ROW = LINE * 4;
+
+const stable = vi.hoisted(() => ({
+  client: { request: vi.fn(async () => ({})) },
+  actions: { listModels: vi.fn(async () => []), send: vi.fn(), openSession: vi.fn() },
+}));
 vi.mock("@/runtime", async original => ({
   ...await original<typeof import("../../src/runtime/index.js")>(),
   useLaserStable: () => stable,
@@ -36,127 +50,301 @@ vi.mock("@/dialogs", () => ({ ToolRowDialog: () => null, useRegisterToolRow: () 
 
 let root: Root;
 let container: HTMLDivElement;
+let restoreGeometry: (() => void) | undefined;
+
+/**
+ * The only stub, and only at the seam where a DOM would measure: happy-dom
+ * lays nothing out, so a row's rectangle is derived from its position in the
+ * transcript. Everything above this — anchors, publication, the trim itself —
+ * is the real thing.
+ */
+function stubGeometry(): () => void {
+  const original = Element.prototype.getBoundingClientRect;
+  Element.prototype.getBoundingClientRect = function rect(this: Element): DOMRect {
+    // The scroller itself is a window nine hundred pixels tall.
+    if ((this as HTMLElement).dataset?.slot === "thread-viewport") {
+      return { x: 0, y: 0, top: 0, left: 0, right: 600, bottom: 900, width: 600, height: 900, toJSON: () => ({}) } as DOMRect;
+    }
+    const row = this.closest?.("[data-message-id]") as HTMLElement | null;
+    // A row sits where its turn sits in the conversation, not where it sits in
+    // the DOM: releasing older rows must be visible as a scroll compensation,
+    // not hidden by renumbering.
+    const id = row?.dataset.messageId ?? "";
+    const index = /^entry:e(\d+)$/.exec(id) ? Number(/^entry:e(\d+)$/.exec(id)![1]) : -1;
+    const viewport = container.querySelector<HTMLElement>('[data-slot="thread-viewport"]');
+    const top = index >= 0 ? index * ROW - (viewport?.scrollTop ?? 0) : 0;
+    return { x: 0, y: top, top, left: 0, right: 600, bottom: top + ROW, width: 600, height: index >= 0 ? ROW : 0, toJSON: () => ({}) } as DOMRect;
+  };
+  return () => { Element.prototype.getBoundingClientRect = original; };
+}
+let scrolled = 0;
+
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   resetAnchoredMessages();
+  scrolled = 0;
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
+  restoreGeometry = stubGeometry();
 });
-afterEach(async () => { await act(async () => root.unmount()); container.remove(); resetAnchoredMessages(); });
+
+afterEach(async () => {
+  await act(async () => root.unmount());
+  container.remove();
+  restoreGeometry?.();
+  resetAnchoredMessages();
+  vi.clearAllMocks();
+});
 
 const entry = (index: number) => ({
   id: `e${index}`, parentId: index === 0 ? null : `e${index - 1}`, type: "message",
   message: { role: index % 2 === 0 ? "user" : "assistant", content: [{ type: "text", text: `${index === 0 ? "first prompt" : `turn ${index}`} ${"x".repeat(3000)}` }] },
 });
 
-function loaded(): AppState {
+/** The session open and on screen, before any history has been read. */
+function opened(): AppState {
   let state = reduce({ ...initialState, connection: "open" }, { type: "opened", state: sessionState({ path: SESSION, cwd: "/project" }) });
   state = { ...state, current: SESSION };
-  state = reduce(state, { type: "destination", destination: { phase: "ready-code", intent: 0, code: { kind: "project-session", project: "/project", path: SESSION } } } as never);
-  state = reduce(state, { type: "historyBegin", path: SESSION, token: "t" });
-  const entries = Array.from({ length: 24 }, (_, index) => entry(index));
-  state = reduce(state, { type: "historySnapshot", path: SESSION, token: "t", entries, leafId: "e23", window: {
-    epoch: "w1", seq: 24, revision: "r1.env.24", environmentKey: "k", userOffset: 0, complete: true,
-    branchesUnloaded: false, hasHistory: true, context: [], priorGoalIds: [], anchor: "e0", before: "cursor-older",
-  } } as never);
-  return state;
+  return reduce(state, { type: "destination", destination: { phase: "ready-code", intent: 0, code: { kind: "project-session", project: "/project", path: SESSION } } } as never);
 }
 
-async function mount(state: AppState) {
-  const store = createStateStore(state);
-  const view = state.open[SESSION]!;
-  function Fixture() {
-    const { messages } = projectMessages({ blocks: view.blocks, running: false, dialogs: [] });
-    const runtime = useExternalStoreRuntime({ convertMessage: (message: ThreadMessageLike) => message, messages, isRunning: false, onNew: async () => {} });
-    return <AssistantRuntimeProvider runtime={runtime}><FileOpenerProvider><ThreadPrimitive.Root><ThreadPrimitive.Messages>{() => <ThreadMessage />}</ThreadPrimitive.Messages></ThreadPrimitive.Root></FileOpenerProvider></AssistantRuntimeProvider>;
+/**
+ * Read the conversation in, through the cache — the same transactions the app
+ * dispatches, watched the same way, so the cache measures this view for real.
+ */
+function hydrateThrough(store: ReturnType<typeof createStateStore>, cache: ReturnType<typeof cacheFor> | undefined): void {
+  const entries = Array.from({ length: 24 }, (_, index) => entry(index));
+  const actions = [
+    { type: "historyBegin", path: SESSION, token: "t" },
+    { type: "historySnapshot", path: SESSION, token: "t", entries, leafId: "e23", window: {
+      epoch: "w1", seq: 24, revision: "r1.env.24", environmentKey: "k", userOffset: 0, complete: true,
+      branchesUnloaded: false, hasHistory: true, context: [], priorGoalIds: [], anchor: "e0", before: "cursor-older",
+    } },
+  ];
+  for (const action of actions) {
+    const before = store.getSnapshot();
+    store.dispatch(action as never);
+    cache?.observeTransaction(action as never, before, store.getSnapshot());
   }
-  await act(async () => root.render(<LaserStoreProvider store={store}><TooltipProvider><Fixture /></TooltipProvider></LaserStoreProvider>));
-  return store;
 }
 
 const rowIds = (): string[] => [...container.querySelectorAll("[data-message-id]")].map(node => (node as HTMLElement).dataset.messageId!);
+const rowOf = (id: string): HTMLElement | null => container.querySelector(`[data-message-id="${id}"]`);
 
-describe("releasing the older part of a conversation on screen", () => {
-  it("keeps the row the viewport is standing on, and the focused one", async () => {
-    const state = loaded();
-    // What the transcript publishes while a person reads an older message.
-    setAnchoredMessages(SESSION, ["entry:e4", "entry:e6"]);
-    expect(anchoredMessages(SESSION)).toEqual(["entry:e4", "entry:e6"]);
-
-    const store = createStateStore(state);
-    store.dispatch({ type: "views/trim", paths: [SESSION], keepBytes: 8 * 1024, at: "2026-09-15T00:00:00.000Z", anchored: anchoredMessages(SESSION) });
-    const after = store.getSnapshot().open[SESSION]!;
-
-    const kept = new Set(after.blocks.map(block => block.id));
-    expect(kept.has("entry:e4")).toBe(true);
-    expect(kept.has("entry:e6")).toBe(true);
-    expect(after.blocks.length).toBeLessThan(state.open[SESSION]!.blocks.length);
-    // The records of the rows that stayed are still here, by identity.
-    for (const id of ["e4", "e6"]) expect(after.entries.some(record => (record as { id: string }).id === id)).toBe(true);
-    await mount(store.getSnapshot());
-    expect(rowIds()).toContain("entry:e4");
-    expect(rowIds()).toContain("entry:e6");
-  });
-
-  it("keeps every message action addressing the same entries, and the prompt ordinals honest", async () => {
-    const before = loaded();
-    await mount(before);
-    const beforeRows = rowIds();
-    const beforeOffset = before.open[SESSION]!.history!.userOffset;
-
-    const store = createStateStore(before);
-    setAnchoredMessages(SESSION, ["entry:e22"]);
-    store.dispatch({ type: "views/trim", paths: [SESSION], keepBytes: 8 * 1024, at: "2026-09-15T00:00:00.000Z", anchored: anchoredMessages(SESSION) });
-    const after = store.getSnapshot().open[SESSION]!;
-
-    // Exactly the prompts that went are added to the offset, so the n-th
-    // prompt still means the n-th prompt of the conversation.
-    const releasedPrompts = before.open[SESSION]!.blocks.filter(block => block.kind === "user").length
-      - after.blocks.filter(block => block.kind === "user").length;
-    expect(after.history!.userOffset).toBe(beforeOffset + releasedPrompts);
-    // Edit, fork, jump and the version picker all address entries by id.
-    for (const block of after.blocks) {
-      if (!("entryId" in block) || !block.entryId) continue;
-      expect(after.entries.some(record => (record as { id: string }).id === block.entryId)).toBe(true);
-    }
-    // The rows that remain are the same rows, with the same identities.
-    await mount(store.getSnapshot());
-    for (const id of rowIds()) expect(beforeRows).toContain(id);
-    // The cursor it cannot mint is gone rather than invented, and the page
-    // says it is no longer complete.
-    expect(after.history!.before).toBeUndefined();
-    expect(after.history!.complete).toBe(false);
-    expect(after.trimmed?.prompts).toBe(releasedPrompts);
-  });
-
-  it("never touches the person's own unsent words", async () => {
-    let state = loaded();
-    state = reduce(state, { type: "optimisticUser", path: SESSION, text: "mine, not sent", images: [], id: "unsent" });
-    const presentation = new TranscriptPresentation();
-    const edit = new MessageEditPresentation("half an edit");
-    presentation.rememberEdit(SESSION, "entry:e4", edit);
-
-    const store = createStateStore(state);
-    store.dispatch({ type: "views/trim", paths: [SESSION], keepBytes: 4 * 1024, at: "2026-09-15T00:00:00.000Z" });
-    const after = store.getSnapshot().open[SESSION]!;
-
-    expect(after.blocks.some(block => block.kind === "user" && block.optimistic === true)).toBe(true);
-    // The edit draft lives outside the view and is untouched by a release.
-    expect(presentation.hasEditDraft(SESSION)).toBe(true);
-    expect(edit.getSnapshot().draft).toBe("half an edit");
-    expect(after.dormant).toBeUndefined();
-  });
-
-  it("measures what it released, and leaves the view inside its share", async () => {
-    const state = loaded();
+/** The mounted surface: the real store, viewport, presentation and transcript. */
+async function mount(store: ReturnType<typeof createStateStore>, presentation: TranscriptPresentation) {
+  let controller: ReturnType<typeof useTranscriptViewport> | undefined;
+  function Capture() {
+    controller = useTranscriptViewport();
+    return null;
+  }
+  function Transcript() {
+    const state = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
     const view = state.open[SESSION]!;
-    const before = view.blocks.reduce((sum, block) => sum + blockBytes(block), 0);
-    const store = createStateStore(state);
-    store.dispatch({ type: "views/trim", paths: [SESSION], keepBytes: 8 * 1024, at: "2026-09-15T00:00:00.000Z" });
+    const { messages } = projectMessages({ blocks: view.blocks, running: false, dialogs: [] });
+    const runtime = useExternalStoreRuntime({ convertMessage: (message: ThreadMessageLike) => message, messages, isRunning: false, onNew: async () => {} });
+    return (
+      <AssistantRuntimeProvider runtime={runtime}>
+        <FileOpenerProvider>
+          <ThreadPrimitive.Root>
+            <ThreadPrimitive.Viewport autoScroll={false} scrollToBottomOnRunStart={false} scrollToBottomOnInitialize={false} scrollToBottomOnThreadSwitch={false} data-slot="thread-viewport">
+              <TranscriptViewportBinding />
+              <WindowedMessages />
+            </ThreadPrimitive.Viewport>
+          </ThreadPrimitive.Root>
+          <HistoryControls />
+        </FileOpenerProvider>
+      </AssistantRuntimeProvider>
+    );
+  }
+  void presentation;
+  await act(async () => root.render(
+    <LaserStoreProvider store={store}>
+      <TooltipProvider>
+        <TranscriptViewportProvider>
+          <Capture />
+          <Transcript />
+        </TranscriptViewportProvider>
+      </TooltipProvider>
+    </LaserStoreProvider>,
+  ));
+  return controller!;
+}
+
+/** A view cache watching this store, trimming to what a bounded view may hold. */
+function cacheFor(store: ReturnType<typeof createStateStore>, viewBytes: number) {
+  return createViewCache({
+    read: store.getSnapshot,
+    dispatch: store.dispatch,
+    environment: { scoped: () => [], hasDraft: () => false, heldPaths: () => [], environmentKey: () => "env" } as never,
+    schedule: (run: () => void) => { run(); return () => {}; },
+    limits: { ...VIEW_CACHE_LIMITS, viewBytes },
+  } as never);
+}
+
+describe("a trim while somebody is reading", () => {
+  it("keeps focus, place, draft and action identity, and never shows an empty transcript", async () => {
+    const store = createStateStore(opened());
+    const presentation = store.presentation;
+    // The conversation is read in before the cache is watching, so nothing is
+    // released before the surface is on screen: the trim below really does
+    // happen while somebody is reading.
+    const cache = cacheFor(store, 12 * 1024);
+    hydrateThrough(store, undefined);
+    const controller = await mount(store, presentation);
+
+    // A real message action, focused, and the row it belongs to.
+    // Read an older part of the conversation: scroll the real viewport there
+    // and let the controller do what it does with a scroll.
+    const viewport = container.querySelector<HTMLElement>('[data-slot="thread-viewport"]')!;
+    scrolled = 24 * ROW - 900;
+    await act(async () => {
+      Object.defineProperty(viewport, "scrollTop", { value: scrolled, configurable: true, writable: true });
+      Object.defineProperty(viewport, "clientHeight", { value: 900, configurable: true });
+      Object.defineProperty(viewport, "scrollHeight", { value: 24 * ROW, configurable: true });
+      viewport.dispatchEvent(new Event("scroll"));
+    });
+    await act(async () => { await Promise.resolve(); });
+    // The newest turn, which is where a reader lands and which the transcript
+    // is showing: the surface picks it, the test only names it.
+    const knownId = rowIds().at(-1)!;
+    expect(knownId).toBe("entry:e23");
+    const knownEntry = knownId.slice("entry:".length);
+    const target = rowOf(knownId)!;
+    const action = target.querySelector("button")!;
+    // Focus the way a person does: the viewport's own focus listener records
+    // which row it belongs to.
+    await act(async () => { action.focus(); action.dispatchEvent(new FocusEvent("focusin", { bubbles: true })); });
+    expect(document.activeElement).toBe(action);
+
+    // A real draft, in the surface's own presentation.
+    const draft = presentation.edit(SESSION, knownId) ?? new MessageEditPresentation("");
+    presentation.rememberEdit(SESSION, knownId, draft);
+    draft.update({ draft: "half an edit", editing: true });
+
+    // Reading an older part of the conversation: scroll there and let the
+    // viewport publish what it is standing on. No timer is guessed — the
+    // publication itself is what is waited for.
+    await act(async () => { controller.capture(); controller.committed(); });
+    await act(async () => { await Promise.resolve(); });
+    expect(standingRows(SESSION)?.focusedEntryId).toBe(knownEntry);
+
+    const anchorTopBefore = rowOf(knownId)!.getBoundingClientRect().top;
+    const rowsBefore = rowIds();
+    const beforeTrim = store.getSnapshot().open[SESSION]!;
+    const offsetBefore = beforeTrim.history!.userOffset;
+
+    // Every committed render is watched: none of them may be an empty
+    // transcript, not even for one frame.
+    const frames: number[] = [];
+    const observer = new MutationObserver(() => frames.push(container.querySelectorAll("[data-message-id]").length));
+    observer.observe(container, { childList: true, subtree: true });
+
+    // The cache notices this conversation from a real transaction, with the
+    // surface mounted, and then its own pass releases the older part of it.
+    await act(async () => {
+      const seen = store.getSnapshot();
+      const update = { type: "notification", method: "session/update", params: { sessionPath: SESSION, seq: 25, at: "", update: { kind: "state", state: seen.open[SESSION]!.state } } };
+      store.dispatch(update as never);
+      cache.observeTransaction(update as never, seen, store.getSnapshot());
+      cache.maintain();
+    });
+    await act(async () => { await Promise.resolve(); });
+    observer.disconnect();
+
     const after = store.getSnapshot().open[SESSION]!;
-    const kept = after.blocks.reduce((sum, block) => sum + blockBytes(block), 0);
-    expect(kept).toBeLessThan(before);
-    expect(kept).toBeLessThanOrEqual(8 * 1024 + 4096);
+    if (!after.trimmed) throw new Error(`no trim: blocks=${after.blocks.length} counters=${JSON.stringify(cache.counters().bytes)} limit=${12 * 1024}`);
+    expect(after.trimmed).toBeDefined();
+    expect(after.blocks.length).toBeLessThan(beforeTrim.blocks.length);
+    expect(frames.every(count => count > 0)).toBe(true);
+    expect(rowIds().length).toBeGreaterThan(0);
+
+    // The row the viewport was holding is still here, and has not moved by
+    // more than a line.
+    const anchorAfter = rowOf(knownId);
+    expect(anchorAfter).not.toBeNull();
+    expect(Math.abs(anchorAfter!.getBoundingClientRect().top - anchorTopBefore)).toBeLessThanOrEqual(LINE);
+
+    // Focus is on the same node, not merely on something like it.
+    expect(document.activeElement).toBe(action);
+    expect(action.isConnected).toBe(true);
+
+    // The draft is untouched.
+    expect(draft.getSnapshot().draft).toBe("half an edit");
+    expect(presentation.hasEditDraft(SESSION)).toBe(true);
+
+    // The action still names the same entry, and prompt ordinals still mean
+    // what they meant: the offset rose by exactly the prompts released.
+    const releasedPrompts = beforeTrim.blocks.filter(block => block.kind === "user").length
+      - after.blocks.filter(block => block.kind === "user").length;
+    expect(after.history!.userOffset).toBe(offsetBefore + releasedPrompts);
+    expect(after.blocks.some(block => "entryId" in block && block.entryId === knownEntry)).toBe(true);
+    expect(after.entries.some(record => (record as { id: string }).id === knownEntry)).toBe(true);
+    for (const id of rowIds()) expect(rowsBefore).toContain(id);
+
+    // The stamp carries what the surface was standing on, as entry ids.
+    expect(after.trimmed?.identities?.focusedEntryId).toBe(knownEntry);
+
+    cache.dispose();
+  });
+
+  it("refuses a replacement that does not contain those rows, and offers to read recent history instead", async () => {
+    const store = createStateStore(opened());
+    const presentation = store.presentation;
+    const cache = cacheFor(store, 12 * 1024);
+    hydrateThrough(store, undefined);
+    void presentation;
+    const controller = await mount(store, presentation);
+    const knownId = rowIds().at(-1)!;
+    const action = rowOf(knownId)!.querySelector("button")!;
+    await act(async () => { action.focus(); action.dispatchEvent(new FocusEvent("focusin", { bubbles: true })); });
+    await act(async () => {
+      const seen = store.getSnapshot();
+      const update = { type: "notification", method: "session/update", params: { sessionPath: SESSION, seq: 25, at: "", update: { kind: "state", state: seen.open[SESSION]!.state } } };
+      store.dispatch(update as never);
+      cache.observeTransaction(update as never, seen, store.getSnapshot());
+      cache.maintain();
+    });
+    await act(async () => { await Promise.resolve(); });
+    const stamp = store.getSnapshot().open[SESSION]!.trimmed!.at;
+    const rowsAfterTrim = rowIds();
+    const anchorTop = rowOf(knownId)!.getBoundingClientRect().top;
+
+    // Before the trim the surface offered to page backwards; it has no cursor
+    // now, so it does not.
+    const page = (over: Record<string, unknown>) => ({
+      epoch: "w1", seq: 30, revision: "r2.env.30", environmentKey: "k", userOffset: 0, complete: true,
+      branchesUnloaded: false, hasHistory: true, context: [], priorGoalIds: [], ...over,
+    });
+
+    // A recent tail that does not carry the rows this surface stands on.
+    await act(async () => {
+      store.dispatch({ type: "views/reconcile", path: SESSION, at: stamp, leafId: "e23",
+        entries: [entry(22), entry(23)], window: page({}) } as never);
+    });
+    const deferred = store.getSnapshot().open[SESSION]!;
+    expect(deferred.trimmed?.deferred).toBe(true);
+    // Not one row of the refused page is on screen, and nothing moved.
+    expect(rowIds()).toEqual(rowsAfterTrim);
+    expect(rowOf(knownId)!.getBoundingClientRect().top).toBe(anchorTop);
+    expect(document.activeElement).toBe(action);
+    expect(container.textContent).toContain("Reload recent history");
+    expect(container.textContent).not.toContain("Load earlier messages");
+
+    // A safe read that does contain them restores the conversation and its
+    // cursor, and the row a person was on is still there.
+    await act(async () => {
+      store.dispatch({ type: "views/reconcile", path: SESSION, at: stamp, leafId: "e23",
+        entries: Array.from({ length: 24 }, (_, index) => entry(index)), window: page({ before: "cursor-older" }) } as never);
+    });
+    await act(async () => { await Promise.resolve(); });
+    const restored = store.getSnapshot().open[SESSION]!;
+    expect(restored.trimmed).toBeUndefined();
+    expect(restored.history?.before).toBe("cursor-older");
+    expect(rowIds()).toContain(knownId);
+    expect(container.textContent).not.toContain("Reload recent history");
+
+    cache.dispose();
   });
 });

@@ -212,7 +212,7 @@ function EntriesRefresh() {
 }
 
 /** History is explicit, and upward reading fetches the next complete turn page. */
-function HistoryControls() {
+export function HistoryControls() {
   const { actions } = useLaserStable();
   const controller = useTranscriptViewport();
   const history = useLaserState(s => s.current ? s.open[s.current]?.history : undefined);
