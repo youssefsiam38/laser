@@ -62,7 +62,14 @@
  * so the file is created 0600, and `providerPayloads: "summary"` drops the
  * bodies entirely for anyone who wants that trade.
  */
-import { PRODUCT_NAME, type AgentRun } from "@lasercode/protocol";
+import {
+  PRODUCT_NAME,
+  redact,
+  type AgentRun,
+  type ProviderCaptureMeta,
+  type ProviderCaptureOmission,
+  type ProviderCaptureSummary,
+} from "@lasercode/protocol";
 import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -89,6 +96,45 @@ const DEFAULT_BYTE_BUDGET = 256 * 1024;
 /** Prunes between full orphaned-body sweeps (an unindexed anti-join). */
 const ORPHAN_SWEEP_EVERY = 10;
 const DEFAULT_LIMIT = 200;
+
+/**
+ * A body above this is stored as bounded chunks (RP-7), so neither writing it
+ * nor reading part of it materialises the whole thing. Below it, one row, as
+ * the store has always done.
+ */
+const CHUNKED_BODY_ABOVE = 1024 * 1024;
+/** One stored chunk. Small next to any read budget, large enough to be cheap. */
+const CONTENT_CHUNK_BYTES = 256 * 1024;
+
+/** Every reason a body cannot be opened, as the row records it. */
+const BODY_ABSENCE: readonly string[] = [
+  "budget",
+  "session-limit",
+  "retention",
+  "over-ceiling",
+  "link-busy",
+  "summary-mode",
+  "interrupted",
+  "corrupt",
+];
+
+function isBodyAbsence(value: string | null): value is LogBodySummary["reason"] {
+  return value !== null && BODY_ABSENCE.includes(value);
+}
+
+/** Split on UTF-8 boundaries: a chunk is never half a character. */
+function splitUtf8(text: string, chunkBytes: number): string[] {
+  const buffer = Buffer.from(text, "utf8");
+  const chunks: string[] = [];
+  let offset = 0;
+  while (offset < buffer.length) {
+    let end = Math.min(offset + chunkBytes, buffer.length);
+    while (end > offset && end < buffer.length && (buffer[end]! & 0xc0) === 0x80) end -= 1;
+    chunks.push(buffer.toString("utf8", offset, end));
+    offset = end;
+  }
+  return chunks;
+}
 
 /** Provider requests per session whose body is kept in full (D-245). */
 export const BODIES_PER_SESSION = 50;
@@ -164,42 +210,12 @@ export interface LogStoreOptions {
 }
 
 /**
- * Field names whose values never belong in a log row.
- *
- * Anchored, with up to two vendor prefix segments (`x-api-key`,
- * `anthropic-api-key`, `x-goog-api-key`) — deliberately not a substring match,
- * because Pi's own payloads are full of `max_tokens`, `reserveTokens` and
- * `thinkingBudgets`, and redacting those would make every row a lie in the other
- * direction.
+ * The credential projection lives in `@lasercode/protocol` (RP-7), because the
+ * worker now redacts a provider capture before it crosses the link and both
+ * sides must run identical code. Re-exported here so every existing caller,
+ * and every test, keeps the same import.
  */
-const SECRET_KEY =
-  /^([a-z0-9]+[-_]){0,2}(authorization|proxy-authorization|www-authenticate|api[-_]?key|apikey|access[-_]?token|refresh[-_]?token|id[-_]?token|secret|client[-_]?secret|password|passwd|cookie|set-cookie|session[-_]?token|auth[-_]?token|bearer|credential|credentials)$/i;
-
-/** Deepest structure walked when redacting; a payload is JSON, not a graph. */
-const REDACT_MAX_DEPTH = 12;
-
-/**
- * Replace credential-shaped values with `[redacted]`, everywhere, and say how
- * many were replaced. Structure is preserved so the row still reads normally.
- */
-export function redact(value: unknown): { value: unknown; count: number } {
-  let count = 0;
-  const walk = (node: unknown, depth: number): unknown => {
-    if (depth > REDACT_MAX_DEPTH || node === null || typeof node !== "object") return node;
-    if (Array.isArray(node)) return node.map((item) => walk(item, depth + 1));
-    const out: Record<string, unknown> = {};
-    for (const [key, item] of Object.entries(node as Record<string, unknown>)) {
-      if (SECRET_KEY.test(key)) {
-        out[key] = "[redacted]";
-        count += 1;
-        continue;
-      }
-      out[key] = walk(item, depth + 1);
-    }
-    return out;
-  };
-  return { value: walk(value, 0), count };
-}
+export { redact };
 
 /** What a caller hands `record()`. `id` and `at` are the store's business. */
 export interface LogInput {
@@ -341,6 +357,19 @@ function openDatabase(file: string): Database {
       content_type TEXT    NOT NULL,
       body         TEXT    NOT NULL
     );
+    -- A large body in bounded pieces (RP-7). node:sqlite has no incremental
+    -- blob I/O, so a single-column body cannot be written or read without
+    -- materialising all of it; these rows can. The content row stays, with
+    -- its true size, so the byte budget, the release path and every index over
+    -- it are unchanged, and an older binary reading this store sees an empty
+    -- body rather than a NULL it would throw on.
+    CREATE TABLE IF NOT EXISTS content_chunks (
+      ref   TEXT    NOT NULL,
+      idx   INTEGER NOT NULL,
+      bytes INTEGER NOT NULL,
+      body  TEXT    NOT NULL,
+      PRIMARY KEY (ref, idx)
+    );
   `);
   // Additive migration: existing requests remain readable, without invented
   // prompt attribution. New captures carry branch-local entry identity.
@@ -349,6 +378,10 @@ function openDatabase(file: string): Database {
   // Additive migration for D-245: every existing row is retained (NULL) until
   // the budget pass decides otherwise, so an upgrade loses nothing at open.
   if (!columns.some((column) => column.name === "body_released")) db.exec("ALTER TABLE entries ADD COLUMN body_released TEXT");
+  // Additive migration for RP-7: a body already in one column stays there and
+  // is read exactly as before; only new large bodies are chunked.
+  const contentColumns = db.prepare("PRAGMA table_info(content)").all() as { name: string }[];
+  if (!contentColumns.some((column) => column.name === "chunked")) db.exec("ALTER TABLE content ADD COLUMN chunked INTEGER");
   db.exec(`
     CREATE INDEX IF NOT EXISTS entries_prompt ON entries(session_path, json_extract(request_context, '$.promptEntryId'), id);
     -- Partial indexes over exactly the rows retention walks: the oldest
@@ -542,19 +575,61 @@ export class LogStore {
     if (bytes <= INLINE_LIMIT) {
       return { inline: body, ref: null, bytes, contentType: "application/json", preview };
     }
-    const ref = createHash("sha256").update(body).digest("hex");
-    const stored = this
-      .statement("INSERT OR IGNORE INTO content (ref, bytes, content_type, body) VALUES (?,?,?,?)")
-      .run(ref, bytes, "application/json", body);
+    return { inline: null, ...this.storeBody(body, bytes), preview };
+  }
+
+  /**
+   * Put one already-serialized, already-redacted body on disk, once (RP-7).
+   *
+   * Content is addressed by SHA-256, so a retried request costs one copy. A
+   * body past {@link CHUNKED_BODY_ABOVE} is written as bounded chunks in the
+   * same transaction as its `content` row: nothing ever holds more than one
+   * chunk beyond the caller's own string, in either direction, and a failure
+   * leaves neither the row nor its pieces.
+   */
+  private storeBody(body: string, knownBytes?: number, knownRef?: string): { ref: string; bytes: number; contentType: "application/json" } {
+    const bytes = knownBytes ?? Buffer.byteLength(body, "utf8");
+    const ref = knownRef ?? createHash("sha256").update(body).digest("hex");
+    const chunked = bytes > CHUNKED_BODY_ABOVE;
+    let inserted = false;
+    this.transaction(() => {
+      const stored = this
+        .statement("INSERT OR IGNORE INTO content (ref, bytes, content_type, body, chunked) VALUES (?,?,?,?,?)")
+        .run(ref, bytes, "application/json", chunked ? "" : body, chunked ? 1 : null);
+      inserted = Number(stored.changes) > 0;
+      if (!inserted || !chunked) return;
+      const insert = this.statement("INSERT OR IGNORE INTO content_chunks (ref, idx, bytes, body) VALUES (?,?,?,?)");
+      let index = 0;
+      for (const chunk of splitUtf8(body, CONTENT_CHUNK_BYTES)) {
+        insert.run(ref, index, Buffer.byteLength(chunk, "utf8"), chunk);
+        index += 1;
+      }
+    });
     // A body already on disk (same hash) costs nothing more, so it must not be
     // charged twice against the budget.
-    if (Number(stored.changes) > 0) {
+    if (inserted) {
       this.retainedBodyBytes += bytes;
       // The same body back on disk: rows that had it released have it again,
       // and must not go on saying "summary only" over a body that opens.
       this.statement("UPDATE entries SET body_released = NULL WHERE detail_ref = ? AND body_released IS NOT NULL").run(ref);
     }
-    return { inline: null, ref, bytes, contentType: "application/json", preview };
+    return { ref, bytes, contentType: "application/json" };
+  }
+
+  /** One statement group, or none of it. */
+  private transaction(work: () => void): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      work();
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* the transaction was already gone; the original failure is the one that matters */
+      }
+      throw error;
+    }
   }
 
   /** A bounded cache also admits recurring query shapes without retaining every
@@ -664,8 +739,8 @@ export class LogStore {
     text: string;
     released?: LogBodySummary;
   } {
-    const row = this.db.prepare("SELECT * FROM content WHERE ref = ?").get(ref) as
-      | { ref: string; bytes: number; content_type: string; body: string }
+    const row = this.db.prepare("SELECT ref, bytes, content_type, body, chunked FROM content WHERE ref = ?").get(ref) as
+      | { ref: string; bytes: number; content_type: string; body: string; chunked: number | null }
       | undefined;
     if (!row) {
       const released = this.releasedSummary(ref);
@@ -674,18 +749,75 @@ export class LogStore {
         `Log payload ${ref.slice(0, 12)}… is no longer stored. Retention removed the rows that referenced it.`,
       );
     }
+    if (row.chunked) {
+      const read = this.readChunked(ref, maxBytes);
+      if (!read) {
+        // The row exists and its pieces do not: a store that was interrupted
+        // or damaged. Say that, with the size and digest the row still knows,
+        // rather than handing back a short body that reads like a whole one.
+        return {
+          ref,
+          contentType: row.content_type,
+          bytes: row.bytes,
+          truncated: false,
+          text: "",
+          released: this.absentSummary(ref, "corrupt", row.bytes),
+        };
+      }
+      return {
+        ref: row.ref,
+        contentType: row.content_type,
+        bytes: row.bytes,
+        truncated: read.truncated,
+        ...(read.truncated ? { truncatedAt: Buffer.byteLength(read.text, "utf8") } : {}),
+        text: read.text,
+      };
+    }
     // `maxBytes` is a byte budget, so it is measured in bytes: a string index
     // let three times that much UTF-8 through for non-Latin text, and cutting
     // mid-code-point would hand the UI a replacement character.
     const bodyBytes = Buffer.byteLength(row.body, "utf8");
     const truncated = bodyBytes > maxBytes;
+    const text = truncated ? truncateUtf8(row.body, maxBytes) : row.body;
     return {
       ref: row.ref,
       contentType: row.content_type,
       bytes: row.bytes,
       truncated,
-      text: truncated ? truncateUtf8(row.body, maxBytes) : row.body,
+      ...(truncated ? { truncatedAt: Buffer.byteLength(text, "utf8") } : {}),
+      text,
     };
+  }
+
+  /**
+   * Read a chunked body up to `maxBytes`, one chunk at a time.
+   *
+   * At most the requested budget plus one chunk is ever in this process, so
+   * opening a 16 MiB request with a 1 MiB budget costs 1 MiB, not 16. The full
+   * body is never assembled here.
+   */
+  private readChunked(ref: string, maxBytes: number): { text: string; truncated: boolean } | undefined {
+    const rows = this.db
+      .prepare("SELECT idx, bytes, body FROM content_chunks WHERE ref = ? ORDER BY idx ASC")
+      .all(ref) as Array<{ idx: number; bytes: number; body: string }>;
+    if (rows.length === 0) return undefined;
+    const pieces: string[] = [];
+    let taken = 0;
+    let truncated = false;
+    let expected = 0;
+    for (const chunk of rows) {
+      if (chunk.idx !== expected) return undefined;
+      expected += 1;
+      if (taken + chunk.bytes > maxBytes) {
+        // Fill the rest of the budget from this chunk, on a UTF-8 boundary.
+        if (taken < maxBytes) pieces.push(truncateUtf8(chunk.body, maxBytes - taken));
+        truncated = true;
+        break;
+      }
+      pieces.push(chunk.body);
+      taken += chunk.bytes;
+    }
+    return { text: pieces.join(""), truncated };
   }
 
   stats(): LogStats {
@@ -934,13 +1066,31 @@ export class LogStore {
     this.statement("UPDATE entries SET body_released = ? WHERE id = ?").run(reason, id);
     const stored = this.statement("SELECT bytes FROM content WHERE ref = ?").get(ref) as { bytes: number } | undefined;
     if (!stored) return;
-    const dropped = Number(
-      this.statement(
-        `DELETE FROM content WHERE ref = ?
-           AND NOT EXISTS (SELECT 1 FROM entries WHERE detail_ref = ? AND body_released IS NULL)`,
-      ).run(ref, ref).changes,
-    );
+    let dropped = 0;
+    this.transaction(() => {
+      dropped = Number(
+        this.statement(
+          `DELETE FROM content WHERE ref = ?
+             AND NOT EXISTS (SELECT 1 FROM entries WHERE detail_ref = ? AND body_released IS NULL)`,
+        ).run(ref, ref).changes,
+      );
+      // A chunked body's pieces go with its row, in the same transaction: a
+      // `content` row without its chunks would read as a corrupt body, and
+      // chunks without their row would be bytes nobody can account for.
+      if (dropped > 0) this.statement("DELETE FROM content_chunks WHERE ref = ?").run(ref);
+    });
     if (dropped > 0) this.retainedBodyBytes = Math.max(0, this.retainedBodyBytes - stored.bytes);
+  }
+
+  /**
+   * The same summary, for a body the store never had or can no longer read
+   * (RP-7): the reason is the caller's, the size and digest are the row's.
+   */
+  private absentSummary(ref: string, reason: LogBodySummary["reason"], bytes: number): LogBodySummary {
+    const summary = this.releasedSummary(ref);
+    return summary
+      ? { ...summary, reason, bytes }
+      : { reason, bytes, sha256: ref, summary: "", preview: "" };
   }
 
   /** What the row still knows about a body that is no longer stored. */
@@ -960,9 +1110,13 @@ export class LogStore {
     const reason = row.body_released;
     return {
       // A body missing without a marker is a body retention took with its
-      // rows; saying "budget" there would be a guess.
-      reason: reason === "budget" || reason === "session-limit" ? reason : "retention",
+      // rows; saying "budget" there would be a guess. A capture recorded
+      // without its body wrote its own reason here when the row was made.
+      reason: isBodyAbsence(reason) ? reason : "retention",
       bytes: row.detail_bytes ?? 0,
+      // The digest of the redacted bytes that would have been stored: it
+      // identifies the body even when nothing can open it.
+      sha256: ref,
       summary: row.summary,
       preview: row.detail_preview ?? "",
       at: row.at,
@@ -984,6 +1138,9 @@ export class LogStore {
     this.db.exec(
       "DELETE FROM content WHERE ref NOT IN (SELECT detail_ref FROM entries WHERE detail_ref IS NOT NULL)",
     );
+    // Chunks follow their row, always: a piece whose body is gone is disk
+    // nobody can read and nobody is accounting for.
+    this.db.exec("DELETE FROM content_chunks WHERE ref NOT IN (SELECT ref FROM content)");
     this.retainedBodyBytes = this.sumRetainedBodyBytes();
   }
 
@@ -1107,6 +1264,66 @@ export class LogStore {
    * carries the whole payload, the response row closes it with status,
    * headers and latency.
    */
+  /**
+   * A capture that arrived whole through the chunked path (RP-7): already
+   * redacted, already measured, stored once. Nothing is re-serialized here.
+   */
+  recordProviderCapture(cwd: string, sessionPath: string, meta: ProviderCaptureMeta, body: string): void {
+    if (this.closed) return;
+    const stored = this.storeBody(body);
+    const entry = this.recordEncoded(
+      {
+        section: "provider",
+        kind: "provider_request",
+        cwd,
+        sessionPath,
+        at: meta.at,
+        summary: describeProviderCapture(meta.summary, stored.bytes),
+        ...(meta.context ? { requestContext: meta.context } : {}),
+      },
+      { inline: null, ref: stored.ref, bytes: stored.bytes, contentType: stored.contentType, preview: meta.preview },
+    );
+    if (entry) this.noteOpenProviderRequest(sessionPath, entry.id, meta.at);
+  }
+
+  /**
+   * The request happened; its body is not kept, and the row says why (RP-7).
+   * Size and digest are the redacted representation that would have been
+   * stored, so the row stays identifiable and honest about what it is.
+   */
+  recordProviderAbsent(cwd: string, sessionPath: string, meta: ProviderCaptureMeta, reason: ProviderCaptureOmission): void {
+    if (this.closed) return;
+    const entry = this.recordEncoded(
+      {
+        section: "provider",
+        kind: "provider_request",
+        cwd,
+        sessionPath,
+        at: meta.at,
+        summary: describeProviderCapture(meta.summary, meta.bytes),
+        ...(meta.context ? { requestContext: meta.context } : {}),
+      },
+      { inline: null, ref: meta.sha256, bytes: meta.bytes, contentType: "application/json", preview: meta.preview },
+    );
+    if (!entry) return;
+    // The very same bytes may already be on disk from an earlier turn: content
+    // is shared by digest, so that row opens and this one must not claim
+    // otherwise. Only a body nobody has is marked absent.
+    const present = this.statement("SELECT 1 AS present FROM content WHERE ref = ?").get(meta.sha256) as { present: number } | undefined;
+    if (!present) this.statement("UPDATE entries SET body_released = ? WHERE id = ?").run(reason, entry.id);
+    this.noteOpenProviderRequest(sessionPath, entry.id, meta.at);
+  }
+
+  /** Correlate the response that will follow, with a bound on a queue nothing answers. */
+  private noteOpenProviderRequest(sessionPath: string, id: number, at: string): void {
+    const queue = this.openProviderRequests.get(sessionPath) ?? [];
+    queue.push({ id, startedAt: Date.parse(at) || Date.now() });
+    // A request nothing ever answered (a killed engine, a dropped hook) must
+    // not keep its session's queue growing.
+    if (queue.length > MAX_OPEN_PER_SESSION) queue.splice(0, queue.length - MAX_OPEN_PER_SESSION);
+    this.openProviderRequests.set(sessionPath, queue);
+  }
+
   observeExtensionMessage(cwd: string, sessionPath: string, message: PiExtensionMessage): void {
     switch (message.type) {
       case "lasercode/provider/request": {
@@ -1121,14 +1338,7 @@ export class LogStore {
           summary: describeProviderRequest(message.payload, detail.bytes ?? undefined),
           ...(message.context ? { requestContext: message.context } : {}),
         }, detail);
-        if (entry) {
-          const queue = this.openProviderRequests.get(sessionPath) ?? [];
-          queue.push({ id: entry.id, startedAt: Date.parse(message.at) || Date.now() });
-          // A request nothing ever answered (a killed engine, a dropped hook)
-          // must not keep its session's queue growing.
-          if (queue.length > MAX_OPEN_PER_SESSION) queue.splice(0, queue.length - MAX_OPEN_PER_SESSION);
-          this.openProviderRequests.set(sessionPath, queue);
-        }
+        if (entry) this.noteOpenProviderRequest(sessionPath, entry.id, message.at);
         return;
       }
       case "lasercode/provider/response": {
@@ -1447,6 +1657,18 @@ export function summaryModel(summary: string): string | undefined {
  * (Anthropic messages, OpenAI completions, OpenAI responses) and degrades to a
  * size when it recognises nothing.
  */
+/** The same line, from a summary the producer computed (RP-7). */
+export function describeProviderCapture(summary: ProviderCaptureSummary, bytes: number): string {
+  const parts: string[] = [];
+  if (summary.model) parts.push(summary.model);
+  if (summary.messages !== undefined) parts.push(`${summary.messages} message${summary.messages === 1 ? "" : "s"}`);
+  if (summary.tools !== undefined && summary.tools > 0) parts.push(`${summary.tools} tools`);
+  if (summary.stream) parts.push("stream");
+  if (summary.thinking) parts.push("thinking");
+  parts.push(formatBytes(bytes));
+  return parts.join(" · ");
+}
+
 export function describeProviderRequest(payload: unknown, retainedBytes?: number): string {
   const body = payload as Record<string, unknown> | null;
   const size = retainedBytes ?? (() => {

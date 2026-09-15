@@ -7,7 +7,19 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
 import type { Duplex } from "node:stream";
-import { ENV, ErrorCodes, LineDecoder, isNotification, isResponse, type JsonRpcError, type JsonRpcMessage, type JsonRpcNotification, type WorkerNotifications } from "@lasercode/protocol";
+import {
+  ENV,
+  ErrorCodes,
+  FRAME_MAX_BYTES,
+  LineDecoder,
+  isNotification,
+  isResponse,
+  type JsonRpcError,
+  type JsonRpcMessage,
+  type JsonRpcNotification,
+  type LineDecoderStats,
+  type WorkerNotifications,
+} from "@lasercode/protocol";
 
 export interface WorkerClientOptions {
   cwd: string;
@@ -32,6 +44,13 @@ export interface WorkerClientOptions {
    * but never published: only its derived key reaches a client.
    */
   environmentId?: string;
+  /**
+   * Whether this installation's log store keeps provider request bodies
+   * (RP-7). `"summary"` is passed down as `--provider-payloads summary` and
+   * the worker never serializes a body at all; a worker that does not know the
+   * flag ignores it.
+   */
+  providerPayloads?: "full" | "summary";
   /** Path to the worker entry; defaults to the workspace `@lasercode/worker` build. */
   workerMain?: string;
   /** Node binary to run the worker with; defaults to the current one. */
@@ -92,6 +111,8 @@ export class WorkerClient {
    * to tell "never started" from "exited", and to say which in the UI.
    */
   private startError: Error | undefined;
+  private decoder: LineDecoder | undefined;
+  private rejectReady: ((error: Error) => void) | undefined;
   readonly ready: Promise<void>;
 
   constructor(private readonly options: WorkerClientOptions) {
@@ -101,6 +122,7 @@ export class WorkerClient {
     if (options.stateDir) args.push("--state-dir", options.stateDir);
     if (options.projectTrusted !== undefined) args.push("--project-trusted", options.projectTrusted ? "yes" : "no");
     if (options.environmentId) args.push("--environment-id", options.environmentId);
+    if (options.providerPayloads) args.push("--provider-payloads", options.providerPayloads);
 
     this.child = spawn(options.nodeBinary ?? process.execPath, args, {
       // --cwd configures the driver; it does not change the process directory.
@@ -120,10 +142,17 @@ export class WorkerClient {
       resolveReady = res;
       rejectReady = rej;
     });
+    this.rejectReady = rejectReady;
 
-    const decoder = new LineDecoder();
-    this.pipe.setEncoding("utf8");
-    this.pipe.on("data", (chunk: string) => {
+    // Bytes, not text: the decoder owns the UTF-8 boundary, so a frame's size
+    // is its exact byte count and a multi-byte character split across two pipe
+    // chunks is simply two pieces that are joined before they are decoded.
+    const decoder = new LineDecoder({
+      maxFrameBytes: FRAME_MAX_BYTES,
+      onOverflow: ({ bytes }) => this.faultGeneration(bytes),
+    });
+    this.decoder = decoder;
+    this.pipe.on("data", (chunk: Buffer) => {
       for (const line of decoder.push(chunk)) {
         let message: JsonRpcMessage;
         try {
@@ -173,6 +202,40 @@ export class WorkerClient {
     for (const entry of this.pending.values()) entry.reject(error);
     this.pending.clear();
     this.options.onExit(code, signal);
+  }
+
+  /**
+   * A frame crossed the transport ceiling (RP-7).
+   *
+   * This link is trusted and framed by us, so a frame that large means the
+   * worker generation is producing something we cannot read — corruption, or a
+   * bug. Skipping to the next newline would be worse than the fault: if the
+   * lost frame was a response, its request would wait for ever. So the
+   * generation ends here, every pending request is rejected with a reason, and
+   * the pool's normal crash handling starts a fresh worker. Nothing about the
+   * message is logged: it is a provider payload as far as we know.
+   */
+  private faultGeneration(bytes: number): void {
+    if (this.reported) return;
+    this.exited = true;
+    const error = new Error(
+      `the worker for ${this.options.cwd} sent a message of ${bytes} bytes, past the ${FRAME_MAX_BYTES} byte limit for one message`,
+    );
+    this.options.onStderr?.(`${error.message}\n`);
+    try {
+      this.pipe.destroy();
+    } catch {
+      // Already gone; the settle below is what matters.
+    }
+    this.settle(error, this.rejectReady ?? ((): void => {}), null, null);
+  }
+
+  /** Bytes this link is holding right now: partial frame in, backlog out. */
+  transportPressure(): { decoder: LineDecoderStats | undefined; pending: number } {
+    return {
+      decoder: this.decoder?.stats,
+      pending: this.pipe.writableLength ?? 0,
+    };
   }
 
   /** Non-undefined when the child process could not be started at all. */

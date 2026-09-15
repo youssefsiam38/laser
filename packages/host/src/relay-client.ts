@@ -34,9 +34,10 @@ import {
   type CryptoBackend,
   type KeyPair,
 } from "@lasercode/crypto";
-import { ErrorCodes, type JsonRpcNotification, type JsonRpcResponse, type SessionUpdateParams, WIRE_NAMESPACE } from "@lasercode/protocol";
+import { ErrorCodes, RELAY_QUEUE_HARD_BYTES, RELAY_QUEUE_SOFT_BYTES, type JsonRpcNotification, type JsonRpcResponse, type SessionUpdateParams, WIRE_NAMESPACE } from "@lasercode/protocol";
 import WebSocket from "ws";
 import { SessionLoadDelivery } from "./session-load-delivery.js";
+import { OutboundPressure, fenceReasonText } from "./transport-pressure.js";
 import { TranscriptDelivery, type SessionMembershipView } from "./transcript-delivery.js";
 import { SearchCancellation } from "./search-cancellation.js";
 
@@ -115,6 +116,15 @@ export interface RelayClientStats {
    * the shaper's own `maxQueue`; neither grows without bound.
    */
   outboundQueueDropped: number;
+  /**
+   * Diagnostic notifications released because this device was behind (RP-7).
+   * Each is something it can read back with a request it already makes;
+   * nothing carrying state, a question or a terminal event is counted here.
+   */
+  diagnosticsShed: number;
+  /** Plaintext bytes queued for this device now, and the most it ever held. */
+  queuedBytes: number;
+  queuedHighWaterBytes: number;
   lastError?: string;
 }
 
@@ -185,7 +195,33 @@ export class RelayClient {
     notificationsDropped: 0,
     oversizedMessages: 0,
     outboundQueueDropped: 0,
+    diagnosticsShed: 0,
   };
+  /**
+   * What this one device costs the host in queued plaintext (RP-7): counted
+   * from the moment a frame is accepted for it, through Noise encryption and
+   * the socket, until the send settles. Crossing the soft mark releases the
+   * three notifications the device can read back; crossing the hard one closes
+   * **this** channel and nothing else — other devices, direct clients, workers
+   * and every command keep going, and the device resumes with `session/load
+   * { fromSeq }` when it reconnects.
+   */
+  private readonly pressure = new OutboundPressure({
+    softBytes: RELAY_QUEUE_SOFT_BYTES,
+    hardBytes: RELAY_QUEUE_HARD_BYTES,
+    onShed: ({ method, total }) => {
+      this.counters.diagnosticsShed = total;
+      this.log(`relay: ${this.deviceLabel()} is behind; released ${total} ${method} notification(s) it can read back`);
+    },
+    onFence: ({ reason, queuedBytes }) => {
+      this.lastError = `relay: ${fenceReasonText(reason)} (${queuedBytes} bytes queued for ${this.deviceLabel()})`;
+      this.log(this.lastError);
+      this.options.onError?.(new Error(this.lastError));
+      // Close this channel's socket only. Backoff reconnects it, and the
+      // device re-reads what it missed; nothing is queued in the meantime.
+      this.ws?.close(4408, "device is not draining");
+    },
+  });
   /**
    * The relay's own ceiling, from its `hello`. Frames above it are refused by
    * the relay with a socket close, so anything that would exceed it is reduced
@@ -224,11 +260,20 @@ export class RelayClient {
   }
 
   statistics(): RelayClientStats {
+    const pressure = this.pressure.snapshot();
     return {
       state: this.currentState,
       ...this.counters,
+      queuedBytes: pressure.queuedBytes,
+      queuedHighWaterBytes: pressure.highWaterBytes,
       ...(this.lastError !== undefined ? { lastError: this.lastError } : {}),
     };
+  }
+
+  /** Queued bytes for this device, for the RP-3 retained-store counters. */
+  transportPressure(): { queuedBytes: number; highWaterBytes: number; shed: number } {
+    const pressure = this.pressure.snapshot();
+    return { queuedBytes: pressure.queuedBytes, highWaterBytes: pressure.highWaterBytes, shed: pressure.shed.total };
   }
 
   start(): void {
@@ -592,6 +637,11 @@ export class RelayClient {
     // A transcript this device is not showing is not sent to it (RP-6); it
     // reconciles from `fromSeq` when it opens the session again.
     if (!this.transcripts.accepts(notification)) return;
+    // Pressure, before anything is serialized or encrypted for this device
+    // (RP-7): only the three notifications it can read back explicitly are
+    // ever released, and a device too far behind for that is fenced rather
+    // than fed a selection of its own state.
+    if (this.pressure.admit(notification.method) !== "send") return;
     const payload = this.encode(notification) ?? this.encode(reduce(notification));
     if (!payload) {
       // Nothing sensible left to shrink. Losing one update is bad; tearing the
@@ -626,9 +676,13 @@ export class RelayClient {
   private async sendForGeneration(payload: Uint8Array, generation: number): Promise<boolean> {
     if (generation !== this.connectionGeneration || !this.session || !this.ws || this.ws.readyState !== this.ws.OPEN) return false;
     if (this.shaper) {
-      this.shaper.enqueue(payload);
+      // The shaper holds the frame until its grid releases it, so those bytes
+      // are still this host's until it does.
+      this.pressure.charge(payload.length);
+      this.shaper.enqueue(payload, () => this.pressure.settle(payload.length));
       return generation === this.connectionGeneration && this.session !== null;
     }
+    if (this.pressure.fenced) return false;
     const maxQueue = this.options.maxOutboundQueue ?? MAX_OUTBOUND_QUEUE;
     if (this.pendingSends >= maxQueue) {
       // Bounded exactly like the shaped path: drop the frame, count it, say so.
@@ -640,6 +694,8 @@ export class RelayClient {
       return false;
     }
     this.pendingSends++;
+    // Counted from acceptance through Noise encryption and the socket, once.
+    this.pressure.charge(payload.length);
     return this.enqueueSend(async () => {
       try {
         if (generation !== this.connectionGeneration || !this.session || !this.ws || this.ws.readyState !== this.ws.OPEN) return false;
@@ -659,6 +715,7 @@ export class RelayClient {
         });
       } finally {
         this.pendingSends--;
+        this.pressure.settle(payload.length);
       }
     });
   }
@@ -690,6 +747,9 @@ export class RelayClient {
 
   private teardown(reason: string): void {
     this.connectionGeneration++;
+    // Nothing is owed for a connection that is gone, and nothing is kept for
+    // it: the device resumes by asking, which is the only resume path there is.
+    this.pressure.reset();
     this.transcripts = new TranscriptDelivery();
     this.searches.close();
     this.searches = new SearchCancellation();

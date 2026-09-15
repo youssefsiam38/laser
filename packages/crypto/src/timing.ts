@@ -51,7 +51,7 @@ export class KeystrokeShaper {
   private readonly setTimer: (handler: () => void, ms: number) => unknown;
   private readonly clearTimer: (handle: unknown) => void;
 
-  private queue: Uint8Array[] = [];
+  private queue: Array<{ frame: Uint8Array; settle?: () => void }> = [];
   private timer: unknown = null;
   private chaffTicksLeft = 0;
   private ticking = false;
@@ -86,16 +86,23 @@ export class KeystrokeShaper {
     return this.droppedFrames;
   }
 
-  enqueue(frame: Uint8Array): void {
+  /**
+   * `settle` is called exactly once, when this frame leaves the queue — sent,
+   * dropped or discarded by `stop()`. A caller that accounts the bytes a peer
+   * still owes it (RP-7) needs that moment; a caller that does not simply
+   * omits it.
+   */
+  enqueue(frame: Uint8Array, settle?: () => void): void {
     if (this.stopped) throw new Error("this shaper has been stopped");
     if (this.queue.length >= this.maxQueue) {
       this.droppedFrames++;
+      settle?.();
       this.options.onError?.(
         new Error(`keystroke shaper queue is full (${this.maxQueue} frames); dropped one. The peer is not draining.`),
       );
       return;
     }
-    this.queue.push(frame);
+    this.queue.push({ frame, ...(settle ? { settle } : {}) });
     this.armTail();
     this.start();
   }
@@ -103,6 +110,7 @@ export class KeystrokeShaper {
   /** Stop the grid and forget anything queued. Call on disconnect. */
   stop(): void {
     this.stopped = true;
+    for (const queued of this.queue) queued.settle?.();
     this.queue = [];
     this.chaffTicksLeft = 0;
     this.halt();
@@ -138,7 +146,11 @@ export class KeystrokeShaper {
   private async sendOne(): Promise<void> {
     const next = this.queue.shift();
     if (next) {
-      await this.options.sendFrame(next);
+      try {
+        await this.options.sendFrame(next.frame);
+      } finally {
+        next.settle?.();
+      }
       return;
     }
     if (this.chaffTicksLeft > 0) {

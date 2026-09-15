@@ -43,6 +43,12 @@ export interface WorkerPoolOptions {
   stateDir?: string;
   /** Passed to every worker as `--environment-id`, so revisions agree (RP-9). */
   environmentId?: string;
+  /**
+   * Whether the log store keeps provider request bodies at all. `"summary"`
+   * reaches the worker as `--provider-payloads summary`, so a capture is never
+   * serialized or sent for a store that would discard it (RP-7).
+   */
+  providerPayloads?: "full" | "summary";
   workerMain?: string;
   nodeBinary?: string;
   /** Extra environment for every worker (the bundled package manager, M10-T5). */
@@ -721,6 +727,7 @@ export class WorkerPool {
       ...(this.options.sessionDir ? { sessionDir: this.options.sessionDir } : {}),
       ...(this.options.stateDir ? { stateDir: this.options.stateDir } : {}),
       ...(this.options.environmentId ? { environmentId: this.options.environmentId } : {}),
+      ...(this.options.providerPayloads ? { providerPayloads: this.options.providerPayloads } : {}),
       ...(this.options.workerMain ? { workerMain: this.options.workerMain } : {}),
       ...(this.options.nodeBinary ? { nodeBinary: this.options.nodeBinary } : {}),
       ...((this.options.env || this.options.envForCwd)
