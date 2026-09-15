@@ -2422,7 +2422,7 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 | M18-T5 | RP-5 bounded renderer session lifetime | done | orchestrator-01a0a030 + renderer-session-lifetime | `4f34a614`; UI focused 84 + typecheck; UI full 1874; browser 4/4; partial exact-code calibration | see notes; depends on M18-T2 |
 | M18-T6 | RP-6 bounded task and transcript-delivery lifetime | done | orchestrator-01a0a030 + task-delivery-lifetime worker | `a256efe`; build/typecheck + pi-extension 168 + host 530 + protocol 186 + browser-check 69 pass | see notes; depends on M18-T2 |
 | M18-T7 | RP-7 bounded provider logging and transport pressure | in-progress | transport-pressure `01a0a214-a8cc-76c8-926f-52b4b3d8408e` | — | depends on M18-T2 |
-| M18-T8 | RP-8 memory-pressure policy and safety ceilings | todo | — | — | depends on M18-T4/M18-T5 |
+| M18-T8 | RP-8 memory-pressure policy and safety ceilings | in-progress | memory-pressure-policy investigation | — | see notes; depends on M18-T4/M18-T5 |
 | M18-T9 | RP-9 durable session revision contract | done | orchestrator-01a0a030 + revision-read worker | `dd637f3`; build/typecheck + protocol 165 + host 445 pass | see notes |
 | M18-T10 | RP-10 bounded device tail cache | in-progress | device-tail-cache `01a0a2fe-219e-76c8-926f-52f9c3310b62` | — | plan-only until M18-T5 handoff; depends on M18-T5/M18-T9 |
 | M18-T11 | RP-11 immediate paint and authoritative reconciliation | todo | — | — | depends on M18-T10 |
@@ -2513,6 +2513,10 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 - 2026-09-15 final completed-slice audit `/tmp/m18-completed-slices-audit.md` found one medium and two low diagnostics integration defects: export/history selected the oldest capped window and cap omission did not set `truncated`; RP-6 task/delivery counters were produced but not consumed by the Resources table. Correction owner `resource-history-correction` session `01a0a2f0-0a42-76c8-926f-52e8a582ca55`, run `run_1a9ad884`, isolated base `2ce0f8c`; owns only host resource history/service/tests and UI Resources model/component/tests, excluding protocol/browser/planning and T4/T5/T7 paths.
 - 2026-09-15 audit F1-F3 corrected and integrated at `66ac605`: no-cursor history and export use the bounded newest window, export truthfully marks cap omissions, and RP-6 task/delivery counters render with defensive incomplete-worker coverage. Parent verification passed host 534, UI 1,792/1 skip, focused typechecks, identity and direction.
 - Ownership ledger: diagnostics UI · correction `66ac605` integrated · M18-T3 still in-progress only for typed RP-4/RP-5/RP-7 producers and final mapping; next: consume containment counters, including T3-owned “Host / workers” provider queue label.
+
+#### M18-T8 notes
+- 2026-09-15 claimed for bounded architecture investigation at integrated T4/T5 base `2577bc6b`: define one role-aware pressure authority and the exact ordered release/refusal/ceiling/failure-attribution contracts before code. T7 still owns overlapping transport/server/client seams, so implementation waits for its reviewed rebase; no competing writes.
+- Ownership ledger: memory-pressure policy · investigation owner pending session identity · plan-only M18-T8 · read-only all relevant T4/T5/T6/T7 seams; no source/planning writes · base `2577bc6b` · prerequisite for implementation: integrated T7 contract · next: approve plan, continue same owner after T7.
 
 #### M18-T9 notes
 - 2026-09-14 claimed: specify the opaque durable revision and worker-free bounded snapshot/read contract together before code, because RP-9 is the validation foundation for RP-10/RP-11/RP-12. Implementation waits for the RP-1 protocol merge to avoid competing writers in shared inventory files.
