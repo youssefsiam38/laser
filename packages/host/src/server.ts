@@ -57,7 +57,7 @@ import { RelayClient, type RelayClientState, type RelayClientStats } from "./rel
 import { Router } from "./router.js";
 import { SessionLoadDelivery } from "./session-load-delivery.js";
 import { TranscriptDelivery, type SessionMembershipView } from "./transcript-delivery.js";
-import { SessionLifetime } from "./session-lifetime.js";
+import { SessionLifetime, type SessionLifetimeOptions } from "./session-lifetime.js";
 import { cleanupTaskLogsBeforeWorkers } from "./tasks/cleanup.js";
 import { SearchCancellation } from "./search-cancellation.js";
 import { SessionIndexCache } from "./session-index.js";
@@ -65,7 +65,7 @@ import { SessionProjection } from "./session-projection.js";
 import { SessionRevisions } from "./session-revision.js";
 import { environmentIdentity, type EnvironmentIdentity } from "./environment-identity.js";
 import { ViewCache } from "./views.js";
-import type { WorkerClient } from "./worker-client.js";
+import { WorkerRetiredError, type WorkerClient } from "./worker-client.js";
 import { WorkerPool, type WorkerPoolOptions } from "./worker-pool.js";
 
 export interface HostServerOptions {
@@ -91,6 +91,15 @@ export interface HostServerOptions {
   workerIdleMs?: number;
   /** Test seam for the pool's idle sweep cadence. */
   workerSweepMs?: number;
+  /**
+   * Internal seam for the session-lifetime policy (RP-4).
+   *
+   * Only so a test can drive the real policy on a real host instead of a
+   * stand-in. It is not configuration: nothing on the wire carries it, no
+   * settings file names it, and leaving it out gives the shipped behaviour,
+   * derived from `workerIdleMs`.
+   */
+  sessionLifetime?: SessionLifetimeOptions;
   /**
    * Extra browser origins allowed to open the WebSocket, on top of this host's
    * own `http://127.0.0.1:<port>` / `http://localhost:<port>`. Only add one you
@@ -502,7 +511,10 @@ export class HostServer {
     this.packages = new PackageService({
       agentDir,
       stateDir,
-      forward: async (cwd, method, params) => (await this.pool.get(cwd)).request(method, params),
+      // Retried once if it meets a worker that was retiring (RP-4): the
+      // refusal proves the request was never written, and `pool.get` waits for
+      // the decision, so the second attempt has a worker that is admitting.
+      forward: async (cwd, method, params) => this.askWorker(cwd, method, params),
       log: (line) => this.log(line),
     });
     this.setup = new SetupService({ stateDir });
@@ -527,6 +539,9 @@ export class HostServer {
       ...(options.workerSweepMs !== undefined ? { sweepMs: options.workerSweepMs } : {}),
       // A worker's first request already sees the agent definitions.
       prime: async (client, cwd, speculative) => {
+        // Priming runs inside the spawn, before anything can ask this worker to
+        // retire, and a failure here is reported and never fatal (RP-4): an
+        // older worker that refuses the method is still a working worker.
         await client.request("agents/sync", { snapshot: this.agents.snapshot() });
         // Naming must not wait for a sign-in this run may never see. The first
         // worker to come up benchmarks Namer, after priming so nothing that
@@ -606,6 +621,7 @@ export class HostServer {
       },
       {
         ...(options.workerIdleMs !== undefined ? { workerIdleMs: options.workerIdleMs } : {}),
+        ...(options.sessionLifetime ?? {}),
       },
     );
 
@@ -963,7 +979,8 @@ export class HostServer {
         this.agents.setBeamSuggestion(suggested);
         this.notify("agents/beam/choose-model", { suggested });
       } catch (error) {
-        // Nothing was shown, so the next sign-in may try again.
+        // Nothing was shown, so the next sign-in may try again — including
+        // when the worker was stopping and never received the request (RP-4).
         this.beamPrompted = false;
         this.log(`agents: could not propose a Beam model: ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -1081,6 +1098,25 @@ export class HostServer {
     if (!projectEnvTrustAllows(trust)) return {};
     const worker = projectEnvWorkerConfig(config);
     return worker ? { [ENV.projectEnv]: JSON.stringify(worker) } : {};
+  }
+
+  /**
+   * One request to a project's worker, from host-side background work.
+   *
+   * The router has its own retry for client requests; this is the same promise
+   * for the calls that do not come through it. A `WorkerRetiredError` means the
+   * bytes were never written, so sending them once more is safe even when the
+   * call is not idempotent — and by then `pool.get()` has waited for the
+   * retirement decision, so the second attempt either reaches the same worker
+   * (it refused) or a fresh one (it retired).
+   */
+  private async askWorker<R>(cwd: string, method: string, params: unknown): Promise<R> {
+    try {
+      return await (await this.pool.get(cwd)).request<R>(method, params);
+    } catch (error) {
+      if (!(error instanceof WorkerRetiredError)) throw error;
+      return (await this.pool.get(cwd)).request<R>(method, params);
+    }
   }
 
   /**

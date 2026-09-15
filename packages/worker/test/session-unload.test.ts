@@ -9,6 +9,8 @@
  */
 import { describe, expect, it } from "vitest";
 import { SESSION_SAFETY_MAX } from "@lasercode/protocol";
+import type { DriverReleaseReadiness } from "../src/driver.js";
+import { ErrorCodes, LIFETIME_RETRY } from "@lasercode/protocol";
 import type { ClientRequests, ContentBlock, JsonRpcMessage, ModelRef, SessionState, SessionUpdateParams, UiDialogRequest } from "@lasercode/protocol";
 import { WorkerServer } from "../src/server.js";
 import type { DriverEvent, DriverListener, SessionDriver } from "../src/driver.js";
@@ -23,6 +25,14 @@ class FakeDriver implements SessionDriver {
   history: { entries: unknown[]; leafId: string | null } = { entries: [], leafId: null };
   /** Resolves `entries()` only when a test lets it, so a read can be in flight. */
   entriesGate: Promise<void> | undefined;
+  /** What `prepareRelease()` answers; the default is a reopenable record. */
+  readiness: DriverReleaseReadiness = { ok: true };
+  /** Set to make `dispose()` fail; `disposeEmitsClosed` says whether it got that far. */
+  disposeFailure: Error | undefined;
+  disposeEmitsClosed = false;
+  releases = 0;
+  /** Runs while `prepareRelease()` is in flight, so a test can race the fence. */
+  onPrepare: (() => void) | undefined;
   /** Holds `open()` so a load is genuinely in flight while something else looks. */
   openGate: Promise<void> | undefined;
   /** Holds `dispose()` open, so a load can arrive while a release is running. */
@@ -74,9 +84,21 @@ class FakeDriver implements SessionDriver {
     return { ...this.history };
   }
   sessionHeader() { return { id: this.st.id, cwd: this.st.cwd }; }
+  async prepareRelease(): Promise<DriverReleaseReadiness> {
+    this.releases += 1;
+    this.onPrepare?.();
+    return this.readiness;
+  }
   async dispose() {
     this.disposing?.();
     if (this.disposeGate) await this.disposeGate;
+    if (this.disposeFailure) {
+      if (this.disposeEmitsClosed) {
+        this.disposed = true;
+        this.emit({ type: "closed", reason: "disposed" });
+      }
+      throw this.disposeFailure;
+    }
     this.disposed = true;
     this.emit({ type: "closed", reason: "disposed" });
   }
@@ -252,45 +274,102 @@ describe("pi/session/unload", () => {
     expect(w.updates().at(-1)!.params.epoch).not.toBe(beforeEpoch);
   });
 
-  it("lets a load that arrives during a release win, without disposing anything", async () => {
-    const w = world();
-    await w.load();
-    const releasing = w.send("pi/session/unload", { path: PATH, reason: "idle" });
-    const loading = w.send("session/load", { path: PATH });
-    await Promise.all([releasing.answered, loading.answered]);
-    // The client asking for the session is work in flight, so the release
-    // refuses rather than pulling the runtime out from under it.
-    expect(releasing.reply()).toMatchObject({ result: { unloaded: false, pins: [{ kind: "in_flight_request" }] } });
-    expect(loading.reply()).toHaveProperty("result");
-    expect(w.drivers).toHaveLength(1);
-    expect(w.drivers[0]!.disposed).toBe(false);
-    expect(w.server.openSessions()).toEqual([PATH]);
-  });
-
-  it("makes a load that arrives mid-release wait for it and then reopen, never on two runtimes", async () => {
+  it("refuses a release because somebody asked for the conversation, and the refused request works on retry", async () => {
     const w = world();
     await w.load();
     const driver = w.drivers[0]!;
-    let finishDispose = () => {};
-    driver.disposeGate = new Promise<void>((resolve) => { finishDispose = resolve; });
-    const disposing = new Promise<void>((resolve) => { driver.disposing = resolve; });
-    const releasing = w.send("pi/session/unload", { path: PATH, reason: "idle" });
-    await disposing;
+    // The request arrives exactly while the release is proving reopenability,
+    // which is inside the fence and after the first pin check.
+    let racing: ReturnType<typeof w.send> | undefined;
+    driver.onPrepare = () => { racing = w.send("session/prompt", { path: PATH, content: text("are you there") }); };
+    const refused = await w.unload();
+    expect(refused).toMatchObject({ unloaded: false, pins: [{ kind: "in_flight_request" }] });
+    expect(driver.disposed).toBe(false);
 
-    // The release is past its checks and inside `dispose()`. A load now must
-    // not be answered from the runtime that is going away.
-    const loading = w.send("session/load", { path: PATH });
-    await Promise.resolve();
+    // The racing request was refused before it ran, and said so retryably.
+    await racing!.answered;
+    const reply = racing!.reply() as { error?: { code: number; data?: { retry?: string } } };
+    expect(reply.error?.code).toBe(ErrorCodes.SessionBusy);
+    expect(reply.error?.data?.retry).toBe(LIFETIME_RETRY);
+
+    // And the retry lands on the runtime the refusal kept alive.
+    driver.onPrepare = undefined;
+    const retried = await w.call("session/prompt", { path: PATH, content: text("are you there") });
+    expect(retried).toHaveProperty("result");
+  });
+
+  it("refuses a load that arrives mid-release and serves it from the runtime that stayed", async () => {
+    const w = world();
+    await w.load();
+    const driver = w.drivers[0]!;
+    let racing: ReturnType<typeof w.send> | undefined;
+    driver.onPrepare = () => { racing = w.send("session/load", { path: PATH }); };
+    expect(await w.unload()).toMatchObject({ unloaded: false, pins: [{ kind: "in_flight_request" }] });
+    await racing!.answered;
+    expect((racing!.reply() as { error?: { code: number } }).error?.code).toBe(ErrorCodes.SessionBusy);
     expect(w.drivers).toHaveLength(1);
-    finishDispose();
-    await Promise.all([releasing.answered, loading.answered]);
-
-    expect(releasing.reply()).toMatchObject({ result: { unloaded: true, pins: [] } });
-    expect(loading.reply()).toHaveProperty("result");
-    expect(w.drivers).toHaveLength(2);
-    expect(w.drivers[0]!.disposed).toBe(true);
-    expect(w.drivers[1]!.disposed).toBe(false);
+    expect(w.drivers[0]!.disposed).toBe(false);
     expect(w.server.openSessions()).toEqual([PATH]);
+    // The retry is an ordinary load of the still-live session.
+    driver.onPrepare = undefined;
+    const reloaded = await w.load();
+    expect(reloaded.state.path).toBe(PATH);
+    expect(w.drivers).toHaveLength(1);
+  });
+
+  it("refuses when the conversation cannot be reopened from its record, and keeps serving it", async () => {
+    const w = world();
+    await w.load();
+    const driver = w.drivers[0]!;
+    for (const refusal of ["no_record", "identity_mismatch", "unreadable"] as const) {
+      driver.readiness = { ok: false, refusal, detail: `record ${refusal}` };
+      const answer = await w.unload();
+      expect(answer.unloaded, refusal).toBe(false);
+      expect(answer.pins.map((pin) => pin.kind), refusal).toEqual(["no_record"]);
+      expect(driver.disposed, refusal).toBe(false);
+      expect(w.server.openSessions()).toEqual([PATH]);
+    }
+    driver.readiness = { ok: false, refusal: "flush_failed", detail: "disk full" };
+    const flush = await w.unload();
+    expect(flush.pins.map((pin) => pin.kind)).toEqual(["close_failed"]);
+    expect(driver.disposed).toBe(false);
+
+    driver.readiness = { ok: true };
+    expect(await w.unload()).toEqual({ unloaded: true, pins: [] });
+  });
+
+  it("refuses a driver that cannot prove reopenability at all", async () => {
+    const w = world();
+    await w.load();
+    // A driver that does not implement the verb at all (the stub driver, an
+    // alternate runtime): the class method is removed from this instance.
+    Object.defineProperty(w.drivers[0]!, "prepareRelease", { value: undefined, configurable: true });
+    const answer = await w.unload();
+    expect(answer).toMatchObject({ unloaded: false, pins: [{ kind: "no_record" }] });
+    expect(w.drivers[0]!.disposed).toBe(false);
+  });
+
+  it("keeps serving a runtime that would not close, and refuses every later release of it", async () => {
+    const w = world();
+    await w.load();
+    const driver = w.drivers[0]!;
+    driver.disposeFailure = new Error("the engine would not shut down");
+    const failed = await w.unload();
+    expect(failed).toMatchObject({ unloaded: false, pins: [{ kind: "close_failed", detail: "the engine would not shut down" }] });
+    expect(w.server.openSessions()).toEqual([PATH]);
+    // Remembered: a later attempt, and the whole worker's retirement, refuse too.
+    expect((await w.unload()).pins.map((pin) => pin.kind)).toEqual(["close_failed"]);
+    expect((await w.safety()).sessions[0]!.pins.map((pin) => pin.kind)).toEqual(["close_failed"]);
+  });
+
+  it("reports an honest release when the runtime did go, even though dispose threw afterwards", async () => {
+    const w = world();
+    await w.load();
+    const driver = w.drivers[0]!;
+    driver.disposeFailure = new Error("late cleanup failed");
+    driver.disposeEmitsClosed = true;
+    expect(await w.unload()).toEqual({ unloaded: true, pins: [] });
+    expect(w.server.openSessions()).toEqual([]);
   });
 
   it("reports what every loaded session is holding, for the pool's retirement admission", async () => {
@@ -308,10 +387,12 @@ describe("pi/session/unload", () => {
 
   it("says its answer is not complete when it holds more sessions than one answer carries", async () => {
     const w = world();
-    const server = w.server as unknown as { sessions: Map<string, unknown> };
+    const runtimes = (w.server as unknown as { runtimes: { get(path: string): unknown; attach(live: unknown): void } }).runtimes;
     await w.load();
-    const only = server.sessions.get(PATH)!;
-    for (let index = 0; index < SESSION_SAFETY_MAX + 3; index += 1) server.sessions.set(`/tmp/unload/extra-${index}.jsonl`, only);
+    const only = runtimes.get(PATH) as { path: string };
+    for (let index = 0; index < SESSION_SAFETY_MAX + 3; index += 1) {
+      runtimes.attach({ ...only, path: `/tmp/unload/extra-${index}.jsonl` });
+    }
     const safety = await w.safety();
     expect(safety.sessions).toHaveLength(SESSION_SAFETY_MAX);
     expect(safety.complete).toBe(false);

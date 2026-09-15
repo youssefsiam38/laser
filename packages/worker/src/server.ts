@@ -22,7 +22,7 @@
  * growing the process.
  */
 
-import { AGENT_MAX_DEPTH_LIMIT, ENV, ErrorCodes, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, boundedHistoryWindow, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type SessionPin, type SessionSafety, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type SettingsScope, type TypedClientRequest, WIRE_NAMESPACE } from "@lasercode/protocol";
+import { AGENT_MAX_DEPTH_LIMIT, ENV, ErrorCodes, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type SettingsScope, type TypedClientRequest, WIRE_NAMESPACE } from "@lasercode/protocol";
 import { randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -41,6 +41,8 @@ import { RevisionCanonicalisationError, type SessionRevisionHeader } from "@lase
 import { SessionRevisionTracker } from "./history-revision.js";
 import { ReplayBudget, ReplayBuffer } from "./replay-buffer.js";
 import { sessionPins, type SessionSafetySnapshot } from "./session-safety.js";
+import { SessionRuntimes } from "./session-runtimes.js";
+import { WorkerLifetime } from "./worker-lifetime.js";
 import { assertFirstTurnAdmission, FirstTurnLock } from "./first-turn.js";
 import { PendingTray } from "./pending.js";
 import { GitService } from "./git.js";
@@ -113,13 +115,6 @@ function pathOf(req: TypedClientRequest): string | undefined {
   return typeof path === "string" ? path : undefined;
 }
 
-/** A release that lost its race with work arriving; carries what pinned it. */
-class PinnedDuringRelease extends Error {
-  constructor(readonly pins: SessionPin[]) {
-    super("the session was pinned before its runtime could be released");
-  }
-}
-
 interface PreAcceptanceHydration {
   /** Genuine accepted baseline captured before candidate runtime preparation. */
   state: SessionState;
@@ -142,6 +137,11 @@ interface Live {
   /** The harness's view of this session, once attached. */
   handle?: SessionHandle;
   /**
+   * Set when a release tried to close this runtime and could not: the
+   * conversation is still being served by it, and nothing may end it.
+   */
+  closeFailed?: string;
+  /**
    * Messages the person wrote while the agent was working. Laser's own list,
    * not the engine's: see `packages/worker/src/pending.ts`. Attached once the
    * session's path is known, because every publication names it.
@@ -152,25 +152,15 @@ interface Live {
 type Result<M extends keyof ClientRequests> = ClientRequests[M]["result"];
 
 export class WorkerServer {
-  private readonly sessions = new Map<string, Live>();
   /**
-   * Opens in flight, keyed by session path. `handle()` dispatches concurrently,
-   * so two `session/load`s for one path used to miss the `sessions` map, build
-   * two drivers on one Pi session file (AGENTS.md invariant 8) and orphan the
-   * first — its subscription still emitting, its runtime leaked. Nothing above
-   * can dedupe this: a desktop and a phone are two clients, and the pool's
-   * crash recovery can race a client's own reconnect.
+   * The sessions this worker holds and every fence around them (RP-4):
+   * one open per file (AGENTS.md invariant 8), a per-path release fence so
+   * nothing starts between a release's final check and its disposal, and the
+   * worker-wide retirement fence. See `session-runtimes.ts`.
    */
-  private readonly opening = new Map<string, Promise<Live>>();
-  /**
-   * Releases in flight, keyed by session path (RP-4). A `session/load` that
-   * races an unload waits for it and then re-opens: the pipe orders the two
-   * requests, but `handle()` serves them concurrently, and without this fence
-   * the load could answer with a runtime the unload is about to dispose.
-   */
-  private readonly unloading = new Map<string, Promise<void>>();
-  /** Requests being served right now, by session path; a pin while they run. */
-  private readonly inFlight = new Map<string, number>();
+  private readonly runtimes = new SessionRuntimes<Live>();
+  /** The two lifetime transitions over that table: release and retire (RP-4). */
+  private readonly lifetime: WorkerLifetime<Live>;
   /** The environment every durable revision this worker mints belongs to (RP-9). */
   private readonly environmentId: string;
   private readonly replayBuffer: number;
@@ -237,6 +227,11 @@ export class WorkerServer {
     // far below the per-session entitlement multiplied by every session a
     // worker can hold (RP-2 measured fifty of them in one worker).
     this.replayBudget = new ReplayBudget(options.replayBudgetBytes ?? REPLAY_BUDGET_BYTES);
+    this.lifetime = new WorkerLifetime<Live>({
+      runtimes: this.runtimes,
+      safetySnapshot: (live, releasing) => this.safetySnapshot(live, releasing),
+      withFirstTurnLease: (path, work) => this.firstTurnLock.run(path, work),
+    });
     // Configured by the host, machine-local and non-secret: the executable, its
     // arguments, and whether a person approved exactly that pair.
     const projectEnvConfig = readProjectEnvConfig();
@@ -256,7 +251,7 @@ export class WorkerServer {
     });
     const host: SessionHost = {
       openChild: (open) => this.openChild(open),
-      driver: (path) => this.sessions.get(path)?.driver,
+      driver: (path) => this.runtimes.get(path)?.driver,
       notify: (method, params) => this.notify(method, params),
       modelAvailable: (model) => this.modelAvailable(model),
       tasks: (path) => this.tasks.tasksOf(path),
@@ -326,7 +321,7 @@ export class WorkerServer {
 
   /** Paths of sessions currently open in this worker. */
   openSessions(): string[] {
-    return [...this.sessions.keys()];
+    return this.runtimes.paths();
   }
 
   notify<M extends keyof HostNotifications>(method: M, params: HostNotifications[M]): void {
@@ -343,24 +338,35 @@ export class WorkerServer {
       this.respondError(id, error);
       return;
     }
-    // A request naming a session pins that session while it is being served
-    // (RP-4): releasing a runtime from under a read in flight would answer a
-    // question the caller asked about a session that still exists. The unload
-    // request itself is excluded, or it would pin what it came to release.
-    const held = req.method === "pi/session/unload" ? undefined : pathOf(req);
-    if (held !== undefined) this.inFlight.set(held, (this.inFlight.get(held) ?? 0) + 1);
+    // Admission, before anything runs (RP-4).
+    //
+    // A request naming a session is counted against that session while it is
+    // served, so a release cannot start under a read in flight; a request that
+    // arrives while that session is being released, or while this worker is
+    // retiring, is refused with a sentence rather than queued — a queue would
+    // be memory a peer controls, and the refusal is what makes both fences
+    // fail closed. The two lifetime verbs are privileged: they are the fences.
+    const privileged = req.method === "pi/session/unload" || req.method === "pi/worker/retire";
+    let release: () => void;
+    try {
+      release = this.runtimes.admit(privileged ? undefined : pathOf(req), { privileged });
+    } catch (error) {
+      this.respondError(req.id, error);
+      return;
+    }
     try {
       const result = await this.dispatch(req);
       this.options.send({ jsonrpc: "2.0", id: req.id, result });
     } catch (error) {
       this.respondError(req.id, error);
     } finally {
-      if (held !== undefined) {
-        const left = (this.inFlight.get(held) ?? 1) - 1;
-        if (left > 0) this.inFlight.set(held, left);
-        else this.inFlight.delete(held);
-      }
+      release();
     }
+  }
+
+  /** Accepted handlers have settled (RP-4). False means the bound passed first. */
+  drain(timeoutMs?: number): Promise<boolean> {
+    return this.runtimes.drain(timeoutMs);
   }
 
   async dispose(): Promise<void> {
@@ -368,11 +374,11 @@ export class WorkerServer {
     this.transcribeService = undefined;
     await this.mcpService?.dispose().catch(() => {});
     this.mcpService = undefined;
-    for (const live of this.sessions.values()) {
+    for (const live of this.runtimes.values()) {
       live.unsubscribe();
       await this.firstTurnLock.run(live.path, () => live.driver.dispose()).catch(() => {});
     }
-    this.sessions.clear();
+    this.runtimes.clear();
     this.runningTools.clear();
     this.unnamed.clear();
   }
@@ -447,25 +453,29 @@ export class WorkerServer {
         // The app releasing an idle runtime (RP-4). Deliberately not `close`:
         // close is the file-move fence and refuses only a streaming turn, while
         // this refuses everything a release would destroy and says what.
-        return (await this.unloadSession(req.params.path)) satisfies Result<"pi/session/unload">;
+        return (await this.lifetime.unload(req.params.path)) satisfies Result<"pi/session/unload">;
 
       case "pi/worker/safety":
-        // The same predicate, read-only, for the host's retirement admission:
-        // automatic retirement must be exactly as careful as unload.
+        // The same predicate, read-only, for diagnostics and tests. The
+        // retirement *decision* is `pi/worker/retire` below, which takes it
+        // under a fence rather than from a snapshot.
         return this.sessionSafety() satisfies Result<"pi/worker/safety">;
+
+      case "pi/worker/retire":
+        return await this.lifetime.retire(req.params.mode);
 
       case "pi/session/close": {
         // The host is about to move the file (M13-T58): it must have no writer
         // while that happens (AGENTS.md invariant 8). Disposing the driver
         // emits `closed`, which drops the session from every table here.
-        const live = this.sessions.get(req.params.path);
+        const live = this.runtimes.get(req.params.path);
         if (!live) return { closed: false } satisfies Result<"pi/session/close">;
         return this.firstTurnLock.run(live.path, async () => {
           if (live.driver.state().isStreaming) {
             throw new ProtocolError(ErrorCodes.SessionBusy, "This chat is still answering. Wait for it to finish, or stop it, then move it.");
           }
           await live.driver.dispose();
-          this.sessions.delete(live.path);
+          this.runtimes.drop(live.path);
           return { closed: true } satisfies Result<"pi/session/close">;
         });
       }
@@ -501,9 +511,8 @@ export class WorkerServer {
             // requests by the new path find it. Clients learn the new path from
             // the result and from the state update that follows.
             const previous = live.path;
-            this.sessions.delete(previous);
             live.path = state.path;
-            this.sessions.set(state.path, live);
+            this.runtimes.rekey(previous, state.path);
             this.rekeySessionState(previous, state.path);
           }
           this.onDriverEvent(live, { type: "update", update: { kind: "state", state } });
@@ -550,7 +559,7 @@ export class WorkerServer {
             const seq = live.seq;
             const baseline = live.preAcceptance;
             const snapshot = baseline ?? await live.driver.entries({ live: !("before" in req.params.window) });
-            if (this.sessions.get(live.path) !== live) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation was closed. Open it again.");
+            if (this.runtimes.get(live.path) !== live) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation was closed. Open it again.");
             if (seq !== live.seq || baseline !== live.preAcceptance) continue;
             const active = "live" in snapshot ? snapshot.live : undefined;
             // Computed from the very snapshot being returned, inside the same
@@ -662,7 +671,7 @@ export class WorkerServer {
             // RP-4's own rows: the runtimes this worker holds, the replay it is
             // keeping for them against its own ceiling, and the per-session
             // tables beside them. Counts of state, never a share of memory.
-            workerSessions: { count: this.sessions.size },
+            workerSessions: { count: this.runtimes.size },
             workerReplay: { count: replay.updates, bytes: replay.bytes },
             workerCaches: { count: this.cacheRecords() },
           },
@@ -713,7 +722,7 @@ export class WorkerServer {
         // A session loaded before this worker knew about git lines (or a
         // caller naming a session this worker never opened) still gets a
         // baseline from now on, so the numbers start counting at first ask.
-        if (req.params.path !== undefined && this.sessions.has(req.params.path)) await git.baseline(req.params.path);
+        if (req.params.path !== undefined && this.runtimes.has(req.params.path)) await git.baseline(req.params.path);
         return (await git.status(req.params.path)) satisfies Result<"pi/project/git">;
       }
 
@@ -1011,7 +1020,7 @@ export class WorkerServer {
   private async reloadLiveSettings(scope: SettingsScope): Promise<void> {
     const cwd = resolve(this.options.cwd);
     await Promise.all(
-      [...this.sessions.values()].map(async (live) => {
+      [...this.runtimes.values()].map(async (live) => {
         const driver = live.driver;
         if (!driver.reloadSettings) return;
         try {
@@ -1142,12 +1151,12 @@ export class WorkerServer {
   }
 
   private async sessionLoad(params: ClientRequests["session/load"]["params"]): Promise<Result<"session/load">> {
-    // A release of this exact session may be in flight (RP-4). Wait for it and
-    // then open again: the alternative is answering with a runtime that is
-    // about to be disposed, which is the one thing the fence exists to stop.
-    const releasing = this.unloading.get(params.path);
-    if (releasing) await releasing.catch(() => {});
-    const existing = this.sessions.get(params.path);
+    // A release of this exact session may have been in flight when this load
+    // was admitted (the admission fence refuses one that arrives later). Wait
+    // for it and then open again: answering from a runtime that is about to be
+    // disposed is the one thing these fences exist to stop.
+    await this.runtimes.settled(params.path);
+    const existing = this.runtimes.get(params.path);
     if (existing) {
       // A no-signal extension question may be holding prompt preflight. Never
       // queue reconnect hydration behind the lease that only its answer can
@@ -1165,7 +1174,7 @@ export class WorkerServer {
         ...(await this.loadRevision(existing)),
       };
     }
-    const inFlight = this.opening.get(params.path);
+    const inFlight = this.runtimes.opening(params.path);
     if (inFlight) {
       const live = await inFlight;
       const state = live.driver.state();
@@ -1173,24 +1182,18 @@ export class WorkerServer {
       return { state: this.decorate(live, state), replayFrom: this.replayFloor(live, params.fromSeq), seq: live.seq, ...(await this.loadRevision(live)) };
     }
     // Registered synchronously, before `open()` gets a chance to yield.
-    const promise = (async () => {
+    const live = await this.runtimes.withLoad(params.path, async () => {
       // Which agent this stored session runs as: its own record, else the
       // synced default. Read from the file only; the engine is not open yet.
       const { definition, role, record } = await this.recoverAgent(params.path);
       const handle = this.harness.prepareSession({ role, definition, record, projectCwd: this.options.cwd });
       return this.openAndAttach({ cwd: this.options.cwd, sessionPath: params.path, ...this.commonOpen(), agent: this.agentOptions(definition, handle) }, handle);
-    })();
-    this.opening.set(params.path, promise);
-    try {
-      const live = await promise;
-      // Opening the session already emitted updates (the companion's
-      // `session_start` report, the first state); the reply carries the state
-      // they produced and the transcript snapshot that follows covers them, so
-      // the client is told the watermark it may safely stamp.
-      return { state: this.decorate(live, live.driver.state()), replayFrom: 0, seq: live.seq, ...(await this.loadRevision(live)) };
-    } finally {
-      this.opening.delete(params.path);
-    }
+    });
+    // Opening the session already emitted updates (the companion's
+    // `session_start` report, the first state); the reply carries the state
+    // they produced and the transcript snapshot that follows covers them, so
+    // the client is told the watermark it may safely stamp.
+    return { state: this.decorate(live, live.driver.state()), replayFrom: 0, seq: live.seq, ...(await this.loadRevision(live)) };
   }
 
   /**
@@ -1334,7 +1337,7 @@ export class WorkerServer {
         return;
       }
       const name = await this.namer.nameSession(text);
-      if (!name || !this.sessions.has(live.path) || live.driver.state().name) return;
+      if (!name || !this.runtimes.has(live.path) || live.driver.state().name) return;
       await live.driver.rename(name).catch(() => undefined);
     } catch (error) {
       console.error(`${PRODUCT_NAME} worker: could not name ${live.path}:`, error instanceof Error ? error.message : error);
@@ -1357,7 +1360,7 @@ export class WorkerServer {
     if (!this.namer.enabled() || this.unnamed.size === 0) return;
     for (const [path, text] of [...this.unnamed]) {
       this.unnamed.delete(path);
-      const live = this.sessions.get(path);
+      const live = this.runtimes.get(path);
       // Gone, or named since — by the person, or by the harness after its
       // `subagent_name`. Namer never renames over either.
       if (!live || live.driver.state().name) continue;
@@ -1411,7 +1414,7 @@ export class WorkerServer {
     live.unsubscribe = driver.subscribe((event) => (ready ? this.onDriverEvent(live, event) : queued.push(event)));
     try {
       const state = await driver.open(openOptions);
-      const already = this.sessions.get(state.path);
+      const already = this.runtimes.get(state.path);
       if (already && already !== live) {
         // Someone else got there first (a `session/new` that landed on an
         // existing path, say). One writer per session file, always.
@@ -1421,7 +1424,7 @@ export class WorkerServer {
         return already;
       }
       live.path = state.path;
-      this.sessions.set(state.path, live);
+      this.runtimes.attach(live);
       if (handle) {
         handle.attach(state.path, state.id);
         live.handle = handle;
@@ -1478,43 +1481,9 @@ export class WorkerServer {
 
   // ------------------------------------------------------- session lifetime
 
-  /**
-   * What each loaded session is holding (RP-4), newest table order.
-   *
-   * One predicate, two readers: this answer is what `pi/worker/safety` returns
-   * and what `pi/session/unload` checks, so the host's automatic retirement and
-   * its automatic unload cannot disagree about what is safe.
-   *
-   * Sessions being opened or released are listed too, pinned, because the host
-   * asks this about *its* bookkeeping: a session it believes is there and this
-   * answer does not mention would otherwise read as an absence of work when it
-   * is really a load in flight.
-   *
-   * `complete` is the honest part. A worker with more sessions than
-   * {@link SESSION_SAFETY_MAX} cannot say everything in one answer, and an
-   * answer that was cut must not be read as "nothing is holding anything".
-   */
+  /** What each session is holding, and whether that list is the whole truth. */
   sessionSafety(): { sessions: SessionSafety[]; complete: boolean } {
-    const out: SessionSafety[] = [];
-    let complete = true;
-    const add = (row: SessionSafety): void => {
-      if (out.length >= SESSION_SAFETY_MAX) {
-        complete = false;
-        return;
-      }
-      out.push(row);
-    };
-    for (const live of this.sessions.values()) add({ path: live.path, pins: sessionPins(this.safetySnapshot(live)) });
-    const listed = new Set(out.map((row) => row.path));
-    for (const path of this.opening.keys()) {
-      if (!listed.has(path)) add({ path, pins: [{ kind: "opening", detail: "a load has not answered yet" }] });
-    }
-    for (const path of this.unloading.keys()) {
-      if (!listed.has(path) && !out.some((row) => row.path === path)) {
-        add({ path, pins: [{ kind: "opening", detail: "a release has not finished yet" }] });
-      }
-    }
-    return { sessions: out, complete };
+    return this.lifetime.safety();
   }
 
   /**
@@ -1553,8 +1522,8 @@ export class WorkerServer {
       // because `first_turn` already pins it.
     }
     return {
-      opening: this.opening.has(live.path) || (!releasing && this.unloading.has(live.path)),
-      inFlightRequests: this.inFlight.get(live.path) ?? 0,
+      opening: this.runtimes.opening(live.path) !== undefined,
+      inFlightRequests: this.runtimes.inFlightFor(live.path),
       streaming,
       compacting,
       firstTurn: (!releasing && this.firstTurnLock.busy(live.path)) || live.preAcceptance !== undefined,
@@ -1565,66 +1534,26 @@ export class WorkerServer {
       queuedWork: queued,
       trayMessages: live.pending?.list().length ?? 0,
       runningTasks: this.tasks.tasksOf(live.path).filter((task) => task.status === "running").length,
-      // Only while a name can actually arrive. A prompt parked because no
-      // model was connected waits for one that may never appear, and a pin on
-      // that would keep a dormant runtime for the life of the worker.
-      naming: this.unnamed.has(live.path) && this.namer.enabled(),
+      // A first prompt waiting to be named is work this runtime is the only
+      // holder of: `nameWaitingSessions()` performs it, and closing the session
+      // erases it. The wait is bounded in count (`UNNAMED_MAX`) but **not in
+      // time**: with no model ever connected, this pin keeps that one runtime
+      // until the conversation is closed. That is the honest trade — an
+      // untitled conversation is a small loss, silently erasing queued work is
+      // not — and it is what the approved plan asked for.
+      naming: this.unnamed.has(live.path),
       runningTools: this.runningTools.get(live.path)?.size ?? 0,
       hasRecord,
+      ...(live.closeFailed !== undefined ? { closeFailed: live.closeFailed } : {}),
     };
-  }
-
-  /**
-   * Release one session's runtime, or refuse with the reasons (RP-4).
-   *
-   * Nothing is cancelled: if anything at all is pinning the session the answer
-   * is the pin list and the session keeps working exactly as it was. A release
-   * disposes the driver, which emits `closed` and drops every per-session table
-   * through the one place that owns that list.
-   */
-  private async unloadSession(path: string): Promise<{ unloaded: boolean; pins: SessionPin[] }> {
-    const inFlight = this.unloading.get(path);
-    if (inFlight) {
-      await inFlight.catch(() => {});
-      return { unloaded: !this.sessions.has(path), pins: [] };
-    }
-    const live = this.sessions.get(path);
-    // Not held here at all: idempotent, and never an error. The host may be
-    // acting on bookkeeping a crash recovery already changed.
-    if (!live) return { unloaded: false, pins: [] };
-    const pins = sessionPins(this.safetySnapshot(live));
-    if (pins.length > 0) return { unloaded: false, pins };
-    const release = (async () => {
-      await this.firstTurnLock.run(path, async () => {
-        // Re-checked inside the fence: preflight could have taken the session
-        // between the decision and the lease.
-        const current = this.sessions.get(path);
-        if (!current) return;
-        const late = sessionPins(this.safetySnapshot(current, true));
-        if (late.length > 0) throw new PinnedDuringRelease(late);
-        current.buffer.dispose();
-        await current.driver.dispose();
-        this.sessions.delete(path);
-      });
-    })();
-    this.unloading.set(path, release.then(() => undefined, () => undefined));
-    try {
-      await release;
-      return { unloaded: true, pins: [] };
-    } catch (error) {
-      if (error instanceof PinnedDuringRelease) return { unloaded: false, pins: error.pins };
-      throw error;
-    } finally {
-      this.unloading.delete(path);
-    }
   }
 
   /** Replay counters for this worker, for tests and the retained-store report. */
   replayStats(): { sessions: number; updates: number; bytes: number; limitBytes: number; evictions: number; floorAdvances: number } {
     let updates = 0;
-    for (const live of this.sessions.values()) updates += live.buffer.size;
+    for (const live of this.runtimes.values()) updates += live.buffer.size;
     return {
-      sessions: this.sessions.size,
+      sessions: this.runtimes.size,
       updates,
       bytes: this.replayBudget.bytes,
       limitBytes: this.replayBudget.limitBytes,
@@ -1640,7 +1569,7 @@ export class WorkerServer {
    */
   private cacheRecords(): number {
     let records = this.unnamed.size;
-    for (const live of this.sessions.values()) records += live.pending?.list().length ?? 0;
+    for (const live of this.runtimes.values()) records += live.pending?.list().length ?? 0;
     for (const ids of this.runningTools.values()) records += ids.size;
     return records;
   }
@@ -1648,7 +1577,7 @@ export class WorkerServer {
   // ------------------------------------------------------------- sessions
 
   private live(path: string): Live {
-    const live = this.sessions.get(path);
+    const live = this.runtimes.get(path);
     if (!live) throw new ProtocolError(ErrorCodes.SessionNotFound, `session ${path} is not open in this worker`);
     return live;
   }
@@ -1927,7 +1856,7 @@ export class WorkerServer {
   private ownerOfDialog(id: string): Live | undefined {
     let blind: Live | undefined;
     let blindCount = 0;
-    for (const live of this.sessions.values()) {
+    for (const live of this.runtimes.values()) {
       const pendingUi = (live.driver as { pendingUi?: () => Array<{ id: string }> }).pendingUi;
       if (typeof pendingUi === "function") {
         if (pendingUi.call(live.driver).some((request) => request.id === id)) return live;
@@ -2013,7 +1942,7 @@ export class WorkerServer {
         return;
       case "closed":
         live.unsubscribe();
-        this.sessions.delete(live.path);
+        this.runtimes.drop(live.path);
         // The suffix this session was entitled to returns to the worker's
         // allowance (RP-4); a released session keeps no replay.
         live.buffer.dispose();
@@ -2041,7 +1970,7 @@ export class WorkerServer {
    */
   private applyLogBudgets(): void {
     for (const { path, bytes } of this.tasks.logBudgets()) {
-      this.sessions.get(path)?.driver.deliverExtensionCommand?.({ type: "lasercode/task/log-budget", bytes });
+      this.runtimes.get(path)?.driver.deliverExtensionCommand?.({ type: "lasercode/task/log-budget", bytes });
     }
   }
 
@@ -2105,7 +2034,7 @@ export class WorkerServer {
     const label = await this.namer.labelTool(live.path, toolCallId, toolName, args, {
       stillRunning: () => this.runningTools.get(live.path)?.has(toolCallId) === true,
     });
-    if (!label || !this.sessions.has(live.path)) return;
+    if (!label || !this.runtimes.has(live.path)) return;
     this.notify("pi/extension/message", { path: live.path, message: { type: "lasercode/namer/label", toolCallId, label } });
   }
 

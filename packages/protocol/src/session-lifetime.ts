@@ -59,7 +59,9 @@ export type SessionPinKind =
   /** Tool labels are being produced for calls that are still running. */
   | "tool_labeling"
   /** There is no durable record to reopen from, so releasing would lose the session. */
-  | "no_record";
+  | "no_record"
+  /** The runtime could not be closed down cleanly, so it is still serving. */
+  | "close_failed";
 
 export const SESSION_PIN_KINDS: readonly SessionPinKind[] = [
   "opening",
@@ -77,6 +79,7 @@ export const SESSION_PIN_KINDS: readonly SessionPinKind[] = [
   "naming",
   "tool_labeling",
   "no_record",
+  "close_failed",
 ] as const;
 
 /**
@@ -102,6 +105,10 @@ export const SESSION_WORK_PIN_KINDS: readonly SessionPinKind[] = [
   "queued_work",
   "pending_tray",
   "task",
+  // A runtime that could not be closed is work in the plainest sense: the
+  // conversation is still being served by it, and ending the process would end
+  // that conversation.
+  "close_failed",
 ] as const;
 
 export function isSessionWorkPin(kind: SessionPinKind): boolean {
@@ -131,8 +138,41 @@ export const SESSION_SAFETY_MAX = 512;
 /** Bound for a pin's detail text. */
 export const SESSION_PIN_DETAIL_MAX = 120;
 
+/**
+ * The marker a lifetime fence puts in its refusal's `data` (RP-4).
+ *
+ * Both fences refuse **before** the request is acted on — a release is refused
+ * by the arrival itself, a retirement never reopens — so the host may safely
+ * send it once more: for a release, on the same runtime, which the arrival has
+ * just kept alive; for a retirement, on the worker that replaces this one.
+ * Nothing is queued anywhere, so nothing can grow.
+ */
+export const LIFETIME_RETRY = "lifetime_fence";
+
 /** Why the host asked for a release. Diagnostic only; the answer never depends on it. */
 export type SessionUnloadReason = "idle" | "budget" | "pressure";
+
+/**
+ * Who asked for a worker to retire (RP-4).
+ *
+ * `automatic` is the idle sweep and refuses on any pin at all. `explicit` is a
+ * person stopping this project's worker (or a Feature toggle restarting it) and
+ * refuses on {@link SESSION_WORK_PIN_KINDS}: the advisory pins are moments, not
+ * work, and a person who asked for a stop is not told to wait for a tool label.
+ */
+export type WorkerRetireMode = "automatic" | "explicit";
+
+/**
+ * Why a worker refused to retire.
+ *
+ * - `pinned` — a conversation is holding work; `pins` says which.
+ * - `arrived` — a request reached this worker while it was deciding, or work
+ *   accepted earlier did not settle inside the drain bound. Somebody is about
+ *   to use it, so it stays.
+ * - `incomplete` — the worker could not describe everything it holds, and an
+ *   answer that was cut is never read as "nothing is holding anything".
+ */
+export type WorkerRetireRefusal = "pinned" | "arrived" | "incomplete";
 
 export const sessionPinSchema = z
   .object({
@@ -142,6 +182,7 @@ export const sessionPinSchema = z
   .strict();
 
 export const sessionLifetimeParamsSchemas = {
+  "pi/worker/retire": z.object({ mode: z.enum(["automatic", "explicit"]) }).strict(),
   "pi/session/unload": z
     .object({
       path: z.string().min(1).max(4096),
@@ -175,6 +216,24 @@ declare module "./messages.js" {
      * than unload: the pool asks this before it retires a worker nobody is
      * following, rather than deciding from its own coarser bookkeeping.
      */
+    /**
+     * Host → an already-live worker: retire, if and only if nothing in this
+     * worker is holding work.
+     *
+     * The transition is the worker's, not the host's: it closes admission
+     * synchronously, drains what it had already accepted, re-evaluates the same
+     * canonical predicate under that fence, and either refuses (admission
+     * reopens; the worker keeps serving) or acknowledges (admission never
+     * reopens, and the host may end the pipe). A host that decided from a
+     * snapshot and then killed the process could destroy a request accepted in
+     * between; this cannot.
+     */
+    "pi/worker/retire": {
+      params: { mode: WorkerRetireMode };
+      result:
+        | { retiring: true }
+        | { retiring: false; pins: SessionSafety[]; reason: WorkerRetireRefusal };
+    };
     "pi/worker/safety": {
       params: {};
       result: {

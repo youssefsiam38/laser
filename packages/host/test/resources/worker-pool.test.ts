@@ -19,7 +19,23 @@ import { Socket } from "node:net";
 const cwd = process.argv[process.argv.indexOf("--cwd") + 1];
 const socket = new Socket({ fd: 3, readable: true, writable: true });
 socket.write(JSON.stringify({ jsonrpc: "2.0", method: "pi/worker/status", params: { cwd, status: "ready" } }) + "\\n");
-socket.on("data", () => {});
+// RP-4: retirement is the worker's own transition, so a worker that is asked
+// answers. This one holds nothing, so it always agrees.
+let buffer = "";
+socket.setEncoding("utf8");
+socket.on("data", (chunk) => {
+  buffer += chunk;
+  let index;
+  while ((index = buffer.indexOf("\\n")) >= 0) {
+    const line = buffer.slice(0, index);
+    buffer = buffer.slice(index + 1);
+    if (!line) continue;
+    const req = JSON.parse(line);
+    if (req.id === undefined) continue;
+    const result = req.method === "pi/worker/retire" ? { retiring: true } : { ok: true };
+    socket.write(JSON.stringify({ jsonrpc: "2.0", id: req.id, result }) + "\\n");
+  }
+});
 socket.on("end", () => process.exit(0));
 `;
 

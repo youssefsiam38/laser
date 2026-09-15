@@ -87,6 +87,18 @@ let base: string;
 let host: HostServer;
 let stub: Awaited<ReturnType<typeof stubProvider>>;
 
+/** The same host, started again over the same directories. */
+function restartedHost(): HostServer {
+  return new HostServer({
+    agentDir: join(base, "agent"),
+    sessionDir: join(base, "sessions"),
+    stateDir: join(base, "state"),
+    workerIdleMs: 600_000,
+    workerSweepMs: 0,
+    log: () => {},
+  });
+}
+
 beforeEach(async () => {
   base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-unload-`));
   for (const dir of ["project", "agent"]) mkdirSync(join(base, dir), { recursive: true });
@@ -116,7 +128,7 @@ afterEach(async () => {
 
 describe.skipIf(!existsSync(defaultWorkerMain()))("releasing a session's runtime, end to end", () => {
   it("brings the same conversation back: same revision, same branch, same durable records", async () => {
-    const client = new Client();
+    let client = new Client();
     await client.connect((await host.listen()).url);
     const cwd = join(base, "project");
     try {
@@ -143,8 +155,27 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("releasing a session's runtime
       // and only then may the runtime go.
       await client.request("pi/session/detach", { path: state.path });
       expect(host.sessionMembership().holders(state.path)).toBe(0);
+
+      // With no naming model connected, this worker is still holding the queued
+      // naming work for that first prompt, and it says so rather than dropping
+      // it (RP-4, review §5). The honest cost: with a model never connected,
+      // this one runtime stays until the conversation is closed.
+      const naming = await host.pool.unloadSession(cwd, state.path, "idle");
+      expect(naming).toMatchObject({ unloaded: false, pins: [{ kind: "naming" }] });
+
+      // A new host is a new worker with nothing queued, which is the ordinary
+      // way that intent ends: the conversation is loaded again from its record.
+      client.close();
+      await host.close();
+      host = restartedHost();
+      const second = new Client();
+      await second.connect((await host.listen()).url);
+      await second.request("session/load", { path: state.path });
+      await second.request("pi/session/detach", { path: state.path });
+      expect(host.sessionMembership().holders(state.path)).toBe(0);
       const released = await host.pool.unloadSession(cwd, state.path, "idle");
       expect(released).toEqual({ unloaded: true, pins: [] });
+      client = second;
       expect(host.pool.openSessions(cwd)).toEqual([]);
       // Nothing was written, moved or deleted by the release itself.
       expect(readFileSync(state.path, "utf8")).toBe(bytesBefore);

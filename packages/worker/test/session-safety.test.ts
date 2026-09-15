@@ -44,6 +44,7 @@ const SOURCES: Array<[SessionPinKind, Partial<SessionSafetySnapshot>]> = [
   ["naming", { naming: true }],
   ["tool_labeling", { runningTools: 2 }],
   ["no_record", { hasRecord: false }],
+  ["close_failed", { closeFailed: "the engine could not close it" }],
 ];
 
 describe("sessionPins", () => {
@@ -78,6 +79,9 @@ describe("sessionPins", () => {
   it("classifies work pins, which is what an explicit stop refuses on", () => {
     for (const kind of SESSION_WORK_PIN_KINDS) expect(isSessionWorkPin(kind), kind).toBe(true);
     for (const kind of ["naming", "tool_labeling", "no_record"] as const) expect(isSessionWorkPin(kind), kind).toBe(false);
+    // A runtime that could not be closed is still serving the conversation, so
+    // an explicit stop refuses on it too.
+    expect(isSessionWorkPin("close_failed")).toBe(true);
     // Automatic release refuses on *any* pin, so the work set is a subset and
     // never the whole vocabulary: the two lists must not drift into one.
     expect(SESSION_WORK_PIN_KINDS.length).toBeLessThan(SESSION_PIN_KINDS.length);

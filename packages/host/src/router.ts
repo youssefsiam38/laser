@@ -28,6 +28,8 @@ import { ENVIRONMENT_DESCRIBE_METHOD, ErrorCodes, PRODUCT_DISPLAY_NAME, PRODUCT_
 import { existsSync, statSync, unlinkSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { HOST_ENVIRONMENT_METHOD, applyHostEnvironment } from "./environment.js";
+import { LIFETIME_RETRY } from "@lasercode/protocol";
+import { WorkerRetiredError } from "./worker-client.js";
 import type { AccessControl, ActorIdentity, RequestAccess } from "./access.js";
 import { unknownMethodDigest, type AccessAudit } from "./access-audit.js";
 import { destinationFor, rewriteSessionFile } from "./session-move.js";
@@ -1093,7 +1095,27 @@ export class Router {
    * per-project methods, by upload id for dictation chunks, by session path
    * for everything else.
    */
+  /**
+   * Forward one request to a worker, retrying exactly once when a lifetime
+   * fence refused it (RP-4).
+   *
+   * Both refusals happen **before** the request is acted on: a release fence
+   * refuses at admission and the arrival is what makes that release refuse
+   * itself, so the retry lands on the runtime that stayed; a retiring worker's
+   * refusal never reaches the pipe at all (`WorkerRetiredError.written` is
+   * false), so the retry opens the worker that replaces it. That is why even a
+   * `session/prompt` is safe to send again here: it was never delivered.
+   */
   private async forwardToWorker(req: TypedClientRequest): Promise<unknown> {
+    try {
+      return await this.forwardOnce(req);
+    } catch (error) {
+      if (!retryableLifetimeRefusal(error)) throw error;
+      return this.forwardOnce(req);
+    }
+  }
+
+  private async forwardOnce(req: TypedClientRequest): Promise<unknown> {
     // A brand-new composer has a project but no session path yet. The worker
     // answers from a disposable Pi runtime, so listing commands does not
     // create an empty transcript.
@@ -1171,7 +1193,11 @@ export class Router {
         const state = (result as { state?: SessionState } | null)?.state;
         const forked = state?.path;
         if (forked && cwd && forked !== path) {
-          this.pool.bindSession(forked, cwd);
+          // One runtime, one row (RP-4): the fork moved the session's file, so
+          // the pool's bookkeeping moves with it. Leaving the source path
+          // behind would leave a row nobody serves, and every later lifetime
+          // question about this worker would disagree with it for ever.
+          this.pool.rekeySession(path, forked, cwd);
           if (state) this.noteUnwritten(state);
         }
         if (req.method === "pi/session/fork" || req.method === "pi/session/navigate" || req.method === "pi/session/compact") {
@@ -1333,6 +1359,23 @@ export class Router {
     }
     return worker;
   }
+}
+
+/**
+ * Whether a failure is a lifetime fence saying "not now" (RP-4).
+ *
+ * Two shapes, one meaning, and both prove the request was never acted on: a
+ * worker whose admission was closed for a retirement decision refused it before
+ * writing anything, and a worker releasing a session refused it at admission
+ * with the retry marker in the error's data.
+ */
+function retryableLifetimeRefusal(error: unknown): boolean {
+  if (error instanceof WorkerRetiredError) return true;
+  if (error instanceof WorkerRpcError) {
+    const data = error.rpc.data as { retry?: unknown } | undefined;
+    return data?.retry === LIFETIME_RETRY;
+  }
+  return false;
 }
 
 function labelOf(name: string): string {

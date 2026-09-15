@@ -40,6 +40,10 @@ socket.on("data", (chunk) => {
     // the pool's own bookkeeping is made by the test calling bindSession.
     if (req.method === "pi/test/holds") { holds = req.params.paths; send({ jsonrpc: "2.0", id: req.id, result: {} }); continue; }
     if (req.method === "pi/worker/safety") { send({ jsonrpc: "2.0", id: req.id, result: { sessions: holds.map((path) => ({ path, pins: [] })), complete: true } }); continue; }
+    // RP-4: retirement is the worker's own transition. This one holds nothing
+    // that pins it, so it always agrees; a test that wants a refusal uses a
+    // worker of its own (see session-lifetime.test.ts).
+    if (req.method === "pi/worker/retire") { send({ jsonrpc: "2.0", id: req.id, result: { retiring: true } }); continue; }
     if (req.method === "pi/test/argv") { send({ jsonrpc: "2.0", id: req.id, result: { argv: process.argv.slice(2), processCwd: process.cwd() } }); continue; }
     if (req.method === "session/load" && req.params.path === "/sessions/unwritten.jsonl") { send({ jsonrpc: "2.0", id: req.id, error: { code: -32001, message: "No saved transcript. Start a new session." } }); continue; }
     send({ jsonrpc: "2.0", id: req.id, result: { ok: true, method: req.method } });

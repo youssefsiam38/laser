@@ -306,6 +306,7 @@ export const METHOD_POLICY = {
   // app managing its own runtimes on this machine, never a client's call.
   "pi/session/unload": { scope: "work_control", reach: "native", refusal: NATIVE_SYNC_REFUSAL },
   "pi/worker/safety": { scope: "diagnostics", reach: "native", refusal: NATIVE_SYNC_REFUSAL },
+  "pi/worker/retire": { scope: "work_control", reach: "native", refusal: NATIVE_SYNC_REFUSAL },
 
   // ------------------------------------------------------------- device ---
   "pi/push/config": { scope: "device", reach: "any" },

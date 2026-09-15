@@ -301,6 +301,7 @@ describe("the descriptor", () => {
         "pi/host/environment",
         "pi/session/unload",
         "pi/worker/retained-stores",
+        "pi/worker/retire",
         "pi/worker/safety",
         "resource/report",
       ]);

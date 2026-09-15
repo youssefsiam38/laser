@@ -13,6 +13,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionLifetime } from "../src/session-lifetime.js";
+import { WorkerRetiredError } from "../src/worker-client.js";
 import { WorkerPool } from "../src/worker-pool.js";
 
 // --------------------------------------------------------------- the policy
@@ -99,6 +100,12 @@ describe("SessionLifetime policy", () => {
     await world.lifetime.sweep();
     expect(world.loaded.has("/s/busy.jsonl")).toBe(true);
     expect(world.lifetime.counts()).toMatchObject({ considered: 1, unloaded: 0, refused: 1, pins: { approval: 1 } });
+    // A refusal waits its turn before it is asked again, so the next sweep
+    // skips it rather than spending the tick on the same pin.
+    await world.lifetime.sweep();
+    expect(world.asked).toHaveLength(1);
+    expect(world.lifetime.counts().skippedBackoff).toBe(1);
+    world.advance(world.lifetime.sessionIdleMs);
     await world.lifetime.sweep();
     expect(world.asked).toHaveLength(2);
   });
@@ -113,6 +120,38 @@ describe("SessionLifetime policy", () => {
     world.hold("/s/b.jsonl", 1);
     await sweep;
     expect(world.asked.map((ask) => ask.path)).toEqual(["/s/a.jsonl"]);
+  });
+
+  it("keeps scanning past a permanently pinned oldest row until the worker is back inside its set", async () => {
+    // Six conversations nobody is following, a set of four, and the two oldest
+    // refusing for ever. The two that have to go are further down the list.
+    const rows = Array.from({ length: 6 }, (_, index) =>
+      row(`/s/${index}.jsonl`, { activity: 1_000_000 + index, pins: index < 2 ? [{ kind: "approval" as const }] : [] }),
+    );
+    const world = policyWorld(rows, { maxLoadedPerWorker: 4 });
+    await world.lifetime.sweep();
+    expect([...world.loaded.keys()].sort()).toEqual(["/s/0.jsonl", "/s/1.jsonl", "/s/4.jsonl", "/s/5.jsonl"]);
+    expect(world.lifetime.counts()).toMatchObject({ budgetTarget: expect.any(Number), budgetRemoved: 2 });
+
+    // And the pins that never clear cost one attempt occasionally, not the tick.
+    const askedBefore = world.asked.length;
+    await world.lifetime.sweep();
+    expect(world.asked.length - askedBefore).toBeLessThanOrEqual(1);
+  });
+
+  it("gives every worker a share of one sweep, and rotates which goes first", async () => {
+    const rows = [
+      ...Array.from({ length: 8 }, (_, index) => row(`/a/${index}.jsonl`, { cwd: "/a", activity: 1_000 + index, pins: [{ kind: "streaming" as const }] })),
+      row("/b/0.jsonl", { cwd: "/b", activity: 1_000 }),
+      row("/b/1.jsonl", { cwd: "/b", activity: 1_001 }),
+    ];
+    const world = policyWorld(rows, { maxUnloadsPerTick: 4 });
+    world.advance(world.lifetime.sessionIdleMs + 100);
+    await world.lifetime.sweep();
+    // The refusing worker cannot spend the whole tick: the other one was asked
+    // in the same sweep and its sessions are gone.
+    expect(world.asked.some((ask) => ask.path.startsWith("/b/"))).toBe(true);
+    expect(world.loaded.has("/b/0.jsonl")).toBe(false);
   });
 
   it("attempts at most its per-tick cap, so one sweep is never unbounded work", async () => {
@@ -192,6 +231,17 @@ socket.on("data", (chunk) => {
       send({ jsonrpc: "2.0", id: req.id, result: { state: { path: req.params.path }, replayFrom: 0, seq: 0 } });
       continue;
     }
+    if (req.method === "pi/worker/retire") {
+      if (mode === "silent") continue;
+      if (mode === "error") { send({ jsonrpc: "2.0", id: req.id, error: { code: -32603, message: "cannot look" } }); continue; }
+      if (mode === "malformed") { send({ jsonrpc: "2.0", id: req.id, result: { ok: true } }); continue; }
+      if (pins.length > 0) {
+        send({ jsonrpc: "2.0", id: req.id, result: { retiring: false, reason: "pinned", sessions: undefined, pins: [...loaded].map((path) => ({ path, pins })) } });
+        continue;
+      }
+      send({ jsonrpc: "2.0", id: req.id, result: { retiring: true } });
+      continue;
+    }
     if (req.method === "pi/worker/safety") {
       if (mode === "silent") continue;
       if (mode === "error") { send({ jsonrpc: "2.0", id: req.id, error: { code: -32603, message: "cannot look" } }); continue; }
@@ -215,6 +265,7 @@ send({ jsonrpc: "2.0", method: "pi/worker/status", params: { cwd, status: "ready
 
 /** The same worker, without RP-4's methods: an older generation the host must tolerate. */
 const SILENT_WORKER = SAFETY_WORKER
+  .replace('if (req.method === "pi/worker/retire") {', 'if (false) {')
   .replace('if (req.method === "pi/worker/safety") {', 'if (false) {')
   .replace('if (req.method === "pi/session/unload") {', 'if (false) {');
 
@@ -247,6 +298,11 @@ describe("WorkerPool session lifetime", () => {
     return client;
   };
 
+  const retireIfSafe = (worker: WorkerPool) =>
+    (worker as unknown as { retireIfSafe(entry: unknown): Promise<void> }).retireIfSafe(
+      (worker as unknown as { entries: Map<string, unknown> }).entries.get(project),
+    );
+
   it("forgets a session the worker released, and keeps one it refused", async () => {
     pool = makePool(join(dir, "safety-worker.mjs"));
     const client = await openSession(pool, "/s/one.jsonl");
@@ -272,15 +328,11 @@ describe("WorkerPool session lifetime", () => {
     await client.request("pi/test/pin", { pins: [{ kind: "question", detail: "1 question(s) waiting" }] });
 
     now += 10_000;
-    await (pool as unknown as { retireIfSafe(entry: unknown): Promise<void> }).retireIfSafe(
-      (pool as unknown as { entries: Map<string, unknown> }).entries.get(project),
-    );
+    await retireIfSafe(pool);
     expect(pool.workerInfo(project)?.status).toBe("ready");
 
     await client.request("pi/test/pin", { pins: [] });
-    await (pool as unknown as { retireIfSafe(entry: unknown): Promise<void> }).retireIfSafe(
-      (pool as unknown as { entries: Map<string, unknown> }).entries.get(project),
-    );
+    await retireIfSafe(pool);
     expect(pool.workerInfo(project)?.status).toBe("retired");
   });
 
@@ -288,7 +340,7 @@ describe("WorkerPool session lifetime", () => {
     pool = makePool(join(dir, "safety-worker.mjs"));
     const client = await openSession(pool, "/s/one.jsonl");
     await client.request("pi/test/pin", { pins: [{ kind: "pending_tray", detail: "1 message(s) waiting in the tray" }] });
-    await expect(pool.stop(project)).rejects.toThrow(/holding work in one of its conversations/);
+    await expect(pool.stop(project)).rejects.toThrow(/could not be stopped: one of its conversations is holding work/);
     expect(pool.workerInfo(project)?.status).toBe("ready");
 
     await client.request("pi/test/pin", { pins: [] });
@@ -296,64 +348,50 @@ describe("WorkerPool session lifetime", () => {
     expect(pool.workerInfo(project)?.status).toBe("retired");
   });
 
-  const retireIfSafe = (worker: WorkerPool) =>
-    (worker as unknown as { retireIfSafe(entry: unknown): Promise<void> }).retireIfSafe(
-      (worker as unknown as { entries: Map<string, unknown> }).entries.get(project),
-    );
-
-  /**
-   * Fail closed. Each of these is a worker that holds a conversation and cannot
-   * prove it is idle — it never answers, it errors, it is an older generation
-   * without the method, its answer was cut, or its answer does not mention a
-   * session this pool believes it has. None of them may end that conversation:
-   * automatic retirement is never less careful than a release, and a release
-   * refuses on exactly the same doubt.
-   */
-  const unprovable: Array<[string, string, (client: Awaited<ReturnType<WorkerPool["get"]>>) => Promise<unknown>]> = [
-    ["does not answer at all", "safety-worker.mjs", (client) => client.request("pi/test/mode", { mode: "silent" })],
-    ["answers with an error", "safety-worker.mjs", (client) => client.request("pi/test/mode", { mode: "error" })],
-    ["answers with a list that was cut", "safety-worker.mjs", (client) => client.request("pi/test/mode", { mode: "truncated" })],
-    ["leaves out a session the pool holds", "safety-worker.mjs", (client) => client.request("pi/test/mode", { mode: "partial" })],
-    ["is an older generation without the method", "silent-worker.mjs", async () => {}],
-  ];
-
-  for (const [what, worker, prepare] of unprovable) {
-    it(`keeps a worker that ${what}, for the sweep and for an explicit stop`, async () => {
-      let now = 0;
-      pool = makePool(join(dir, worker), { idleMs: 1_000, now: () => now, safetyTimeoutMs: 150 });
-      const client = await openSession(pool, "/s/one.jsonl");
-      await prepare(client);
-
-      now += 10_000;
-      await retireIfSafe(pool);
-      expect(pool.workerInfo(project)?.status).toBe("ready");
-      expect(pool.openSessions(project)).toEqual(["/s/one.jsonl"]);
-
-      await expect(pool.stop(project)).rejects.toThrow(/could not say what its conversations are holding/);
-      await expect(pool.restart(project)).rejects.toThrow(/could not say what its conversations are holding/);
-      expect(pool.workerInfo(project)?.status).toBe("ready");
-      expect(client.alive).toBe(true);
-    });
-  }
-
-  it("still asks nothing of a worker with no conversations, so an idle one still retires", async () => {
-    let now = 0;
-    pool = makePool(join(dir, "silent-worker.mjs"), { idleMs: 1_000, now: () => now });
-    await pool.get(project);
-    expect(pool.openSessions(project)).toEqual([]);
-    now += 10_000;
-    await retireIfSafe(pool);
-    expect(pool.workerInfo(project)?.status).toBe("retired");
-  });
-
-  it("lets an explicit retry replace a crashed worker, which holds nothing to lose", async () => {
-    pool = makePool(join(dir, "safety-worker.mjs"), { backoffMs: 50 });
+  it("writes nothing to a worker while its retirement is being decided, and refuses the request that tried", async () => {
+    pool = makePool(join(dir, "safety-worker.mjs"), { idleMs: 1_000, now: () => 0, retireTimeoutMs: 400 });
     const client = await openSession(pool, "/s/one.jsonl");
-    await client.request("pi/test/pin", { pins: [{ kind: "question" }] });
-    client.request("pi/test/crash", {}).catch(() => {});
-    await vi.waitFor(() => expect(pool!.workerInfo(project)?.status).toBe("crashed"));
-    const info = await pool.restart(project);
-    expect(info.status).toBe("ready");
+    // This worker never answers the retirement question, so the decision is
+    // open for the whole timeout — the exact window the old check-then-kill
+    // code could write into.
+    await client.request("pi/test/mode", { mode: "silent" });
+    const deciding = retireIfSafe(pool);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    await expect(client.request("session/prompt", { path: "/s/one.jsonl", params: {} })).rejects.toBeInstanceOf(WorkerRetiredError);
+    // A caller going through the pool waits for the decision instead.
+    const waiting = pool.get(project);
+    await deciding;
+    const same = await waiting;
+    expect(same).toBe(client);
+    expect(client.alive).toBe(true);
+    expect(pool.workerInfo(project)?.status).toBe("ready");
+    // Admission reopened with the refusal, so the retry lands.
+    await expect(client.request("pi/test/argv", {})).resolves.toBeDefined();
+  });
+  it("moves a session's row when a fork moves its file, leaving no phantom behind", async () => {
+    pool = makePool(join(dir, "safety-worker.mjs"));
+    await openSession(pool, "/s/source.jsonl");
+    expect(pool.loadedSessions()).toEqual([{ cwd: project, path: "/s/source.jsonl" }]);
+
+    // What the router does after a fork answers with a new path.
+    pool.rekeySession("/s/source.jsonl", "/s/forked.jsonl", project);
+    expect(pool.loadedSessions()).toEqual([{ cwd: project, path: "/s/forked.jsonl" }]);
+    expect(pool.openSessions(project)).toEqual(["/s/forked.jsonl"]);
+    expect(pool.cwdOfSession("/s/source.jsonl")).toBeUndefined();
+    expect(pool.cwdOfSession("/s/forked.jsonl")).toBe(project);
+
+    // The lifetime works on the row that exists, and the worker knows it.
+    expect(await pool.unloadSession(project, "/s/forked.jsonl")).toEqual({ unloaded: true, pins: [] });
+    expect(pool.loadedSessions()).toEqual([]);
+
+    // Opening the source again is a separate runtime with a row of its own.
+    await openSession(pool, "/s/source.jsonl");
+    expect(pool.loadedSessions()).toEqual([{ cwd: project, path: "/s/source.jsonl" }]);
+    // And a rekey onto a path this worker already serves keeps one row, not two.
+    await openSession(pool, "/s/forked.jsonl");
+    pool.rekeySession("/s/source.jsonl", "/s/forked.jsonl", project);
+    expect(pool.loadedSessions()).toEqual([{ cwd: project, path: "/s/forked.jsonl" }]);
   });
 
   it("refuses a release the worker never answered, without forgetting the session", async () => {

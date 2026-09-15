@@ -31,6 +31,7 @@ import {
   createAgentSessionRuntime,
   createAgentSessionServices,
   getAgentDir,
+  parseSessionEntries,
   resolveModelScopeWithDiagnostics,
   SessionManager,
   SettingsManager,
@@ -67,7 +68,7 @@ import type {
   UiDialogResponse,
   Usage,
 } from "@lasercode/protocol";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { supportedThinkingLevels } from "../packages.js";
@@ -82,6 +83,7 @@ import {
   type DriverAgentOptions,
   type DriverEvent,
   type DriverListener,
+  type DriverReleaseReadiness,
   type DriverOpenOptions,
   type DriverInvocationRef,
   type ExtensionModelWorkHandler,
@@ -896,6 +898,77 @@ export class StableSdkDriver implements SessionDriver {
     };
   }
 
+  /**
+   * Settle this session's file and prove the engine can open it again (RP-4).
+   *
+   * The order is the whole point. First `SessionManager.flush()`, the engine's
+   * own "persist the genuine current state" verb, so nothing it still owed the
+   * file is left in memory. Then the file is read back and parsed by
+   * `parseSessionEntries`, which is the engine's own canonical parser — not a
+   * second one written here — and the result is compared with the live manager:
+   * the header's identity, every entry the runtime holds, and the branch leaf.
+   * A record that is missing, replaced, truncated or corrupted after its header
+   * fails one of those comparisons, and a failure is a refusal.
+   *
+   * Deliberately not `SessionManager.open()`: that constructor migrates an old
+   * file and rewrites it, which would make this validation a writer. Reading
+   * the bytes and handing them to the engine's parser cannot write anything.
+   *
+   * The parsed copy is local to this call, so it is garbage after it returns;
+   * a file larger than the validation ceiling is refused rather than read, so
+   * the check cannot become the allocation it exists to make safe.
+   */
+  async prepareRelease(): Promise<DriverReleaseReadiness> {
+    let manager;
+    try {
+      manager = this.session().sessionManager;
+    } catch (error) {
+      return { ok: false, refusal: "no_record", detail: describe(error) };
+    }
+    const file = manager.getSessionFile();
+    if (!file || !manager.isPersisted()) return { ok: false, refusal: "no_record", detail: "this session has no file" };
+    const live = manager.getHeader();
+    if (!live) return { ok: false, refusal: "no_record", detail: "the runtime has no session header" };
+    try {
+      manager.flush();
+    } catch (error) {
+      return { ok: false, refusal: "flush_failed", detail: describe(error) };
+    }
+    let size: number;
+    try {
+      const stats = statSync(file);
+      if (!stats.isFile()) return { ok: false, refusal: "no_record", detail: "the record is not a file" };
+      size = stats.size;
+    } catch (error) {
+      return { ok: false, refusal: "no_record", detail: describe(error) };
+    }
+    if (size === 0) return { ok: false, refusal: "unreadable", detail: "the record is empty" };
+    if (size > REOPEN_VALIDATION_MAX_BYTES) {
+      return { ok: false, refusal: "unreadable", detail: `the record is larger than ${REOPEN_VALIDATION_MAX_BYTES} bytes` };
+    }
+    let reopened: ReturnType<typeof parseSessionEntries>;
+    try {
+      reopened = parseSessionEntries(readFileSync(file, "utf8"));
+    } catch (error) {
+      return { ok: false, refusal: "unreadable", detail: describe(error) };
+    }
+    const header = reopened.find((entry) => entry.type === "session");
+    if (!header) return { ok: false, refusal: "unreadable", detail: "the record has no header" };
+    if (header.id !== live.id || header.cwd !== live.cwd) {
+      return { ok: false, refusal: "identity_mismatch", detail: "the record belongs to another session" };
+    }
+    const stored = new Set<string>();
+    for (const entry of reopened) if (entry.type !== "session") stored.add(entry.id);
+    for (const entry of manager.getEntries()) {
+      if (!stored.has(entry.id)) return { ok: false, refusal: "identity_mismatch", detail: "the record is missing entries this conversation has" };
+    }
+    const leafId = manager.getLeafId();
+    if (leafId !== null && !stored.has(leafId)) {
+      return { ok: false, refusal: "identity_mismatch", detail: "the record does not contain this conversation's branch" };
+    }
+    return { ok: true };
+  }
+
   async goalState(): Promise<SessionGoal | null> {
     return toSessionGoal(goalStateFromEntries(this.session().sessionManager.getBranch()));
   }
@@ -1575,6 +1648,18 @@ export class StableSdkDriver implements SessionDriver {
 
 
 /** De-duplicate existing resource roots while preserving precedence. */
+/**
+ * The largest session record this validates by reading it back (RP-4). Far
+ * above any real conversation, and a hard stop so proving a release is safe can
+ * never itself be the allocation that is not.
+ */
+const REOPEN_VALIDATION_MAX_BYTES = 64 * 1024 * 1024;
+
+/** One short sentence from a thrown value, for a refusal detail. */
+function describe(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function existingResourceRoots(paths: string[]): string[] {
   const seen = new Set<string>();
   return paths.filter((path) => {

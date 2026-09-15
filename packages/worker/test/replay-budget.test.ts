@@ -186,5 +186,21 @@ describe("a worker under replay pressure", () => {
 
     // Canonical state is untouched by any of it: the session is still served.
     expect(server.openSessions().sort()).toEqual([...paths].sort());
+
+    // And the newest updates — the ones that say a turn ended — are the ones
+    // eviction keeps: a client that is only a little behind still receives the
+    // terminal event rather than having to re-read the transcript for it.
+    const before = out.length;
+    drivers.get(paths[0]!)!.emit({ type: "update", update: { kind: "agent_settled" } });
+    const settled = out.slice(before).find((message) => "method" in message && message.method === "session/update") as
+      | { params: { seq: number; update: { kind: string } } }
+      | undefined;
+    expect(settled?.params.update.kind).toBe("agent_settled");
+    const tail = await call<ClientRequests["session/load"]["result"]>("session/load", { path: paths[0]!, fromSeq: settled!.params.seq - 1 });
+    expect(tail.replayFrom).toBe(settled!.params.seq - 1);
+    const replayed = out.filter((message) => "method" in message && message.method === "session/update")
+      .map((message) => (message as { params: { seq: number; update: { kind: string } } }).params)
+      .filter((params) => params.seq === settled!.params.seq && params.update.kind === "agent_settled");
+    expect(replayed.length).toBeGreaterThanOrEqual(2);
   });
 });
