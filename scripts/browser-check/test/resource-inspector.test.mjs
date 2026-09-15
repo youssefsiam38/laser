@@ -446,6 +446,12 @@ test('a worker that answers "no evidence" is unreadable, in one place, for every
     'a worker that did not answer makes the totals unknown, never zero');
   assert.throws(() => assertNoLiveWork(guards), /unknown, not settled/);
   assert.deepEqual(retirementGuardSnapshot({ connections: 0 }, [readableWorkerRow]).runningTools, 0);
+  const malformed = { ...readableWorkerRow };
+  delete malformed.runningTools;
+  assert.equal(retirementGuardSnapshot({ connections: 0 }, [malformed]).runningTools, null,
+    'a readable row missing a required guard is unknown, never zero');
+  assert.equal(retirementGuardSnapshot({ connections: 0 }, [{ available: true }]).runningTasks, null,
+    'an unrecognised available row is unknown, never zero');
 });
 
 test('sampleRetirementGuards and proveNoLiveWork refuse a worker without evidence', async () => {

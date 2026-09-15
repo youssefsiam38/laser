@@ -63,10 +63,10 @@ export function retirementGuardSnapshot(host = {}, workers = []) {
   const sum = (key) => {
     let total = 0;
     for (const worker of workers) {
-      if (!workerEvidence(worker).readable && worker?.available === false) return null;
+      if (!workerEvidence(worker).readable) return null;
       const value = worker?.[key];
-      if (value === null) return null;
-      total += Number(value) || 0;
+      if (!Number.isInteger(value) || value < 0) return null;
+      total += value;
     }
     return total;
   };
