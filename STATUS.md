@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-15T02:18:57Z · orchestrator `01a0a030` · HEAD: a256efe
-**Current focus:** M18 is rebasing worker, renderer and transport containment onto the completed task/delivery lifetime contracts.
+**Last updated:** 2026-09-15T05:41:05Z · orchestrator `01a0a030` · HEAD: 4f34a614
+**Current focus:** M18 has bounded worker and renderer session lifetimes; transport-pressure review corrections are rebasing before T3, T8 and T10 consume the settled seams.
 
 | Milestone | State |
 | --- | --- |
@@ -27,8 +27,8 @@
 | M18 Resource containment | in-progress |
 | MX Cross-cutting | in-progress |
 
-**Blockers:** none. RP-2’s unchanged full A safely refuses B on unbounded renderer state; D-257 assigns the clean repeat to M18-T15 after containment.
-**Next up:** rebase and implement M18-T4, T5 and T7 on RP-6; wire their typed counters into T3; implement T8.
-**Recently done:** M18-T6 task/delivery lifetime (`a256efe`; build/typecheck, pi-extension 168, host 530, browser-check 69); M18-T13 environment policy/browser gate (`a0111f9`); M18-T2 finding (`ad8c188`); M18-T13A authorization (`00db89f`); M18-T12 worker-free reads (`e9e3d8d`).
+**Blockers:** none. RP-2’s unchanged full A safely refuses B on the pre-containment renderer ceiling; D-257 assigns the clean repeat to M18-T15 after RP-7/RP-8.
+**Next up:** integrate reviewed M18-T7; wire T4/T5/T7 typed counters into T3; implement ready T8 and approved T10, then T11.
+**Recently done:** M18-T5 renderer lifetime (`4f34a614`; reviewed focused/full/UI/browser/calibration gates); M18-T4 worker lifetime (`eb18e147`); M18-T6 task/delivery lifetime (`a256efe`); M18-T13 browser gate (`a0111f9`); M18-T2 finding (`ad8c188`).
 
 Ownership and evidence: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`.

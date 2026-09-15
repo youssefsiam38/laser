@@ -15,12 +15,12 @@ Authoritative detail, evidence and ownership live in `STATUS_DETAILED.md`; `STAT
 | RP-2 repeat | M18-T15 | todo — unchanged two-run baseline after containment | RP-4..RP-8 |
 | RP-3 | M18-T3 | browser gate/review `a0111f9` + history/export/RP-6 counter correction `66ac605`; T4/T5/T7 typed counters pending | RP-1 |
 | RP-4 | M18-T4 | done — worker-owned atomic release/retirement, fair LRU unload and hard replay floors integrated at `eb18e147`; exact-head convergence verified | RP-2 |
-| RP-5 | M18-T5 | in progress — renderer lifetime plan approved; RP-6 contract integrated | RP-2 |
+| RP-5 | M18-T5 | done — byte/count-bounded hydrated views, light identities, complete pins, exact revision-fenced tail handoff and incremental counters integrated at `4f34a614`; reviewed browser/calibration evidence | RP-2 |
 | RP-6 | M18-T6 | done — integrated `a256efe`; reviewed membership, task/log retention and cleanup/security gates | RP-2 |
 | RP-7 | M18-T7 | in progress — decoder/provider/queue plan approved; RP-6 contract integrated | RP-2 |
-| RP-8 | M18-T8 | todo | RP-4, RP-5 |
+| RP-8 | M18-T8 | ready — RP-4 and RP-5 containment seams integrated | RP-4, RP-5 |
 | RP-9 | M18-T9 | done — integrated `dd637f3` | protocol integration follows RP-1 |
-| RP-10 | M18-T10 | in progress — plan-only investigation; implementation waits RP-5 handoff | RP-5, RP-9 |
+| RP-10 | M18-T10 | in progress — plan v2 approved; RP-5 immutable tail/sink handoff integrated, implementation waits only for active T7 `client.ts` ownership to settle | RP-5, RP-9 |
 | RP-11 | M18-T11 | todo | RP-10 |
 | RP-12 | M18-T12 | done — integrated `e9e3d8d` | RP-9 |
 | RP-13 | M18-T13 | done — host policy/storage isolation through `1e4eeba`; reviewed real-host browser matrices `a0111f9` | RP-12 |
