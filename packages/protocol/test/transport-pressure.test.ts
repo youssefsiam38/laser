@@ -53,7 +53,8 @@ describe("what may be shed", () => {
 
 describe("capture messages", () => {
   it("names every message that carries or stands in for a request body", () => {
-    expect(PROVIDER_CAPTURE_MESSAGE_TYPES).toHaveLength(6);
+    // begin, chunk, end, abort, omitted, and the small-path request/response.
+    expect(PROVIDER_CAPTURE_MESSAGE_TYPES).toHaveLength(7);
     for (const type of PROVIDER_CAPTURE_MESSAGE_TYPES) {
       expect(isProviderCaptureMessage({ type })).toBe(true);
     }

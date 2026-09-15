@@ -34,6 +34,7 @@ export const PROVIDER_CAPTURE_MESSAGE_TYPES: readonly string[] = [
   `${WIRE_NAMESPACE}/provider/request/begin`,
   `${WIRE_NAMESPACE}/provider/request/chunk`,
   `${WIRE_NAMESPACE}/provider/request/end`,
+  `${WIRE_NAMESPACE}/provider/request/abort`,
   `${WIRE_NAMESPACE}/provider/request/omitted`,
 ];
 

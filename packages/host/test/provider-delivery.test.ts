@@ -113,6 +113,38 @@ it("keeps every chunked capture message inside the host, and still records the r
   socket.close();
 }, 15_000);
 
+it("records an aborted capture once, and keeps none of it", async () => {
+  root = mkdtempSync(join(tmpdir(), "provider-delivery-abort-"));
+  host = new HostServer({ agentDir: join(root, "agent"), sessionDir: join(root, "sessions"), stateDir: join(root, "state") });
+  const ingress = host as unknown as { observe(cwd: string, n: JsonRpcNotification): void };
+  const body = JSON.stringify({ model: "m", messages: [{ role: "user", content: "z".repeat(2 * 1024 * 1024) }] });
+  const meta = {
+    captureId: "c-abababababababab",
+    at: new Date().toISOString(),
+    bytes: Buffer.byteLength(body, "utf8"),
+    sha256: createHash("sha256").update(body).digest("hex"),
+    preview: body.slice(0, 40),
+    redactedFields: 0,
+    chunks: 8,
+    summary: { model: "m", messages: 1 },
+  };
+  const observe = (message: unknown) =>
+    ingress.observe(root!, { jsonrpc: "2.0", method: "pi/extension/message", params: { path: "/s", message } });
+  observe({ type: `${WIRE_NAMESPACE}/provider/request/begin`, ...meta });
+  observe({ type: `${WIRE_NAMESPACE}/provider/request/chunk`, captureId: meta.captureId, index: 0, text: body.slice(0, 1000) });
+  // The link filled while the worker was sending: it stops where it is.
+  observe({ type: `${WIRE_NAMESPACE}/provider/request/abort`, captureId: meta.captureId, reason: "link-busy" });
+
+  const query = await host.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/logs/query", params: { kind: "provider_request", sessionPath: "/s" } }, LOCAL_ACCESS);
+  const entries = (query.result as LogPage).entries;
+  // Exactly one row for one request, and it says the body is not there.
+  expect(entries).toHaveLength(1);
+  const content = await host.router.handle({ jsonrpc: "2.0", id: 2, method: "pi/logs/content", params: { ref: meta.sha256 } }, LOCAL_ACCESS);
+  const result = content.result as ClientRequests["pi/logs/content"]["result"];
+  expect(result.released).toMatchObject({ reason: "link-busy", bytes: meta.bytes, sha256: meta.sha256 });
+  expect(result.text).toBe("");
+}, 15_000);
+
 it("records a capture the worker chose not to send, with its size, digest and reason", async () => {
   root = mkdtempSync(join(tmpdir(), "provider-delivery-omitted-"));
   host = new HostServer({ agentDir: join(root, "agent"), sessionDir: join(root, "sessions"), stateDir: join(root, "state") });

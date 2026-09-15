@@ -137,6 +137,39 @@ describe("bounds", () => {
     expect(absent.every((entry) => entry.reason === "interrupted")).toBe(true);
   });
 
+  it("records an aborted capture once, with its own metadata, and keeps nothing", () => {
+    const { accumulator, complete, absent } = harness();
+    const body = "x".repeat(4096);
+    const meta = metaFor(body, "c-9999999999999999", 4);
+    accumulator.begin("/project", "/session", meta);
+    accumulator.chunk(meta.captureId, 0, body.slice(0, 1024));
+    // The producer gave up: the link filled while it was sending.
+    accumulator.abort(meta.captureId, "link-busy");
+    expect(complete).toEqual([]);
+    expect(absent).toHaveLength(1);
+    expect(absent[0]).toMatchObject({
+      reason: "link-busy",
+      sessionPath: "/session",
+      meta: { bytes: meta.bytes, sha256: meta.sha256, preview: meta.preview },
+    });
+    expect(accumulator.retained()).toEqual({ open: 0, bytes: 0 });
+    // Nothing else may follow it: no second row from a late chunk, an end, or
+    // the worker generation going away afterwards.
+    accumulator.chunk(meta.captureId, 1, body.slice(1024, 2048));
+    accumulator.finish(meta.captureId, 4, meta.bytes);
+    accumulator.actorGone("/project");
+    accumulator.clear();
+    expect(absent).toHaveLength(1);
+    expect(complete).toEqual([]);
+  });
+
+  it("ignores an abort for a capture nobody opened", () => {
+    const { accumulator, complete, absent } = harness();
+    accumulator.abort("c-aaaabbbbccccdddd", "link-busy");
+    expect(absent).toEqual([]);
+    expect(complete).toEqual([]);
+  });
+
   it("ends everything a worker generation opened when it goes", () => {
     const { accumulator, absent } = harness();
     const body = "x".repeat(10);

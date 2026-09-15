@@ -138,6 +138,12 @@ ACP-inspired JSON-RPC:
   something to resynchronise past, because a skipped response would leave its
   request waiting for ever. The host's own WebSocket refuses an oversize
   inbound frame before any JSON is parsed, closing only that socket.
+- A stored request body larger than 1 MiB lives as bounded chunks, each with
+  its own size and digest. A read validates every chunk it hands back and, when
+  it returns the whole body, the aggregate against the row's own digest, so an
+  altered, reordered, short or missing piece is reported as damaged instead of
+  being returned under a digest it no longer matches. Reads stay lazy: at most
+  the requested budget plus the one chunk that crosses it is ever in memory.
 - Requests (host → client): `session/request_permission` and `pi/ui/request`
   (select, confirm, input, editor). Fire-and-forget: `pi/ui/notify`,
   `pi/ui/status`, `pi/ui/widget`, `pi/ui/title`, `pi/ui/editor_text`.

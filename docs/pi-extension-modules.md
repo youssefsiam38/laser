@@ -448,9 +448,13 @@ people never open.
   message it always was.
 - **Large captures travel in bounded chunks** — `begin` with size, SHA-256,
   preview and the row's summary, then 256 KiB pieces cut on UTF-8 boundaries,
-  then `end`. The host reassembles under per-session, per-worker-generation and
+  then `end`. The link is re-read before every piece, because a clear pipe at
+  the first chunk says nothing about the tenth and the loop does not yield; if
+  it fills, the capture stops with one small `abort` and becomes a row without
+  a body. The host reassembles under per-session, per-worker-generation and
   global bounds, verifies order, count, size and digest, and releases the pieces
-  on every outcome.
+  on every outcome — abort included, which is the one atomic path keyed by the
+  capture id, so a capture is never two rows.
 - **A capture with no body is still a row.** Larger than 16 MiB, the link to the
   app backed up, an installation that keeps summaries only, an interrupted
   stream, a digest that did not match: each records the request with its exact

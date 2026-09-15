@@ -180,6 +180,18 @@ export class CaptureAccumulator {
     });
   }
 
+  /**
+   * The producer gave up on a capture it had begun (RP-7).
+   *
+   * The one atomic path for that, keyed by the capture id: the pieces are
+   * released and the request is recorded exactly once, with the metadata the
+   * capture announced and the producer's reason. An id nobody opened is
+   * ignored — its row, if it needed one, was written when `begin` refused it.
+   */
+  abort(captureId: string, reason: ProviderCaptureOmission): void {
+    this.end(captureId, reason);
+  }
+
   /** A worker generation is gone: nothing it opened can ever complete. */
   actorGone(actor: string): void {
     for (const [id, entry] of [...this.open]) {

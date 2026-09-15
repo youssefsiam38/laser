@@ -138,7 +138,20 @@ export const providerLogModule: LaserModule = {
 
       const chunks = chunkBody(encoded.body);
       send({ type: "lasercode/provider/request/begin", ...meta, chunks: chunks.length });
-      chunks.forEach((text, index) => send({ type: "lasercode/provider/request/chunk", captureId: meta.captureId, index, text }));
+      for (const [index, text] of chunks.entries()) {
+        // The link is re-read before every piece, not once at the start: a
+        // clear pipe at the first chunk says nothing about the tenth, and this
+        // loop does not yield, so a single unchecked pass could hand the link
+        // the whole capture before anything drained. Above the mark the
+        // capture stops where it is — one small abort, the pieces the host
+        // holds are released, and the request is still recorded, without its
+        // body and with the reason.
+        if (index > 0 && (captureLink?.pendingBytes() ?? 0) > WORKER_PIPE_SOFT_BYTES) {
+          send({ type: "lasercode/provider/request/abort", captureId: meta.captureId, reason: "link-busy" });
+          return undefined;
+        }
+        send({ type: "lasercode/provider/request/chunk", captureId: meta.captureId, index, text });
+      }
       send({ type: "lasercode/provider/request/end", captureId: meta.captureId, chunks: chunks.length, bytes: encoded.bytes });
       return undefined;
     };

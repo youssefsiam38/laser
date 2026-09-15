@@ -158,6 +158,13 @@ export type PiExtensionMessage =
   | ({ type: "lasercode/provider/request/begin" } & ProviderCaptureMeta)
   | { type: "lasercode/provider/request/chunk"; captureId: string; index: number; text: string }
   | { type: "lasercode/provider/request/end"; captureId: string; chunks: number; bytes: number }
+  /**
+   * The producer gave up on a capture it had already begun — the link filled
+   * while it was sending. One message, keyed by the capture id: the host
+   * releases the pieces it holds and records the request once, without its
+   * body, with the reason. Never two rows, and never a body half-stored.
+   */
+  | { type: "lasercode/provider/request/abort"; captureId: string; reason: ProviderCaptureOmission }
   /** The request happened and is recorded; its body was not kept, and why. */
   | ({ type: "lasercode/provider/request/omitted" } & ProviderCaptureMeta & { reason: ProviderCaptureOmission })
   | { type: "lasercode/account-usage/state"; state: AccountUsageState }

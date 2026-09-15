@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createHash } from "node:crypto";
-import { CAPTURE_MAX_BYTES, WORKER_PIPE_SOFT_BYTES, type ProviderCaptureLink } from "@lasercode/protocol";
+import { CAPTURE_CHUNK_BYTES, CAPTURE_MAX_BYTES, WORKER_PIPE_SOFT_BYTES, type ProviderCaptureLink } from "@lasercode/protocol";
 import { chunkBody, encodeCapture, providerLogModule, summarize } from "../src/modules/provider-log.js";
 
 const ctx = {
@@ -103,6 +103,47 @@ it("skips the body while the link to the app is backed up, and still records the
   await handlers.get("before_provider_request")!({ payload: payloadOf(2 * 1024 * 1024) }, ctx);
   expect(send).toHaveBeenCalledTimes(1);
   expect(send.mock.calls[0]![0]).toMatchObject({ type: "lasercode/provider/request/omitted", reason: "link-busy" });
+});
+
+it("stops a capture the moment the link fills, and says so once", async () => {
+  // A clear pipe at the first chunk says nothing about the tenth: this loop
+  // does not yield, so the link is re-read before every piece.
+  let pending = 0;
+  const { handlers, send } = await activate({
+    pendingBytes: () => pending,
+    retainBodies: () => true,
+  });
+  const sent: unknown[] = [];
+  send.mockImplementation((message: unknown) => {
+    sent.push(message);
+    const type = (message as { type: string }).type;
+    // The pipe fills while the capture is going out.
+    if (type === "lasercode/provider/request/chunk") pending = WORKER_PIPE_SOFT_BYTES + 1;
+  });
+  await handlers.get("before_provider_request")!({ payload: payloadOf(3 * 1024 * 1024) }, ctx);
+
+  const types = sent.map((message) => (message as { type: string }).type);
+  expect(types[0]).toBe("lasercode/provider/request/begin");
+  expect(types.filter((type) => type === "lasercode/provider/request/chunk")).toHaveLength(1);
+  expect(types).not.toContain("lasercode/provider/request/end");
+  // Exactly one terminal message, and it names the reason.
+  const aborts = sent.filter((message) => (message as { type: string }).type === "lasercode/provider/request/abort");
+  expect(aborts).toHaveLength(1);
+  expect(aborts[0]).toMatchObject({ reason: "link-busy", captureId: (sent[0] as { captureId: string }).captureId });
+  expect(types).not.toContain("lasercode/provider/request/omitted");
+
+  // What it handed the link before stopping is bounded: the metadata, one
+  // chunk, and the small terminal frame.
+  const bytes = sent.reduce((total, message) => total + Buffer.byteLength(JSON.stringify(message), "utf8"), 0);
+  expect(bytes).toBeLessThan(CAPTURE_CHUNK_BYTES * 2);
+});
+
+it("sends the whole capture while the link stays clear", async () => {
+  const { handlers, send } = await activate({ pendingBytes: () => 0, retainBodies: () => true });
+  await handlers.get("before_provider_request")!({ payload: payloadOf(2 * 1024 * 1024) }, ctx);
+  const types = send.mock.calls.map((call) => call[0].type);
+  expect(types).not.toContain("lasercode/provider/request/abort");
+  expect(types[types.length - 1]).toBe("lasercode/provider/request/end");
 });
 
 it("sends nothing but a summary when this installation keeps no bodies", async () => {

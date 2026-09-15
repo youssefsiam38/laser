@@ -1288,6 +1288,11 @@ export class HostServer {
         this.captures.finish(end.captureId, end.chunks, end.bytes);
         return true;
       }
+      case `${WIRE_NAMESPACE}/provider/request/abort`: {
+        const abort = message as { captureId: string; reason: ProviderCaptureOmission };
+        this.captures.abort(abort.captureId, abort.reason);
+        return true;
+      }
       case `${WIRE_NAMESPACE}/provider/request/omitted`: {
         const { type: _type, reason, ...meta } = message as { type: string; reason: ProviderCaptureOmission } & ProviderCaptureMeta;
         this.logs?.recordProviderAbsent(cwd, sessionPath, meta, reason);

@@ -152,6 +152,85 @@ it("reads the prefix it was asked for even when a later chunk is missing", () =>
   expect(read.released).toBeUndefined();
 });
 
+it("refuses a chunk whose bytes were altered on disk, rather than returning it", () => {
+  const log = open();
+  const body = largeBody(3);
+  const meta = metaFor(body);
+  log.recordProviderCapture("/project", "/session", meta, body);
+  // One byte changed inside the first chunk: the row's own digest no longer
+  // describes what is stored, so the body must not be handed back under it.
+  const db = (log as unknown as { db: { prepare(sql: string): { get(...p: unknown[]): unknown; run(...p: unknown[]): unknown } } }).db;
+  const first = db.prepare("SELECT body FROM content_chunks WHERE ref = ? AND idx = 0").get(meta.sha256) as { body: string };
+  db.prepare("UPDATE content_chunks SET body = ? WHERE ref = ? AND idx = 0").run(`X${first.body.slice(1)}`, meta.sha256);
+
+  const read = log.content(meta.sha256, 32 * 1024 * 1024);
+  expect(read.text).toBe("");
+  expect(read.released).toMatchObject({ reason: "corrupt", bytes: meta.bytes, sha256: meta.sha256 });
+  // Even a small-budget read, which only ever sees that chunk, refuses it.
+  const partial = log.content(meta.sha256, 64 * 1024);
+  expect(partial.text).toBe("");
+  expect(partial.released?.reason).toBe("corrupt");
+});
+
+it("refuses a chunk whose recorded size no longer matches its bytes", () => {
+  const log = open();
+  const body = largeBody(3);
+  const meta = metaFor(body);
+  log.recordProviderCapture("/project", "/session", meta, body);
+  const db = (log as unknown as { db: { prepare(sql: string): { run(...p: unknown[]): unknown } } }).db;
+  db.prepare("UPDATE content_chunks SET bytes = bytes + 1 WHERE ref = ? AND idx = 0").run(meta.sha256);
+  expect(log.content(meta.sha256, 32 * 1024 * 1024).released?.reason).toBe("corrupt");
+});
+
+it("refuses chunks that were reordered under the same digests", () => {
+  const log = open();
+  const body = largeBody(3);
+  const meta = metaFor(body);
+  log.recordProviderCapture("/project", "/session", meta, body);
+  const db = (log as unknown as { db: { exec(sql: string): void } }).db;
+  // Swap two pieces: every chunk is individually intact and the body is not.
+  db.exec(`UPDATE content_chunks SET idx = -1 WHERE ref = '${meta.sha256}' AND idx = 0`);
+  db.exec(`UPDATE content_chunks SET idx = 0 WHERE ref = '${meta.sha256}' AND idx = 1`);
+  db.exec(`UPDATE content_chunks SET idx = 1 WHERE ref = '${meta.sha256}' AND idx = -1`);
+  expect(log.content(meta.sha256, 32 * 1024 * 1024).released?.reason).toBe("corrupt");
+});
+
+it("refuses a body that lost its last chunk, where every remaining piece is intact", () => {
+  const log = open();
+  const body = largeBody(3);
+  const meta = metaFor(body);
+  log.recordProviderCapture("/project", "/session", meta, body);
+  const db = (log as unknown as { db: { prepare(sql: string): { get(...p: unknown[]): unknown }; exec(sql: string): void } }).db;
+  const last = db.prepare("SELECT MAX(idx) AS n FROM content_chunks WHERE ref = ?").get(meta.sha256) as { n: number };
+  db.exec(`DELETE FROM content_chunks WHERE ref = '${meta.sha256}' AND idx = ${Number(last.n)}`);
+  // A complete read is checked as a whole, so a shorter body is caught even
+  // though nothing that remains is damaged.
+  const read = log.content(meta.sha256, 32 * 1024 * 1024);
+  expect(read.text).toBe("");
+  expect(read.released?.reason).toBe("corrupt");
+});
+
+it("keeps multi-byte text intact across chunk boundaries, in full and in part", () => {
+  const log = open();
+  // Three-byte characters and surrogate pairs, in a body that spans many
+  // chunks: a boundary inside a character would show up here first.
+  const content = "日本語🚀".repeat(200_000);
+  const body = JSON.stringify({ model: "claude", messages: [{ role: "user", content }] });
+  const meta = metaFor(body);
+  log.recordProviderCapture("/project", "/session", meta, body);
+
+  const whole = log.content(meta.sha256, 32 * 1024 * 1024);
+  expect(whole.truncated).toBe(false);
+  expect(whole.text).toBe(body);
+  expect(JSON.parse(whole.text).messages[0].content).toBe(content);
+
+  const partial = log.content(meta.sha256, 700 * 1024);
+  expect(partial.truncated).toBe(true);
+  expect(partial.text).not.toContain("\ufffd");
+  expect(Buffer.byteLength(partial.text, "utf8")).toBeLessThanOrEqual(700 * 1024);
+  expect(body.startsWith(partial.text)).toBe(true);
+});
+
 it("releases a chunked body and its pieces together, and says why", () => {
   const log = open({ bodyBudgetBytes: 1 });
   const body = largeBody();

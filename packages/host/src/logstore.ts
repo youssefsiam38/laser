@@ -370,10 +370,16 @@ function openDatabase(file: string): Database {
     -- it are unchanged, and an older binary reading this store sees an empty
     -- body rather than a NULL it would throw on.
     CREATE TABLE IF NOT EXISTS content_chunks (
-      ref   TEXT    NOT NULL,
-      idx   INTEGER NOT NULL,
-      bytes INTEGER NOT NULL,
-      body  TEXT    NOT NULL,
+      ref    TEXT    NOT NULL,
+      idx    INTEGER NOT NULL,
+      bytes  INTEGER NOT NULL,
+      -- Integrity evidence per piece (RP-7): a read validates the bytes and
+      -- the digest of every chunk it hands back, so a body that was altered
+      -- on disk is reported as damaged rather than returned under the digest
+      -- of what it used to be. A complete read also checks the whole against
+      -- the content row's own digest.
+      sha256 TEXT    NOT NULL,
+      body   TEXT    NOT NULL,
       PRIMARY KEY (ref, idx)
     );
   `);
@@ -388,6 +394,27 @@ function openDatabase(file: string): Database {
   // is read exactly as before; only new large bodies are chunked.
   const contentColumns = db.prepare("PRAGMA table_info(content)").all() as { name: string }[];
   if (!contentColumns.some((column) => column.name === "chunked")) db.exec("ALTER TABLE content ADD COLUMN chunked INTEGER");
+  // Chunked bodies are new in this release and were briefly stored without
+  // their per-chunk integrity evidence. Rather than carry a shape nothing has
+  // shipped, a store written by that build gives those bodies up: the pieces
+  // and their content rows go, and the entries that pointed at them read as
+  // bodies retention no longer keeps — which is what they now are. Every
+  // other row, including every single-column body, is untouched.
+  const chunkColumns = db.prepare("PRAGMA table_info(content_chunks)").all() as { name: string }[];
+  if (chunkColumns.length > 0 && !chunkColumns.some((column) => column.name === "sha256")) {
+    db.exec("DELETE FROM content WHERE ref IN (SELECT DISTINCT ref FROM content_chunks)");
+    db.exec("DROP TABLE content_chunks");
+    db.exec(`
+      CREATE TABLE content_chunks (
+        ref    TEXT    NOT NULL,
+        idx    INTEGER NOT NULL,
+        bytes  INTEGER NOT NULL,
+        sha256 TEXT    NOT NULL,
+        body   TEXT    NOT NULL,
+        PRIMARY KEY (ref, idx)
+      );
+    `);
+  }
   db.exec(`
     CREATE INDEX IF NOT EXISTS entries_prompt ON entries(session_path, json_extract(request_context, '$.promptEntryId'), id);
     -- Partial indexes over exactly the rows retention walks: the oldest
@@ -604,10 +631,10 @@ export class LogStore {
         .run(ref, bytes, "application/json", chunked ? "" : body, chunked ? 1 : null);
       inserted = Number(stored.changes) > 0;
       if (!inserted || !chunked) return;
-      const insert = this.statement("INSERT OR IGNORE INTO content_chunks (ref, idx, bytes, body) VALUES (?,?,?,?)");
+      const insert = this.statement("INSERT OR IGNORE INTO content_chunks (ref, idx, bytes, sha256, body) VALUES (?,?,?,?,?)");
       let index = 0;
       for (const chunk of splitUtf8(body, CONTENT_CHUNK_BYTES)) {
-        insert.run(ref, index, Buffer.byteLength(chunk, "utf8"), chunk);
+        insert.run(ref, index, Buffer.byteLength(chunk, "utf8"), createHash("sha256").update(chunk).digest("hex"), chunk);
         index += 1;
       }
     });
@@ -756,7 +783,7 @@ export class LogStore {
       );
     }
     if (row.chunked) {
-      const read = this.readChunked(ref, maxBytes);
+      const read = this.readChunked(ref, maxBytes, row.bytes);
       if (!read) {
         // The row exists and its pieces do not: a store that was interrupted
         // or damaged. Say that, with the size and digest the row still knows,
@@ -802,24 +829,31 @@ export class LogStore {
    * opening a 16 MiB request with a 1 MiB budget costs 1 MiB, not 16. The full
    * body is never assembled here.
    */
-  private readChunked(ref: string, maxBytes: number): { text: string; truncated: boolean } | undefined {
+  private readChunked(ref: string, maxBytes: number, totalBytes: number): { text: string; truncated: boolean } | undefined {
     // Stepped, not collected: at most the budget plus the one chunk that
     // crosses it is ever in this process, whatever the body weighs. `all()`
     // here would materialise all 16 MiB of a large capture to hand back one.
     const rows = this
-      .statement("SELECT idx, bytes, body FROM content_chunks WHERE ref = ? ORDER BY idx ASC")
-      .iterate(ref) as IterableIterator<{ idx: number; bytes: number; body: string }>;
+      .statement("SELECT idx, bytes, sha256, body FROM content_chunks WHERE ref = ? ORDER BY idx ASC")
+      .iterate(ref) as IterableIterator<{ idx: number; bytes: number; sha256: string; body: string }>;
     const pieces: string[] = [];
+    const whole = createHash("sha256");
     let taken = 0;
     let truncated = false;
     let expected = 0;
     let corrupt = false;
     try {
       for (const chunk of rows) {
-        // Contiguity is checked over exactly the prefix this read must trust:
-        // a gap inside it is a body nobody can read, and it is reported rather
-        // than silently stitched together.
-        if (chunk.idx !== expected) {
+        // Everything this read hands back is checked before it is handed back,
+        // one chunk at a time: its position, its exact UTF-8 size and its own
+        // digest. A gap, a reordering or an altered byte is a body nobody can
+        // read, and it is reported as damaged rather than stitched together or
+        // returned under a digest it no longer matches.
+        if (chunk.idx !== expected || Buffer.byteLength(chunk.body, "utf8") !== chunk.bytes) {
+          corrupt = true;
+          break;
+        }
+        if (createHash("sha256").update(chunk.body).digest("hex") !== chunk.sha256) {
           corrupt = true;
           break;
         }
@@ -832,6 +866,7 @@ export class LogStore {
           break;
         }
         pieces.push(chunk.body);
+        whole.update(chunk.body);
         taken += chunk.bytes;
       }
     } finally {
@@ -840,6 +875,11 @@ export class LogStore {
       rows.return?.();
     }
     if (corrupt || expected === 0) return undefined;
+    // A complete read is also checked as a whole: the pieces may each be
+    // intact and still not be the body this row is addressed by — a chunk
+    // missing from the end leaves a shorter body every piece of which passes.
+    // The digest is computed as the chunks go past, so nothing extra is held.
+    if (!truncated && (taken !== totalBytes || whole.digest("hex") !== ref)) return undefined;
     return { text: pieces.join(""), truncated };
   }
 
