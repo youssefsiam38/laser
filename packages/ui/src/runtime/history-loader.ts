@@ -2,6 +2,7 @@ import { ErrorCodes, type ClientRequests, type HistoryWindow, type HistoryWindow
 import type { applyUpdate, blocksFromEntries, modelNamesOf, stampNewBlocks, textOf, Action, Block, SessionView, ValidatedRevision } from "../store.js";
 import { awake } from "../view-summary.js";
 import { retainEntries, stubOfElided, mergeStubs, type EntryStub } from "./retained-entries.js";
+import { BODY_EXCERPT_MAX_BYTES } from "./body-excerpt.js";
 
 import { deepEqual } from "./projection.js";
 
@@ -262,9 +263,13 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     const work = (async () => {
       const anchor = policy === "recent" ? undefined : deps.get(path)?.history?.anchor;
       const window: HistoryWindowRequest = policy === "recent" ? { tail: 40 } : all ? { all: true } : anchor ? { from: anchor } : { tail: 40 };
-      const result = await deps.request({ path, window }).catch(error => {
+      // RP-5b: this surface cannot hold a body larger than its excerpt bound,
+      // so every page it asks for leaves those bodies out and lists the records
+      // that carry them — which is also what lets a page of a conversation with
+      // one enormous turn still carry the turns around it.
+      const result = await deps.request({ path, window, bodyLimit: BODY_EXCERPT_MAX_BYTES }).catch(error => {
         if (!("from" in window) || (error as { code?: number }).code !== ErrorCodes.InvalidParams) throw error;
-        return deps.request({ path, window: { tail: 40 } });
+        return deps.request({ path, window: { tail: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES });
       });
       const current = deps.get(path);
       if (!active() || !current || current.historyPending?.token !== token) return;
@@ -293,7 +298,7 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     const before = deps.get(path)?.history?.before;
     const revision = deps.get(path)?.historyRevision;
     if (!before || !active()) return false;
-    const result = await deps.request({ path, window: { before, limit: 40 } }).catch(async error => {
+    const result = await deps.request({ path, window: { before, limit: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES }).catch(async error => {
       if (!active()) return undefined;
       if ((error as { code?: number }).code !== ErrorCodes.InvalidParams) throw error;
       await read(path, false, active); return undefined;
@@ -307,7 +312,7 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     if (!active()) return;
     const from = deps.get(path)?.leafId;
     const revision = deps.get(path)?.historyRevision;
-    const result = await deps.request({ path, window: from ? { from } : { all: true } }).catch(async error => {
+    const result = await deps.request({ path, window: from ? { from } : { all: true }, bodyLimit: BODY_EXCERPT_MAX_BYTES }).catch(async error => {
       if (!active()) return undefined;
       if ((error as { code?: number }).code !== ErrorCodes.InvalidParams) throw error;
       await read(path, false, active); return undefined;

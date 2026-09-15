@@ -31,11 +31,21 @@ import { utf8ByteLength, type BodyComponent, type BodyRegion } from "@lasercode/
 /** Bytes of one body this view keeps. */
 export const BODY_EXCERPT_MAX_BYTES = 16 * 1024;
 /**
- * Bytes of a live turn's own text this view keeps while it streams. Larger
- * than a settled excerpt because it is the only slice that can be shown at
- * all until the turn is written and becomes addressable.
+ * Bytes of **one** live body this view keeps while a turn streams — its prose
+ * and its reasoning are two, and they are shown together in one message, so
+ * this is half the per-message render budget rather than all of it
+ * ({@link MESSAGE_RENDER_MAX_BYTES}). Larger than a settled excerpt because it
+ * is the only slice that can be shown at all until the turn is written and
+ * becomes addressable.
  */
-export const LIVE_TAIL_MAX_BYTES = 64 * 1024;
+export const LIVE_TAIL_MAX_BYTES = 32 * 1024;
+
+/**
+ * What one message may render at once, every body of it together (RP-5b §7).
+ * A streamed turn shows two bodies at their tail bound; a settled one shows
+ * excerpts, which are smaller again.
+ */
+export const MESSAGE_RENDER_MAX_BYTES = 64 * 1024;
 
 /**
  * Where a body lives, and how much of it this view is not holding.

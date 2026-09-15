@@ -19,6 +19,8 @@ import { initialState, reduce } from "../../src/store.js";
 import { ThreadMessage } from "../../src/components/thread/messages.js";
 import { BODY_VIEWER_AGGREGATE_MAX_BYTES, BodyWindow, IMAGE_BLOB_MAX, ImageBlobs } from "../../src/runtime/body-reader.js";
 import { sessionState } from "../agents/fixtures.js";
+import { LIVE_TAIL_MAX_BYTES, MESSAGE_RENDER_MAX_BYTES } from "../../src/runtime/body-excerpt.js";
+import { measureView } from "../../src/runtime/view-measure.js";
 
 const SESSION = "/project/session.jsonl";
 const BODY = "answer ".repeat(600_000); // ~4 MB
@@ -116,6 +118,37 @@ describe("a reply the window is holding an excerpt of", () => {
     expect(notice, container.innerHTML.slice(0, 400)).not.toBeNull();
     expect(notice!.textContent).toMatch(/It will be readable when the reply finishes/);
     expect([...container.querySelectorAll("button")].some(node => node.textContent === "Read all of it")).toBe(false);
+  });
+});
+
+describe("what one message renders", () => {
+  it("keeps the whole mounted row inside the per-message render budget", async () => {
+    // A streamed turn with both bodies at their live tail: prose and reasoning
+    // are shown together, so the budget is the row's, not each body's.
+    let state = reduce(initialState, { type: "opened", state: sessionState({ path: SESSION, cwd: "/project" }) });
+    state = reduce(state, { type: "destination", destination: { phase: "ready-code", intent: 0, code: { kind: "project-session", project: "/project", path: SESSION } } } as never);
+    state = reduce(state, { type: "notification", method: "session/update", params: { sessionPath: SESSION, seq: 1, at: "", update: { kind: "message_start", role: "assistant" } } } as never);
+    state = reduce(state, { type: "notification", method: "session/update", params: { sessionPath: SESSION, seq: 2, at: "", update: { kind: "text_delta", delta: BODY } } } as never);
+    state = reduce(state, { type: "notification", method: "session/update", params: { sessionPath: SESSION, seq: 3, at: "", update: { kind: "thinking_delta", delta: BODY } } } as never);
+    const view = state.open[SESSION]!;
+    const store = createStateStore(state);
+    function Fixture() {
+      const { messages } = projectMessages({ blocks: view.blocks, running: true, dialogs: [] });
+      const runtime = useExternalStoreRuntime({ convertMessage: (message: ThreadMessageLike) => message, messages, isRunning: true, onNew: async () => {} });
+      return <AssistantRuntimeProvider runtime={runtime}><FileOpenerProvider><ThreadPrimitive.Root><ThreadPrimitive.Messages>{() => <ThreadMessage />}</ThreadPrimitive.Messages></ThreadPrimitive.Root></FileOpenerProvider></AssistantRuntimeProvider>;
+    }
+    await act(async () => root.render(<LaserStoreProvider store={store}><TooltipProvider><Fixture /></TooltipProvider></LaserStoreProvider>));
+
+    const row = container.querySelector('[data-message-id]') as HTMLElement;
+    expect(row).not.toBeNull();
+    const rendered = new TextEncoder().encode(row.textContent ?? "").byteLength;
+    expect(rendered).toBeLessThanOrEqual(MESSAGE_RENDER_MAX_BYTES + 4096);
+    // Each body is at its own tail bound, and the two together are the budget.
+    const block = view.blocks.at(-1) as { text: string; thinking: string };
+    expect(new TextEncoder().encode(block.text).byteLength).toBeLessThanOrEqual(LIVE_TAIL_MAX_BYTES);
+    expect(new TextEncoder().encode(block.thinking).byteLength).toBeLessThanOrEqual(LIVE_TAIL_MAX_BYTES);
+    expect(measureView(view).largestBodyBytes).toBeLessThanOrEqual(LIVE_TAIL_MAX_BYTES);
+    expect(measureView(view).largestBlockBytes).toBeLessThanOrEqual(MESSAGE_RENDER_MAX_BYTES);
   });
 });
 

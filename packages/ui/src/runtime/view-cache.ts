@@ -99,9 +99,14 @@ export interface RendererViewCounters {
   readonly bytes: number;
   /** What that is worth in retained heap, through the calibrated model. */
   readonly heapEquivalentBytes: number;
-  /** The largest hydrated view, and the largest single block in any of them. */
+  /**
+   * The largest hydrated view; the largest single block (every body of it
+   * together, which is what one message renders); and the largest single body
+   * inside any block, which is what one part of a message renders.
+   */
   readonly largestViewBytes: number;
   readonly largestBlockBytes: number;
+  readonly largestBodyBytes: number;
   /** Canonical bytes the views point at and do not hold (RP-5b). */
   readonly referencedBytes: number;
   /** Views whose older settled part was released to stay inside the bound. */
@@ -861,10 +866,12 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
       const pinned = held.filter((row) => row.pin !== undefined).length;
       let largestViewBytes = 0;
       let largestBlockBytes = 0;
+      let largestBodyBytes = 0;
       let referencedBytes = 0;
       for (const row of held) {
         largestViewBytes = Math.max(largestViewBytes, row.bytes);
         largestBlockBytes = Math.max(largestBlockBytes, row.measure.largestBlockBytes);
+        largestBodyBytes = Math.max(largestBodyBytes, row.measure.largestBodyBytes);
         referencedBytes += row.measure.referencedBytes;
       }
       const heap = VIEW_HEAP_MODEL.lightBytes * paths.length
@@ -886,6 +893,7 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
         heapEquivalentBytes: heap,
         largestViewBytes,
         largestBlockBytes,
+        largestBodyBytes,
         referencedBytes,
         trims,
         drafts,

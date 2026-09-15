@@ -124,8 +124,12 @@ export interface ViewMeasure {
   stubsBytes: number;
   /** Canonical bytes this view points at and does not hold. Never retained. */
   referencedBytes: number;
-  /** The largest single block, for the counters that say what dominates. */
+  /**
+   * The largest single block — every body of it together, which is what one
+   * message renders — and the largest single body inside any of them.
+   */
   largestBlockBytes: number;
+  largestBodyBytes: number;
   /** Raw Pi entries, as JSON. Carries encoded image payloads once. */
   entriesBytes: number;
   /** Derived blocks: prose, reasoning, tool arguments and results. No image payloads. */
@@ -141,11 +145,11 @@ export interface ViewMeasure {
 
 export const EMPTY_MEASURE: ViewMeasure = Object.freeze({
   entriesBytes: 0, blocksBytes: 0, imagesBytes: 0, imagesEstimated: 0, images: 0, bytes: 0,
-  stubsBytes: 0, referencedBytes: 0, largestBlockBytes: 0,
+  stubsBytes: 0, referencedBytes: 0, largestBlockBytes: 0, largestBodyBytes: 0,
 });
 
 const entryCache = new WeakMap<object, number>();
-const blockCache = new WeakMap<object, { text: number; images: number; estimated: number; count: number; referenced: number }>();
+const blockCache = new WeakMap<object, { text: number; images: number; estimated: number; count: number; referenced: number; largestBody: number }>();
 const imageCache = new WeakMap<object, ImageMeasure>();
 
 /** Bytes of one raw entry, memoized against the entry object itself. */
@@ -255,7 +259,7 @@ function jpegDimensions(bytes: Uint8Array): { width: number; height: number } | 
 }
 
 /** Bytes of one derived block, memoized. Image payloads are counted separately. */
-function blockMeasure(block: Block): { text: number; images: number; estimated: number; count: number; referenced: number } {
+function blockMeasure(block: Block): { text: number; images: number; estimated: number; count: number; referenced: number; largestBody: number } {
   const cached = blockCache.get(block);
   if (cached) return cached;
   work.blocks += 1;
@@ -265,12 +269,16 @@ function blockMeasure(block: Block): { text: number; images: number; estimated: 
   let count = 0;
   // Bytes this block points at and does not hold (RP-5b): reported, not retained.
   let referenced = 0;
+  // The largest single body: what one *part* of a message renders, as opposed
+  // to the whole row, which is every body of it together.
+  let largestBody = 0;
+  const body = (bytes: number): number => { largestBody = Math.max(largestBody, bytes); return bytes; };
   for (const ref of bodyRefsOf(block)) referenced += omittedBytes(ref);
   switch (block.kind) {
     case "user": {
       work.bytes += block.text.length;
-      text = byteLength(block.text);
-      for (const file of block.files) text += byteLength(file.content) + byteLength(file.name);
+      text = body(byteLength(block.text));
+      for (const file of block.files) text += body(byteLength(file.content)) + byteLength(file.name);
       for (const image of block.images) {
         count += 1;
         // An image this view only points at costs nothing here: its bytes are
@@ -284,19 +292,19 @@ function blockMeasure(block: Block): { text: number; images: number; estimated: 
     }
     case "assistant":
       work.bytes += block.text.length + block.thinking.length;
-      text = byteLength(block.text) + byteLength(block.thinking) + byteLength(block.errorMessage ?? "");
+      text = body(byteLength(block.text)) + body(byteLength(block.thinking)) + byteLength(block.errorMessage ?? "");
       break;
     case "tool":
-      text = byteLength(block.name) + jsonBytes(block.args) + jsonBytes(block.result) + byteLength(block.partial ?? "");
+      text = byteLength(block.name) + body(jsonBytes(block.args)) + body(jsonBytes(block.result)) + body(byteLength(block.partial ?? ""));
       break;
     case "notice":
-      text = byteLength(block.text);
+      text = body(byteLength(block.text));
       break;
     case "custom":
-      text = byteLength(block.text) + jsonBytes(block.details);
+      text = body(byteLength(block.text)) + body(jsonBytes(block.details));
       break;
   }
-  const measure = { text, images, estimated, count, referenced };
+  const measure = { text, images, estimated, count, referenced, largestBody };
   blockCache.set(block, measure);
   return measure;
 }
@@ -343,6 +351,7 @@ export function measureView(view: SessionView): ViewMeasure {
   let imagesEstimated = 0;
   let images = 0;
   let largestBlockBytes = 0;
+  let largestBodyBytes = 0;
   let referencedBytes = 0;
   for (const block of view.blocks) {
     const measure = blockMeasure(block);
@@ -351,6 +360,7 @@ export function measureView(view: SessionView): ViewMeasure {
     imagesEstimated += measure.estimated;
     images += measure.count;
     largestBlockBytes = Math.max(largestBlockBytes, measure.text + measure.images);
+    largestBodyBytes = Math.max(largestBodyBytes, measure.largestBody);
     referencedBytes += measure.referenced;
   }
   for (const entry of view.history?.context ?? []) entriesBytes += entryBytes(entry);
@@ -360,6 +370,6 @@ export function measureView(view: SessionView): ViewMeasure {
     stubsBytes += stubBytes(stub);
     for (const body of stub.bodies) referencedBytes += body.totalBytes;
   }
-  return { entriesBytes, blocksBytes, imagesBytes, imagesEstimated, images, stubsBytes, referencedBytes, largestBlockBytes,
+  return { entriesBytes, blocksBytes, imagesBytes, imagesEstimated, images, stubsBytes, referencedBytes, largestBlockBytes, largestBodyBytes,
     bytes: entriesBytes + blocksBytes + imagesBytes + stubsBytes };
 }

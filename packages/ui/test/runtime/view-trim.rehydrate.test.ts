@@ -13,6 +13,7 @@ import { createHistoryLoader } from "../../src/runtime/history-loader.js";
 import { initialState, reduce, type Action, type AppState } from "../../src/store.js";
 import { trimView } from "../../src/view-summary.js";
 import { blockBytes, measureView } from "../../src/runtime/view-measure.js";
+import { BODY_EXCERPT_MAX_BYTES } from "../../src/runtime/body-excerpt.js";
 
 const CWD = "/p";
 const path = `${CWD}/s.jsonl`;
@@ -99,8 +100,8 @@ describe("releasing the older part of a conversation somebody is using", () => {
 
     await loader.recent(path, () => true);
 
-    // One ordinary bounded read: the same request a released transcript makes.
-    expect(request).toHaveBeenCalledWith({ path, window: { tail: 40 } });
+    // One ordinary bounded read, carrying the per-body limit this surface can hold.
+    expect(request).toHaveBeenCalledWith({ path, window: { tail: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES });
     const after = store.open[path]!;
     expect(after.trimmed).toBeUndefined();
     // A fresh cursor came back with it, so paging further back works again.
