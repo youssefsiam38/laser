@@ -11,6 +11,7 @@ import { createViewCache, DELIVERY_FALLBACK_MS, PENDING_TAIL_MAX_BYTES, PENDING_
 import { VIEW_TAIL_MAX_ENTRIES, viewTailRetainedBytes, type ViewTailDto, type ViewTailSink } from "../../src/runtime/view-tail.js";
 import { initialState, isDormantView, reduce, type AppState } from "../../src/store.js";
 import { measurementWork, resetMeasurementWork } from "../../src/runtime/view-measure.js";
+import { LIVE_TAIL_MAX_BYTES } from "../../src/runtime/body-excerpt.js";
 import { MessageEditPresentation, TranscriptPresentation } from "../../src/runtime/transcript-presentation.js";
 
 const CWD = "/p";
@@ -352,7 +353,7 @@ describe("pressure, counters and generations", () => {
 });
 
 describe("what it costs while an agent streams", () => {
-  it("measures the delta and nothing else, with fifty other conversations open", () => {
+  it("plateaus with the capped live tail instead of counting every token, with fifty other conversations open", () => {
     const h = harness({ limits: { views: 8, bytes: 1 << 24, viewBytes: 1 << 24 } });
     const path = pathOf(1);
     load(h, path, { entries: 4 });
@@ -366,23 +367,36 @@ describe("what it costs while an agent streams", () => {
     const stringify = vi.spyOn(JSON, "stringify");
     h.store.dispatch({ type: "notification", method: "session/update", params: { sessionPath: path, seq: 100, at: "", update: { kind: "message_start", role: "assistant" } } as never });
     let streamed = 0;
-    for (let index = 0; index < 1000; index++) {
+    const samples: number[] = [];
+    let passes = 0;
+    for (let index = 0; index < 12000; index++) {
       const delta = `token ${index} \u00e9\u{1F6F0}`;
       streamed += new TextEncoder().encode(delta).length;
       h.store.dispatch({ type: "notification", method: "session/update", params: { sessionPath: path, seq: 101 + index, at: "", update: { kind: "text_delta", delta, contentIndex: 0 } } as never });
-      // Deferred passes really run, several times over the stream.
-      if (index % 100 === 0) h.runDeferred();
+      if (index % 100 === 0) { h.runDeferred(); passes += 1; samples.push(h.cache.counters().bytes); }
     }
     h.runDeferred();
     const work = measurementWork();
     stringify.mockRestore();
 
-    // The bytes are exactly the stream's, counted as they arrived.
-    expect(h.cache.counters().bytes - before).toBe(streamed);
-    // The one view that changed is the only one ever walked, and the content
-    // looked at is the deltas, not the cumulative text that grew to hold them.
-    expect(work.views).toBeLessThanOrEqual(2);
-    expect(work.bytes).toBeLessThan(streamed);
+    // The stream is far past the live tail cap, and the accounting says what
+    // the view actually holds rather than what went through it (RP-5b §4.2).
+    expect(streamed).toBeGreaterThan(4 * LIVE_TAIL_MAX_BYTES);
+    const grown = h.cache.counters().bytes - before;
+    expect(grown).toBeLessThanOrEqual(LIVE_TAIL_MAX_BYTES + 4096);
+    expect(grown).toBeLessThan(streamed / 4);
+    // It plateaus: the last samples do not keep climbing with the stream.
+    const tail = samples.slice(-5);
+    expect(Math.max(...tail) - Math.min(...tail)).toBeLessThanOrEqual(4096);
+    // Nothing is ever reported as over budget for a stream that is inside it.
+    expect(h.cache.counters().overflow).toBeUndefined();
+    // Only the view that changed is walked, once per pass, and what is looked
+    // at is the capped tail — never the cumulative text that produced it.
+    expect(work.views).toBeLessThanOrEqual(passes + 2);
+    expect(work.bytes).toBeLessThanOrEqual((passes + 2) * (LIVE_TAIL_MAX_BYTES + 4096));
+    // Each pass looks at the capped tail, not at everything that has streamed
+    // through it: the cost per pass is the bound, not the conversation.
+    expect(work.bytes / Math.max(1, work.views)).toBeLessThanOrEqual(LIVE_TAIL_MAX_BYTES + 4096);
     expect(stringify).not.toHaveBeenCalled();
     // And the pinned conversation on screen is never a candidate.
     expect(isDormantView(h.store.getSnapshot().open[path])).toBe(false);

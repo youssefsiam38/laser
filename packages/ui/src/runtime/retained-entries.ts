@@ -15,7 +15,7 @@
  *
  * Pure: no React, no DOM, no network, no allocation proportional to a body.
  */
-import { entryBodies, entryToolCalls, utf8ByteLength, type BodyComponent, type ElidedEntry } from "@lasercode/protocol";
+import { entryBodyMetadata, entryToolCalls, type BodyComponent, type ElidedEntry } from "@lasercode/protocol";
 import { BODY_EXCERPT_MAX_BYTES } from "./body-excerpt.js";
 
 /**
@@ -43,8 +43,8 @@ const timestampOf = (value: Record<string, unknown>): string | undefined => {
   return typeof at === "string" ? at : undefined;
 };
 
-/** The stub for one oversized record. */
-export function stubOf(entry: unknown, bodies = entryBodies(entry)): EntryStub | undefined {
+/** The stub for one oversized record. Sizes only: no body is ever built. */
+export function stubOf(entry: unknown, bodies = entryBodyMetadata(entry)): EntryStub | undefined {
   const value = record(entry);
   if (typeof value.id !== "string" || value.id === "") return undefined;
   const message = record(value.message);
@@ -56,7 +56,7 @@ export function stubOf(entry: unknown, bodies = entryBodies(entry)): EntryStub |
     ...(typeof message.toolCallId === "string" ? { toolCallId: message.toolCallId } : {}),
     ...(entryToolCalls(entry).length > 0 ? { toolCalls: entryToolCalls(entry) } : {}),
     ...(timestampOf(value) ? { at: timestampOf(value)! } : {}),
-    bodies: bodies.map((body) => ({ component: body.component, totalBytes: utf8ByteLength(body.text) })),
+    bodies: bodies.map((body) => ({ component: body.component, totalBytes: body.totalBytes })),
   };
 }
 
@@ -87,10 +87,12 @@ export function retainEntries(entries: readonly unknown[], maxBytes = BODY_EXCER
   const kept: unknown[] = [];
   const stubs: EntryStub[] = [];
   for (const entry of entries) {
-    const bodies = entryBodies(entry);
+    // Sizes, not bodies: classifying a twelve-megabyte structured result must
+    // not build the twelve-megabyte projection of it first (RP-5b §3.2).
+    const bodies = entryBodyMetadata(entry);
     let oversized = false;
     for (const body of bodies) {
-      if (utf8ByteLength(body.text) > maxBytes) { oversized = true; break; }
+      if (body.totalBytes > maxBytes) { oversized = true; break; }
     }
     if (!oversized) { kept.push(entry); continue; }
     const stub = stubOf(entry, bodies);

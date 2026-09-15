@@ -225,13 +225,25 @@ export const resetBodyProjectionWork = (): void => { projection.calls = 0; proje
 export interface BoundedBody {
   /** The first `maxBytes` of the body, cut on a character boundary. */
   text: string;
-  /** Exact UTF-8 size of the whole body. */
-  totalBytes: number;
-  /** The body is larger than the excerpt. */
+  /**
+   * Exact UTF-8 size of the whole body, or `undefined` when this projection
+   * cannot predict the canonical text and refuses to build it to find out.
+   * Never zero for something it did not measure.
+   */
+  totalBytes: number | undefined;
+  /** The body is larger than the excerpt, or could not be projected at all. */
   truncated: boolean;
+  /** The size and the excerpt are unavailable; read it from the authority. */
+  unknown?: true;
 }
 
-/** Bytes a JSON string literal takes, counted rather than produced. */
+/**
+ * Bytes a JSON string literal takes, counted rather than produced — exactly as
+ * `JSON.stringify` writes it, including the two cases that are easy to get
+ * wrong: an astral character is one four-byte pair, and an **unpaired**
+ * surrogate (high or low) is written as a six-character `\uXXXX` escape rather
+ * than as UTF-8.
+ */
 function jsonStringBytes(value: string): number {
   let bytes = 2; // the quotes
   for (let index = 0; index < value.length; index++) {
@@ -243,8 +255,10 @@ function jsonStringBytes(value: string): number {
     else if (code < 0x800) bytes += 2;
     else if (code >= 0xd800 && code <= 0xdbff) {
       const low = index + 1 < value.length ? value.charCodeAt(index + 1) : 0;
+      // A pair is four bytes; a lone high surrogate is escaped.
       if (low >= 0xdc00 && low <= 0xdfff) { bytes += 4; index += 1; } else bytes += 6;
-    } else bytes += 3;
+    } else if (code >= 0xdc00 && code <= 0xdfff) bytes += 6; // a lone low surrogate
+    else bytes += 3;
   }
   return bytes;
 }
@@ -280,38 +294,59 @@ export function boundedBodyText(value: unknown, maxBytes: number): BoundedBody {
   let bytes = 0;
   let emitted = 0;
   /** Write while there is room; count always. */
+  /**
+   * Write while there is room; count always. Once the room is gone nothing
+   * more is written, ever — what comes out is a strict prefix of the whole
+   * text, so an offset into it means the same thing to the authority.
+   */
+  let full = false;
   const put = (text: string, size = utf8ByteLength(text)): void => {
-    if (emitted + size <= maxBytes) { parts.push(text); emitted += size; }
-    else if (emitted < maxBytes) {
-      const room = sliceUtf8RangeFrom(text, 0, maxBytes - emitted);
-      if (room) { parts.push(room.text); emitted += room.bytes; }
-      else emitted = maxBytes;
+    if (!full) {
+      if (emitted + size <= maxBytes) { parts.push(text); emitted += size; }
+      else {
+        const room = maxBytes - emitted;
+        const fitted = room > 0 ? sliceUtf8RangeFrom(text, 0, room) : undefined;
+        if (fitted) { parts.push(fitted.text); emitted += fitted.bytes; }
+        full = true;
+      }
     }
     bytes += size;
-    projection.emittedChars += parts.length > 0 ? 0 : 0;
   };
   const putString = (text: string): void => {
     projection.scannedChars += text.length;
     const size = jsonStringBytes(text);
-    if (emitted + size <= maxBytes) { parts.push(JSON.stringify(text)); emitted += size; bytes += size; return; }
-    if (emitted < maxBytes) {
-      // Only as much of the string as fits is ever escaped, so a huge value is
-      // never copied to be thrown away.
-      const room = maxBytes - emitted;
-      const head = sliceUtf8RangeFrom(text, 0, Math.max(1, room));
-      const written = head ? JSON.stringify(head.text) : "";
-      const fitted = sliceUtf8RangeFrom(written, 0, room);
-      if (fitted) { parts.push(fitted.text); emitted += fitted.bytes; }
-      else emitted = maxBytes;
+    if (!full) {
+      if (emitted + size <= maxBytes) { parts.push(JSON.stringify(text)); emitted += size; }
+      else {
+        // Only as much of the string as fits is ever escaped, so a huge value
+        // is never copied to be thrown away.
+        const room = maxBytes - emitted;
+        // The escape of a prefix is a prefix of the escape, so cutting the
+        // written form is safe and keeps the result an exact prefix.
+        const head = room > 0 ? sliceUtf8RangeFrom(text, 0, room) : undefined;
+        const written = head ? JSON.stringify(head.text) : "";
+        const fitted = room > 0 ? sliceUtf8RangeFrom(written, 0, room) : undefined;
+        if (fitted) { parts.push(fitted.text); emitted += fitted.bytes; }
+        full = true;
+      }
     }
     bytes += size;
   };
+  /** A value that writes itself is not modelled here; the projection refuses. */
+  let unmodelled = false;
+  const seen = new Set<object>();
   const walk = (node: unknown, indent: string): void => {
     if (node === null) return put("null", 4);
+    if (typeof node === "object") {
+      if (seen.has(node)) { unmodelled = true; return; }
+      seen.add(node);
+    }
+    if (typeof node === "object" && typeof (node as { toJSON?: unknown }).toJSON === "function") { unmodelled = true; return; }
     if (typeof node === "string") return putString(node);
     if (typeof node === "number") return put(Number.isFinite(node) ? String(node) : "null");
     if (typeof node === "boolean") return put(node ? "true" : "false");
-    if (typeof node === "bigint" || typeof node === "function" || typeof node === "symbol" || node === undefined) return put("null", 4);
+    if (typeof node === "bigint") { unmodelled = true; return; }
+    if (typeof node === "function" || typeof node === "symbol" || node === undefined) return put("null", 4);
     const inner = `${indent}  `;
     if (Array.isArray(node)) {
       if (node.length === 0) return put("[]", 2);
@@ -341,7 +376,14 @@ export function boundedBodyText(value: unknown, maxBytes: number): BoundedBody {
   try {
     walk(value, "");
   } catch {
-    return { text: "", totalBytes: 0, truncated: false };
+    unmodelled = true;
+  }
+  if (unmodelled) {
+    // A value whose canonical text this projection cannot predict — one with
+    // its own `toJSON`, a cycle, a `BigInt` — gets no excerpt and is declared
+    // unknown. It is never built here to find out how big it is, and "unknown"
+    // is never reported as zero: the caller reads it from its authority.
+    return { text: "", totalBytes: undefined, truncated: true, unknown: true };
   }
   const text = parts.join("");
   projection.emittedChars += text.length;
@@ -443,6 +485,88 @@ export function entryBodies(entry: unknown): EntryBody[] {
     if (message.details !== undefined) bodies.push({ component: { kind: "custom_details", index: 1 }, text: displayBodyText(message.details) });
   }
   return bodies;
+}
+
+/**
+ * The size of every addressable body of an entry, **without building any of
+ * them** (RP-5b §3.2).
+ *
+ * `entryBodies` is for an authority that is about to answer with the text; a
+ * client deciding whether it may keep a record must not pay for the text to
+ * find out. Strings are counted where they already are, and a structured value
+ * is walked through the same bounded projection the excerpt uses, which writes
+ * at most `maxBytes` and counts the rest.
+ */
+export function entryBodyMetadata(entry: unknown, maxBytes = 0): Array<{ component: BodyComponent; totalBytes: number; unknown?: true }> {
+  const value = record(entry);
+  const type = typeof value.type === "string" ? value.type : "";
+  const rows: Array<{ component: BodyComponent; totalBytes: number; unknown?: true }> = [];
+  const structured = (component: BodyComponent, node: unknown): void => {
+    const bounded = boundedBodyText(node, maxBytes);
+    // A body whose size cannot be predicted without building it is declared
+    // unknown and treated as oversized: the view points at it rather than
+    // guessing, and never records zero for it.
+    rows.push(bounded.totalBytes === undefined
+      ? { component, totalBytes: Number.MAX_SAFE_INTEGER, unknown: true }
+      : { component, totalBytes: bounded.totalBytes });
+  };
+  const partsSize = (content: unknown, kind: string, field: string): number => {
+    if (typeof content === "string") return kind === "text" ? utf8ByteLength(content) : 0;
+    if (!Array.isArray(content)) return 0;
+    let bytes = 0;
+    for (const part of content) {
+      const row = record(part);
+      if (row.type === kind) bytes += utf8ByteLength(String(row[field] ?? ""));
+    }
+    return bytes;
+  };
+  if (type === "custom_message") {
+    const text = partsSize(value.content, "text", "text");
+    if (text > 0) rows.push({ component: { kind: "custom_details" }, totalBytes: text });
+    if (value.details !== undefined) structured({ kind: "custom_details", index: 1 }, value.details);
+    return rows;
+  }
+  if (type !== "message") return rows;
+  const message = record(value.message);
+  const role = typeof message.role === "string" ? message.role : "";
+  if (role === "user") {
+    rows.push({ component: { kind: "user_text" }, totalBytes: partsSize(message.content, "text", "text") });
+    const content = Array.isArray(message.content) ? message.content : [];
+    let image = 0;
+    for (const part of content) {
+      const row = record(part);
+      if (row.type === "image" && typeof row.data === "string") rows.push({ component: { kind: "image", index: image++ }, totalBytes: utf8ByteLength(row.data) });
+    }
+    return rows;
+  }
+  if (role === "assistant") {
+    rows.push({ component: { kind: "assistant_text" }, totalBytes: partsSize(message.content, "text", "text") });
+    const thinking = partsSize(message.content, "thinking", "thinking");
+    if (thinking > 0) rows.push({ component: { kind: "reasoning" }, totalBytes: thinking });
+    const content = Array.isArray(message.content) ? message.content : [];
+    let call = 0;
+    for (const part of content) {
+      const row = record(part);
+      if (row.type === "toolCall") structured({ kind: "tool_args", index: call++ }, row.arguments);
+    }
+    return rows;
+  }
+  if (role === "toolResult") {
+    const content = message.content;
+    const details = message.details;
+    const hasDetails = typeof details === "object" && details !== null && !Array.isArray(details);
+    const hasNonText = Array.isArray(content) &&
+      content.some((part) => typeof part === "object" && part !== null && (part as { type?: unknown }).type !== "text");
+    // A text-only result is its own text, counted where it already is.
+    if (!hasDetails && !hasNonText) rows.push({ component: { kind: "tool_result" }, totalBytes: partsSize(content, "text", "text") });
+    else structured({ kind: "tool_result" }, toolResultValue(message));
+    return rows;
+  }
+  if (role === "custom") {
+    rows.push({ component: { kind: "custom_details" }, totalBytes: partsSize(message.content, "text", "text") });
+    if (message.details !== undefined) structured({ kind: "custom_details", index: 1 }, message.details);
+  }
+  return rows;
 }
 
 /** One named body of one entry, or `undefined` when the entry has no such body. */

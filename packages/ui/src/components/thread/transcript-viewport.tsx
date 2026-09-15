@@ -98,7 +98,12 @@ export class TranscriptViewport {
     this.arriving = false;
     this.running = false;
     this.cancel();
-    if (this.path) this.places.set(this.path, this.place);
+    if (this.path) {
+      this.places.set(this.path, this.place);
+      // The conversation this surface has left stands on nothing: its ids go
+      // with it, so they neither protect its rows from a trim nor linger.
+      clearAnchoredMessages(this.path);
+    }
     this.path = path;
     this.place = this.places.get(path) ?? { following: true };
     this.ids = [];

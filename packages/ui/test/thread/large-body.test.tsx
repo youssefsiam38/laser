@@ -17,7 +17,8 @@ import { LaserStoreProvider, createStateStore } from "../../src/runtime/LaserPro
 import { projectMessages } from "../../src/runtime/projection.js";
 import { initialState, reduce } from "../../src/store.js";
 import { ThreadMessage } from "../../src/components/thread/messages.js";
-import { BODY_VIEWER_AGGREGATE_MAX_BYTES, BodyReplyRefused, BodyWindow, findInBody, IMAGE_BLOB_MAX, IMAGE_SURFACE_MAX_BYTES, ImageBlobs, streamBody } from "../../src/runtime/body-reader.js";
+import { BODY_VIEWER_AGGREGATE_MAX_BYTES, BodyReplyRefused, BodyWindow, COPY_INFLIGHT_MAX_BYTES, copyWholeBody, FIND_QUERY_MAX_BYTES, findInBody, IMAGE_BLOB_MAX, IMAGE_SURFACE_MAX_BYTES, ImageBlobs, indexOfFolded, streamBody } from "../../src/runtime/body-reader.js";
+import { sliceUtf8RangeFrom, utf8ByteLength } from "@lasercode/protocol";
 import { sessionState } from "../agents/fixtures.js";
 import { LIVE_TAIL_MAX_BYTES, MESSAGE_RENDER_MAX_BYTES } from "../../src/runtime/body-excerpt.js";
 import { measureView } from "../../src/runtime/view-measure.js";
@@ -27,6 +28,15 @@ const BODY = "answer ".repeat(600_000); // ~4 MB, for the transcript rows
 const HUGE_TOTAL = 32 * 1024 * 1024; // the acceptance body: 32 MiB, paged never held
 
 const slices = vi.hoisted(() => ({ calls: [] as Array<{ offset: number; limit?: number }> }));
+
+/** The digest an authority signs a slice with, exactly as the readers check it. */
+async function digestOf(text: string): Promise<string> {
+  const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(bytes)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+}
+const WHOLE_DIGEST = "c".repeat(64);
+/** The digest of a whole body, for the fixtures a reader reconstructs. */
+async function wholeDigestOf(text: string): Promise<string> { return digestOf(text); }
 const stable = vi.hoisted(() => ({
   client: {
     request: vi.fn(async (method: string, params: Record<string, unknown>) => {
@@ -42,7 +52,7 @@ const stable = vi.hoisted(() => ({
       return {
         authority: "durable", revision: "r1.env.1", component: params.component, totalBytes: total,
         offset, bytes, ...(offset + bytes < total ? { next: offset + bytes } : {}),
-        truncated: offset + bytes < total, sliceDigest: "s", contentDigest: "c", text,
+        truncated: offset + bytes < total, sliceDigest: await digestOf(text), contentDigest: WHOLE_DIGEST, text,
       };
     }),
   },
@@ -224,7 +234,8 @@ describe("the bounded window over one body", () => {
     for (const over of hostile) {
       const window = new BodyWindow(async (params) => ({
         authority: "durable", revision: "r1.env.1", component: params.component, totalBytes: HUGE_TOTAL,
-        offset: params.offset, bytes: 8, next: params.offset + 8, truncated: true, sliceDigest: "s", contentDigest: "c", text: "xxxxxxxx",
+        offset: params.offset, bytes: 8, next: params.offset + 8, truncated: true,
+        sliceDigest: await digestOf("xxxxxxxx"), contentDigest: WHOLE_DIGEST, text: "xxxxxxxx",
         ...over,
       }) as never, SESSION, ref, 128 * 1024, "env");
       await expect(window.more()).rejects.toThrow(BodyReplyRefused);
@@ -239,12 +250,57 @@ describe("the bounded window over one body", () => {
       const total = call === 1 ? HUGE_TOTAL : HUGE_TOTAL + 1;
       return {
         authority: "durable", revision: "r1.env.1", component: params.component, totalBytes: total,
-        offset: params.offset, bytes: 8, next: params.offset + 8, truncated: true, sliceDigest: "s",
-        contentDigest: call === 1 ? "c" : "different", text: "xxxxxxxx",
+        offset: params.offset, bytes: 8, next: params.offset + 8, truncated: true, sliceDigest: await digestOf("xxxxxxxx"),
+        contentDigest: call === 1 ? WHOLE_DIGEST : "d".repeat(64), text: "xxxxxxxx",
       } as never;
     }, SESSION, ref, 128 * 1024, "env");
     await window.more();
     await expect(window.more()).rejects.toThrow(BodyReplyRefused);
+  });
+
+  it("lets a read that lands after a clear touch nothing of the next one", async () => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let phase: "old" | "new" = "old";
+    const request = vi.fn(async (params: Record<string, unknown>) => {
+      const old = phase === "old";
+      if (old) await gate;
+      // The successor reads a different body entirely: another revision,
+      // another size, another digest.
+      const text = old ? "oldold88" : "newnew88";
+      return {
+        authority: "durable", revision: old ? "r1.env.1" : "r2.env.9", component: params.component,
+        totalBytes: old ? HUGE_TOTAL : HUGE_TOTAL + 4096, offset: params.offset as number, bytes: 8,
+        next: (params.offset as number) + 8, truncated: true,
+        sliceDigest: await digestOf(text), contentDigest: old ? "a".repeat(64) : "b".repeat(64), text,
+      } as never;
+    });
+    const window = new BodyWindow(request as never, SESSION, { ...ref, revision: undefined } as never, 128 * 1024, "env",
+      async () => (phase === "old" ? "r1.env.1" : "r2.env.9"));
+    // Its outcome is caught from the moment it exists: a refusal for a body
+    // nobody is reading any more is not an error anyone should see.
+    let staleRefused = false;
+    const stale = window.more().catch(() => { staleRefused = true; });
+    await Promise.resolve();
+    window.clear();
+    phase = "new";
+    // A successor reads the body as it is now, and settles first.
+    await window.more();
+    const after = window.getSnapshot();
+    expect(after.slices.map(slice => slice.text)).toEqual(["newnew88"]);
+    expect(after.totalBytes).toBe(HUGE_TOTAL + 4096);
+
+    release!();
+    // Whether the late read finishes or is refused, it is silent.
+    await stale;
+    expect(typeof staleRefused).toBe("boolean");
+    // The late read painted nothing, settled nothing, and left no belief about
+    // size or digest behind: the successor can keep reading its own body.
+    expect(window.getSnapshot()).toEqual(after);
+    await window.more();
+    const next = window.getSnapshot();
+    expect(next.slices.at(-1)!.text).toBe("newnew88");
+    expect(next.totalBytes).toBe(HUGE_TOTAL + 4096);
   });
 
   it("jumps to a named place and holds only what it shows", async () => {
@@ -265,14 +321,15 @@ describe("a prompt whose image the window points at", () => {
     globalThis.URL.createObjectURL = vi.fn(() => `blob:image-${++counter}`);
     globalThis.URL.revokeObjectURL = vi.fn();
     const data = btoa("x".repeat(40_000));
+    const imageDigest = await wholeDigestOf(data);
     stable.client.request.mockImplementation(async (method: string, params: Record<string, unknown>) => {
       if (method === "session/revision") return { revision: "r1.env.1", environmentKey: "e1.key", authority: "durable" };
       if (method !== "session/entry_range") return {};
       const offset = params.offset as number;
       const text = data.slice(offset, offset + 65_536);
       return { authority: "durable", revision: "r1.env.1", component: params.component, totalBytes: data.length, offset,
-        bytes: text.length, ...(offset + text.length < data.length ? { next: offset + text.length } : {}), truncated: false,
-        sliceDigest: "s", contentDigest: "c", text };
+        bytes: text.length, ...(offset + text.length < data.length ? { next: offset + text.length } : {}),
+        truncated: offset + text.length < data.length, sliceDigest: await digestOf(text), contentDigest: imageDigest, text };
     });
 
     await mount([
@@ -302,8 +359,8 @@ describe("finding and copying what the window does not hold", () => {
       const limit = params.limit as number;
       const text = body.slice(offset, offset + limit);
       return { authority: "durable", revision: "r", component: params.component, totalBytes: body.length, offset,
-        bytes: text.length, ...(offset + text.length < body.length ? { next: offset + text.length } : {}), truncated: false,
-        sliceDigest: "s", contentDigest: "c", text };
+        bytes: text.length, ...(offset + text.length < body.length ? { next: offset + text.length } : {}),
+        truncated: offset + text.length < body.length, sliceDigest: await digestOf(text), contentDigest: WHOLE_DIGEST, text };
     });
     const at = await findInBody(request as never, SESSION, { entryId: "e1", component: { kind: "tool_result" }, totalBytes: body.length, revision: "r", excerpt: { offset: 0, bytes: 0 } }, "NEEDLE");
     expect(at).toBe(200_000);
@@ -315,12 +372,14 @@ describe("finding and copying what the window does not hold", () => {
 
   it("streams a whole body to a consumer without keeping it", async () => {
     const total = 4 * 1024 * 1024;
+    const wholeDigest = await wholeDigestOf("y".repeat(total));
     const request = vi.fn(async (params: Record<string, unknown>) => {
       const offset = params.offset as number;
       const bytes = Math.max(0, Math.min(params.limit as number, total - offset));
+      const text = "y".repeat(bytes);
       return { authority: "durable", revision: "r", component: params.component, totalBytes: total, offset, bytes,
         ...(offset + bytes < total ? { next: offset + bytes } : {}), truncated: offset + bytes < total,
-        sliceDigest: "s", contentDigest: "c", text: "y".repeat(bytes) };
+        sliceDigest: await digestOf(text), contentDigest: wholeDigest, text };
     });
     let seen = 0;
     let peak = 0;
@@ -376,12 +435,16 @@ describe("images the window points at", () => {
   const payload = (slices: number) => {
     const sliceChars = 64 * 1024;
     const total = slices * sliceChars;
+    // The digest the authority publishes for the whole image, so a reader that
+    // verifies its reconstruction sees the image it asked for.
+    const whole = digestOf("QUJD".repeat(total / 4));
     return vi.fn(async (params: Record<string, unknown>) => {
       const offset = params.offset as number;
       const bytes = Math.max(0, Math.min(params.limit as number, total - offset));
+      const text = "QUJD".repeat(bytes / 4);
       return { authority: "durable", revision: "r", component: params.component, totalBytes: total, offset, bytes,
         ...(offset + bytes < total ? { next: offset + bytes } : {}), truncated: offset + bytes < total,
-        sliceDigest: "s", contentDigest: "c", text: "QUJD".repeat(bytes / 4) };
+        sliceDigest: await digestOf(text), contentDigest: await whole, text };
     });
   };
 
@@ -447,7 +510,7 @@ describe("images the window points at", () => {
     const request = vi.fn(async (params: Record<string, unknown>) => {
       await gate;
       return { authority: "durable", revision: "r", component: params.component, totalBytes: 4, offset: 0, bytes: 4,
-        truncated: false, sliceDigest: "s", contentDigest: "c", text: "QUJD" };
+        truncated: false, sliceDigest: await digestOf("QUJD"), contentDigest: await digestOf("QUJD"), text: "QUJD" };
     });
     const blobs = new ImageBlobs(request as never, "env");
     const pending = blobs.load("late", SESSION, refOf(1, 4, 1024), "image/png");
@@ -471,10 +534,160 @@ describe("images the window points at", () => {
     expect(created).toHaveLength(1);
   });
 
+  it("never holds more than the stated scratch, on uneven multi-byte slices", async () => {
+    // Slices of awkward sizes in characters that are two and four bytes each:
+    // the ceiling is in bytes, and it is a ceiling, not an average.
+    const unit = "ü😀";           // 2 + 4 bytes
+    const body = unit.repeat(120_000);
+    const totalBytes = utf8ByteLength(body);
+    const whole = await digestOf(body);
+    let cursor = 0;
+    const request = vi.fn(async (params: Record<string, unknown>) => {
+      const offset = params.offset as number;
+      // Uneven slices, every one inside the protocol's own slice bound.
+      const want = [61_000, 7, 64 * 1024, 999, 33_333][cursor++ % 5]!;
+      const slice = sliceUtf8RangeFrom(body, offset, want);
+      const text = slice?.text ?? "";
+      const bytes = utf8ByteLength(text);
+      return { authority: "durable", revision: "r", component: params.component, totalBytes, offset, bytes,
+        ...(offset + bytes < totalBytes ? { next: offset + bytes } : {}), truncated: offset + bytes < totalBytes,
+        sliceDigest: await digestOf(text), contentDigest: whole, text };
+    });
+    // Every Blob this builds records the bytes it was handed beyond the blob
+    // it grew from: that is the scratch in the JavaScript heap at that moment.
+    let peak = 0;
+    const RealBlob = globalThis.Blob;
+    class MeasuringBlob {
+      size = 0;
+      constructor(parts: Array<{ size?: number; byteLength?: number } | string> = []) {
+        let fresh = 0;
+        for (const part of parts) {
+          const size = typeof part === "string" ? utf8ByteLength(part) : (part?.size ?? part?.byteLength ?? 0);
+          this.size += size;
+          if (typeof part === "string") fresh += size;
+        }
+        peak = Math.max(peak, fresh);
+      }
+    }
+    (globalThis as { Blob: unknown }).Blob = MeasuringBlob as never;
+    const writer = { write: vi.fn(async () => {}) };
+    const outcome = await copyWholeBody(request as never, SESSION,
+      { entryId: "e1", component: { kind: "tool_result" }, totalBytes, revision: "r", excerpt: { offset: 0, bytes: 0 } },
+      { clipboard: writer as never });
+    (globalThis as { Blob: unknown }).Blob = RealBlob;
+    expect(outcome.ok).toBe(true);
+    // Whatever was in hand at once stayed inside the promise, literally.
+    expect(peak).toBeGreaterThan(0);
+    expect(peak).toBeLessThanOrEqual(COPY_INFLIGHT_MAX_BYTES);
+  });
+
+  it("refuses an image whose slices are each signed but whose whole is not the image", async () => {
+    const total = 64 * 1024;
+    const corrupt = vi.fn(async (params: Record<string, unknown>) => {
+      const offset = params.offset as number;
+      const bytes = Math.max(0, Math.min(params.limit as number, total - offset));
+      const text = "QUJD".repeat(bytes / 4);
+      // Every slice digest is honest; the body as a whole is a different one.
+      return { authority: "durable", revision: "r", component: params.component, totalBytes: total, offset, bytes,
+        ...(offset + bytes < total ? { next: offset + bytes } : {}), truncated: offset + bytes < total,
+        sliceDigest: await digestOf(text), contentDigest: await digestOf("something else"), text };
+    });
+    const blobs = new ImageBlobs(corrupt as never, "env");
+    expect(await blobs.load("corrupt", SESSION, refOf(1, total, 1024), "image/png")).toBeUndefined();
+    expect(blobs.held).toEqual({ images: 0, bytes: 0, surface: 0 });
+    // Nothing was published, and whatever was built was given back.
+    expect(revoked.length).toBe(created.length);
+  });
+
+  it("keeps count and surface exact when many unique reads race, and refuses the rest", async () => {
+    // Every read is held open until the test lets it finish, so all of them are
+    // in flight at once: admission must count what is being read, not only what
+    // has been published (RP-5b §7.3).
+    let open = 0;
+    let peak = 0;
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const total = 64 * 1024;
+    const whole = digestOf("QUJD".repeat(total / 4));
+    const slow = vi.fn(async (params: Record<string, unknown>) => {
+      open += 1; peak = Math.max(peak, open);
+      await gate;
+      open -= 1;
+      const offset = params.offset as number;
+      const bytes = Math.max(0, Math.min(params.limit as number, total - offset));
+      const text = "QUJD".repeat(bytes / 4);
+      return { authority: "durable", revision: "r", component: params.component, totalBytes: total, offset, bytes,
+        ...(offset + bytes < total ? { next: offset + bytes } : {}), truncated: offset + bytes < total,
+        sliceDigest: await digestOf(text), contentDigest: await whole, text };
+    });
+    const blobs = new ImageBlobs(slow as never, "env");
+    // Sixty distinct images, each claiming a twelfth of the surface budget.
+    const claim = Math.floor(IMAGE_SURFACE_MAX_BYTES / 12);
+    const pending = Array.from({ length: 60 }, (_, index) =>
+      blobs.load(`race-${index}`, SESSION, { ...refOf(index, total), image: surface(claim) }, "image/png"));
+    // Never more reads in flight than the pool may ever hold.
+    expect(peak).toBeLessThanOrEqual(IMAGE_BLOB_MAX);
+    release!();
+    const urls = await Promise.all(pending);
+    const admitted = urls.filter(url => typeof url === "string").length;
+    expect(admitted).toBeGreaterThan(0);
+    expect(admitted).toBeLessThanOrEqual(12);
+    expect(blobs.held.images).toBe(admitted);
+    expect(blobs.held.images).toBeLessThanOrEqual(IMAGE_BLOB_MAX);
+    expect(blobs.held.surface).toBeLessThanOrEqual(IMAGE_SURFACE_MAX_BYTES);
+    expect(blobs.committed).toEqual(blobs.held);
+    // Nothing published was stolen from a row that is showing it.
+    for (let index = 0; index < 60; index++) {
+      const url = blobs.url(`race-${index}`);
+      if (url) expect(revoked).not.toContain(url);
+    }
+  });
+
+  it("lets a read that outlived its environment touch nothing of the next one", async () => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const total = 64 * 1024;
+    const whole = digestOf("QUJD".repeat(total / 4));
+    let held = true;
+    const request = vi.fn(async (params: Record<string, unknown>) => {
+      if (held) await gate;
+      const offset = params.offset as number;
+      const bytes = Math.max(0, Math.min(params.limit as number, total - offset));
+      const text = "QUJD".repeat(bytes / 4);
+      return { authority: "durable", revision: "r", component: params.component, totalBytes: total, offset, bytes,
+        ...(offset + bytes < total ? { next: offset + bytes } : {}), truncated: offset + bytes < total,
+        sliceDigest: await digestOf(text), contentDigest: await whole, text };
+    });
+    const blobs = new ImageBlobs(request as never, "env");
+    const old = blobs.load("same-key", SESSION, refOf(1, total, 1024), "image/png");
+    blobs.clear();
+    // A new generation reads the same key and two rows show it.
+    held = false;
+    const fresh = await blobs.load("same-key", SESSION, refOf(1, total, 1024), "image/png");
+    await blobs.load("same-key", SESSION, refOf(1, total, 1024), "image/png");
+    expect(typeof fresh).toBe("string");
+
+    release!();
+    expect(await old).toBeUndefined();
+    // The successor is untouched: its URL still published, its holders intact,
+    // its counters exact and never negative.
+    expect(blobs.url("same-key")).toBe(fresh);
+    expect(revoked).not.toContain(fresh);
+    expect(blobs.held.images).toBe(1);
+    expect(blobs.committed).toEqual(blobs.held);
+    expect(blobs.held.bytes).toBeGreaterThan(0);
+    blobs.release("same-key");
+    expect(blobs.url("same-key")).toBe(fresh);
+    blobs.release("same-key");
+    expect(blobs.url("same-key")).toBeUndefined();
+    expect(blobs.held).toEqual({ images: 0, bytes: 0, surface: 0 });
+    expect(blobs.committed).toEqual({ images: 0, bytes: 0, surface: 0 });
+  });
+
   it("refuses a malformed payload rather than showing something else", async () => {
     const malformed = vi.fn(async (params: Record<string, unknown>) => ({
-      authority: "durable", revision: "r", component: params.component, totalBytes: 8, offset: 0, bytes: 8,
-      truncated: false, sliceDigest: "s", contentDigest: "c", text: "!!not base64!!",
+      authority: "durable", revision: "r", component: params.component, totalBytes: 14, offset: 0, bytes: 14,
+      truncated: false, sliceDigest: await digestOf("!!not base64!!"), contentDigest: WHOLE_DIGEST, text: "!!not base64!!",
     }));
     const blobs = new ImageBlobs(malformed as never, "env");
     expect(await blobs.load("bad", SESSION, refOf(1, 8, 1024), "image/png")).toBeUndefined();

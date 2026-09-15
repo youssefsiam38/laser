@@ -2,7 +2,7 @@ import { ErrorCodes, type ClientRequests, type HistoryWindow, type HistoryWindow
 import type { applyUpdate, blocksFromEntries, modelNamesOf, stampNewBlocks, textOf, Action, Block, SessionView, ValidatedRevision } from "../store.js";
 import { awake } from "../view-summary.js";
 import { retainEntries, stubOfElided, mergeStubs, type EntryStub } from "./retained-entries.js";
-import { BODY_EXCERPT_MAX_BYTES } from "./body-excerpt.js";
+import { BODY_EXCERPT_MAX_BYTES, tailOfParts, type BodyRef } from "./body-excerpt.js";
 
 import { deepEqual } from "./projection.js";
 
@@ -55,6 +55,12 @@ function sessionIdOf(view: SessionView): string | undefined {
 
 export const hasCompleteTree = (view: SessionView | undefined): boolean =>
   view?.history ? view.history.complete && !view.history.branchesUnloaded : Boolean(view?.hydrated);
+
+/** The bodies a live message is only holding the tail of, if any. */
+function liveBodies(text: BodyRef | undefined, thinking: BodyRef | undefined): { text?: BodyRef; thinking?: BodyRef } | undefined {
+  if (!text && !thinking) return undefined;
+  return { ...(text ? { text } : {}), ...(thinking ? { thinking } : {}) };
+}
 
 /** User/tool ids are canonical. Only assistants lack persisted ids in live events. */
 function shareHistoryBlocks(next: Block[], previous: Block[]): Block[] {
@@ -155,10 +161,17 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
         blocks: blocksFromEntries(entries, action.leafId, modelNamesOf(v.state), { stubs, revision: window.revision }),
         running: live?.running ?? v.running, lastSeq: action.window.seq, updateEpoch: history.epoch, pendingSentBy: undefined, historyPending: undefined };
       if (live?.message) {
+        // A turn in flight can be megabytes, and it arrives beside a page this
+        // view has already bounded. It goes through the same live tail as a
+        // streamed one: newest bytes kept, the rest counted and readable when
+        // the turn is written. No durable identity is invented for it.
         const message = live.message.value as { content?: unknown };
-        const parts = Array.isArray(message.content) ? message.content as { type?: string; thinking?: string }[] : [];
-        next.blocks.push({ kind: "assistant", id: live.message.id, text: textOf(message.content),
-          thinking: parts.filter(p => p.type === "thinking").map(p => p.thinking ?? "").join(""), streaming: true,
+        const parts = Array.isArray(message.content) ? message.content as { type?: string; text?: string; thinking?: string }[] : [];
+        const prose = tailOfParts(parts.filter(part => part.type === "text").map(part => part.text ?? ""), { component: { kind: "assistant_text" } });
+        const reasoning = tailOfParts(parts.filter(part => part.type === "thinking").map(part => part.thinking ?? ""), { component: { kind: "reasoning" } });
+        const bodies = liveBodies(prose.ref, reasoning.ref);
+        next.blocks.push({ kind: "assistant", id: live.message.id, text: prose.text, thinking: reasoning.text, streaming: true,
+          ...(bodies ? { bodies } : {}),
           ...(live.message.speaker ? { speaker: live.message.speaker } : {}) });
       }
       for (const tool of live?.tools ?? []) {

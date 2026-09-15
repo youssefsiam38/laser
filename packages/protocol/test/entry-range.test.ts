@@ -10,8 +10,12 @@ import {
   BODY_COMPONENT_KINDS,
   ENTRY_RANGE_MAX_BYTES,
   bodyComponentKey,
+  bodyProjectionWork,
   bodyRangeSlice,
+  boundedBodyText,
   clientMethods,
+  entryBodyMetadata,
+  resetBodyProjectionWork,
   clientParamsSchemas,
   elideOversizedEntries,
   entryBodies,
@@ -133,6 +137,64 @@ describe("leaving an oversized record out of a page", () => {
     const page = elideOversizedEntries([anonymous], 1024, digest);
     expect(page.entries).toEqual([anonymous]);
     expect(page.elided).toEqual([]);
+  });
+});
+
+describe("the bounded canonical projection", () => {
+  const exact = (value: unknown) => {
+    const whole = JSON.stringify(value, null, 2)!;
+    const bounded = boundedBodyText(value, 1 << 22);
+    expect(bounded.text).toBe(whole);
+    expect(bounded.totalBytes).toBe(utf8ByteLength(whole));
+    for (const cap of [1, 4, 9, 23, 64, 200]) {
+      const short = boundedBodyText(value, cap);
+      expect(whole.startsWith(short.text)).toBe(true);
+      expect(short.totalBytes).toBe(utf8ByteLength(whole));
+    }
+  };
+
+  it("matches JSON.stringify exactly for quotes, controls, astral pairs and lone surrogates", () => {
+    exact({ q: 'he said "hi"', b: "back\\slash", c: "tab\tnew\nline\r\bform\f", ctl: "\u0001\u001f" });
+    exact({ astral: "😀🎉", high: "\ud800alone", low: "\udc00alone", mixed: "a\ud800\udc00b\ud800c\udc00d" });
+    exact(["\u007f", "\u0080", "\u07ff", "\u0800", "\uffff", 1, 2.5, true, false, null]);
+    exact({ nested: { list: ["ünïcødé", { deep: [] }, {}] } });
+  });
+
+  it("writes only the excerpt, however large the body is", () => {
+    const body = { lines: Array.from({ length: 500 }, (_, index) => ({ n: index, text: "s".repeat(4000) })) };
+    resetBodyProjectionWork();
+    const bounded = boundedBodyText(body, 4096);
+    const work = bodyProjectionWork();
+    expect(bounded.text.length).toBeLessThanOrEqual(4096);
+    expect(bounded.totalBytes).toBe(utf8ByteLength(JSON.stringify(body, null, 2)!));
+    expect(work.emittedChars).toBeLessThanOrEqual(8192);
+    expect(work.emittedChars * 100).toBeLessThan(bounded.totalBytes!);
+  });
+
+  it("declares a body it cannot predict unknown, never zero", () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    for (const value of [{ at: new Date("2026-01-01T00:00:00Z") }, cyclic, { big: 10n }]) {
+      const bounded = boundedBodyText(value, 1024);
+      expect(bounded.unknown).toBe(true);
+      expect(bounded.totalBytes).toBeUndefined();
+      expect(bounded.text).toBe("");
+    }
+  });
+
+  it("sizes an entry's bodies without building them, and marks unpredictable ones", () => {
+    const entry = { id: "e1", parentId: null, type: "message", message: { role: "toolResult", toolCallId: "c1",
+      content: [{ type: "text", text: "z".repeat(200_000) }] } };
+    resetBodyProjectionWork();
+    const rows = entryBodyMetadata(entry);
+    expect(rows).toEqual([{ component: { kind: "tool_result" }, totalBytes: 200_000 }]);
+    expect(bodyProjectionWork().emittedChars).toBeLessThan(1024);
+
+    const unpredictable = { id: "e2", parentId: null, type: "message", message: { role: "assistant",
+      content: [{ type: "toolCall", id: "c2", name: "bash", arguments: { when: new Date("2026-01-01T00:00:00Z") } }] } };
+    const args = entryBodyMetadata(unpredictable).find(row => row.component.kind === "tool_args");
+    expect(args?.unknown).toBe(true);
+    expect(args?.totalBytes).toBe(Number.MAX_SAFE_INTEGER);
   });
 });
 

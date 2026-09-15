@@ -716,12 +716,6 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
     return moved;
   };
 
-  /** The delta a streamed update appends, when it appends one and nothing else. */
-  const appendedBytes = (update: SessionUpdate): number | undefined => {
-    if (update.kind === "text_delta" || update.kind === "thinking_delta") return byteLength(update.delta);
-    return undefined;
-  };
-
   const markDirty = (path: string): void => {
     const row = owned.get(path);
     if (row) { row.dirty = true; snapshot = undefined; }
@@ -747,18 +741,12 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
           const path = params.sessionPath ?? params.path;
           if (path === undefined) break;
           const view = after.open[path];
-          const row = owned.get(path);
-          const delta = action.method === "session/update" && params.update ? appendedBytes(params.update) : undefined;
-          // An appended token costs its own bytes and nothing else: no walk of
-          // the transcript it was appended to, and no pass of its own.
-          if (delta !== undefined && row && view && before.open[path] !== view && !row.dirty) {
-            row.appended += delta;
-            totals.blocksBytes += delta;
-            totals.bytes += delta;
-            snapshot = undefined;
-            grew = true;
-            break;
-          }
+          // A streamed token is not simply added any more: the live body it
+          // lands in is capped, so it drops as many bytes as it takes and the
+          // old incremental shortcut would grow this accounting without bound
+          // while the view itself stayed flat (RP-5b §4.2). The path is marked
+          // instead, and the next pass measures what is actually held — the
+          // per-block measures are memoised, so that costs the live tail.
           if (before.open[path] !== view) { dirty(path); grew = true; }
           break;
         }

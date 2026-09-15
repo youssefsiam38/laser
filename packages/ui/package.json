@@ -27,6 +27,7 @@
     "@dnd-kit/sortable": "10.0.0",
     "@dnd-kit/utilities": "3.2.2",
     "@lobehub/icons": "5.18.0",
+    "@noble/hashes": "1.8.0",
     "@tailwindcss/vite": "4.3.3",
     "@types/katex": "0.16.7",
     "@types/react": "19.1.12",

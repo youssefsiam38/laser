@@ -34,10 +34,9 @@ function fixture() {
 
 function services() {
   const reads: string[] = [];
-  // The acceptance body is 32 MiB in one record; the shipped index refuses a
-  // line that large by default, so the reader is exercised with limits that
-  // admit it. Nothing else about the reader changes.
-  const index = new SessionIndexCache({ limits: { ...DEFAULT_SESSION_INDEX_LIMITS, lineBytes: 64 * 1024 * 1024, fileBytes: 256 * 1024 * 1024, indexBytes: 16 * 1024 * 1024 } });
+  // Shipped defaults, deliberately: the acceptance body is 32 MiB in one
+  // record, and a conversation holding one must be readable without a worker.
+  const index = new SessionIndexCache();
   const revisions = new SessionRevisions({ index, environmentId: ENVIRONMENT });
   const range = new SessionBodyRange({ index, revisions, onRead: (entry) => reads.push(entry.id ?? "") });
   return { index, revisions, range, reads };
@@ -48,6 +47,13 @@ const params = (over: Partial<ClientRequests["session/entry_range"]["params"]> =
 });
 
 describe("reading one body from the stored conversation", () => {
+  it("admits a thirty-two mebibyte body under shipped defaults", () => {
+    // The ceiling is declared, finite and above the acceptance body plus its
+    // JSON framing; nothing here relies on a test-only configuration.
+    expect(DEFAULT_SESSION_INDEX_LIMITS.lineBytes).toBeGreaterThan(utf8ByteLength(HUGE) + 4096);
+    expect(DEFAULT_SESSION_INDEX_LIMITS.lineBytes).toBeLessThanOrEqual(64 * 1024 * 1024);
+  });
+
   it("answers exact totals, digests and character-aligned slices without a worker", async () => {
     const file = fixture();
     try {

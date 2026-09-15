@@ -20,7 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useCopy } from "@/hooks/use-copy";
 import { useLaserStable, useLaserState } from "@/runtime";
-import { bodyReadMessage, BodyWindow, BODY_VIEWER_AGGREGATE_MAX_BYTES, streamBody } from "@/runtime/body-reader";
+import { bodyReadMessage, BodyWindow, BODY_VIEWER_AGGREGATE_MAX_BYTES, canCopyWholeBody, copyWholeBody } from "@/runtime/body-reader";
 import { isReadable, type BodyRef } from "@/runtime/body-excerpt";
 import { formatBytes } from "@/format";
 
@@ -72,6 +72,12 @@ function ViewerContents({ ref_, path, title, startOffset }: { ref_: BodyRef; pat
   const region = useRef<HTMLDivElement>(null);
   const [copying, setCopying] = useState(false);
 
+  const step = useCallback(async (run: () => Promise<void>) => {
+    setLoading(true);
+    setError(undefined);
+    try { await run(); } catch (failure) { setError(bodyReadMessage(failure)); } finally { setLoading(false); }
+  }, []);
+
   /**
    * Copying the whole message streams it through the clipboard writer a slice
    * at a time and keeps only the digest of what went: the body is never
@@ -82,33 +88,25 @@ function ViewerContents({ ref_, path, title, startOffset }: { ref_: BodyRef; pat
     setCopying(true);
     setError(undefined);
     try {
-      const chunks: string[] = [];
-      let bytes = 0;
-      const outcome = await streamBody(
+      const outcome = await copyWholeBody(
         (params) => client.request("session/entry_range", params),
         path,
         ref_,
         { environmentKey, revisionOf: async (candidate) => (await client.request("session/revision", { path: candidate })).revision },
-        (slice) => { chunks.push(slice); bytes += slice.length; },
       );
-      // The writer takes it in one call; the slices are released immediately
-      // afterwards and nothing of the body stays in this view.
-      await copy(chunks.join(""));
-      chunks.length = 0;
-      if (outcome.bytes !== outcome.totalBytes) setError("Only part of this message could be read just now. Try again in a moment.");
-      void bytes;
+      if (!outcome.ok) {
+        setError(outcome.reason === "unsupported"
+          ? "This window cannot copy a whole message of this size. Copy the part you can see, or open the conversation on the desktop app."
+          : outcome.reason === "corrupt"
+            ? "What came back was not this message. Open the conversation again."
+            : "Only part of this message could be read just now. Try again in a moment.");
+      }
     } catch (failure) {
       setError(bodyReadMessage(failure));
     } finally {
       setCopying(false);
     }
-  }, [client, copy, environmentKey, path, ref_]);
-
-  const step = useCallback(async (run: () => Promise<void>) => {
-    setLoading(true);
-    setError(undefined);
-    try { await run(); } catch (failure) { setError(bodyReadMessage(failure)); } finally { setLoading(false); }
-  }, []);
+  }, [client, environmentKey, path, ref_]);
 
   useEffect(() => {
     if (!body) { setLoading(false); return; }
@@ -146,11 +144,7 @@ function ViewerContents({ ref_, path, title, startOffset }: { ref_: BodyRef; pat
         if (event.key === "PageDown") { event.preventDefault(); if (!atEnd) void step(() => body!.more()); }
         else if (event.key === "PageUp") { event.preventDefault(); if (body!.previous !== undefined) void step(() => body!.back()); }
         else if (event.key === "Home") { event.preventDefault(); void step(() => body!.jump(0)); }
-        else if (event.key === "End") {
-          event.preventDefault();
-          const last = Math.max(0, state.totalBytes - BODY_SLICE_STEP);
-          void step(() => body!.jump(last));
-        }
+        else if (event.key === "End") { event.preventDefault(); void step(() => body!.last()); }
       }}>
       {error ? <ErrorState message={error} onRetry={() => void step(() => body!.more())} />
         : shown ? <TextPreview text={shown} className="min-h-0" />
@@ -166,9 +160,11 @@ function ViewerContents({ ref_, path, title, startOffset }: { ref_: BodyRef; pat
         <Button variant="ghost" className="min-h-11" onClick={() => copy(partial(shown, from, to, state.totalBytes))}>
           {copied ? "Copied this part" : "Copy this part"}
         </Button>
-        <Button variant="ghost" className="min-h-11" disabled={copying} onClick={() => void copyAll()}>
-          {copying ? "Copying the whole message…" : "Copy all of it"}
-        </Button>
+        {canCopyWholeBody()
+          ? <Button variant="ghost" className="min-h-11" disabled={copying} onClick={() => void copyAll()}>
+              {copying ? "Copying the whole message…" : "Copy all of it"}
+            </Button>
+          : null}
         <Button className="min-h-11" disabled={atEnd || loading} onClick={() => void step(() => body!.more())}>Show more</Button>
       </div>
     </footer>
@@ -193,9 +189,6 @@ function ErrorState({ message, onRetry }: { message: string; onRetry(): void }) 
     <Button variant="ghost" className="min-h-11" onClick={onRetry}>Try again</Button>
   </div>;
 }
-
-/** One step of paging, so End lands on the last window rather than past it. */
-const BODY_SLICE_STEP = 64 * 1024;
 
 /**
  * What the clipboard gets when a person copies the part they can see: the text

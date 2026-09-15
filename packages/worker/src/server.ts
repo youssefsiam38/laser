@@ -423,6 +423,8 @@ export class WorkerServer {
 
   async dispose(): Promise<void> {
     this.runtimes.clearLease();
+    // Nothing of a body outlives this worker's service (RP-5b, RP-4).
+    this.bodyRanges.forget();
     this.transcribeService?.dispose();
     this.transcribeService = undefined;
     await this.mcpService?.dispose().catch(() => {});
@@ -2128,6 +2130,10 @@ export class WorkerServer {
         // One holder fewer: the rest of this worker's sessions may keep more.
         this.applyLogBudgets();
         this.gitService?.forget(live.path);
+        // RP-5b: the range reader holds at most one body, and that body belongs
+        // to a session that is open. A closed session leaves none behind, so
+        // nothing can serve its bytes afterwards and nothing keeps its memory.
+        this.bodyRanges.forget();
         this.runningTools.delete(live.path);
         this.unnamed.delete(live.path);
         // The runtime a naming attempt would have renamed is gone, so the

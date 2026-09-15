@@ -16,7 +16,7 @@ import { createViewCache, VIEW_CACHE_LIMITS, type ViewCacheEnvironment } from ".
 import { initialState, isDormantView, reduce, type AppState, type Block } from "../../src/store.js";
 import { BODY_EXCERPT_MAX_BYTES, LIVE_TAIL_MAX_BYTES, omittedBytes } from "../../src/runtime/body-excerpt.js";
 import { measureView, measurementWork, resetMeasurementWork } from "../../src/runtime/view-measure.js";
-import { bodyProjectionWork, resetBodyProjectionWork } from "@lasercode/protocol";
+import { bodyProjectionWork, resetBodyProjectionWork, TASK_EVENT_MESSAGE_TYPE } from "@lasercode/protocol";
 
 const CWD = "/p";
 const path = `${CWD}/heavy.jsonl`;
@@ -170,6 +170,107 @@ describe("A2 · one fold's own work is bounded", () => {
     expect(measurementWork().bytes).toBeLessThan(2 * MIB);
     const tool = state.open[path]!.blocks.find(block => block.kind === "tool") as Extract<Block, { kind: "tool" }>;
     expect(omittedBytes(tool.bodies?.result)).toBeGreaterThan(11 * MIB);
+  });
+});
+
+describe("A2 · every write path is bounded, not only the ones the soak walks", () => {
+  const bytesIn = (text: string) => new TextEncoder().encode(text).byteLength;
+
+  it("bounds one enormous delta without ever concatenating the body", () => {
+    let state = reduce({ ...initialState, connection: "open" }, { type: "opened", state: sessionState({ isStreaming: true }) });
+    state = update(state, 1, { kind: "message_start", role: "assistant" });
+    state = update(state, 2, { kind: "text_delta", delta: "a".repeat(64 * 1024) });
+    // One eight-megabyte delta on top of a tail already at its cap.
+    resetBodyProjectionWork();
+    state = update(state, 3, { kind: "text_delta", delta: "B".repeat(8 * MIB) });
+    const block = state.open[path]!.blocks.at(-1) as Extract<Block, { kind: "assistant" }>;
+    expect(bytesIn(block.text)).toBeLessThanOrEqual(LIVE_TAIL_MAX_BYTES);
+    expect(block.text.endsWith("B")).toBe(true);
+    expect(block.bodies?.text?.totalBytes).toBe(64 * 1024 + 8 * MIB);
+    expect(bytesOf(state)).toBeLessThanOrEqual(VIEW_CACHE_LIMITS.viewBytes);
+  });
+
+  it("bounds the first delta of a turn, a tool call's request and a custom payload", () => {
+    let state = reduce({ ...initialState, connection: "open" }, { type: "opened", state: sessionState({ isStreaming: true }) });
+    // A whole reply in the first delta, before any assistant block exists.
+    state = update(state, 1, { kind: "text_delta", delta: "F".repeat(4 * MIB) });
+    const first = state.open[path]!.blocks.at(-1) as Extract<Block, { kind: "assistant" }>;
+    expect(bytesIn(first.text)).toBeLessThanOrEqual(LIVE_TAIL_MAX_BYTES);
+    expect(first.bodies?.text?.totalBytes).toBe(4 * MIB);
+
+    // A call whose request is enormous.
+    state = update(state, 2, { kind: "tool_execution_start", toolCallId: "t1", toolName: "write", args: { content: "c".repeat(4 * MIB) } });
+    const tool = state.open[path]!.blocks.find(block => block.kind === "tool") as Extract<Block, { kind: "tool" }>;
+    expect(bytesIn(String(tool.args))).toBeLessThanOrEqual(BODY_EXCERPT_MAX_BYTES + 64);
+    expect(tool.bodies?.args?.totalBytes).toBeGreaterThan(4 * MIB);
+
+    // A custom record: both the line the model read and the payload attached.
+    state = update(state, 3, { kind: "message_end", message: { role: "custom", customType: TASK_EVENT_MESSAGE_TYPE,
+      content: [{ type: "text", text: "D".repeat(2 * MIB) }], details: { output: "e".repeat(2 * MIB) } } });
+    const custom = state.open[path]!.blocks.find(block => block.kind === "custom") as Extract<Block, { kind: "custom" }> | undefined;
+    if (custom) {
+      expect(bytesIn(custom.text)).toBeLessThanOrEqual(BODY_EXCERPT_MAX_BYTES);
+      expect(bytesIn(String(custom.details ?? ""))).toBeLessThanOrEqual(BODY_EXCERPT_MAX_BYTES + 64);
+      expect(custom.bodies?.text?.totalBytes).toBe(2 * MIB);
+    }
+    expect(bytesOf(state)).toBeLessThanOrEqual(VIEW_CACHE_LIMITS.viewBytes);
+  });
+
+  it("classifies an authoritative page of structured records without building their projections", () => {
+    const structured = { rows: Array.from({ length: 2000 }, (_, index) => ({ index, text: "s".repeat(6000) })) };
+    let state = reduce({ ...initialState, connection: "open" }, { type: "opened", state: sessionState() });
+    state = reduce(state, { type: "historyBegin", path, token: "t" });
+    resetBodyProjectionWork();
+    state = reduce(state, { type: "historySnapshot", path, token: "t", leafId: "r1", window: {
+      epoch: "w1", seq: 2, revision: "r1.env.2", environmentKey: "k", userOffset: 0, complete: true,
+      branchesUnloaded: false, hasHistory: true, context: [], priorGoalIds: [],
+    } as never, entries: [
+      { id: "r0", parentId: null, type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "c1", name: "bash", arguments: { command: "ls" } }] } },
+      { id: "r1", parentId: "r0", type: "message", message: { role: "toolResult", toolCallId: "c1", content: [], details: structured } },
+    ] });
+    const work = bodyProjectionWork();
+    // The page was classified and folded; nothing built the twelve-megabyte
+    // projection of that result to do it.
+    expect(work.emittedChars).toBeLessThanOrEqual(BODY_EXCERPT_MAX_BYTES * 2);
+    const view = state.open[path]!;
+    expect(view.stubs?.map(stub => stub.id)).toEqual(["r1"]);
+    expect(measureView(view).bytes).toBeLessThanOrEqual(VIEW_CACHE_LIMITS.viewBytes);
+  });
+
+  it("bounds a live message that arrives beside an authoritative page", () => {
+    let state = reduce({ ...initialState, connection: "open" }, { type: "opened", state: sessionState() });
+    state = reduce(state, { type: "historyBegin", path, token: "t" });
+    state = reduce(state, { type: "historySnapshot", path, token: "t", leafId: "p0", entries: [
+      { id: "p0", parentId: null, type: "message", message: { role: "user", content: [{ type: "text", text: "go" }] } },
+    ], window: {
+      epoch: "w1", seq: 2, revision: "r1.env.2", environmentKey: "k", userOffset: 0, complete: true,
+      branchesUnloaded: false, hasHistory: true, context: [], priorGoalIds: [],
+      live: { running: true, tools: [], message: { id: "live-1", value: { role: "assistant", content: [
+        { type: "text", text: "L".repeat(8 * MIB) },
+        { type: "thinking", thinking: "T".repeat(8 * MIB) },
+      ] } } },
+    } as never });
+    const live = state.open[path]!.blocks.find(block => block.kind === "assistant" && block.streaming) as Extract<Block, { kind: "assistant" }>;
+    expect(live.id).toBe("live-1");
+    expect(bytesIn(live.text)).toBeLessThanOrEqual(LIVE_TAIL_MAX_BYTES);
+    expect(bytesIn(live.thinking)).toBeLessThanOrEqual(LIVE_TAIL_MAX_BYTES);
+    expect(live.bodies?.text?.totalBytes).toBe(8 * MIB);
+    expect(live.bodies?.text?.live).toBe(true);
+    expect(measureView(state.open[path]!).bytes).toBeLessThanOrEqual(VIEW_CACHE_LIMITS.viewBytes);
+  });
+
+  it("keeps no truncated attachment, and says the prompt is partial", () => {
+    const file = `<attached-file name="notes.md" type="text/markdown" size="${new TextEncoder().encode("ü".repeat(40_000)).byteLength}">\n${"ü".repeat(40_000)}\n</attached-file>`;
+    let state = reduce({ ...initialState, connection: "open" }, { type: "opened", state: sessionState() });
+    state = reduce(state, { type: "hydrate", path, leafId: "u1", entries: [
+      { id: "u1", parentId: null, type: "message", message: { role: "user", content: [{ type: "text", text: `prose\n\n${file}` }] } },
+    ] });
+    const prompt = state.open[path]!.blocks.find(block => block.kind === "user") as Extract<Block, { kind: "user" }>;
+    // Nothing half-complete is kept: the prompt is an excerpt with a reference,
+    // and no file chip claims to be a whole attachment.
+    expect(prompt.files).toEqual([]);
+    expect(prompt.bodies?.text?.totalBytes).toBeGreaterThan(BODY_EXCERPT_MAX_BYTES);
+    expect(bytesIn(prompt.text)).toBeLessThanOrEqual(BODY_EXCERPT_MAX_BYTES);
   });
 });
 

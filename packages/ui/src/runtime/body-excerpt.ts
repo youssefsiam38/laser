@@ -59,6 +59,12 @@ export interface BodyRef {
   component: BodyComponent;
   /** Exact UTF-8 size of the whole body. */
   totalBytes: number;
+  /**
+   * The digest the authoritative page gave for the whole body, when it gave
+   * one. Every reply this reference produces is fenced against it, so a reader
+   * trusts the page it came from rather than the first answer it receives.
+   */
+  contentDigest?: string;
   /** The addressable window inside that body: how an attachment is addressed. */
   region?: BodyRegion;
   excerpt: { offset: number; bytes: number };
@@ -181,21 +187,67 @@ export function excerptLiveTail(text: string, source: ExcerptSource, maxBytes = 
  */
 export function appendLive(current: string, delta: string, previous: BodyRef | undefined, source: ExcerptSource, maxBytes = LIVE_TAIL_MAX_BYTES): Excerpt {
   const dropped = previous?.excerpt.offset ?? 0;
-  const combined = current + delta;
-  const total = dropped + utf8ByteLength(combined);
-  if (total <= maxBytes) return { text: combined };
-  const tail = tailIndex(combined, maxBytes);
+  const currentBytes = utf8ByteLength(current);
+  const deltaBytes = utf8ByteLength(delta);
+  const total = dropped + currentBytes + deltaBytes;
+  // Under the cap, the two together *are* the tail; this is the ordinary case
+  // of a streamed token and costs one small concatenation.
+  if (currentBytes + deltaBytes <= maxBytes) {
+    const text = current + delta;
+    if (total <= maxBytes) return { text };
+    return { text, ref: reference(source, total, total - (currentBytes + deltaBytes), currentBytes + deltaBytes) };
+  }
+  // Over it, the tail is a suffix of the delta — and, when the delta alone does
+  // not fill the cap, a suffix of what was already held. Neither `current` nor
+  // `current + delta` is ever built: a single eight-megabyte delta costs its
+  // own tail, not a second copy of the body (RP-5b §3.2).
+  let text: string;
+  let bytes: number;
+  if (deltaBytes >= maxBytes) {
+    const tail = tailIndex(delta, maxBytes);
+    text = delta.slice(tail.index);
+    bytes = tail.bytes;
+  } else {
+    const head = tailIndex(current, maxBytes - deltaBytes);
+    text = current.slice(head.index) + delta;
+    bytes = head.bytes + deltaBytes;
+  }
+  return { text, ref: reference(source, total, total - bytes, bytes) };
+}
+
+/** The reference a bounded live body carries. */
+function reference(source: ExcerptSource, totalBytes: number, offset: number, bytes: number): BodyRef {
   return {
-    text: combined.slice(tail.index),
-    ref: {
-      ...(source.entryId !== undefined ? { entryId: source.entryId } : {}),
-      component: source.component,
-      totalBytes: total,
-      ...(source.revision !== undefined ? { revision: source.revision } : {}),
-      excerpt: { offset: total - tail.bytes, bytes: tail.bytes },
-      ...(source.entryId === undefined ? { live: true as const } : {}),
-    },
+    ...(source.entryId !== undefined ? { entryId: source.entryId } : {}),
+    component: source.component,
+    totalBytes,
+    ...(source.revision !== undefined ? { revision: source.revision } : {}),
+    excerpt: { offset, bytes },
+    ...(source.entryId === undefined ? { live: true as const } : {}),
   };
+}
+
+/**
+ * The tail of a body that arrives as parts — a live message's text or its
+ * reasoning — without joining them first. The parts are walked from the end
+ * until the cap is reached; everything before that is counted, never built.
+ */
+export function tailOfParts(parts: readonly string[], source: ExcerptSource, maxBytes = LIVE_TAIL_MAX_BYTES): Excerpt {
+  let total = 0;
+  for (const part of parts) total += utf8ByteLength(part);
+  if (total <= maxBytes) return { text: parts.join("") };
+  const kept: string[] = [];
+  let bytes = 0;
+  for (let index = parts.length - 1; index >= 0 && bytes < maxBytes; index--) {
+    const part = parts[index]!;
+    const size = utf8ByteLength(part);
+    if (bytes + size <= maxBytes) { kept.unshift(part); bytes += size; continue; }
+    const tail = tailIndex(part, maxBytes - bytes);
+    kept.unshift(part.slice(tail.index));
+    bytes += tail.bytes;
+    break;
+  }
+  return { text: kept.join(""), ref: reference(source, total, total - bytes, bytes) };
 }
 
 /** Bytes of a body this view is not holding. Zero when it holds all of it. */
