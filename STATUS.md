@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-15T11:55:00Z · orchestrator `01a0a030` · HEAD: bd4bb4ae
-**Current focus:** M18 tail caching is implementing; RP-5b’s hard-bound plan is accepted, while a no-Namer retirement pin and final harness counter are being corrected before pressure/baseline closeout.
+**Last updated:** 2026-09-15T13:21:47+03:00 · orchestrator `01a0a030` · HEAD: 2430622b
+**Current focus:** M18 RP-10 is closing fail-closed cache review gaps; RP-5b, pressure policy, immediate reconciliation, the unchanged full baseline and shell gate follow in dependency order.
 
 | Milestone | State |
 | --- | --- |
@@ -27,8 +27,8 @@
 | M18 Resource containment | in-progress |
 | MX Cross-cutting | in-progress |
 
-**Blockers:** none. RP-2’s unchanged full A safely refused B on the pre-containment renderer ceiling; D-257 assigns the clean repeat to M18-T15 after RP-8.
-**Next up:** complete T10 cache, T17 retirement and T15 harness readiness; implement RP-5b and T8; implement T11; close T3; run unchanged full A/B.
-**Recently done:** M18-T7 transport pressure (`0542a58e`; reviewed focused/full/E2E/browser/privacy/footprint gates); T3 containment-counter checkpoint (`4ba58bd4`); M18-T5 renderer lifetime (`4f34a614`); M18-T4 worker lifetime (`eb18e147`); M18-T6 task/delivery lifetime (`a256efe`).
+**Blockers:** none. RP-2’s pre-containment full A safely refused B at the fixed renderer ceiling; the reviewed unchanged quick now passes all nine scenarios with zero survivors.
+**Next up:** integrate T10; implement RP-5b and T8; implement T11; close T3; run unchanged full A/B; execute RP-14.
+**Recently done:** M18-T17 naming-pin correction (`890e6a86`; worker 45 + host E2E 4 + host 636); T15 harness readiness (`cec6c07a`, `2430622b`; browser-check 96 + nine-scenario quick); M18-T7 transport pressure (`0542a58e`); T3 counter checkpoint (`4ba58bd4`); M18-T5 renderer lifetime (`4f34a614`).
 
 Ownership and evidence: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`.
