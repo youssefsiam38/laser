@@ -44,8 +44,8 @@ function windowOf(canonical: SessionView, owned: SessionView): SessionView {
 export interface HistoryWindowRoot {
   getSnapshot(): AppState;
   dispatch(action: Action): void;
-  observeWindows(observer: (action: Action, before: AppState, after: AppState) => boolean): () => void;
-  publishWindows(): void;
+  observeTransactions(observer: (action: Action, before: AppState, after: AppState) => boolean): () => void;
+  publishTransactions(): void;
 }
 
 /** One rendered surface's view of one session's loaded transcript. */
@@ -100,7 +100,7 @@ export function createHistoryWindows(root: HistoryWindowRoot): HistoryWindows {
     return entry;
   };
 
-  const stop = root.observeWindows((action, before, after) => {
+  const stop = root.observeTransactions((action, before, after) => {
     let changed = false;
     for (const entry of held.values()) {
       if (!entry.owned) continue;
@@ -148,7 +148,7 @@ export function createHistoryWindows(root: HistoryWindowRoot): HistoryWindows {
           const next = reduce({ ...state, open: { ...state.open, [path]: entry.owned } }, action).open[path];
           if (!next || next === entry.owned) return;
           entry.owned = next;
-          root.publishWindows();
+          root.publishTransactions();
         },
       };
       owners.set(key(scope, path), created);

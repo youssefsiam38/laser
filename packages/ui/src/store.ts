@@ -499,7 +499,7 @@ export function reduce(state: AppState, action: Action): AppState {
       const { [action.from]: _gone, ...rest } = state.open;
       const prepared = state.open[action.state.path];
       const view: SessionView = prepared?.hydrated ? { ...prepared, state: action.state } : old
-        ? { ...old, path: action.state.path, state: action.state, lastSeq: 0, hydrated: false, entries: [], history: undefined, historyPending: undefined, goal: null }
+        ? { ...old, path: action.state.path, state: action.state, lastSeq: 0, hydrated: false, entries: [], history: undefined, historyPending: undefined, goal: null, validated: undefined, summary: undefined }
         : { path: action.state.path, state: action.state, blocks: [], lastSeq: 0, running: false, queue: { steering: [], followUp: [] }, pending: [], dialogs: [], statuses: {}, widgets: {}, openedAt: new Date().toISOString(), hydrated: false, entries: [], capabilities: [], goal: null, namerLabels: {} };
       return { ...state, open: { ...rest, [view.path]: view } };
     }
@@ -537,12 +537,14 @@ export function reduce(state: AppState, action: Action): AppState {
         const lastSeq = action.seq !== undefined && action.seq > v.lastSeq ? action.seq : v.lastSeq;
         // Live updates landed while the snapshot was in flight: they already
         // carry what the snapshot has, plus what it does not.
+        // A read with no window carries no revision, so this view can claim
+        // none: whatever it was valid at, it is not that set of entries now.
         return action.expectSeq !== undefined && v.lastSeq !== action.expectSeq
-          ? { ...v, entries: action.entries, leafId: action.leafId, history: undefined, historyPending: undefined, hydrated: true, lastSeq }
-          : { ...v, blocks: blocksFromEntries(action.entries, action.leafId, modelNamesOf(v.state)), entries: action.entries, leafId: action.leafId, history: undefined, historyPending: undefined, hydrated: true, pendingSentBy: undefined, lastSeq };
+          ? { ...v, entries: action.entries, leafId: action.leafId, history: undefined, historyPending: undefined, hydrated: true, lastSeq, validated: undefined }
+          : { ...v, blocks: blocksFromEntries(action.entries, action.leafId, modelNamesOf(v.state)), entries: action.entries, leafId: action.leafId, history: undefined, historyPending: undefined, hydrated: true, pendingSentBy: undefined, lastSeq, validated: undefined };
       });
     case "entries":
-      return updateView(state, action.path, (v) => ({ ...v, entries: action.entries, leafId: action.leafId }));
+      return updateView(state, action.path, (v) => ({ ...v, entries: action.entries, leafId: action.leafId, validated: undefined }));
     case "goal":
       return updateView(state, action.path, (v) => ({ ...v, goal: action.goal }));
     case "editorTextTaken":

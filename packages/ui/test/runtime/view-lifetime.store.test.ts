@@ -223,3 +223,93 @@ describe("a dormant view and the updates that keep arriving", () => {
     expect(view.hydrationEpoch).toBe(1);
   });
 });
+
+describe("a released record never claims a state it does not hold", () => {
+  const liveUpdate = (state: AppState, seq: number, u: unknown): AppState =>
+    reduce(state, { type: "notification", method: "session/update", params: { sessionPath: PATH, seq, at: AT, update: u } as never });
+
+  const userEntry = (id: string, parentId: string, text: string) => ({
+    id, parentId, type: "message", message: { role: "user", content: [{ type: "text", text }] },
+  });
+
+  it("stops claiming a revision once a live entry lands after the window", () => {
+    let state = hydrated();
+    const before = state.open[PATH]!;
+    expect(before.validated?.revision).toBe("r1.env.abc");
+    expect(captureViewTail(before, AT).omitted).toBeUndefined();
+
+    // The engine persisted a prompt: this view now holds an entry the window
+    // it was validated against never described.
+    state = liveUpdate(state, 8, { kind: "message_start", role: "user" });
+    state = liveUpdate(state, 9, { kind: "message_end", message: { role: "user", content: [{ type: "text", text: "and one more" }] }, entry: { id: "e3", parentId: "e2" } });
+    const after = state.open[PATH]!;
+    expect(after.entries).toHaveLength(3);
+    expect(after.lastSeq).toBe(9);
+    expect(after.validated).toBeUndefined();
+
+    // So the record it releases is omitted rather than a guess.
+    const tail = captureViewTail(after, AT);
+    expect(tail.omitted).toBe("no-revision");
+    expect(tail.entries).toEqual([]);
+    expect(evict(state).open[PATH]!.validated).toBeUndefined();
+  });
+
+  it("stops claiming one when a buffered update lands with the window", () => {
+    let state = opened();
+    state = reduce(state, { type: "historyBegin", path: PATH, token: "t1" });
+    // An update that arrives while the read is in flight, carrying a new entry.
+    state = liveUpdate(state, 8, { kind: "message_start", role: "user" });
+    state = liveUpdate(state, 9, { kind: "message_end", message: { role: "user", content: [{ type: "text", text: "meanwhile" }] }, entry: { id: "e9", parentId: "e2" } });
+    state = reduce(state, { type: "historySnapshot", path: PATH, token: "t1", entries, leafId: "e2", window: window({ seq: 7 }) });
+
+    const view = state.open[PATH]!;
+    // The replay put an entry the window did not carry, so no revision is claimed.
+    expect(view.entries.length).toBeGreaterThan(entries.length);
+    expect(view.validated).toBeUndefined();
+    expect(captureViewTail(view, AT).omitted).toBe("no-revision");
+  });
+
+  it("keeps two releases in the same worker generation mutually consistent", () => {
+    let state = hydrated();
+    const first = captureViewTail(state.open[PATH]!, AT);
+    expect(first.omitted).toBeUndefined();
+    expect(first.revision).toBe("r1.env.abc");
+    expect(first.seq).toBe(7);
+    expect(first.entries.map((entry) => entry.id)).toEqual(["e1", "e2"]);
+    expect(first.leafId).toBe("e2");
+
+    // The same epoch, a newer authoritative window: the second record is the
+    // second state, whole — content, revision, leaf and write order together.
+    const third = userEntry("e3", "e2", "third");
+    state = reduce(state, { type: "historyBegin", path: PATH, token: "t2" });
+    state = reduce(state, { type: "historySnapshot", path: PATH, token: "t2", entries: [...entries, third], leafId: "e3", window: window({ seq: 11, revision: "r1.env.def" }) });
+    const second = captureViewTail(state.open[PATH]!, AT);
+
+    expect(second.omitted).toBeUndefined();
+    expect(second.revision).toBe("r1.env.def");
+    expect(second.seq).toBe(11);
+    expect(second.entries.map((entry) => entry.id)).toEqual(["e1", "e2", "e3"]);
+    expect(second.leafId).toBe("e3");
+    // Ordered: the later record carries the later sequence, never the earlier
+    // revision beside newer content.
+    expect(second.seq).toBeGreaterThan(first.seq);
+    expect(second.revision).not.toBe(first.revision);
+  });
+
+  it("adopts a merged page's window only when it is the same revision", () => {
+    const older = [{ id: "e0", parentId: null, type: "message", message: { role: "user", content: [{ type: "text", text: "older" }] } }];
+    // Same revision: the merged set is one describable state, so the tuple is
+    // taken, with the window's own sequence.
+    let same = hydrated();
+    same = reduce(same, { type: "historyMetadata", path: PATH, from: "e2", revision: same.open[PATH]!.historyRevision,
+      entries: older, leafId: "e2", window: window({ seq: 9 }) });
+    expect(same.open[PATH]!.validated).toMatchObject({ revision: "r1.env.abc", seq: 9, sessionId: SESSION_ID });
+
+    // A different revision: the merge spans two states and names neither.
+    let moved = hydrated();
+    moved = reduce(moved, { type: "historyMetadata", path: PATH, from: "e2", revision: moved.open[PATH]!.historyRevision,
+      entries: older, leafId: "e2", window: window({ seq: 9, revision: "r1.env.other" }) });
+    expect(moved.open[PATH]!.validated).toBeUndefined();
+    expect(captureViewTail(moved.open[PATH]!, AT).omitted).toBe("no-revision");
+  });
+});

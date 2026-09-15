@@ -24,18 +24,66 @@
 import type { ImageContent } from "@lasercode/protocol";
 import type { Block, SessionView } from "../store.js";
 
-const encoder = new TextEncoder();
-
-/** Exact UTF-8 byte length. */
+/**
+ * Exact UTF-8 byte length, counted rather than produced.
+ *
+ * `TextEncoder.encode` allocates a buffer as large as the string it measures,
+ * and this measures transcripts: a megabyte of Markdown would cost a megabyte
+ * of garbage to find out how big it is. The arithmetic below is the same
+ * answer with no allocation at all, including for the two cases a naive
+ * version gets wrong — a surrogate pair is one four-byte character, and an
+ * unpaired surrogate is the three-byte replacement character, which is exactly
+ * what `TextEncoder` writes.
+ */
 export function byteLength(text: string): number {
-  return encoder.encode(text).length;
+  let bytes = 0;
+  for (let index = 0; index < text.length; index++) {
+    const code = text.charCodeAt(index);
+    if (code < 0x80) {
+      bytes += 1;
+    } else if (code < 0x800) {
+      bytes += 2;
+    } else if (code >= 0xd800 && code <= 0xdbff) {
+      const low = index + 1 < text.length ? text.charCodeAt(index + 1) : 0;
+      if (low >= 0xdc00 && low <= 0xdfff) {
+        bytes += 4;
+        index += 1;
+      } else {
+        bytes += 3;
+      }
+    } else {
+      bytes += 3;
+    }
+  }
+  return bytes;
 }
+
+/**
+ * What measuring has actually done, for the tests that pin its cost. Counting
+ * only; nothing reads it to make a decision.
+ */
+const work = { views: 0, blocks: 0, entries: 0, bytes: 0 };
+
+export interface MeasurementWork {
+  /** Whole views walked. */
+  readonly views: number;
+  /** Blocks measured for the first time. */
+  readonly blocks: number;
+  /** Entries measured for the first time. */
+  readonly entries: number;
+  /** Characters of content actually looked at. */
+  readonly bytes: number;
+}
+
+export const measurementWork = (): MeasurementWork => ({ ...work });
+export const resetMeasurementWork = (): void => { work.views = 0; work.blocks = 0; work.entries = 0; work.bytes = 0; };
 
 const jsonBytes = (value: unknown): number => {
   if (value === undefined) return 0;
-  if (typeof value === "string") return byteLength(value);
+  if (typeof value === "string") { work.bytes += value.length; return byteLength(value); }
   try {
     const text = JSON.stringify(value);
+    if (text !== undefined) work.bytes += text.length;
     return text === undefined ? 0 : byteLength(text);
   } catch {
     // A value that cannot be serialized is still retained; charge its shape.
@@ -96,6 +144,7 @@ export function entryBytes(entry: unknown): number {
   if (!entry || typeof entry !== "object") return jsonBytes(entry);
   const cached = entryCache.get(entry as object);
   if (cached !== undefined) return cached;
+  work.entries += 1;
   const bytes = jsonBytes(entry);
   entryCache.set(entry as object, bytes);
   return bytes;
@@ -200,12 +249,14 @@ function jpegDimensions(bytes: Uint8Array): { width: number; height: number } | 
 function blockMeasure(block: Block): { text: number; images: number; estimated: number; count: number } {
   const cached = blockCache.get(block);
   if (cached) return cached;
+  work.blocks += 1;
   let text = 0;
   let images = 0;
   let estimated = 0;
   let count = 0;
   switch (block.kind) {
     case "user": {
+      work.bytes += block.text.length;
       text = byteLength(block.text);
       for (const file of block.files) text += byteLength(file.content) + byteLength(file.name);
       for (const image of block.images) {
@@ -217,6 +268,7 @@ function blockMeasure(block: Block): { text: number; images: number; estimated: 
       break;
     }
     case "assistant":
+      work.bytes += block.text.length + block.thinking.length;
       text = byteLength(block.text) + byteLength(block.thinking) + byteLength(block.errorMessage ?? "");
       break;
     case "tool":
@@ -239,6 +291,7 @@ function blockMeasure(block: Block): { text: number; images: number; estimated: 
  * memoized lookups: a settled row is measured once for as long as it lives.
  */
 export function measureView(view: SessionView): ViewMeasure {
+  work.views += 1;
   let entriesBytes = 0;
   for (const entry of view.entries) entriesBytes += entryBytes(entry);
   let blocksBytes = 0;

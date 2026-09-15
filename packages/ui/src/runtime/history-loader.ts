@@ -16,6 +16,22 @@ export type HistoryAction =
  * revision it was valid at, the environment that revision belongs to, and
  * whether the session has any history at all.
  */
+/**
+ * Take the window's identity for a merged read, or take none.
+ *
+ * A page read and what this view already held describe one state when they
+ * came from the same durable revision. When they did not, the merge is a set
+ * no single revision names, and a record released from it would claim to be
+ * something it is not.
+ */
+function adopt(next: SessionView, previous: SessionView, window: Omit<HistoryWindow, "live">): SessionView {
+  if (previous.validated === undefined || previous.validated.revision !== window.revision) {
+    const { validated: _stale, ...rest } = next;
+    return rest as SessionView;
+  }
+  return { ...next, validated: validatedOf(window, next) };
+}
+
 function validatedOf(window: Omit<HistoryWindow, "live">, view: SessionView): ValidatedRevision {
   return { revision: window.revision, environmentKey: window.environmentKey, epoch: window.epoch, seq: window.seq,
     hasHistory: window.hasHistory, at: new Date().toISOString(), ...(sessionIdOf(view) ? { sessionId: sessionIdOf(view)! } : {}) };
@@ -69,14 +85,28 @@ interface HistoryFold {
   textOf: typeof textOf;
 }
 
+/**
+ * The tuple a released record is keyed by describes an exact set of entries on
+ * an exact leaf. A live update that appends an entry or moves the leaf makes
+ * that no longer true, and nothing here can compute the new revision: the
+ * honest answer is to stop claiming one until an authoritative window says
+ * what it is (RP-5/RP-10).
+ */
+function keepValidated(before: SessionView, after: SessionView): SessionView {
+  if (after.validated === undefined) return after;
+  if (before.entries === after.entries && before.leafId === after.leafId) return after;
+  const { validated: _stale, ...rest } = after;
+  return rest as SessionView;
+}
+
 /** Keep lower-sequence new-generation events until a snapshot can adopt them. */
 export function receiveHistoryUpdate(v: SessionView, p: SessionUpdateParams, { applyUpdate, stampNewBlocks }: HistoryFold): SessionView {
   const historyPending = v.historyPending ? { ...v.historyPending, updates: [...v.historyPending.updates, p] } : undefined;
   const epoch = v.history?.epoch ?? v.updateEpoch;
   if (p.seq <= v.lastSeq || (p.epoch && epoch && p.epoch !== epoch)) return historyPending ? { ...v, historyPending } : v;
   const next = applyUpdate(v, p.update);
-  return { ...next, blocks: stampNewBlocks(v.blocks, next.blocks, p.at), lastSeq: p.seq,
-    ...(p.epoch ? { updateEpoch: p.epoch } : {}), ...(historyPending ? { historyPending } : {}) };
+  return keepValidated(v, { ...next, blocks: stampNewBlocks(v.blocks, next.blocks, p.at), lastSeq: p.seq,
+    ...(p.epoch ? { updateEpoch: p.epoch } : {}), ...(historyPending ? { historyPending } : {}) });
 }
 
 /** The store routes history actions here; its ordinary event fold stays authoritative. */
@@ -132,7 +162,13 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
       const optimistic = v.blocks.filter(b => b.kind === "user" && b.optimistic);
       const existingIds = new Set(next.blocks.map(b => b.id));
       next.blocks = [...next.blocks, ...optimistic.filter(b => !existingIds.has(b.id))];
-      return { ...next, blocks: shareHistoryBlocks(next.blocks, v.blocks), lastSeq: changedEpoch ? next.lastSeq : Math.max(next.lastSeq, v.lastSeq) };
+      const settled: SessionView = { ...next, blocks: shareHistoryBlocks(next.blocks, v.blocks),
+        lastSeq: changedEpoch ? next.lastSeq : Math.max(next.lastSeq, v.lastSeq) };
+      // The buffered updates replayed above can have appended an entry or moved
+      // the leaf since the window was read: then the window's revision no
+      // longer describes what this view holds.
+      return settled.entries === entries && settled.leafId === action.leafId
+        ? settled : keepValidated({ ...settled, entries, leafId: action.leafId }, settled);
     }
     case "historyMetadata": {
       if (v.historyRevision !== action.revision || (v.history && v.history.epoch !== action.window.epoch)) return v;
@@ -145,7 +181,10 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
       const entries = [...new Map([...v.entries, ...action.entries].map(entry => [(entry as { id: string }).id, entry])).values()];
       const { live: _live, before: _before, ...history } = action.window;
       const merged = v.history ? { ...v.history, seq: history.seq, hasHistory: v.history.hasHistory || history.hasHistory } : { ...history, userOffset: 0, context: [], priorGoalIds: [], complete: true };
-      return { ...v, entries, leafId: action.leafId, history: merged, validated: validatedOf(merged, v) };
+      // The merged set spans this read and what was already held. That is one
+      // describable state only when both came from the same durable revision;
+      // across revisions the tuple would name entries it does not cover.
+      return adopt({ ...v, entries, leafId: action.leafId, history: merged }, v, action.window);
     }
     case "historyPrepend": {
       if (v.historyRevision !== action.revision || v.history?.before !== action.before || v.history.epoch !== action.window.epoch) return v;
@@ -154,8 +193,8 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
       const { live: _live, ...history } = action.window;
       // The page plus the existing suffix covers the branch exactly when no
       // earlier cursor remains. Alternative versions are a separate scope.
-      return { ...v, history: { ...history, complete: history.before === undefined }, entries: [...entries, ...v.entries],
-        blocks: [...blocksFromEntries(entries, undefined, modelNamesOf(v.state)), ...v.blocks] };
+      return adopt({ ...v, history: { ...history, complete: history.before === undefined }, entries: [...entries, ...v.entries],
+        blocks: [...blocksFromEntries(entries, undefined, modelNamesOf(v.state)), ...v.blocks] }, v, action.window);
     }
   }
 }

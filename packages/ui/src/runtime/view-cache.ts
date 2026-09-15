@@ -29,8 +29,8 @@
 import type { Action, AppState, EvictionReason, SessionView } from "../store.js";
 import { hasUnsentWork, isDormantView } from "../view-summary.js";
 import { captureViewTail, VIEW_TAIL_MAX_BYTES, viewTailRetainedBytes, viewTailSink, type ViewTailDto, type ViewTailSink } from "./view-tail.js";
-import { EMPTY_MEASURE, measureView, type ViewMeasure } from "./view-measure.js";
-import { isTerminalRunStatus } from "@lasercode/protocol";
+import { byteLength, EMPTY_MEASURE, measureView, type ViewMeasure } from "./view-measure.js";
+import { isTerminalRunStatus, type SessionUpdate } from "@lasercode/protocol";
 import { mainPath, pendingSessionPath } from "./main-destination.js";
 
 /**
@@ -233,8 +233,12 @@ export const PENDING_TAIL_MAX_ENTRIES = 32;
 export const PENDING_TAIL_MAX_BYTES = 8 * VIEW_TAIL_MAX_BYTES;
 
 export interface ViewCache {
-  /** Fold one store publication. Cheap: reference comparisons, no measuring. */
-  observe(state: AppState): void;
+  /**
+   * Fold one store transaction. Directed by the action, not by a scan: it
+   * touches the path the action names and the pin sources the action moved,
+   * and a streamed delta adds its own bytes without measuring anything.
+   */
+  observeTransaction(action: Action, before: AppState, after: AppState): void;
   /** A person opened, selected or read this session. */
   touch(path: string): void;
   /** Bring the cache inside its bounds now. */
@@ -258,29 +262,39 @@ export interface ViewCache {
   dispose(): void;
 }
 
-interface Tracked {
-  blocks: unknown;
-  entries: unknown;
+/** What this cache keeps about one path, so a pass never walks the others. */
+interface Owned {
+  /** The measure as of the last full measurement of this path. */
+  measure: ViewMeasure;
+  /** Exact UTF-8 bytes appended since then by deltas alone. */
+  appended: number;
+  /** The next pass must measure this path again. */
+  dirty: boolean;
   hydrated: boolean;
-  /** Everything about this view a pin is decided from, as one cheap string. */
-  pins: string;
 }
 
 /**
- * What a pin is decided from, per view, without walking anything: references
- * the reducer replaces when it changes, and three lengths. Two readings with
- * the same fingerprint cannot differ in whether this view is held.
+ * The sessions live work is happening in, built once per pass rather than by
+ * looping the two registries for every view that might be held.
  */
-const pinFingerprint = (view: SessionView): string =>
-  `${view.running ? 1 : 0}${view.state.isStreaming ? 1 : 0}${view.state.isCompacting ? 1 : 0}`
-  + `:${view.dialogs.length}:${view.pending.length}:${view.queue.steering.length}:${view.queue.followUp.length}`
-  + `:${view.historyPending ? 1 : 0}:${view.state.messageCount}:${view.state.pendingMessageCount}`;
+export interface LiveWork {
+  runs: ReadonlySet<string>;
+  tasks: ReadonlySet<string>;
+}
+
+export function liveWorkOf(state: AppState): LiveWork {
+  const runs = new Set<string>();
+  const tasks = new Set<string>();
+  for (const run of Object.values(state.agents.runs)) if (!isTerminalRunStatus(run.status)) runs.add(run.sessionPath);
+  for (const task of Object.values(state.tasks.tasks)) if (task.status === "running") tasks.add(task.sessionPath);
+  return { runs, tasks };
+}
 
 /**
  * Which pin holds this view, or `undefined` when nothing does. Reads scalars
- * and two registries; it never walks a transcript.
+ * and, for live work, a set the caller built once; it never walks a transcript.
  */
-export function pinReason(state: AppState, path: string, environment: ViewCacheEnvironment): PinReason | undefined {
+export function pinReason(state: AppState, path: string, environment: ViewCacheEnvironment, live?: LiveWork): PinReason | undefined {
   const view = state.open[path];
   if (state.current === path) return "current";
   // The destination a switch is moving to is pinned from the moment it is
@@ -297,13 +311,9 @@ export function pinReason(state: AppState, path: string, environment: ViewCacheE
   // A session nobody has written to yet costs nothing and is what the landing
   // thread, session reuse and the "New session" row are built on.
   if (view.state.messageCount === 0 && view.state.pendingMessageCount === 0) return "unstarted";
-  for (const run of Object.values(state.agents.runs)) {
-    if (run.sessionPath !== path) continue;
-    if (!isTerminalRunStatus(run.status)) return "agent-run";
-  }
-  for (const task of Object.values(state.tasks.tasks)) {
-    if (task.sessionPath === path && task.status === "running") return "task";
-  }
+  const work = live ?? liveWorkOf(state);
+  if (work.runs.has(path)) return "agent-run";
+  if (work.tasks.has(path)) return "task";
   return undefined;
 }
 
@@ -315,22 +325,23 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
   const sink = options.sink;
 
   const used = new Map<string, number>();
-  const tracked = new Map<string, Tracked>();
-  /** One measurement per view object: an unchanged view is never walked again. */
-  const measured = new WeakMap<SessionView, ViewMeasure>();
+  /** What this cache knows about each path, kept up to date by the actions. */
+  const owned = new Map<string, Owned>();
+  /** Counted here so nothing has to add up the paths to answer `counters()`. */
+  const totals = { entriesBytes: 0, blocksBytes: 0, imagesBytes: 0, imagesEstimated: 0, bytes: 0, hydrated: 0 };
   /**
-   * Records waiting for the next frame, newest per session, oldest first, each
-   * with what holding the whole record costs — not only its content bytes.
+   * Records waiting for the next frame, newest per session and keyed by that
+   * session's identity, oldest first, each with what holding the whole record
+   * costs — not only its content bytes.
    */
   const pending = new Map<string, { tail: ViewTailDto; retained: number }>();
   let pendingBytes = 0;
   let tailsDropped = 0;
   let cancelDelivery: (() => void) | undefined;
   let clock = 0;
-  let lastOpen: AppState["open"] | undefined;
-  /** The registries and selections a pin is decided from, as references. */
-  let lastPinSources: readonly unknown[] = [];
   let cancelPass: (() => void) | undefined;
+  /** The frozen answer `counters()` gives until one of its numbers moves. */
+  let snapshot: RendererViewCounters | undefined;
   let passAt = 0;
   let evictions = 0;
   let overflow: RendererViewCounters["overflow"];
@@ -357,13 +368,62 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
     }, wait);
   };
 
-  const measureOf = (view: SessionView): ViewMeasure => {
-    const cached = measured.get(view);
-    if (cached) return cached;
-    const measure = view.hydrated || view.blocks.length > 0 || view.entries.length > 0 ? measureView(view) : EMPTY_MEASURE;
-    measured.set(view, measure);
-    return measure;
+  const holdsTranscript = (view: SessionView): boolean =>
+    view.dormant === undefined && (view.hydrated || view.blocks.length > 0 || view.entries.length > 0);
+
+  const add = (measure: ViewMeasure, sign: 1 | -1, appended = 0): void => {
+    totals.entriesBytes += sign * measure.entriesBytes;
+    totals.blocksBytes += sign * (measure.blocksBytes + appended);
+    totals.imagesBytes += sign * measure.imagesBytes;
+    totals.imagesEstimated += sign * measure.imagesEstimated;
+    totals.bytes += sign * (measure.bytes + appended);
+    snapshot = undefined;
   };
+
+  /** Stop keeping anything about this path. */
+  const forget = (path: string): void => {
+    const row = owned.get(path);
+    if (!row) return;
+    add(row.measure, -1, row.appended);
+    if (row.hydrated) totals.hydrated -= 1;
+    owned.delete(path);
+    snapshot = undefined;
+  };
+
+  /** Measure one path now, and only that one. */
+  const remeasure = (state: AppState, path: string): void => {
+    const view = state.open[path];
+    if (!view || !holdsTranscript(view)) {
+      forget(path);
+      return;
+    }
+    const row = owned.get(path);
+    if (row) add(row.measure, -1, row.appended);
+    const measure = measureView(view);
+    const hydrated = view.hydrated;
+    if (row) {
+      if (row.hydrated !== hydrated) totals.hydrated += hydrated ? 1 : -1;
+      row.measure = measure; row.appended = 0; row.dirty = false; row.hydrated = hydrated;
+    } else {
+      owned.set(path, { measure, appended: 0, dirty: false, hydrated });
+      if (hydrated) totals.hydrated += 1;
+    }
+    add(measure, 1);
+  };
+
+  /** What this path costs right now, without measuring it again. */
+  const known = (path: string): { bytes: number; measure: ViewMeasure; appended: number } | undefined => {
+    const row = owned.get(path);
+    return row ? { bytes: row.measure.bytes + row.appended, measure: row.measure, appended: row.appended } : undefined;
+  };
+
+  /** Bring every path the actions marked back to a measured truth. */
+  const settle = (state: AppState): void => {
+    for (const [path, row] of [...owned]) if (row.dirty) remeasure(state, path);
+  };
+
+  const measureOf = (view: SessionView): ViewMeasure =>
+    holdsTranscript(view) ? measureView(view) : EMPTY_MEASURE;
 
   const release = (candidates: readonly { path: string; bytes: number; reason: EvictionReason }[]): ReleaseOutcome => {
     if (candidates.length === 0) return NOTHING_RELEASED;
@@ -393,11 +453,11 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
       const group = paths.filter((row) => row.reason === reason).map((row) => row.path);
       options.dispatch({ type: "views/evict", paths: group, reason, at });
     }
-    for (const path of released) {
-      used.delete(path);
-      tracked.delete(path);
-    }
+    // The dispatch above already told this cache to forget them; recency goes
+    // with them, so a conversation opened again starts as newly used.
+    for (const path of released) used.delete(path);
     evictions += released.length;
+    snapshot = undefined;
     options.onRelease?.(released);
     // Into the one queue waiting for the next frame, never a timer and a
     // closure per release: a fast hydrate/evict loop must not turn best-effort
@@ -420,20 +480,32 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
    * the same conversation, and only the later one is true.
    */
   const enqueueTail = (tail: ViewTailDto): void => {
+    // A conversation is its session, not the file it happens to live at: a
+    // move or a rename changes the path and keeps the identity, and two
+    // records for one session are the same record (RP-10 §3.2). A record
+    // with no identity is refused outright rather than keyed by its path.
+    if (tail.omitted !== undefined || tail.sessionId === "" || tail.environmentKey === "") {
+      tailsDropped += 1;
+      snapshot = undefined;
+      return;
+    }
+    const key = `${tail.environmentKey}\u0000${tail.sessionId}`;
     // The whole record, not only the entries in it: the bound is on memory
     // this queue holds, and identity, cursors and structure are memory too.
     const cost = viewTailRetainedBytes(tail);
-    const existing = pending.get(tail.path);
+    const existing = pending.get(key);
     if (existing) pendingBytes -= existing.retained;
-    pending.delete(tail.path);
+    pending.delete(key);
     // A single record larger than the whole queue is refused outright rather
     // than emptying the queue for itself.
     if (cost > PENDING_TAIL_MAX_BYTES) {
       tailsDropped += 1;
+      snapshot = undefined;
       return;
     }
-    pending.set(tail.path, { tail, retained: cost });
+    pending.set(key, { tail, retained: cost });
     pendingBytes += cost;
+    snapshot = undefined;
     while (pending.size > PENDING_TAIL_MAX_ENTRIES || pendingBytes > PENDING_TAIL_MAX_BYTES) {
       const oldest = pending.keys().next();
       if (oldest.done) break;
@@ -453,6 +525,7 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
       const waiting = [...pending.values()].map((row) => row.tail);
       pending.clear();
       pendingBytes = 0;
+      snapshot = undefined;
       if (disposed || captured !== generation) return;
       // Read now, not when the release was decided: a cache installed in the
       // meantime receives these tails, and one that has gone never does.
@@ -475,78 +548,75 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
     pendingBytes = 0;
   };
 
-  /** Everything the pass needs, measured once. */
+  /** Everything the pass needs, from what is already measured. */
   const survey = (state: AppState) => {
-    const hydrated: Array<{ path: string; view: SessionView; measure: ViewMeasure; pin: PinReason | undefined }> = [];
+    settle(state);
+    const live = liveWorkOf(state);
+    const held: Array<{ path: string; bytes: number; measure: ViewMeasure; appended: number; pin: PinReason | undefined }> = [];
     let bytes = 0;
     let pinnedBytes = 0;
-    let dormant = 0;
     let drafts = 0;
-    const totals = { entriesBytes: 0, blocksBytes: 0, imagesBytes: 0, imagesEstimated: 0 };
-    for (const [path, view] of Object.entries(state.open)) {
-      if (options.environment.hasDraft(path)) drafts += 1;
-      if (view.dormant !== undefined) {
-        dormant += 1;
-        continue;
-      }
-      if (!view.hydrated && view.blocks.length === 0 && view.entries.length === 0) continue;
-      const measure = measureOf(view);
+    for (const [path, row] of owned) {
+      const view = state.open[path];
+      if (!view) continue;
       // A prompt this surface sent and the engine has not persisted is the
       // person's words; nothing else holds them.
       const unsent = view.blocks.some((block) => block.kind === "user" && block.optimistic === true);
-      const pin = unsent ? ("unsent" as const) : pinReason(state, path, options.environment);
-      hydrated.push({ path, view, measure, pin });
-      bytes += measure.bytes;
-      if (pin) pinnedBytes += measure.bytes;
-      totals.entriesBytes += measure.entriesBytes;
-      totals.blocksBytes += measure.blocksBytes;
-      totals.imagesBytes += measure.imagesBytes;
-      totals.imagesEstimated += measure.imagesEstimated;
+      const pin = unsent ? ("unsent" as const) : pinReason(state, path, options.environment, live);
+      const cost = row.measure.bytes + row.appended;
+      held.push({ path, bytes: cost, measure: row.measure, appended: row.appended, pin });
+      bytes += cost;
+      if (pin) pinnedBytes += cost;
     }
-    return { hydrated, bytes, pinnedBytes, dormant, drafts, totals };
+    for (const path of Object.keys(state.open)) if (options.environment.hasDraft(path)) drafts += 1;
+    return { held, bytes, pinnedBytes, drafts };
   };
 
   const plan = (state: AppState, effective: ViewCacheLimits): { paths: Array<{ path: string; bytes: number; reason: EvictionReason }>; refused: Array<{ path: string; pin: PinReason }>; overflow: RendererViewCounters["overflow"] } => {
-    const { hydrated, bytes, pinnedBytes, drafts } = survey(state);
-    const candidates = hydrated
+    const { held, bytes, pinnedBytes, drafts } = survey(state);
+    const candidates = held
       .filter((row) => row.pin === undefined)
       .sort((a, b) => (used.get(a.path) ?? 0) - (used.get(b.path) ?? 0));
     const chosen: Array<{ path: string; bytes: number; reason: EvictionReason }> = [];
     const taken = new Set<string>();
     let total = bytes;
-    let count = hydrated.length;
+    // The count bound is on the cache, not on the conversations a person is
+    // using: six transcripts beside whatever is pinned (approved plan §6.1).
+    let count = candidates.length;
 
     // One transcript over its own share goes first, whatever the count says —
     // and so does one holding an image whose decoded size could not be read.
     // A few encoded kilobytes can be an enormous surface once decoded, and a
     // number nobody could measure must not buy a conversation a place here.
     for (const row of candidates) {
-      if (row.measure.bytes <= effective.viewBytes && row.measure.imagesEstimated === 0) continue;
-      chosen.push({ path: row.path, bytes: row.measure.bytes, reason: "bytes" });
+      if (row.bytes <= effective.viewBytes && row.measure.imagesEstimated === 0) continue;
+      chosen.push({ path: row.path, bytes: row.bytes, reason: "bytes" });
       taken.add(row.path);
-      total -= row.measure.bytes;
+      total -= row.bytes;
       count -= 1;
     }
     for (const row of candidates) {
       if (count <= effective.views) break;
       if (taken.has(row.path)) continue;
-      chosen.push({ path: row.path, bytes: row.measure.bytes, reason: "count" });
+      chosen.push({ path: row.path, bytes: row.bytes, reason: "count" });
       taken.add(row.path);
-      total -= row.measure.bytes;
+      total -= row.bytes;
       count -= 1;
     }
     for (const row of candidates) {
       if (total <= effective.bytes) break;
       if (taken.has(row.path)) continue;
-      chosen.push({ path: row.path, bytes: row.measure.bytes, reason: "bytes" });
+      chosen.push({ path: row.path, bytes: row.bytes, reason: "bytes" });
       taken.add(row.path);
-      total -= row.measure.bytes;
+      total -= row.bytes;
       count -= 1;
     }
 
+    // The total and the per-view share still count everything hydrated,
+    // pinned or not: they are about memory, not about the cache's own slots.
     const over = total > effective.bytes || count > effective.views;
     const refused = over
-      ? hydrated.filter((row) => row.pin !== undefined).map((row) => ({ path: row.path, pin: row.pin! }))
+      ? held.filter((row) => row.pin !== undefined).map((row) => ({ path: row.path, pin: row.pin! }))
       : [];
     return {
       paths: chosen,
@@ -560,58 +630,128 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
     passAt = Date.now();
     const state = options.read();
     const { paths, refused, overflow: over } = plan(state, limits);
+    if (over !== overflow) snapshot = undefined;
     overflow = over;
     const outcome = release(paths);
     return refused.length === 0 ? outcome : { ...outcome, refused };
   }
 
+  /** The delta a streamed update appends, when it appends one and nothing else. */
+  const appendedBytes = (update: SessionUpdate): number | undefined => {
+    if (update.kind === "text_delta" || update.kind === "thinking_delta") return byteLength(update.delta);
+    return undefined;
+  };
+
+  const markDirty = (path: string): void => {
+    const row = owned.get(path);
+    if (row) { row.dirty = true; snapshot = undefined; }
+  };
+
   return {
-    observe(state) {
+    observeTransaction(action, before, after) {
       if (disposed) return;
-      // What a pin is decided from outside a view: the selection, the two
-      // registries, and the loads in flight. A run going terminal or a task
-      // ending replaces its registry and nothing else, so `open` alone would
-      // never notice that a view stopped being held.
-      const sources = [state.current, state.destination, state.agents.runs, state.tasks.tasks, state.sessionLoads];
-      const pinsChanged = sources.some((source, index) => source !== lastPinSources[index]);
-      lastPinSources = sources;
-      if (state.open === lastOpen && !pinsChanged) return;
-      const openChanged = state.open !== lastOpen;
-      lastOpen = state.open;
-      let hydratedCount = 0;
-      let structural = tracked.size === 0 || pinsChanged;
+      let pins = false;
       let grew = false;
-      const seen = new Set<string>();
-      for (const [path, view] of Object.entries(state.open)) {
-        seen.add(path);
-        const hydrated = view.hydrated && view.dormant === undefined;
-        if (hydrated) hydratedCount += 1;
-        const pins = pinFingerprint(view);
-        const previous = tracked.get(path);
-        if (!previous) {
-          tracked.set(path, { blocks: view.blocks, entries: view.entries, hydrated, pins });
-          if (hydrated) structural = true;
-          continue;
+      const dirty = (path: string | undefined): void => {
+        if (path === undefined) return;
+        const view = after.open[path];
+        if (!view) { forget(path); pins = true; return; }
+        if (owned.has(path)) markDirty(path);
+        else if (holdsTranscript(view)) { remeasure(after, path); pins = true; }
+        if (before.open[path] !== view) pins = true;
+      };
+
+      switch (action.type) {
+        case "notification": {
+          const params = action.params as { sessionPath?: string; path?: string; update?: SessionUpdate };
+          const path = params.sessionPath ?? params.path;
+          if (path === undefined) break;
+          const view = after.open[path];
+          const row = owned.get(path);
+          const delta = action.method === "session/update" && params.update ? appendedBytes(params.update) : undefined;
+          // An appended token costs its own bytes and nothing else: no walk of
+          // the transcript it was appended to, and no pass of its own.
+          if (delta !== undefined && row && view && before.open[path] !== view && !row.dirty) {
+            row.appended += delta;
+            totals.blocksBytes += delta;
+            totals.bytes += delta;
+            snapshot = undefined;
+            grew = true;
+            break;
+          }
+          if (before.open[path] !== view) { dirty(path); grew = true; }
+          break;
         }
-        // A turn ending, a queue emptying, a question answered: this view may
-        // have stopped being held, and that is never made to wait.
-        if (previous.hydrated !== hydrated || previous.pins !== pins) structural = true;
-        // A streamed token replaces the blocks array and nothing else. One such
-        // transaction can also be one enormous tool result, so it schedules a
-        // pass too — just one that waits out the gap between content passes.
-        else if (previous.blocks !== view.blocks || previous.entries !== view.entries) grew = true;
-        previous.blocks = view.blocks;
-        previous.entries = view.entries;
-        previous.hydrated = hydrated;
-        previous.pins = pins;
+        case "views/evict":
+          for (const path of action.paths) forget(path);
+          pins = true;
+          break;
+        case "closeView":
+          forget(action.path);
+          pins = true;
+          break;
+        case "forked":
+          forget(action.from);
+          dirty(action.state.path);
+          used.set(action.state.path, ++clock);
+          pins = true;
+          break;
+        case "opened":
+          dirty(action.state.path);
+          used.set(action.state.path, ++clock);
+          break;
+        case "hydrate":
+        case "entries":
+        case "historySnapshot":
+        case "historyPrepend":
+        case "historyMetadata":
+        case "historyReset":
+        case "historyBegin":
+        case "historyEnd":
+        case "goal":
+        case "pending":
+        case "resync":
+        case "optimisticUser":
+        case "optimisticFailed":
+        case "dialogAnswered":
+        case "editorTextTaken":
+          // A read a person asked for, a message they sent, a question they
+          // answered: this conversation is the one they are using. An action
+          // the reducer refused changed nothing and counts as nothing.
+          if ("path" in action && typeof action.path === "string") {
+            const changed = before.open[action.path] !== after.open[action.path];
+            dirty(action.path);
+            if (changed && action.type !== "historyBegin" && action.type !== "historyEnd") used.set(action.path, ++clock);
+          }
+          pins = true;
+          break;
+        case "resetEnvironment":
+          for (const path of [...owned.keys()]) forget(path);
+          used.clear();
+          pins = true;
+          break;
+        case "destination":
+        case "sessionLoad":
+        case "agents/run":
+        case "agents/runs/loaded":
+        case "tasks/update":
+        case "tasks/loaded":
+          pins = true;
+          break;
+        default:
+          break;
       }
-      if (openChanged) for (const path of [...tracked.keys()]) if (!seen.has(path)) tracked.delete(path);
-      if (structural || hydratedCount > limits.views) schedule("pins");
+      // Anything the store dropped or added without naming it here.
+      if (before.open !== after.open && !pins) {
+        for (const path of [...owned.keys()]) if (!after.open[path]) { forget(path); pins = true; }
+      }
+      if (pins) schedule("pins");
       else if (grew) schedule("growth");
     },
     notifyPins() {
       // A draft written or cleared, a scope taking or letting go of a session:
       // the store did not move, so nothing could have observed it.
+      snapshot = undefined;
       schedule("pins");
     },
     touch(path) {
@@ -630,21 +770,28 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
       };
       const state = options.read();
       const { paths, refused, overflow: over } = plan(state, effective);
+      if (over !== overflow) snapshot = undefined;
       overflow = over;
       const outcome = release(paths.map((row) => ({ ...row, reason: "pressure" as const })));
       return { ...outcome, refused };
     },
     counters() {
+      // The same frozen answer until one of its numbers moves: a diagnostics
+      // surface polling this must not make the renderer do work to say so.
+      if (snapshot) return snapshot;
       const state = options.read();
-      const { hydrated, bytes, dormant, drafts, totals } = survey(state);
-      const pinned = hydrated.filter((row) => row.pin !== undefined).length;
-      const heap = VIEW_HEAP_MODEL.lightBytes * Object.keys(state.open).length
-        + VIEW_HEAP_MODEL.hydratedBytes * hydrated.length
+      const { held, bytes, drafts } = survey(state);
+      const paths = Object.keys(state.open);
+      const pinned = held.filter((row) => row.pin !== undefined).length;
+      const heap = VIEW_HEAP_MODEL.lightBytes * paths.length
+        + VIEW_HEAP_MODEL.hydratedBytes * held.length
         + VIEW_HEAP_MODEL.contentFactor * (totals.entriesBytes + totals.blocksBytes)
         + totals.imagesBytes;
-      return Object.freeze({
-        views: Object.keys(state.open).length,
-        hydrated: hydrated.length,
+      let dormant = 0;
+      for (const path of paths) if (state.open[path]!.dormant !== undefined) dormant += 1;
+      return snapshot = Object.freeze({
+        views: paths.length,
+        hydrated: held.length,
         pinned,
         dormant,
         entriesBytes: totals.entriesBytes,
@@ -676,12 +823,11 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
       clearPending();
       tailsDropped = 0;
       used.clear();
-      tracked.clear();
-      lastOpen = undefined;
-      lastPinSources = [];
+      for (const path of [...owned.keys()]) forget(path);
       passAt = 0;
       evictions = 0;
       overflow = undefined;
+      snapshot = undefined;
     },
     dispose() {
       disposed = true;
@@ -690,7 +836,8 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
       cancelPass = undefined;
       clearPending();
       used.clear();
-      tracked.clear();
+      owned.clear();
+      snapshot = undefined;
     },
   };
 }

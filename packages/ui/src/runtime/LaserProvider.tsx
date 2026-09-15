@@ -377,15 +377,22 @@ export interface StateStore {
 
 export function createStateStore(initial: AppState = initialState): StateStore & {
   batch(deliver: () => void): void;
-  observeWindows(observer: (action: Action, before: AppState, after: AppState) => boolean): () => void;
-  publishWindows(): void;
+  observeTransactions(observer: (action: Action, before: AppState, after: AppState) => boolean): () => void;
+  publishTransactions(): void;
 } {
   let current = initial;
   const presentation = new TranscriptPresentation();
   let depth = 0;
   let dirty = false;
   const listeners = new Set<() => void>();
-  const windows = new Set<(action: Action, before: AppState, after: AppState) => boolean>();
+  /**
+   * Observers of the whole transaction, not of the state after it: an owner
+   * that has to know *what changed* — which session, and how — rather than
+   * diff two snapshots for it. Owner-local transcript windows use it to replay
+   * an action into their own copy; the view bound uses it to keep its measure
+   * of one path without walking every other (RP-5).
+   */
+  const observers = new Set<(action: Action, before: AppState, after: AppState) => boolean>();
   const publish = () => {
     if (depth || !dirty) return;
     dirty = false;
@@ -405,13 +412,13 @@ export function createStateStore(initial: AppState = initialState): StateStore &
       const before = current;
       current = reduce(before, action);
       dirty = dirty || current !== before;
-      // Window replay may need an event the canonical watermark already saw.
-      // Finish every fold before any React subscriber observes the transaction.
-      for (const observer of [...windows]) dirty = observer(action, before, current) || dirty;
+      // An owner's replay may need an event the canonical watermark already
+      // saw. Finish every fold before any React subscriber sees the transaction.
+      for (const observer of [...observers]) dirty = observer(action, before, current) || dirty;
       publish();
     },
-    observeWindows(observer) { windows.add(observer); return () => { windows.delete(observer); }; },
-    publishWindows() { dirty = true; publish(); },
+    observeTransactions(observer) { observers.add(observer); return () => { observers.delete(observer); }; },
+    publishTransactions() { dirty = true; publish(); },
     batch(deliver) {
       depth++;
       try {
@@ -757,8 +764,12 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   }), [client, store]);
   notifyPins.current = viewCache.notifyPins;
   useEffect(() => {
-    const stop = store.subscribe(() => viewCache.observe(store.getSnapshot()));
-    viewCache.observe(store.getSnapshot());
+    // The transaction, not the state after it: the bound follows the action to
+    // the one session it touched instead of walking every record per token.
+    const stop = store.observeTransactions((action, before, after) => {
+      viewCache.observeTransaction(action, before, after);
+      return false;
+    });
     return () => { stop(); viewCache.dispose(); };
   }, [store, viewCache]);
   // The main window is registered wherever it is, so a scope that shows the

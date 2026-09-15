@@ -164,3 +164,27 @@ describe("one view", () => {
     stringify.mockRestore();
   });
 });
+
+describe("counting UTF-8 without producing it", () => {
+  const encoder = new TextEncoder();
+  const cases = [
+    "", "plain ascii", "héllo — ok", "🛰 orbit", "🇦🇶🇦🇶", "a\u0000b",
+    "\u{10FFFF}", "mixed 🛰 héllo \u00ff\u0800\uffff",
+    // Unpaired surrogates: a high one at the end, a low one alone, and a
+    // high one followed by an ordinary character.
+    "lone high \ud83d", "\udc96 lone low", "\ud83dx", "\ud83d\ud83d\ude00",
+  ];
+
+  it("agrees with TextEncoder on every shape, including unpaired surrogates", () => {
+    for (const text of cases) expect([text, byteLength(text)]).toEqual([text, encoder.encode(text).length]);
+  });
+
+  it("allocates no buffer to answer", () => {
+    const encode = vi.spyOn(TextEncoder.prototype, "encode");
+    const blocks: Block[] = [{ kind: "assistant", id: "b1", text: "x".repeat(200_000), thinking: "🛰".repeat(1_000), streaming: false }];
+    const measure = measureView(view({ blocks }));
+    expect(measure.blocksBytes).toBe(200_000 + 4_000);
+    expect(encode).not.toHaveBeenCalled();
+    encode.mockRestore();
+  });
+});

@@ -17,11 +17,17 @@ rather than chosen from the size of a JSON string.
 
 | Bound | Value | Constant |
 | --- | ---: | --- |
-| Hydrated transcripts kept beside the pinned ones | 6 | `VIEW_CACHE_LIMITS.views` |
+| Hydrated transcripts kept **beside** the pinned ones (unpinned candidates) | 6 | `VIEW_CACHE_LIMITS.views` |
 | Total hydrated transcript bytes (exact UTF-8) | 4 MiB | `VIEW_CACHE_LIMITS.bytes` |
 | One transcript's share | 1.5 MiB | `VIEW_CACHE_LIMITS.viewBytes` |
 | Entries a released tail may carry | 40 | `VIEW_TAIL_MAX_ENTRIES` |
 | Bytes a released tail may carry | 256 KiB | `VIEW_TAIL_MAX_BYTES` |
+
+The count bounds the cache's own slots: a conversation held by the person, a
+question or live work does not consume one. The byte bounds are about memory and
+count everything hydrated, pinned or not. Recency is the last time a person used
+a conversation — selecting it, a scope adopting it, an accepted read, a send, a
+fork becoming the destination — never the last time output arrived in it.
 
 The three cache bounds are independent. A transcript over its own share is
 released even when the count is under its limit; the count is enforced even
@@ -46,8 +52,12 @@ fitted rather than guessed:
   counted as *estimated* and charged a declared floor. It is never reported as
   costing nothing.
 
-Measurement is incremental: a streamed token costs the delta, never a walk of
-the transcript, and each view object is measured once. A maintenance pass runs
+Measurement is incremental and directed by the action, not by a scan: the cache
+watches the store's transactions, so a streamed token adds its own exact UTF-8
+bytes to the one path it belongs to and nothing else is touched, while a settle,
+a hydrate or a replacement measures that path once. Byte lengths are counted by
+arithmetic over the string, never by encoding it into a buffer, and `counters()`
+returns the same frozen snapshot until one of its numbers moves. A maintenance pass runs
 immediately when what is *held* changes — the hydrated set, the selection, a
 run or command going terminal, a turn or queue ending, a draft or scope let go
 of outside the store — and after content growth with a 250 ms gap between such
@@ -214,8 +224,10 @@ The default is a sink that does nothing. The cache reads the installed sink
 callback plus a task, with a bounded 250 ms fallback for a page that never
 paints, running exactly once and cancelled by a reset or a disposal — so a
 device cache installed a moment later still receives that tail, and one that has
-been removed never does. Records waiting for that frame sit in one coalesced queue — the newest record
-per session, at most 32 of them and at most 2 MiB (eight full tails)
+been removed never does. Records waiting for that frame sit in one coalesced queue, keyed by
+`(environmentKey, sessionId)` so a conversation that moved or was renamed is
+still one conversation and a record with no identity is refused and counted —
+the newest record per session, at most 32 of them and at most 2 MiB (eight full tails)
 measured over the **whole** retained record — identity, cursors, entry ids and
 JSON structure included, not only the content bytes RP-10 reads from
 `ViewTailDto.bytes` — oldest shed first and counted in `tailsDropped` — with one scheduler for the whole
