@@ -12,7 +12,8 @@ import { promisify } from 'node:util';
 import { modeConfig, expected, SAFETY } from '../resource/config.mjs';
 import { syntheticPng, imagePayload } from '../resource/fixtures.mjs';
 import { theilSen, compareRuns, assertRedacted, sanitizeOwner, sanitizeError, COMPARISON_POLICY, SLOPE_POLICY } from '../resource/report.mjs';
-import { connectInspector, InspectorClient } from '../resource/inspector.mjs';
+import { CONNECTION_PRESSURE_FN, WORKER_COUNTERS_FN, connectInspector, connectionPressure, InspectorClient, scalarCounters } from '../resource/inspector.mjs';
+import { FENCE_CLOSE_CODE, classifyConnection, observeBackpressure, watchFenceClosure } from '../resource/backpressure.mjs';
 import { captureHeap } from '../resource/heap.mjs';
 import { captureMemoryInfra, dumpAllocators } from '../resource/memory-infra.mjs';
 import { memoryLabels } from '../resource/process-sampler.mjs';
@@ -24,7 +25,7 @@ import { expectedRetainedCounts } from '../resource/retention.mjs';
 import { revealSessionRow, sidebarRowView } from '../resource/sidebar.mjs';
 import { DiscoveryRegistry, PUBLISHED } from '../resource/discovery.mjs';
 import { ProcessCensus, censusTotals, verdictFor } from '../resource/sampling.mjs';
-import { withStalledClient } from '../resource/scenarios/08-slow-consumer.mjs';
+import { slowConsumerLoad, withStalledClient } from '../resource/scenarios/08-slow-consumer.mjs';
 import { BROWSER_SCENARIOS, SCENARIO_IDS } from '../resource/scenarios/index.mjs';
 import { graphBudget, validateHeader } from '../resource/heap-parser.mjs';
 import { closeNodeWebSocket, settledWebSocketRpc } from '../resource/websocket.mjs';
@@ -857,6 +858,322 @@ test('a stalled client is resumed and closed even when its body throws', async (
     else assert.equal(await call, 5);
     assert.deepEqual([resumed, closed], [1, 1]);
   }
+});
+
+// --- worker retained-state projection (RP-4's runtime table) ------------------
+
+const CHECKOUT = new URL('../../../', import.meta.url);
+const projectWorker = new Function(`return ${WORKER_COUNTERS_FN}`)();
+const projectConnection = new Function(`return ${CONNECTION_PRESSURE_FN}`)();
+
+/**
+ * The real table and replay buffer when the worker is built, and stand-ins with
+ * exactly the API the projection reads when it is not. The pin test below keeps
+ * the stand-ins honest against the product source.
+ */
+async function workerRuntimeParts() {
+  try {
+    const [runtimes, replay] = await Promise.all([
+      import(new URL('packages/worker/dist/session-runtimes.js', CHECKOUT).href),
+      import(new URL('packages/worker/dist/replay-buffer.js', CHECKOUT).href),
+    ]);
+    return { SessionRuntimes: runtimes.SessionRuntimes, ReplayBuffer: replay.ReplayBuffer, source: 'the built worker' };
+  } catch {
+    class SessionRuntimes {
+      #table = new Map();
+      get size() { return this.#table.size; }
+      values() { return this.#table.values(); }
+      attach(live) { this.#table.set(live.path, live); }
+      openPaths() { return []; }
+      releasingPaths() { return []; }
+      get fenced() { return false; }
+      get retiring() { return false; }
+    }
+    class ReplayBuffer {
+      #entries = new Map(); #bytes = 0;
+      get size() { return this.#entries.size; }
+      get bytes() { return this.#bytes; }
+      push(value) { this.#entries.set(value.seq, value); this.#bytes += Buffer.byteLength(JSON.stringify(value)); }
+    }
+    return { SessionRuntimes, ReplayBuffer, source: 'source-shaped stand-ins (worker not built)' };
+  }
+}
+
+function liveSession(path, { entries = 3, buffer, pending = [] } = {}) {
+  const manager = entries === null ? undefined : { getEntries: () => Array.from({ length: entries }, (_, index) => ({ id: `entry-${index}` })) };
+  return { path, buffer, driver: { runtime: manager ? { session: { sessionManager: manager } } : undefined, pendingUi: () => pending } };
+}
+
+test('worker counters read RP-4’s runtime table and report real sessions, entries and replay', async () => {
+  const { SessionRuntimes, ReplayBuffer, source } = await workerRuntimeParts();
+  const runtimes = new SessionRuntimes();
+  const buffers = [new ReplayBuffer(100, 1024 * 1024), new ReplayBuffer(100, 1024 * 1024)];
+  buffers[0].push({ seq: 1, sessionId: 'a', update: { kind: 'text_delta', delta: 'hello' } });
+  buffers[0].push({ seq: 2, sessionId: 'a', update: { kind: 'text_delta', delta: 'again' } });
+  buffers[1].push({ seq: 1, sessionId: 'b', update: { kind: 'text_delta', delta: 'x' } });
+  runtimes.attach(liveSession('/p/one.jsonl', { entries: 12, buffer: buffers[0], pending: [{ id: 'q1' }, { id: 'a1', toolCallId: 't1' }] }));
+  runtimes.attach(liveSession('/p/two.jsonl', { entries: 7, buffer: buffers[1] }));
+  const value = projectWorker.call({
+    runtimes,
+    tasks: { bySession: new Map([['/p/one.jsonl', new Map([['t', { status: 'running' }], ['u', { status: 'exited' }]])]]) },
+    runningTools: new Map([['/p/one.jsonl', new Set(['tool-1'])]]),
+  });
+  assert.equal(value.available, true, `projection unavailable against ${source}`);
+  assert.equal(value.sessions, 2, `sessions must come from the runtime table (${source})`);
+  assert.equal(value.entries, 19);
+  assert.equal(value.entriesUnreadable, 0);
+  assert.equal(value.replayCount, 3);
+  assert.ok(value.replayBytes > 0, 'replay bytes are the buffers’ own account, never a zero');
+  assert.deepEqual([value.tasks, value.runningTasks, value.runningTools], [2, 1, 1]);
+  assert.deepEqual([value.pendingQuestions, value.pendingApprovals], [1, 1]);
+  assert.deepEqual([value.opening, value.releasing, value.fenced, value.retiring], [0, 0, false, false]);
+  const text = JSON.stringify(value);
+  assert.doesNotMatch(text, /one\.jsonl|two\.jsonl|entry-0|hello/, 'the projection carries counts, never an identity or content');
+});
+
+test('a live runtime whose entry count cannot be read is null, never a zero', async () => {
+  const { SessionRuntimes, ReplayBuffer } = await workerRuntimeParts();
+  const runtimes = new SessionRuntimes();
+  const buffer = new ReplayBuffer(100, 1024 * 1024);
+  buffer.push({ seq: 1, sessionId: 'a', update: { kind: 'state' } });
+  runtimes.attach(liveSession('/p/open.jsonl', { entries: 5, buffer }));
+  // A session whose engine runtime is not built yet: absent evidence, not zero.
+  runtimes.attach(liveSession('/p/opening.jsonl', { entries: null, buffer }));
+  const value = projectWorker.call({ runtimes });
+  assert.equal(value.sessions, 2, 'the sessions it holds are still known exactly');
+  assert.equal(value.entries, null, 'an incomplete entry total is unavailable, never a false sum');
+  assert.deepEqual([value.entriesKnown, value.entriesReadable, value.entriesUnreadable], [5, 1, 1]);
+  assert.equal(value.entriesSource, 'engine session manager');
+  assert.equal(value.replayCount, 2, 'replay stayed readable for both rows');
+});
+
+test('a worker without RP-4’s runtime table is unavailable, never a row of zeros', () => {
+  // The exact regression M18-T8 found: the projection used to read `sessions`,
+  // which T4 removed, and reported every retained count as 0.
+  const legacy = projectWorker.call({ sessions: new Map([['/p/one.jsonl', { driver: {}, buffer: { size: 4, bytes: 99 } }]]) });
+  assert.equal(legacy.available, false);
+  assert.match(legacy.reason, /runtime table unavailable/);
+  assert.deepEqual([legacy.sessions, legacy.entries, legacy.replayCount, legacy.replayBytes], [null, null, null, null]);
+  const broken = projectWorker.call({ runtimes: { size: 1, values() { throw new Error('table torn down'); } } });
+  assert.equal(broken.available, false);
+  assert.deepEqual([broken.sessions, broken.entries, broken.replayCount], [null, null, null]);
+});
+
+test('the worker projection names fields the worker source really has', async () => {
+  const read = async path => readFile(new URL(path, CHECKOUT), 'utf8');
+  const server = await read('packages/worker/src/server.ts');
+  assert.match(server, /private readonly runtimes: SessionRuntimes<Live>/, 'WorkerServer.runtimes is the table the projection reads');
+  assert.doesNotMatch(server, /private readonly sessions\b/, 'the removed `sessions` map must not come back unnoticed');
+  assert.match(server, /buffer: ReplayBuffer/, 'a Live row carries its replay buffer as `buffer`');
+  assert.match(server, /private readonly tasks = new TaskIndex\(\)/);
+  assert.match(server, /private readonly runningTools = new Map/);
+  const table = await read('packages/worker/src/session-runtimes.ts');
+  for (const member of [/values\(\): IterableIterator<Live>/, /get size\(\): number/, /openPaths\(\): string\[\]/, /releasingPaths\(\): string\[\]/, /get fenced\(\): boolean/, /get retiring\(\): boolean/]) {
+    assert.match(table, member, `SessionRuntimes must still expose ${member}`);
+  }
+  const replay = await read('packages/worker/src/replay-buffer.ts');
+  assert.match(replay, /get bytes\(\): number/);
+  assert.match(replay, /get size\(\): number/);
+  const driver = await read('packages/worker/src/drivers/stable-sdk.ts');
+  assert.match(driver, /sessionManager\.getEntries\(\)/, 'the entry count is the engine’s own synchronous accessor');
+  assert.match(driver, /private runtime: AgentSessionRuntime \| undefined/);
+  const tasks = await read('packages/worker/src/agents/tasks.ts');
+  assert.match(tasks, /private readonly bySession = new Map/);
+});
+
+test('scalar counters send the host or worker projection and return its value', async () => {
+  const sent = [];
+  const client = { async send(method, params) { sent.push([method, params]); return { result: { value: { kind: 'ok' } } }; } };
+  await scalarCounters(client, 'instance-1', 'worker');
+  await scalarCounters(client, 'instance-1', 'host');
+  assert.equal(sent[0][1].functionDeclaration, WORKER_COUNTERS_FN);
+  assert.match(sent[1][1].functionDeclaration, /kind:'host'/);
+  assert.equal(sent[0][1].arguments, undefined, 'a counter read passes no arguments at all');
+  await assert.rejects(connectionPressure(client, 'instance-1', '54321'), /integer loopback port/);
+  await connectionPressure(client, 'instance-1', 54_321);
+  assert.deepEqual(sent.at(-1)[1].arguments, [{ value: 54_321 }], 'a connection is named by a port number and nothing else');
+});
+
+// --- one named connection’s pressure account (RP-7) --------------------------
+
+function hostWithConnections(rows) {
+  const clients = rows.map(row => ({
+    bufferedAmount: row.bufferedAmount ?? 0,
+    readyState: row.readyState ?? 1,
+    _socket: { remotePort: row.port, bytesWritten: row.bytesWritten ?? 0, bytesRead: row.bytesRead ?? 0 },
+  }));
+  const pressure = new Map(clients.map((ws, index) => [ws, rows[index].pressure === null ? undefined : {
+    fenced: rows[index].pressure?.state === 'fenced',
+    snapshot: () => ({ state: 'flowing', queuedBytes: 0, socketBufferedBytes: 0, highWaterBytes: 0, inFlight: 0, shed: { total: 0, byMethod: {} }, ...rows[index].pressure }),
+  }]).filter(([, value]) => value !== undefined));
+  return { clients: new Set(clients), pressure };
+}
+
+test('the connection projection answers about one named socket, or says it could not', () => {
+  const host = hostWithConnections([
+    { port: 40_001, bufferedAmount: 0, pressure: { state: 'flowing' } },
+    { port: 40_002, bufferedAmount: 1_024, bytesWritten: 9_000, pressure: { state: 'shedding', queuedBytes: 2_048, highWaterBytes: 4_096, shed: { total: 3, byMethod: {} } } },
+  ]);
+  const queued = projectConnection.call(host, 40_002);
+  assert.deepEqual([queued.connections, queued.matched, queued.present, queued.ambiguous], [2, 1, true, false]);
+  assert.equal(queued.connection.pendingBytes, 2_048, 'pending bytes take the larger of the socket and the account, never their sum');
+  assert.deepEqual([queued.connection.accountedBytes, queued.connection.socketBufferedBytes, queued.connection.highWaterBytes], [2_048, 1_024, 4_096]);
+  assert.equal(queued.connection.bytesWritten, 9_000);
+  assert.equal(queued.totalBufferedBytes, 1_024);
+  assert.doesNotMatch(JSON.stringify(queued), /4000[12]/, 'the answer carries no port, address or identity');
+
+  const gone = projectConnection.call(host, 40_009);
+  assert.deepEqual([gone.matched, gone.present, gone.connection], [0, false, null]);
+  const twice = projectConnection.call(hostWithConnections([{ port: 40_003, pressure: {} }, { port: 40_003, pressure: {} }]), 40_003);
+  assert.deepEqual([twice.matched, twice.ambiguous, twice.connection], [2, true, null]);
+  const fenced = projectConnection.call(hostWithConnections([{ port: 40_004, readyState: 2, pressure: { state: 'fenced', highWaterBytes: 16 * 1024 * 1024 } }]), 40_004);
+  assert.deepEqual([fenced.connection.state, fenced.connection.fenced, fenced.connection.readyState], ['fenced', true, 2]);
+  const untracked = projectConnection.call(hostWithConnections([{ port: 40_005, bufferedAmount: 7, pressure: null }]), 40_005);
+  assert.deepEqual([untracked.connection.state, untracked.connection.accountedBytes, untracked.connection.pendingBytes], [null, null, 7]);
+});
+
+test('the host still fences a slow direct connection with 1013', async () => {
+  const source = await readFile(new URL('packages/host/src/server.ts', CHECKOUT), 'utf8');
+  assert.match(source, /ws\.close\(1013, "reconnect to catch up"\)/, 'the byte fence closes with the code the harness proves');
+  assert.match(source, /private readonly pressure = new Map<WebSocket, OutboundPressure>/, 'per-connection pressure is the map the projection reads');
+  assert.match(source, /private dropClient\(ws: WebSocket\): void \{\n    this\.clients\.delete\(ws\);/, 'a fenced connection really leaves this.clients');
+  const pressure = await readFile(new URL('packages/host/src/transport-pressure.ts', CHECKOUT), 'utf8');
+  assert.match(pressure, /snapshot\(\): PressureSnapshot/);
+  assert.match(pressure, /get fenced\(\): boolean/);
+});
+
+// --- the two containment outcomes scenario 8 accepts --------------------------
+
+const connectionView = (over = {}) => ({
+  connections: 3, matched: 1, present: true, ambiguous: false, totalBufferedBytes: 0,
+  connection: { readyState: 1, pendingBytes: 0, socketBufferedBytes: 0, accountedBytes: 0, highWaterBytes: 0,
+    state: 'flowing', fenced: false, inFlight: 0, shed: 0, bytesWritten: 1_000, bytesRead: 10 },
+  ...over,
+});
+const goneView = (over = {}) => ({ connections: 2, matched: 0, present: false, ambiguous: false, connection: null, totalBufferedBytes: 0, ...over });
+const sampler = views => { let index = 0; return async () => views[Math.min(index++, views.length - 1)]; };
+const fakeClosure = value => ({ prove: async () => ({ observed: value !== null, code: value, reason: value === null ? null : 'reconnect to catch up' }) });
+const observeOptions = { ceilingBytes: SAFETY.socketBufferedBytes, deadlineMs: 1_000, seen: true, sleepFor: async () => {}, pollMs: 0 };
+/** A clock that always reaches the deadline, so a timeout test costs no wall time. */
+const advancingClock = () => { let value = 0; return () => (value += 400); };
+
+test('a bounded positive pending-byte peak on the named connection is the queued outcome', async () => {
+  const result = await observeBackpressure({
+    ...observeOptions,
+    sample: sampler([
+      connectionView(),
+      connectionView({ connection: { ...connectionView().connection, pendingBytes: 3 * 1024 * 1024, accountedBytes: 3 * 1024 * 1024, socketBufferedBytes: 1_024, highWaterBytes: 3 * 1024 * 1024, state: 'shedding', bytesWritten: 5_000 } }),
+    ]),
+    closure: fakeClosure(null),
+  });
+  assert.equal(result.mechanism, 'queued');
+  assert.equal(result.peakBytes, 3 * 1024 * 1024);
+  assert.equal(result.evidence.pressureState, 'shedding');
+  assert.equal(result.samples, 2);
+  assert.doesNotThrow(() => assertRedacted(JSON.stringify(result)));
+});
+
+test('this socket’s own fenced pressure state is containment, with its closure recorded', async () => {
+  const fenced = { ...connectionView().connection, readyState: 2, state: 'fenced', fenced: true, highWaterBytes: 16 * 1024 * 1024, bytesWritten: 20 * 1024 * 1024 };
+  const result = await observeBackpressure({ ...observeOptions, sample: sampler([connectionView(), connectionView({ connection: fenced })]), closure: fakeClosure(FENCE_CLOSE_CODE) });
+  assert.equal(result.mechanism, 'fenced');
+  assert.equal(result.evidence.pressureState, 'fenced');
+  assert.equal(result.evidence.highWaterBytes, 16 * 1024 * 1024);
+  assert.deepEqual([result.evidence.closeCode, result.evidence.closeCodeRequired], [1013, false]);
+  // The state is this connection's own, so an unobserved closure does not undo it.
+  const quiet = await observeBackpressure({ ...observeOptions, sample: sampler([connectionView({ connection: fenced })]), closure: fakeClosure(null) });
+  assert.equal(quiet.mechanism, 'fenced');
+  assert.deepEqual([quiet.evidence.closeCode, quiet.evidence.closeObserved], [null, false]);
+});
+
+test('a removed connection counts only when this socket really received the 1013 fence closure', async () => {
+  const removed = await observeBackpressure({ ...observeOptions, sample: sampler([connectionView(), goneView()]), closure: fakeClosure(FENCE_CLOSE_CODE) });
+  assert.equal(removed.mechanism, 'fenced');
+  assert.deepEqual([removed.evidence.closeCode, removed.evidence.closeCodeRequired, removed.evidence.pressureState], [1013, true, null]);
+  for (const code of [1006, 1000, null]) {
+    await assert.rejects(
+      observeBackpressure({ ...observeOptions, sample: sampler([connectionView(), goneView()]), closure: fakeClosure(code) }),
+      error => {
+        assert.match(error.message, /merely disappeared is not containment/);
+        assert.doesNotThrow(() => assertRedacted(error.message));
+        return true;
+      },
+      `close code ${code} must not pass as containment`);
+  }
+  // Never seen at all: absence proves nothing about a connection this
+  // observation never observed, so it keeps waiting and then times out.
+  await assert.rejects(observeBackpressure({ ...observeOptions, seen: false, now: advancingClock(), sample: sampler([goneView()]), closure: fakeClosure(FENCE_CLOSE_CODE) }),
+    /Timed out waiting for the slow consumer/);
+});
+
+test('a queue that stays at zero, a changed connection and the byte ceiling all still fail', async () => {
+  await assert.rejects(
+    observeBackpressure({ ...observeOptions, now: advancingClock(), sample: sampler([connectionView()]), closure: fakeClosure(FENCE_CLOSE_CODE) }),
+    error => {
+      assert.match(error.message, /Timed out waiting for the slow consumer to be queued for or fenced/);
+      assert.match(error.message, /lastOutcome=none peakBytes=0 connectionSeen=true/);
+      assert.match(error.message, /bytesWrittenToThisSocket=0 pressureState=flowing readyState=1 peakHostBufferedBytes=0/);
+      return true;
+    });
+  await assert.rejects(observeBackpressure({ ...observeOptions,
+    sample: sampler([connectionView({ connection: { ...connectionView().connection, bytesWritten: 9_000 } }), connectionView({ connection: { ...connectionView().connection, bytesWritten: 12 } })]),
+    closure: fakeClosure(FENCE_CLOSE_CODE) }), /changed identity mid-observation/);
+  await assert.rejects(observeBackpressure({ ...observeOptions, sample: sampler([connectionView({ totalBufferedBytes: SAFETY.socketBufferedBytes + 1 })]), closure: fakeClosure(null) }),
+    /slow socket crossed safety ceiling/);
+  await assert.rejects(observeBackpressure({ ...observeOptions,
+    sample: sampler([connectionView({ connection: { ...connectionView().connection, pendingBytes: SAFETY.socketBufferedBytes + 1 } })]), closure: fakeClosure(null) }),
+    /slow socket crossed safety ceiling/);
+  await assert.rejects(observeBackpressure({ ...observeOptions, sample: sampler([connectionView({ matched: 2, ambiguous: true, present: false, connection: null })]), closure: fakeClosure(null) }),
+    /not about one socket/);
+});
+
+test('the slow consumer sends requests this protocol really accepts', async () => {
+  const { parseClientRequest } = await import(new URL('packages/protocol/dist/index.js', CHECKOUT).href);
+  const request = params => parseClientRequest({ jsonrpc: '2.0', id: 1, method: 'session/load', params });
+  const path = '/scratch/sessions/session-abcdef.jsonl';
+  assert.equal(request(slowConsumerLoad(path)).params.path, path);
+  assert.equal(request(slowConsumerLoad(path, 0)).params.fromSeq, 0);
+  assert.equal(request(slowConsumerLoad(path, 12)).params.fromSeq, 12);
+  // The pin: the opt-in flag RP-6 removed is refused, which is exactly how this
+  // scenario came to produce no traffic and then wait for a queue for ever.
+  assert.throws(() => request({ ...slowConsumerLoad(path), transcript: 'loaded' }));
+  const source = await readFile(new URL('../resource/scenarios/08-slow-consumer.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /transcript:/, 'the scenario must not send a session/load field the protocol does not have');
+  assert.match(source, /if \(message\.error\) reject/, 'a refused load must fail the scenario, never look like a loaded consumer');
+});
+
+test('classification separates the two outcomes from absence and from an unnamed socket', () => {
+  assert.equal(classifyConnection(connectionView()).outcome, 'none');
+  assert.equal(classifyConnection(connectionView({ connection: { ...connectionView().connection, pendingBytes: 1 } })).outcome, 'queued');
+  assert.equal(classifyConnection(connectionView({ connection: { ...connectionView().connection, state: 'fenced' } })).outcome, 'fenced');
+  assert.equal(classifyConnection(goneView(), { seen: true }).outcome, 'removed');
+  assert.equal(classifyConnection(goneView(), { seen: false }).outcome, 'absent');
+  assert.equal(classifyConnection({ ambiguous: true }).outcome, 'ambiguous');
+});
+
+test('the fence closure is watched on the socket itself and resumes its reader to read it', async () => {
+  const socket = new EventEmitter();
+  let resumed = 0;
+  socket._socket = { resume: () => { resumed += 1; } };
+  const closure = watchFenceClosure(socket);
+  assert.equal(closure.closed, false);
+  const pending = closure.prove({ timeoutMs: 1_000 });
+  await Promise.resolve();
+  assert.equal(resumed, 1, 'a paused reader only hears the close frame once it is resumed');
+  socket.emit('close', 1013, Buffer.from('reconnect to catch up'));
+  const proved = await pending;
+  assert.deepEqual([proved.code, proved.observed, proved.reason], [1013, true, 'reconnect to catch up']);
+  assert.equal(closure.closed, true);
+  const quiet = watchFenceClosure(new EventEmitter());
+  assert.deepEqual(await quiet.prove({ timeoutMs: 5, sleepFor: async () => {} }), { code: null, reason: null, at: null, observed: false });
+});
+
+test('a failing backpressure observation still resumes and closes the stalled client', async () => {
+  let resumed = 0; let closed = 0;
+  const socket = { _socket: { resume: () => { resumed += 1; } } };
+  await assert.rejects(withStalledClient(socket, () => observeBackpressure({ ...observeOptions, now: advancingClock(), sample: sampler([connectionView()]), closure: fakeClosure(null) }),
+    { close: async () => { closed += 1; } }), /Timed out waiting for the slow consumer/);
+  assert.deepEqual([resumed, closed], [1, 1]);
 });
 
 test('dormant views are every retained view except the one on screen', () => {

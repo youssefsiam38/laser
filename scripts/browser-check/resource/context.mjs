@@ -6,7 +6,7 @@
  */
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { waitForRegistrations, connectInspector, queryInstances, scalarCounters, tailBufferCounters, linuxStartToken } from './inspector.mjs';
+import { waitForRegistrations, connectInspector, connectionPressure, queryInstances, scalarCounters, tailBufferCounters, linuxStartToken } from './inspector.mjs';
 import { DiscoveryRegistry } from './discovery.mjs';
 import { ProcessCensus, censusTotals, verdictFor } from './sampling.mjs';
 import { captureHeap } from './heap.mjs';
@@ -115,6 +115,9 @@ export class SoakRun {
       return await fn({
         set,
         counters: () => scalarCounters(set.host.client, set.host.handle.objectId, 'host'),
+        // One named connection's own queue account, on the same host connection
+        // this activity already holds: no extra inspector, no queried objects.
+        connection: remotePort => connectionPressure(set.host.client, set.host.handle.objectId, remotePort),
       });
     } finally { await this.closeInspectorSet(set); }
   }

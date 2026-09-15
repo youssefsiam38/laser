@@ -230,6 +230,21 @@ live instance is re-acquired through `Runtime.queryObjects` immediately before
 its own capture. Final reports exclude scratch paths, inspector URLs, session
 IDs, commands and payloads.
 
+Two projections read product state through an owned inspector, and both refuse
+to answer a question they cannot answer. The **worker retained-state** row is
+read from `WorkerServer.runtimes` — RP-4's `SessionRuntimes` table — with each
+live row's replay buffer and the engine's own synchronous entry accessor: a
+worker whose table is missing is `available: false`, and a live row whose entry
+count cannot be read makes the total `null` beside `entriesKnown` and
+`entriesUnreadable`, never a zero. The **slow consumer** (scenario 8) names one
+socket by the loopback port its own client opened from, so the reading is about
+that connection and not about "a connection": the host may contain it by holding
+bytes for it (`mechanism: "queued"`, a positive pending-byte peak under the
+unchanged high-water ceiling) or by fencing it for reconnect (`"fenced"`, proved
+by that connection's own pressure state or by its 1013 closure once its reader
+resumes). A connection that merely disappeared, a socket error, a timeout or a
+queue that stayed at zero are none of those and fail the scenario.
+
 Native allocator ownership comes from one bounded Chrome memory dump taken after
 the measured workload, at the least intrusive level of detail that still names
 real allocator owners. Tracing never runs across the workload itself. To compare
