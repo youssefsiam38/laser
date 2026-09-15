@@ -57,6 +57,7 @@ import { RelayClient, type RelayClientState, type RelayClientStats } from "./rel
 import { Router } from "./router.js";
 import { SessionLoadDelivery } from "./session-load-delivery.js";
 import { TranscriptDelivery, type SessionMembershipView } from "./transcript-delivery.js";
+import { SessionLifetime } from "./session-lifetime.js";
 import { cleanupTaskLogsBeforeWorkers } from "./tasks/cleanup.js";
 import { SearchCancellation } from "./search-cancellation.js";
 import { SessionIndexCache } from "./session-index.js";
@@ -257,6 +258,12 @@ export class HostServer {
   /** The bounded, redacted record of what the boundary decided (RP-13). */
   readonly audit: AccessAudit;
   readonly router: Router;
+  /**
+   * The bounded lifetime of the runtimes inside those workers (RP-4): idle and
+   * over-set conversations nobody is following are released well before the
+   * whole worker would be retired.
+   */
+  readonly sessionLifetime: SessionLifetime;
   private readonly http: Server;
   private readonly wss: WebSocketServer;
   private readonly clients = new Set<WebSocket>();
@@ -587,6 +594,20 @@ export class HostServer {
       },
     };
     this.pool = new WorkerPool(poolOptions);
+    // Runtime lifetime, ahead of worker retirement (RP-4). Membership is read,
+    // never written: `holders` is RP-6's one authority on who is following what.
+    this.sessionLifetime = new SessionLifetime(
+      {
+        holders: (path) => this.sessionMembership().holders(path),
+        loadedSessions: () => this.pool.loadedSessions(),
+        lastActivity: (path) => this.pool.lastSessionActivity(path),
+        unload: (cwd, path, reason) => this.pool.unloadSession(cwd, path, reason),
+        log: (line) => this.log(line),
+      },
+      {
+        ...(options.workerIdleMs !== undefined ? { workerIdleMs: options.workerIdleMs } : {}),
+      },
+    );
 
     this.router = new Router(this.pool, this.catalog, {
       attention: this.attention,
@@ -649,6 +670,7 @@ export class HostServer {
       this.http.once("error", reject);
       this.http.listen(this.options.port ?? 0, host, () => {
         this.skillsCheck.start();
+        this.sessionLifetime.start();
         resolve();
       });
     });
@@ -734,6 +756,7 @@ export class HostServer {
     this.relayClients.length = 0;
     this.notificationListeners.clear();
     this.skillsCheck.stop();
+    this.sessionLifetime.stop();
     if (this.logFlush) clearTimeout(this.logFlush);
     this.logFlush = undefined;
     this.pendingLogRows = [];
@@ -1118,9 +1141,20 @@ export class HostServer {
     const answered = answers.filter((answer): answer is ClientRequests["pi/worker/retained-stores"]["result"] => answer !== undefined);
     let workerTaskCount = 0;
     let workerTaskBytes = 0;
+    // RP-4's rows live entirely inside the workers, so a sum of them is only a
+    // total when every live worker answered; otherwise they are left out
+    // rather than reported as a number that quietly means "some of them".
+    let runtimes = 0;
+    let replayCount = 0;
+    let replayBytes = 0;
+    let caches = 0;
     for (const answer of answered) {
       workerTaskCount += answer.stores.taskRegistry?.count ?? 0;
       workerTaskBytes += answer.stores.taskRegistry?.bytes ?? 0;
+      runtimes += answer.stores.workerSessions?.count ?? 0;
+      replayCount += answer.stores.workerReplay?.count ?? 0;
+      replayBytes += answer.stores.workerReplay?.bytes ?? 0;
+      caches += answer.stores.workerCaches?.count ?? 0;
     }
     const complete = answered.length === live.length;
     return {
@@ -1131,6 +1165,13 @@ export class HostServer {
           // own records are a fraction of what the tails cost.
           ...(complete ? { bytes: registry.bytes + workerTaskBytes } : {}),
         },
+        ...(complete
+          ? {
+              workerSessions: { count: runtimes },
+              workerReplay: { count: replayCount, bytes: replayBytes },
+              workerCaches: { count: caches },
+            }
+          : {}),
         deliveryRegistry: {
           count: delivery.owners,
           // Queued transport bytes belong to the transport (RP-7); membership

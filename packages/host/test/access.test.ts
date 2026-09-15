@@ -293,7 +293,17 @@ describe("the descriptor", () => {
       // A page on this machine still cannot hand down an environment, and it
       // cannot ask a worker what it is holding either: that is the app talking
       // to its own workers (RP-6).
-      expect(descriptor.localOnly).toEqual(["agents/sync", "pi/host/environment", "pi/worker/retained-stores", "resource/report"]);
+      // RP-4 adds two of the same kind: releasing a session's runtime and
+      // asking a worker what its sessions are holding are the app managing its
+      // own runtimes on this machine.
+      expect(descriptor.localOnly).toEqual([
+        "agents/sync",
+        "pi/host/environment",
+        "pi/session/unload",
+        "pi/worker/retained-stores",
+        "pi/worker/safety",
+        "resource/report",
+      ]);
 
       const device = deviceActor(undefined, ENVIRONMENT_ID);
       const remote = (await call(h.router, "environment/describe", device)) as { result: { environment: EnvironmentDescriptor } };

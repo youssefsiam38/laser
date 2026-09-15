@@ -500,6 +500,36 @@ export class AgentHarness {
   }
 
   /**
+   * What releasing this session's runtime would destroy (RP-4). Read-only: it
+   * counts, it never ends, cancels or dequeues anything.
+   *
+   * A child's live run is counted against **its parent** as well as against
+   * itself, because the parent's runtime is what its ending has to wake: a
+   * parent released while a child works would leave that child's report with
+   * nowhere to land. Queued work is the harness's own — a run waiting its turn,
+   * a message in an owner's inbox, a successor reserved behind a declared end.
+   */
+  retainedWork(sessionPath: string): { liveRuns: number; liveChildRuns: number; queued: number } {
+    let liveRuns = 0;
+    let liveChildRuns = 0;
+    let queued = 0;
+    for (const state of this.runStates.values()) {
+      if (isTerminalRunStatus(state.run.status)) continue;
+      if (state.run.sessionPath === sessionPath) {
+        liveRuns += 1;
+        if (state.run.status === "queued") queued += 1;
+      } else if (state.run.parent?.sessionPath === sessionPath) liveChildRuns += 1;
+    }
+    const entry = this.byPath.get(sessionPath);
+    if (entry) {
+      const owner = entry.lifecycle.owner();
+      if (owner) queued += entry.lifecycle.inbox(owner).length;
+      if (entry.lifecycle.successor()) queued += 1;
+    }
+    return { liveRuns, liveChildRuns, queued };
+  }
+
+  /**
    * A person prompted a child session that has no active run: give the
    * prompt a run of its own so lifecycle, the map and the parent's summary
    * keep working. Returns undefined for sessions that are not children.

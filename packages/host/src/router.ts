@@ -881,6 +881,13 @@ export class Router {
       // choosing. The host asks its own live workers, inside a snapshot (RP-6).
       case "pi/worker/retained-stores":
         throw new ProtocolError(ErrorCodes.Unsupported, "The app sends this to its own workers.");
+      // Same rule for RP-4's pair: releasing a session's runtime and reading
+      // what its sessions are holding are the app's own lifetime decisions,
+      // taken against its own live workers. A client asking would be choosing
+      // a worker, and a person's detach already says everything a client can.
+      case "pi/session/unload":
+      case "pi/worker/safety":
+        throw new ProtocolError(ErrorCodes.Unsupported, "The app manages its own session runtimes.");
 
       default:
         break;

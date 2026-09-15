@@ -261,6 +261,8 @@ const samples: Record<ClientMethod, unknown> = {
     processes: [{ pid: 4243, creationTime: 1767225601000, type: "Tab", workingSetBytes: 1024 }],
   },
   "pi/worker/retained-stores": {},
+  "pi/session/unload": { path: "/s.jsonl", reason: "idle" },
+  "pi/worker/safety": {},
 };
 
 describe("process inventory methods", () => {

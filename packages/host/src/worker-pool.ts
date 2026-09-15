@@ -20,9 +20,18 @@
  * That promise is not the sweep's alone: `stop()` and `restart()` refuse the
  * same work, so a `pi/worker/stop` or a Feature toggle (which restarts every
  * open project) cannot end a run either.
+ *
+ * Retiring a whole worker is the *last* thing that happens to it (RP-4). Long
+ * before this sweep fires, `SessionLifetime` releases the individual runtimes
+ * nobody is following, because coming back to one conversation costs a reload
+ * while coming back to a retired worker costs every conversation in the project
+ * a cold start. Both paths ask the worker the same question — `pi/worker/safety`
+ * — so automatic retirement can never destroy what a release would refuse to
+ * touch: an unanswered question, a message waiting in the tray, a command still
+ * running.
  */
-import type { HostNotifications, JsonRpcNotification, WorkerInfo, WorkerStatus } from "@lasercode/protocol";
-import { ErrorCodes, ProtocolError, environmentOverlay } from "@lasercode/protocol";
+import type { ClientRequests, HostNotifications, JsonRpcNotification, SessionPin, SessionSafety, SessionUnloadReason, WorkerInfo, WorkerStatus } from "@lasercode/protocol";
+import { ErrorCodes, ProtocolError, environmentOverlay, isSessionWorkPin } from "@lasercode/protocol";
 import { canonical } from "./trust.js";
 import { WorkerClient, type WorkerClientOptions } from "./worker-client.js";
 
@@ -93,6 +102,12 @@ export interface WorkerPoolOptions {
    * remembered by the caller, so this costs one await afterwards.
    */
   beforeSpawn?: () => Promise<unknown>;
+  /**
+   * How long a worker may take to say what its sessions are holding (RP-4)
+   * before the pool falls back to its own coarser guards. A stop must not hang
+   * on a wedged worker, and a worker that cannot answer is usually already gone.
+   */
+  safetyTimeoutMs?: number;
   /** Ordinary idle retirement. 0 disables it, but not unused warm expiry. */
   idleMs?: number;
   /** How often idleness is checked. */
@@ -160,12 +175,27 @@ const DEFAULTS = {
   healthyMs: 60_000,
   backoffMs: 1_000,
   backoffCapMs: 30_000,
+  safetyTimeoutMs: 2_000,
 };
+
+/** Resolve `undefined` rather than wait for ever on a worker that cannot answer. */
+function withTimeout<T>(work: Promise<T>, ms: number): Promise<T | undefined> {
+  return new Promise<T | undefined>((resolve) => {
+    const timer = setTimeout(() => resolve(undefined), ms);
+    timer.unref?.();
+    work.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      () => { clearTimeout(timer); resolve(undefined); },
+    );
+  });
+}
 
 export class WorkerPool {
   private readonly baseEnv: NodeJS.ProcessEnv = { ...process.env };
   private readonly entries = new Map<string, Entry>();
   private readonly sessionCwd = new Map<string, string>();
+  /** When each open session last produced or received something (RP-4's LRU). */
+  private readonly sessionActivity = new Map<string, number>();
   private readonly now: () => number;
   private readonly setTimer: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
   private sweepTimer: ReturnType<typeof setInterval> | undefined;
@@ -349,12 +379,49 @@ export class WorkerPool {
   bindSession(path: string, cwd: string): void {
     const key = canonical(cwd);
     this.sessionCwd.set(path, key);
+    this.sessionActivity.set(path, this.now());
     const entry = this.entries.get(key);
     if (entry) {
       entry.open.add(path);
       entry.active.add(path);
       entry.lastActivity = this.now();
     }
+  }
+
+  /**
+   * Every session a live, ready worker currently holds, with its directory
+   * (RP-4). The session-lifetime policy walks this; it never spawns anything.
+   */
+  loadedSessions(): Array<{ cwd: string; path: string }> {
+    const out: Array<{ cwd: string; path: string }> = [];
+    for (const entry of this.entries.values()) {
+      if (!entry.client?.alive || entry.status !== "ready") continue;
+      for (const path of entry.active) out.push({ cwd: entry.cwd, path });
+    }
+    return out;
+  }
+
+  /** When this session last produced or received something; `undefined` if unknown. */
+  lastSessionActivity(path: string): number | undefined {
+    return this.sessionActivity.get(path);
+  }
+
+  /**
+   * Ask a live worker to release one session's runtime (RP-4).
+   *
+   * The worker decides: it is the only party that can see a turn, a question, a
+   * queued message, a run or a running command, and it answers with the pins
+   * when it refuses. A release that succeeds is bookkeeping here too — nothing
+   * routes to that session in this worker until it is loaded again — and a
+   * refusal changes nothing at all.
+   */
+  async unloadSession(cwd: string, path: string, reason: SessionUnloadReason = "idle"): Promise<{ unloaded: boolean; pins: SessionPin[] }> {
+    const key = canonical(cwd);
+    const entry = this.entries.get(key);
+    if (!entry?.client?.alive || entry.status !== "ready" || entry.stopping || entry.stopped) return { unloaded: false, pins: [] };
+    const answer = await entry.client.request<ClientRequests["pi/session/unload"]["result"]>("pi/session/unload", { path, reason });
+    if (answer.unloaded) this.forgetSession(path);
+    return answer;
   }
 
   cwdOfSession(path: string): string | undefined {
@@ -387,6 +454,7 @@ export class WorkerPool {
   forgetSession(path: string): void {
     const cwd = this.sessionCwd.get(path);
     this.sessionCwd.delete(path);
+    this.sessionActivity.delete(path);
     const entry = cwd !== undefined ? this.entries.get(cwd) : undefined;
     if (!entry) return;
     entry.open.delete(path);
@@ -415,7 +483,7 @@ export class WorkerPool {
     const entry = this.ensure(key);
     // Asked before anything is touched: a refused restart must leave the worker
     // exactly as it was, counters included.
-    this.assertNotBusy(key, entry);
+    await this.assertNotBusy(key, entry);
     entry.restarts = 0;
     this.clearRetry(entry);
     // Retiring clears the open set, so remember it first: "Retry" is meant to
@@ -440,7 +508,7 @@ export class WorkerPool {
     const key = canonical(cwd);
     const entry = this.entries.get(key);
     if (!entry) return;
-    this.assertNotBusy(key, entry);
+    await this.assertNotBusy(key, entry);
     await this.retire(entry, message);
   }
 
@@ -452,7 +520,7 @@ export class WorkerPool {
    * the same promise as the idle sweep's — `feature/set` restarts every open
    * project, and toggling a Feature may not end a live agent run (D-144).
    */
-  private assertNotBusy(key: string, entry: Entry): void {
+  private async assertNotBusy(key: string, entry: Entry): Promise<void> {
     if (entry.running.size > 0) {
       throw new ProtocolError(
         ErrorCodes.SessionBusy,
@@ -464,6 +532,42 @@ export class WorkerPool {
         ErrorCodes.SessionBusy,
         `the worker for ${key} has an agent run that has not ended; stop that agent before stopping it`,
       );
+    }
+    // The same predicate a session unload applies (RP-4): a question waiting
+    // for a person, a message in the tray, a command still running are all work
+    // this worker is holding, and stopping it would destroy them silently.
+    const safety = await this.sessionSafetyOf(entry);
+    const held = safety?.flatMap((session) => session.pins.filter((pin) => isSessionWorkPin(pin.kind)));
+    if (held && held.length > 0) {
+      throw new ProtocolError(
+        ErrorCodes.SessionBusy,
+        `the worker for ${key} is holding work in one of its conversations (${held[0]!.detail ?? held[0]!.kind}); finish or stop that first`,
+      );
+    }
+  }
+
+  /**
+   * What each of this worker's loaded sessions is holding, or `undefined` when
+   * the worker cannot say (it is gone, it failed, or it is an older generation
+   * without the method).
+   *
+   * `undefined` is not "nothing": callers treat it as an answer they did not
+   * get, and the ones that can be careful about it are.
+   */
+  private async sessionSafetyOf(entry: Entry): Promise<SessionSafety[] | undefined> {
+    const client = entry.client;
+    if (!client?.alive || entry.status !== "ready" || entry.stopping || entry.stopped) return undefined;
+    // A worker holding no sessions has nothing to say, and asking would put a
+    // request in front of every stop of an idle worker.
+    if (entry.active.size === 0) return [];
+    try {
+      const answer = await withTimeout(
+        client.request<ClientRequests["pi/worker/safety"]["result"]>("pi/worker/safety", {}),
+        this.options.safetyTimeoutMs ?? DEFAULTS.safetyTimeoutMs,
+      );
+      return Array.isArray(answer?.sessions) ? answer.sessions : undefined;
+    } catch {
+      return undefined;
     }
   }
 
@@ -639,6 +743,7 @@ export class WorkerPool {
         entry.open.add(path);
         entry.active.add(path);
         this.sessionCwd.set(path, entry.cwd);
+        this.sessionActivity.set(path, this.now());
         if (kind === "agent_start") entry.running.add(path);
         if (kind === "agent_end" || kind === "agent_settled") entry.running.delete(path);
       }
@@ -782,8 +887,34 @@ export class WorkerPool {
     // a run in project A is no reason to keep B and C alive.
     for (const entry of candidates) {
       if (this.options.hasLiveRun?.(entry.cwd) ?? false) continue;
-      void this.retire(entry, "retired after being idle").catch(() => {});
+      void this.retireIfSafe(entry).catch(() => {});
     }
+  }
+
+  /**
+   * Retire an idle worker, but only after asking it what its sessions are
+   * holding (RP-4).
+   *
+   * Automatic retirement and automatic session unload apply the *same* answer,
+   * so the coarser bookkeeping here can no longer destroy what an unload would
+   * refuse to touch: a question nobody answered, a message in the tray, a
+   * command still running. A worker that cannot answer keeps the behaviour it
+   * always had, which is the same conservative set of guards that got it this
+   * far — `running`, `hasLiveRun` and attachment.
+   */
+  private async retireIfSafe(entry: Entry): Promise<void> {
+    const safety = await this.sessionSafetyOf(entry);
+    if (safety?.some((session) => session.pins.length > 0)) return;
+    // Re-checked after the await: a click, a prompt or a new attachment during
+    // the question means this worker is not idle any more.
+    const idleMs = this.options.idleMs ?? DEFAULTS.idleMs;
+    const since = entry.warm ? entry.wantedAt : entry.lastActivity;
+    const threshold = entry.warm ? (this.options.warmIdleMs ?? 60_000) : idleMs;
+    if (!entry.client?.alive || entry.status !== "ready" || entry.running.size > 0) return;
+    if (this.now() - since < threshold) return;
+    if (this.options.isAttached?.(entry.cwd) ?? false) return;
+    if (this.options.hasLiveRun?.(entry.cwd) ?? false) return;
+    await this.retire(entry, "retired after being idle");
   }
 
   private clearRetry(entry: Entry): void {

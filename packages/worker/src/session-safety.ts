@@ -1,0 +1,93 @@
+/**
+ * The one predicate that decides whether a session's runtime may be released
+ * (RP-4).
+ *
+ * It is pure: the worker gathers a snapshot of what it already holds and this
+ * turns that snapshot into pins, in a stable order, with a short detail for a
+ * diagnostic. Two consumers, one answer:
+ *
+ * - `pi/session/unload` refuses unless the list is empty;
+ * - `pi/worker/safety` reports the list, and the host's pool asks for it before
+ *   automatic retirement, so nothing automatic is ever less careful than
+ *   unload (`packages/host/src/worker-pool.ts`).
+ *
+ * Nothing here stops, answers, dequeues or truncates anything. A pin is a
+ * refusal, and the work it names keeps running exactly as it was.
+ */
+import { SESSION_PIN_DETAIL_MAX, type SessionPin, type SessionPinKind } from "@lasercode/protocol";
+
+/**
+ * Everything the worker knows about one loaded session that a release would
+ * destroy. Counts rather than booleans wherever the number is worth saying in
+ * a diagnostic; every field is read from state the worker already has.
+ */
+export interface SessionSafetySnapshot {
+  /** A `session/load` for this path has not answered yet. */
+  opening: boolean;
+  /** Requests naming this session that are being served right now. */
+  inFlightRequests: number;
+  /** A turn is running (a fallback switch between engine runs counts). */
+  streaming: boolean;
+  compacting: boolean;
+  /** First-turn preflight holds the session, or a speculative runtime does. */
+  firstTurn: boolean;
+  /** Extension questions waiting for a person (no tool call behind them). */
+  questions: number;
+  /** Tool approvals waiting for a person. */
+  approvals: number;
+  /** Non-terminal agent runs executing in this session. */
+  liveRuns: number;
+  /** Non-terminal agent runs of children whose parent is this session. */
+  liveChildRuns: number;
+  /** Queued steering/follow-up work: the engine's queue and the harness's. */
+  queuedWork: number;
+  /** Messages in the person's pending tray, which lives only in memory. */
+  trayMessages: number;
+  /** Foreground or background commands of this session that are running. */
+  runningTasks: number;
+  /**
+   * A first prompt is waiting for a model to name its session, **and** a model
+   * is there to do it. A prompt parked because nothing was connected is not a
+   * pin: the name it is waiting for may never arrive, and a runtime kept for
+   * the life of the worker is a worse loss than an untitled conversation.
+   */
+  naming: boolean;
+  /** Tool calls still running, whose labels are still being produced. */
+  runningTools: number;
+  /**
+   * There is a durable record to reopen from. False means releasing the runtime
+   * would lose the conversation, so it is pinned however idle it is.
+   */
+  hasRecord: boolean;
+}
+
+function pin(kind: SessionPinKind, detail?: string): SessionPin {
+  if (detail === undefined) return { kind };
+  const flat = detail.replace(/\s+/g, " ").trim();
+  if (!flat) return { kind };
+  return { kind, detail: flat.length > SESSION_PIN_DETAIL_MAX ? flat.slice(0, SESSION_PIN_DETAIL_MAX) : flat };
+}
+
+/**
+ * The pins holding this session, or an empty list when its runtime is safe to
+ * release. Order is stable so a diagnostic reads the same way twice.
+ */
+export function sessionPins(snapshot: SessionSafetySnapshot): SessionPin[] {
+  const pins: SessionPin[] = [];
+  if (snapshot.opening) pins.push(pin("opening", "a load has not answered yet"));
+  if (snapshot.inFlightRequests > 0) pins.push(pin("in_flight_request", `${snapshot.inFlightRequests} request(s) in flight`));
+  if (snapshot.streaming) pins.push(pin("streaming", "a turn is running"));
+  if (snapshot.compacting) pins.push(pin("compacting", "history is being compacted"));
+  if (snapshot.firstTurn) pins.push(pin("first_turn", "first-turn preflight holds this session"));
+  if (snapshot.questions > 0) pins.push(pin("question", `${snapshot.questions} question(s) waiting`));
+  if (snapshot.approvals > 0) pins.push(pin("approval", `${snapshot.approvals} approval(s) waiting`));
+  if (snapshot.liveRuns > 0) pins.push(pin("agent_run", `${snapshot.liveRuns} run(s) have not ended`));
+  if (snapshot.liveChildRuns > 0) pins.push(pin("child_run", `${snapshot.liveChildRuns} child run(s) have not ended`));
+  if (snapshot.queuedWork > 0) pins.push(pin("queued_work", `${snapshot.queuedWork} queued message(s)`));
+  if (snapshot.trayMessages > 0) pins.push(pin("pending_tray", `${snapshot.trayMessages} message(s) waiting in the tray`));
+  if (snapshot.runningTasks > 0) pins.push(pin("task", `${snapshot.runningTasks} command(s) running`));
+  if (snapshot.naming) pins.push(pin("naming", "a first prompt is waiting to be named"));
+  if (snapshot.runningTools > 0) pins.push(pin("tool_labeling", `${snapshot.runningTools} tool call(s) running`));
+  if (!snapshot.hasRecord) pins.push(pin("no_record", "there is no durable record to reopen from"));
+  return pins;
+}

@@ -8,9 +8,21 @@
  * increasing `seq` and a bounded replay buffer so a client can `session/load`
  * with `fromSeq` after a reconnect and miss nothing that is still buffered.
  * Pending extension dialogs are re-emitted on load for the same reason.
+ *
+ * A session's runtime is not kept for ever (RP-4). When nobody is following a
+ * conversation the host may ask for it back with `pi/session/unload`, and this
+ * process answers from one predicate (`session-safety.ts`): a turn, a question,
+ * an approval, a run, a queued message or a running command refuses the
+ * release, and the same answer is what `pi/worker/safety` reports to the pool
+ * before it retires anything. Releasing disposes the driver, whose `closed`
+ * event drops every per-session table in one place; the conversation itself is
+ * untouched, and `session/load` opens it again from the canonical record on a
+ * fresh epoch the client resyncs to. Replay has a worker-wide ceiling as well
+ * as a per-session one, and reaching it raises a session's floor rather than
+ * growing the process.
  */
 
-import { AGENT_MAX_DEPTH_LIMIT, ENV, ErrorCodes, PRODUCT_NAME, ProtocolError, boundedHistoryWindow, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type SettingsScope, type TypedClientRequest, WIRE_NAMESPACE } from "@lasercode/protocol";
+import { AGENT_MAX_DEPTH_LIMIT, ENV, ErrorCodes, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, boundedHistoryWindow, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type SessionPin, type SessionSafety, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type SettingsScope, type TypedClientRequest, WIRE_NAMESPACE } from "@lasercode/protocol";
 import { randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -27,7 +39,8 @@ import type {
 import { ProjectFilesService } from "./files.js";
 import { RevisionCanonicalisationError, type SessionRevisionHeader } from "@lasercode/protocol";
 import { SessionRevisionTracker } from "./history-revision.js";
-import { ReplayBuffer } from "./replay-buffer.js";
+import { ReplayBudget, ReplayBuffer } from "./replay-buffer.js";
+import { sessionPins, type SessionSafetySnapshot } from "./session-safety.js";
 import { assertFirstTurnAdmission, FirstTurnLock } from "./first-turn.js";
 import { PendingTray } from "./pending.js";
 import { GitService } from "./git.js";
@@ -72,6 +85,15 @@ export interface WorkerServerOptions {
   replayBuffer?: number;
   /** Serialized-byte ceiling per replay suffix, independent of live state. */
   replayBytes?: number;
+  /**
+   * Serialized-byte ceiling for **every** replay suffix in this worker (RP-4).
+   *
+   * The per-session limit above is what one conversation may keep; this is what
+   * the process may keep across all of them, and it is hard: when it is reached
+   * the oldest replayable updates are dropped and those sessions' floors rise,
+   * which `session/load` already turns into a snapshot resync.
+   */
+  replayBudgetBytes?: number;
   /** The package manager to run when settings name none (M10-T5): the one the host bundles. */
   npmCommand?: string[];
   /** Test seam: the model runtime Namer completes through. Defaults to the engine's. */
@@ -80,6 +102,23 @@ export interface WorkerServerOptions {
 
 /** Sessions whose first prompt may wait for a Namer model; a worker holds few at once. */
 const UNNAMED_MAX = 32;
+
+/** Bytes of replay one worker may hold across every session it serves (RP-4). */
+const REPLAY_BYTES_PER_SESSION = 16 * 1024 * 1024;
+const REPLAY_BUDGET_BYTES = 4 * REPLAY_BYTES_PER_SESSION;
+
+/** The session named by a request, when it names one. */
+function pathOf(req: TypedClientRequest): string | undefined {
+  const path = (req.params as { path?: unknown } | undefined)?.path;
+  return typeof path === "string" ? path : undefined;
+}
+
+/** A release that lost its race with work arriving; carries what pinned it. */
+class PinnedDuringRelease extends Error {
+  constructor(readonly pins: SessionPin[]) {
+    super("the session was pinned before its runtime could be released");
+  }
+}
 
 interface PreAcceptanceHydration {
   /** Genuine accepted baseline captured before candidate runtime preparation. */
@@ -123,9 +162,20 @@ export class WorkerServer {
    * crash recovery can race a client's own reconnect.
    */
   private readonly opening = new Map<string, Promise<Live>>();
+  /**
+   * Releases in flight, keyed by session path (RP-4). A `session/load` that
+   * races an unload waits for it and then re-opens: the pipe orders the two
+   * requests, but `handle()` serves them concurrently, and without this fence
+   * the load could answer with a runtime the unload is about to dispose.
+   */
+  private readonly unloading = new Map<string, Promise<void>>();
+  /** Requests being served right now, by session path; a pin while they run. */
+  private readonly inFlight = new Map<string, number>();
   /** The environment every durable revision this worker mints belongs to (RP-9). */
   private readonly environmentId: string;
   private readonly replayBuffer: number;
+  /** This worker's whole replay allowance (RP-4), shared by every session. */
+  private readonly replayBudget: ReplayBudget;
   /**
    * M4 adapters. Built on first use: constructing a `SettingsManager` reads two
    * files and `ModelRuntime.create` touches the network-free catalogue, and a
@@ -182,6 +232,11 @@ export class WorkerServer {
   constructor(private readonly options: WorkerServerOptions) {
     this.environmentId = options.environmentId ?? UNCONFIGURED_ENVIRONMENT;
     this.replayBuffer = options.replayBuffer ?? 5000;
+    // Four times one session's suffix ceiling: enough that the handful of
+    // conversations a person actually streams keep a full replay window, and
+    // far below the per-session entitlement multiplied by every session a
+    // worker can hold (RP-2 measured fifty of them in one worker).
+    this.replayBudget = new ReplayBudget(options.replayBudgetBytes ?? REPLAY_BUDGET_BYTES);
     // Configured by the host, machine-local and non-secret: the executable, its
     // arguments, and whether a person approved exactly that pair.
     const projectEnvConfig = readProjectEnvConfig();
@@ -288,11 +343,23 @@ export class WorkerServer {
       this.respondError(id, error);
       return;
     }
+    // A request naming a session pins that session while it is being served
+    // (RP-4): releasing a runtime from under a read in flight would answer a
+    // question the caller asked about a session that still exists. The unload
+    // request itself is excluded, or it would pin what it came to release.
+    const held = req.method === "pi/session/unload" ? undefined : pathOf(req);
+    if (held !== undefined) this.inFlight.set(held, (this.inFlight.get(held) ?? 0) + 1);
     try {
       const result = await this.dispatch(req);
       this.options.send({ jsonrpc: "2.0", id: req.id, result });
     } catch (error) {
       this.respondError(req.id, error);
+    } finally {
+      if (held !== undefined) {
+        const left = (this.inFlight.get(held) ?? 1) - 1;
+        if (left > 0) this.inFlight.set(held, left);
+        else this.inFlight.delete(held);
+      }
     }
   }
 
@@ -376,6 +443,17 @@ export class WorkerServer {
         const { steering, followUp } = await this.firstTurnLock.run(live.path, () => live.driver.clearQueue());
         return { steering, followUp } satisfies Result<"pi/session/clear_queue">;
       }
+      case "pi/session/unload":
+        // The app releasing an idle runtime (RP-4). Deliberately not `close`:
+        // close is the file-move fence and refuses only a streaming turn, while
+        // this refuses everything a release would destroy and says what.
+        return (await this.unloadSession(req.params.path)) satisfies Result<"pi/session/unload">;
+
+      case "pi/worker/safety":
+        // The same predicate, read-only, for the host's retirement admission:
+        // automatic retirement must be exactly as careful as unload.
+        return { sessions: this.sessionSafety() } satisfies Result<"pi/worker/safety">;
+
       case "pi/session/close": {
         // The host is about to move the file (M13-T58): it must have no writer
         // while that happens (AGENTS.md invariant 8). Disposing the driver
@@ -573,11 +651,23 @@ export class WorkerServer {
       }
 
       // ------------------------------------------- background tasks ---
-      case "pi/worker/retained-stores":
+      case "pi/worker/retained-stores": {
         // The app asking its own worker what it is holding (RP-3/RP-6). Read
         // from state this process already has: nothing is collected, nothing
         // is opened and no session is touched to answer it.
-        return { stores: this.tasks.retainedStores() } satisfies Result<"pi/worker/retained-stores">;
+        const replay = this.replayStats();
+        return {
+          stores: {
+            ...this.tasks.retainedStores(),
+            // RP-4's own rows: the runtimes this worker holds, the replay it is
+            // keeping for them against its own ceiling, and the per-session
+            // tables beside them. Counts of state, never a share of memory.
+            workerSessions: { count: this.sessions.size },
+            workerReplay: { count: replay.updates, bytes: replay.bytes },
+            workerCaches: { count: this.cacheRecords() },
+          },
+        } satisfies Result<"pi/worker/retained-stores">;
+      }
 
       case "pi/task/stop": {
         // The companion extension owns the process, so Stop is a command to
@@ -1052,6 +1142,11 @@ export class WorkerServer {
   }
 
   private async sessionLoad(params: ClientRequests["session/load"]["params"]): Promise<Result<"session/load">> {
+    // A release of this exact session may be in flight (RP-4). Wait for it and
+    // then open again: the alternative is answering with a runtime that is
+    // about to be disposed, which is the one thing the fence exists to stop.
+    const releasing = this.unloading.get(params.path);
+    if (releasing) await releasing.catch(() => {});
     const existing = this.sessions.get(params.path);
     if (existing) {
       // A no-signal extension question may be holding prompt preflight. Never
@@ -1309,7 +1404,7 @@ export class WorkerServer {
     // have used it, where a person can read it.
     await this.ensureProjectEnv().catch(() => {});
     const driver = this.options.createDriver();
-    const live: Live = { driver, historyEpoch: randomUUID(), revisions: new SessionRevisionTracker(this.environmentId), seq: 0, buffer: new ReplayBuffer(this.replayBuffer, this.options.replayBytes ?? 16 * 1024 * 1024), unsubscribe: () => {}, path: "" };
+    const live: Live = { driver, historyEpoch: randomUUID(), revisions: new SessionRevisionTracker(this.environmentId), seq: 0, buffer: new ReplayBuffer(this.replayBuffer, this.options.replayBytes ?? REPLAY_BYTES_PER_SESSION, this.replayBudget), unsubscribe: () => {}, path: "" };
     driver.setExtensionModelWorkHandler?.((request) => this.admitExtensionModelWork(live, request));
     const queued: DriverEvent[] = [];
     let ready = false;
@@ -1379,6 +1474,152 @@ export class WorkerServer {
       if (this.commandCatalogInFlight === pending) this.commandCatalogInFlight = undefined;
     }).catch(() => {});
     return pending;
+  }
+
+  // ------------------------------------------------------- session lifetime
+
+  /**
+   * What each loaded session is holding (RP-4), newest table order.
+   *
+   * One predicate, two readers: this answer is what `pi/worker/safety` returns
+   * and what `pi/session/unload` checks, so the host's automatic retirement and
+   * its automatic unload cannot disagree about what is safe.
+   */
+  sessionSafety(): SessionSafety[] {
+    const out: SessionSafety[] = [];
+    for (const live of this.sessions.values()) {
+      if (out.length >= SESSION_SAFETY_MAX) break;
+      out.push({ path: live.path, pins: sessionPins(this.safetySnapshot(live)) });
+    }
+    return out;
+  }
+
+  /**
+   * Everything a release of this session would destroy, read from state
+   * already held.
+   *
+   * `releasing` is set by the release itself when it re-checks inside the
+   * first-turn fence: the lease it is holding and the fence entry it just made
+   * are its own, and a release that counted them would refuse itself for ever.
+   * Every other pin is evaluated exactly as it is from outside.
+   */
+  private safetySnapshot(live: Live, releasing = false): SessionSafetySnapshot {
+    let streaming = false;
+    let compacting = false;
+    let hasRecord = false;
+    try {
+      const state = live.preAcceptance?.state ?? live.driver.state();
+      streaming = state.isStreaming;
+      compacting = state.isCompacting;
+      // The engine writes a durable file when it opens a session, so a state
+      // with a path is a conversation `session/load` can bring back. A driver
+      // without one (an ephemeral or alternate runtime) is pinned instead.
+      hasRecord = Boolean(live.driver.sessionHeader?.()?.id ?? state.path);
+    } catch {
+      // No readable runtime: a replacement is in flight, which is a first-turn
+      // pin of its own below. Nothing is assumed safe from a failed read.
+    }
+    const pendingUi = (live.driver as { pendingUi?: () => Array<{ toolCallId?: string }> }).pendingUi;
+    const dialogs = typeof pendingUi === "function" ? pendingUi.call(live.driver) : [];
+    const work = this.harness.retainedWork(live.path);
+    let queued = work.queued;
+    try {
+      queued += (live.preAcceptance?.state ?? live.driver.state()).pendingMessageCount;
+    } catch {
+      // Same as above: an unreadable runtime contributes no false zero here,
+      // because `first_turn` already pins it.
+    }
+    return {
+      opening: this.opening.has(live.path) || (!releasing && this.unloading.has(live.path)),
+      inFlightRequests: this.inFlight.get(live.path) ?? 0,
+      streaming,
+      compacting,
+      firstTurn: (!releasing && this.firstTurnLock.busy(live.path)) || live.preAcceptance !== undefined,
+      questions: dialogs.filter((request) => !request.toolCallId).length,
+      approvals: dialogs.filter((request) => Boolean(request.toolCallId)).length,
+      liveRuns: work.liveRuns,
+      liveChildRuns: work.liveChildRuns,
+      queuedWork: queued,
+      trayMessages: live.pending?.list().length ?? 0,
+      runningTasks: this.tasks.tasksOf(live.path).filter((task) => task.status === "running").length,
+      // Only while a name can actually arrive. A prompt parked because no
+      // model was connected waits for one that may never appear, and a pin on
+      // that would keep a dormant runtime for the life of the worker.
+      naming: this.unnamed.has(live.path) && this.namer.enabled(),
+      runningTools: this.runningTools.get(live.path)?.size ?? 0,
+      hasRecord,
+    };
+  }
+
+  /**
+   * Release one session's runtime, or refuse with the reasons (RP-4).
+   *
+   * Nothing is cancelled: if anything at all is pinning the session the answer
+   * is the pin list and the session keeps working exactly as it was. A release
+   * disposes the driver, which emits `closed` and drops every per-session table
+   * through the one place that owns that list.
+   */
+  private async unloadSession(path: string): Promise<{ unloaded: boolean; pins: SessionPin[] }> {
+    const inFlight = this.unloading.get(path);
+    if (inFlight) {
+      await inFlight.catch(() => {});
+      return { unloaded: !this.sessions.has(path), pins: [] };
+    }
+    const live = this.sessions.get(path);
+    // Not held here at all: idempotent, and never an error. The host may be
+    // acting on bookkeeping a crash recovery already changed.
+    if (!live) return { unloaded: false, pins: [] };
+    const pins = sessionPins(this.safetySnapshot(live));
+    if (pins.length > 0) return { unloaded: false, pins };
+    const release = (async () => {
+      await this.firstTurnLock.run(path, async () => {
+        // Re-checked inside the fence: preflight could have taken the session
+        // between the decision and the lease.
+        const current = this.sessions.get(path);
+        if (!current) return;
+        const late = sessionPins(this.safetySnapshot(current, true));
+        if (late.length > 0) throw new PinnedDuringRelease(late);
+        current.buffer.dispose();
+        await current.driver.dispose();
+        this.sessions.delete(path);
+      });
+    })();
+    this.unloading.set(path, release.then(() => undefined, () => undefined));
+    try {
+      await release;
+      return { unloaded: true, pins: [] };
+    } catch (error) {
+      if (error instanceof PinnedDuringRelease) return { unloaded: false, pins: error.pins };
+      throw error;
+    } finally {
+      this.unloading.delete(path);
+    }
+  }
+
+  /** Replay counters for this worker, for tests and the retained-store report. */
+  replayStats(): { sessions: number; updates: number; bytes: number; limitBytes: number; evictions: number; floorAdvances: number } {
+    let updates = 0;
+    for (const live of this.sessions.values()) updates += live.buffer.size;
+    return {
+      sessions: this.sessions.size,
+      updates,
+      bytes: this.replayBudget.bytes,
+      limitBytes: this.replayBudget.limitBytes,
+      evictions: this.replayBudget.evictions,
+      floorAdvances: this.replayBudget.floorAdvances,
+    };
+  }
+
+  /**
+   * Per-session tables this worker keeps beside a runtime (RP-3/RP-4): the
+   * person's tray, tool labels in flight and first prompts waiting to be named.
+   * Counts of records, never a claim about bytes of memory.
+   */
+  private cacheRecords(): number {
+    let records = this.unnamed.size;
+    for (const live of this.sessions.values()) records += live.pending?.list().length ?? 0;
+    for (const ids of this.runningTools.values()) records += ids.size;
+    return records;
   }
 
   // ------------------------------------------------------------- sessions
@@ -1750,6 +1991,9 @@ export class WorkerServer {
       case "closed":
         live.unsubscribe();
         this.sessions.delete(live.path);
+        // The suffix this session was entitled to returns to the worker's
+        // allowance (RP-4); a released session keeps no replay.
+        live.buffer.dispose();
         this.mcpService?.sessionClosed(live.path);
         this.tasks.sessionClosed(live.path);
         // One holder fewer: the rest of this worker's sessions may keep more.

@@ -55,8 +55,17 @@ describe("the method table", () => {
       .map(([method]) => method)
       .sort();
     // `pi/worker/retained-stores` joins `agents/sync`: the app asking its own
-    // already-live workers what they are holding, never a client's call.
-    expect(restricted).toEqual(["agents/sync", "pi/host/environment", "pi/worker/retained-stores", "resource/report"]);
+    // already-live workers what they are holding, never a client's call. RP-4's
+    // `pi/session/unload` and `pi/worker/safety` are the same shape: the app
+    // managing and inspecting its own session runtimes on this machine.
+    expect(restricted).toEqual([
+      "agents/sync",
+      "pi/host/environment",
+      "pi/session/unload",
+      "pi/worker/retained-stores",
+      "pi/worker/safety",
+      "resource/report",
+    ]);
     // The phone's redacted inventory summary stays reachable (RP-3); only the
     // desktop's measurement *input* is local.
     for (const method of ["resource/snapshot", "resource/history", "resource/export"] as const) {
