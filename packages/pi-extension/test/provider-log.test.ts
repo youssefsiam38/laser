@@ -1,7 +1,14 @@
 import { expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createHash } from "node:crypto";
-import { CAPTURE_CHUNK_BYTES, CAPTURE_MAX_BYTES, WORKER_PIPE_SOFT_BYTES, type ProviderCaptureLink } from "@lasercode/protocol";
+import {
+  CAPTURE_CHUNK_BYTES,
+  CAPTURE_MAX_BYTES,
+  CAPTURE_RESPONSE_WAIT_MS,
+  CAPTURE_STALL_DEADLINE_MS,
+  WORKER_PIPE_SOFT_BYTES,
+  type ProviderCaptureLink,
+} from "@lasercode/protocol";
 import { chunkBody, countUtf8Chunks, encodeCapture, providerLogModule, summarize, utf8Chunks } from "../src/modules/provider-log.js";
 import { CaptureReservations } from "../../worker/src/capture-reservations.js";
 
@@ -109,14 +116,19 @@ it("skips the body while the link to the app is backed up, and still records the
 it("stops a capture when the link stalls, and says so once", async () => {
   // A stalled link: the backlog is over the mark and never moves, whatever the
   // capture does. The raw backlog is what is read — a capture is not exempt
-  // from the mark because the bytes there are its own.
+  // from the mark because the bytes there are its own — and the decision is
+  // made on a clock, so this test drives that clock rather than waiting.
   let pending = 0;
+  let clock = 0;
   let drains = 0;
   const { handlers, send } = await activate({
     pendingBytes: () => pending,
     retainBodies: () => true,
+    now: () => clock,
     drain: async () => {
       drains += 1;
+      // Time passes and the app reads nothing.
+      clock += 50;
     },
   });
   const sent: Array<{ type: string; text?: string }> = [];
@@ -130,7 +142,6 @@ it("stops a capture when the link stalls, and says so once", async () => {
     pending = Math.max(pending, WORKER_PIPE_SOFT_BYTES + 1);
   });
   await handlers.get("before_provider_request")!({ payload: payloadOf(3 * 1024 * 1024) }, ctx);
-  // The hook returned; the pieces go cooperatively behind it.
   await new Promise((resolve) => setTimeout(resolve, 50));
 
   const types = sent.map((message) => message.type);
@@ -140,10 +151,43 @@ it("stops a capture when the link stalls, and says so once", async () => {
   expect(types).not.toContain("lasercode/provider/request/end");
   expect(types.filter((type) => type === "lasercode/provider/request/abort")).toHaveLength(1);
   expect(drains).toBeGreaterThan(0);
+  // It gave up inside its own deadline, not before it and not for ever.
+  expect(clock).toBeGreaterThanOrEqual(CAPTURE_STALL_DEADLINE_MS);
+  expect(clock).toBeLessThan(CAPTURE_STALL_DEADLINE_MS * 2);
 
   // What a stalled link is left holding: the mark, the chunk in flight, and
   // the small terminal frame. Never the whole capture.
   expect(pending).toBeLessThanOrEqual(WORKER_PIPE_SOFT_BYTES + CAPTURE_CHUNK_BYTES + 1);
+});
+
+it("keeps sending while a busy link is doing bounded work for what it already took", async () => {
+  // The case that failed the real end-to-end gate: a healthy fd-3 link that
+  // sits above its mark for a while because the app is writing the pieces it
+  // has taken. Counting turns called that stalled; a deadline does not.
+  let pending = 0;
+  let clock = 0;
+  let drains = 0;
+  const { handlers, send } = await activate({
+    pendingBytes: () => pending,
+    retainBodies: () => true,
+    now: () => clock,
+    drain: async () => {
+      drains += 1;
+      clock += 20;
+      // The app takes a while per piece, and then takes it.
+      if (drains % 20 === 0) pending = 0;
+    },
+  });
+  const sent: string[] = [];
+  send.mockImplementation((message: unknown) => {
+    const entry = message as { type: string; text?: string };
+    sent.push(entry.type);
+    if (entry.type === "lasercode/provider/request/chunk") pending += Buffer.byteLength(entry.text ?? "", "utf8") + WORKER_PIPE_SOFT_BYTES;
+  });
+  await handlers.get("before_provider_request")!({ payload: payloadOf(4 * 1024 * 1024) }, ctx);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  expect(sent).not.toContain("lasercode/provider/request/abort");
+  expect(sent.at(-1)).toBe("lasercode/provider/request/end");
 });
 
 it("finishes a near-ceiling capture when the link keeps draining", async () => {
@@ -333,6 +377,12 @@ it("keeps a response behind the request it answers", async () => {
   );
   expect(terminal).toBeGreaterThanOrEqual(0);
   expect(settled).toBeGreaterThan(terminal);
+});
+
+it("waits longer for a response than a capture may stall", () => {
+  // A response must never overtake a capture that is still inside its own
+  // allowance, so the one bound is derived from the other.
+  expect(CAPTURE_RESPONSE_WAIT_MS).toBeGreaterThan(CAPTURE_STALL_DEADLINE_MS);
 });
 
 it("leaves no timer behind an ordinary response", async () => {

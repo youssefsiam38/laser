@@ -162,6 +162,8 @@ export interface ProviderCaptureLink {
    * is at its mark, so an idle link costs nothing.
    */
   drain?: () => Promise<void>;
+  /** Test seam for the stall deadline; defaults to the wall clock. */
+  now?: () => number;
 }
 
 /** A hold on this process's capture memory. Released exactly once. */
@@ -170,11 +172,28 @@ export interface CaptureReservation {
 }
 
 /**
- * Turns a capture will wait for its link before giving up on it. Each is one
- * pass of the event loop; eight of them with no progress is a link nobody is
- * reading, not a busy moment.
+ * How long a capture will wait for a link that is over its mark before giving
+ * up on it.
+ *
+ * Counting turns of the event loop was the wrong question: a healthy link can
+ * sit above the mark for many turns while the app is doing bounded work for
+ * the pieces it has already taken — writing them to disk, for one — and a
+ * capture that gave up on that was calling a working link stalled. What
+ * matters is whether the backlog is still above the mark *after a real while*.
+ * Five seconds is far longer than any bounded per-chunk work and far shorter
+ * than a person would wait for anything.
+ *
+ * The bound is on time, never on bytes: while it waits, the link is holding
+ * the mark plus the piece in flight, and nothing more.
  */
-export const CAPTURE_DRAIN_ATTEMPTS = 8;
+export const CAPTURE_STALL_DEADLINE_MS = 5_000;
+
+/**
+ * How long a response row waits for the request it answers to finish crossing.
+ * Longer than the stall deadline by construction: a response must never
+ * overtake a capture that is still within its own allowance.
+ */
+export const CAPTURE_RESPONSE_WAIT_MS = CAPTURE_STALL_DEADLINE_MS + 2_000;
 
 /** What one connection released, in numbers. Never a payload, never a path. */
 export interface ShedCounters {

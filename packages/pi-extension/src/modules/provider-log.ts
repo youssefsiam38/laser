@@ -22,7 +22,8 @@ import type { LaserModule } from "./index.js";
 import type { BeforeProviderRequestEvent, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   CAPTURE_CHUNKED_ABOVE_BYTES,
-  CAPTURE_DRAIN_ATTEMPTS,
+  CAPTURE_RESPONSE_WAIT_MS,
+  CAPTURE_STALL_DEADLINE_MS,
   CAPTURE_CHUNK_BYTES,
   CAPTURE_MAX_BYTES,
   WORKER_PIPE_SOFT_BYTES,
@@ -40,8 +41,7 @@ import type { OutboundMessage as OutboundCapture } from "./index.js";
 /** Leading characters kept on the row, matching the store's own preview. */
 const PREVIEW_CHARS = 240;
 
-/** How long a response row waits for the request it answers to finish crossing. */
-const RESPONSE_WAIT_MS = 2_000;
+
 
 /** The row's line, without the app parsing a body it was handed whole. */
 export function summarize(payload: unknown): ProviderCaptureSummary {
@@ -217,9 +217,14 @@ async function streamCapture(input: {
     let index = -1;
     for (const text of utf8Chunks(body, CAPTURE_CHUNK_BYTES)) {
       index += 1;
+      const now = link?.now ?? Date.now;
       let pending = link?.pendingBytes() ?? 0;
-      for (let attempt = 0; attempt < CAPTURE_DRAIN_ATTEMPTS && pending > WORKER_PIPE_SOFT_BYTES; attempt++) {
-        // Only when it matters: an idle link never waits.
+      // Only when it matters: an idle link never waits. While the link is over
+      // its mark the capture waits for it to actually move, and gives up only
+      // if it is still over the mark when the deadline passes — a link doing
+      // bounded work for the pieces it already has is not a stalled one.
+      const deadline = now() + CAPTURE_STALL_DEADLINE_MS;
+      while (pending > WORKER_PIPE_SOFT_BYTES && now() < deadline) {
         await (link?.drain?.() ?? Promise.resolve());
         pending = link?.pendingBytes() ?? 0;
       }
@@ -329,7 +334,7 @@ export const providerLogModule: LaserModule = {
       // row is better than a lost one.
       let timer: ReturnType<typeof setTimeout> | undefined;
       const deadline = new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, RESPONSE_WAIT_MS);
+        timer = setTimeout(resolve, CAPTURE_RESPONSE_WAIT_MS);
         timer.unref?.();
       });
       try {
