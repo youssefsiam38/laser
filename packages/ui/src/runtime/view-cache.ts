@@ -67,7 +67,9 @@ export type PinReason =
   | "unstarted"
   | "loading"
   | "draft"
-  | "unsent";
+  | "unsent"
+  /** A person's action is holding room in this view (an edit being rebuilt). */
+  | "action";
 
 export interface ReleasedView {
   path: string;
@@ -268,6 +270,20 @@ export interface ViewCache {
   /** RP-8: release under memory pressure. Never a pinned view, never work. */
   releaseUnder(pressure: "warning" | "critical"): ReleaseOutcome;
   counters(): RendererViewCounters;
+  /**
+   * Hold room for something a person is about to do (RP-5b §2).
+   *
+   * Rebuilding an oversized prompt so it can be edited puts its whole body in
+   * the renderer, and that has to fit — beside this view's own bound and
+   * beside every other view's. The room is taken **before** the body is read,
+   * counted while it is held, released when the action ends, and never quietly
+   * exceeded: a token that no longer belongs to this cache's generation gives
+   * its bytes back to nobody.
+   *
+   * Dormant views are released first, so an action is refused only when the
+   * room really is not there.
+   */
+  reserveAction(path: string, bytes: number): ActionReservation | undefined;
   /** Measurement of one view, for tests and counters. */
   measure(path: string): ViewMeasure;
   /**
@@ -282,6 +298,16 @@ export interface ViewCache {
    */
   reset(): void;
   dispose(): void;
+}
+
+/** Room held for one action in flight. */
+export interface ActionReservation {
+  readonly path: string;
+  readonly bytes: number;
+  /** Grow or shrink what is held; false when the larger size does not fit. */
+  resize(bytes: number): boolean;
+  /** Give it back. Safe to call more than once, and after a reset. */
+  release(): void;
 }
 
 /** What this cache keeps about one path, so a pass never walks the others. */
@@ -349,6 +375,12 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
   const used = new Map<string, number>();
   /** What this cache knows about each path, kept up to date by the actions. */
   const owned = new Map<string, Owned>();
+  /** Room held for actions in flight, by token (RP-5b §2). */
+  const reservations = new Map<symbol, { path: string; bytes: number }>();
+  let reservedBytes = 0;
+  /** Bumped by `reset`/`dispose`: tokens from before belong to nobody. */
+  let actionGeneration = 0;
+
   /** Counted here so nothing has to add up the paths to answer `counters()`. */
   const totals = { entriesBytes: 0, blocksBytes: 0, imagesBytes: 0, imagesEstimated: 0, bytes: 0, hydrated: 0 };
   /**
@@ -571,6 +603,13 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
     pendingBytes = 0;
   };
 
+  /** Bytes held for actions on one path. */
+  const heldForAction = (path: string): number => {
+    let bytes = 0;
+    for (const row of reservations.values()) if (row.path === path) bytes += row.bytes;
+    return bytes;
+  };
+
   /** Everything the pass needs, from what is already measured. */
   const survey = (state: AppState) => {
     settle(state);
@@ -585,13 +624,21 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
       // A prompt this surface sent and the engine has not persisted is the
       // person's words; nothing else holds them.
       const unsent = view.blocks.some((block) => block.kind === "user" && block.optimistic === true);
-      const pin = unsent ? ("unsent" as const) : pinReason(state, path, options.environment, live);
-      const cost = row.measure.bytes + row.appended;
+      // A view holding room for an action a person started is never a
+      // candidate, and never trimmed out from under the draft it is building.
+      const acting = heldForAction(path);
+      const pin = acting ? ("action" as const) : unsent ? ("unsent" as const) : pinReason(state, path, options.environment, live);
+      const cost = row.measure.bytes + row.appended + acting;
       held.push({ path, bytes: cost, measure: row.measure, appended: row.appended, pin });
       bytes += cost;
       if (pin) pinnedBytes += cost;
     }
     for (const path of Object.keys(state.open)) if (options.environment.hasDraft(path)) drafts += 1;
+    // Room held for an action on a view this cache has not measured yet is
+    // still room held: it is counted, or a reservation would be free.
+    for (const row of reservations.values()) {
+      if (!owned.has(row.path)) bytes += row.bytes;
+    }
     return { held, bytes, pinnedBytes, drafts };
   };
 
@@ -850,6 +897,54 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
       }
       return { ...outcome, refused };
     },
+    reserveAction(path, bytes) {
+      if (!Number.isSafeInteger(bytes) || bytes < 0) return undefined;
+      // Give back what can be given back before refusing anybody.
+      maintain();
+      const generation = actionGeneration;
+      const fits = (want: number, ignore?: symbol): boolean => {
+        const state = options.read();
+        const { held, bytes: total } = survey(state);
+        const mine = (held.find((row) => row.path === path)?.bytes ?? 0);
+        let others = 0;
+        let here = 0;
+        for (const [token, row] of reservations) {
+          if (token === ignore) continue;
+          if (row.path === path) here += row.bytes;
+          others += row.bytes;
+        }
+        if (mine + here + want > limits.viewBytes) return false;
+        return total + others + want <= limits.bytes;
+      };
+      if (!fits(bytes)) return undefined;
+      const token = Symbol("action");
+      reservations.set(token, { path, bytes });
+      reservedBytes += bytes;
+      snapshot = undefined;
+      const reservation: ActionReservation = {
+        path,
+        get bytes() { return reservations.get(token)?.bytes ?? 0; },
+        resize(next: number) {
+          if (!Number.isSafeInteger(next) || next < 0) return false;
+          if (generation !== actionGeneration) return false;
+          const row = reservations.get(token);
+          if (!row) return false;
+          if (next > row.bytes && !fits(next, token)) return false;
+          reservedBytes += next - row.bytes;
+          reservations.set(token, { path, bytes: next });
+          snapshot = undefined;
+          return true;
+        },
+        release() {
+          const row = reservations.get(token);
+          if (!row) return;
+          reservations.delete(token);
+          reservedBytes -= row.bytes;
+          snapshot = undefined;
+        },
+      };
+      return reservation;
+    },
     counters() {
       // The same frozen answer until one of its numbers moves: a diagnostics
       // surface polling this must not make the renderer do work to say so.
@@ -909,6 +1004,11 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
     },
     reset() {
       generation += 1;
+      // Room held for an action in the environment this device just left is
+      // given back here, once; the tokens for it can do nothing afterwards.
+      actionGeneration += 1;
+      reservations.clear();
+      reservedBytes = 0;
       cancelPass?.();
       cancelPass = undefined;
       // A record captured in the environment this device just left is never
@@ -926,6 +1026,9 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
     dispose() {
       disposed = true;
       generation += 1;
+      actionGeneration += 1;
+      reservations.clear();
+      reservedBytes = 0;
       cancelPass?.();
       cancelPass = undefined;
       clearPending();

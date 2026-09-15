@@ -8,7 +8,7 @@ import { AgentEventMessage } from "./AgentEventMessage.js";
 import { TaskEventNotice } from "./TaskEventNotice.js";
 import { AGENT_COMPLETION_DATA_PART, AGENT_EVENT_DATA_PART, GOAL_DATA_PART, TASK_EVENT_DATA_PART, type AgentCompletionData } from "@/runtime/projection";
 import type { GoalRecord as GoalRecordData } from "@/runtime/goal-history";
-import { memo, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentPropsWithoutRef } from "react";
+import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentPropsWithoutRef } from "react";
 import { useTranscriptViewport } from "./transcript-viewport.js";
 import { useTranscriptPresentation } from "@/runtime/LaserProvider";
 import { MessageEditPresentation } from "@/runtime/transcript-presentation";
@@ -24,7 +24,7 @@ import { EditMessage } from "@/components/assistant-ui/elements/edit-message";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import { File } from "@/components/assistant-ui/elements/file";
 import { Image } from "@/components/assistant-ui/elements/image";
-import { MarkdownText } from "@/components/assistant-ui/elements/markdown-text";
+import { ExcerptedMessage, MarkdownText } from "@/components/assistant-ui/elements/markdown-text";
 import { MessageActions } from "@/components/assistant-ui/elements/message-actions";
 import { MessageImages, MessageAttachments, type MessageAttachmentItem } from "@/components/assistant-ui/elements/message-attachment";
 import { MessageBranches } from "@/components/assistant-ui/elements/message-branches";
@@ -41,7 +41,9 @@ import { readProviderFailure } from "./provider-error.js";
 import { StreamingText } from "@/components/assistant-ui/elements/streaming-text";
 import { ActivityReasoning, ToolGroup } from "@/components/assistant-ui/elements/tool-group.aui";
 import { useCopy } from "@/hooks/use-copy";
-import { canCopyWholeBody, copyWholeBody, readAttachment } from "@/runtime/body-reader";
+import { bodyReadMessage, canCopyWholeBody, copyWholeBody, readAttachment, streamBody } from "@/runtime/body-reader";
+import type { ActionReservation } from "@/runtime/view-cache";
+import { utf8ByteLength } from "@lasercode/protocol";
 import { isReadable, omittedBytes } from "@/runtime/body-excerpt";
 import { partial } from "./LargeBodyViewer.js";
 import { duration as formatDuration } from "@/format";
@@ -358,6 +360,61 @@ export function UserMessage() {
     opener.openFile({ file: attachedFileContent({ name: file.name, mediaType: file.mediaType, size: outcome.bytes, content: outcome.text }) }, trigger);
   }, [client, environmentKey, opener, path]);
 
+  /** The room this edit is holding, for as long as its draft exists. */
+  const editRoom = useRef<ActionReservation | undefined>(undefined);
+  /** Which rebuild owns the editor; a late one belongs to nobody. */
+  const editAttempt = useRef(0);
+  const { reserveViewAction } = useLaserStable();
+  const releaseEditRoom = useCallback(() => { editRoom.current?.release(); editRoom.current = undefined; }, []);
+  useEffect(() => releaseEditRoom, [releaseEditRoom]);
+  const [editRefusal, setEditRefusal] = useState<string>();
+
+  const rebuildForEdit = useCallback(async (body: BodyRef): Promise<void> => {
+    setEditRefusal(undefined);
+    const tooLarge = "This message is too large to edit here. Open it to read or copy what you need into a new message, or fork from a later message. Nothing has changed.";
+    if (!isReadable(body) || path === undefined || !Number.isSafeInteger(body.totalBytes)) {
+      setEditRefusal(tooLarge);
+      return;
+    }
+    // What the draft will cost: the body itself, and the same bytes again for
+    // the editor's own copy of it, which is what an edit really holds.
+    const want = body.totalBytes * 2;
+    const room = reserveViewAction(path, want);
+    if (!room) {
+      setEditRefusal(tooLarge);
+      return;
+    }
+    const mine = ++editAttempt.current;
+    try {
+      let assembled = "";
+      const outcome = await streamBody(
+        (params) => client.request("session/entry_range", params),
+        path,
+        body,
+        { environmentKey, revisionOf: async (candidate) => (await client.request("session/revision", { path: candidate })).revision },
+        (slice) => { assembled += slice; },
+      );
+      // A conversation that moved on, a scope that changed, or a person who
+      // gave up: the bytes are dropped and nothing is edited.
+      if (mine !== editAttempt.current) { room.release(); return; }
+      if (!outcome.verified || utf8ByteLength(assembled) !== body.totalBytes) {
+        room.release();
+        setEditRefusal("This message could not be read in full just now, so it was not opened for editing. Nothing has changed.");
+        return;
+      }
+      // Complete canonical wrappers, split from a body that is whole.
+      const { text: prose, files: attached } = splitAttachedFiles(assembled);
+      editRoom.current?.release();
+      editRoom.current = room;
+      setDraft(prose);
+      setEditing(true);
+      if (attached.length > 0) editOwner.update({ draft: assembled });
+    } catch (failure) {
+      room.release();
+      setEditRefusal(bodyReadMessage(failure));
+    }
+  }, [client, editOwner, environmentKey, path, reserveViewAction, setDraft, setEditing]);
+
   const openAttachment = useCallback(async (index: number, trigger: HTMLElement): Promise<void> => {
     const held = files[index];
     if (!opener || !held) return;
@@ -399,10 +456,25 @@ export function UserMessage() {
   const fork = entryId ? () => { viewport.startAction(); void actions.fork(entryId, move); } : undefined;
   const jump = entryId ? () => { viewport.startAction(); void actions.jump(entryId, move); } : undefined;
   const copyPath = path ? () => void copyText(path) : undefined;
+  /**
+   * Editing a prompt this window is only showing part of (RP-5b §2).
+   *
+   * The editor holds the whole message, so the whole message has to fit: room
+   * is taken from the renderer's own accounting first, then the body is read
+   * back at one revision in bounded slices and verified as a whole, and only a
+   * verified body is turned into a draft and its attachments. Nothing is ever
+   * edited from an excerpt, and if the room is not there the action says so and
+   * changes nothing.
+   */
   const startEdit = entryId
     ? () => {
-        setDraft(text);
-        setEditing(true);
+        const body = promptBodies?.text;
+        if (!body || omittedBytes(body) <= 0) {
+          setDraft(text);
+          setEditing(true);
+          return;
+        }
+        void rebuildForEdit(body);
       }
     : undefined;
   /**
@@ -425,12 +497,14 @@ export function UserMessage() {
         if (!(await actions.navigate(entryId, move))) return;
         await actions.send(editContent(), "prompt");
         setEditing(false);
+        releaseEditRoom();
         void viewport.afterAction(location);
         return;
       }
       await actions.fork(entryId, move);
       await actions.send(editContent(), "prompt");
       setEditing(false);
+      releaseEditRoom();
       clearHandedBackPrompt(aui, [text, ...files.map(wrapFileAttachment)].filter(Boolean).join("\n\n"));
     } finally {
       setSending(false);
@@ -446,7 +520,7 @@ export function UserMessage() {
             onValueChange={setDraft}
             onSend={() => void sendEdit("here")}
             onSendInNewSession={() => void sendEdit("fork")}
-            onCancel={() => setEditing(false)}
+            onCancel={() => { editAttempt.current += 1; releaseEditRoom(); setEditing(false); }}
             laterMessages={laterMessages}
             stopsReply={busy}
             busy={sending}
@@ -478,6 +552,7 @@ export function UserMessage() {
             ) : null}
             <MessageAttachments attachments={attachments} className="mt-2 self-end" onOpen={opener ? (id, trigger) => void openAttachment(Number(id), trigger) : undefined} />
             {attachmentProblem ? <p role="alert" className="mt-1 self-end text-xs text-ink-2">{attachmentProblem}</p> : null}
+            {editRefusal ? <p role="alert" data-slot="edit-refusal" className="mt-1 self-end text-xs text-ink-2">{editRefusal}</p> : null}
             <AttachmentOverflow
               overflow={promptBodies?.fileOverflow}
               body={promptBodies?.text}
@@ -616,6 +691,12 @@ const EMPTY_BODIES: readonly { label: string; body: BodyRef }[] = [];
 
 export function AssistantMessage() {
   const searchReveal = useSearchReveal();
+  // Is this reply only shown in part? Code copied out of it must say so.
+  const excerpted = useAuiState((s) => {
+    const bodies = laserMeta(s.message).bodies;
+    const text = Array.isArray(bodies) ? undefined : (bodies as BlockBodies | undefined)?.text;
+    return text !== undefined && omittedBytes(text) > 0;
+  });
   const streaming = useAuiState((s) => s.message.role === "assistant" && s.message.status?.type === "running");
   // Notices and the custom messages the transcript draws (agent events, task
   // exits) are records, not replies: no actions, no regenerate, a clock only.
@@ -639,6 +720,9 @@ export function AssistantMessage() {
   return (
     <MessageRoot data-role="assistant" data-search-selected={searchReveal || undefined} data-streaming={streaming || undefined} className={cn("group/message flex flex-col", MESSAGE_ROOT)}>
       {speaker ? <SpeakerIdentity {...speaker} /> : null}
+      {/* A reply this window is only showing part of: code copied out of it
+          says so in its own bytes (RP-5b §2). */}
+      <ExcerptedMessage value={excerpted}>
       <AssistantBody streaming={streaming}>
         <TurnOverflow />
         <MessagePrimitive.GroupedParts groupBy={groupBy} indicator="empty">
@@ -702,6 +786,7 @@ export function AssistantMessage() {
           }}
         </MessagePrimitive.GroupedParts>
       </AssistantBody>
+      </ExcerptedMessage>
       {stopped ? <AssistantStopped {...stopped} /> : null}
       {!isNotice && !streaming ? <AssistantFooter /> : null}
       {isNotice && !streaming ? (

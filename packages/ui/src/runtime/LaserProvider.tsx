@@ -65,7 +65,7 @@ import { createTasksActions, type TasksActions } from "../fleet/actions.js";
 import { HostClient } from "../client.js";
 import { initialState, reduce, type Action, type AppState, type SessionView } from "../store.js";
 import { hydrationEpochOf, isDormantView } from "../view-summary.js";
-import { createViewCache, type RendererViewCounters } from "./view-cache.js";
+import { createViewCache, type ActionReservation, type RendererViewCounters } from "./view-cache.js";
 import { createThreadAdapter, sendToSession, type SendBehavior } from "./adapter.js";
 import { firstTurnFromRunConfig, useDiscardFirstTurnOnLeave } from "./first-turn.js";
 import { createSessionLauncher, type NewSessionOptions } from "./new-session.js";
@@ -258,6 +258,12 @@ export interface LaserContextValue {
    * its own view state and this says nothing about it.
    */
   rendererViews: () => RendererViewCounters;
+  /**
+   * Hold room in the renderer for something a person is about to do — today,
+   * rebuilding an oversized prompt so it can be edited (RP-5b §2). The caller
+   * keeps the token for as long as it holds those bytes.
+   */
+  reserveViewAction: (path: string, bytes: number) => ActionReservation | undefined;
 }
 
 /** Everything that does not change when the transcript does. */
@@ -1656,6 +1662,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       archive,
       actions,
       rendererViews: viewCache.counters,
+      reserveViewAction: viewCache.reserveAction,
     }),
     [actions, archive, client, currentProject, dispatch, projectInfo, projects, setCurrentProject, startupRestoring, state.destination, trustRequests, viewCache],
   );
