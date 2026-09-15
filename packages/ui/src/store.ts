@@ -79,13 +79,14 @@ export interface BlockBodies {
   images?: Array<BodyRef | undefined>;
   /** One per attachment chip: the stored bytes of that file inside the prompt. */
   files?: Array<BodyRef | undefined>;
-  /**
-   * Attachments this prompt has that are not chips here. `omitted` is an exact
-   * count the authority gave; `unknown` means it could not see the whole prompt
-   * and said so, and then no number is shown (RP-5b §2).
-   */
-  fileOverflow?: { omitted: number } | { unknown: true };
 }
+
+/**
+ * Attachments a prompt has that are not chips on its row. `omitted` is an
+ * exact count the authority gave; `unknown` means it could not see the whole
+ * prompt and said so, and then no number is shown (RP-5b §2).
+ */
+export type FileOverflow = { omitted: number } | { unknown: true };
 
 export type Block =
   | {
@@ -95,6 +96,8 @@ export type Block =
       text: string;
       images: ImageContent[];
       files: AttachedFile[];
+      /** Attachments this prompt has beyond the chips on its row (RP-5b §2). */
+      fileOverflow?: FileOverflow;
       optimistic?: boolean;
       sentBy?: SentByParent;
       /**
@@ -1655,9 +1658,7 @@ function stubBlocks(stub: EntryStub, revision: string | undefined): { blocks: Bl
     const bodies = blockBodies({
       text: refOf({ kind: "user_text" }),
       ...(fileRefs.length > 0 ? { files: fileRefs } : {}),
-      ...(regions && (regions.omitted || regions.truncated)
-        ? { fileOverflow: regions.truncated ? { unknown: true as const } : { omitted: regions.omitted! } }
-        : {}),
+
       // A record this view only points at carries no header to read, so its
       // surface is charged the declared floor rather than nothing.
       images: images.map((row) => {
@@ -1665,7 +1666,11 @@ function stubBlocks(stub: EntryStub, revision: string | undefined): { blocks: Bl
         return ref ? { ...ref, image: { decodedBytes: UNKNOWN_IMAGE_DECODED_BYTES } } : undefined;
       }),
     });
+    const fileOverflow: FileOverflow | undefined = regions && (regions.omitted || regions.truncated)
+      ? (regions.truncated ? { unknown: true as const } : { omitted: regions.omitted! })
+      : undefined;
     return { blocks: [{ kind: "user", id: `entry:${stub.id}`, ...when, text: "", files, entryId: stub.id,
+      ...(fileOverflow ? { fileOverflow } : {}),
       images: images.map(() => ({ type: "image", mimeType: "image/*", data: "" }) as ImageContent),
       ...(bodies ? { bodies } : {}) }] };
   }

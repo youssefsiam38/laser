@@ -364,6 +364,7 @@ const userMessage = (block: Extract<Block, { kind: "user" }>, ordinal: number, g
           kind: "user",
           images: block.images,
           files: block.files,
+          ...(block.fileOverflow ? { fileOverflow: block.fileOverflow } : {}),
           optimistic: block.optimistic === true,
           userOrdinal: ordinal,
           // RP-5b: what of this prompt the window is not holding, and where

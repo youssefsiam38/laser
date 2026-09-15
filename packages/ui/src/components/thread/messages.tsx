@@ -58,7 +58,7 @@ import { AttachmentBrowser } from "./AttachmentBrowser.js";
 import { BodyOverflow } from "./BodyOverflow.js";
 import { useImageBodies } from "./use-image-bodies.js";
 import type { BodyRef } from "@/runtime/body-excerpt";
-import type { BlockBodies } from "@/store";
+import type { BlockBodies, FileOverflow } from "@/store";
 import { ApiRequestDialog } from "@/components/logs/ApiRequestDialog";
 
 /** `metadata.custom.laser` the projection stamps on every message. */
@@ -67,6 +67,8 @@ interface LaserMeta {
   kind?: "user" | "turn" | "notice" | "custom";
   images?: readonly ImageContent[];
   files?: readonly AttachedFile[];
+  /** Attachments this prompt has beyond the chips shown (RP-5b §2). */
+  fileOverflow?: FileOverflow;
   optimistic?: boolean;
   userOrdinal?: number;
   prompt?: { ordinal: number; entryId?: string };
@@ -163,7 +165,7 @@ export function useHonestCopy(path: string | undefined, text: string, body: Body
  * a count it cannot stand behind is not shown.
  */
 function AttachmentOverflow({ overflow, body, path, onOpen }: {
-  overflow: BlockBodies["fileOverflow"];
+  overflow: FileOverflow | undefined;
   body: BodyRef | undefined;
   path: string | undefined;
   onOpen?: ((file: { name: string; mediaType: string; ref: BodyRef }, trigger: HTMLElement) => void) | undefined;
@@ -276,6 +278,7 @@ export function UserMessage() {
   });
   const imageSource = useImageBodies(useSessionPath(), images, promptBodies);
   const files = useAuiState((s) => laserMeta(s.message).files ?? EMPTY_FILES);
+  const fileOverflow = useAuiState((s) => laserMeta(s.message).fileOverflow);
   const optimistic = useAuiState((s) => laserMeta(s.message).optimistic === true);
   const goalSetter = useAuiState((s) => laserMeta(s.message).goalSetter === true);
   // A primitive, so the selector keeps its identity across re-renders.
@@ -584,7 +587,7 @@ export function UserMessage() {
             {attachmentProblem ? <p role="alert" className="mt-1 self-end text-xs text-ink-2">{attachmentProblem}</p> : null}
             {editRefusal ? <p role="alert" data-slot="edit-refusal" className="mt-1 self-end text-xs text-ink-2">{editRefusal}</p> : null}
             <AttachmentOverflow
-              overflow={promptBodies?.fileOverflow}
+              overflow={fileOverflow}
               body={promptBodies?.text}
               path={path}
               onOpen={opener ? (file, trigger) => void openRegionFile(file, trigger) : undefined}
