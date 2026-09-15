@@ -90,9 +90,9 @@ export class KeystrokeShaper {
    * `settle` is called exactly once, when this frame leaves the queue — sent,
    * dropped or discarded by `stop()`. A caller that accounts the bytes a peer
    * still owes it (RP-7) needs that moment; a caller that does not simply
-   * omits it.
+   * omits it. Returns false when the queue was full and the frame was refused.
    */
-  enqueue(frame: Uint8Array, settle?: () => void): void {
+  enqueue(frame: Uint8Array, settle?: () => void): boolean {
     if (this.stopped) throw new Error("this shaper has been stopped");
     if (this.queue.length >= this.maxQueue) {
       this.droppedFrames++;
@@ -100,11 +100,14 @@ export class KeystrokeShaper {
       this.options.onError?.(
         new Error(`keystroke shaper queue is full (${this.maxQueue} frames); dropped one. The peer is not draining.`),
       );
-      return;
+      // The caller has to know: a frame this shaper refused is a frame that
+      // was not sent, and only the caller knows whether losing it is allowed.
+      return false;
     }
     this.queue.push({ frame, ...(settle ? { settle } : {}) });
     this.armTail();
     this.start();
+    return true;
   }
 
   /** Stop the grid and forget anything queued. Call on disconnect. */

@@ -325,7 +325,11 @@ Backpressure keeps that rule (RP-7). Bytes queued for one paired device are
 counted from acceptance through Noise encryption to the socket; past a soft
 mark only the three notifications the device can read back with a request it
 already makes are released, and past a hard mark **that channel's socket is
-closed**. Nothing is retained for it in the meantime, so there is still exactly
+closed**. Every other refusal — a frame the relay's size ceiling cannot carry,
+a full outbound queue, a full keystroke shaper — closes the channel too, rather
+than deciding on the device's behalf which of its own state, questions or
+answers it can do without. Frames are charged at their exact padded wire size,
+real and chaff alike, from reservation to send callback. Nothing is retained for it in the meantime, so there is still exactly
 one resume path, and the fence is that device's alone: other devices, direct
 clients, workers and every command are untouched. The relay is unchanged — it
 remains a byte forwarder with its own `bufferedAmount` pause/resume (§9).

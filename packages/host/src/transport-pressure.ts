@@ -39,6 +39,19 @@ export interface OutboundPressureOptions {
   hardBytes?: number;
   stuckMs?: number;
   now?: () => number;
+  /**
+   * What the socket itself is still holding, when it can say.
+   *
+   * A `ws` send callback settles our account when the frame leaves our queue,
+   * which is not the same moment the kernel takes it: a peer that has stopped
+   * reading leaves bytes in the socket that our own counter has already let
+   * go. This is **never added** to the account — that would count the same
+   * bytes twice — it is the second opinion every decision takes the larger of.
+   */
+  bufferedAmount?: () => number;
+  /** Test seams for the stuck timer; defaults are `setTimeout`/`clearTimeout`. */
+  setTimer?: (fn: () => void, ms: number) => unknown;
+  clearTimer?: (handle: unknown) => void;
   /** The connection crossed the hard mark or sat above the soft one. */
   onFence?: (info: { reason: "hard-limit" | "stuck"; queuedBytes: number }) => void;
   /** A diagnostic notification was released. Numbers and method names only. */
@@ -48,7 +61,10 @@ export interface OutboundPressureOptions {
 export interface PressureSnapshot {
   state: PressureState;
   queuedBytes: number;
+  /** What the socket says it is holding, reported beside ours, never summed. */
+  socketBufferedBytes: number;
   highWaterBytes: number;
+  /** Complete frames handed over and not yet settled. */
   inFlight: number;
   shed: ShedCounters;
 }
@@ -65,12 +81,28 @@ export class OutboundPressure {
   private readonly hard: number;
   private readonly stuckMs: number;
   private readonly now: () => number;
+  private readonly setTimer: (fn: () => void, ms: number) => unknown;
+  private readonly clearTimer: (handle: unknown) => void;
+  private stuckTimer: unknown;
 
   constructor(private readonly options: OutboundPressureOptions = {}) {
     this.soft = options.softBytes ?? CLIENT_QUEUE_SOFT_BYTES;
     this.hard = options.hardBytes ?? CLIENT_QUEUE_HARD_BYTES;
     this.stuckMs = options.stuckMs ?? CLIENT_STUCK_MS;
     this.now = options.now ?? Date.now;
+    this.setTimer =
+      options.setTimer ??
+      ((fn, ms) => {
+        const handle = setTimeout(fn, ms);
+        handle.unref?.();
+        return handle;
+      });
+    this.clearTimer = options.clearTimer ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
+  }
+
+  /** Our account and the socket's, whichever is holding more. */
+  private observed(): number {
+    return Math.max(this.queued, this.options.bufferedAmount?.() ?? 0);
   }
 
   get fenced(): boolean {
@@ -81,6 +113,7 @@ export class OutboundPressure {
     return {
       state: this.state,
       queuedBytes: this.queued,
+      socketBufferedBytes: this.options.bufferedAmount?.() ?? 0,
       highWaterBytes: this.highWater,
       inFlight: this.inFlight,
       shed: { total: this.shedTotals.total, byMethod: { ...this.shedTotals.byMethod } },
@@ -102,13 +135,17 @@ export class OutboundPressure {
    * anything else.
    */
   admit(method?: string, bytes = 0): "send" | "shed" | "fenced" {
+    // Re-read the socket before deciding: its backlog can grow while our own
+    // account is empty, and that is exactly the case this second opinion is
+    // here for.
+    this.evaluate();
     if (this.state === "fenced") return "fenced";
     if (this.state === "shedding" && method !== undefined && isSheddable(method)) {
       this.countShed(method);
       return "shed";
     }
-    if (this.queued + bytes > this.hard) {
-      this.fence("hard-limit", this.queued + bytes);
+    if (this.observed() + bytes > this.hard) {
+      this.fence("hard-limit", this.observed() + bytes);
       return "fenced";
     }
     return "send";
@@ -124,8 +161,8 @@ export class OutboundPressure {
    */
   charge(bytes: number): boolean {
     if (this.state === "fenced") return false;
-    if (this.queued + bytes > this.hard) {
-      this.fence("hard-limit", this.queued + bytes);
+    if (this.observed() + bytes > this.hard) {
+      this.fence("hard-limit", this.observed() + bytes);
       return false;
     }
     this.queued += bytes;
@@ -142,11 +179,12 @@ export class OutboundPressure {
     this.evaluate();
   }
 
-  /** The connection is gone; nothing is owed and nothing is retained. */
+  /** The connection is gone; nothing is owed, nothing is retained, no timer runs. */
   reset(): void {
     this.queued = 0;
     this.inFlight = 0;
     this.softSince = undefined;
+    this.disarm();
   }
 
   private countShed(method: string): void {
@@ -162,25 +200,48 @@ export class OutboundPressure {
 
   private evaluate(): void {
     if (this.state === "fenced") return;
-    if (this.queued > this.hard) {
-      this.fence("hard-limit", this.queued);
+    const observed = this.observed();
+    if (observed > this.hard) {
+      this.fence("hard-limit", observed);
       return;
     }
-    if (this.queued > this.soft) {
-      this.softSince ??= this.now();
-      // Hysteresis, like the relay's own: a burst that drains is not a peer
-      // that has stopped reading.
-      if (this.now() - this.softSince > this.stuckMs) {
-        this.fence("stuck", this.queued);
+    if (observed > this.soft) {
+      if (this.softSince === undefined) {
+        this.softSince = this.now();
+        // A real timer, not a hope that something else will happen: a burst
+        // that stops above the mark and then drains nothing would otherwise
+        // never be looked at again, and the peer would stay for ever.
+        this.arm();
+      } else if (this.now() - this.softSince > this.stuckMs) {
+        this.fence("stuck", observed);
         return;
       }
       this.state = "shedding";
       return;
     }
-    if (this.queued <= this.soft / 2) {
+    // Hysteresis, like the relay's own: a burst that drains is not a peer that
+    // has stopped reading.
+    if (observed <= this.soft / 2) {
       this.softSince = undefined;
+      this.disarm();
       this.state = "flowing";
     }
+  }
+
+  private arm(): void {
+    this.disarm();
+    this.stuckTimer = this.setTimer(() => {
+      this.stuckTimer = undefined;
+      if (this.state === "fenced" || this.softSince === undefined) return;
+      if (this.now() - this.softSince >= this.stuckMs) this.fence("stuck", this.observed());
+      else this.arm();
+    }, this.stuckMs);
+  }
+
+  private disarm(): void {
+    if (this.stuckTimer === undefined) return;
+    this.clearTimer(this.stuckTimer);
+    this.stuckTimer = undefined;
   }
 
   /**
@@ -191,6 +252,7 @@ export class OutboundPressure {
   private fence(reason: "hard-limit" | "stuck", queuedBytes: number): void {
     this.state = "fenced";
     this.softSince = undefined;
+    this.disarm();
     this.options.onFence?.({ reason, queuedBytes });
   }
 }

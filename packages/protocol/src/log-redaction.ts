@@ -34,13 +34,30 @@ export const REDACT_MAX_DEPTH = 12;
 export const REDACTED = "[redacted]";
 
 /**
- * Replace credential-shaped values with `[redacted]`, everywhere, and say how
- * many were replaced. Structure is preserved so the row still reads normally.
+ * What a subtree deeper than {@link REDACT_MAX_DEPTH} is replaced by.
+ *
+ * The walk used to return such a subtree untouched, which meant a credential
+ * below the bound was never looked at and was stored in full. The bound is a
+ * safety ceiling and stays where it is; what changes is which way it fails.
+ * Nothing below it is kept, so nothing below it can leak.
  */
-export function redact(value: unknown): { value: unknown; count: number } {
+export const REDACTION_DEPTH_SENTINEL = "[not recorded: nested past the redaction limit]";
+
+/**
+ * Replace credential-shaped values with `[redacted]`, everywhere, and say how
+ * many were replaced. Structure is preserved so the row still reads normally,
+ * except past the depth bound, where the whole remaining subtree is dropped
+ * for the sentinel and counted.
+ */
+export function redact(value: unknown): { value: unknown; count: number; depthOmissions: number } {
   let count = 0;
+  let depthOmissions = 0;
   const walk = (node: unknown, depth: number): unknown => {
-    if (depth > REDACT_MAX_DEPTH || node === null || typeof node !== "object") return node;
+    if (node === null || typeof node !== "object") return node;
+    if (depth > REDACT_MAX_DEPTH) {
+      depthOmissions += 1;
+      return REDACTION_DEPTH_SENTINEL;
+    }
     if (Array.isArray(node)) return node.map((item) => walk(item, depth + 1));
     const out: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(node as Record<string, unknown>)) {
@@ -53,7 +70,50 @@ export function redact(value: unknown): { value: unknown; count: number } {
     }
     return out;
   };
-  return { value: walk(value, 0), count };
+  return { value: walk(value, 0), count, depthOmissions };
+}
+
+/**
+ * The one projection anything durable goes through: redact, serialize, and
+ * then read the serialized text back looking for a credential-shaped field
+ * that survived. A survivor means this text cannot be stored — an older
+ * producer, a bug, or a shape the walk could not reach — and the caller
+ * records the row without a body rather than keeping it.
+ *
+ * Deliberately runtime-neutral: no hashing happens here, because this module
+ * is also loaded in a browser. A Node caller hashes the returned body itself.
+ */
+export type StorageProjection =
+  | {
+      ok: true;
+      /** Redacted, serialized, and verified clean by the scan below. */
+      body: string;
+      redactedFields: number;
+      depthOmissions: number;
+    }
+  | { ok: false; reason: "unredacted"; survivors: string[] };
+
+export function redactForStorage(value: unknown): StorageProjection {
+  const { value: safe, count, depthOmissions } = redact(value);
+  // Say so rather than lying by omission: a row that dropped fields shows it.
+  const annotated =
+    (count > 0 || depthOmissions > 0) && safe !== null && typeof safe === "object" && !Array.isArray(safe)
+      ? {
+          ...(safe as Record<string, unknown>),
+          ...(count > 0 ? { laserRedactedFields: count } : {}),
+          ...(depthOmissions > 0 ? { laserDepthOmissions: depthOmissions } : {}),
+        }
+      : safe;
+  let body: string;
+  try {
+    body = JSON.stringify(annotated) ?? "null";
+  } catch {
+    // A payload with a cycle or a BigInt is still worth a row.
+    body = JSON.stringify({ laser: "payload was not JSON-serializable", type: typeof value });
+  }
+  const survivors = findCredentialShapedKeys(body);
+  if (survivors.length > 0) return { ok: false, reason: "unredacted", survivors };
+  return { ok: true, body, redactedFields: count, depthOmissions };
 }
 
 /** Same JSON-key grammar as {@link SECRET_KEY}, matched inside serialized text. */

@@ -5,6 +5,7 @@
  * entry file path.
  */
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
 import type { Duplex } from "node:stream";
 import {
@@ -94,6 +95,13 @@ export function defaultWorkerMain(): string {
 }
 
 export class WorkerClient {
+  /**
+   * This process's identity for anything the host keys by "which worker said
+   * that" (RP-7 captures). Opaque and random on purpose: a pid, a start token
+   * or a directory would be host-internal data with meaning elsewhere, and
+   * this value is never logged, never stored and never sent to a client.
+   */
+  readonly generation: string = randomBytes(8).toString("hex");
   private readonly child: ChildProcess;
   private readonly pipe: Duplex;
   private readonly pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();

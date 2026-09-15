@@ -142,7 +142,9 @@ ACP-inspired JSON-RPC:
   its own size and digest. A read validates every chunk it hands back and, when
   it returns the whole body, the aggregate against the row's own digest, so an
   altered, reordered, short or missing piece is reported as damaged instead of
-  being returned under a digest it no longer matches. Reads stay lazy: at most
+  being returned under a digest it no longer matches. The body tables are
+  versioned (`user_version`) and migrate one atomic step at a time, and a
+  database a newer release wrote is left alone rather than reshaped. Reads stay lazy: at most
   the requested budget plus the one chunk that crosses it is ever in memory.
 - Requests (host → client): `session/request_permission` and `pi/ui/request`
   (select, confirm, input, editor). Fire-and-forget: `pi/ui/notify`,

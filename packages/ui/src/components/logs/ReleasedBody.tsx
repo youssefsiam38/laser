@@ -33,14 +33,16 @@ function why(summary: LogBodySummary): string {
       return "The capture stopped before all of it had arrived, so no partial text was kept.";
     case "corrupt":
       return "What arrived did not match the size and fingerprint the capture announced, so none of it was kept.";
+    case "unredacted":
+      return "A credential-shaped field could not be removed from this request, so none of its text was kept. The request itself is still recorded.";
     default:
       return "The rows that referred to it were removed when older logs were cleaned up.";
   }
 }
 
-/** The first and last characters of a digest: identity, without a wall of hex. */
-function shortDigest(sha256: string): string {
-  return sha256.length > 20 ? `${sha256.slice(0, 12)}…${sha256.slice(-4)}` : sha256;
+/** Grouped digits: an exact count a person can read and compare. */
+function exactBytes(bytes: number): string {
+  return `${bytes.toLocaleString()} bytes (${formatBytes(bytes)})`;
 }
 
 export function ReleasedBody({
@@ -58,8 +60,8 @@ export function ReleasedBody({
     ...(summary.messages !== undefined
       ? [{ label: "messages", value: `${summary.messages}`, typed: true }]
       : []),
-    { label: "size", value: formatBytes(summary.bytes), typed: true },
-    ...(summary.sha256 ? [{ label: "fingerprint", value: shortDigest(summary.sha256), typed: true }] : []),
+    { label: "size", value: exactBytes(summary.bytes), typed: true },
+    ...(summary.sha256 ? [{ label: "fingerprint", value: summary.sha256, typed: true }] : []),
     ...(summary.at ? [{ label: "captured", value: dateTime(summary.at) }] : []),
     ...(summary.durationMs !== undefined ? [{ label: "took", value: duration(summary.durationMs), typed: true }] : []),
   ];

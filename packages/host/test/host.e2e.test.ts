@@ -556,7 +556,9 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("host end to end", () => {
       // Transport queues are numbers, not payloads (RP-7): connections and
       // open captures, plus the bytes this host is holding for somebody else.
       // With a live worker answering, the bytes are complete and honest.
-      expect(snapshot.stores?.entries.providerQueues?.count).toBeGreaterThanOrEqual(1);
+      // Frames in flight and captures being reassembled — an idle connection
+      // is zero, not one (RP-7).
+      expect(snapshot.stores?.entries.providerQueues?.count).toBe(0);
       expect(snapshot.stores?.entries.providerQueues?.bytes).toBeGreaterThanOrEqual(0);
       expect(JSON.stringify(snapshot.stores)).not.toContain(state.path);
 

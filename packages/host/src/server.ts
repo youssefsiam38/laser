@@ -45,7 +45,9 @@ import { FeatureService } from "./features.js";
 import { PrefsStore } from "./prefs.js";
 import { SessionCatalog, defaultSessionDir } from "./catalog.js";
 import { LogStore } from "./logstore.js";
-import { CaptureAccumulator } from "./provider-capture.js";
+import { CaptureAccumulator, type CaptureActor } from "./provider-capture.js";
+import { collectTransportQueues, type TransportQueueSource, type TransportQueues } from "./transport-snapshot.js";
+import { observeCapture } from "./capture-ingress.js";
 import { OutboundPressure, fenceReasonText } from "./transport-pressure.js";
 import { PackageService, SetupService } from "./packages.js";
 import { ResourceService } from "./resources/index.js";
@@ -568,19 +570,22 @@ export class HostServer {
       onPreparedUse: (client, cwd) => {
         setImmediate(() => void this.qualifyNamer(cwd, client));
       },
-      onNotification: (cwd, n) => {
-        this.observe(cwd, n);
+      onNotification: (cwd, n, source) => {
+        this.observe(cwd, n, source);
         this.broadcast(n);
       },
+      // The process that opened a capture is the only one that may advance or
+      // end it (RP-7): its exit ends what it started, and cannot touch the
+      // successor that took its place.
+      onWorkerGone: ({ generation }) => this.captures.generationGone(generation),
       onStderr: (cwd, text) => {
         const safe = this.privateLogText(text);
         this.log(`[worker ${cwd}] ${safe.trimEnd()}`);
         this.logs?.observeWorkerStderr(cwd, safe);
       },
       onStatus: (info) => {
-        // Nothing this generation started can still complete (RP-7): its open
-        // captures end as rows that say so, and their bytes are released.
-        if (info.status === "crashed" || info.status === "retired") this.captures.actorGone(info.cwd);
+        // Captures are ended by `onWorkerGone`, which names the exact process
+        // (RP-7); a status is about a directory and could end a successor's.
         if (info.status === "crashed") {
           this.attention.workerCrashed(info.cwd, info.message ?? "worker crashed");
           this.forgetSessionsOf(info.cwd, "the worker stopped");
@@ -878,7 +883,7 @@ export class HostServer {
    * The host is the only observer that sees every session, so this cannot live
    * in a client.
    */
-  private observe(cwd: string, notification: JsonRpcNotification): void {
+  private observe(cwd: string, notification: JsonRpcNotification, source?: { generation: string }): void {
     switch (notification.method) {
       case "session/update": {
         const params = notification.params as SessionUpdateParams;
@@ -950,7 +955,14 @@ export class HostServer {
         // Task messages become `tasks/update` broadcasts; nothing else needs them.
         if (this.tasks.observeExtensionMessage(params.path, params.message)) return;
         // A chunked provider capture is reassembled before it is a row (RP-7).
-        if (this.observeCapture(cwd, params.path, params.message)) return;
+        if (
+          source &&
+          observeCapture(this.captures, { cwd, generation: source.generation }, params.path, params.message, (actor, path, meta, reason) =>
+            this.logs?.recordProviderAbsent(actor.cwd, path, meta, reason),
+          )
+        ) {
+          return;
+        }
         this.logs?.observeExtensionMessage(cwd, params.path, params.message);
         return;
       }
@@ -1244,8 +1256,10 @@ export class HostServer {
             }
           : {}),
         providerQueues: {
-          count: queues.connections + captures.open,
-          ...(complete ? { bytes: queues.bytes + queues.workerLinks + captures.bytes + workerQueueBytes } : {}),
+          // Frames in flight and captures being reassembled — never a count of
+          // connections, which an idle socket would inflate.
+          count: queues.frames + captures.open,
+          ...(complete ? { bytes: queues.bytes + captures.bytes + captures.reservedBytes + workerQueueBytes } : {}),
         },
         deliveryRegistry: {
           count: delivery.owners,
@@ -1264,69 +1278,37 @@ export class HostServer {
   }
 
   /**
-   * The chunked half of the capture path (RP-7). Returns true when the message
-   * belonged to it, so nothing else treats a chunk as a row of its own.
-   *
-   * These arrive on the host's own pipe to a worker it started; a client
-   * socket cannot reach this code, and `broadcast` drops every capture message
-   * before serialization, so no chunk ever leaves the host.
-   */
-  private observeCapture(cwd: string, sessionPath: string, message: HostNotifications["pi/extension/message"]["message"]): boolean {
-    switch (message.type) {
-      case `${WIRE_NAMESPACE}/provider/request/begin`: {
-        const { type: _type, ...meta } = message as { type: string } & ProviderCaptureMeta;
-        this.captures.begin(cwd, sessionPath, meta);
-        return true;
-      }
-      case `${WIRE_NAMESPACE}/provider/request/chunk`: {
-        const chunk = message as { captureId: string; index: number; text: string };
-        this.captures.chunk(chunk.captureId, chunk.index, chunk.text);
-        return true;
-      }
-      case `${WIRE_NAMESPACE}/provider/request/end`: {
-        const end = message as { captureId: string; chunks: number; bytes: number };
-        this.captures.finish(end.captureId, end.chunks, end.bytes);
-        return true;
-      }
-      case `${WIRE_NAMESPACE}/provider/request/abort`: {
-        const abort = message as { captureId: string; reason: ProviderCaptureOmission };
-        this.captures.abort(abort.captureId, abort.reason);
-        return true;
-      }
-      case `${WIRE_NAMESPACE}/provider/request/omitted`: {
-        const { type: _type, reason, ...meta } = message as { type: string; reason: ProviderCaptureOmission } & ProviderCaptureMeta;
-        this.logs?.recordProviderAbsent(cwd, sessionPath, meta, reason);
-        return true;
-      }
-      default:
-        return false;
-    }
-  }
-
-  /**
    * Bytes this host is holding for somebody else right now (RP-7): queued for
    * direct sockets, queued for each paired device, and sitting in the pipes to
    * its own workers. Counted once each, and never containing anything but
    * numbers.
    */
-  private transportQueues(): { connections: number; bytes: number; workerLinks: number } {
-    let bytes = 0;
-    let connections = 0;
+  private transportQueues(): TransportQueues {
+    const sources: TransportQueueSource[] = [];
     for (const pressure of this.pressure.values()) {
-      const snapshot = pressure.snapshot();
-      bytes += snapshot.queuedBytes;
-      connections += 1;
+      sources.push({
+        pendingFrames: () => pressure.snapshot().inFlight,
+        queuedBytes: () => pressure.snapshot().queuedBytes,
+      });
     }
     for (const client of this.relayClients) {
-      bytes += client.transportPressure().queuedBytes;
-      connections += 1;
+      sources.push({
+        pendingFrames: () => client.transportPressure().pendingFrames,
+        queuedBytes: () => client.transportPressure().queuedBytes,
+      });
     }
-    let workerLinks = 0;
     for (const { client } of this.pool.liveClients()) {
-      const link = client.transportPressure();
-      workerLinks += link.pending + (link.decoder?.retained ?? 0);
+      sources.push({
+        // A partial frame being read is bytes, not a message: it is counted in
+        // the bytes below and never as a frame.
+        pendingFrames: () => 0,
+        queuedBytes: () => {
+          const link = client.transportPressure();
+          return link.pending + (link.decoder?.retained ?? 0);
+        },
+      });
     }
-    return { connections, bytes, workerLinks };
+    return collectTransportQueues(sources);
   }
 
   /** Every connection's membership: direct sockets first, then paired devices. */
@@ -1446,6 +1428,10 @@ export class HostServer {
     this.pressure.set(
       ws,
       new OutboundPressure({
+        // The socket's own view, as a second opinion: a `ws` callback settles
+        // our account when the frame leaves our queue, not when the kernel
+        // takes it (RP-7).
+        bufferedAmount: () => ws.bufferedAmount,
         onShed: ({ method, total }) => this.log(`a client is behind: released ${total} ${method} notification(s) it can read back`),
         onFence: ({ reason, queuedBytes }) => {
           this.log(`disconnecting a client: ${fenceReasonText(reason)} (${queuedBytes} bytes queued)`);
@@ -1472,7 +1458,10 @@ export class HostServer {
       try {
         raw = JSON.parse(data.toString());
       } catch {
-        ws.send(JSON.stringify({ jsonrpc: "2.0", id: 0, error: { code: -32700, message: "invalid JSON" } }));
+        // Through the same bounded sender as every other reply: a peer that
+        // never reads must not be able to build an uncharged queue by sending
+        // malformed JSON (RP-7).
+        await this.sendSocket(ws, JSON.stringify({ jsonrpc: "2.0", id: 0, error: { code: -32700, message: "invalid JSON" } }));
         return;
       }
       const request = raw as { method?: unknown; params?: { path?: unknown; id?: unknown } } | null;

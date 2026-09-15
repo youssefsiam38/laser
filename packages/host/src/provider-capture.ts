@@ -28,7 +28,7 @@ import {
   CAPTURE_OPEN_SESSION,
   findCredentialShapedKeys,
   isProviderCaptureId,
-  redact,
+  redactForStorage,
   type ProviderCaptureMeta,
   type ProviderCaptureOmission,
 } from "@lasercode/protocol";
@@ -85,18 +85,43 @@ export interface CaptureAccumulatorOptions {
 }
 
 interface Open {
-  actor: string;
+  key: string;
+  actor: CaptureActor;
   sessionPath: string;
   meta: ProviderCaptureMeta;
   pieces: string[];
+  /** Bytes actually received so far. */
   bytes: number;
+  /** Announced size, held against every bound from `begin` until it ends. */
+  reserved: number;
   next: number;
   startedAt: number;
 }
 
+/**
+ * Who a capture belongs to.
+ *
+ * `generation` is the exact worker process: opaque, host-internal, and the
+ * only thing ownership is keyed by, so a late message from a process that has
+ * been replaced can never touch its successor's capture. `cwd` is carried for
+ * the row the capture becomes and is never an identity.
+ */
+export interface CaptureActor {
+  generation: string;
+  cwd: string;
+}
+
 export interface CaptureRetention {
+  /** Captures open right now. */
   open: number;
+  /** Bytes actually held in memory. */
   bytes: number;
+  /** Announced-but-not-yet-received bytes still reserved against the bounds. */
+  reservedBytes: number;
+}
+
+function keyOf(generation: string, captureId: string): string {
+  return `${generation}\u0000${captureId}`;
 }
 
 export class CaptureAccumulator {
@@ -105,75 +130,90 @@ export class CaptureAccumulator {
 
   constructor(private readonly options: CaptureAccumulatorOptions) {}
 
-  /** Open captures and the bytes they hold, for the RP-3 counters. */
+  /**
+   * What the host is holding for captures in flight, for the RP-3 counters.
+   * Reserved bytes are announced sizes not yet received: they are held against
+   * every bound from `begin`, so captures that start empty cannot each claim a
+   * full capture's worth later.
+   */
   retained(): CaptureRetention {
-    return { open: this.open.size, bytes: this.bytes };
+    let reservedBytes = 0;
+    for (const entry of this.open.values()) reservedBytes += Math.max(0, entry.reserved - entry.bytes);
+    return { open: this.open.size, bytes: this.bytes, reservedBytes };
   }
 
-  begin(actor: string, sessionPath: string, meta: ProviderCaptureMeta): void {
+  begin(actor: CaptureActor, sessionPath: string, meta: ProviderCaptureMeta): void {
     if (!isProviderCaptureId(meta.captureId, CAPTURE_ID_MAX)) return;
     if (!Number.isInteger(meta.bytes) || meta.bytes < 0 || meta.bytes > CAPTURE_MAX_BYTES) {
-      this.options.onAbsent({ cwd: actor, sessionPath, meta, reason: "corrupt" });
+      this.options.onAbsent({ cwd: actor.cwd, sessionPath, meta, reason: "corrupt" });
       return;
     }
-    // An id already in flight is two streams under one name. Neither may be
-    // merged into the other, so the incumbent ends as it stands.
-    const existing = this.open.get(meta.captureId);
-    if (existing) this.end(meta.captureId, "interrupted");
-    this.evictFor(actor, sessionPath, meta.bytes);
-    this.open.set(meta.captureId, {
+    const key = keyOf(actor.generation, meta.captureId);
+    // An id already in flight **for this generation** is two streams under one
+    // name. Neither may be merged into the other, so the incumbent ends as it
+    // stands. Another generation using the same id is a different capture.
+    if (this.open.has(key)) this.end(key, "interrupted");
+    const entry: Open = {
+      key,
       actor,
       sessionPath,
       meta,
       pieces: [],
       bytes: 0,
+      reserved: meta.bytes,
       next: 0,
       startedAt: Date.now(),
-    });
+    };
+    this.open.set(key, entry);
+    // The new capture is inside every bound from this moment, and is its own
+    // last resort: a capture that alone exceeds its scope ends itself.
+    this.enforce(entry);
   }
 
-  chunk(captureId: string, index: number, text: string): void {
-    const entry = this.open.get(captureId);
+  chunk(actor: CaptureActor, captureId: string, index: number, text: string): void {
+    const key = keyOf(actor.generation, captureId);
+    const entry = this.open.get(key);
     if (!entry) return;
     if (index !== entry.next) {
-      this.end(captureId, "corrupt");
+      this.end(key, "corrupt");
       return;
     }
     const bytes = Buffer.byteLength(text, "utf8");
     if (entry.bytes + bytes > entry.meta.bytes) {
-      this.end(captureId, "corrupt");
+      this.end(key, "corrupt");
       return;
     }
     entry.pieces.push(text);
     entry.bytes += bytes;
     entry.next += 1;
     this.bytes += bytes;
-    this.evictFor(entry.actor, entry.sessionPath, 0, captureId);
+    this.enforce(entry);
   }
 
-  finish(captureId: string, chunks: number, bytes: number): void {
-    const entry = this.open.get(captureId);
+  finish(actor: CaptureActor, captureId: string, chunks: number, bytes: number): void {
+    const key = keyOf(actor.generation, captureId);
+    const entry = this.open.get(key);
     if (!entry) return;
     if (entry.next !== chunks || entry.bytes !== bytes || entry.bytes !== entry.meta.bytes) {
-      this.end(captureId, "corrupt");
+      this.end(key, "corrupt");
       return;
     }
     const body = entry.pieces.join("");
-    this.release(captureId);
+    this.release(key);
     const digest = createHash("sha256").update(body).digest("hex");
     if (digest !== entry.meta.sha256) {
-      this.options.onAbsent({ cwd: entry.actor, sessionPath: entry.sessionPath, meta: entry.meta, reason: "corrupt" });
+      this.options.onAbsent({ cwd: entry.actor.cwd, sessionPath: entry.sessionPath, meta: entry.meta, reason: "corrupt" });
       return;
     }
     // Exactly one terminal outcome per capture, and the metadata on it always
     // describes the bytes that are actually stored.
     const defended = this.defend(body);
     if (!defended.ok) {
-      this.options.onAbsent({ cwd: entry.actor, sessionPath: entry.sessionPath, meta: entry.meta, reason: defended.reason });
+      this.options.onAbsent({ cwd: entry.actor.cwd, sessionPath: entry.sessionPath, meta: entry.meta, reason: defended.reason });
       return;
     }
     this.options.onComplete({
-      cwd: entry.actor,
+      cwd: entry.actor.cwd,
       sessionPath: entry.sessionPath,
       meta: defended.body === body ? entry.meta : restate(entry.meta, defended.body, defended.redactedFields),
       body: defended.body,
@@ -188,20 +228,20 @@ export class CaptureAccumulator {
    * capture announced and the producer's reason. An id nobody opened is
    * ignored — its row, if it needed one, was written when `begin` refused it.
    */
-  abort(captureId: string, reason: ProviderCaptureOmission): void {
-    this.end(captureId, reason);
+  abort(actor: CaptureActor, captureId: string, reason: ProviderCaptureOmission): void {
+    this.end(keyOf(actor.generation, captureId), reason);
   }
 
-  /** A worker generation is gone: nothing it opened can ever complete. */
-  actorGone(actor: string): void {
-    for (const [id, entry] of [...this.open]) {
-      if (entry.actor === actor) this.end(id, "interrupted");
+  /** That worker process is gone: nothing it opened can ever complete. */
+  generationGone(generation: string): void {
+    for (const [key, entry] of [...this.open]) {
+      if (entry.actor.generation === generation) this.end(key, "interrupted");
     }
   }
 
   /** Every open capture ends as it stands; used when the host is closing. */
   clear(): void {
-    for (const id of [...this.open.keys()]) this.end(id, "interrupted");
+    for (const key of [...this.open.keys()]) this.end(key, "interrupted");
   }
 
   /**
@@ -227,48 +267,71 @@ export class CaptureAccumulator {
       // that one.
       return { ok: false, reason: "corrupt" };
     }
-    const { value, count } = redact(parsed);
-    const redacted = JSON.stringify(value);
-    if (redacted === undefined) return { ok: false, reason: "corrupt" };
-    return { ok: true, body: redacted, redactedFields: count };
+    // The same verified projection every durable path uses: it redacts, and
+    // then reads its own output back. If anything credential-shaped is still
+    // there, this body is not storable at all.
+    const projected = redactForStorage(parsed);
+    if (!projected.ok) {
+      this.options.log?.(
+        `provider capture: refused a body with ${projected.survivors.length} credential-shaped field(s) that redaction could not remove ` +
+          `(${projected.survivors.join(", ")})`,
+      );
+      return { ok: false, reason: "unredacted" };
+    }
+    return { ok: true, body: projected.body, redactedFields: projected.redactedFields };
   }
 
   /** End one capture with a reason, releasing its pieces. */
-  private end(captureId: string, reason: ProviderCaptureOmission): void {
-    const entry = this.open.get(captureId);
+  private end(key: string, reason: ProviderCaptureOmission): void {
+    const entry = this.open.get(key);
     if (!entry) return;
-    this.release(captureId);
-    this.options.onAbsent({ cwd: entry.actor, sessionPath: entry.sessionPath, meta: entry.meta, reason });
+    this.release(key);
+    this.options.onAbsent({ cwd: entry.actor.cwd, sessionPath: entry.sessionPath, meta: entry.meta, reason });
   }
 
-  private release(captureId: string): void {
-    const entry = this.open.get(captureId);
+  private release(key: string): void {
+    const entry = this.open.get(key);
     if (!entry) return;
     this.bytes = Math.max(0, this.bytes - entry.bytes);
     entry.pieces.length = 0;
-    this.open.delete(captureId);
+    this.open.delete(key);
   }
 
   /**
-   * Make room for `incoming` bytes in every scope this capture belongs to:
-   * its session, its worker generation, and the host. The oldest capture in
-   * the offending scope goes first, and it goes as a row, not as silence.
+   * Hold every scope this capture belongs to inside its bounds.
+   *
+   * The capture being filled counts towards `used` and `count` like any other
+   * — excluding it was how four captures could begin empty and then retain
+   * 64 MiB against a 48 MiB bound — and it is only excluded from the list of
+   * captures that may be ended to make room. If a scope is still over its
+   * bound with nothing else left to end, the capture ends itself: a bound that
+   * exempts its own cause is not a bound.
    */
-  private evictFor(actor: string, sessionPath: string, incoming: number, keep?: string): void {
-    const scopes = [
-      { name: "session", bytesMax: CAPTURE_ACCUM_SESSION_BYTES, openMax: CAPTURE_OPEN_SESSION, match: (e: Open) => e.sessionPath === sessionPath },
-      { name: "worker", bytesMax: CAPTURE_ACCUM_ACTOR_BYTES, openMax: Number.POSITIVE_INFINITY, match: (e: Open) => e.actor === actor },
-      { name: "host", bytesMax: CAPTURE_ACCUM_GLOBAL_BYTES, openMax: CAPTURE_OPEN_GLOBAL, match: () => true },
+  private enforce(current: Open): void {
+    const held = (entry: Open): number => Math.max(entry.bytes, entry.reserved);
+    const scopes: Array<{ bytesMax: number; openMax: number; match: (entry: Open) => boolean }> = [
+      {
+        bytesMax: CAPTURE_ACCUM_SESSION_BYTES,
+        openMax: CAPTURE_OPEN_SESSION,
+        match: (entry) => entry.sessionPath === current.sessionPath && entry.actor.generation === current.actor.generation,
+      },
+      {
+        bytesMax: CAPTURE_ACCUM_ACTOR_BYTES,
+        openMax: Number.POSITIVE_INFINITY,
+        match: (entry) => entry.actor.generation === current.actor.generation,
+      },
+      { bytesMax: CAPTURE_ACCUM_GLOBAL_BYTES, openMax: CAPTURE_OPEN_GLOBAL, match: () => true },
     ];
     for (const scope of scopes) {
       for (;;) {
-        const members = [...this.open].filter(([id, entry]) => scope.match(entry) && id !== keep);
-        const used = members.reduce((sum, [, entry]) => sum + entry.bytes, 0) + incoming;
-        const count = members.length + (keep === undefined ? 1 : 0);
-        if (used <= scope.bytesMax && count <= scope.openMax) break;
-        const oldest = members.sort((a, b) => a[1].startedAt - b[1].startedAt)[0];
-        if (!oldest) break;
-        this.end(oldest[0], "interrupted");
+        const members = [...this.open.values()].filter((entry) => scope.match(entry));
+        const used = members.reduce((sum, entry) => sum + held(entry), 0);
+        if (used <= scope.bytesMax && members.length <= scope.openMax) break;
+        const victims = members.filter((entry) => entry.key !== current.key).sort((a, b) => a.startedAt - b.startedAt);
+        const victim = victims[0] ?? (this.open.has(current.key) ? current : undefined);
+        if (!victim) break;
+        this.end(victim.key, "interrupted");
+        if (victim.key === current.key) break;
       }
     }
   }

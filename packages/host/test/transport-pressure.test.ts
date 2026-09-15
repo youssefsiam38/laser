@@ -21,7 +21,7 @@ describe("the account and the state machine", () => {
       pressure.charge(100);
       pressure.settle(100);
     }
-    expect(pressure.snapshot()).toMatchObject({ state: "flowing", queuedBytes: 0, inFlight: 0 });
+    expect(pressure.snapshot()).toMatchObject({ state: "flowing", queuedBytes: 0, inFlight: 0, socketBufferedBytes: 0 });
     expect(pressure.snapshot().highWaterBytes).toBe(100);
   });
 
@@ -104,6 +104,94 @@ describe("the account and the state machine", () => {
     // And a late settle for a frame that was never charged cannot go negative.
     pressure.settle(600);
     expect(pressure.snapshot().queuedBytes).toBe(0);
+  });
+
+  it("fences a finite burst that stops above the soft mark, with nothing else happening", () => {
+    // The review's case: the last charge crosses soft and then nothing drains
+    // and nothing else is sent. Without a timer of its own the connection sits
+    // there for ever; with one, it is fenced at the mark it declared.
+    let now = 0;
+    const timers: Array<{ at: number; fn: () => void }> = [];
+    const fences: string[] = [];
+    const pressure = new OutboundPressure({
+      softBytes: 100,
+      hardBytes: 1_000_000,
+      stuckMs: 50,
+      now: () => now,
+      setTimer: (fn, ms) => {
+        const timer = { at: now + ms, fn };
+        timers.push(timer);
+        return timer;
+      },
+      clearTimer: (handle) => {
+        const index = timers.indexOf(handle as { at: number; fn: () => void });
+        if (index >= 0) timers.splice(index, 1);
+      },
+      onFence: ({ reason }) => fences.push(reason),
+    });
+    pressure.charge(200);
+    expect(pressure.snapshot().state).toBe("shedding");
+    expect(timers).toHaveLength(1);
+
+    // Nothing charges, nothing settles: only the timer runs.
+    now = 60;
+    timers.splice(0)[0]!.fn();
+    expect(fences).toEqual(["stuck"]);
+    expect(pressure.fenced).toBe(true);
+  });
+
+  it("cancels the stuck timer when the peer catches up", () => {
+    let now = 0;
+    const timers: Array<{ at: number; fn: () => void }> = [];
+    const fences: string[] = [];
+    const pressure = new OutboundPressure({
+      softBytes: 100,
+      hardBytes: 1_000_000,
+      stuckMs: 50,
+      now: () => now,
+      setTimer: (fn, ms) => {
+        const timer = { at: now + ms, fn };
+        timers.push(timer);
+        return timer;
+      },
+      clearTimer: (handle) => {
+        const index = timers.indexOf(handle as { at: number; fn: () => void });
+        if (index >= 0) timers.splice(index, 1);
+      },
+      onFence: ({ reason }) => fences.push(reason),
+    });
+    pressure.charge(200);
+    expect(timers).toHaveLength(1);
+    pressure.settle(200);
+    expect(pressure.snapshot().state).toBe("flowing");
+    expect(timers).toHaveLength(0);
+    now = 1000;
+    expect(fences).toEqual([]);
+  });
+
+  it("takes the socket's own view of what it is holding, without counting it twice", () => {
+    // A `ws` callback settles our account when the frame leaves our queue, not
+    // when the kernel takes it. The socket's number is a second opinion, never
+    // an addition.
+    let buffered = 0;
+    const fences: string[] = [];
+    const pressure = new OutboundPressure({
+      softBytes: 100,
+      hardBytes: 1000,
+      bufferedAmount: () => buffered,
+      onFence: ({ reason }) => fences.push(reason),
+    });
+    pressure.charge(50);
+    pressure.settle(50);
+    expect(pressure.snapshot().queuedBytes).toBe(0);
+
+    buffered = 400;
+    expect(pressure.admit("pi/logs/append", 10)).toBe("shed");
+    expect(pressure.snapshot().socketBufferedBytes).toBe(400);
+    // And the totals are not summed: 400 observed plus a 700-byte frame is
+    // over the 1000-byte mark, where 0 + 700 would not be.
+    expect(pressure.admit("session/update", 700)).toBe("fenced");
+    expect(fences).toEqual(["hard-limit"]);
   });
 
   it("fences a peer that sits above the soft mark without draining", () => {
@@ -203,5 +291,32 @@ describe("a direct client that stops reading", () => {
       other.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "pi/project/list", params: {} }));
     });
     expect(reply.error).toBeUndefined();
+    other.close();
+  }, 40_000);
+
+  it("charges a malformed request's reply like any other, so it cannot build a free queue", async () => {
+    root = mkdtempSync(join(tmpdir(), "transport-pressure-parse-"));
+    host = new HostServer({ agentDir: join(root, "agent"), sessionDir: join(root, "sessions"), stateDir: join(root, "state"), logFile: false });
+    const { url } = await host.listen();
+    const socket = await connect(url);
+    let closeCode: number | undefined;
+    socket.on("close", (code) => {
+      closeCode = code;
+    });
+    const raw = (socket as unknown as { _socket: { pause(): void; resume(): void } })._socket;
+    raw.pause();
+
+    const pressureOf = () =>
+      [...(host as unknown as { pressure: Map<unknown, { snapshot(): { state: string; highWaterBytes: number } }> }).pressure.values()][0]!;
+    expect(pressureOf().snapshot().highWaterBytes).toBe(0);
+
+    // Nothing but invalid JSON, from a peer that never reads its answers. Each
+    // reply is small, so this does not reach a mark in a test's lifetime — what
+    // it proves is that those replies are **accounted**, which is what made
+    // them a way around the bound before.
+    for (let i = 0; i < 200; i++) socket.send('{"jsonrpc":"2.0",');
+    await expect.poll(() => pressureOf().snapshot().highWaterBytes, { timeout: 10_000 }).toBeGreaterThan(0);
+    raw.resume();
+    expect(closeCode).toBeUndefined();
   }, 40_000);
 });

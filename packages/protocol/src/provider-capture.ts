@@ -78,8 +78,15 @@ export interface ProviderCaptureMeta {
  * `summary-mode` — this installation stores summaries only.
  * `interrupted` — the stream stopped before it ended, or a bound evicted it.
  * `corrupt` — what arrived did not match the size, order or digest declared.
+ * `unredacted` — a credential-shaped field survived redaction, so nothing was kept.
  */
-export type ProviderCaptureOmission = "over-ceiling" | "link-busy" | "summary-mode" | "interrupted" | "corrupt";
+export type ProviderCaptureOmission =
+  | "over-ceiling"
+  | "link-busy"
+  | "summary-mode"
+  | "interrupted"
+  | "corrupt"
+  | "unredacted";
 
 /** One sentence per reason, shared by the store and the inspector. */
 export const PROVIDER_CAPTURE_OMISSION_REASONS: Readonly<Record<ProviderCaptureOmission, string>> = {
@@ -88,6 +95,7 @@ export const PROVIDER_CAPTURE_OMISSION_REASONS: Readonly<Record<ProviderCaptureO
   "summary-mode": "this installation keeps request summaries only",
   interrupted: "the capture stopped before it finished",
   corrupt: "what arrived did not match what was announced",
+  unredacted: "a credential-shaped field could not be removed from it",
 };
 
 export function isProviderCaptureId(value: unknown, max: number): value is string {

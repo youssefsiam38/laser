@@ -243,9 +243,10 @@ function RequestBody({entry}:{entry:LogEntry}) {
           <span className="ms-auto hidden text-xs text-ink-3 sm:inline">{scope==="request"?"All keys and values":"This section"}</span>
         </div>}/>}
       <div ref={find.viewport} data-slot="request-viewport" className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4">
-        {truncated&&<p role="alert" className="mb-3 text-sm text-attention">
-          Showing the first {formatBytes(cut?.shown??0)} of a {formatBytes(cut?.stored??0)} request
-          {cut?<> · fingerprint <span className="typed">{cut.sha256.slice(0,12)}…</span></>:null}. The rest is stored and is not on this
+        {truncated&&<p role="alert" data-slot="request-truncated" className="mb-3 text-sm text-attention">
+          Showing the first {(cut?.shown??0).toLocaleString()} bytes ({formatBytes(cut?.shown??0)}) of
+          a {(cut?.stored??0).toLocaleString()}-byte ({formatBytes(cut?.stored??0)}) request.
+          {cut?<> Fingerprint <span className="typed wrap-break-word">{cut.sha256}</span>.</>:null} The rest is stored and is not on this
           page, so structured sections and search cover only what is shown here. Sizes describe the redacted copy this app keeps.
         </p>}
         {/* Full search indexes the payload ONCE, never a concatenation of tabs.

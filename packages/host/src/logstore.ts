@@ -65,12 +65,14 @@
 import {
   PRODUCT_NAME,
   redact,
+  redactForStorage,
   type AgentRun,
   type ProviderCaptureMeta,
   type ProviderCaptureOmission,
   type ProviderCaptureSummary,
 } from "@lasercode/protocol";
 import { createHash } from "node:crypto";
+import { CONTENT_SCHEMA_VERSION, ContentStore } from "./content-store.js";
 import { chmodSync, mkdirSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
@@ -96,15 +98,6 @@ const DEFAULT_BYTE_BUDGET = 256 * 1024;
 /** Prunes between full orphaned-body sweeps (an unindexed anti-join). */
 const ORPHAN_SWEEP_EVERY = 10;
 const DEFAULT_LIMIT = 200;
-
-/**
- * A body above this is stored as bounded chunks (RP-7), so neither writing it
- * nor reading part of it materialises the whole thing. Below it, one row, as
- * the store has always done.
- */
-const CHUNKED_BODY_ABOVE = 1024 * 1024;
-/** One stored chunk. Small next to any read budget, large enough to be cheap. */
-const CONTENT_CHUNK_BYTES = 256 * 1024;
 
 /** Every reason a body cannot be opened, as the row records it. */
 const BODY_ABSENCE: readonly string[] = [
@@ -216,6 +209,9 @@ export interface LogStoreOptions {
  * and every test, keeps the same import.
  */
 export { redact };
+
+/** What a row keeps instead of a body that could not be cleaned (RP-7). */
+const UNREDACTABLE_BODY = "not recorded: a credential-shaped field could not be removed";
 
 /** What a caller hands `record()`. `id` and `at` are the store's business. */
 export interface LogInput {
@@ -363,25 +359,6 @@ function openDatabase(file: string): Database {
       content_type TEXT    NOT NULL,
       body         TEXT    NOT NULL
     );
-    -- A large body in bounded pieces (RP-7). node:sqlite has no incremental
-    -- blob I/O, so a single-column body cannot be written or read without
-    -- materialising all of it; these rows can. The content row stays, with
-    -- its true size, so the byte budget, the release path and every index over
-    -- it are unchanged, and an older binary reading this store sees an empty
-    -- body rather than a NULL it would throw on.
-    CREATE TABLE IF NOT EXISTS content_chunks (
-      ref    TEXT    NOT NULL,
-      idx    INTEGER NOT NULL,
-      bytes  INTEGER NOT NULL,
-      -- Integrity evidence per piece (RP-7): a read validates the bytes and
-      -- the digest of every chunk it hands back, so a body that was altered
-      -- on disk is reported as damaged rather than returned under the digest
-      -- of what it used to be. A complete read also checks the whole against
-      -- the content row's own digest.
-      sha256 TEXT    NOT NULL,
-      body   TEXT    NOT NULL,
-      PRIMARY KEY (ref, idx)
-    );
   `);
   // Additive migration: existing requests remain readable, without invented
   // prompt attribution. New captures carry branch-local entry identity.
@@ -390,31 +367,6 @@ function openDatabase(file: string): Database {
   // Additive migration for D-245: every existing row is retained (NULL) until
   // the budget pass decides otherwise, so an upgrade loses nothing at open.
   if (!columns.some((column) => column.name === "body_released")) db.exec("ALTER TABLE entries ADD COLUMN body_released TEXT");
-  // Additive migration for RP-7: a body already in one column stays there and
-  // is read exactly as before; only new large bodies are chunked.
-  const contentColumns = db.prepare("PRAGMA table_info(content)").all() as { name: string }[];
-  if (!contentColumns.some((column) => column.name === "chunked")) db.exec("ALTER TABLE content ADD COLUMN chunked INTEGER");
-  // Chunked bodies are new in this release and were briefly stored without
-  // their per-chunk integrity evidence. Rather than carry a shape nothing has
-  // shipped, a store written by that build gives those bodies up: the pieces
-  // and their content rows go, and the entries that pointed at them read as
-  // bodies retention no longer keeps — which is what they now are. Every
-  // other row, including every single-column body, is untouched.
-  const chunkColumns = db.prepare("PRAGMA table_info(content_chunks)").all() as { name: string }[];
-  if (chunkColumns.length > 0 && !chunkColumns.some((column) => column.name === "sha256")) {
-    db.exec("DELETE FROM content WHERE ref IN (SELECT DISTINCT ref FROM content_chunks)");
-    db.exec("DROP TABLE content_chunks");
-    db.exec(`
-      CREATE TABLE content_chunks (
-        ref    TEXT    NOT NULL,
-        idx    INTEGER NOT NULL,
-        bytes  INTEGER NOT NULL,
-        sha256 TEXT    NOT NULL,
-        body   TEXT    NOT NULL,
-        PRIMARY KEY (ref, idx)
-      );
-    `);
-  }
   db.exec(`
     CREATE INDEX IF NOT EXISTS entries_prompt ON entries(session_path, json_extract(request_context, '$.promptEntryId'), id);
     -- Partial indexes over exactly the rows retention walks: the oldest
@@ -431,6 +383,8 @@ function openDatabase(file: string): Database {
 
 export class LogStore {
   private readonly db: Database;
+  /** Where bodies live: their tables, their schema, their integrity (RP-7). */
+  private readonly content_: ContentStore;
   private readonly statements = new Map<string, ReturnType<Database["prepare"]>>();
   private readonly maxRows: number;
   private readonly maxAgeMs: number;
@@ -476,7 +430,19 @@ export class LogStore {
 
   constructor(options: LogStoreOptions) {
     this.file = options.file;
+    this.log = options.log ?? (() => {});
     this.db = openDatabase(options.file);
+    // Bodies own their tables and their schema. The migration is versioned and
+    // atomic, and refuses a database a newer Laser wrote rather than reshaping
+    // it (RP-7).
+    this.content_ = new ContentStore(this.db);
+    const migration = this.content_.migrate();
+    if (migration.ahead) {
+      this.log(
+        `log store: this file's body tables are version ${migration.from}, newer than this app understands (${CONTENT_SCHEMA_VERSION}); ` +
+          "leaving them as they are.",
+      );
+    }
     // 0 would make the OFFSET negative, which SQLite clamps to 0 — keeping one
     // row rather than none. A store has to hold at least one row to be a store.
     this.maxRows = Math.max(1, Math.trunc(options.maxRows ?? 200_000));
@@ -484,11 +450,10 @@ export class LogStore {
     this.maxAgeMs = (options.maxAgeDays ?? 14) * 24 * 60 * 60 * 1000;
     this.pruneEvery = options.pruneEvery ?? 500;
     this.onAppend = options.onAppend;
-    this.log = options.log ?? (() => {});
     this.bodyBudget = Math.max(0, Math.trunc(options.bodyBudgetBytes ?? DEFAULT_BODY_BUDGET_BYTES));
     this.bodiesPerSession = Math.max(1, Math.trunc(options.bodiesPerSession ?? BODIES_PER_SESSION));
     this.autoVacuum = this.pragma("auto_vacuum");
-    this.retainedBodyBytes = this.sumRetainedBodyBytes();
+    this.retainedBodyBytes = this.content_.totalBytes();
     this.prune();
     // What this store already holds is decided off the request path: an
     // upgrade from a version with no budget can have gigabytes to release.
@@ -501,6 +466,7 @@ export class LogStore {
     if (this.pruneTimer) clearTimeout(this.pruneTimer);
     this.pruneTimer = undefined;
     this.statements.clear();
+    this.content_.dispose();
     this.db.close();
   }
 
@@ -590,63 +556,33 @@ export class LogStore {
     preview: string | null;
   } {
     if (detail === undefined) return { inline: null, ref: null, bytes: null, contentType: null, preview: null };
-    const { value, count } = redact(detail);
-    // Say so rather than lying by omission: a row that dropped fields shows it.
-    const safe =
-      count > 0 && value !== null && typeof value === "object" && !Array.isArray(value)
-        ? { ...(value as Record<string, unknown>), laserRedactedFields: count }
-        : value;
-    let body: string;
-    try {
-      body = JSON.stringify(safe) ?? "null";
-    } catch {
-      // A payload with a cycle or a BigInt is still worth a row.
-      body = JSON.stringify({ laser: "payload was not JSON-serializable", type: typeof detail });
-    }
+    const projected = redactForStorage(detail);
+    // A body carrying a credential-shaped field the projection could not
+    // remove is not stored at all, and neither is a preview of it: the row
+    // keeps the placeholder below and says what happened. Only key names ever
+    // reach the log line.
+    const body = projected.ok
+      ? projected.body
+      : (() => {
+          this.log(
+            `log store: refused to keep a payload with ${projected.survivors.length} credential-shaped field(s) ` +
+              `(${projected.survivors.join(", ")})`,
+          );
+          return JSON.stringify({ laser: UNREDACTABLE_BODY });
+        })();
     const bytes = Buffer.byteLength(body, "utf8");
     const preview = body.slice(0, PREVIEW_CHARS);
     if (bytes <= INLINE_LIMIT) {
       return { inline: body, ref: null, bytes, contentType: "application/json", preview };
     }
-    return { inline: null, ...this.storeBody(body, bytes), preview };
-  }
-
-  /**
-   * Put one already-serialized, already-redacted body on disk, once (RP-7).
-   *
-   * Content is addressed by SHA-256, so a retried request costs one copy. A
-   * body past {@link CHUNKED_BODY_ABOVE} is written as bounded chunks in the
-   * same transaction as its `content` row: nothing ever holds more than one
-   * chunk beyond the caller's own string, in either direction, and a failure
-   * leaves neither the row nor its pieces.
-   */
-  private storeBody(body: string, knownBytes?: number, knownRef?: string): { ref: string; bytes: number; contentType: "application/json" } {
-    const bytes = knownBytes ?? Buffer.byteLength(body, "utf8");
-    const ref = knownRef ?? createHash("sha256").update(body).digest("hex");
-    const chunked = bytes > CHUNKED_BODY_ABOVE;
-    let inserted = false;
-    this.transaction(() => {
-      const stored = this
-        .statement("INSERT OR IGNORE INTO content (ref, bytes, content_type, body, chunked) VALUES (?,?,?,?,?)")
-        .run(ref, bytes, "application/json", chunked ? "" : body, chunked ? 1 : null);
-      inserted = Number(stored.changes) > 0;
-      if (!inserted || !chunked) return;
-      const insert = this.statement("INSERT OR IGNORE INTO content_chunks (ref, idx, bytes, sha256, body) VALUES (?,?,?,?,?)");
-      let index = 0;
-      for (const chunk of splitUtf8(body, CONTENT_CHUNK_BYTES)) {
-        insert.run(ref, index, Buffer.byteLength(chunk, "utf8"), createHash("sha256").update(chunk).digest("hex"), chunk);
-        index += 1;
-      }
-    });
-    // A body already on disk (same hash) costs nothing more, so it must not be
-    // charged twice against the budget.
-    if (inserted) {
-      this.retainedBodyBytes += bytes;
+    const stored = this.content_.put(body, bytes);
+    if (stored.inserted) {
+      this.retainedBodyBytes += stored.bytes;
       // The same body back on disk: rows that had it released have it again,
       // and must not go on saying "summary only" over a body that opens.
-      this.statement("UPDATE entries SET body_released = NULL WHERE detail_ref = ? AND body_released IS NOT NULL").run(ref);
+      this.statement("UPDATE entries SET body_released = NULL WHERE detail_ref = ? AND body_released IS NOT NULL").run(stored.ref);
     }
-    return { ref, bytes, contentType: "application/json" };
+    return { inline: null, ref: stored.ref, bytes: stored.bytes, contentType: stored.contentType, preview };
   }
 
   /** One statement group, or none of it. */
@@ -772,115 +708,29 @@ export class LogStore {
     text: string;
     released?: LogBodySummary;
   } {
-    const row = this.db.prepare("SELECT ref, bytes, content_type, body, chunked FROM content WHERE ref = ?").get(ref) as
-      | { ref: string; bytes: number; content_type: string; body: string; chunked: number | null }
-      | undefined;
-    if (!row) {
+    const read = this.content_.read(ref, maxBytes);
+    if (!read) {
       const released = this.releasedSummary(ref);
       if (released) return { ref, contentType: "application/json", bytes: released.bytes, truncated: false, text: "", released };
       throw new Error(
         `Log payload ${ref.slice(0, 12)}… is no longer stored. Retention removed the rows that referenced it.`,
       );
     }
-    if (row.chunked) {
-      const read = this.readChunked(ref, maxBytes, row.bytes);
-      if (!read) {
-        // The row exists and its pieces do not: a store that was interrupted
-        // or damaged. Say that, with the size and digest the row still knows,
-        // rather than handing back a short body that reads like a whole one.
-        return {
-          ref,
-          contentType: row.content_type,
-          bytes: row.bytes,
-          truncated: false,
-          text: "",
-          released: this.absentSummary(ref, "corrupt", row.bytes),
-        };
-      }
+    if (read.corrupt) {
+      // The row exists and what is stored for it cannot be trusted: a chunk
+      // was altered, reordered, shortened or lost. Say that, with the size and
+      // digest the row still knows, rather than handing back something that
+      // reads like the request.
       return {
-        ref: row.ref,
-        contentType: row.content_type,
-        bytes: row.bytes,
-        truncated: read.truncated,
-        ...(read.truncated ? { truncatedAt: Buffer.byteLength(read.text, "utf8") } : {}),
-        text: read.text,
+        ref,
+        contentType: "application/json",
+        bytes: read.bytes,
+        truncated: false,
+        text: "",
+        released: this.absentSummary(ref, "corrupt", read.bytes),
       };
     }
-    // `maxBytes` is a byte budget, so it is measured in bytes: a string index
-    // let three times that much UTF-8 through for non-Latin text, and cutting
-    // mid-code-point would hand the UI a replacement character.
-    const bodyBytes = Buffer.byteLength(row.body, "utf8");
-    const truncated = bodyBytes > maxBytes;
-    const text = truncated ? truncateUtf8(row.body, maxBytes) : row.body;
-    return {
-      ref: row.ref,
-      contentType: row.content_type,
-      bytes: row.bytes,
-      truncated,
-      ...(truncated ? { truncatedAt: Buffer.byteLength(text, "utf8") } : {}),
-      text,
-    };
-  }
-
-  /**
-   * Read a chunked body up to `maxBytes`, one chunk at a time.
-   *
-   * At most the requested budget plus one chunk is ever in this process, so
-   * opening a 16 MiB request with a 1 MiB budget costs 1 MiB, not 16. The full
-   * body is never assembled here.
-   */
-  private readChunked(ref: string, maxBytes: number, totalBytes: number): { text: string; truncated: boolean } | undefined {
-    // Stepped, not collected: at most the budget plus the one chunk that
-    // crosses it is ever in this process, whatever the body weighs. `all()`
-    // here would materialise all 16 MiB of a large capture to hand back one.
-    const rows = this
-      .statement("SELECT idx, bytes, sha256, body FROM content_chunks WHERE ref = ? ORDER BY idx ASC")
-      .iterate(ref) as IterableIterator<{ idx: number; bytes: number; sha256: string; body: string }>;
-    const pieces: string[] = [];
-    const whole = createHash("sha256");
-    let taken = 0;
-    let truncated = false;
-    let expected = 0;
-    let corrupt = false;
-    try {
-      for (const chunk of rows) {
-        // Everything this read hands back is checked before it is handed back,
-        // one chunk at a time: its position, its exact UTF-8 size and its own
-        // digest. A gap, a reordering or an altered byte is a body nobody can
-        // read, and it is reported as damaged rather than stitched together or
-        // returned under a digest it no longer matches.
-        if (chunk.idx !== expected || Buffer.byteLength(chunk.body, "utf8") !== chunk.bytes) {
-          corrupt = true;
-          break;
-        }
-        if (createHash("sha256").update(chunk.body).digest("hex") !== chunk.sha256) {
-          corrupt = true;
-          break;
-        }
-        expected += 1;
-        if (taken + chunk.bytes > maxBytes) {
-          // Fill the rest of the budget from this chunk, on a UTF-8 boundary,
-          // and stop: nothing after it is read.
-          if (taken < maxBytes) pieces.push(truncateUtf8(chunk.body, maxBytes - taken));
-          truncated = true;
-          break;
-        }
-        pieces.push(chunk.body);
-        whole.update(chunk.body);
-        taken += chunk.bytes;
-      }
-    } finally {
-      // Stop the statement where it stands; a half-stepped iterator would hold
-      // the read open for as long as the store lives.
-      rows.return?.();
-    }
-    if (corrupt || expected === 0) return undefined;
-    // A complete read is also checked as a whole: the pieces may each be
-    // intact and still not be the body this row is addressed by — a chunk
-    // missing from the end leaves a shorter body every piece of which passes.
-    // The digest is computed as the chunks go past, so nothing extra is held.
-    if (!truncated && (taken !== totalBytes || whole.digest("hex") !== ref)) return undefined;
-    return { text: pieces.join(""), truncated };
+    return read;
   }
 
   stats(): LogStats {
@@ -981,12 +831,8 @@ export class LogStore {
     const excess = Number(this.statement(`DELETE FROM entries WHERE id IN (
       SELECT id FROM entries WHERE id < (SELECT id FROM entries ORDER BY id DESC LIMIT 1 OFFSET ?) LIMIT 256
     )`).run(this.maxRows - 1).changes);
-    const orphans = this.sweepOrphans && aged < 256 && excess < 256
-      ? Number(this.statement(`DELETE FROM content WHERE ref IN (
-          SELECT ref FROM content WHERE NOT EXISTS (SELECT 1 FROM entries WHERE detail_ref = content.ref) LIMIT 256
-        )`).run().changes)
-      : 0;
-    if (orphans > 0) this.retainedBodyBytes = this.sumRetainedBodyBytes();
+    const orphans = this.sweepOrphans && aged < 256 && excess < 256 ? this.content_.collectOrphans(256) : 0;
+    if (orphans > 0) this.retainedBodyBytes = this.content_.totalBytes();
     const more = aged === 256 || excess === 256 || orphans === 256;
     if (!more) {
       this.pruneDue = false;
@@ -1127,22 +973,9 @@ export class LogStore {
    */
   private releaseBody(id: number, ref: string, reason: LogBodySummary["reason"]): void {
     this.statement("UPDATE entries SET body_released = ? WHERE id = ?").run(reason, id);
-    const stored = this.statement("SELECT bytes FROM content WHERE ref = ?").get(ref) as { bytes: number } | undefined;
-    if (!stored) return;
-    let dropped = 0;
-    this.transaction(() => {
-      dropped = Number(
-        this.statement(
-          `DELETE FROM content WHERE ref = ?
-             AND NOT EXISTS (SELECT 1 FROM entries WHERE detail_ref = ? AND body_released IS NULL)`,
-        ).run(ref, ref).changes,
-      );
-      // A chunked body's pieces go with its row, in the same transaction: a
-      // `content` row without its chunks would read as a corrupt body, and
-      // chunks without their row would be bytes nobody can account for.
-      if (dropped > 0) this.statement("DELETE FROM content_chunks WHERE ref = ?").run(ref);
-    });
-    if (dropped > 0) this.retainedBodyBytes = Math.max(0, this.retainedBodyBytes - stored.bytes);
+    const bytes = this.content_.sizeOf(ref);
+    if (bytes === 0) return;
+    if (this.content_.release(ref)) this.retainedBodyBytes = Math.max(0, this.retainedBodyBytes - bytes);
   }
 
   /**
@@ -1189,22 +1022,9 @@ export class LogStore {
     };
   }
 
-  private sumRetainedBodyBytes(): number {
-    try {
-      return Number((this.db.prepare("SELECT COALESCE(SUM(bytes), 0) AS n FROM content").get() as { n: number }).n);
-    } catch {
-      return 0;
-    }
-  }
-
   private collectOrphanedContent(): void {
-    this.db.exec(
-      "DELETE FROM content WHERE ref NOT IN (SELECT detail_ref FROM entries WHERE detail_ref IS NOT NULL)",
-    );
-    // Chunks follow their row, always: a piece whose body is gone is disk
-    // nobody can read and nobody is accounting for.
-    this.db.exec("DELETE FROM content_chunks WHERE ref NOT IN (SELECT ref FROM content)");
-    this.retainedBodyBytes = this.sumRetainedBodyBytes();
+    this.content_.collectAllOrphans();
+    this.retainedBodyBytes = this.content_.totalBytes();
   }
 
   // ------------------------------------------------------------- reclaiming
@@ -1333,7 +1153,8 @@ export class LogStore {
    */
   recordProviderCapture(cwd: string, sessionPath: string, meta: ProviderCaptureMeta, body: string): void {
     if (this.closed) return;
-    const stored = this.storeBody(body);
+    const stored = this.content_.put(body);
+    if (stored.inserted) this.retainedBodyBytes += stored.bytes;
     const entry = this.recordEncoded(
       {
         section: "provider",
@@ -1633,19 +1454,6 @@ export class LogStore {
 
 // ------------------------------------------------------------------ helpers
 
-/**
- * The longest prefix of `text` that fits `maxBytes` UTF-8 bytes, cut on a code
- * point boundary: the first dropped byte is never a continuation byte, so no
- * character is half-sent and no reader sees U+FFFD where data used to be.
- */
-function truncateUtf8(text: string, maxBytes: number): string {
-  if (maxBytes <= 0) return "";
-  const buffer = Buffer.from(text, "utf8");
-  if (buffer.length <= maxBytes) return text;
-  let end = maxBytes;
-  while (end > 0 && (buffer[end]! & 0xc0) === 0x80) end--;
-  return buffer.subarray(0, end).toString("utf8");
-}
 
 function toEntry(row: Row): LogEntry {
   return {

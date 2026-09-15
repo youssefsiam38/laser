@@ -239,8 +239,10 @@ it("opens a log's referenced payload without a message lookup and says exactly w
   await mount(<ApiRequestDialog target={{kind:"log",entry:{...entry,detail:undefined,detailRef:{ref:"a".repeat(64),bytes:9e6,preview:"payload"}}}} onClose={()=>{}}/>);
   expect(client.request).toHaveBeenCalledWith("pi/logs/content",{ref:"a".repeat(64),maxBytes:8*1024*1024});
   const text=document.body.textContent??"";
-  expect(text).toContain("Showing the first 14 B of a 8.6 MB request");
-  expect(text).toContain("aaaaaaaaaaaa…");
+  expect(text).toContain("Showing the first 14 bytes");
+  expect(text).toContain("9,000,000-byte");
+  // The whole digest: a prefix cannot be compared with anything.
+  expect(text).toContain("a".repeat(64));
   expect(text).toContain("redacted copy this app keeps");
   expect(document.querySelector('[role="alert"]')).not.toBeNull();
 });

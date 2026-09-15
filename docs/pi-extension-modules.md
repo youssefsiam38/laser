@@ -438,26 +438,32 @@ people never open.
 
 `provider-log` now owns the shape of that crossing:
 
-- **Redacted and serialized once, here.** The shared projection in
-  `@lasercode/protocol` (`redact`) is the same code the host runs on every other
-  row, so the bytes that cross are the bytes that are stored. The host still
-  checks what it receives with a bounded key-only scan and re-redacts a
-  survivor; a defence that printed the value it caught would be the leak it
-  exists to prevent.
+- **Redacted, serialized and verified once, here.** The shared projection in
+  `@lasercode/protocol` (`redactForStorage`) is the same code the host runs on
+  every other row: it redacts, serializes, and then reads its own output back
+  looking for a credential-shaped field that survived. Nothing deeper than the
+  redaction ceiling is kept at all — past it the subtree is replaced by a
+  sentinel and counted, so a credential below it cannot be stored unexamined —
+  and a survivor means the body is **not kept**: the request is recorded with
+  reason `unredacted` instead. The host applies the same projection to a body
+  it did not make, and a defence log names keys, never values.
 - **Small captures are unchanged.** At or below 1 MiB it is the same single
   message it always was.
 - **Large captures travel in bounded chunks** — `begin` with size, SHA-256,
   preview and the row's summary, then 256 KiB pieces cut on UTF-8 boundaries,
   then `end`. The link is re-read before every piece, because a clear pipe at
   the first chunk says nothing about the tenth and the loop does not yield; if
-  it fills, the capture stops with one small `abort` and becomes a row without
-  a body. The host reassembles under per-session, per-worker-generation and
+  the backlog this capture did not cause is past the mark — the session's own
+  updates waiting behind a diagnostic — the capture stops with one small
+  `abort` and becomes a row without a body. Its own bytes are not that signal:
+  a large capture puts itself over any mark, and the ceiling is what bounds it. The host reassembles under per-session, per-worker-generation and
   global bounds, verifies order, count, size and digest, and releases the pieces
   on every outcome — abort included, which is the one atomic path keyed by the
   capture id, so a capture is never two rows.
 - **A capture with no body is still a row.** Larger than 16 MiB, the link to the
-  app backed up, an installation that keeps summaries only, an interrupted
-  stream, a digest that did not match: each records the request with its exact
+  app backed up with somebody else's traffic, an installation that keeps
+  summaries only, an interrupted stream, a digest that did not match, a
+  credential that could not be removed: each records the request with its exact
   redacted size, its digest and its reason, and the inspector says which in a
   person's words. Sizes and digests always describe the redacted copy the app
   keeps, and every surface that shows them says so.

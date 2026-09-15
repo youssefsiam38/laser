@@ -108,23 +108,33 @@ it("skips the body while the link to the app is backed up, and still records the
 it("stops a capture the moment the link fills, and says so once", async () => {
   // A clear pipe at the first chunk says nothing about the tenth: this loop
   // does not yield, so the link is re-read before every piece.
-  let pending = 0;
+  // Somebody else's backlog: the session's own updates are waiting, and this
+  // capture's own chunks are not what is measured.
+  let others = 0;
+  let mine = 0;
   const { handlers, send } = await activate({
-    pendingBytes: () => pending,
+    pendingBytes: () => others + mine,
     retainBodies: () => true,
   });
   const sent: unknown[] = [];
   send.mockImplementation((message: unknown) => {
     sent.push(message);
-    const type = (message as { type: string }).type;
-    // The pipe fills while the capture is going out.
-    if (type === "lasercode/provider/request/chunk") pending = WORKER_PIPE_SOFT_BYTES + 1;
+    const chunk = message as { type: string; text?: string };
+    if (chunk.type !== "lasercode/provider/request/chunk") return;
+    mine += Buffer.byteLength(chunk.text ?? "", "utf8");
+    // After the first piece, the link fills with traffic this capture did not
+    // cause.
+    others = WORKER_PIPE_SOFT_BYTES + 1;
   });
   await handlers.get("before_provider_request")!({ payload: payloadOf(3 * 1024 * 1024) }, ctx);
 
   const types = sent.map((message) => (message as { type: string }).type);
   expect(types[0]).toBe("lasercode/provider/request/begin");
-  expect(types.filter((type) => type === "lasercode/provider/request/chunk")).toHaveLength(1);
+  // A few chunks may go while the link is only briefly over its mark; what
+  // must not happen is the whole capture going into a link nobody is reading.
+  const chunksSent = types.filter((type) => type === "lasercode/provider/request/chunk").length;
+  expect(chunksSent).toBeGreaterThan(0);
+  expect(chunksSent).toBeLessThanOrEqual(2);
   expect(types).not.toContain("lasercode/provider/request/end");
   // Exactly one terminal message, and it names the reason.
   const aborts = sent.filter((message) => (message as { type: string }).type === "lasercode/provider/request/abort");
@@ -135,15 +145,45 @@ it("stops a capture the moment the link fills, and says so once", async () => {
   // What it handed the link before stopping is bounded: the metadata, one
   // chunk, and the small terminal frame.
   const bytes = sent.reduce((total, message) => total + Buffer.byteLength(JSON.stringify(message), "utf8"), 0);
-  expect(bytes).toBeLessThan(CAPTURE_CHUNK_BYTES * 2);
+  expect(bytes).toBeLessThan(CAPTURE_CHUNK_BYTES * 4);
 });
 
-it("sends the whole capture while the link stays clear", async () => {
-  const { handlers, send } = await activate({ pendingBytes: () => 0, retainBodies: () => true });
-  await handlers.get("before_provider_request")!({ payload: payloadOf(2 * 1024 * 1024) }, ctx);
+it("sends the whole capture while the link carries nothing else", async () => {
+  // The capture's own bytes are in the pipe, and that is not a reason to give
+  // up on it: the ceiling is what bounds a capture, not its own backlog.
+  let mine = 0;
+  const { handlers, send } = await activate({ pendingBytes: () => mine, retainBodies: () => true });
+  send.mockImplementation((message: unknown) => {
+    const chunk = message as { type: string; text?: string };
+    if (chunk.type === "lasercode/provider/request/chunk") mine += Buffer.byteLength(chunk.text ?? "", "utf8");
+  });
+  await handlers.get("before_provider_request")!({ payload: payloadOf(12 * 1024 * 1024) }, ctx);
   const types = send.mock.calls.map((call) => call[0].type);
   expect(types).not.toContain("lasercode/provider/request/abort");
   expect(types[types.length - 1]).toBe("lasercode/provider/request/end");
+});
+
+it("records the request without a body when a credential cannot be removed", async () => {
+  const { handlers, send } = await activate();
+  // Produced at serialization time, so the structural pass never sees it: the
+  // producer reads its own output back and refuses to send the body.
+  const hostile = {
+    model: "test",
+    evidence: {
+      toJSON() {
+        return { api_key: "sk-live-canary-9c1" };
+      },
+    },
+  };
+  await handlers.get("before_provider_request")!({ payload: hostile }, ctx);
+  expect(send).toHaveBeenCalledTimes(1);
+  const message = send.mock.calls[0]![0];
+  expect(message).toMatchObject({ type: "lasercode/provider/request/omitted", reason: "unredacted" });
+  // Nothing describing a body nobody may keep: no size, no digest, no preview.
+  expect(message.bytes).toBe(0);
+  expect(message.sha256).toBe("");
+  expect(message.preview).toBe("");
+  expect(JSON.stringify(message)).not.toContain("sk-live-canary-9c1");
 });
 
 it("sends nothing but a summary when this installation keeps no bodies", async () => {

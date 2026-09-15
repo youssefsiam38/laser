@@ -8,6 +8,9 @@ import { createHash } from "node:crypto";
 import { WIRE_NAMESPACE, type JsonRpcNotification, type LogPage, type ClientRequests } from "@lasercode/protocol";
 import { HostServer } from "../src/server.js";
 
+/** One worker process's opaque identity, as the pool would supply it. */
+const WORKER = { generation: "gen-test" };
+
 let host: HostServer | undefined;
 let root: string | undefined;
 afterEach(async () => { await host?.close(); if (root) rmSync(root, { recursive: true, force: true }); });
@@ -25,7 +28,7 @@ it("delivers log references, not raw captures, while retaining the complete insp
   // Same observation/broadcast boundary as the worker-pool callback; no engine
   // or paid provider is needed to inject an exact multi-megabyte capture.
   const ingress = host as unknown as {
-    observe(cwd: string, n: JsonRpcNotification): void;
+    observe(cwd: string, n: JsonRpcNotification, source?: { generation: string }): void;
     broadcast(n: JsonRpcNotification): void;
     notificationListeners: Set<(n: JsonRpcNotification) => void>;
   };
@@ -67,7 +70,7 @@ it("keeps every chunked capture message inside the host, and still records the r
   socket.on("message", data => traffic.push(data.toString()));
   await new Promise<void>(resolve => socket.once("open", resolve));
   const ingress = host as unknown as {
-    observe(cwd: string, n: JsonRpcNotification): void;
+    observe(cwd: string, n: JsonRpcNotification, source?: { generation: string }): void;
     broadcast(n: JsonRpcNotification): void;
     notificationListeners: Set<(n: JsonRpcNotification) => void>;
   };
@@ -96,7 +99,9 @@ it("keeps every chunked capture message inside the host, and still records the r
   ];
   for (const message of messages) {
     const notification: JsonRpcNotification = { jsonrpc: "2.0", method: "pi/extension/message", params: { path: "/s", message } };
-    ingress.observe(root, notification);
+    // Capture messages name the worker process they came from: the host only
+    // accepts them with that identity (RP-7).
+    ingress.observe(root, notification, WORKER);
     ingress.broadcast(notification);
   }
   host.notify("pi/project/updated", { projects: [] });
@@ -116,7 +121,7 @@ it("keeps every chunked capture message inside the host, and still records the r
 it("records an aborted capture once, and keeps none of it", async () => {
   root = mkdtempSync(join(tmpdir(), "provider-delivery-abort-"));
   host = new HostServer({ agentDir: join(root, "agent"), sessionDir: join(root, "sessions"), stateDir: join(root, "state") });
-  const ingress = host as unknown as { observe(cwd: string, n: JsonRpcNotification): void };
+  const ingress = host as unknown as { observe(cwd: string, n: JsonRpcNotification, source?: { generation: string }): void };
   const body = JSON.stringify({ model: "m", messages: [{ role: "user", content: "z".repeat(2 * 1024 * 1024) }] });
   const meta = {
     captureId: "c-abababababababab",
@@ -129,7 +134,7 @@ it("records an aborted capture once, and keeps none of it", async () => {
     summary: { model: "m", messages: 1 },
   };
   const observe = (message: unknown) =>
-    ingress.observe(root!, { jsonrpc: "2.0", method: "pi/extension/message", params: { path: "/s", message } });
+    ingress.observe(root!, { jsonrpc: "2.0", method: "pi/extension/message", params: { path: "/s", message } }, WORKER);
   observe({ type: `${WIRE_NAMESPACE}/provider/request/begin`, ...meta });
   observe({ type: `${WIRE_NAMESPACE}/provider/request/chunk`, captureId: meta.captureId, index: 0, text: body.slice(0, 1000) });
   // The link filled while the worker was sending: it stops where it is.
@@ -148,7 +153,7 @@ it("records an aborted capture once, and keeps none of it", async () => {
 it("records a capture the worker chose not to send, with its size, digest and reason", async () => {
   root = mkdtempSync(join(tmpdir(), "provider-delivery-omitted-"));
   host = new HostServer({ agentDir: join(root, "agent"), sessionDir: join(root, "sessions"), stateDir: join(root, "state") });
-  const ingress = host as unknown as { observe(cwd: string, n: JsonRpcNotification): void };
+  const ingress = host as unknown as { observe(cwd: string, n: JsonRpcNotification, source?: { generation: string }): void };
   const meta = {
     captureId: "c-fedcba9876543210",
     at: new Date().toISOString(),
@@ -158,11 +163,15 @@ it("records a capture the worker chose not to send, with its size, digest and re
     redactedFields: 2,
     summary: { model: "m", messages: 40 },
   };
-  ingress.observe(root, {
-    jsonrpc: "2.0",
-    method: "pi/extension/message",
-    params: { path: "/s", message: { type: `${WIRE_NAMESPACE}/provider/request/omitted`, ...meta, reason: "over-ceiling" } },
-  });
+  ingress.observe(
+    root,
+    {
+      jsonrpc: "2.0",
+      method: "pi/extension/message",
+      params: { path: "/s", message: { type: `${WIRE_NAMESPACE}/provider/request/omitted`, ...meta, reason: "over-ceiling" } },
+    },
+    WORKER,
+  );
   const content = await host.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/logs/content", params: { ref: meta.sha256 } }, LOCAL_ACCESS);
   const result = content.result as ClientRequests["pi/logs/content"]["result"];
   expect(result.released).toMatchObject({ reason: "over-ceiling", bytes: meta.bytes, sha256: meta.sha256, preview: meta.preview });

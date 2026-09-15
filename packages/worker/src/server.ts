@@ -699,6 +699,9 @@ export class WorkerServer {
             // What this worker's link to the app is holding right now (RP-7):
             // bytes accepted and not yet written, plus a partial frame being
             // read. Numbers only; never a payload and never a path.
+            // Bytes accepted for the app and not yet written. A frame count
+            // is the host's to report: what is here is a byte backlog, and
+            // saying "one frame" for it would be a different number's name.
             providerQueues: { count: 0, bytes: this.options.transportPending?.() ?? 0 },
           },
         } satisfies Result<"pi/worker/retained-stores">;

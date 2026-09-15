@@ -80,9 +80,11 @@ it("explains a released request body in the inspector and offers what was kept",
   const text = document.body.textContent ?? "";
   expect(text).toContain("Only this request’s summary was kept");
   expect(text).toContain("newer requests since");
-  // The summary that was kept, in a person's units — not a byte count or a hash.
+  // The summary that was kept, and the exact size of the copy this app would
+  // have held: a rounded number is not evidence (RP-7 review).
   expect(text).toContain("claude-sonnet-4-5");
   expect(text).toContain("412");
+  expect(text).toContain("1,100,000 bytes");
   expect(text).toContain("1.0 MB");
   expect(text).toContain(released.preview);
   // Not an error, and not the "nothing was recorded" state either.
@@ -122,8 +124,10 @@ it("explains a capture whose body was never kept, with its size, fingerprint and
   await mount(<ApiRequestDialog target={{ kind: "log", entry }} onClose={() => {}} />);
   const text = document.body.textContent ?? "";
   expect(text).toContain("larger than the size kept in full");
+  expect(text).toContain("18,874,368 bytes");
   expect(text).toContain("18.0 MB");
-  expect(text).toContain("bbbbbbbbbbbb…bbbb");
+  // The whole digest, not a decoration of one.
+  expect(text).toContain("b".repeat(64));
   expect(text).toContain("redacted copy this app would have kept");
   expect(document.querySelector('[role="alert"]')).toBeNull();
 });
@@ -134,6 +138,7 @@ it("names every reason the store or the capture can give", async () => {
     "summary-mode": "keep request summaries only",
     interrupted: "stopped before all of it had arrived",
     corrupt: "did not match the size and fingerprint",
+    unredacted: "credential-shaped field could not be removed",
   };
   for (const [reason, sentence] of Object.entries(sentences)) {
     answer({

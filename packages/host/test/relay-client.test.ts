@@ -604,7 +604,7 @@ describe("RelayClient", () => {
     expect(errors.at(-1)?.message).toMatch(/HTTP 429/);
   });
 
-  it("drops outbound frames rather than queueing without bound when the peer stalls", async () => {
+  it("fences the channel rather than dropping a device's own state when the queue fills", async () => {
     const h = await harness({ maxOutboundQueue: 4 });
     const phone = await Phone.attach(h.url, h.channelId, h.device, h.desktop.publicKey);
     cleanup.push(() => phone.close());
@@ -613,19 +613,38 @@ describe("RelayClient", () => {
 
     await following(phone, h, "/s/a.jsonl");
     const delivered = () => phone.messages.filter((message) => (message as { method?: string }).method === "session/update");
-    // Forty updates enqueued in one synchronous burst: nothing has drained yet,
-    // so everything past the cap is dropped and counted, as the shaped path's
-    // own `maxQueue` does.
+    // Forty updates in one synchronous burst, past a four-frame cap. A
+    // transcript update is state: the device cannot be told to do without it,
+    // so the channel is closed and the device re-reads with
+    // `session/load { fromSeq }` when it comes back (RP-7, security.md §7).
     for (let seq = 1; seq <= 40; seq++) h.notify(update("/s/a.jsonl", seq));
-    await until(() => h.client.statistics().outboundQueueDropped > 0, 2000, "the queue to refuse a frame");
-    await until(() => delivered().length >= 4, 2000, "the frames that were accepted");
-    expect(h.client.statistics().outboundQueueDropped).toBe(36);
-    expect(delivered()).toHaveLength(4);
-    expect(h.errors.at(-1)?.message).toMatch(/outbound queue is full \(4 frames\)/);
+    await until(() => h.client.state !== "connected", 3000, "the channel to be fenced");
+    expect(h.client.statistics().outboundQueueDropped).toBe(0);
+    expect(h.errors.at(-1)?.message).toMatch(/not draining its connection/);
+    // Nothing is kept for a fenced channel: there is only one resume path.
+    expect(h.client.transportPressure().queuedBytes).toBe(0);
+    expect(delivered().length).toBeLessThanOrEqual(40);
+  });
 
-    // And the connection still works: this is backpressure, not a failure.
-    h.notify(update("/s/a.jsonl", 41));
-    await until(() => delivered().length === 5, 2000, "a later notification");
+  it("releases the diagnostics a device can read back instead of closing on them", async () => {
+    const h = await harness({ maxOutboundQueue: 4 });
+    const phone = await Phone.attach(h.url, h.channelId, h.device, h.desktop.publicKey);
+    cleanup.push(() => phone.close());
+    await phone.ready();
+    await until(() => h.client.state === "connected", 2000, "connected");
+    await following(phone, h, "/s/a.jsonl");
+
+    // The same burst past the same cap, of the one notification the protocol
+    // declares re-readable: it is released and counted, and the channel is not
+    // closed for it — the device can ask `pi/logs/query` for those rows.
+    for (let n = 0; n < 40; n++) {
+      h.notify({ jsonrpc: "2.0", method: "pi/logs/append", params: { entries: [{ id: n, summary: "x".repeat(200) }] } });
+    }
+    await until(() => h.client.statistics().diagnosticsShed > 0, 3000, "a released diagnostic");
+    expect(h.client.state).toBe("connected");
+    expect(h.errors.map((error) => error.message).join(" ")).not.toMatch(/not draining/);
+    // Nothing that carries state was touched by any of it.
+    expect(h.client.statistics().notificationsDropped).toBe(0);
   });
 
   it("backs off and retries when the relay refuses the upgrade outright", async () => {

@@ -25,7 +25,7 @@ import {
   CAPTURE_CHUNK_BYTES,
   CAPTURE_MAX_BYTES,
   WORKER_PIPE_SOFT_BYTES,
-  redact,
+  redactForStorage,
   type InstructionSourceMap,
   type ProviderCaptureLink,
   type ProviderCaptureMeta,
@@ -53,27 +53,30 @@ export function summarize(payload: unknown): ProviderCaptureSummary {
   };
 }
 
-/** Redact, serialize once, and measure exactly what would be stored. */
-export function encodeCapture(payload: unknown): { body: string; bytes: number; sha256: string; preview: string; redactedFields: number } {
-  const { value, count } = redact(payload);
-  // Say so rather than lying by omission: a row that dropped fields shows it,
-  // exactly as the store's own path has always done.
-  const safe =
-    count > 0 && value !== null && typeof value === "object" && !Array.isArray(value)
-      ? { ...(value as Record<string, unknown>), laserRedactedFields: count }
-      : value;
-  let body: string;
-  try {
-    body = JSON.stringify(safe) ?? "null";
-  } catch {
-    body = JSON.stringify({ laser: "payload was not JSON-serializable", type: typeof payload });
-  }
+export type EncodedCapture =
+  | { ok: true; body: string; bytes: number; sha256: string; preview: string; redactedFields: number; depthOmissions: number }
+  | { ok: false; reason: "unredacted"; survivors: string[] };
+
+/**
+ * Redact, serialize once, verify, and measure exactly what would be stored.
+ *
+ * The verification is the point: a credential-shaped field that survives the
+ * projection means this text must not be kept at all, and the caller records
+ * the request without a body instead. Nothing about a refused body — not even
+ * its preview — is ever produced.
+ */
+export function encodeCapture(payload: unknown): EncodedCapture {
+  const projected = redactForStorage(payload);
+  if (!projected.ok) return { ok: false, reason: projected.reason, survivors: projected.survivors };
+  const { body, redactedFields, depthOmissions } = projected;
   return {
+    ok: true,
     body,
     bytes: Buffer.byteLength(body, "utf8"),
     sha256: createHash("sha256").update(body).digest("hex"),
     preview: body.slice(0, PREVIEW_CHARS),
-    redactedFields: count,
+    redactedFields,
+    depthOmissions,
   };
 }
 
@@ -111,20 +114,22 @@ export const providerLogModule: LaserModule = {
       const at = new Date().toISOString();
       const keepsBodies = captureLink?.retainBodies() ?? true;
       const encoded = encodeCapture(event.payload);
-      const meta: ProviderCaptureMeta = {
+      const base = {
         captureId: newCaptureId(),
         at,
-        bytes: encoded.bytes,
-        sha256: encoded.sha256,
-        preview: encoded.preview,
-        redactedFields: encoded.redactedFields,
         summary: summarize(event.payload),
         ...(Object.keys(context).length > 0 ? { context } : {}),
       };
+      const meta: ProviderCaptureMeta = encoded.ok
+        ? { ...base, bytes: encoded.bytes, sha256: encoded.sha256, preview: encoded.preview, redactedFields: encoded.redactedFields }
+        : // A body that could not be cleaned has no size, digest or preview to
+          // report: none of them may be computed over text nobody may keep.
+          { ...base, bytes: 0, sha256: "", preview: "", redactedFields: 0 };
       const omit = (reason: ProviderCaptureOmission): undefined => {
         send({ type: "lasercode/provider/request/omitted", ...meta, reason });
         return undefined;
       };
+      if (!encoded.ok) return omit("unredacted");
       if (!keepsBodies) return omit("summary-mode");
       if (encoded.bytes > CAPTURE_MAX_BYTES) return omit("over-ceiling");
       if ((captureLink?.pendingBytes() ?? 0) > WORKER_PIPE_SOFT_BYTES) return omit("link-busy");
@@ -138,18 +143,27 @@ export const providerLogModule: LaserModule = {
 
       const chunks = chunkBody(encoded.body);
       send({ type: "lasercode/provider/request/begin", ...meta, chunks: chunks.length });
+      let written = 0;
       for (const [index, text] of chunks.entries()) {
         // The link is re-read before every piece, not once at the start: a
-        // clear pipe at the first chunk says nothing about the tenth, and this
-        // loop does not yield, so a single unchecked pass could hand the link
-        // the whole capture before anything drained. Above the mark the
-        // capture stops where it is — one small abort, the pieces the host
-        // holds are released, and the request is still recorded, without its
-        // body and with the reason.
-        if (index > 0 && (captureLink?.pendingBytes() ?? 0) > WORKER_PIPE_SOFT_BYTES) {
+        // clear pipe at the first chunk says nothing about the tenth.
+        //
+        // What is measured is the backlog **this capture did not cause**. A
+        // large capture puts itself over any mark — the loop does not yield,
+        // so nothing can drain while it runs — and aborting on that would mean
+        // no large capture is ever kept. Somebody else's backlog past the mark
+        // is the real signal: the session's own updates are waiting behind a
+        // diagnostic, and the diagnostic is the one that gives way. It stops
+        // where it is with one small abort, the host releases the pieces it
+        // holds, and the request is still recorded, without its body and with
+        // the reason. The total a capture can ever hand the link is bounded by
+        // the capture ceiling regardless.
+        const others = (captureLink?.pendingBytes() ?? 0) - written;
+        if (others > WORKER_PIPE_SOFT_BYTES) {
           send({ type: "lasercode/provider/request/abort", captureId: meta.captureId, reason: "link-busy" });
           return undefined;
         }
+        written += Buffer.byteLength(text, "utf8");
         send({ type: "lasercode/provider/request/chunk", captureId: meta.captureId, index, text });
       }
       send({ type: "lasercode/provider/request/end", captureId: meta.captureId, chunks: chunks.length, bytes: encoded.bytes });
