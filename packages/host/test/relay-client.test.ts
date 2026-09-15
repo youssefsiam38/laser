@@ -282,7 +282,7 @@ async function harness(options: {
  */
 async function following(phone: Phone, h: { requests: unknown[] }, path: string, id = 900): Promise<void> {
   const before = h.requests.length;
-  await phone.send({ jsonrpc: "2.0", id, method: "session/load", params: { path, fromSeq: 0, transcript: "loaded" } });
+  await phone.send({ jsonrpc: "2.0", id, method: "session/load", params: { path, fromSeq: 0 } });
   await until(() => h.requests.length > before, 2000, `the ${path} load to reach the host`);
   await until(() => phone.messages.some((message) => (message as { id?: number }).id === id), 2000, `the ${path} load reply`);
 }
@@ -316,7 +316,7 @@ describe("RelayClient", () => {
     await phone.ready();
     await until(() => h.client.state === "connected", 2000, "connected");
 
-    await phone.send({ jsonrpc: "2.0", id: 1, method: "session/load", params: { path: "/s/a.jsonl", fromSeq: 0, transcript: "loaded" } });
+    await phone.send({ jsonrpc: "2.0", id: 1, method: "session/load", params: { path: "/s/a.jsonl", fromSeq: 0 } });
     await until(() => phone.messages.length === 3, 2000, "update, response, and question");
     expect(phone.messages.map((message) => (message as { method?: string; id?: number }).method ?? `response:${(message as { id: number }).id}`))
       .toEqual(["session/update", "response:1", "pi/ui/request"]);
@@ -375,12 +375,11 @@ describe("RelayClient", () => {
     expect(second.messages[0]).toMatchObject({ id: 2, result: { ok: true } });
   });
 
-  it("forwards notifications only while a device is attached, and tracks each session's seq", async () => {
+  it("forwards notifications only while a device is attached and following", async () => {
     const h = await harness();
     // Before anyone attaches: dropped, not queued — the device resumes with fromSeq.
     h.notify(update("/s/a.jsonl", 7));
     expect(h.client.statistics().notificationsDropped).toBe(1);
-    expect(h.client.lastSeq.get("/s/a.jsonl")).toBe(7);
 
     const phone = await Phone.attach(h.url, h.channelId, h.device, h.desktop.publicKey);
     cleanup.push(() => phone.close());
@@ -391,7 +390,11 @@ describe("RelayClient", () => {
     h.notify(update("/s/a.jsonl", 8));
     await until(() => phone.messages.some((message) => (message as { method?: string }).method === "session/update"), 2000, "the notification");
     expect(phone.messages.find((message) => (message as { method?: string }).method === "session/update")).toMatchObject({ method: "session/update", params: { seq: 8 } });
-    expect(h.client.lastSeq.get("/s/a.jsonl")).toBe(8);
+    // A session this device never said it was showing stays filtered.
+    const before = phone.messages.length;
+    h.notify(update("/s/unfollowed.jsonl", 3));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(phone.messages).toHaveLength(before);
   });
 
   it("survives a tool result far larger than the relay's frame ceiling", async () => {

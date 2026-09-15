@@ -7,14 +7,15 @@ const failure = { jsonrpc: "2.0" as const, id: 1, error: { code: -1, message: "g
 const update = (path: string): JsonRpcNotification => ({ jsonrpc: "2.0", method: "session/update", params: { sessionPath: path, seq: 1, at: new Date(0).toISOString(), update: { kind: "text_delta", text: "x".repeat(1000) } } });
 const success = { jsonrpc: "2.0" as const, id: 1, result: {} };
 const load = (d: TranscriptDelivery, path: string, options: { owner?: string } = {}) =>
-  d.begin({ jsonrpc: "2.0", id: 1, method: "session/load", params: { path, fromSeq: 0, transcript: "loaded", ...(options.owner ? { owner: options.owner } : {}) } });
+  d.begin({ jsonrpc: "2.0", id: 1, method: "session/load", params: { path, fromSeq: 0, ...(options.owner ? { owner: options.owner } : {}) } });
 const detach = (d: TranscriptDelivery, path: string, owner?: string) =>
   d.begin({ jsonrpc: "2.0", id: 2, method: "pi/session/detach", params: { path, ...(owner ? { owner } : {}) } }).finish(success);
 
 it("admits replay before the load reply, keeps a newly created session, and leaves lifecycle/questions global", () => {
   const d = new TranscriptDelivery();
   // A connection that has asked for nothing is shown nothing: delivery is
-  // scoped from the first byte, not from the first `transcript: "loaded"`.
+  // scoped from the first byte: a socket that has asked for nothing hears
+  // nothing.
   expect(d.accepts(update("/other"))).toBe(false);
   const loading = load(d, "/a");
   expect(d.accepts(update("/a"))).toBe(true);
@@ -55,6 +56,7 @@ it("counts owners per connection: one scope leaving does not unsubscribe the oth
   expect(d.holders("/a")).toBe(0);
   expect(d.accepts(update("/a"))).toBe(false);
   expect(d.counts()).toEqual({ paths: 0, owners: 0 });
+  expect([...d.paths()]).toEqual([]);
 });
 
 it("a detach during a load releases that load, and only a later load re-admits", () => {
@@ -146,17 +148,39 @@ it("counts an attach that is still in flight as a hold, so nothing is unloaded u
   expect(d.admittedHolders("/opening")).toBe(1);
 });
 
-it("does not lose first events of new or forked sessions", () => {
+it("follows a session it created, and nothing else, while it is being created", () => {
   const d = new TranscriptDelivery();
   load(d, "/a").finish(success);
   for (const method of ["session/new", "pi/session/fork"]) {
     const creating = d.begin({ jsonrpc: "2.0", id: 2, method, params: method === "session/new" ? { cwd: "/project" } : { path: "/a", entryId: "e" } });
-    expect(d.accepts(update("/new"))).toBe(true);
+    // A create reserves a slot; it does not open the connection to every
+    // conversation on the machine while it runs. The response's own state is
+    // what the client starts from.
+    expect(d.accepts(update("/other"))).toBe(false);
+    expect(d.accepts(update("/new"))).toBe(false);
     creating.finish({ jsonrpc: "2.0", id: 2, result: { state: { path: "/new" } } });
+    // Created, so followed: the path the response named.
     expect(d.accepts(update("/new"))).toBe(true);
+    expect(d.holders("/new")).toBe(1);
     expect(d.accepts(update("/other"))).toBe(false);
     detach(d, "/new");
   }
+});
+
+it("keeps unrelated updates out while several creates overlap, and releases a failed create's slot", () => {
+  const d = new TranscriptDelivery();
+  const first = d.begin({ jsonrpc: "2.0", id: 1, method: "session/new", params: { cwd: "/project" } });
+  const second = d.begin({ jsonrpc: "2.0", id: 2, method: "session/new", params: { cwd: "/project" } });
+  const third = d.begin({ jsonrpc: "2.0", id: 3, method: "session/new", params: { cwd: "/project" } });
+  expect(d.accepts(update("/unrelated"))).toBe(false);
+  second.finish({ jsonrpc: "2.0", id: 2, result: { state: { path: "/second" } } });
+  expect(d.accepts(update("/second"))).toBe(true);
+  expect(d.accepts(update("/unrelated"))).toBe(false);
+  first.finish({ jsonrpc: "2.0", id: 1, result: { state: { path: "/first" } } });
+  // A create that failed gives its reservation back rather than holding a slot.
+  third.finish({ jsonrpc: "2.0", id: 3, error: { code: -1, message: "no" } });
+  expect(d.counts()).toEqual({ paths: 2, owners: 2 });
+  expect(d.accepts(update("/first"))).toBe(true);
 });
 
 it("bounds held and in-flight surfaces together, and refuses rather than half-serving", () => {
@@ -175,6 +199,8 @@ it("bounds held and in-flight surfaces together, and refuses rather than half-se
   for (let index = 0; index < MEMBERSHIP_PATHS_MAX + 6; index++) paths.push(load(d, `/p${index}`));
   expect(d.counts().paths).toBe(MEMBERSHIP_PATHS_MAX);
   expect(paths.some((entry) => entry.refusal === MEMBERSHIP_REFUSAL)).toBe(true);
+  // A create cannot slip past the same bound either.
+  expect(d.begin({ jsonrpc: "2.0", id: 9, method: "session/new", params: { cwd: "/project" } }).refusal).toBe(MEMBERSHIP_REFUSAL);
   for (const entry of paths) entry.finish(success);
   expect(d.counts().paths).toBe(MEMBERSHIP_PATHS_MAX);
   // Every refused surface is refused in words a person can act on.

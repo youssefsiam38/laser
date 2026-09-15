@@ -394,5 +394,5 @@ export interface BackgroundWorkOptions {
    * callbacks it holds, which is the only way to observe a session whose
    * storage has stopped draining.
    */
-  logWrite?: (fd: number, chunk: Buffer) => Promise<void>;
+  logWrite?: (fd: number, chunk: Buffer) => Promise<number>;
 }

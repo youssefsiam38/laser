@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProtocolError, type BackgroundTask, type BackgroundTaskUpdate } from "@lasercode/protocol";
-import { TaskRegister } from "../../src/tasks/register.js";
+import { MAX_REGISTER_BYTES, MAX_SESSIONS_WITH_TASKS, TaskRegister } from "../../src/tasks/register.js";
 
 const PATH = "/sessions/a.jsonl";
 const OTHER = "/sessions/b.jsonl";
@@ -47,8 +47,10 @@ describe("TaskRegister", () => {
   it("carries changes, not heartbeats, and remembers the log path across updates", async () => {
     const dir = mkdtempSync(join(tmpdir(), "task-register-"));
     dirs.push(dir);
-    const logPath = join(dir, "t-1.log");
-    writeFileSync(logPath, "hello world");
+    // The window is immutable segments named for the stream byte they start
+    // at; `logPath` is their base name (RP-6).
+    const logPath = join(dir, "t-1");
+    writeFileSync(`${logPath}.0.log`, "hello world");
     const w = world(dir);
     w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ logPath }) });
     w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ logPath }) });
@@ -64,7 +66,7 @@ describe("TaskRegister", () => {
     const dir = mkdtempSync(join(tmpdir(), "task-register-root-"));
     dirs.push(dir);
     const w = world(dir);
-    w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ logPath: join(dir, "t-1.log") }) });
+    w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ logPath: join(dir, "t-1") }) });
     w.register.observeExtensionMessage(OTHER, { type: "lasercode/task/update", task: update({ id: "t-2" }) });
     await expect(w.register.read(OTHER, "t-1", 0)).rejects.toThrow(ProtocolError);
     await expect(w.register.read(OTHER, "t-1", 0)).rejects.toThrow(/does not belong to this session/);
@@ -81,8 +83,8 @@ describe("TaskRegister", () => {
     await expect(w.register.read(PATH, "t-outside", 0)).rejects.toThrow(/kept no log file/);
     // Nor one that is a symlink into somebody else's file.
     writeFileSync(join(outside, "target.log"), "also not yours");
-    symlinkSync(join(outside, "target.log"), join(dir, "t-link.log"));
-    w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ id: "t-link", logPath: join(dir, "t-link.log") }) });
+    symlinkSync(join(outside, "target.log"), join(dir, "t-link.0.log"));
+    w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ id: "t-link", logPath: join(dir, "t-link") }) });
     await expect(w.register.read(PATH, "t-link", 0)).rejects.toThrow(/has been cleaned up/);
     // A symlinked *directory* inside the root escapes it just as well, and
     // `O_NOFOLLOW` would not have noticed: containment is decided on the
@@ -91,8 +93,22 @@ describe("TaskRegister", () => {
     dirs.push(elsewhere);
     writeFileSync(join(elsewhere, "secret.log"), "still not yours");
     symlinkSync(elsewhere, join(dir, "opaque"));
-    w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ id: "t-dir", logPath: join(dir, "opaque", "secret.log") }) });
+    w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ id: "t-dir", logPath: join(dir, "opaque", "secret") }) });
     await expect(w.register.read(PATH, "t-dir", 0)).rejects.toThrow(/kept no log file/);
+  });
+
+  it("says so when running commands hold it above its bounds, rather than implying it is inside them", () => {
+    const w = world();
+    // More live commands than the session bound: every one of their rows stays,
+    // because the fleet is drawing them, and the overflow is named.
+    for (let index = 0; index < MAX_SESSIONS_WITH_TASKS + 20; index++) {
+      w.register.observeExtensionMessage(`/sessions/live${index}.jsonl`, { type: "lasercode/task/update", task: update({ id: `t-${index}` }) });
+    }
+    const retained = w.register.retained();
+    expect(retained.count).toBe(MAX_SESSIONS_WITH_TASKS + 20);
+    expect(retained.overflow).toBe("running_commands");
+    // Not one running row was erased to make the number look tidy.
+    expect(w.register.list().filter((task) => task.status === "running")).toHaveLength(MAX_SESSIONS_WITH_TASKS + 20);
   });
 
   it("counts retained bytes in UTF-8, not in string units", () => {
@@ -120,17 +136,21 @@ describe("TaskRegister", () => {
   it("reads a windowed log across both its segments, with stream offsets and the digest", async () => {
     const dir = mkdtempSync(join(tmpdir(), "task-register-window-"));
     dirs.push(dir);
-    const logPath = join(dir, "t-1.log");
-    // A long command's log is a window (RP-6): the writer rotated the older
-    // half into `.prev` and released everything before it. Offsets stay stream
-    // offsets, so a follower's arithmetic never has to know that happened.
-    writeFileSync(`${logPath}.prev`, "middle-part");
-    writeFileSync(logPath, "latest-part");
+    const logPath = join(dir, "t-1");
+    // A long command's log is a window of immutable segments (RP-6), each
+    // named for the stream byte it starts at. Offsets stay stream offsets, so
+    // a follower's arithmetic never has to know a rotation happened — and a
+    // record that is a rotation out of date cannot mislabel anything, because
+    // the offsets come from the files.
+    writeFileSync(`${logPath}.999978.log`, "middle-part");
+    writeFileSync(`${logPath}.999989.log`, "latest-part");
     const digest = "a".repeat(64);
     const w = world(dir);
     w.register.observeExtensionMessage(PATH, {
       type: "lasercode/task/update",
-      task: update({ logPath, outputBytes: 1_000_000, retainedFromByte: 999_978, logState: "truncated", outputDigest: digest }),
+      // Deliberately stale: the record still says the window began 12 bytes
+      // earlier than it does. The read must not believe it.
+      task: update({ logPath, outputBytes: 1_000_000, retainedFromByte: 999_966, logState: "truncated", outputDigest: digest }),
     });
 
     const head = await w.register.read(PATH, "t-1", 0);
@@ -142,8 +162,8 @@ describe("TaskRegister", () => {
   it("says a released log is gone rather than reading a file that is not it", async () => {
     const dir = mkdtempSync(join(tmpdir(), "task-register-released-"));
     dirs.push(dir);
-    const logPath = join(dir, "t-1.log");
-    writeFileSync(logPath, "stale");
+    const logPath = join(dir, "t-1");
+    writeFileSync(`${logPath}.0.log`, "stale");
     const w = world(dir);
     w.register.observeExtensionMessage(PATH, {
       type: "lasercode/task/update",
@@ -163,11 +183,13 @@ describe("TaskRegister", () => {
       });
     }
     const retained = w.register.retained();
-    expect(retained.count).toBeLessThanOrEqual(260);
-    expect(retained.bytes).toBeGreaterThan(0);
+    // Exactly the bound, and the session whose command is still running is one
+    // of the rows inside it: finished sessions went first, oldest first.
+    expect(w.register.list().length).toBe(MAX_SESSIONS_WITH_TASKS);
+    expect(retained.count).toBe(MAX_SESSIONS_WITH_TASKS);
+    expect(retained.bytes).toBeLessThanOrEqual(MAX_REGISTER_BYTES);
+    expect(retained.overflow).toBeUndefined();
     expect(w.register.list(PATH).map((task) => task.id)).toEqual(["t-live"]);
-    expect(w.register.list().length).toBe(retained.count);
-    // Sessions that were all finished went first; the live one is still here.
     expect(w.register.list().some((task) => task.id === "t-live")).toBe(true);
   });
 

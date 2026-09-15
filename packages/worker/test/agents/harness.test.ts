@@ -1197,8 +1197,8 @@ describe("AgentHarness", () => {
       // how many you have run since.
       const root = world.openRoot("lead");
       const rootPath = root.path;
-      const log = join(mkdtempSync(join(tmpdir(), "own-log-")), "t-own.log");
-      writeFileSync(log, "first\nsecond\n");
+      const log = join(mkdtempSync(join(tmpdir(), "own-log-")), "t-own");
+      writeFileSync(`${log}.0.log`, "first\nsecond\n");
       world.tasks.set(rootPath, [task("t-own", rootPath, "completed", { exitCode: 0, outputBytes: 13, logPath: log })]);
       const read = await root.handle.backgroundWork("/repo")!.readTask!("t-own", 1);
       expect(read.task).toMatchObject({ id: "t-own", status: "completed", exitCode: 0 });
@@ -1216,8 +1216,10 @@ describe("AgentHarness", () => {
       const child = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w1", task: "t" });
       const childPath = "/sessions/child-1.jsonl";
       const grand = await world.harness.bridgeOf(childPath)!.startAgent({ agentName: "worker", subagentName: "w2", task: "t2" });
-      const log = join(mkdtempSync(join(tmpdir(), "fleet-log-")), "t-grand.log");
-      writeFileSync(log, "one\ntwo\nthree\n");
+      // The window is immutable segments named for the stream byte they start
+      // at; the record carries their base name (RP-6).
+      const log = join(mkdtempSync(join(tmpdir(), "fleet-log-")), "t-grand");
+      writeFileSync(`${log}.0.log`, "one\ntwo\nthree\n");
       world.tasks.set("/sessions/child-2.jsonl", [task("t-grand", "/sessions/child-2.jsonl", "completed", { exitCode: 0, outputBytes: 14, logPath: log }), task("t-quiet", "/sessions/child-2.jsonl", "running", { activity: "still going" })]);
       world.tasks.set("/sessions/other.jsonl", [task("t-other", "/sessions/other.jsonl", "running", { logPath: log })]);
       const readTask = world.opened[0]!.agent.backgroundWork!.readTask!;

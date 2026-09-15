@@ -1272,7 +1272,13 @@ export class HostServer {
       try {
         const response = await this.router.handle(raw, { actor, searches });
         transcriptResponse = response;
-        if (!response.error) this.noteRequest(ws, request, response.result);
+        // The one thing a reply still tells this layer: a dialog was answered
+        // from a client, so the worker's UI bridge stays silent. What a client
+        // is *following* is membership's, per connection and per scope, and
+        // retirement reads that one place (`isAttached`).
+        if (!response.error && request?.method === "pi/ui/response" && typeof request.params?.id === "string") {
+          this.attention.dialogAnswered(request.params.id);
+        }
         const sent = await this.sendSocket(ws, JSON.stringify(response));
         if (delivery && sent && !response.error) {
           await delivery.flush((notification) => this.sendSocket(ws, JSON.stringify(notification)));
@@ -1285,23 +1291,6 @@ export class HostServer {
     });
     ws.on("close", () => this.dropClient(ws));
     ws.on("error", () => this.dropClient(ws));
-  }
-
-  /**
-   * Clear a dialog this client just answered (the worker's UI bridge stays
-   * silent when the answer came from a client).
-   *
-   * What the client is *following* is no longer tracked here: membership owns
-   * it, per connection and per scope, and retirement reads that one place
-   * (`isAttached`). Two sets that were supposed to say the same thing, updated
-   * by two different rules, is exactly how a Beam bubble's session could be
-   * unpinned by the main view leaving.
-   */
-  private noteRequest(_ws: WebSocket, request: { method?: unknown; params?: { path?: unknown; id?: unknown } } | null, _result: unknown): void {
-    const method = request?.method;
-    if (method === "pi/ui/response" && typeof request?.params?.id === "string") {
-      this.attention.dialogAnswered(request.params.id);
-    }
   }
 
   private sendSocket(ws: WebSocket, line: string): Promise<boolean> {

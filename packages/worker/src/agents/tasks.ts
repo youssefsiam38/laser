@@ -15,8 +15,8 @@
  * handed to the model or a client.
  */
 import { constants } from "node:fs";
-import { open, realpath } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { open, readdir, realpath, type FileHandle } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   TASK_OUTPUT_MAX_BYTES,
   alignUtf8,
@@ -226,28 +226,68 @@ export async function readLogTail(logPath: string | undefined, lines: number, ro
   // is inside the private root this process owns, and it is opened without
   // following a symlink: a path is a claim, not a permission (RP-6).
   if (!(await isInsideRoot(logPath, root))) return undefined;
-  let text: string;
+  const directory = dirname(logPath!);
+  const name = basename(logPath!);
+  let entries: string[];
   try {
-    const handle = await open(logPath!, constants.O_RDONLY | constants.O_NOFOLLOW);
-    try {
-      const stats = await handle.stat();
-      if (!stats.isFile()) return undefined;
-      const size = stats.size;
-      const start = Math.max(0, size - TASK_OUTPUT_MAX_BYTES);
-      const length = size - start;
-      if (length === 0) return "";
-      const buffer = Buffer.alloc(length);
-      const { bytesRead } = await handle.read(buffer, 0, length, start);
-      const bytes = buffer.subarray(0, bytesRead);
-      const aligned = alignUtf8(bytes, start === 0);
-      text = bytes.toString("utf8", aligned.start, aligned.end);
-    } finally {
-      await handle.close();
-    }
+    entries = await readdir(directory);
   } catch {
     return undefined;
   }
+  // The window is immutable segments named for the stream byte they start at,
+  // newest last. Reading the newest backwards gives the tail whatever a
+  // rotation did in the meantime.
+  const segments = entries
+    .map((entry) => ({ entry, from: segmentOffset(name, entry) }))
+    .filter((candidate): candidate is { entry: string; from: number } => candidate.from !== undefined)
+    .sort((left, right) => right.from - left.from);
+  if (segments.length === 0) return undefined;
+  const parts: Buffer[] = [];
+  let want = TASK_OUTPUT_MAX_BYTES;
+  let read = false;
+  for (const segment of segments) {
+    if (want <= 0) break;
+    const bytes = await readEnd(join(directory, segment.entry), want);
+    if (bytes === undefined) continue;
+    read = true;
+    if (bytes.length === 0) continue;
+    parts.unshift(bytes);
+    want -= bytes.length;
+  }
+  if (!read) return undefined;
+  const whole = Buffer.concat(parts);
+  const aligned = alignUtf8(whole, want > 0);
+  const text = whole.toString("utf8", aligned.start, aligned.end);
   const all = text.split("\n");
   while (all.length > 0 && all[all.length - 1] === "") all.pop();
   return all.slice(Math.max(0, all.length - Math.max(1, lines))).join("\n");
+}
+
+/** The last `maxBytes` of one segment, or `undefined` when it cannot be read. */
+async function readEnd(path: string, maxBytes: number): Promise<Buffer | undefined> {
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const stats = await handle.stat();
+    if (!stats.isFile()) return undefined;
+    const start = Math.max(0, stats.size - maxBytes);
+    const length = stats.size - start;
+    if (length === 0) return Buffer.alloc(0);
+    const buffer = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(buffer, 0, length, start);
+    return buffer.subarray(0, bytesRead);
+  } catch {
+    return undefined;
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
+
+/** The stream offset a segment file's name declares, or `undefined` (RP-6). */
+export function segmentOffset(id: string, name: string): number | undefined {
+  if (!name.startsWith(`${id}.`) || !name.endsWith(".log")) return undefined;
+  const middle = name.slice(id.length + 1, -".log".length);
+  if (!/^\d+$/.test(middle)) return undefined;
+  const from = Number(middle);
+  return Number.isSafeInteger(from) ? from : undefined;
 }

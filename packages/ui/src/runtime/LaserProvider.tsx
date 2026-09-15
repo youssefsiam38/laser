@@ -895,10 +895,24 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       // `fromSeq` is what this window already holds, so claiming a surface
       // never costs a replay of the buffer it has already applied.
       const seq = readState().open[path]?.lastSeq ?? 0;
-      scopeClaimedAt.current.set(owner, connectionEpoch.current);
-      client.request("session/load", { path, owner, fromSeq: seq }).catch(() => {});
+      const claimedOn = connectionEpoch.current;
+      client.request("session/load", { path, owner, fromSeq: seq }).then(
+        () => {
+          // Only a claim the host took counts as made on this connection. A
+          // failed one is retried by the next reconnect rather than leaving
+          // the bubble quietly unsubscribed for the life of the socket.
+          if (scopeClaims.current.get(owner) === path) scopeClaimedAt.current.set(owner, claimedOn);
+        },
+        (error: unknown) => {
+          scopeClaimedAt.current.delete(owner);
+          // The host refuses a surface it cannot follow with a sentence a
+          // person can act on ("close one before opening another"). Said here,
+          // where the bubble is, rather than swallowed into a silent staleness.
+          if (scopeClaims.current.get(owner) === path) onError(error);
+        },
+      );
     },
-    [client, readState],
+    [client, onError, readState],
   );
   const attachScope = useCallback((path: string): (() => void) => {
     const owner = `scope:${nextScopeOwner.current++}`;
@@ -923,11 +937,13 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       connectionEpoch.current += 1;
       return;
     }
+    // A reconnect is a new connection, so its membership starts empty; so is a
+    // claim the host refused or that never arrived. Both are retried here.
     for (const [owner, path] of scopeClaims.current) {
       if (scopeClaimedAt.current.get(owner) === connectionEpoch.current) continue;
       claimScope(owner, path);
     }
-  }, [claimScope, state.connection]);
+  }, [claimScope, state.connection, scopeRevision]);
   useEffect(() => {
     if (state.connection !== "open") {
       detached.current.clear();

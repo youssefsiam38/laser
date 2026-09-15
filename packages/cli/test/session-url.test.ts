@@ -5,7 +5,7 @@
  * port nothing listens on.
  */
 import { createServer, type Server } from "node:http";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -151,4 +151,15 @@ describe("the URL a session verb prints and opens", () => {
     expect(json()["url"]).toBe(`http://127.0.0.1:${host.port}${sessionFragment("/s/new.jsonl")}`);
     expect(opened).toEqual([]);
   });
+});
+
+it("loads a session before it watches it, which is what makes the host deliver its transcript", () => {
+  // Scoped delivery (RP-6): the host sends `session/update` only for sessions
+  // a connection has loaded. The command line is a connection like any other,
+  // so every command that watches a session opens it first — this pins that,
+  // rather than leaving it to a reader of the transport.
+  const source = readFileSync(new URL("../src/commands/session.ts", import.meta.url), "utf8");
+  const watchers = source.split("\n").filter((line) => line.includes("loadSession(rpc"));
+  expect(watchers.length).toBeGreaterThan(3);
+  expect(source).toContain("only for sessions a connection has loaded");
 });

@@ -608,7 +608,6 @@ export const clientParamsSchemas = {
     .object({
       path: sessionPath,
       fromSeq: z.number().int().nonnegative().optional(),
-      transcript: z.literal("loaded").optional(),
       owner: deliveryOwner.optional(),
     })
     .strict(),

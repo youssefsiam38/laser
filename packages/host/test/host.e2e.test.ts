@@ -532,8 +532,8 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("host end to end", () => {
       const { state } = await client.request<{ state: SessionState }>("session/new", { cwd });
       // Two surfaces of one connection hold the same conversation: the view it
       // is open in, and a bubble over it (RP-6).
-      await client.request("session/load", { path: state.path, transcript: "loaded", owner: "view" });
-      await client.request("session/load", { path: state.path, transcript: "loaded", owner: "scope:1", fromSeq: 0 });
+      await client.request("session/load", { path: state.path, owner: "view" });
+      await client.request("session/load", { path: state.path, owner: "scope:1", fromSeq: 0 });
       expect(host.sessionMembership().holders(state.path)).toBe(2);
 
       // The view leaves. The bubble is still showing it, so the host keeps
@@ -564,7 +564,7 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("host end to end", () => {
 
       // Reopening reconciles from the sequence it holds: nothing was lost, it
       // was waiting in the worker's replay.
-      const resumed = await client.request<{ replayFrom: number; seq: number }>("session/load", { path: state.path, transcript: "loaded", fromSeq: quiet > 0 ? client.updates()[quiet - 1]!.seq : 0 });
+      const resumed = await client.request<{ replayFrom: number; seq: number }>("session/load", { path: state.path, fromSeq: quiet > 0 ? client.updates()[quiet - 1]!.seq : 0 });
       expect(resumed.seq).toBeGreaterThan(0);
       await client.waitFor((m) => "method" in m && m.method === "session/update" && (m.params as SessionUpdateParams).seq > (quiet > 0 ? client.updates()[quiet - 1]!.seq : 0));
       expect(client.updates().length).toBeGreaterThan(quiet);

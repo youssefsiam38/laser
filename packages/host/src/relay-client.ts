@@ -177,7 +177,6 @@ export class RelayClient {
   private transcripts = new TranscriptDelivery();
   private searches = new SearchCancellation();
 
-  private readonly seqBySession = new Map<string, number>();
   private counters = {
     connectAttempts: 0,
     handshakes: 0,
@@ -210,11 +209,6 @@ export class RelayClient {
     return this.currentState;
   }
 
-  /** Highest `session/update` seq seen per session, for diagnostics and logs. */
-  get lastSeq(): ReadonlyMap<string, number> {
-    return this.seqBySession;
-  }
-
   get channelIdText(): string {
     return toBase64Url(this.options.channelId);
   }
@@ -222,15 +216,11 @@ export class RelayClient {
   /**
    * What this device is holding, for the host's one membership truth (RP-6).
    * A paired device following a session pins its worker exactly as a local
-   * window does; a teardown replaces the delivery, so this reads the current
-   * one rather than capturing it.
+   * window does. The delivery itself is returned: wrapping it in another
+   * object would be a second thing to keep in step with the first.
    */
   membership(): SessionMembershipView {
-    return {
-      holders: (path) => this.transcripts.holders(path),
-      paths: () => this.transcripts.paths(),
-      counts: () => this.transcripts.counts(),
-    };
+    return this.transcripts;
   }
 
   statistics(): RelayClientStats {
@@ -588,14 +578,10 @@ export class RelayClient {
   }
 
   private onNotification(notification: JsonRpcNotification): void {
-    // The resume watermark is tracked whatever happens to the notification: a
-    // device that was not listening still resumes from the right seq.
-    if (notification.method === "session/update") {
-      const params = notification.params as SessionUpdateParams;
-      if (params?.sessionPath && typeof params.seq === "number") {
-        this.seqBySession.set(params.sessionPath, params.seq);
-      }
-    }
+    // Nothing is remembered per session here: the device resumes with its own
+    // `session/load { fromSeq }`, so a map of every path this host has ever
+    // seen an update for was a machine-wide structure that answered no
+    // question anybody asked.
     const held = [...this.loadDeliveries].map((delivery) => delivery.offer(notification)).some(Boolean);
     if (held) return;
     if (!this.session) {

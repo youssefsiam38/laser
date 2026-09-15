@@ -7,6 +7,7 @@ import { BACKGROUND_TOOL_NAMES, TASK_EVENT_MESSAGE_TYPE, WIRE_NAMESPACE, backgro
 import type { ReadTaskOutputResult } from "../src/agents-bridge.js";
 import { createLaserExtension } from "../src/index.js";
 import { createCommandBus, type ModuleContext, type ModuleDispose } from "../src/modules/index.js";
+import { resetLogRootForTests } from "../src/modules/task-retention.js";
 import { backgroundWorkModule, lastLines, TailBuffer } from "../src/modules/background-work.js";
 
 interface FakeTool {
@@ -45,7 +46,13 @@ const logIds = (): Set<string> => {
   const dir = sessionLogDir();
   if (!dir) return new Set();
   try {
-    return new Set(readdirSync(dir).filter((f) => f.endsWith(".log")).map((f) => f.replace(/\.log$/, "")));
+    // A window is `<task id>.<stream offset>.log` (RP-6): the id is what comes
+    // before the offset.
+    return new Set(
+      readdirSync(dir)
+        .map((file) => /^(.+)\.\d+\.log$/.exec(file)?.[1])
+        .filter((id): id is string => id !== undefined),
+    );
   } catch {
     return new Set();
   }
@@ -92,6 +99,8 @@ function harness(
   } as unknown as ExtensionAPI;
   const commands = createCommandBus();
   const send = vi.fn();
+  // The root is process-wide in production (RP-6); each test gets its own.
+  resetLogRootForTests();
   const cwd = mkdtempSync(join(tmpdir(), "background-work-"));
   dirs.push(cwd);
   logRootDir = mkdtempSync(join(tmpdir(), "background-work-logs-"));
@@ -115,7 +124,8 @@ function harness(
   return { tools, published, sendMessage, commands, cwd, call, dispose, send };
 }
 
-const logPath = (taskId: string) => join(sessionLogDir() ?? join(tmpdir(), "no-log-root"), `${taskId}.log`);
+/** The one segment a short command wrote: `<id>.0.log` in the session's directory. */
+const logPath = (taskId: string) => join(sessionLogDir() ?? join(tmpdir(), "no-log-root"), `${taskId}.0.log`);
 
 /** Every word the model reads about a tool: description, snippet, guidelines, parameter text. */
 function modelText(tool: FakeTool): string {
@@ -235,7 +245,8 @@ describe("background-work: the bash override", () => {
       command: "echo a; sleep 0.5; echo b",
       status: "running",
       origin: "promoted",
-      logPath: logPath(taskId),
+      // The base name of the window; its segments are `<base>.<from>.log`.
+      logPath: logPath(taskId).replace(/\.0\.log$/, ""),
     });
     expect(tasks[0]!.outputBytes).toEqual(expect.any(Number));
     expect(tasks.at(-1)).toMatchObject({ status: "completed", exitCode: 0, outputBytes: 4, activity: "b" });

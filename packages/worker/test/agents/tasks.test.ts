@@ -7,17 +7,19 @@ import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { TASK_OUTPUT_MAX_BYTES, type BackgroundTaskUpdate } from "@lasercode/protocol";
+import { TASK_OUTPUT_MAX_BYTES, type BackgroundTaskRetention, type BackgroundTaskUpdate } from "@lasercode/protocol";
 import { MAX_CLOSED_SESSIONS, MAX_INDEXED_TASKS_PER_SESSION, MIN_SESSION_LOG_BYTES, TaskIndex, readLogTail } from "../../src/agents/tasks.js";
 
-const retention = (partial: Partial<Parameters<TaskIndex["observe"]>[1] extends never ? never : never> | Record<string, number> = {}) => ({
+const retention = (partial: Partial<BackgroundTaskRetention> = {}): BackgroundTaskRetention => ({
   live: 0,
   terminal: 0,
   liveTailBytes: 0,
   excerptBytes: 0,
   logBytes: 0,
+  pendingLogBytes: 0,
   evicted: 0,
   released: 0,
+  tailsShrunk: 0,
   ...partial,
 });
 
@@ -153,39 +155,40 @@ describe("readLogTail", () => {
   it("returns the last lines, bounded to the same window the host serves, and nothing for a file it cannot read", async () => {
     const dir = mkdtempSync(join(tmpdir(), "task-tail-"));
     dirs.push(dir);
-    const log = join(dir, "t.log");
-    writeFileSync(log, "one\ntwo\nthree\n");
+    // A window is immutable segments; `logPath` is their base name (RP-6).
+    const log = join(dir, "t");
+    writeFileSync(`${log}.0.log`, "one\ntwo\nthree\n");
     expect(await readLogTail(log, 2, dir)).toBe("two\nthree");
     expect(await readLogTail(log, 10, dir)).toBe("one\ntwo\nthree");
     expect(await readLogTail(log, 0, dir)).toBe("three");
-    writeFileSync(log, "");
+    writeFileSync(`${log}.0.log`, "");
     expect(await readLogTail(log, 5, dir)).toBe("");
-    expect(await readLogTail(join(dir, "missing.log"), 5, dir)).toBeUndefined();
+    expect(await readLogTail(join(dir, "missing"), 5, dir)).toBeUndefined();
     expect(await readLogTail(undefined, 5, dir)).toBeUndefined();
     expect(await readLogTail("relative.log", 5, dir)).toBeUndefined();
     // A path outside the private root is a claim, not a permission (RP-6), and
     // neither is a symlink out of it.
     const outside = mkdtempSync(join(tmpdir(), "task-tail-outside-"));
     dirs.push(outside);
-    writeFileSync(join(outside, "secret.log"), "not yours");
-    expect(await readLogTail(join(outside, "secret.log"), 5, dir)).toBeUndefined();
-    symlinkSync(join(outside, "secret.log"), join(dir, "link.log"));
-    expect(await readLogTail(join(dir, "link.log"), 5, dir)).toBeUndefined();
+    writeFileSync(join(outside, "secret.0.log"), "not yours");
+    expect(await readLogTail(join(outside, "secret"), 5, dir)).toBeUndefined();
+    symlinkSync(join(outside, "secret.0.log"), join(dir, "link.0.log"));
+    expect(await readLogTail(join(dir, "link"), 5, dir)).toBeUndefined();
     // And a symlinked *directory* inside the root: `O_NOFOLLOW` only refuses
     // the last component, so containment is decided on the resolved parent.
     const elsewhere = mkdtempSync(join(tmpdir(), "task-tail-elsewhere-"));
     dirs.push(elsewhere);
-    writeFileSync(join(elsewhere, "secret.log"), "still not yours");
+    writeFileSync(join(elsewhere, "secret.0.log"), "still not yours");
     symlinkSync(elsewhere, join(dir, "opaque"));
-    expect(await readLogTail(join(dir, "opaque", "secret.log"), 5, dir)).toBeUndefined();
+    expect(await readLogTail(join(dir, "opaque", "secret"), 5, dir)).toBeUndefined();
     // Without a root nothing is read at all.
-    writeFileSync(log, "one\n");
+    writeFileSync(`${log}.0.log`, "one\n");
     expect(await readLogTail(log, 5)).toBeUndefined();
     // Past the window only the tail is read, aligned to a character boundary.
-    const big = join(dir, "big.log");
+    const big = join(dir, "big");
     const line = "é".repeat(50) + "\n";
     const lines = Math.ceil((TASK_OUTPUT_MAX_BYTES * 1.5) / Buffer.byteLength(line));
-    writeFileSync(big, line.repeat(lines) + "last\n");
+    writeFileSync(`${big}.0.log`, line.repeat(lines) + "last\n");
     const tail = await readLogTail(big, 3, dir);
     expect(tail).toBe(`${"é".repeat(50)}\n${"é".repeat(50)}\nlast`);
     expect(tail).not.toContain("�");

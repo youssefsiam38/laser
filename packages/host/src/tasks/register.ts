@@ -17,8 +17,8 @@
  * drops a session.
  */
 import { constants } from "node:fs";
-import { open, realpath, type FileHandle } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { open, readdir, realpath, type FileHandle } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   ErrorCodes,
   ProtocolError,
@@ -29,6 +29,7 @@ import {
   type PiExtensionMessage,
   type TaskOutputChunk,
 } from "@lasercode/protocol";
+import { segmentOffset } from "./segments.js";
 
 export interface TaskRegisterDeps {
   notify(method: "tasks/update", params: HostNotifications["tasks/update"]): void;
@@ -82,11 +83,18 @@ export const MAX_TASKS_PER_SESSION = 200;
  * How many sessions keep a task map, and how many bytes of records the whole
  * register may hold (RP-6).
  *
- * A record is metadata — a command line, a title, a status — so the bound it
- * needs is count and bytes, not age: a finished command a person can still see
- * in the fleet must not disappear because an hour passed (docs/ux-fleet.md
- * R7). What was unbounded was the number of *sessions*: one map per session
- * ever seen, for the life of the host.
+ * Read them as bounds on **terminal records**. A record is metadata — a
+ * command line, a title, a status — so the bound it needs is count and bytes,
+ * not age: a finished command a person can still see in the fleet must not
+ * disappear because an hour passed (docs/ux-fleet.md R7). What was unbounded
+ * was the number of *sessions*: one map per session ever seen, for the life of
+ * the host.
+ *
+ * A row for a command that is still **running** is exempt from all of them and
+ * is never dropped: the fleet would be showing work that the register had
+ * forgotten. So these are ceilings on what can be forgotten, not a promise
+ * that the register is always under them — a host with more live commands than
+ * the bound says so out loud instead (`retained().overflow`).
  */
 export const MAX_SESSIONS_WITH_TASKS = 200;
 export const MAX_REGISTER_BYTES = 8 * 1024 * 1024;
@@ -173,27 +181,49 @@ export class TaskRegister {
         "That task does not belong to this session, so the host will not read its output.",
       );
     }
-    const file = held.logPath;
-    if (file === undefined || held.task.logState === "released" || !(await isInsideRoot(file, this.deps.logRoot))) {
+    const base = held.logPath;
+    if (base === undefined || held.task.logState === "released" || !(await isInsideRoot(base, this.deps.logRoot))) {
       throw new ProtocolError(
         ErrorCodes.Unsupported,
         "That task kept no log file, so there is nothing to read. Its last line is on the row.",
       );
     }
-    // A long command's log is a bounded window, not the whole stream (RP-6):
-    // the task says where the window starts, and the segment before the
-    // current one — the file the writer rotated away from — is the older half
-    // of it. Offsets stay stream offsets, so a follower's byte arithmetic is
-    // unchanged; it only ever learns that the head is gone.
-    const retainedFrom = held.task.retainedFromByte ?? 0;
-    // Both halves of the window are opened once, without following a symlink,
-    // and measured through the handle that will be read: a rotation between a
-    // `stat` and an `open` would otherwise describe one file and read another.
-    const segments: Array<{ file: string; handle: FileHandle; size: number }> = [];
-    const openSegment = async (path: string): Promise<{ handle: FileHandle; size: number } | undefined> => {
+    // A long command's log is a bounded window of **immutable** segments, and
+    // every segment's name says which stream byte it begins at (RP-6). The
+    // offsets a read answers with therefore come from the files themselves,
+    // never from this record: a record a rotation has just made stale reads a
+    // correctly labelled segment, or finds none and says the output is gone.
+    // Nothing here can label bytes with an offset that belongs to another file.
+    const directory = dirname(base);
+    const name = basename(base);
+    let entries: string[];
+    try {
+      entries = await readdir(directory);
+    } catch {
+      throw new ProtocolError(
+        ErrorCodes.InvalidParams,
+        "That output is gone — the file it was written to has been cleaned up.",
+      );
+    }
+    const segments: Array<{ file: string; from: number }> = [];
+    for (const entry of entries) {
+      const from = segmentOffset(name, entry);
+      if (from !== undefined) segments.push({ file: join(directory, entry), from });
+    }
+    segments.sort((left, right) => left.from - right.from);
+    if (segments.length === 0) {
+      throw new ProtocolError(
+        ErrorCodes.InvalidParams,
+        "That output is gone — the file it was written to has been cleaned up.",
+      );
+    }
+
+    // Opened once, measured through the handle that will be read: a rotation
+    // between a `stat` and an `open` cannot describe one file and read another.
+    const open_ = async (file: string): Promise<{ handle: FileHandle; size: number } | undefined> => {
       let handle: FileHandle | undefined;
       try {
-        handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+        handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
         const stats = await handle.stat();
         if (!stats.isFile()) {
           await handle.close();
@@ -205,63 +235,61 @@ export class TaskRegister {
         return undefined;
       }
     };
-    const older = await openSegment(`${file}.prev`);
-    if (older && older.size > 0) segments.push({ file: `${file}.prev`, ...older });
-    else if (older) await older.handle.close();
-    const current = await openSegment(file);
-    if (!current) {
-      for (const segment of segments) await segment.handle.close();
-      throw new ProtocolError(
-        ErrorCodes.InvalidParams,
-        "That output is gone — the file it was written to has been cleaned up.",
-      );
-    }
-    segments.push({ file, ...current });
-    const previous = older && older.size > 0 ? older.size : 0;
-    const retainedBytes = segments.reduce((sum, segment) => sum + segment.size, 0);
-    const total = Math.max(held.task.outputBytes, retainedFrom + retainedBytes);
-    // Below the window: answer from its first byte and say where that is, so a
-    // follower appending from `from` stays exact instead of reading a seam.
-    const wanted = Math.min(Math.max(fromByte, retainedFrom), retainedFrom + retainedBytes);
-    let offset = wanted - retainedFrom;
-    let segment = segments[0]!;
-    for (const candidate of segments) {
-      if (offset < candidate.size || candidate === segments[segments.length - 1]) {
-        segment = candidate;
-        break;
-      }
-      offset -= candidate.size;
-    }
-    const start = Math.min(Math.max(0, offset), segment.size);
-    const length = Math.max(0, Math.min(start + TASK_OUTPUT_MAX_BYTES, segment.size) - start);
-    let chunk = "";
-    // The offset the chunk really begins at: a text read moves it forward past
-    // a character the previous window already carried, so a follower that
-    // appends `from + byteLength(chunk)` stays exact and no seam grows a U+FFFD.
-    let chunkStart = start;
+    const opened: Array<{ from: number; size: number; handle: FileHandle }> = [];
     try {
+      for (const segment of segments) {
+        const file = await open_(segment.file);
+        // A segment a rotation removed between the listing and the open is
+        // simply not part of the window any more.
+        if (file) opened.push({ from: segment.from, size: file.size, handle: file.handle });
+      }
+      if (opened.length === 0) {
+        throw new ProtocolError(
+          ErrorCodes.InvalidParams,
+          "That output is gone — the file it was written to has been cleaned up.",
+        );
+      }
+      const retainedFrom = opened[0]!.from;
+      const end = opened[opened.length - 1]!;
+      const total = Math.max(held.task.outputBytes, end.from + end.size);
+      const wanted = Math.min(Math.max(fromByte, retainedFrom), end.from + end.size);
+      // The segment that contains the wanted offset, or the last one.
+      let segment = opened[0]!;
+      for (const candidate of opened) {
+        if (wanted >= candidate.from && wanted < candidate.from + candidate.size) {
+          segment = candidate;
+          break;
+        }
+        if (wanted >= candidate.from) segment = candidate;
+      }
+      const start = Math.min(Math.max(0, wanted - segment.from), segment.size);
+      const length = Math.max(0, Math.min(start + TASK_OUTPUT_MAX_BYTES, segment.size) - start);
+      let chunk = "";
+      // The offset the chunk really begins at: a text read moves it forward past
+      // a character the previous window already carried, so a follower that
+      // appends `from + byteLength(chunk)` stays exact and no seam grows a U+FFFD.
+      let chunkStart = start;
       if (length > 0) {
         const buffer = Buffer.alloc(length);
         const { bytesRead } = await segment.handle.read(buffer, 0, length, start);
         const bytes = buffer.subarray(0, bytesRead);
-        const aligned = alignUtf8(bytes, start === 0 && segment === segments[0]);
+        const aligned = alignUtf8(bytes, segment.from === 0 && start === 0);
         chunkStart = start + aligned.start;
         chunk = bytes.toString("utf8", aligned.start, aligned.end);
       }
+      const from = segment.from + chunkStart;
+      return {
+        id,
+        from,
+        bytes: total,
+        chunk,
+        eof: from + Buffer.byteLength(chunk, "utf8") >= total,
+        ...(retainedFrom > 0 ? { retainedFrom } : {}),
+        ...(held.task.outputDigest ? { digest: held.task.outputDigest } : {}),
+      };
     } finally {
-      for (const open of segments) await open.handle.close().catch(() => {});
+      for (const entry of opened) await entry.handle.close().catch(() => {});
     }
-    const base = segment.file === file ? retainedFrom + (segments.length > 1 ? previous : 0) : retainedFrom;
-    const from = base + chunkStart;
-    return {
-      id,
-      from,
-      bytes: total,
-      chunk,
-      eof: from + Buffer.byteLength(chunk, "utf8") >= total,
-      ...(retainedFrom > 0 ? { retainedFrom } : {}),
-      ...(held.task.outputDigest ? { digest: held.task.outputDigest } : {}),
-    };
   }
 
   /** Oldest finished tasks first; a running task is never forgotten. */
@@ -292,10 +320,21 @@ export class TaskRegister {
     }
   }
 
-  /** Records held and the bytes they occupy, for the resource diagnostics (RP-3). */
-  retained(): { count: number; bytes: number } {
+  /**
+   * Records held and the bytes they occupy, for the resource diagnostics
+   * (RP-3), with the honesty the rest of that surface keeps: when running
+   * commands hold the register above a bound, the overflow is named rather
+   * than implied away — exactly as the process inventory does for a machine
+   * with more live workers than its record bound.
+   */
+  retained(): { count: number; bytes: number; overflow?: "running_commands" } {
     let count = 0;
-    for (const tasks of this.bySession.values()) count += tasks.size;
-    return { count, bytes: this.bytes };
+    let running = 0;
+    for (const tasks of this.bySession.values()) {
+      count += tasks.size;
+      for (const held of tasks.values()) if (held.task.status === "running") running += 1;
+    }
+    const over = this.bySession.size > MAX_SESSIONS_WITH_TASKS || this.bytes > MAX_REGISTER_BYTES;
+    return { count, bytes: this.bytes, ...(over && running > 0 ? { overflow: "running_commands" as const } : {}) };
   }
 }

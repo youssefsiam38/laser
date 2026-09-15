@@ -26,9 +26,9 @@ import { parseClientRequest, type JsonRpcNotification, type JsonRpcResponse, typ
  *   because they are how a person learns that something they are *not* looking
  *   at needs them.
  * - **A connection hears a transcript only after it asks for it.** Delivery is
- *   scoped from the first byte, not from the first `transcript: "loaded"`: a
- *   socket that has loaded nothing is shown nothing, so a new connection can
- *   never be handed every conversation in flight on the machine.
+ *   scoped from the first byte: a socket that has loaded nothing is shown
+ *   nothing, so a new connection can never be handed every conversation in
+ *   flight on the machine, and there is no opt-in flag to forget to send.
  * - **Nothing here is authorization.** An owner is a local label a connection
  *   chose for its own surfaces; the method's own scope and reach have already
  *   been decided by the time anything reaches this class. The bounds below
@@ -55,8 +55,10 @@ export interface SessionMembershipView {
    * pinned, not free to unload (RP-4 consumes this as one of its guards).
    */
   holders(path: string): number;
-  /** Every path this connection is holding. */
-  paths(): string[];
+  /** Every path this connection is holding. Iterated, never materialised. */
+  paths(): IterableIterator<string>;
+  /** Whether this connection holds this exact path. */
+  holdsPath(path: string): boolean;
   /** Retention evidence: paths held and owners holding them. */
   counts(): { paths: number; owners: number };
 }
@@ -80,8 +82,8 @@ interface Hold {
 export class TranscriptDelivery {
   /** path → owner → hold. Held and in-flight surfaces live in one bounded map. */
   private readonly members = new Map<string, Map<string, Hold>>();
-  private creating = 0;
   private generation = 0;
+  private reservations = 0;
 
   begin(raw: unknown): { refusal?: string; finish: (response?: JsonRpcResponse) => void } {
     let request;
@@ -119,15 +121,26 @@ export class TranscriptDelivery {
       return { finish: () => {} };
     }
     if (request.method === "session/new" || request.method === "pi/session/fork") {
-      // The worker chooses the destination path. Admit its first events before
-      // the response tells us which cache owns them, then narrow again.
-      this.creating++;
+      // The worker chooses the destination path, so the slot is reserved
+      // *before* the request runs and converted to that path when it answers.
+      // There is no global window in which everything is delivered: a session
+      // this connection has never named stays filtered, and the response's own
+      // state is what the client starts from.
+      if (this.members.size + this.reservations >= MEMBERSHIP_PATHS_MAX) {
+        return { refusal: MEMBERSHIP_REFUSAL, finish: () => {} };
+      }
+      this.reservations += 1;
+      let settled = false;
       return {
         finish: (response) => {
-          this.creating--;
+          if (settled) return;
+          settled = true;
+          this.reservations -= 1;
           const path = (response?.result as { state?: { path?: string } } | undefined)?.state?.path;
           if (!response || response.error || !path) return;
           const hold = this.claim(path, DEFAULT_DELIVERY_OWNER);
+          // The slot was reserved for exactly this, so it is there; admitted
+          // at once, because the session exists and this connection made it.
           if (!hold) return;
           hold.inFlight = Math.max(0, hold.inFlight - 1);
           hold.admitted = true;
@@ -138,7 +151,7 @@ export class TranscriptDelivery {
   }
 
   accepts(notification: JsonRpcNotification): boolean {
-    if (this.creating || notification.method !== "session/update") return true;
+    if (notification.method !== "session/update") return true;
     const path = (notification.params as SessionUpdateParams).sessionPath;
     return this.members.has(path);
   }
@@ -163,8 +176,14 @@ export class TranscriptDelivery {
     return held;
   }
 
-  paths(): string[] {
-    return [...this.members.keys()];
+  /** Every path this connection is holding, without building a list to do it. */
+  paths(): IterableIterator<string> {
+    return this.members.keys();
+  }
+
+  /** Whether this connection holds this exact path. O(1). */
+  holdsPath(path: string): boolean {
+    return this.members.has(path);
   }
 
   counts(): { paths: number; owners: number } {
@@ -183,7 +202,7 @@ export class TranscriptDelivery {
   private claim(path: string, owner: string): Hold | undefined {
     const byOwner = this.members.get(path);
     if (!byOwner) {
-      if (this.members.size >= MEMBERSHIP_PATHS_MAX) return undefined;
+      if (this.members.size + this.reservations >= MEMBERSHIP_PATHS_MAX) return undefined;
       const hold: Hold = { generation: ++this.generation, inFlight: 1, admitted: false };
       this.members.set(path, new Map([[owner, hold]]));
       return hold;
