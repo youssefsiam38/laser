@@ -7,7 +7,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { attachmentRegions, utf8ByteLength } from "@lasercode/protocol";
 import { createHash } from "node:crypto";
-import { readAttachment, readAttachmentRegions, BodyReplyRefused } from "../../src/runtime/body-reader.js";
+import { checkRegionsPage, readAttachment, readAttachmentRegions, BodyReplyRefused } from "../../src/runtime/body-reader.js";
 import { stubOfElided } from "../../src/runtime/retained-entries.js";
 import { blocksFromEntries } from "../../src/store.js";
 import type { Block } from "../../src/store.js";
@@ -49,6 +49,87 @@ function authority(over: Partial<Record<string, unknown>> = {}) {
     };
   });
 }
+
+describe("one page of attachments at a time", () => {
+  const ref = {
+    entryId: "u1", component: { kind: "user_text" as const }, totalBytes: utf8ByteLength(prompt),
+    revision: "r1.env.2", contentDigest: sha(prompt), excerpt: { offset: 0, bytes: 0 },
+  };
+  const item = (offset: number, name: string) => ({ offset, bytes: 10, name, mediaType: "text/plain", contentDigest: sha(name) });
+  const pageOf = (over: Record<string, unknown> = {}) => ({
+    authority: "durable" as const, revision: "r1.env.2", component: { kind: "user_text" as const },
+    totalBytes: utf8ByteLength(prompt), items: [item(10, "a.txt"), item(30, "b.txt")], scannedBytes: 100, ...over,
+  });
+
+  it("checks a page before anything is shown", () => {
+    const good = checkRegionsPage(pageOf({ next: 60 }) as never, { revision: "r1.env.2", component: { kind: "user_text" }, totalBytes: utf8ByteLength(prompt), from: 0 });
+    expect(good.items).toHaveLength(2);
+    expect(good.next).toBe(60);
+
+    const bad: Array<[string, Record<string, unknown>]> = [
+      ["another revision", { revision: "r2.env.2" }],
+      ["another component", { component: { kind: "assistant_text" } }],
+      ["no authority", { authority: "guess" }],
+      ["another body size", { totalBytes: 12 }],
+      ["a region past the end", { items: [item(utf8ByteLength(prompt), "x")] }],
+      ["an unsafe offset", { items: [{ ...item(10, "x"), offset: Number.MAX_SAFE_INTEGER }] }],
+      ["a fractional size", { items: [{ ...item(10, "x"), bytes: 1.5 }] }],
+      ["a digest that is not one", { items: [{ ...item(10, "x"), contentDigest: "nope" }] }],
+      ["regions out of order", { items: [item(60, "b"), item(10, "a")] }],
+      ["a cursor that does not move", { next: 0 }],
+      ["a count claimed for a partial scan", { truncated: true, omitted: 3 }],
+      ["more items than a page may carry", { items: Array.from({ length: 200 }, (_, index) => item(index * 20, `f${index}.txt`)) }],
+    ];
+    for (const [why, over] of bad) {
+      expect(() => checkRegionsPage(pageOf(over) as never, { revision: "r1.env.2", component: { kind: "user_text" }, totalBytes: utf8ByteLength(prompt), from: 0, limit: 64 }), why)
+        .toThrow(BodyReplyRefused);
+    }
+  });
+
+  it("asks for the page it was told to, and keeps only that page", async () => {
+    const pages = vi.fn(async (params: Record<string, unknown>) => {
+      const from = (params.from as number | undefined) ?? 0;
+      return from === 0
+        ? pageOf({ next: 60, omitted: 5 })
+        : pageOf({ items: [item(60, "c.txt")], omitted: 4 });
+    });
+    const first = await readAttachmentRegions(pages as never, authority() as never, SESSION, ref as never, { limit: 2 });
+    expect(first.items.map(row => row.name)).toEqual(["a.txt", "b.txt"]);
+    expect(first.omitted).toBe(5);
+    const second = await readAttachmentRegions(pages as never, authority() as never, SESSION, ref as never, { from: first.next, limit: 2 });
+    // The next page does not repeat the one before it and does not add to it.
+    expect(second.items.map(row => row.name)).toEqual(["c.txt"]);
+    expect(pages.mock.calls.map(call => (call[0] as { from?: number }).from)).toEqual([undefined, 60]);
+  });
+
+  it("pages an old authority the same way, without ever returning everything it found", async () => {
+    const many = Array.from({ length: 8 }, (_, index) => {
+      const content = `file ${index}\n`.repeat(50);
+      return `<attached-file name="f${index}.txt" type="text/plain" size="${utf8ByteLength(content)}">\n${content}\n</attached-file>`;
+    }).join("\n\n");
+    const body = `prose\n\n${many}`;
+    const bodyRef = { entryId: "u2", component: { kind: "user_text" as const }, totalBytes: utf8ByteLength(body), revision: "r1.env.2", contentDigest: sha(body), excerpt: { offset: 0, bytes: 0 } };
+    const stream = vi.fn(async (params: Record<string, unknown>) => {
+      const offset = params.offset as number;
+      const buffer = Buffer.from(body, "utf8");
+      const take = Math.min((params.limit as number) ?? 65536, buffer.length - offset);
+      const text = buffer.subarray(offset, offset + take).toString("utf8");
+      const next = offset + take < buffer.length ? offset + take : undefined;
+      return { authority: "durable", revision: "r1.env.2", component: params.component, totalBytes: buffer.length, offset,
+        bytes: utf8ByteLength(text), ...(next !== undefined ? { next } : {}), truncated: next !== undefined,
+        sliceDigest: sha(text), contentDigest: sha(body), text };
+    });
+    const refuse = vi.fn(async () => { throw Object.assign(new Error("unknown method"), { code: -32601 }); });
+    const first = await readAttachmentRegions(refuse as never, stream as never, SESSION, bodyRef as never, { limit: 3 });
+    expect(first.items.map(row => row.name)).toEqual(["f0.txt", "f1.txt", "f2.txt"]);
+    expect(first.omitted).toBe(5);
+    expect(first.next).toBeGreaterThan(first.items[2]!.offset);
+    const second = await readAttachmentRegions(refuse as never, stream as never, SESSION, bodyRef as never, { from: first.next, limit: 3 });
+    expect(second.items.map(row => row.name)).toEqual(["f3.txt", "f4.txt", "f5.txt"]);
+    // A page, never everything it walked past.
+    expect(second.items).toHaveLength(3);
+  });
+});
 
 describe("an authority that has never heard of attachment regions", () => {
   const ref = {

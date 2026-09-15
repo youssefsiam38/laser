@@ -52,6 +52,7 @@ import { THINKING_LEVELS, useSupportedThinkingLevels } from "@/components/assist
 import { useElapsed } from "./timing.js";
 import { toolGroupKey } from "./tool-groups.js";
 import { ToolRow } from "./ToolRow.js";
+import { AttachmentBrowser } from "./AttachmentBrowser.js";
 import { BodyOverflow } from "./BodyOverflow.js";
 import { useImageBodies } from "./use-image-bodies.js";
 import type { BodyRef } from "@/runtime/body-excerpt";
@@ -159,12 +160,30 @@ export function useHonestCopy(path: string | undefined, text: string, body: Body
  * many it did not describe; no number at all when it could not see all of it —
  * a count it cannot stand behind is not shown.
  */
-function AttachmentOverflow({ overflow }: { overflow: BlockBodies["fileOverflow"] }) {
-  if (!overflow) return null;
+function AttachmentOverflow({ overflow, body, path, onOpen }: {
+  overflow: BlockBodies["fileOverflow"];
+  body: BodyRef | undefined;
+  path: string | undefined;
+  onOpen?: ((file: { name: string; mediaType: string; ref: BodyRef }, trigger: HTMLElement) => void) | undefined;
+}) {
+  const trigger = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  if (!overflow || !body) return null;
   const label = "unknown" in overflow
-    ? "More files in this message"
-    : `${overflow.omitted} more ${overflow.omitted === 1 ? "file" : "files"} in this message`;
-  return <p data-slot="attachment-overflow" className="mt-1 self-end text-xs text-ink-3">{label}</p>;
+    ? "More attachments in this message"
+    : `${overflow.omitted} more ${overflow.omitted === 1 ? "attachment" : "attachments"} in this message`;
+  return <>
+    <button
+      ref={trigger}
+      type="button"
+      data-slot="attachment-overflow"
+      onClick={() => setOpen(true)}
+      className="mt-1 min-h-11 self-end text-xs text-ink-3 underline underline-offset-2 outline-none transition-colors duration-(--motion-instant) hover:text-ink focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-live"
+    >
+      {label}
+    </button>
+    {open ? <AttachmentBrowser body={body} path={path} open onOpenChange={setOpen} returnFocus={trigger.current} onOpen={onOpen} /> : null}
+  </>;
 }
 
 export function MessageRoot(props: ComponentPropsWithoutRef<"div">) {
@@ -315,6 +334,30 @@ export function UserMessage() {
    * the digest that authority published for it, and unescaped only then —
    * never shown from an excerpt or from empty retained bytes (RP-5b §2).
    */
+  /** Open one named file from its verified region, wherever it was listed. */
+  const openRegionFile = useCallback(async (file: { name: string; mediaType: string; ref: BodyRef }, trigger: HTMLElement): Promise<void> => {
+    if (!opener || path === undefined || !isReadable(file.ref) || !file.ref.region) {
+      setAttachmentProblem("This file cannot be opened from here. Open the conversation again.");
+      return;
+    }
+    setAttachmentProblem(undefined);
+    const outcome = await readAttachment(
+      (params) => client.request("session/entry_range", params),
+      path,
+      file.ref as never,
+      { environmentKey, revisionOf: async (candidate) => (await client.request("session/revision", { path: candidate })).revision },
+    ).catch(() => ({ ok: false as const, reason: "short" as const }));
+    if (!outcome.ok) {
+      setAttachmentProblem(outcome.reason === "corrupt"
+        ? "What came back was not this file. Open the conversation again."
+        : outcome.reason === "too-large"
+          ? "This file is too large to open here."
+          : "This file could not be read just now. Try again in a moment.");
+      return;
+    }
+    opener.openFile({ file: attachedFileContent({ name: file.name, mediaType: file.mediaType, size: outcome.bytes, content: outcome.text }) }, trigger);
+  }, [client, environmentKey, opener, path]);
+
   const openAttachment = useCallback(async (index: number, trigger: HTMLElement): Promise<void> => {
     const held = files[index];
     if (!opener || !held) return;
@@ -435,7 +478,12 @@ export function UserMessage() {
             ) : null}
             <MessageAttachments attachments={attachments} className="mt-2 self-end" onOpen={opener ? (id, trigger) => void openAttachment(Number(id), trigger) : undefined} />
             {attachmentProblem ? <p role="alert" className="mt-1 self-end text-xs text-ink-2">{attachmentProblem}</p> : null}
-            <AttachmentOverflow overflow={promptBodies?.fileOverflow} />
+            <AttachmentOverflow
+              overflow={promptBodies?.fileOverflow}
+              body={promptBodies?.text}
+              path={path}
+              onOpen={opener ? (file, trigger) => void openRegionFile(file, trigger) : undefined}
+            />
             <BodyOverflow body={promptBodies?.text} path={path} label="message" />
           </UserBubble>
         )}

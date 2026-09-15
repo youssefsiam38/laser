@@ -26,7 +26,7 @@
 import { ENTRY_RANGE_MAX_BYTES, sameBodyComponent, utf8ByteLength, type ClientRequests } from "@lasercode/protocol";
 import type { BodyRef } from "./body-excerpt.js";
 import { imageDimensions, UNKNOWN_IMAGE_DECODED_BYTES } from "./view-measure.js";
-import { ATTACHMENT_MAX_BYTES, createAttachmentScanner, type AttachmentRegions } from "@lasercode/protocol";
+import { ATTACHMENT_MAX_BYTES, BODY_REGION_MAX_ITEMS, BODY_REGION_METADATA_MAX_BYTES, createAttachmentScanner, type AttachmentRegions } from "@lasercode/protocol";
 import { Sha256Stream } from "./sha256.js";
 
 export type RangeRequest = (params: ClientRequests["session/entry_range"]["params"]) => Promise<ClientRequests["session/entry_range"]["result"]>;
@@ -601,13 +601,13 @@ export async function readAttachmentRegions(
       ...(options.from !== undefined ? { from: options.from } : {}),
       ...(options.limit !== undefined ? { limit: options.limit } : {}),
     });
-    return {
-      items: page.items,
-      ...(page.omitted !== undefined ? { omitted: page.omitted } : {}),
-      ...(page.truncated ? { truncated: page.truncated } : {}),
-      ...(page.next !== undefined ? { next: page.next } : {}),
-      scannedBytes: page.scannedBytes,
-    };
+    return checkRegionsPage(page, {
+      revision,
+      component: ref.component,
+      totalBytes: ref.totalBytes,
+      ...(options.from !== undefined ? { from: options.from } : {}),
+      ...(options.limit !== undefined ? { limit: options.limit } : {}),
+    });
   } catch (error) {
     if (!lacksRegionSupport(error)) throw error;
   }
@@ -615,13 +615,65 @@ export async function readAttachmentRegions(
   // bounded carry and nothing else.
   const scanner = createAttachmentScanner(
     () => { const running = new Sha256Stream(); return { update: (chunk: string) => running.updateText(chunk), digest: () => running.digest() }; },
-    options.limit !== undefined ? { maxItems: options.limit } : {},
+    {
+      // One page, bounded exactly as the authority's own page is: this never
+      // returns an unbounded list of everything it found.
+      ...(options.limit !== undefined ? { maxItems: options.limit } : {}),
+      ...(options.from !== undefined ? { from: options.from } : {}),
+    },
   );
   const outcome = await streamBody(request, path, ref, { ...options, revision }, (slice) => { scanner.push(slice); });
   const found = scanner.end();
   // The parent was verified as a whole before anything found in it is used.
   if (!outcome.verified) throw new BodyReplyRefused("content-digest");
   return found;
+}
+
+/**
+ * Everything about a page of attachments that can be checked before a person is
+ * shown it: that it is the body and revision that was asked about, that every
+ * number is a safe integer naming a part of that body, that the items are in
+ * order and do not overlap, that each digest is a digest, that a cursor
+ * strictly advances, and that the page is the size a page may be.
+ */
+export function checkRegionsPage(
+  page: ClientRequests["session/entry_regions"]["result"],
+  expected: { revision: string; component: BodyRef["component"]; totalBytes: number; from?: number; limit?: number },
+): AttachmentRegions {
+  const fail = (detail: string): never => { throw new BodyReplyRefused(detail); };
+  if (page.revision !== expected.revision) fail("revision");
+  if (!sameBodyComponent(page.component, expected.component)) fail("component");
+  if (page.authority !== "live" && page.authority !== "durable") fail("authority");
+  if (!Number.isSafeInteger(page.totalBytes) || page.totalBytes !== expected.totalBytes) fail("total");
+  if (!Array.isArray(page.items)) fail("items");
+  if (page.items.length > Math.min(expected.limit ?? BODY_REGION_MAX_ITEMS, BODY_REGION_MAX_ITEMS)) fail("over-limit");
+  if (utf8ByteLength(JSON.stringify(page.items)) > BODY_REGION_METADATA_MAX_BYTES) fail("over-metadata");
+  let previousEnd = expected.from ?? 0;
+  for (const item of page.items) {
+    if (!Number.isSafeInteger(item.offset) || !Number.isSafeInteger(item.bytes) || item.offset < 0 || item.bytes < 0) fail("region-bounds");
+    const end = item.offset + item.bytes;
+    if (!Number.isSafeInteger(end) || end > page.totalBytes) fail("region-past-end");
+    if (item.offset < previousEnd && item.offset !== previousEnd) fail("region-order");
+    if (typeof item.contentDigest !== "string" || !DIGEST.test(item.contentDigest)) fail("region-digest-shape");
+    if (typeof item.name !== "string" || typeof item.mediaType !== "string") fail("region-shape");
+    previousEnd = end;
+  }
+  if (page.next !== undefined) {
+    if (!Number.isSafeInteger(page.next) || page.next > page.totalBytes) fail("next");
+    // A cursor that does not move is a loop, not a page.
+    if (expected.from !== undefined && page.next <= expected.from) fail("next-not-monotonic");
+    if (page.items.length > 0 && page.next <= page.items[0]!.offset) fail("next-behind");
+  }
+  if (page.truncated && page.omitted !== undefined) fail("count-claimed");
+  if (page.omitted !== undefined && (!Number.isSafeInteger(page.omitted) || page.omitted < 0)) fail("omitted");
+  if (!Number.isSafeInteger(page.scannedBytes) || page.scannedBytes < 0) fail("scanned");
+  return {
+    items: page.items,
+    ...(page.omitted !== undefined ? { omitted: page.omitted } : {}),
+    ...(page.truncated ? { truncated: page.truncated } : {}),
+    ...(page.next !== undefined ? { next: page.next } : {}),
+    scannedBytes: page.scannedBytes,
+  };
 }
 
 /** Whether a refusal means "this authority has no attachment regions". */

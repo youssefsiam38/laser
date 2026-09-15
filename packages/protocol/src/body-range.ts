@@ -260,11 +260,15 @@ export function attachmentRegions(
  */
 export function createAttachmentScanner(
   createHasher: () => { update(chunk: string): void; digest(): string },
-  options: { maxItems?: number } = {},
+  options: { maxItems?: number; maxBytes?: number; from?: number } = {},
 ): { push(chunk: string): void; end(): AttachmentRegions } {
   const maxItems = Math.max(1, Math.min(options.maxItems ?? BODY_REGION_MAX_ITEMS, BODY_REGION_MAX_ITEMS));
+  const maxBytes = Math.max(256, Math.min(options.maxBytes ?? BODY_REGION_METADATA_MAX_BYTES, BODY_REGION_METADATA_MAX_BYTES));
+  const from = safeOffset(options.from) ?? 0;
   const items: AttachmentRegion[] = [];
   let omitted = 0;
+  let metadata = 0;
+  let next: number | undefined;
   // What has been seen but not yet resolved: at most one candidate wrapper.
   let carry = "";
   let carryOffset = 0;
@@ -312,13 +316,20 @@ export function createAttachmentScanner(
       }
       const offset = carryOffset + utf8BytesBetween(carry, 0, wrapper.payloadFrom);
       const bytes = utf8BytesBetween(carry, wrapper.payloadFrom, wrapper.payloadTo);
-      if (items.length >= maxItems) omitted += 1;
-      else {
+      // One page at a time, bounded exactly as the authority's own answer is:
+      // a page's worth of items, a page's worth of metadata, and where the next
+      // page would start.
+      if (offset < from) {
+        // Before this page; not this page's business and not counted in it.
+      } else if (items.length >= maxItems) {
+        next ??= offset;
+        omitted += 1;
+      } else {
         const name = boundedField(wrapper.name, REGION_NAME_MAX_BYTES);
         const mediaType = boundedField(wrapper.mediaType, REGION_MEDIA_TYPE_MAX_BYTES);
         const hasher = createHasher();
         hasher.update(wrapper.payload);
-        items.push({
+        const region: AttachmentRegion = {
           offset,
           bytes,
           name: name.text,
@@ -326,7 +337,10 @@ export function createAttachmentScanner(
           contentDigest: hasher.digest(),
           ...(name.cut ? { nameTruncated: true as const } : {}),
           ...(mediaType.cut ? { mediaTypeTruncated: true as const } : {}),
-        });
+        };
+        const cost = utf8ByteLength(JSON.stringify(region));
+        if (metadata + cost > maxBytes) { next ??= offset; omitted += 1; }
+        else { metadata += cost; items.push(region); }
       }
       carryOffset += utf8BytesBetween(carry, 0, wrapper.end);
       carry = carry.slice(wrapper.end);
@@ -341,7 +355,12 @@ export function createAttachmentScanner(
     },
     end() {
       drain(true);
-      return { items, ...(omitted > 0 ? { omitted } : {}), scannedBytes: scanned };
+      return {
+        items,
+        ...(omitted > 0 ? { omitted } : {}),
+        ...(next !== undefined ? { next } : {}),
+        scannedBytes: scanned,
+      };
     },
   };
 }
