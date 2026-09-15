@@ -17,8 +17,8 @@
  * drops a session.
  */
 import { constants } from "node:fs";
-import { open, type FileHandle } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { open, realpath, type FileHandle } from "node:fs/promises";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import {
   ErrorCodes,
   ProtocolError,
@@ -41,12 +41,30 @@ export interface TaskRegisterDeps {
   logRoot?: string;
 }
 
-/** Is this path inside `root`? Compared after resolution, never by prefix string. */
-export function isInsideRoot(candidate: string | undefined, root: string | undefined): boolean {
+/**
+ * Is this path really inside `root`?
+ *
+ * Resolved through the filesystem, not compared as strings: a symlink at any
+ * directory inside the root leads out of it, and `O_NOFOLLOW` on the open only
+ * refuses the *last* component. The parent directory is resolved and checked,
+ * the final component is never followed, and a path whose parent cannot be
+ * resolved is refused rather than assumed.
+ */
+export async function isInsideRoot(candidate: string | undefined, root: string | undefined): Promise<boolean> {
   if (candidate === undefined || root === undefined) return false;
   if (!isAbsolute(candidate) || !isAbsolute(root)) return false;
-  const within = relative(resolve(root), resolve(candidate));
-  return within !== "" && within !== ".." && !within.startsWith(`..${sep}`) && !isAbsolute(within);
+  let realRoot: string;
+  let realParent: string;
+  try {
+    realRoot = await realpath(resolve(root));
+    realParent = await realpath(dirname(resolve(candidate)));
+  } catch {
+    return false;
+  }
+  const within = relative(realRoot, realParent);
+  if (within !== "" && (within === ".." || within.startsWith(`..${sep}`) || isAbsolute(within))) return false;
+  const name = relative(dirname(resolve(candidate)), resolve(candidate));
+  return name !== "" && name !== "." && name !== "..";
 }
 
 interface Held {
@@ -156,7 +174,7 @@ export class TaskRegister {
       );
     }
     const file = held.logPath;
-    if (file === undefined || held.task.logState === "released" || !isInsideRoot(file, this.deps.logRoot)) {
+    if (file === undefined || held.task.logState === "released" || !(await isInsideRoot(file, this.deps.logRoot))) {
       throw new ProtocolError(
         ErrorCodes.Unsupported,
         "That task kept no log file, so there is nothing to read. Its last line is on the row.",

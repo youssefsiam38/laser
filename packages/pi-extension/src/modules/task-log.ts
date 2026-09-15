@@ -35,7 +35,7 @@
  * id or path.
  */
 import { createHash, type Hash } from "node:crypto";
-import { closeSync, constants, fstatSync, mkdirSync, openSync, readSync, renameSync, unlinkSync, write } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, renameSync, unlinkSync, write } from "node:fs";
 import { join } from "node:path";
 
 /** Bytes one segment grows to before it rotates. */
@@ -97,7 +97,11 @@ export class TaskLog {
   private closed = false;
   private readonly queue: Buffer[] = [];
   private queued = 0;
+  /** Bytes handed to the platform and not yet acknowledged. Retained memory too. */
+  private inFlight = 0;
   private draining = false;
+  /** Set when the body was abandoned and its files still have to be cleaned up. */
+  private cleanupPending = false;
   /** Resolves when the queue is empty. Tests and shutdown may await it; nothing else does. */
   private idle: Promise<void> = Promise.resolve();
   private settleIdle: () => void = () => {};
@@ -111,6 +115,8 @@ export class TaskLog {
     this.onWindowChange = options.onWindowChange;
     try {
       mkdirSync(options.dir, { recursive: true, mode: LOG_DIR_MODE });
+      // A symlink standing where our directory should be is not our directory.
+      if (!lstatSync(options.dir).isDirectory()) throw new Error("the log directory is not a directory");
       this.fd = this.openSegment(this.path);
     } catch (error) {
       this.broken = true;
@@ -140,9 +146,13 @@ export class TaskLog {
     return this.activeBytes + (this.hasPrev ? this.prevBytes : 0);
   }
 
-  /** Bytes waiting to reach the disk. Bounded by construction. */
+  /**
+   * Bytes this log is holding on their way to disk: the queue **and** the
+   * slice the platform has not acknowledged yet. Both are memory, so both are
+   * counted, and both are what the admission bound is checked against.
+   */
   get pendingBytes(): number {
-    return this.queued;
+    return this.queued + this.inFlight;
   }
 
   /** sha256 of everything produced so far; safe to call while the task runs. */
@@ -161,7 +171,7 @@ export class TaskLog {
     this.bytes += chunk.length;
     this.hash.update(chunk);
     if (this.released || this.broken || this.fd === undefined) return;
-    if (this.queued + chunk.length > this.queueBytes) {
+    if (this.pendingBytes + chunk.length > this.queueBytes) {
       // Storage cannot keep up. Abandoning the body is the only answer that
       // neither slows the command down nor grows this process without bound;
       // the row says `released`, and the size and digest still describe every
@@ -182,7 +192,10 @@ export class TaskLog {
   /** The command ended: stop holding the descriptor once the queue has gone. */
   close(): void {
     this.closed = true;
-    if (this.queue.length === 0) this.closeFd();
+    // Never while the platform still owns the descriptor: closing it under an
+    // unacknowledged write is how a file descriptor gets reused by somebody
+    // else's open and written into.
+    if (this.queue.length === 0 && this.inFlight === 0) this.closeFd();
   }
 
   /**
@@ -217,19 +230,32 @@ export class TaskLog {
   release(): number {
     if (this.released) return 0;
     const freed = this.diskBytes;
+    // Abandoned from this instant: nothing more is written, nothing rotates,
+    // and no retained window is published again.
+    this.released = true;
+    this.droppedHead = this.bytes > 0;
     this.queue.length = 0;
     this.queued = 0;
-    this.settleIdle();
-    this.closeFd();
-    this.unlink(`${this.path}.prev`);
-    this.unlink(this.path);
-    this.released = true;
     this.hasPrev = false;
     this.prevBytes = 0;
     this.activeBytes = 0;
-    this.droppedHead = this.bytes > 0;
+    // A write the platform has not acknowledged still owns the descriptor and
+    // the buffer. Closing or unlinking now would race it, so the cleanup waits
+    // for it to settle — and `drained()` waits with it rather than claiming
+    // the queue has gone while it has not.
+    if (this.inFlight > 0) this.cleanupPending = true;
+    else this.finishRelease();
     this.onWindowChange?.();
     return freed;
+  }
+
+  /** The part of a release that may only happen once no write is in flight. */
+  private finishRelease(): void {
+    this.cleanupPending = false;
+    this.closeFd();
+    this.unlink(`${this.path}.prev`);
+    this.unlink(this.path);
+    this.settleIdle();
   }
 
   /**
@@ -287,20 +313,33 @@ export class TaskLog {
           continue;
         }
         this.queued -= taken;
+        // Still held, just held by the platform now: the bytes move from the
+        // queue to `inFlight`, and `pendingBytes` never dips while they are in
+        // somebody else's hands.
+        this.inFlight += taken;
         const slice = parts.length === 1 ? parts[0]! : Buffer.concat(parts, taken);
         try {
           await this.io(this.fd, slice);
         } catch (error) {
+          this.inFlight -= taken;
           this.fail(error);
           return;
         }
-        if (this.released || this.broken) return;
+        this.inFlight -= taken;
+        // The body may have been abandoned while that write was in flight. The
+        // bytes it wrote are not accounted, nothing rotates, and the cleanup
+        // that was waiting for this write happens now.
+        if (this.released || this.broken) {
+          if (this.cleanupPending) this.finishRelease();
+          return;
+        }
         this.activeBytes += slice.length;
         if (this.activeBytes >= this.segmentBytes) this.rotate();
       }
     } finally {
       this.draining = false;
-      if (this.queue.length === 0) {
+      if (this.queue.length === 0 && this.inFlight === 0) {
+        if (this.cleanupPending) this.finishRelease();
         this.settleIdle();
         if (this.closed) this.closeFd();
       }
@@ -400,8 +439,9 @@ export class TaskLog {
     this.broken = true;
     this.queue.length = 0;
     this.queued = 0;
+    this.cleanupPending = false;
     this.settleIdle();
-    this.closeFd();
+    if (this.inFlight === 0) this.closeFd();
     this.onError?.(error);
     this.onWindowChange?.();
   }

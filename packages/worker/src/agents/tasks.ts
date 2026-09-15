@@ -15,8 +15,8 @@
  * handed to the model or a client.
  */
 import { constants } from "node:fs";
-import { open } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { open, realpath } from "node:fs/promises";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import {
   TASK_OUTPUT_MAX_BYTES,
   alignUtf8,
@@ -194,11 +194,25 @@ export class TaskIndex {
  * No root means nothing may be read: a build that forgot to pass one reads
  * nothing rather than reading whatever a message names.
  */
-export function isInsideRoot(candidate: string | undefined, root: string | undefined): boolean {
+export async function isInsideRoot(candidate: string | undefined, root: string | undefined): Promise<boolean> {
   if (candidate === undefined || root === undefined) return false;
   if (!isAbsolute(candidate) || !isAbsolute(root)) return false;
-  const within = relative(resolve(root), resolve(candidate));
-  return within !== "" && !within.startsWith(`..${sep}`) && within !== ".." && !isAbsolute(within);
+  // Lexical containment is not containment: a symlink at any directory inside
+  // the root leads out of it, and `O_NOFOLLOW` only refuses the last
+  // component. Both sides are resolved through the filesystem first, and a
+  // path whose parent cannot be resolved is refused rather than guessed at.
+  let realRoot: string;
+  let realParent: string;
+  try {
+    realRoot = await realpath(resolve(root));
+    realParent = await realpath(dirname(resolve(candidate)));
+  } catch {
+    return false;
+  }
+  const within = relative(realRoot, realParent);
+  if (within !== "" && (within === ".." || within.startsWith(`..${sep}`) || isAbsolute(within))) return false;
+  const name = relative(dirname(resolve(candidate)), resolve(candidate));
+  return name !== "" && name !== "." && name !== "..";
 }
 
 /**
@@ -211,7 +225,7 @@ export async function readLogTail(logPath: string | undefined, lines: number, ro
   // A log path arrives from an extension message. It is only ever read when it
   // is inside the private root this process owns, and it is opened without
   // following a symlink: a path is a claim, not a permission (RP-6).
-  if (!isInsideRoot(logPath, root)) return undefined;
+  if (!(await isInsideRoot(logPath, root))) return undefined;
   let text: string;
   try {
     const handle = await open(logPath!, constants.O_RDONLY | constants.O_NOFOLLOW);

@@ -390,6 +390,18 @@ function sessionLogBytes(state: State): number {
 }
 
 /**
+ * Everything this session's logs are holding: bytes on disk **and** bytes on
+ * their way there.
+ *
+ * Pending bytes are memory. A per-log queue is bounded, but ten stalled
+ * commands would be ten of those queues, so the budget is checked against the
+ * sum — a ceiling one command cannot exceed but ten can is not a ceiling.
+ */
+function sessionHeldBytes(state: State): number {
+  return logsOf(state).reduce((sum, entry) => sum + entry.log.diskBytes + entry.log.pendingBytes, 0);
+}
+
+/**
  * Keep this session's commands inside their share of the disk.
  *
  * Order: logs nobody holds a record for, then finished commands oldest first,
@@ -401,29 +413,30 @@ function sessionLogBytes(state: State): number {
  * be able to fill the disk.
  */
 function enforceLogBudget(state: State): void {
-  if (sessionLogBytes(state) <= state.logBudget) return;
+  if (sessionHeldBytes(state) <= state.logBudget) return;
   const entries = logsOf(state);
   // First everything nobody is writing to any more, oldest first.
   for (const entry of entries) {
-    if (sessionLogBytes(state) <= state.logBudget) break;
+    if (sessionHeldBytes(state) <= state.logBudget) break;
     if (entry.live) continue;
     entry.log.release();
     state.released += 1;
   }
   // Then the older half of a running command's window.
   for (const entry of entries) {
-    if (sessionLogBytes(state) <= state.logBudget) break;
+    if (sessionHeldBytes(state) <= state.logBudget) break;
     if (!entry.live) continue;
     if (entry.log.releaseOldest() > 0) state.released += 1;
   }
-  // Then a running command's window entirely. The command is not touched: it
-  // keeps printing, its bytes keep being counted and digested, and its row
-  // says the body is gone. A ceiling that a long-running command could hold
-  // open is not a ceiling.
+  // Then a running command's window entirely — oldest first, and a command
+  // whose writes are stalled is exactly one of those: its queue goes with its
+  // body. The command is not touched, it keeps printing, and its bytes keep
+  // being counted and digested. A ceiling that a stalled disk or a long
+  // command could hold open is not a ceiling.
   for (const entry of entries) {
-    if (sessionLogBytes(state) <= state.logBudget) break;
+    if (sessionHeldBytes(state) <= state.logBudget) break;
     if (!entry.live) continue;
-    if (entry.log.release() > 0) state.released += 1;
+    if (entry.log.release() >= 0) state.released += 1;
   }
   state.orphanLogs = state.orphanLogs.filter((log) => log.usable);
 }
@@ -774,6 +787,10 @@ function startTask(ctx: ModuleContext, state: State, options: BackgroundWorkOpti
           // command printing in 8 KiB pieces must not pay for a walk of every
           // log this session owns on each one.
           state.bytesSinceBudgetCheck += data.length;
+          // A stalled disk shows up as pending bytes rather than as written
+          // ones, so a log that is holding a megabyte is checked at once
+          // instead of waiting for the written-bytes cadence.
+          if (task.log.pendingBytes >= BUDGET_CHECK_BYTES) state.bytesSinceBudgetCheck = BUDGET_CHECK_BYTES;
           if (state.bytesSinceBudgetCheck >= BUDGET_CHECK_BYTES) {
             state.bytesSinceBudgetCheck = 0;
             enforceLogBudget(state);

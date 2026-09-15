@@ -300,6 +300,47 @@ it(
 );
 
 it(
+  "holds a session's stalled logs inside one aggregate ceiling, and keeps every command running",
+  async () => {
+    // The worker's share for this session, made small so the ceiling is
+    // reachable with a handful of commands rather than a gigabyte of output.
+    const h = harness();
+    expect(h.commands.deliver({ type: "lasercode/task/log-budget", bytes: 4 * 1024 * 1024 })).toBe(true);
+
+    const ids: string[] = [];
+    for (let index = 0; index < 8; index++) {
+      const { details } = await h.call("bash", {
+        command: "node -e \"const l='y'.repeat(65536); for(let i=0;i<64;i++) process.stdout.write(l); setTimeout(()=>{},30000)\"",
+        background: true,
+        notify: false,
+      });
+      ids.push((details as { taskId: string }).taskId);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+
+    const held = h.retention()!;
+    // Disk *and* the bytes on their way there, together, inside the share: a
+    // per-log queue bound alone would have allowed eight of them.
+    expect(held.logBytes + held.pendingLogBytes).toBeLessThanOrEqual(4 * 1024 * 1024);
+    expect(diskBytes()).toBeLessThanOrEqual(4 * 1024 * 1024);
+    expect(held.released).toBeGreaterThan(0);
+    expect(held.live).toBe(8);
+
+    // Every command is still running, and every one of them still tells the
+    // exact truth about its output whether its body survived or not.
+    for (const id of ids) {
+      const row = h.updates().filter((update) => update.id === id).at(-1)!;
+      expect(row.status).toBe("running");
+      expect(row.outputBytes).toBeGreaterThan(0);
+      expect(row.outputDigest).toMatch(/^[0-9a-f]{64}$/);
+      expect(["retained", "truncated", "released"]).toContain(row.logState);
+    }
+    for (const id of ids) await h.call("task_stop", { taskId: id });
+  },
+  180_000,
+);
+
+it(
   "publishes the window the moment it moves, so a ranged read never uses stale offsets",
   async () => {
     const h = harness();

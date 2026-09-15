@@ -171,6 +171,13 @@ describe("readLogTail", () => {
     expect(await readLogTail(join(outside, "secret.log"), 5, dir)).toBeUndefined();
     symlinkSync(join(outside, "secret.log"), join(dir, "link.log"));
     expect(await readLogTail(join(dir, "link.log"), 5, dir)).toBeUndefined();
+    // And a symlinked *directory* inside the root: `O_NOFOLLOW` only refuses
+    // the last component, so containment is decided on the resolved parent.
+    const elsewhere = mkdtempSync(join(tmpdir(), "task-tail-elsewhere-"));
+    dirs.push(elsewhere);
+    writeFileSync(join(elsewhere, "secret.log"), "still not yours");
+    symlinkSync(elsewhere, join(dir, "opaque"));
+    expect(await readLogTail(join(dir, "opaque", "secret.log"), 5, dir)).toBeUndefined();
     // Without a root nothing is read at all.
     writeFileSync(log, "one\n");
     expect(await readLogTail(log, 5)).toBeUndefined();

@@ -157,7 +157,9 @@ it("never blocks the command: a stalled disk bounds the queue, then the body goe
   expect(log.state).toBe("released");
   expect(log.bytes).toBe(200 * 4096);
   expect(log.digest()).toBe(expected.digest("hex"));
-  expect(log.pendingBytes).toBe(0);
+  // The queue went with the body; only the slice the platform is still holding
+  // remains counted, and it is bounded by one write.
+  expect(log.pendingBytes).toBeLessThanOrEqual(32 * 1024);
   expect(log.diskBytes).toBe(0);
   expect(log.readTail(1024)).toBeUndefined();
   // Output after the release is still counted exactly.
@@ -167,6 +169,7 @@ it("never blocks the command: a stalled disk bounds the queue, then the body goe
   release?.();
   log.close();
   await log.drained();
+  expect(log.pendingBytes).toBe(0);
   expect(existsSync(join(dir, "t-stall.log"))).toBe(false);
   expect(existsSync(join(dir, "t-stall.log.prev"))).toBe(false);
 });
@@ -205,4 +208,78 @@ it("creates private files in a private directory, and refuses a symlink in their
   expect(hostile.bytes).toBe(6);
   expect(readFileSync(target, "utf8")).toBe("untouched");
   expect(lstatSync(join(dir, "t-evil.log")).isSymbolicLink()).toBe(true);
+});
+
+it("counts the slice the platform is still holding, and never closes the descriptor under it", async () => {
+  const dir = scratch();
+  const settle: Array<() => void> = [];
+  const log = new TaskLog({
+    dir,
+    id: "t-inflight",
+    segmentBytes: 1024 * 1024,
+    queueBytes: 64 * 1024,
+    write: () => new Promise<void>((resolve) => settle.push(resolve)),
+  });
+  // One append leaves the queue; the drain hands it to the platform and waits.
+  log.append(chunk("a", 16 * 1024));
+  await Promise.resolve();
+  expect(settle).toHaveLength(1);
+  // The bytes are still in this process, so they are still counted: a bound
+  // checked against the queue alone would have let another 64 KiB in.
+  expect(log.pendingBytes).toBe(16 * 1024);
+  log.append(chunk("b", 40 * 1024));
+  expect(log.pendingBytes).toBe(56 * 1024);
+  // The next append would put total pending past the bound, so the body goes.
+  log.append(chunk("c", 16 * 1024));
+  expect(log.state).toBe("released");
+  expect(log.bytes).toBe(72 * 1024);
+
+  // The write is still in flight: nothing has been closed or unlinked yet, and
+  // `drained()` has not resolved either.
+  expect(existsSync(join(dir, "t-inflight.log"))).toBe(true);
+  let drained = false;
+  void log.drained().then(() => {
+    drained = true;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  expect(drained).toBe(false);
+
+  // It settles: only now is the descriptor closed and the file removed.
+  settle[0]!();
+  await log.drained();
+  expect(drained).toBe(true);
+  expect(existsSync(join(dir, "t-inflight.log"))).toBe(false);
+  expect(log.pendingBytes).toBe(0);
+  expect(log.diskBytes).toBe(0);
+});
+
+it("writes nothing to a descriptor it no longer owns after an abandonment", async () => {
+  const dir = scratch();
+  const seen: number[] = [];
+  const settle: Array<() => void> = [];
+  const log = new TaskLog({
+    dir,
+    id: "t-fd",
+    segmentBytes: 4096,
+    queueBytes: 1024 * 1024,
+    write: (fd) => {
+      seen.push(fd);
+      return new Promise<void>((resolve) => settle.push(resolve));
+    },
+  });
+  log.append(chunk("a", 2048));
+  await Promise.resolve();
+  const released = log.release();
+  expect(released).toBe(0); // nothing had reached the disk yet
+  log.append(chunk("b", 2048));
+  settle[0]!();
+  await log.drained();
+  // Exactly one write was ever issued, on the descriptor that existed when it
+  // was issued: the release did not close that descriptor underneath it, and
+  // nothing was written after the body was abandoned.
+  expect(seen).toHaveLength(1);
+  expect(settle).toHaveLength(1);
+  expect(log.state).toBe("released");
+  expect(log.bytes).toBe(4096);
+  expect(existsSync(join(dir, "t-fd.log"))).toBe(false);
 });

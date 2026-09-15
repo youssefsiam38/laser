@@ -84,6 +84,15 @@ describe("TaskRegister", () => {
     symlinkSync(join(outside, "target.log"), join(dir, "t-link.log"));
     w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ id: "t-link", logPath: join(dir, "t-link.log") }) });
     await expect(w.register.read(PATH, "t-link", 0)).rejects.toThrow(/has been cleaned up/);
+    // A symlinked *directory* inside the root escapes it just as well, and
+    // `O_NOFOLLOW` would not have noticed: containment is decided on the
+    // resolved parent directory, not on the string.
+    const elsewhere = mkdtempSync(join(tmpdir(), "task-register-elsewhere-"));
+    dirs.push(elsewhere);
+    writeFileSync(join(elsewhere, "secret.log"), "still not yours");
+    symlinkSync(elsewhere, join(dir, "opaque"));
+    w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ id: "t-dir", logPath: join(dir, "opaque", "secret.log") }) });
+    await expect(w.register.read(PATH, "t-dir", 0)).rejects.toThrow(/kept no log file/);
   });
 
   it("counts retained bytes in UTF-8, not in string units", () => {
