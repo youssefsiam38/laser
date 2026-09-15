@@ -267,6 +267,26 @@ export interface SessionDriver {
    */
   sessionHeader?(): SessionRevisionHeader | null;
 
+  /**
+   * Settle this session's canonical record and prove it can be reopened from
+   * it, immediately before the runtime is released (RP-4).
+   *
+   * Called under the worker's per-path release fence, after the safety
+   * predicate has already refused every kind of work: nothing may be appended
+   * while this runs. A driver implements it by flushing whatever the engine
+   * still owes the file and then reading that file back through the engine's
+   * own parser, comparing identity and entries with the live runtime.
+   *
+   * It must never throw, never write anything but the flush the engine owes,
+   * and never claim readiness it did not prove: a missing, replaced, truncated
+   * or corrupt record, or a flush that failed, is a refusal, and a refusal
+   * keeps the runtime exactly as it was.
+   *
+   * Optional: a driver that cannot prove reopenability does not implement it,
+   * and a session it serves is refused release for that reason.
+   */
+  prepareRelease?(): Promise<DriverReleaseReadiness>;
+
   /** Durable goal control. Optional for engines that do not implement Goals. */
   goalState?(): Promise<SessionGoal | null>;
   goalAction?(action: GoalAction, options?: { admissionLease?: SessionAdmissionLease; onAccepted?: () => void }): Promise<SessionGoal | null>;
@@ -293,6 +313,30 @@ export interface SessionDriver {
 
   dispose(): Promise<void>;
 }
+
+/** Why a session's canonical record cannot be relied on to bring it back (RP-4). */
+export type DriverReleaseRefusal =
+  /** There is no durable record for this session at all. */
+  | "no_record"
+  /** A record exists, but it is not this session's. */
+  | "identity_mismatch"
+  /** The record cannot be read or parsed as it stands. */
+  | "unreadable"
+  /** The engine could not settle what it still owed the record. */
+  | "flush_failed";
+
+/**
+ * The result of {@link SessionDriver.prepareRelease}. Discriminated on `ok`.
+ *
+ * A refusal is a **code and nothing else**. What an engine, a filesystem or a
+ * parser says about a failure names the file it was working on and can quote
+ * what is inside it, and this answer travels on to the worker's pins, the
+ * host's diagnostics and its logs. The sentence a person could see is written
+ * on the other side of that boundary, from the code.
+ */
+export type DriverReleaseReadiness =
+  | { ok: true }
+  | { ok: false; refusal: DriverReleaseRefusal };
 
 export class DriverUnavailableError extends Error {
   override readonly name = "DriverUnavailableError";

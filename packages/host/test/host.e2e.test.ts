@@ -562,12 +562,24 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("host end to end", () => {
       await new Promise((resolve) => setTimeout(resolve, 400));
       expect(client.updates().length).toBe(quiet);
 
-      // Reopening reconciles from the sequence it holds: nothing was lost, it
-      // was waiting in the worker's replay.
-      const resumed = await client.request<{ replayFrom: number; seq: number }>("session/load", { path: state.path, fromSeq: quiet > 0 ? client.updates()[quiet - 1]!.seq : 0 });
-      expect(resumed.seq).toBeGreaterThan(0);
-      await client.waitFor((m) => "method" in m && m.method === "session/update" && (m.params as SessionUpdateParams).seq > (quiet > 0 ? client.updates()[quiet - 1]!.seq : 0));
-      expect(client.updates().length).toBeGreaterThan(quiet);
+      // Reopening reconciles from the sequence it holds. Two honest outcomes,
+      // because a session nobody is following may also have had its runtime
+      // released in the meantime (RP-4): either the worker still has it and
+      // replays what was withheld, or the reply's floor disagrees with the
+      // watermark, which is the client's signal to re-read. Either way the
+      // conversation itself is whole — that is the claim that matters.
+      const held = quiet > 0 ? client.updates()[quiet - 1]!.seq : 0;
+      const resumed = await client.request<{ replayFrom: number; seq: number }>("session/load", { path: state.path, fromSeq: held });
+      if (resumed.replayFrom === held) {
+        await client.waitFor((m) => "method" in m && m.method === "session/update" && (m.params as SessionUpdateParams).seq > held);
+        expect(client.updates().length).toBeGreaterThan(quiet);
+      } else {
+        expect(resumed.seq).toBeLessThanOrEqual(held);
+      }
+      const whole = await client.request<{ entries: unknown[] }>("pi/session/entries", { path: state.path });
+      const said = JSON.stringify(whole.entries);
+      expect(said).toContain("hello");
+      expect(said).toContain("again");
 
       // And no client, ever, is told a process id.
       expect(client.inbound.some((m) => "method" in m && m.method === "pi/resource/process")).toBe(false);

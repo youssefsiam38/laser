@@ -22,6 +22,13 @@ import { applyEnvironment } from "./environment.js";
 
 const PROTOCOL_FD = Number(process.env[ENV.workerFd] ?? 3);
 
+/**
+ * How long an unexpected shutdown waits for handlers it had already accepted
+ * (RP-4). The retirement path never uses it: the worker proved it had none
+ * before the host closed the pipe.
+ */
+const SHUTDOWN_DRAIN_MS = 5_000;
+
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
   return i >= 0 ? process.argv[i + 1] : undefined;
@@ -151,6 +158,20 @@ async function main(): Promise<void> {
     if (closing) return;
     closing = true;
     server.notify("pi/worker/status", { cwd, status: "retired" });
+    // Handlers accepted before the pipe closed finish first (RP-4). On the
+    // normal retirement path there are none — `pi/worker/retire` proved that
+    // before the host ended the pipe — so this returns at once. On an
+    // unexpected close (the host was killed, the parent vanished) it is a
+    // bounded wait, and a wait that runs out is said out loud: work that was
+    // in flight is lost with the process, and that is a harness loss, not
+    // something a person did.
+    const quiet = await server.drain(SHUTDOWN_DRAIN_MS);
+    if (!quiet) {
+      console.error(
+        `${PRODUCT_NAME} worker: the connection closed while this project's worker was still working; ` +
+          `it could not finish within ${SHUTDOWN_DRAIN_MS} ms and is stopping.`,
+      );
+    }
     await server.dispose();
     process.exit(code);
   }

@@ -313,7 +313,8 @@ describe.skipIf(!harnessModulePresent || !haveGit)("golden path: start_agent →
       expect(running, diagnostics()).toBeDefined();
       const childPath = running!.sessionPath;
       type Internals = { ui: { context: { select(title: string, options: string[]): Promise<string | undefined> } } };
-      const live = (server as unknown as { sessions: Map<string, { driver: SessionDriver }> }).sessions.get(childPath);
+      // The worker's session table lives in its runtime owner (RP-4).
+      const live = (server as unknown as { runtimes: { get(path: string): { driver: SessionDriver } | undefined } }).runtimes.get(childPath);
       expect(live, "the child's session is open in this worker").toBeDefined();
       const answered = (live!.driver as unknown as Internals).ui.context.select("Which token store?", ["cookie", "header"]);
 

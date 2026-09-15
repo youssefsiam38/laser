@@ -52,6 +52,24 @@ export class WorkerRpcError extends Error {
   }
 }
 
+/**
+ * A request refused because this worker is being retired (RP-4).
+ *
+ * The important part is `written === false`: the bytes never reached the pipe,
+ * so the call had no effect at all and a caller may safely send it again —
+ * including a `session/prompt`, which is the one call that would be unsafe to
+ * repeat if it might have been delivered. Admission is closed before the
+ * retirement question is asked and, if the worker acknowledges, never reopens;
+ * nothing is queued, because a queue is memory a peer controls (RP-7).
+ */
+export class WorkerRetiredError extends Error {
+  override readonly name = "WorkerRetiredError";
+  readonly written = false;
+  constructor(readonly cwd: string) {
+    super("This project's worker was stopped before that reached it; it will start again on the next request.");
+  }
+}
+
 export function defaultWorkerMain(): string {
   return createRequire(import.meta.url).resolve("@lasercode/worker/main");
 }
@@ -64,6 +82,8 @@ export class WorkerClient {
   private exited = false;
   /** Set when `stop()` closes the pipe, before the child has actually exited. */
   private ending = false;
+  /** RP-4: closed while a retirement is being decided, so nothing is written. */
+  private admissionClosed = false;
   /** Set once, so a spawn `error` followed by an `exit` reports one incident. */
   private reported = false;
   /**
@@ -178,7 +198,41 @@ export class WorkerClient {
     return !this.exited && !this.ending;
   }
 
+  /**
+   * Stop accepting work, without ending the pipe (RP-4).
+   *
+   * Called before `pi/worker/retire` is asked, so nothing can be written
+   * between the worker's answer and the pipe closing. Requests that arrive
+   * while admission is closed are refused immediately with
+   * {@link WorkerRetiredError} — never queued, never written. `reopenAdmission`
+   * undoes it when the worker refuses to retire.
+   */
+  closeAdmission(): void {
+    this.admissionClosed = true;
+  }
+
+  reopenAdmission(): void {
+    this.admissionClosed = false;
+  }
+
+  get admitting(): boolean {
+    return !this.admissionClosed;
+  }
+
+  /**
+   * Send one request past a closed admission. Only the lifetime verbs use it:
+   * they are what the closed admission exists to serve.
+   */
+  requestPrivileged<R = unknown>(method: string, params: unknown): Promise<R> {
+    return this.send<R>(method, params);
+  }
+
   request<R = unknown>(method: string, params: unknown): Promise<R> {
+    if (this.admissionClosed) return Promise.reject(new WorkerRetiredError(this.options.cwd));
+    return this.send<R>(method, params);
+  }
+
+  private send<R = unknown>(method: string, params: unknown): Promise<R> {
     if (!this.alive) return Promise.reject(new WorkerRpcError({ code: ErrorCodes.DriverUnavailable, message: "worker exited" }));
     const id = this.nextId++;
     return new Promise<R>((resolve, reject) => {

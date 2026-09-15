@@ -467,6 +467,37 @@ describe("AgentHarness", () => {
     expect(await childBridge.completeRun({ status: "done" as "completed", message: "x" })).toEqual({ ok: false, error: "This run already ended." });
   });
 
+  it("tells the session lifetime what a runtime release would destroy, for a child and for its parent (RP-4)", async () => {
+    const root = world.openRoot("lead");
+    const childPath = "/sessions/child-1.jsonl";
+    expect(world.harness.retainedWork(root.path)).toEqual({ liveRuns: 0, liveChildRuns: 0, queued: 0 });
+
+    const { runId } = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "t" });
+    // The child's own runtime is held by its run…
+    expect(world.harness.retainedWork(childPath)).toMatchObject({ liveRuns: 1, liveChildRuns: 0 });
+    // …and so is its parent's, because the ending has to wake that session.
+    expect(world.harness.retainedWork(root.path)).toMatchObject({ liveRuns: 0, liveChildRuns: 1 });
+
+    const childBridge = world.harness.bridgeOf(childPath)!;
+    expect(await childBridge.completeRun({ status: "completed", message: "done" })).toEqual({ ok: true, runId });
+    await flushLifecycle();
+    // A finished child holds neither runtime: only the ones still working do.
+    expect(world.harness.retainedWork(childPath)).toEqual({ liveRuns: 0, liveChildRuns: 0, queued: 0 });
+    expect(world.harness.retainedWork(root.path)).toEqual({ liveRuns: 0, liveChildRuns: 0, queued: 0 });
+  });
+
+  it("counts a queued message to a working child as work its runtime is holding (RP-4)", async () => {
+    const root = world.openRoot("lead");
+    const childPath = "/sessions/child-1.jsonl";
+    world.setAutoResolveChildPrompts(false);
+    const started = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "t" });
+    await root.handle.bridge.sendAgentMessage({ sessionId: started.sessionId, message: "and then this", mode: "queue" });
+    await flushLifecycle();
+    const held = world.harness.retainedWork(childPath);
+    expect(held.liveRuns).toBeGreaterThan(0);
+    expect(held.queued).toBeGreaterThan(0);
+  });
+
   it("validates completion input while the run is active", async () => {
     const root = world.openRoot("lead");
     await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "t" });
