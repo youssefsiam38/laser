@@ -443,11 +443,29 @@ describe("writes are atomic, and a failed one changes nothing", () => {
   });
 
   it("makes room once and retries when the first write is refused", async () => {
+    // A refused transaction is the storage layer saying it has no room, so the
+    // retry has to free something: an older record goes, and the write lands.
+    const older = row({ sessionId: "older", path: "/p/older.jsonl" });
+    const view = harness({ rows: [older], faults: { refuseFirstPuts: 1 } });
+    await prepared(view);
+    view.clock.now += 1_000;
+    view.cache.release(tail());
+    await view.flush();
+    expect([...view.store.rows.values()].map((stored) => stored.sessionId)).toEqual(["session-a"]);
+    expect(view.cache.peek("/p/a.jsonl")).toBeDefined();
+    expect(view.cache.counters().evictions).toBe(1);
+  });
+
+  it("gives up rather than pretending, when there is nothing left to free", async () => {
     const view = harness({ faults: { refuseFirstPuts: 1 } });
     await prepared(view);
     view.cache.release(tail());
     await view.flush();
-    expect(view.store.rows.size).toBe(1);
+    // Nothing to evict and a store with no room: this device simply does not
+    // hold that conversation, and says so in the counters.
+    expect(view.store.rows.size).toBe(0);
+    expect(view.cache.peek("/p/a.jsonl")).toBeUndefined();
+    expect(view.cache.counters().writesRefused).toBe(1);
   });
 });
 

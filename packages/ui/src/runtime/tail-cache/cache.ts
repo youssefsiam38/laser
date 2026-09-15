@@ -710,14 +710,17 @@ export function createTailCache(deps: TailCacheDeps): TailCache {
             // simply leaves this device without it — but a make-room pass that
             // cannot prove what it deleted closes the cache, like every other
             // unproved purge.
-            if (!(await evictToFit(limits, record.sessionId, mine))) return;
+            // Free the oldest other record, counting the record about to be
+            // written: the store said it has no room, so a pass that evicts
+            // nothing is not a retry.
+            if (!(await evictToFit(limits, mine, { keep: record.sessionId, incoming: { bytes: record.bytes }, minimum: 1 }))) return;
             if (generation !== mine || !store) return;
             if (!(await store.put(row))) return;
           }
           // Committed: now, and only now, is it a record this device holds.
           if (generation !== mine) return;
           remember(record);
-          if (!(await evictToFit(limits, record.sessionId, mine))) {
+          if (!(await evictToFit(limits, mine, { keep: record.sessionId }))) {
             // The record is on this device but the environment is over its
             // bounds and could not be brought back inside them. Nothing is
             // served from an over-bound cache: the record just remembered goes
@@ -935,24 +938,54 @@ export function createTailCache(deps: TailCacheDeps): TailCache {
    * closes the cache rather than serving an environment that is over budget
    * and calling itself open.
    */
-  async function evictToFit(limits: TailBounds, keepSessionId: string, pass: number): Promise<boolean> {
+  async function evictToFit(
+    limits: TailBounds,
+    pass: number,
+    options: {
+      /** The session being written: never evicted to make room for itself. */
+      keep: string;
+      /**
+       * A record that is not in `held` yet, for the make-room pass before a
+       * retry. Planning without it would look at a set that already fits and
+       * evict nothing, which is how the advertised quota retry became a no-op.
+       */
+      incoming?: { bytes: number } | undefined;
+      /**
+       * Records this pass must free even if the projection fits. A refused
+       * transaction is the storage layer saying it has no room, which no
+       * arithmetic about our own bounds can see.
+       */
+      minimum?: number | undefined;
+    },
+  ): Promise<boolean> {
     if (!store) return false;
-    const rows = [...held.values()].sort((a, b) => Date.parse(a.lastUsedAt) - Date.parse(b.lastUsedAt));
+    const minimum = options.minimum ?? 0;
+    const existing = held.get(options.keep);
+    // What this environment will hold once the write lands. A same-session
+    // write replaces a row rather than adding one, so it costs the difference.
+    let records = held.size + (options.incoming && !existing ? 1 : 0);
+    let bytes = heldBytes() + (options.incoming ? options.incoming.bytes - (existing?.bytes ?? 0) : 0);
+    const rows = [...held.values()]
+      .filter((row) => row.sessionId !== options.keep)
+      .sort((a, b) => Date.parse(a.lastUsedAt) - Date.parse(b.lastUsedAt));
     const doomed: TailKey[] = [];
-    let records = held.size;
-    let bytes = heldBytes();
+    // Least recently used first, and the fewest that will do: the oldest other
+    // record goes before the one the person is looking at, and the existing row
+    // of this very session is never taken before its replacement can commit.
     for (const row of rows) {
-      if (records <= limits.sessions && bytes <= limits.bytes) break;
-      if (row.sessionId === keepSessionId) continue;
+      const fits = records <= limits.sessions && bytes <= limits.bytes;
+      if (fits && doomed.length >= minimum) break;
       if (doomed.length >= TAIL_SCAN_LIMITS.deleteRows) break;
       doomed.push([environmentKey!, row.sessionId]);
       records -= 1;
       bytes -= row.bytes;
     }
     // The plan itself has to reach the bounds. If it cannot — more rows over
-    // the limit than one pass may delete — saying "inside its bounds" would be
-    // untrue whatever the deletions do.
+    // the limit than one pass may delete, or nothing left to free for a store
+    // that has no room — saying "inside its bounds" would be untrue whatever
+    // the deletions do.
     if (records > limits.sessions || bytes > limits.bytes) return false;
+    if (doomed.length < minimum) return false;
     if (doomed.length === 0) return true;
     const removed = await store.remove(doomed, TAIL_SCAN_LIMITS.batchRows, {
       rows: TAIL_SCAN_LIMITS.deleteRows,

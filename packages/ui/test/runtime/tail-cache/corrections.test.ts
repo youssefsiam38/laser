@@ -610,3 +610,104 @@ describe("an over-bound cache never calls itself open", () => {
     real!.close();
   });
 });
+
+describe("the quota retry really makes room", () => {
+  /**
+   * A store with a capacity of its own, like a browser at its quota: it
+   * refuses a write while it holds `capacity` rows and accepts one as soon as
+   * something has gone. Nothing about our own bounds can see this — which is
+   * the whole point of a retry that frees a record.
+   */
+  const quotaStore = async (capacity: number, options: { failRetry?: boolean } = {}): Promise<{ store: TailStore; refusals: () => number; close(): void }> => {
+    const real = (await openTailStore(factory as unknown as IDBFactory, { now: () => clockNow.now }))!;
+    let refusals = 0;
+    let held = 0;
+    const store: TailStore = {
+      ...real,
+      async put(row) {
+        const rows = await storedRows();
+        held = rows.length;
+        const replacing = rows.some((stored) => stored.sessionId === row.sessionId);
+        if (!replacing && held >= capacity) {
+          refusals += 1;
+          return false;
+        }
+        if (options.failRetry && refusals > 0) {
+          refusals += 1;
+          return false;
+        }
+        return real.put(row);
+      },
+    };
+    return { store, refusals: () => refusals, close: () => real.close() };
+  };
+
+  it("frees the oldest other record, proves it, and commits the retry", async () => {
+    // Two records already here, both inside the bounds, the first the older.
+    const older = rowFor({ sessionId: "older", path: "/p/older.jsonl", lastUsedAt: new Date(1_699_000_000_000).toISOString() });
+    const newer = rowFor({ sessionId: "newer", path: "/p/newer.jsonl", lastUsedAt: new Date(1_699_900_000_000).toISOString() });
+    await seed([older, newer]);
+    const quota = await quotaStore(2);
+    const view = harness({ store: () => Promise.resolve(quota.store) });
+    // Room for four by policy: the refusal comes from the store, not the bound.
+    expect((await view.cache.prepare(descriptor({ maxSessions: 4 }))).kind).toBe("open");
+    expect(view.cache.counters().records).toBe(2);
+
+    view.clock.now += 1_000;
+    view.cache.release(tail());
+    await view.flush();
+
+    expect(quota.refusals()).toBe(1);
+    const stored = await storedRows();
+    // The oldest other record went; the newer one and the newcomer are here.
+    expect(stored.map((row) => row.sessionId).sort()).toEqual(["newer", "session-a"]);
+    expect(view.cache.state().kind).toBe("open");
+    expect(view.cache.peek("/p/a.jsonl")).toBeDefined();
+    expect(view.cache.peek("/p/older.jsonl")).toBeUndefined();
+
+    const counters = view.cache.counters();
+    const limits = counters.bounds!;
+    expect(counters.records).toBe(2);
+    expect(counters.records).toBeLessThanOrEqual(limits.sessions);
+    expect(counters.bytes).toBeLessThanOrEqual(limits.bytes);
+    expect(counters.evictions).toBe(1);
+    expect(stored.every((row) => row.bytes <= limits.bytesPerSession)).toBe(true);
+    quota.close();
+  });
+
+  it("keeps the durable row it already had when the retry cannot commit", async () => {
+    const previous = rowFor({ revision: "r1.abcdefgh.CCCCCCCCCCCCCCCCCCCCCCCCCCC" });
+    const other = rowFor({ sessionId: "other", path: "/p/other.jsonl", lastUsedAt: new Date(1_699_000_000_000).toISOString() });
+    await seed([previous, other]);
+    const real = (await openTailStore(factory as unknown as IDBFactory, { now: () => clockNow.now }))!;
+    // A store with no room at all: it refuses the write and the retry too.
+    let puts = 0;
+    const full: TailStore = {
+      ...real,
+      put: (row) => {
+        puts += 1;
+        return puts <= 2 ? Promise.resolve(false) : real.put(row);
+      },
+    };
+    const view = harness({ store: () => Promise.resolve(full) });
+    expect((await view.cache.prepare(descriptor({ maxSessions: 4 }))).kind).toBe("open");
+    expect(view.cache.peek("/p/a.jsonl")?.revision).toBe("r1.abcdefgh.CCCCCCCCCCCCCCCCCCCCCCCCCCC");
+
+    view.clock.now += 1_000;
+    // A replacement for the same session, which this store will not take.
+    view.cache.release(tail({ revision: REVISION, seq: 99 }));
+    await view.flush();
+
+    // The session's own durable row is exactly the one that was there, and the
+    // record that never committed is nowhere: not in the store, not in memory.
+    expect(puts).toBe(2);
+    const mine = (await storedRows()).find((row) => row.sessionId === "session-a");
+    expect(mine?.revision).toBe("r1.abcdefgh.CCCCCCCCCCCCCCCCCCCCCCCCCCC");
+    expect(view.cache.peek("/p/a.jsonl")?.revision).toBe("r1.abcdefgh.CCCCCCCCCCCCCCCCCCCCCCCCCCC");
+    expect(view.cache.counters().writesRefused).toBeGreaterThan(0);
+    const limits = view.cache.counters().bounds!;
+    expect(view.cache.counters().records).toBeLessThanOrEqual(limits.sessions);
+    expect(view.cache.counters().bytes).toBeLessThanOrEqual(limits.bytes);
+    real.close();
+  });
+});
