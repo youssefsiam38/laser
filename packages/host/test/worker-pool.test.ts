@@ -492,6 +492,47 @@ describe("WorkerPool", () => {
     await refusing.stopAll();
   });
 
+  it("starts no worker until the host's before-workers work has settled, and then exactly one", async () => {
+    // The host cleans its command-log root while nothing is writing there. That
+    // cleanup is cooperative, so it yields; a worker spawned in one of those
+    // gaps would have its fresh directory deleted underneath it (RP-6). The
+    // spawn waits for it — starting it beside the pool is not "before workers".
+    let settle: (() => void) | undefined;
+    let asked = 0;
+    const cleanup = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    pool = makePool({
+      beforeSpawn: () => {
+        asked += 1;
+        return cleanup;
+      },
+    });
+
+    // Two requests that would each spawn, issued while the cleanup is stalled.
+    const first = pool.get(project);
+    const second = pool.get(project);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(statusesOf(project)).toEqual([]);
+    expect(pool.workerInfo(project)?.pid).toBeUndefined();
+    expect(asked).toBeGreaterThan(0);
+
+    settle!();
+    const [a, b] = await Promise.all([first, second]);
+    // One worker, once: the wait did not turn two callers into two processes.
+    expect(a).toBe(b);
+    expect(pool.cwds()).toEqual([project]);
+    expect(statusesOf(project)).toEqual(["starting", "ready"]);
+    expect(a.alive).toBe(true);
+  });
+
+  it("still starts a worker when the before-workers work fails", async () => {
+    pool = makePool({ beforeSpawn: () => Promise.reject(new Error("cleanup could not read the directory")) });
+    const client = await pool.get(project);
+    expect(client.alive).toBe(true);
+    expect(statusesOf(project)).toEqual(["starting", "ready"]);
+  });
+
   it("passes the host's trust decision to the worker and refuses the spawn when trust throws", async () => {
     pool = makePool({ resolveTrust: () => Promise.resolve(false) });
     const client = await pool.get(project);

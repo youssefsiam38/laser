@@ -18,16 +18,25 @@ export default {
     const afterReasoning = await run.samplePhase('large-reasoning-markdown');
     await prompt(check.rpc, heavy.path, 'resource:tool-large', run.until.bind(run), config.phaseTimeoutMs);
 
-    // The extension's bounded tail buffers, proved live by querying the heap of
-    // the worker that is holding them.
+    // The extension's tail buffers, read from the heap of the worker that would
+    // be holding them. Before RP-6 a finished command kept its full 256 KiB
+    // buffer for the life of the session, and this checkpoint asserted exactly
+    // that. It now asserts the containment: the query still works (the
+    // instrumentation is proved by a readable answer), and a command that has
+    // ended is holding nothing. Live buffers are covered where a command can
+    // be observed while it runs — `packages/pi-extension/test`.
     const tailCheckpoint = await run.inspectorSet();
     let tailBufferCount = 0;
+    let tailBufferReadable = false;
     try {
       assert.ok(tailCheckpoint.workers.length >= 1, 'WorkerServer Runtime.queryObjects checkpoint found no live worker');
       for (const worker of tailCheckpoint.workers) {
-        try { tailBufferCount += (await tailBufferCounters(worker.client, run.modules.tail, { minimum: 0 })).count; } catch {}
+        const counters = await tailBufferCounters(worker.client, run.modules.tail, { minimum: 0 });
+        tailBufferReadable = true;
+        tailBufferCount += counters.count;
       }
-      assert.ok(tailBufferCount >= 1, 'TailBuffer Runtime.queryObjects checkpoint failed after the first real tool call');
+      assert.equal(tailBufferReadable, true, 'TailBuffer Runtime.queryObjects checkpoint could not be read after the first real tool call');
+      assert.equal(tailBufferCount, 0, 'a finished command must keep no tail buffer (RP-6)');
     } finally { await run.closeInspectorSet(tailCheckpoint); }
 
     // The worker process holding that buffer right now: if it retires naturally

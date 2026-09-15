@@ -380,4 +380,19 @@ export interface BackgroundWorkOptions {
   readTask?: (taskId: string, tailLines: number) => Promise<ReadTaskOutputResult>;
   /** The project's environment command, when this project configures one. */
   projectEnv?: ProjectEnvironmentBridge;
+  /**
+   * The private directory this worker's command logs live in (RP-6). Supplied
+   * by the worker, which had it from the host: a shared, predictable temporary
+   * directory is not somewhere to write a person's command output. When it is
+   * absent (a test, a standalone run) the module creates its own private root
+   * instead — never a well-known path.
+   */
+  logRoot?: string;
+  /**
+   * Test seam: the asynchronous write a command log uses. Production leaves it
+   * unset and the module writes with `fs.write`; a test hands in one whose
+   * callbacks it holds, which is the only way to observe a session whose
+   * storage has stopped draining.
+   */
+  logWrite?: (fd: number, chunk: Buffer) => Promise<number>;
 }

@@ -51,6 +51,7 @@ import {
   type ResourceMeasure,
   type ResourceProcess,
   type ResourceProcessRole,
+  type ResourceRetainedStores,
   type ResourceProject,
   type ResourceReportResult,
   type ResourceRetention,
@@ -82,6 +83,13 @@ export interface ResourceServiceOptions {
   now?: () => number;
   /** Asks the desktop shell for fresh metrics. Never a poll: one request per demand. */
   requestDesktopRefresh?: () => void;
+  /**
+   * Retained-state counters the host and its **already live** workers report
+   * (RP-3/RP-6). Bounded by its own implementation and never a reason to open
+   * a worker: an answer that does not arrive in time is missing coverage, not
+   * a zero and not a delay.
+   */
+  retainedStores?: () => Promise<ResourceRetainedStores>;
 }
 
 interface VerifiedReport {
@@ -316,6 +324,16 @@ export class ResourceService {
     }
 
     const crossCheck = this.crossCheck(processes, verified);
+    // Retained stores are collected with the snapshot they belong to, inside
+    // the same demand: nothing samples them in the background, and a worker
+    // that cannot answer leaves its numbers out rather than making the totals
+    // a guess.
+    let stores: ResourceRetainedStores | undefined;
+    try {
+      stores = await this.options.retainedStores?.();
+    } catch {
+      stores = undefined;
+    }
     const snapshot: ResourceSnapshot = {
       id: `rs_${++this.counter}`,
       at: new Date(started).toISOString(),
@@ -330,6 +348,7 @@ export class ResourceService {
         truncated,
         crossCheck,
       },
+      ...(stores ? { stores } : {}),
     };
 
     this.history.add(snapshot);

@@ -15,6 +15,7 @@
  * apart makes that impossible rather than merely discouraged.
  */
 import { spawn } from "node:child_process";
+import { noteWorkerProcess } from "./process-registry.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
@@ -385,6 +386,10 @@ export function runHook(options: RunOptions): Promise<RunResult> {
       clearTimeout(timer);
       resolve({ ...result, payload, overflowed, timedOut });
     };
+
+    // Named for the process inventory the moment it exists, and unnamed again
+    // when it goes: a record must not outlive the process it describes (RP-1).
+    if (child.pid !== undefined) noteWorkerProcess({ pid: child.pid, role: "helper", label: "project-environment" });
 
     child.on("error", (error) => finish({ code: null, signal: null, spawnError: error }));
     // `exit`, not `close`: a hook that leaves a long-lived grandchild holding

@@ -14,13 +14,24 @@
  * `logPath` stays in this process. It is how a tail is read; it is never
  * handed to the model or a client.
  */
-import { open, stat } from "node:fs/promises";
-import { isAbsolute } from "node:path";
-import { TASK_OUTPUT_MAX_BYTES, alignUtf8, type BackgroundTask, type PiExtensionMessage } from "@lasercode/protocol";
+import { constants } from "node:fs";
+import { open, realpath, type FileHandle } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import {
+  TASK_LOG_SEGMENTS_MAX,
+  TASK_OUTPUT_MAX_BYTES,
+  alignUtf8,
+  type BackgroundTask,
+  type BackgroundTaskRetention,
+  type PiExtensionMessage,
+  type ResourceStoreValue,
+} from "@lasercode/protocol";
 
 /** A task as the worker holds it: the wire record plus where its bytes are. */
 export interface IndexedTask extends BackgroundTask {
   logPath?: string;
+  /** The writer's own bounded segment offsets (RP-6). Never leaves this process. */
+  logSegments?: number[];
 }
 
 /** How many finished tasks one session keeps before the oldest is forgotten (the host keeps the same). */
@@ -34,16 +45,36 @@ export const MAX_INDEXED_TASKS_PER_SESSION = 200;
  */
 export const MAX_CLOSED_SESSIONS = 50;
 
+/**
+ * Bytes every command log in this worker may occupy together (RP-6).
+ *
+ * The worker is the only party that sees all of its sessions, so the budget
+ * lives here — but it never deletes a byte itself: each session's own runtime
+ * wrote its files and is the only thing allowed to remove them, so this is
+ * divided into per-session shares and handed to the owners, who release their
+ * own oldest bytes. A running command is never paused or stopped for it.
+ */
+export const MAX_WORKER_LOG_BYTES = 512 * 1024 * 1024;
+
+/** The smallest share a session may be given: one segment for its newest command. */
+export const MIN_SESSION_LOG_BYTES = 8 * 1024 * 1024;
+
 export class TaskIndex {
   /** path → id → task, insertion-ordered so a session's commands read oldest first. */
   private readonly bySession = new Map<string, Map<string, IndexedTask>>();
   /** Closed sessions, oldest first: what may be forgotten, and in what order. */
   private readonly closed: string[] = [];
+  /** What each live session's commands are holding, as that session last said. */
+  private readonly retention = new Map<string, BackgroundTaskRetention>();
 
   /** Fold one extension message in; true when it was a task update. */
   observe(path: string, message: PiExtensionMessage): boolean {
+    if (message.type === "lasercode/task/retention") {
+      this.retention.set(path, message.retention);
+      return true;
+    }
     if (message.type !== "lasercode/task/update") return false;
-    const { logPath, ...rest } = message.task;
+    const { logPath, logSegments, ...rest } = message.task;
     let tasks = this.bySession.get(path);
     if (!tasks) {
       tasks = new Map();
@@ -52,7 +83,13 @@ export class TaskIndex {
     this.reopened(path);
     const previous = tasks.get(rest.id);
     const kept = logPath ?? previous?.logPath;
-    tasks.set(rest.id, { ...rest, sessionPath: path, ...(kept !== undefined ? { logPath: kept } : {}) });
+    const keptSegments = logSegments ?? previous?.logSegments;
+    tasks.set(rest.id, {
+      ...rest,
+      sessionPath: path,
+      ...(kept !== undefined ? { logPath: kept } : {}),
+      ...(keptSegments !== undefined ? { logSegments: keptSegments } : {}),
+    });
     this.prune(tasks);
     return true;
   }
@@ -65,6 +102,11 @@ export class TaskIndex {
     const tasks = this.bySession.get(oldPath);
     if (!tasks || oldPath === newPath) return;
     this.bySession.delete(oldPath);
+    const movedRetention = this.retention.get(oldPath);
+    if (movedRetention) {
+      this.retention.delete(oldPath);
+      this.retention.set(newPath, movedRetention);
+    }
     const moved = new Map<string, IndexedTask>();
     for (const [id, task] of tasks) moved.set(id, { ...task, sessionPath: newPath });
     this.bySession.set(newPath, moved);
@@ -82,7 +124,49 @@ export class TaskIndex {
    * that ran it. The module says so itself on an orderly shutdown; this is
    * for the session that went without one, so no row spins for ever.
    */
+  /**
+   * What this worker's commands are retaining, for the host's diagnostics
+   * (RP-3). Counts and bytes only: a task record is metadata, a tail is
+   * memory, and a log is disk — they are reported as what they are.
+   */
+  retainedStores(): { taskRegistry: ResourceStoreValue } {
+    let count = 0;
+    for (const tasks of this.bySession.values()) count += tasks.size;
+    let bytes = 0;
+    for (const [path, retention] of this.retention) {
+      if (!this.bySession.has(path)) continue;
+      bytes += retention.liveTailBytes + retention.excerptBytes;
+    }
+    return { taskRegistry: { count, bytes } };
+  }
+
+  /** Bytes this worker's command logs occupy, as its sessions last reported. */
+  logBytes(): number {
+    let bytes = 0;
+    for (const [path, retention] of this.retention) {
+      if (this.bySession.has(path)) bytes += retention.logBytes;
+    }
+    return bytes;
+  }
+
+  /**
+   * The per-session shares to hand out when this worker's logs are over their
+   * budget, largest holder first. Empty while the total is inside the budget:
+   * a session that is not costing anything is never told to release.
+   */
+  logBudgets(max = MAX_WORKER_LOG_BYTES): Array<{ path: string; bytes: number }> {
+    const live = [...this.retention.entries()].filter(([path]) => this.bySession.has(path));
+    const total = live.reduce((sum, [, retention]) => sum + retention.logBytes, 0);
+    if (total <= max || live.length === 0) return [];
+    const share = Math.max(MIN_SESSION_LOG_BYTES, Math.floor(max / live.length));
+    return live
+      .filter(([, retention]) => retention.logBytes > share)
+      .sort((left, right) => right[1].logBytes - left[1].logBytes)
+      .map(([path]) => ({ path, bytes: share }));
+  }
+
   sessionClosed(path: string, reason = "the session ended"): void {
+    this.retention.delete(path);
     const tasks = this.bySession.get(path);
     if (!tasks) return;
     for (const [id, task] of tasks) {
@@ -114,38 +198,90 @@ export class TaskIndex {
 }
 
 /**
+ * Is this path one of ours, inside the private root we were given?
+ *
+ * No root means nothing may be read: a build that forgot to pass one reads
+ * nothing rather than reading whatever a message names.
+ */
+export async function isInsideRoot(candidate: string | undefined, root: string | undefined): Promise<boolean> {
+  if (candidate === undefined || root === undefined) return false;
+  if (!isAbsolute(candidate) || !isAbsolute(root)) return false;
+  // Lexical containment is not containment: a symlink at any directory inside
+  // the root leads out of it, and `O_NOFOLLOW` only refuses the last
+  // component. Both sides are resolved through the filesystem first, and a
+  // path whose parent cannot be resolved is refused rather than guessed at.
+  let realRoot: string;
+  let realParent: string;
+  try {
+    realRoot = await realpath(resolve(root));
+    realParent = await realpath(dirname(resolve(candidate)));
+  } catch {
+    return false;
+  }
+  const within = relative(realRoot, realParent);
+  if (within !== "" && (within === ".." || within.startsWith(`..${sep}`) || isAbsolute(within))) return false;
+  const name = relative(dirname(resolve(candidate)), resolve(candidate));
+  return name !== "" && name !== "." && name !== "..";
+}
+
+/**
  * The last `lines` lines of a task's log, read from its tail — at most
  * `TASK_OUTPUT_MAX_BYTES`, the same bound the host's `tasks/output` keeps
  * (R9). `undefined` when there is no file to read: the caller says so rather
  * than showing an empty pane.
  */
-export async function readLogTail(logPath: string | undefined, lines: number): Promise<string | undefined> {
-  if (logPath === undefined || !isAbsolute(logPath)) return undefined;
-  let size: number;
-  try {
-    size = (await stat(logPath)).size;
-  } catch {
-    return undefined;
+export async function readLogTail(logPath: string | undefined, lines: number, root?: string, logSegments?: number[]): Promise<string | undefined> {
+  // A log path arrives from an extension message. It is only ever read when it
+  // is inside the private root this process owns, and it is opened without
+  // following a symlink: a path is a claim, not a permission (RP-6).
+  if (!(await isInsideRoot(logPath, root))) return undefined;
+  const directory = dirname(logPath!);
+  const name = basename(logPath!);
+  // The writer says which segments exist — at most two — rather than this
+  // process listing a directory of somebody else's commands. A stale offset is
+  // safe: a segment file never changes meaning.
+  const offsets = [...new Set(logSegments ?? [])]
+    .filter((offset) => Number.isSafeInteger(offset) && offset >= 0)
+    .sort((left, right) => right - left)
+    .slice(0, TASK_LOG_SEGMENTS_MAX);
+  if (offsets.length === 0) return undefined;
+  const parts: Buffer[] = [];
+  let want = TASK_OUTPUT_MAX_BYTES;
+  let read = false;
+  for (const offset of offsets) {
+    if (want <= 0) break;
+    const bytes = await readEnd(join(directory, `${name}.${offset}.log`), want);
+    if (bytes === undefined) continue;
+    read = true;
+    if (bytes.length === 0) continue;
+    parts.unshift(bytes);
+    want -= bytes.length;
   }
-  const start = Math.max(0, size - TASK_OUTPUT_MAX_BYTES);
-  const length = size - start;
-  if (length === 0) return "";
-  let text: string;
-  try {
-    const handle = await open(logPath, "r");
-    try {
-      const buffer = Buffer.alloc(length);
-      const { bytesRead } = await handle.read(buffer, 0, length, start);
-      const bytes = buffer.subarray(0, bytesRead);
-      const aligned = alignUtf8(bytes, start === 0);
-      text = bytes.toString("utf8", aligned.start, aligned.end);
-    } finally {
-      await handle.close();
-    }
-  } catch {
-    return undefined;
-  }
+  if (!read) return undefined;
+  const whole = Buffer.concat(parts);
+  const aligned = alignUtf8(whole, want > 0);
+  const text = whole.toString("utf8", aligned.start, aligned.end);
   const all = text.split("\n");
   while (all.length > 0 && all[all.length - 1] === "") all.pop();
   return all.slice(Math.max(0, all.length - Math.max(1, lines))).join("\n");
+}
+
+/** The last `maxBytes` of one segment, or `undefined` when it cannot be read. */
+async function readEnd(path: string, maxBytes: number): Promise<Buffer | undefined> {
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const stats = await handle.stat();
+    if (!stats.isFile()) return undefined;
+    const start = Math.max(0, stats.size - maxBytes);
+    const length = stats.size - start;
+    if (length === 0) return Buffer.alloc(0);
+    const buffer = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(buffer, 0, length, start);
+    return buffer.subarray(0, bytesRead);
+  } catch {
+    return undefined;
+  } finally {
+    await handle?.close().catch(() => {});
+  }
 }

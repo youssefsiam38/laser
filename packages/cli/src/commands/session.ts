@@ -68,6 +68,13 @@ async function pick(rpc: HostRpc, context: CommandContext, reference?: string): 
   }
 }
 
+/**
+ * Open a session on the host.
+ *
+ * Also what makes this connection start hearing that session's transcript: the
+ * host delivers `session/update` only for sessions a connection has loaded
+ * (RP-6). Every command here that watches a session loads it first, on purpose.
+ */
 async function loadSession(rpc: HostRpc, path: string): Promise<SessionState> {
   try {
     const { state } = await rpc.request("session/load", { path });

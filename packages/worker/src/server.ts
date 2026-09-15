@@ -10,9 +10,11 @@
  * Pending extension dialogs are re-emitted on load for the same reason.
  */
 
-import { AGENT_MAX_DEPTH_LIMIT, ENV, ErrorCodes, PRODUCT_NAME, ProtocolError, boundedHistoryWindow, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type SettingsScope, type TypedClientRequest } from "@lasercode/protocol";
+import { AGENT_MAX_DEPTH_LIMIT, ENV, ErrorCodes, PRODUCT_NAME, ProtocolError, boundedHistoryWindow, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type SettingsScope, type TypedClientRequest, WIRE_NAMESPACE } from "@lasercode/protocol";
 import { randomUUID } from "node:crypto";
-import { join, resolve } from "node:path";
+import { chmodSync, mkdirSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, resolve } from "node:path";
 import type {
   DriverAgentOptions,
   DriverEvent,
@@ -45,6 +47,7 @@ import { NamerService, type NamerModelRuntime } from "./agents/namer.js";
 import { readSessionAgentRecord, rootRecord, rootRole, removedWorktreeCwd } from "./agents/session-config.js";
 import { listAgentSkills } from "./agents/skills.js";
 import { TaskIndex } from "./agents/tasks.js";
+import { setWorkerProcessObserver } from "./process-registry.js";
 import { WorktreeManager } from "./agents/worktrees.js";
 
 export interface WorkerServerOptions {
@@ -162,6 +165,8 @@ export class WorkerServer {
    * forwarded to the host below; the host keeps its own copy for clients.
    */
   private readonly tasks = new TaskIndex();
+  /** Resolved on first use; see `taskLogRoot`. */
+  private logRoot: string | undefined;
   /**
    * First prompts still waiting for a Namer model, by session path. A prompt
    * that arrives before the host's `agents/sync` (or before qualification
@@ -184,12 +189,23 @@ export class WorkerServer {
       ? new ProjectEnvironment({ cwd: options.cwd, config: projectEnvConfig })
       : undefined;
     this.definitions = new DefinitionsCache();
+    // Processes this worker starts on purpose are named for the host's
+    // inventory (RP-1). Pids only: the host proves `(pid, startToken)` and
+    // ancestry itself before it believes any of it, and the notification is
+    // consumed by the host rather than broadcast.
+    // Registrations only: a pid this worker reports as *gone* would be a claim
+    // about a number, and the next process to take that number could be
+    // another worker's. The host's own table decides when a process ended.
+    setWorkerProcessObserver({
+      started: (registration) => this.notify("pi/resource/process", { registrations: [registration] }),
+    });
     const host: SessionHost = {
       openChild: (open) => this.openChild(open),
       driver: (path) => this.sessions.get(path)?.driver,
       notify: (method, params) => this.notify(method, params),
       modelAvailable: (model) => this.modelAvailable(model),
       tasks: (path) => this.tasks.tasksOf(path),
+      taskLogRoot: () => this.taskLogRoot(),
     };
     this.harness = new AgentHarness({
       host,
@@ -198,6 +214,10 @@ export class WorkerServer {
       ...(options.projectTrusted !== undefined ? { projectTrusted: options.projectTrusted } : {}),
       backgroundWork: (cwd) => ({
         cwd,
+        // The private directory command logs live in: the host's, when it gave
+        // us one, and otherwise this process's own (RP-6). Never a shared,
+        // guessable path under the system temp directory.
+        logRoot: this.taskLogRoot(),
         foregroundCommandSeconds: this.definitions.policy().foregroundCommandSeconds,
         // Resolved when each Bash call starts, so a Settings save takes effect
         // without ending an open parent or child session.
@@ -221,6 +241,27 @@ export class WorkerServer {
     // qualification itself finishes seconds after the first prompt. A session
     // whose first prompt found no model is named the moment one appears.
     this.definitions.onChange(() => this.nameWaitingSessions());
+  }
+
+  /**
+   * Where this worker's command logs live, created once, privately.
+   *
+   * The host passes its own root down as environment; without one (a test, a
+   * standalone worker) this makes an unpredictable one with `mkdtemp` and
+   * `0700`. It is also the only directory anything in this process will read a
+   * command log from.
+   */
+  taskLogRoot(): string {
+    if (this.logRoot) return this.logRoot;
+    const configured = process.env[ENV.taskLogRoot];
+    if (configured && isAbsolute(configured)) {
+      mkdirSync(configured, { recursive: true, mode: 0o700 });
+      this.logRoot = configured;
+      return this.logRoot;
+    }
+    this.logRoot = mkdtempSync(join(tmpdir(), `${WIRE_NAMESPACE}-tasks-`));
+    chmodSync(this.logRoot, 0o700);
+    return this.logRoot;
   }
 
   /** The harness, for tests and for the packaged probe. */
@@ -532,6 +573,12 @@ export class WorkerServer {
       }
 
       // ------------------------------------------- background tasks ---
+      case "pi/worker/retained-stores":
+        // The app asking its own worker what it is holding (RP-3/RP-6). Read
+        // from state this process already has: nothing is collected, nothing
+        // is opened and no session is touched to answer it.
+        return { stores: this.tasks.retainedStores() } satisfies Result<"pi/worker/retained-stores">;
+
       case "pi/task/stop": {
         // The companion extension owns the process, so Stop is a command to
         // the session that started it. `delivered: false` means nobody in
@@ -1680,9 +1727,24 @@ export class WorkerServer {
         // `mcp/list`. A shutdown snapshot is empty and carries no information,
         // so a closing session never blanks a live one (docs/mcp.md).
         if (event.message.type === "lasercode/mcp/status") this.mcp().observeSnapshot(live.path, event.message.snapshot);
+        // A pid the module knows the meaning of goes to the host's process
+        // inventory (RP-1) and nowhere else: it is a number about this
+        // machine, not conversation state, so it never joins the extension
+        // message stream a client can hear.
+        if (event.message.type === "lasercode/process/registration") {
+          const { pid, taskId } = event.message;
+          this.notify("pi/resource/process", {
+            path: live.path,
+            registrations: [{ pid, role: "background_command", sessionPath: live.path, taskId }],
+          });
+          return;
+        }
         // A background command going past is indexed here, so the harness
         // can show it in an agent's fleet (D-163); the host indexes it too.
-        this.tasks.observe(live.path, event.message);
+        if (this.tasks.observe(live.path, event.message)) this.applyLogBudgets();
+        // What a session's commands are holding is this worker's business and
+        // the host's diagnostics; it is not transcript state.
+        if (event.message.type === "lasercode/task/retention") return;
         this.notify("pi/extension/message", { path: live.path, message: event.message });
         return;
       case "closed":
@@ -1690,11 +1752,29 @@ export class WorkerServer {
         this.sessions.delete(live.path);
         this.mcpService?.sessionClosed(live.path);
         this.tasks.sessionClosed(live.path);
+        // One holder fewer: the rest of this worker's sessions may keep more.
+        this.applyLogBudgets();
         this.gitService?.forget(live.path);
         this.runningTools.delete(live.path);
         this.unnamed.delete(live.path);
         this.namer.forget(live.path);
         return;
+    }
+  }
+
+  /**
+   * Keep this worker's command logs inside their budget (RP-6).
+   *
+   * The worker sees every session; the sessions own their files. So it divides
+   * the budget and tells each session that is over its share how much it may
+   * keep, and that session releases its own oldest bytes. Nothing here deletes
+   * a file, nothing touches bytes another runtime wrote, and no command is
+   * paused, throttled or ended: only bytes already written are released, and
+   * the exact byte count and digest of every command survive it.
+   */
+  private applyLogBudgets(): void {
+    for (const { path, bytes } of this.tasks.logBudgets()) {
+      this.sessions.get(path)?.driver.deliverExtensionCommand?.({ type: "lasercode/task/log-budget", bytes });
     }
   }
 

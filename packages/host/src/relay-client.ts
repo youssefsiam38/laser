@@ -37,7 +37,7 @@ import {
 import { ErrorCodes, type JsonRpcNotification, type JsonRpcResponse, type SessionUpdateParams, WIRE_NAMESPACE } from "@lasercode/protocol";
 import WebSocket from "ws";
 import { SessionLoadDelivery } from "./session-load-delivery.js";
-import { TranscriptDelivery } from "./transcript-delivery.js";
+import { TranscriptDelivery, type SessionMembershipView } from "./transcript-delivery.js";
 import { SearchCancellation } from "./search-cancellation.js";
 
 export type RelayClientState =
@@ -177,7 +177,6 @@ export class RelayClient {
   private transcripts = new TranscriptDelivery();
   private searches = new SearchCancellation();
 
-  private readonly seqBySession = new Map<string, number>();
   private counters = {
     connectAttempts: 0,
     handshakes: 0,
@@ -210,13 +209,18 @@ export class RelayClient {
     return this.currentState;
   }
 
-  /** Highest `session/update` seq seen per session, for diagnostics and logs. */
-  get lastSeq(): ReadonlyMap<string, number> {
-    return this.seqBySession;
-  }
-
   get channelIdText(): string {
     return toBase64Url(this.options.channelId);
+  }
+
+  /**
+   * What this device is holding, for the host's one membership truth (RP-6).
+   * A paired device following a session pins its worker exactly as a local
+   * window does. The delivery itself is returned: wrapping it in another
+   * object would be a second thing to keep in step with the first.
+   */
+  membership(): SessionMembershipView {
+    return this.transcripts;
   }
 
   statistics(): RelayClientStats {
@@ -518,7 +522,17 @@ export class RelayClient {
     const delivery = typeof path === "string" ? new SessionLoadDelivery(path) : undefined;
     if (delivery) this.loadDeliveries.add(delivery);
     const generation = this.connectionGeneration;
-    const finishTranscript = this.transcripts.begin(raw);
+    const admission = this.transcripts.begin(raw);
+    if (admission.refusal !== undefined) {
+      // As on a direct socket: refused before the router, so no worker work
+      // happens for a load this device could not be sent anyway (RP-6).
+      delivery?.dispose();
+      if (delivery) this.loadDeliveries.delete(delivery);
+      const refusal = this.encode({ jsonrpc: "2.0", id: message.id as string | number, error: { code: ErrorCodes.InvalidParams, message: admission.refusal } });
+      if (refusal) await this.sendForGeneration(refusal, generation);
+      return;
+    }
+    const finishTranscript = admission.finish;
     let transcriptResponse;
     try {
       const response = await this.options.handle(raw, this.searches);
@@ -564,20 +578,20 @@ export class RelayClient {
   }
 
   private onNotification(notification: JsonRpcNotification): void {
-    if (!this.transcripts.accepts(notification)) return;
+    // Nothing is remembered per session here: the device resumes with its own
+    // `session/load { fromSeq }`, so a map of every path this host has ever
+    // seen an update for was a machine-wide structure that answered no
+    // question anybody asked.
     const held = [...this.loadDeliveries].map((delivery) => delivery.offer(notification)).some(Boolean);
-    if (notification.method === "session/update") {
-      const params = notification.params as SessionUpdateParams;
-      if (params?.sessionPath && typeof params.seq === "number") {
-        this.seqBySession.set(params.sessionPath, params.seq);
-      }
-    }
     if (held) return;
     if (!this.session) {
       // Dropped on purpose: the device resumes with session/load { fromSeq }.
       this.counters.notificationsDropped++;
       return;
     }
+    // A transcript this device is not showing is not sent to it (RP-6); it
+    // reconciles from `fromSeq` when it opens the session again.
+    if (!this.transcripts.accepts(notification)) return;
     const payload = this.encode(notification) ?? this.encode(reduce(notification));
     if (!payload) {
       // Nothing sensible left to shrink. Losing one update is bad; tearing the

@@ -290,8 +290,10 @@ describe("the descriptor", () => {
       expect(descriptor.actor).toEqual({ class: "local_browser", id: "l1.browser" });
       expect(descriptor.scopes).toEqual([...METHOD_SCOPES]);
       expect(descriptor.cache).toEqual(DEFAULT_CACHE_POLICY);
-      // A page on this machine still cannot hand down an environment.
-      expect(descriptor.localOnly).toEqual(["agents/sync", "pi/host/environment", "resource/report"]);
+      // A page on this machine still cannot hand down an environment, and it
+      // cannot ask a worker what it is holding either: that is the app talking
+      // to its own workers (RP-6).
+      expect(descriptor.localOnly).toEqual(["agents/sync", "pi/host/environment", "pi/worker/retained-stores", "resource/report"]);
 
       const device = deviceActor(undefined, ENVIRONMENT_ID);
       const remote = (await call(h.router, "environment/describe", device)) as { result: { environment: EnvironmentDescriptor } };

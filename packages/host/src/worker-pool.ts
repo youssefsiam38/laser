@@ -82,6 +82,17 @@ export interface WorkerPoolOptions {
    * the method is still a working worker.
    */
   prime?: (client: WorkerClient, cwd: string, speculative: boolean) => Promise<void>;
+  /**
+   * Work that must be finished before **any** worker process exists.
+   *
+   * Awaited inside `spawn`, not merely started beside it: the host's crash
+   * cleanup of the command-log root is only safe while nothing is writing
+   * there, and a cooperative cleanup that yields while a worker starts would
+   * delete a directory that worker had just created (RP-6). Awaited on every
+   * spawn, so a restart after a failure is gated too; its own result is
+   * remembered by the caller, so this costs one await afterwards.
+   */
+  beforeSpawn?: () => Promise<unknown>;
   /** Ordinary idle retirement. 0 disables it, but not unused warm expiry. */
   idleMs?: number;
   /** How often idleness is checked. */
@@ -506,6 +517,13 @@ export class WorkerPool {
     if (entry.client?.alive) {
       throw new ProtocolError(ErrorCodes.Internal, `a worker for ${entry.cwd} is already running (pid ${entry.client.pid})`);
     }
+    if (this.closed) throw new ProtocolError(ErrorCodes.DriverUnavailable, "the host is shutting down");
+    if (entry.stopped) throw retiringError(entry.cwd);
+
+    // Nothing may start until the host's own before-workers work has settled.
+    // A failure there is not a reason to refuse a worker: the cleanup reports
+    // itself and the machine carries on.
+    if (this.options.beforeSpawn) await this.options.beforeSpawn().catch(() => undefined);
     if (this.closed) throw new ProtocolError(ErrorCodes.DriverUnavailable, "the host is shutting down");
     if (entry.stopped) throw retiringError(entry.cwd);
 

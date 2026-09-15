@@ -78,6 +78,7 @@ export const ENV = {
   "screenshotBaseUrl": "LASERCODE_SCREENSHOT_BASE_URL",
   "sessionDir": "LASERCODE_SESSION_DIR",
   "stateDir": "LASERCODE_STATE_DIR",
+  "taskLogRoot": "LASERCODE_TASK_LOG_ROOT",
   "tag": "LASERCODE_TAG",
   "uiUrl": "LASERCODE_UI_URL",
   "workerFd": "LASERCODE_WORKER_FD",

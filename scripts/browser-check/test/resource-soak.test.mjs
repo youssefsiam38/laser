@@ -645,18 +645,22 @@ test('a failed run persists a sanitized partial report atomically and refuses an
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test('in-worker retention expectations follow the live worker generation', () => {
+test('in-worker retention expectations: no finished command keeps a tail buffer, metadata still follows its generation', () => {
   const calls = [
     { background: false, generation: 'a' }, { background: false, generation: 'a' }, { background: false, generation: 'a' },
     { background: true, generation: 'a' }, { background: true, generation: 'a' }, { background: true, generation: 'a' },
   ];
+  // RP-6: the tail buffer of a command that has ended is released at terminal
+  // delivery, so the expected count is zero whatever the generations did. The
+  // *metadata* rows are unchanged: they still belong to the generation that
+  // ran them, and a worker that was replaced took its rows with it.
   assert.deepEqual(expectedRetainedCounts({ calls, heavyToolGeneration: 'a', currentGeneration: 'a' }),
-    { tailBuffers: 7, workerBackgroundTasks: 3, sameGenerationCalls: 6, replacedGenerationCalls: 0, heavyToolGenerationSurvived: true });
+    { tailBuffers: 0, workerBackgroundTasks: 3, sameGenerationCalls: 6, replacedGenerationCalls: 0, heavyToolGenerationSurvived: true });
   assert.deepEqual(expectedRetainedCounts({ calls, heavyToolGeneration: 'pre-a', currentGeneration: 'a' }),
-    { tailBuffers: 6, workerBackgroundTasks: 3, sameGenerationCalls: 6, replacedGenerationCalls: 0, heavyToolGenerationSurvived: false });
+    { tailBuffers: 0, workerBackgroundTasks: 3, sameGenerationCalls: 6, replacedGenerationCalls: 0, heavyToolGenerationSurvived: false });
   const spanning = [...calls.slice(0, 4).map(call => ({ ...call, generation: 'a' })), ...calls.slice(4).map(call => ({ ...call, generation: 'b' }))];
   assert.deepEqual(expectedRetainedCounts({ calls: spanning, heavyToolGeneration: 'a', currentGeneration: 'b' }),
-    { tailBuffers: 2, workerBackgroundTasks: 2, sameGenerationCalls: 2, replacedGenerationCalls: 4, heavyToolGenerationSurvived: false });
+    { tailBuffers: 0, workerBackgroundTasks: 2, sameGenerationCalls: 2, replacedGenerationCalls: 4, heavyToolGenerationSurvived: false });
   assert.deepEqual(expectedRetainedCounts({ calls, heavyToolGeneration: null, currentGeneration: null }),
     { tailBuffers: 0, workerBackgroundTasks: 0, sameGenerationCalls: 0, replacedGenerationCalls: 6, heavyToolGenerationSurvived: false });
   assert.deepEqual(expectedRetainedCounts(), { tailBuffers: 0, workerBackgroundTasks: 0, sameGenerationCalls: 0, replacedGenerationCalls: 0, heavyToolGenerationSurvived: false });

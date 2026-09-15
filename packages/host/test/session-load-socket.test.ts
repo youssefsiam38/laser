@@ -104,7 +104,7 @@ it("filters unopened transcripts per socket without crossing the load/replay bou
     socket.on("message", data => messages[i]!.push(JSON.parse(data.toString())));
     return new Promise<void>(resolve => socket.once("open", resolve));
   }));
-  sockets.forEach((socket, i) => socket.send(JSON.stringify({ jsonrpc: "2.0", id: i, method: "session/load", params: { path: `/s/${i}`, transcript: "loaded", fromSeq: 0 } })));
+  sockets.forEach((socket, i) => socket.send(JSON.stringify({ jsonrpc: "2.0", id: i, method: "session/load", params: { path: `/s/${i}`, fromSeq: 0 } })));
   await until(() => messages.every((list, i) => list.some(m => "id" in m && m.id === i)));
   messages.forEach(list => { list.length = 0; });
   for (let i = 0; i < 3; i++) host.notify("session/update", { sessionPath: `/s/${i}`, seq: 2, at: new Date(0).toISOString(), update: { kind: "agent_end" } });

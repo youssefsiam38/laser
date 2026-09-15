@@ -3,12 +3,25 @@
  * going past, read by the harness for `inspect_fleet` and for `task_output`
  * on a child's command. And the bounded tail read behind that.
  */
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { TASK_OUTPUT_MAX_BYTES, type BackgroundTaskUpdate } from "@lasercode/protocol";
-import { MAX_CLOSED_SESSIONS, MAX_INDEXED_TASKS_PER_SESSION, TaskIndex, readLogTail } from "../../src/agents/tasks.js";
+import { TASK_OUTPUT_MAX_BYTES, type BackgroundTaskRetention, type BackgroundTaskUpdate } from "@lasercode/protocol";
+import { MAX_CLOSED_SESSIONS, MAX_INDEXED_TASKS_PER_SESSION, MIN_SESSION_LOG_BYTES, TaskIndex, readLogTail } from "../../src/agents/tasks.js";
+
+const retention = (partial: Partial<BackgroundTaskRetention> = {}): BackgroundTaskRetention => ({
+  live: 0,
+  terminal: 0,
+  liveTailBytes: 0,
+  excerptBytes: 0,
+  logBytes: 0,
+  pendingLogBytes: 0,
+  evicted: 0,
+  released: 0,
+  tailsShrunk: 0,
+  ...partial,
+});
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -18,6 +31,52 @@ afterEach(() => {
 function update(partial: Partial<BackgroundTaskUpdate> & Pick<BackgroundTaskUpdate, "id">): BackgroundTaskUpdate {
   return { command: `echo ${partial.id}`, title: `echo ${partial.id}`, status: "running", origin: "background", startedAt: "2026-09-09T10:00:00.000Z", outputBytes: 0, ...partial };
 }
+
+describe("TaskIndex retained state and the per-worker log budget (RP-6)", () => {
+  it("reports what its sessions hold, and forgets it when a session closes", () => {
+    const index = new TaskIndex();
+    index.observe("/s/a.jsonl", { type: "lasercode/task/update", task: update({ id: "t-1" }) });
+    index.observe("/s/b.jsonl", { type: "lasercode/task/update", task: update({ id: "t-2" }) });
+    expect(index.observe("/s/a.jsonl", { type: "lasercode/task/retention", retention: retention({ live: 1, terminal: 3, liveTailBytes: 1000, excerptBytes: 500, logBytes: 10 }) })).toBe(true);
+    index.observe("/s/b.jsonl", { type: "lasercode/task/retention", retention: retention({ terminal: 2, excerptBytes: 250, logBytes: 20 }) });
+
+    // Records are metadata; tails and excerpts are the memory they cost.
+    expect(index.retainedStores()).toEqual({ taskRegistry: { count: 2, bytes: 1750 } });
+    expect(index.logBytes()).toBe(30);
+
+    index.sessionClosed("/s/b.jsonl");
+    expect(index.retainedStores().taskRegistry.bytes).toBe(1500);
+    expect(index.logBytes()).toBe(10);
+  });
+
+  it("hands each session a share when the worker is over its log budget, and never below the floor", () => {
+    const index = new TaskIndex();
+    for (const path of ["/s/a.jsonl", "/s/b.jsonl"]) {
+      index.observe(path, { type: "lasercode/task/update", task: update({ id: `t-${path}` }) });
+    }
+    index.observe("/s/a.jsonl", { type: "lasercode/task/retention", retention: retention({ logBytes: 90 * 1024 * 1024 }) });
+    index.observe("/s/b.jsonl", { type: "lasercode/task/retention", retention: retention({ logBytes: 1024 }) });
+
+    // Inside the budget: nobody is asked to release anything.
+    expect(index.logBudgets(200 * 1024 * 1024)).toEqual([]);
+
+    // Over it: the biggest holder is told what it may keep, the small one is
+    // left alone, and the share never drops below one segment.
+    const budgets = index.logBudgets(64 * 1024 * 1024);
+    expect(budgets.map((budget) => budget.path)).toEqual(["/s/a.jsonl"]);
+    expect(budgets[0]!.bytes).toBeGreaterThanOrEqual(MIN_SESSION_LOG_BYTES);
+    expect(index.logBudgets(1)[0]!.bytes).toBe(MIN_SESSION_LOG_BYTES);
+  });
+
+  it("moves a session's retention with it when a fork rekeys the path", () => {
+    const index = new TaskIndex();
+    index.observe("/s/old.jsonl", { type: "lasercode/task/update", task: update({ id: "t-1" }) });
+    index.observe("/s/old.jsonl", { type: "lasercode/task/retention", retention: retention({ logBytes: 42, excerptBytes: 7 }) });
+    index.rekeySession("/s/old.jsonl", "/s/new.jsonl");
+    expect(index.logBytes()).toBe(42);
+    expect(index.retainedStores()).toEqual({ taskRegistry: { count: 1, bytes: 7 } });
+  });
+});
 
 describe("TaskIndex", () => {
   it("keeps one record per task per session, stamped with the session, replacing in place and remembering the log path", () => {
@@ -96,22 +155,44 @@ describe("readLogTail", () => {
   it("returns the last lines, bounded to the same window the host serves, and nothing for a file it cannot read", async () => {
     const dir = mkdtempSync(join(tmpdir(), "task-tail-"));
     dirs.push(dir);
-    const log = join(dir, "t.log");
-    writeFileSync(log, "one\ntwo\nthree\n");
-    expect(await readLogTail(log, 2)).toBe("two\nthree");
-    expect(await readLogTail(log, 10)).toBe("one\ntwo\nthree");
-    expect(await readLogTail(log, 0)).toBe("three");
-    writeFileSync(log, "");
-    expect(await readLogTail(log, 5)).toBe("");
-    expect(await readLogTail(join(dir, "missing.log"), 5)).toBeUndefined();
-    expect(await readLogTail(undefined, 5)).toBeUndefined();
-    expect(await readLogTail("relative.log", 5)).toBeUndefined();
+    // A window is immutable segments; `logPath` is their base name (RP-6).
+    const log = join(dir, "t");
+    writeFileSync(`${log}.0.log`, "one\ntwo\nthree\n");
+    expect(await readLogTail(log, 2, dir, [0])).toBe("two\nthree");
+    expect(await readLogTail(log, 10, dir, [0])).toBe("one\ntwo\nthree");
+    expect(await readLogTail(log, 0, dir, [0])).toBe("three");
+    // Without the writer's own segment list there is nothing to read: this
+    // process never lists a directory of somebody else's commands (RP-6).
+    expect(await readLogTail(log, 2, dir)).toBeUndefined();
+    writeFileSync(`${log}.0.log`, "");
+    expect(await readLogTail(log, 5, dir, [0])).toBe("");
+    expect(await readLogTail(join(dir, "missing"), 5, dir, [0])).toBeUndefined();
+    expect(await readLogTail(undefined, 5, dir, [0])).toBeUndefined();
+    expect(await readLogTail("relative.log", 5, dir, [0])).toBeUndefined();
+    // A path outside the private root is a claim, not a permission (RP-6), and
+    // neither is a symlink out of it.
+    const outside = mkdtempSync(join(tmpdir(), "task-tail-outside-"));
+    dirs.push(outside);
+    writeFileSync(join(outside, "secret.0.log"), "not yours");
+    expect(await readLogTail(join(outside, "secret"), 5, dir, [0])).toBeUndefined();
+    symlinkSync(join(outside, "secret.0.log"), join(dir, "link.0.log"));
+    expect(await readLogTail(join(dir, "link"), 5, dir, [0])).toBeUndefined();
+    // And a symlinked *directory* inside the root: `O_NOFOLLOW` only refuses
+    // the last component, so containment is decided on the resolved parent.
+    const elsewhere = mkdtempSync(join(tmpdir(), "task-tail-elsewhere-"));
+    dirs.push(elsewhere);
+    writeFileSync(join(elsewhere, "secret.0.log"), "still not yours");
+    symlinkSync(elsewhere, join(dir, "opaque"));
+    expect(await readLogTail(join(dir, "opaque", "secret"), 5, dir, [0])).toBeUndefined();
+    // Without a root nothing is read at all.
+    writeFileSync(`${log}.0.log`, "one\n");
+    expect(await readLogTail(log, 5, undefined, [0])).toBeUndefined();
     // Past the window only the tail is read, aligned to a character boundary.
-    const big = join(dir, "big.log");
+    const big = join(dir, "big");
     const line = "é".repeat(50) + "\n";
     const lines = Math.ceil((TASK_OUTPUT_MAX_BYTES * 1.5) / Buffer.byteLength(line));
-    writeFileSync(big, line.repeat(lines) + "last\n");
-    const tail = await readLogTail(big, 3);
+    writeFileSync(`${big}.0.log`, line.repeat(lines) + "last\n");
+    const tail = await readLogTail(big, 3, dir, [0]);
     expect(tail).toBe(`${"é".repeat(50)}\n${"é".repeat(50)}\nlast`);
     expect(tail).not.toContain("�");
   });

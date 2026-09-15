@@ -26,13 +26,13 @@
  * and tests (which send none) keep working.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 import { basename, dirname, extname, join, normalize, relative, resolve as resolvePath, sep } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { channelIdFor, type KeyPair } from "@lasercode/crypto";
-import { ENV, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, isTerminalRunStatus, projectEnvWorkerConfig, type ClientRequests, type DeviceGrants, type EnvironmentPolicyInput, type HostNotifications, type JsonRpcNotification, type LogEntry, type NamerState, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
+import { ENV, ErrorCodes, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, isTerminalRunStatus, projectEnvWorkerConfig, type ClientRequests, type DeviceGrants, type EnvironmentPolicyInput, type HostNotifications, type JsonRpcNotification, type LogEntry, type NamerState, type ResourceRetainedStores, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
 import { AccessControl, isLoopbackAddress, localActor, pairedActor, type ActorIdentity } from "./access.js";
 import { AccessAudit } from "./access-audit.js";
 import { loadEnvironmentPolicy } from "./environment-policy.js";
@@ -56,7 +56,8 @@ import { PushService } from "./push.js";
 import { RelayClient, type RelayClientState, type RelayClientStats } from "./relay-client.js";
 import { Router } from "./router.js";
 import { SessionLoadDelivery } from "./session-load-delivery.js";
-import { TranscriptDelivery } from "./transcript-delivery.js";
+import { TranscriptDelivery, type SessionMembershipView } from "./transcript-delivery.js";
+import { cleanupTaskLogsBeforeWorkers } from "./tasks/cleanup.js";
 import { SearchCancellation } from "./search-cancellation.js";
 import { SessionIndexCache } from "./session-index.js";
 import { SessionProjection } from "./session-projection.js";
@@ -181,6 +182,13 @@ const PERSISTING_UPDATES = new Set(["message_end", "compaction_end", "entry_appe
 /** New log rows are batched for this long before one notification goes out. */
 const LOG_APPEND_FLUSH_MS = 120;
 
+/**
+ * How long the Advanced resource surface waits for one live worker to say what
+ * it is retaining. A diagnostic never delays a person's answer: past this, the
+ * worker's numbers are missing coverage rather than a slow reply.
+ */
+const RETAINED_STORES_TIMEOUT_MS = 750;
+
 /** Vite's emitted `assets/<name>-<hash>.<ext>`; mirrors the service worker's `hashedAsset`. */
 const HASHED_ASSET = /^assets[/\\][^/\\]+-[\w-]{8,}\.(?:m?js|css|woff2?)$/;
 
@@ -255,8 +263,11 @@ export class HostServer {
   /** What the boundary proved about each local socket (RP-13). */
   private readonly actors = new Map<WebSocket, ActorIdentity>();
   /** Session paths each client is following, for the retirement guard. */
-  private readonly attached = new Map<WebSocket, Set<string>>();
   private readonly transcripts = new Map<WebSocket, TranscriptDelivery>();
+  /** The private directory every command log this host will read must be inside. */
+  private readonly taskLogRoot: string;
+  /** Crash cleanup of that directory, started before any worker exists. */
+  private taskLogCleanup: Promise<number> = Promise.resolve(0);
   private readonly searches = new Map<WebSocket, SearchCancellation>();
   /** Question-only response fences for concurrent session/load requests, per socket. */
   private readonly loadDeliveries = new Map<WebSocket, Set<SessionLoadDelivery>>();
@@ -284,6 +295,23 @@ export class HostServer {
     this.uiDir = options.uiDir ?? defaultUiDir();
     const agentDir = options.agentDir ?? defaultAgentDir();
     const stateDir = options.stateDir ?? defaultStateDir();
+    // Command output is a person's own bytes: it lives in a private directory
+    // of this host's state, not in a shared, guessable temporary path, and it
+    // is the only place anything here will read a command log from (RP-6).
+    this.taskLogRoot = join(stateDir, "task-logs");
+    try {
+      mkdirSync(this.taskLogRoot, { recursive: true, mode: 0o700 });
+      chmodSync(this.taskLogRoot, 0o700);
+      // Whatever is in there now is from a run that is gone: this host has not
+      // spawned a worker yet, so nothing can be writing. That is the only
+      // moment at which leftovers can be identified without guessing, which is
+      // why no worker ever removes a directory it did not write
+      // (`tasks/cleanup.ts`).
+      this.taskLogCleanup = cleanupTaskLogsBeforeWorkers(this.taskLogRoot).catch(() => 0);
+    } catch {
+      // A state directory that cannot hold it is reported when a read fails,
+      // never as a reason to refuse to start.
+    }
     this.environment = environmentIdentity(stateDir);
     const log = options.log ?? (() => {});
     // Defense in depth: even a dependency echoing worker argv cannot put the
@@ -406,7 +434,7 @@ export class HostServer {
       onChange: (status) => this.notify("pi/project/env/changed", { status }),
     });
 
-    this.tasks = new TaskRegister({ notify: (method, params) => this.notify(method, params) });
+    this.tasks = new TaskRegister({ notify: (method, params) => this.notify(method, params), logRoot: this.taskLogRoot });
 
     this.push = new PushService({ agentDir, log: (line) => this.log(line) });
 
@@ -458,6 +486,7 @@ export class HostServer {
         runIdsOf: (cwd) => this.runs.list().filter((run) => run.projectCwd === cwd && !isTerminalRunStatus(run.status)).map((run) => run.runId),
         taskIdsOf: (cwd) => this.tasks.list().filter((task) => task.status === "running" && (this.pool.cwdOfSession(task.sessionPath) ?? this.catalog.cwdOf(task.sessionPath)) === cwd).map((task) => task.id),
       },
+      retainedStores: () => this.retainedStores(),
     });
 
     // The host resolves the package manager the workers should use — the one
@@ -475,7 +504,7 @@ export class HostServer {
 
     const poolOptions: WorkerPoolOptions = {
       ...(options.agentDir ? { agentDir: options.agentDir } : {}),
-      ...(npmCommand ? { env: { [ENV.npmCommand]: JSON.stringify(npmCommand) } } : {}),
+      env: { ...(npmCommand ? { [ENV.npmCommand]: JSON.stringify(npmCommand) } : {}), [ENV.taskLogRoot]: this.taskLogRoot },
       envForCwd: (cwd) => ({
         [ENV.features]: JSON.stringify(this.features.enabled(cwd)),
         // Non-secret: the executable, its arguments and whether this exact pair
@@ -543,6 +572,9 @@ export class HostServer {
         }
         return this.projects.ensureTrusted(cwd);
       },
+      // No worker starts until the command-log root has been cleaned: that
+      // cleanup is only safe while nothing is writing there (RP-6).
+      beforeSpawn: () => this.taskLogCleanup,
       isAttached: (cwd) => this.isAttached(cwd),
       hasLiveRun: (cwd) => this.runs.hasLiveRun(cwd),
       // The pid is only knowable at spawn. Recording it reads nothing and
@@ -682,6 +714,11 @@ export class HostServer {
   }
 
   /** Live relay clients, for `pi/worker/*`-style status surfaces and tests. */
+  /** Resolves when the start-time command-log cleanup has finished (RP-6). */
+  taskLogsCleaned(): Promise<number> {
+    return this.taskLogCleanup;
+  }
+
   relayStats(): RelayClientStats[] {
     return this.relayClients.map((client) => client.statistics());
   }
@@ -709,7 +746,6 @@ export class HostServer {
     for (const ws of this.clients) ws.close(1001, "host shutting down");
     this.clients.clear();
     this.actors.clear();
-    this.attached.clear();
     for (const deliveries of this.loadDeliveries.values()) for (const delivery of deliveries) delivery.dispose();
     this.loadDeliveries.clear();
     await this.pool.stopAll();
@@ -824,6 +860,24 @@ export class HostServer {
       case "pi/ui/event": {
         const params = notification.params as HostNotifications["pi/ui/event"];
         if (params.method === "dialogResolved") this.attention.dialogResolved(params.path, params.id);
+        return;
+      }
+      case "pi/resource/process": {
+        // A pid whose meaning the worker knows (RP-1). It is consumed here and
+        // dropped in `broadcast`: it carries a host-internal session path and a
+        // process id, neither of which is a client's business. Nothing is
+        // believed on the strength of this message — the inventory proves
+        // `(pid, startToken)` and ancestry against its own collected table
+        // before a row is named.
+        const params = notification.params as HostNotifications["pi/resource/process"];
+        if (params.registrations?.length) {
+          this.resources.observeProcessRegistrations(cwd, params.registrations);
+        }
+        // No exit hints are accepted here, by design: a pid with no start token
+        // is not an identity, and honouring "pid 412 has gone" could delete the
+        // record of a process another worker started at that number. The next
+        // process table decides — a pid that is absent, or whose start token
+        // changed, loses its record there (RP-1).
         return;
       }
       case "pi/extension/message": {
@@ -1006,14 +1060,121 @@ export class HostServer {
     return worker ? { [ENV.projectEnv]: JSON.stringify(worker) } : {};
   }
 
-  /** Is any connected client following a session in this directory? */
+  /**
+   * Is any connected client following a session in this directory?
+   *
+   * One truth for it (RP-6): the per-connection transcript membership, which
+   * is reference-counted by connection and scope and now covers paired devices
+   * as well as direct sockets. A phone watching a session used to pin nothing,
+   * because the relay kept its own delivery and the retirement bookkeeping
+   * only saw local sockets.
+   */
   private isAttached(cwd: string): boolean {
-    for (const paths of this.attached.values()) {
-      for (const path of paths) {
+    for (const membership of this.memberships()) {
+      for (const path of membership.paths()) {
         if ((this.pool.cwdOfSession(path) ?? this.catalog.cwdOf(path)) === cwd) return true;
       }
     }
     return false;
+  }
+
+  /**
+   * What this host and its live workers are retaining, for the Advanced
+   * resource surface (RP-3). Counts and bytes of *state*, not of memory: a
+   * task record is metadata, a delivery membership is a subscription, and
+   * neither pretends to be a share of a process's footprint.
+   *
+   * Only workers that are **already running** are asked, with a bound: this is
+   * a diagnostic, and a diagnostic must never start a worker or wait on one.
+   * A worker that does not answer inside the bound leaves its numbers out and
+   * makes the coverage incomplete, because a partial sum presented as a total
+   * is the one thing this whole surface exists not to do.
+   */
+  private async retainedStores(): Promise<ResourceRetainedStores> {
+    /** A worker that does not answer in time is missing coverage, not a delay. */
+    const bounded = <T>(work: Promise<T>): Promise<T | undefined> =>
+      new Promise<T | undefined>((resolve) => {
+        const timer = setTimeout(() => resolve(undefined), RETAINED_STORES_TIMEOUT_MS);
+        timer.unref?.();
+        work.then(
+          (value) => {
+            clearTimeout(timer);
+            resolve(value);
+          },
+          () => {
+            clearTimeout(timer);
+            resolve(undefined);
+          },
+        );
+      });
+    const registry = this.tasks.retained();
+    const delivery = this.sessionMembership().counts();
+    const live = this.pool.liveClients();
+    const answers = await Promise.all(
+      live.map(async ({ client }) => {
+        return bounded(client.request<ClientRequests["pi/worker/retained-stores"]["result"]>("pi/worker/retained-stores", {}));
+      }),
+    );
+    const answered = answers.filter((answer): answer is ClientRequests["pi/worker/retained-stores"]["result"] => answer !== undefined);
+    let workerTaskCount = 0;
+    let workerTaskBytes = 0;
+    for (const answer of answered) {
+      workerTaskCount += answer.stores.taskRegistry?.count ?? 0;
+      workerTaskBytes += answer.stores.taskRegistry?.bytes ?? 0;
+    }
+    const complete = answered.length === live.length;
+    return {
+      entries: {
+        taskRegistry: {
+          count: registry.count + workerTaskCount,
+          // Bytes are only honest when every live worker answered: the host's
+          // own records are a fraction of what the tails cost.
+          ...(complete ? { bytes: registry.bytes + workerTaskBytes } : {}),
+        },
+        deliveryRegistry: {
+          count: delivery.owners,
+          // Queued transport bytes belong to the transport (RP-7); membership
+          // itself holds no payload, and saying "0 bytes" would read as a
+          // measurement rather than as the absence of one.
+        },
+      },
+      coverage: {
+        workers: live.length,
+        answered: answered.length,
+        complete,
+        ...(complete ? {} : { reason: "collector_failed" as const }),
+      },
+    };
+  }
+
+  /** Every connection's membership: direct sockets first, then paired devices. */
+  private memberships(): SessionMembershipView[] {
+    return [...this.transcripts.values(), ...this.relayClients.map((client) => client.membership())];
+  }
+
+  /**
+   * Holders of one session across every connection, and the totals behind
+   * them. Read-only, and the only thing anything outside this file may use:
+   * RP-4's unload policy consumes `holders(path) > 0` as one of its guards and
+   * never writes membership itself. A hold counts from the moment a client
+   * asks to attach, not from the moment the attach is answered: retiring a
+   * worker between the request and its reply is exactly the race that guard
+   * exists to stop.
+   */
+  sessionMembership(): { holders(path: string): number; counts(): { connections: number; paths: number; owners: number } } {
+    return {
+      holders: (path) => this.memberships().reduce((sum, membership) => sum + membership.holders(path), 0),
+      counts: () => {
+        const all = this.memberships();
+        const paths = new Set<string>();
+        let owners = 0;
+        for (const membership of all) {
+          for (const path of membership.paths()) paths.add(path);
+          owners += membership.counts().owners;
+        }
+        return { connections: all.length, paths: paths.size, owners };
+      },
+    };
   }
 
   // ------------------------------------------------------------- sockets
@@ -1022,6 +1183,9 @@ export class HostServer {
     // Captures have already reached LogStore in observe(). Views inspect the
     // redacted retained body via logs/query + logs/content, not this raw event.
     // Filter before serialization and before relay listeners/frame admission.
+    // Process registrations are consumed by the inventory and go no further:
+    // no client, no relay listener and no audit ever sees a pid (RP-1/RP-6).
+    if (notification.method === "pi/resource/process") return;
     if (notification.method === "pi/extension/message") {
       const { message } = notification.params as HostNotifications["pi/extension/message"];
       const type = (message as { type?: unknown } | null)?.type;
@@ -1087,7 +1251,6 @@ export class HostServer {
   private onConnection(ws: WebSocket, actor: ActorIdentity): void {
     this.clients.add(ws);
     this.actors.set(ws, actor);
-    this.attached.set(ws, new Set());
     const transcripts = new TranscriptDelivery();
     this.transcripts.set(ws, transcripts);
     const searches = new SearchCancellation();
@@ -1111,12 +1274,28 @@ export class HostServer {
         ? new SessionLoadDelivery(request.params.path)
         : undefined;
       if (delivery) this.loadDeliveries.get(ws)?.add(delivery);
-      const finishTranscript = transcripts.begin(raw);
+      const admission = transcripts.begin(raw);
+      if (admission.refusal !== undefined) {
+        // Refused before the router: a load this connection cannot follow must
+        // not become work in a worker, and the person is told why (RP-6).
+        delivery?.dispose();
+        if (delivery) this.loadDeliveries.get(ws)?.delete(delivery);
+        const id = (raw as { id?: string | number } | null)?.id ?? null;
+        await this.sendSocket(ws, JSON.stringify({ jsonrpc: "2.0", id, error: { code: ErrorCodes.InvalidParams, message: admission.refusal } }));
+        return;
+      }
+      const finishTranscript = admission.finish;
       let transcriptResponse;
       try {
         const response = await this.router.handle(raw, { actor, searches });
         transcriptResponse = response;
-        if (!response.error) this.noteRequest(ws, request, response.result);
+        // The one thing a reply still tells this layer: a dialog was answered
+        // from a client, so the worker's UI bridge stays silent. What a client
+        // is *following* is membership's, per connection and per scope, and
+        // retirement reads that one place (`isAttached`).
+        if (!response.error && request?.method === "pi/ui/response" && typeof request.params?.id === "string") {
+          this.attention.dialogAnswered(request.params.id);
+        }
         const sent = await this.sendSocket(ws, JSON.stringify(response));
         if (delivery && sent && !response.error) {
           await delivery.flush((notification) => this.sendSocket(ws, JSON.stringify(notification)));
@@ -1129,39 +1308,6 @@ export class HostServer {
     });
     ws.on("close", () => this.dropClient(ws));
     ws.on("error", () => this.dropClient(ws));
-  }
-
-  /**
-   * Remember what this client is following (so an attached worker is never
-   * retired) and clear a dialog it just answered (the worker's UI bridge stays
-   * silent when the answer came from a client).
-   */
-  private noteRequest(ws: WebSocket, request: { method?: unknown; params?: { path?: unknown; id?: unknown } } | null, result: unknown): void {
-    const method = request?.method;
-    if (method === "session/load" && typeof request?.params?.path === "string") {
-      this.attached.get(ws)?.add(request.params.path);
-      return;
-    }
-    if (method === "session/new") {
-      const path = (result as { state?: { path?: string } } | null)?.state?.path;
-      if (path) this.attached.get(ws)?.add(path);
-      return;
-    }
-    if (method === "pi/session/fork") {
-      const path = (result as { state?: { path?: string } } | null)?.state?.path;
-      if (path) this.attached.get(ws)?.add(path);
-      return;
-    }
-    if (method === "pi/session/detach" && typeof request?.params?.path === "string") {
-      // The one thing that made idle retirement fire in practice: without a
-      // detach the attached set only ever grew, so every project the user had
-      // clicked into today kept its worker for the life of the window.
-      this.attached.get(ws)?.delete(request.params.path);
-      return;
-    }
-    if (method === "pi/ui/response" && typeof request?.params?.id === "string") {
-      this.attention.dialogAnswered(request.params.id);
-    }
   }
 
   private sendSocket(ws: WebSocket, line: string): Promise<boolean> {
@@ -1178,7 +1324,6 @@ export class HostServer {
   private dropClient(ws: WebSocket): void {
     this.clients.delete(ws);
     this.actors.delete(ws);
-    this.attached.delete(ws);
     this.transcripts.delete(ws);
     this.searches.get(ws)?.close();
     this.searches.delete(ws);

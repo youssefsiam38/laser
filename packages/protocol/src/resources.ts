@@ -325,6 +325,53 @@ export interface ResourceHealth {
   crossCheck: { status: ResourceCrossCheckStatus; detail?: string };
 }
 
+/**
+ * Retained-state stores a diagnostics surface can name, one key per owning
+ * subsystem (RP-3). Declared once, here, so a producer is added without
+ * touching the shape: RP-6 fills `taskRegistry` and `deliveryRegistry`, RP-4
+ * the three worker keys, RP-7 `providerQueues`, and the renderer its own.
+ */
+export const RESOURCE_STORE_KEYS = [
+  "workerSessions",
+  "workerReplay",
+  "workerCaches",
+  "taskRegistry",
+  "deliveryRegistry",
+  "providerQueues",
+  "rendererViews",
+] as const;
+
+export type ResourceStoreKey = (typeof RESOURCE_STORE_KEYS)[number];
+
+/**
+ * Counters for one retained store. A missing number is unavailable, never a
+ * zero: the surface says "not reported" rather than "nothing retained".
+ */
+export interface ResourceStoreValue {
+  count?: number;
+  bytes?: number;
+}
+
+/**
+ * Retained-state counters plus their own coverage.
+ *
+ * Some entries are aggregated from live workers. A worker that does not answer
+ * inside the collection bound makes `coverage.complete` false and leaves the
+ * affected numbers out — a partial sum is never presented as a total, the same
+ * rule {@link ResourceTotals} keeps for memory.
+ */
+export interface ResourceRetainedStores {
+  entries: Partial<Record<ResourceStoreKey, ResourceStoreValue>>;
+  coverage: {
+    /** Live workers the host asked. */
+    workers: number;
+    /** Live workers that answered inside the bound. */
+    answered: number;
+    complete: boolean;
+    reason?: ResourceUnavailableReason;
+  };
+}
+
 export interface ResourceSnapshot {
   id: string;
   at: string;
@@ -334,6 +381,8 @@ export interface ResourceSnapshot {
   totals: ResourceTotals;
   byRole: ResourceRoleTotals[];
   health: ResourceHealth;
+  /** Retained stores of the subsystems that report them (RP-3/RP-6). */
+  stores?: ResourceRetainedStores;
 }
 
 export interface ResourceRetention {
@@ -479,6 +528,7 @@ export const resourceParamsSchemas = {
     .strict(),
   "resource/export": z.object({}).strict(),
   "resource/report": resourceDesktopReportSchema,
+  "pi/worker/retained-stores": z.object({}).strict(),
 };
 
 declare module "./messages.js" {
@@ -510,6 +560,16 @@ declare module "./messages.js" {
       params: ResourceDesktopReport;
       result: ResourceReportResult;
     };
+    /**
+     * Host → an **already live** worker only, never a client and never a
+     * reason to start a worker: the retained-store counters that live in that
+     * worker's address space (RP-6 tasks and tails today; RP-4 and RP-7 add
+     * their own keys). Answered from state the worker already holds.
+     */
+    "pi/worker/retained-stores": {
+      params: {};
+      result: { stores: Partial<Record<ResourceStoreKey, ResourceStoreValue>> };
+    };
   }
 
   interface HostNotifications {
@@ -519,5 +579,23 @@ declare module "./messages.js" {
      * with diagnostics closed, nothing asks and nothing is collected.
      */
     "resource/refresh_request": {};
+    /**
+     * Worker → host only, consumed before any broadcast: a pid whose meaning
+     * the worker knows (a background command, a helper it spawned). It carries
+     * host-internal values (a session path) and pids, so the host drops it
+     * rather than forwarding it to a client or a relay listener.
+     *
+     * Registrations only, deliberately: **there is no exit hint here.** A pid
+     * on its own is not an identity (RP-1: `(pid, startToken)`, never a pid),
+     * so a message saying "pid 412 has gone" could delete the record of a
+     * *different* process that took that pid in another worker. Exits are
+     * decided by the host's own process table, which sees the pid disappear or
+     * the start token change; the only exits taken on trust are the ones the
+     * host itself issued a generation for, when it spawned the worker.
+     */
+    "pi/resource/process": {
+      path?: string;
+      registrations?: ResourceProcessRegistration[];
+    };
   }
 }

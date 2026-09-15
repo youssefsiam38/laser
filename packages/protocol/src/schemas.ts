@@ -28,7 +28,7 @@ import { PREFS_MAX_BYTES } from "./messages.js";
 import { resourceParamsSchemas } from "./resources.js";
 import { environmentParamsSchemas } from "./environment-policy.js";
 import type { ClientMethod, ClientRequests } from "./messages.js";
-import { TASK_COMMAND_MAX, TASK_LINE_MAX } from "./tasks.js";
+import { TASK_COMMAND_MAX, TASK_LINE_MAX, TASK_LOG_SEGMENTS_MAX } from "./tasks.js";
 import { ENVIRONMENT_KEY_PATTERN, SESSION_REVISION_PATTERN } from "./session-revision.js";
 
 /** Opt-in browse replies must not silently reinterpret legacy folders as files. */
@@ -165,6 +165,15 @@ export const uiDialogResponseSchema = z.union([
 ]);
 
 const sessionPath = z.string().min(1);
+
+/**
+ * Which surface of one connection holds a session's transcript delivery
+ * (RP-6). A local opaque label and nothing else: bounded in length, drawn from
+ * a small alphabet, and never a path, session id, run id or device value. It
+ * grants no access — the method's own authorization has already run — so the
+ * only thing this bound protects is the host's own membership state.
+ */
+const deliveryOwner = z.string().regex(/^[a-z0-9][a-z0-9:_-]{0,31}$/);
 // Opaque tokens, validated by shape only: nothing here ever interprets them.
 const sessionRevision = z.string().regex(SESSION_REVISION_PATTERN);
 const environmentKey = z.string().regex(ENVIRONMENT_KEY_PATTERN);
@@ -350,6 +359,11 @@ export const backgroundTaskUpdateSchema = z
     error: z.string().max(4000).optional(),
     /** Host-side only; the host reads it and never forwards it to a client. */
     logPath: z.string().min(1).max(4096).optional(),
+    /** Host-side only: the stream offsets of the segments that exist (RP-6). */
+    logSegments: z.array(z.number().int().nonnegative()).max(TASK_LOG_SEGMENTS_MAX).optional(),
+    logState: z.enum(["retained", "truncated", "released"]).optional(),
+    retainedFromByte: z.number().int().nonnegative().optional(),
+    outputDigest: z.string().regex(/^[0-9a-f]{64}$/).optional(),
   })
   .strict();
 
@@ -592,7 +606,13 @@ export const sessionLoadResultSchema = z
 
 export const clientParamsSchemas = {
   "session/new": z.object({ cwd: z.string().min(1), parentPath: sessionPath.optional(), agentName: agentNameSchema.optional() }).strict(),
-  "session/load": z.object({ path: sessionPath, fromSeq: z.number().int().nonnegative().optional(), transcript: z.literal("loaded").optional() }).strict(),
+  "session/load": z
+    .object({
+      path: sessionPath,
+      fromSeq: z.number().int().nonnegative().optional(),
+      owner: deliveryOwner.optional(),
+    })
+    .strict(),
   "session/prompt": z
     .object({
       path: sessionPath,
@@ -635,7 +655,7 @@ export const clientParamsSchemas = {
     .object({ cwd: z.string().min(1).optional(), limit: z.number().int().positive().max(500).optional() })
     .strict(),
   "pi/session/seen": z.object({ path: sessionPath, seq: z.number().int().nonnegative().optional() }).strict(),
-  "pi/session/detach": z.object({ path: sessionPath }).strict(),
+  "pi/session/detach": z.object({ path: sessionPath, owner: deliveryOwner.optional() }).strict(),
   // A move names the session and the project it goes to, nothing else: the
   // destination file is the host's to choose (M13-T58).
   "pi/session/move": z.object({ path: sessionPath, cwd }).strict(),

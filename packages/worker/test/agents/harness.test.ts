@@ -225,6 +225,10 @@ function makeWorld(projectCwd = "/repo", projectTrusted = true) {
     notify: (method, params) => notifications.push({ method, params }),
     modelAvailable: async () => !unavailable,
     tasks: (path) => tasks.get(path) ?? [],
+    // The private root a command log must be inside to be read (RP-6). The
+    // tests write their scratch logs under the system temp directory, which is
+    // where this harness's root points.
+    taskLogRoot: () => tmpdir(),
   };
   const definitions = new DefinitionsCache();
   const harness = new AgentHarness({ host, definitions, worktrees, projectTrusted, backgroundWork: (cwd) => ({ cwd, foregroundCommandSeconds: 120, commandPrefix: projectBashPrefix("source scripts/project-shell.sh") }), now: () => Date.now() });
@@ -1186,15 +1190,38 @@ describe("AgentHarness", () => {
       expect(fleet.rows.filter((row) => row.kind === "command")).toHaveLength(46);
     });
 
+    it("reads one of this session's own commands, so a bound that forgot it in the module is not the end of it", async () => {
+      // A finished command's record is bounded inside the module that ran it
+      // (RP-6). When a bound forgets it, the worker's index still has it and
+      // its log is still on disk — reading your own command must not depend on
+      // how many you have run since.
+      const root = world.openRoot("lead");
+      const rootPath = root.path;
+      const log = join(mkdtempSync(join(tmpdir(), "own-log-")), "t-own");
+      writeFileSync(`${log}.0.log`, "first\nsecond\n");
+      world.tasks.set(rootPath, [task("t-own", rootPath, "completed", { exitCode: 0, outputBytes: 13, logPath: log, logSegments: [0] })]);
+      const read = await root.handle.backgroundWork("/repo")!.readTask!("t-own", 1);
+      expect(read.task).toMatchObject({ id: "t-own", status: "completed", exitCode: 0 });
+      expect(read.text).toBe("second");
+      expect(read.task).not.toHaveProperty("logPath");
+      expect(read.owner.sessionId).toBeDefined();
+      // Still refused for a command of a session that is not the caller's and
+      // not under it.
+      world.tasks.set("/sessions/stranger.jsonl", [task("t-stranger", "/sessions/stranger.jsonl", "running", { logPath: log, logSegments: [0] })]);
+      await expect(root.handle.backgroundWork("/repo")!.readTask!("t-stranger", 5)).rejects.toThrow(/is not in the tree under this session/);
+    });
+
     it("reads a command of an agent under this session from its log, and refuses one outside the tree", async () => {
       const root = world.openRoot("lead");
       const child = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w1", task: "t" });
       const childPath = "/sessions/child-1.jsonl";
       const grand = await world.harness.bridgeOf(childPath)!.startAgent({ agentName: "worker", subagentName: "w2", task: "t2" });
-      const log = join(mkdtempSync(join(tmpdir(), "fleet-log-")), "t-grand.log");
-      writeFileSync(log, "one\ntwo\nthree\n");
-      world.tasks.set("/sessions/child-2.jsonl", [task("t-grand", "/sessions/child-2.jsonl", "completed", { exitCode: 0, outputBytes: 14, logPath: log }), task("t-quiet", "/sessions/child-2.jsonl", "running", { activity: "still going" })]);
-      world.tasks.set("/sessions/other.jsonl", [task("t-other", "/sessions/other.jsonl", "running", { logPath: log })]);
+      // The window is immutable segments named for the stream byte they start
+      // at; the record carries their base name (RP-6).
+      const log = join(mkdtempSync(join(tmpdir(), "fleet-log-")), "t-grand");
+      writeFileSync(`${log}.0.log`, "one\ntwo\nthree\n");
+      world.tasks.set("/sessions/child-2.jsonl", [task("t-grand", "/sessions/child-2.jsonl", "completed", { exitCode: 0, outputBytes: 14, logPath: log, logSegments: [0] }), task("t-quiet", "/sessions/child-2.jsonl", "running", { activity: "still going" })]);
+      world.tasks.set("/sessions/other.jsonl", [task("t-other", "/sessions/other.jsonl", "running", { logPath: log, logSegments: [0] })]);
       const readTask = world.opened[0]!.agent.backgroundWork!.readTask!;
       // The child's options read its own child's command; the root's read the grandchild's too.
       const read = await readTask("t-grand", 2);
@@ -1209,7 +1236,7 @@ describe("AgentHarness", () => {
       await expect(readTask("t-other", 5)).rejects.toThrow(/"t-other" is not in the tree under this session.*inspect_fleet/s);
       await expect(readTask("t-nope", 5)).rejects.toThrow(/is not in the tree under this session/);
       // A grandchild reads nothing of its parent's.
-      world.tasks.set(childPath, [task("t-child", childPath, "running", { logPath: log })]);
+      world.tasks.set(childPath, [task("t-child", childPath, "running", { logPath: log, logSegments: [0] })]);
       await expect(world.opened[1]!.agent.backgroundWork!.readTask!("t-child", 5)).rejects.toThrow(/is not in the tree under this session/);
       void child;
     });

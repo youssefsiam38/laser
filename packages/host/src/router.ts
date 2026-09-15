@@ -876,6 +876,11 @@ export class Router {
       }
       case "agents/sync":
         throw new ProtocolError(ErrorCodes.Unsupported, "The app sends this to its own workers.");
+      // Same rule, and said here rather than left to the forwarder: a client
+      // asking a worker what it is retaining would reach a worker of its
+      // choosing. The host asks its own live workers, inside a snapshot (RP-6).
+      case "pi/worker/retained-stores":
+        throw new ProtocolError(ErrorCodes.Unsupported, "The app sends this to its own workers.");
 
       default:
         break;

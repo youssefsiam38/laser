@@ -524,6 +524,57 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("host end to end", () => {
     }
   }, 60_000);
 
+  it("delivers a transcript to the surfaces that hold it, and stops when the last one lets go", async () => {
+    const client = new Client();
+    await client.connect((await host.listen()).url);
+    const cwd = join(base, "project");
+    try {
+      const { state } = await client.request<{ state: SessionState }>("session/new", { cwd });
+      // Two surfaces of one connection hold the same conversation: the view it
+      // is open in, and a bubble over it (RP-6).
+      await client.request("session/load", { path: state.path, owner: "view" });
+      await client.request("session/load", { path: state.path, owner: "scope:1", fromSeq: 0 });
+      expect(host.sessionMembership().holders(state.path)).toBe(2);
+
+      // The view leaves. The bubble is still showing it, so the host keeps
+      // delivering and the worker stays pinned.
+      await client.request("pi/session/detach", { path: state.path, owner: "view" });
+      expect(host.sessionMembership().holders(state.path)).toBe(1);
+      const before = client.updates().length;
+      await client.request("session/prompt", { path: state.path, content: [{ type: "text", text: "hello" }] });
+      await client.waitFor((m) => "method" in m && m.method === "session/update" && (m.params as SessionUpdateParams).sessionPath === state.path && (m.params as SessionUpdateParams).update.kind === "message_end");
+      expect(client.updates().length).toBeGreaterThan(before);
+
+      // Retained state is reported as counts, with its own coverage; the live
+      // worker answers, so the answer is complete.
+      const { snapshot } = await client.request<{ snapshot: { stores?: { entries: Record<string, { count?: number; bytes?: number }>; coverage: { workers: number; answered: number; complete: boolean } } } }>("resource/snapshot", { refresh: true });
+      expect(snapshot.stores?.coverage).toMatchObject({ complete: true });
+      expect(snapshot.stores?.coverage.workers).toBeGreaterThan(0);
+      expect(snapshot.stores?.entries.deliveryRegistry?.count).toBe(1);
+      expect(snapshot.stores?.entries.deliveryRegistry?.bytes).toBeUndefined();
+      expect(snapshot.stores?.entries.taskRegistry?.count).toBe(0);
+
+      // The last surface lets go: this connection stops hearing the transcript.
+      await client.request("pi/session/detach", { path: state.path, owner: "scope:1" });
+      expect(host.sessionMembership().holders(state.path)).toBe(0);
+      const quiet = client.updates().length;
+      await client.request("session/prompt", { path: state.path, content: [{ type: "text", text: "again" }] });
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      expect(client.updates().length).toBe(quiet);
+
+      // Reopening reconciles from the sequence it holds: nothing was lost, it
+      // was waiting in the worker's replay.
+      const resumed = await client.request<{ replayFrom: number; seq: number }>("session/load", { path: state.path, fromSeq: quiet > 0 ? client.updates()[quiet - 1]!.seq : 0 });
+      expect(resumed.seq).toBeGreaterThan(0);
+      await client.waitFor((m) => "method" in m && m.method === "session/update" && (m.params as SessionUpdateParams).seq > (quiet > 0 ? client.updates()[quiet - 1]!.seq : 0));
+      expect(client.updates().length).toBeGreaterThan(quiet);
+
+      // And no client, ever, is told a process id.
+      expect(client.inbound.some((m) => "method" in m && m.method === "pi/resource/process")).toBe(false);
+      expect(JSON.stringify(client.inbound)).not.toContain("registrations");
+    } finally { client.close(); }
+  }, 120_000);
+
   it("never runs two workers for one cwd", async () => {
     await host.listen();
     const [a, b] = await Promise.all([host.pool.get(join(base, "project")), host.pool.get(join(base, "project"))]);

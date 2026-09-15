@@ -194,11 +194,27 @@ describe("scope isolation", () => {
     expect(prompts[1]!.path).not.toBe(MAIN);
   });
 
-  it("opens the scoped session quietly and keeps it attached while the scope holds it", async () => {
+  it("opens the scoped session quietly and holds it with its own scope label", async () => {
     await act(async () => root.render(<Harness />));
     await act(async () => settle(20));
-    const detached = world.calls.filter((call) => call.method === "pi/session/detach").map((call) => (call.params as { path: string }).path);
-    expect(detached).not.toContain(BEAM);
+    // The bubble holds the session as a surface of its own (RP-6): the host
+    // counts delivery per connection *and* per scope, so the main view leaving
+    // the path releases one holder and not the conversation.
+    const claims = world.calls
+      .filter((call) => call.method === "session/load")
+      .map((call) => call.params as { path: string; owner?: string })
+      .filter((params) => params.path === BEAM && params.owner !== undefined);
+    expect(claims.length).toBeGreaterThan(0);
+    // One surface, one label, however many times it says so: re-stating a hold
+    // (the connection settling, a reconnect) is idempotent on the host.
+    expect(new Set(claims.map((claim) => claim.owner)).size).toBe(1);
+    expect(claims[0]!.owner).toMatch(/^scope:\d+$/);
+    // Nothing released that hold while the scope is still showing it.
+    const released = world.calls
+      .filter((call) => call.method === "pi/session/detach")
+      .map((call) => call.params as { path: string; owner?: string })
+      .filter((params) => params.owner !== undefined);
+    expect(released).toEqual([]);
     expect(container.querySelector('[data-slot="probe-main"]')?.getAttribute("data-path")).toBe(MAIN);
   });
 });

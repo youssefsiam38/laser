@@ -43,6 +43,7 @@ export const ENV_NAMES = /** @type {const} */ ([
   "SCREENSHOT_BASE_URL",
   "SESSION_DIR",
   "STATE_DIR",
+  "TASK_LOG_ROOT",
   "TAG",
   "UI_URL",
   "WORKER_FD",

@@ -98,6 +98,37 @@ describe("ownership records and pid reuse", () => {
     expect(registry.size()).toBe(0);
   });
 
+  it("takes no pid-only exit hint from a worker: a reused pid keeps the owner the table proves", () => {
+    // Two workers, one pid, one after the other. Worker A's background command
+    // ends and its pid is reused, in worker B, for a command of B's. A hint
+    // saying "pid 412 has gone" would delete B's attribution here; nothing
+    // sends one, and the record only changes because the table says so (RP-1).
+    let now = 1_000_000;
+    const registry = new ProcessOwnershipRegistry({}, { now: () => now });
+    registry.observeProcessRegistrations("/projects/alpha", [{ pid: 412, role: "background_command", taskId: "t-a" }]);
+    registry.reconcile([observed(412, 999_990)]);
+    expect(registry.lookup(412, "linux:boot:999990")).toMatchObject({ projectCwd: "/projects/alpha", taskId: "t-a" });
+
+    // The process ends. The host hears nothing about it, on purpose.
+    now += 5_000;
+    registry.observeProcessRegistrations("/projects/beta", [{ pid: 412, role: "background_command", taskId: "t-b" }]);
+    const live = registry.reconcile([observed(412, now - 10)]);
+    expect(live).toHaveLength(1);
+    // The new owner, proved by its own start token; the old identity is gone.
+    expect(registry.lookup(412, `linux:boot:${now - 10}`)).toMatchObject({ projectCwd: "/projects/beta", taskId: "t-b" });
+    expect(registry.lookup(412, "linux:boot:999990")).toBeUndefined();
+
+    // A late exit for the *first* generation cannot reach the second: an exit
+    // is only honoured with the generation the host itself issued.
+    const stale = 1;
+    registry.noteExit(412, stale);
+    expect(registry.lookup(412, `linux:boot:${now - 10}`)?.taskId).toBe("t-b");
+
+    // And when the pid really goes, the table is what says so.
+    now += 1_000;
+    expect(registry.reconcile([])).toHaveLength(0);
+  });
+
   it("bounds records on its own, and never evicts a live worker to do it", () => {
     let now = 1_000_000;
     const registry = new ProcessOwnershipRegistry({}, { now: () => now, maxRecords: 3, maxAgeMs: 10 ** 9 });

@@ -1028,17 +1028,26 @@ export interface ClientRequests {
    * are different states, and conflating them makes the next `session/load`
    * ask for `fromSeq: 0` and receive the whole buffer a second time.
    */
-  /** `transcript: "loaded"` opts this connection into updates only for sessions
-   * it loads/creates/forks. Admission starts before replay. Loaded caches remain
-   * subscribed until disconnect, independently of retirement detach; questions,
-   * attention and other small notifications remain global. Omit for full stream. */
+  /** A connection is sent transcript updates only for the sessions it has
+   * loaded, created or forked, from its first byte: there is no opt-in and no
+   * full stream, because a socket that has asked for nothing has no use for
+   * every conversation on the machine. Admission starts before replay;
+   * questions, attention and other small notifications remain global.
+   *
+   * `owner` names *which surface of this connection* is holding the session, so
+   * membership is reference-counted per connection and scope (RP-6): the main
+   * view sends `view`, a Beam bubble sends its own opaque scope label, and the
+   * session leaves this connection's delivery only when its last owner detaches.
+   * It is a local label, never a session, path, run or device value, and it
+   * grants nothing: the method's own authorization has already run. Omitted
+   * means `view`. */
   /**
    * `revision`/`environmentKey` are present for every session that has
    * canonical content (RP-9). They stay optional for the two compatibility
    * cases only: a session the engine has not written yet, and an alternate
    * driver that keeps no entries.
    */
-  "session/load": { params: { path: string; fromSeq?: number; transcript?: "loaded" }; result: { state: SessionState; replayFrom: number; seq: number; revision?: string; environmentKey?: string } };
+  "session/load": { params: { path: string; fromSeq?: number; owner?: string }; result: { state: SessionState; replayFrom: number; seq: number; revision?: string; environmentKey?: string } };
   /**
    * The durable revision of a conversation (RP-9), host-owned rather than a Pi
    * passthrough. Answered by the worker that owns the session when one is
@@ -1100,8 +1109,12 @@ export interface ClientRequests {
    * host stops counting the session as attached, so its worker becomes eligible
    * for idle retirement again. Detaching never closes the session, never stops
    * a running turn, and is safe to send for a path the client never loaded.
+   *
+   * `owner` releases one surface's hold (RP-6). The path leaves this
+   * connection's transcript delivery only when the last owner has let go; an
+   * omitted owner releases `view`, which is what an older client means.
    */
-  "pi/session/detach": { params: { path: string }; result: {} };
+  "pi/session/detach": { params: { path: string; owner?: string }; result: {} };
   /**
    * Move a saved session into a project (M13-T58). The host does it while no
    * worker holds the file: the transcript keeps its history, its name and its
