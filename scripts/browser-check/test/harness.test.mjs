@@ -45,15 +45,28 @@ test('the app target lands a case on its fixture session through the app itself'
   assert.equal(sessionDeepLink('http://127.0.0.1:8080', path), `http://127.0.0.1:8080/#/session/${encodeURIComponent(path)}`);
   assert.equal(sessionDeepLink('http://127.0.0.1:8080/', path), sessionDeepLink('http://127.0.0.1:8080', path));
   assert.ok(!sessionDeepLink('http://127.0.0.1:8080', path).includes(' '));
+});
+test('the opened session is read from the app record, in the namespace the caller configures', () => {
+  const path = '/tmp/run-1/sessions/2026-09-14T22-45-37-170Z_01a0.jsonl';
+  // The namespace is whatever the app's own storage helper produced; this test
+  // uses a neutral one, and the middle segment is never parsed or rebuilt.
+  const namespace = 'fixture-env';
+  const record = (session = path) => JSON.stringify({ v: 2, tab: 'code', code: { kind: 'project-session', project: '/tmp/run-1/project-01', path: session } });
+  const key = (scope, suffix = 'destination') => `${namespace}:${scope}:${suffix}`;
 
-  // Where it landed is read back from the app's own record, by suffix: no
-  // environment key is assumed, reconstructed or required to be known.
-  const destination = key => [[key, JSON.stringify({ v: 2, tab: 'code', code: { kind: 'project-session', project: '/tmp/run-1/project-01', path } })]];
-  assert.equal(openedSessionPath(destination('lasercode-env:e1.AAAAAAAAAAAAAAAAAAAAAA:destination')), path);
-  assert.equal(openedSessionPath(destination('anything-env:e1.ZZZZZZZZZZZZZZZZZZZZZZ:destination')), path);
-  assert.equal(openedSessionPath([['x-env:e1.A:destination', '{'], ['x-env:e1.A:project', path]]), undefined);
-  assert.equal(openedSessionPath([['x-env:e1.A:destination', JSON.stringify({ v: 2, code: { kind: 'project-landing', project: '/tmp/p' } })]]), undefined);
-  assert.equal(openedSessionPath([]), undefined);
+  assert.equal(openedSessionPath([[key('scope-a'), record()]], namespace), path);
+  // Only this namespace, and only the shape the app writes.
+  assert.equal(openedSessionPath([[`other-env:scope-a:destination`, record()]], namespace), undefined);
+  assert.equal(openedSessionPath([[`${namespace}:scope:a:destination`, record()]], namespace), undefined);
+  assert.equal(openedSessionPath([[key('', 'destination'), record()]], namespace), undefined);
+  assert.equal(openedSessionPath([[key('scope-a', 'project'), record()]], namespace), undefined);
+  // A record that cannot be read, or that names no session, is not a landing.
+  assert.equal(openedSessionPath([[key('scope-a'), '{']], namespace), undefined);
+  assert.equal(openedSessionPath([[key('scope-a'), JSON.stringify({ v: 2, code: { kind: 'project-landing', project: '/tmp/p' } })]], namespace), undefined);
+  assert.equal(openedSessionPath([], namespace), undefined);
+  // Two namespaces with a destination each is ambiguity, not a coin toss.
+  assert.throws(() => openedSessionPath([[key('scope-a'), record()], [key('scope-b'), record('/tmp/other.jsonl')]], namespace), /Ambiguous destination/);
+  assert.throws(() => openedSessionPath([[key('scope-a'), record()]]), /needs the storage namespace/);
 });
 test('teardown bookkeeping tracks owned groups, ignores unrelated processes and zombies', () => {
   const processes = [{ pid: 11, group: 10, state: 'S' }, { pid: 12, group: 10, state: 'Z' }, { pid: 21, group: 20, state: 'S' }];

@@ -34,21 +34,32 @@ export function sessionDeepLink(url, path) {
 
 /**
  * The session the app itself says it is showing, read from the destination it
- * recorded through its own device-storage authority. Read-only, and by suffix:
- * the environment namespace belongs to the app, and this never reconstructs or
- * assumes one. `undefined` means "it has not said yet".
+ * recorded through its own device-storage authority.
+ *
+ * Read-only, and narrow on purpose. A key counts only in the shape the app
+ * writes — `<namespace>:<one segment>:destination` under the namespace the
+ * caller was given — so a look-alike key from anything else is not a
+ * destination; the middle segment is never parsed, validated or rebuilt, so
+ * this knows nothing about environment keys. Two different namespaces holding
+ * a destination is ambiguity, not a choice to make silently: it throws, and
+ * the caller's wait reports it. `undefined` means "the app has not said yet".
  */
-export function openedSessionPath(entries) {
+export function openedSessionPath(entries, namespace) {
+  if (!namespace) throw new Error('openedSessionPath needs the storage namespace the app writes under.');
+  const shape = new RegExp(`^${namespace.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:([^:]+):destination$`);
+  const found = new Map();
   for (const [key, value] of entries) {
-    if (!key.endsWith(':destination')) continue;
+    const match = shape.exec(key);
+    if (!match) continue;
     try {
       const code = JSON.parse(value)?.code;
-      if (code?.kind === 'project-session' && typeof code.path === 'string') return code.path;
+      if (code?.kind === 'project-session' && typeof code.path === 'string') found.set(match[1], code.path);
     } catch {
       // A record this harness cannot read is not a destination it can trust.
     }
   }
-  return undefined;
+  if (found.size > 1) throw new Error(`Ambiguous destination: ${found.size} namespaces record one (${[...found.values()].join(', ')}).`);
+  return [...found.values()][0];
 }
 
 /**
@@ -61,7 +72,7 @@ export async function target(runtime, options = {}) {
   for (const path of ['packages/cli/dist/main.js', 'packages/host/dist/index.js', 'packages/worker/dist/main.js', 'packages/ui/dist/index.html']) {
     if (!existsSync(join(checkout, path))) throw new Error('The app is not built; run pnpm -r build from the target checkout.');
   }
-  const { ENV, dottedStorageKey } = await import('../../../packages/protocol/dist/index.js');
+  const { ENV, dottedStorageKey, storageKey } = await import('../../../packages/protocol/dist/index.js');
   const { PI_AGENT_DIR_ENV, PI_SESSION_DIR_ENV } = await import('../../../packages/cli/dist/config.js');
   const agentDir = join(runtime.root, 'agent'), sessionDir = join(runtime.root, 'sessions'), stateDir = join(runtime.root, 'state');
   for (const path of [agentDir, sessionDir, stateDir]) mkdirSync(path, { recursive: true });
@@ -96,6 +107,10 @@ export async function target(runtime, options = {}) {
       landing = fixture?.path;
     },
     async ready(check) {
+      // One extra navigation per `open()`, which is once per matrix case. Note
+      // that this lands on the fixture session whatever path `open()` was
+      // given: no caller passes one today, and a target that needed both would
+      // have to decide which wins.
       if (landing) {
         await check.page.goto(sessionDeepLink(url, landing), { waitUntil: 'domcontentloaded' });
         // A navigation can restore the context's initial touch/media overrides.
@@ -107,8 +122,9 @@ export async function target(runtime, options = {}) {
       // The app has to agree, in its own words, that this is where it is: a
       // case that started on a different session would make every assertion
       // about "the fixture session" a coincidence.
+      const namespace = storageKey('env');
       await runtime.until(
-        async () => openedSessionPath(await check.page.evaluate(() => Object.entries(localStorage))) === landing,
+        async () => openedSessionPath(await check.page.evaluate(() => Object.entries(localStorage)), namespace) === landing,
         `the app to open the fixture session ${landing}`,
         runtime.timeout,
       );

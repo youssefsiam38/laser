@@ -82,8 +82,10 @@ export function SpecSheet({ title, subtitle, rows, bare = false, className, ...p
             <dt className="eyebrow self-baseline pt-px">{r.label}</dt>
             <dd
               className={cn(
+                // Stacked rows wrap; a compact row goes back to one truncated
+                // line unless it is prose, which wraps at every width.
                 "min-w-0 wrap-break-word whitespace-normal @sm:text-end",
-                r.wrap ? "@sm:wrap-break-word @sm:whitespace-normal" : "@sm:truncate",
+                !r.wrap && "@sm:truncate",
                 r.typed ? cn(mono, "tnum") : "text-sm",
                 r.emphasis ? "font-medium text-ink" : "text-ink-2",
               )}

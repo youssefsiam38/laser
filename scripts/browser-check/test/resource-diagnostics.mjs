@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 
+import { activator, dismissInstallPrompt, scrub, watchPage } from './support.mjs';
+
 /**
  * Settings → Advanced → Resources (M18-T3, RP-3).
  *
@@ -24,47 +26,25 @@ import assert from 'node:assert/strict';
 /** Poll cadence of the surface (`RESOURCE_POLL_MS`), in ms. */
 const POLL_MS = 5_000;
 
-let listening = false;
-let caseNumber = 0;
-let loadingSeen = 0;
-let exportChecked = false;
-/** True while this script has the network switched off on purpose. */
-let unplugged = false;
-const console_ = [];
-/** The browser's own message for a socket that cannot reach a host we unplugged. */
-const DISCONNECT_NOISE = /ERR_INTERNET_DISCONNECTED|ERR_NETWORK_CHANGED|ERR_CONNECTION_REFUSED|WebSocket connection to/;
-
-const scrub = text => text.replace(/\s+/g, ' ').trim();
+/** What only the first case of a run can observe, whichever case that is. */
+let firstCase = true;
 
 export default async function resourceDiagnostics(check) {
   const { page } = check;
-  caseNumber += 1;
   const phone = check.state.width <= 600;
   const label = `${check.state.width}-${check.state.theme}`;
+  const first = firstCase;
+  firstCase = false;
   await check.touch(phone);
 
-  if (!listening) {
-    listening = true;
-    page.on('console', message => {
-      if (message.type() !== 'error') return;
-      const text = scrub(message.text());
-      if (unplugged && DISCONNECT_NOISE.test(text)) return;
-      console_.push(text);
-    });
-    page.on('pageerror', error => console_.push(`pageerror: ${error.message}`));
-    await check.cdp.send('Network.enable');
-  }
+  const watch = await watchPage(check);
   const frames = [];
   const onFrame = event => frames.push(event.response.payloadData);
   check.cdp.on('Network.webSocketFrameSent', onFrame);
   const snapshotCalls = from => frames.slice(from).filter(payload => payload.includes('"resource/snapshot"')).length;
 
-  const activate = async locator => {
-    await locator.scrollIntoViewIfNeeded();
-    if (check.state.touch) await locator.tap(); else await locator.click();
-  };
-  const installPrompt = page.getByRole('button', { name: 'Not now', exact: true });
-  await page.addLocatorHandler(installPrompt, button => button.click());
+  const activate = activator(check);
+  await dismissInstallPrompt(check);
 
   const root = page.locator('[data-slot=resource-diagnostics]');
   const openResources = async () => {
@@ -76,12 +56,26 @@ export default async function resourceDiagnostics(check) {
   };
 
   // ---------------------------------------------------------------- loading
+  // Every mount collects a fresh snapshot from the host, and the designed
+  // loading state is what a person sees while it does — for as long as one
+  // collection takes, which is too short to poll for. So the page records it:
+  // a mutation observer armed before the surface opens cannot miss a frame,
+  // and cannot quietly observe nothing either, because the assertion is in
+  // every case rather than at the end of a matrix.
+  await page.evaluate(label => {
+    const seen = () => document.body.textContent.includes(label);
+    window.__loadingSeen = seen();
+    window.__loadingObserver?.disconnect();
+    window.__loadingObserver = new MutationObserver(() => { if (seen()) window.__loadingSeen = true; });
+    window.__loadingObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+  }, 'Loading resource diagnostics');
   await openResources();
-  // The first mount collects a fresh snapshot from the host; the designed
-  // loading state is what a person sees while it does.
-  const loader = page.getByText('Loading resource diagnostics', { exact: false });
-  if (await loader.isVisible().catch(() => false)) loadingSeen += 1;
   await root.waitFor();
+  const loadingSeen = await page.evaluate(() => {
+    window.__loadingObserver.disconnect();
+    return window.__loadingSeen;
+  });
+  assert.equal(loadingSeen, true, 'the designed loading state was shown while this mount collected its snapshot');
 
   // ------------------------------------------------- role-separated summary
   const cards = {};
@@ -130,7 +124,7 @@ export default async function resourceDiagnostics(check) {
   // --------------------------------------------------- history and the chart
   const trend = root.locator('[data-slot=chart]');
   const noTrend = page.getByText('Collecting another complete sample before drawing a trend', { exact: false });
-  if (caseNumber === 1) {
+  if (first) {
     // The host's first sample is the one this mount just caused: one point is
     // not a trend, and the surface says so rather than drawing a flat line.
     assert.ok(await noTrend.isVisible(), 'the first sample shows the designed no-trend state');
@@ -246,10 +240,20 @@ export default async function resourceDiagnostics(check) {
         ms: Number(animation.effect?.getComputedTiming?.().duration ?? 0),
       })),
   }));
+  // The disclosure's own chevron is the movement on this surface; what it is
+  // *told* to take is a computed value, so both directions are read rather
+  // than raced for.
+  const chevronMs = () => root.getByRole('button', { name: /details for/ }).last().locator('svg').first()
+    .evaluate(node => (parseFloat(getComputedStyle(node).transitionDuration) || 0) * 1000);
+  const movingMs = await chevronMs();
+  assert.ok(movingMs >= 50, `the disclosure is animated to begin with (${movingMs}ms)`);
+
   await check.reducedMotion(true);
   const refresh = root.getByRole('button', { name: /Refresh/ });
   await activate(refresh);
   await activate(trigger);
+  const reducedMs = await chevronMs();
+  assert.ok(reducedMs <= 1, `reduce collapses the disclosure's own duration (${reducedMs}ms, was ${movingMs}ms)`);
   const reduced = await timedMotion();
   assert.equal(reduced.reduced, true, 'the case really is in prefers-reduced-motion');
   assert.deepEqual(
@@ -260,21 +264,13 @@ export default async function resourceDiagnostics(check) {
   await page.getByText('Last sampled', { exact: false }).first().waitFor();
   await check.shot(`resources-reduced-motion-${label}`);
   await check.reducedMotion(false);
-  // …and with motion back on, the same disclosure really does move, so the
-  // assertion above is a fallback and not a surface that never animates.
-  await activate(trigger);
-  let animated = [];
-  for (let attempt = 0; attempt < 20 && animated.length === 0; attempt += 1) {
-    animated = (await timedMotion()).moving.filter(entry => entry.ms > 1);
-    if (animated.length === 0) await page.waitForTimeout(50);
-  }
-  assert.ok(animated.length > 0, 'without the reduce preference the disclosure animates');
+  // …and the movement comes back with the preference, so the assertion above
+  // is a fallback and not a surface that never animates.
+  assert.ok(await chevronMs() >= 50, 'the fallback is the preference, not a surface with no motion in it');
   await activate(trigger);
 
   // ------------------------------------------------------- a real disconnect
-  const offline = async on => check.cdp.send('Network.emulateNetworkConditions', { offline: on, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
-  unplugged = true;
-  await offline(true);
+  await watch.offline(true);
   const strip = page.locator('[data-slot=connection-state]');
   await strip.waitFor();
   assert.equal(await strip.getAttribute('data-phase'), 'dropped', 'the socket really dropped');
@@ -288,18 +284,17 @@ export default async function resourceDiagnostics(check) {
   await page.getByText('Resource diagnostics need a host connection', { exact: false }).waitFor();
   await check.shot(`resources-disconnected-mount-${label}`);
   const reconnectFrom = frames.length;
-  await offline(false);
+  await watch.offline(false);
   await root.waitFor({ timeout: 30_000 });
   await strip.waitFor({ state: 'detached', timeout: 30_000 });
   assert.ok(snapshotCalls(reconnectFrom) >= 1, 'coming back refreshes once, without waiting for the next poll');
   assert.match(await valueOf('Host'), bytes, 'the surface is live again after the reconnect');
-  unplugged = false;
+  watch.reconnected();
 
   // -------------------------------------------------------- redacted export
   await activate(root.getByRole('button', { name: /Download redacted report/ }));
   await page.getByText('Redacted resource report downloaded', { exact: false }).waitFor({ state: 'attached' });
-  if (!exportChecked) {
-    exportChecked = true;
+  if (first) {
     const exported = await check.rpc('resource/export', {});
     const document_ = exported.document;
     assert.equal(typeof JSON.parse(document_), 'object', 'the export is the host document, byte for byte');
@@ -354,8 +349,7 @@ export default async function resourceDiagnostics(check) {
   await page.getByRole('textbox', { name: 'Message', exact: true }).waitFor();
   assert.equal(await root.count(), 0, 'opening the chat leaves Settings behind');
 
-  assert.deepEqual(console_, [], `no console errors: ${console_.join(' | ')}`);
+  watch.assertClean();
   check.cdp.off('Network.webSocketFrameSent', onFrame);
-  if (caseNumber === 4) assert.ok(loadingSeen >= 1, 'the designed loading state was seen at least once');
-  console.log(`resources ${label}: whole ${wholeValue} · host ${hostValue} · workers ${workersValue} · polls while open ${whileOpen} · loading seen ${loadingSeen}`);
+  console.log(`resources ${label}: whole ${wholeValue} · host ${hostValue} · workers ${workersValue} · polls while open ${whileOpen} · chevron ${movingMs}ms/${reducedMs}ms`);
 }

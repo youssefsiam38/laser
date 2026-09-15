@@ -1,14 +1,16 @@
 // @vitest-environment happy-dom
 /**
- * The spec sheet's two shapes (M18-T3 browser acceptance).
+ * What the spec sheet renders (M18-T3 browser acceptance).
  *
  * The browser matrix measured the process-detail rows at 390px: a
- * `max-content` label column took the width and every value arrived as
- * `364645…` behind a `title` no touch screen can open, or as a word broken
- * down a sixty-pixel column. Below `@sm` the row stacks instead. happy-dom
- * does not evaluate container queries, so what is asserted here is the
- * contract the stylesheet implements — the rendered result is measured in
- * `scripts/browser-check/test/resource-diagnostics.mjs`.
+ * `max-content` label column took the width and every value arrived truncated
+ * behind a `title` no touch screen can open, or as a word broken down a
+ * sixty-pixel column. The layout that fixes it is a container query, and
+ * whether it *works* is measured where CSS is real —
+ * `scripts/browser-check/test/resource-diagnostics.mjs` asserts stacked on a
+ * phone, two columns on the desktop, nothing clipped, in both themes. What is
+ * asserted here is the markup that layout needs and the content it carries:
+ * a definition list, one pair per row, every value present in full.
  */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -36,46 +38,35 @@ const ROWS = [
   { label: "private commit", value: "Unavailable · Not available on this platform: private commit is a Windows counter", wrap: true },
 ];
 
-const render = async () => {
-  await act(async () => root.render(<SpecSheet bare rows={ROWS} />));
-  return container.querySelector<HTMLElement>('[data-slot="spec-sheet"]')!;
+const render = async (rows: typeof ROWS = ROWS) => {
+  await act(async () => root.render(<SpecSheet bare rows={rows} />));
+  return container.querySelector<HTMLElement>('[data-slot="spec-sheet"]');
 };
 
-it("stacks a narrow container and keeps the compact two-column sheet when there is room", async () => {
-  const sheet = await render();
-  // The width that decides is the sheet's own, not the window's: this element
-  // lives in rails and sheets that are narrow on a wide screen.
-  expect(sheet.className).toContain("@container");
+it("is a definition list: one labelled pair per row, each pair its own group", async () => {
+  const sheet = (await render())!;
   const list = sheet.querySelector("dl")!;
-  expect(list.className).toContain("grid-cols-[minmax(0,1fr)]");
-  expect(list.className).toContain("@sm:grid-cols-[max-content_minmax(0,1fr)]");
-
-  // Still a definition list: one `div` per pair, which is `contents` only once
-  // the two-column grid applies.
   const pairs = [...list.children];
+
   expect(pairs).toHaveLength(ROWS.length);
-  for (const pair of pairs) {
-    expect(pair.className).toContain("@sm:contents");
-    expect(pair.querySelector("dt")).not.toBeNull();
-    expect(pair.querySelector("dd")).not.toBeNull();
+  for (const [index, pair] of pairs.entries()) {
+    expect(pair.querySelector("dt")!.textContent).toBe(ROWS[index]!.label);
+    expect(pair.querySelector("dd")!.textContent).toBe(ROWS[index]!.value);
   }
 });
 
-it("never truncates a stacked value, and still truncates a compact one", async () => {
-  const sheet = await render();
+it("carries every value in full, with the whole of it in the tooltip", async () => {
+  const sheet = (await render())!;
   const values = [...sheet.querySelectorAll("dd")];
-  const [compact, prose] = values;
 
-  // Nothing is cut off while stacked: no `truncate` without its `@sm` guard.
-  for (const value of values) {
-    expect(value.className).not.toMatch(/(^|\s)truncate(\s|$)/);
-    expect(value.className).toContain("whitespace-normal");
+  for (const [index, value] of values.entries()) {
+    // Nothing is shortened in the markup: a layout may fold it, but the text
+    // and the tooltip always hold the whole value.
+    expect(value.textContent).toBe(ROWS[index]!.value);
+    expect(value.getAttribute("title")).toBe(ROWS[index]!.value);
   }
-  // A compact value goes back to one truncated line when the sheet is wide
-  // enough for the tooltip to be reachable with a pointer.
-  expect(compact!.className).toContain("@sm:truncate");
-  expect(compact!.getAttribute("title")).toBe(ROWS[0]!.value);
-  // Prose wraps at every width.
-  expect(prose!.className).not.toContain("@sm:truncate");
-  expect(prose!.textContent).toBe(ROWS[1]!.value);
+});
+
+it("draws nothing at all rather than an empty sheet", async () => {
+  expect(await render([])).toBeNull();
 });

@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { activator, dismissInstallPrompt, scrub, watchPage } from './support.mjs';
+
 /**
  * This device is scoped to the environment it is talking to (M18-T13 B, RP-13).
  *
@@ -32,13 +34,6 @@ import { join } from 'node:path';
 /** Comfortably past `MAX_SCANNED_KEYS` (5,000) without filling the quota. */
 const SEEDED_LEGACY_KEYS = 5_200;
 
-let listening = false;
-let unplugged = false;
-const console_ = [];
-const DISCONNECT_NOISE = /ERR_INTERNET_DISCONNECTED|ERR_NETWORK_CHANGED|ERR_CONNECTION_REFUSED|WebSocket connection to/;
-
-const scrub = text => text.replace(/\s+/g, ' ').trim();
-
 export default async function environmentStorage(check) {
   const { page } = check;
   const phone = check.state.width <= 600;
@@ -61,22 +56,9 @@ export default async function environmentStorage(check) {
     'session-folds', 'activity-detail', 'activity-disclosure', 'fleet-cleared', 'drafts', 'descriptor',
   ]);
 
-  if (!listening) {
-    listening = true;
-    page.on('console', message => {
-      if (message.type() !== 'error') return;
-      const text = scrub(message.text());
-      if (unplugged && DISCONNECT_NOISE.test(text)) return;
-      console_.push(text);
-    });
-    page.on('pageerror', error => console_.push(`pageerror: ${error.message}`));
-    await check.cdp.send('Network.enable');
-  }
-  const activate = async locator => {
-    await locator.scrollIntoViewIfNeeded();
-    if (check.state.touch) await locator.tap(); else await locator.click();
-  };
-  await page.addLocatorHandler(page.getByRole('button', { name: 'Not now', exact: true }), button => button.click());
+  const watch = await watchPage(check);
+  const activate = activator(check);
+  await dismissInstallPrompt(check);
 
   const storageState = () => page.evaluate(() => ({
     local: Object.keys(localStorage).sort(),
@@ -136,11 +118,9 @@ export default async function environmentStorage(check) {
   console.log(`environment ${label}: ${environmentKey} · ${before.local.length} keys · ${namespaced.join(', ')}`);
 
   // ------------------------------------------ 2. a reconnect keeps the device
-  const offline = async on => check.cdp.send('Network.emulateNetworkConditions', { offline: on, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
   const transcript = page.getByText('Checkpoint 120 is complete.', { exact: false }).first();
   await transcript.waitFor();
-  unplugged = true;
-  await offline(true);
+  await watch.offline(true);
   // Nothing pings the host on a timer, so the app has to talk before it can
   // find the socket gone. Advanced → Resources is the one surface that asks
   // the host on its own; opening it is a real interaction, not a poke at the
@@ -169,9 +149,9 @@ export default async function environmentStorage(check) {
   assert.ok(retry.inside, `the retry sits inside the line (${JSON.stringify(retry)})`);
   if (phone) assert.ok(retry.height >= 44, `the retry clears the coarse-pointer floor (${retry.height}px in a ${retry.line}px line)`);
   await check.shot(`environment-dropped-${label}`);
-  await offline(false);
+  await watch.offline(false);
   await strip.waitFor({ state: 'detached', timeout: 30_000 });
-  unplugged = false;
+  watch.reconnected();
   assert.equal(await page.locator('[data-slot=environment-notice]').count(), 0, 'the same environment is not a failure');
   assert.ok(await transcript.isVisible(), 'the conversation on screen survives the reconnect');
   assert.equal(await composer.inputValue(), draft, 'so does what was being typed');
@@ -265,5 +245,5 @@ export default async function environmentStorage(check) {
   assert.equal(await page.locator('[data-slot=environment-notice]').count(), 0, 'and the notice is gone');
   await check.shot(`environment-recovered-${label}`);
 
-  assert.deepEqual(console_, [], `no console errors: ${console_.join(' | ')}`);
+  watch.assertClean();
 }
