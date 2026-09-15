@@ -201,7 +201,8 @@ export function attachmentRegions(
     // A wrapper begins the component or follows a blank line; anything else is
     // prose that mentions the markup.
     const separated = at === 0 || (at >= 2 && text.charCodeAt(at - 1) === 10 && text.charCodeAt(at - 2) === 10);
-    const candidate = separated ? readWrapper(text, at) : undefined;
+    const found = separated ? readWrapper(text, at) : undefined;
+    const candidate = found === "incomplete" ? undefined : found;
     if (!candidate) {
       // Move one character on, counting its bytes, and keep looking.
       bytePos += utf8BytesBetween(text, at, at + 1);
@@ -248,6 +249,104 @@ export function attachmentRegions(
 }
 
 /**
+ * The same recogniser, fed a component a piece at a time (RP-5b §2).
+ *
+ * An authority that does not know about attachment regions cannot be asked for
+ * them, so a reader streams the parent body through ordinary range replies and
+ * finds the wrappers itself — with the **same** semantics as
+ * {@link attachmentRegions}, because it is the same recogniser: this holds only
+ * a bounded carry (a candidate wrapper, capped at what the composer accepts)
+ * and never the parent.
+ */
+export function createAttachmentScanner(
+  createHasher: () => { update(chunk: string): void; digest(): string },
+  options: { maxItems?: number } = {},
+): { push(chunk: string): void; end(): AttachmentRegions } {
+  const maxItems = Math.max(1, Math.min(options.maxItems ?? BODY_REGION_MAX_ITEMS, BODY_REGION_MAX_ITEMS));
+  const items: AttachmentRegion[] = [];
+  let omitted = 0;
+  // What has been seen but not yet resolved: at most one candidate wrapper.
+  let carry = "";
+  let carryOffset = 0;
+  let scanned = 0;
+
+  const drain = (final: boolean): void => {
+    for (;;) {
+      const at = carry.indexOf(OPENER);
+      if (at < 0) {
+        // Keep only enough to recognise an opener split across two chunks, and
+        // the blank line that would have to come before it.
+        const keep = Math.min(carry.length, OPENER.length + 2);
+        carryOffset += utf8BytesBetween(carry, 0, carry.length - keep);
+        carry = carry.slice(carry.length - keep);
+        return;
+      }
+      // A wrapper starts the body or follows a blank line.
+      const separated = carryOffset === 0 && at === 0
+        ? true
+        : at >= 2 && carry.charCodeAt(at - 1) === 10 && carry.charCodeAt(at - 2) === 10;
+      if (!separated) {
+        carryOffset += utf8BytesBetween(carry, 0, at + 1);
+        carry = carry.slice(at + 1);
+        continue;
+      }
+      const wrapper = readWrapper(carry, at, { partial: !final });
+      if (wrapper === "incomplete") {
+        // Wait for more bytes — unless the candidate is already past anything
+        // that could be a wrapper, in which case it is prose.
+        if (carry.length - at <= MAX_PAYLOAD_CHARS + 4096) {
+          // Keep the separator before it too: the recogniser needs it.
+          const from = Math.max(0, at - 2);
+          carryOffset += utf8BytesBetween(carry, 0, from);
+          carry = carry.slice(from);
+          return;
+        }
+        carryOffset += utf8BytesBetween(carry, 0, at + 1);
+        carry = carry.slice(at + 1);
+        continue;
+      }
+      if (wrapper === undefined) {
+        carryOffset += utf8BytesBetween(carry, 0, at + 1);
+        carry = carry.slice(at + 1);
+        continue;
+      }
+      const offset = carryOffset + utf8BytesBetween(carry, 0, wrapper.payloadFrom);
+      const bytes = utf8BytesBetween(carry, wrapper.payloadFrom, wrapper.payloadTo);
+      if (items.length >= maxItems) omitted += 1;
+      else {
+        const name = boundedField(wrapper.name, REGION_NAME_MAX_BYTES);
+        const mediaType = boundedField(wrapper.mediaType, REGION_MEDIA_TYPE_MAX_BYTES);
+        const hasher = createHasher();
+        hasher.update(wrapper.payload);
+        items.push({
+          offset,
+          bytes,
+          name: name.text,
+          mediaType: mediaType.text,
+          contentDigest: hasher.digest(),
+          ...(name.cut ? { nameTruncated: true as const } : {}),
+          ...(mediaType.cut ? { mediaTypeTruncated: true as const } : {}),
+        });
+      }
+      carryOffset += utf8BytesBetween(carry, 0, wrapper.end);
+      carry = carry.slice(wrapper.end);
+    }
+  };
+
+  return {
+    push(chunk: string) {
+      scanned += utf8ByteLength(chunk);
+      carry += chunk;
+      drain(false);
+    },
+    end() {
+      drain(true);
+      return { items, ...(omitted > 0 ? { omitted } : {}), scannedBytes: scanned };
+    },
+  };
+}
+
+/**
  * One complete canonical wrapper starting at `at`, or undefined.
  *
  * Every check the prompt reader makes, made here: attributes with no quote or
@@ -256,21 +355,26 @@ export function attachmentRegions(
  * decoded size equal to the declared one, and a re-encode identical to what is
  * stored — so nothing that merely looks like a wrapper is ever named as a file.
  */
-function readWrapper(text: string, at: number): { name: string; mediaType: string; payload: string; payloadFrom: number; payloadTo: number; end: number } | undefined {
+function readWrapper(text: string, at: number, options: { partial?: boolean } = {}): { name: string; mediaType: string; payload: string; payloadFrom: number; payloadTo: number; end: number } | undefined | "incomplete" {
+  // While streaming, "not yet" is different from "no": a wrapper cut by the
+  // end of a chunk is waited for, never rejected.
+  const unfinished = options.partial ? ("incomplete" as const) : undefined;
   const nameFrom = at + OPENER.length;
   const nameTo = text.indexOf('"', nameFrom);
-  if (nameTo < 0 || text.indexOf("\n", nameFrom) !== -1 && text.indexOf("\n", nameFrom) < nameTo) return undefined;
+  if (nameTo < 0) return unfinished;
+  if (text.indexOf("\n", nameFrom) !== -1 && text.indexOf("\n", nameFrom) < nameTo) return undefined;
   const TYPE = ' type="';
-  if (!text.startsWith(TYPE, nameTo + 1)) return undefined;
+  if (!text.startsWith(TYPE, nameTo + 1)) return text.length < nameTo + 1 + TYPE.length ? unfinished : undefined;
   const typeFrom = nameTo + 1 + TYPE.length;
   const typeTo = text.indexOf('"', typeFrom);
-  if (typeTo < 0 || text.indexOf("\n", typeFrom) !== -1 && text.indexOf("\n", typeFrom) < typeTo) return undefined;
+  if (typeTo < 0) return unfinished;
+  if (text.indexOf("\n", typeFrom) !== -1 && text.indexOf("\n", typeFrom) < typeTo) return undefined;
   const SIZE = ' size="';
-  if (!text.startsWith(SIZE, typeTo + 1)) return undefined;
+  if (!text.startsWith(SIZE, typeTo + 1)) return text.length < typeTo + 1 + SIZE.length ? unfinished : undefined;
   const sizeFrom = typeTo + 1 + SIZE.length;
   const sizeTo = text.indexOf('"', sizeFrom);
-  if (sizeTo < 0) return undefined;
-  if (!text.startsWith('">\n', sizeTo)) return undefined;
+  if (sizeTo < 0) return unfinished;
+  if (!text.startsWith('">\n', sizeTo)) return text.length < sizeTo + 3 ? unfinished : undefined;
   const digits = text.slice(sizeFrom, sizeTo);
   if (!/^\d{1,9}$/.test(digits)) return undefined;
   const declared = Number(digits);
@@ -281,9 +385,11 @@ function readWrapper(text: string, at: number): { name: string; mediaType: strin
   // worst escaping, cannot be one: the search for the closer is bounded by it.
   const searchTo = Math.min(text.length, payloadFrom + MAX_PAYLOAD_CHARS + CLOSER.length);
   const closerAt = text.lastIndexOf(CLOSER, searchTo) >= payloadFrom ? text.indexOf(CLOSER, payloadFrom) : -1;
-  if (closerAt < payloadFrom || closerAt > searchTo) return undefined;
+  if (closerAt < payloadFrom) return text.length <= searchTo ? unfinished : undefined;
+  if (closerAt > searchTo) return undefined;
   const end = closerAt + CLOSER.length;
   // A blank line or the end of the component after it, and nothing else.
+  if (options.partial && end + 2 > text.length) return unfinished;
   if (end !== text.length && !text.startsWith("\n\n", end)) return undefined;
 
   const payload = text.slice(payloadFrom, closerAt);

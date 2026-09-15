@@ -41,7 +41,7 @@ import { readProviderFailure } from "./provider-error.js";
 import { StreamingText } from "@/components/assistant-ui/elements/streaming-text";
 import { ActivityReasoning, ToolGroup } from "@/components/assistant-ui/elements/tool-group.aui";
 import { useCopy } from "@/hooks/use-copy";
-import { canCopyWholeBody, copyWholeBody } from "@/runtime/body-reader";
+import { canCopyWholeBody, copyWholeBody, readAttachment } from "@/runtime/body-reader";
 import { isReadable, omittedBytes } from "@/runtime/body-excerpt";
 import { partial } from "./LargeBodyViewer.js";
 import { duration as formatDuration } from "@/format";
@@ -150,6 +150,21 @@ export function useHonestCopy(path: string | undefined, text: string, body: Body
     }
   }, [body, client, copy, environmentKey, markCopied, path, text]);
   return { copied, copying, partial: copied && wasPartial, copy: run };
+}
+
+/**
+ * The attachments a prompt has that are not chips here (RP-5b §2).
+ *
+ * An exact number when the authority scanned the whole prompt and told us how
+ * many it did not describe; no number at all when it could not see all of it —
+ * a count it cannot stand behind is not shown.
+ */
+function AttachmentOverflow({ overflow }: { overflow: BlockBodies["fileOverflow"] }) {
+  if (!overflow) return null;
+  const label = "unknown" in overflow
+    ? "More files in this message"
+    : `${overflow.omitted} more ${overflow.omitted === 1 ? "file" : "files"} in this message`;
+  return <p data-slot="attachment-overflow" className="mt-1 self-end text-xs text-ink-3">{label}</p>;
 }
 
 export function MessageRoot(props: ComponentPropsWithoutRef<"div">) {
@@ -291,6 +306,41 @@ export function UserMessage() {
   const versionIndex = entryId ? versions.indexOf(entryId) : -1;
   const { quote, rest } = useMemo(() => splitLeadingQuote(text), [text]);
   const opener = useFileOpener();
+  const [attachmentProblem, setAttachmentProblem] = useState<string>();
+  const { client } = useLaserStable();
+  const environmentKey = useLaserState(s => s.environment?.environmentKey) ?? "";
+  /**
+   * Open one attachment chip. A file this window is holding opens as it is; one
+   * it only points at is read back from its authority, verified whole against
+   * the digest that authority published for it, and unescaped only then —
+   * never shown from an excerpt or from empty retained bytes (RP-5b §2).
+   */
+  const openAttachment = useCallback(async (index: number, trigger: HTMLElement): Promise<void> => {
+    const held = files[index];
+    if (!opener || !held) return;
+    setAttachmentProblem(undefined);
+    const ref = promptBodies?.files?.[index];
+    if (held.content) { opener.openFile({ file: attachedFileContent(held) }, trigger); return; }
+    if (!ref || !isReadable(ref) || !ref.region || path === undefined) {
+      setAttachmentProblem("This file cannot be opened from here. Open the conversation again.");
+      return;
+    }
+    const outcome = await readAttachment(
+      (params) => client.request("session/entry_range", params),
+      path,
+      ref as never,
+      { environmentKey, revisionOf: async (candidate) => (await client.request("session/revision", { path: candidate })).revision },
+    ).catch(() => ({ ok: false as const, reason: "short" as const }));
+    if (!outcome.ok) {
+      setAttachmentProblem(outcome.reason === "corrupt"
+        ? "What came back was not this file. Open the conversation again."
+        : outcome.reason === "too-large"
+          ? "This file is too large to open here."
+          : "This file could not be read just now. Try again in a moment.");
+      return;
+    }
+    opener.openFile({ file: attachedFileContent({ ...held, content: outcome.text, size: outcome.bytes }) }, trigger);
+  }, [client, environmentKey, files, opener, path, promptBodies]);
   const attachments = useMemo<MessageAttachmentItem[]>(
     () => files.map((file, index) => ({ id: String(index), name: file.name, kind: "document", detail: `${describeMediaType(file.mediaType)} · ${formatBytes(file.size)}` })),
     [files],
@@ -383,7 +433,9 @@ export function UserMessage() {
                 <DirectiveString text={rest} />
               </p>
             ) : null}
-            <MessageAttachments attachments={attachments} className="mt-2 self-end" onOpen={opener ? (id, trigger) => opener.openFile({ file: attachedFileContent(files[Number(id)]!) }, trigger) : undefined} />
+            <MessageAttachments attachments={attachments} className="mt-2 self-end" onOpen={opener ? (id, trigger) => void openAttachment(Number(id), trigger) : undefined} />
+            {attachmentProblem ? <p role="alert" className="mt-1 self-end text-xs text-ink-2">{attachmentProblem}</p> : null}
+            <AttachmentOverflow overflow={promptBodies?.fileOverflow} />
             <BodyOverflow body={promptBodies?.text} path={path} label="message" />
           </UserBubble>
         )}

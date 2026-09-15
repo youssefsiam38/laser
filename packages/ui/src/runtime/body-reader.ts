@@ -26,6 +26,7 @@
 import { ENTRY_RANGE_MAX_BYTES, sameBodyComponent, utf8ByteLength, type ClientRequests } from "@lasercode/protocol";
 import type { BodyRef } from "./body-excerpt.js";
 import { imageDimensions, UNKNOWN_IMAGE_DECODED_BYTES } from "./view-measure.js";
+import { ATTACHMENT_MAX_BYTES, createAttachmentScanner, type AttachmentRegions } from "@lasercode/protocol";
 import { Sha256Stream } from "./sha256.js";
 
 export type RangeRequest = (params: ClientRequests["session/entry_range"]["params"]) => Promise<ClientRequests["session/entry_range"]["result"]>;
@@ -78,6 +79,10 @@ export interface ReplyExpectation {
   limit: number;
   totalBytes?: number | undefined;
   contentDigest?: string | undefined;
+  /** The attachment asked for: the echo must be exactly this. */
+  region?: { offset: number; bytes: number } | undefined;
+  /** The digest the authority published for that region's stored bytes. */
+  regionDigest?: string | undefined;
 }
 
 /**
@@ -96,6 +101,20 @@ export function validateRangeReply(reply: RangeResult, expected: ReplyExpectatio
   if (typeof reply.contentDigest !== "string" || !DIGEST.test(reply.contentDigest)) fail("content-digest-shape");
   if (expected.contentDigest !== undefined && reply.contentDigest !== expected.contentDigest) fail("content-digest");
   if (typeof reply.sliceDigest !== "string" || !DIGEST.test(reply.sliceDigest)) fail("slice-digest-shape");
+  if (expected.region !== undefined) {
+    // A region read is answered for exactly the region asked for, in the
+    // component's own offsets, with that region's own digest.
+    const echo = reply.region;
+    if (!echo || echo.offset !== expected.region.offset || echo.bytes !== expected.region.bytes) fail("region-echo");
+    if (typeof reply.regionDigest !== "string" || !DIGEST.test(reply.regionDigest)) fail("region-digest-shape");
+    if (expected.regionDigest !== undefined && reply.regionDigest !== expected.regionDigest) fail("region-digest");
+    if (reply.offset < expected.region.offset) fail("region-before");
+    const end = expected.region.offset + expected.region.bytes;
+    if (!Number.isSafeInteger(end)) fail("region-unsafe");
+    if (reply.offset + utf8ByteLength(reply.text) > end) fail("region-past-end");
+  } else if (reply.region !== undefined) {
+    fail("region-unasked");
+  }
   if (typeof reply.text !== "string") fail("text");
   const bytes = utf8ByteLength(reply.text);
   if (reply.bytes !== bytes) fail("bytes");
@@ -104,16 +123,19 @@ export function validateRangeReply(reply: RangeResult, expected: ReplyExpectatio
   // `truncated` is not decoration: it says exactly whether there is more, and
   // must agree with the cursor the reply carries.
   if (reply.truncated !== (reply.next !== undefined)) fail("truncated");
+  // For a region read the body ends at the region's end, even though the
+  // component carries on past it.
+  const endOfRead = expected.region ? expected.region.offset + expected.region.bytes : reply.totalBytes;
   if (reply.next !== undefined) {
     if (reply.next !== reply.offset + bytes) fail("next");
     // A continuation that advances nothing is a loop, not an answer.
     if (bytes === 0) fail("zero-progress");
     if (reply.next <= reply.offset) fail("not-monotonic");
-    if (reply.next > reply.totalBytes) fail("next-past-end");
+    if (reply.next > endOfRead) fail("next-past-end");
   } else {
-    // The last slice ends the body exactly; an empty one only at its very end.
-    if (reply.offset + bytes !== reply.totalBytes) fail("unterminated");
-    if (bytes === 0 && reply.offset !== reply.totalBytes) fail("empty");
+    // The last slice ends the read exactly; an empty one only at its very end.
+    if (reply.offset + bytes !== endOfRead) fail("unterminated");
+    if (bytes === 0 && reply.offset !== endOfRead) fail("empty");
   }
   return reply;
 }
@@ -481,6 +503,143 @@ export function indexOfFolded(haystack: string, needle: string): number {
   // A fold that merged characters can land between two of them; the match then
   // begins at the character containing that point.
   return original;
+}
+
+/**
+ * Read one attachment out of a prompt this window does not hold (RP-5b §2).
+ *
+ * The region names the **stored, escaped** bytes of the file inside the
+ * prompt's own byte space, so that is what is asked for, slice by slice, at one
+ * revision, and that is what is hashed. Nothing is shown until the whole region
+ * has been reconstructed and its digest is the one the authority published for
+ * it; only then is the canonical escaping undone to give the file's own text.
+ *
+ * Bounded twice: a file is never larger than {@link ATTACHMENT_MAX_BYTES}
+ * decoded, and the stored form is at most six times that — which this refuses
+ * to exceed rather than reading on.
+ */
+export async function readAttachment(
+  request: RangeRequest,
+  path: string,
+  ref: BodyRef & { entryId: string; region: { offset: number; bytes: number } },
+  options: { environmentKey?: string; revision?: string; revisionOf?: RevisionRequest; signal?: { aborted: boolean } } = {},
+): Promise<{ ok: true; text: string; bytes: number } | { ok: false; reason: "short" | "corrupt" | "too-large" | "malformed" }> {
+  if (!Number.isSafeInteger(ref.region.offset) || !Number.isSafeInteger(ref.region.bytes) || ref.region.bytes < 0) {
+    return { ok: false, reason: "malformed" };
+  }
+  if (ref.region.bytes > ATTACHMENT_STORED_MAX_BYTES) return { ok: false, reason: "too-large" };
+  const revision = ref.revision ?? options.revision ?? (options.revisionOf ? await options.revisionOf(path) : "");
+  const running = new Sha256Stream();
+  const parts: string[] = [];
+  let bytes = 0;
+  let offset = ref.region.offset;
+  let seenTotal: number | undefined;
+  let digest: string | undefined = ref.contentDigest;
+  for (;;) {
+    if (options.signal?.aborted) return { ok: false, reason: "short" };
+    const reply = await checkRangeReply(
+      await request({
+        path,
+        environmentKey: options.environmentKey ?? "",
+        revision,
+        entryId: ref.entryId,
+        component: ref.component,
+        offset,
+        limit: BODY_SLICE_BYTES,
+        region: ref.region,
+      }),
+      { revision, component: ref.component, offset, limit: BODY_SLICE_BYTES, totalBytes: seenTotal, region: ref.region, regionDigest: digest },
+    );
+    seenTotal = reply.totalBytes;
+    digest = reply.regionDigest ?? digest;
+    running.updateText(reply.text);
+    parts.push(reply.text);
+    bytes += reply.bytes;
+    if (bytes > ATTACHMENT_STORED_MAX_BYTES) return { ok: false, reason: "too-large" };
+    if (reply.next === undefined) break;
+    offset = reply.next;
+  }
+  if (bytes !== ref.region.bytes) return { ok: false, reason: "short" };
+  // The stored bytes are this file's, whole, before anything is shown.
+  if (digest === undefined || running.digest() !== digest) return { ok: false, reason: "corrupt" };
+  const stored = parts.join("");
+  const text = unescapeAttachment(stored);
+  if (text.includes("\0")) return { ok: false, reason: "malformed" };
+  if (utf8ByteLength(text) > ATTACHMENT_MAX_BYTES) return { ok: false, reason: "too-large" };
+  return { ok: true, text, bytes: utf8ByteLength(text) };
+}
+
+/**
+ * Ask an authority what attachments a body has, and if it has never heard of
+ * the question, work it out from the body itself (RP-5b §2).
+ *
+ * The fallback is deliberately narrow: only a refusal that means "this
+ * authority does not know about attachment regions" — an unknown method, or
+ * invalid params naming that capability — leads to it. A stale revision, a
+ * refusal to authorize, a digest that did not match, a network failure: each of
+ * those is the answer, and is returned as it is.
+ *
+ * The fallback itself holds nothing: the parent is streamed through ordinary
+ * range replies, each one verified, into the shared recogniser, which keeps a
+ * bounded carry and never the body.
+ */
+export async function readAttachmentRegions(
+  regions: (params: ClientRequests["session/entry_regions"]["params"]) => Promise<ClientRequests["session/entry_regions"]["result"]>,
+  request: RangeRequest,
+  path: string,
+  ref: BodyRef & { entryId: string },
+  options: { environmentKey?: string; revisionOf?: RevisionRequest; from?: number; limit?: number; signal?: { aborted: boolean } } = {},
+): Promise<AttachmentRegions> {
+  const revision = ref.revision ?? (options.revisionOf ? await options.revisionOf(path) : "");
+  try {
+    const page = await regions({
+      path,
+      environmentKey: options.environmentKey ?? "",
+      revision,
+      entryId: ref.entryId,
+      component: ref.component,
+      ...(options.from !== undefined ? { from: options.from } : {}),
+      ...(options.limit !== undefined ? { limit: options.limit } : {}),
+    });
+    return {
+      items: page.items,
+      ...(page.omitted !== undefined ? { omitted: page.omitted } : {}),
+      ...(page.truncated ? { truncated: page.truncated } : {}),
+      ...(page.next !== undefined ? { next: page.next } : {}),
+      scannedBytes: page.scannedBytes,
+    };
+  } catch (error) {
+    if (!lacksRegionSupport(error)) throw error;
+  }
+  // An authority from before this existed: read the body and look, holding a
+  // bounded carry and nothing else.
+  const scanner = createAttachmentScanner(
+    () => { const running = new Sha256Stream(); return { update: (chunk: string) => running.updateText(chunk), digest: () => running.digest() }; },
+    options.limit !== undefined ? { maxItems: options.limit } : {},
+  );
+  const outcome = await streamBody(request, path, ref, { ...options, revision }, (slice) => { scanner.push(slice); });
+  const found = scanner.end();
+  // The parent was verified as a whole before anything found in it is used.
+  if (!outcome.verified) throw new BodyReplyRefused("content-digest");
+  return found;
+}
+
+/** Whether a refusal means "this authority has no attachment regions". */
+function lacksRegionSupport(error: unknown): boolean {
+  const code = (error as { code?: number } | null)?.code;
+  const message = String((error as { message?: unknown } | null)?.message ?? "");
+  if (code === -32601) return true; // unknown method
+  return code === -32602 && /entry_regions|unknown (?:field|param)|unrecognized key/i.test(message);
+}
+
+/** The stored form of an attachment can be six times its decoded size. */
+export const ATTACHMENT_STORED_MAX_BYTES = ATTACHMENT_MAX_BYTES * 6;
+
+const ATTACHMENT_ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', "#10": "\n", "#13": "\r", "#9": "\t" };
+
+/** Undo exactly the escaping the composer applied, and nothing else. */
+function unescapeAttachment(text: string): string {
+  return text.replace(/&(amp|lt|gt|quot|#10|#13|#9);/g, (_, entity: string) => ATTACHMENT_ENTITIES[entity]!);
 }
 
 /** Whether this window can take a whole body without assembling it in JS. */

@@ -77,7 +77,14 @@ export interface BlockBodies {
   details?: BodyRef;
   /** One per image, in the prompt's own order; a gap means that one is held. */
   images?: Array<BodyRef | undefined>;
+  /** One per attachment chip: the stored bytes of that file inside the prompt. */
   files?: Array<BodyRef | undefined>;
+  /**
+   * Attachments this prompt has that are not chips here. `omitted` is an exact
+   * count the authority gave; `unknown` means it could not see the whole prompt
+   * and said so, and then no number is shown (RP-5b §2).
+   */
+  fileOverflow?: { omitted: number } | { unknown: true };
 }
 
 export type Block =
@@ -1553,8 +1560,23 @@ function stubBlocks(stub: EntryStub, revision: string | undefined): { blocks: Bl
   const when = stub.at ? { at: stub.at } : {};
   if (stub.role === "user") {
     const images = stub.bodies.filter((row) => row.component.kind === "image");
+    // The attachments the authority named inside this prompt. Each chip is a
+    // reference to the exact stored bytes of one file, with that region's own
+    // digest; nothing about them is worked out from an excerpt (RP-5b §2).
+    const prose = stub.bodies.find((row) => row.component.kind === "user_text");
+    const regions = prose?.regions;
+    const fileRefs: Array<BodyRef | undefined> = [];
+    const files: AttachedFile[] = (regions?.items ?? []).map((item) => {
+      const ref = refOf({ kind: "user_text" });
+      fileRefs.push(ref ? { ...ref, region: { offset: item.offset, bytes: item.bytes }, contentDigest: item.contentDigest } : undefined);
+      return { name: item.name, mediaType: item.mediaType, size: item.bytes, content: "" };
+    });
     const bodies = blockBodies({
       text: refOf({ kind: "user_text" }),
+      ...(fileRefs.length > 0 ? { files: fileRefs } : {}),
+      ...(regions && (regions.omitted || regions.truncated)
+        ? { fileOverflow: regions.truncated ? { unknown: true as const } : { omitted: regions.omitted! } }
+        : {}),
       // A record this view only points at carries no header to read, so its
       // surface is charged the declared floor rather than nothing.
       images: images.map((row) => {
@@ -1562,7 +1584,7 @@ function stubBlocks(stub: EntryStub, revision: string | undefined): { blocks: Bl
         return ref ? { ...ref, image: { decodedBytes: UNKNOWN_IMAGE_DECODED_BYTES } } : undefined;
       }),
     });
-    return { blocks: [{ kind: "user", id: `entry:${stub.id}`, ...when, text: "", files: [], entryId: stub.id,
+    return { blocks: [{ kind: "user", id: `entry:${stub.id}`, ...when, text: "", files, entryId: stub.id,
       images: images.map(() => ({ type: "image", mimeType: "image/*", data: "" }) as ImageContent),
       ...(bodies ? { bodies } : {}) }] };
   }

@@ -17,6 +17,7 @@ import {
   BODY_REGION_SCAN_MAX_BYTES,
   bodyProjectionWork,
   bodyRangeSlice,
+  createAttachmentScanner,
   sliceUtf8RangeFrom,
   elideOversizedEntries,
   entryBodies,
@@ -444,6 +445,54 @@ describe("what counts as an attachment at all", () => {
     expect(utf8ByteLength(assembled)).toBe(item.bytes);
     expect(digestOfText(assembled)).toBe(item.contentDigest);
     expect(assembled).toBe(escapeText(content));
+  });
+});
+
+describe("finding the same attachments while streaming the parent", () => {
+  const hasher = () => {
+    const chunks: string[] = [];
+    return { update: (chunk: string) => { chunks.push(chunk); }, digest: () => sha256Of(chunks.join("")) };
+  };
+  const escapeText = (text: string) => text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+  const wrap = (name: string, content: string) =>
+    `<attached-file name="${name}" type="text/plain" size="${utf8ByteLength(content)}">\n${escapeText(content)}\n</attached-file>`;
+
+  it("agrees with the authority's own scan, whatever the chunks are", () => {
+    const text = `prose & more\n\n${wrap("a.txt", "x & y\n".repeat(400))}\n\nbetween\n\n${wrap("b.md", "<tag>\n".repeat(900))}\n\ntail`;
+    const expected = attachmentRegions(text, hasher);
+    for (const size of [1, 7, 64, 997, 4096, 65_536, text.length]) {
+      const scanner = createAttachmentScanner(hasher);
+      for (let index = 0; index < text.length; index += size) scanner.push(text.slice(index, index + size));
+      const streamed = scanner.end();
+      expect(streamed.items, `chunks of ${size}`).toEqual(expected.items);
+      expect(streamed.scannedBytes).toBe(utf8ByteLength(text));
+    }
+  });
+
+  it("rejects what the authority rejects, across a chunk boundary", () => {
+    const content = "real";
+    const cases = [
+      `<attached-file name="a.txt" type="text/plain" size="99">\n${content}\n</attached-file>`,
+      `prose <attached-file name="a.txt" type="text/plain" size="4">\n${content}\n</attached-file>`,
+      `<attached-file name="a.txt" type="text/plain" size="4">\n${content}`,
+    ];
+    for (const text of cases) {
+      for (const size of [3, 17, 200]) {
+        const scanner = createAttachmentScanner(hasher);
+        for (let index = 0; index < text.length; index += size) scanner.push(text.slice(index, index + size));
+        expect(scanner.end().items, `${text.slice(0, 30)} @${size}`).toEqual([]);
+      }
+    }
+  });
+
+  it("holds only a bounded carry, never the parent", () => {
+    const scanner = createAttachmentScanner(hasher);
+    const chunk = "plain prose with no markup at all. ".repeat(1_000); // ~34 KB
+    for (let index = 0; index < 300; index++) scanner.push(chunk);
+    const done = scanner.end();
+    expect(done.items).toEqual([]);
+    // Ten megabytes went through it.
+    expect(done.scannedBytes).toBeGreaterThan(10 * 1024 * 1024);
   });
 });
 

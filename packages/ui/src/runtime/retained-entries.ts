@@ -15,7 +15,7 @@
  *
  * Pure: no React, no DOM, no network, no allocation proportional to a body.
  */
-import { entryBodyMetadata, entryToolCalls, type BodyComponent, type ElidedEntry } from "@lasercode/protocol";
+import { entryBodyMetadata, entryToolCalls, type AttachmentRegions, type BodyComponent, type ElidedEntry } from "@lasercode/protocol";
 import { BODY_EXCERPT_MAX_BYTES } from "./body-excerpt.js";
 
 /**
@@ -32,7 +32,7 @@ export interface EntryStub {
   /** The calls an assistant record made, so their rows survive the elision. */
   toolCalls?: Array<{ id: string; name: string }>;
   at?: string;
-  bodies: Array<{ component: BodyComponent; totalBytes: number; contentDigest?: string }>;
+  bodies: Array<{ component: BodyComponent; totalBytes: number; contentDigest?: string; regions?: AttachmentRegions }>;
 }
 
 const record = (value: unknown): Record<string, unknown> =>
@@ -69,7 +69,15 @@ export function stubOfElided(elided: ElidedEntry): EntryStub {
     ...(elided.role !== undefined ? { role: elided.role } : {}),
     ...(elided.toolCallId !== undefined ? { toolCallId: elided.toolCallId } : {}),
     ...(elided.toolCalls ? { toolCalls: elided.toolCalls } : {}),
-    bodies: elided.bodies.map((body) => ({ component: body.component, totalBytes: body.totalBytes, contentDigest: body.contentDigest })),
+    bodies: elided.bodies.map((body) => ({
+      component: body.component,
+      totalBytes: body.totalBytes,
+      contentDigest: body.contentDigest,
+      // The attachments the authority found inside this body, as it published
+      // them: a view never works out for itself what a prompt it does not have
+      // contains (RP-5b §2).
+      ...(body.regions ? { regions: body.regions } : {}),
+    })),
   };
 }
 
