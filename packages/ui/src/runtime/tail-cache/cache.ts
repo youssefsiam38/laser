@@ -544,8 +544,10 @@ export function createTailCache(deps: TailCacheDeps): TailCache {
         if (next.kind === "open") publish(next);
         return next;
       } catch {
-        // Nothing about this device is allowed to take the connection with it.
-        return refuse("storage", key);
+        // Nothing about this device is allowed to take the connection with it —
+        // and a rejection that lands after the page moved on publishes nothing,
+        // exactly like a late resolution.
+        return refuse("storage", key, mine);
       }
     },
 
@@ -586,14 +588,11 @@ export function createTailCache(deps: TailCacheDeps): TailCache {
       }
 
       // Normalize newest-first so trimming to fit drops the oldest rows.
-      const entries: TailEntryRecord[] = [];
-      const attachments: TailAttachmentRef[] = [];
-      let omitted = 0;
-      let bytes = 0;
+      const rows: Array<{ entry: TailEntryRecord; references: readonly TailAttachmentRef[]; omitted: number }> = [];
       let truncated = tail.truncated;
       for (let index = tail.entries.length - 1; index >= 0; index--) {
         const source = tail.entries[index]!;
-        if (entries.length >= limits.entriesPerSession) {
+        if (rows.length >= limits.entriesPerSession) {
           truncated = true;
           break;
         }
@@ -602,24 +601,47 @@ export function createTailCache(deps: TailCacheDeps): TailCache {
           truncated = true;
           continue;
         }
-        const size = byteLength(normalized.json);
-        if (bytes + size > limits.bytesPerSession) {
-          truncated = true;
-          break;
-        }
-        bytes += size;
-        entries.push(Object.freeze({ id: source.id, parentId: source.parentId, json: normalized.json }));
-        attachments.push(...normalized.references);
-        omitted += normalized.omitted;
+        rows.push({
+          entry: Object.freeze({ id: source.id, parentId: source.parentId, json: normalized.json }),
+          references: normalized.references,
+          omitted: normalized.omitted,
+        });
       }
-      if (entries.length === 0) {
+      rows.reverse();
+
+      /**
+       * Fit the **canonical stored body**, not the sum of its entries.
+       *
+       * A record costs what is written: every entry's id and parent id, the
+       * JSON structure around them, the escaping inside them and the
+       * attachment references beside them. Measuring only `entry.json` let a
+       * record whose ids are long, or whose text is non-Latin, cross the
+       * per-record bound — and it was then written, read back as over-bound on
+       * the next start, and purged. So the bound is applied to the exact body,
+       * oldest row dropped first, until it fits or there is nothing left to
+       * drop; a single row that cannot fit alone is refused outright.
+       */
+      const canonical = () => {
+        const body = Object.freeze({
+          entries: Object.freeze(rows.map((row) => row.entry)),
+          attachments: Object.freeze(rows.flatMap((row) => [...row.references])),
+        });
+        return { body, text: bodyText(body) };
+      };
+      let fitted = canonical();
+      while (rows.length > 0 && byteLength(fitted.text) > limits.bytesPerSession) {
+        rows.shift();
+        truncated = true;
+        fitted = canonical();
+      }
+      if (rows.length === 0) {
         writesRefused += 1;
         snapshot = undefined;
         return;
       }
-      entries.reverse();
-      const body = Object.freeze({ entries: Object.freeze(entries), attachments: Object.freeze(attachments) });
-      const text = bodyText(body);
+      const omitted = rows.reduce((sum, row) => sum + row.omitted, 0);
+      const body = fitted.body;
+      const text = fitted.text;
       const at = new Date(deps.now()).toISOString();
       const record: TailRecord = Object.freeze({
         schema: TAIL_RECORD_SCHEMA,
@@ -685,15 +707,27 @@ export function createTailCache(deps: TailCacheDeps): TailCache {
             snapshot = undefined;
             // Quota or a refused transaction: make room once, then try again.
             // Nothing about this record is in memory yet, so a second refusal
-            // simply leaves this device without it.
-            await evictToFit(limits, record.sessionId);
+            // simply leaves this device without it — but a make-room pass that
+            // cannot prove what it deleted closes the cache, like every other
+            // unproved purge.
+            if (!(await evictToFit(limits, record.sessionId, mine))) return;
             if (generation !== mine || !store) return;
             if (!(await store.put(row))) return;
           }
           // Committed: now, and only now, is it a record this device holds.
           if (generation !== mine) return;
           remember(record);
-          await evictToFit(limits, record.sessionId);
+          if (!(await evictToFit(limits, record.sessionId, mine))) {
+            // The record is on this device but the environment is over its
+            // bounds and could not be brought back inside them. Nothing is
+            // served from an over-bound cache: the record just remembered goes
+            // out of memory and the cache closes, saying why.
+            dropHot(record.path);
+            held.delete(record.sessionId);
+            snapshot = undefined;
+            stoppedBy = "failed";
+            refuse("purge", environmentKey, mine);
+          }
         });
         writing.set(record.sessionId, chain.catch(() => {}));
       });
@@ -741,12 +775,36 @@ export function createTailCache(deps: TailCacheDeps): TailCache {
         return;
       }
       const limits = bounds;
+      const poisoned: TailKey[] = [];
       for (const row of found.slice(0, TAIL_SCAN_LIMITS.warmRecords)) {
-        if (!identityIsReadable(row, deps.appVersion, key)) continue;
-        if (readableAge(row.capturedAt, deps.now(), limits.ageMs) === undefined) continue;
+        // Anything this build cannot read is not merely skipped: leaving it
+        // there would mean every later promotion pays for it again, and the
+        // cache would stay open over bytes whose provenance it never
+        // established.
+        if (!identityIsReadable(row, deps.appVersion, key) || readableAge(row.capturedAt, deps.now(), limits.ageMs) === undefined) {
+          poisoned.push(keyOf(row));
+          continue;
+        }
         const record = await openRow(row, key, limits);
-        if (!record || generation !== mine) continue;
+        if (generation !== mine) return;
+        if (!record) {
+          poisoned.push(keyOf(row));
+          continue;
+        }
         remember(record);
+      }
+      if (poisoned.length > 0 && store) {
+        const removed = await store.remove(poisoned, TAIL_SCAN_LIMITS.batchRows, {
+          rows: TAIL_SCAN_LIMITS.deleteRows,
+          deadline: deps.now() + TAIL_SCAN_LIMITS.prepareMs,
+        });
+        if (generation !== mine) return;
+        for (const row of poisoned) held.delete(row[1]);
+        snapshot = undefined;
+        if (!removed) {
+          stoppedBy = "failed";
+          refuse("purge", key, generation);
+        }
       }
     },
 
@@ -869,11 +927,16 @@ export function createTailCache(deps: TailCacheDeps): TailCache {
 
   /**
    * Bring the environment back inside its bounds, least recently used first,
-   * in bounded batches. The session just written is evicted last: it is the one
-   * the person is looking at.
+   * in bounded batches. The session just written is evicted last: it is the
+   * one the person is looking at.
+   *
+   * `false` means the bounds are **not** met — a deletion that could not be
+   * proved, or a plan that cannot reach the limits inside one pass. The caller
+   * closes the cache rather than serving an environment that is over budget
+   * and calling itself open.
    */
-  async function evictToFit(limits: TailBounds, keepSessionId: string): Promise<void> {
-    if (!store) return;
+  async function evictToFit(limits: TailBounds, keepSessionId: string, pass: number): Promise<boolean> {
+    if (!store) return false;
     const rows = [...held.values()].sort((a, b) => Date.parse(a.lastUsedAt) - Date.parse(b.lastUsedAt));
     const doomed: TailKey[] = [];
     let records = held.size;
@@ -886,9 +949,17 @@ export function createTailCache(deps: TailCacheDeps): TailCache {
       records -= 1;
       bytes -= row.bytes;
     }
-    if (doomed.length === 0) return;
-    const removed = await store.remove(doomed, TAIL_SCAN_LIMITS.batchRows);
-    if (!removed) return;
+    // The plan itself has to reach the bounds. If it cannot — more rows over
+    // the limit than one pass may delete — saying "inside its bounds" would be
+    // untrue whatever the deletions do.
+    if (records > limits.sessions || bytes > limits.bytes) return false;
+    if (doomed.length === 0) return true;
+    const removed = await store.remove(doomed, TAIL_SCAN_LIMITS.batchRows, {
+      rows: TAIL_SCAN_LIMITS.deleteRows,
+      deadline: deps.now() + TAIL_SCAN_LIMITS.prepareMs,
+    });
+    if (generation !== pass) return false;
+    if (!removed) return false;
     for (const [, sessionId] of doomed) {
       const row = held.get(sessionId);
       if (row) dropHot(row.path);
@@ -896,5 +967,6 @@ export function createTailCache(deps: TailCacheDeps): TailCache {
       evictions += 1;
     }
     snapshot = undefined;
+    return true;
   }
 }

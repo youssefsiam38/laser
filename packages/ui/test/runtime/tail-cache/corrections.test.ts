@@ -431,3 +431,182 @@ describe("a preparation the connection stopped waiting for cannot come back", ()
     expect(view.cache.state()).toEqual({ kind: "closed" });
   });
 });
+
+describe("the bound is on the body that is actually written", () => {
+  /** A tail whose entries fit one by one but whose canonical body would not. */
+  const nearLimit = (bytesPerSession: number) => {
+    // Long ids and parent ids, non-Latin text and characters JSON escapes:
+    // everything the old per-entry sum left out of the number.
+    const longId = (index: number) => `entry-${"x".repeat(180)}-${index}`;
+    const rows = Array.from({ length: 12 }, (_, index) => ({
+      id: longId(index),
+      parentId: index === 0 ? null : longId(index - 1),
+      json: JSON.stringify({
+        id: longId(index),
+        parentId: index === 0 ? null : longId(index - 1),
+        type: "message",
+        message: { role: "user", content: [{ type: "text", text: `"引用" ${"日本語テキスト".repeat(Math.ceil(bytesPerSession / 400))}` }] },
+      }),
+    }));
+    return tail({ entries: Object.freeze(rows) });
+  };
+
+  it("never writes a record over the per-record bound, and a reload keeps it", async () => {
+    const bytesPerSession = 8_192;
+    const view = harness();
+    await view.cache.prepare(descriptor({ maxBytes: bytesPerSession }));
+    const limits = view.cache.counters().bounds!;
+    expect(limits.bytesPerSession).toBe(bytesPerSession);
+
+    view.cache.release(nearLimit(bytesPerSession));
+    await view.flush();
+    const record = view.cache.peek("/p/a.jsonl");
+    expect(record).toBeDefined();
+    expect(record!.bytes).toBeLessThanOrEqual(limits.bytesPerSession);
+    expect(record!.truncated).toBe(true);
+    // The number is the body's own exact size, ids and escaping included.
+    const [stored] = await storedRows();
+    const text = stored!.body.kind === "plain" ? stored!.body.text : "";
+    expect(new TextEncoder().encode(text).length).toBe(record!.bytes);
+
+    // And the next start keeps it rather than purging what was just written.
+    const again = harness();
+    expect((await again.cache.prepare(descriptor({ maxBytes: bytesPerSession }))).kind).toBe("open");
+    expect(again.cache.peek("/p/a.jsonl")?.bytes).toBe(record!.bytes);
+    expect(again.cache.counters().discarded.oversize).toBe(0);
+  });
+
+  it("refuses a single entry that cannot fit the bound on its own", async () => {
+    const view = harness();
+    await view.cache.prepare(descriptor({ maxBytes: 512 }));
+    view.cache.release(tail({ entries: Object.freeze([entry("e1", "あ".repeat(2_000))]) }));
+    await view.flush();
+    expect(view.cache.peek("/p/a.jsonl")).toBeUndefined();
+    expect(await storedRows()).toEqual([]);
+    expect(view.cache.counters().writesRefused).toBe(1);
+  });
+});
+
+describe("a preparation that rejects late publishes nothing either", () => {
+  it("keeps the cache closed when the vault rejects after the wait was cancelled", async () => {
+    let fail: (() => void) | undefined;
+    const clock = clockNow;
+    const cache = createTailCache({
+      openStore: () => openTailStore(factory as unknown as IDBFactory, { now: () => clockNow.now }),
+      resolveVault: () => new Promise((_resolve, reject) => {
+        fail = () => reject(new Error("the keychain went away"));
+      }),
+      destroy: () => destroyTailDatabase(factory as unknown as IDBFactory),
+      appVersion: PRODUCT_VERSION,
+      now: () => clock.now,
+      defer: (task) => task(),
+    });
+    const preparing = cache.prepare(descriptor());
+    cache.deactivate();
+    fail?.();
+    await preparing;
+    expect(cache.state()).toEqual({ kind: "closed" });
+    expect(cache.counters().status).toBe("closed");
+  });
+});
+
+describe("promotion cleans up what it cannot read", () => {
+  const poison = async (): Promise<void> => {
+    const text = bodyText({ entries: [entry("e1", "hello")], attachments: [] });
+    await seed([
+      rowFor(),
+      rowFor({ sessionId: "bad", path: "/p/bad.jsonl", checksum: "deadbeef-1" }, text),
+    ]);
+  };
+
+  it("deletes a row it could not open rather than leaving it to poison every pass", async () => {
+    await poison();
+    const real = await openTailStore(factory as unknown as IDBFactory, { now: () => clockNow.now });
+    // Warm only the good row, so the bad one is met by `prime` and not by the
+    // preparation pass.
+    let hideBad = true;
+    const scoped: TailStore = {
+      ...real!,
+      scan: (options, visit) => real!.scan(options, (row) => (hideBad && row.sessionId === "bad" ? undefined : visit(row))),
+    };
+    const view = harness({ store: () => Promise.resolve(scoped) });
+    expect((await view.cache.prepare(descriptor())).kind).toBe("open");
+    expect((await storedRows()).some((row) => row.sessionId === "bad")).toBe(true);
+    hideBad = false;
+
+    await view.cache.prime(["/p/bad.jsonl"]);
+    expect(view.cache.peek("/p/bad.jsonl")).toBeUndefined();
+    expect(view.cache.state().kind).toBe("open");
+    expect((await storedRows()).some((row) => row.sessionId === "bad")).toBe(false);
+    expect(view.cache.counters().discarded.corrupt).toBe(1);
+    real!.close();
+  });
+
+  it("closes the cache when that row cannot be proved gone", async () => {
+    await poison();
+    const real = await openTailStore(factory as unknown as IDBFactory, { now: () => clockNow.now });
+    let allowRemove = true;
+    let hideBad = true;
+    const stubborn: TailStore = {
+      ...real!,
+      scan: (options, visit) => real!.scan(options, (row) => (hideBad && row.sessionId === "bad" ? undefined : visit(row))),
+      remove: (keys, batch, bounds) => (allowRemove ? real!.remove(keys, batch, bounds) : Promise.resolve(false)),
+    };
+    const view = harness({ store: () => Promise.resolve(stubborn) });
+    expect((await view.cache.prepare(descriptor())).kind).toBe("open");
+    hideBad = false;
+    allowRemove = false;
+    await view.cache.prime(["/p/bad.jsonl"]);
+    expect(view.cache.state()).toMatchObject({ kind: "refused", reason: "purge" });
+    expect(view.cache.peek("/p/bad.jsonl")).toBeUndefined();
+    expect(view.cache.counters()).toMatchObject({ records: 0, hotRecords: 0 });
+    real!.close();
+  });
+});
+
+describe("an over-bound cache never calls itself open", () => {
+  it("closes when the eviction after a commit cannot be proved", async () => {
+    const real = await openTailStore(factory as unknown as IDBFactory, { now: () => clockNow.now });
+    let allowRemove = true;
+    const stubborn: TailStore = {
+      ...real!,
+      remove: (keys, batch, bounds) => (allowRemove ? real!.remove(keys, batch, bounds) : Promise.resolve(false)),
+    };
+    const view = harness({ store: () => Promise.resolve(stubborn) });
+    // Room for one conversation only, so the second commit must evict the first.
+    await view.cache.prepare(descriptor({ maxSessions: 1 }));
+    view.cache.release(tail());
+    await view.flush();
+    expect(view.cache.counters().records).toBe(1);
+
+    allowRemove = false;
+    view.clock.now += 1_000;
+    view.cache.release(tail({ path: "/p/b.jsonl", sessionId: "session-b", revision: REVISION }));
+    await view.flush();
+
+    // Over its bounds and unable to get back inside them: closed, holding
+    // nothing, and never an open counter above the limit.
+    expect(view.cache.state()).toMatchObject({ kind: "refused", reason: "purge" });
+    expect(view.cache.peek("/p/b.jsonl")).toBeUndefined();
+    expect(view.cache.peek("/p/a.jsonl")).toBeUndefined();
+    const counters = view.cache.counters();
+    expect(counters).toMatchObject({ status: "refused", records: 0, hotRecords: 0, bytes: 0 });
+    real!.close();
+  });
+
+  it("closes when making room before a retry cannot be proved", async () => {
+    const real = await openTailStore(factory as unknown as IDBFactory, { now: () => clockNow.now });
+    const refusing: TailStore = {
+      ...real!,
+      put: () => Promise.resolve(false),
+      remove: () => Promise.resolve(false),
+    };
+    const view = harness({ store: () => Promise.resolve(refusing) });
+    await view.cache.prepare(descriptor({ maxSessions: 1 }));
+    view.cache.release(tail());
+    await view.flush();
+    expect(view.cache.peek("/p/a.jsonl")).toBeUndefined();
+    expect(view.cache.counters()).toMatchObject({ records: 0, hotRecords: 0 });
+    real!.close();
+  });
+});
