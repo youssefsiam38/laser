@@ -92,6 +92,7 @@ import {
 import { createCatalogLoader } from "./catalog-loader.js";
 import { DEVICE_KEYS, deviceStore } from "./device-storage.js";
 import { createEnvironmentLifecycle, useEnvironmentSubtreeKey, type EnvironmentLifecycle } from "./environment-lifecycle.js";
+import { tailCache } from "./tail-cache/index.js";
 import { createHistoryLoader, type HistoryReads } from "./history-loader.js";
 import { createHistoryWindows, MAIN_WINDOW_SCOPE, type HistoryWindowOwner, type HistoryWindows } from "./history-owners.js";
 import { sessionsList } from "../components/shell/session-groups.js";
@@ -785,6 +786,19 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     track: (path, seq) => client.track(path, seq),
   }), [client]);
   const readHistory = historyLoader.read;
+
+  /**
+   * The opaque id of the conversation at this path, from canonical state.
+   *
+   * The device cache is addressed by the session's own id and never by a path
+   * (RP-10): a path is a private filesystem locator, so the mapping stays here,
+   * in the state that owns it — the open view's authoritative session state
+   * first, then the catalog.
+   */
+  const sessionIdOf = useCallback((path: string): string | undefined => {
+    const state = readState();
+    return state.open[path]?.state.id ?? state.sessions.find((summary) => summary.path === path)?.id;
+  }, []);
 
   /** Hydrate one cached view. Main-window selection belongs to the controller. */
   const openSession = useCallback(
@@ -1567,7 +1581,12 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         deleteSession: async (path) => {
           // The delete confirmation left its answer about the child's worktree
           // here; absent, the host keeps it (M13-T42).
+          const sessionId = sessionIdOf(path);
           await client.request("pi/session/delete", { path, worktree: takeWorktreeDisposition(path) });
+          // A conversation the person deleted loses what this device cached of
+          // it: awaited, so the deletion is proved before the caller carries
+          // on, and keyed by the session's own opaque id (RP-10).
+          if (sessionId) await tailCache.forget({ sessionId });
         },
         loadSession: (path) => openSession(path, { select: false }),
         refreshSessions,
@@ -2045,7 +2064,12 @@ export function LaserThreadScope({ path, onPathChange, filter, createIn, unavail
           await client.request("pi/session/rename", { path: target, name });
         },
         deleteSession: async (target) => {
+          // The scope's own snapshot owns the path ↔ opaque id mapping here,
+          // for the same reason the main window's does (RP-10).
+          const snapshot = scopedStore.getSnapshot();
+          const sessionId = snapshot.open[target]?.state.id ?? snapshot.sessions.find((summary) => summary.path === target)?.id;
           await client.request("pi/session/delete", { path: target, worktree: takeWorktreeDisposition(target) });
+          if (sessionId) await tailCache.forget({ sessionId });
         },
         loadSession: (target) =>
           openSession(target, { select: false }).then(async () => {

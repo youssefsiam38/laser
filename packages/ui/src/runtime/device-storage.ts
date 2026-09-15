@@ -265,6 +265,16 @@ export interface DeviceStore {
    * what a person left behind with whatever it started empty with.
    */
   subscribe(listener: (event: DeviceStoreEvent) => void): () => void;
+  /**
+   * The validated, already-clamped cache policy in force, or `undefined` when
+   * no environment is open.
+   *
+   * The one way anything on this device learns what it may keep: the bounded
+   * transcript cache (RP-10) derives its own ceilings from this rather than
+   * reading a descriptor of its own, so "what this environment allows" has a
+   * single answer here and nowhere else.
+   */
+  cachePolicy(): CachePolicy | undefined;
   activate(descriptor: EnvironmentDescriptor): ActivationResult;
   /** Close the namespace. Reads and writes stop; nothing stored is deleted. */
   deactivate(): void;
@@ -634,6 +644,8 @@ export function createDeviceStore(getStorage: () => Storage | null): DeviceStore
   return {
     status: () => snapshot,
 
+    cachePolicy: () => (cache ? { ...cache } : undefined),
+
     purgeLegacy() {
       const store = open();
       if (!store) return;
@@ -796,6 +808,26 @@ export function createDeviceStore(getStorage: () => Storage | null): DeviceStore
 export const deviceStore: DeviceStore = createDeviceStore(() => globalThis.localStorage ?? null);
 
 /**
+ * Content this device keeps outside `localStorage`.
+ *
+ * Today that is exactly one thing: the bounded transcript cache in IndexedDB
+ * (RP-10). It registers itself here so this module stays the single authority
+ * over "forget everything", without importing the cache and without the cache
+ * importing this file's recovery path.
+ */
+export interface DeviceContentStore {
+  /** Close own connections, delete the storage, and resolve only when done. */
+  clear(): Promise<boolean>;
+}
+
+let contentStore: DeviceContentStore | undefined;
+
+/** Register (or, with `undefined`, withdraw) the content store. */
+export function registerDeviceContentStore(store: DeviceContentStore | undefined): void {
+  contentStore = store;
+}
+
+/**
  * Forget everything this app has stored in this browser.
  *
  * The way out of an environment that cannot be established: the failure is
@@ -803,10 +835,19 @@ export const deviceStore: DeviceStore = createDeviceStore(() => globalThis.local
  * preferences go too — a person who reaches for this is asking for a clean
  * start, and half a clean start is the confusing answer. Never touches the
  * host, and never throws.
+ *
+ * **Awaited on purpose.** Deleting a database is asynchronous and another tab
+ * can block it, so this resolves only once every store has actually reported.
+ * `false` means something is still here — which the caller shows as "this
+ * browser is still holding on" rather than reloading and claiming success.
  */
-export function clearBrowserStorage(storage: Storage | null = safeLocalStorage()): boolean {
+export async function clearBrowserStorage(
+  storage: Storage | null = safeLocalStorage(),
+  content: DeviceContentStore | undefined = contentStore,
+): Promise<boolean> {
   deviceStore.deactivate();
-  if (!storage) return true;
+  const contentCleared = content ? await clearContent(content) : true;
+  if (!storage) return contentCleared;
   try {
     // `clear()`, not a scan: this is the person asking, on this app's own
     // origin, and the failure it recovers from is precisely the one where
@@ -819,9 +860,18 @@ export function clearBrowserStorage(storage: Storage | null = safeLocalStorage()
   try {
     // Only meaningful when the store still answers; a store that will not say
     // is not evidence that anything survived.
-    return storage.length === 0;
+    return contentCleared && storage.length === 0;
   } catch {
-    return true;
+    return contentCleared;
+  }
+}
+
+/** A content store that throws is a content store that did not clear. */
+async function clearContent(content: DeviceContentStore): Promise<boolean> {
+  try {
+    return await content.clear();
+  } catch {
+    return false;
   }
 }
 

@@ -434,13 +434,13 @@ describe("a key that only looks namespaced", () => {
 });
 
 describe("clearing this browser's data", () => {
-  it("takes everything on this origin, which is all this app's, and closes the store", () => {
+  it("takes everything on this origin, which is all this app's, and closes the store", async () => {
     storage = fakeStorage({ [storageKey("panels")]: "{}", "lasercode.theme": '{"v":1}' });
     store = createDeviceStore(() => storage);
     store.activate(testDescriptor());
     store.writeJson(DEVICE_KEYS.sessionPins, ["/p/s.jsonl"]);
 
-    expect(clearBrowserStorage(storage)).toBe(true);
+    expect(await clearBrowserStorage(storage)).toBe(true);
     expect([...storage.map.keys()]).toEqual([]);
     expect(deviceStore.status().active).toBe(false);
   });
@@ -530,7 +530,7 @@ describe("an invalidation that cannot be carried out", () => {
 });
 
 describe("clearing this browser's data, when that is the only way out", () => {
-  it("works past the scan ceiling that caused the failure in the first place", () => {
+  it("works past the scan ceiling that caused the failure in the first place", async () => {
     const crowded: Record<string, string> = {};
     for (let index = 0; index <= MAX_SCANNED_KEYS; index += 1) crowded[`${storageKey("draft:")}${index}.jsonl`] = "x";
     storage = fakeStorage(crowded);
@@ -538,15 +538,15 @@ describe("clearing this browser's data, when that is the only way out", () => {
     // Exactly the failure the notice appears for.
     expect(store.activate(testDescriptor()).kind).toBe("failure");
 
-    expect(clearBrowserStorage(storage)).toBe(true);
+    expect(await clearBrowserStorage(storage)).toBe(true);
     expect(storage.map.size).toBe(0);
     // And the environment opens on the next attempt.
     expect(createDeviceStore(() => storage).activate(testDescriptor()).kind).toBe("first");
   });
 
-  it("does not claim success when the browser refuses to clear", () => {
+  it("does not claim success when the browser refuses to clear", async () => {
     const refusing = { ...fakeStorage(), clear: () => { throw new DOMException("denied"); } } as unknown as Storage;
-    expect(clearBrowserStorage(refusing)).toBe(false);
+    expect(await clearBrowserStorage(refusing)).toBe(false);
   });
 });
 

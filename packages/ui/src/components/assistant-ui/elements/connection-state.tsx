@@ -171,8 +171,26 @@ export function HostVersionNotice() {
  * The way out is the one that actually helps: this browser's stored data for
  * this app is what a failed purge is stuck on, so the button clears it and
  * reloads the view. Nothing on the host is touched by either.
+ *
+ * Clearing is **awaited**: conversations this device cached live in a database
+ * (RP-10), deleting one is asynchronous, and another tab can block it. So the
+ * button reports what happened rather than reloading on the assumption that it
+ * worked — a reload that claimed success while the data was still there is the
+ * one outcome this state exists to prevent.
  */
-export function EnvironmentNotice({ reason, onClear }: { reason: string; onClear: () => void }) {
+export function EnvironmentNotice({ reason, onClear }: { reason: string; onClear: () => boolean | void | Promise<boolean | void> }) {
+  const [clearing, setClearing] = useState(false);
+  const [stuck, setStuck] = useState(false);
+  const clear = async (): Promise<void> => {
+    setStuck(false);
+    setClearing(true);
+    try {
+      // `false` is the one answer that must be shown: something is still here.
+      setStuck((await onClear()) === false);
+    } finally {
+      setClearing(false);
+    }
+  };
   return (
     <div
       role="status"
@@ -187,10 +205,25 @@ export function EnvironmentNotice({ reason, onClear }: { reason: string; onClear
         <p className="mt-1 text-xs text-ink-3">
           Nothing is being kept on this device while this lasts, and nothing on the host has changed. Reconnecting continues in the background.
         </p>
+        {stuck && (
+          <p data-slot="environment-notice-stuck" className="mt-1 text-xs text-attention">
+            This browser is still holding on to the data. Close other tabs and windows of {PRODUCT_DISPLAY_NAME} and try again.
+          </p>
+        )}
       </div>
       {/* The one way out of this state, on the device most likely to be in it:
           a coarse pointer gets the 44px target DESIGN.md requires. */}
-      <Button variant="outline" size="sm" className="pointer-coarse:min-h-11" onClick={onClear}>Clear this browser&rsquo;s data and reload</Button>
+      <Button
+        variant="outline"
+        size="sm"
+        className="pointer-coarse:min-h-11"
+        disabled={clearing}
+        onClick={() => {
+          void clear();
+        }}
+      >
+        {clearing ? "Clearing…" : "Clear this browser’s data and reload"}
+      </Button>
     </div>
   );
 }
@@ -199,7 +232,18 @@ export function EnvironmentNotice({ reason, onClear }: { reason: string; onClear
 export function HostEnvironmentNotice() {
   const reason = useLaserState((s) => s.environmentError);
   if (!reason) return null;
-  return <EnvironmentNotice reason={reason} onClear={() => { clearBrowserStorage(); refreshFrontend(); }} />;
+  return (
+    <EnvironmentNotice
+      reason={reason}
+      onClear={async () => {
+        // Proved, not assumed: the reload happens only once every store on this
+        // device has reported that its data is gone.
+        const cleared = await clearBrowserStorage();
+        if (cleared) refreshFrontend();
+        return cleared;
+      }}
+    />
+  );
 }
 
 /**

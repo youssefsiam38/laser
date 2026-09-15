@@ -19,6 +19,8 @@ const IPC = {
   microphoneRequest: "laser:microphone/request",
   microphoneSettings: "laser:microphone/settings",
   identity: "laser:identity",
+  cacheKey: "laser:cache/key",
+  cacheKeyReset: "laser:cache/key/reset",
   updateStatus: "laser:update/status",
   updateCheck: "laser:update/check",
   updateInstall: "laser:update/install",

@@ -39,7 +39,7 @@ import { HostProcess } from "./host-process.js";
 import { resolveShellEnvironment } from "./shell-environment.js";
 import { resolveStartupInputs } from "./startup.js";
 import { connectedGpuVendors, linuxDisplayDecision, probeWaylandGlobals } from "./linux-display.js";
-import { loadSecrets } from "./keychain.js";
+import { loadDeviceCacheKey, loadSecrets } from "./keychain.js";
 import { DesktopLog } from "./log.js";
 import { Notifier } from "./notifications.js";
 import { NativeUpdateWatch } from "./native-update.js";
@@ -580,6 +580,12 @@ function installIpc(): void {
   ipcMain.on(IPC.microphoneSettings, () => openMicrophoneSettings());
 
   ipcMain.handle(IPC.identity, () => identity);
+
+  // The renderer's device conversation cache key (RP-10). The main process owns
+  // where the key lives and whether this machine can have one at all; the
+  // reason it reports is written for a person and never carries the key.
+  ipcMain.handle(IPC.cacheKey, () => loadDeviceCacheKey(log));
+  ipcMain.handle(IPC.cacheKeyReset, () => loadDeviceCacheKey(log, true));
 
   ipcMain.handle(IPC.updateStatus, () => updateStatus);
   ipcMain.handle(IPC.updateCheck, () => nativeUpdate.check() ? updateStatus : updater.check());

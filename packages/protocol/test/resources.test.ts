@@ -8,6 +8,7 @@ import {
   RESOURCE_LABEL_MAX,
   PRODUCT_NAME,
   RESOURCE_PROCESS_ROLES,
+  RESOURCE_STORE_KEYS,
   boundedResourceIds,
   boundedResourceText,
   resourceMeasure,
@@ -59,5 +60,17 @@ describe("retention bounds", () => {
     expect(RESOURCE_PROCESS_ROLES).not.toContain("agent_run");
     expect(RESOURCE_PROCESS_ROLES).toContain("project_worker");
     expect(RESOURCE_PROCESS_ROLES).toContain("unknown_descendant");
+  });
+});
+
+describe("retained-store keys", () => {
+  it("names one producer per owning subsystem, including the two device-local ones", () => {
+    // `rendererViews` is the transcripts a viewer holds in memory (RP-5);
+    // `deviceCache` is the bounded tails it has written to its own device
+    // (RP-10). Both are per device, so a phone reports its own and never the
+    // desktop's; the host fills the rest.
+    expect(RESOURCE_STORE_KEYS).toContain("rendererViews");
+    expect(RESOURCE_STORE_KEYS).toContain("deviceCache");
+    expect(new Set(RESOURCE_STORE_KEYS).size).toBe(RESOURCE_STORE_KEYS.length);
   });
 });

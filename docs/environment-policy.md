@@ -433,8 +433,12 @@ device or an operator adjusted a grant.
 
 ## 8. Still to do
 
-- **RP-10/RP-11**: the bounded transcript tail cache and immediate paint, on
-  top of §7.3's admission API.
+- **RP-11**: the immediate paint and its reconciliation. RP-10's bounded
+  transcript tail cache is built on §7.3's admission API and is done
+  (`docs/device-tail-cache.md`): the policy here decides whether a device may
+  keep transcript content at all, the cache derives every bound from it through
+  `deviceStore.cachePolicy()`, and the connection now waits for that cache to
+  be ready — bounded, and never for its failure — before it opens.
 - **Launcher wiring for a managed policy** — teach `laser up`, the packaged
   daemon and the desktop shell to read a policy they trust and pass it as
   `HostServerOptions.policy`. Today they pass none (§3). The host half is done

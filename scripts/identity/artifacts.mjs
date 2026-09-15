@@ -210,6 +210,7 @@ function ipcModule() {
     ["microphoneStatus", "microphone/status"], ["microphoneRequest", "microphone/request"],
     ["microphoneSettings", "microphone/settings"],
     ["identity", "identity"],
+    ["cacheKey", "cache/key"], ["cacheKeyReset", "cache/key/reset"],
     ["updateStatus", "update/status"], ["updateCheck", "update/check"],
     ["updateInstall", "update/install"], ["updateChanged", "update/changed"],
   ];

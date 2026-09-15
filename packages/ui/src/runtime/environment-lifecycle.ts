@@ -12,10 +12,19 @@
  * booleans at the call site, and it runs *before* the connection opens, so a
  * session path from the environment this device has just left can never be
  * resumed against the host it has just reached.
+ *
+ * It is also where the bounded device cache is prepared (RP-10). The
+ * acceptance carries a `ready` promise, and the client will not publish `open`
+ * until it settles or its budget expires — so by the time the app is
+ * connected, a previously seen conversation is either readable from memory or
+ * honestly not cached at all. Preparation cannot fail the connection: a
+ * refused cache is a state this device is in, not a reason to keep a person
+ * from their host.
  */
 import type { EnvironmentAcceptance } from "../client.js";
 import type { Action } from "../store.js";
-import { deviceStore } from "./device-storage.js";
+import { deviceStore, registerDeviceContentStore } from "./device-storage.js";
+import { installTailCacheSink, tailCache } from "./tail-cache/index.js";
 import type { EnvironmentDescriptor } from "@lasercode/protocol";
 import { useRef } from "react";
 
@@ -46,6 +55,12 @@ export function createEnvironmentLifecycle(deps: EnvironmentLifecycleDeps): Envi
     deps.reset();
   };
 
+  // One registration for the life of the page: "forget everything this browser
+  // stored" has to reach the transcript cache too, and `device-storage.ts`
+  // stays the only module that owns that recovery.
+  registerDeviceContentStore({ clear: () => tailCache.clear("all") });
+  installTailCacheSink();
+
   return {
     accept(descriptor) {
       const result = deviceStore.activate(descriptor);
@@ -54,6 +69,7 @@ export function createEnvironmentLifecycle(deps: EnvironmentLifecycleDeps): Envi
         // does not open: the person is told, rather than served an app that
         // quietly remembers the wrong environment.
         forget();
+        tailCache.deactivate();
         deviceStore.purgeLegacy();
         return { ok: false, reason: result.reason };
       }
@@ -62,11 +78,22 @@ export function createEnvironmentLifecycle(deps: EnvironmentLifecycleDeps): Envi
       // Device storage only opens here, so this is the first moment the
       // remembered destination can be read at all.
       deps.restoreDestination();
-      return { ok: true };
+      // The cache prepares against the policy this environment declared, and
+      // the connection waits for it — bounded, and never for a failure.
+      return {
+        ok: true,
+        ready: tailCache.prepare(descriptor).catch(() => undefined),
+        // The connection stopped waiting: the budget ran out, or this socket
+        // was replaced. Whatever the preparation is still doing, this device
+        // keeps nothing — a pass that lands a moment too late must not open a
+        // cache the connection has already gone ahead without.
+        onReadyExpired: () => tailCache.deactivate(),
+      };
     },
 
     fail(reason) {
       deviceStore.deactivate();
+      tailCache.deactivate();
       // The pre-environment keys are unsafe wherever this view turns out to be,
       // so they go even though it never learned where that is.
       deviceStore.purgeLegacy();
