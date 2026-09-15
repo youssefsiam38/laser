@@ -2424,7 +2424,7 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 | M18-T7 | RP-7 bounded provider logging and transport pressure | in-progress | transport-pressure `01a0a214-a8cc-76c8-926f-52b4b3d8408e` | — | depends on M18-T2 |
 | M18-T8 | RP-8 memory-pressure policy and safety ceilings | todo | — | — | depends on M18-T4/M18-T5 |
 | M18-T9 | RP-9 durable session revision contract | done | orchestrator-01a0a030 + revision-read worker | `dd637f3`; build/typecheck + protocol 165 + host 445 pass | see notes |
-| M18-T10 | RP-10 bounded device tail cache | todo | — | — | depends on M18-T5/M18-T9 |
+| M18-T10 | RP-10 bounded device tail cache | in-progress | device-tail-cache `01a0a2fe-219e-76c8-926f-52f9c3310b62` | — | plan-only until M18-T5 handoff; depends on M18-T5/M18-T9 |
 | M18-T11 | RP-11 immediate paint and authoritative reconciliation | todo | — | — | depends on M18-T10 |
 | M18-T12 | RP-12 worker-free authoritative reads | done | orchestrator-01a0a030 + revision-read worker | `e9e3d8d`; focused protocol/host/worker + typecheck/identity/direction pass | see notes |
 | M18-T13 | RP-13 remote/cloud/enterprise policy | done | orchestrator-01a0a030 + environment-policy/browser workers | `a0111f9`; real host/browser 4×2 matrices + UI 1789 + browser-check 69 | see notes; depends on M18-T12 |
@@ -2527,6 +2527,10 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 - 2026-09-14 B integrated as `e183393`/`2498238`/`1e4eeba`: fail-closed current/foreign namespace purge, first activation rehydration, socket-generation handshake, UTF-8 draft bounds, schema-complete downgrade, persistent phone-readable notice and environment subtree reset. Root rerun after protocol build: UI 1,782/1 skip, protocol 184, CLI 74, desktop 160/1 skip, workspace typecheck, identity/direction/diff pass. Browser matrix remains before T13 done.
 - 2026-09-15 done: final browser gate merged as `a0111f9`. On committed bytes, independent review reran 4/4 environment matrix: host-derived opaque namespace/fingerprint only; no raw environment/session/path in keys; equivalent reconnect preserves transcript/draft; forced 5,200-key purge failure stays closed without reads/resume/writes and recovers only through `Storage.clear()`. UI 1,789/1 skip, browser-check 69/69, build/typecheck/identity/direction pass.
 - Ownership ledger: environment policy · M18-T13 done through `a0111f9` · host boundary, client storage isolation and real desktop/phone acceptance complete · no handoff.
+
+#### M18-T10 notes
+- 2026-09-15 plan-only investigation claimed by `device-tail-cache` session `01a0a2fe-219e-76c8-926f-52f9c3310b62`, run `run_47ed2b9a`, isolated base `3fb51c7`. It maps RP-9 revisions, RP-13 policy/storage, T5's immutable tail handoff, desktop encryption/degraded behavior, PWA origin storage, bounds/purge/corruption and RP-11 provisional reads into `/tmp/m18-t10-plan.md`; no source writes until plan approval and T5 integration.
+- Ownership ledger: device tail cache · `01a0a2fe-219e-76c8-926f-52f9c3310b62` run `run_47ed2b9a` · M18-T10 plan investigation · read-only current source, artifact `/tmp/m18-t10-plan.md`; future write set unsettled and excludes active T5 files · base `3fb51c7` · prerequisite T5 integration · next: approve/correct plan, then wait for T5 handoff.
 
 #### M18-T12 notes
 - 2026-09-14 claimed: extend the existing bounded `pi/session/entries` window with live-or-durable authority, host-side line-offset materialisation and no-spawn cold reads; no second read API or transcript authority.
