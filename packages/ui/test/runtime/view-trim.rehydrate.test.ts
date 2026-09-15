@@ -56,7 +56,12 @@ describe("releasing the older part of a conversation somebody is using", () => {
     expect(after.history?.complete).toBe(false);
     expect(after.history?.before).toBeUndefined();
     expect(after.history?.anchor).toBe((after.entries[0] as { id: string }).id);
-    expect(after.trimmed).toEqual({ at: "2026-09-15T00:00:00.000Z", prompts: result.releasedPrompts });
+    // The stamp says when, how many prompts went, and — identity strings only
+    // — what the surface was standing on, so a replacement can be checked
+    // against it before it is committed (RP-5b §7).
+    expect(after.trimmed).toMatchObject({ at: "2026-09-15T00:00:00.000Z", prompts: result.releasedPrompts });
+    expect(after.trimmed?.identities?.leafId).toBe(before.leafId);
+    expect(JSON.stringify(after.trimmed).length).toBeLessThan(400);
     // Records and blocks go together: no record is left behind without its row.
     const ids = new Set(after.blocks.flatMap(block => "entryId" in block && block.entryId ? [block.entryId] : []));
     for (const record of after.entries) expect(ids.has((record as { id: string }).id)).toBe(true);

@@ -166,6 +166,11 @@ export interface TrimOptions {
   anchored?: ReadonlySet<string> | undefined;
   /** Entry ids carrying a question or an approval. */
   answerable?: ReadonlySet<string> | undefined;
+  /**
+   * What the surface is standing on: identity strings only, carried into the
+   * stamp so a replacement page can be checked against them (RP-5b §7).
+   */
+  standing?: { anchorEntryId?: string; focusedEntryId?: string; actionTargetEntryIds?: readonly string[] } | undefined;
 }
 
 export interface TrimResult {
@@ -225,7 +230,21 @@ export function trimView(view: SessionView, options: TrimOptions, at: string): T
     entries,
     stubs,
     ...(window ? { history: window } : {}),
-    trimmed: { at, prompts: releasedPrompts },
+    trimmed: {
+      at,
+      prompts: releasedPrompts,
+      // Tens of bytes, measured with the view like everything else it keeps.
+      ...(options.standing || view.leafId !== undefined
+        ? {
+            identities: {
+              ...(options.standing?.anchorEntryId ? { anchorEntryId: options.standing.anchorEntryId } : {}),
+              ...(options.standing?.focusedEntryId ? { focusedEntryId: options.standing.focusedEntryId } : {}),
+              ...(options.standing?.actionTargetEntryIds?.length ? { actionTargetEntryIds: [...options.standing.actionTargetEntryIds] } : {}),
+              ...(view.leafId !== undefined ? { leafId: view.leafId } : {}),
+            },
+          }
+        : {}),
+    },
   };
   return { view: trimmed, releasedBlocks: view.blocks.length - blocks.length, releasedBytes, releasedPrompts };
 }

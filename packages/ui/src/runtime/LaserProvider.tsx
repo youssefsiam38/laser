@@ -185,6 +185,8 @@ export interface LaserActions {
   expandCatalog(): () => void;
   refreshEntries(options?: { tail?: boolean }): Promise<void>;
   loadEarlierEntries(): Promise<boolean>;
+  /** Replace what a trim released with the conversation's recent history. */
+  reloadRecentHistory(): Promise<boolean>;
   loadAllEntries(): Promise<boolean>;
   /** Refresh cross-app allowance for the session's account provider. */
   refreshAccountUsage(): Promise<void>;
@@ -956,6 +958,24 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   // --- agents -------------------------------------------------------------
 
   const agentsActions = useMemo(() => createAgentsActions({ client, dispatch, guard }), [client, guard]);
+  /**
+   * RP-5b §7: when the current view is trimmed, read the conversation's recent
+   * history once for that stamp and commit it only if it still contains what
+   * the surface is standing on. A stamp that has already spent its reads waits
+   * for a safe transition — the live edge, or coming back to the conversation
+   * — and nothing is read while it waits.
+   */
+  const reconciledStamp = useRef(new Map<string, string>());
+  const currentPath = mainPath(state.destination);
+  const trimmedStamp = currentPath ? state.open[currentPath]?.trimmed?.at : undefined;
+  useEffect(() => {
+    if (!currentPath || trimmedStamp === undefined) return;
+    if (reconciledStamp.current.get(currentPath) === trimmedStamp) return;
+    reconciledStamp.current.set(currentPath, trimmedStamp);
+    const epoch = openEpochs.current.get(currentPath);
+    void historyLoader.reconcile(currentPath, () => !moving.current.has(currentPath) && openEpochs.current.get(currentPath) === epoch);
+  }, [currentPath, historyLoader, trimmedStamp]);
+
   const tasksActions = useMemo(() => createTasksActions({ client, dispatch, guard }), [client, guard]);
 
   // Definitions and the run registry come up with the connection and again
@@ -1406,6 +1426,17 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         const path = requireCurrent();
         const epoch = openEpochs.current.get(path);
         return history.all(path, () => !moving.current.has(path) && openEpochs.current.get(path) === epoch);
+      }).then(Boolean),
+      /**
+       * RP-5b §7: read this conversation's recent history again, to replace
+       * what a trim released. A person asking for it is the safest moment
+       * there is, so this spends a read even when the stamp already has one.
+       */
+      reloadRecentHistory: () => guard(async () => {
+        const path = requireCurrent();
+        const epoch = openEpochs.current.get(path);
+        await history.reconcile(path, () => !moving.current.has(path) && openEpochs.current.get(path) === epoch, { explicit: true });
+        return true;
       }).then(Boolean),
       loadEarlierEntries: () => guard(async () => {
         const path = requireCurrent();

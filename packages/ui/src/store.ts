@@ -33,7 +33,7 @@ import type {
 
 import { activePathIds } from "./components/thread/entries.js";
 import { appendLive, BODY_EXCERPT_MAX_BYTES, excerptHead, excerptLiveTail, LIVE_TAIL_MAX_BYTES, type BodyRef } from "./runtime/body-excerpt.js";
-import { retainEntries, retainedRows, type EntryStub } from "./runtime/retained-entries.js";
+import { retainEntries, stubOfElided, retainedRows, type EntryStub } from "./runtime/retained-entries.js";
 import { boundedBodyText, sameBodyComponent, utf8ByteLength, type BodyComponent } from "@lasercode/protocol";
 import { blockBytes, entryBytes, imageMeasure, UNKNOWN_IMAGE_DECODED_BYTES } from "./runtime/view-measure.js";
 import { initialMainDestination, mainPath, type MainDestination } from "./runtime/main-destination.js";
@@ -262,7 +262,23 @@ export interface SessionView {
    * is doing with it is untouched; the released prompts are counted so the
    * transcript can say so and read them again.
    */
-  trimmed?: { at: string; prompts: number } | undefined;
+  /**
+   * What a trim released, and what the surface was standing on when it did
+   * (RP-5b §7): identity strings only — the anchored message, the row a person
+   * had focused, the rows an open action targets, and the leaf. They are what
+   * an authoritative replacement has to contain before it may be committed.
+   *
+   * `deferred` says a replacement was read and did not contain them, so this
+   * view keeps what it has and offers to read again; `reads` is how many
+   * reconciliation reads this stamp has spent (at most two).
+   */
+  trimmed?: {
+    at: string;
+    prompts: number;
+    identities?: { anchorEntryId?: string; focusedEntryId?: string; actionTargetEntryIds?: readonly string[]; leafId?: string | null };
+    deferred?: true;
+    reads?: number;
+  } | undefined;
   /**
    * Set while the transcript has been released and not read again. Its
    * presence — not `hydrated` — is what makes a view dormant: a view that has
@@ -416,7 +432,24 @@ export type Action =
    * usable, the streaming turn, questions, approvals and unsent prompts stay,
    * and what went is read again through the ordinary bounded tail read.
    */
-  | { type: "views/trim"; paths: readonly string[]; keepBytes: number; at: string; anchored?: readonly string[] }
+  | {
+      type: "views/trim";
+      paths: readonly string[];
+      keepBytes: number;
+      at: string;
+      anchored?: readonly string[];
+      /** What the surface is standing on, so a replacement can be checked. */
+      standing?: { anchorEntryId?: string; focusedEntryId?: string; actionTargetEntryIds?: readonly string[] };
+    }
+  /**
+   * An authoritative `{tail:40}` page read to replace what a trim released
+   * (RP-5b §7). It is committed only if it contains every identity the trim
+   * preserved; otherwise the page is discarded here and the view keeps what it
+   * has, with its stamp marked deferred. Nothing of a refused page is retained.
+   */
+  | { type: "views/reconcile"; path: string; at: string; entries: unknown[]; leafId?: string | null | undefined; window: HistoryWindow }
+  /** A reconciliation read that failed or was refused; the stamp spent a read. */
+  | { type: "views/reconcileFailed"; path: string; at: string }
   /**
    * Replace the transcript from a persisted snapshot. `expectSeq` guards the
    * round trip: when live updates advanced `lastSeq` while `pi/session/entries`
@@ -595,6 +628,7 @@ export function reduce(state: AppState, action: Action): AppState {
           // The message the viewport is anchored to, the focused one, and
           // anything a surface pinned while it is open.
           ...(action.anchored ? { anchored: new Set(action.anchored) } : {}),
+          ...(action.standing ? { standing: action.standing } : {}),
         }, action.at);
         if (result.releasedBlocks === 0) continue;
         open ??= { ...state.open };
@@ -621,6 +655,53 @@ export function reduce(state: AppState, action: Action): AppState {
     case "historyMetadata":
     case "historyPrepend":
       return updateView(state, action.path, v => reduceHistory(v, action, historyFold));
+    case "views/reconcile":
+      return updateView(state, action.path, (v) => {
+        const stamp = v.trimmed;
+        // Only the stamp this page was read for, and only a view still trimmed.
+        if (!stamp || stamp.at !== action.at) return v;
+        const spent = (stamp.reads ?? 0) + 1;
+        const wanted = new Set<string>([
+          ...(stamp.identities?.anchorEntryId ? [stamp.identities.anchorEntryId] : []),
+          ...(stamp.identities?.focusedEntryId ? [stamp.identities.focusedEntryId] : []),
+          ...(stamp.identities?.actionTargetEntryIds ?? []),
+        ]);
+        const arriving = new Set<string>();
+        for (const entry of action.entries) {
+          const id = (entry as { id?: unknown } | null)?.id;
+          if (typeof id === "string") arriving.add(id);
+        }
+        for (const elided of action.window.elided ?? []) arriving.add(elided.id);
+        const contained = [...wanted].every((id) => arriving.has(id));
+        if (!contained) {
+          // The page is dropped here, whole: a view already at its bound must
+          // not hold a replacement beside itself (RP-5b §7).
+          return { ...v, trimmed: { ...stamp, deferred: true as const, reads: spent } };
+        }
+        // Committed in one transaction: there is no frame in between.
+        const incoming = retainEntries(action.entries);
+        const elided = (action.window.elided ?? []).map(stubOfElided);
+        const entries = incoming.entries;
+        const stubs: EntryStub[] = [...incoming.stubs, ...elided];
+        const { live: _live, ...window } = action.window;
+        const { trimmed: _stamp, ...base } = v;
+        const next: SessionView = {
+          ...(base as SessionView),
+          entries,
+          stubs,
+          leafId: action.leafId ?? v.leafId,
+          history: window,
+          hydrated: true,
+          blocks: blocksFromEntries(entries, action.leafId ?? v.leafId, modelNamesOf(v.state), { stubs, revision: window.revision }),
+        };
+        return next;
+      });
+    case "views/reconcileFailed":
+      return updateView(state, action.path, (v) => {
+        const stamp = v.trimmed;
+        if (!stamp || stamp.at !== action.at) return v;
+        return { ...v, trimmed: { ...stamp, deferred: true as const, reads: (stamp.reads ?? 0) + 1 } };
+      });
     case "hydrate":
       return updateView(state, action.path, (view) => {
         const v = awake(view);

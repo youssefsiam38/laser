@@ -243,8 +243,15 @@ let nextToken = 0;
 export type HistoryReads = ReturnType<typeof createHistoryLoader>;
 
 /** One request owner for tail/all reads, generation adoption and cursor recovery. */
+/** How many reads one trim stamp may ever spend (RP-5b §7). */
+export const RECONCILE_MAX_READS = 2;
+/** The window a reconciliation asks for: the conversation's recent tail. */
+const HISTORY_TAIL = 40;
+
 export function createHistoryLoader(deps: HistoryLoaderDeps) {
   const reads = new Map<string, Promise<void>>();
+  /** The stamp a reconciliation is in flight for, per path. */
+  const reconciling = new Map<string, string>();
   const generations = new Map<string, number>();
   const fence = (path: string, accepting: () => boolean) => {
     const generation = generations.get(path) ?? 0;
@@ -342,5 +349,45 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     await read(path, true, accepting);
   };
   const recent = (path: string, accepting: () => boolean, legacySeq?: number) => read(path, false, accepting, legacySeq, "recent");
-  return { read, recent, all, earlier, metadata, ensure };
+  /**
+   * Replace what a trim released, if the replacement really contains what the
+   * surface is standing on (RP-5b §7).
+   *
+   * One read per trim stamp, and one more at the first safe moment if the
+   * first did not contain them — never a third for the same stamp. The page is
+   * committed in one transaction or discarded entirely; nothing of a refused
+   * page is kept beside a view that is already at its bound.
+   */
+  const reconcile = async (path: string, accepting: () => boolean = () => true, options: { explicit?: boolean } = {}): Promise<void> => {
+    const view = deps.get(path);
+    const stamp = view?.trimmed;
+    if (!view || !stamp) return;
+    // At most two reads for one stamp: the one at the trim, and one at the
+    // first safe transition after it.
+    // A person asking for it is the safest moment there is, and is allowed
+    // whatever this stamp has already spent.
+    if (!options.explicit && (stamp.reads ?? 0) >= RECONCILE_MAX_READS) return;
+    const at = stamp.at;
+    if (reconciling.get(path) === at) return;
+    reconciling.set(path, at);
+    const active = fence(path, accepting);
+    // One in flight per path, and never beside another history read.
+    const pending = reads.get(path);
+    if (pending) await pending.catch(() => {});
+    try {
+      const result = await deps.request({ path, window: { tail: HISTORY_TAIL }, bodyLimit: BODY_EXCERPT_MAX_BYTES });
+      if (!active() || deps.get(path)?.trimmed?.at !== at) return;
+      if (!result.window) {
+        deps.dispatch({ type: "views/reconcileFailed", path, at });
+        return;
+      }
+      deps.dispatch({ type: "views/reconcile", path, at, entries: result.entries, leafId: result.leafId, window: result.window });
+    } catch {
+      if (active() && deps.get(path)?.trimmed?.at === at) deps.dispatch({ type: "views/reconcileFailed", path, at });
+    } finally {
+      if (reconciling.get(path) === at) reconciling.delete(path);
+    }
+  };
+
+  return { read, recent, all, earlier, metadata, ensure, reconcile };
 }
