@@ -2,7 +2,7 @@
 
 Status: implementation authorized and active as M18.
 
-Architecture task: MX-T9. Implementation tasks: M18-T1..T15. Decisions: D-255, D-256, D-257.
+Architecture task: MX-T9. Implementation tasks: M18-T1..T16. Decisions: D-255, D-256, D-257, D-258.
 
 ## Progress
 
@@ -12,10 +12,11 @@ Authoritative detail, evidence and ownership live in `STATUS_DETAILED.md`; `STAT
 | --- | --- | --- | --- |
 | RP-1 | M18-T1 | done | `1628349`; build, protocol 153, host 403, desktop 160 |
 | RP-2 initial | M18-T2 | done — reviewed harness and sanitized finding integrated through `ad8c188`; full A refuses B at unchanged renderer ceiling with zero survivors | RP-1 |
-| RP-2 repeat | M18-T15 | in progress — repairing two post-containment harness observations without changing fixtures/ceilings; full A/B waits RP-8 | RP-4..RP-8 |
+| RP-2 repeat | M18-T15 | in progress — repairing two post-containment harness observations without changing fixtures/ceilings; full A/B waits RP-8/RP-5b | RP-4..RP-8, RP-5b |
 | RP-3 | M18-T3 | browser gate/review `a0111f9` + correction `66ac605` + T4/T5/T6/T7 counter mapping `4ba58bd4`; final pressure subsection/closeout waits RP-8 | RP-1 |
 | RP-4 | M18-T4 | done — worker-owned atomic release/retirement, fair LRU unload and hard replay floors integrated at `eb18e147`; exact-head convergence verified | RP-2 |
-| RP-5 | M18-T5 | done — byte/count-bounded hydrated views, light identities, complete pins, exact revision-fenced tail handoff and incremental counters integrated at `4f34a614`; reviewed browser/calibration evidence | RP-2 |
+| RP-5 | M18-T5 | done — byte/count-bounded unpinned hydrated views, light identities, complete pins, exact revision-fenced tail handoff and incremental counters integrated at `4f34a614` | RP-2 |
+| RP-5b | M18-T16 | todo — no-snapshot full evidence proves one pinned/current message bypasses the per-view bound; hard-bound render excerpts and canonical range reads are being specified | RP-5, RP-10 |
 | RP-6 | M18-T6 | done — integrated `a256efe`; reviewed membership, task/log retention and cleanup/security gates | RP-2 |
 | RP-7 | M18-T7 | done — integrated `0542a58e`; reviewed bounded decoder/provider/body-store/direct+relay pressure, privacy/browser and unchanged-workload footprint gates pass | RP-2 |
 | RP-8 | M18-T8 | in progress — integrated-base threshold calibration complete with unchanged provisional values; source waits RP-10 schema handoff and pinned-view audit | RP-4, RP-5 |
@@ -278,6 +279,12 @@ Re-entry uses RP-10's local tail and then reconciles. Eviction must not delete c
 - current/Beam/waiting views are never evicted;
 - drafts, focus intent, scroll restoration and approvals survive dehydrate/rehydrate;
 - conversation find loads older pages explicitly rather than pinning every visited transcript.
+
+### RP-5b post-containment correction
+
+The same hard bounds apply inside every hydrated view, including current, Beam, waiting and running views. A pin prevents eviction of work; it does not permit an unbounded message, tool body, image or rendered DOM tree. Oversized live and settled bodies retain explicit bounded excerpts plus canonical source identity, exact omitted-byte evidence and a revision fence. Additional content is read in bounded ranges from the live owning worker or worker-free host projection without restoring the whole body to renderer state. Actions, entry ordinals, drafts, focus, scroll, approvals, search destinations and active work survive trimming.
+
+Done when unchanged full large-content and multi-agent fixtures keep every view within 1.5 MiB and the renderer within its warning/ceiling, with no silent omission or second transcript authority.
 
 ## RP-6 · Bound task and transcript-delivery lifetime
 

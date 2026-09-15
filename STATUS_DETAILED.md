@@ -2429,7 +2429,8 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 | M18-T12 | RP-12 worker-free authoritative reads | done | orchestrator-01a0a030 + revision-read worker | `e9e3d8d`; focused protocol/host/worker + typecheck/identity/direction pass | see notes |
 | M18-T13 | RP-13 remote/cloud/enterprise policy | done | orchestrator-01a0a030 + environment-policy/browser workers | `a0111f9`; real host/browser 4×2 matrices + UI 1789 + browser-check 69 | see notes; depends on M18-T12 |
 | M18-T14 | RP-14 Electron/Tauri decision gate | todo | — | — | depends on M18-T1..T13/M18-T15 |
-| M18-T15 | RP-2 post-containment repeat baseline | in-progress | soak-harness-readiness `01a0a434-bd43-76c8-926f-53918d27a39b` | — | harness prerequisites active; full A/B waits M18-T8 |
+| M18-T15 | RP-2 post-containment repeat baseline | in-progress | soak-harness-readiness `01a0a434-bd43-76c8-926f-53918d27a39b` | — | harness prerequisites active; full A/B waits M18-T8/M18-T16 |
+| M18-T16 | RP-5b bounded single-conversation hydration and rendering | todo | — | — | added by D-258; depends on M18-T10; blocks M18-T8 renderer gate/M18-T15 |
 
 #### M18-T1 notes
 - 2026-09-14 baseline: protocol 144/144 and host 316/316 pass at `ec1c42d`. Desktop 155/156 passes; `test/host-environment.test.ts` reproducibly expects same-version adoption but receives `failed` before this task changes code. Treat as a pre-existing baseline, not a telemetry regression; M18-T1 must keep every other desktop test green and report this exact case separately if unchanged.
@@ -2465,7 +2466,10 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 - Ownership ledger: controlled reproduction · integrated `fbf210c`/`ad723e6`/`40d9461`/`ad8c188` · M18-T2 done · no active writer; `scripts/browser-check/**` released · review cycle complete · handoff measured renderer lifetime to T4-T8, browser harness to T3, unchanged repeat to T15.
 
 #### M18-T14 notes
-- 2026-09-15 read-only decision-gate investigation assigned to `01a0a439-70ed-76c8-926f-53a4385adea9` run `run_bb3dcaef`: map the conditional packaged Electron-versus-headless/PWA measurement, predeclared benefit, supported-platform WebView parity evidence and disposable stock-Node-host Tauri spike without starting migration or changing repository files. Artifact `/tmp/m18-t14-plan.md`; implementation/decision remains gated on RP-1..RP-13 and T15.
+- 2026-09-15 read-only decision-gate investigation `01a0a439-70ed-76c8-926f-53a4385adea9` produced `/tmp/m18-t14-plan.md` without repository writes: first compare packaged Electron with symmetric headless-host/PWA scope; predeclare benefit before any conditional spike; stop and keep Electron unless idle shell private memory is both ≥200 MiB and ≥25% of total. Current supported release platforms are Linux x64/arm64; Windows/macOS collectors and WebViews remain unproven, never inferred from Linux. T14 stays gated on RP-1..RP-13, T15 and T16.
+
+#### M18-T16 notes
+- 2026-09-15 created by D-258 after three no-heap-snapshot full fixture runs proved one current/running view retained a 3.15 MiB assistant block, rendered 254k DOM nodes and crossed the fixed renderer ceiling at 1.97–2.67 GiB PSS. Existing T5 LRU correctly bounds unpinned views but its approved pin exemption makes the per-view limit only an eviction trigger. Plan v1 `/tmp/m18-pinned-view-plan.md` is being corrected by `01a0a430-0193-76c8-926f-5380c13c9ab3` run `run_24dfe9e6`: hard-bound every view and settle revision-fenced bounded canonical content ranges rather than accepting oversized pinned overflow.
 
 #### M18-T15 notes
 - 2026-09-14 created by D-257: do not run until T4–T8 contain the measured renderer/task/transport lifetimes. Reuse the unchanged reviewed T2 fixtures and fixed ceilings for two clean full runs, then write `docs/resource-soak-baseline.md`.
@@ -4857,3 +4861,8 @@ Next: T111 finishes routing; T108 completes its single review correction. Only t
 **Decision.** Add MX-T8 for the requested report-only performance audit. Read the live chat-loading worktree, distinguish active M16-T16 work from additional opportunities, and keep synthetic probes isolated.
 **Why.** Historical performance reports and a branch HEAD alone do not describe a worktree being edited concurrently.
 **Consequences.** No runtime changes, release, or installed-process restart. Recommendations require their own ownership and correctness/performance evidence before implementation.
+
+### D-258 · 2026-09-15 · Pins preserve work, not unbounded renderer bodies
+**Decision.** Add M18-T16 (RP-5b) after M18-T10 and before the final M18-T8 renderer gate, M18-T15 and M18-T14. Every hydrated view, including current/pinned/running, obeys the 1.5 MiB per-view and 4 MiB renderer retained-state bounds. Oversized live and settled bodies retain explicit bounded excerpts and canonical source identity; revision-fenced bounded reads retrieve further content from the live owning worker or worker-free host projection without rebuilding the whole body in renderer state.
+**Why.** Three unchanged full fixture runs with renderer heap snapshots disabled crossed the fixed ceiling at 1.97–2.67 GiB PSS and peaked at 3.34–3.55 GiB. One current/running view held a 3.15 MiB assistant block, rendered 254,403 DOM nodes and reported no overflow because T5's approved whole-view eviction plan exempted pins. The unpinned LRU works; one pinned message is the remaining product defect.
+**Consequences.** A pin still prevents eviction, cancellation or loss of drafts/questions/approvals/actions. It no longer permits a multi-megabyte DOM or duplicate raw/derived body. No direct client JSONL read or second transcript authority is introduced. T15 keeps every fixture and ceiling unchanged, and T14 remains Electron-first until this correction and the repeat baseline pass.
