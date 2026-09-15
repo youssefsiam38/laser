@@ -138,7 +138,14 @@ const request = <T>(value: IDBRequest<T>): Promise<T> =>
  * allowed while one is outstanding: there is nothing for the late delete to
  * destroy but the database it was asked about.
  */
-const pendingDeletions = new Map<string, Promise<void>>();
+interface PendingDeletion {
+  /** Resolves when the request itself really settles. */
+  readonly settled: Promise<void>;
+  /** The answer every caller of this deletion gets. One request, one answer. */
+  readonly outcome: Promise<DestroyOutcome>;
+}
+
+const pendingDeletions = new Map<string, PendingDeletion>();
 
 /** Is a deletion of this database still outstanding? */
 export function deletionPending(name: string = TAIL_DATABASE_NAME): boolean {
@@ -147,7 +154,7 @@ export function deletionPending(name: string = TAIL_DATABASE_NAME): boolean {
 
 /** For tests and for an orderly shutdown: await whatever is outstanding. */
 export function whenDeletionSettles(name: string = TAIL_DATABASE_NAME): Promise<void> {
-  return pendingDeletions.get(name) ?? Promise.resolve();
+  return pendingDeletions.get(name)?.settled ?? Promise.resolve();
 }
 
 /**
@@ -371,44 +378,53 @@ export function destroyTailDatabase(
   blockedMs: number = TAIL_SCAN_LIMITS.blockedMs,
 ): Promise<DestroyOutcome> {
   if (!factory) return Promise.resolve("absent");
-  return new Promise((resolve) => {
-    let settled = false;
+  // Single-flight. A second call while one is outstanding gets the first
+  // request's answer rather than issuing another: two live requests would mean
+  // the first settle clearing the registry while the second is still able to
+  // take a database opened after it — the successor race this registry exists
+  // to close. Repeated clearing is therefore bounded by construction.
+  const outstanding = pendingDeletions.get(TAIL_DATABASE_NAME);
+  if (outstanding) return outstanding.outcome;
+  const record: { finish?: () => void } = {};
+  const settled = new Promise<void>((done) => {
+    record.finish = () => {
+      pendingDeletions.delete(TAIL_DATABASE_NAME);
+      done();
+    };
+  });
+  const outcome = new Promise<DestroyOutcome>((resolve) => {
+    let answered = false;
     const settle = (value: DestroyOutcome): void => {
-      if (settled) return;
-      settled = true;
+      if (answered) return;
+      answered = true;
       resolve(value);
     };
     let deletion: IDBOpenDBRequest;
     try {
       deletion = factory.deleteDatabase(TAIL_DATABASE_NAME);
     } catch {
+      record.finish?.();
       settle("failed");
       return;
     }
-    // Track it until it really settles: an uncancellable request must not be
-    // able to delete a database opened after it was given up on.
-    let finish: (() => void) | undefined;
-    pendingDeletions.set(TAIL_DATABASE_NAME, new Promise<void>((done) => {
-      finish = () => {
-        pendingDeletions.delete(TAIL_DATABASE_NAME);
-        done();
-      };
-    }));
     const timer = setTimeout(() => settle("blocked"), blockedMs);
     deletion.onsuccess = () => {
       clearTimeout(timer);
-      finish?.();
+      record.finish?.();
       settle("deleted");
     };
     deletion.onerror = () => {
       clearTimeout(timer);
-      finish?.();
+      record.finish?.();
       settle("failed");
     };
     deletion.onblocked = () => {
       // Left to the timer: another context may still close in time.
     };
   });
+  // Registered before anybody can await it, so no open slips through.
+  pendingDeletions.set(TAIL_DATABASE_NAME, { settled, outcome });
+  return outcome;
 }
 
 /** The browser's factory, read defensively (it throws in some sandboxes). */

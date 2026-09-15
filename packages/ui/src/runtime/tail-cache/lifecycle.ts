@@ -59,7 +59,7 @@ export interface LifecycleDeps {
 }
 
 /** A pass, and the single flag that ends it. */
-interface Pass {
+export interface Pass {
   readonly id: number;
   live: boolean;
 }
@@ -73,8 +73,15 @@ export interface Lifecycle {
   counters(): DeviceCacheCounters;
   /** The live pass's collaborators, or `undefined` when the cache is not open. */
   open(): { pass: Pass; bounds: TailBounds; recency: RecencyIndex; mutations: MutationOwner; environmentKey: string } | undefined;
-  /** The whole-database recovery, which needs no open store. */
-  destroyEverything(): Promise<boolean>;
+  /**
+   * The whole-database recovery, which needs no open store.
+   *
+   * `issuedIn` is the pass the person asked in. If a reconnect has opened a
+   * newer one since, the deletion still happens — they asked to forget what is
+   * on this device — but it neither tears down nor closes the pass that opened
+   * after it.
+   */
+  destroyEverything(issuedIn?: Pass | undefined): Promise<boolean>;
   markCleared(): void;
 }
 
@@ -202,12 +209,20 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
       snapshot = undefined;
     },
 
-    async destroyEverything() {
-      end();
+    async destroyEverything(issuedIn) {
+      // Fenced at both ends. A reconnect may have opened a newer pass while
+      // this deletion was being asked for or carried out, and neither the
+      // teardown nor the answer may reach into it: the person asked to forget
+      // what is on this device, not to close whatever opened since.
+      const mine = issuedIn ?? pass;
+      if (mine === pass) end();
       const outcome = await deps.destroy().catch(() => "failed" as const);
       const cleared = outcome === "deleted" || outcome === "absent";
       if (cleared) lastClearedAt = new Date(deps.now()).toISOString();
-      publish({ kind: "closed" });
+      // A newer pass may have opened while the deletion was outstanding (the
+      // registry refuses an open only while one is *pending*), and this answer
+      // must not close it. The caller still learns what the deletion did.
+      if (mine === pass) publish({ kind: "closed" });
       return cleared;
     },
 
@@ -235,7 +250,15 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
       vault = resolved.value;
       const refusal = policyAdmits(policy) ?? (policy.requireDeviceEncryption && !vault.encrypted ? "encryption" : undefined);
 
-      const opened = await within(deps.openStore(), mine, deadline);
+      const pendingOpen = deps.openStore();
+      const opened = await within(pendingOpen, mine, deadline);
+      if (!opened.ok || mine !== pass || !mine.live) {
+        // A store that arrives after this pass gave up on it is closed rather
+        // than left open: a refused attempt must hold nothing.
+        void pendingOpen.then((late) => {
+          if (late && (mine !== pass || !mine.live || !opened.ok)) late.close();
+        }).catch(() => {});
+      }
       if (mine !== pass || !mine.live) return state;
       if (!opened.ok) return opened.reason === "cancelled" ? state : refuse(refusal ?? "storage", key, mine);
       const active = opened.value;
@@ -243,8 +266,10 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
       store = active;
 
       const doomed: TailKey[] = [];
-      const validated: ValidatedRow[] = [];
-      const report = await active.scan(
+      const candidates: ValidatedRow[] = [];
+      /** A row this build could not even address, so nothing can remove it. */
+      let unaddressable = false;
+      const scanned = await within(active.scan(
         { rows: TAIL_SCAN_LIMITS.scanRows, bytes: TAIL_SCAN_LIMITS.scanBytes, batch: TAIL_SCAN_LIMITS.batchRows, deadline },
         (stored) => {
           const parsed = parseStoredRow(stored, { appVersion: deps.appVersion, environmentKey: key });
@@ -254,7 +279,11 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
           if ("discard" in parsed) {
             discard(parsed.discard);
             // Removable by its primary key even when its own fields are junk.
+            // One that cannot even be addressed is not something to count and
+            // carry on from: this device holds data this build cannot account
+            // for, and the cache does not open over it.
             if (removable) doomed.push(removable);
+            else unaddressable = true;
             return;
           }
           if (refusal) {
@@ -273,24 +302,40 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
             discard("expired");
             return;
           }
-          if (validated.length >= limits.sessions) {
-            // Past the record ceiling: over bounds by definition.
-            doomed.push(parsed.key as TailKey);
-            evictions += 1;
-            return;
-          }
-          validated.push(parsed);
+          candidates.push(parsed);
         },
-      );
+      ), mine, deadline);
       if (mine !== pass || !mine.live) return state;
+      // A store that rejects or never answers is a storage failure, not a
+      // reason for `prepare` to reject or hang: the contract is that it always
+      // resolves with a state.
+      if (!scanned.ok) {
+        stoppedBy = scanned.reason === "expired" ? "over-time" : "failed";
+        return refuse(scanned.reason === "expired" ? "purge" : "storage", key, mine);
+      }
+      const report = scanned.value;
       if (report.outcome !== "complete") {
         stoppedBy = report.outcome;
         return refuse(report.outcome === "failed" ? "storage" : "purge", key, mine);
       }
+      if (unaddressable) {
+        stoppedBy = "failed";
+        return refuse("purge", key, mine);
+      }
+
+      // Least recently **used** first, and only then the record ceiling: the
+      // order rows happen to sit in under their keys is not recency, and
+      // deciding by it would throw away the newest records on a device that
+      // holds more than the policy allows.
+      candidates.sort((a, b) => Date.parse(b.lastUsedAt) - Date.parse(a.lastUsedAt));
+      const validated = candidates.slice(0, limits.sessions);
+      for (const over of candidates.slice(limits.sessions)) {
+        doomed.push(over.key as TailKey);
+        evictions += 1;
+      }
 
       // **Every** retained row is authenticated before it is counted as held;
       // only the newest few keep their parsed objects.
-      validated.sort((a, b) => Date.parse(b.lastUsedAt) - Date.parse(a.lastUsedAt));
       const heldRows: HeldRow[] = [];
       const warm: TailRecord[] = [];
       let bytes = 0;
@@ -332,6 +377,8 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
           bytes: record.bytes,
           usedAt: Date.parse(record.lastUsedAt) || deps.now(),
           capturedAt: record.capturedAt,
+          epoch: record.epoch,
+          seq: record.seq,
         });
         if (warm.length < TAIL_SCAN_LIMITS.warmRecords) warm.push(record);
       }
@@ -347,13 +394,13 @@ export function createLifecycle(deps: LifecycleDeps): Lifecycle {
         return refuse("purge", key, mine);
       }
       if (doomed.length > 0) {
-        const removed = await active.remove(doomed, TAIL_SCAN_LIMITS.batchRows, {
+        const purged = await within(active.remove(doomed, TAIL_SCAN_LIMITS.batchRows, {
           rows: TAIL_SCAN_LIMITS.deleteRows,
           deadline: deps.now() + TAIL_SCAN_LIMITS.prepareMs,
-        });
+        }), mine, deps.now() + TAIL_SCAN_LIMITS.prepareMs);
         if (mine !== pass || !mine.live) return state;
-        if (!removed) {
-          stoppedBy = "failed";
+        if (!purged.ok || !purged.value) {
+          stoppedBy = purged.ok ? "failed" : purged.reason === "expired" ? "over-time" : "failed";
           return refuse("purge", key, mine);
         }
       }

@@ -22,7 +22,8 @@ import { DURABLE_TOUCH_INTERVAL_MS } from "../../../src/runtime/tail-cache/recen
 import { QUEUE_LIMITS } from "../../../src/runtime/tail-cache/mutations.js";
 import { openTailStore, destroyTailDatabase, deletionPending, type TailStore } from "../../../src/runtime/tail-cache/store.js";
 import { NULL_VAULT } from "../../../src/runtime/tail-cache/vault.js";
-import { ENV_A, REVISION, createTestStore, descriptor, entry, harness, payloadOf, row, tail } from "./harness.js";
+import { ENV_A, REVISION, REVISION_2, createTestStore, descriptor, entry, harness, payloadOf, row, tail } from "./harness.js";
+import { QUEUE_LIMITS as LIMITS } from "../../../src/runtime/tail-cache/mutations.js";
 
 const peek = (cache: { peek(target: { sessionId: string }): unknown }, sessionId = "session-a") => cache.peek({ sessionId });
 
@@ -375,5 +376,241 @@ describe("a timed-out database deletion cannot reach a successor", () => {
     block?.();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(deletionPending()).toBe(false);
+  });
+});
+
+describe("preparation never fails open, rejects or hangs", () => {
+  it("refuses when a row cannot even be addressed for removal", async () => {
+    const view = harness({ rows: [row()], faults: { unaddressableRows: 1 } });
+    // Counting it and carrying on would open a cache over data this build
+    // cannot account for or remove.
+    expect(await view.cache.prepare(descriptor())).toMatchObject({ kind: "refused", reason: "purge" });
+    expect(peek(view.cache)).toBeUndefined();
+  });
+
+  it("resolves with a refusal when the store throws instead of reporting", async () => {
+    const view = harness({ faults: { rejectScan: true } });
+    await expect(view.cache.prepare(descriptor())).resolves.toMatchObject({ kind: "refused", reason: "storage" });
+  });
+
+  it("resolves with a refusal when a scan never settles", async () => {
+    const view = harness({ faults: { stuckScan: true } });
+    await expect(view.cache.prepare(descriptor(), 10)).resolves.toMatchObject({ kind: "refused" });
+    expect(view.cache.state().kind).not.toBe("preparing");
+  });
+
+  it("resolves with a refusal when a deletion never settles", async () => {
+    const view = harness({ rows: [row({ sessionId: "stale", capturedAt: new Date(1_600_000_000_000).toISOString() })], faults: { stuckRemove: true } });
+    await expect(view.cache.prepare(descriptor(), 10)).resolves.toMatchObject({ kind: "refused", reason: "purge" });
+  });
+
+  it("keeps the newest records when a device holds more than the policy allows", async () => {
+    // Key order is not recency: these are seeded so that the newest rows sort
+    // last by key and would have been the ones deleted.
+    const rows = Array.from({ length: 6 }, (_, index) => row({
+      sessionId: `session-${index}`,
+      lastUsedAt: new Date(1_699_000_000_000 + index * 60_000).toISOString(),
+    }));
+    const view = harness({ rows });
+    expect((await view.cache.prepare(descriptor(ENV_A, { maxSessions: 2 }))).kind).toBe("open");
+    expect([...view.store.rows.values()].map((stored) => stored.sessionId).sort()).toEqual(["session-4", "session-5"]);
+    expect(view.cache.counters().records).toBe(2);
+  });
+
+  it("closes a store that arrives after the pass gave up on it", async () => {
+    let release: ((store: ReturnType<typeof createTestStore>) => void) | undefined;
+    const late = createTestStore([row()], {});
+    const view = harness({ openStore: () => new Promise((resolve) => { release = resolve; }) });
+    const state = await view.cache.prepare(descriptor(), 10);
+    expect(state).toMatchObject({ kind: "refused", reason: "storage" });
+    release?.(late);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    // Closed, so it cannot be read from or written to by anything later.
+    expect(await late.put(row({ sessionId: "after" }))).toBe(false);
+  });
+});
+
+describe("promotion runs inside the queue", () => {
+  it("does not resurrect a session that was forgotten while it was promoting", async () => {
+    const store = createTestStore([row()], {});
+    const view = harness({ store });
+    expect((await view.cache.prepare(descriptor())).kind).toBe("open");
+    store.rows.set(`${ENV_A}\u0000cold`, row({ sessionId: "cold" }));
+
+    const promoting = view.cache.prime(["cold"]);
+    const forgetting = view.cache.forget({ sessionId: "cold" });
+    await Promise.all([promoting, forgetting]);
+    await view.flush();
+    expect(peek(view.cache, "cold")).toBeUndefined();
+    expect([...store.rows.values()].some((stored) => stored.sessionId === "cold")).toBe(false);
+    expect(view.cache.counters().records).toBe(1);
+  });
+
+  it("does not resurrect anything when the environment is cleared while it is promoting", async () => {
+    const store = createTestStore([row()], {});
+    const view = harness({ store });
+    expect((await view.cache.prepare(descriptor())).kind).toBe("open");
+    store.rows.set(`${ENV_A}\u0000cold`, row({ sessionId: "cold" }));
+
+    const promoting = view.cache.prime(["cold"]);
+    const clearing = view.cache.clear("environment");
+    await Promise.all([promoting, clearing]);
+    await view.flush();
+    expect(store.rows.size).toBe(0);
+    expect(view.cache.counters()).toMatchObject({ records: 0, hotRecords: 0, bytes: 0 });
+  });
+});
+
+describe("the control lane is bounded and serialized", () => {
+  it("coalesces repeated controls while the write lane is full", async () => {
+    const view = harness({ rows: [row()] });
+    await view.cache.prepare(descriptor());
+    // Fill the work lane past both its ceilings.
+    for (let index = 0; index < LIMITS.writes * 2; index += 1) {
+      view.cache.release(tail({ sessionId: `session-${index}`, seq: index + 1 }));
+    }
+    view.deliver();
+    const answers = await Promise.all([
+      view.cache.forget({ sessionId: "session-a" }),
+      view.cache.forget({ sessionId: "session-a" }),
+      view.cache.forget({ sessionId: "session-a" }),
+      view.cache.clear("environment"),
+      view.cache.clear("environment"),
+    ]);
+    // Every waiter is answered, nothing was dropped, and the store saw one
+    // pass rather than five.
+    expect(answers.every((ok) => typeof ok === "boolean")).toBe(true);
+    await view.flush();
+    expect(view.store.rows.size).toBe(0);
+    const counters = view.cache.counters();
+    expect(counters.queued).toEqual({ writes: 0, touches: 0, control: 0 });
+  });
+
+  it("releases its bookkeeping once everything has settled", async () => {
+    const view = harness({ rows: [row()] });
+    await view.cache.prepare(descriptor());
+    for (let index = 0; index < 40; index += 1) {
+      await view.cache.forget({ sessionId: `session-${index}` });
+      view.cache.release(tail({ sessionId: `later-${index}` }));
+      await view.flush();
+    }
+    expect(view.cache.counters().queued).toEqual({ writes: 0, touches: 0, control: 0 });
+  });
+});
+
+describe("durable recency is never claimed without a write", () => {
+  it("puts the watermark back when the touch does not commit", async () => {
+    const store = createTestStore([row()], {});
+    const view = harness({ store });
+    await view.cache.prepare(descriptor());
+    view.clock.now += 2 * 60 * 60 * 1000;
+    store.faults = { ...store.faults, refusePut: true };
+    expect(peek(view.cache)).toBeDefined();
+    await view.flush();
+    const refused = view.cache.counters().writesRefused;
+    expect(refused).toBeGreaterThan(0);
+    // The next read tries again rather than believing the write that failed.
+    view.clock.now += 2 * 60 * 60 * 1000;
+    expect(peek(view.cache)).toBeDefined();
+    await view.flush();
+    expect(view.cache.counters().writesRefused).toBeGreaterThan(refused);
+  });
+
+  it("counts a second refused write rather than passing over it", async () => {
+    const other = row({ sessionId: "other", lastUsedAt: new Date(1_699_000_000_000).toISOString() });
+    const view = harness({ rows: [other], faults: { refusePut: true } });
+    await view.cache.prepare(descriptor(ENV_A, { maxSessions: 2 }));
+    view.cache.release(tail());
+    await view.flush();
+    expect(view.cache.counters().writesRefused).toBeGreaterThanOrEqual(2);
+    expect(peek(view.cache)).toBeUndefined();
+  });
+});
+
+describe("freshness holds for a record that is held but not hot", () => {
+  it("refuses an older tail against a newer cold row", async () => {
+    // More rows than the hot ceiling, so the first is validated but not warm.
+    const rows = Array.from({ length: TAIL_SCAN_LIMITS.warmRecords + 2 }, (_, index) => row({
+      sessionId: `session-${index}`,
+      lastUsedAt: new Date(1_699_000_000_000 + index * 1_000).toISOString(),
+    }));
+    rows[0] = row({ sessionId: "cold-newer", lastUsedAt: new Date(1_699_000_000_000).toISOString() }, payloadOf({ revision: REVISION_2, seq: 50 }));
+    const view = harness({ rows });
+    expect((await view.cache.prepare(descriptor())).kind).toBe("open");
+    expect(peek(view.cache, "cold-newer")).toBeUndefined();
+
+    view.cache.release(tail({ sessionId: "cold-newer", revision: REVISION, seq: 3 }));
+    await view.flush();
+    const stored = [...view.store.rows.values()].find((each) => each.sessionId === "cold-newer")!;
+    const text = stored.body.kind === "plain" ? stored.body.text : "";
+    expect(text).toContain(REVISION_2);
+    expect(text).not.toContain(`"${REVISION}"`);
+  });
+
+  it("accepts a newer replacement for the same cold session", async () => {
+    const rows = Array.from({ length: TAIL_SCAN_LIMITS.warmRecords + 2 }, (_, index) => row({
+      sessionId: `session-${index}`,
+      lastUsedAt: new Date(1_699_000_000_000 + index * 1_000).toISOString(),
+    }));
+    rows[0] = row({ sessionId: "cold-older", lastUsedAt: new Date(1_699_000_000_000).toISOString() }, payloadOf({ revision: REVISION, seq: 2 }));
+    const view = harness({ rows });
+    await view.cache.prepare(descriptor());
+    view.cache.release(tail({ sessionId: "cold-older", revision: REVISION_2, seq: 9 }));
+    await view.flush();
+    const stored = [...view.store.rows.values()].find((each) => each.sessionId === "cold-older")!;
+    const text = stored.body.kind === "plain" ? stored.body.text : "";
+    expect(text).toContain(REVISION_2);
+  });
+});
+
+describe("the deletion registry is single-flight", () => {
+  it("issues one request however often clearing is asked for, and fences a newer pass", async () => {
+    let requests = 0;
+    let block;
+    const factory = {
+      deleteDatabase() {
+        requests += 1;
+        const request = {};
+        block = () => request.onsuccess?.();
+        return request;
+      },
+      open() {
+        throw new Error("nothing may open while a deletion is outstanding");
+      },
+    };
+
+    const first = destroyTailDatabase(factory, 5);
+    const second = destroyTailDatabase(factory, 5);
+    expect(await first).toBe("blocked");
+    expect(await second).toBe("blocked");
+    expect(requests).toBe(1);
+    expect(deletionPending()).toBe(true);
+    expect(await openTailStore(factory)).toBeUndefined();
+
+    block?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(deletionPending()).toBe(false);
+  });
+
+  it("does not close a pass that opened while a deletion was outstanding", async () => {
+    let settle;
+    const clock = { now: 1_700_000_000_000 };
+    const cache = createTailCache({
+      // A fresh store each time, as a reconnect gets.
+      openStore: () => Promise.resolve(createTestStore([row()], {})),
+      resolveVault: () => Promise.resolve(NULL_VAULT),
+      destroy: () => new Promise((resolve) => { settle = resolve; }),
+      appVersion: PRODUCT_VERSION,
+      now: () => clock.now,
+      defer: (task) => task(),
+    });
+    expect((await cache.prepare(descriptor())).kind).toBe("open");
+    const clearing = cache.clear("all");
+    // A reconnect opens a new pass while the deletion is still outstanding.
+    expect((await cache.prepare(descriptor())).kind).toBe("open");
+    settle?.("deleted");
+    expect(await clearing).toBe(true);
+    // The newer pass is the one in force; the old deletion did not close it.
+    expect(cache.state().kind).toBe("open");
   });
 });

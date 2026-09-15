@@ -326,3 +326,93 @@ describe("the wait has a cancel half, and it is always called", () => {
     expect(h.client.connection).toBe("open");
   });
 });
+
+describe("cancellation lives on the handshake, so every retirement reaches it", () => {
+  /** A `ready` that never settles: the case no other exit would reach. */
+  const stuck = () => {
+    const expired = [];
+    const h = build(() => ({
+      ok: true,
+      ready: new Promise(() => {}),
+      readyBudgetMs: 10_000,
+      onReadyExpired: () => expired.push("expired"),
+    }));
+    return { h, expired };
+  };
+
+  it("cancels a never-settling readiness when the socket closes", async () => {
+    const { h, expired } = stuck();
+    h.client.connect();
+    const socket = h.socket();
+    socket.open();
+    socket.handshake();
+    expect(expired).toEqual([]);
+    socket.close();
+    // Synchronously, on the close itself — not when something finally settles.
+    expect(expired).toEqual(["expired"]);
+    expect(h.client.connection).toBe("closed");
+  });
+
+  it("cancels a never-settling readiness when the client is closed", () => {
+    const { h, expired } = stuck();
+    h.client.connect();
+    h.socket().open();
+    h.socket().handshake();
+    h.client.close();
+    expect(expired).toEqual(["expired"]);
+  });
+
+  it("cancels a never-settling readiness when the connection is replaced", () => {
+    const { h, expired } = stuck();
+    h.client.connect();
+    h.socket().open();
+    h.socket().handshake();
+    h.client.reconnect();
+    expect(expired).toEqual(["expired"]);
+  });
+
+  it("cancels a never-settling readiness when the environment then fails", () => {
+    const expired = [];
+    let first = true;
+    const h = build(() => {
+      if (first) {
+        first = false;
+        return { ok: true, ready: new Promise(() => {}), readyBudgetMs: 10_000, onReadyExpired: () => expired.push("expired") };
+      }
+      return { ok: false, reason: "this device could not be made safe" };
+    });
+    h.client.connect();
+    h.socket().open();
+    h.socket().handshake();
+    // A second environment answer on the same socket retires the handshake.
+    h.socket().handshake();
+    expect(expired).toEqual(["expired"]);
+  });
+
+  it("does not cancel when preparation succeeded in time", async () => {
+    const expired = [];
+    const ready = deferred();
+    const h = build(() => ({ ok: true, ready: ready.promise, onReadyExpired: () => expired.push("expired") }));
+    h.client.connect();
+    h.socket().open();
+    h.socket().handshake();
+    ready.resolve();
+    await ready.promise;
+    await Promise.resolve();
+    expect(h.client.connection).toBe("open");
+    // And the later close does not cancel a preparation that already landed.
+    h.socket().close();
+    expect(expired).toEqual([]);
+  });
+
+  it("cancels once, however many retirements follow", () => {
+    const { h, expired } = stuck();
+    h.client.connect();
+    h.socket().open();
+    h.socket().handshake();
+    h.socket().close();
+    h.client.close();
+    h.client.reconnect();
+    expect(expired).toEqual(["expired"]);
+  });
+});

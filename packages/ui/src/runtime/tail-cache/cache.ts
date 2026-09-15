@@ -82,10 +82,13 @@ export function createTailCache(deps: TailCacheDeps): TailCache {
         if (fitted.refusal !== "not-a-tail" && fitted.refusal !== "foreign") live.mutations.noteRefusedWrite();
         return;
       }
-      // A newer record is never replaced by an older one. Within one engine
-      // generation `seq` orders them; across generations only the capture time
-      // can, because `seq` restarts.
-      const existing = live.recency.hot(fitted.sessionId);
+      // A newer record is never replaced by an older one — and the comparison
+      // is against every record this device **holds**, not only the ones whose
+      // objects are still in memory: a newer cold row must not be overwritten
+      // just because it was not warm. Within one engine generation `seq` orders
+      // two captures; across generations only the capture time can, because
+      // `seq` restarts (D-g).
+      const existing = live.recency.held(fitted.sessionId);
       if (existing) {
         const newer = existing.epoch === fitted.payload.epoch
           ? existing.seq > fitted.payload.seq
@@ -119,7 +122,10 @@ export function createTailCache(deps: TailCacheDeps): TailCache {
         return undefined;
       }
       // Recency lives outside the frozen record, so a hit allocates nothing.
-      if (live.recency.touch(target.sessionId, deps.now())) live.mutations.touch(target.sessionId);
+      // The watermark is read before the use is marked, so a durable write
+      // that does not commit can put it back.
+      const persistedBefore = live.recency.persistedAt(target.sessionId);
+      if (live.recency.touch(target.sessionId, deps.now())) live.mutations.touch(target.sessionId, persistedBefore);
       return record;
     },
 
@@ -148,7 +154,7 @@ export function createTailCache(deps: TailCacheDeps): TailCache {
         // what makes it the recovery a refused cache can actually offer.
         const live = lifecycle.open();
         if (live) await live.mutations.clearEnvironment().catch(() => false);
-        return lifecycle.destroyEverything();
+        return lifecycle.destroyEverything(live?.pass);
       }
       const live = lifecycle.open();
       if (!live) return false;

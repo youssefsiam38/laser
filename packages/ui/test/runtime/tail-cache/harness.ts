@@ -144,6 +144,14 @@ export function row(overrides: Partial<TailRow> = {}, payload = payloadOf()): Ta
 }
 
 export interface StoreFaults {
+  /** `scan` rejects outright (a store that throws rather than reports). */
+  rejectScan?: boolean;
+  /** `scan` never settles. */
+  stuckScan?: boolean;
+  /** `remove` never settles. */
+  stuckRemove?: boolean;
+  /** `scan` hands back a row with a key this build cannot address. */
+  unaddressableRows?: number;
   /** Every `put` fails to commit. */
   refusePut?: boolean;
   /** The first `n` puts fail; later ones commit (a quota eviction can fix). */
@@ -188,6 +196,8 @@ export function createTestStore(seed: readonly TailRow[] = [], faults: StoreFaul
 
     async scan(options: ScanOptions, visit): Promise<ScanReport> {
       const report: ScanReport = { outcome: "complete", rowsSeen: 0, bytesSeen: 0 };
+      if (store.faults.rejectScan) throw new Error("this store throws instead of reporting");
+      if (store.faults.stuckScan) return new Promise<never>(() => {});
       if (closed || store.faults.refuseScan) return { ...report, outcome: "failed" };
       if (store.faults.scanOutcome && store.faults.scanOutcome !== "complete") {
         return { ...report, outcome: store.faults.scanOutcome, rowsSeen: 1, bytesSeen: 1 };
@@ -197,6 +207,11 @@ export function createTestStore(seed: readonly TailRow[] = [], faults: StoreFaul
         row: value,
         stored: key,
       }));
+      for (let index = 0; index < (store.faults.unaddressableRows ?? 0); index += 1) {
+        // No usable primary key at all: nothing can delete this row, which is
+        // why a pass that meets one must fail closed.
+        all.unshift({ key: "not-a-key", row: { schema: TAIL_RECORD_SCHEMA, appVersion: PRODUCT_VERSION } });
+      }
       for (let index = 0; index < (store.faults.malformedKeys ?? 0); index += 1) {
         // A row this build could not have written: addressable only by the key
         // the store hands over with it.
@@ -239,6 +254,7 @@ export function createTestStore(seed: readonly TailRow[] = [], faults: StoreFaul
     },
 
     async remove(keys, batch, limits) {
+      if (store.faults.stuckRemove) return new Promise<never>(() => {});
       if (closed || store.faults.refuseRemove) return false;
       if (keys.length > (limits?.rows ?? TAIL_SCAN_LIMITS.deleteRows)) return false;
       const expired = (): boolean => limits?.deadline !== undefined && time.now > limits.deadline;

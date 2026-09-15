@@ -181,7 +181,21 @@ export class HostClient {
    * connection on its behalf. `reconnect()` and `close()` retire this, so a
    * late arrival finds nothing to act on.
    */
-  private handshake: { socket: WebSocket; timer?: ReturnType<typeof setTimeout>; acceptedVersion?: string } | undefined;
+  private handshake: {
+    socket: WebSocket;
+    timer?: ReturnType<typeof setTimeout>;
+    acceptedVersion?: string;
+    /**
+     * Cancel whatever the app is preparing for this socket (RP-10).
+     *
+     * It lives on the handshake rather than in a closure so that **every**
+     * retirement path cancels it — a replaced socket, a close, a failure, a
+     * version mismatch — including the case that has no other exit: a `ready`
+     * promise that never settles. Idempotent, and removed the moment a
+     * successful preparation opens the connection, so success never cancels.
+     */
+    cancelReady?: () => void;
+  } | undefined;
   private readonly handshakeMessages: JsonRpcMessage[] = [];
   private frameHandle: number | undefined;
   private timerHandle: ReturnType<typeof setTimeout> | undefined;
@@ -337,7 +351,7 @@ export class HostClient {
     const ws = new WebSocket(this.options.url ?? defaultHostUrl());
     this.ws = ws;
     this.retireHandshake();
-    const handshake: { socket: WebSocket; timer?: ReturnType<typeof setTimeout>; acceptedVersion?: string } = { socket: ws };
+    const handshake: NonNullable<HostClient["handshake"]> = { socket: ws };
     this.handshake = handshake;
     ws.onopen = () => {
       if (this.handshake !== handshake) return;
@@ -373,10 +387,22 @@ export class HostClient {
     ws.onerror = () => ws.close();
   }
 
-  /** Drop the current handshake and its deadline, whatever state it is in. */
+  /**
+   * Drop the current handshake, its deadline **and** whatever the app was
+   * preparing for it, whatever state it is in.
+   *
+   * The cancellation is synchronous and happens here, in the one place every
+   * retirement goes through, so a preparation is never left running for a
+   * socket nobody is using — not even one that would never have settled.
+   */
   private retireHandshake(): void {
-    if (this.handshake?.timer) clearTimeout(this.handshake.timer);
+    const handshake = this.handshake;
     this.handshake = undefined;
+    if (!handshake) return;
+    if (handshake.timer) clearTimeout(handshake.timer);
+    const cancel = handshake.cancelReady;
+    delete handshake.cancelReady;
+    cancel?.();
   }
 
   /** The handshake took too long. Replace that socket, and only that socket. */
@@ -480,14 +506,20 @@ export class HostClient {
     if (!handshake || handshake.socket !== socket || !ready) return;
     const budget = Math.max(0, Math.min(acceptance.readyBudgetMs ?? READY_BUDGET_MS, MAX_READY_BUDGET_MS));
     let settled = false;
-    /** Tell the app its preparation is over, whatever it is still doing. */
+    let cancelled = false;
+    /** Tell the app its preparation is over, once, whatever it is still doing. */
     const expire = (): void => {
+      if (cancelled) return;
+      cancelled = true;
       try {
         acceptance.onReadyExpired?.();
       } catch {
         // The app's own cancellation is not allowed to take the socket with it.
       }
     };
+    // On the handshake, so every retirement path cancels it — including a
+    // `ready` that never settles at all, which no other exit would reach.
+    handshake.cancelReady = expire;
     const settle = (prepared: boolean): void => {
       if (settled) return;
       settled = true;
@@ -495,11 +527,18 @@ export class HostClient {
       delete handshake.timer;
       // The only fence that matters: is this still the live handshake's socket?
       const live = this.handshake?.socket === socket && this.ws === socket;
-      // Two reasons to cancel: the wait ran out, or this socket is not the one
-      // any more. In both, whatever was being prepared must stay closed.
-      if (!prepared || !live) expire();
-      if (!live) return;
-      this.openEnvironment(socket);
+      if (prepared && live) {
+        // Prepared in time: disarm before opening, so success never cancels.
+        cancelled = true;
+        delete handshake.cancelReady;
+        this.openEnvironment(socket);
+        return;
+      }
+      // The wait ran out, the preparation failed, or this socket is not the
+      // one any more: whatever was being prepared must stay closed.
+      expire();
+      delete handshake.cancelReady;
+      if (live) this.openEnvironment(socket);
     };
     handshake.timer = setTimeout(() => settle(false), budget);
     ready.then(() => settle(true), () => settle(false));

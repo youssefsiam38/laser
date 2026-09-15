@@ -27,13 +27,23 @@ export interface HotLimits {
   bytes: number;
 }
 
-/** One record this environment holds, as the accounting sees it. */
+/**
+ * One record this environment holds, as the accounting sees it.
+ *
+ * It carries the ordering metadata as well as the bytes, because freshness has
+ * to be decidable for a record that is **held but not hot**: an older tail must
+ * not overwrite a newer cold row just because its object is no longer in
+ * memory. Within one engine generation `seq` orders two captures; across
+ * generations only `capturedAt` can, because `seq` restarts (D-g).
+ */
 export interface HeldRow {
   readonly sessionId: string;
   readonly bytes: number;
   /** When it was last used: a read or a write, never a background update. */
   readonly usedAt: number;
   readonly capturedAt: string;
+  readonly epoch: string;
+  readonly seq: number;
 }
 
 export interface RecencyIndex {
@@ -56,6 +66,16 @@ export interface RecencyIndex {
   hotBytes(): number;
   /** Mark a use. Returns true when a durable touch is worth persisting. */
   touch(sessionId: string, usedAt: number): boolean;
+  /** What was last persisted for this session, for a failed touch to restore. */
+  persistedAt(sessionId: string): number;
+  /**
+   * A durable touch did not commit: forget that it was ever persisted.
+   *
+   * Recency this device claims to have written has to be recency it wrote. The
+   * in-memory use stands — somebody did read it — but the watermark goes back,
+   * so the next read tries again instead of believing a write that failed.
+   */
+  untouch(sessionId: string, persistedAt: number): void;
   /** Everything past its age, oldest first. */
   expired(now: number, ageMs: number): readonly HeldRow[];
   /**
@@ -87,6 +107,9 @@ export function createRecencyIndex(limits: HotLimits): RecencyIndex {
   /** What was last persisted, so a touch is written at most once an interval. */
   const persisted = new Map<string, number>();
 
+  /** What this index last persisted for a session, for a failed touch to restore. */
+  const persistedAt = (sessionId: string): number => persisted.get(sessionId) ?? 0;
+
   const trimHot = (): void => {
     const overBytes = (): boolean => {
       let bytes = 0;
@@ -109,6 +132,8 @@ export function createRecencyIndex(limits: HotLimits): RecencyIndex {
   };
 
   return {
+    persistedAt,
+
     adopt(rows, hot) {
       held.clear();
       objects.clear();
@@ -127,6 +152,8 @@ export function createRecencyIndex(limits: HotLimits): RecencyIndex {
         bytes: record.bytes,
         usedAt,
         capturedAt: record.capturedAt,
+        epoch: record.epoch,
+        seq: record.seq,
       });
       objects.set(record.sessionId, record);
       persisted.set(record.sessionId, usedAt);
@@ -175,6 +202,14 @@ export function createRecencyIndex(limits: HotLimits): RecencyIndex {
       if (usedAt - last < DURABLE_TOUCH_INTERVAL_MS) return false;
       persisted.set(sessionId, usedAt);
       return true;
+    },
+
+    untouch(sessionId, persistedAt) {
+      if (!held.has(sessionId)) {
+        persisted.delete(sessionId);
+        return;
+      }
+      persisted.set(sessionId, persistedAt);
     },
 
     expired(now, ageMs) {
