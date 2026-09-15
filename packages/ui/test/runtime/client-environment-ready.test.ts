@@ -235,3 +235,94 @@ describe("a preparation belongs to the socket it started on", () => {
     expect(h.socket().closed).toBe(true);
   });
 });
+
+describe("the wait has a cancel half, and it is always called", () => {
+  /** What the app is told when the connection stops waiting for this device. */
+  const withCancel = () => {
+    const expired: string[] = [];
+    const ready = deferred();
+    const h = build(() => ({
+      ok: true,
+      ready: ready.promise,
+      readyBudgetMs: 40,
+      onReadyExpired: () => expired.push("expired"),
+    }));
+    return { h, ready, expired };
+  };
+
+  it("tells the app when the budget runs out, before it opens", async () => {
+    vi.useFakeTimers();
+    const { h, ready, expired } = withCancel();
+    h.client.connect();
+    h.socket().open();
+    h.socket().handshake();
+    expect(expired).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(40);
+    expect(expired).toEqual(["expired"]);
+    expect(h.client.connection).toBe("open");
+
+    // The original preparation finishes a moment later and changes nothing.
+    ready.resolve();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(expired).toEqual(["expired"]);
+    expect(h.client.connection).toBe("open");
+  });
+
+  it("tells the app when its socket is replaced while it is still preparing", async () => {
+    const { h, ready, expired } = withCancel();
+    h.client.connect();
+    const original = h.socket();
+    original.open();
+    original.handshake();
+    original.close();
+
+    ready.resolve();
+    await ready.promise;
+    await Promise.resolve();
+    expect(expired).toEqual(["expired"]);
+    expect(h.client.connection).toBe("closed");
+  });
+
+  it("tells the app when preparing this device failed", async () => {
+    const { h, ready, expired } = withCancel();
+    h.client.connect();
+    h.socket().open();
+    h.socket().handshake();
+    ready.reject();
+    await ready.promise.catch(() => {});
+    await Promise.resolve();
+    expect(expired).toEqual(["expired"]);
+    expect(h.client.connection).toBe("open");
+  });
+
+  it("does not tell the app anything when preparation simply succeeded", async () => {
+    const { h, ready, expired } = withCancel();
+    h.client.connect();
+    h.socket().open();
+    h.socket().handshake();
+    ready.resolve();
+    await ready.promise;
+    await Promise.resolve();
+    expect(expired).toEqual([]);
+    expect(h.client.connection).toBe("open");
+  });
+
+  it("survives a cancellation callback that throws", async () => {
+    vi.useFakeTimers();
+    const ready = deferred();
+    const h = build(() => ({
+      ok: true,
+      ready: ready.promise,
+      readyBudgetMs: 20,
+      onReadyExpired: () => {
+        throw new Error("the app's own cleanup broke");
+      },
+    }));
+    h.client.connect();
+    h.socket().open();
+    h.socket().handshake();
+    await vi.advanceTimersByTimeAsync(20);
+    expect(h.client.connection).toBe("open");
+  });
+});

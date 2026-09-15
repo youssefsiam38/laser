@@ -193,12 +193,23 @@ export function parseBody(text: string): TailBody | undefined {
   return Object.freeze({ entries: Object.freeze(entries), attachments: Object.freeze(attachments) });
 }
 
-/** Exact UTF-8 bytes of a body's carried entry JSON, plus its references. */
+/**
+ * Exact UTF-8 bytes of the body **as it is stored**.
+ *
+ * Not the sum of the entry JSON: a record also carries every entry's id and
+ * parent id, its attachment references, and the JSON structure and escaping
+ * around all of it. Measuring the pieces and calling the total exact would
+ * under-count a record by everything between them — so this measures the one
+ * string that is actually written, which is also the string the checksum is
+ * taken over and the vault seals. Counted, never allocated.
+ */
 export function bodyBytes(body: TailBody): number {
-  let bytes = 0;
-  for (const entry of body.entries) bytes += byteLength(entry.json);
-  for (const reference of body.attachments) bytes += byteLength(reference.mimeType) + byteLength(reference.checksum) + 24;
-  return bytes;
+  return byteLength(bodyText(body));
+}
+
+/** Exact UTF-8 bytes of an already-serialized body. The same number. */
+export function bodyTextBytes(text: string): number {
+  return byteLength(text);
 }
 
 /**

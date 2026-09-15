@@ -24,6 +24,7 @@
  * lie. The in-memory store used by the focused tests lives under `test/`.
  */
 import { storageKey } from "@lasercode/protocol";
+import { byteLength } from "../view-measure.js";
 import type { SealedBody } from "./vault.js";
 import { TAIL_SCAN_LIMITS, type ScanOutcome } from "./bounds.js";
 import type { TailAttachmentRef, TailKey } from "./record.js";
@@ -72,6 +73,14 @@ export interface ScanReport {
   bytesSeen: number;
 }
 
+/** What one delete pass may spend. Both halves — delete and proof — obey it. */
+export interface RemoveBounds {
+  /** Keys one pass may delete. More than this is refused, not truncated. */
+  rows?: number | undefined;
+  /** A `Date.now()` deadline for the whole pass, including its verification. */
+  deadline?: number | undefined;
+}
+
 export interface TailStore {
   /** True for real storage. Always true in production (there is one store). */
   readonly durable: boolean;
@@ -82,8 +91,15 @@ export interface TailStore {
   scan(options: ScanOptions, visit: (row: TailRow) => boolean | void): Promise<ScanReport>;
   /** One atomic write. `false` means the transaction did not commit. */
   put(row: TailRow): Promise<boolean>;
-  /** Delete these keys in bounded batches, then prove they are gone. */
-  remove(keys: readonly TailKey[], batch: number): Promise<boolean>;
+  /**
+   * Delete these keys in bounded batches, then prove they are gone.
+   *
+   * `false` for anything short of proof: too many keys for one pass, a
+   * transaction that did not commit, a key still present afterwards, or a
+   * deadline reached. A caller that cannot prove a deletion keeps the cache
+   * shut rather than reading over bytes it believes are gone.
+   */
+  remove(keys: readonly TailKey[], batch: number, bounds?: RemoveBounds): Promise<boolean>;
   close(): void;
 }
 
@@ -103,16 +119,19 @@ export const yieldToLoop = (): Promise<void> => new Promise((resolve) => setTime
  */
 export function rowStoredBytes(row: TailRow): number {
   const body = row.body as SealedBody | undefined;
-  const bodyBytes = body === undefined
+  const bytes = body === undefined
     ? 0
+    // Exact UTF-8, never `String.length`: a stored body is measured the way a
+    // quota measures it, so a transcript in a non-Latin script is not
+    // accounted at a third of its real size.
     : body.kind === "plain"
-      ? body.text.length
+      ? byteLength(body.text)
       : (body.data?.byteLength ?? 0) + (body.iv?.byteLength ?? 0);
-  return bodyBytes + ROW_IDENTITY_ALLOWANCE;
+  return bytes + ROW_IDENTITY_ALLOWANCE;
 }
 
 /** Identity, accounting and reference fields beside a body, generously. */
-const ROW_IDENTITY_ALLOWANCE = 2_048;
+export const ROW_IDENTITY_ALLOWANCE = 2_048;
 
 const request = <T>(value: IDBRequest<T>): Promise<T> =>
   new Promise((resolve, reject) => {
@@ -131,9 +150,14 @@ const request = <T>(value: IDBRequest<T>): Promise<T> =>
  */
 export async function openTailStore(
   factory: IDBFactory | undefined,
-  blockedMs: number = TAIL_SCAN_LIMITS.blockedMs,
+  options: { blockedMs?: number | undefined; now?: (() => number) | undefined } = {},
 ): Promise<TailStore | undefined> {
   if (!factory) return undefined;
+  const blockedMs = options.blockedMs ?? TAIL_SCAN_LIMITS.blockedMs;
+  // One clock for the store and its caller: every deadline that reaches here
+  // was computed from the *caller's* clock, and comparing it against a
+  // different one would expire a pass that had its whole budget left.
+  const now = options.now ?? (() => Date.now());
   let database: IDBDatabase | undefined;
   try {
     database = await new Promise<IDBDatabase | undefined>((resolve) => {
@@ -150,7 +174,18 @@ export async function openTailStore(
         settle(undefined);
         return;
       }
-      const blocked = setTimeout(() => settle(undefined), blockedMs);
+      // A blocked open is given `blockedMs` and then refused. If the request
+      // succeeds afterwards, that connection is closed rather than left open:
+      // a timed-out attempt must not hold a database it will never be used for,
+      // and must never become a cache somebody reads.
+      const blocked = setTimeout(() => {
+        settle(undefined);
+        try {
+          open.result?.close();
+        } catch {
+          // Nothing opened yet; the success handler below closes a late one.
+        }
+      }, blockedMs);
       open.onupgradeneeded = () => {
         const db = open.result;
         if (!db.objectStoreNames.contains(TAIL_STORE_NAME)) {
@@ -160,6 +195,15 @@ export async function openTailStore(
       };
       open.onsuccess = () => {
         clearTimeout(blocked);
+        if (settled) {
+          // Too late: this attempt was already refused.
+          try {
+            open.result.close();
+          } catch {
+            // Already closing; nothing to do.
+          }
+          return;
+        }
         settle(open.result);
       };
       open.onerror = () => {
@@ -223,7 +267,7 @@ export async function openTailStore(
         const last = batch[batch.length - 1]!;
         cursorKey = [last.environmentKey, last.sessionId];
         if (batch.length < options.batch) return report;
-        if (options.deadline !== undefined && Date.now() > options.deadline) return { ...report, outcome: "over-time" };
+        if (options.deadline !== undefined && now() > options.deadline) return { ...report, outcome: "over-time" };
         await yieldToLoop();
       }
     },
@@ -244,8 +288,14 @@ export async function openTailStore(
       });
     },
 
-    async remove(keys, batch) {
+    async remove(keys, batch, limits) {
+      const rows = limits?.rows ?? TAIL_SCAN_LIMITS.deleteRows;
+      // Refused, never truncated: a partial delete reported as a success is
+      // exactly the lie this cache must not tell.
+      if (keys.length > rows) return false;
+      const expired = (): boolean => limits?.deadline !== undefined && now() > limits.deadline;
       for (let index = 0; index < keys.length; index += batch) {
+        if (expired()) return false;
         const slice = keys.slice(index, index + batch);
         const store = transaction("readwrite");
         if (!store) return false;
@@ -264,16 +314,22 @@ export async function openTailStore(
         if (index + batch < keys.length) await yieldToLoop();
       }
       // Verified, not assumed: a delete that did not take must not leave the
-      // cache open over bytes it believes are gone.
-      const store = transaction("readonly");
-      if (!store) return false;
-      for (const key of keys) {
+      // cache open over bytes it believes are gone. The proof is batched and
+      // yields like the deletion itself — two thousand reads in one
+      // transaction would be a frame, not a check.
+      for (let index = 0; index < keys.length; index += batch) {
+        if (expired()) return false;
+        const store = transaction("readonly");
+        if (!store) return false;
         try {
-          const found = await request(store.getKey(key as unknown as IDBValidKey));
-          if (found !== undefined) return false;
+          for (const key of keys.slice(index, index + batch)) {
+            const found = await request(store.getKey(key as unknown as IDBValidKey));
+            if (found !== undefined) return false;
+          }
         } catch {
           return false;
         }
+        if (index + batch < keys.length) await yieldToLoop();
       }
       return true;
     },

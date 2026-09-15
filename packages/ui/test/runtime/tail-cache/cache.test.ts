@@ -13,7 +13,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createTailCache, type TailCache, type TailCacheState } from "../../../src/runtime/tail-cache/cache.js";
 import { TAIL_HARD_LIMITS, TAIL_RECORD_SCHEMA, TAIL_SCAN_LIMITS, boundsFor } from "../../../src/runtime/tail-cache/bounds.js";
-import { TAIL_OMITTED_ATTACHMENT, bodyText, checksumOf, identityAad } from "../../../src/runtime/tail-cache/record.js";
+import { TAIL_OMITTED_ATTACHMENT, bodyText, bodyTextBytes, checksumOf, identityAad } from "../../../src/runtime/tail-cache/record.js";
 import type { TailRow } from "../../../src/runtime/tail-cache/store.js";
 import { NULL_VAULT, createDesktopVault, type TailVault } from "../../../src/runtime/tail-cache/vault.js";
 import { VIEW_TAIL_SCHEMA, type ViewTailDto } from "../../../src/runtime/view-tail.js";
@@ -128,7 +128,9 @@ function row(overrides: Partial<TailRow> = {}): TailRow {
     truncated: false,
     attachments: [],
     attachmentsOmitted: 0,
-    bytes: 120,
+    // Exact UTF-8 bytes of the body as stored: a row whose number disagrees
+    // with its body is corrupt, which is its own test below.
+    bytes: bodyTextBytes(text),
     capturedAt: new Date(1_699_999_000_000).toISOString(),
     lastUsedAt: new Date(1_699_999_000_000).toISOString(),
     checksum: checksumOf(text),
@@ -214,6 +216,7 @@ describe("identity is opaque, and one environment never reads another's", () => 
     const view = harness();
     await prepared(view);
     view.cache.release(tail());
+    await view.flush();
     const hit = view.cache.peek("/p/a.jsonl");
     expect(hit).toMatchObject({ sessionId: "session-a", environmentKey: ENV_A, revision: REVISION });
     await view.flush();
@@ -320,6 +323,7 @@ describe("bounds: count, exact UTF-8 bytes, entries and age", () => {
     await prepared(view);
     const text = "日本語のテキスト";
     view.cache.release(tail({ entries: [entry("e1", text)] }));
+    await view.flush();
     const record = view.cache.peek("/p/a.jsonl")!;
     const expected = new TextEncoder().encode(record.entries[0]!.json).length;
     expect(record.bytes).toBeGreaterThanOrEqual(expected);
@@ -330,6 +334,7 @@ describe("bounds: count, exact UTF-8 bytes, entries and age", () => {
     const view = harness();
     await prepared(view, descriptor(ENV_A, { maxEntriesPerSession: 2 }));
     view.cache.release(tail({ entries: [entry("e1"), entry("e2"), entry("e3")] }));
+    await view.flush();
     const record = view.cache.peek("/p/a.jsonl")!;
     expect(record.entries.map((each) => each.id)).toEqual(["e2", "e3"]);
     expect(record.truncated).toBe(true);
@@ -356,6 +361,7 @@ describe("bounds: count, exact UTF-8 bytes, entries and age", () => {
     const view = harness();
     await prepared(view, descriptor(ENV_A, { maxAgeHours: 1 }));
     view.cache.release(tail());
+    await view.flush();
     expect(view.cache.peek("/p/a.jsonl")).toBeDefined();
     view.clock.now += 2 * 60 * 60 * 1000;
     expect(view.cache.peek("/p/a.jsonl")).toBeUndefined();
@@ -461,6 +467,7 @@ describe("attachments are references, never a second copy of a picture", () => {
     const view = harness();
     await prepared(view);
     view.cache.release(tail({ entries: [picture("e1", 20_000)] }));
+    await view.flush();
     const record = view.cache.peek("/p/a.jsonl")!;
     expect(record.attachments).toHaveLength(1);
     expect(record.attachments[0]).toMatchObject({ entryId: "e1", mimeType: "image/png", bytes: 20_000 });
@@ -474,6 +481,7 @@ describe("attachments are references, never a second copy of a picture", () => {
     const view = harness();
     await prepared(view);
     view.cache.release(tail({ entries: [picture("e1", 100)] }));
+    await view.flush();
     const record = view.cache.peek("/p/a.jsonl")!;
     expect(record.attachments).toHaveLength(0);
     expect(JSON.parse(record.entries[0]!.json).message.content[0].data).toBe("A".repeat(100));
@@ -483,6 +491,7 @@ describe("attachments are references, never a second copy of a picture", () => {
     const view = harness();
     await prepared(view, descriptor(ENV_A, { attachments: "none" }));
     view.cache.release(tail({ entries: [picture("e1", 20_000), picture("e2", 50)] }));
+    await view.flush();
     const record = view.cache.peek("/p/a.jsonl")!;
     expect(record.attachments).toHaveLength(0);
     expect(record.attachmentsOmitted).toBe(2);
@@ -506,6 +515,7 @@ describe("attachments are references, never a second copy of a picture", () => {
     const view = harness();
     await prepared(view);
     view.cache.release(tail({ entries: [{ id: "e1", parentId: null, json: "{not json" }, entry("e2")] }));
+    await view.flush();
     const record = view.cache.peek("/p/a.jsonl")!;
     expect(record.entries.map((each) => each.id)).toEqual(["e2"]);
     expect(record.truncated).toBe(true);
@@ -517,6 +527,7 @@ describe("peek is synchronous, allocation-free and fenced", () => {
     const view = harness();
     await prepared(view);
     view.cache.release(tail());
+    await view.flush();
     const first = view.cache.peek("/p/a.jsonl");
     const second = view.cache.peek("/p/a.jsonl");
     expect(first).toBe(second);

@@ -57,6 +57,18 @@ export type EnvironmentAcceptance =
     ready?: Promise<unknown> | undefined;
     /** Override the default budget. Clamped to {@link MAX_READY_BUDGET_MS}. */
     readyBudgetMs?: number | undefined;
+    /**
+     * The connection has stopped waiting for `ready`, and never will again for
+     * this socket: the budget expired, or the socket was replaced or closed
+     * while preparation was still running.
+     *
+     * This is the cancel half of the contract. Without it a preparation that
+     * finished a moment too late could publish itself as ready for a
+     * connection that had already opened without it — and a device that was
+     * refused would quietly repopulate. The app uses it to leave whatever it
+     * was preparing closed; it must not throw and must not block.
+     */
+    onReadyExpired?: (() => void) | undefined;
   };
 
 /** Handshake ids. Negative and zero, so they can never be a request id. */
@@ -445,7 +457,7 @@ export class HostClient {
       return;
     }
     if (acceptance.ready) {
-      this.openWhenReady(acceptance.ready, acceptance.readyBudgetMs, socket);
+      this.openWhenReady(acceptance, socket);
       return;
     }
     this.openEnvironment(socket);
@@ -459,22 +471,38 @@ export class HostClient {
    * one. A late answer from a socket that has been replaced opens nothing,
    * sets no state and sends nothing.
    */
-  private openWhenReady(ready: Promise<unknown>, budgetMs: number | undefined, socket: WebSocket): void {
+  private openWhenReady(
+    acceptance: { ready?: Promise<unknown> | undefined; readyBudgetMs?: number | undefined; onReadyExpired?: (() => void) | undefined },
+    socket: WebSocket,
+  ): void {
     const handshake = this.handshake;
-    if (!handshake || handshake.socket !== socket) return;
-    const budget = Math.max(0, Math.min(budgetMs ?? READY_BUDGET_MS, MAX_READY_BUDGET_MS));
+    const ready = acceptance.ready;
+    if (!handshake || handshake.socket !== socket || !ready) return;
+    const budget = Math.max(0, Math.min(acceptance.readyBudgetMs ?? READY_BUDGET_MS, MAX_READY_BUDGET_MS));
     let settled = false;
-    const settle = (): void => {
+    /** Tell the app its preparation is over, whatever it is still doing. */
+    const expire = (): void => {
+      try {
+        acceptance.onReadyExpired?.();
+      } catch {
+        // The app's own cancellation is not allowed to take the socket with it.
+      }
+    };
+    const settle = (prepared: boolean): void => {
       if (settled) return;
       settled = true;
       if (handshake.timer) clearTimeout(handshake.timer);
       delete handshake.timer;
       // The only fence that matters: is this still the live handshake's socket?
-      if (this.handshake?.socket !== socket || this.ws !== socket) return;
+      const live = this.handshake?.socket === socket && this.ws === socket;
+      // Two reasons to cancel: the wait ran out, or this socket is not the one
+      // any more. In both, whatever was being prepared must stay closed.
+      if (!prepared || !live) expire();
+      if (!live) return;
       this.openEnvironment(socket);
     };
-    handshake.timer = setTimeout(settle, budget);
-    ready.then(settle, settle);
+    handshake.timer = setTimeout(() => settle(false), budget);
+    ready.then(() => settle(true), () => settle(false));
   }
 
   /** The unchanged open: state, buffered frames, then resume what we hold. */

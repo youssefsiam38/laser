@@ -45,6 +45,7 @@ import {
 import {
   bodyBytes,
   bodyText,
+  bodyTextBytes,
   checksumOf,
   identityAad,
   identityIsReadable,
@@ -57,7 +58,7 @@ import {
   type TailRecord,
 } from "./record.js";
 import { emptyDiscards, type DeviceCacheCounters, type TailCacheStatus, type TailDiscardReason } from "./counters.js";
-import type { DestroyOutcome, TailRow, TailStore } from "./store.js";
+import { ROW_IDENTITY_ALLOWANCE, rowStoredBytes, type DestroyOutcome, type TailRow, type TailStore } from "./store.js";
 import { NULL_VAULT, type TailVault } from "./vault.js";
 
 export type TailCacheState =
@@ -236,7 +237,16 @@ export function createTailCache(deps: TailCacheDeps): TailCache {
     closeStore();
   };
 
-  const refuse = (reason: TailRefusal, key?: string): TailCacheState => {
+  /**
+   * Close this environment's cache and say why.
+   *
+   * `pass` is the generation the refusal belongs to: a refusal from a pass the
+   * page has already moved past (the connection timed out waiting for it, the
+   * environment changed, the socket was replaced) publishes nothing, so a late
+   * answer cannot overwrite `closed` with a state nobody is in.
+   */
+  const refuse = (reason: TailRefusal, key?: string, pass?: number): TailCacheState => {
+    if (pass !== undefined && pass !== generation) return state;
     const next: TailCacheState = {
       kind: "refused",
       reason,
@@ -288,11 +298,30 @@ export function createTailCache(deps: TailCacheDeps): TailCache {
     snapshot = undefined;
   };
 
-  /** Turn one stored row into the frozen record a reader may hold. */
-  const openRow = async (row: TailRow, key: string): Promise<TailRecord | undefined> => {
+  /**
+   * Turn one stored row into the frozen record a reader may hold.
+   *
+   * Three checks before a single entry is parsed, in this order: the body is
+   * inside the per-record byte bound as **measured**, it weighs exactly what
+   * the row claimed, and its checksum matches. A row that claims to be tiny
+   * and carries a megabyte therefore never becomes a warm record — the claim
+   * is not what is trusted, the measurement is.
+   */
+  const openRow = async (row: TailRow, key: string, limits: TailBounds): Promise<TailRecord | undefined> => {
     const text = await vault.open(row.body, identityAad({ ...row, schema: row.schema, appVersion: row.appVersion }));
     if (text === undefined) {
       discard("undecryptable");
+      return undefined;
+    }
+    const exact = bodyTextBytes(text);
+    if (exact > limits.bytesPerSession) {
+      discard("oversize");
+      return undefined;
+    }
+    if (exact !== row.bytes) {
+      // The accounting this device keeps, and the bound it enforces, are only
+      // worth anything if the number beside a body is the body's own size.
+      discard("corrupt");
       return undefined;
     }
     if (checksumOf(text) !== row.checksum) {
@@ -339,7 +368,7 @@ export function createTailCache(deps: TailCacheDeps): TailCache {
    */
   const preparePass = async (key: string, refusal: TailRefusal | undefined, deadline: number, pass: number): Promise<TailCacheState> => {
     const active = store;
-    if (!active) return refuse("storage", key);
+    if (!active) return refuse("storage", key, pass);
     const limits = bounds!;
     const doomed: TailKey[] = [];
     const mine: TailRow[] = [];
@@ -379,7 +408,9 @@ export function createTailCache(deps: TailCacheDeps): TailCache {
           discard("invalid");
           return;
         }
-        if (row.bytes > limits.bytesPerSession) {
+        // Both the claim and the measurement: a row may not say it is small
+        // and carry a megabyte, and it may not be over the bound either way.
+        if (row.bytes > limits.bytesPerSession || rowStoredBytes(row) > limits.bytesPerSession + ROW_IDENTITY_ALLOWANCE) {
           doomed.push(keyOf(row));
           discard("oversize");
           return;
@@ -394,11 +425,11 @@ export function createTailCache(deps: TailCacheDeps): TailCache {
     );
     if (report.outcome !== "complete") {
       stoppedBy = report.outcome;
-      return refuse(report.outcome === "failed" ? "storage" : "purge", key);
+      return refuse(report.outcome === "failed" ? "storage" : "purge", key, pass);
     }
     if (doomed.length > TAIL_SCAN_LIMITS.deleteRows) {
       stoppedBy = "over-rows";
-      return refuse("purge", key);
+      return refuse("purge", key, pass);
     }
 
     // Bounds the policy narrowed between runs are enforced here, not only on
@@ -422,15 +453,20 @@ export function createTailCache(deps: TailCacheDeps): TailCache {
       mine.length = 0;
     }
 
+    // Every dimension again, now that eviction has added to the list.
+    if (doomed.length > TAIL_SCAN_LIMITS.deleteRows) {
+      stoppedBy = "over-rows";
+      return refuse("purge", key, pass);
+    }
     if (doomed.length > 0) {
-      const removed = await active.remove(doomed, TAIL_SCAN_LIMITS.batchRows);
+      const removed = await active.remove(doomed, TAIL_SCAN_LIMITS.batchRows, { rows: TAIL_SCAN_LIMITS.deleteRows, deadline });
       if (!removed) {
         stoppedBy = "failed";
-        return refuse("purge", key);
+        return refuse("purge", key, pass);
       }
     }
     if (generation !== pass) return state;
-    if (refusal) return refuse(refusal, key);
+    if (refusal) return refuse(refusal, key, pass);
 
     held.clear();
     for (const row of mine) {
@@ -444,7 +480,7 @@ export function createTailCache(deps: TailCacheDeps): TailCache {
     for (const row of mine.slice(0, TAIL_SCAN_LIMITS.warmRecords)) {
       if (deps.now() > deadline) break;
       if (warmedBytes + row.bytes > limits.bytes) break;
-      const record = await openRow(row, key);
+      const record = await openRow(row, key, limits);
       if (!record) {
         unreadable.push(keyOf(row));
         held.delete(row.sessionId);
@@ -456,11 +492,18 @@ export function createTailCache(deps: TailCacheDeps): TailCache {
       used.set(record.path, Date.parse(record.lastUsedAt) || deps.now());
     }
     if (unreadable.length > 0) {
-      // A row this build cannot open is already unreadable, so a failed delete
-      // leaks nothing; it is counted and tried again next time.
-      void active.remove(unreadable, TAIL_SCAN_LIMITS.batchRows);
+      // Awaited and proved, like every other deletion: a row this build could
+      // not open is a row whose provenance was never established, and opening
+      // the cache over one would be exactly the assumption this pass refuses
+      // to make.
+      const removed = await active.remove(unreadable, TAIL_SCAN_LIMITS.batchRows, { rows: TAIL_SCAN_LIMITS.deleteRows, deadline });
+      if (!removed) {
+        stoppedBy = "failed";
+        return refuse("purge", key, pass);
+      }
       for (const key of unreadable) held.delete(key[1]);
     }
+    if (generation !== pass) return state;
     return { kind: "open", environmentKey: key, bounds: limits };
   };
 
@@ -597,7 +640,11 @@ export function createTailCache(deps: TailCacheDeps): TailCache {
         lastUsedAt: at,
         checksum: checksumOf(text),
       });
-      remember(record);
+      // Deliberately **not** remembered yet. A record becomes readable only
+      // once its own atomic write has committed: a hot record behind a
+      // transaction that never landed would be an in-memory cache pretending
+      // to be a durable one, and `peek` would serve it as though a reload
+      // could find it again.
 
       // The write itself never runs on the path that released the transcript.
       deps.defer(() => {
@@ -605,7 +652,14 @@ export function createTailCache(deps: TailCacheDeps): TailCache {
         const chain = (writing.get(record.sessionId) ?? Promise.resolve()).then(async () => {
           if (generation !== mine || !store) return;
           const sealed = await vault.seal(text, identityAad(record));
-          if (!sealed || generation !== mine || !store) return;
+          if (!sealed) {
+            // Nothing could be written, so nothing is held: said in the
+            // counters rather than kept in memory as if it were stored.
+            writesRefused += 1;
+            snapshot = undefined;
+            return;
+          }
+          if (generation !== mine || !store) return;
           const row: TailRow = {
             schema: record.schema,
             appVersion: record.appVersion,
@@ -630,13 +684,15 @@ export function createTailCache(deps: TailCacheDeps): TailCache {
             writesRefused += 1;
             snapshot = undefined;
             // Quota or a refused transaction: make room once, then try again.
+            // Nothing about this record is in memory yet, so a second refusal
+            // simply leaves this device without it.
             await evictToFit(limits, record.sessionId);
             if (generation !== mine || !store) return;
-            if (!(await store.put(row))) {
-              held.delete(record.sessionId);
-              return;
-            }
+            if (!(await store.put(row))) return;
           }
+          // Committed: now, and only now, is it a record this device holds.
+          if (generation !== mine) return;
+          remember(record);
           await evictToFit(limits, record.sessionId);
         });
         writing.set(record.sessionId, chain.catch(() => {}));
@@ -677,11 +733,18 @@ export function createTailCache(deps: TailCacheDeps): TailCache {
           return found.length < wanted.size;
         },
       );
-      if (report.outcome === "failed" || generation !== mine) return;
+      // A partial pass proves nothing about what is there, so nothing is
+      // promoted from one: `peek` answers `undefined` and the conversation is
+      // read from its host, which is the honest outcome.
+      if (report.outcome !== "complete" || generation !== mine) {
+        if (report.outcome !== "complete") stoppedBy = report.outcome;
+        return;
+      }
+      const limits = bounds;
       for (const row of found.slice(0, TAIL_SCAN_LIMITS.warmRecords)) {
         if (!identityIsReadable(row, deps.appVersion, key)) continue;
-        if (readableAge(row.capturedAt, deps.now(), bounds.ageMs) === undefined) continue;
-        const record = await openRow(row, key);
+        if (readableAge(row.capturedAt, deps.now(), limits.ageMs) === undefined) continue;
+        const record = await openRow(row, key, limits);
         if (!record || generation !== mine) continue;
         remember(record);
       }
@@ -712,8 +775,17 @@ export function createTailCache(deps: TailCacheDeps): TailCache {
       if (row) dropHot(row.path);
       held.delete(sessionId);
       snapshot = undefined;
-      await store.remove([[key, sessionId]], TAIL_SCAN_LIMITS.batchRows);
+      const removed = await store.remove([[key, sessionId]], TAIL_SCAN_LIMITS.batchRows, {
+        rows: TAIL_SCAN_LIMITS.deleteRows,
+        deadline: deps.now() + TAIL_SCAN_LIMITS.prepareMs,
+      });
       if (generation !== mine) return;
+      if (!removed) {
+        // A conversation the person deleted whose tail could not be removed is
+        // not something to keep reading: the cache closes and says why.
+        stoppedBy = "failed";
+        refuse("purge", key, generation);
+      }
     },
 
     async clear(scope) {
@@ -749,10 +821,28 @@ export function createTailCache(deps: TailCacheDeps): TailCache {
       used.clear();
       held.clear();
       snapshot = undefined;
-      if (report.outcome === "failed") return false;
-      const removed = doomed.length === 0 ? true : await store.remove(doomed, TAIL_SCAN_LIMITS.batchRows);
-      if (removed) lastClearedAt = at;
-      return removed;
+      // A pass that stopped at a ceiling has seen a prefix of what is here, so
+      // deleting what it found would empty part of this device and report it as
+      // all of it. The person is told it did not finish instead, and the cache
+      // stays shut: what is left could not be established.
+      if (report.outcome !== "complete") {
+        stoppedBy = report.outcome;
+        refuse(report.outcome === "failed" ? "storage" : "purge", key, generation);
+        return false;
+      }
+      const removed = doomed.length === 0
+        ? true
+        : await store.remove(doomed, TAIL_SCAN_LIMITS.batchRows, {
+          rows: TAIL_SCAN_LIMITS.deleteRows,
+          deadline: deps.now() + TAIL_SCAN_LIMITS.prepareMs,
+        });
+      if (!removed) {
+        stoppedBy = "failed";
+        refuse("purge", key, generation);
+        return false;
+      }
+      lastClearedAt = at;
+      return true;
     },
 
     counters() {

@@ -37,7 +37,7 @@ function deferWork(task: () => void): void {
 }
 
 export const tailCache: TailCache = createTailCache({
-  openStore: () => openTailStore(indexedDbFactory()),
+  openStore: () => openTailStore(indexedDbFactory(), { now: () => Date.now() }),
   resolveVault: () => {
     const bridge = desktopCacheBridge();
     if (!bridge) return Promise.resolve(NULL_VAULT);

@@ -80,7 +80,15 @@ export function createEnvironmentLifecycle(deps: EnvironmentLifecycleDeps): Envi
       deps.restoreDestination();
       // The cache prepares against the policy this environment declared, and
       // the connection waits for it — bounded, and never for a failure.
-      return { ok: true, ready: tailCache.prepare(descriptor).catch(() => undefined) };
+      return {
+        ok: true,
+        ready: tailCache.prepare(descriptor).catch(() => undefined),
+        // The connection stopped waiting: the budget ran out, or this socket
+        // was replaced. Whatever the preparation is still doing, this device
+        // keeps nothing — a pass that lands a moment too late must not open a
+        // cache the connection has already gone ahead without.
+        onReadyExpired: () => tailCache.deactivate(),
+      };
     },
 
     fail(reason) {
