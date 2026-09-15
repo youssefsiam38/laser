@@ -28,7 +28,7 @@
  */
 import type { Action, AppState, EvictionReason, SessionView } from "../store.js";
 import { hasUnsentWork, isDormantView } from "../view-summary.js";
-import { captureViewTail, VIEW_TAIL_MAX_BYTES, viewTailSink, type ViewTailDto, type ViewTailSink } from "./view-tail.js";
+import { captureViewTail, VIEW_TAIL_MAX_BYTES, viewTailRetainedBytes, viewTailSink, type ViewTailDto, type ViewTailSink } from "./view-tail.js";
 import { EMPTY_MEASURE, measureView, type ViewMeasure } from "./view-measure.js";
 import { isTerminalRunStatus } from "@lasercode/protocol";
 import { mainPath, pendingSessionPath } from "./main-destination.js";
@@ -102,7 +102,11 @@ export interface RendererViewCounters {
   /** Threads holding words a person wrote and nobody else has. */
   readonly drafts: number;
   readonly evictions: number;
-  /** Records waiting for the next frame, and their bytes. Bounded (see above). */
+  /**
+   * Records waiting for the next frame, and the exact UTF-8 bytes holding all
+   * of them costs — whole records, not only the entries they carry. Bounded
+   * (see {@link PENDING_TAIL_MAX_ENTRIES} and {@link PENDING_TAIL_MAX_BYTES}).
+   */
   readonly tailsPending: number;
   readonly tailsPendingBytes: number;
   /** Records shed because the queue was full. Best-effort data, said out loud. */
@@ -220,6 +224,10 @@ export const DELIVERY_FALLBACK_MS = 250;
  * hint a cache may keep, not something anybody is waiting for. So the queue is
  * bounded on both axes and sheds its oldest records rather than growing: eight
  * full tails' worth of bytes, thirty-two records, counted when they go.
+ *
+ * The byte bound is measured over the *whole* retained record
+ * ({@link viewTailRetainedBytes}), not the content bytes RP-10 reads, so the
+ * ceiling is the memory this queue actually holds.
  */
 export const PENDING_TAIL_MAX_ENTRIES = 32;
 export const PENDING_TAIL_MAX_BYTES = 8 * VIEW_TAIL_MAX_BYTES;
@@ -310,8 +318,11 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
   const tracked = new Map<string, Tracked>();
   /** One measurement per view object: an unchanged view is never walked again. */
   const measured = new WeakMap<SessionView, ViewMeasure>();
-  /** Records waiting for the next frame, newest per session, oldest first. */
-  const pending = new Map<string, ViewTailDto>();
+  /**
+   * Records waiting for the next frame, newest per session, oldest first, each
+   * with what holding the whole record costs — not only its content bytes.
+   */
+  const pending = new Map<string, { tail: ViewTailDto; retained: number }>();
   let pendingBytes = 0;
   let tailsDropped = 0;
   let cancelDelivery: (() => void) | undefined;
@@ -409,9 +420,11 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
    * the same conversation, and only the later one is true.
    */
   const enqueueTail = (tail: ViewTailDto): void => {
-    const cost = tail.bytes;
+    // The whole record, not only the entries in it: the bound is on memory
+    // this queue holds, and identity, cursors and structure are memory too.
+    const cost = viewTailRetainedBytes(tail);
     const existing = pending.get(tail.path);
-    if (existing) pendingBytes -= existing.bytes;
+    if (existing) pendingBytes -= existing.retained;
     pending.delete(tail.path);
     // A single record larger than the whole queue is refused outright rather
     // than emptying the queue for itself.
@@ -419,14 +432,14 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
       tailsDropped += 1;
       return;
     }
-    pending.set(tail.path, tail);
+    pending.set(tail.path, { tail, retained: cost });
     pendingBytes += cost;
     while (pending.size > PENDING_TAIL_MAX_ENTRIES || pendingBytes > PENDING_TAIL_MAX_BYTES) {
       const oldest = pending.keys().next();
       if (oldest.done) break;
       const dropped = pending.get(oldest.value)!;
       pending.delete(oldest.value);
-      pendingBytes -= dropped.bytes;
+      pendingBytes -= dropped.retained;
       tailsDropped += 1;
     }
   };
@@ -437,7 +450,7 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
     const captured = generation;
     cancelDelivery = deliver(() => {
       cancelDelivery = undefined;
-      const waiting = [...pending.values()];
+      const waiting = [...pending.values()].map((row) => row.tail);
       pending.clear();
       pendingBytes = 0;
       if (disposed || captured !== generation) return;

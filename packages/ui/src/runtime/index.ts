@@ -182,6 +182,7 @@ export {
   VIEW_TAIL_SESSION_ID_MAX,
   captureViewTail,
   installViewTailSink,
+  viewTailRetainedBytes,
   viewTailSink,
   type ViewTailDto,
   type ViewTailEntryDto,

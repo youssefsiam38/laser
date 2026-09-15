@@ -8,7 +8,7 @@ import type { AgentRun, BackgroundTask, SessionState } from "@lasercode/protocol
 
 import { createStateStore } from "../../src/runtime/LaserProvider.js";
 import { createViewCache, DELIVERY_FALLBACK_MS, PENDING_TAIL_MAX_BYTES, PENDING_TAIL_MAX_ENTRIES, pinReason, rendererViewsStore, type ViewCacheEnvironment, type ViewCacheLimits } from "../../src/runtime/view-cache.js";
-import { VIEW_TAIL_MAX_ENTRIES, type ViewTailDto, type ViewTailSink } from "../../src/runtime/view-tail.js";
+import { VIEW_TAIL_MAX_ENTRIES, viewTailRetainedBytes, type ViewTailDto, type ViewTailSink } from "../../src/runtime/view-tail.js";
 import { initialState, isDormantView, reduce, type AppState } from "../../src/store.js";
 import { MessageEditPresentation, TranscriptPresentation } from "../../src/runtime/transcript-presentation.js";
 
@@ -675,6 +675,31 @@ describe("the records waiting for that frame", () => {
     return { store, cache, put };
   };
 
+  it("accounts the whole record it is holding, and re-accounts a replacement", () => {
+    const released: ViewTailDto[] = [];
+    const { cache, put } = releasing({ release: (tail) => released.push(tail) });
+
+    put(pathOf(1), { entries: 4, size: 64 });
+    const afterFirst = cache.counters().tailsPendingBytes;
+    expect(afterFirst).toBeGreaterThan(0);
+
+    // The same conversation again, with far more in it: the queue holds one
+    // record for it, and the accounting is the new one's, not the sum.
+    put(pathOf(1), { entries: 20, size: 800 });
+    const afterSecond = cache.counters().tailsPendingBytes;
+    expect(cache.counters().tailsPending).toBe(1);
+    expect(afterSecond).toBeGreaterThan(afterFirst);
+
+    vi.advanceTimersByTime(DELIVERY_FALLBACK_MS);
+
+    expect(released).toHaveLength(1);
+    // What was accounted is exactly what holding that record costs, and it is
+    // more than the content bytes RP-10 reads from it.
+    expect(afterSecond).toBe(viewTailRetainedBytes(released[0]!));
+    expect(afterSecond).toBeGreaterThan(released[0]!.bytes);
+    expect(cache.counters().tailsPendingBytes).toBe(0);
+  });
+
   it("keeps one scheduler and one record per session, however fast the loop is", () => {
     const released: ViewTailDto[] = [];
     const { cache, put } = releasing({ release: (tail) => released.push(tail) });
@@ -734,7 +759,7 @@ describe("the records waiting for that frame", () => {
     expect(counters.tailsDropped).toBe(20 - counters.tailsPending);
 
     vi.advanceTimersByTime(DELIVERY_FALLBACK_MS);
-    expect(released.reduce((sum, tail) => sum + tail.bytes, 0)).toBeLessThanOrEqual(PENDING_TAIL_MAX_BYTES);
+    expect(released.reduce((sum, tail) => sum + viewTailRetainedBytes(tail), 0)).toBeLessThanOrEqual(PENDING_TAIL_MAX_BYTES);
   });
 
   it("holds nothing through a reset or a disposal", () => {

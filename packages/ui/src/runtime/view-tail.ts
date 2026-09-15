@@ -62,6 +62,21 @@ export interface ViewTailDto {
   readonly omitted?: ViewTailOmission;
 }
 
+/**
+ * What holding this record actually costs, in exact UTF-8 bytes.
+ *
+ * {@link ViewTailDto.bytes} is the *content* contract RP-10 reads: the entries
+ * this record carries, and nothing else. A queue that holds records has to
+ * account for the whole of one — its path and identity, the revision, epoch and
+ * timestamps, every entry's own id and parent id, the JSON structure around all
+ * of it — so it measures the canonical serialization of the record itself.
+ *
+ * Pure, exact, and deliberately not the same number as `bytes`.
+ */
+export function viewTailRetainedBytes(tail: ViewTailDto): number {
+  return byteLength(JSON.stringify(tail));
+}
+
 /** Where a released tail goes. T5's default does nothing; RP-10 persists it. */
 export interface ViewTailSink {
   release(tail: ViewTailDto): void;

@@ -6,7 +6,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SessionState } from "@lasercode/protocol";
 
-import { captureViewTail, installViewTailSink, NO_TAIL_SINK, VIEW_TAIL_MAX_BYTES, VIEW_TAIL_MAX_ENTRIES, VIEW_TAIL_SESSION_ID_MAX, viewTailSink } from "../../src/runtime/view-tail.js";
+import { captureViewTail, installViewTailSink, NO_TAIL_SINK, VIEW_TAIL_MAX_BYTES, VIEW_TAIL_MAX_ENTRIES, VIEW_TAIL_SESSION_ID_MAX, viewTailRetainedBytes, viewTailSink } from "../../src/runtime/view-tail.js";
 import type { SessionView, ValidatedRevision } from "../../src/store.js";
 
 const AT = "2026-09-15T02:00:00.000Z";
@@ -144,5 +144,54 @@ describe("the sink RP-10 installs", () => {
     } finally {
       installViewTailSink(original);
     }
+  });
+});
+
+describe("what holding a record costs", () => {
+  const utf8 = (value: unknown): number => new TextEncoder().encode(JSON.stringify(value)).length;
+
+  it("is the exact UTF-8 size of the whole record, not of the entries in it", () => {
+    const tail = captureViewTail(view({ entries: entries(6, 40) }), AT);
+    expect(viewTailRetainedBytes(tail)).toBe(utf8(tail));
+    // Identity, cursors and structure are memory too: the content contract
+    // RP-10 reads is strictly smaller.
+    expect(viewTailRetainedBytes(tail)).toBeGreaterThan(tail.bytes);
+  });
+
+  it("counts a record that carries no entry at all", () => {
+    const longPath = `/p/${"nested/".repeat(20)}conversation.jsonl`;
+    const identity = "s".repeat(VIEW_TAIL_SESSION_ID_MAX);
+    const omitted = captureViewTail(view({ path: longPath, entries: entries(3), validated: undefined }), AT);
+    expect(omitted.bytes).toBe(0);
+    expect(viewTailRetainedBytes(omitted)).toBe(utf8(omitted));
+    expect(viewTailRetainedBytes(omitted)).toBeGreaterThan(longPath.length);
+
+    const identified = captureViewTail(view({ path: longPath, entries: entries(3), validated: { ...validated, sessionId: identity } }), AT);
+    expect(viewTailRetainedBytes(identified)).toBe(utf8(identified));
+    expect(viewTailRetainedBytes(identified)).toBeGreaterThan(viewTailRetainedBytes(omitted));
+  });
+
+  it("counts the wrapper around many small entries", () => {
+    // Long ids and parent ids, tiny content: nearly all of this record is the
+    // structure the content contract does not mention.
+    const rows = Array.from({ length: 30 }, (_, index) => ({
+      id: `entry-${"0".repeat(40)}${index}`,
+      parentId: index === 0 ? null : `entry-${"0".repeat(40)}${index - 1}`,
+      type: "message",
+      message: { role: "user", content: [{ type: "text", text: "." }] },
+    }));
+    const tail = captureViewTail(view({ entries: rows }), AT);
+    const retained = viewTailRetainedBytes(tail);
+    expect(retained).toBe(utf8(tail));
+    // Every entry's id and parent id are carried twice: once inside its JSON
+    // and once beside it, and none of that is in `bytes`.
+    expect(retained).toBeGreaterThan(tail.bytes * 1.5);
+  });
+
+  it("is stable for the same record and follows its content", () => {
+    const small = captureViewTail(view({ entries: entries(2, 8) }), AT);
+    const large = captureViewTail(view({ entries: entries(20, 800) }), AT);
+    expect(viewTailRetainedBytes(small)).toBe(viewTailRetainedBytes(small));
+    expect(viewTailRetainedBytes(large)).toBeGreaterThan(viewTailRetainedBytes(small));
   });
 });
