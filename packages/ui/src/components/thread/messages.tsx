@@ -49,6 +49,10 @@ import { THINKING_LEVELS, useSupportedThinkingLevels } from "@/components/assist
 import { useElapsed } from "./timing.js";
 import { toolGroupKey } from "./tool-groups.js";
 import { ToolRow } from "./ToolRow.js";
+import { BodyOverflow } from "./BodyOverflow.js";
+import { useImageBodies } from "./use-image-bodies.js";
+import type { BodyRef } from "@/runtime/body-excerpt";
+import type { BlockBodies } from "@/store";
 import { ApiRequestDialog } from "@/components/logs/ApiRequestDialog";
 
 /** `metadata.custom.laser` the projection stamps on every message. */
@@ -66,6 +70,8 @@ interface LaserMeta {
   /** Set when a parent agent, not the person, sent this prompt into a child session. */
   sentBy?: { parentPath: string; runId?: string };
   level?: "info" | "warning" | "error";
+  /** RP-5b: bodies this window holds an excerpt of, and where the rest is. */
+  bodies?: BlockBodies | readonly { label: string; body: BodyRef }[];
   /** Which agent produced this message, when the session is a child run. */
   speaker?: Speaker;
 }
@@ -166,6 +172,13 @@ export function UserMessage() {
   const { actions } = useLaserStable();
   const text = useMessageText();
   const images = useAuiState((s) => laserMeta(s.message).images ?? EMPTY_IMAGES);
+  // RP-5b: a very long prompt keeps its start here and the rest with the
+  // conversation; the row says so rather than showing a silent cut.
+  const promptBodies = useAuiState((s) => {
+    const bodies = laserMeta(s.message).bodies;
+    return Array.isArray(bodies) ? undefined : bodies as BlockBodies | undefined;
+  });
+  const imageSource = useImageBodies(useSessionPath(), images, promptBodies);
   const files = useAuiState((s) => laserMeta(s.message).files ?? EMPTY_FILES);
   const optimistic = useAuiState((s) => laserMeta(s.message).optimistic === true);
   const goalSetter = useAuiState((s) => laserMeta(s.message).goalSetter === true);
@@ -296,7 +309,7 @@ export function UserMessage() {
           >
             {parentPath ? <ParentTask parentPath={parentPath} /> : null}
             {goalSetter && <span className="mb-1 flex items-center gap-1.5 text-xs font-medium text-ink-2"><Target className="size-3.5 text-live" aria-hidden="true" />Goal set</span>}
-            <MessageImages images={images} onOpen={opener ? (index, trigger) => opener.openFile({ file: attachmentFile(images[index]!, `Image ${index + 1}`) }, trigger) : undefined} />
+            <MessageImages images={images} sourceFor={imageSource} onOpen={opener ? (index, trigger) => opener.openFile({ file: attachmentFile(images[index]!, `Image ${index + 1}`) }, trigger) : undefined} />
             {quote ? <QuoteReply text={quote} /> : null}
             {rest ? (
               <p className="wrap-break-word whitespace-pre-wrap">
@@ -304,6 +317,7 @@ export function UserMessage() {
               </p>
             ) : null}
             <MessageAttachments attachments={attachments} className="mt-2 self-end" onOpen={opener ? (id, trigger) => opener.openFile({ file: attachedFileContent(files[Number(id)]!) }, trigger) : undefined} />
+            <BodyOverflow body={promptBodies?.text} path={path} label="message" />
           </UserBubble>
         )}
         <MessageFooter className="ms-0 me-0 h-auto min-h-6 justify-end">
@@ -419,6 +433,19 @@ function stopReason(reason: string, detail: string | undefined): { reason: strin
   }
 }
 
+/** One row per reply or reasoning trace this window is holding an excerpt of. */
+function TurnOverflow() {
+  const path = useSessionPath();
+  const rows = useAuiState(s => {
+    const bodies = laserMeta(s.message).bodies;
+    return Array.isArray(bodies) ? bodies as readonly { label: string; body: BodyRef }[] : EMPTY_BODIES;
+  });
+  if (rows.length === 0) return null;
+  return <>{rows.map((row, index) => <BodyOverflow key={`${row.label}:${index}`} body={row.body} path={path} label={row.label} />)}</>;
+}
+
+const EMPTY_BODIES: readonly { label: string; body: BodyRef }[] = [];
+
 export function AssistantMessage() {
   const searchReveal = useSearchReveal();
   const streaming = useAuiState((s) => s.message.role === "assistant" && s.message.status?.type === "running");
@@ -445,6 +472,7 @@ export function AssistantMessage() {
     <MessageRoot data-role="assistant" data-search-selected={searchReveal || undefined} data-streaming={streaming || undefined} className={cn("group/message flex flex-col", MESSAGE_ROOT)}>
       {speaker ? <SpeakerIdentity {...speaker} /> : null}
       <AssistantBody streaming={streaming}>
+        <TurnOverflow />
         <MessagePrimitive.GroupedParts groupBy={groupBy} indicator="empty">
           {({ part, children }) => {
             switch (part.type) {

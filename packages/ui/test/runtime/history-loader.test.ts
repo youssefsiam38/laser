@@ -26,7 +26,7 @@ describe("history request ownership", () => {
     await f.loader.read(state.path, true);
     expect(f.view().blocks).toHaveLength(80);
     await f.loader.read(state.path, false, () => true, undefined, "recent");
-    expect(request).toHaveBeenLastCalledWith({ path: state.path, window: { tail: 40 } });
+    expect(request).toHaveBeenLastCalledWith({ path: state.path, window: { tail: 40 }});
     const expected = historyWindow(source, { tail: 40 }, scope);
     expect(f.view().entries).toEqual(expected.entries);
     expect(f.view().history).toEqual(expected.window);
@@ -195,13 +195,13 @@ describe("history request ownership", () => {
     expect(await f.loader.earlier(state.path, () => true)).toBe(false);
     expect(request).toHaveBeenCalledTimes(count);
     expect(await f.loader.all(state.path, () => true)).toBe(true);
-    expect(request).toHaveBeenLastCalledWith({ path: state.path, window: { all: true } });
+    expect(request).toHaveBeenLastCalledWith({ path: state.path, window: { all: true }});
     expect(f.view().history).toMatchObject({ complete: true, branchesUnloaded: false });
     expect(f.view().entries).toHaveLength(81);
     await f.loader.read(state.path);
     expect(f.view().history).toMatchObject({ complete: true, branchesUnloaded: false });
     expect(f.view().entries).toHaveLength(81);
-    expect(request).toHaveBeenLastCalledWith({ path: state.path, window: { from: "e0" } });
+    expect(request).toHaveBeenLastCalledWith({ path: state.path, window: { from: "e0" }});
   });
 
   it("retains a known tree after an invalid branch anchor falls back to a tail, but drops it on epoch change", async () => {

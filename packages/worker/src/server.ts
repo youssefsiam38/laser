@@ -22,9 +22,12 @@
  * growing the process.
  */
 
-import { AGENT_MAX_DEPTH_LIMIT, ENV, ErrorCodes, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TypedClientRequest, WIRE_NAMESPACE } from "@lasercode/protocol";
+import { AGENT_MAX_DEPTH_LIMIT, ENV, ErrorCodes, bodyRangeSlice, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TypedClientRequest, WIRE_NAMESPACE } from "@lasercode/protocol";
 import { CaptureReservations } from "./capture-reservations.js";
-import { randomUUID } from "node:crypto";
+
+/** RP-5b body digests. The one hash both authorities sign a body with. */
+const sha256Hex = (text: string): string => createHash("sha256").update(text, "utf8").digest("hex");
+import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
@@ -630,17 +633,20 @@ export class WorkerServer {
             // Only a live-edge tail can be spliced onto a cached revision.
             // Older-page, search-anchor and all-history requests retain their
             // exact tree semantics even when the base is current or a prefix.
+            // RP-5b: a caller that cannot hold a large body asks for the page
+            // without it; the record is listed in `elided` instead of rewritten.
+            const bodies = req.params.bodyLimit === undefined ? undefined : { limit: req.params.bodyLimit, digest: sha256Hex };
             if ("tail" in req.params.window && resolved?.base !== "stale" && resolved?.state) {
               const delta = boundedHistoryWindow(snapshot, req.params.window, {
                 ...common,
                 selection: { kind: "delta", after: resolved.state.leafId },
-              });
+              }, bodies);
               if (delta) return delta;
             }
             const replacement = boundedHistoryWindow(snapshot, req.params.window, {
               ...common,
               selection: { kind: "replace" },
-            });
+            }, bodies);
             if (replacement) return replacement;
             throw new ProtocolError(
               ErrorCodes.RevisionUnavailable,
@@ -654,6 +660,36 @@ export class WorkerServer {
         // does not replace the runtime. Its live canonical reads must remain
         // available so a no-signal question can be answered after reconnect.
         return (await live.driver.entries()) satisfies Result<"pi/session/entries">;
+      }
+      // RP-5b: one body of one entry, from the authority that owns this
+      // session right now. The revision is computed from the very snapshot the
+      // bytes come from, so a caller reading at an older state is refused
+      // rather than handed another state's offsets.
+      case "session/entry_range": {
+        const live = this.live(req.params.path);
+        const snapshot = await live.driver.entries();
+        if (this.runtimes.get(live.path) !== live) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation was closed. Open it again.");
+        const { revision, environmentKey } = this.revisionOf(live, snapshot);
+        if (environmentKey !== req.params.environmentKey) {
+          throw new ProtocolError(ErrorCodes.InvalidParams, "That conversation belongs to a different connection.");
+        }
+        if (revision !== req.params.revision) {
+          throw new ProtocolError(
+            ErrorCodes.RevisionUnavailable,
+            "This conversation moved on since that message was read. Open it again to see the rest.",
+          );
+        }
+        const entry = snapshot.entries.find((row) => (row as { id?: unknown } | null)?.id === req.params.entryId);
+        if (entry === undefined) {
+          throw new ProtocolError(ErrorCodes.InvalidParams, "That message is not part of this conversation any more.");
+        }
+        const sliced = bodyRangeSlice(entry, req.params, revision, "live", sha256Hex);
+        if (!sliced.ok) {
+          throw sliced.refusal.reason === "bad-range"
+            ? new ProtocolError(ErrorCodes.InvalidParams, "That is not a readable part of this message. Open it again from the start.")
+            : new ProtocolError(ErrorCodes.InvalidParams, `That message has no ${req.params.component.kind.replaceAll("_", " ")} to read.`, { available: sliced.refusal.available });
+        }
+        return sliced.result satisfies Result<"session/entry_range">;
       }
       case "pi/session/compact": {
         const live = this.live(req.params.path);

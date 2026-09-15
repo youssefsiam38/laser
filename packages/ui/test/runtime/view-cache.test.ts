@@ -128,8 +128,8 @@ describe("what is never released", () => {
     expect(pinReason(state, pathOf(3), noDrafts)).toBe("task");
   });
 
-  it("keeps every pinned view and says so rather than releasing one", () => {
-    const h = harness({ limits: { views: 1, bytes: 512, viewBytes: 512 }, environment: { scoped: () => [pathOf(2)], hasDraft: () => false } });
+  it("keeps every pinned view, and brings each inside the per-view bound instead of releasing one", () => {
+    const h = harness({ limits: { views: 1, bytes: 4096, viewBytes: 1024 }, environment: { scoped: () => [pathOf(2)], hasDraft: () => false } });
     for (const index of [1, 2]) load(h, pathOf(index), { entries: 6, size: 200 });
     h.store.dispatch({ type: "destination", destination: { phase: "ready-chat", intent: 1, target: { kind: "session", path: pathOf(1), visibleTab: "chat" }, path: pathOf(1), rememberedCode: { kind: "no-project-landing" } } as AppState["destination"] });
 
@@ -137,8 +137,11 @@ describe("what is never released", () => {
 
     expect(outcome.released).toEqual([]);
     expect(outcome.refused.map((row) => row.pin).sort()).toEqual(["current", "scope"]);
-    expect(h.cache.counters().overflow).toBe("pinned");
+    // RP-5b: no pinned conversation is evicted, and none settles over its
+    // share either — each released its older settled turns instead.
     expect(dormantPaths(h.store.getSnapshot())).toEqual([]);
+    for (const index of [1, 2]) expect(h.cache.measure(pathOf(index)).bytes).toBeLessThanOrEqual(1024);
+    expect(h.cache.counters().overflow).toBeUndefined();
   });
 });
 
@@ -443,14 +446,16 @@ describe("when a pass happens", () => {
   });
 
   it("reconciles when a run goes terminal and `open` never changes", () => {
-    // One transcript, well over the byte bound, held only by its agent run.
-    const h = harness({ limits: { views: 6, bytes: 2048, viewBytes: 2048 } });
+    // One transcript over the cache's count bound, held only by its agent run.
+    const h = harness({ limits: { views: 0, bytes: 1 << 24, viewBytes: 1 << 24 } });
     load(h, pathOf(1), { entries: 8, size: 400 });
     const running: AgentRun = { runId: "r1", sessionPath: pathOf(1), rootSessionPath: pathOf(1), agentName: "worker", subagentName: "w", status: "running", origin: "agent", startedAt: "", updatedAt: "2026-09-15T00:00:00.000Z", cwd: CWD } as AgentRun;
     h.store.dispatch({ type: "agents/run", run: running });
     h.runDeferred();
     expect(isDormantView(h.store.getSnapshot().open[pathOf(1)])).toBe(false);
-    expect(h.cache.counters().overflow).toBe("pinned");
+    // RP-5b: the run's own view is never evicted, and nothing settles over a
+    // bound — with room to spare here, there is nothing to report.
+    expect(h.cache.counters().overflow).toBeUndefined();
     const open = h.store.getSnapshot().open;
 
     h.store.dispatch({ type: "agents/run", run: { ...running, status: "completed", updatedAt: "2026-09-15T00:01:00.000Z" } as AgentRun });
@@ -462,7 +467,7 @@ describe("when a pass happens", () => {
   });
 
   it("reconciles when a background command stops and `open` never changes", () => {
-    const h = harness({ limits: { views: 6, bytes: 2048, viewBytes: 2048 } });
+    const h = harness({ limits: { views: 0, bytes: 1 << 24, viewBytes: 1 << 24 } });
     load(h, pathOf(1), { entries: 8, size: 400 });
     const task: BackgroundTask = { id: "t1", sessionPath: pathOf(1), command: "pnpm test", status: "running", outputBytes: 0, startedAt: "" } as BackgroundTask;
     h.store.dispatch({ type: "tasks/update", task });
@@ -478,7 +483,7 @@ describe("when a pass happens", () => {
   });
 
   it("reconciles when a turn ends", () => {
-    const h = harness({ limits: { views: 6, bytes: 2048, viewBytes: 2048 } });
+    const h = harness({ limits: { views: 0, bytes: 1 << 24, viewBytes: 1 << 24 } });
     load(h, pathOf(1), { entries: 8, size: 400, over: { isStreaming: true } });
     h.runDeferred();
     expect(isDormantView(h.store.getSnapshot().open[pathOf(1)])).toBe(false);
@@ -492,11 +497,11 @@ describe("when a pass happens", () => {
 
   it("reconciles when a draft is cleared outside the store", () => {
     const drafts = new Set<string>([pathOf(1)]);
-    const h = harness({ limits: { views: 6, bytes: 2048, viewBytes: 2048 }, environment: { scoped: () => [], hasDraft: (path) => drafts.has(path) } });
+    const h = harness({ limits: { views: 0, bytes: 1 << 24, viewBytes: 1 << 24 }, environment: { scoped: () => [], hasDraft: (path) => drafts.has(path) } });
     load(h, pathOf(1), { entries: 8, size: 400 });
     h.runDeferred();
     expect(isDormantView(h.store.getSnapshot().open[pathOf(1)])).toBe(false);
-    expect(h.cache.counters().overflow).toBe("drafts");
+    expect(h.cache.counters().overflow).toBeUndefined();
 
     // The person sent or cleared their words. The reducer never hears of it.
     drafts.delete(pathOf(1));

@@ -55,6 +55,7 @@ import { RESOURCE_REPORT_METHOD } from "./resources/guard.js";
 import type { ResourceService } from "./resources/index.js";
 import { canonical } from "./trust.js";
 import type { SessionProjection } from "./session-projection.js";
+import type { SessionBodyRange } from "./session-body-range.js";
 import type { SessionRevisions } from "./session-revision.js";
 import type { ViewCache } from "./views.js";
 import type { WorkerPool } from "./worker-pool.js";
@@ -112,6 +113,7 @@ export interface RouterDeps {
   revisions?: SessionRevisions | undefined;
   /** Read-only bounded history pages over the durable revision index (RP-12). */
   projection?: SessionProjection | undefined;
+  bodyRange?: SessionBodyRange | undefined;
   /**
    * Process inventory (RP-1). Absent = the `resource/*` methods are refused
    * rather than answered with an invented shape.
@@ -488,6 +490,31 @@ export class Router {
         // normal path ownership has proved this is its transcript.
         const forwarded = await (await this.workerFor(path)).request(req.method, req.params);
         return revisions.validateLive(forwarded);
+      }
+
+      // RP-5b. Authorization already ran on the method name alone, before this
+      // switch and before any session lookup, worker or file (see `handle`).
+      case "session/entry_range": {
+        const { path } = req.params;
+        const revisions = this.deps.revisions;
+        const bodyRange = this.deps.bodyRange;
+        if (!revisions || !bodyRange) {
+          throw new ProtocolError(
+            ErrorCodes.RevisionUnavailable,
+            "This host has no configured durable history reader. Restart the app and try again.",
+          );
+        }
+        this.assertDurableReadPath(path);
+        // The owning worker wins: its entries can be ahead of the file, and a
+        // turn that has not been written yet exists only there.
+        const live = this.liveWorkerFor(path);
+        if (live) return await live.request(req.method, req.params);
+        if (!existsSync(path)) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation is no longer stored here.");
+        const answer = await bodyRange.read(path, req.params);
+        if (answer.kind === "answer") return answer.result;
+        if (answer.kind === "refuse") throw answer.error;
+        // Only an unmigrated format routes live, exactly as the page reader does.
+        return await (await this.workerFor(path)).request(req.method, req.params);
       }
 
       case "pi/session/move":
@@ -1041,7 +1068,7 @@ export class Router {
     // Bounds/unreadability refuse truthfully instead of silently spawning.
     // Only an unmigrated format routes live: the pinned engine owns that
     // rewrite and the host deliberately cannot reproduce it.
-    const answer = await projection.read(path, params.window, req.params.baseRevision);
+    const answer = await projection.read(path, params.window, req.params.baseRevision, req.params.bodyLimit);
     if (answer.kind === "refuse") throw answer.error;
     if (answer.kind === "route-live") {
       const forwarded = await (await this.workerFor(path)).request(req.method, params);

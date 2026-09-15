@@ -19,6 +19,7 @@ import type { PushConfig, PushDeviceInfo, PushSubscriptionJson } from "./push.js
 // Type-only, and erased: `pending.ts` augments the interfaces below, so the
 // cycle exists in the type graph and never in the emitted modules.
 import type { PendingMessage } from "./pending.js";
+import type { BodyComponent, ElidedEntry } from "./body-range.js";
 
 // ---------- Shared value types (no Pi types allowed here) ----------
 
@@ -62,6 +63,12 @@ export interface HistoryWindow {
   hasHistory: boolean;
   context: unknown[];
   priorGoalIds: string[];
+  /**
+   * Records this page did not carry because a body of theirs is larger than
+   * the caller's `bodyLimit` (RP-5b). Identity and body metadata only; the
+   * bytes are read with `session/entry_range`.
+   */
+  elided?: ElidedEntry[];
   live?: HistoryLiveSnapshot;
   /** The authority that produced this page. Durable pages never carry live work or actions. */
   authority?: "live" | "durable";
@@ -1109,6 +1116,49 @@ export interface ClientRequests {
   };
   "session/cancel": { params: { path: string }; result: {} };
   "session/set_mode": { params: { path: string; mode: string }; result: {} };
+  /**
+   * One body of one entry, as bytes (RP-5b).
+   *
+   * A surface holds a bounded excerpt of a large reply, tool result or image
+   * and reads the rest from here, a slice at a time. The address is
+   * (environment, session, revision, entry, component) — never a path, an
+   * offset into storage or anything else about how a conversation is stored.
+   *
+   * Answered by the worker that owns the session when one is live, otherwise
+   * by the host's read-only projection of the stored conversation, which never
+   * starts a worker. A `revision` that is not the one being served is refused
+   * with `RevisionUnavailable`; the caller re-reads the conversation rather
+   * than receiving bytes from a state it did not ask about.
+   */
+  "session/entry_range": {
+    params: {
+      path: string;
+      environmentKey: string;
+      revision: string;
+      entryId: string;
+      component: BodyComponent;
+      /** Exact UTF-8 offset into that body. An offset inside a character is refused. */
+      offset: number;
+      /** At most `ENTRY_RANGE_MAX_BYTES`, which is also the default. */
+      limit?: number;
+    };
+    result: {
+      authority: "live" | "durable";
+      revision: string;
+      component: BodyComponent;
+      /** Exact UTF-8 size of the whole body. */
+      totalBytes: number;
+      offset: number;
+      bytes: number;
+      /** Where the next slice starts; absent at the end. */
+      next?: number;
+      truncated: boolean;
+      /** SHA-256 of this slice, and of the whole body. */
+      sliceDigest: string;
+      contentDigest: string;
+      text: string;
+    };
+  };
 
   "pi/session/list": {
     params: { cwd?: string; page?: { cursor?: string; size?: number; sizes?: Record<string, number>; exclude?: string[]; include?: string[]; probe?: string[] } };
@@ -1228,6 +1278,15 @@ export interface ClientRequests {
        * keep their requested page/tree semantics and return a replacement.
        */
       baseRevision?: string;
+      /**
+       * RP-5b. The largest body this caller is willing to receive inside one
+       * record, in exact UTF-8 bytes. A record carrying a larger body is left
+       * out of `entries` and listed in `window.elided` with its identity and
+       * the exact size and digest of every body it has, so the caller can read
+       * what it needs with `session/entry_range`. No record is ever rewritten:
+       * an entry is delivered whole or not delivered at all.
+       */
+      bodyLimit?: number;
     };
     result: { entries: unknown[]; leafId?: string | null; window?: HistoryWindow };
   };

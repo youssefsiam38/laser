@@ -66,6 +66,7 @@ import { cleanupTaskLogsBeforeWorkers } from "./tasks/cleanup.js";
 import { SearchCancellation } from "./search-cancellation.js";
 import { SessionIndexCache } from "./session-index.js";
 import { SessionProjection } from "./session-projection.js";
+import { SessionBodyRange } from "./session-body-range.js";
 import { SessionRevisions } from "./session-revision.js";
 import { environmentIdentity, type EnvironmentIdentity } from "./environment-identity.js";
 import { ViewCache } from "./views.js";
@@ -246,6 +247,8 @@ export class HostServer {
   readonly revisions: SessionRevisions;
   /** Bounded, read-only history pages over that same index (RP-12). */
   readonly projection: SessionProjection;
+  /** Bounded, read-only slices of one body of one stored entry (RP-5b). */
+  readonly bodyRange: SessionBodyRange;
   /** M4 log store, or undefined when it could not be opened (see `logsUnavailable`). */
   readonly logs: LogStore | undefined;
   readonly logsUnavailable: string | undefined;
@@ -408,6 +411,7 @@ export class HostServer {
       environmentId: this.environment.id,
     });
     this.projection = new SessionProjection({ index: sessionIndex, revisions: this.revisions });
+    this.bodyRange = new SessionBodyRange({ index: sessionIndex, revisions: this.revisions });
 
     // Who may do what, and the record of it. Both are host-owned: a client
     // never carries its own authority, and an audit row never carries a
@@ -673,6 +677,7 @@ export class HostServer {
       resources: this.resources,
       revisions: this.revisions,
       projection: this.projection,
+      bodyRange: this.bodyRange,
       access: this.access,
       audit: this.audit,
     });

@@ -1,6 +1,8 @@
 import { ErrorCodes, type ClientRequests, type HistoryWindow, type HistoryWindowRequest, type SessionUpdateParams } from "@lasercode/protocol";
 import type { applyUpdate, blocksFromEntries, modelNamesOf, stampNewBlocks, textOf, Action, Block, SessionView, ValidatedRevision } from "../store.js";
 import { awake } from "../view-summary.js";
+import { retainEntries, stubOfElided, mergeStubs, type EntryStub } from "./retained-entries.js";
+
 import { deepEqual } from "./projection.js";
 
 export type HistoryAction =
@@ -122,7 +124,10 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
       // message this surface has already sent is not history and stays.
       if (v.historyPending?.token !== action.token) return v;
       const { history: _window, historyRevision: _revision, ...rest } = v;
-      return { ...awake(rest as SessionView), entries: [], blocks: v.blocks.filter(block => block.kind === "user" && block.optimistic), hydrated: false };
+      // A fresh authoritative read replaces what a trim released, cursor and
+      // all: this view is what the authority just said it is (RP-5b).
+      const { trimmed: _trimmed, ...reset } = rest as SessionView;
+      return { ...awake(reset as SessionView), entries: [], stubs: [], blocks: v.blocks.filter(block => block.kind === "user" && block.optimistic), hydrated: false };
     }
     case "historyEnd": return v.historyPending?.token === action.token ? { ...v, historyPending: undefined } : v;
     case "historySnapshot": {
@@ -135,12 +140,18 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
       // into that tree so known siblings remain immediately navigable. A new
       // epoch or an authoritative complete snapshot still replaces the cache.
       const retainTree = !action.replaceWindow && oldEpoch === window.epoch && hasCompleteTree(v) && (!window.complete || window.branchesUnloaded);
-      const entries = retainTree ? [...new Map([...v.entries, ...action.entries].map(entry => [(entry as { id: string }).id, entry])).values()] : action.entries;
+      // RP-5b: records larger than this view may hold are pointed at, never
+      // rewritten, and the producer's own elisions fold in the same way.
+      const incoming = retainEntries(action.entries);
+      const elided = (action.window.elided ?? []).map(stubOfElided);
+      const entries = retainTree ? [...new Map([...v.entries, ...incoming.entries].map(entry => [(entry as { id: string }).id, entry])).values()] : incoming.entries;
+      const stubs = retainTree ? mergeStubs(v.stubs ?? [], [...incoming.stubs, ...elided]) : [...incoming.stubs, ...elided];
       const history = retainTree ? { ...window, complete: true, branchesUnloaded: false, userOffset: 0, context: [], priorGoalIds: [] } : window;
       if (retainTree) delete history.before;
-      let next: SessionView = { ...awake(v), entries, leafId: action.leafId, history, hydrated: true, validated: validatedOf(window, v),
+      const { trimmed: _released, ...base } = v;
+      let next: SessionView = { ...awake(base as SessionView), entries, stubs, leafId: action.leafId, history, hydrated: true, validated: validatedOf(window, v),
         historyRevision: action.replaceWindow ? action.token : v.historyRevision,
-        blocks: blocksFromEntries(entries, action.leafId, modelNamesOf(v.state)),
+        blocks: blocksFromEntries(entries, action.leafId, modelNamesOf(v.state), { stubs, revision: window.revision }),
         running: live?.running ?? v.running, lastSeq: action.window.seq, updateEpoch: history.epoch, pendingSentBy: undefined, historyPending: undefined };
       if (live?.message) {
         const message = live.message.value as { content?: unknown };
@@ -178,23 +189,27 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
       // Splicing a new continuation at its parent would put it before older
       // siblings abandoned by an edit, reversing their version numbers.
       // Replace known records in place and append only newly persisted ids.
-      const entries = [...new Map([...v.entries, ...action.entries].map(entry => [(entry as { id: string }).id, entry])).values()];
+      const incoming = retainEntries(action.entries);
+      const entries = [...new Map([...v.entries, ...incoming.entries].map(entry => [(entry as { id: string }).id, entry])).values()];
+      const stubs = mergeStubs(v.stubs ?? [], [...incoming.stubs, ...(action.window.elided ?? []).map(stubOfElided)]);
       const { live: _live, before: _before, ...history } = action.window;
       const merged = v.history ? { ...v.history, seq: history.seq, hasHistory: v.history.hasHistory || history.hasHistory } : { ...history, userOffset: 0, context: [], priorGoalIds: [], complete: true };
       // The merged set spans this read and what was already held. That is one
       // describable state only when both came from the same durable revision;
       // across revisions the tuple would name entries it does not cover.
-      return adopt({ ...v, entries, leafId: action.leafId, history: merged }, v, action.window);
+      return adopt({ ...v, entries, stubs, leafId: action.leafId, history: merged }, v, action.window);
     }
     case "historyPrepend": {
       if (v.historyRevision !== action.revision || v.history?.before !== action.before || v.history.epoch !== action.window.epoch) return v;
-      const ids = new Set(v.entries.map(e => (e as { id?: string }).id));
-      const entries = action.entries.filter(e => !ids.has((e as { id?: string }).id));
+      const ids = new Set([...v.entries.map(e => (e as { id?: string }).id), ...(v.stubs ?? []).map(stub => stub.id)]);
+      const incoming = retainEntries(action.entries.filter(e => !ids.has((e as { id?: string }).id)));
+      const entries = incoming.entries;
+      const stubs = mergeStubs([...incoming.stubs, ...(action.window.elided ?? []).map(stubOfElided)], v.stubs ?? []);
       const { live: _live, ...history } = action.window;
       // The page plus the existing suffix covers the branch exactly when no
       // earlier cursor remains. Alternative versions are a separate scope.
-      return adopt({ ...v, history: { ...history, complete: history.before === undefined }, entries: [...entries, ...v.entries],
-        blocks: [...blocksFromEntries(entries, undefined, modelNamesOf(v.state)), ...v.blocks] }, v, action.window);
+      return adopt({ ...v, history: { ...history, complete: history.before === undefined }, entries: [...entries, ...v.entries], stubs,
+        blocks: [...blocksFromEntries(entries, undefined, modelNamesOf(v.state), { stubs: incoming.stubs, revision: action.window.revision }), ...v.blocks] }, v, action.window);
     }
   }
 }

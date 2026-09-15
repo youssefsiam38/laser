@@ -15,13 +15,31 @@ import { cn } from "@/lib/utils";
 
 import { mono, paper } from "./surfaces.js";
 
-export function MessageImages({ images, onOpen }: { images: readonly ImageContent[]; onOpen?: ((index: number, trigger: HTMLButtonElement) => void) | undefined }) {
+export function MessageImages({ images, onOpen, sourceFor }: {
+  images: readonly ImageContent[];
+  onOpen?: ((index: number, trigger: HTMLButtonElement) => void) | undefined;
+  /**
+   * RP-5b: where an image's bytes are, when the transcript is not holding
+   * them. A blob URL while it is being read, `undefined` until then.
+   */
+  sourceFor?: ((index: number, image: ImageContent) => { src?: string | undefined; state: "ready" | "loading" | "unavailable" }) | undefined;
+}) {
   if (!images.length) return null;
   return <div data-slot="message-images" className="mb-2 flex max-w-full flex-wrap gap-2">
-    {images.map((image, index) => <button key={index} type="button" aria-label={`Open Image ${index + 1}`} disabled={!onOpen} onClick={event => onOpen?.(index, event.currentTarget)}
-      className={cn("max-w-full overflow-hidden rounded-lg pointer-coarse:min-h-11 pointer-coarse:min-w-11 outline-none hover:opacity-90 active:opacity-80 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-live", images.length > 1 ? "size-28" : "w-full max-w-full sm:w-auto sm:max-w-80")}>
-      <img data-slot="message-image" src={`data:${image.mimeType};base64,${image.data}`} alt={`Image ${index + 1}`} className={images.length > 1 ? "size-full object-cover" : "max-h-60 w-full max-w-full object-contain sm:w-auto"} />
-    </button>)}
+    {images.map((image, index) => {
+      const resolved = sourceFor?.(index, image) ?? { src: image.data ? `data:${image.mimeType};base64,${image.data}` : undefined, state: image.data ? "ready" as const : "unavailable" as const };
+      const shape = images.length > 1 ? "size-28" : "w-full max-w-full sm:w-auto sm:max-w-80";
+      return <button key={index} type="button" aria-label={`Open Image ${index + 1}`} disabled={!onOpen || resolved.state !== "ready"} onClick={event => onOpen?.(index, event.currentTarget)}
+        className={cn("max-w-full overflow-hidden rounded-lg pointer-coarse:min-h-11 pointer-coarse:min-w-11 outline-none hover:opacity-90 active:opacity-80 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-live", shape)}>
+        {resolved.src
+          ? <img data-slot="message-image" src={resolved.src} alt={`Image ${index + 1}`} className={images.length > 1 ? "size-full object-cover" : "max-h-60 w-full max-w-full object-contain sm:w-auto"} />
+          : <span data-slot="message-image-placeholder" role="status"
+              className={cn("flex items-center justify-center gap-1.5 rounded-lg border border-line bg-surface-2 p-3 text-xs text-ink-2", images.length > 1 ? "size-full" : "min-h-24 w-full")}>
+              <ImageIcon className="size-4" aria-hidden="true" />
+              {resolved.state === "loading" ? "Loading image…" : "Image not kept in this window"}
+            </span>}
+      </button>;
+    })}
   </div>;
 }
 

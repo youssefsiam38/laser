@@ -40,6 +40,7 @@ import { namespaced, AGENT_EVENT_MESSAGE_TYPE, MESSAGE_METADATA_NS, TASK_EVENT_M
 import type { ThreadMessageLike } from "@assistant-ui/react";
 import type { AgentRun, MessageSpeaker, StopReason, UiDialogRequest, Usage } from "@lasercode/protocol";
 import type { Block, SessionView } from "../store.js";
+import type { BodyRef } from "./body-excerpt.js";
 import { goalRecords, goalForPrompt, type GoalRecord } from "./goal-history.js";
 
 /** `data` part name used for transcript notices. */
@@ -294,7 +295,9 @@ function toolPartOf(block: ToolBlock, dialog: UiDialogRequest | undefined): Proj
     args: argsOf(block.args),
     argsText: argsTextOf(block.args),
     ...(result !== undefined ? { result } : {}),
-    ...(!block.done && block.partial !== undefined ? { artifact: { partialOutput: block.partial } } : {}),
+    ...(!block.done && block.partial !== undefined
+      ? { artifact: { partialOutput: block.partial, ...(block.bodies ? { bodies: block.bodies } : {}) } }
+      : block.bodies ? { artifact: { bodies: block.bodies } } : {}),
     ...(block.isError ? { isError: true } : {}),
     ...(dialog ? dialogToToolFields(dialog) : {}),
   };
@@ -363,6 +366,9 @@ const userMessage = (block: Extract<Block, { kind: "user" }>, ordinal: number, g
           files: block.files,
           optimistic: block.optimistic === true,
           userOrdinal: ordinal,
+          // RP-5b: what of this prompt the window is not holding, and where
+          // the rest of it is. Never bytes, always a reference.
+          ...(block.bodies ? { bodies: block.bodies } : {}),
           ...(block.entryId !== undefined ? { entryId: block.entryId } : {}),
           ...(goal ? { goalSetter: true } : {}),
           // Who asked, when it was not the person: the task a parent agent
@@ -489,6 +495,8 @@ const turnMessage = (
           kind: "turn",
           ...(prompt ? { prompt } : {}),
           blockIds: group.map((b) => b.id),
+          // RP-5b: one row per assistant block that is holding an excerpt.
+          ...(turnBodies(group).length > 0 ? { bodies: turnBodies(group) } : {}),
           ...(usageCustom ? { usage: usageCustom } : {}),
           ...(speaker ? { speaker } : {}),
         },
@@ -496,6 +504,20 @@ const turnMessage = (
     },
   };
 };
+
+/**
+ * What this turn's replies and reasoning are not holding (RP-5b), in the order
+ * they were said. One row per body, with the words the transcript uses for it.
+ */
+function turnBodies(group: readonly Extract<Block, { kind: "assistant" | "tool" }>[]): Array<{ label: string; body: BodyRef }> {
+  const rows: Array<{ label: string; body: BodyRef }> = [];
+  for (const block of group) {
+    if (block.kind !== "assistant" || !block.bodies) continue;
+    if (block.bodies.thinking) rows.push({ label: "reasoning", body: block.bodies.thinking });
+    if (block.bodies.text) rows.push({ label: "reply", body: block.bodies.text });
+  }
+  return rows;
+}
 
 /** Project a transcript. Pure; safe to call on every render. */
 export function projectMessages(input: ProjectionInput): ProjectionResult {
