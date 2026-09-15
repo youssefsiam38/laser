@@ -376,32 +376,30 @@ describe("pi/session/unload", () => {
     expect(await w.unload()).toEqual({ unloaded: true, pins: [] });
   });
 
-  it("holds the session until every naming attempt for it has settled", async () => {
+  it("names a session once: a second message during the completion starts no second attempt", async () => {
     const namer = gatedNamer();
     const w = world({ namer });
     await w.load();
     await w.call("agents/sync", { snapshot: namerSnapshot({ provider: "stub", id: "stub-1" }) });
-    // Two first prompts on an idle, still unnamed session: two real attempts,
-    // each holding this runtime for its own completion.
+    // Two eligible messages on an idle, still unnamed session. The session is
+    // named from its first prompt, so the second does not ask a model the same
+    // question again — one completion, one record, whatever a person types
+    // while it runs.
     await w.call("session/prompt", { path: PATH, content: text("explore the repo") });
     await w.call("session/prompt", { path: PATH, content: text("and read the build config") });
     await settle();
-    expect(namer.asked).toHaveLength(2);
-    expect((await w.safety()).sessions[0]!.pins.map((pin) => pin.kind)).toEqual(["naming"]);
-
-    // The first one lands and names the session; the second is still running,
-    // so the session is still held — one attempt ending is not the other's.
-    namer.answerWith("Explore the repo");
-    await settle();
-    expect(w.drivers[0]!.state().name).toBe("Explore the repo");
-    expect((await w.safety()).sessions[0]!.pins.map((pin) => pin.kind)).toEqual(["naming"]);
+    expect(namer.asked).toHaveLength(1);
+    expect(namer.asked[0]).toContain("explore the repo");
+    expect((await w.safety()).sessions[0]!.pins).toEqual([{ kind: "naming", detail: "this session is being named" }]);
     expect(await w.unload()).toMatchObject({ unloaded: false, pins: [{ kind: "naming" }] });
 
-    // The second lands: Namer never renames over a name, and nothing is left
-    // holding the session.
-    namer.answerWith("And read the build config");
+    // The person names it while the completion is still running: theirs wins,
+    // the attempt clears, and nothing asks again afterwards.
+    await w.call("pi/session/rename", { path: PATH, name: "Mine" });
+    namer.answerWith("Explore the repo");
     await settle();
-    expect(w.drivers[0]!.state().name).toBe("Explore the repo");
+    expect(w.drivers[0]!.state().name).toBe("Mine");
+    expect(namer.asked).toHaveLength(1);
     expect((await w.safety()).sessions).toEqual([{ path: PATH, pins: [] }]);
     expect(await w.unload()).toEqual({ unloaded: true, pins: [] });
   });

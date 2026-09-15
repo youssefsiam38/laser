@@ -240,20 +240,26 @@ export class WorkerServer {
    */
   private readonly unnamed = new Map<string, string>();
   /**
-   * Naming actually under way, one record per attempt (RP-4).
+   * Naming actually under way: **one** attempt per session, by path, holding
+   * that attempt's token (RP-4).
    *
    * This is the state safety reads: a session is pinned while a Namer
    * completion for it is in flight, because that completion ends in a rename
-   * **through this runtime** and nothing else can finish it. A record is added
+   * **through this runtime** and nothing else can finish it. The entry is made
    * before the await and removed in a `finally`, so it is bounded by Namer's
    * own 8 s completion ceiling — no timer, lease or queue of ours.
    *
-   * One record per attempt rather than one flag per path: two first prompts
-   * can overlap, a fork moves an attempt's path under it, and a late
-   * completion of a session that has closed must not be able to clear (or
-   * invent) the state of whatever holds that path next.
+   * One per session, not one per prompt: a session is named from its first
+   * prompt, so while an attempt is running another eligible message starts no
+   * second request — which also bounds what this holds and what naming spends
+   * to one completion per conversation at a time, whatever a person types
+   * during it.
+   *
+   * The token is what makes a late completion safe: `finally` removes the
+   * entry only while it is still its own, so an attempt whose session was
+   * closed (or rekeyed and started again) cannot clear a successor's record.
    */
-  private readonly namingInFlight = new Set<{ path: string }>();
+  private readonly namingInFlight = new Map<string, symbol>();
   /** Tool calls currently running, by session path: a label for a finished call is never shown. */
   private readonly runningTools = new Map<string, Set<string>>();
   /** Held only through prompt preflight; prevents runtime replacement races. */
@@ -1394,7 +1400,9 @@ export class WorkerServer {
    * kept for the life of the worker. Once a model is there the attempt is
    * real, bounded and answered through this runtime, and it is registered in
    * {@link namingInFlight} for exactly as long as it runs — including the
-   * rename, which is the part that needs the runtime.
+   * rename, which is the part that needs the runtime. One attempt at a time
+   * per session: a message that arrives while that one is running is not a
+   * second naming request.
    */
   private async nameSession(live: Live, text: string): Promise<void> {
     try {
@@ -1402,18 +1410,26 @@ export class WorkerServer {
         this.waitToName(live.path, text);
         return;
       }
-      // Registered before the await, so there is no moment in which the work
-      // is neither parked nor in flight. Its own record, so a model taken away
-      // mid-completion cannot erase it and an overlapping attempt cannot end
-      // it: only this attempt's `finally` removes this attempt.
-      const attempt = { path: live.path };
-      this.namingInFlight.add(attempt);
+      // This conversation is already being named. Naming is for its first
+      // prompt, so a second request would spend a second completion to answer
+      // the same question, and nothing would show the result: Namer never
+      // renames over a name. Not parked either — the attempt that is running
+      // is the one that names this session.
+      const path = live.path;
+      if (this.namingInFlight.has(path)) return;
+      // Registered before the await, so there is no moment in which the work is
+      // neither parked nor in flight. The token says which attempt this entry
+      // belongs to, so a model taken away mid-completion cannot erase it and a
+      // late completion cannot clear a successor's.
+      const token = Symbol("naming");
+      this.namingInFlight.set(path, token);
       try {
         const name = await this.namer.nameSession(text);
-        if (!name || !this.runtimes.has(attempt.path) || live.driver.state().name) return;
+        const current = this.namingPath(token) ?? path;
+        if (!name || !this.runtimes.has(current) || live.driver.state().name) return;
         await live.driver.rename(name).catch(() => undefined);
       } finally {
-        this.namingInFlight.delete(attempt);
+        this.forgetNaming(token);
       }
     } catch (error) {
       console.error(`${PRODUCT_NAME} worker: could not name ${live.path}:`, error instanceof Error ? error.message : error);
@@ -1422,8 +1438,19 @@ export class WorkerServer {
 
   /** Whether a Namer completion for this session is in flight right now. */
   private naming(path: string): boolean {
-    for (const attempt of this.namingInFlight) if (attempt.path === path) return true;
-    return false;
+    return this.namingInFlight.has(path);
+  }
+
+  /** Where this attempt's session lives now, or undefined once it is no longer held. */
+  private namingPath(token: symbol): string | undefined {
+    for (const [path, held] of this.namingInFlight) if (held === token) return path;
+    return undefined;
+  }
+
+  /** Drop this attempt's entry, and only ever its own (a successor's stays). */
+  private forgetNaming(token: symbol): void {
+    const path = this.namingPath(token);
+    if (path !== undefined) this.namingInFlight.delete(path);
   }
 
   /** Hold a first prompt until a Namer model exists, oldest dropped past the cap. */
@@ -1668,7 +1695,7 @@ export class WorkerServer {
   /**
    * Per-session tables this worker keeps beside a runtime (RP-3/RP-4): the
    * person's tray, tool labels in flight, first prompts waiting to be named and
-   * the naming attempts running for them.
+   * the one naming attempt a session may have running.
    * Counts of records, never a claim about bytes of memory.
    */
   private cacheRecords(): number {
@@ -2058,10 +2085,11 @@ export class WorkerServer {
         this.runningTools.delete(live.path);
         this.unnamed.delete(live.path);
         // The runtime a naming attempt would have renamed is gone, so the
-        // attempt can no longer finish its work: its record goes with the
+        // attempt can no longer finish its work: its entry goes with the
         // session rather than being left to pin whatever opens this path next.
-        // Its own `finally` then removes nothing.
-        for (const attempt of [...this.namingInFlight]) if (attempt.path === live.path) this.namingInFlight.delete(attempt);
+        // Its own `finally` then finds the entry no longer its own and removes
+        // nothing.
+        this.namingInFlight.delete(live.path);
         this.namer.forget(live.path);
         return;
     }
@@ -2117,9 +2145,14 @@ export class WorkerServer {
       this.unnamed.set(newPath, waiting);
     }
     // A naming completion already in flight is naming *this* conversation,
-    // which now lives at the new path: the pin moves with it, so the fork's
-    // runtime is the one held until the rename it is about to attempt lands.
-    for (const attempt of this.namingInFlight) if (attempt.path === oldPath) attempt.path = newPath;
+    // which now lives at the new path: the entry moves with it, token and all,
+    // so the fork's runtime is the one held until the rename it is about to
+    // attempt lands, and the attempt still recognises its own entry.
+    const naming = this.namingInFlight.get(oldPath);
+    if (naming !== undefined) {
+      this.namingInFlight.delete(oldPath);
+      this.namingInFlight.set(newPath, naming);
+    }
   }
 
   /** Tool calls running in one session; the set is dropped when the session closes. */
