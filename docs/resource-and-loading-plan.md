@@ -18,7 +18,7 @@ Authoritative detail, evidence and ownership live in `STATUS_DETAILED.md`; `STAT
 | RP-5 | M18-T5 | done — byte/count-bounded hydrated views, light identities, complete pins, exact revision-fenced tail handoff and incremental counters integrated at `4f34a614`; reviewed browser/calibration evidence | RP-2 |
 | RP-6 | M18-T6 | done — integrated `a256efe`; reviewed membership, task/log retention and cleanup/security gates | RP-2 |
 | RP-7 | M18-T7 | done — integrated `0542a58e`; reviewed bounded decoder/provider/body-store/direct+relay pressure, privacy/browser and unchanged-workload footprint gates pass | RP-2 |
-| RP-8 | M18-T8 | in progress — plan v2 approved; implementing on integrated RP-4/RP-5/RP-7 seams | RP-4, RP-5 |
+| RP-8 | M18-T8 | in progress — integrated-base threshold calibration complete with unchanged provisional values; source waits RP-10 schema handoff and pinned-view audit | RP-4, RP-5 |
 | RP-9 | M18-T9 | done — integrated `dd637f3` | protocol integration follows RP-1 |
 | RP-10 | M18-T10 | in progress — plan v2 approved; RP-5 immutable tail/sink and T7 client ownership are released for implementation | RP-5, RP-9 |
 | RP-11 | M18-T11 | todo | RP-10 |
