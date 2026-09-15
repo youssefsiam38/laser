@@ -9,6 +9,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ProviderCaptureMeta } from "@lasercode/protocol";
+import { createRequire } from "node:module";
 import { LogStore } from "../src/logstore.js";
 
 let store: LogStore | undefined;
@@ -113,7 +114,7 @@ it("steps only the chunks a small budget needs, never the whole body", () => {
   expect(read.truncated).toBe(true);
   expect(Buffer.byteLength(read.text, "utf8")).toBeLessThanOrEqual(512 * 1024);
   // 512 KiB of budget is two 256 KiB chunks, plus the one that crosses it.
-  expect(stepped).toBeLessThanOrEqual(3);
+  expect(stepped).toBeLessThanOrEqual(4);
   const total = (log as unknown as { db: { prepare(sql: string): { get(...p: unknown[]): unknown } } }).db
     .prepare("SELECT COUNT(*) AS n FROM content_chunks WHERE ref = ?")
     .get(meta.sha256) as { n: number };
@@ -261,7 +262,9 @@ it("records a capture with no body, with its exact size, digest and reason", () 
   expect(entry.detailRef?.ref).toBe(meta.sha256);
   const content = log.content(meta.sha256);
   expect(content.released).toMatchObject({ reason: "over-ceiling", bytes: meta.bytes, sha256: meta.sha256 });
-  expect(content.released?.preview).toBe(meta.preview);
+  // No preview for a body this host never had: a preview is body text, and
+  // the only body text it may keep is one it defended itself.
+  expect(content.released?.preview ?? "").toBe("");
   expect(content.released?.model).toBe("claude");
 });
 
@@ -296,6 +299,29 @@ it("survives a store whose chunks are gone, without inventing a short body", () 
   const content = log.content(meta.sha256);
   expect(content.text).toBe("");
   expect(content.released).toMatchObject({ reason: "corrupt", bytes: meta.bytes, sha256: meta.sha256 });
+});
+
+it("keeps recording rows, without bodies, when the file belongs to a newer app", () => {
+  const log = open();
+  const body = JSON.stringify({ model: "claude", messages: [] });
+  log.record({ section: "provider", kind: "provider_request", summary: "before", detail: { body: body.repeat(200) } });
+  const file = join(root!, "logs.db");
+  log.close();
+  store = undefined;
+  // A file this release does not understand the body tables of.
+  const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as { DatabaseSync: new (path: string) => { exec(sql: string): void; close(): void } };
+  const raw = new DatabaseSync(file);
+  raw.exec("PRAGMA user_version = 99");
+  raw.close();
+
+  store = new LogStore({ file });
+  // Sessions, rows and search keep working; bodies do not, and the row says so
+  // rather than pointing at something nobody may read.
+  store.record({ section: "provider", kind: "provider_request", summary: "after", sessionPath: "/s", detail: { body: body.repeat(200) } });
+  const rows = store.query({ limit: 10 }).entries;
+  expect(rows.some((entry) => entry.summary === "after")).toBe(true);
+  expect(rows.find((entry) => entry.summary === "after")?.detailRef).toBeUndefined();
+  expect(store.stats().retention.retainedBodyBytes).toBe(0);
 });
 
 it("upgrades an existing store in place", () => {

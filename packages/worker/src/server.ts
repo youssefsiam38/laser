@@ -23,6 +23,7 @@
  */
 
 import { AGENT_MAX_DEPTH_LIMIT, ENV, ErrorCodes, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TypedClientRequest, WIRE_NAMESPACE } from "@lasercode/protocol";
+import { CaptureReservations } from "./capture-reservations.js";
 import { randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -114,6 +115,8 @@ export interface WorkerServerOptions {
    * updates. Work is never paused by this — only a diagnostic is.
    */
   transportPending?: () => number;
+  /** Complete messages accepted for the app and not yet written (RP-7). */
+  transportFrames?: () => number;
   /** Give that link a turn to write what it is holding (RP-7). */
   transportDrain?: () => Promise<void>;
   /**
@@ -704,7 +707,13 @@ export class WorkerServer {
             // Bytes accepted for the app and not yet written. A frame count
             // is the host's to report: what is here is a byte backlog, and
             // saying "one frame" for it would be a different number's name.
-            providerQueues: { count: 0, bytes: this.options.transportPending?.() ?? 0 },
+            // Exact, both numbers: the messages this worker has accepted for
+            // the app and not yet written, and what they weigh. A half-read
+            // inbound frame is bytes, never a message.
+            providerQueues: {
+              count: (this.options.transportFrames?.() ?? 0) + this.captureReservations.held().open,
+              bytes: (this.options.transportPending?.() ?? 0) + this.captureReservations.held().bytes,
+            },
           },
         } satisfies Result<"pi/worker/retained-stores">;
       }
@@ -1499,7 +1508,13 @@ export class WorkerServer {
     pendingBytes: () => this.options.transportPending?.() ?? 0,
     retainBodies: () => this.options.retainProviderBodies !== false,
     drain: () => this.options.transportDrain?.() ?? Promise.resolve(),
+    // One authority for every session in this process (RP-7): what all of
+    // their captures may hold at once, not what each of them may.
+    reserve: (bytes) => this.captureReservations.reserve(bytes),
   };
+
+  /** What provider captures may hold in this worker while they are sent. */
+  private readonly captureReservations = new CaptureReservations();
 
   /**
    * Load the same Pi resources a first session will use, without attaching the

@@ -58,7 +58,9 @@ describe("a capture that arrives whole", () => {
     accumulator.finish(A, meta.captureId, 2, meta.bytes);
     expect(absent).toEqual([]);
     expect(complete).toHaveLength(1);
-    expect(complete[0]!.body).toBe(body);
+    // A body this host did not have to touch is handed over as the pieces it
+    // arrived in, so it is never held twice.
+    expect(complete[0]!.body === "" ? complete[0]!.pieces!.join("") : complete[0]!.body).toBe(body);
     expect(complete[0]!.sessionPath).toBe("/session");
     expect(accumulator.retained()).toEqual({ open: 0, bytes: 0, reservedBytes: 0 });
   });

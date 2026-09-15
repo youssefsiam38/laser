@@ -120,6 +120,8 @@ export class WorkerClient {
    */
   private startError: Error | undefined;
   private decoder: LineDecoder | undefined;
+  /** Complete messages handed to the pipe and not yet written. */
+  private inFlightWrites = 0;
   private rejectReady: ((error: Error) => void) | undefined;
   readonly ready: Promise<void>;
 
@@ -197,6 +199,18 @@ export class WorkerClient {
     });
   }
 
+  /**
+   * One line to the worker, counted from here until the pipe has taken it.
+   * The count is what the diagnostics call a queued message; the bytes beside
+   * it are the stream's own.
+   */
+  private writeLine(line: string): void {
+    this.inFlightWrites += 1;
+    this.pipe.write(line, () => {
+      this.inFlightWrites = Math.max(0, this.inFlightWrites - 1);
+    });
+  }
+
   /** Fail everything in flight and report the exit, exactly once. */
   private settle(
     error: Error,
@@ -206,6 +220,9 @@ export class WorkerClient {
   ): void {
     if (this.reported) return;
     this.reported = true;
+    // Nothing is owed on a link that is gone, and a late callback cannot make
+    // it negative or resurrect a count.
+    this.inFlightWrites = 0;
     rejectReady(error);
     for (const entry of this.pending.values()) entry.reject(error);
     this.pending.clear();
@@ -238,11 +255,16 @@ export class WorkerClient {
     this.settle(error, this.rejectReady ?? ((): void => {}), null, null);
   }
 
-  /** Bytes this link is holding right now: partial frame in, backlog out. */
-  transportPressure(): { decoder: LineDecoderStats | undefined; pending: number } {
+  /**
+   * What this link is holding right now (RP-7): the messages written to the
+   * worker and not yet taken, what they weigh, and the partial frame being
+   * read — which is bytes, never a message.
+   */
+  transportPressure(): { decoder: LineDecoderStats | undefined; pending: number; pendingFrames: number } {
     return {
       decoder: this.decoder?.stats,
       pending: this.pipe.writableLength ?? 0,
+      pendingFrames: this.inFlightWrites,
     };
   }
 
@@ -309,7 +331,7 @@ export class WorkerClient {
     return new Promise<R>((resolve, reject) => {
       this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
       try {
-        this.pipe.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+        this.writeLine(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
       } catch (error) {
         // The pipe closed between the check above and the write. The caller
         // gets a refusal it can report; the process does not get an unhandled
@@ -324,7 +346,7 @@ export class WorkerClient {
   notify<M extends keyof WorkerNotifications>(method: M, params: WorkerNotifications[M]): void {
     if (!this.alive) return;
     try {
-      this.pipe.write(`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`);
+      this.writeLine(`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`);
     } catch {
       // The worker closed concurrently; future workers still get the base.
     }

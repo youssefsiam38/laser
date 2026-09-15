@@ -144,6 +144,16 @@ export interface ProviderCaptureLink {
   /** False when the store keeps summaries only, so no body is worth sending. */
   retainBodies: () => boolean;
   /**
+   * Ask to hold `bytes` of capture in this process while it is sent.
+   *
+   * One authority for the whole worker, not one per session: without it, ten
+   * sessions capturing at once each hold their own copy of a body, and the
+   * host's own bounds say nothing about that. `undefined` means there is no
+   * room, and the capture is recorded without its body rather than waiting.
+   * The handle is released on every outcome.
+   */
+  reserve?: (bytes: number) => CaptureReservation | undefined;
+  /**
    * Give the link a turn to write what it is holding.
    *
    * A large capture is sent as bounded pieces, and the loop that sends them
@@ -152,6 +162,11 @@ export interface ProviderCaptureLink {
    * is at its mark, so an idle link costs nothing.
    */
   drain?: () => Promise<void>;
+}
+
+/** A hold on this process's capture memory. Released exactly once. */
+export interface CaptureReservation {
+  release: () => void;
 }
 
 /**

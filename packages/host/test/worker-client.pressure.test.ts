@@ -119,3 +119,24 @@ it("ends the worker generation on a frame past the ceiling, failing what was in 
   // a link nobody is reading.
   await expect(worker.request("pi/test/echo", {})).rejects.toThrow(/worker exited/);
 }, 60_000);
+
+it("counts the messages it has written to the worker, and owes nothing once it is gone", async () => {
+  const exits: Array<number | null> = [];
+  const worker = connect((code) => exits.push(code));
+  await worker.ready;
+  // Idle: nothing written, nothing owed.
+  expect(worker.transportPressure().pendingFrames).toBe(0);
+
+  // In flight: the count rises with messages accepted for the worker and falls
+  // as the pipe takes them. It is a count of messages, never of connections.
+  const answers = Promise.all(Array.from({ length: 8 }, () => worker.request("pi/test/echo", {})));
+  expect(worker.transportPressure().pendingFrames).toBeGreaterThan(0);
+  await answers;
+  await expect.poll(() => worker.transportPressure().pendingFrames).toBe(0);
+
+  // A link that has gone owes nothing, and a late callback cannot resurrect a
+  // count on it.
+  await worker.stop();
+  await expect.poll(() => exits.length).toBeGreaterThan(0);
+  expect(worker.transportPressure().pendingFrames).toBe(0);
+}, 30_000);

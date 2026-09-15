@@ -283,7 +283,11 @@ export class HostServer {
    * that cannot complete is still recorded, with its size, digest and reason.
    */
   private readonly captures = new CaptureAccumulator({
-    onComplete: ({ cwd, sessionPath, meta, body }) => this.logs?.recordProviderCapture(cwd, sessionPath, meta, body),
+    openBody: (meta) => this.logs?.openProviderBody(meta),
+    onComplete: ({ cwd, sessionPath, meta, body, pieces, stored }) => {
+      if (stored) this.logs?.recordProviderStored(cwd, sessionPath, meta, stored);
+      else this.logs?.recordProviderCapture(cwd, sessionPath, meta, body, pieces);
+    },
     onAbsent: ({ cwd, sessionPath, meta, reason }) => this.logs?.recordProviderAbsent(cwd, sessionPath, meta, reason),
     log: (message) => this.log(message),
   });
@@ -1225,6 +1229,7 @@ export class HostServer {
     let replayBytes = 0;
     let caches = 0;
     let workerQueueBytes = 0;
+    let workerQueueFrames = 0;
     for (const answer of answered) {
       workerTaskCount += answer.stores.taskRegistry?.count ?? 0;
       workerTaskBytes += answer.stores.taskRegistry?.bytes ?? 0;
@@ -1233,6 +1238,7 @@ export class HostServer {
       replayBytes += answer.stores.workerReplay?.bytes ?? 0;
       caches += answer.stores.workerCaches?.count ?? 0;
       workerQueueBytes += answer.stores.providerQueues?.bytes ?? 0;
+      workerQueueFrames += answer.stores.providerQueues?.count ?? 0;
     }
     const complete = answered.length === live.length;
     // Bytes in transit, and the captures being reassembled from them (RP-7).
@@ -1258,7 +1264,7 @@ export class HostServer {
         providerQueues: {
           // Frames in flight and captures being reassembled — never a count of
           // connections, which an idle socket would inflate.
-          count: queues.frames + captures.open,
+          count: queues.frames + workerQueueFrames + captures.open,
           ...(complete ? { bytes: queues.bytes + captures.bytes + captures.reservedBytes + workerQueueBytes } : {}),
         },
         deliveryRegistry: {
@@ -1299,9 +1305,10 @@ export class HostServer {
     }
     for (const { client } of this.pool.liveClients()) {
       sources.push({
+        // Messages this host has written to that worker and it has not taken.
         // A partial frame being read is bytes, not a message: it is counted in
         // the bytes below and never as a frame.
-        pendingFrames: () => 0,
+        pendingFrames: () => client.transportPressure().pendingFrames,
         queuedBytes: () => {
           const link = client.transportPressure();
           return link.pending + (link.decoder?.retained ?? 0);

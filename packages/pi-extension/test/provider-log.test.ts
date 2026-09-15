@@ -3,6 +3,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { createHash } from "node:crypto";
 import { CAPTURE_CHUNK_BYTES, CAPTURE_MAX_BYTES, WORKER_PIPE_SOFT_BYTES, type ProviderCaptureLink } from "@lasercode/protocol";
 import { chunkBody, encodeCapture, providerLogModule, summarize } from "../src/modules/provider-log.js";
+import { CaptureReservations } from "../../worker/src/capture-reservations.js";
 
 const ctx = {
   model: { provider: "openai", id: "test", api: "openai-responses" },
@@ -226,6 +227,112 @@ it("keeps the small path when the link is idle and bodies are kept", async () =>
   const { handlers, send } = await activate({ pendingBytes: () => 0, retainBodies: () => true });
   await handlers.get("before_provider_request")!({ payload: { model: "test", messages: [] } }, ctx);
   expect(send.mock.calls[0]![0].type).toBe("lasercode/provider/request");
+});
+
+it("holds only what the process allows, across sessions, and releases it", async () => {
+  // Two sessions, one authority. The first capture is still going out — its
+  // link is over the mark and nothing drains — so it keeps its room, and the
+  // second is refused with a row rather than held or silently dropped.
+  const reservations = new CaptureReservations(20 * 1024 * 1024, 2);
+  let firstCall = true;
+  const holding: ProviderCaptureLink = {
+    pendingBytes: () => {
+      // Clear when the capture starts, backed up from its first chunk on.
+      if (firstCall) {
+        firstCall = false;
+        return 0;
+      }
+      return WORKER_PIPE_SOFT_BYTES + 1;
+    },
+    retainBodies: () => true,
+    drain: () => new Promise<void>(() => {}),
+    reserve: (bytes) => reservations.reserve(bytes),
+  };
+  const one = await activate(holding);
+  one.send.mockImplementation(() => {});
+  await one.handlers.get("before_provider_request")!({ payload: payloadOf(15 * 1024 * 1024) }, ctx);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(reservations.held().open).toBe(1);
+  expect(reservations.held().bytes).toBeGreaterThan(15 * 1024 * 1024);
+
+  // The second session asks the same authority, and there is no room.
+  const blocked: unknown[] = [];
+  const two = await activate({
+    pendingBytes: () => 0,
+    retainBodies: () => true,
+    drain: async () => {},
+    reserve: (bytes) => reservations.reserve(bytes),
+  });
+  two.send.mockImplementation((message: unknown) => blocked.push(message));
+  await two.handlers.get("before_provider_request")!({ payload: payloadOf(15 * 1024 * 1024) }, ctx);
+  expect(blocked[0]).toMatchObject({ type: "lasercode/provider/request/omitted", reason: "link-busy" });
+  expect(reservations.held().open).toBe(1);
+
+  // A capture that fits beside it is kept, and gives its room back.
+  const third: unknown[] = [];
+  two.send.mockImplementation((message: unknown) => third.push(message));
+  await two.handlers.get("before_provider_request")!({ payload: payloadOf(2 * 1024 * 1024) }, ctx);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect((third[0] as { type: string }).type).toBe("lasercode/provider/request/begin");
+  expect(reservations.held().open).toBe(1);
+});
+
+it("releases its reservation when the link throws, without failing the turn", async () => {
+  const reservations = new CaptureReservations();
+  const { handlers, send } = await activate({
+    pendingBytes: () => 0,
+    retainBodies: () => true,
+    drain: async () => {
+      throw new Error("the link went away");
+    },
+    reserve: (bytes) => reservations.reserve(bytes),
+  });
+  let sends = 0;
+  send.mockImplementation(() => {
+    sends += 1;
+    // Everything after the first message fails, as a closed pipe would.
+    if (sends > 1) throw new Error("write after end");
+  });
+  // The hook itself must not fail, whatever the link does.
+  await expect(handlers.get("before_provider_request")!({ payload: payloadOf(3 * 1024 * 1024) }, ctx)).resolves.toBeUndefined();
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  expect(reservations.held()).toEqual({ bytes: 0, open: 0 });
+});
+
+it("keeps a response behind the request it answers", async () => {
+  const order: string[] = [];
+  let releaseDrain = () => {};
+  let started = false;
+  const { handlers, send } = await activate({
+    // Clear when the capture starts; over its mark from the first chunk on, so
+    // every piece waits on the drain below until the app reads again.
+    pendingBytes: () => (started ? WORKER_PIPE_SOFT_BYTES + 1 : 0),
+    retainBodies: () => true,
+    drain: () => new Promise<void>((resolve) => { releaseDrain = resolve; }),
+  });
+  send.mockImplementation((message: unknown) => {
+    const type = (message as { type: string }).type;
+    if (type === "lasercode/provider/request/begin") started = true;
+    order.push(type);
+  });
+
+  await handlers.get("before_provider_request")!({ payload: payloadOf(3 * 1024 * 1024) }, ctx);
+  const response = handlers.get("after_provider_response")!({ status: 200, headers: {} }, ctx);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  // The response has not overtaken the capture that is still going out.
+  expect(order).not.toContain("lasercode/provider/response");
+  // The app starts reading again: the pieces go, and the capture ends.
+  started = false;
+  releaseDrain();
+  await response;
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const settled = order.indexOf("lasercode/provider/response");
+  const terminal = Math.max(
+    order.lastIndexOf("lasercode/provider/request/end"),
+    order.lastIndexOf("lasercode/provider/request/abort"),
+  );
+  expect(terminal).toBeGreaterThanOrEqual(0);
+  expect(settled).toBeGreaterThan(terminal);
 });
 
 it("still reports responses", async () => {

@@ -87,6 +87,22 @@ describe("migration", () => {
     expect((db.prepare("SELECT COUNT(*) AS n FROM content_chunks").get() as { n: number }).n).toBe(0);
   });
 
+  it("refuses every body operation on a store a newer app wrote", () => {
+    const db = database();
+    db.exec(`PRAGMA user_version = ${CONTENT_SCHEMA_VERSION + 5}`);
+    const store = new ContentStore(db);
+    expect(store.migrate().ahead).toBe(true);
+    expect(store.unavailable).toBe(true);
+    // Nothing is written, nothing is read, nothing is released, and no number
+    // is invented for any of it.
+    expect(store.put("{}")).toBeUndefined();
+    expect(store.read("a".repeat(64), 1024)).toBeUndefined();
+    expect(store.has("a".repeat(64))).toBe(false);
+    expect(store.sizeOf("a".repeat(64))).toBe(0);
+    expect(store.release("a".repeat(64))).toBe(false);
+    expect(store.totalBytes()).toBe(0);
+  });
+
   it("leaves a store a newer app wrote exactly as it is", () => {
     const db = database();
     db.exec(`PRAGMA user_version = ${CONTENT_SCHEMA_VERSION + 5}`);

@@ -94,6 +94,17 @@ export type StorageProjection =
   | { ok: false; reason: "unredacted"; survivors: string[] };
 
 export function redactForStorage(value: unknown): StorageProjection {
+  try {
+    return projectVerified(value);
+  } catch {
+    // A getter or a proxy that throws while it is being read. Nothing is
+    // stored, and nothing about the request fails: the row says the text could
+    // not be made safe to keep.
+    return { ok: false, reason: "unredacted", survivors: [] };
+  }
+}
+
+function projectVerified(value: unknown): StorageProjection {
   const first = project(value);
   if (findCredentialShapedKeys(first.body).length === 0) return { ok: true, ...first };
   // Something credential-shaped is in the text that the walk did not see —

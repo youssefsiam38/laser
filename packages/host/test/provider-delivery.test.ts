@@ -174,6 +174,8 @@ it("records a capture the worker chose not to send, with its size, digest and re
   );
   const content = await host.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/logs/content", params: { ref: meta.sha256 } }, LOCAL_ACCESS);
   const result = content.result as ClientRequests["pi/logs/content"]["result"];
-  expect(result.released).toMatchObject({ reason: "over-ceiling", bytes: meta.bytes, sha256: meta.sha256, preview: meta.preview });
+  // No preview: the host keeps one only for text it defended itself (RP-7).
+  expect(result.released).toMatchObject({ reason: "over-ceiling", bytes: meta.bytes, sha256: meta.sha256 });
+  expect(result.released?.preview ?? "").toBe("");
   expect(result.text).toBe("");
 }, 15_000);

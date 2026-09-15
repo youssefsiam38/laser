@@ -28,6 +28,7 @@ import {
   WORKER_PIPE_SOFT_BYTES,
   redactForStorage,
   type InstructionSourceMap,
+  type CaptureReservation,
   type ProviderCaptureLink,
   type ProviderCaptureMeta,
   type ProviderCaptureOmission,
@@ -38,6 +39,9 @@ import type { OutboundMessage as OutboundCapture } from "./index.js";
 
 /** Leading characters kept on the row, matching the store's own preview. */
 const PREVIEW_CHARS = 240;
+
+/** How long a response row waits for the request it answers to finish crossing. */
+const RESPONSE_WAIT_MS = 2_000;
 
 /** The row's line, without the app parsing a body it was handed whole. */
 export function summarize(payload: unknown): ProviderCaptureSummary {
@@ -82,20 +86,30 @@ export function encodeCapture(payload: unknown): EncodedCapture {
   };
 }
 
-/** Split on UTF-8 byte boundaries, so a chunk is never half a character. */
-export function chunkBody(body: string, chunkBytes = CAPTURE_CHUNK_BYTES): string[] {
+/**
+ * Walk a body as bounded UTF-8 pieces, one at a time.
+ *
+ * Never cut inside a multi-byte sequence: the walk steps back over
+ * continuation bytes (0b10xxxxxx) so each piece decodes on its own.
+ */
+export function* utf8Chunks(body: string, chunkBytes = CAPTURE_CHUNK_BYTES): Generator<string> {
   const buffer = Buffer.from(body, "utf8");
-  const chunks: string[] = [];
+  if (buffer.length === 0) {
+    yield "";
+    return;
+  }
   let offset = 0;
   while (offset < buffer.length) {
     let end = Math.min(offset + chunkBytes, buffer.length);
-    // Never cut inside a multi-byte sequence: walk back over continuation
-    // bytes (0b10xxxxxx) so each chunk decodes on its own.
     while (end > offset && end < buffer.length && (buffer[end]! & 0xc0) === 0x80) end -= 1;
-    chunks.push(buffer.toString("utf8", offset, end));
+    yield buffer.toString("utf8", offset, end);
     offset = end;
   }
-  return chunks.length > 0 ? chunks : [""];
+}
+
+/** The same pieces, collected. */
+export function chunkBody(body: string, chunkBytes = CAPTURE_CHUNK_BYTES): string[] {
+  return [...utf8Chunks(body, chunkBytes)];
 }
 
 function newCaptureId(): string {
@@ -116,31 +130,56 @@ async function streamCapture(input: {
   send: (message: OutboundCapture) => void;
   link: ProviderCaptureLink | undefined;
   meta: ProviderCaptureMeta;
-  chunks: string[];
+  body: string;
   bytes: number;
+  reservation: CaptureReservation | undefined;
 }): Promise<void> {
-  const { send, link, meta, chunks, bytes } = input;
-  send({ type: "lasercode/provider/request/begin", ...meta, chunks: chunks.length });
-  for (const [index, text] of chunks.entries()) {
-    let pending = link?.pendingBytes() ?? 0;
-    for (let attempt = 0; attempt < CAPTURE_DRAIN_ATTEMPTS && pending > WORKER_PIPE_SOFT_BYTES; attempt++) {
-      // Only when it matters: an idle link never waits.
-      await (link?.drain?.() ?? Promise.resolve());
-      pending = link?.pendingBytes() ?? 0;
+  const { send, link, meta, body, bytes, reservation } = input;
+  try {
+    const chunks = [...utf8Chunks(body, CAPTURE_CHUNK_BYTES)];
+    send({ type: "lasercode/provider/request/begin", ...meta, chunks: chunks.length });
+    for (const [index, text] of chunks.entries()) {
+      let pending = link?.pendingBytes() ?? 0;
+      for (let attempt = 0; attempt < CAPTURE_DRAIN_ATTEMPTS && pending > WORKER_PIPE_SOFT_BYTES; attempt++) {
+        // Only when it matters: an idle link never waits.
+        await (link?.drain?.() ?? Promise.resolve());
+        pending = link?.pendingBytes() ?? 0;
+      }
+      if (pending > WORKER_PIPE_SOFT_BYTES) {
+        send({ type: "lasercode/provider/request/abort", captureId: meta.captureId, reason: "link-busy" });
+        return;
+      }
+      send({ type: "lasercode/provider/request/chunk", captureId: meta.captureId, index, text });
     }
-    if (pending > WORKER_PIPE_SOFT_BYTES) {
+    send({ type: "lasercode/provider/request/end", captureId: meta.captureId, chunks: chunks.length, bytes });
+  } catch {
+    // A send or a drain that threw. The capture stops here and says so; the
+    // turn that produced it never learns about any of this.
+    try {
       send({ type: "lasercode/provider/request/abort", captureId: meta.captureId, reason: "link-busy" });
-      return;
+    } catch {
+      /* the link is gone; the host ends the capture when the process does */
     }
-    send({ type: "lasercode/provider/request/chunk", captureId: meta.captureId, index, text });
+  } finally {
+    // Every outcome: sent, aborted, thrown, or the process closing under it.
+    reservation?.release();
   }
-  send({ type: "lasercode/provider/request/end", captureId: meta.captureId, chunks: chunks.length, bytes });
 }
 
 export const providerLogModule: LaserModule = {
   name: "provider-log",
   detect: () => true,
   activate({ pi, send, requestProvenance, captureLink }) {
+    /**
+     * This module instance's current capture, settled.
+     *
+     * A chunked request is sent behind its hook, so without this its response
+     * row could be written before the request it answers. The response waits
+     * for the capture it belongs to — briefly, and for the diagnostic only:
+     * the provider call itself is long since done, and nothing about the turn
+     * is delayed, queued or cancelled by this.
+     */
+    let settling: Promise<void> = Promise.resolve();
     const capture = (event: BeforeProviderRequestEvent, ctx: ExtensionContext, sources?: InstructionSourceMap[]) => {
       const prompt = ctx.sessionManager.getBranch().findLast((entry) => entry.type === "message" && entry.message.role === "user");
       const context: ProviderRequestContext = {
@@ -179,18 +218,37 @@ export const providerLogModule: LaserModule = {
         return undefined;
       }
 
-      const chunks = chunkBody(encoded.body);
-      // Sent cooperatively, and not on the turn's way: the hook returns now,
-      // and the pieces go as the link takes them. Nothing about a turn, a tool
-      // or a command waits for this — a capture is a diagnostic, and the one
-      // thing it may cost is itself.
-      void streamCapture({ send, link: captureLink, meta, chunks, bytes: encoded.bytes });
+      // One authority for the whole worker: what every session's captures may
+      // hold in this process while they are sent (RP-7). Taken **before** the
+      // pieces are cut, so a capture that cannot be held never materialises
+      // them, and released on every outcome.
+      const reservation = captureLink?.reserve?.(encoded.bytes);
+      if (captureLink?.reserve && !reservation) return omit("link-busy");
+      // Behind the hook, never on the turn's way: the pieces go as the link
+      // takes them, and nothing about a turn, a tool or a command waits.
+      const streaming = streamCapture({
+        send,
+        link: captureLink,
+        meta,
+        body: encoded.body,
+        bytes: encoded.bytes,
+        reservation,
+      }).catch(() => {
+        // `streamCapture` handles its own failures; this is the last guard
+        // against an unhandled rejection in a detached promise.
+        reservation?.release();
+      });
+      settling = settling.then(() => streaming).catch(() => {});
       return undefined;
     };
     if (requestProvenance) requestProvenance.onRequest(capture);
     else pi.on("before_provider_request", async (event, ctx) => capture(event, ctx));
     pi.on("after_provider_response", async (event: { status: number; headers: Record<string, string> }) => {
-      send({ type: "lasercode/provider/response", at: new Date().toISOString(), status: event.status, headers: event.headers });
+      const at = new Date().toISOString();
+      // Bounded: a capture that cannot finish must not hold a response row for
+      // ever, and a late response row is better than a lost one.
+      await Promise.race([settling, new Promise<void>((resolve) => setTimeout(resolve, RESPONSE_WAIT_MS).unref?.())]).catch(() => {});
+      send({ type: "lasercode/provider/response", at, status: event.status, headers: event.headers });
       return undefined;
     });
   },

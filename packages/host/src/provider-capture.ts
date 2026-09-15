@@ -38,8 +38,16 @@ export interface CaptureComplete {
   cwd: string;
   sessionPath: string;
   meta: ProviderCaptureMeta;
-  /** The redacted body, exactly as it will be stored. */
+  /**
+   * The redacted body, when this host had to build it — a small capture, or
+   * one it had to defend. Empty when `pieces` carries it instead, so a
+   * multi-megabyte body is never held twice.
+   */
   body: string;
+  /** The pieces it arrived in, in order: the shape the store already keeps. */
+  pieces?: readonly string[];
+  /** Already written by the store, piece by piece, as it arrived. */
+  stored?: { ref: string; bytes: number; preview: string };
 }
 
 export interface CaptureAbsent {
@@ -76,6 +84,14 @@ function restate(meta: ProviderCaptureMeta, body: string, redactedHere: number):
 const CAPTURE_PREVIEW_CHARS = 240;
 
 export interface CaptureAccumulatorOptions {
+  /**
+   * Where a large body's pieces go as they arrive.
+   *
+   * With this, the host writes each piece and lets it go: a 12 MiB request
+   * costs one piece of memory while it is arriving, not all of it. Without it
+   * (a test with no store) the pieces are kept and handed over at the end.
+   */
+  openBody?: (meta: ProviderCaptureMeta) => CaptureBodySink | undefined;
   /** A capture arrived whole; store it. */
   onComplete: (input: CaptureComplete) => void;
   /** A capture happened and its body is not kept; record the row and why. */
@@ -84,12 +100,29 @@ export interface CaptureAccumulatorOptions {
   log?: (message: string) => void;
 }
 
+/** A body being written a piece at a time, from the store's side. */
+export interface CaptureBodySink {
+  write: (piece: string) => void;
+  /** The row's size and digest, or `undefined` when the pieces are not a body. */
+  finish: () => { ref: string; bytes: number } | undefined;
+  abort: () => void;
+}
+
 interface Open {
   key: string;
   actor: CaptureActor;
   sessionPath: string;
   meta: ProviderCaptureMeta;
+  /** Kept only when there is nowhere to stream them; see `openBody`. */
   pieces: string[];
+  /** Where pieces are written as they arrive, when the store takes them. */
+  sink: CaptureBodySink | undefined;
+  /** The first characters of the body, kept for the row. */
+  preview: string;
+  /** Tail of the previous piece, so a key that straddles a cut is still seen. */
+  carry: string;
+  /** Credential-shaped keys seen while the pieces went past. */
+  survivors: string[];
   /** Bytes actually received so far. */
   bytes: number;
   /** Announced size, held against every bound from `begin` until it ends. */
@@ -119,6 +152,24 @@ export interface CaptureRetention {
   /** Announced-but-not-yet-received bytes still reserved against the bounds. */
   reservedBytes: number;
 }
+
+/**
+ * Look for a credential-shaped key across pieces, with an overlap so one that
+ * straddles a boundary is still seen. Key names only ever leave this function.
+ */
+function scanPieces(pieces: readonly string[]): string[] {
+  const found: string[] = [];
+  let carry = "";
+  for (const piece of pieces) {
+    for (const key of findCredentialShapedKeys(carry + piece)) if (!found.includes(key)) found.push(key);
+    if (found.length > 0) break;
+    carry = piece.slice(-OVERLAP_CHARS);
+  }
+  return found;
+}
+
+/** Enough to carry the longest credential-shaped key and its value across a cut. */
+const OVERLAP_CHARS = 512;
 
 function keyOf(generation: string, captureId: string): string {
   return `${generation}\u0000${captureId}`;
@@ -162,6 +213,10 @@ export class CaptureAccumulator {
       sessionPath,
       meta,
       pieces: [],
+      sink: this.options.openBody?.(meta),
+      preview: "",
+      carry: "",
+      survivors: [],
       bytes: 0,
       reserved: announced,
       next: 0,
@@ -186,7 +241,26 @@ export class CaptureAccumulator {
       this.end(key, "corrupt");
       return;
     }
-    entry.pieces.push(text);
+    // Seen as it goes past, with an overlap so a credential-shaped key that
+    // straddles a cut is not missed.
+    for (const survivor of findCredentialShapedKeys(entry.carry + text)) {
+      if (!entry.survivors.includes(survivor)) entry.survivors.push(survivor);
+    }
+    entry.carry = text.slice(-OVERLAP_CHARS);
+    if (entry.preview.length < CAPTURE_PREVIEW_CHARS) entry.preview = (entry.preview + text).slice(0, CAPTURE_PREVIEW_CHARS);
+    if (entry.sink && entry.survivors.length === 0) {
+      // Written and let go: the host holds one piece, not the capture.
+      entry.sink.write(text);
+    } else {
+      if (entry.sink) {
+        // Something credential-shaped is in this body, so it cannot be stored
+        // as it came. Stop writing and keep the pieces: the whole body is
+        // needed to redact it, and only a capture that has one pays for that.
+        entry.sink.abort();
+        entry.sink = undefined;
+      }
+      entry.pieces.push(text);
+    }
     entry.bytes += bytes;
     entry.next += 1;
     this.bytes += bytes;
@@ -201,16 +275,46 @@ export class CaptureAccumulator {
       this.end(key, "corrupt");
       return;
     }
-    const body = entry.pieces.join("");
-    this.release(key);
-    const digest = createHash("sha256").update(body).digest("hex");
-    if (digest !== entry.meta.sha256) {
+    if (entry.sink && entry.survivors.length === 0) {
+      // The store took every piece as it arrived; it verifies the digest of
+      // what it has, and nothing here ever held the body.
+      const stored = entry.sink.finish();
+      entry.sink = undefined;
+      const preview = entry.preview;
+      this.release(key);
+      if (!stored) {
+        this.options.onAbsent({ cwd: entry.actor.cwd, sessionPath: entry.sessionPath, meta: entry.meta, reason: "corrupt" });
+        return;
+      }
+      this.options.onComplete({
+        cwd: entry.actor.cwd,
+        sessionPath: entry.sessionPath,
+        meta: entry.meta,
+        body: "",
+        stored: { ref: stored.ref, bytes: stored.bytes, preview },
+      });
+      return;
+    }
+
+    // No store to stream into, or a body that has to be defended: the pieces
+    // are here, and the digest is taken over them as they are.
+    const digest = createHash("sha256");
+    for (const piece of entry.pieces) digest.update(piece);
+    if (digest.digest("hex") !== entry.meta.sha256) {
+      this.release(key);
       this.options.onAbsent({ cwd: entry.actor.cwd, sessionPath: entry.sessionPath, meta: entry.meta, reason: "corrupt" });
       return;
     }
-    // Exactly one terminal outcome per capture, and the metadata on it always
-    // describes the bytes that are actually stored.
-    const defended = this.defend(body);
+    if (entry.survivors.length === 0) {
+      const pieces = entry.pieces.slice();
+      this.release(key);
+      this.options.onComplete({ cwd: entry.actor.cwd, sessionPath: entry.sessionPath, meta: entry.meta, body: "", pieces });
+      return;
+    }
+    const body = entry.pieces.join("");
+    const survivors = entry.survivors.slice();
+    this.release(key);
+    const defended = this.defend(body, survivors);
     if (!defended.ok) {
       this.options.onAbsent({ cwd: entry.actor.cwd, sessionPath: entry.sessionPath, meta: entry.meta, reason: defended.reason });
       return;
@@ -218,7 +322,7 @@ export class CaptureAccumulator {
     this.options.onComplete({
       cwd: entry.actor.cwd,
       sessionPath: entry.sessionPath,
-      meta: defended.body === body ? entry.meta : restate(entry.meta, defended.body, defended.redactedFields),
+      meta: restate(entry.meta, defended.body, defended.redactedFields),
       body: defended.body,
     });
   }
@@ -255,9 +359,7 @@ export class CaptureAccumulator {
    * redacted again here rather than stored as it arrived, and the log line
    * names the **keys** that were caught, never their values.
    */
-  private defend(body: string): DefenceResult {
-    const survivors = findCredentialShapedKeys(body);
-    if (survivors.length === 0) return { ok: true, body, redactedFields: 0 };
+  private defend(body: string, survivors: string[]): DefenceResult {
     this.options.log?.(
       `provider capture: ${survivors.length} credential-shaped field(s) were not redacted by the worker (${survivors.join(", ")}); redacted here`,
     );
@@ -295,6 +397,9 @@ export class CaptureAccumulator {
   private release(key: string): void {
     const entry = this.open.get(key);
     if (!entry) return;
+    // Anything written for a capture that is ending goes with it.
+    entry.sink?.abort();
+    entry.sink = undefined;
     this.bytes = Math.max(0, this.bytes - entry.bytes);
     entry.pieces.length = 0;
     this.open.delete(key);

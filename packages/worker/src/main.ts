@@ -54,6 +54,8 @@ function arg(name: string): string | undefined {
 interface WorkerTransport {
   input: NodeJS.ReadableStream;
   write: (line: string) => void;
+  /** Complete messages accepted for the app and not yet written (RP-7). */
+  pendingFrames: () => number;
   /** Bytes accepted for the host and not yet handed to the kernel (RP-7). */
   pending: () => number;
   /**
@@ -67,9 +69,25 @@ interface WorkerTransport {
 function openTransport(): WorkerTransport {
   try {
     const socket = new Socket({ fd: PROTOCOL_FD, readable: true, writable: true });
+    let inFlight = 0;
+    let gone = false;
+    const settleAll = () => {
+      if (gone) return;
+      gone = true;
+      inFlight = 0;
+    };
+    socket.once("error", settleAll);
+    socket.once("close", settleAll);
     return {
       input: socket,
-      write: (line) => socket.write(line),
+      write: (line) => {
+        if (gone) return;
+        inFlight += 1;
+        socket.write(line, () => {
+          if (!gone) inFlight = Math.max(0, inFlight - 1);
+        });
+      },
+      pendingFrames: () => inFlight,
       pending: () => socket.writableLength,
       drain: () =>
         new Promise<void>((resolve) => {
@@ -99,9 +117,16 @@ function openTransport(): WorkerTransport {
     const realStdoutWrite = process.stdout.write.bind(process.stdout);
     console.log = (...args: unknown[]) => console.error(...args);
     console.info = console.log;
+    let stdoutInFlight = 0;
     return {
       input: process.stdin,
-      write: (line) => realStdoutWrite(line),
+      write: (line) => {
+        stdoutInFlight += 1;
+        realStdoutWrite(line, () => {
+          stdoutInFlight = Math.max(0, stdoutInFlight - 1);
+        });
+      },
+      pendingFrames: () => stdoutInFlight,
       pending: () => process.stdout.writableLength,
       drain: () => new Promise<void>((resolve) => setImmediate(resolve)),
     };
@@ -202,6 +227,7 @@ async function main(): Promise<void> {
     ...(npmCommand ? { npmCommand } : {}),
     features,
     transportPending: () => transport.pending(),
+    transportFrames: () => transport.pendingFrames(),
     transportDrain: () => transport.drain(),
     retainProviderBodies: providerPayloads !== "summary",
   });

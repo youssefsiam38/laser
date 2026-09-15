@@ -72,7 +72,8 @@ import {
   type ProviderCaptureSummary,
 } from "@lasercode/protocol";
 import { createHash } from "node:crypto";
-import { CONTENT_SCHEMA_VERSION, ContentStore } from "./content-store.js";
+import { CHUNKED_BODY_ABOVE, CONTENT_SCHEMA_VERSION, ContentStore } from "./content-store.js";
+import type { CaptureBodySink } from "./provider-capture.js";
 import { chmodSync, mkdirSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
@@ -212,6 +213,8 @@ export { redact };
 
 /** What a row keeps instead of a body that could not be cleaned (RP-7). */
 const UNREDACTABLE_BODY = "not recorded: a credential-shaped field could not be removed";
+/** What a row says when this file's bodies belong to a newer release (RP-7). */
+const BODIES_UNAVAILABLE = "request text not kept: this file was written by a newer version";
 
 /** What a caller hands `record()`. `id` and `at` are the store's business. */
 export interface LogInput {
@@ -329,6 +332,13 @@ function openDatabase(file: string): Database {
   db.exec(`
     PRAGMA journal_mode = WAL;
     PRAGMA synchronous = NORMAL;
+    -- A bounded page cache (RP-7). The default grows with what has been
+    -- touched, and a burst of multi-megabyte bodies touches a great many pages;
+    -- this is a memory bound on SQLite's own convenience, not on what the
+    -- store keeps. Retention, integrity and partial reads are unchanged.
+    PRAGMA cache_size = -2000;
+    -- Cap the WAL between checkpoints for the same reason.
+    PRAGMA journal_size_limit = 8388608;
     CREATE TABLE IF NOT EXISTS entries (
       id             INTEGER PRIMARY KEY AUTOINCREMENT,
       at             TEXT    NOT NULL,
@@ -576,6 +586,10 @@ export class LogStore {
       return { inline: body, ref: null, bytes, contentType: "application/json", preview };
     }
     const stored = this.content_.put(body, bytes);
+    // Bodies are not being kept in this file (a newer release wrote its body
+    // tables): the row keeps its line, its size and nothing else. Rows,
+    // sessions and search are unaffected.
+    if (!stored) return { inline: null, ref: null, bytes, contentType: "application/json", preview };
     if (stored.inserted) {
       this.retainedBodyBytes += stored.bytes;
       // The same body back on disk: rows that had it released have it again,
@@ -1151,9 +1165,74 @@ export class LogStore {
    * A capture that arrived whole through the chunked path (RP-7): already
    * redacted, already measured, stored once. Nothing is re-serialized here.
    */
-  recordProviderCapture(cwd: string, sessionPath: string, meta: ProviderCaptureMeta, body: string): void {
+  /**
+   * Take a large capture's pieces as they arrive (RP-7). The store writes each
+   * one and lets it go, so the host never holds a whole request.
+   */
+  openProviderBody(meta: ProviderCaptureMeta): CaptureBodySink | undefined {
+    if (this.closed || this.providerPayloads !== "full") return undefined;
+    if (meta.sha256 === undefined || meta.bytes === undefined || meta.bytes <= CHUNKED_BODY_ABOVE) return undefined;
+    const stream = this.content_.openStream(meta.sha256);
+    return {
+      write: (piece) => stream.write(piece),
+      finish: () => {
+        const stored = stream.finish();
+        if (!stored) return undefined;
+        if (stored.inserted) this.retainedBodyBytes += stored.bytes;
+        return { ref: stored.ref, bytes: stored.bytes };
+      },
+      abort: () => stream.abort(),
+    };
+  }
+
+  /** The row for a capture the store already wrote, piece by piece. */
+  recordProviderStored(
+    cwd: string,
+    sessionPath: string,
+    meta: ProviderCaptureMeta,
+    stored: { ref: string; bytes: number; preview: string },
+  ): void {
     if (this.closed) return;
-    const stored = this.content_.put(body);
+    const entry = this.recordEncoded(
+      {
+        section: "provider",
+        kind: "provider_request",
+        cwd,
+        sessionPath,
+        at: meta.at,
+        summary: describeProviderCapture(meta.summary, stored.bytes),
+        ...(meta.context ? { requestContext: meta.context } : {}),
+      },
+      { inline: null, ref: stored.ref, bytes: stored.bytes, contentType: "application/json", preview: stored.preview.slice(0, PREVIEW_CHARS) },
+    );
+    if (entry) this.noteOpenProviderRequest(sessionPath, entry.id, meta.at);
+  }
+
+  recordProviderCapture(cwd: string, sessionPath: string, meta: ProviderCaptureMeta, body: string, pieces?: readonly string[]): void {
+    if (this.closed) return;
+    // The pieces a capture arrived in are the shape this store keeps, so they
+    // are written as they are when the caller still has them: joining and
+    // re-cutting a multi-megabyte body held two more copies of it.
+    const stored = pieces && pieces.length > 0 && body.length === 0
+      ? this.content_.putPieces(pieces, meta.bytes ?? 0, meta.sha256 ?? "")
+      : this.content_.put(body);
+    if (!stored) {
+      // Same as above: the request is recorded, its text is not kept, and the
+      // row says so rather than pointing at a body nobody can read.
+      this.recordEncoded(
+        {
+          section: "provider",
+          kind: "provider_request",
+          cwd,
+          sessionPath,
+          at: meta.at,
+          summary: `${describeProviderCapture(meta.summary, meta.bytes ?? Buffer.byteLength(body, "utf8"))} · ${BODIES_UNAVAILABLE}`,
+          ...(meta.context ? { requestContext: meta.context } : {}),
+        },
+        { inline: null, ref: null, bytes: null, contentType: null, preview: null },
+      );
+      return;
+    }
     if (stored.inserted) this.retainedBodyBytes += stored.bytes;
     const entry = this.recordEncoded(
       {
@@ -1165,7 +1244,16 @@ export class LogStore {
         summary: describeProviderCapture(meta.summary, stored.bytes),
         ...(meta.context ? { requestContext: meta.context } : {}),
       },
-      { inline: null, ref: stored.ref, bytes: stored.bytes, contentType: stored.contentType, preview: meta.preview ?? "" },
+      // The preview is taken from the bytes this host is storing, never from
+      // what the producer said they were: a preview is body text, and body
+      // text is only safe once this host has defended it.
+      {
+        inline: null,
+        ref: stored.ref,
+        bytes: stored.bytes,
+        contentType: stored.contentType,
+        preview: (body.length > 0 ? body : (pieces?.[0] ?? "")).slice(0, PREVIEW_CHARS),
+      },
     );
     if (entry) this.noteOpenProviderRequest(sessionPath, entry.id, meta.at);
   }
@@ -1192,8 +1280,11 @@ export class LogStore {
         summary: `${describeProviderCapture(meta.summary, meta.bytes)}${measured ? "" : ` · ${UNREDACTABLE_BODY}`}`,
         ...(meta.context ? { requestContext: meta.context } : {}),
       },
+      // No preview for a capture whose body is not here: the only preview this
+      // host may keep is one it took from text it defended itself, and for an
+      // absent capture there is no such text.
       measured
-        ? { inline: null, ref: meta.sha256!, bytes: meta.bytes!, contentType: "application/json", preview: meta.preview ?? "" }
+        ? { inline: null, ref: meta.sha256!, bytes: meta.bytes!, contentType: "application/json", preview: null }
         : { inline: null, ref: null, bytes: null, contentType: null, preview: null },
     );
     if (!entry) return;
