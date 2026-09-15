@@ -121,7 +121,12 @@ export interface SessionSafety {
   pins: SessionPin[];
 }
 
-/** At most this many sessions are reported in one safety answer. */
+/**
+ * At most this many sessions are reported in one safety answer.
+ *
+ * Reaching it makes the answer **incomplete**, and an incomplete answer is not
+ * a safe one: the session that was cut could be the one holding a question.
+ */
 export const SESSION_SAFETY_MAX = 512;
 /** Bound for a pin's detail text. */
 export const SESSION_PIN_DETAIL_MAX = 120;
@@ -172,7 +177,20 @@ declare module "./messages.js" {
      */
     "pi/worker/safety": {
       params: {};
-      result: { sessions: SessionSafety[] };
+      result: {
+        /**
+         * Every session this worker holds **and every one it is opening or
+         * releasing**, so a load in flight is visible as work rather than as
+         * an absence.
+         */
+        sessions: SessionSafety[];
+        /**
+         * Whether that list is the whole truth. False when it hit
+         * {@link SESSION_SAFETY_MAX}. A caller must treat an incomplete answer
+         * exactly as it treats no answer at all: the worker keeps working.
+         */
+        complete: boolean;
+      };
     };
   }
 }

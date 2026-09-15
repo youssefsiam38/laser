@@ -8,6 +8,7 @@
  * message, a running command, a request in flight — is untouched afterwards.
  */
 import { describe, expect, it } from "vitest";
+import { SESSION_SAFETY_MAX } from "@lasercode/protocol";
 import type { ClientRequests, ContentBlock, JsonRpcMessage, ModelRef, SessionState, SessionUpdateParams, UiDialogRequest } from "@lasercode/protocol";
 import { WorkerServer } from "../src/server.js";
 import type { DriverEvent, DriverListener, SessionDriver } from "../src/driver.js";
@@ -22,6 +23,8 @@ class FakeDriver implements SessionDriver {
   history: { entries: unknown[]; leafId: string | null } = { entries: [], leafId: null };
   /** Resolves `entries()` only when a test lets it, so a read can be in flight. */
   entriesGate: Promise<void> | undefined;
+  /** Holds `open()` so a load is genuinely in flight while something else looks. */
+  openGate: Promise<void> | undefined;
   /** Holds `dispose()` open, so a load can arrive while a release is running. */
   disposeGate: Promise<void> | undefined;
   disposing: (() => void) | undefined;
@@ -42,6 +45,7 @@ class FakeDriver implements SessionDriver {
   };
 
   async open(options: { sessionPath?: string }) {
+    if (this.openGate) await this.openGate;
     if (options.sessionPath) this.st = { ...this.st, path: options.sessionPath };
     return this.st;
   }
@@ -81,10 +85,15 @@ class FakeDriver implements SessionDriver {
 function world() {
   const out: JsonRpcMessage[] = [];
   const drivers: FakeDriver[] = [];
+  let pendingOpenGate: Promise<void> | undefined;
   const server = new WorkerServer({
     cwd: "/tmp/unload",
     createDriver: () => {
       const driver = new FakeDriver();
+      if (pendingOpenGate) {
+        driver.openGate = pendingOpenGate;
+        pendingOpenGate = undefined;
+      }
       drivers.push(driver);
       return driver;
     },
@@ -107,7 +116,11 @@ function world() {
   const unload = async () => (await call<ClientRequests["pi/session/unload"]["result"]>("pi/session/unload", { path: PATH, reason: "idle" })).result!;
   const safety = async () => (await call<ClientRequests["pi/worker/safety"]["result"]>("pi/worker/safety", {})).result!;
   const updates = () => out.filter((m) => "method" in m && m.method === "session/update") as Array<{ params: SessionUpdateParams }>;
-  return { server, out, drivers, call, send, load, unload, safety, updates };
+  return {
+    server, out, drivers, call, send, load, unload, safety, updates,
+    /** The next driver this worker builds holds its `open()` on this gate. */
+    nextOpenGate: (gate: Promise<void>) => { pendingOpenGate = gate; },
+  };
 }
 
 const text = (value: string): ContentBlock[] => [{ type: "text", text: value }];
@@ -288,6 +301,38 @@ describe("pi/session/unload", () => {
     expect(safety.sessions).toHaveLength(1);
     expect(safety.sessions[0]!.path).toBe(PATH);
     expect(safety.sessions[0]!.pins.map((pin) => pin.kind)).toEqual(["streaming"]);
+    // The answer says it is the whole truth, which is what lets the pool read
+    // an empty pin list as "safe" rather than as "I could not tell you".
+    expect(safety.complete).toBe(true);
+  });
+
+  it("says its answer is not complete when it holds more sessions than one answer carries", async () => {
+    const w = world();
+    const server = w.server as unknown as { sessions: Map<string, unknown> };
+    await w.load();
+    const only = server.sessions.get(PATH)!;
+    for (let index = 0; index < SESSION_SAFETY_MAX + 3; index += 1) server.sessions.set(`/tmp/unload/extra-${index}.jsonl`, only);
+    const safety = await w.safety();
+    expect(safety.sessions).toHaveLength(SESSION_SAFETY_MAX);
+    expect(safety.complete).toBe(false);
+  });
+
+  it("lists a session whose load has not answered yet, pinned, so nobody reads it as absent", async () => {
+    const w = world();
+    await w.load();
+    const other = "/tmp/unload/s2.jsonl";
+    let openGate = () => {};
+    const gate = new Promise<void>((resolve) => { openGate = resolve; });
+    // The next driver holds its `open()` so the load is genuinely in flight.
+    w.nextOpenGate(gate);
+    const loading = w.send("session/load", { path: other });
+    await Promise.resolve();
+    const safety = await w.safety();
+    expect(safety.complete).toBe(true);
+    const opening = safety.sessions.find((session) => session.path === other);
+    expect(opening?.pins.map((pin) => pin.kind)).toEqual(["opening"]);
+    openGate();
+    await loading.answered;
   });
 
   it("reports its retained stores, and they shrink when a runtime is released", async () => {

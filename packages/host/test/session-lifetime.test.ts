@@ -8,7 +8,7 @@
  * release, the refusal and the retirement admission are the real requests.
  */
 import { PRODUCT_NAME, type SessionPin } from "@lasercode/protocol";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -173,6 +173,7 @@ const socket = new Socket({ fd: 3, readable: true, writable: true });
 const send = (m) => socket.write(JSON.stringify(m) + "\\n");
 let buffer = "";
 let pins = [];
+let mode = "answer";
 let loaded = new Set();
 socket.setEncoding("utf8");
 socket.on("data", (chunk) => {
@@ -183,14 +184,20 @@ socket.on("data", (chunk) => {
     buffer = buffer.slice(i + 1);
     if (!line) continue;
     const req = JSON.parse(line);
+    if (req.method === "pi/test/crash") process.exit(9);
     if (req.method === "pi/test/pin") { pins = req.params.pins; send({ jsonrpc: "2.0", id: req.id, result: {} }); continue; }
+    if (req.method === "pi/test/mode") { mode = req.params.mode; send({ jsonrpc: "2.0", id: req.id, result: {} }); continue; }
     if (req.method === "session/load") {
       loaded.add(req.params.path);
       send({ jsonrpc: "2.0", id: req.id, result: { state: { path: req.params.path }, replayFrom: 0, seq: 0 } });
       continue;
     }
     if (req.method === "pi/worker/safety") {
-      send({ jsonrpc: "2.0", id: req.id, result: { sessions: [...loaded].map((path) => ({ path, pins })) } });
+      if (mode === "silent") continue;
+      if (mode === "error") { send({ jsonrpc: "2.0", id: req.id, error: { code: -32603, message: "cannot look" } }); continue; }
+      if (mode === "truncated") { send({ jsonrpc: "2.0", id: req.id, result: { sessions: [...loaded].map((path) => ({ path, pins })), complete: false } }); continue; }
+      if (mode === "partial") { send({ jsonrpc: "2.0", id: req.id, result: { sessions: [], complete: true } }); continue; }
+      send({ jsonrpc: "2.0", id: req.id, result: { sessions: [...loaded].map((path) => ({ path, pins })), complete: true } });
       continue;
     }
     if (req.method === "pi/session/unload") {
@@ -289,18 +296,70 @@ describe("WorkerPool session lifetime", () => {
     expect(pool.workerInfo(project)?.status).toBe("retired");
   });
 
-  it("keeps the behaviour it always had with a worker that cannot report safety", async () => {
+  const retireIfSafe = (worker: WorkerPool) =>
+    (worker as unknown as { retireIfSafe(entry: unknown): Promise<void> }).retireIfSafe(
+      (worker as unknown as { entries: Map<string, unknown> }).entries.get(project),
+    );
+
+  /**
+   * Fail closed. Each of these is a worker that holds a conversation and cannot
+   * prove it is idle — it never answers, it errors, it is an older generation
+   * without the method, its answer was cut, or its answer does not mention a
+   * session this pool believes it has. None of them may end that conversation:
+   * automatic retirement is never less careful than a release, and a release
+   * refuses on exactly the same doubt.
+   */
+  const unprovable: Array<[string, string, (client: Awaited<ReturnType<WorkerPool["get"]>>) => Promise<unknown>]> = [
+    ["does not answer at all", "safety-worker.mjs", (client) => client.request("pi/test/mode", { mode: "silent" })],
+    ["answers with an error", "safety-worker.mjs", (client) => client.request("pi/test/mode", { mode: "error" })],
+    ["answers with a list that was cut", "safety-worker.mjs", (client) => client.request("pi/test/mode", { mode: "truncated" })],
+    ["leaves out a session the pool holds", "safety-worker.mjs", (client) => client.request("pi/test/mode", { mode: "partial" })],
+    ["is an older generation without the method", "silent-worker.mjs", async () => {}],
+  ];
+
+  for (const [what, worker, prepare] of unprovable) {
+    it(`keeps a worker that ${what}, for the sweep and for an explicit stop`, async () => {
+      let now = 0;
+      pool = makePool(join(dir, worker), { idleMs: 1_000, now: () => now, safetyTimeoutMs: 150 });
+      const client = await openSession(pool, "/s/one.jsonl");
+      await prepare(client);
+
+      now += 10_000;
+      await retireIfSafe(pool);
+      expect(pool.workerInfo(project)?.status).toBe("ready");
+      expect(pool.openSessions(project)).toEqual(["/s/one.jsonl"]);
+
+      await expect(pool.stop(project)).rejects.toThrow(/could not say what its conversations are holding/);
+      await expect(pool.restart(project)).rejects.toThrow(/could not say what its conversations are holding/);
+      expect(pool.workerInfo(project)?.status).toBe("ready");
+      expect(client.alive).toBe(true);
+    });
+  }
+
+  it("still asks nothing of a worker with no conversations, so an idle one still retires", async () => {
     let now = 0;
     pool = makePool(join(dir, "silent-worker.mjs"), { idleMs: 1_000, now: () => now });
-    await openSession(pool, "/s/one.jsonl");
-    // Nothing answered `pi/worker/safety`, so the old guards decide — and they
-    // say this worker is idle, attached to nobody and running nothing.
+    await pool.get(project);
+    expect(pool.openSessions(project)).toEqual([]);
     now += 10_000;
-    await (pool as unknown as { retireIfSafe(entry: unknown): Promise<void> }).retireIfSafe(
-      (pool as unknown as { entries: Map<string, unknown> }).entries.get(project),
-    );
+    await retireIfSafe(pool);
     expect(pool.workerInfo(project)?.status).toBe("retired");
-    // And a release it cannot perform is reported as one that did not happen.
+  });
+
+  it("lets an explicit retry replace a crashed worker, which holds nothing to lose", async () => {
+    pool = makePool(join(dir, "safety-worker.mjs"), { backoffMs: 50 });
+    const client = await openSession(pool, "/s/one.jsonl");
+    await client.request("pi/test/pin", { pins: [{ kind: "question" }] });
+    client.request("pi/test/crash", {}).catch(() => {});
+    await vi.waitFor(() => expect(pool!.workerInfo(project)?.status).toBe("crashed"));
+    const info = await pool.restart(project);
+    expect(info.status).toBe("ready");
+  });
+
+  it("refuses a release the worker never answered, without forgetting the session", async () => {
+    pool = makePool(join(dir, "silent-worker.mjs"));
+    await openSession(pool, "/s/one.jsonl");
     expect(await pool.unloadSession(project, "/s/one.jsonl")).toEqual({ unloaded: false, pins: [] });
+    expect(pool.openSessions(project)).toEqual(["/s/one.jsonl"]);
   });
 });

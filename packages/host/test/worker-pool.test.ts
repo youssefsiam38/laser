@@ -24,6 +24,7 @@ const cwd = process.argv[process.argv.indexOf("--cwd") + 1];
 const socket = new Socket({ fd: 3, readable: true, writable: true });
 const send = (m) => socket.write(JSON.stringify(m) + "\\n");
 let buffer = "";
+let holds = [];
 socket.setEncoding("utf8");
 socket.on("data", (chunk) => {
   buffer += chunk;
@@ -34,6 +35,11 @@ socket.on("data", (chunk) => {
     if (!line) continue;
     const req = JSON.parse(line);
     if (req.method === "pi/test/crash") process.exit(9);
+    // RP-4: a worker of this generation always says what its conversations are
+    // holding. "pi/test/holds" is how a test says which ones it has, because
+    // the pool's own bookkeeping is made by the test calling bindSession.
+    if (req.method === "pi/test/holds") { holds = req.params.paths; send({ jsonrpc: "2.0", id: req.id, result: {} }); continue; }
+    if (req.method === "pi/worker/safety") { send({ jsonrpc: "2.0", id: req.id, result: { sessions: holds.map((path) => ({ path, pins: [] })), complete: true } }); continue; }
     if (req.method === "pi/test/argv") { send({ jsonrpc: "2.0", id: req.id, result: { argv: process.argv.slice(2), processCwd: process.cwd() } }); continue; }
     if (req.method === "session/load" && req.params.path === "/sessions/unwritten.jsonl") { send({ jsonrpc: "2.0", id: req.id, error: { code: -32001, message: "No saved transcript. Start a new session." } }); continue; }
     send({ jsonrpc: "2.0", id: req.id, result: { ok: true, method: req.method } });
@@ -339,8 +345,10 @@ describe("WorkerPool", () => {
   it("retires an idle worker, but not one a client is attached to", async () => {
     let attached = true;
     pool = makePool({ idleMs: 1, sweepMs: 0, isAttached: () => attached, });
-    await pool.get(project);
+    const worker = await pool.get(project);
     pool.bindSession("/sessions/a.jsonl", project);
+    // The worker says what it holds, and it holds one idle conversation (RP-4).
+    await worker.request("pi/test/holds", { paths: ["/sessions/a.jsonl"] });
     await new Promise((r) => setTimeout(r, 5));
 
     pool["sweep"]();
@@ -360,8 +368,9 @@ describe("WorkerPool", () => {
 
   it("never retires a worker while one of its sessions is running", async () => {
     pool = makePool({ idleMs: 1, sweepMs: 0, isAttached: () => false, });
-    await pool.get(project);
+    const worker = await pool.get(project);
     pool.bindSession("/sessions/a.jsonl", project);
+    await worker.request("pi/test/holds", { paths: ["/sessions/a.jsonl"] });
     pool.noteRunning(project, "/sessions/a.jsonl", true);
     await new Promise((r) => setTimeout(r, 5));
 
@@ -381,8 +390,9 @@ describe("WorkerPool", () => {
     // run has no time limit at all (D-144).
     let working = true;
     pool = makePool({ idleMs: 1, sweepMs: 0, isAttached: () => false, hasLiveRun: (cwd) => working && cwd === project });
-    await pool.get(project);
+    const worker = await pool.get(project);
     pool.bindSession("/sessions/a.jsonl", project);
+    await worker.request("pi/test/holds", { paths: ["/sessions/a.jsonl"] });
     await new Promise((r) => setTimeout(r, 5));
 
     // Months of an agent working alone, with nobody watching.
@@ -410,6 +420,7 @@ describe("WorkerPool", () => {
     pool = makePool({ idleMs: 0, sweepMs: 0, isAttached: () => false, hasLiveRun: (cwd) => runs.hasLiveRun(cwd) });
     const client = await pool.get(project);
     pool.bindSession("/sessions/a.jsonl", project);
+    await client.request("pi/test/holds", { paths: ["/sessions/a.jsonl"] });
     expect(pool.workerInfo(project)?.restarts).toBe(0);
 
     await expect(pool.restart(project)).rejects.toThrow(/has an agent run that has not ended/);

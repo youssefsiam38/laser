@@ -452,7 +452,7 @@ export class WorkerServer {
       case "pi/worker/safety":
         // The same predicate, read-only, for the host's retirement admission:
         // automatic retirement must be exactly as careful as unload.
-        return { sessions: this.sessionSafety() } satisfies Result<"pi/worker/safety">;
+        return this.sessionSafety() satisfies Result<"pi/worker/safety">;
 
       case "pi/session/close": {
         // The host is about to move the file (M13-T58): it must have no writer
@@ -1484,14 +1484,37 @@ export class WorkerServer {
    * One predicate, two readers: this answer is what `pi/worker/safety` returns
    * and what `pi/session/unload` checks, so the host's automatic retirement and
    * its automatic unload cannot disagree about what is safe.
+   *
+   * Sessions being opened or released are listed too, pinned, because the host
+   * asks this about *its* bookkeeping: a session it believes is there and this
+   * answer does not mention would otherwise read as an absence of work when it
+   * is really a load in flight.
+   *
+   * `complete` is the honest part. A worker with more sessions than
+   * {@link SESSION_SAFETY_MAX} cannot say everything in one answer, and an
+   * answer that was cut must not be read as "nothing is holding anything".
    */
-  sessionSafety(): SessionSafety[] {
+  sessionSafety(): { sessions: SessionSafety[]; complete: boolean } {
     const out: SessionSafety[] = [];
-    for (const live of this.sessions.values()) {
-      if (out.length >= SESSION_SAFETY_MAX) break;
-      out.push({ path: live.path, pins: sessionPins(this.safetySnapshot(live)) });
+    let complete = true;
+    const add = (row: SessionSafety): void => {
+      if (out.length >= SESSION_SAFETY_MAX) {
+        complete = false;
+        return;
+      }
+      out.push(row);
+    };
+    for (const live of this.sessions.values()) add({ path: live.path, pins: sessionPins(this.safetySnapshot(live)) });
+    const listed = new Set(out.map((row) => row.path));
+    for (const path of this.opening.keys()) {
+      if (!listed.has(path)) add({ path, pins: [{ kind: "opening", detail: "a load has not answered yet" }] });
     }
-    return out;
+    for (const path of this.unloading.keys()) {
+      if (!listed.has(path) && !out.some((row) => row.path === path)) {
+        add({ path, pins: [{ kind: "opening", detail: "a release has not finished yet" }] });
+      }
+    }
+    return { sessions: out, complete };
   }
 
   /**
