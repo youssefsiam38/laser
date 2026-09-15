@@ -149,8 +149,11 @@ export function createTailCache(deps: TailCacheDeps): TailCache {
       // the paint path — and its row is deleted and proved by the one owner
       // that deletes anything. The session is not tombstoned for good: a later,
       // fresh release of the same conversation is accepted as usual.
-      live.recency.forget(sessionId);
+      // Queued first, while the record is still held: the coordinator fences
+      // the deletion by the revision it can see. The candidate set is then
+      // cleared synchronously, so nothing paints or warms from it again.
       void live.mutations.supersede(sessionId, held.revision);
+      live.recency.forget(sessionId);
     },
 
     async forget(target) {

@@ -595,6 +595,6 @@ describe("counters", () => {
     expect(counters.bytes).toBeGreaterThan(0);
     expect(counters.encryption).toEqual({ kind: "not-applicable" });
     expect(view.cache.counters()).toBe(counters);
-    expect(counters.queued).toEqual({ writes: 0, touches: 0, control: 0 });
+    expect(counters.queued).toEqual({ writes: 0, touches: 0, control: 0, tombstones: 0 });
   });
 });

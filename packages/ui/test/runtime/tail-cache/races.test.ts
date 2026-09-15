@@ -23,7 +23,7 @@ import { QUEUE_LIMITS } from "../../../src/runtime/tail-cache/mutations.js";
 import { openTailStore, destroyTailDatabase, deletionPending, type TailStore } from "../../../src/runtime/tail-cache/store.js";
 import { NULL_VAULT } from "../../../src/runtime/tail-cache/vault.js";
 import { ENV_A, REVISION, REVISION_2, createTestStore, descriptor, entry, harness, payloadOf, row, tail } from "./harness.js";
-import { QUEUE_LIMITS as LIMITS } from "../../../src/runtime/tail-cache/mutations.js";
+import { QUEUE_LIMITS, QUEUE_LIMITS as LIMITS } from "../../../src/runtime/tail-cache/mutations.js";
 
 const peek = (cache: { peek(target: { sessionId: string }): unknown }, sessionId = "session-a") => cache.peek({ sessionId });
 
@@ -348,7 +348,7 @@ describe("one recency and expiry authority", () => {
     const counters = view.cache.counters();
     expect(counters.records).toBeLessThanOrEqual(4);
     expect(counters.hotRecords).toBeLessThanOrEqual(TAIL_SCAN_LIMITS.warmRecords);
-    expect(counters.queued).toEqual({ writes: 0, touches: 0, control: 0 });
+    expect(counters.queued).toEqual({ writes: 0, touches: 0, control: 0, tombstones: 0 });
     expect(view.store.rows.size).toBeLessThanOrEqual(4);
   });
 });
@@ -483,7 +483,7 @@ describe("the control lane is bounded and serialized", () => {
     await view.flush();
     expect(view.store.rows.size).toBe(0);
     const counters = view.cache.counters();
-    expect(counters.queued).toEqual({ writes: 0, touches: 0, control: 0 });
+    expect(counters.queued).toEqual({ writes: 0, touches: 0, control: 0, tombstones: 0 });
   });
 
   it("releases its bookkeeping once everything has settled", async () => {
@@ -494,7 +494,7 @@ describe("the control lane is bounded and serialized", () => {
       view.cache.release(tail({ sessionId: `later-${index}` }));
       await view.flush();
     }
-    expect(view.cache.counters().queued).toEqual({ writes: 0, touches: 0, control: 0 });
+    expect(view.cache.counters().queued).toEqual({ writes: 0, touches: 0, control: 0, tombstones: 0 });
   });
 });
 
@@ -699,7 +699,7 @@ describe("control coalescing holds while an operation is running", () => {
     expect(await Promise.all([first, second, third])).toEqual([true, true, true]);
     // One deletion for one session, however many times it was asked for.
     expect(removals).toBe(1);
-    expect(view.cache.counters().queued).toEqual({ writes: 0, touches: 0, control: 0 });
+    expect(view.cache.counters().queued).toEqual({ writes: 0, touches: 0, control: 0, tombstones: 0 });
   });
 
   it("keeps the control lane inside its bound while an operation is blocked", async () => {
@@ -840,5 +840,91 @@ describe("supersession is a proved deletion, not a hidden object", () => {
     view.cache.supersede("session-a", REVISION_2);
     await view.flush();
     expect(view.cache.state()).toMatchObject({ kind: "refused", reason: "purge" });
+  });
+});
+
+describe("nothing unbounded survives a flood of duplicate or absent asks", () => {
+  it("rolls a touch back when the lane is full, so eviction order stays honest", async () => {
+    const count = QUEUE_LIMITS.touches + 1;
+    // Newest-first seeded recency, so the **last** read — the one the full
+    // lane refuses — is the oldest record of the batch.
+    const rows = Array.from({ length: count }, (_, index) => row({
+      sessionId: `session-${index}`,
+      lastUsedAt: new Date(1_699_900_000_000 - index * 60_000).toISOString(),
+    }));
+    const store = createTestStore(rows, {});
+    const view = harness({ store });
+    await view.cache.prepare(descriptor(ENV_A, { maxSessions: count }));
+    view.clock.now += 2 * 60 * 60 * 1000;
+
+    for (const stored of rows) {
+      await view.cache.prime([stored.sessionId]);
+      peek(view.cache, stored.sessionId);
+    }
+    const depth = view.cache.counters().queued!;
+    expect(depth.touches).toBeLessThanOrEqual(QUEUE_LIMITS.touches);
+
+    // The refused read left no durable claim, so that session is still the
+    // least recently used one and is the one a write makes room by evicting.
+    const refused = rows[count - 1]!.sessionId;
+    view.clock.now += 1_000;
+    view.cache.release(tail({ sessionId: "fresh" }));
+    await view.flush();
+    expect([...store.rows.values()].some((stored) => stored.sessionId === refused)).toBe(false);
+    expect([...store.rows.values()].some((stored) => stored.sessionId === "fresh")).toBe(true);
+  });
+
+  it("answers an absent deletion without an operation at all", async () => {
+    const store = createTestStore([row()], {});
+    let removals = 0;
+    const counting = {
+      ...store,
+      remove: (keys, batch, bounds) => {
+        removals += 1;
+        return store.remove(keys, batch, bounds);
+      },
+    };
+    const view = harness({ store: counting });
+    await view.cache.prepare(descriptor());
+    expect(await view.cache.forget({ sessionId: "never-held" })).toBe(true);
+    expect(removals).toBe(0);
+    expect(view.cache.counters().queued).toEqual({ writes: 0, touches: 0, control: 0, tombstones: 0 });
+    // And the record this device does hold is untouched by that answer.
+    expect(peek(view.cache)).toBeDefined();
+  });
+});
+
+describe("one deadline per composite operation", () => {
+  it("gives every step of one operation the same wall clock", async () => {
+    const other = row({ sessionId: "other", lastUsedAt: new Date(1_699_000_000_000).toISOString() });
+    const store = createTestStore([other], {});
+    const seen = [];
+    const slow = {
+      ...store,
+      remove: async (keys, batch, limits) => {
+        seen.push({ step: "remove", deadline: limits?.deadline });
+        // The first substep spends most of the budget.
+        view.clock.now += 30;
+        return store.remove(keys, batch, limits);
+      },
+      put: async (rowToWrite, limits) => {
+        seen.push({ step: "put", deadline: limits?.deadline });
+        return store.put(rowToWrite, limits);
+      },
+    };
+    const view = harness({ store: slow, budgetMs: 40 });
+    await view.cache.prepare(descriptor(ENV_A, { maxSessions: 1 }));
+    // One write, whose operation is purge → evict → put: the eviction of
+    // `other` and the write itself belong to the same pass.
+    view.cache.release(tail({ sessionId: "next" }));
+    await view.flush();
+
+    const put = seen.find((entry) => entry.step === "put");
+    const remove = seen.find((entry) => entry.step === "remove");
+    expect(put?.deadline).toBeDefined();
+    expect(remove?.deadline).toBeDefined();
+    // The same clock, not a fresh one per nested step: a slow eviction leaves
+    // the write with what is left of the budget, not a new one.
+    expect(remove?.deadline).toBe(put?.deadline);
   });
 });

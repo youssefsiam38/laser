@@ -63,7 +63,13 @@ export interface DeviceCacheCounters {
    * be shed; control ops (deletion, clearing, purging) never are, so this is
    * also the evidence that a deletion is not waiting behind a full write lane.
    */
-  readonly queued?: { readonly writes: number; readonly touches: number; readonly control: number } | undefined;
+  readonly queued?: {
+    readonly writes: number;
+    readonly touches: number;
+    readonly control: number;
+    /** Sessions whose deletion is protecting them from a queued write. */
+    readonly tombstones: number;
+  } | undefined;
 }
 
 /** The `deviceCache` entry of RP-3's retained-store counters. */
