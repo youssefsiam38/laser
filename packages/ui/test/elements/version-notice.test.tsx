@@ -29,3 +29,15 @@ it("distinguishes a full local restart and warns about stopping active work", ()
   act(() => node.querySelector("button")!.click());
   expect(restart).toHaveBeenCalledOnce(); expect(refresh).not.toHaveBeenCalled();
 });
+
+// The action out of a view that is blocked until it is taken has to be
+// reachable with a thumb; the browser matrix measured its sibling at 28px.
+it("gives both actions a coarse-pointer target", () => {
+  for (const props of [
+    { hostVersion: "99.0.0", onRefresh: vi.fn(), onRestart: vi.fn() },
+    { desktopVersion: PRODUCT_VERSION, installedVersion: "99.0.0", onRefresh: vi.fn(), onRestart: vi.fn() },
+  ]) {
+    const button = render(props).querySelector("button")!;
+    expect(button.className, button.textContent ?? "").toContain("pointer-coarse:min-h-11");
+  }
+});

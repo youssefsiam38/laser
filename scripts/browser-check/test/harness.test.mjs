@@ -8,6 +8,7 @@ import { isolatedEnvironment, lifecycle, liveOwnedProcesses, until, freePort } f
 import { shotName, matrixCases } from '../browser.mjs';
 import { outsideCheckout } from '../index.mjs';
 import { fixturePlan, answer } from '../targets/fixtures.mjs';
+import { openedSessionPath, sessionDeepLink } from '../targets/app.mjs';
 
 function temporary(t) { const root = mkdtempSync(join(tmpdir(), 'browser-check-test-')); t.after(() => rmSync(root, { recursive: true, force: true })); return root; }
 test('environment is allowlisted, isolated, and can spawn sh', async t => {
@@ -36,6 +37,36 @@ test('fixture plans have exact message and project counts', () => {
   assert.ok(answer({ messages: [{ role: 'user', content: 'Show fixture reasoning' }] }).reasoning);
   assert.equal(answer({ messages: [{ role: 'user', content: [{ type: 'text', text: 'Run fixture tools' }] }] }).toolCall.name, 'bash');
   assert.equal(answer({ messages: [{ role: 'user', content: [{ type: 'text', text: 'Start fixture-asking' }] }] }).toolCall.name, 'start_agent');
+});
+test('the app target lands a case on its fixture session through the app itself', () => {
+  const path = '/tmp/run-1/sessions/2026-09-14T22-45-37-170Z_01a0.jsonl';
+  // The product's own notification link, so the environment handshake and the
+  // storage authority both still run: the harness writes no key of its own.
+  assert.equal(sessionDeepLink('http://127.0.0.1:8080', path), `http://127.0.0.1:8080/#/session/${encodeURIComponent(path)}`);
+  assert.equal(sessionDeepLink('http://127.0.0.1:8080/', path), sessionDeepLink('http://127.0.0.1:8080', path));
+  assert.ok(!sessionDeepLink('http://127.0.0.1:8080', path).includes(' '));
+});
+test('the opened session is read from the app record, in the namespace the caller configures', () => {
+  const path = '/tmp/run-1/sessions/2026-09-14T22-45-37-170Z_01a0.jsonl';
+  // The namespace is whatever the app's own storage helper produced; this test
+  // uses a neutral one, and the middle segment is never parsed or rebuilt.
+  const namespace = 'fixture-env';
+  const record = (session = path) => JSON.stringify({ v: 2, tab: 'code', code: { kind: 'project-session', project: '/tmp/run-1/project-01', path: session } });
+  const key = (scope, suffix = 'destination') => `${namespace}:${scope}:${suffix}`;
+
+  assert.equal(openedSessionPath([[key('scope-a'), record()]], namespace), path);
+  // Only this namespace, and only the shape the app writes.
+  assert.equal(openedSessionPath([[`other-env:scope-a:destination`, record()]], namespace), undefined);
+  assert.equal(openedSessionPath([[`${namespace}:scope:a:destination`, record()]], namespace), undefined);
+  assert.equal(openedSessionPath([[key('', 'destination'), record()]], namespace), undefined);
+  assert.equal(openedSessionPath([[key('scope-a', 'project'), record()]], namespace), undefined);
+  // A record that cannot be read, or that names no session, is not a landing.
+  assert.equal(openedSessionPath([[key('scope-a'), '{']], namespace), undefined);
+  assert.equal(openedSessionPath([[key('scope-a'), JSON.stringify({ v: 2, code: { kind: 'project-landing', project: '/tmp/p' } })]], namespace), undefined);
+  assert.equal(openedSessionPath([], namespace), undefined);
+  // Two namespaces with a destination each is ambiguity, not a coin toss.
+  assert.throws(() => openedSessionPath([[key('scope-a'), record()], [key('scope-b'), record('/tmp/other.jsonl')]], namespace), /Ambiguous destination/);
+  assert.throws(() => openedSessionPath([[key('scope-a'), record()]]), /needs the storage namespace/);
 });
 test('teardown bookkeeping tracks owned groups, ignores unrelated processes and zombies', () => {
   const processes = [{ pid: 11, group: 10, state: 'S' }, { pid: 12, group: 10, state: 'Z' }, { pid: 21, group: 20, state: 'S' }];

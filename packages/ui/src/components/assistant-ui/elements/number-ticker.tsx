@@ -54,7 +54,10 @@ export function NumberTicker({ value, label, className, ...props }: NumberTicker
         /\d/.test(char) ? (
           <RollingDigit key={i} digit={Number(char)} />
         ) : (
-          <span key={i} className="h-[1.15em] leading-[1.15]">
+          // `whitespace-pre`: every character is its own inline-flex item, and
+          // an item holding one space collapses to nothing — which turned
+          // "259.9 MB" into "259.9MB" beside an untickered "356.0 MB".
+          <span key={i} className="h-[1.15em] leading-[1.15] whitespace-pre">
             {char}
           </span>
         ),

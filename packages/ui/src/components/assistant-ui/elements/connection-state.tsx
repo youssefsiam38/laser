@@ -47,7 +47,11 @@ export function ConnectionState({ phase, attempt, first = false, onRetry, classN
       data-slot="connection-state"
       data-phase={phase}
       className={cn(
-        "flex h-8 shrink-0 items-center gap-2 px-4 text-xs hairline-b",
+        // One quiet line, until it carries an action: a 44px target cannot fit
+        // in 32px, so the line grows for a coarse pointer rather than clipping
+        // the only control on it. Only the phase that has the action grows.
+        "flex min-h-8 shrink-0 items-center gap-2 px-4 text-xs hairline-b",
+        phase === "dropped" && onRetry ? "pointer-coarse:min-h-14 pointer-coarse:py-1.5" : undefined,
         "motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-(--motion-slow)",
         tone === "ok"
           ? "bg-[color-mix(in_oklab,var(--ok)_9%,var(--bg))]"
@@ -64,7 +68,7 @@ export function ConnectionState({ phase, attempt, first = false, onRetry, classN
             Retrying in the background. Every session is saved on this computer as it goes, so nothing you have already seen is lost.
           </span>
           {onRetry && (
-            <Button variant="outline" size="xs" onClick={onRetry} className="ms-auto shrink-0">
+            <Button variant="outline" size="xs" onClick={onRetry} className="ms-auto shrink-0 pointer-coarse:min-h-11">
               Reconnect now
             </Button>
           )}
@@ -124,8 +128,9 @@ export function VersionNotice({ hostVersion, desktopVersion, installedVersion, o
           : "The host has been updated. This refresh only updates your frontend. Your sessions and running agents will not be affected."}</p>
         <p className="mt-1 text-xs text-ink-3">{installedVersion ? `Installed ${installedVersion} · Running ${desktopVersion}` : `This view ${PRODUCT_VERSION} · Host ${hostVersion}`}</p>
       </div>
-      {restart ? (local && onRestart && <Button variant="outline" size="sm" onClick={onRestart}>Restart when ready…</Button>)
-        : <Button variant="outline" size="sm" onClick={onRefresh}>Refresh view</Button>}
+      {/* The action that gets a person out of a blocked view, on a phone too. */}
+      {restart ? (local && onRestart && <Button variant="outline" size="sm" className="pointer-coarse:min-h-11" onClick={onRestart}>Restart when ready…</Button>)
+        : <Button variant="outline" size="sm" className="pointer-coarse:min-h-11" onClick={onRefresh}>Refresh view</Button>}
     </div>
   );
 }
@@ -183,7 +188,9 @@ export function EnvironmentNotice({ reason, onClear }: { reason: string; onClear
           Nothing is being kept on this device while this lasts, and nothing on the host has changed. Reconnecting continues in the background.
         </p>
       </div>
-      <Button variant="outline" size="sm" onClick={onClear}>Clear this browser&rsquo;s data and reload</Button>
+      {/* The one way out of this state, on the device most likely to be in it:
+          a coarse pointer gets the 44px target DESIGN.md requires. */}
+      <Button variant="outline" size="sm" className="pointer-coarse:min-h-11" onClick={onClear}>Clear this browser&rsquo;s data and reload</Button>
     </div>
   );
 }

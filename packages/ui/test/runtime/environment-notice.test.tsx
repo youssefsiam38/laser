@@ -57,6 +57,9 @@ it("says what happened and what to do, in words a person can read on a phone", a
   // One action, and it is the one that can actually help.
   const button = element.querySelector("button")!;
   expect(button.textContent).toMatch(/clear this browser/i);
+  // A phone is the device most likely to be in this state; that this button is
+  // a 44px target there is measured where CSS is real, in
+  // `scripts/browser-check/test/environment-storage.mjs`.
   await act(async () => button.click());
   expect(cleared).toBe(1);
 });
