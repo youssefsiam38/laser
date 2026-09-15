@@ -24,7 +24,7 @@ Authoritative detail, evidence and ownership live in `STATUS_DETAILED.md`; `STAT
 | RP-8 | M18-T8 | in progress — integrated-base threshold calibration complete with unchanged provisional values; source waits RP-10 schema handoff and pinned-view audit | RP-4, RP-5 |
 | RP-9 | M18-T9 | done — integrated `dd637f3` | protocol integration follows RP-1 |
 | RP-10 | M18-T10 | done — reviewed bounded device tail cache integrated at `c7375791`; parent exact-tip cache 113 + readiness 18, UI types/build, lifecycle/race browser matrices and same-workload memory evidence pass | RP-5, RP-9 |
-| RP-11 | M18-T11 | todo | RP-10 |
+| RP-11 | M18-T11 | in progress — mapping the integrated device-cache/readiness seam before implementation; provisional paint remains local-first and every mutation host-authority-fenced | RP-10 |
 | RP-12 | M18-T12 | done — integrated `e9e3d8d` | RP-9 |
 | RP-13 | M18-T13 | done — host policy/storage isolation through `1e4eeba`; reviewed real-host browser matrices `a0111f9` | RP-12 |
 | RP-14 | M18-T14 | todo | RP-1..RP-13, M18-T15 |
