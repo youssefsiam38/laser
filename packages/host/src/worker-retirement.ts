@@ -24,6 +24,21 @@ import { WorkerRetiredError, type WorkerClient } from "./worker-client.js";
 /** Longest the host waits for a worker to answer the retirement question. */
 export const RETIRE_TIMEOUT_MS = 10_000;
 
+/**
+ * How long the host keeps a timed-out worker's admission closed (RP-4).
+ *
+ * A silence is ambiguous: the worker may have agreed and fenced itself, with
+ * its answer still in flight or lost. Reopening admission immediately would
+ * start writing to a worker that is refusing everything, so the host waits out
+ * the worker's own retirement lease — `DEFAULT_RETIRE_LEASE_MS` in
+ * `packages/worker/src/session-runtimes.ts`, which is where the worker gives up
+ * and goes back to work — plus a margin for the request's own travel. Only a
+ * silence waits: an error, an unknown method or a refusal reopens at once,
+ * because each of those proves the worker is not fenced.
+ */
+export const RETIRE_LEASE_MS = 15_000;
+export const RETIRE_LEASE_MARGIN_MS = 1_000;
+
 export type RetirementOutcome =
   | { retired: true }
   | { retired: false; reason: string; pins?: SessionSafety[] };
@@ -34,17 +49,30 @@ export interface RetirementTarget {
   /** Ends the pipe and waits for the process; called only after an acknowledgement. */
   stop(): Promise<void>;
   timeoutMs?: number;
+  /** How long a silence keeps admission closed. Defaults to the worker's lease. */
+  leaseMs?: number;
+  /** Test seam for that wait. */
+  wait?: (ms: number) => Promise<void>;
 }
 
 /** Bound the wait without leaving the promise dangling on the timer's side. */
-function withTimeout<T>(work: Promise<T>, ms: number): Promise<{ ok: true; value: T } | { ok: false; reason: string }> {
+function withTimeout<T>(work: Promise<T>, ms: number): Promise<{ ok: true; value: T } | { ok: false; reason: string; timedOut?: true }> {
   return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve({ ok: false, reason: `it did not answer within ${ms} ms` }), ms);
+    const timer = setTimeout(() => resolve({ ok: false, reason: `it did not answer within ${ms} ms`, timedOut: true }), ms);
     timer.unref?.();
     work.then(
       (value) => { clearTimeout(timer); resolve({ ok: true, value }); },
+      // A failure is an answer: this worker is not fenced, so admission may
+      // reopen at once.
       (error) => { clearTimeout(timer); resolve({ ok: false, reason: error instanceof Error ? error.message : String(error) }); },
     );
+  });
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((done) => {
+    const timer = setTimeout(done, ms);
+    timer.unref?.();
   });
 }
 
@@ -66,6 +94,15 @@ export async function retireWorker(target: RetirementTarget, mode: WorkerRetireM
     target.timeoutMs ?? RETIRE_TIMEOUT_MS,
   );
   if (!answered.ok) {
+    if (answered.timedOut) {
+      // Ambiguous by construction: this worker may be fenced right now with its
+      // answer lost. Wait until its own lease has certainly expired — the point
+      // at which it gives up and admits work again — and only then write to it.
+      // A late acknowledgement cannot act on anything: this decision is already
+      // made, and nothing stops a worker the host did not hear agree.
+      const lease = target.leaseMs ?? RETIRE_LEASE_MS;
+      await (target.wait ?? sleep)(lease + RETIRE_LEASE_MARGIN_MS);
+    }
     client.reopenAdmission();
     return { retired: false, reason: answered.reason };
   }

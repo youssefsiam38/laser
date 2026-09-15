@@ -63,8 +63,12 @@ export interface SessionSafetySnapshot {
    * A release already tried to close this runtime and could not. The
    * conversation is still being served by it, so nothing may end it — not a
    * later release, and not retirement of the whole worker.
+   *
+   * A flag, deliberately: whatever the engine said about the failure stays
+   * inside the worker, because an engine's words can name a path or quote a
+   * conversation and a pin is read by the host, its diagnostics and its logs.
    */
-  closeFailed?: string;
+  closeFailed?: boolean;
 }
 
 function pin(kind: SessionPinKind, detail?: string): SessionPin {
@@ -95,6 +99,6 @@ export function sessionPins(snapshot: SessionSafetySnapshot): SessionPin[] {
   if (snapshot.naming) pins.push(pin("naming", "a first prompt is waiting to be named"));
   if (snapshot.runningTools > 0) pins.push(pin("tool_labeling", `${snapshot.runningTools} tool call(s) running`));
   if (!snapshot.hasRecord) pins.push(pin("no_record", "there is no durable record to reopen from"));
-  if (snapshot.closeFailed) pins.push(pin("close_failed", snapshot.closeFailed));
+  if (snapshot.closeFailed) pins.push(pin("close_failed", "this conversation's runtime would not close"));
   return pins;
 }

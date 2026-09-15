@@ -65,13 +65,14 @@ class FakeDriver implements SessionDriver {
   async dispose() { this.disposed = true; this.emit({ type: "closed", reason: "disposed" }); }
 }
 
-function world() {
+function world(options: { retireLeaseMs?: number } = {}) {
   const out: JsonRpcMessage[] = [];
   const drivers: FakeDriver[] = [];
   const server = new WorkerServer({
     cwd: "/tmp/retire",
     createDriver: () => { const driver = new FakeDriver(); drivers.push(driver); return driver; },
     send: (message) => out.push(message),
+    ...(options.retireLeaseMs !== undefined ? { retireLeaseMs: options.retireLeaseMs } : {}),
   });
   let id = 0;
   const send = (method: string, params?: unknown) => {
@@ -164,6 +165,26 @@ describe("pi/worker/retire", () => {
 
     expect(await w.retire("automatic")).toMatchObject({ retiring: false, reason: "pinned" });
     expect(await w.retire("explicit")).toEqual({ retiring: true });
+  });
+
+  it("goes back to work when the acknowledgement was lost and the pipe never closed", async () => {
+    // The host asked, this worker agreed and fenced itself — and then nothing
+    // happened: the answer was lost, or the host had already given up. A worker
+    // that stayed fenced would refuse every request until somebody killed it.
+    const w = world({ retireLeaseMs: 40 });
+    await w.call("session/load", { path: PATH });
+    expect(await w.retire()).toEqual({ retiring: true });
+    const refusedNow = await w.call("pi/session/entries", { path: PATH });
+    expect(refusedNow.error?.code).toBe(ErrorCodes.DriverUnavailable);
+
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    // The lease expired: this is a working worker again, with its conversation.
+    expect(await w.call("pi/session/entries", { path: PATH })).toHaveProperty("result");
+    expect(w.server.openSessions()).toEqual([PATH]);
+    expect(w.drivers[0]!.disposed).toBe(false);
+    // And it can be asked again, from scratch.
+    expect(await w.retire()).toEqual({ retiring: true });
   });
 
   it("refuses an explicit stop on work in flight, exactly as the sweep does", async () => {

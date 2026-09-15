@@ -325,10 +325,18 @@ export type DriverReleaseRefusal =
   /** The engine could not settle what it still owed the record. */
   | "flush_failed";
 
-/** The result of {@link SessionDriver.prepareRelease}. Discriminated on `ok`. */
+/**
+ * The result of {@link SessionDriver.prepareRelease}. Discriminated on `ok`.
+ *
+ * A refusal is a **code and nothing else**. What an engine, a filesystem or a
+ * parser says about a failure names the file it was working on and can quote
+ * what is inside it, and this answer travels on to the worker's pins, the
+ * host's diagnostics and its logs. The sentence a person could see is written
+ * on the other side of that boundary, from the code.
+ */
 export type DriverReleaseReadiness =
   | { ok: true }
-  | { ok: false; refusal: DriverReleaseRefusal; detail?: string };
+  | { ok: false; refusal: DriverReleaseRefusal };
 
 export class DriverUnavailableError extends Error {
   override readonly name = "DriverUnavailableError";

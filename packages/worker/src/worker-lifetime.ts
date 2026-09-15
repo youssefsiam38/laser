@@ -26,6 +26,30 @@ import {
 import { sessionPins, type SessionSafetySnapshot } from "./session-safety.js";
 import type { SessionRuntimes } from "./session-runtimes.js";
 
+/**
+ * The only sentences a release refusal can carry (RP-4).
+ *
+ * A pin travels to the host, its diagnostics and its logs, so its detail is
+ * written here rather than taken from whatever threw: an engine's message, a
+ * filesystem error or a parser's complaint can name a path or quote a
+ * conversation, and none of those belong outside this process. Each one is far
+ * inside `SESSION_PIN_DETAIL_MAX`.
+ */
+export const RELEASE_REFUSAL_DETAIL = {
+  unprovable: "this runtime cannot prove the conversation can be reopened",
+  no_record: "the conversation has no saved record to reopen from",
+  identity_mismatch: "the saved record is not this conversation's",
+  unreadable: "the saved record cannot be read as it stands",
+  flush_failed: "the conversation could not be written out safely",
+  close_failed: "this conversation's runtime would not close",
+} as const satisfies Record<string, string>;
+
+/** The one sentence for a refusal code this worker does not recognise. */
+function refusalDetail(refusal: string | undefined): string {
+  const known = RELEASE_REFUSAL_DETAIL as Record<string, string | undefined>;
+  return (refusal !== undefined ? known[refusal] : undefined) ?? RELEASE_REFUSAL_DETAIL.unprovable;
+}
+
 export type WorkerRetireResult =
   | { retiring: true }
   | { retiring: false; pins: SessionSafety[]; reason: WorkerRetireRefusal };
@@ -33,7 +57,7 @@ export type WorkerRetireResult =
 /** What one live session looks like to the lifetime: enough to release it. */
 export interface LifetimeSession {
   path: string;
-  closeFailed?: string;
+  closeFailed?: boolean;
   driver: {
     prepareRelease?: () => Promise<{ ok: boolean; refusal?: string; detail?: string }>;
     dispose: () => Promise<void>;
@@ -132,11 +156,16 @@ export class WorkerLifetime<Live extends LifetimeSession> {
           // And the conversation has to be reachable without this runtime.
           const readiness = await current.driver.prepareRelease?.();
           if (!readiness) {
-            return { unloaded: false, pins: [{ kind: "no_record" as const, detail: "this runtime cannot prove the conversation can be reopened" }] };
+            return { unloaded: false, pins: [{ kind: "no_record" as const, detail: RELEASE_REFUSAL_DETAIL.unprovable }] };
           }
           if (!readiness.ok) {
             const kind = readiness.refusal === "flush_failed" ? ("close_failed" as const) : ("no_record" as const);
-            return { unloaded: false, pins: [{ kind, ...(readiness.detail ? { detail: readiness.detail } : {}) }] };
+            // Categorical, and ours: a driver's refusal names a case, and the
+            // sentence a person or a log could see is written here. Nothing an
+            // engine, a filesystem or a file's contents produced crosses this
+            // boundary — a path or a fragment of a conversation in a pin would
+            // travel to the host, its diagnostics and its logs.
+            return { unloaded: false, pins: [{ kind, detail: refusalDetail(readiness.refusal) }] };
           }
           // Checked again after proving reopenability, because that step reads
           // the record and a request can arrive while it does. Past this line
@@ -144,22 +173,28 @@ export class WorkerLifetime<Live extends LifetimeSession> {
           // the retry opens the conversation again rather than finding it.
           const late = arrivals();
           if (late) return late;
-          current.buffer.dispose();
+          // The replay suffix is **not** released here. Disposing the driver is
+          // what ends the session, and the `closed` event it emits is the one
+          // place that drops everything this worker held for it, replay
+          // included. Releasing first would leave a session that failed to
+          // close still serving a person with no replay to answer a reconnect
+          // — bytes the worker would also have stopped accounting for.
           try {
             await current.driver.dispose();
-          } catch (error) {
+          } catch {
             // Partial failure, decided from the table rather than guessed: the
             // driver's `closed` event is what drops a session here, so if the
             // path is gone the runtime really was released and the throw was a
             // late cleanup. If it is still there, the session keeps being
-            // served and the failure is reported as a refusal.
+            // served — with its replay intact — and the failure is reported as
+            // a refusal. The thrown value itself stays here: it is an engine's
+            // words, and those can carry a path or a fragment of a transcript.
             if (this.deps.runtimes.has(path)) {
-              const detail = error instanceof Error ? error.message : String(error);
               // Remembered, not just reported: a runtime that would not close
               // is degraded, and both a later release and retirement of the
               // whole worker must keep refusing while it is still serving.
-              current.closeFailed = detail;
-              return { unloaded: false, pins: [{ kind: "close_failed" as const, detail }] };
+              current.closeFailed = true;
+              return { unloaded: false, pins: [{ kind: "close_failed" as const, detail: RELEASE_REFUSAL_DETAIL.close_failed }] };
             }
             return { unloaded: true, pins: [] };
           }

@@ -51,10 +51,23 @@ export function fenceRefusal(kind: FenceRefusal): ProtocolError {
 export interface RuntimeTableOptions {
   /** Longest an accepted handler may take to settle before a drain gives up. */
   drainTimeoutMs?: number;
+  /** How long an acknowledged retirement holds admission closed (see below). */
+  retireLeaseMs?: number;
   now?: () => number;
 }
 
 export const DEFAULT_DRAIN_TIMEOUT_MS = 5_000;
+
+/**
+ * How long an acknowledged retirement keeps admission closed before the worker
+ * decides the host is not coming (RP-4).
+ *
+ * The host ends the pipe as soon as it has the acknowledgement, so this expires
+ * only when that acknowledgement never arrived — a lost reply, a host that timed
+ * out first. Long enough that a healthy stop always wins the race, short enough
+ * that a worker is never left refusing everything.
+ */
+export const DEFAULT_RETIRE_LEASE_MS = 15_000;
 
 /**
  * One worker's live sessions, keyed by session file path, plus the three
@@ -71,12 +84,25 @@ export class SessionRuntimes<Live extends { path: string }> {
   private readonly inFlight = new Map<string, number>();
   private outstanding = 0;
   private drained: Array<() => void> = [];
-  /** Set the instant a retirement begins; never reopened once acknowledged. */
-  private retireFence: { arrived: number; acknowledged: boolean } | undefined;
+  /**
+   * Set the instant a retirement begins.
+   *
+   * An acknowledged fence is meant to be the last thing this process does, but
+   * "meant to" is not a guarantee: the host's reply may be lost or arrive after
+   * its own bound, and a worker fenced for ever on a lost acknowledgement would
+   * be a live process that refuses every request until somebody kills it. So an
+   * acknowledgement carries a **lease**: unless the pipe actually closes inside
+   * it, admission opens again and the worker goes back to work.
+   */
+  private retireFence: { generation: number; arrived: number; acknowledged: boolean } | undefined;
+  private retireGeneration = 0;
+  private leaseTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly leaseMs: number;
   private readonly drainTimeoutMs: number;
 
   constructor(options: RuntimeTableOptions = {}) {
     this.drainTimeoutMs = options.drainTimeoutMs ?? DEFAULT_DRAIN_TIMEOUT_MS;
+    this.leaseMs = options.retireLeaseMs ?? DEFAULT_RETIRE_LEASE_MS;
   }
 
   // --------------------------------------------------------------- the table
@@ -259,7 +285,7 @@ export class SessionRuntimes<Live extends { path: string }> {
   /** Close admission synchronously. Returns false when one is already open. */
   fence(): boolean {
     if (this.retireFence) return false;
-    this.retireFence = { arrived: 0, acknowledged: false };
+    this.retireFence = { generation: ++this.retireGeneration, arrived: 0, acknowledged: false };
     return true;
   }
 
@@ -271,13 +297,36 @@ export class SessionRuntimes<Live extends { path: string }> {
   /** Reopen admission: the retirement was refused. */
   unfence(): void {
     if (this.retireFence?.acknowledged) return;
+    this.clearLease();
     this.retireFence = undefined;
   }
 
-  /** The worker is going: admission never reopens. */
+  /**
+   * The worker agreed to go. Admission stays closed for the lease, and the host
+   * normally ends the pipe long before it expires; if it does not, this worker
+   * goes back to work rather than sitting there refusing everything.
+   *
+   * The timer is generation-stamped and unreferenced: a lease belonging to an
+   * older retirement can never reopen a newer one, and an idle worker is not
+   * kept alive by it.
+   */
   acknowledgeRetirement(): void {
-    if (!this.retireFence) this.retireFence = { arrived: 0, acknowledged: true };
+    if (!this.retireFence) this.retireFence = { generation: ++this.retireGeneration, arrived: 0, acknowledged: true };
     else this.retireFence.acknowledged = true;
+    const generation = this.retireFence.generation;
+    this.clearLease();
+    this.leaseTimer = setTimeout(() => {
+      this.leaseTimer = undefined;
+      if (this.retireFence?.generation !== generation) return;
+      this.retireFence = undefined;
+    }, this.leaseMs);
+    this.leaseTimer.unref?.();
+  }
+
+  /** Stop the lease timer; the process is going, or the fence is gone. */
+  clearLease(): void {
+    if (this.leaseTimer) clearTimeout(this.leaseTimer);
+    this.leaseTimer = undefined;
   }
 
   /**

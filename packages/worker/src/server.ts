@@ -96,6 +96,13 @@ export interface WorkerServerOptions {
    * which `session/load` already turns into a snapshot resync.
    */
   replayBudgetBytes?: number;
+  /**
+   * How long an acknowledged retirement holds this worker's admission closed
+   * before it goes back to work (RP-4). A test seam: the host ends the pipe as
+   * soon as it hears the acknowledgement, so this only ever expires when that
+   * answer was lost.
+   */
+  retireLeaseMs?: number;
   /** The package manager to run when settings name none (M10-T5): the one the host bundles. */
   npmCommand?: string[];
   /** Test seam: the model runtime Namer completes through. Defaults to the engine's. */
@@ -140,7 +147,7 @@ interface Live {
    * Set when a release tried to close this runtime and could not: the
    * conversation is still being served by it, and nothing may end it.
    */
-  closeFailed?: string;
+  closeFailed?: boolean;
   /**
    * Messages the person wrote while the agent was working. Laser's own list,
    * not the engine's: see `packages/worker/src/pending.ts`. Attached once the
@@ -158,7 +165,7 @@ export class WorkerServer {
    * nothing starts between a release's final check and its disposal, and the
    * worker-wide retirement fence. See `session-runtimes.ts`.
    */
-  private readonly runtimes = new SessionRuntimes<Live>();
+  private readonly runtimes: SessionRuntimes<Live>;
   /** The two lifetime transitions over that table: release and retire (RP-4). */
   private readonly lifetime: WorkerLifetime<Live>;
   /** The environment every durable revision this worker mints belongs to (RP-9). */
@@ -227,6 +234,7 @@ export class WorkerServer {
     // far below the per-session entitlement multiplied by every session a
     // worker can hold (RP-2 measured fifty of them in one worker).
     this.replayBudget = new ReplayBudget(options.replayBudgetBytes ?? REPLAY_BUDGET_BYTES);
+    this.runtimes = new SessionRuntimes<Live>(options.retireLeaseMs !== undefined ? { retireLeaseMs: options.retireLeaseMs } : {});
     this.lifetime = new WorkerLifetime<Live>({
       runtimes: this.runtimes,
       safetySnapshot: (live, releasing) => this.safetySnapshot(live, releasing),
@@ -370,6 +378,7 @@ export class WorkerServer {
   }
 
   async dispose(): Promise<void> {
+    this.runtimes.clearLease();
     this.transcribeService?.dispose();
     this.transcribeService = undefined;
     await this.mcpService?.dispose().catch(() => {});
@@ -1544,7 +1553,7 @@ export class WorkerServer {
       naming: this.unnamed.has(live.path),
       runningTools: this.runningTools.get(live.path)?.size ?? 0,
       hasRecord,
-      ...(live.closeFailed !== undefined ? { closeFailed: live.closeFailed } : {}),
+      ...(live.closeFailed ? { closeFailed: true } : {}),
     };
   }
 

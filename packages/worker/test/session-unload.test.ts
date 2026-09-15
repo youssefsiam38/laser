@@ -8,7 +8,7 @@
  * message, a running command, a request in flight — is untouched afterwards.
  */
 import { describe, expect, it } from "vitest";
-import { SESSION_SAFETY_MAX } from "@lasercode/protocol";
+import { SESSION_PIN_DETAIL_MAX, SESSION_SAFETY_MAX, sessionPinSchema } from "@lasercode/protocol";
 import type { DriverReleaseReadiness } from "../src/driver.js";
 import { ErrorCodes, LIFETIME_RETRY } from "@lasercode/protocol";
 import type { ClientRequests, ContentBlock, JsonRpcMessage, ModelRef, SessionState, SessionUpdateParams, UiDialogRequest } from "@lasercode/protocol";
@@ -349,17 +349,61 @@ describe("pi/session/unload", () => {
     expect(w.drivers[0]!.disposed).toBe(false);
   });
 
-  it("keeps serving a runtime that would not close, and refuses every later release of it", async () => {
+  it("keeps serving a runtime that would not close, with its replay intact, and refuses every later release", async () => {
     const w = world();
     await w.load();
     const driver = w.drivers[0]!;
+    driver.emit({ type: "update", update: { kind: "text_delta", delta: "before", contentIndex: 0 } });
+    const heldBytes = w.server.replayStats().bytes;
+    expect(heldBytes).toBeGreaterThan(0);
+
     driver.disposeFailure = new Error("the engine would not shut down");
     const failed = await w.unload();
-    expect(failed).toMatchObject({ unloaded: false, pins: [{ kind: "close_failed", detail: "the engine would not shut down" }] });
+    expect(failed).toMatchObject({ unloaded: false, pins: [{ kind: "close_failed" }] });
     expect(w.server.openSessions()).toEqual([PATH]);
+
+    // The conversation is still being served, so everything it needs to answer
+    // a reconnect is still here: the replay suffix was not released on the way
+    // to a close that never happened, and its bytes are still accounted for.
+    expect(w.server.replayStats().bytes).toBeGreaterThanOrEqual(heldBytes);
+    driver.emit({ type: "update", update: { kind: "text_delta", delta: "after", contentIndex: 0 } });
+    const seq = w.updates().at(-1)!.params.seq;
+    expect(w.server.replayStats().bytes).toBeGreaterThan(heldBytes);
+    const before = w.updates().length;
+    const reloaded = await w.load(seq - 2);
+    expect(reloaded.replayFrom).toBe(seq - 2);
+    expect(w.updates().length).toBeGreaterThan(before);
+
     // Remembered: a later attempt, and the whole worker's retirement, refuse too.
     expect((await w.unload()).pins.map((pin) => pin.kind)).toEqual(["close_failed"]);
     expect((await w.safety()).sessions[0]!.pins.map((pin) => pin.kind)).toEqual(["close_failed"]);
+  });
+
+  it("never lets an engine's words out of this process", async () => {
+    const CANARY = "/private/canary/session.jsonl";
+    const SECRET = `sk-${"9".repeat(400)}`;
+    const w = world();
+    await w.load();
+    const driver = w.drivers[0]!;
+
+    // Both boundaries a failure can cross: a readiness refusal and a close that
+    // threw. Neither may carry what the engine or the filesystem said.
+    driver.readiness = { ok: false, refusal: "unreadable" };
+    const refused = await w.unload();
+    driver.readiness = { ok: true };
+    driver.disposeFailure = new Error(`could not close ${CANARY}: ${SECRET}`);
+    const closeFailed = await w.unload();
+    const safety = await w.safety();
+    const stores = (await w.call<ClientRequests["pi/worker/retained-stores"]["result"]>("pi/worker/retained-stores", {})).result!;
+
+    const everything = JSON.stringify({ refused, closeFailed, safety, stores, out: w.out });
+    expect(everything).not.toContain(CANARY);
+    expect(everything).not.toContain(SECRET);
+    for (const pin of [...refused.pins, ...closeFailed.pins, ...safety.sessions.flatMap((session) => session.pins)]) {
+      expect(pin.detail === undefined || pin.detail.length <= SESSION_PIN_DETAIL_MAX).toBe(true);
+      // And every one of them is a shape the wire accepts.
+      expect(sessionPinSchema.safeParse(pin).success).toBe(true);
+    }
   });
 
   it("reports an honest release when the runtime did go, even though dispose threw afterwards", async () => {

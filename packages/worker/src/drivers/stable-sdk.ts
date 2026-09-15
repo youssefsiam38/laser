@@ -919,53 +919,51 @@ export class StableSdkDriver implements SessionDriver {
    * the check cannot become the allocation it exists to make safe.
    */
   async prepareRelease(): Promise<DriverReleaseReadiness> {
+    // Every answer below is a **code**, never a thrown message. What the
+    // engine, the filesystem or the parser says about a failure names the file
+    // it was working on and can quote what is in it; a readiness answer travels
+    // to the worker, the host and its diagnostics, so none of that leaves here.
     let manager;
     try {
       manager = this.session().sessionManager;
-    } catch (error) {
-      return { ok: false, refusal: "no_record", detail: describe(error) };
+    } catch {
+      return { ok: false, refusal: "no_record" };
     }
     const file = manager.getSessionFile();
-    if (!file || !manager.isPersisted()) return { ok: false, refusal: "no_record", detail: "this session has no file" };
+    if (!file || !manager.isPersisted()) return { ok: false, refusal: "no_record" };
     const live = manager.getHeader();
-    if (!live) return { ok: false, refusal: "no_record", detail: "the runtime has no session header" };
+    if (!live) return { ok: false, refusal: "no_record" };
     try {
       manager.flush();
-    } catch (error) {
-      return { ok: false, refusal: "flush_failed", detail: describe(error) };
+    } catch {
+      return { ok: false, refusal: "flush_failed" };
     }
     let size: number;
     try {
       const stats = statSync(file);
-      if (!stats.isFile()) return { ok: false, refusal: "no_record", detail: "the record is not a file" };
+      if (!stats.isFile()) return { ok: false, refusal: "no_record" };
       size = stats.size;
-    } catch (error) {
-      return { ok: false, refusal: "no_record", detail: describe(error) };
+    } catch {
+      return { ok: false, refusal: "no_record" };
     }
-    if (size === 0) return { ok: false, refusal: "unreadable", detail: "the record is empty" };
-    if (size > REOPEN_VALIDATION_MAX_BYTES) {
-      return { ok: false, refusal: "unreadable", detail: `the record is larger than ${REOPEN_VALIDATION_MAX_BYTES} bytes` };
-    }
+    if (size === 0) return { ok: false, refusal: "unreadable" };
+    if (size > REOPEN_VALIDATION_MAX_BYTES) return { ok: false, refusal: "unreadable" };
     let reopened: ReturnType<typeof parseSessionEntries>;
     try {
       reopened = parseSessionEntries(readFileSync(file, "utf8"));
-    } catch (error) {
-      return { ok: false, refusal: "unreadable", detail: describe(error) };
+    } catch {
+      return { ok: false, refusal: "unreadable" };
     }
     const header = reopened.find((entry) => entry.type === "session");
-    if (!header) return { ok: false, refusal: "unreadable", detail: "the record has no header" };
-    if (header.id !== live.id || header.cwd !== live.cwd) {
-      return { ok: false, refusal: "identity_mismatch", detail: "the record belongs to another session" };
-    }
+    if (!header) return { ok: false, refusal: "unreadable" };
+    if (header.id !== live.id || header.cwd !== live.cwd) return { ok: false, refusal: "identity_mismatch" };
     const stored = new Set<string>();
     for (const entry of reopened) if (entry.type !== "session") stored.add(entry.id);
     for (const entry of manager.getEntries()) {
-      if (!stored.has(entry.id)) return { ok: false, refusal: "identity_mismatch", detail: "the record is missing entries this conversation has" };
+      if (!stored.has(entry.id)) return { ok: false, refusal: "identity_mismatch" };
     }
     const leafId = manager.getLeafId();
-    if (leafId !== null && !stored.has(leafId)) {
-      return { ok: false, refusal: "identity_mismatch", detail: "the record does not contain this conversation's branch" };
-    }
+    if (leafId !== null && !stored.has(leafId)) return { ok: false, refusal: "identity_mismatch" };
     return { ok: true };
   }
 
@@ -1654,11 +1652,6 @@ export class StableSdkDriver implements SessionDriver {
  * never itself be the allocation that is not.
  */
 const REOPEN_VALIDATION_MAX_BYTES = 64 * 1024 * 1024;
-
-/** One short sentence from a thrown value, for a refusal detail. */
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function existingResourceRoots(paths: string[]): string[] {
   const seen = new Set<string>();

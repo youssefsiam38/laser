@@ -109,6 +109,12 @@ export interface WorkerPoolOptions {
    * worker, and a worker that will not answer keeps running.
    */
   retireTimeoutMs?: number;
+  /**
+   * How long a silent worker keeps its admission closed after a timeout (RP-4):
+   * the worker's own retirement lease, which the host waits out before writing
+   * to it again. A test seam; the default matches the worker's.
+   */
+  retireLeaseMs?: number;
   /** Ordinary idle retirement. 0 disables it, but not unused warm expiry. */
   idleMs?: number;
   /** How often idleness is checked. */
@@ -542,7 +548,13 @@ export class WorkerPool {
       return { retired: !entry.client?.alive, reason: "a stop was already in flight" };
     }
     const decision = retireWorker(
-      { cwd: entry.cwd, client, stop: () => this.retire(entry, message), ...(this.options.retireTimeoutMs !== undefined ? { timeoutMs: this.options.retireTimeoutMs } : {}) },
+      {
+        cwd: entry.cwd,
+        client,
+        stop: () => this.retire(entry, message),
+        ...(this.options.retireTimeoutMs !== undefined ? { timeoutMs: this.options.retireTimeoutMs } : {}),
+        ...(this.options.retireLeaseMs !== undefined ? { leaseMs: this.options.retireLeaseMs } : {}),
+      },
       mode,
     );
     entry.retiring = decision.then(() => undefined, () => undefined);

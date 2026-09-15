@@ -44,7 +44,7 @@ const SOURCES: Array<[SessionPinKind, Partial<SessionSafetySnapshot>]> = [
   ["naming", { naming: true }],
   ["tool_labeling", { runningTools: 2 }],
   ["no_record", { hasRecord: false }],
-  ["close_failed", { closeFailed: "the engine could not close it" }],
+  ["close_failed", { closeFailed: true }],
 ];
 
 describe("sessionPins", () => {
@@ -83,7 +83,11 @@ describe("sessionPins", () => {
     // an explicit stop refuses on it too.
     expect(isSessionWorkPin("close_failed")).toBe(true);
     // Automatic release refuses on *any* pin, so the work set is a subset and
-    // never the whole vocabulary: the two lists must not drift into one.
+    // never the whole vocabulary: the two lists must not drift into one. The
+    // advisory set is exactly the three named above, and this pins the count so
+    // a new kind cannot quietly join them.
     expect(SESSION_WORK_PIN_KINDS.length).toBeLessThan(SESSION_PIN_KINDS.length);
+    const advisory = SESSION_PIN_KINDS.filter((kind) => !isSessionWorkPin(kind));
+    expect(advisory).toEqual(["naming", "tool_labeling", "no_record"]);
   });
 });

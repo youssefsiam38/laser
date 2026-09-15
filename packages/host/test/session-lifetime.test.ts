@@ -233,6 +233,12 @@ socket.on("data", (chunk) => {
     }
     if (req.method === "pi/worker/retire") {
       if (mode === "silent") continue;
+      if (mode === "slow-ack") {
+        // Agrees, but its answer arrives long after the host gave up: the
+        // ambiguous case the retirement lease exists for.
+        setTimeout(() => send({ jsonrpc: "2.0", id: req.id, result: { retiring: true } }), 300);
+        continue;
+      }
       if (mode === "error") { send({ jsonrpc: "2.0", id: req.id, error: { code: -32603, message: "cannot look" } }); continue; }
       if (mode === "malformed") { send({ jsonrpc: "2.0", id: req.id, result: { ok: true } }); continue; }
       if (pins.length > 0) {
@@ -349,7 +355,7 @@ describe("WorkerPool session lifetime", () => {
   });
 
   it("writes nothing to a worker while its retirement is being decided, and refuses the request that tried", async () => {
-    pool = makePool(join(dir, "safety-worker.mjs"), { idleMs: 1_000, now: () => 0, retireTimeoutMs: 400 });
+    pool = makePool(join(dir, "safety-worker.mjs"), { idleMs: 1_000, now: () => 0, retireTimeoutMs: 400, retireLeaseMs: 50 });
     const client = await openSession(pool, "/s/one.jsonl");
     // This worker never answers the retirement question, so the decision is
     // open for the whole timeout — the exact window the old check-then-kill
@@ -369,6 +375,30 @@ describe("WorkerPool session lifetime", () => {
     // Admission reopened with the refusal, so the retry lands.
     await expect(client.request("pi/test/argv", {})).resolves.toBeDefined();
   });
+  it("waits out a silent worker's lease, never kills it, and ignores an acknowledgement that arrives late", async () => {
+    pool = makePool(join(dir, "safety-worker.mjs"), { retireTimeoutMs: 60, retireLeaseMs: 80 });
+    const client = await openSession(pool, "/s/one.jsonl");
+    await client.request("pi/test/mode", { mode: "slow-ack" });
+
+    const started = Date.now();
+    await expect(pool.stop(project)).rejects.toThrow(/could not be stopped/);
+    // The host waited for the worker's own lease before writing again, rather
+    // than reopening onto a worker that may still be fenced.
+    expect(Date.now() - started).toBeGreaterThanOrEqual(120);
+
+    // Nothing was killed, and the late acknowledgement cannot stop it either.
+    expect(client.alive).toBe(true);
+    expect(pool.workerInfo(project)?.status).toBe("ready");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(client.alive).toBe(true);
+    expect(pool.workerInfo(project)?.status).toBe("ready");
+
+    // Admission reopened: this worker takes work again.
+    await client.request("pi/test/mode", { mode: "answer" });
+    await expect(client.request("pi/test/argv", {})).resolves.toBeDefined();
+    expect(pool.openSessions(project)).toEqual(["/s/one.jsonl"]);
+  });
+
   it("moves a session's row when a fork moves its file, leaving no phantom behind", async () => {
     pool = makePool(join(dir, "safety-worker.mjs"));
     await openSession(pool, "/s/source.jsonl");
