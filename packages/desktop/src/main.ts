@@ -257,6 +257,7 @@ activation = new DesktopUpdateActivation({
     tray.setUpdate(status);
     windows.broadcast(IPC.updateChanged, status);
   },
+  log: (category, error) => log.error(`update activation ${category}`, error),
 });
 
 const updater = new Updater({
@@ -412,22 +413,24 @@ function routeMainWindow(): void {
     return;
   }
   if (state === "failed") {
+    const migration = hostInfo?.migration;
+    const presentation = migration?.snapshot === "restored"
+      ? runtimeUpdatePresentation("restored")
+      : migration?.snapshot === "none"
+        ? runtimeUpdatePresentation("no-snapshot")
+        : undefined;
+    const failed = runtimeUpdatePresentation("migration-failed");
+    const restoring = runtimeUpdatePresentation("restoring");
     windows.navigateMain(
       statusPageUrl({
-        title: `${PRODUCT_NAME} cannot start its agent host`,
-        message: hostInfo?.message ?? "Something stopped the host from starting.",
+        title: presentation?.title ?? `${PRODUCT_NAME} cannot start its agent host`,
+        message: presentation?.detail ?? hostInfo?.message ?? "Something stopped the host from starting.",
         logFile: hostInfo?.logFile ?? paths.logFile,
-        ...(hostInfo?.migration?.canRestore ? (() => {
-          const failed = runtimeUpdatePresentation("migration-failed");
-          const restoring = runtimeUpdatePresentation("restoring");
-          const restored = runtimeUpdatePresentation("restored");
-          return { restore: {
-            label: failed.secondaryActionLabel ?? "",
-            pendingLabel: restoring.title,
-            successTitle: restored.title,
-            successMessage: restored.detail,
-          } };
-        })() : {}),
+        ...(migration?.snapshot === "available" ? { restore: {
+          updateId: migration.updateId,
+          label: failed.secondaryActionLabel ?? "",
+          pendingLabel: restoring.title,
+        } } : {}),
       }),
       true,
     );
@@ -643,7 +646,18 @@ function installIpc(): void {
   ipcMain.handle(IPC.updateCheck, () => nativeUpdate.check() ? updateStatus : updater.check());
   ipcMain.handle(IPC.updatePrepare, () => activation?.prepare() ?? updateStatus);
   ipcMain.handle(IPC.updateCancel, () => activation?.cancel() ?? updateStatus);
-  ipcMain.handle(IPC.updateRestore, () => activation?.restore() ?? updateStatus);
+  ipcMain.handle(IPC.updateRestore, async (_event, updateId?: string) => {
+    const status = await (activation?.restore(updateId) ?? updateStatus);
+    if (status.state === "restored") {
+      const restored = runtimeUpdatePresentation("restored");
+      windows.navigateMain(statusPageUrl({
+        title: restored.title,
+        message: restored.detail,
+        logFile: paths.logFile,
+      }), true);
+    }
+    return status;
+  });
   ipcMain.on(IPC.updateInstall, (_event, options: unknown) => void installUpdate(false,
     !!options && typeof options === "object" && (options as { relaunch?: unknown }).relaunch === true));
 }

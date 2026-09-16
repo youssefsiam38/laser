@@ -72,7 +72,7 @@ export interface StatusPageContent {
   /** Absolute path to the host log, shown small and selectable. */
   logFile: string;
   /** Offer exact snapshot restore when migration failed before host bind. */
-  restore?: { label: string; pendingLabel: string; successTitle: string; successMessage: string };
+  restore?: { updateId: string; label: string; pendingLabel: string };
 }
 
 export function statusPageUrl(content: StatusPageContent): string {
@@ -177,13 +177,8 @@ export function statusPageHtml({ title, message, logFile, restore }: StatusPageC
     restore.addEventListener("click", async () => {
       restore.disabled = true;
       restore.textContent = ${JSON.stringify(restore.pendingLabel)};
-      const status = await window.${DESKTOP_BRIDGE}?.updates?.restore?.();
-      if (status?.state === "restored") {
-        document.querySelector("h1").textContent = ${JSON.stringify(restore.successTitle)};
-        document.querySelector("main > p:nth-of-type(2)").textContent = ${JSON.stringify(restore.successMessage)};
-        button?.remove();
-        restore.remove();
-      } else {
+      const status = await window.${DESKTOP_BRIDGE}?.updates?.restore?.(${JSON.stringify(restore.updateId)});
+      if (status?.state !== "restored") {
         restore.disabled = false;
         restore.textContent = ${JSON.stringify(restore.label)};
       }

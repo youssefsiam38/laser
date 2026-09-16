@@ -124,7 +124,8 @@ describe("migration snapshot and restore", () => {
   it("keeps the verified snapshot through selection and deletes it only after healthy success", () => {
     const f = fixture();
     f.engine.migrate({ updateId: UPDATE, targetGenerationId: GENERATION });
-    f.engine.acknowledgeSelection(UPDATE);
+    f.engine.markLaunchAttempt(UPDATE, "c".repeat(32));
+    f.engine.acknowledgeSelection(UPDATE, "c".repeat(32));
     expect(f.engine.currentState()).toBeUndefined();
     expect(existsSync(join(f.paths.stateDir, "migration-snapshots", UPDATE))).toBe(true);
     f.engine.markSucceeded(UPDATE);
@@ -160,6 +161,28 @@ describe("migration snapshot and restore", () => {
 
     writeFileSync(join(f.paths.stateDir, "migration-schema.json"), '{"schemaVersion":99}\n');
     expect(() => f.engine.needsMigration()).toThrowError("This data was written by a newer app version.");
+  });
+
+  it("re-applies an interrupted idempotent step from its durable step index", () => {
+    const f = fixture();
+    let calls = 0;
+    const retryRegistry: MigrationRegistry = {
+      targetSchema: 2,
+      steps: [{
+        id: "retry-layout", fromSchema: 1, toSchema: 2, units: [configUnit],
+        run(context) {
+          calls += 1;
+          context.writeFile(configUnit, '{"name":"after"}\n', 0o640);
+          if (calls === 1) throw new Error("interrupted after apply");
+        },
+      }],
+    };
+    const engine = new MigrationEngine({ roots: f.paths, registry: retryRegistry });
+    expect(() => engine.migrate({ updateId: UPDATE, targetGenerationId: GENERATION })).toThrow();
+    expect(engine.currentState()).toMatchObject({ phase: "migrating", stepIndex: 0 });
+    expect(engine.migrate({ updateId: UPDATE, targetGenerationId: GENERATION })).toMatchObject({ phase: "migrated", stepIndex: 1 });
+    expect(calls).toBe(2);
+    expect(readFileSync(f.config, "utf8")).toBe('{"name":"after"}\n');
   });
 
   it("leaves a durable pre-mutation marker on ENOSPC", () => {

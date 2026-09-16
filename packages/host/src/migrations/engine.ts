@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { runtimeMigrationCopy } from "@lasercode/protocol";
 import {
   chmodSync,
   existsSync,
@@ -46,10 +47,21 @@ export class MigrationError extends Error {
   override readonly name = "MigrationError";
   constructor(
     readonly category: "snapshot" | "migration" | "restore" | "schema" | "target",
-    message = category === "schema"
-      ? "This data was written by a newer app version. Update the app before opening it."
-      : "The update could not prepare your data safely.",
-  ) { super(message); }
+    message = category === "schema" ? runtimeMigrationCopy("newer-schema") : runtimeMigrationCopy("unsafe"),
+    options?: ErrorOptions,
+  ) { super(message, options); }
+}
+
+export function readMigrationState(stateDir: string): MigrationState | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(join(stateDir, "migration-state.json"), "utf8")) as Partial<MigrationState>;
+    validateState(parsed);
+    return parsed as MigrationState;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    if (error instanceof MigrationError) throw error;
+    throw new MigrationError("restore", runtimeMigrationCopy("restore-failed"), { cause: error });
+  }
 }
 
 export interface MigrationRunInput {
@@ -65,19 +77,10 @@ export class MigrationEngine {
     this.boundary = options.boundary;
     this.now = options.now ?? (() => new Date());
     validateRegistry(options.registry);
-    for (const root of Object.values(options.roots)) mkdirSync(root, { recursive: true, mode: 0o700 });
   }
 
   currentState(): MigrationState | undefined {
-    try {
-      const parsed = JSON.parse(readFileSync(this.statePath(), "utf8")) as Partial<MigrationState>;
-      validateState(parsed);
-      return parsed as MigrationState;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-      if (error instanceof MigrationError) throw error;
-      throw new MigrationError("restore");
-    }
+    return readMigrationState(this.options.roots.stateDir);
   }
 
   currentSchema(): number {
@@ -102,10 +105,10 @@ export class MigrationEngine {
     validateIdentity(input.updateId, input.targetGenerationId);
     const existing = this.currentState();
     if (existing && (existing.updateId !== input.updateId || existing.targetGenerationId !== input.targetGenerationId)) {
-      throw new MigrationError("migration", "Another update already owns data preparation.");
+      throw new MigrationError("migration", runtimeMigrationCopy("owner"));
     }
     if (existing?.phase === "migrated") return existing;
-    if (existing?.phase === "migrating" || existing?.phase === "restoring") {
+    if (existing?.phase === "restoring") {
       this.restore(existing.updateId);
       return this.migrate(input);
     }
@@ -145,23 +148,22 @@ export class MigrationEngine {
     } catch (error) {
       this.noteFailure(state, state.phase === "snapshotting" ? "snapshot" : "migration");
       if ((error as NodeJS.ErrnoException).code === "ENOSPC") {
-        throw new MigrationError(state.phase === "snapshotting" ? "snapshot" : "migration", "There is not enough free space to prepare this update safely.");
+        throw new MigrationError(state.phase === "snapshotting" ? "snapshot" : "migration", runtimeMigrationCopy("space"), { cause: error });
       }
       if (error instanceof MigrationError) throw error;
-      throw new MigrationError(state.phase === "snapshotting" ? "snapshot" : "migration");
+      throw new MigrationError(state.phase === "snapshotting" ? "snapshot" : "migration", undefined, { cause: error });
     }
   }
 
   recover(input: { targetVerified: boolean }): MigrationRecoveryResult {
     const state = this.currentState();
     if (!state) return { status: "none" };
-    if (state.phase === "snapshotting") {
-      removePath(this.snapshotStaging(state.updateId));
-      return { status: "migrated", state: this.migrate({ updateId: state.updateId, targetGenerationId: state.targetGenerationId })! };
+    if (state.phase === "snapshotting") removePath(this.snapshotStaging(state.updateId));
+    if (state.phase === "snapshotting" || state.phase === "migrating") {
+      const migrated = this.migrate({ updateId: state.updateId, targetGenerationId: state.targetGenerationId });
+      return migrated ? { status: "migrated", state: migrated } : { status: "none" };
     }
-    if (state.phase === "migrating" || state.phase === "restoring") {
-      return { status: "restored", state: this.restore(state.updateId) };
-    }
+    if (state.phase === "restoring") return { status: "restored", state: this.restore(state.updateId) };
     if (input.targetVerified) return { status: "migrated", state };
     this.noteFailure(state, "target");
     return { status: "restored", state: this.restore(state.updateId) };
@@ -179,6 +181,7 @@ export class MigrationEngine {
         const unit = snapshot.manifest.units[index]!;
         this.restoreUnit(state, unit, index);
         state = this.writeState({ ...state, restoreIndex: index + 1 });
+        this.options.onProgress?.({ phase: "restoring", completed: index + 1, total: snapshot.manifest.units.length });
       }
       if (!state.schemaFileExisted) rmSync(this.schemaPath(), { force: true });
       this.removeState();
@@ -186,17 +189,27 @@ export class MigrationEngine {
     } catch (error) {
       this.noteFailure(state, "restore");
       if ((error as NodeJS.ErrnoException).code === "ENOSPC") {
-        throw new MigrationError("restore", "There is not enough free space to restore the previous data snapshot.");
+        throw new MigrationError("restore", runtimeMigrationCopy("restore-space"), { cause: error });
       }
       if (error instanceof MigrationError) throw error;
-      throw new MigrationError("restore", "The previous data snapshot could not be restored safely.");
+      throw new MigrationError("restore", runtimeMigrationCopy("restore-failed"), { cause: error });
     }
   }
 
-  /** Called only after the update transaction has durably selected this target. */
-  acknowledgeSelection(updateId: string): void {
+  /** Fence a migrated marker to the one host launch that may bind against it. */
+  markLaunchAttempt(updateId: string, launchId: string): void {
+    if (!/^[0-9a-f]{32}$/.test(launchId)) throw new MigrationError("target");
     const state = this.currentState();
     if (!state || state.updateId !== updateId || state.phase !== "migrated") throw new MigrationError("target");
+    this.writeState({ ...state, launchAttemptId: launchId });
+  }
+
+  /** Called only after that exact launch reports the selected generation and version. */
+  acknowledgeSelection(updateId: string, launchId: string): void {
+    const state = this.currentState();
+    if (!state || state.updateId !== updateId || state.phase !== "migrated" || state.launchAttemptId !== launchId) {
+      throw new MigrationError("target");
+    }
     this.removeState();
   }
 
@@ -222,14 +235,25 @@ export class MigrationEngine {
     chmodSync(staging, 0o700);
     const units = declaredUnits(steps);
     if (state.schemaFileExisted) units.push({ root: "stateDir", path: "migration-schema.json", type: "file" });
+    const resolvedUnits = units.map((unit) => ({ unit, source: resolveUnit(this.options.roots, unit) }));
+    for (let left = 0; left < resolvedUnits.length; left += 1) {
+      for (let right = left + 1; right < resolvedUnits.length; right += 1) {
+        const a = resolvedUnits[left]!.source;
+        const b = resolvedUnits[right]!.source;
+        const aToB = relative(a, b);
+        const bToA = relative(b, a);
+        const nested = (value: string) => value === "" || (value !== ".." && !value.startsWith(`..${sep}`));
+        if (nested(aToB) || nested(bToA)) throw new MigrationError("snapshot");
+      }
+    }
     const manifestUnits: SnapshotUnitManifest[] = [];
-    for (const unit of units) {
-      const source = resolveUnit(this.options.roots, unit);
+    for (const [index, { unit, source }] of resolvedUnits.entries()) {
       const destination = this.snapshotUnitPath(staging, unit);
       copyWhole(source, destination, unit.type, this.boundary);
       const expected = describeUnit(this.options.roots, unit, source, this.boundary);
       if (!verifyUnit(destination, expected, this.boundary)) throw new MigrationError("snapshot");
       manifestUnits.push(expected);
+      this.options.onProgress?.({ phase: "snapshotting", completed: index + 1, total: units.length });
     }
     const manifest: MigrationSnapshotManifest = {
       schemaVersion: 1,
@@ -257,13 +281,13 @@ export class MigrationEngine {
     const raw = readFileSync(manifestPath);
     this.boundary?.("hash", manifestPath);
     const digest = sha256(raw);
-    if (digest !== state.snapshotDigest) throw new MigrationError("restore", "The previous data snapshot is damaged.");
+    if (digest !== state.snapshotDigest) throw new MigrationError("restore", runtimeMigrationCopy("snapshot-damaged"));
     let manifest: MigrationSnapshotManifest;
     try { manifest = JSON.parse(raw.toString("utf8")) as MigrationSnapshotManifest; }
-    catch { throw new MigrationError("restore", "The previous data snapshot is damaged."); }
+    catch (error) { throw new MigrationError("restore", runtimeMigrationCopy("snapshot-damaged"), { cause: error }); }
     this.verifySnapshot(root, manifest, digest);
     if (manifest.updateId !== state.updateId || manifest.fromSchema !== state.fromSchema || manifest.targetSchema !== state.targetSchema) {
-      throw new MigrationError("restore", "The previous data snapshot is damaged.");
+      throw new MigrationError("restore", runtimeMigrationCopy("snapshot-damaged"));
     }
     return { manifest, digest };
   }
@@ -271,13 +295,13 @@ export class MigrationEngine {
   private verifySnapshot(root: string, manifest: MigrationSnapshotManifest, digest: string): void {
     if (!HASH.test(digest) || manifest.schemaVersion !== 1 || !HASH.test(manifest.updateId)
       || !Number.isSafeInteger(manifest.fromSchema) || !Number.isSafeInteger(manifest.targetSchema)
-      || !Array.isArray(manifest.units) || modeOf(root) !== 0o700) throw new MigrationError("restore", "The previous data snapshot is damaged.");
+      || !Array.isArray(manifest.units) || modeOf(root) !== 0o700) throw new MigrationError("restore", runtimeMigrationCopy("snapshot-damaged"));
     const seen = new Set<string>();
     for (const unit of manifest.units) {
-      if (!validSnapshotUnit(unit) || seen.has(unitKey(unit))) throw new MigrationError("restore", "The previous data snapshot is damaged.");
+      if (!validSnapshotUnit(unit) || seen.has(unitKey(unit))) throw new MigrationError("restore", runtimeMigrationCopy("snapshot-damaged"));
       seen.add(unitKey(unit));
       if (!verifyUnit(this.snapshotUnitPath(root, unit), unit, this.boundary)) {
-        throw new MigrationError("restore", "The previous data snapshot is damaged.");
+        throw new MigrationError("restore", runtimeMigrationCopy("snapshot-damaged"));
       }
     }
   }
@@ -292,7 +316,7 @@ export class MigrationEngine {
     }
     removePath(staging);
     copyWhole(this.snapshotUnitPath(this.snapshotRoot(state.updateId), unit), staging, unit.type, this.boundary);
-    if (!verifyUnit(staging, unit, this.boundary)) throw new MigrationError("restore", "The previous data snapshot is damaged.");
+    if (!verifyUnit(staging, unit, this.boundary)) throw new MigrationError("restore", runtimeMigrationCopy("snapshot-damaged"));
     if (existsSync(destination)) {
       removePath(displaced);
       this.boundary?.("rename", displaced);
@@ -314,7 +338,10 @@ export class MigrationEngine {
         const pathFor = (unit: MigrationUnit): string => {
           validateUnit(unit);
           if (!allowed.has(unitKey(unit))) throw new MigrationError("migration", "A migration tried to write outside its declared data units.");
-          return resolveUnit(roots, unit);
+          const path = resolveUnit(roots, unit);
+          const displaced = `${path}.migration-previous`;
+          if (!existsSync(path) && existsSync(displaced)) renameSync(displaced, path);
+          return path;
         };
         return {
           readFile(unit) {
@@ -347,7 +374,9 @@ export class MigrationEngine {
             const destination = pathFor(unit);
             const staging = `${destination}.migration-next`;
             const displaced = `${destination}.migration-previous`;
-            removePath(staging); removePath(displaced);
+            removePath(staging);
+            if (!existsSync(destination) && existsSync(displaced)) renameSync(displaced, destination);
+            removePath(displaced);
             mkdirSync(staging, { recursive: true, mode: mode ?? 0o700 });
             for (const [relativePath, bytes] of files) {
               if (!safeMigrationPath(relativePath)) throw new MigrationError("migration");
@@ -452,6 +481,7 @@ function validateState(value: Partial<MigrationState>): void {
     || typeof value.schemaFileExisted !== "boolean"
     || typeof value.updatedAt !== "string" || !Number.isFinite(Date.parse(value.updatedAt))
     || (value.snapshotDigest !== undefined && !HASH.test(value.snapshotDigest))
+    || (value.launchAttemptId !== undefined && !/^[0-9a-f]{32}$/.test(value.launchAttemptId))
     || (value.failureCategory !== undefined && !["snapshot", "migration", "restore", "target"].includes(value.failureCategory))) {
     throw new MigrationError("restore");
   }

@@ -31,6 +31,7 @@ export { TOPICS, findTopic, renderCommandHelp, renderRootHelp, type Topic } from
 export {
   cliEntry,
   completeInstalledMigration,
+  markInstalledMigrationLaunch,
   unpacked,
   daemonArgs,
   hostDaemonArgv,
@@ -79,20 +80,23 @@ export { sessionFragment } from "./commands/session.js";
 export { CLI_VERSION } from "./version.js";
 export {
   MigrationActivationError,
+  completeMigrationLaunch,
   ensureUpdateTransaction,
   migrationEventLine,
-  migrationPhaseForState,
   prepareUpdateData,
+  recoverUpdateData,
   restoreUpdateData,
   type MigrationEventSink,
   type MigrationLaunchEvent,
   type MigrationLaunchPhase,
+  type MigrationSnapshotStatus,
 } from "./migration-activation.js";
 export {
   MIGRATION_REGISTRY,
   MigrationEngine,
   UpdateTransactionStore,
   prepareRuntimeGeneration,
+  readMigrationState,
   readRuntimeGenerationPointer,
   runtimeReferenceFromManifest,
   runtimeUpdateId,

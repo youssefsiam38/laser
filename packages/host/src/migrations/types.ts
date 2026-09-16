@@ -59,6 +59,8 @@ export interface MigrationState {
   schemaFileExisted: boolean;
   updatedAt: string;
   failureCategory?: "snapshot" | "migration" | "restore" | "target";
+  /** Exact host launch permitted to bind while this migrated marker remains. */
+  launchAttemptId?: string;
 }
 
 export type MigrationBoundary = "copy" | "hash" | "marker" | "step" | "rename";
@@ -75,6 +77,7 @@ export interface MigrationEngineOptions {
   /** Test-only fault seam. Production leaves it absent. */
   boundary?: (boundary: MigrationBoundary, detail: string) => void;
   onState?: (state: MigrationState) => void;
+  onProgress?: (progress: { phase: "snapshotting" | "restoring"; completed: number; total: number }) => void;
   now?: () => Date;
 }
 

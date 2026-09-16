@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import {
   MigrationEngine,
   UpdateTransactionStore,
+  readMigrationState,
   readRuntimeGenerationPointer,
   type MigrationRegistry,
   runtimeReferenceFromManifest,
@@ -93,6 +94,8 @@ it("correlates download, parking, selection and exact launch success", async () 
   expect(h.link.prepareActivation).toHaveBeenCalledExactlyOnceWith(h.marker.updateId, h.marker.generationId);
   h.setBlockers({});
   await expect(h.activation.prepare()).resolves.toMatchObject({ state: "ready", updateId: h.marker.updateId });
+  expect(new UpdateTransactionStore(h.stateDir).read(h.marker.updateId)?.phase).toBe("ready");
+  expect(readMigrationState(h.stateDir)).toBeUndefined();
   await expect(h.activation.activate()).resolves.toBe(true);
   expect(readRuntimeGenerationPointer(h.stateDir)?.active.generationId).toBe(h.marker.generationId);
   expect(new UpdateTransactionStore(h.stateDir).read(h.marker.updateId)?.phase).toBe("restarting");
@@ -150,13 +153,24 @@ it("offers and completes exact snapshot restore after migration failure", async 
     roots: { stateDir: h.paths.stateDir, agentDir: h.paths.agentDir, sessionDir: h.paths.sessionDir }, registry,
   }).migrate({ updateId: h.marker.updateId, targetGenerationId: h.marker.generationId })).toThrow(/prepare your data safely/);
   transactions.transition(h.marker.updateId, "failed", { failureCategory: "migration_failed" });
-  h.activation.discover(h.marker);
 
-  await expect(h.activation.restore()).resolves.toMatchObject({
+  // Models a package-manager install: the durable transaction/marker exists,
+  // but no native-update marker was ever discovered in this Electron process.
+  await expect(h.activation.restore(h.marker.updateId)).resolves.toMatchObject({
     state: "restored", title: "Previous data restored. The update was not activated.",
   });
   expect(readFileSync(join(h.stateDir, unit.path), "utf8")).toBe("before\n");
   expect(transactions.read(h.marker.updateId)?.phase).toBe("rolled_back");
+  h.activation.stop();
+});
+
+it("uses neutral copy when no correlated snapshot exists", async () => {
+  const h = harness();
+  await expect(h.activation.restore("e".repeat(64))).resolves.toMatchObject({
+    state: "no-snapshot",
+    message: "There is no earlier data snapshot to restore.",
+  });
+  expect((h.statuses.at(-1) as { message: string }).message).not.toContain("restored");
   h.activation.stop();
 });
 

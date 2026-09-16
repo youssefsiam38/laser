@@ -2,13 +2,15 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { PRODUCT_SLUG } from "@lasercode/protocol";
-import { UpdateTransactionStore, type MigrationRegistry } from "@lasercode/host";
+import { PRODUCT_SLUG, runtimeUpdatePresentation } from "@lasercode/protocol";
+import { MigrationEngine, UpdateTransactionStore, type MigrationRegistry } from "@lasercode/host";
 import {
   MigrationActivationError,
   completeInstalledMigration,
+  markInstalledMigrationLaunch,
   migrationEventLine,
   prepareUpdateData,
+  recoverUpdateData,
   restoreUpdateData,
   type InstalledRuntimeLaunch,
   type LaserPaths,
@@ -59,8 +61,10 @@ describe("pre-host migration activation", () => {
 
     expect(readFileSync(join(paths.stateDir, "fixture.txt"), "utf8")).toBe("after\n");
     expect(store.read(updateId)?.phase).toBe("ready");
-    expect(events.map(({ phase }) => phase)).toEqual(["preparing", "migrating", "ready"]);
-    const line = migrationEventLine(events[1]!);
+    expect(events[0]).toMatchObject({ phase: "preparing", progress: { completed: 0, total: 1 } });
+    expect(events.map(({ phase }) => phase)).toContain("migrating");
+    expect(events.at(-1)).toMatchObject({ phase: "ready", progress: { completed: 1, total: 1 } });
+    const line = migrationEventLine(events.find(({ phase }) => phase === "migrating")!);
     expect(JSON.parse(line)).toMatchObject({ schemaVersion: 1, type: "migration", updateId, phase: "migrating" });
     expect(line).not.toContain(paths.stateDir);
     expect(line).not.toContain("before");
@@ -72,6 +76,7 @@ describe("pre-host migration activation", () => {
       reference: { generationId: "b".repeat(64) },
       manifest: { productVersion: "2.0.0" },
     } as unknown as InstalledRuntimeLaunch;
+    markInstalledMigrationLaunch(paths, installed, "a".repeat(32));
     expect(completeInstalledMigration(paths, installed, {
       launchId: "a".repeat(32), generationId: "e".repeat(64), cliVersion: "2.0.0",
     })).toBe(false);
@@ -85,12 +90,30 @@ describe("pre-host migration activation", () => {
     })).toBe(true);
   });
 
+  it("uses the production recovery caller to roll back a selected launch that never became ready", () => {
+    const { paths, store, updateId } = fixture();
+    const staged = registry();
+    prepareUpdateData(paths, { updateId, targetGenerationId: "b".repeat(64) }, undefined, { registry: staged });
+    store.transition(updateId, "selected");
+    store.transition(updateId, "restarting");
+    new MigrationEngine({
+      roots: { stateDir: paths.stateDir, agentDir: paths.agentDir, sessionDir: paths.sessionDir }, registry: staged,
+    }).markLaunchAttempt(updateId, "a".repeat(32));
+
+    expect(recoverUpdateData(paths, {
+      updateId, targetGenerationId: "b".repeat(64), targetVerified: false,
+    }, undefined, { registry: staged })).toBe("restored");
+    expect(store.read(updateId)?.phase).toBe("rolled_back");
+    expect(readFileSync(join(paths.stateDir, "fixture.txt"), "utf8")).toBe("before\n");
+  });
+
   it("keeps the snapshot on failure and restores exact bytes for the correlated update only", () => {
     const { paths, store, updateId } = fixture();
     expect(() => prepareUpdateData(paths, { updateId, targetGenerationId: "b".repeat(64) }, undefined, { registry: registry(true) }))
-      .toThrow(MigrationActivationError);
+      .toThrowError(runtimeUpdatePresentation("migration-failed").title);
     expect(store.read(updateId)?.phase).toBe("failed");
     expect(readFileSync(join(paths.stateDir, "fixture.txt"), "utf8")).toBe("after\n");
+    expect(readFileSync(paths.logFile, "utf8")).toContain("synthetic failure");
 
     expect(() => restoreUpdateData(paths, "e".repeat(64))).toThrow(MigrationActivationError);
     restoreUpdateData(paths, updateId);

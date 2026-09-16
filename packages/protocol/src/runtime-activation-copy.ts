@@ -2,7 +2,7 @@ import type { ActivationBlockers } from "./runtime-activation.js";
 
 export type RuntimeUpdateNoticeState =
   | "downloaded" | "parking" | "preparing-data" | "ready" | "restarting"
-  | "succeeded" | "failed" | "migration-failed" | "restoring" | "restored";
+  | "succeeded" | "failed" | "migration-failed" | "restoring" | "restored" | "no-snapshot";
 export type RuntimeUpdateNoticeAction = "prepare" | "cancel" | "activate" | "retry" | "restore" | "none";
 
 export interface RuntimeUpdatePresentation {
@@ -29,6 +29,26 @@ function blockerDetail(blockers?: ActivationBlockers): string {
 }
 
 /** The only source for native update notice copy and actions. */
+export type RuntimeMigrationCopyKey =
+  | "newer-schema" | "unsafe" | "space" | "owner" | "snapshot-damaged" | "restore-space" | "restore-failed";
+
+export function runtimeMigrationEventCopy(phase: "preparing" | "migrating" | "ready"): string {
+  if (phase === "ready") return "Data preparation finished.";
+  return runtimeUpdatePresentation("preparing-data").title;
+}
+
+export function runtimeMigrationCopy(key: RuntimeMigrationCopyKey): string {
+  switch (key) {
+    case "newer-schema": return "This data was written by a newer app version. Update the app before opening it.";
+    case "space": return "There is not enough free space to prepare this update safely.";
+    case "owner": return "Another update already owns data preparation.";
+    case "snapshot-damaged": return "The previous data snapshot is damaged.";
+    case "restore-space": return "There is not enough free space to restore the previous data snapshot.";
+    case "restore-failed": return "The previous data snapshot could not be restored safely.";
+    case "unsafe": return "The update could not prepare your data safely.";
+  }
+}
+
 export function runtimeUpdatePresentation(
   state: RuntimeUpdateNoticeState,
   blockers?: ActivationBlockers,
@@ -80,7 +100,7 @@ export function runtimeUpdatePresentation(
       return {
         title: "The update could not be finished.",
         detail: "Your previous data snapshot is intact.",
-        action: "retry",
+        action: "prepare",
         actionLabel: "Try again",
         secondaryAction: "restore",
         secondaryActionLabel: "Restore previous data",
@@ -91,6 +111,13 @@ export function runtimeUpdatePresentation(
       return {
         title: "Previous data restored. The update was not activated.",
         detail: "Your previous data is intact. You can try the update again when you are ready.",
+        action: "prepare",
+        actionLabel: "Try again",
+      };
+    case "no-snapshot":
+      return {
+        title: "The update could not be finished.",
+        detail: "There is no earlier data snapshot to restore.",
         action: "retry",
         actionLabel: "Try again",
       };

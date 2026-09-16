@@ -8,7 +8,7 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
-  readFileSync,
+  readSync,
   readdirSync,
   realpathSync,
   renameSync,
@@ -28,6 +28,19 @@ import type {
 
 const HASH = /^[0-9a-f]{64}$/;
 const sha256 = (value: string | Buffer): string => createHash("sha256").update(value).digest("hex");
+const hashFile = (path: string): string => {
+  const hash = createHash("sha256");
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  const fd = openSync(path, "r");
+  try {
+    for (;;) {
+      const length = readSync(fd, buffer, 0, buffer.length, null);
+      if (length === 0) break;
+      hash.update(buffer.subarray(0, length));
+    }
+  } finally { closeSync(fd); }
+  return hash.digest("hex");
+};
 const posix = (value: string): string => value.split(sep).join("/");
 
 export function safeMigrationPath(value: unknown): value is string {
@@ -137,8 +150,7 @@ function describeTree(path: string, type: MigrationUnit["type"], boundary?: Migr
   if (type === "file") {
     if (!root.isFile()) throw new Error("A declared migration file has the wrong type.");
     boundary?.("hash", path);
-    const bytes = readFileSync(path);
-    return { mode: root.mode & 0o777, length: bytes.length, sha256: sha256(bytes) };
+    return { mode: root.mode & 0o777, length: root.size, sha256: hashFile(path) };
   }
   if (!root.isDirectory()) throw new Error("A declared migration directory has the wrong type.");
   const rows: TreeRow[] = [];
@@ -154,9 +166,8 @@ function describeTree(path: string, type: MigrationUnit["type"], boundary?: Migr
         visit(childPath);
       } else if (child.isFile()) {
         boundary?.("hash", childPath);
-        const bytes = readFileSync(childPath);
-        length += bytes.length;
-        rows.push({ path: rel, type: "file", mode: child.mode & 0o777, length: bytes.length, sha256: sha256(bytes) });
+        length += child.size;
+        rows.push({ path: rel, type: "file", mode: child.mode & 0o777, length: child.size, sha256: hashFile(childPath) });
       } else throw new Error("Migration data contains an unsupported filesystem entry.");
     }
   };

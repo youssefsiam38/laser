@@ -94,6 +94,8 @@ it("keeps migration failure retry and exact snapshot restore as separate actions
   expect(container.textContent).toContain("Your previous data snapshot is intact.");
   const buttons = [...container.querySelectorAll("button")];
   expect(buttons.map((button) => button.textContent)).toEqual(["Try again", "Restore previous data"]);
+  expect(buttons[0]!.className).not.toBe(buttons[1]!.className);
+  expect(buttons[1]!.hasAttribute("data-secondary-action")).toBe(false);
   await act(async () => buttons[0]!.click());
   await act(async () => buttons[1]!.click());
   expect(retry).toHaveBeenCalledOnce();

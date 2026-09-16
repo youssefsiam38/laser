@@ -73,13 +73,19 @@ describe("the daemon and an unusable policy", () => {
           context.writeFile(unit, "after\n");
         } }],
       };
-      new MigrationEngine({
+      const engine = new MigrationEngine({
         roots: { stateDir: resolved.stateDir, agentDir: resolved.agentDir, sessionDir: resolved.sessionDir }, registry,
-      }).migrate({ updateId: "d".repeat(64), targetGenerationId: runtimeGeneration.generationId });
+      });
+      engine.migrate({ updateId: "d".repeat(64), targetGenerationId: runtimeGeneration.generationId });
 
       await expect(runDaemon({ paths: resolved, runtimeGeneration, log: () => {} })).rejects.toThrow(
         /data preparation is incomplete/,
       );
+      expect(existsSync(resolved.hostFile)).toBe(false);
+
+      engine.markLaunchAttempt("d".repeat(64), process.env[ENV.hostLaunchId]!);
+      writeFileSync(join(resolved.stateDir, "policy.json"), JSON.stringify({ remote: { scopes: ["everything"] } }));
+      await expect(runDaemon({ paths: resolved, runtimeGeneration, log: () => {} })).rejects.toThrow(/cannot be used/);
       expect(existsSync(resolved.hostFile)).toBe(false);
     } finally {
       if (previousLaunchId === undefined) delete process.env[ENV.hostLaunchId];

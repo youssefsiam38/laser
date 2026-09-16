@@ -92,14 +92,15 @@ describe("the screen that says the host could not start", () => {
       message: "Your previous data snapshot is intact.",
       logFile: "/tmp/host.log",
       restore: {
+        updateId: "d".repeat(64),
         label: "Restore previous data",
         pendingLabel: "Restoring your previous data…",
-        successTitle: "Previous data restored. The update was not activated.",
-        successMessage: "Your previous data is intact.",
       },
     });
     expect(page).toContain("Restore previous data");
     expect(page).toContain("updates?.restore");
+    expect(page).toContain("d".repeat(64));
+    expect(page).not.toContain("querySelector(\"h1\")");
     expect(statusPageHtml({ title: "Cannot start", message: "Stopped.", logFile: "/tmp/host.log" }))
       .not.toContain("Restore previous data");
   });

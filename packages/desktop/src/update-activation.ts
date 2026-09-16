@@ -1,9 +1,6 @@
 import {
-  MIGRATION_REGISTRY,
-  MigrationActivationError,
-  MigrationEngine,
   UpdateTransactionStore,
-  prepareUpdateData,
+  completeMigrationLaunch,
   restoreUpdateData,
   selectRuntimeGeneration,
   type LaserPaths,
@@ -28,6 +25,7 @@ export class DesktopUpdateActivation {
     paths: LaserPaths;
     link: HostLink;
     publish: (status: UpdateStatus) => void;
+    log?: (category: string, error: unknown) => void;
   }) {
     this.transactions = new UpdateTransactionStore(options.stateDir);
   }
@@ -61,7 +59,8 @@ export class DesktopUpdateActivation {
         ? await this.options.link.activationStatus(marker.updateId)
         : await this.options.link.prepareActivation(marker.updateId, marker.generationId);
       return this.applyGate(gate);
-    } catch {
+    } catch (error) {
+      this.options.log?.("activation_prepare_failed", error);
       return this.fail("activation_prepare_failed");
     }
   }
@@ -75,21 +74,24 @@ export class DesktopUpdateActivation {
       if (transaction.phase === "parking") this.transactions.transition(marker.updateId, "staged");
       this.stopPolling();
       return this.set(this.notice("downloaded", marker));
-    } catch {
+    } catch (error) {
+      this.options.log?.("activation_cancel_failed", error);
       return this.fail("activation_cancel_failed");
     }
   }
 
-  async restore(): Promise<UpdateStatus> {
-    const marker = this.marker;
-    if (!marker) return this.status;
+  async restore(updateId = this.marker?.updateId): Promise<UpdateStatus> {
+    if (!updateId) return this.status;
+    const transaction = this.transactions.read(updateId);
+    if (!transaction) return this.set(this.noSnapshot(updateId));
+    const marker = this.marker?.updateId === updateId ? this.marker : this.markerFrom(transaction);
     try {
       this.set(this.notice("restoring", marker));
-      restoreUpdateData(this.options.paths, marker.updateId, (event) => this.applyMigrationEvent(event));
-      await this.options.link.cancelActivation(marker.updateId).catch(() => undefined);
+      restoreUpdateData(this.options.paths, updateId, (event) => this.applyMigrationEvent(event));
       this.stopPolling();
       return this.set(this.notice("restored", marker));
-    } catch {
+    } catch (error) {
+      this.options.log?.("migration_restore_failed", error);
       return this.set(this.notice("migration-failed", marker));
     }
   }
@@ -124,7 +126,8 @@ export class DesktopUpdateActivation {
       this.stopPolling();
       this.set(this.notice("restarting", marker));
       return transaction.phase === "restarting";
-    } catch {
+    } catch (error) {
+      this.options.log?.("activation_selection_failed", error);
       this.fail("activation_selection_failed");
       return false;
     }
@@ -137,35 +140,23 @@ export class DesktopUpdateActivation {
       const transaction = this.requireTransaction(marker.updateId);
       if (transaction.phase !== "restarting") return;
       this.transactions.transition(marker.updateId, "failed", { failureCategory: "verified_launch_failed" });
-    } catch { /* The notice remains honest even if the transaction record is damaged. */ }
+    } catch (error) { this.options.log?.("verified_launch_failed", error); }
     this.stopPolling();
     this.set(this.notice("failed", marker));
   }
 
-  completeLaunch(launch: { launchId: string; generationId: string; version: string }): void {
-    const marker = this.marker;
-    if (!marker) return;
+  completeLaunch(launch: { launchId: string; generationId: string; version: string; updateId?: string }): void {
+    const updateId = launch.updateId ?? this.marker?.updateId;
+    if (!updateId) return;
     let transaction: UpdateTransaction;
-    try { transaction = this.requireTransaction(marker.updateId); }
-    catch { return; }
+    try { transaction = this.requireTransaction(updateId); }
+    catch (error) { this.options.log?.("verified_launch_transaction", error); return; }
     if ((transaction.phase !== "restarting" && transaction.phase !== "succeeded")
       || launch.generationId !== transaction.targetGenerationId
       || launch.version !== transaction.targetVersion) return;
     const newlySucceeded = transaction.phase === "restarting";
-    if (newlySucceeded) {
-      this.transactions.transition(marker.updateId, "succeeded", {
-        selectedLaunchId: launch.launchId,
-        selectedVersion: launch.version,
-      });
-    }
-    new MigrationEngine({
-      roots: {
-        stateDir: this.options.paths.stateDir,
-        agentDir: this.options.paths.agentDir,
-        sessionDir: this.options.paths.sessionDir,
-      },
-      registry: MIGRATION_REGISTRY,
-    }).markSucceeded(marker.updateId);
+    if (!completeMigrationLaunch(this.options.paths, { ...launch, updateId })) return;
+    const marker = this.marker?.updateId === updateId ? this.marker : this.markerFrom(transaction);
     if (newlySucceeded) this.set(this.notice("succeeded", marker));
   }
 
@@ -178,16 +169,8 @@ export class DesktopUpdateActivation {
       return this.fail("activation_identity_mismatch");
     }
     if (gate.phase === "parked" && Object.values(gate.blockers).every((count) => count === 0)) {
-      try {
-        this.set(this.notice("preparing-data", marker, gate.blockers));
-        prepareUpdateData(this.options.paths, {
-          updateId: marker.updateId,
-          targetGenerationId: marker.generationId,
-        }, (event) => this.applyMigrationEvent(event));
-      } catch (error) {
-        this.stopPolling();
-        return this.set(this.notice(error instanceof MigrationActivationError && !error.canRestore ? "restored" : "migration-failed", marker));
-      }
+      const transaction = this.requireTransaction(marker.updateId);
+      if (transaction.phase === "parking") this.transactions.transition(marker.updateId, "ready");
       this.stopPolling();
       return this.set(this.notice("ready", marker, gate.blockers));
     }
@@ -202,7 +185,7 @@ export class DesktopUpdateActivation {
       if (!marker) return;
       void this.options.link.activationStatus(marker.updateId)
         .then((gate) => this.applyGate(gate))
-        .catch(() => { /* Reconnect keeps the same durable update id; the next poll resumes. */ });
+        .catch((error) => { this.options.log?.("activation_poll_failed", error); });
     }, POLL_MS);
     this.timer.unref();
   }
@@ -220,9 +203,33 @@ export class DesktopUpdateActivation {
       if (transaction.phase !== "succeeded" && transaction.phase !== "rolled_back") {
         this.transactions.transition(marker.updateId, "failed", { failureCategory: category });
       }
-    } catch { /* The person-facing refusal still stands. */ }
+    } catch (error) { this.options.log?.(category, error); }
     this.stopPolling();
     return this.set(this.notice("failed", marker));
+  }
+
+  private markerFrom(transaction: UpdateTransaction): NativeUpdateMarker {
+    return {
+      schemaVersion: 1,
+      updateId: transaction.updateId,
+      version: transaction.targetVersion,
+      buildIdentity: transaction.buildIdentity,
+      generationId: transaction.targetGenerationId,
+      manifestDigest: transaction.manifestDigest,
+    };
+  }
+
+  private noSnapshot(updateId: string): UpdateStatus {
+    const presentation = runtimeUpdatePresentation("no-snapshot");
+    return {
+      state: "no-snapshot",
+      updateId,
+      version: "",
+      title: presentation.title,
+      message: presentation.detail,
+      action: presentation.action,
+      ...(presentation.actionLabel ? { actionLabel: presentation.actionLabel } : {}),
+    };
   }
 
   private requireTransaction(updateId: string): UpdateTransaction {
@@ -236,7 +243,8 @@ export class DesktopUpdateActivation {
     if (transaction.phase === "ready") return this.notice("ready", marker);
     if (transaction.phase === "selected" || transaction.phase === "restarting") return this.notice("restarting", marker);
     if (transaction.phase === "succeeded") return this.notice("succeeded", marker);
-    if (transaction.phase === "failed" || transaction.phase === "restoring" || transaction.phase === "rolled_back") return this.notice("failed", marker);
+    if (transaction.phase === "rolled_back") return this.notice("restored", marker);
+    if (transaction.phase === "failed" || transaction.phase === "restoring") return this.notice("failed", marker);
     return this.notice("downloaded", marker);
   }
 

@@ -70,6 +70,20 @@ describe("real-process migration crash recovery", () => {
     });
   }
 
+  it("restores byte-identically when the selected target is killed before ready", async () => {
+    const root = fixture();
+    const child = await spawnPaused(root, "select-pause", "selected");
+    expect(readFileSync(join(root, "state", "fixture.txt"), "utf8")).toBe("after\n");
+    await killHard(child);
+
+    const recovered = run(root, "recover-failed");
+    expect(recovered.status, recovered.stderr).toBe(0);
+    expect(readFileSync(join(root, "state", "fixture.txt"), "utf8")).toBe("before\n");
+    expect(readFileSync(join(root, "state", "second.txt"), "utf8")).toBe("before-second\n");
+    expect(statSync(join(root, "state", "fixture.txt")).mode & 0o777).toBe(0o600);
+    expect(statSync(join(root, "state", "second.txt")).mode & 0o777).toBe(0o640);
+  });
+
   it("resumes an interrupted partial restore after SIGKILL with exact bytes and modes", async () => {
     const root = fixture();
     expect(run(root, "fail").status).toBe(0);

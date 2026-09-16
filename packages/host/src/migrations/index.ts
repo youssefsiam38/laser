@@ -1,4 +1,4 @@
-export { MigrationEngine, MigrationError, type MigrationRunInput } from "./engine.js";
+export { MigrationEngine, MigrationError, readMigrationState, type MigrationRunInput } from "./engine.js";
 export { MIGRATION_REGISTRY } from "./registry.js";
 export type {
   MigrationBoundary,

@@ -57,7 +57,7 @@ export interface DesktopHostInfo {
   /** Where the host writes its log, for an error state that needs a next step. */
   logFile: string;
   /** Present only while pre-host update data preparation owns startup. */
-  migration?: { updateId: string; canRestore: boolean };
+  migration?: { updateId: string; snapshot: "available" | "none" | "restored"; canRestore: boolean };
 }
 
 export type DeepLink =
@@ -108,6 +108,7 @@ export type UpdateState =
   | "migration-failed"
   | "restoring"
   | "restored"
+  | "no-snapshot"
   | "ready"
   | "restarting"
   | "succeeded"
@@ -125,7 +126,7 @@ interface UpdateStatusBase {
 export type UpdateStatus =
   | (UpdateStatusBase & { state: "unsupported" | "idle" | "checking" | "available" | "downloading" | "error"; updateId?: never })
   | (UpdateStatusBase & {
-      state: "downloaded" | "parking" | "preparing-data" | "migration-failed" | "restoring" | "restored" | "ready" | "restarting" | "succeeded" | "failed";
+      state: "downloaded" | "parking" | "preparing-data" | "migration-failed" | "restoring" | "restored" | "no-snapshot" | "ready" | "restarting" | "succeeded" | "failed";
       /** Durable correlation across download, gate, restart and result. */
       updateId: string;
       title: string;
@@ -238,7 +239,7 @@ export interface LaserDesktop {
     /** Reopen admission for the same update id. */
     cancel(): Promise<UpdateStatus>;
     /** Restore the exact verified snapshot without selecting the update. */
-    restore(): Promise<UpdateStatus>;
+    restore(updateId?: string): Promise<UpdateStatus>;
     /** Activate only after the exact transaction is parked and verified. */
     install(): void;
     onStatus(listener: (status: UpdateStatus) => void): () => void;

@@ -118,7 +118,7 @@ type DesktopUpdates = {
     status(): Promise<UpdateNoticeState>;
     prepare(): Promise<UpdateNoticeState>;
     cancel(): Promise<UpdateNoticeState>;
-    restore(): Promise<UpdateNoticeState>;
+    restore(updateId: string): Promise<UpdateNoticeState>;
     install(): void;
     restart?(): void;
     onStatus(listener: (status: UpdateNoticeState) => void): () => void;
@@ -132,16 +132,14 @@ function UpdateNoticeAction({ update, onRestart, onPrepare, onCancel, onRestore 
   onCancel?: (() => void) | undefined;
   onRestore?: (() => void) | undefined;
 }) {
-  const props = { variant: "outline" as const, size: "sm" as const, className: "pointer-coarse:min-h-11" };
   const action = (kind: UpdateNoticeState["action"], label: string | undefined, secondary = false) => {
     let handler: (() => void) | undefined;
     if (kind === "prepare") handler = onPrepare;
     else if (kind === "cancel") handler = onCancel;
     else if (kind === "restore") handler = onRestore;
-    else if (kind === "activate") handler = onRestart;
-    else if (kind === "retry") handler = update.state === "migration-failed" || update.state === "restored" ? onPrepare : onRestart;
+    else if (kind === "activate" || kind === "retry") handler = onRestart;
     return handler && label
-      ? <Button {...props} data-secondary-action={secondary || undefined} onClick={handler}>{label}</Button>
+      ? <Button variant={secondary ? "ghost" : "outline"} size="sm" className="pointer-coarse:min-h-11" onClick={handler}>{label}</Button>
       : null;
   };
   return <>
@@ -192,7 +190,7 @@ export function HostVersionNotice() {
     if (!desktop?.updates) return;
     let active = true;
     const receive = (status: UpdateNoticeState) => {
-      const visible = ["downloaded", "parking", "preparing-data", "migration-failed", "restoring", "restored", "ready", "restarting", "failed"].includes(status.state);
+      const visible = ["downloaded", "parking", "preparing-data", "migration-failed", "restoring", "restored", "no-snapshot", "ready", "restarting", "failed"].includes(status.state);
       if (active) setUpdate(visible ? status : undefined);
     };
     void desktop.updates.status().then(receive).catch(() => {});
@@ -206,7 +204,9 @@ export function HostVersionNotice() {
     {...(desktop?.updates?.restart ? { onRestart: () => mismatch ? desktop.updates.restart!() : desktop.updates.install() } : {})}
     {...(desktop?.updates?.prepare ? { onPrepare: () => { void desktop.updates.prepare(); } } : {})}
     {...(desktop?.updates?.cancel ? { onCancel: () => { void desktop.updates.cancel(); } } : {})}
-    {...(desktop?.updates?.restore ? { onRestore: () => { void desktop.updates.restore(); } } : {})}
+    {...(desktop?.updates?.restore && update?.updateId
+      ? { onRestore: () => { void desktop.updates.restore(update.updateId!); } }
+      : {})}
     onRefresh={refreshFrontend} />;
 }
 

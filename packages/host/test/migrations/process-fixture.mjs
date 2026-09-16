@@ -35,7 +35,13 @@ const engine = new MigrationEngine({
 const input = { updateId: "d".repeat(64), targetGenerationId: "b".repeat(64) };
 try {
   if (mode === "restore") engine.restore(input.updateId);
-  else engine.migrate(input);
+  else if (mode === "recover") engine.recover({ targetVerified: true });
+  else if (mode === "recover-failed") engine.recover({ targetVerified: false });
+  else if (mode === "select-pause") {
+    engine.migrate(input);
+    engine.markLaunchAttempt(input.updateId, "c".repeat(32));
+    pause("selected");
+  } else engine.migrate(input);
   process.stdout.write(`${JSON.stringify({ phase: engine.currentState()?.phase ?? "none", data: "complete" })}\n`);
 } catch (error) {
   process.stdout.write(`${JSON.stringify({ phase: engine.currentState()?.phase ?? "none", data: "failed" })}\n`);

@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-17T01:04:41+03:00 · m19-recovery-plan `01a0a030` · HEAD: 877ed4f6
-**Current focus:** M19-T3A/B/C implementation is complete and awaiting its one review before final validation.
+**Last updated:** 2026-09-17T02:21:35+03:00 · m19-recovery-plan `01a0a030` · HEAD: 9e727012
+**Current focus:** M19-T3 review fixes and the full validation/package/browser gate are complete; stopped for parent verification.
 
 | Milestone | State |
 | --- | --- |
@@ -29,7 +29,7 @@
 | MX Cross-cutting | in-progress |
 
 **Blockers:** none.
-**Next up:** one review across T3A/B/C; review fixes; final build/test/verify/package/browser gates and `/tmp/m19-t3-report.md`.
-**Recently done:** M19-T3C process/package recovery (`877ed4f6`); M19-T3B pre-host activation (`fb75bf61`); M19-T3A core (`6e7c07e9`); M19-T2 (`d59f74e8`); M19-T1 (`23787c27`).
+**Next up:** parent verifies the single M19-T3 review-fix commit and `/tmp/m19-t3-report.md`; integration/ledger completion remains parent-owned.
+**Recently done:** M19-T3 review-fix batch and full gate; T3C (`877ed4f6`); T3B (`fb75bf61`); T3A (`6e7c07e9`); M19-T2 (`d59f74e8`).
 
 Ownership and evidence: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`.
