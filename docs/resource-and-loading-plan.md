@@ -2,7 +2,7 @@
 
 Status: implementation authorized and active as M18.
 
-Architecture task: MX-T9. Implementation tasks: M18-T1..T19 and M19-T1..T3. Decisions: D-255 through D-264.
+Architecture task: MX-T9. Implementation tasks: M18-T1..T19 and M19-T1..T3. Decisions: D-255 through D-269.
 
 ## Progress
 

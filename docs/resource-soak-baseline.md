@@ -5,6 +5,8 @@ ranking gate passed, D-267 made the flat host result a reproducible null, and
 D-269 applies the original T2 sign/CV gate to the mixed-resolution pagination
 pair. Every predeclared gate passes.
 
+> Executable tree provenance: the measured implementation `21a15a2a` is tagged `resource-baseline-m18-t15`. It is main's harness state at `202ab3da` without the M19-T1 merge (`23787c27`, launch identity/safe mode/repair); the RP-1–RP-13 product code under measurement is otherwise identical to main. Main itself has not been re-soaked after M19-T1; the RP-2 quick fixture is part of every later milestone's gate.
+
 ## Provenance
 
 - Decision base: `cf9a21aa` (D-267 as amended by D-269).
