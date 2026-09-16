@@ -56,6 +56,33 @@ export const SHRUNK_TAIL_BYTES = 16 * 1024;
 /** How often the age of finished records is checked, on one unref'd timer. */
 export const AGE_SWEEP_INTERVAL_MS = 60_000;
 
+/**
+ * What a session keeps of its finished commands while its worker is short of
+ * memory (RP-8).
+ *
+ * The ordinary bounds above are what a session may hold when nothing is wrong.
+ * These are what it keeps for one sweep when the worker asks — tighter in all
+ * three dimensions, and decided now rather than derived from anything: an
+ * excerpt is {@link TASK_EXCERPT_BYTES}, so fifty of them are about 400 KiB
+ * and twenty about 160 KiB, which is why the count binds first at `warning`
+ * and the bytes bind first at `critical`. Fifteen minutes is "this turn" and
+ * five is "right now"; anything older is one `task_output` away from its
+ * durable log, which none of this touches.
+ */
+export const PRESSURE_TERMINAL_BOUNDS = {
+  warning: { records: 50, ageMs: 15 * 60_000, excerptBytes: 512 * 1024 },
+  critical: { records: 20, ageMs: 5 * 60_000, excerptBytes: 128 * 1024 },
+} as const;
+
+/**
+ * Finished commands pressure never forgets, whatever it is asked for.
+ *
+ * The newest few are the ones an agent is most likely to read next, and a
+ * sweep that emptied a session's memory of its own work would cost more than
+ * the bytes it gave back.
+ */
+export const PRESSURE_KEEP_NEWEST = 5;
+
 /** What the session needs of a command to apply its bounds. Nothing more. */
 export interface RetainedTask {
   id: string;
@@ -323,9 +350,60 @@ export class SessionRetention {
    * many excerpt bytes. A running command is exempt from all three.
    */
   enforceRecordBounds(): void {
+    this.sweepTerminal({
+      records: TERMINAL_TASKS_MAX,
+      ageMs: TERMINAL_TASK_MAX_AGE_MS,
+      excerptBytes: TERMINAL_EXCERPT_BYTES_MAX,
+      keepNewest: 0,
+      trimOrphans: true,
+    });
+  }
+
+  /**
+   * Keep less of what is finished, for one sweep, because the worker is short
+   * of memory (RP-8).
+   *
+   * The same forgetting the ordinary bounds do, with tighter numbers and a
+   * floor: {@link PRESSURE_KEEP_NEWEST} finished commands always stay. It is
+   * one pass over the records already here, it stores no mode and starts no
+   * timer, and running it again changes nothing — the bounds are absolute, so
+   * the second sweep finds the session already inside them.
+   *
+   * What it does not do is as much of the point. A running command keeps its
+   * record, its tail, its pending writes and its process; a durable log keeps
+   * every byte, every segment and its digest; the ordinary bounds are
+   * unchanged; and a forgotten record is still a row in the worker's index and
+   * still readable through its log, which is where `task_output` looks when
+   * this module no longer remembers it.
+   */
+  releaseUnder(level: "warning" | "critical"): void {
+    const bounds = PRESSURE_TERMINAL_BOUNDS[level];
+    this.sweepTerminal({
+      records: bounds.records,
+      ageMs: bounds.ageMs,
+      excerptBytes: bounds.excerptBytes,
+      keepNewest: PRESSURE_KEEP_NEWEST,
+      // Orphan logs are *durable* bytes, and releasing them is the worker's
+      // disk budget (RP-6), not memory pressure's business.
+      trimOrphans: false,
+    });
+  }
+
+  /**
+   * One pass over the finished records, oldest first, against three bounds and
+   * a floor.
+   *
+   * `keepNewest` protects the tail of that order, so a bound can empty a
+   * session's older memory without taking the handful it is most likely to be
+   * asked for next.
+   */
+  private sweepTerminal(limits: { records: number; ageMs: number; excerptBytes: number; keepNewest: number; trimOrphans: boolean }): void {
     const now = this.now();
-    const terminal = (): Tracked[] => [...this.tracked.values()].filter((entry) => !entry.live).sort(byAge);
-    let ordered = terminal();
+    let ordered = [...this.tracked.values()].filter((entry) => !entry.live).sort(byAge);
+    const protectedCount = Math.max(0, Math.min(limits.keepNewest, ordered.length));
+    const total = ordered.length;
+    /** How many of the oldest may still go before the floor is reached. */
+    let mayForget = total - protectedCount;
     const forget = (entry: Tracked): void => {
       this.tracked.delete(entry.task.id);
       this.terminalCount -= 1;
@@ -343,16 +421,20 @@ export class SessionRetention {
       }
       this.options.forget(entry.task.id);
       ordered = ordered.filter((candidate) => candidate !== entry);
+      mayForget -= 1;
     };
     for (const entry of [...ordered]) {
+      if (mayForget <= 0) break;
       const endedAt = entry.task.endedAtMs;
-      if (endedAt !== undefined && now - endedAt > TERMINAL_TASK_MAX_AGE_MS) forget(entry);
+      if (endedAt !== undefined && now - endedAt > limits.ageMs) forget(entry);
     }
-    while (ordered.length > TERMINAL_TASKS_MAX) forget(ordered[0]!);
-    while (ordered.length > 0 && this.excerpts > TERMINAL_EXCERPT_BYTES_MAX) forget(ordered[0]!);
-    while (this.orphans.length > TERMINAL_TASKS_MAX) {
-      const oldest = this.orphans.shift();
-      if (oldest) this.releaseOrphan(oldest);
+    while (mayForget > 0 && ordered.length > limits.records) forget(ordered[0]!);
+    while (mayForget > 0 && ordered.length > 0 && this.excerpts > limits.excerptBytes) forget(ordered[0]!);
+    if (limits.trimOrphans) {
+      while (this.orphans.length > TERMINAL_TASKS_MAX) {
+        const oldest = this.orphans.shift();
+        if (oldest) this.releaseOrphan(oldest);
+      }
     }
     this.options.onChange?.();
   }

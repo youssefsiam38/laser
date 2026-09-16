@@ -140,6 +140,17 @@ export class TaskIndex {
     return { taskRegistry: { count, bytes } };
   }
 
+  /**
+   * What one session's commands last said they were holding (RP-6/RP-8).
+   *
+   * `undefined` for a session that has never published, which is not the same
+   * as a session holding nothing: a caller comparing two of these is told it
+   * has no evidence rather than a zero.
+   */
+  retentionOf(path: string): BackgroundTaskRetention | undefined {
+    return this.retention.get(path);
+  }
+
   /** Bytes this worker's command logs occupy, as its sessions last reported. */
   logBytes(): number {
     let bytes = 0;

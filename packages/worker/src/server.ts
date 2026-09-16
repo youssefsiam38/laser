@@ -1929,10 +1929,14 @@ export class WorkerServer {
    *
    * A level, delivered to each session's own companion, which decides what its
    * *terminal* records keep. Nothing here pauses a command, shortens a live
-   * tail or deletes a durable log, and nothing waits for an answer: delivery
-   * is all this step can observe, so it never claims a release it cannot
-   * count. Bounded to the sessions least recently active; the rest wait for
-   * the next pass.
+   * tail or deletes a durable log.
+   *
+   * What it released is read, not assumed: the companion publishes what it is
+   * holding on the way out of the same call, so this compares the session's
+   * retention on either side and reports the difference. A session that was
+   * asked and changed nothing had nothing to give; one whose answer could not
+   * be compared is unavailable, which is a different sentence. Bounded to the
+   * sessions least recently used; the rest wait for the next pass.
    */
   private releaseTaskRecords(level: "warning" | "critical"): PressureActionOutcome {
     // Least recently used first, where "used" is the later of somebody asking
@@ -1942,16 +1946,36 @@ export class WorkerServer {
     const usedAt = (live: Live): number => Math.max(live.touchedAtMs, live.buffer.lastActivity);
     const candidates = [...this.runtimes.values()].sort((a, b) => usedAt(a) - usedAt(b));
     const told = candidates.slice(0, PRESSURE_MAX_TASK_SESSIONS);
-    let delivered = 0;
+    let count = 0;
+    let bytes = 0;
+    let unobservable = false;
     for (const live of told) {
-      if (live.driver.deliverExtensionCommand?.({ type: "lasercode/task/pressure", level }) === true) delivered += 1;
+      // What this session said it was holding, on either side of the ask. The
+      // companion publishes synchronously, so the second read is the answer to
+      // the first — and when there is no pair to compare, this step says it
+      // could not see rather than guessing.
+      const before = this.tasks.retentionOf(live.path);
+      const handled = live.driver.deliverExtensionCommand?.({ type: "lasercode/task/pressure", level }) === true;
+      if (!handled) continue;
+      const after = this.tasks.retentionOf(live.path);
+      if (!before || !after) {
+        unobservable = true;
+        continue;
+      }
+      // Only what pressure itself releases: records that are gone and the
+      // excerpt bytes they held. Live tails and durable logs are somebody
+      // else's work and are never counted here.
+      count += Math.max(0, before.terminal - after.terminal);
+      bytes += Math.max(0, before.excerptBytes - after.excerptBytes);
     }
     // Work left over outranks what was done with the rest: the host should see
     // that this worker did not finish, not that it had nothing to do.
     if (candidates.length > told.length) return { boundReached: true };
-    // Delivery is not a release. Until the companion reports what it let go
-    // (milestone D), an accepted delivery is an outcome nobody can measure.
-    if (delivered > 0) return { unobservable: true };
+    if (count > 0 || bytes > 0) return { released: { count, bytes } };
+    // An accepted ask whose result could not be read is unavailable; one that
+    // was read and changed nothing is a session with nothing to give, and so
+    // is a session whose companion does not answer at all.
+    if (unobservable) return { unobservable: true };
     return {};
   }
 

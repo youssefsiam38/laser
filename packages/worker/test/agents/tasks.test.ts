@@ -49,6 +49,39 @@ describe("TaskIndex retained state and the per-worker log budget (RP-6)", () => 
     expect(index.logBytes()).toBe(10);
   });
 
+  it("answers what one session last said it holds, and says nothing rather than zero (RP-8)", () => {
+    const index = new TaskIndex();
+    index.observe("/s/a.jsonl", { type: "lasercode/task/update", task: update({ id: "t-1" }) });
+    // Never published: there is no evidence, which is not the same as none held.
+    expect(index.retentionOf("/s/a.jsonl")).toBeUndefined();
+    const held = retention({ live: 1, terminal: 24, excerptBytes: 196_608 });
+    index.observe("/s/a.jsonl", { type: "lasercode/task/retention", retention: held });
+    expect(index.retentionOf("/s/a.jsonl")).toEqual(held);
+    // A later snapshot replaces the earlier one, which is what makes a
+    // before/after comparison meaningful.
+    const after = retention({ live: 1, terminal: 20, excerptBytes: 163_840, evicted: 4 });
+    index.observe("/s/a.jsonl", { type: "lasercode/task/retention", retention: after });
+    expect(index.retentionOf("/s/a.jsonl")).toEqual(after);
+    // A fork moves the session's file; what it holds moves with it.
+    index.rekeySession("/s/a.jsonl", "/s/moved.jsonl");
+    expect(index.retentionOf("/s/moved.jsonl")).toEqual(after);
+    expect(index.retentionOf("/s/a.jsonl")).toBeUndefined();
+    expect(index.retentionOf("/s/never.jsonl")).toBeUndefined();
+  });
+
+  it("keeps a finished command's row after the companion forgets it (RP-6/RP-8)", () => {
+    const index = new TaskIndex();
+    const done = update({ id: "t-gone", status: "completed", exitCode: 0, outputBytes: 4_096 });
+    index.observe("/s/a.jsonl", { type: "lasercode/task/update", task: { ...done, logPath: "/logs/a/t-gone", logSegments: [0] } });
+    // The companion's memory of it goes; the worker's row and its log do not,
+    // which is what `task_output` falls back to.
+    index.observe("/s/a.jsonl", { type: "lasercode/task/retention", retention: retention({ terminal: 0, excerptBytes: 0, evicted: 1 }) });
+    const row = index.tasksOf("/s/a.jsonl").find((task) => task.id === "t-gone")!;
+    expect(row).toMatchObject({ id: "t-gone", status: "completed", outputBytes: 4_096 });
+    expect(row.logPath).toBe("/logs/a/t-gone");
+    expect(row.logSegments).toEqual([0]);
+  });
+
   it("hands each session a share when the worker is over its log budget, and never below the floor", () => {
     const index = new TaskIndex();
     for (const path of ["/s/a.jsonl", "/s/b.jsonl"]) {

@@ -552,3 +552,96 @@ it("never lets a log file's path reach a diagnostic, a row or a model, whatever 
   expect(row.outputBytes).toBe(4);
   expect(JSON.stringify(row)).not.toContain(canary);
 });
+
+it(
+  "keeps less of what is finished when the worker asks, and still answers for it (RP-8)",
+  async () => {
+    const readBack: string[] = [];
+    const h = harness({
+      // What the worker answers with once this module no longer remembers a
+      // finished command: its row, and its output from the durable log.
+      readTask: async (taskId) => {
+        readBack.push(taskId);
+        return {
+          task: {
+            id: taskId,
+            command: "printf",
+            title: "printf",
+            status: "completed",
+            origin: "background",
+            startedAt: new Date().toISOString(),
+            outputBytes: 6,
+            exitCode: 0,
+          },
+          owner: { agentName: "default", subagentName: "this session", sessionId: SESSION_ID },
+          text: "from the durable log",
+        } satisfies ReadTaskOutputResult;
+      },
+    });
+
+    // Twenty-four finished commands — four more than `critical` keeps — and
+    // one still running when the ask arrives.
+    const ids: string[] = [];
+    for (let index = 0; index < 24; index += 1) {
+      const { details } = await h.call("bash", { command: `printf done${index}`, background: true, notify: false });
+      ids.push((details as { taskId: string }).taskId);
+    }
+    for (const id of ids) await settled(h, id);
+    const running = await h.call("bash", { command: "sleep 30", background: true, notify: false });
+    const runningId = (running.details as { taskId: string }).taskId;
+
+    const before = h.retention()!;
+    expect(before.terminal).toBe(24);
+    expect(before.live).toBe(1);
+    const sent = h.send.mock.calls.length;
+
+    // The command is handled, the sweep happens before it returns, and the new
+    // retention is published in the same call — which is what lets the worker
+    // compare either side of `deliverExtensionCommand`.
+    expect(h.commands.deliver({ type: "lasercode/task/pressure", level: "critical" })).toBe(true);
+    const published = h.send.mock.calls
+      .slice(sent)
+      .map(([message]) => message as { type: string })
+      .filter((message) => message.type === "lasercode/task/retention");
+    expect(published.length).toBeGreaterThanOrEqual(1);
+
+    const after = h.retention()!;
+    // Twenty finished commands stay; the four oldest go, and their excerpt
+    // bytes go with them.
+    expect(after.terminal).toBe(20);
+    expect(after.live).toBe(1);
+    expect(after.excerptBytes).toBeLessThanOrEqual(before.excerptBytes);
+    expect(after.evicted).toBe(before.evicted + 4);
+    // Not one durable byte was released for memory: that is the disk budget's.
+    expect(after.released).toBe(before.released);
+    expect(after.logBytes).toBe(before.logBytes);
+
+    // The running command is untouched, and still running.
+    const live = await h.call("task_output", { taskId: runningId, tail: 1 });
+    expect((live.details as { status: string }).status).toBe("running");
+
+    // A forgotten command is still addressable: this module asks the worker,
+    // which reads the row it kept and the log that was never deleted.
+    const forgotten = ids[0]!;
+    const answer = await h.call("task_output", { taskId: forgotten, tail: 5 });
+    expect(readBack).toContain(forgotten);
+    expect(JSON.stringify(answer.content)).toContain("from the durable log");
+
+    // And one the sweep kept is still answered from memory, not the worker.
+    const kept = ids.at(-1)!;
+    const keptAnswer = await h.call("task_output", { taskId: kept, tail: 5 });
+    expect(readBack).not.toContain(kept);
+    expect((keptAnswer.details as { taskId: string }).taskId).toBe(kept);
+
+    // Asking again changes nothing, and publishes nothing: the bounds are
+    // absolute, so a second sweep finds the session already inside them.
+    const quiet = h.send.mock.calls.length;
+    expect(h.commands.deliver({ type: "lasercode/task/pressure", level: "critical" })).toBe(true);
+    expect(h.send.mock.calls.length).toBe(quiet);
+    expect(h.retention()!.terminal).toBe(20);
+
+    // An unknown command is still not this module's.
+    expect(h.commands.deliver({ type: "lasercode/unknown/command" } as never)).toBe(false);
+  },
+  120_000,
+);

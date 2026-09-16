@@ -329,3 +329,154 @@ it("ages every session of a process on one timer, and stops it when the last one
     setAgeScheduler(undefined);
   }
 });
+
+// ---------------------------------------------------------------------------
+// RP-8: keeping less of what is finished, for one sweep, on request
+// ---------------------------------------------------------------------------
+
+/** A finished command with an excerpt of a chosen size, ended at a chosen moment. */
+function terminal(
+  retention: SessionRetention,
+  dir: string,
+  id: string,
+  options: { startedAtMs: number; endedAtMs: number; excerpt: number },
+): ReturnType<typeof fakeTask> {
+  const log = stalledLog(dir, id, retention);
+  const task = fakeTask(id, log, options.startedAtMs);
+  task.excerpt = options.excerpt;
+  retention.track(task);
+  task.endedAtMs = options.endedAtMs;
+  retention.markTerminal(id);
+  return task;
+}
+
+it("keeps only the newest fifty finished commands under warning, and twenty under critical", () => {
+  const dir = scratch();
+  let clock = 1_000_000;
+  // Small excerpts on purpose: this fixture is about the *count* bound, so the
+  // byte bound must not be the one doing the work.
+  const { retention, forgotten } = session({ now: () => clock });
+  for (let index = 0; index < 120; index += 1) {
+    terminal(retention, dir, `t-${index}`, { startedAtMs: index, endedAtMs: clock - 1_000 + index, excerpt: 512 });
+  }
+  expect(retention.snapshot().terminal).toBe(120);
+
+  retention.releaseUnder("warning");
+  expect(retention.snapshot().terminal).toBe(50);
+  expect(retention.snapshot().excerptBytes).toBe(50 * 512);
+  // Oldest first, and the module was told about each one it may forget.
+  expect(forgotten).toHaveLength(70);
+  expect(forgotten[0]).toBe("t-0");
+  expect(forgotten.at(-1)).toBe("t-69");
+
+  retention.releaseUnder("critical");
+  expect(retention.snapshot().terminal).toBe(20);
+  expect(forgotten.at(-1)).toBe("t-99");
+  // Absolute bounds: a second sweep at the same level finds nothing to do.
+  const after = retention.snapshot();
+  retention.releaseUnder("critical");
+  retention.releaseUnder("warning");
+  expect(retention.snapshot()).toEqual(after);
+});
+
+it("forgets what is older than the level's age, down to the newest five", () => {
+  const dir = scratch();
+  let clock = 10 * 60_000;
+  const { retention } = session({ now: () => clock });
+  // Eight commands, each a minute apart; the newest ended a minute ago.
+  for (let index = 0; index < 8; index += 1) {
+    terminal(retention, dir, `age-${index}`, { startedAtMs: index, endedAtMs: clock - (8 - index) * 60_000, excerpt: 256 });
+  }
+  retention.releaseUnder("critical");
+  // Everything older than five minutes would go, but the newest five stay.
+  expect(retention.snapshot().terminal).toBe(5);
+
+  // And with nothing old enough, nothing goes at all.
+  clock += 0;
+  const held = retention.snapshot();
+  retention.releaseUnder("warning");
+  expect(retention.snapshot()).toEqual(held);
+});
+
+it("keeps critical's excerpt bytes inside its ceiling, subject to the same floor", () => {
+  const dir = scratch();
+  let clock = 1_000_000;
+  const { retention } = session({ now: () => clock });
+  // Thirty finished commands, each holding a full excerpt: 240 KiB in all.
+  for (let index = 0; index < 30; index += 1) {
+    terminal(retention, dir, `bytes-${index}`, { startedAtMs: index, endedAtMs: clock - 1_000 + index, excerpt: 8 * 1024 });
+  }
+  expect(retention.snapshot().excerptBytes).toBe(30 * 8 * 1024);
+
+  retention.releaseUnder("critical");
+  const after = retention.snapshot();
+  expect(after.excerptBytes).toBeLessThanOrEqual(128 * 1024);
+  expect(after.terminal).toBeLessThanOrEqual(20);
+  // The floor still holds, and what is left is exactly what is counted.
+  expect(after.terminal).toBeGreaterThanOrEqual(5);
+  expect(after.excerptBytes).toBe(after.terminal * 8 * 1024);
+
+  // A session whose five newest alone exceed the ceiling keeps them anyway:
+  // the floor is a floor, not a suggestion.
+  const heavy = session({ now: () => clock });
+  for (let index = 0; index < 5; index += 1) {
+    terminal(heavy.retention, dir, `heavy-${index}`, { startedAtMs: index, endedAtMs: clock - 1_000 + index, excerpt: 64 * 1024 });
+  }
+  heavy.retention.releaseUnder("critical");
+  expect(heavy.retention.snapshot().terminal).toBe(5);
+  expect(heavy.retention.snapshot().excerptBytes).toBe(5 * 64 * 1024);
+});
+
+it("never touches a running command, its tail, its bytes or its durable log", () => {
+  const dir = scratch();
+  let clock = 1_000_000;
+  const { retention, forgotten } = session({ now: () => clock });
+  const running = fakeTask("running", stalledLog(dir, "running", retention), 0);
+  running.tail = 256 * 1024;
+  retention.track(running);
+  running.log.append(Buffer.alloc(32 * 1024, "r"));
+  const bytesBefore = running.log.bytes;
+  const digestBefore = running.log.digest();
+  const stateBefore = running.log.state;
+  for (let index = 0; index < 40; index += 1) {
+    terminal(retention, dir, `done-${index}`, { startedAtMs: index, endedAtMs: clock - 10 * 60_000, excerpt: 8 * 1024 });
+  }
+
+  retention.releaseUnder("critical");
+
+  // The running command is exactly as it was.
+  expect(forgotten).not.toContain("running");
+  expect(running.tail).toBe(256 * 1024);
+  expect(running.log.bytes).toBe(bytesBefore);
+  expect(running.log.digest()).toBe(digestBefore);
+  expect(running.log.state).toBe(stateBefore);
+  expect(retention.snapshot().live).toBe(1);
+  expect(retention.snapshot().liveTailBytes).toBe(256 * 1024);
+  // No durable byte was released by pressure: that is the disk budget's, and
+  // it did not run.
+  expect(retention.released).toBe(0);
+});
+
+it("leaves the ordinary bounds, the shared timer and the disk budget where they were", () => {
+  const dir = scratch();
+  let clock = 1_000_000;
+  const { retention } = session({ now: () => clock });
+  const before = ageSchedulerState();
+  for (let index = 0; index < 40; index += 1) {
+    terminal(retention, dir, `t-${index}`, { startedAtMs: index, endedAtMs: clock - 1_000 + index, excerpt: 1024 });
+  }
+  retention.releaseUnder("warning");
+  const after = ageSchedulerState();
+  // One clock for the whole process, whatever pressure does.
+  expect(after.timersCreated).toBe(before.timersCreated);
+  expect(after.sessions).toBe(before.sessions);
+  expect(after.running).toBe(before.running);
+
+  // The ordinary bounds are unchanged: with far fewer than two hundred
+  // records, the normal sweep still forgets nothing.
+  const held = retention.snapshot();
+  retention.enforceRecordBounds();
+  expect(retention.snapshot()).toEqual(held);
+  expect(TERMINAL_TASKS_MAX).toBe(200);
+  expect(TERMINAL_TASK_MAX_AGE_MS).toBe(60 * 60_000);
+});

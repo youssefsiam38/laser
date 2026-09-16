@@ -58,9 +58,23 @@ class PressureDriver implements SessionDriver {
   emit(event: DriverEvent) { for (const listener of this.listeners) listener(event); }
   respondToUi() {}
   pendingUi() { return this.pending; }
+  /**
+   * What this session publishes when it is asked to keep less — the companion's
+   * own retention message, emitted synchronously from inside the call, exactly
+   * as `background-work` does it.
+   */
+  onPressure: ((command: PiExtensionCommand) => void) | undefined;
   deliverExtensionCommand(command: PiExtensionCommand) {
     this.commands.push(command);
+    if (this.accepts) this.onPressure?.(command);
     return this.accepts;
+  }
+  /** Publish a retention snapshot the way the companion does. */
+  publishRetention(retention: Record<string, number>) {
+    this.emit({
+      type: "extension",
+      message: { type: "lasercode/task/retention", retention: retention as never },
+    } as DriverEvent);
   }
   sessionHeader() { return { id: this.st.id }; }
   async dispose() {}
@@ -192,6 +206,45 @@ describe("the directive the host sends", () => {
     await h.server.dispose();
   });
 
+  it("reports what the companion actually released, from what it published", async () => {
+    const h = harness({ workerGeneration: 3 });
+    await open(h, "/tmp/fake/a.jsonl");
+    const driver = h.drivers.find((candidate) => candidate.state().path === "/tmp/fake/a.jsonl")!;
+    const held = { live: 1, terminal: 24, liveTailBytes: 4_096, excerptBytes: 196_608, logBytes: 10_000, pendingLogBytes: 0, evicted: 0, released: 0, tailsShrunk: 0 };
+    driver.publishRetention(held);
+    // The companion keeps less and says so before the call returns.
+    driver.onPressure = () => driver.publishRetention({ ...held, terminal: 20, excerptBytes: 163_840, evicted: 4 });
+
+    const answer = (await h.call(50, "pi/worker/pressure", { level: "critical", epoch: 1, generation: 3 })) as {
+      result: { results: Array<{ action: string; outcome: string; released?: { count?: number; bytes?: number } }> };
+    };
+    const row = answer.result.results.find((result) => result.action === "task_records")!;
+    // Exactly the difference, and only the parts pressure moves: records that
+    // are gone and the excerpt bytes they held.
+    expect(row.outcome).toBe("released");
+    expect(row.released).toEqual({ count: 4, bytes: 196_608 - 163_840 });
+    await h.server.dispose();
+  });
+
+  it("calls an answered ask that changed nothing what it is: nothing to give", async () => {
+    const h = harness({ workerGeneration: 3 });
+    await open(h, "/tmp/fake/a.jsonl");
+    const driver = h.drivers.find((candidate) => candidate.state().path === "/tmp/fake/a.jsonl")!;
+    const held = { live: 0, terminal: 3, liveTailBytes: 0, excerptBytes: 3_000, logBytes: 0, pendingLogBytes: 0, evicted: 0, released: 0, tailsShrunk: 0 };
+    driver.publishRetention(held);
+    // Handled, and honestly unchanged: a session with three finished commands
+    // is already inside every bound.
+    driver.onPressure = () => driver.publishRetention(held);
+
+    const answer = (await h.call(51, "pi/worker/pressure", { level: "warning", epoch: 1, generation: 3 })) as {
+      result: { results: Array<{ action: string; outcome: string; released?: unknown }> };
+    };
+    const row = answer.result.results.find((result) => result.action === "task_records")!;
+    expect(row.outcome).toBe("nothing_to_give");
+    expect(row.released).toBeUndefined();
+    await h.server.dispose();
+  });
+
   it("does not claim a release for a delivery nobody handled", async () => {
     const h = harness({ workerGeneration: 3 });
     await open(h, "/tmp/fake/a.jsonl");
@@ -212,6 +265,8 @@ describe("the directive the host sends", () => {
       result: { results: Array<{ action: string; outcome: string; released?: unknown }> };
     };
     const accepted = again.result.results.find((event) => event.action === "task_records")!;
+    // Accepted, but this session has never said what it holds, so there is no
+    // pair to compare: unavailable is the honest word, not a zero.
     expect(accepted.outcome).toBe("unavailable");
     expect(accepted.released).toBeUndefined();
     await other.server.dispose();

@@ -876,6 +876,17 @@ export const backgroundWorkModule: LaserModule = {
         state.publishRetention?.();
         return true;
       }
+      // The worker is short of memory and asks this session's *finished*
+      // commands to keep less for one sweep (RP-8). Nothing running is
+      // touched, no durable byte is deleted, and the worker learns what it
+      // released by comparing the retention this publishes on either side of
+      // the call — which is why the sweep and the publication both happen
+      // before this returns.
+      if (command.type === "lasercode/task/pressure") {
+        state.retention.releaseUnder(command.level);
+        state.publishRetention?.();
+        return true;
+      }
       if (command.type !== "lasercode/task/stop") return false;
       const task = state.tasks.get(command.id);
       if (!task) return false;
