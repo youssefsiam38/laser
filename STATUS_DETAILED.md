@@ -2888,6 +2888,7 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 
 #### M19-T3 notes
 - 2026-09-16 claimed by the T1/T2 owner on base `d59f74e8` per the approved plan (T3A migration core/fault suite, T3B launcher/update integration, T3C real-process and packaged recovery); one review for T3.
+- 2026-09-17 T3A complete: staged-generation registry contract, allowlisted file/directory atomic units, verified reflink/copy snapshot, fsynced migration marker, sibling-staged exact restore, interrupted-phase recovery and snapshot retention. Fault injection covers every copy/hash/marker/step/rename boundary; traversal, symlink, corruption, ENOSPC, newer schema and exact byte/mode restoration pass in `packages/host/test/migrations/engine.test.ts` (14 tests).
 
 #### M19 notes
 - 2026-09-16 D-264 turns `docs/resource-and-loading-plan.md`'s supporting recovery/update prose into three dependency-ordered tasks after containment. They strengthen activation and recovery; the reviewed release orchestrator remains authoritative.
