@@ -1,6 +1,6 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-16T16:47:13+03:00 · orchestrator `01a0a030` · HEAD: cf9a21aa
+**Last updated:** 2026-09-16T16:47:13+03:00 · orchestrator `01a0a030` · HEAD: 7bfce5e8
 **Current focus:** M18 closes RP-3 diagnostics on the finished RP-8 stack, finishes RP-13 capability consumption, then closes the RP-2 repeat baseline (RP-14 dropped, D-268).
 
 | Milestone | State |
@@ -28,8 +28,8 @@
 | M19 Runtime recovery/update activation | todo |
 | MX Cross-cutting | in-progress |
 
-**Blockers:** none — M18-T15 awaits the D-269 recompute of the passing pair.
-**Next up:** T15 D-269 recompute + baseline doc; M19-T2 (in progress); then M19-T3 and the final audit.
-**Recently done:** M19-T1 launch identity/safe mode/repair (`23787c27`); attachment membership fix (`98d12881`); M18-T19 capability consumption (`76f475fa`); M18-T3 diagnostics closeout; M18-T8 RP-8 complete (`ce455b99`).
+**Blockers:** none.
+**Next up:** M19-T2 (in progress), M19-T3, then M18 closeout and the final RP-1–RP-13 audit.
+**Recently done:** M18-T15 repeat baseline (`7bfce5e8`); M19-T1 (`23787c27`); attachment membership fix (`98d12881`); M18-T19 (`76f475fa`); M18-T3 closeout.
 
 Ownership and evidence: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`.
