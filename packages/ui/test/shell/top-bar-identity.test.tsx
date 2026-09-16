@@ -25,6 +25,7 @@ import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { createStateStore, LaserStoreProvider, type StateStore } from "../../src/runtime/LaserProvider.js";
 import { initialState, reduce, type AppState } from "../../src/store.js";
 import { sessionState, snapshot, summary, view } from "../agents/fixtures.js";
+import { testDescriptor } from "../runtime/environment-fixture.js";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -87,12 +88,12 @@ const seed = (): AppState => {
   let state = reduce(initialState, { type: "agents/loaded", snapshot: snapshot({ defaultAgent: "default" }) });
   state = reduce(state, { type: "sessions", sessions: summaries });
   const open = {
-    [A]: view({ path: A, state: sessionState({ path: A, cwd: "/project", name: summaries[0]!.name, agent: writer, model: { provider: "anthropic", id: "a-model-name-long-enough-to-truncate" } }) }),
-    [B]: view({ path: B, state: sessionState({ path: B, cwd: "/project", name: summaries[1]!.name }) }),
-    [C]: view({ path: C, state: sessionState({ path: C, cwd: "/project", name: summaries[2]!.name }) }),
-    [D]: view({ path: D, state: sessionState({ path: D, cwd: "/project", name: summaries[3]!.name, agent: child }) }),
+    [A]: view({ path: A, state: sessionState({ path: A, cwd: "/project", ...(summaries[0]!.name ? { name: summaries[0]!.name } : {}), agent: writer, model: { provider: "anthropic", id: "a-model-name-long-enough-to-truncate" } }) }),
+    [B]: view({ path: B, state: sessionState({ path: B, cwd: "/project", ...(summaries[1]!.name ? { name: summaries[1]!.name } : {}) }) }),
+    [C]: view({ path: C, state: sessionState({ path: C, cwd: "/project", ...(summaries[2]!.name ? { name: summaries[2]!.name } : {}) }) }),
+    [D]: view({ path: D, state: sessionState({ path: D, cwd: "/project", ...(summaries[3]!.name ? { name: summaries[3]!.name } : {}), agent: child }) }),
   };
-  return { ...state, connection: "open", current: A, open };
+  return { ...state, connection: "open", current: A, open, environment: testDescriptor() };
 };
 const select = (store: StateStore, path: string) => store.dispatch({ type: "destination", destination: { phase: "ready-code", intent: store.getSnapshot().destination.intent + 1, code: { kind: "project-session", project: "/project", path } } });
 const mountTopBar = async (store: StateStore) => {
@@ -166,7 +167,7 @@ describe("connected top-bar identity", () => {
     // Open-session attribution wins over the conflicting catalog and default,
     // and remains the same when the live session starts streaming.
     expect(agentLabel()?.textContent).toBe("writer");
-    await act(async () => store.dispatch({ type: "opened", state: sessionState({ path: A, cwd: "/project", name: summaries[0]!.name, agent: writer, isStreaming: true }) }));
+    await act(async () => store.dispatch({ type: "opened", state: sessionState({ path: A, cwd: "/project", ...(summaries[0]!.name ? { name: summaries[0]!.name } : {}), agent: writer, isStreaming: true }) }));
     expect(agentLabel()?.textContent).toBe("writer");
 
     await act(async () => select(store, B));
@@ -189,6 +190,24 @@ describe("connected top-bar identity", () => {
     await mountTopBar(store);
     expect(container.textContent).toContain("Catalog attribution");
     expect(container.textContent).not.toContain("New session");
+  });
+
+  it("hides top-bar lifecycle mutations while preserving read navigation under paired read-only authority", async () => {
+    const store = createStateStore({ ...seed(), environment: testDescriptor({ actor: { class: "paired_device", id: "phone" }, scopes: ["handshake", "read", "diagnostics"] }) });
+    stable.actions.rename.mockReset(); stable.actions.compact.mockReset(); stable.actions.fork.mockReset(); stable.actions.restartWorker.mockReset(); stable.client.request.mockReset();
+    await mountTopBar(store);
+    const heading = container.querySelector("h1")!;
+    await act(async () => heading.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
+    expect(container.querySelector("input")).toBeNull();
+    const more = container.querySelector<HTMLButtonElement>('[aria-label="More"]')!;
+    await act(async () => more.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 })));
+    const text = document.querySelector<HTMLElement>('[data-slot="dropdown-menu-content"]')!.textContent ?? "";
+    expect(text).toContain("Find in conversation");
+    expect(text).toContain("Show agent map");
+    expect(text).not.toMatch(/Rename session|Move chat|Compact context|Fork from last prompt/);
+    expect(stable.actions.rename).not.toHaveBeenCalled(); expect(stable.actions.compact).not.toHaveBeenCalled();
+    expect(stable.actions.fork).not.toHaveBeenCalled(); expect(stable.actions.restartWorker).not.toHaveBeenCalled();
+    expect(stable.client.request).not.toHaveBeenCalled();
   });
 
   it("keeps compact actions in one touch-reachable More menu instead of duplicating header controls", async () => {

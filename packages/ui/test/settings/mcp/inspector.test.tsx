@@ -14,7 +14,7 @@ import type { ClientRequests, McpCallResult, McpInspection, McpServerConfigInput
 const mocks = vi.hoisted(() => ({ request: vi.fn(), toast: vi.fn() }));
 vi.mock("../../../src/runtime/index.js", () => {
   const stable = { client: { request: mocks.request, subscribe: () => () => {} }, actions: { toast: mocks.toast } };
-  return { useLaserStable: () => stable };
+  return { useCapability: () => ({ state: "available" }), useLaserStable: () => stable };
 });
 
 import { McpServersTab } from "../../../src/components/settings/mcp/McpServersTab.js";

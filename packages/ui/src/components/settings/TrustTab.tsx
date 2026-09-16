@@ -1,4 +1,5 @@
 "use client";
+import type { CapabilityDecision } from "@/runtime/environment-capabilities";
 /**
  * Settings → Trust (M4-T7, the trust-store half).
  *
@@ -10,6 +11,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { RefreshCw, ShieldAlert, ShieldCheck, ShieldQuestion, ShieldX } from "lucide-react";
 
+import { CapabilityNotice } from "@/components/capability-gate";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
@@ -49,7 +51,9 @@ function headline(trust: ProjectTrust): string {
   }
 }
 
-export function TrustTab() {
+export function TrustTab({ decision }: { decision?: CapabilityDecision | undefined }) {
+  const writable = decision?.state === "available" || decision === undefined;
+  const readOnlyExplanation = decision?.state === "explained" ? decision.explanation : undefined;
   const { projectInfo, actions } = useLaserStable();
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState<string>();
@@ -104,6 +108,8 @@ export function TrustTab() {
           )}
         </div>
 
+        {!writable && readOnlyExplanation ? <CapabilityNotice explanation={readOnlyExplanation} /> : null}
+
         <div className="flex items-center gap-2">
           <SearchInput value={query} onChange={setQuery} placeholder="Filter projects" className="max-w-72 flex-1" />
           <TooltipIconButton tooltip="Reload projects" onClick={() => void actions.refreshProjects()}>
@@ -121,6 +127,7 @@ export function TrustTab() {
                 project={project}
                 first={index === 0}
                 busy={busy === project.cwd}
+                writable={writable}
                 onDecide={decide}
               />
             ))}
@@ -135,11 +142,13 @@ function Row({
   project,
   first,
   busy,
+  writable,
   onDecide,
 }: {
   project: ProjectInfo;
   first: boolean;
   busy: boolean;
+  writable: boolean;
   onDecide: (cwd: string, trusted: boolean) => void;
 }) {
   const Icon = ICON[project.trust];
@@ -167,7 +176,7 @@ function Row({
         )}
       </div>
 
-      {decidable ? (
+      {decidable && writable ? (
         <div
           role="radiogroup"
           aria-label={`Trust for ${project.name}`}
@@ -206,9 +215,9 @@ function Row({
             );
           })}
         </div>
-      ) : (
+      ) : !decidable ? (
         <span className="shrink-0 text-xs text-ink-3">nothing to decide</span>
-      )}
+      ) : null}
     </div>
   );
 }

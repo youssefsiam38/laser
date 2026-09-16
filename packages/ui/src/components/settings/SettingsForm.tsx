@@ -28,6 +28,7 @@ import { shortCwd } from "@/format";
 import { useLaserStable } from "@/runtime";
 import type { ModelCatalogEntry, SettingChange, SettingDescriptor, SettingsCatalog, SettingsScope, SettingsSnapshot, ThinkingLevel } from "@lasercode/protocol";
 
+import type { CapabilityDecision } from "@/runtime/environment-capabilities";
 import { SettingField } from "./fields.js";
 import { effectiveDiff, getAtPath, rowFor, searchFields, sectionsWithFields, type FieldRow } from "./model.js";
 import { OriginBadge, SearchInput } from "./SettingsScreen.js";
@@ -39,10 +40,12 @@ export interface SettingsFormProps {
   cwd: string;
   catalog: SettingsCatalog;
   snapshot: SettingsSnapshot;
+  decision?: CapabilityDecision | undefined;
   onApply: (scope: SettingsScope, changes: SettingChange[]) => Promise<boolean>;
 }
 
-export function SettingsForm({ audience, cwd, catalog, snapshot, onApply }: SettingsFormProps) {
+export function SettingsForm({ audience, cwd, catalog, snapshot, decision, onApply }: SettingsFormProps) {
+  const writable = decision?.state === "available" || decision === undefined;
   const { client, projects, projectInfo, setCurrentProject } = useLaserStable();
   const [view, setView] = useState<View>("global");
   const [section, setSection] = useState<string>(catalog.sections[0]?.id ?? "model");
@@ -213,6 +216,7 @@ export function SettingsForm({ audience, cwd, catalog, snapshot, onApply }: Sett
                   modelCatalog={modelCatalog}
                   modelCatalogLoading={modelCatalogLoading}
                   modelCatalogError={modelCatalogError}
+                  environmentWritable={writable}
                   onApply={onApply}
                 />
               ))}
@@ -366,6 +370,7 @@ function FieldRowView({
   modelCatalog,
   modelCatalogLoading,
   modelCatalogError,
+  environmentWritable,
   onApply,
 }: {
   field: SettingDescriptor;
@@ -377,13 +382,14 @@ function FieldRowView({
   modelCatalog: { models: ModelCatalogEntry[]; connected: ModelCatalogEntry[]; defaultProvider?: string; defaultModel?: string };
   modelCatalogLoading: boolean;
   modelCatalogError: string | undefined;
+  environmentWritable: boolean;
   onApply: (scope: SettingsScope, changes: SettingChange[]) => Promise<boolean>;
 }) {
   const controlId = useId();
   const row = rowFor(field, snapshot);
   const scoped = scope === "global" ? row.global : row.project;
   const displayed = scoped ?? row.effective ?? field.default;
-  const writable = !field.managed && (scope === "global" || snapshot.projectTrust.writable);
+  const writable = environmentWritable && !field.managed && (scope === "global" || snapshot.projectTrust.writable);
   const section = catalog.sections.find((s) => s.id === field.section);
   const provider = String(getAtPath(snapshot.effective, "defaultProvider") ?? modelCatalog.defaultProvider ?? "");
 

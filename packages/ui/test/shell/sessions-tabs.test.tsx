@@ -8,7 +8,7 @@
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AssistantRuntimeProvider, useExternalStoreRuntime, useRemoteThreadListRuntime, type RemoteThreadListAdapter } from "@assistant-ui/react";
+import { AssistantRuntimeProvider, useExternalStoreRuntime, useRemoteThreadListRuntime, type RemoteThreadListAdapter, type ThreadMessageLike } from "@assistant-ui/react";
 import type { SessionSummary } from "@lasercode/protocol";
 
 import { SessionsPanel } from "../../src/components/shell/SessionsPanel.js";
@@ -25,14 +25,14 @@ import { toThreadMetadata } from "../../src/runtime/threadList.js";
 import { initialState, reduce, type AppState } from "../../src/store.js";
 import { run, snapshot, summary } from "../agents/fixtures.js";
 import { DEVICE_KEYS } from "../../src/runtime/device-storage.js";
-import { activateTestEnvironment, seedDeviceValue } from "../../test/runtime/environment-fixture.js";
+import { activateTestEnvironment, seedDeviceValue, testDescriptor } from "../../test/runtime/environment-fixture.js";
 
 const stable = vi.hoisted(() => ({
   projects: ["/one", "/two"],
   currentProject: "/one",
   setCurrentProject: vi.fn(),
   dispatch: vi.fn(),
-  actions: { toast: vi.fn(), removeProject: vi.fn(), newSession: vi.fn(async () => "/state/chat/new.jsonl"), openSession: vi.fn(async () => undefined), goTab: vi.fn(async () => undefined) },
+  actions: { toast: vi.fn(), removeProject: vi.fn(), newSession: vi.fn(async () => "/state/chat/new.jsonl"), openSession: vi.fn(async (_path?: string) => undefined), goTab: vi.fn(async () => undefined) },
   archive: { add: vi.fn(), has: () => false },
   client: { request: vi.fn(async () => ({ hits: [], unreadable: 0 })) },
 }));
@@ -66,9 +66,9 @@ const adapter: RemoteThreadListAdapter = {
   rename: async () => {}, archive: async () => {}, unarchive: async () => {}, delete: async () => {},
   generateTitle: async () => { throw new Error("Not used"); },
 };
-function useEmptyRuntime() { return useExternalStoreRuntime({ messages: [], isRunning: false, onNew: async () => {} }); }
+function useEmptyRuntime() { return useExternalStoreRuntime({ convertMessage: (message: ThreadMessageLike) => message, messages: [] as ThreadMessageLike[], isRunning: false, onNew: async () => {} }); }
 const shell: ShellContextValue = {
-  layout: "desktop", sessionsOpen: true, telemetryOpen: false, setSessionsOpen: () => {}, setTelemetryOpen: () => {}, toggleSessions: () => {}, toggleTelemetry: () => {},
+  layout: "desktop", sessionsOpen: true, fleetOpen: false, telemetryOpen: false, setSessionsOpen: () => {}, setFleetOpen: () => {}, setTelemetryOpen: () => {}, toggleSessions: () => {}, toggleFleet: () => {}, toggleTelemetry: () => {},
   historyOpen: false, setHistoryOpen: () => {}, openHistory: () => {}, toolsOpen: false, setToolsOpen: () => {}, addProjectOpen: false, setAddProjectOpen: () => {},
   newSession: async () => {}, canCreate: true, showChat: () => {}, returnToChat: () => {},
 };
@@ -96,7 +96,7 @@ let store: StateStore;
 const seed = (): AppState => {
   let state = reduce(initialState, { type: "agents/loaded", snapshot: snapshot() });
   state = reduce(state, { type: "sessions", sessions });
-  state = { ...state, connection: "open" };
+  state = { ...state, connection: "open", environment: testDescriptor() };
   for (const r of runs) state = reduce(state, { type: "agents/run", run: r });
   return state;
 };
@@ -109,6 +109,8 @@ beforeEach(() => {
   sessionsList.reset();
   stable.actions.openSession.mockClear();
   stable.actions.goTab.mockClear();
+  stable.actions.newSession.mockClear();
+  stable.client.request.mockClear();
   stable.setCurrentProject.mockClear();
   stable.dispatch.mockClear();
   sessionFolds.reset();
@@ -225,6 +227,27 @@ describe("sessions panel tabs", () => {
 });
 
 describe("Beam and children in the Code tab", () => {
+  it("keeps session and Beam reads while hiding every local-only lifecycle entry", async () => {
+    store.dispatch({ type: "environment", environment: testDescriptor({ actor: { class: "local_browser", id: "browser" }, localOnly: ["session/new", "pi/session/rename", "pi/session/delete", "pi/session/move", "agents/runs/stop"] }) });
+    await mount();
+    expect(rowTitled("Ship the release")).toBeDefined();
+    expect(rowTitled("Why is the dock empty")).toBeDefined();
+    expect(container.querySelector('[data-slot="new-session"]')).toBeNull();
+    expect(container.querySelector('[aria-label="New Beam chat"]')).toBeNull();
+    const rootRow = rowTitled("Ship the release")!;
+    await act(async () => rootRow.querySelector<HTMLElement>('[data-slot="aui_thread-list-item-trigger"]')!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
+    expect(rootRow.querySelector("input")).toBeNull();
+    let menu = await openMenu("Actions for explorer");
+    expect(menu?.textContent).not.toMatch(/Rename|Delete|Move|End agent/);
+    await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    menu = await openMenu("Actions for Ship the release");
+    expect(menu?.textContent).not.toMatch(/Rename|Delete|Move|End agent/);
+    await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "n", ctrlKey: true, bubbles: true })));
+    expect(stable.actions.newSession).not.toHaveBeenCalled();
+    expect(endRequest).toBeFalsy();
+    expect(stable.client.request).not.toHaveBeenCalled();
+  });
+
   it("lists Beam as a spark-marked group after the projects and marks its rows", async () => {
     await mount();
     const groups = [...container.querySelectorAll<HTMLElement>("section[data-cwd]")];

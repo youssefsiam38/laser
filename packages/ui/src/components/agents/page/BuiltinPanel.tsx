@@ -29,12 +29,20 @@ export interface BuiltinPanelProps {
   snapshot: AgentsSnapshot;
   /** Where host work is routed: the project, or the Beam workspace when none is open. */
   routeCwd: string | undefined;
+  writable?: boolean;
 }
 
-export function BuiltinPanel({ name, snapshot, routeCwd }: BuiltinPanelProps) {
+export function BuiltinPanel({ name, snapshot, routeCwd, writable = true }: BuiltinPanelProps) {
   const definition = snapshot.agents.find((agent) => agent.name === name);
-  return (
+  if (!writable) return (
     <div className="mx-auto flex w-full max-w-180 flex-col gap-4 px-4 py-5 md:px-6">
+      <AgentCard name={agentDisplayName(name)} eyebrow="Built in" icon={<AgentMarkIcon mark={name} />} description={definition?.description ?? "Built-in agent"} facts={definition?.model ? [{ label: "model", value: definition.model.id }] : []} />
+      {definition?.instructions ? <p className="whitespace-pre-wrap text-sm leading-6 text-ink-2">{definition.instructions}</p> : null}
+      <Hint>Built-in agents cannot be deleted; their system instructions and model are yours to choose.</Hint>
+    </div>
+  );
+  return (
+    <div aria-readonly={!writable || undefined} inert={!writable || undefined} className={`mx-auto flex w-full max-w-180 flex-col gap-4 px-4 py-5 md:px-6 ${writable ? "" : "[&_button]:hidden"}`}>
       {name === "beam" ? (
         <BeamCard snapshot={snapshot} routeCwd={routeCwd} />
       ) : name === "namer" ? (

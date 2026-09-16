@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Check, ChevronRight, ChevronsUpDown, Eye, Loader2, Mic2, RefreshCw, Sparkles } from "lucide-react";
 
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
+import { CapabilityNotice } from "@/components/capability-gate";
 import { DataTable, type DataTableColumn } from "@/components/assistant-ui/elements/data-table";
 import { modelProvenance, ProviderFilterField, ProviderModelMultiPicker } from "@/components/assistant-ui/elements/model-selector";
 import { ProviderLogo } from "@/components/assistant-ui/elements/logos";
@@ -35,7 +36,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { money, tokens } from "@/format";
 import { cn } from "@/lib/utils";
-import { useLaserStable } from "@/runtime";
+import { useCapability, useLaserStable } from "@/runtime";
 import type {
   ModelCatalogEntry,
   ProviderAuthInfo,
@@ -80,21 +81,26 @@ export interface ModelsTabProps {
 }
 
 export function ModelsTab(props: ModelsTabProps) {
+  const webSearch = useCapability("web-search/status");
+  const settingsWrite = useCapability("pi/settings/set", { presentation: "explained" });
+  const searchWrite = useCapability("web-search/configure", { presentation: "explained" });
   return (
     <Tabs.Root defaultValue="models" className="flex h-full min-h-0 flex-col">
       <Tabs.List aria-label="Provider settings" className="flex shrink-0 gap-1 border-b border-line px-4 py-2">
         <Tabs.Trigger value="models" asChild><Button variant="ghost" size="sm" className="data-[state=active]:bg-surface-2">Models and dictation</Button></Tabs.Trigger>
         <Tabs.Trigger value="fallback" asChild><Button variant="ghost" size="sm" className="data-[state=active]:bg-surface-2">Fallback chains</Button></Tabs.Trigger>
-        <Tabs.Trigger value="search" asChild><Button variant="ghost" size="sm" className="data-[state=active]:bg-surface-2">Web search</Button></Tabs.Trigger>
+        {webSearch.state === "available" ? <Tabs.Trigger value="search" asChild><Button variant="ghost" size="sm" className="data-[state=active]:bg-surface-2">Web search</Button></Tabs.Trigger> : null}
       </Tabs.List>
-      <Tabs.Content value="models" className="min-h-0 flex-1"><ModelConnectionsTab {...props} /></Tabs.Content>
-      <Tabs.Content value="fallback" className="min-h-0 flex-1"><FallbackChainsTab {...props} /></Tabs.Content>
-      <Tabs.Content value="search" className="min-h-0 flex-1"><WebSearchTab key={props.cwd} cwd={props.cwd} /></Tabs.Content>
+      <Tabs.Content value="models" className="min-h-0 flex-1"><ModelConnectionsTab {...props} decision={settingsWrite} /></Tabs.Content>
+      <Tabs.Content value="fallback" className="min-h-0 flex-1"><FallbackChainsTab {...props} decision={settingsWrite} /></Tabs.Content>
+      {webSearch.state === "available" ? <Tabs.Content value="search" className="min-h-0 flex-1"><WebSearchTab key={props.cwd} cwd={props.cwd} decision={searchWrite} /></Tabs.Content> : null}
     </Tabs.Root>
   );
 }
 
-function ModelConnectionsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
+function ModelConnectionsTab({ cwd, snapshot, onApply, decision }: ModelsTabProps & { decision: import("@/runtime/environment-capabilities").CapabilityDecision }) {
+  const writable = decision.state === "available";
+  const readOnlyExplanation = decision.state === "explained" ? decision.explanation : undefined;
   const { client } = useLaserStable();
   const [providers, setProviders] = useState<ProviderAuthInfo[]>([]);
   const [dictation, setDictation] = useState<TranscribeStatus>();
@@ -314,6 +320,7 @@ function ModelConnectionsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
   return (
     <ScrollArea className="h-full">
       <div className="mx-auto flex max-w-240 flex-col gap-5 px-4 py-4">
+        {!writable && readOnlyExplanation ? <CapabilityNotice explanation={readOnlyExplanation} /> : null}
         <section className="flex flex-col gap-2">
           <div className="flex items-center gap-2">
             <h2 className="text-sm font-semibold text-ink">Providers</h2>
@@ -329,8 +336,8 @@ function ModelConnectionsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
             </Button>
           </div>
           <p className="text-xs leading-5 text-ink-2">
-            Which providers are signed in, and how. Pick one to sign in with an account or an API key, or to sign out.
-            {" "}{PRODUCT_DISPLAY_NAME} never reads the credential itself.
+            Which providers are signed in, and how. {writable ? "Pick one to sign in with an account or an API key, or to sign out. " : "Provider changes must be made from a connection with settings access. "}
+            {PRODUCT_DISPLAY_NAME} never reads the credential itself.
           </p>
           <ProviderStep cwd={cwd} onConfigured={handleProviderConfigured} />
           <div className="flex items-start gap-3 rounded-xl border border-line bg-surface px-3 py-3">
@@ -425,7 +432,7 @@ function ModelConnectionsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
               <ProviderModelMultiPicker
                 models={models}
                 values={patterns ?? []}
-                disabled={snapshot === undefined}
+                disabled={!writable || snapshot === undefined}
                 onValuesChange={(value) =>
                   void onApply(listScope, [
                     value.length === 0
@@ -439,7 +446,7 @@ function ModelConnectionsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
               {patterns && patterns.length > 0 && (
                 <div className="flex flex-wrap items-center gap-1.5">
                   {patterns.map((pattern) => <Badge key={pattern} variant="outline" className="font-mono">{pattern}</Badge>)}
-                  <Button variant="ghost" size="xs" onClick={() => void onApply(listScope, [{ path: "enabledModels", op: "unset" }]).then((ok) => ok && void load(false))}>
+                  <Button variant="ghost" size="xs" disabled={!writable} onClick={() => void onApply(listScope, [{ path: "enabledModels", op: "unset" }]).then((ok) => ok && void load(false))}>
                     Offer every model
                   </Button>
                 </div>
@@ -555,7 +562,7 @@ function ModelConnectionsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
                     variant="ghost"
                     size="xs"
                     className="shrink-0"
-                    disabled={!canEnableAll || providerBusy}
+                    disabled={!writable || !canEnableAll || providerBusy}
                     aria-label={`Enable every ${provider} model`}
                     onClick={() => toggleProvider(provider, true)}
                   >
@@ -565,7 +572,7 @@ function ModelConnectionsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
                     variant="ghost"
                     size="xs"
                     className="shrink-0"
-                    disabled={!canDisableAll || providerBusy}
+                    disabled={!writable || !canDisableAll || providerBusy}
                     aria-label={`Disable every ${provider} model`}
                     onClick={() => toggleProvider(provider, false)}
                   >
@@ -575,7 +582,7 @@ function ModelConnectionsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
                 <CollapsibleContent className="hairline-t">
                   <DataTable
                     caption={`${provider} models, with their switch, context window, thinking levels and startup level`}
-                    columns={modelColumns({ setThinking, offerState, toggleModel, busy, offered })}
+                    columns={modelColumns({ setThinking, offerState, toggleModel, busy, offered, writable })}
                     rows={providerModels}
                     rowKey={(model) => `${model.provider}/${model.id}`}
                     minWidth="46rem"
@@ -614,6 +621,7 @@ interface ModelColumnActions {
   /** `provider/id` keys with a write in flight, and ones switched on from this tab. */
   busy: ReadonlySet<string>;
   offered: ReadonlySet<string>;
+  writable: boolean;
 }
 
 /** Five-word status language for a row the pickers do not show (DESIGN.md, status language). */
@@ -623,7 +631,7 @@ const OFFER_STATE_LABEL: Record<Exclude<ModelOfferState, "offered">, string> = {
   "switched-off": "Switched off",
 };
 
-function modelColumns({ setThinking, offerState, toggleModel, busy, offered }: ModelColumnActions): DataTableColumn<ModelCatalogEntry>[] {
+function modelColumns({ setThinking, offerState, toggleModel, busy, offered, writable }: ModelColumnActions): DataTableColumn<ModelCatalogEntry>[] {
   return [
     {
       key: "switch",
@@ -639,7 +647,7 @@ function modelColumns({ setThinking, offerState, toggleModel, busy, offered }: M
         return (
           <SettingsSwitch
             checked={on}
-            disabled={busy.has(key)}
+            disabled={!writable || busy.has(key)}
             aria-busy={busy.has(key) || undefined}
             aria-label={`${on ? "Switch off" : "Switch on"} ${key}`}
             data-slot="model-switch"
@@ -759,6 +767,7 @@ function modelColumns({ setThinking, offerState, toggleModel, busy, offered }: M
         <select
           aria-label={`Startup thinking level for ${model.provider}/${model.id}`}
           value={model.thinkingLevel ?? ""}
+          disabled={!writable}
           onChange={(event) => setThinking(model, event.target.value === "" ? undefined : (event.target.value as ThinkingLevel))}
           className="h-7 rounded-md border border-line bg-surface px-1.5 text-xs text-ink outline-none focus-visible:border-live"
         >

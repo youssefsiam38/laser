@@ -16,7 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Hint, IssueNotice, Section } from "./fields.js";
 import { POLICY_LIMITS, checkRange } from "./model.js";
 
-export function HarnessPanel({ snapshot }: { snapshot: AgentsSnapshot }) {
+export function HarnessPanel({ snapshot, writable = true }: { snapshot: AgentsSnapshot; writable?: boolean }) {
   return (
     <div className="mx-auto flex w-full max-w-180 flex-col gap-6 px-4 py-5 md:px-6">
       <AgentCard
@@ -29,7 +29,7 @@ export function HarnessPanel({ snapshot }: { snapshot: AgentsSnapshot }) {
           { label: "commands", value: `${snapshot.policy.foregroundCommandSeconds} s in the foreground`, typed: true },
         ]}
       />
-      <PolicyField
+      {writable ? <><PolicyField
         id="maxDepth"
         title="Maximum nesting depth"
         description="How many levels of agents may start agents. A top-level session's children are depth 1; their children depth 2. Deeper trees cost more and are harder to follow."
@@ -44,7 +44,7 @@ export function HarnessPanel({ snapshot }: { snapshot: AgentsSnapshot }) {
         unit="seconds"
         limits={POLICY_LIMITS.foregroundCommandSeconds}
         value={snapshot.policy.foregroundCommandSeconds}
-      />
+      /></> : null}
     </div>
   );
 }

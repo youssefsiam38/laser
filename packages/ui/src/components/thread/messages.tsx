@@ -49,7 +49,7 @@ import { isReadable, omittedBytes } from "@/runtime/body-excerpt";
 import { partial } from "./LargeBodyViewer.js";
 import { duration as formatDuration } from "@/format";
 import { cn } from "@/lib/utils";
-import { NOTICE_DATA_PART, sessionTitle, useLaserStable, useLaserState } from "@/runtime";
+import { NOTICE_DATA_PART, sessionTitle, useCapability, useLaserStable, useLaserState } from "@/runtime";
 import { leafOf, userEntryAt, versionsOf } from "./entries.js";
 import { THINKING_LEVELS, useSupportedThinkingLevels } from "@/components/assistant-ui/elements/reasoning-effort";
 import { useElapsed } from "./timing.js";
@@ -216,6 +216,9 @@ export function UserMessage() {
   const setSending = (sending: boolean) => editOwner.update({ sending });
   const { editRefusal, rebuildForEdit, releaseEditRoom, rebuiltFiles, editAttempt } = usePromptEdit({ path, setDraft, setEditing, editOwner });
   const [requestOpen, setRequestOpen] = useState(false);
+  const navigateCapability = useCapability("pi/session/navigate");
+  const forkCapability = useCapability("pi/session/fork");
+  const promptCapability = useCapability("session/prompt");
   useLayoutEffect(() => editing || requestOpen ? viewport.pin(id) : undefined, [viewport, id, editing, requestOpen]);
   const requestAt = useAuiState(s => s.message.createdAt?.toISOString());
   const nextRequestAt = useAuiState(s => s.thread.messages.slice(s.message.index + 1).find(m => m.role === "user")?.createdAt?.toISOString());
@@ -388,7 +391,7 @@ export function UserMessage() {
           </ExcerptedMessage>
         )}
         <MessageFooter className="ms-0 me-0 h-auto min-h-6 justify-end">
-          <MessageBranches
+          {navigateCapability.state === "available" ? <MessageBranches
             {...(versionIndex >= 0 ? { index: versionIndex } : {})}
             count={versions.length}
             busy={busy}
@@ -406,7 +409,7 @@ export function UserMessage() {
                 });
               }
             }}
-          />
+          /> : null}
           <MessageActions
             onLoadHistory={partialHistory && !wholeTranscript.paused ? () => void actions.loadAllEntries() : undefined}
             loadHistoryRefusal={partialHistory ? wholeTranscript.explanation : undefined}
@@ -414,9 +417,9 @@ export function UserMessage() {
             copied={copied || copiedPartial}
             copyLabel={copying ? "Copying the whole message…" : copiedPartial ? "Copied what is shown" : undefined}
             onCopy={() => void copyMessage()}
-            onEdit={startEdit}
-            onFork={fork}
-            onJump={jump}
+            onEdit={promptCapability.state === "available" ? startEdit : undefined}
+            onFork={forkCapability.state === "available" ? fork : undefined}
+            onJump={navigateCapability.state === "available" ? jump : undefined}
             onCopyPath={copyPath}
             onViewRequest={path ? () => setRequestOpen(true) : undefined}
             busy={busy}
@@ -701,6 +704,10 @@ function AssistantFooter() {
   // Only what this model accepts (R2). Unknown yet → offer them all.
   const supported = useSupportedThinkingLevels();
   const thinkingLevels = supported ?? THINKING_LEVELS;
+  const navigateCapability = useCapability("pi/session/navigate");
+  const forkCapability = useCapability("pi/session/fork");
+  const promptCapability = useCapability("session/prompt");
+  const canRegenerate = navigateCapability.state === "available" && forkCapability.state === "available" && promptCapability.state === "available";
 
   const promptOrdinal = useAuiState((s) => laserMeta(s.message).prompt?.ordinal);
   const stampedEntryId = useAuiState((s) => laserMeta(s.message).prompt?.entryId);
@@ -739,11 +746,11 @@ function AssistantFooter() {
         copyLabel={copying ? "Copying the whole reply…" : copiedPartial ? "Copied what is shown" : undefined}
         onCopy={() => void copyMessage()}
         onCopyPath={path ? () => void copy(path) : undefined}
-        onRegenerate={promptEntryId ? () => void rerun("here") : undefined}
-        onRegenerateFork={promptEntryId ? () => void rerun("fork") : undefined}
+        onRegenerate={canRegenerate && promptEntryId ? () => void rerun("here") : undefined}
+        onRegenerateFork={canRegenerate && promptEntryId ? () => void rerun("fork") : undefined}
         busy={busy}
         regenerate={
-          promptEntryId ? (
+          canRegenerate && promptEntryId ? (
             <RegenerateMenu
               loadModels={actions.listModels}
               thinkingLevels={thinkingLevels}

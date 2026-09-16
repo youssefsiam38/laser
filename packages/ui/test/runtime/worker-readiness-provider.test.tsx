@@ -10,7 +10,7 @@ vi.mock("../../src/client.js", async (original) => ({
 import { LaserProvider, useLaserStable } from "../../src/runtime/LaserProvider.js";
 import { sessionsList } from "../../src/components/shell/session-groups.js";
 import { addSession, createWorld, FakeHostClient, settle, type World } from "../beam/fake-host.js";
-import { seedProject } from "./environment-fixture.js";
+import { seedProject, testDescriptor } from "./environment-fixture.js";
 
 let root: Root;
 let container: HTMLDivElement;
@@ -48,6 +48,15 @@ it("catalog/default selection alone never prepares, but explicit selection does"
 it("an explicit group expansion prepares its project and collapse does not", async () => {
   await mount(); sessionsList.toggleCollapsed("/q"); await settle(200); expect(hints()).toEqual([]);
   sessionsList.toggleCollapsed("/q"); await vi.waitFor(() => expect(hints()).toEqual([{ cwd: "/q" }]));
+});
+it("skips remembered, selected and expanded prewarm under authenticated denial", async () => {
+  FakeHostClient.environment = testDescriptor({ actor: { class: "local_browser", id: "browser" }, localOnly: ["pi/worker/prepare"] });
+  seedProject("/q");
+  await mount();
+  select("/p");
+  sessionsList.toggleCollapsed("/q");
+  await settle(250);
+  expect(hints()).toEqual([]);
 });
 it("unmount cancels a pending readiness hint", async () => {
   await mount(); select("/q"); root.render(null); await settle(250); expect(hints()).toEqual([]);

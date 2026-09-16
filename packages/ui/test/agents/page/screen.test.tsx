@@ -104,12 +104,13 @@ import { AgentsButton } from "../../../src/components/agents/page/AgentsButton.j
 import { TooltipProvider } from "../../../src/components/ui/tooltip.js";
 import { WorkbenchProvider, useWorkbench, type AgentsTarget } from "../../../src/components/workbench/index.js";
 import { LaserStoreProvider, createStateStore, type StateStore } from "../../../src/runtime/LaserProvider.js";
+import { testDescriptor } from "../../runtime/environment-fixture.js";
 
 let container: HTMLDivElement;
 let root: Root;
 let store: StateStore;
 
-const seed = (snap: AgentsSnapshot): AppState => reduce(initialState, { type: "agents/loaded", snapshot: snap });
+const seed = (snap: AgentsSnapshot): AppState => ({ ...reduce(initialState, { type: "agents/loaded", snapshot: snap }), environment: testDescriptor() });
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -180,6 +181,22 @@ const settle = (ms = 30) => act(async () => new Promise((resolve) => setTimeout(
 const row = (name: string) => q(`[data-slot="agent-row"][data-agent="${name}"]`);
 
 describe("Agents page", () => {
+  it("keeps definitions readable and hides every settings-denied editor and policy control", async () => {
+    store.dispatch({ type: "environment", environment: testDescriptor({ actor: { class: "paired_device", id: "phone" }, scopes: ["handshake", "read", "diagnostics"] }) });
+    await mount();
+    await click(row("reviewer"));
+    expect(container.textContent).toContain("Reviews a diff");
+    expect(container.textContent).toContain("read these settings");
+    expect([...document.querySelectorAll("button")].map((item) => item.textContent).join(" ")).not.toMatch(/Save|Delete|Make default|Create agent/);
+    await click(row("beam"));
+    expect(container.textContent).toContain("Built-in agents cannot be deleted");
+    expect([...container.querySelectorAll("button")].map((item) => item.textContent).join(" ")).not.toMatch(/Save instructions|Choose model|Restore built-in/);
+    await click(q('[data-slot="harness-row"]'));
+    expect(container.textContent).toContain("Limits for every agent");
+    expect(container.querySelector("input")).toBeNull();
+    for (const method of ["save", "remove", "setDefault", "setPolicy", "setBuiltinModel", "setBuiltinInstructions"]) expect((mocks.agents as Record<string, { mock: { calls: unknown[] } }>)[method]?.mock.calls ?? []).toHaveLength(0);
+  });
+
   it("lists your agents first and the built-ins at the bottom, with the default and warning badges", async () => {
     store = createStateStore(seed(snapshot({ warnings: [{ agentName: "reviewer", field: "skills", target: "deploy", message: "The skill deploy could not be found.", since: "2026-09-08T00:00:00.000Z" }] })));
     mocks.state.store = store;

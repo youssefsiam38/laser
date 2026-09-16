@@ -45,7 +45,7 @@ const stable = vi.hoisted(() => ({
   client: { request: vi.fn(async () => ({ hits: [], unreadable: 0 })) },
 }));
 stable.actions.agents.worktreeStatus = worktreeStatus;
-vi.mock("@/runtime", async (importActual) => ({ ...(await importActual<typeof import("../../src/runtime/index.js")>()), useLaserStable: () => stable }));
+vi.mock("@/runtime", async (importActual) => ({ ...(await importActual<typeof import("../../src/runtime/index.js")>()), useCapability: () => ({ state: "available" }), useLaserStable: () => stable }));
 
 const sessions: SessionSummary[] = [
   summary({

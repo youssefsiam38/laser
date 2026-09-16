@@ -25,7 +25,7 @@ import { requestEndAgent } from "@/components/agents";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
 import { useShellOptional } from "@/components/shell/shell-context";
-import { useLaserStable, useLaserState, useLaserView } from "@/runtime";
+import { useCapability, useLaserStable, useLaserState, useLaserView } from "@/runtime";
 
 import { MapHostProvider, type MapHost } from "./map-context.js";
 import { mapUi } from "./map-state.js";
@@ -79,6 +79,7 @@ export function AgentMapConnected({ rootPath, frame, focusPath, chrome = true }:
     load();
   }, [rootPath, load]);
 
+  const stopCapability = useCapability("agents/runs/stop");
   const host = useMemo<MapHost>(
     () => ({
       frame,
@@ -87,11 +88,11 @@ export function AgentMapConnected({ rootPath, frame, focusPath, chrome = true }:
         mapUi.setOpen(false);
         void actions.openSession(path);
       },
-      requestEndAgent,
+      ...(stopCapability.state === "available" ? { requestEndAgent } : {}),
       openFullscreen: () => mapUi.setFullscreen(true),
       closeFullscreen: () => mapUi.setFullscreen(false),
     }),
-    [actions, frame, rootPath],
+    [actions, frame, rootPath, stopCapability.state],
   );
 
   if (!tree) return null;

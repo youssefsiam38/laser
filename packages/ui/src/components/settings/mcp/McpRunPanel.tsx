@@ -19,7 +19,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { SettingsSwitch } from "@/components/assistant-ui/elements/settings-panel";
-import { useLaserStable } from "@/runtime";
+import { useCapability, useLaserStable } from "@/runtime";
+import { CapabilityNotice } from "@/components/capability-gate";
 
 import { selectClass } from "../fields.js";
 import { buildArgs, contentDataUri, initialArgValues, schemaFields, schemaToShape, type ArgValues } from "./model.js";
@@ -36,6 +37,7 @@ export function McpRunPanel({
   inspection: McpInspection;
 }) {
   const { client } = useLaserStable();
+  const execution = useCapability("mcp/call", { presentation: "explained" });
   const [tool, setTool] = useState<string | undefined>(inspection.tools[0]?.originalName);
   const [values, setValues] = useState<ArgValues>({});
   const [running, setRunning] = useState(false);
@@ -150,12 +152,16 @@ export function McpRunPanel({
         {!fields.length && <p className="text-sm leading-6 text-ink-2">This tool takes no arguments.</p>}
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" disabled={running} onClick={() => void run()}>
-          <Play aria-hidden="true" /> Run it
-        </Button>
-        {running && <GenerationLoader label="Running" layout="inline" />}
-      </div>
+      {execution.state === "available" ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" disabled={running} onClick={() => void run()}>
+            <Play aria-hidden="true" /> Run it
+          </Button>
+          {running && <GenerationLoader label="Running" layout="inline" />}
+        </div>
+      ) : execution.state === "explained" ? (
+        <CapabilityNotice title="Running MCP tools is unavailable here" explanation={execution.explanation ?? "Use a connection with execution access to run this tool."} />
+      ) : null}
 
       {error && (
         <p role="alert" className="text-sm leading-6 text-danger">

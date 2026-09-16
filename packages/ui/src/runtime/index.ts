@@ -136,6 +136,7 @@ export {
   LaserThreadScope,
   useExtensionUi,
   useHostUiRequests,
+  useCapability,
   useLaser,
   useLaserStable,
   useLaserState,
@@ -162,6 +163,16 @@ export {
   type Toasts,
   type WholeTranscriptRefusal,
 } from "./LaserProvider.js";
+
+export {
+  capabilityError,
+  capabilityFor,
+  type CapabilityDecision,
+  type CapabilityPresentation,
+  type CapabilityRequirements,
+  type CapabilityState,
+  type EnvironmentCapability,
+} from "./environment-capabilities.js";
 
 export {
   DELIVERY_FALLBACK_MS,

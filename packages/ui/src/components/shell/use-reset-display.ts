@@ -4,11 +4,12 @@ import type { ResetDisplay } from "./account-allowance.js";
 
 const NAMESPACE = "account-usage-display";
 /** Stored by the host on this machine, not in provider settings or a session. */
-export function useResetDisplay(client: Pick<HostClient, "request" | "subscribe">) {
+export function useResetDisplay(client: Pick<HostClient, "request" | "subscribe">, access: { read: boolean; write: boolean } = { read: true, write: true }) {
   const [display, setDisplay] = useState<ResetDisplay>("remaining");
   const [saveError, setSaveError] = useState(false);
   const revision = useRef(0);
   useEffect(() => {
+    if (!access.read) return undefined;
     let live = true;
     const start = revision.current;
     const adopt = (value: unknown) => {
@@ -27,11 +28,12 @@ export function useResetDisplay(client: Pick<HostClient, "request" | "subscribe"
       adopt(entry.value);
     });
     return () => { live = false; off(); };
-  }, [client]);
+  }, [access.read, client]);
   const choose = (resetDisplay: ResetDisplay) => {
     const edit = ++revision.current;
     setDisplay(resetDisplay);
     setSaveError(false);
+    if (!access.write) return;
     void client.request("pi/prefs/set", { namespace: NAMESPACE, value: { resetDisplay } }).catch(() => {
       if (edit === revision.current) setSaveError(true);
     });

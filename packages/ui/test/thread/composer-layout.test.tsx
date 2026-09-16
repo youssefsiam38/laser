@@ -6,6 +6,7 @@ import {
   AssistantRuntimeProvider,
   useExternalStoreRuntime,
   type DictationAdapter,
+  type ThreadMessageLike,
 } from "@assistant-ui/react";
 
 import { view as makeView } from "../agents/fixtures.js";
@@ -48,7 +49,7 @@ vi.mock("@/components/assistant-ui/elements/context-display", () => ({
 vi.mock("@/components/assistant-ui/elements/draft-restore", () => ({ ComposerDraftRestore: () => null }));
 vi.mock("@/components/assistant-ui/elements/message-queue", () => ({ ComposerQueue: () => null }));
 vi.mock("@/components/assistant-ui/elements/quote.aui", () => ({ ComposerQuotePreview: () => null, quoteAsMarkdown: (text: string) => text }));
-vi.mock("@/components/assistant-ui/elements/composer-trigger-popover.aui", () => ({ ComposerTriggerPopover: () => null }));
+vi.mock("@/components/assistant-ui/elements/composer-trigger-popover.aui", () => ({ ComposerTriggerPopover: ({ char, adapter }: { char: string; adapter: { search?: (query: string) => Array<{ label?: string }> } }) => char === "/" ? <div data-slot="slash-items">{adapter.search?.("").map((item) => item.label).join(" ")}</div> : null }));
 vi.mock("@/components/thread/StatusLine.js", () => ({ StatusLine: () => null }));
 vi.mock("@/components/thread/session-preparation.js", () => ({
   SessionPreparationProvider: ({ children }: { children: ReactNode }) => children,
@@ -108,6 +109,9 @@ vi.mock("@/pwa", async (importActual) => {
 
 import { Composer } from "../../src/components/thread/Composer.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
+import { createStateStore, LaserStoreProvider, type StateStore } from "../../src/runtime/LaserProvider.js";
+import { initialState } from "../../src/store.js";
+import { testDescriptor } from "../runtime/environment-fixture.js";
 
 const speechStarts = new Set<() => void>();
 const speech = new Set<(result: DictationAdapter.Result) => void>();
@@ -140,16 +144,18 @@ const dictation: DictationAdapter = {
 
 function Fixture() {
   const runtime = useExternalStoreRuntime({
-    messages: [],
+    convertMessage: (message: ThreadMessageLike) => message,
+    messages: [] as ThreadMessageLike[],
     isRunning: false,
     onNew: async () => {},
     adapters: { dictation },
   });
-  return <AssistantRuntimeProvider runtime={runtime}><TooltipProvider><Composer /></TooltipProvider></AssistantRuntimeProvider>;
+  return <LaserStoreProvider store={store}><AssistantRuntimeProvider runtime={runtime}><TooltipProvider><Composer /></TooltipProvider></AssistantRuntimeProvider></LaserStoreProvider>;
 }
 
 let container: HTMLDivElement;
 let root: Root;
+let store: StateStore;
 const render = async () => act(async () => root.render(<Fixture />));
 const input = () => container.querySelector<HTMLTextAreaElement>("textarea")!;
 const dictate = () => container.querySelector<HTMLElement>('[data-slot="dictate"]');
@@ -167,6 +173,7 @@ beforeEach(async () => {
   mocks.phase = "idle"; mocks.error = undefined; mocks.currentProject = "/project";
   mocks.toast.mockReset(); mocks.clearError.mockReset(); mocks.client.request.mockReset().mockResolvedValue({ commands: [] });
   mocks.clearQueue.mockReset().mockResolvedValue(""); activeSession = undefined;
+  store = createStateStore({ ...initialState, environment: testDescriptor() });
   const view = makeView({ path: "/state/session.jsonl" });
   mocks.view = { ...view, capabilities: ["transcribe"] };
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
@@ -223,6 +230,41 @@ describe("the production composer layout", () => {
     mocks.phase = "starting"; await render();
     expect(container.querySelector<HTMLButtonElement>('[aria-label="Dictate a message"]')!.disabled).toBe(true);
     expect(input().value).toBe("Keep editing dictated");
+  });
+
+  it.each([
+    testDescriptor({ actor: { class: "paired_device", id: "phone" }, scopes: ["handshake", "read", "diagnostics"] }),
+    testDescriptor({ actor: { class: "local_browser", id: "browser" }, localOnly: ["session/prompt"] }),
+  ])("replaces every composer action with one guardrail when prompt authority is denied", async (environment) => {
+    store.dispatch({ type: "environment", environment });
+    await render();
+    expect(container.textContent).toContain("This conversation is read-only here");
+    expect(input()).toBeNull();
+    expect(dictate()).toBeNull();
+    expect(container.querySelector('[aria-label^="Model:"]')).toBeNull();
+    expect(container.querySelector('[aria-label^="Thinking:"]')).toBeNull();
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true }));
+    });
+    expect(mocks.client.request.mock.calls.filter(([method]) => method === "session/prompt" || String(method).startsWith("pi/transcribe/"))).toHaveLength(0);
+  });
+
+  it("removes the /project command when project setup is local-only", async () => {
+    store.dispatch({ type: "environment", environment: testDescriptor({ actor: { class: "local_browser", id: "browser" }, localOnly: ["pi/project/add"] }) });
+    await render();
+    expect(container.querySelector('[data-slot="slash-items"]')?.textContent).toContain("/compact");
+    expect(container.querySelector('[data-slot="slash-items"]')?.textContent).not.toContain("/project");
+    expect(mocks.client.request.mock.calls.filter(([method]) => method === "pi/project/add")).toHaveLength(0);
+  });
+
+  it("turns an already visible composer read-only in the same render without leaking a request", async () => {
+    expect(input()).not.toBeNull();
+    await act(async () => store.dispatch({ type: "environment", environment: testDescriptor({ actor: { class: "paired_device", id: "phone" }, scopes: ["handshake", "read"] }) }));
+    expect(input()).toBeNull();
+    expect(container.textContent).toContain("This conversation is read-only here");
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(mocks.client.request.mock.calls.filter(([method]) => method === "session/prompt")).toHaveLength(0);
   });
 
   it("uses the actual blocked, no-model and no-microphone branches", async () => {

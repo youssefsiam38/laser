@@ -74,7 +74,7 @@ export function createEnvironmentLifecycle(deps: EnvironmentLifecycleDeps): Envi
         return { ok: false, reason: result.reason };
       }
       if (result.kind === "switched" || result.kind === "narrowed") forget();
-      deps.dispatch({ type: "environment", environment: { environmentKey: result.environmentKey } });
+      deps.dispatch({ type: "environment", environment: descriptor });
       // Device storage only opens here, so this is the first moment the
       // remembered destination can be read at all.
       deps.restoreDestination();

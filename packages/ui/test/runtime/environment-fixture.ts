@@ -37,6 +37,9 @@ export function testDescriptor(overrides: {
   capabilities?: Partial<EnvironmentCapabilities>;
   cache?: Partial<CachePolicy>;
   deployment?: EnvironmentDescriptor["deployment"];
+  actor?: EnvironmentDescriptor["actor"];
+  scopes?: EnvironmentDescriptor["scopes"];
+  localOnly?: EnvironmentDescriptor["localOnly"];
   contract?: string;
   version?: string;
 } = {}): EnvironmentDescriptor {
@@ -45,11 +48,11 @@ export function testDescriptor(overrides: {
     version: overrides.version ?? PRODUCT_VERSION,
     environmentKey: overrides.environmentKey ?? TEST_ENVIRONMENT_KEY,
     deployment: overrides.deployment ?? "local",
-    actor: { class: "local_browser", id: "l1.browser" },
+    actor: overrides.actor ?? { class: "local_browser", id: "l1.browser" },
     capabilities: { ...FULL_CAPABILITIES, ...overrides.capabilities },
     cache: { ...DEFAULT_CACHE_POLICY, ...overrides.cache },
-    scopes: [...METHOD_SCOPES],
-    localOnly: [],
+    scopes: overrides.scopes ?? [...METHOD_SCOPES],
+    localOnly: overrides.localOnly ?? [],
   };
 }
 

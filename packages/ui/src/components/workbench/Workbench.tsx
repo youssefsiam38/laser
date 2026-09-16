@@ -13,7 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { shortCwd } from "@/format";
 import { cn } from "@/lib/utils";
-import { useLaserStable, useLaserState } from "@/runtime";
+import { useCapability, useLaserStable, useLaserState } from "@/runtime";
 
 import { useWorkbench, type WorkbenchPage } from "./workbench-context.js";
 
@@ -37,28 +37,31 @@ const PAGE_LABEL: Record<WorkbenchPage, string> = { settings: "Settings", agents
 export function Workbench() {
   const { page, tab: settingsTab, agents: agentsTarget, open, close } = useWorkbench();
   const { currentProject } = useLaserStable();
+  const logs = useCapability("pi/logs/query");
+  const visibleTabs = logs.state === "available" ? TABS : TABS.filter((tab) => tab.id !== "logs");
   // The project directory, not the session: reading the view re-rendered the
   // workbench for every streamed token (M16-T32).
   const sessionCwd = useLaserState(s => (s.current ? s.open[s.current]?.state.cwd : undefined));
   const cwd = currentProject ?? sessionCwd;
 
   if (!page) return null;
+  const shownPage: WorkbenchPage = page === "logs" && logs.state !== "available" ? "settings" : page;
 
   return (
     <section
-      aria-label={PAGE_LABEL[page]}
+      aria-label={PAGE_LABEL[shownPage]}
       className="absolute inset-0 z-30 flex min-w-0 flex-col bg-bg"
     >
       <header className="flex h-12 shrink-0 items-center gap-1 px-2 pt-[env(safe-area-inset-top)] hairline-b">
         <nav className="flex items-center gap-0.5" aria-label="Workbench screens">
-          {TABS.map((tab) => (
+          {visibleTabs.map((tab) => (
             <Button
               key={tab.id}
               variant="ghost"
               size="sm"
               onClick={() => open(tab.id)}
-              aria-current={page === tab.id ? "page" : undefined}
-              className={cn("gap-1.5", page === tab.id && "bg-surface-2 text-ink")}
+              aria-current={shownPage === tab.id ? "page" : undefined}
+              className={cn("gap-1.5", shownPage === tab.id && "bg-surface-2 text-ink")}
             >
               <tab.icon />
               {tab.label}
@@ -83,9 +86,9 @@ export function Workbench() {
 
       <div className="min-h-0 flex-1">
         <Suspense fallback={<ScreenSkeleton />}>
-          {page === "settings" ? (
+          {shownPage === "settings" ? (
             <SettingsScreen cwd={cwd} initialTab={settingsTab} />
-          ) : page === "agents" ? (
+          ) : shownPage === "agents" ? (
             <AgentsScreen cwd={cwd} target={agentsTarget} />
           ) : (
             <LogsScreen cwd={cwd} />

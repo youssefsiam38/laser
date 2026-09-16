@@ -153,6 +153,39 @@ it("does not load or resume sessions until the host release matches", async () =
   client.close();
 });
 
+it("refuses descriptor-denied requests before allocating an id or sending a frame", async () => {
+  const { client } = build();
+  client.connect();
+  const socket = FakeSocket.instances[0]!;
+  socket.accept(PRODUCT_VERSION, testDescriptor({ scopes: ["handshake", "read"] }));
+
+  const before = socket.sent.length;
+  await expect(client.request("pi/settings/set", { scope: "global", changes: [] })).rejects.toThrow(/settings access/i);
+  expect(socket.sent).toHaveLength(before);
+
+  const allowed = client.request("pi/session/list", {});
+  expect(socket.frames().at(-1)).toMatchObject({ id: 1, method: "pi/session/list" });
+  socket.deliver({ jsonrpc: "2.0", id: 1, result: { sessions: [] } });
+  await allowed;
+  client.close();
+});
+
+it("refuses local-only and capability-denied requests without a WebSocket frame", async () => {
+  for (const [descriptor, method, params] of [
+    [testDescriptor({ localOnly: ["pi/settings/get"] }), "pi/settings/get", { cwd: "/work" }],
+    [testDescriptor({ capabilities: { logs: false } }), "pi/logs/query", { limit: 1 }],
+  ] as const) {
+    const { client } = build();
+    client.connect();
+    const socket = FakeSocket.instances.at(-1)!;
+    socket.accept(PRODUCT_VERSION, descriptor);
+    const before = socket.sent.length;
+    await expect(client.request(method, params as never)).rejects.toThrow();
+    expect(socket.sent).toHaveLength(before);
+    client.close();
+  }
+});
+
 it("stops reconnect and resume on a new host version without sending a cancellation", async () => {
   vi.useFakeTimers(); const mismatch = vi.fn();
   const { client } = build({ onVersionMismatch: mismatch });

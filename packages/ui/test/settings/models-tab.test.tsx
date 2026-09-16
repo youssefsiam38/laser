@@ -17,7 +17,7 @@ import type { ModelCatalogEntry, ProviderAuthInfo, SettingChange, SettingsScope,
 const mocks = vi.hoisted(() => ({ request: vi.fn(), toast: vi.fn() }));
 vi.mock("../../src/runtime/index.js", () => {
   const stable = { client: { request: mocks.request, subscribe: () => () => {} }, actions: { toast: mocks.toast } };
-  return { useLaserStable: () => stable };
+  return { useCapability: () => ({ state: "available" }), useLaserStable: () => stable };
 });
 vi.mock("../../src/components/onboarding/index.js", () => ({ ProviderStep: () => null }));
 vi.mock("../../src/components/settings/WebSearchTab.js", () => ({ WebSearchTab: () => null }));

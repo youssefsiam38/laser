@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SessionView } from "../../src/store.js";
 const mocks = vi.hoisted(() => ({ view: undefined as SessionView | undefined, refresh: vi.fn(), request: vi.fn().mockResolvedValue({ entries: [] }) }));
-vi.mock("../../src/runtime/index.js", () => ({ useLaserView: () => mocks.view, useLaserStable: () => ({ actions: { refreshAccountUsage: mocks.refresh }, client: { request: mocks.request, subscribe: () => () => {} } }) }));
+vi.mock("../../src/runtime/index.js", () => ({ useCapability: () => ({ state: "available" }), useLaserView: () => mocks.view, useLaserStable: () => ({ actions: { refreshAccountUsage: mocks.refresh }, client: { request: mocks.request, subscribe: () => () => {} } }) }));
 import { UsageTab } from "../../src/components/settings/UsageTab.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 let root: Root, container: HTMLDivElement;

@@ -3,8 +3,10 @@ import { act } from "react";
 import type { Root } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 
+const runtime = vi.hoisted(() => ({ request: vi.fn(async () => ({})), denied: new Set<string>() }));
 vi.mock("@/runtime", () => ({
-  useLaserStable: () => ({ client: { request: async () => ({}) }, actions: {} }),
+  useCapability: (method: string) => runtime.denied.has(method) ? { state: "hidden" } : { state: "available" },
+  useLaserStable: () => ({ client: { request: runtime.request }, actions: {} }),
 }));
 vi.mock("../../src/components/settings/resources/ResourceDiagnostics.js", () => ({
   ResourceDiagnostics: () => <div>Resource diagnostics</div>,
@@ -17,6 +19,8 @@ let root: Root | undefined;
 afterEach(async () => {
   if (root) await act(async () => root!.unmount());
   document.body.innerHTML = "";
+  runtime.denied.clear();
+  runtime.request.mockClear();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -45,4 +49,25 @@ it("reveals the active tab on selection and whenever its strip narrows, without 
   await act(async () => root!.unmount());
   root = undefined;
   expect(callbacks.has(strip)).toBe(false);
+});
+
+it("hides host-backed settings sections before they can issue a denied request", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  runtime.denied = new Set([
+    "pi/settings/get", "feature/list", "mcp/list", "pi/providers/list",
+    "pi/account-usage/refresh", "pi/project/list", "resource/snapshot",
+  ]);
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  ({ root } = await render(<TooltipProvider><SettingsScreen cwd="/project" initialTab="general" /></TooltipProvider>));
+  await act(async () => { await Promise.resolve(); });
+  const tabs = [...document.querySelectorAll('[aria-current], button')].map((node) => node.textContent?.trim()).filter(Boolean);
+  expect(tabs).toContain("Appearance");
+  expect(tabs).toContain("Help and shortcuts");
+  expect(tabs).toContain("This device");
+  expect(tabs).not.toContain("General");
+  expect(tabs).not.toContain("Advanced");
+  expect(tabs).not.toContain("Features");
+  expect(tabs).not.toContain("MCP servers");
+  expect(tabs).not.toContain("Providers and models");
+  expect(runtime.request).not.toHaveBeenCalled();
 });

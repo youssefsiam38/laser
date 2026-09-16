@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { initialState, reduce } from "../../../src/store.js";
 import { snapshot } from "../fixtures.js";
+import { testDescriptor } from "../../runtime/environment-fixture.js";
 
 /** The phone layout: the list first, the editor as a full-height view with a way back. */
 const mocks = vi.hoisted(() => {
@@ -77,7 +78,7 @@ const click = (el: Element | null) => act(async () => (el as HTMLElement).click(
 
 describe("Agents page on a phone", () => {
   it("shows the list first, then the editor as a full view with a way back, and Escape returns to the list", async () => {
-    const store = createStateStore(reduce(initialState, { type: "agents/loaded", snapshot: snapshot() }));
+    const store = createStateStore({ ...reduce(initialState, { type: "agents/loaded", snapshot: snapshot() }), environment: testDescriptor() });
     await act(async () =>
       root.render(
         <LaserStoreProvider store={store}>

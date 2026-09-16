@@ -35,16 +35,19 @@ import { useConnectedModels } from "@/components/assistant-ui/elements/connected
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
 import { ProviderLogo } from "@/components/assistant-ui/elements/logos";
 import { ProviderModelPicker, modelOptionId } from "@/components/assistant-ui/elements/model-selector";
+import { CapabilityNotice } from "@/components/capability-gate";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { cn } from "@/lib/utils";
+import type { CapabilityDecision } from "@/runtime/environment-capabilities";
 
 export interface FallbackChainsTabProps {
   cwd: string;
   snapshot: SettingsSnapshot | undefined;
   onApply: (scope: SettingsScope, changes: SettingChange[]) => Promise<boolean>;
+  decision?: CapabilityDecision | undefined;
 }
 
 /** A draft chain is local until it has a model to fall back to; a chain of one cannot be saved. */
@@ -56,7 +59,9 @@ const nameOf = (model: FallbackModelRef, catalogue: readonly ModelCatalogEntry[]
 const sameChains = (a: readonly FallbackChain[], b: readonly FallbackChain[]): boolean =>
   JSON.stringify(a) === JSON.stringify(b);
 
-export function FallbackChainsTab({ cwd, snapshot, onApply }: FallbackChainsTabProps) {
+export function FallbackChainsTab({ cwd, snapshot, onApply, decision }: FallbackChainsTabProps) {
+  const writable = decision?.state === "available" || decision === undefined;
+  const readOnlyExplanation = decision?.state === "explained" ? decision.explanation : undefined;
   const saved = useMemo(
     () => readFallbackChainsValue(snapshot?.global.values[FALLBACK_CHAINS_SETTING]),
     [snapshot],
@@ -133,6 +138,7 @@ export function FallbackChainsTab({ cwd, snapshot, onApply }: FallbackChainsTabP
   return (
     <ScrollArea className="h-full">
       <div className="mx-auto flex max-w-240 flex-col gap-5 px-4 py-4">
+        {!writable && readOnlyExplanation ? <CapabilityNotice explanation={readOnlyExplanation} /> : null}
         <section className="flex flex-col gap-2">
           <div className="flex items-center gap-2">
             <h2 className="text-sm font-semibold text-ink">Fallback chains</h2>
@@ -178,7 +184,7 @@ export function FallbackChainsTab({ cwd, snapshot, onApply }: FallbackChainsTabP
               Nothing changes until you make one. Name a model you work with, then the models that should take over for it,
               in the order you would reach for them.
             </p>
-            <Button size="sm" data-slot="add-chain" onClick={() => setDraft({ models: [] })} disabled={loading || none}>
+            <Button size="sm" data-slot="add-chain" onClick={() => setDraft({ models: [] })} disabled={!writable || loading || none}>
               <Plus aria-hidden="true" /> Add fallback chain
             </Button>
           </section>
@@ -193,6 +199,7 @@ export function FallbackChainsTab({ cwd, snapshot, onApply }: FallbackChainsTabP
                 addable={addable(chain.models)}
                 issues={issuesFor(index)}
                 busy={saving}
+                writable={writable}
                 onChange={(models) => editChain(index, models)}
                 onDelete={() => void commit(chains.filter((_, at) => at !== index))}
               />
@@ -210,6 +217,7 @@ export function FallbackChainsTab({ cwd, snapshot, onApply }: FallbackChainsTabP
                     : []
                 }
                 busy={saving}
+                writable={writable}
                 onChange={(models) => setDraft({ models })}
                 onAdd={addToDraft}
                 onDelete={() => setDraft(null)}
@@ -221,7 +229,7 @@ export function FallbackChainsTab({ cwd, snapshot, onApply }: FallbackChainsTabP
                 variant="secondary"
                 data-slot="add-chain"
                 onClick={() => setDraft({ models: [] })}
-                disabled={loading || none || draft !== null}
+                disabled={!writable || loading || none || draft !== null}
               >
                 <Plus aria-hidden="true" /> Add fallback chain
               </Button>
@@ -240,13 +248,14 @@ interface ChainCardProps {
   addable: readonly ModelRef[];
   issues: FallbackChainIssue[];
   busy: boolean;
+  writable: boolean;
   draft?: boolean;
   onChange(models: FallbackModelRef[]): void;
   onAdd?(model: FallbackModelRef): void;
   onDelete(): void;
 }
 
-function ChainCard({ index, models, catalogue, addable, issues, busy, draft, onChange, onAdd, onDelete }: ChainCardProps) {
+function ChainCard({ index, models, catalogue, addable, issues, busy, writable, draft, onChange, onAdd, onDelete }: ChainCardProps) {
   const starter = models[0];
   const title = starter ? nameOf(starter, catalogue) : "New chain";
   const add = (id: string) => {
@@ -280,7 +289,7 @@ function ChainCard({ index, models, catalogue, addable, issues, busy, draft, onC
             {models.length - 1} {models.length === 2 ? "fallback" : "fallbacks"}
           </span>
         )}
-        <TooltipIconButton
+        {writable ? <TooltipIconButton
           tooltip={draft ? "Discard this chain" : `Delete ${title}’s chain`}
           side="left"
           variant="ghost"
@@ -290,7 +299,7 @@ function ChainCard({ index, models, catalogue, addable, issues, busy, draft, onC
           onClick={onDelete}
         >
           <Trash2 aria-hidden="true" />
-        </TooltipIconButton>
+        </TooltipIconButton> : null}
       </div>
 
       <ol className="flex flex-col gap-1.5">
@@ -320,7 +329,7 @@ function ChainCard({ index, models, catalogue, addable, issues, busy, draft, onC
                   Starts the chain
                 </Badge>
               ) : null}
-              <TooltipIconButton
+              {writable ? <TooltipIconButton
                 tooltip={`Move ${label} up`}
                 side="top"
                 variant="ghost"
@@ -330,8 +339,8 @@ function ChainCard({ index, models, catalogue, addable, issues, busy, draft, onC
                 onClick={() => move(position, position - 1)}
               >
                 <ArrowUp aria-hidden="true" />
-              </TooltipIconButton>
-              <TooltipIconButton
+              </TooltipIconButton> : null}
+              {writable ? <TooltipIconButton
                 tooltip={`Move ${label} down`}
                 side="top"
                 variant="ghost"
@@ -341,8 +350,8 @@ function ChainCard({ index, models, catalogue, addable, issues, busy, draft, onC
                 onClick={() => move(position, position + 1)}
               >
                 <ArrowDown aria-hidden="true" />
-              </TooltipIconButton>
-              <TooltipIconButton
+              </TooltipIconButton> : null}
+              {writable ? <TooltipIconButton
                 // A chain of one is not a chain, so removing from a pair is
                 // not an edit — it is deleting the chain, and the row says so
                 // rather than refusing afterwards with a sentence about
@@ -356,7 +365,7 @@ function ChainCard({ index, models, catalogue, addable, issues, busy, draft, onC
                 onClick={() => onChange(models.filter((_, at) => at !== position))}
               >
                 <X aria-hidden="true" />
-              </TooltipIconButton>
+              </TooltipIconButton> : null}
             </li>
           );
         })}
@@ -372,7 +381,7 @@ function ChainCard({ index, models, catalogue, addable, issues, busy, draft, onC
         </ul>
       )}
 
-      <div className="flex flex-wrap items-center gap-2">
+      {writable ? <div className="flex flex-wrap items-center gap-2">
         <ProviderModelPicker
           models={addable}
           value=""
@@ -384,7 +393,7 @@ function ChainCard({ index, models, catalogue, addable, issues, busy, draft, onC
           align="start"
         />
         {busy && <Loader2 aria-hidden="true" className="size-3.5 text-ink-3 motion-safe:animate-busy" />}
-      </div>
+      </div> : null}
 
       {models.length > 1 && (
         <p className="text-xs leading-5 text-ink-3">

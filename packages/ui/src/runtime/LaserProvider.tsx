@@ -32,6 +32,7 @@ import {
 } from "@assistant-ui/react";
 import type { AssistantRuntime, RemoteThreadListAdapter, ThreadComposerRuntime, ThreadMessageLike } from "@assistant-ui/react";
 import type {
+  ClientMethod,
   ContentBlock,
   GoalAction,
   HostNotificationMethod,
@@ -100,6 +101,7 @@ import {
 import { createCatalogLoader } from "./catalog-loader.js";
 import { DEVICE_KEYS, deviceStore } from "./device-storage.js";
 import { createEnvironmentLifecycle, useEnvironmentSubtreeKey, type EnvironmentLifecycle } from "./environment-lifecycle.js";
+import { capabilityFor, type CapabilityDecision, type CapabilityRequirements } from "./environment-capabilities.js";
 import { tailCache } from "./tail-cache/index.js";
 import { sessionIdForPath } from "./provisional-paint.js";
 import { createProvisionalAuthority, sessionAuthorityRefusal } from "./provisional-authority.js";
@@ -397,6 +399,12 @@ const identity = <T,>(value: T): T => value;
 
 /** Conversations promoted into the cache's hot set per environment (RP-10/11). */
 const PRIME_RECENT_SESSIONS = 8;
+
+/** Decide one RPC-backed affordance against the authenticated environment. */
+export function useCapability(method: ClientMethod, requirements?: CapabilityRequirements): CapabilityDecision {
+  const environment = useLaserState((state) => state.environment);
+  return capabilityFor(environment, method, requirements);
+}
 
 /**
  * Subscribe to one slice of app state. A streamed token replaces the whole
@@ -1810,7 +1818,16 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   const actionsRef = useRef<LaserActions>(actions);
   actionsRef.current = actions;
 
-  const prepareProject = useWorkerReadiness({ currentProject, connection: state.connection, sessionsLoaded: state.sessionsLoaded, projects: projectList, client, readState, archive });
+  const prepareProject = useWorkerReadiness({
+    currentProject,
+    connection: state.connection,
+    sessionsLoaded: state.sessionsLoaded,
+    projects: projectList,
+    client,
+    readState,
+    archive,
+    enabled: capabilityFor(state.environment, "pi/worker/prepare").state === "available",
+  });
   const setCurrentProject = useCallback((cwd: string | undefined) => {
     destination.setCodeProject(cwd);
     prepareProject(cwd);

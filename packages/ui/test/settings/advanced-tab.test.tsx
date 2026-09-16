@@ -3,6 +3,9 @@ import { act, useState } from "react";
 import type { Root } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 
+vi.mock("@/runtime", () => ({
+  useCapability: () => ({ state: "available" }),
+}));
 vi.mock("../../src/components/settings/resources/ResourceDiagnostics.js", () => ({
   ResourceDiagnostics: () => <div data-testid="resources">Resource truth is available</div>,
 }));

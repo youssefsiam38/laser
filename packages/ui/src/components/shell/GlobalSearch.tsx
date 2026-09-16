@@ -5,7 +5,7 @@ import { ThreadSearch, matchesThread, rankSearchThreads, threadSearchKeys, type 
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { useWorkbench } from "@/components/workbench";
 import { openConversationFind } from "@/components/thread/search-state";
-import { sessionTitle, useLaserStable, useLaserState } from "@/runtime";
+import { sessionTitle, useCapability, useLaserStable, useLaserState } from "@/runtime";
 import { shortCwd } from "@/format";
 import { sessionStatus } from "./model.js";
 import { SessionSearchProgress } from "./SessionSearchProgress.js";
@@ -16,7 +16,9 @@ export function openGlobalSearch() { window.dispatchEvent(new Event("global-sess
 
 export function GlobalSearch() {
   const [open, setOpen] = useState(false);
+  const search = useCapability("session/search");
   useEffect(() => {
+    if (search.state !== "available") { setOpen(false); return; }
     const show = () => setOpen(true);
     const key = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") { e.preventDefault(); setOpen(true); }
@@ -24,7 +26,7 @@ export function GlobalSearch() {
     window.addEventListener("keydown", key);
     window.addEventListener("global-session-search", show);
     return () => { window.removeEventListener("keydown", key); window.removeEventListener("global-session-search", show); };
-  }, []);
+  }, [search.state]);
   return <Dialog open={open} onOpenChange={setOpen}><DialogContent className="flex h-[80dvh] max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl">
     <div className="border-b border-line px-5 py-4 pe-12"><DialogTitle className="flex items-center gap-2"><Search className="size-4 text-ink-3" />Search all sessions</DialogTitle><DialogDescription className="mt-1">Find messages, reasoning and tool activity. Recent conversations first, including archives.</DialogDescription></div>
     {open && <GlobalSearchBody close={() => setOpen(false)} />}

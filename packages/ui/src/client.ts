@@ -26,6 +26,7 @@ import type {
   JsonRpcMessage,
   SessionUpdateParams,
 } from "@lasercode/protocol";
+import { capabilityError, capabilityFor } from "./runtime/environment-capabilities.js";
 
 export type NotificationHandler = <M extends HostNotificationMethod>(method: M, params: HostNotifications[M]) => void;
 
@@ -170,6 +171,8 @@ export class HostClient {
   private listening = false;
   private state: ConnectionState = "closed";
   private versionBlocked = false;
+  /** The authenticated policy for the currently open socket; never reused across reconnects. */
+  private acceptedEnvironment: EnvironmentDescriptor | undefined;
   /** The last environment failure, kept so retries do not repeat themselves. */
   private environmentReason: string | undefined;
   /**
@@ -185,6 +188,7 @@ export class HostClient {
     socket: WebSocket;
     timer?: ReturnType<typeof setTimeout>;
     acceptedVersion?: string;
+    environment?: EnvironmentDescriptor;
     /**
      * Cancel whatever the app is preparing for this socket (RP-10).
      *
@@ -237,6 +241,7 @@ export class HostClient {
    */
   reconnect(reason: string): void {
     if (this.versionBlocked) return;
+    this.acceptedEnvironment = undefined;
     const dead = this.ws;
     this.ws = undefined;
     // The dead socket's handshake dies with it: its deadline must not close
@@ -259,6 +264,7 @@ export class HostClient {
   }
 
   close(): void {
+    this.acceptedEnvironment = undefined;
     this.retireHandshake();
     this.closedByUser = true;
     if (this.listening) {
@@ -328,9 +334,11 @@ export class HostClient {
   }
 
   request<M extends ClientMethod>(method: M, params: ClientRequests[M]["params"]): Promise<ClientRequests[M]["result"]> {
-    if (this.versionBlocked || this.state !== "open" || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+    if (this.versionBlocked || this.state !== "open" || !this.ws || this.ws.readyState !== WebSocket.OPEN || !this.acceptedEnvironment) {
       return Promise.reject(new Error("Not connected to the host."));
     }
+    const capability = capabilityFor(this.acceptedEnvironment, method, { presentation: "explained" });
+    if (capability.state !== "available") return Promise.reject(capabilityError(capability));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
@@ -345,6 +353,7 @@ export class HostClient {
 
   private open(): void {
     if (this.closedByUser || this.versionBlocked) return;
+    this.acceptedEnvironment = undefined;
     if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) return;
     this.setState("connecting");
     this.handshakeMessages.length = 0;
@@ -375,6 +384,7 @@ export class HostClient {
     ws.onclose = () => {
       if (this.handshake?.socket === ws) this.retireHandshake();
       if (this.ws !== ws) return;
+      this.acceptedEnvironment = undefined;
       this.flushUpdates();
       this.setState("closed");
       for (const p of this.pending.values()) p.reject(new Error("connection closed"));
@@ -482,6 +492,7 @@ export class HostClient {
       this.failEnvironment(acceptance.reason, socket);
       return;
     }
+    handshake.environment = parsed.data as EnvironmentDescriptor;
     if (acceptance.ready) {
       this.openWhenReady(acceptance, socket);
       return;
@@ -546,6 +557,12 @@ export class HostClient {
 
   /** The unchanged open: state, buffered frames, then resume what we hold. */
   private openEnvironment(socket: WebSocket): void {
+    const environment = this.handshake?.socket === socket ? this.handshake.environment : undefined;
+    if (!environment) {
+      this.failEnvironment("This host did not finish describing this environment.", socket);
+      return;
+    }
+    this.acceptedEnvironment = environment;
     this.retireHandshake();
     this.environmentReason = undefined;
     this.backoffMs = 500;
@@ -576,6 +593,7 @@ export class HostClient {
    */
   private failEnvironment(reason: string, socket: WebSocket): void {
     if (this.handshake?.socket !== socket) return;
+    this.acceptedEnvironment = undefined;
     this.retireHandshake();
     this.handshakeMessages.length = 0;
     const repeated = this.environmentReason === reason;

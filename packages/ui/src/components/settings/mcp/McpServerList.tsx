@@ -49,8 +49,8 @@ export function McpServerList({
 }: {
   servers: readonly McpServerState[];
   selectedId?: string | undefined;
-  onSelect: (id: string) => void;
-  onSignIn: (id: string) => void;
+  onSelect?: ((id: string) => void) | undefined;
+  onSignIn?: ((id: string) => void) | undefined;
 }) {
   const nextExpiry = Math.min(...servers.map(server => server.toolCatalog?.expiresAt ?? 0).filter(expiry => expiry > Date.now()));
   const now = useCatalogClock(nextExpiry);
@@ -69,8 +69,8 @@ export function McpServerList({
             heading={scopeLabel(group.scope)}
             rows={group.rows}
             selectedId={selectedId}
-            onSelect={onSelect}
-            onSignIn={onSignIn}
+            {...(onSelect ? { onSelect } : {})}
+            {...(onSignIn ? { onSignIn } : {})}
           />
         ))}
     </div>

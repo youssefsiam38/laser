@@ -16,7 +16,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { shortCwd } from "@/format";
 import { cn } from "@/lib/utils";
-import { useLaserState, useLaserStable } from "@/runtime";
+import { useCapability, useLaserState, useLaserStable } from "@/runtime";
+import { CapabilityNotice } from "@/components/capability-gate";
 import type { DirectoryListing } from "@lasercode/protocol";
 
 import { recentCwds } from "@/components/shell/model";
@@ -28,6 +29,7 @@ export interface ProjectStepProps {
 
 export function ProjectStep({ onAdded }: ProjectStepProps) {
   const { client, actions, projects } = useLaserStable();
+  const addProject = useCapability("pi/project/add", { presentation: "explained" });
   const sessions = useLaserState((s) => s.sessions);
   const [listing, setListing] = useState<DirectoryListing>();
   const [loading, setLoading] = useState(true);
@@ -170,16 +172,20 @@ export function ProjectStep({ onAdded }: ProjectStepProps) {
         </p>
       )}
 
-      <div className="flex items-center justify-end gap-2">
-        {alreadyProject && (
-          <span className="flex items-center gap-1 text-xs text-ok">
-            <Check aria-hidden="true" className="size-3.5" /> already a project
-          </span>
-        )}
-        <Button size="sm" disabled={!here || loading || adding !== undefined} onClick={() => here && void add(here)}>
-          {adding ? <Loader2 className="motion-safe:animate-busy" /> : <FolderGit2 />} {alreadyProject ? "Continue with this folder" : "Use this folder"}
-        </Button>
-      </div>
+      {addProject.state === "explained" ? (
+        <CapabilityNotice title="Projects cannot be added here" explanation={addProject.explanation ?? "Use the app on the host computer to add a project."} />
+      ) : addProject.state === "available" ? (
+        <div className="flex items-center justify-end gap-2">
+          {alreadyProject && (
+            <span className="flex items-center gap-1 text-xs text-ok">
+              <Check aria-hidden="true" className="size-3.5" /> already a project
+            </span>
+          )}
+          <Button size="sm" disabled={!here || loading || adding !== undefined} onClick={() => here && void add(here)}>
+            {adding ? <Loader2 className="motion-safe:animate-busy" /> : <FolderGit2 />} {alreadyProject ? "Continue with this folder" : "Use this folder"}
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }

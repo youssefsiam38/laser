@@ -20,7 +20,7 @@ import { useWorkbench } from "@/components/workbench";
 import { shortCwd, shortcutLabel } from "@/format";
 import { useTheme } from "@/hooks";
 import { cn } from "@/lib/utils";
-import { mainTab, useLaserStable, useLaserState } from "@/runtime";
+import { mainTab, useCapability, useLaserStable, useLaserState } from "@/runtime";
 import { onVisible } from "@/runtime/visible-poll";
 import type { AppState } from "@/store";
 
@@ -77,6 +77,9 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
   const { projects, currentProject, actions } = useLaserStable();
   const shell = useShell();
   const list = useSessionsList();
+  const addProject = useCapability("pi/project/add");
+  const createSession = useCapability("session/new");
+  const searchSessions = useCapability("session/search");
   const tab = useLaserState((s) => mainTab(s.destination));
   useClock();
 
@@ -219,8 +222,8 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
           <h2 className="truncate text-sm leading-5 font-semibold text-ink">Sessions</h2>
           {total > 0 && <span className="shrink-0 typed text-ink-3">{total}</span>}
         </div>
-        <TooltipIconButton tooltip="Search all sessions" shortcut="Ctrl+Shift+F" onClick={() => { if (variant === "sheet") shell.setSessionsOpen(false); openGlobalSearch(); }}><Search /></TooltipIconButton>
-        {variant === "panel" && (
+        {searchSessions.state === "available" ? <TooltipIconButton tooltip="Search all sessions" shortcut="Ctrl+Shift+F" onClick={() => { if (variant === "sheet") shell.setSessionsOpen(false); openGlobalSearch(); }}><Search /></TooltipIconButton> : null}
+        {variant === "panel" && createSession.state === "available" && (
           <TooltipIconButton
             tooltip={newLabel}
             {...(chat ? {} : { shortcut: shortcutLabel("N") })}
@@ -235,7 +238,7 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
 
       <SessionsTabs tab={tab} onChange={changeTab} />
 
-      {variant === "sheet" && (
+      {variant === "sheet" && createSession.state === "available" && (
         <div className="flex shrink-0 items-center px-3 py-2 hairline-b">
           <Button size="sm" variant="outline" className="w-full justify-start" onClick={onNew} disabled={!canNew} data-slot={chat ? "new-chat" : "new-session"}>
             {chat ? <MessageSquarePlus /> : <Plus />}
@@ -245,7 +248,7 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
         </div>
       )}
 
-      {total > 0 && (
+      {total > 0 && searchSessions.state === "available" && (
         <div className="shrink-0 px-3 py-2">
           <ThreadListSearch
             value={query}
@@ -284,12 +287,12 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
               icon={<MessageSquarePlus className="size-4 text-ink-3" />}
               title="No chats yet"
               body="Chats are conversations that are not about a project. Ask anything; nothing here touches your code."
-              action={
+              action={createSession.state === "available" ? (
                 <Button size="sm" variant="outline" onClick={() => void newChat()} disabled={!canChat} data-slot="new-chat">
                   <MessageSquarePlus />
                   New chat
                 </Button>
-              }
+              ) : undefined}
             />
           ) : (
             <ThreadList projects={projects} tab="chat" onOpen={onOpen} />
@@ -300,19 +303,19 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
               <EmptyState
                 title="No project yet"
                 body={`Point ${PRODUCT_NAME} at a directory. Sessions already saved there show up too.`}
-                action={
+                action={addProject.state === "available" ? (
                   <Button size="sm" variant="outline" onClick={() => shell.setAddProjectOpen(true)}>
                     <FolderPlus />
                     Add project
                   </Button>
-                }
+                ) : null}
               />
             ) : (
               <ThreadList
                 projects={projects}
                 tab="code"
                 canCreate={connection === "open"}
-                onNewSession={(cwd) => void newSessionIn(cwd)}
+                onNewSession={createSession.state === "available" ? (cwd) => void newSessionIn(cwd) : undefined}
                 onOpen={onOpen}
               />
             )}
@@ -392,6 +395,9 @@ function SessionsTabs({ tab, onChange }: { tab: SessionsTab; onChange(tab: Sessi
 
 function SheetFooter() {
   const { theme, toggle } = useTheme();
+  const addProject = useCapability("pi/project/add");
+  const createSession = useCapability("session/new");
+  const logs = useCapability("pi/logs/query");
   const shell = useShell();
   const workbench = useWorkbench();
   const openWorkbench = (page: "settings" | "logs") => {
@@ -403,19 +409,19 @@ function SheetFooter() {
       <TooltipIconButton tooltip={theme === "dark" ? "Light theme" : "Dark theme"} side="top" onClick={toggle}>
         {theme === "dark" ? <Sun /> : <Moon />}
       </TooltipIconButton>
-      <TooltipIconButton tooltip="Add project" side="top" onClick={() => shell.setAddProjectOpen(true)}>
+      {addProject.state === "available" ? <TooltipIconButton tooltip="Add project" side="top" onClick={() => shell.setAddProjectOpen(true)}>
         <FolderPlus />
-      </TooltipIconButton>
+      </TooltipIconButton> : null}
       {/* There is no rail on mobile, so agents, settings and logs are reachable here. */}
       <AgentsButton side="top" afterOpen={() => shell.setSessionsOpen(false)} className="text-ink-2" />
-      <TooltipIconButton tooltip="Logs" side="top" onClick={() => openWorkbench("logs")}>
+      {logs.state === "available" ? <TooltipIconButton tooltip="Logs" side="top" onClick={() => openWorkbench("logs")}>
         <FileClock />
-      </TooltipIconButton>
+      </TooltipIconButton> : null}
       <TooltipIconButton tooltip="Settings" side="top" onClick={() => openWorkbench("settings")}>
         <Settings />
       </TooltipIconButton>
       {/* Beam's spark, beside Settings: the rail's affordance, rendered where a phone has room for it. */}
-      <BeamSpark side="top" onOpen={() => shell.setSessionsOpen(false)} />
+      {createSession.state === "available" ? <BeamSpark side="top" onOpen={() => shell.setSessionsOpen(false)} /> : null}
       <span className="ms-auto pe-1 typed text-ink-3">{PRODUCT_NAME}</span>
     </footer>
   );
@@ -425,7 +431,7 @@ function SheetFooter() {
 // Empty
 // ---------------------------------------------------------------------------
 
-function EmptyState({ icon, title, body, action }: { icon?: React.ReactNode; title: string; body: React.ReactNode; action: React.ReactNode }) {
+function EmptyState({ icon, title, body, action }: { icon?: React.ReactNode; title: string; body: React.ReactNode; action: React.ReactNode | null }) {
   return (
     <div className="flex h-full min-h-48 flex-col items-center justify-center gap-4 px-6 py-8 text-center">
       <StatusRing status="idle" size={40} thickness={2} aria-hidden="true">

@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { useWorkbench } from "@/components/workbench";
 import { relativeTime, shortCwd, shortcutLabel } from "@/format";
 import { useTheme } from "@/hooks";
-import { useLaserStable, useLaserState, useSessionMeta } from "@/runtime";
+import { useCapability, useLaserStable, useLaserState, useSessionMeta } from "@/runtime";
 import { currentView, samePresentationView } from "@/runtime/presentation-state";
 
 import type { AppState } from "@/store";
@@ -93,24 +93,29 @@ function usePaletteCommands(active: boolean): RunnableCommand[] {
   const workers = useLaserState((s) => s.workers);
   const groups = useMemo(() => sessionGroups(projects, sessions, open, workers), [projects, sessions, open, workers]);
   const busy = meta.running || meta.compacting;
+  const logs = useCapability("pi/logs/query");
+  const addProject = useCapability("pi/project/add");
+  const createSession = useCapability("session/new");
+  const compactSession = useCapability("pi/session/compact");
+  const forkSession = useCapability("pi/session/fork");
 
   return useMemo<RunnableCommand[]>(() => {
     const session: RunnableCommand[] = view
       ? [
-          { id: "compact", group: "This session", label: "Compact context", detail: busy ? "Waits for the turn to finish" : undefined, icon: Shrink, disabled: busy, run: () => void actions.compact() },
-          { id: "fork", group: "This session", label: "Fork from last prompt", icon: GitFork, disabled: meta.running, run: () => void forkFromLastPrompt(view.path, client, actions) },
+          ...(compactSession.state === "available" ? [{ id: "compact", group: "This session", label: "Compact context", detail: busy ? "Waits for the turn to finish" : undefined, icon: Shrink, disabled: busy, run: () => void actions.compact() } satisfies RunnableCommand] : []),
+          ...(forkSession.state === "available" ? [{ id: "fork", group: "This session", label: "Fork from last prompt", icon: GitFork, disabled: meta.running, run: () => void forkFromLastPrompt(view.path, client, actions) } satisfies RunnableCommand] : []),
           { id: "history", group: "This session", label: "Open history", keys: ["]"], icon: GitBranch, run: () => shell.openHistory() },
         ]
       : [];
     const app: RunnableCommand[] = [
-      { id: "new", group: "App", label: currentProject ? `New session in ${shortCwd(currentProject)}` : "New session", keys: [shortcutLabel("N")], icon: Plus, disabled: !shell.canCreate, run: () => void shell.newSession() },
-      { id: "add-project", group: "App", label: "Add a project", icon: FolderPlus, run: () => shell.setAddProjectOpen(true) },
+      ...(createSession.state === "available" ? [{ id: "new", group: "App", label: currentProject ? `New session in ${shortCwd(currentProject)}` : "New session", keys: [shortcutLabel("N")], icon: Plus, disabled: !shell.canCreate, run: () => void shell.newSession() } satisfies RunnableCommand] : []),
+      ...(addProject.state === "available" ? [{ id: "add-project", group: "App", label: "Add a project", icon: FolderPlus, run: () => shell.setAddProjectOpen(true) } satisfies RunnableCommand] : []),
       { id: "sessions", group: "App", label: shell.sessionsOpen ? "Hide sessions" : "Show sessions", keys: ["["], icon: PanelLeft, run: () => shell.toggleSessions() },
       { id: "telemetry", group: "App", label: shell.telemetryOpen ? "Hide telemetry" : "Show telemetry", keys: ["]"], icon: Activity, run: () => shell.toggleTelemetry() },
       { id: "settings", group: "App", label: "Settings", icon: Settings, run: () => workbench.open("settings") },
       // Agents page (M13-T5).
       { id: "agents", group: "App", label: "Agents", icon: Bot, run: () => workbench.open("agents") },
-      { id: "logs", group: "App", label: "Logs", icon: FileClock, run: () => workbench.open("logs") },
+      ...(logs.state === "available" ? [{ id: "logs", group: "App", label: "Logs", icon: FileClock, run: () => workbench.open("logs") } satisfies RunnableCommand] : []),
       { id: "theme", group: "App", label: theme === "dark" ? "Light theme" : "Dark theme", icon: theme === "dark" ? Sun : Moon, run: () => toggle() },
     ];
     const projectRows: RunnableCommand[] = groups.map((g) => ({
@@ -137,7 +142,7 @@ function usePaletteCommands(active: boolean): RunnableCommand[] {
       })),
     );
     return [...session, ...app, ...sessionRows, ...projectRows];
-  }, [actions, busy, client, currentProject, groups, meta.running, shell, theme, toggle, view, workbench]);
+  }, [actions, addProject.state, busy, client, compactSession.state, createSession.state, currentProject, forkSession.state, groups, logs.state, meta.running, shell, theme, toggle, view, workbench]);
 }
 
 /**

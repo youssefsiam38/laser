@@ -51,7 +51,7 @@ const stable = vi.hoisted(() => ({
   archive: { add: vi.fn(), has: () => false },
   client: { request: vi.fn(async () => ({ hits: [], unreadable: 0 })) },
 }));
-vi.mock("@/runtime", async (importActual) => ({ ...(await importActual<typeof import("../../src/runtime/index.js")>()), useLaserStable: () => stable }));
+vi.mock("@/runtime", async (importActual) => ({ ...(await importActual<typeof import("../../src/runtime/index.js")>()), useCapability: () => ({ state: "available" }), useLaserStable: () => stable }));
 
 const sessions: SessionSummary[] = [
   summary({ path: "/one/root.jsonl", cwd: "/one", name: "Ship the release", modifiedAt: "2026-09-08T03:00:00Z" }),
