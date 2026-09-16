@@ -1,6 +1,6 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-16T21:33:34+03:00 · orchestrator `01a0a030` · HEAD: b51ed268
+**Last updated:** 2026-09-16T21:33:34+03:00 · orchestrator `01a0a030` · HEAD: f797f5b0
 **Current focus:** M19 runtime recovery and update activation (T2 generation/park/update transaction in progress); M18 resource containment is complete and audited (`/tmp/m18-final-audit.md`: 72 proven, 10 measurement-only weak, 0 missing).
 
 | Milestone | State |
