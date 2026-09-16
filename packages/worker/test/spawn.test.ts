@@ -79,6 +79,51 @@ describe.skipIf(!existsSync(MAIN))("worker process over fd 3", () => {
     expect(stdout).not.toContain('"jsonrpc"');
   }, 60_000);
 
+  it("parks a real worker behind one exact update id and reopens only after matching cancel", async () => {
+    child = spawn(
+      process.execPath,
+      [MAIN, "--cwd", join(base, "project"), "--launch-id", "00112233445566778899aabbccddeeff", "--worker-mode", "normal", "--agent-dir", join(base, "agent"), "--session-dir", join(base, "sessions")],
+      { stdio: ["ignore", "pipe", "pipe", "pipe"] },
+    );
+    const pipe = child.stdio[3] as Duplex;
+    const inbound: JsonRpcMessage[] = [];
+    const decoder = new LineDecoder();
+    pipe.on("data", (chunk: Buffer) => {
+      for (const line of decoder.push(chunk)) inbound.push(JSON.parse(line) as JsonRpcMessage);
+    });
+    const waitForId = (id: number, ms = 30_000) => new Promise<JsonRpcMessage>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`timeout waiting for ${id}`)), ms);
+      const check = () => {
+        const hit = inbound.find((message) => "id" in message && message.id === id);
+        if (hit) { clearTimeout(timer); pipe.off("data", check); resolve(hit); }
+      };
+      pipe.on("data", check);
+      check();
+    });
+    const ready = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("worker did not become ready")), 30_000);
+      const check = () => {
+        if (inbound.some((message) => "method" in message && message.method === "pi/worker/status" && (message.params as { status?: string }).status === "ready")) {
+          clearTimeout(timer); pipe.off("data", check); resolve();
+        }
+      };
+      pipe.on("data", check);
+    });
+    await ready;
+    const updateId = "a".repeat(64);
+    const generationId = "b".repeat(64);
+    pipe.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "pi/worker/activation/park", params: { updateId, generationId } })}\n`);
+    await expect(waitForId(1)).resolves.toMatchObject({ result: { updateId, generationId, parked: true } });
+    pipe.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "session/new", params: { cwd: join(base, "project") } })}\n`);
+    await expect(waitForId(2)).resolves.toMatchObject({ error: { code: -32001 } });
+    pipe.write(`${JSON.stringify({ jsonrpc: "2.0", id: 3, method: "pi/worker/activation/cancel", params: { updateId } })}\n`);
+    await expect(waitForId(3)).resolves.toHaveProperty("result.updateId", updateId);
+    pipe.write(`${JSON.stringify({ jsonrpc: "2.0", id: 4, method: "session/new", params: { cwd: join(base, "project") } })}\n`);
+    await expect(waitForId(4)).resolves.toHaveProperty("result.state.cwd", join(base, "project"));
+    pipe.end();
+    await new Promise((resolve) => child!.once("exit", resolve));
+  }, 60_000);
+
   it("drains a structured initialization failure before exiting", async () => {
     child = spawn(
       process.execPath,

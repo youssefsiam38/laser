@@ -61,6 +61,7 @@ import type { SessionBodyRange } from "./session-body-range.js";
 import type { SessionRevisions } from "./session-revision.js";
 import type { ViewCache } from "./views.js";
 import type { WorkerPool } from "./worker-pool.js";
+import type { RuntimeActivationGate } from "./runtime-activation.js";
 import { WorkerRpcError, type WorkerClient } from "./worker-client.js";
 
 /** Attention order for the inbox (DESIGN.md "Status language"). */
@@ -123,6 +124,8 @@ export interface RouterDeps {
   resources?: ResourceService | undefined;
   /** Host memory-pressure step 7. Absent only in narrow router tests. */
   admission?: PressureAdmission | undefined;
+  /** Immutable update admission gate. Absent only in narrow router tests. */
+  activation?: RuntimeActivationGate | undefined;
   /**
    * The boundary's authorization and environment descriptor (RP-13).
    *
@@ -319,8 +322,13 @@ export class Router {
       if (req.method !== "pi/host/version" && clientVersion && clientVersion !== PRODUCT_VERSION) {
         throw new ProtocolError(ErrorCodes.VersionMismatch, "Refresh this view to match the host before continuing.", { version: PRODUCT_VERSION });
       }
-      const result = await this.dispatch(req, access.searches, access.actor);
-      response = { jsonrpc: "2.0", id: req.id, result };
+      const leave = this.deps.activation?.enter(req.method) ?? (() => undefined);
+      try {
+        const result = await this.dispatch(req, access.searches, access.actor);
+        response = { jsonrpc: "2.0", id: req.id, result };
+      } finally {
+        leave();
+      }
     } catch (error) {
       response = { jsonrpc: "2.0", id, error: toRpcError(error) };
     }
@@ -424,6 +432,15 @@ export class Router {
     switch (req.method) {
       case "pi/host/version":
         return { version: PRODUCT_VERSION };
+      case "pi/runtime/activation/prepare":
+        if (!this.deps.activation) throw new ProtocolError(ErrorCodes.Unsupported, "Runtime activation is unavailable in this host.");
+        return this.deps.activation.prepare(req.params.updateId, req.params.generationId);
+      case "pi/runtime/activation/status":
+        if (!this.deps.activation) throw new ProtocolError(ErrorCodes.Unsupported, "Runtime activation is unavailable in this host.");
+        return this.deps.activation.status(req.params.updateId);
+      case "pi/runtime/activation/cancel":
+        if (!this.deps.activation) throw new ProtocolError(ErrorCodes.Unsupported, "Runtime activation is unavailable in this host.");
+        return this.deps.activation.cancel(req.params.updateId);
       case ENVIRONMENT_DESCRIBE_METHOD:
         return { environment: this.deps.access.describe(actor) };
       case HOST_ENVIRONMENT_METHOD: return applyHostEnvironment(this.pool, req.params);

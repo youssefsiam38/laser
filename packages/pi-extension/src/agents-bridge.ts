@@ -369,6 +369,8 @@ export interface BackgroundWorkOptions {
   cwd: string;
   /** Seconds a foreground command may run before it is promoted to a background task. */
   foregroundCommandSeconds: number;
+  /** False while update activation is parked; existing tasks remain controllable. */
+  admitCommand?: () => boolean;
   shellPath?: string;
   commandPrefix?: string | (() => string | undefined);
   /**

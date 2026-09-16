@@ -22,7 +22,7 @@
  * growing the process.
  */
 
-import { AGENT_MAX_DEPTH_LIMIT, EDITABLE_TEXT_MAX_BYTES, ENV, ErrorCodes, createBodyRangeReader, entryRegionsPage, utf8ByteLength, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type AgentRun, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type MemoryPressureStores, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TypedClientRequest, WIRE_NAMESPACE } from "@lasercode/protocol";
+import { AGENT_MAX_DEPTH_LIMIT, EDITABLE_TEXT_MAX_BYTES, ENV, ErrorCodes, createBodyRangeReader, entryRegionsPage, utf8ByteLength, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type AgentRun, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type MemoryPressureStores, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TypedClientRequest, type WorkerActivationState, WIRE_NAMESPACE } from "@lasercode/protocol";
 import { CaptureReservations } from "./capture-reservations.js";
 import {
   PRESSURE_MAX_REPLAY_DROPS,
@@ -35,6 +35,14 @@ import { createPressureSampler } from "./pressure-sampler.js";
 
 /** RP-5b body digests. The one hash both authorities sign a body with. */
 const sha256Hex = (text: string): string => createHash("sha256").update(text, "utf8").digest("hex");
+
+const ACTIVATION_ROOT_METHODS = new Set([
+  "session/new",
+  "session/prompt",
+  "session/goal/action",
+  "pi/session/steer",
+  "pi/session/follow_up",
+]);
 
 /**
  * A prompt handed back for editing, bounded before it is serialized (RP-5b B3).
@@ -316,6 +324,8 @@ export class WorkerServer {
   private readonly firstTurnLock = new FirstTurnLock();
   /** This worker's own memory-pressure controller (RP-8). One per process. */
   private readonly pressure: WorkerPressureController;
+  /** Exact update fence; absent until this worker acknowledges park. */
+  private activationGate: { updateId: string; generationId: string } | undefined;
 
   constructor(private readonly options: WorkerServerOptions) {
     this.environmentId = options.environmentId ?? UNCONFIGURED_ENVIRONMENT;
@@ -361,6 +371,7 @@ export class WorkerServer {
       definitions: this.definitions,
       worktrees: new WorktreeManager(),
       ...(options.projectTrusted !== undefined ? { projectTrusted: options.projectTrusted } : {}),
+      admitNewWork: () => this.activationGate === undefined,
       backgroundWork: (cwd) => ({
         cwd,
         // The private directory command logs live in: the host's, when it gave
@@ -368,6 +379,7 @@ export class WorkerServer {
         // guessable path under the system temp directory.
         logRoot: this.taskLogRoot(),
         foregroundCommandSeconds: this.definitions.policy().foregroundCommandSeconds,
+        admitCommand: () => this.activationGate === undefined,
         // Resolved when each Bash call starts, so a Settings save takes effect
         // without ending an open parent or child session.
         commandPrefix: () => this.projectEnv?.preface,
@@ -517,6 +529,9 @@ export class WorkerServer {
   // ------------------------------------------------------------- dispatch
 
   private async dispatch(req: TypedClientRequest): Promise<unknown> {
+    if (this.activationGate && ACTIVATION_ROOT_METHODS.has(req.method)) {
+      throw new ProtocolError(ErrorCodes.SessionBusy, "An update is waiting for current work to finish. Keep working by cancelling update preparation first.");
+    }
     switch (req.method) {
       case "session/new":
         return this.sessionNew(req.params);
@@ -591,6 +606,21 @@ export class WorkerServer {
         // retirement *decision* is `pi/worker/retire` below, which takes it
         // under a fence rather than from a snapshot.
         return this.sessionSafety() satisfies Result<"pi/worker/safety">;
+
+      case "pi/worker/activation/park":
+        if (this.activationGate && (this.activationGate.updateId !== req.params.updateId
+          || this.activationGate.generationId !== req.params.generationId)) {
+          throw new ProtocolError(ErrorCodes.SessionBusy, "Another update is already waiting for current work to finish.");
+        }
+        this.activationGate = { ...req.params };
+        return this.activationState(req.params.updateId) satisfies Result<"pi/worker/activation/park">;
+      case "pi/worker/activation/status":
+        return this.activationState(req.params.updateId) satisfies Result<"pi/worker/activation/status">;
+      case "pi/worker/activation/cancel": {
+        const state = this.activationState(req.params.updateId);
+        this.activationGate = undefined;
+        return { ...state, parked: false } satisfies Result<"pi/worker/activation/cancel">;
+      }
 
       case "pi/worker/retire":
         return await this.lifetime.retire(req.params.mode);
@@ -1770,6 +1800,30 @@ export class WorkerServer {
   /** What each session is holding, and whether that list is the whole truth. */
   sessionSafety(): { sessions: SessionSafety[]; complete: boolean } {
     return this.lifetime.safety();
+  }
+
+  private activationState(updateId: string): WorkerActivationState {
+    const gate = this.activationGate;
+    if (!gate || gate.updateId !== updateId) {
+      throw new ProtocolError(ErrorCodes.InvalidParams, "That update does not own this worker's preparation gate.");
+    }
+    const safety = this.sessionSafety();
+    const blockers = { conversations: 0, agents: 0, questions: 0, approvals: 0, commands: 0 };
+    for (const session of safety.sessions) {
+      for (const pin of session.pins) {
+        if (pin.kind === "agent_run" || pin.kind === "child_run") blockers.agents += 1;
+        else if (pin.kind === "question") blockers.questions += 1;
+        else if (pin.kind === "approval") blockers.approvals += 1;
+        else if (pin.kind === "task") blockers.commands += 1;
+        else if (pin.kind !== "no_record") blockers.conversations += 1;
+      }
+    }
+    return {
+      ...gate,
+      complete: safety.complete,
+      parked: safety.complete && Object.values(blockers).every((count) => count === 0),
+      blockers,
+    };
   }
 
   /**

@@ -79,6 +79,7 @@ import { configuredOldSpaceBytes } from "./heap-ceiling.js";
 import { WorkerRetiredError, type WorkerClient } from "./worker-client.js";
 import { WorkerPool, type WorkerPoolOptions } from "./worker-pool.js";
 import { RuntimeRepairLedger } from "./runtime-repair.js";
+import { RuntimeActivationGate } from "./runtime-activation.js";
 import {
   FeatureGenerationStore,
   RuntimeGenerationGuard,
@@ -796,6 +797,7 @@ export class HostServer {
       },
     );
 
+    const activation = new RuntimeActivationGate(stateDir, this.pool, this.runs, this.tasks);
     this.router = new Router(this.pool, this.catalog, {
       attention: this.attention,
       projects: this.projects,
@@ -814,6 +816,7 @@ export class HostServer {
       runs: this.runs,
       resources: this.resources,
       admission: this.memoryPressure.admission,
+      activation,
       revisions: this.revisions,
       projection: this.projection,
       bodyRange: this.bodyRange,

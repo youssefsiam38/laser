@@ -63,7 +63,13 @@ describe("the method table", () => {
     expect(restricted).toEqual([
       "agents/sync",
       "pi/host/environment",
+      "pi/runtime/activation/cancel",
+      "pi/runtime/activation/prepare",
+      "pi/runtime/activation/status",
       "pi/session/unload",
+      "pi/worker/activation/cancel",
+      "pi/worker/activation/park",
+      "pi/worker/activation/status",
       "pi/worker/pressure",
       "pi/worker/recover-agent-failures",
       "pi/worker/retained-stores",

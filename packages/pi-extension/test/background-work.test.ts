@@ -88,6 +88,7 @@ function harness(
   foregroundCommandSeconds = 0.3,
   readTask?: (taskId: string, tailLines: number) => Promise<ReadTaskOutputResult>,
   commandPrefix?: string | (() => string | undefined),
+  admitCommand?: () => boolean,
 ) {
   const tools = new Map<string, FakeTool>();
   const sendMessage = vi.fn();
@@ -105,7 +106,7 @@ function harness(
   dirs.push(cwd);
   logRootDir = mkdtempSync(join(tmpdir(), "background-work-logs-"));
   dirs.push(logRootDir);
-  const ctx: ModuleContext = { pi, send, commands, backgroundWork: { cwd, logRoot: logRootDir, foregroundCommandSeconds, ...(readTask ? { readTask } : {}), ...(commandPrefix ? { commandPrefix } : {}) } };
+  const ctx: ModuleContext = { pi, send, commands, backgroundWork: { cwd, logRoot: logRootDir, foregroundCommandSeconds, ...(readTask ? { readTask } : {}), ...(commandPrefix ? { commandPrefix } : {}), ...(admitCommand ? { admitCommand } : {}) } };
   backgroundWorkModule.register!(ctx);
   const dispose = backgroundWorkModule.activate(ctx) as ModuleDispose | undefined;
   if (dispose) open.push(() => dispose({ reason: "quit" }));
@@ -133,6 +134,15 @@ function modelText(tool: FakeTool): string {
 }
 
 describe("background-work: the bash override", () => {
+  it("refuses a new command while update activation is parked and starts none", async () => {
+    let admitted = false;
+    const h = harness(120, undefined, undefined, () => admitted);
+    await expect(h.call("bash", { command: "printf blocked" })).rejects.toThrow(/update is waiting/i);
+    expect(h.published()).toEqual([]);
+    admitted = true;
+    await expect(h.call("bash", { command: "printf allowed" })).resolves.toMatchObject({ content: [{ type: "text", text: expect.stringContaining("allowed") }] });
+  });
+
   it("registers bash plus the two task tools and never tells the model to wait, poll or list", () => {
     const h = harness(120);
     expect([...h.tools.keys()]).toEqual(["bash", "task_output", "task_stop"]);

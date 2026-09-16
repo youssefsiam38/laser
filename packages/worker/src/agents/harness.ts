@@ -158,6 +158,8 @@ export interface AgentHarnessOptions {
   projectTrusted?: boolean;
   /** Background-work options for a session running in `cwd`; passed to every child. */
   backgroundWork?: (cwd: string) => BackgroundWorkOptions;
+  /** False while an update gate is parked; existing runs remain fully controllable. */
+  admitNewWork?: () => boolean;
   now?: () => number;
 }
 
@@ -351,6 +353,7 @@ export class AgentHarness {
   private readonly worktrees: WorktreeProvider;
   private readonly projectTrusted: boolean;
   private readonly backgroundWork: ((cwd: string) => BackgroundWorkOptions) | undefined;
+  private readonly admitNewWork: (() => boolean) | undefined;
   private readonly now: () => number;
   private readonly byPath = new Map<string, Entry>();
   private readonly runStates = new Map<string, RunState>();
@@ -363,6 +366,7 @@ export class AgentHarness {
     this.worktrees = options.worktrees;
     this.projectTrusted = options.projectTrusted !== false;
     this.backgroundWork = options.backgroundWork;
+    this.admitNewWork = options.admitNewWork;
     this.now = options.now ?? Date.now;
     // A definitions change is announced to every live bridge as a role
     // change, so `start_agent` catalogs are re-read.
@@ -1142,6 +1146,9 @@ export class AgentHarness {
   }
 
   private async startAgent(parent: Entry, input: StartAgentInput, signal?: AbortSignal): Promise<StartAgentResult> {
+    if (this.admitNewWork?.() === false) {
+      throw new HarnessError("An update is waiting for current work to finish. Cancel update preparation before starting another agent.");
+    }
     if (!parent.path || !parent.sessionId) throw new HarnessError("This session is not ready to start agents yet.");
     const agentName = (input.agentName ?? "").trim();
     const subagentName = (input.subagentName ?? "").trim();

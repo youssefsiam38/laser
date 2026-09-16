@@ -19,6 +19,7 @@ export {
 } from "./identity-migration.js";
 export { WorkerPool, type WorkerPoolOptions } from "./worker-pool.js";
 export { WorkerClient, WorkerRpcError, defaultWorkerMain, type WorkerClientOptions } from "./worker-client.js";
+export { RuntimeActivationGate } from "./runtime-activation.js";
 export {
   FeatureGenerationStore,
   RuntimeGenerationError,

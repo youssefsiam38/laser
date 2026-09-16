@@ -305,6 +305,14 @@ export const METHOD_POLICY = {
   // every method is, and it is `native` for the same reason `agents/sync` is:
   // nothing outside this machine's app may ask a worker what it is holding.
   "pi/worker/retained-stores": { scope: "diagnostics", reach: "native", refusal: NATIVE_SYNC_REFUSAL },
+  // Update activation is initiated only by the local shell/CLI. Browser and
+  // paired clients may keep settling existing work but cannot park the host.
+  "pi/runtime/activation/prepare": { scope: "work_control", reach: "native", refusal: NATIVE_SYNC_REFUSAL },
+  "pi/runtime/activation/status": { scope: "read", reach: "native", refusal: NATIVE_SYNC_REFUSAL },
+  "pi/runtime/activation/cancel": { scope: "work_control", reach: "native", refusal: NATIVE_SYNC_REFUSAL },
+  "pi/worker/activation/park": { scope: "work_control", reach: "native", refusal: NATIVE_SYNC_REFUSAL },
+  "pi/worker/activation/status": { scope: "diagnostics", reach: "native", refusal: NATIVE_SYNC_REFUSAL },
+  "pi/worker/activation/cancel": { scope: "work_control", reach: "native", refusal: NATIVE_SYNC_REFUSAL },
   // Host → its own already-live workers (RP-4): releasing an idle session's
   // runtime, and reading what each loaded session is holding. Both are the
   // app managing its own runtimes on this machine, never a client's call.
