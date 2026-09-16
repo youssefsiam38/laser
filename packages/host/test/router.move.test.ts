@@ -47,7 +47,7 @@ function chatSession(name: string, over: { record?: object | null; parentSession
   return path;
 }
 
-function harness(options: { open?: string[]; closeRefuses?: string } = {}) {
+function harness(options: { open?: string[]; closeRefuses?: string; closeGate?: Promise<void>; requestGate?: Promise<void> } = {}) {
   const catalog = new SessionCatalog(sessionRoot);
   const open = new Set(options.open ?? []);
   const workerRequests: Array<{ cwd: string; method: string; params: unknown }> = [];
@@ -64,11 +64,13 @@ function harness(options: { open?: string[]; closeRefuses?: string } = {}) {
       request: async (method: string, params: unknown) => {
         workerRequests.push({ cwd, method, params });
         if (method === "pi/session/close") {
+          if (options.closeGate) await options.closeGate;
           if (options.closeRefuses) throw new WorkerRpcError({ code: -32001, message: options.closeRefuses });
           const { path } = params as { path: string };
           const held = open.delete(path);
           return { closed: held };
         }
+        if (options.requestGate) await options.requestGate;
         return {};
       },
     }),
@@ -218,6 +220,63 @@ describe("Router · pi/session/move", () => {
       // Nothing refused was moved.
       expect(existsSync(plain)).toBe(true);
       expect(existsSync(child)).toBe(true);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("owns the conversation for the whole move: nothing routes beside the close and the rewrite", async () => {
+    // RP-4c: a move is not a reader. It closes the runtime, rewrites the file
+    // and moves the host's record of where the conversation lives, and no
+    // path-routed request may run between any two of those.
+    const path = chatSession("s5.jsonl");
+    let openTheClose!: () => void;
+    const closeGate = new Promise<void>((resolve) => { openTheClose = resolve; });
+    const h = harness({ open: [path], closeGate });
+    try {
+      const move = h.rpc("pi/session/move", { path, cwd: project });
+      await Promise.resolve();
+      // A path-routed read, issued while the move is closing the runtime.
+      const routed = h.rpc("pi/session/entries", { path });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      // Parked, not running: the only thing that reached a worker is the close.
+      expect(h.workerRequests.map((request) => request.method)).toEqual(["pi/session/close"]);
+
+      openTheClose();
+      const moved = (await move).result as { path: string };
+      expect(existsSync(moved.path)).toBe(true);
+      expect(existsSync(path)).toBe(false);
+      // The parked read never ran against the old name either: it is answered
+      // from the world as it is after the move, with nothing sent to a worker.
+      expect((await routed).error).toBeDefined();
+      expect(h.workerRequests.map((request) => request.method)).toEqual(["pi/session/close"]);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("refuses a move while something else is still using the conversation, and moves nothing", async () => {
+    const path = chatSession("s6.jsonl");
+    let answer!: () => void;
+    const requestGate = new Promise<void>((resolve) => { answer = resolve; });
+    const h = harness({ open: [path], requestGate });
+    try {
+      const routed = h.rpc("pi/session/entries", { path });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const refused = await h.rpc("pi/session/move", { path, cwd: project });
+      expect(refused.error).toMatchObject({ code: -32001, message: expect.stringMatching(/busy right now.*Nothing was moved/) });
+      // Nothing was closed, nothing was written, nothing was forgotten.
+      expect(h.workerRequests.map((request) => request.method)).toEqual(["pi/session/entries"]);
+      expect(h.forgotten).toEqual([]);
+      expect(existsSync(path)).toBe(true);
+      expect(h.projects.list()).toEqual([]);
+
+      answer();
+      expect((await routed).error).toBeUndefined();
+      // And once the conversation is free, the same move goes through.
+      const moved = (await h.rpc("pi/session/move", { path, cwd: project })).result as { path: string };
+      expect(existsSync(moved.path)).toBe(true);
     } finally {
       h.cleanup();
     }

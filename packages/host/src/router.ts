@@ -54,12 +54,13 @@ import type { PushService } from "./push.js";
 import { RESOURCE_REPORT_METHOD } from "./resources/guard.js";
 import type { ResourceService } from "./resources/index.js";
 import { canonical } from "./trust.js";
+import { SessionRouteLeases } from "./session-route-lease.js";
 import type { SessionProjection } from "./session-projection.js";
 import type { SessionBodyRange } from "./session-body-range.js";
 import type { SessionRevisions } from "./session-revision.js";
 import type { ViewCache } from "./views.js";
 import type { WorkerPool } from "./worker-pool.js";
-import { WorkerRpcError } from "./worker-client.js";
+import { WorkerRpcError, type WorkerClient } from "./worker-client.js";
 
 /** Attention order for the inbox (DESIGN.md "Status language"). */
 const ATTENTION_RANK: Record<SessionAttention, number> = {
@@ -129,6 +130,12 @@ export interface RouterDeps {
   access: AccessControl;
   /** The access audit (RP-13). Absent = decisions are not recorded. */
   audit?: AccessAudit | undefined;
+  /**
+   * Per-session route leases (RP-4c), shared with the pool that releases under
+   * them. Absent, this Router owns a private one: routing is still serialized
+   * against itself, but only the shared instance can see a release in flight.
+   */
+  routeLeases?: SessionRouteLeases | undefined;
 }
 
 /** Methods answered by the worker that owns `params.cwd` (M4). */
@@ -213,11 +220,54 @@ export class Router {
    */
   private readonly uploads = new Map<string, { cwd: string; at: number }>();
 
+  /**
+   * RP-4c: the reader half of the session route lease. Every path-routed
+   * request runs under it, ensure-open included.
+   */
+  private readonly leases: SessionRouteLeases;
+
   constructor(
     private readonly pool: WorkerPool,
     private readonly catalog: SessionCatalog,
     private readonly deps: RouterDeps,
-  ) {}
+  ) {
+    // The host wires one instance into both; `Partial` because a pool is also
+    // stood up as a stub in tests, where nothing releases anything.
+    this.leases = deps.routeLeases ?? (pool as Partial<WorkerPool>).routeLeases ?? new SessionRouteLeases();
+  }
+
+  /**
+   * Run one path-routed request under this session's route lease (RP-4c).
+   *
+   * The lease must cover ensure-open *and* the request that follows it: the
+   * whole point is that the decision not to re-open cannot go stale between the
+   * two. A release in flight is waited out first, and a release the host cannot
+   * prove the outcome of refuses the route having written nothing.
+   */
+  private route<T>(path: string, work: () => Promise<T>): Promise<T> {
+    return this.leases.route(path, work);
+  }
+
+  /**
+   * Ask the worker that already owns this session, under the lease (RP-4c).
+   *
+   * Every live fast path goes through here instead of snapshotting
+   * `liveWorkerFor` and then awaiting a request against that snapshot: the
+   * owner is chosen again *inside* the lease, so a release that took the
+   * runtime in between is waited out and then seen. When nothing owns the
+   * session once the lease is held, this answers `undefined` and the caller
+   * reads the durable record exactly as it does for a cold session.
+   */
+  private async routeLive<T>(path: string, send: (worker: WorkerClient) => Promise<T>): Promise<{ answered: true; result: T } | { answered: false }> {
+    // Nothing owns it: no lease is taken, and no worker is asked. A durable
+    // read needs no authority over a runtime that does not exist.
+    if (!this.liveWorkerFor(path)) return { answered: false };
+    return this.route(path, async () => {
+      const live = this.liveWorkerFor(path);
+      if (!live) return { answered: false as const };
+      return { answered: true as const, result: await send(live) };
+    });
+  }
 
   private now(): number {
     return this.deps.now?.() ?? Date.now();
@@ -478,8 +528,8 @@ export class Router {
         // The owning worker wins whenever there is one: its leaf can be ahead
         // of anything the file shows. Its answer still has to belong to this
         // host's environment; an unconfigured/stale worker is never trusted.
-        const live = this.liveWorkerFor(path);
-        if (live) return revisions.validateLive(await live.request(req.method, req.params));
+        const live = await this.routeLive(path, (worker) => worker.request(req.method, req.params));
+        if (live.answered) return revisions.validateLive(live.result);
         if (!existsSync(path)) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation is no longer stored here.");
 
         const answer = await revisions.read(path, req.params.baseRevision);
@@ -488,7 +538,7 @@ export class Router {
         // Pi may still understand unsupported/large/changing content, and can
         // also give the authoritative error for parser/unreadable cases once
         // normal path ownership has proved this is its transcript.
-        const forwarded = await (await this.workerFor(path)).request(req.method, req.params);
+        const forwarded = await this.route(path, async () => (await this.workerFor(path)).request(req.method, req.params));
         return revisions.validateLive(forwarded);
       }
 
@@ -507,14 +557,14 @@ export class Router {
         this.assertDurableReadPath(path);
         // The owning worker wins: its entries can be ahead of the file, and a
         // turn that has not been written yet exists only there.
-        const live = this.liveWorkerFor(path);
-        if (live) return await live.request(req.method, req.params);
+        const live = await this.routeLive(path, (worker) => worker.request(req.method, req.params));
+        if (live.answered) return live.result;
         if (!existsSync(path)) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation is no longer stored here.");
         const answer = await bodyRange.read(path, req.params);
         if (answer.kind === "answer") return answer.result;
         if (answer.kind === "refuse") throw answer.error;
         // Only an unmigrated format routes live, exactly as the page reader does.
-        return await (await this.workerFor(path)).request(req.method, req.params);
+        return await this.route(path, async () => (await this.workerFor(path)).request(req.method, req.params));
       }
 
       // RP-5b §2: the attachments inside one body. Same authorization, same
@@ -530,13 +580,13 @@ export class Router {
           );
         }
         this.assertDurableReadPath(path);
-        const live = this.liveWorkerFor(path);
-        if (live) return await live.request(req.method, req.params);
+        const live = await this.routeLive(path, (worker) => worker.request(req.method, req.params));
+        if (live.answered) return live.result;
         if (!existsSync(path)) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation is no longer stored here.");
         const answer = await bodyRange.regions(path, req.params);
         if (answer.kind === "answer") return answer.result;
         if (answer.kind === "refuse") throw answer.error;
-        return await (await this.workerFor(path)).request(req.method, req.params);
+        return await this.route(path, async () => (await this.workerFor(path)).request(req.method, req.params));
       }
 
       case "pi/session/move":
@@ -552,8 +602,7 @@ export class Router {
         if (req.params.authority === "any") return this.readAnyHistory(req);
         if (req.params.window) {
           // Default/explicit `live` preserves today's worker-owned behavior.
-          const worker = await this.workerFor(path);
-          const result = await worker.request(req.method, req.params);
+          const result = await this.route(path, async () => (await this.workerFor(path)).request(req.method, req.params));
           return this.deps.revisions ? this.deps.revisions.validateWindow(result) : result;
         }
         const cached = this.deps.views.get(path);
@@ -561,8 +610,9 @@ export class Router {
         // appending anything, so a cache that kept only the entries would
         // hand back the branch the person just left.
         if (cached) return cached;
-        const worker = await this.workerFor(path);
-        const result = await worker.request<{ entries: unknown[]; leafId?: string | null }>(req.method, req.params);
+        const result = await this.route(path, async () =>
+          (await this.workerFor(path)).request<{ entries: unknown[]; leafId?: string | null }>(req.method, req.params),
+        );
         this.deps.views.set(path, result);
         return result;
       }
@@ -851,8 +901,9 @@ export class Router {
           throw new ProtocolError(ErrorCodes.InvalidParams, "That task is not one of this session's, so it cannot be stopped from here.");
         }
         if (task.status !== "running") return { task };
-        const worker = await this.workerFor(req.params.path);
-        const { delivered } = await worker.request<{ delivered: boolean }>("pi/task/stop", req.params);
+        const { delivered } = await this.route(req.params.path, async () =>
+          (await this.workerFor(req.params.path)).request<{ delivered: boolean }>("pi/task/stop", req.params),
+        );
         if (!delivered) {
           throw new ProtocolError(
             ErrorCodes.InvalidParams,
@@ -981,34 +1032,51 @@ export class Router {
     const agentName = this.agents().defaultAgentName;
     const live = this.deps.runs?.list(path).some((run) => !isTerminalRunStatus(run.status)) ?? false;
     if (live) throw new ProtocolError(ErrorCodes.SessionBusy, "An agent this session started is still working. Wait for it to finish, or end it, then move the session.");
-    // One writer per file: the worker lets go before the host touches it. A
-    // streaming turn is refused by the worker with its own reason.
-    if (this.pool.openSessions(entry.cwd).includes(path)) {
-      const worker = await this.pool.get(entry.cwd);
-      await worker.request("pi/session/close", { path });
-      this.pool.forgetSession(path);
-    }
     const dest = destinationFor(this.catalog.sessionDir, path, target);
+    // Refused before anything is held, so a collision costs the conversation
+    // nothing at all.
+    this.assertNoDestinationFile(path, dest);
+    // One writer per file, and one authority over both names (RP-4c). A move
+    // closes the runtime, rewrites the file and hands the caches the new path;
+    // all three are authority over the same conversation, so they are one
+    // exclusive operation over the old and the new path rather than a reader
+    // that other routes may run beside. A release cannot start under it, a
+    // routed request cannot straddle it, and nothing else can be writing the
+    // destination. A streaming turn is still refused by the worker itself.
+    return this.leases.exclusive([path, dest], async () => {
+      if (this.pool.openSessions(entry.cwd).includes(path)) {
+        const worker = await this.pool.get(entry.cwd);
+        await worker.request("pi/session/close", { path });
+        this.pool.forgetSession(path);
+      }
+      // Re-read on this side of the close: the destination is only proved free
+      // while this operation holds it.
+      this.assertNoDestinationFile(path, dest);
+      rewriteSessionFile(path, dest, { cwd: target, agentName });
+      this.catalog.invalidate(path);
+      this.catalog.invalidate(dest);
+      this.deps.views.invalidate(path);
+      this.deps.revisions?.invalidate(path);
+      this.deps.revisions?.invalidate(dest);
+      this.unwritten.delete(path);
+      // Read where it was read: a session someone had caught up on must not
+      // come back as unread for having moved.
+      const seenAt = this.deps.attention.seenAt(path);
+      this.deps.attention.forget(path);
+      if (seenAt !== undefined) this.deps.attention.markSeen(dest, target);
+      // The project the person chose is a project from now on, exactly as the
+      // rail's Add project makes one: pinned, so it outlives its sessions.
+      this.deps.projects.add(target);
+      this.deps.projects.touch(target);
+      return { path: dest };
+    });
+  }
+
+  /** A move never writes over a file that is already there. */
+  private assertNoDestinationFile(path: string, dest: string): void {
     if (dest !== path && existsSync(dest)) {
       throw new ProtocolError(ErrorCodes.Internal, `That project already has a session file named ${dest.split(/[\\/]/).pop() ?? dest}. Nothing was moved.`);
     }
-    rewriteSessionFile(path, dest, { cwd: target, agentName });
-    this.catalog.invalidate(path);
-    this.catalog.invalidate(dest);
-    this.deps.views.invalidate(path);
-    this.deps.revisions?.invalidate(path);
-    this.deps.revisions?.invalidate(dest);
-    this.unwritten.delete(path);
-    // Read where it was read: a session someone had caught up on must not
-    // come back as unread for having moved.
-    const seenAt = this.deps.attention.seenAt(path);
-    this.deps.attention.forget(path);
-    if (seenAt !== undefined) this.deps.attention.markSeen(dest, target);
-    // The project the person chose is a project from now on, exactly as the
-    // rail's Add project makes one: pinned, so it outlives its sessions.
-    this.deps.projects.add(target);
-    this.deps.projects.touch(target);
-    return { path: dest };
   }
 
   /**
@@ -1083,8 +1151,8 @@ export class Router {
     // Omitted `window` under `any` means a bounded first screen. Default/live
     // omission remains the legacy whole-transcript route in the switch above.
     const params = req.params.window ? req.params : { ...req.params, window: { tail: 40 } as const };
-    const live = this.liveWorkerFor(path);
-    if (live) return revisions.validateWindow(await live.request(req.method, params));
+    const live = await this.routeLive(path, (worker) => worker.request(req.method, params));
+    if (live.answered) return revisions.validateWindow(live.result);
     if (!existsSync(path)) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation is no longer stored here.");
 
     // Bounds/unreadability refuse truthfully instead of silently spawning.
@@ -1093,7 +1161,7 @@ export class Router {
     const answer = await projection.read(path, params.window, req.params.baseRevision, req.params.bodyLimit);
     if (answer.kind === "refuse") throw answer.error;
     if (answer.kind === "route-live") {
-      const forwarded = await (await this.workerFor(path)).request(req.method, params);
+      const forwarded = await this.route(path, async () => (await this.workerFor(path)).request(req.method, params));
       return revisions.validateWindow(forwarded);
     }
     return answer.result;
@@ -1231,24 +1299,37 @@ export class Router {
 
         const path = (req.params as { path: string }).path;
         const loading = req.method === "session/load";
-        const worker = await this.workerFor(path, !loading);
-        const forwarded = await worker.request(req.method, req.params);
-        const result = loading && this.deps.revisions ? this.deps.revisions.validateLoad(forwarded) : forwarded;
-        const cwd = this.pool.cwdOfSession(path) ?? this.cwdOf(path);
-        if (loading && cwd) this.pool.bindSession(path, cwd);
+        // RP-4c: choosing the worker, ensure-open, the request *and* the host's
+        // record of where this session now lives are one lease. Between any two
+        // of them the lifetime sweep, a retirement or a crash may otherwise take
+        // the runtime, and the mutation would reach a worker that had correctly
+        // let the session go — or the pool would keep advertising a path the
+        // worker has already re-keyed under a fork.
+        const { result, cwd, forked } = await this.route(path, async () => {
+          const worker = await this.workerFor(path, !loading);
+          const forwarded = await worker.request(req.method, req.params);
+          // Validated before anything is recorded: a load whose answer does not
+          // belong to this host must not become the pool's idea of ownership.
+          const answer = loading && this.deps.revisions ? this.deps.revisions.validateLoad(forwarded) : forwarded;
+          const owner = this.pool.cwdOfSession(path) ?? this.cwdOf(path);
+          if (loading && owner) this.pool.bindSession(path, owner);
+          // A fork answers with a new session path served by the same worker; a
+          // navigate rewrites the leaf, so the cached transcript is stale.
+          const state = (answer as { state?: SessionState } | null)?.state;
+          const moved = typeof state?.path === "string" && state.path !== path ? state.path : undefined;
+          if (moved && owner) {
+            // One runtime, one row (RP-4): the fork moved the session's file, so
+            // the pool's bookkeeping moves with it, inside the same lease that
+            // wrote the request. Leaving the source path behind would leave a row
+            // nobody serves, and every later lifetime question about this worker
+            // would disagree with it for ever.
+            this.pool.rekeySession(path, moved, owner);
+            if (state) this.noteUnwritten(state);
+          }
+          return { result: answer, cwd: owner, forked: moved };
+        });
+        // Presentation only from here: no authority over a runtime or a file.
         if (loading && cwd && !this.isWorkspace(cwd) && !this.isWorkspaceSession(path)) this.deps.projects.touch(cwd);
-        // A fork answers with a new session path served by the same worker; a
-        // navigate rewrites the leaf, so the cached transcript is stale.
-        const state = (result as { state?: SessionState } | null)?.state;
-        const forked = state?.path;
-        if (forked && cwd && forked !== path) {
-          // One runtime, one row (RP-4): the fork moved the session's file, so
-          // the pool's bookkeeping moves with it. Leaving the source path
-          // behind would leave a row nobody serves, and every later lifetime
-          // question about this worker would disagree with it for ever.
-          this.pool.rekeySession(path, forked, cwd);
-          if (state) this.noteUnwritten(state);
-        }
         if (req.method === "pi/session/fork" || req.method === "pi/session/navigate" || req.method === "pi/session/compact") {
           this.deps.views.invalidate(path);
           // The catalog resumes its byte-offset scan whenever a file only grew.
@@ -1394,6 +1475,29 @@ export class Router {
     const cwd = this.cwdOf(path);
     if (!cwd) throw new ProtocolError(ErrorCodes.SessionNotFound, `no project known for session ${path}`);
     if (!this.isWorkspace(cwd)) this.deps.projects.assertProject(cwd);
+    // Refuse before anything is started, so a session with nothing to recover
+    // never costs a worker process.
+    this.openOrRefuse(path, cwd);
+    const worker = await this.pool.get(cwd);
+    // Read again on this side of the await (RP-4c). Getting the worker can wait
+    // out a retirement, replace a crashed process or return a successor, and any
+    // of those empties the pool's membership for this path. The whole guard is
+    // re-evaluated, not only `open`: after an explicit stop a path with no saved
+    // file can lose its runtime, and a stale `open` would let `session/load`
+    // create a different session under that filename.
+    const open = this.openOrRefuse(path, cwd);
+    if (ensureOpen && !open) {
+      await worker.request("session/load", { path });
+      this.pool.bindSession(path, cwd);
+    }
+    return worker;
+  }
+
+  /**
+   * Whether this worker holds the session right now, refusing when it does not
+   * and there is nothing saved to re-open.
+   */
+  private openOrRefuse(path: string, cwd: string): boolean {
     const open = this.pool.openSessions(cwd).includes(path);
     if (!open && !this.catalog.get(path) && !existsSync(path)) {
       throw new ProtocolError(
@@ -1401,12 +1505,7 @@ export class Router {
         "This session is no longer open and has no saved transcript. Start a new session.",
       );
     }
-    const worker = await this.pool.get(cwd);
-    if (ensureOpen && !open) {
-      await worker.request("session/load", { path });
-      this.pool.bindSession(path, cwd);
-    }
-    return worker;
+    return open;
   }
 }
 

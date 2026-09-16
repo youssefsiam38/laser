@@ -100,7 +100,9 @@ class FakeDriver implements SessionDriver {
   patch(next: Partial<SessionState>) { this.st = { ...this.st, ...next }; }
   subscribe(listener: DriverListener) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   emit(event: DriverEvent) { for (const listener of this.listeners) listener(event); }
-  async prompt() { return { accepted: true, queued: false }; }
+  /** Prompts this driver was actually asked to run (RP-4c's premise). */
+  promptCalls = 0;
+  async prompt() { this.promptCalls += 1; return { accepted: true, queued: false }; }
   async steer() {}
   async followUp() {}
   async clearQueue() { return { steering: [], followUp: [] }; }
@@ -198,6 +200,25 @@ describe("pi/session/unload", () => {
     // A release is not a cancellation: nothing was aborted on the way out.
     expect(w.drivers[0]!.aborts).toBe(0);
     expect((await w.safety()).sessions).toEqual([]);
+  });
+
+  it("refuses a prompt for a session it no longer holds, before the driver sees anything", async () => {
+    // The premise the host's route lease (RP-4c) rests on: this refusal happens
+    // in `live()`, ahead of the driver, the harness and the engine, so the
+    // prompt was never delivered and re-establishing it later cannot be a
+    // second delivery. It also carries no retry marker, which is why the
+    // host's one-shot lifetime retry cannot save it.
+    const w = world();
+    await w.load();
+    expect(await w.unload()).toEqual({ unloaded: true, pins: [] });
+    expect(w.drivers[0]!.promptCalls).toBe(0);
+
+    const refused = await w.call("session/prompt", { path: PATH, content: text("never delivered") });
+    expect(refused.error?.code).toBe(ErrorCodes.SessionNotFound);
+    expect(refused.error?.message).toMatch(/is not open in this worker/);
+    expect((refused.error as { data?: { retry?: string } } | undefined)?.data?.retry).toBeUndefined();
+    expect(w.drivers[0]!.promptCalls).toBe(0);
+    expect(w.drivers).toHaveLength(1);
   });
 
   it("is idempotent: a session this worker does not hold is not an error", async () => {
