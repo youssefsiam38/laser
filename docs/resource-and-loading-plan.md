@@ -27,7 +27,7 @@ Authoritative detail, evidence and ownership live in `STATUS_DETAILED.md`; `STAT
 | RP-11 | M18-T11 | done — `fa68dd02` plus reviewed corrections `eddc9f38`, `bae977d9`, `78b22c83`; one shared authority fence, exact-revision cache settlement and real offline mismatch matrices prove 0-frame warm paint, preserved focus/draft/reading place and zero survivors | RP-10 |
 | RP-12 | M18-T12 | done — integrated `e9e3d8d` | RP-9 |
 | RP-13 | M18-T13 | done — host policy/storage isolation through `1e4eeba`; reviewed real-host browser matrices `a0111f9` | RP-12 |
-| RP-14 | M18-T14 | todo | RP-1..RP-13, M18-T15 |
+| RP-14 | M18-T14 | dropped — D-268: no shell migration gate; Electron stays | — |
 | Capability consumption | M18-T19 | done — reviewed `76f475fa`: affordances derive from the authenticated descriptor and protocol policy tables, refuse before invocation, desktop/phone narrowed-policy matrices | RP-13 |
 | Recovery/update activation | M19-T1..T3 | todo — explicit launch, generation, repair, update and migration recovery tasks | M18 |
 
@@ -46,7 +46,7 @@ A first-ever uncached conversation cannot load in zero milliseconds. The target 
 ## Decisions and non-goals
 
 - **Local-first reads, host-first actions.** A cached transcript may paint before a connection is ready. Send, approvals, tools, navigation mutations and process controls wait for the authoritative host.
-- **Electron stays.** A Tauri or native-WebView migration is not part of this plan. It has a measurement gate at the end.
+- **Electron stays.** A Tauri or native-WebView migration is not part of this plan, and the measurement gate that once closed it (RP-14) was dropped by D-268.
 - **No external-agent controller.** Do not add provider drivers, discover third-party coding-agent CLIs, import their transcripts or infer Laser agents from their tool output.
 - **No direct client JSONL access.** The host or live worker owns every authoritative read.
 - **No second transcript authority.** A projection or cache accelerates reads; Pi's session record remains canonical.
@@ -130,8 +130,6 @@ RP-9
   └─ RP-12 worker-free authoritative reads
        └─ RP-13 deployment and enterprise policy
 
-RP-1..RP-13 + RP-2 repeat baseline
-  └─ RP-14 Electron/Tauri decision gate
 ```
 
 ## RP-1 · Process identity and correct accounting
@@ -495,20 +493,9 @@ These are transferable lessons from T3 Code and DSH Desktop, but remain separate
 
 Laser's existing reviewed-SHA, digest, provenance and public-release verification remains authoritative. These additions strengthen runtime activation; they do not replace release verification.
 
-## RP-14 · Electron/Tauri decision gate
+## RP-14 · Electron/Tauri decision gate (dropped)
 
-Do not begin a migration as part of the memory work.
-
-After RP-1 through RP-13:
-
-1. compare the packaged Electron app with the existing headless host plus PWA to isolate shell cost without rewriting anything;
-2. if the shell still dominates remaining idle/private memory, build a disposable Tauri spike that launches the unchanged stock-Node host;
-3. run the same UI bundle and fixtures on Electron, WebView2, WKWebView and WebKitGTK;
-4. compare private memory, startup, idle CPU/battery, streaming, long-history navigation, hidden-window behavior and package size;
-5. verify tray, notifications, keychain, updater, deep links, dictation, file opening, accessibility, Wayland and reduced motion;
-6. set the required memory/footprint benefit before reviewing results.
-
-Migration is accepted only if the predeclared benefit is met on supported platforms with no regression in security, visual consistency, accessibility, browser acceptance or host/worker lifecycle. The host and worker remain Node sidecars; porting the engine runtime to Rust is explicitly out of scope.
+Dropped by D-268 at the person's direction: Electron stays; no shell comparison, Tauri spike or migration decision is part of this plan. The host and worker remain Node sidecars.
 
 ## Cross-cutting acceptance gates
 
