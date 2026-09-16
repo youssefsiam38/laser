@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-16T11:09:23+03:00 · orchestrator `01a0a030` · HEAD: a4a364c2
-**Current focus:** M18 advances RP-8 from the reviewed worker controller to companion retention, host orchestration, renderer response and final ceilings.
+**Last updated:** 2026-09-16T12:08:24+03:00 · orchestrator `01a0a030` · HEAD: 87e65720
+**Current focus:** M18 advances RP-8 from reviewed worker/companion containment to host orchestration, renderer response and final ceilings.
 
 | Milestone | State |
 | --- | --- |
@@ -29,7 +29,7 @@
 | MX Cross-cutting | in-progress |
 
 **Blockers:** M18-T15 waits for RP-8; M18-T14 waits for T15 and Q-10; M19 waits for M18.
-**Next up:** implement/review companion retention D; implement host controller E; implement renderer behavior F, ceilings G and capability consumption T19.
-**Recently done:** M18-T8 worker controller C (`a4a364c2`); MX-T10 runtime verification (`9e369d8f`); M18-T11 immediate paint (`78b22c83`); M18-T18 route authority (`916e30fa`); M18-T16 bounded bodies (`42344a58`).
+**Next up:** implement/review host controller E; implement renderer behavior F and ceilings G; consume capabilities in T19.
+**Recently done:** M18-T8 companion retention D (`87e65720`); M18-T8 worker controller C (`a4a364c2`); MX-T10 runtime verification (`9e369d8f`); M18-T11 immediate paint (`78b22c83`); M18-T18 route authority (`916e30fa`).
 
 Ownership and evidence: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`.
