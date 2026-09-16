@@ -20,7 +20,11 @@ import {
   type JsonRpcError,
   type JsonRpcMessage,
   type JsonRpcNotification,
+  runtimeFailureSchema,
   type LineDecoderStats,
+  type RuntimeFailure,
+  type RuntimeFailureCategory,
+  type WorkerMode,
   type WorkerNotifications,
 } from "@lasercode/protocol";
 
@@ -62,6 +66,8 @@ export interface WorkerClientOptions {
   workerGeneration?: number;
   /** Explicit V8 old-space ceiling for this exact worker spawn, in MiB. */
   oldSpaceMiB?: number;
+  /** Effective feature mode for this spawn; desired preferences are never changed here. */
+  mode?: WorkerMode;
   /** Path to the worker entry; defaults to the workspace `@lasercode/worker` build. */
   workerMain?: string;
   /** Node binary to run the worker with; defaults to the current one. */
@@ -75,15 +81,55 @@ export interface WorkerClientOptions {
   onStderr?: (text: string) => void;
 }
 
-export type WorkerExitKind = "heap_oom" | "process_exit" | "spawn_error" | "transport_fault";
+export type WorkerExitKind = Extract<
+  RuntimeFailureCategory,
+  | "spawn_error"
+  | "launch_identity_missing"
+  | "launch_identity_mismatch"
+  | "initialization_error"
+  | "process_exit"
+  | "heap_oom"
+  | "transport_fault"
+>;
 export interface WorkerExit {
   kind: WorkerExitKind;
   code: number | null;
   signal: NodeJS.Signals | null;
+  failure: RuntimeFailure;
 }
 
 const OOM_MARKER = /Reached heap limit|JavaScript heap out of memory|Allocation failed/i;
 const STDERR_MARKER_WINDOW = 4096;
+const EXIT_FAILURE: Record<WorkerExitKind, { stage: RuntimeFailure["stage"]; message: string }> = {
+  spawn_error: {
+    stage: "spawn",
+    message: "This project's runtime could not start. Check the app installation, then try again.",
+  },
+  launch_identity_missing: {
+    stage: "announce",
+    message: "The app could not verify the project runtime it started. Try again; if this continues, update or reinstall the app.",
+  },
+  launch_identity_mismatch: {
+    stage: "announce",
+    message: "The app could not verify the project runtime it started. Try again; if this continues, update or reinstall the app.",
+  },
+  initialization_error: {
+    stage: "initialize",
+    message: "This project's runtime did not start. Try again; if this continues, update or reinstall the app.",
+  },
+  process_exit: {
+    stage: "runtime",
+    message: "This project's runtime stopped before the work finished.",
+  },
+  heap_oom: {
+    stage: "runtime",
+    message: "This project's agent ran out of memory.",
+  },
+  transport_fault: {
+    stage: "runtime",
+    message: "The project runtime sent an invalid message and was stopped. Try again.",
+  },
+};
 
 /** Marker plus abnormal termination: neither a SIGABRT nor a stray log line is enough alone. */
 export function classifyWorkerExit(
@@ -151,6 +197,8 @@ export class WorkerClient {
    * this value is never logged, never stored and never sent to a client.
    */
   readonly generation: string = randomBytes(8).toString("hex");
+  /** Exact 128-bit child identity, minted before spawn and required on its first frame. */
+  readonly launchId: string = randomBytes(16).toString("hex");
   /**
    * What *this spawn* is, as a number the worker can prove it was given (RP-8).
    *
@@ -193,13 +241,23 @@ export class WorkerClient {
   private rejectReady: ((error: Error) => void) | undefined;
   /** Only enough stderr to recognize stable fatal markers; never surfaced as status copy. */
   private stderrMarkerTail = "";
+  private announced = false;
+  private becameReady = false;
   readonly ready: Promise<void>;
 
   constructor(private readonly options: WorkerClientOptions) {
     const args: string[] = [];
     this.configuredOldSpaceBytes = options.oldSpaceMiB === undefined ? undefined : oldSpaceBytes(options.oldSpaceMiB);
     if (options.oldSpaceMiB !== undefined) args.push(oldSpaceSizeFlag(options.oldSpaceMiB));
-    args.push(options.workerMain ?? defaultWorkerMain(), "--cwd", options.cwd);
+    args.push(
+      options.workerMain ?? defaultWorkerMain(),
+      "--cwd",
+      options.cwd,
+      "--launch-id",
+      this.launchId,
+      "--worker-mode",
+      options.mode ?? "normal",
+    );
     if (options.agentDir) args.push("--agent-dir", options.agentDir);
     if (options.sessionDir) args.push("--session-dir", options.sessionDir);
     if (options.stateDir) args.push("--state-dir", options.stateDir);
@@ -246,6 +304,19 @@ export class WorkerClient {
         try {
           message = JSON.parse(line) as JsonRpcMessage;
         } catch {
+          if (!this.announced) this.faultLaunch("launch_identity_missing");
+          continue;
+        }
+        if (!this.announced) {
+          const params = isNotification(message) && message.method === "pi/worker/status"
+            ? message.params as { cwd?: unknown; status?: unknown; launchId?: unknown }
+            : undefined;
+          if (params?.status !== "starting" || params.cwd !== options.cwd || params.launchId !== this.launchId) {
+            this.faultLaunch(params?.launchId === undefined ? "launch_identity_missing" : "launch_identity_mismatch");
+            continue;
+          }
+          this.announced = true;
+          options.onNotification(message as JsonRpcNotification);
           continue;
         }
         if (isResponse(message)) {
@@ -255,8 +326,23 @@ export class WorkerClient {
           if (message.error) entry.reject(new WorkerRpcError(message.error));
           else entry.resolve(message.result);
         } else if (isNotification(message)) {
-          if (message.method === "pi/worker/status" && (message.params as { status?: string }).status === "ready") {
-            resolveReady();
+          if (message.method === "pi/worker/status") {
+            const params = message.params as { status?: unknown; launchId?: unknown; failure?: unknown };
+            if (params.launchId !== this.launchId) {
+              this.faultLaunch(params.launchId === undefined ? "launch_identity_missing" : "launch_identity_mismatch");
+              continue;
+            }
+            if (params.status === "ready") {
+              this.becameReady = true;
+              resolveReady();
+            } else if (params.status === "crashed" && !this.becameReady) {
+              const parsed = runtimeFailureSchema.safeParse(params.failure);
+              const failure = parsed.success && parsed.data.category === "initialization_error"
+                ? parsed.data
+                : this.failureFor("initialization_error");
+              this.faultLaunch("initialization_error", failure);
+              continue;
+            }
           }
           options.onNotification(message);
         }
@@ -270,14 +356,14 @@ export class WorkerClient {
     this.child.stdout?.on("data", () => {}); // drain; Pi/extension logs are not ours
     this.child.on("exit", (code, signal) => {
       this.exited = true;
-      this.settle(new Error(`worker for ${options.cwd} exited (${code ?? signal})`), rejectReady, code, signal);
+      this.settle(rejectReady, code, signal);
     });
     this.child.on("error", (error) => {
       // No `exit` follows a failed spawn, so this is the only chance to unblock
       // `ready`, fail the pending calls, and tell the pool the worker is gone.
       this.exited = true;
       this.startError ??= error;
-      this.settle(error, rejectReady, null, null, "spawn_error");
+      this.settle(rejectReady, null, null, "spawn_error");
     });
   }
 
@@ -295,21 +381,43 @@ export class WorkerClient {
 
   /** Fail everything in flight and report the exit, exactly once. */
   private settle(
-    error: Error,
     rejectReady: (e: Error) => void,
     code: number | null,
     signal: NodeJS.Signals | null,
     kind = classifyWorkerExit(this.stderrMarkerTail, code, signal),
+    failure = this.failureFor(kind),
   ): void {
     if (this.reported) return;
     this.reported = true;
+    // Child diagnostics stay on the host; pending RPCs receive categorical
+    // person copy, never a project path, pid, signal, exit code or frame size.
+    const publicError = new WorkerRpcError({ code: ErrorCodes.DriverUnavailable, message: failure.message });
     // Nothing is owed on a link that is gone, and a late callback cannot make
     // it negative or resurrect a count.
     this.inFlightWrites = 0;
-    rejectReady(error);
-    for (const entry of this.pending.values()) entry.reject(error);
+    rejectReady(publicError);
+    for (const entry of this.pending.values()) entry.reject(publicError);
     this.pending.clear();
-    this.options.onExit(code, signal, { kind, code, signal });
+    this.options.onExit(code, signal, { kind, code, signal, failure });
+  }
+
+  private failureFor(kind: WorkerExitKind): RuntimeFailure {
+    const copy = EXIT_FAILURE[kind];
+    return {
+      owner: { kind: "worker", launchId: this.launchId, cwd: this.options.cwd },
+      stage: copy.stage,
+      category: kind,
+      message: copy.message,
+    };
+  }
+
+  /** A missing or mismatched first-frame identity can never become ready. */
+  private faultLaunch(kind: WorkerExitKind, failure = this.failureFor(kind)): void {
+    if (this.reported) return;
+    this.exited = true;
+    try { this.pipe.destroy(); } catch { /* already closed */ }
+    try { this.child.kill("SIGKILL"); } catch { /* already gone */ }
+    this.settle(this.rejectReady ?? ((): void => {}), null, null, kind, failure);
   }
 
   /**
@@ -335,7 +443,7 @@ export class WorkerClient {
     } catch {
       // Already gone; the settle below is what matters.
     }
-    this.settle(error, this.rejectReady ?? ((): void => {}), null, null, "transport_fault");
+    this.settle(this.rejectReady ?? ((): void => {}), null, null, "transport_fault");
   }
 
   /**

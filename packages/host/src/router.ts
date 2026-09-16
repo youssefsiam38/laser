@@ -675,7 +675,7 @@ export class Router {
         const worker = await this.pool.get(cwd);
         const params = { ...req.params, cwd, ...(agentName ? { agentName } : {}) };
         const result = await worker.request<{ state: SessionState }>(req.method, params);
-        this.pool.bindSession(result.state.path, cwd);
+        await this.bindOpenedSession(result.state.path, cwd);
         // A workspace is not a project: Beam and Chat sessions never put one
         // in the project list.
         if (!this.isWorkspace(cwd)) this.deps.projects.touch(cwd);
@@ -811,7 +811,7 @@ export class Router {
         return {};
 
       case "pi/worker/restart":
-        return { worker: await this.pool.restart(req.params.cwd) };
+        return { worker: await this.pool.restart(req.params.cwd, req.params.mode) };
 
       case "pi/worker/stop": {
         await this.pool.stop(req.params.cwd, "stopped from the app");
@@ -1347,7 +1347,7 @@ export class Router {
           // belong to this host must not become the pool's idea of ownership.
           const answer = loading && this.deps.revisions ? this.deps.revisions.validateLoad(forwarded) : forwarded;
           const owner = this.pool.cwdOfSession(path) ?? this.cwdOf(path);
-          if (loading && owner) this.pool.bindSession(path, owner);
+          if (loading && owner) await this.bindOpenedSession(path, owner);
           // A fork answers with a new session path served by the same worker; a
           // navigate rewrites the leaf, so the cached transcript is stale.
           const state = (answer as { state?: SessionState } | null)?.state;
@@ -1506,6 +1506,11 @@ export class Router {
    * refuse it before the engine can create a different session under its stale
    * filename.
    */
+  private async bindOpenedSession(path: string, cwd: string): Promise<void> {
+    this.pool.bindSession(path, cwd);
+    await this.pool.recoverOpenedSession(path, cwd);
+  }
+
   private async workerFor(path: string, ensureOpen = true) {
     const cwd = this.cwdOf(path);
     if (!cwd) throw new ProtocolError(ErrorCodes.SessionNotFound, `no project known for session ${path}`);
@@ -1523,7 +1528,7 @@ export class Router {
     const open = this.openOrRefuse(path, cwd);
     if (ensureOpen && !open) {
       await worker.request("session/load", { path });
-      this.pool.bindSession(path, cwd);
+      await this.bindOpenedSession(path, cwd);
     }
     return worker;
   }

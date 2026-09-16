@@ -21,6 +21,7 @@ import { WorkerClient, classifyWorkerExit, nextWorkerGeneration } from "../src/w
 const WORKER = `
 import { Socket } from "node:net";
 const cwd = process.argv[process.argv.indexOf("--cwd") + 1];
+const launchId = process.argv[process.argv.indexOf("--launch-id") + 1];
 const socket = new Socket({ fd: 3, readable: true, writable: true });
 const send = (m) => socket.write(JSON.stringify(m) + "\\n");
 let buffer = "";
@@ -49,7 +50,8 @@ socket.on("data", (chunk) => {
   }
 });
 socket.on("end", () => process.exit(0));
-send({ jsonrpc: "2.0", method: "pi/worker/status", params: { cwd, status: "ready" } });
+send({ jsonrpc: "2.0", method: "pi/worker/status", params: { cwd, status: "starting", launchId, mode: "normal" } });
+send({ jsonrpc: "2.0", method: "pi/worker/status", params: { cwd, status: "ready", launchId, mode: "normal" } });
 `;
 
 let dir: string;
@@ -119,8 +121,8 @@ it("ends the worker generation on a frame past the ceiling, failing what was in 
   // behind it. Neither may be left hanging.
   const overflowing = worker.request("pi/test/overflow", { megabytes: FRAME_MAX_BYTES / (1024 * 1024) + 2 });
   const innocent = worker.request("pi/test/echo", {});
-  await expect(overflowing).rejects.toThrow(/past the .* limit for one message|worker/i);
-  await expect(innocent).rejects.toThrow();
+  await expect(overflowing).rejects.toThrow("The project runtime sent an invalid message and was stopped. Try again.");
+  await expect(innocent).rejects.toThrow("The project runtime sent an invalid message and was stopped. Try again.");
   expect(worker.alive).toBe(false);
   await expect.poll(() => exits.length).toBe(1);
   // A request after the fault is refused immediately rather than queued into

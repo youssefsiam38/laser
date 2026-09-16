@@ -5,12 +5,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { AgentRun, WorkerInfo } from "@lasercode/protocol";
 import { AgentRunRegistry } from "../src/agents/runs.js";
 import { WorkerPool } from "../src/worker-pool.js";
+import { RuntimeRepairLedger } from "../src/runtime-repair.js";
 import type { WorkerExit } from "../src/worker-client.js";
 
 const OOM_WORKER = String.raw`
 import { existsSync, writeFileSync } from "node:fs";
 import { Socket } from "node:net";
 const cwd = process.argv[process.argv.indexOf("--cwd") + 1];
+const launchId = process.argv[process.argv.indexOf("--launch-id") + 1];
 const socket = new Socket({ fd: 3, readable: true, writable: true });
 const send = (message) => socket.write(JSON.stringify(message) + "\n");
 let buffer = "";
@@ -32,7 +34,8 @@ socket.on("data", (chunk) => {
   }
 });
 socket.on("end", () => process.exit(0));
-send({ jsonrpc: "2.0", method: "pi/worker/status", params: { cwd, status: "ready" } });
+send({ jsonrpc: "2.0", method: "pi/worker/status", params: { cwd, status: "starting", launchId, mode: "normal" } });
+send({ jsonrpc: "2.0", method: "pi/worker/status", params: { cwd, status: "ready", launchId, mode: "normal" } });
 const marker = process.env.OOM_ONCE_MARKER;
 if (marker && !existsSync(marker)) {
   writeFileSync(marker, "once");
@@ -92,6 +95,7 @@ describe("a real worker old-space failure", () => {
 
     pool = new WorkerPool({
       workerMain,
+      repair: new RuntimeRepairLedger(join(scratch, "runtime-repair.json"), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
       workerOldSpaceMiB: 64,
       env: { OOM_ONCE_MARKER: marker, RECOVERY_MARKER: recoveryMarker },
       sweepMs: 0,
@@ -121,7 +125,7 @@ describe("a real worker old-space failure", () => {
     expect(losses[0]).toMatchObject({ kind: "heap_oom" });
     if (process.platform === "linux") expect(losses[0]!.signal).toBe("SIGABRT");
     expect(sawFatalMarker).toBe(true);
-    expect(delays).toEqual([1_000]);
+    expect(delays.filter((delay) => delay < 60_000)).toEqual([1_000]);
     expect(reopened).toEqual([[parentPath]]);
     expect(existsSync(recoveryMarker)).toBe(true);
     expect((await pool.get(project)).generation).not.toBe(first.generation);

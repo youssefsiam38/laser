@@ -481,6 +481,7 @@ function routerHarness(options: {
       bound.push(path);
       open.add(path);
     },
+    recoverOpenedSession: async () => undefined,
     rekeySession: (from: string, to: string) => {
       rekeys.push({ from, to });
       open.delete(from);
@@ -733,6 +734,7 @@ function liveHarness() {
     ownerOfSession: (candidate: string) => (open.has(candidate) ? worker : undefined),
     cwdOfSession: (candidate: string) => (open.has(candidate) ? CWD : undefined),
     bindSession: () => open.add(path),
+    recoverOpenedSession: async () => undefined,
     get: async () => worker,
   } as unknown as WorkerPool;
 

@@ -1,7 +1,7 @@
 /**
  * HostServer (M1-T1, M2) — HTTP + WebSocket on 127.0.0.1.
  *   GET /           → the UI bundle (SPA fallback), or a placeholder if not built
- *   GET /healthz    → ok
+ *   GET /healthz    → { status: "ok", launchId }
  *   WS  /ws         → JSON-RPC: client requests in, responses + worker notifications out
  *
  * This is where the host's pieces are wired together:
@@ -26,6 +26,7 @@
  * and tests (which send none) keep working.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
@@ -33,7 +34,7 @@ import { totalmem } from "node:os";
 import { basename, dirname, extname, join, normalize, relative, resolve as resolvePath, sep } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { channelIdFor, type KeyPair } from "@lasercode/crypto";
-import { ENV, ErrorCodes, FRAME_MAX_BYTES, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, isProviderCaptureMessage, isTerminalRunStatus, projectEnvWorkerConfig, type ClientRequests, type DeviceGrants, type EnvironmentPolicyInput, type HostNotifications, type JsonRpcNotification, type LogEntry, type MemoryPressurePublish, type NamerState, type ProviderCaptureMeta, type ProviderCaptureOmission, type ResourceRetainedStores, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
+import { ENV, ErrorCodes, FRAME_MAX_BYTES, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, isProviderCaptureMessage, isTerminalRunStatus, projectEnvWorkerConfig, type AgentRun, type ClientRequests, type DeviceGrants, type EnvironmentPolicyInput, type HostNotifications, type JsonRpcNotification, type LogEntry, type MemoryPressurePublish, type NamerState, type ProviderCaptureMeta, type ProviderCaptureOmission, type ResourceRetainedStores, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
 import { AccessControl, isLoopbackAddress, localActor, pairedActor, type ActorIdentity } from "./access.js";
 import { AccessAudit } from "./access-audit.js";
 import { loadEnvironmentPolicy } from "./environment-policy.js";
@@ -77,10 +78,13 @@ import { ViewCache } from "./views.js";
 import { configuredOldSpaceBytes } from "./heap-ceiling.js";
 import { WorkerRetiredError, type WorkerClient } from "./worker-client.js";
 import { WorkerPool, type WorkerPoolOptions } from "./worker-pool.js";
+import { RuntimeRepairLedger } from "./runtime-repair.js";
 
 export interface HostServerOptions {
   host?: string;
   port?: number;
+  /** Launcher-minted identity echoed by health; production always supplies it. */
+  launchId?: string;
   agentDir?: string;
   sessionDir?: string;
   workerMain?: string;
@@ -279,6 +283,8 @@ export class HostServer {
   readonly prefs: PrefsStore;
   /** Laser-owned capability policy; implementation packages stay hidden. */
   readonly features: FeatureService;
+  /** Durable bounded launch repair and per-project effective safe mode. */
+  readonly repair: RuntimeRepairLedger;
   /** Agent definitions (docs/agents-leap): the person's, the seeded default, the three built-ins. */
   readonly agents: AgentStore;
   /** Every agent run a worker reported, kept after the worker is gone. */
@@ -355,8 +361,10 @@ export class HostServer {
   private readonly namerQualified = new Set<string>();
   /** Bounded harness-failure handoff through exact successor workers. */
   private readonly agentFailureRecovery: AgentFailureRecoveryQueue;
+  private readonly launchId: string;
 
   constructor(private readonly options: HostServerOptions = {}) {
+    this.launchId = options.launchId ?? randomBytes(16).toString("hex");
     this.uiDir = options.uiDir ?? defaultUiDir();
     const agentDir = options.agentDir ?? defaultAgentDir();
     const stateDir = options.stateDir ?? defaultStateDir();
@@ -515,6 +523,7 @@ export class HostServer {
       onChange: (entry) => this.notify("pi/prefs/updated", entry),
     });
     this.features = new FeatureService(this.prefs);
+    this.repair = new RuntimeRepairLedger(join(stateDir, "runtime-repair.json"), this.launchId);
 
     // The definitions live here; every worker gets a copy when it starts
     // (`prime`, below) and again whenever they change. Clients hear the same
@@ -541,6 +550,13 @@ export class HostServer {
       },
     });
     this.agentFailureRecovery = new AgentFailureRecoveryQueue(this.runs, (line) => this.log(line));
+    const loadedFailures = new Map<string, AgentRun[]>();
+    for (const run of this.runs.takeLoadedFailures()) {
+      const bucket = loadedFailures.get(run.projectCwd) ?? [];
+      bucket.push(run);
+      loadedFailures.set(run.projectCwd, bucket);
+    }
+    for (const [cwd, runs] of loadedFailures) this.agentFailureRecovery.note(cwd, runs);
     this.skillsCheck = new SkillsCheck({
       agents: () => this.agents.snapshot().agents,
       report: (warnings) => this.agents.setWarnings(warnings),
@@ -619,8 +635,8 @@ export class HostServer {
       routeLeases: this.routeLeases,
       ...(options.agentDir ? { agentDir: options.agentDir } : {}),
       env: { ...(npmCommand ? { [ENV.npmCommand]: JSON.stringify(npmCommand) } : {}), [ENV.taskLogRoot]: this.taskLogRoot },
-      envForCwd: (cwd) => ({
-        [ENV.features]: JSON.stringify(this.features.enabled(cwd)),
+      envForCwd: (cwd, mode) => ({
+        [ENV.features]: JSON.stringify(mode === "safe" ? [] : this.features.enabled(cwd)),
         // Non-secret: the executable, its arguments and whether this exact pair
         // was approved. Values never travel this way; the worker runs the hook.
         ...this.projectEnvForWorker(cwd),
@@ -628,6 +644,7 @@ export class HostServer {
       ...(options.sessionDir ? { sessionDir: options.sessionDir } : {}),
       stateDir,
       environmentId: this.environment.id,
+      repair: this.repair,
       // A store that keeps summaries only never receives a body: the capture
       // is recorded, without one, in the worker that holds it (RP-7).
       ...(options.logRetention?.providerPayloads ? { providerPayloads: options.logRetention.providerPayloads } : {}),
@@ -1712,7 +1729,8 @@ export class HostServer {
   private serveFile(req: IncomingMessage, res: ServerResponse): void {
     const url = new URL(req.url ?? "/", "http://localhost");
     if (url.pathname === "/healthz") {
-      res.writeHead(200, { "content-type": "text/plain" }).end("ok");
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" })
+        .end(JSON.stringify({ status: "ok", launchId: this.launchId }));
       return;
     }
     if (!this.uiDir) {

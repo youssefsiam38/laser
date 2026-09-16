@@ -56,6 +56,7 @@ function harness(options: { open?: string[]; closeRefuses?: string; closeGate?: 
     openSessions: (cwd: string) => (cwd === chat ? [...open] : []),
     cwdOfSession: () => undefined,
     bindSession: () => {},
+    recoverOpenedSession: async () => undefined,
     forgetSession: (path: string) => {
       forgotten.push(path);
       open.delete(path);

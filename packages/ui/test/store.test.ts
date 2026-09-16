@@ -180,20 +180,56 @@ describe("applyUpdate", () => {
     expect(v.blocks.at(-1)).toMatchObject({ kind: "notice", level: "error" });
   });
 
+  it("replaces worker status from the authoritative connect snapshot", () => {
+    const stale = reduce(initialState, { type: "notification", method: "pi/worker/status", params: { cwd: "/stale", status: "ready" } });
+    const current = reduce(stale, {
+      type: "workers",
+      workers: [{
+        cwd: "/current",
+        status: "crashed",
+        message: "This project's agent couldn't recover.",
+        mode: "normal",
+        repair: { state: "exhausted", automaticAttempts: 2 },
+      }],
+    });
+    expect(current.workers).toEqual({
+      "/current": expect.objectContaining({ status: "crashed", repair: { state: "exhausted", automaticAttempts: 2 } }),
+    });
+  });
+
   it("tracks dialogs, statuses, widgets, toasts and worker status", () => {
     let s = reduce({ ...initialState, open: { "/s.jsonl": view() } }, { type: "notification", method: "pi/ui/request", params: { path: "/s.jsonl", method: "select", id: "u1", title: "Pick", options: ["a"] } });
     s = reduce(s, { type: "notification", method: "pi/ui/request", params: { path: "/s.jsonl", method: "select", id: "u1", title: "Pick", options: ["a"] } });
     s = reduce(s, { type: "notification", method: "pi/ui/event", params: { path: "/s.jsonl", method: "setStatus", key: "k", text: "busy" } });
     s = reduce(s, { type: "notification", method: "pi/ui/event", params: { path: "/s.jsonl", method: "setWidget", key: "w", lines: ["l1"], placement: "belowEditor" } });
     s = reduce(s, { type: "notification", method: "pi/ui/event", params: { path: "/s.jsonl", method: "notify", message: "hey", level: "warning" } });
-    s = reduce(s, { type: "notification", method: "pi/worker/status", params: { cwd: "/p", status: "crashed", message: "exit 1" } });
+    s = reduce(s, {
+      type: "notification",
+      method: "pi/worker/status",
+      params: {
+        cwd: "/private/project",
+        status: "crashed",
+        message: "worker for /private/project exited (SIGKILL)",
+        mode: "normal",
+        retryAt: 2_000,
+        repair: { state: "available", automaticAttempts: 1 },
+        failure: {
+          owner: { kind: "worker", cwd: "/private/project", launchId: "0123456789abcdef0123456789abcdef" },
+          stage: "runtime",
+          category: "process_exit",
+          message: "This project's runtime stopped before the work finished.",
+        },
+      },
+    });
     const v = s.open["/s.jsonl"]!;
     expect(v.dialogs).toHaveLength(1);
     expect(reduce(s, { type: "dialogAnswered", id: "u1" }).open["/s.jsonl"]!.dialogs).toHaveLength(0);
     expect(v.statuses).toEqual({ k: "busy" });
     expect(v.widgets["w"]).toEqual({ lines: ["l1"], placement: "belowEditor" });
     expect(s.toasts.map((t) => t.level)).toEqual(["warning", "error"]);
-    expect(s.workers["/p"]).toMatchObject({ status: "crashed" });
+    expect(s.toasts.at(-1)?.text).toBe("The project's agent stopped. Trying to reload the conversation…");
+    expect(s.toasts.at(-1)?.text).not.toMatch(/\/private\/project|SIG|exit code|pid/i);
+    expect(s.workers["/private/project"]).toMatchObject({ status: "crashed" });
   });
 });
 
@@ -320,7 +356,7 @@ describe("the environment (RP-13)", () => {
       sessionsLoaded: true,
       open: { "/p/s.jsonl": { path: "/p/s.jsonl" } as unknown as SessionView },
       current: "/p/s.jsonl",
-      workers: { "/p": { status: "ready" } },
+      workers: { "/p": { cwd: "/p", status: "ready" as const, restarts: 0, since: "2026-01-01T00:00:00.000Z", canRestart: false } },
       toasts: [{ id: 1, level: "info" as const, text: "kept nothing" }],
       agents: { ...initialState.agents, runs: { r1: { runId: "r1" } as never } },
       tasks: { tasks: { t1: { id: "t1" } as never }, listed: ["/p/s.jsonl"] },

@@ -36,7 +36,18 @@ describe("web access companion module", () => {
   it("reports a registration failure without failing the session or exposing its raw error", async () => {
     const h = harness(async () => "unused", true);
     await h.events.get("session_start")!({}, {});
-    expect(h.send.mock.calls[0]![0]).toMatchObject({ active: [], failed: [{ module: "web-access" }] });
+    expect(h.send.mock.calls[0]![0]).toMatchObject({
+      active: [],
+      failed: [{
+        module: "web-access",
+        failure: {
+          owner: { kind: "module", module: "web-access" },
+          stage: "register",
+          category: "registration_error",
+          message: "Could not register this capability. Restart the project or update the app.",
+        },
+      }],
+    });
     expect(JSON.stringify(h.send.mock.calls)).not.toContain("private failure");
   });
 });

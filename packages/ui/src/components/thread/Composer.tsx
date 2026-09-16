@@ -28,7 +28,7 @@ import { errorText, useShell } from "@/components/shell/shell-context";
 import { useIsMobile, useIsTouch } from "@/hooks/use-mobile";
 import { finishActiveDictation } from "@/pwa";
 import { appendAttachedPrompt, splitAttachedFiles, wrapFileAttachment } from "@/runtime/attachments";
-import { composerSendPlan, mainCodeProject, mainError, mainTab, provisionalSessionPath, useCapability, useLaserStable, useLaserState, useSessionMeta } from "@/runtime";
+import { composerSendPlan, mainCodeProject, mainError, mainTab, provisionalSessionPath, useCapability, useLaserStable, useLaserState, useSessionMeta, visibleSessionPath } from "@/runtime";
 import { mergeRunConfigCustom } from "@/runtime/first-turn";
 import { completeLeadingSlash, matchLeadingSlash, rankSlashCommandMatches } from "./slash-completion.js";
 import { StatusLine } from "./StatusLine.js";
@@ -170,9 +170,15 @@ function ComposerBody() {
  */
 function useNothingToSendTo(): string | undefined {
   const { destination, currentProject } = useLaserStable();
+  const workerCrashed = useLaserState((s) => {
+    const path = visibleSessionPath(s);
+    const cwd = path ? s.open[path]?.state.cwd ?? s.sessions.find((summary) => summary.path === path)?.cwd : undefined;
+    return cwd ? s.workers[cwd]?.status === "crashed" : false;
+  });
   // Whether a session is open here, not what is in it: the composer must not
   // re-render for a streamed token (M16-T32).
   const view = useLaserState(s => Boolean(s.current && s.open[s.current]));
+  if (workerCrashed) return "The agent is unavailable";
   if (destination?.phase === "resolving") {
     return mainTab(destination) === "chat" ? "Preparing Chat…" : "Opening this conversation…";
   }

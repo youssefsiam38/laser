@@ -145,15 +145,36 @@ describe("session rows", () => {
   it("worker chip only speaks when something is off", () => {
     expect(workerChip(undefined)).toBeUndefined();
     expect(workerChip({ status: "ready" })).toBeUndefined();
-    expect(workerChip({ status: "starting" })).toEqual({ label: "Starting the agent", tone: "attention", canRetry: false });
+    expect(workerChip({ status: "starting" })).toEqual({
+      label: "Starting the agent", tone: "attention", canRetry: false, canStartSafe: false, canTryNormal: false,
+    });
     expect(workerChip({ status: "crashed", message: "exit 1" })).toEqual({
       label: "Worker crashed",
       tone: "danger",
       canRetry: true,
+      canStartSafe: true,
+      canTryNormal: false,
       detail: "exit 1",
     });
     // A retired worker is asleep, not broken; it can still be woken by hand.
     expect(workerChip({ status: "retired" })).toMatchObject({ tone: "muted", canRetry: true });
+    expect(workerChip({ status: "ready", mode: "safe" })).toMatchObject({
+      label: "Safe mode is on", canTryNormal: true, canStartSafe: false,
+    });
+    expect(workerChip({ status: "crashed", repair: { state: "paused", automaticAttempts: 0 } })).toMatchObject({
+      label: "Automatic repair paused", canRetry: true,
+    });
+    expect(workerChip({
+      status: "crashed",
+      mode: "normal",
+      failure: {
+        owner: { kind: "worker", launchId: "0123456789abcdef0123456789abcdef", cwd: "/project" },
+        stage: "initialize",
+        category: "initialization_error",
+        message: "failed",
+      },
+      repair: { state: "exhausted", automaticAttempts: 2 },
+    })).toMatchObject({ label: "Agent couldn't start", canRetry: true });
   });
 
   it("inbox lists what needs you across projects, most urgent first", () => {

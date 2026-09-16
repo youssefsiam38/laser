@@ -12,7 +12,8 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Toggle } from "@/components/ui/toggle";
 import { cn } from "@/lib/utils";
-import { useLaserStable } from "@/runtime";
+import { WorkerRecoveryNotice } from "@/components/worker-recovery-notice";
+import { useLaserStable, useLaserState } from "@/runtime";
 
 export function FeaturesScreen({ cwd, onManageServers, decision }: { cwd?: string; onManageServers?: () => void; decision?: CapabilityDecision | undefined }) {
   const writable = decision?.state === "available" || decision === undefined;
@@ -22,6 +23,7 @@ export function FeaturesScreen({ cwd, onManageServers, decision }: { cwd?: strin
   const [scope, setScope] = useState<FeatureScope>("global");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string>();
+  const worker = useLaserState(state => cwd ? state.workers[cwd] : undefined);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -79,6 +81,13 @@ export function FeaturesScreen({ cwd, onManageServers, decision }: { cwd?: strin
         </header>
 
         {!writable && readOnlyExplanation ? <CapabilityNotice explanation={readOnlyExplanation} /> : null}
+
+        {cwd && (
+          <WorkerRecoveryNotice
+            worker={worker}
+            onRestart={(mode) => void actions.restartWorker(cwd, mode)}
+          />
+        )}
 
         {loading ? (
           <GenerationLoader label="Loading features" />

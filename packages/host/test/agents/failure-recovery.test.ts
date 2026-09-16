@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentRun } from "@lasercode/protocol";
 import {
@@ -5,6 +8,7 @@ import {
   AgentFailureRecoveryQueue,
   type FailureRecoveryClient,
 } from "../../src/agents/failure-recovery.js";
+import { AgentRunRegistry } from "../../src/agents/runs.js";
 
 const CWD = "/projects/a";
 const OPEN = "/sessions/open.jsonl";
@@ -88,6 +92,44 @@ describe("AgentFailureRecoveryQueue", () => {
     expect(flatten(successor.calls)).toEqual(rows.filter((row) => row.parent!.sessionPath === OPEN).map((row) => row.runId));
     expect(successor.calls.every((ids) => ids.length <= 32)).toBe(true);
     expect(logs).toContain("agent failure recovery unavailable: no failed run had a reopened parent");
+  });
+
+  it("delivers one canonical failure after a host-loss reload reopens the parent", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "host-loss-recovery-"));
+    const storePath = join(dir, "agent-runs.json");
+    try {
+      const firstHost = new AgentRunRegistry({ storePath });
+      const live: AgentRun = {
+        ...run(1),
+        status: "running",
+        error: undefined,
+        endedBy: undefined,
+        endedAt: undefined,
+      };
+      firstHost.upsert(live);
+      firstHost.close();
+
+      const successorRegistry = new AgentRunRegistry({
+        storePath,
+        now: () => new Date("2026-01-01T00:02:00.000Z"),
+      });
+      const loaded = successorRegistry.takeLoadedFailures();
+      expect(loaded).toHaveLength(1);
+      expect(loaded[0]).toMatchObject({
+        runId: live.runId,
+        status: "failed",
+        endedBy: { initiator: "harness" },
+      });
+      const recovery = new AgentFailureRecoveryQueue(successorRegistry);
+      recovery.note(CWD, loaded);
+      const successor = client();
+      await recovery.deliver(successor, CWD, [OPEN]);
+      await recovery.deliver(successor, CWD, [OPEN]);
+      expect(flatten(successor.calls)).toEqual([live.runId]);
+      successorRegistry.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("coalesces duplicate ids", async () => {

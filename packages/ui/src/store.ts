@@ -6,7 +6,7 @@
  * `entry_appended` only for extension custom entries, so it is not the source
  * of transcript state). Past sessions hydrate from `pi/session/entries`.
  */
-import { AGENT_EVENT_MESSAGE_TYPE, SESSION_FALLBACK_ENTRY_TYPE, SESSION_RUN_ENTRY_TYPE, TASK_EVENT_MESSAGE_TYPE, failureWording, isTerminalRunStatus } from "@lasercode/protocol";
+import { AGENT_EVENT_MESSAGE_TYPE, SESSION_FALLBACK_ENTRY_TYPE, SESSION_RUN_ENTRY_TYPE, TASK_EVENT_MESSAGE_TYPE, failureWording, isTerminalRunStatus, runtimeRecoveryCopy } from "@lasercode/protocol";
 import { imagesOfContent, splitAttachedFiles, type AttachedFile } from "./runtime/attachments.js";
 import type {
   ImageContent,
@@ -30,6 +30,7 @@ import type {
   UiDialogRequest,
   UiFireAndForget,
   Usage,
+  WorkerInfo,
 } from "@lasercode/protocol";
 
 import { activePathIds } from "./components/thread/entries.js";
@@ -382,7 +383,7 @@ export interface AppState {
   current: string | undefined;
   /** The sole tab/project/session intent for the main window. */
   destination: MainDestination;
-  workers: Record<string, { status: string; message?: string }>;
+  workers: Record<string, WorkerInfo>;
   toasts: Array<{ id: number; level: "info" | "warning" | "error"; text: string }>;
   agents: AgentsSlice;
   /** Background commands agents left running (docs/ux-fleet.md). */
@@ -511,6 +512,8 @@ export type Action =
   /** The composer took `view.editorText`; it must not be applied twice. */
   | { type: "editorTextTaken"; path: string }
   | { type: "toast"; level: "info" | "warning" | "error"; text: string }
+  /** `pi/worker/list` on connect: authoritative, so a reopened UI keeps recovery controls. */
+  | { type: "workers"; workers: WorkerInfo[] }
   | { type: "notification"; method: HostNotificationMethod; params: HostNotifications[HostNotificationMethod] }
   | { type: "dismissToast"; id: number }
   // --- agents ---
@@ -555,6 +558,11 @@ export function reduce(state: AppState, action: Action): AppState {
       return { ...state, connection: action.state };
     case "versionMismatch":
       return { ...state, versionMismatch: action.version };
+    case "workers":
+      return {
+        ...state,
+        workers: Object.fromEntries(action.workers.map((worker) => [worker.cwd, structuredClone(worker)])),
+      };
     case "environment": {
       const { environmentError: _cleared, ...rest } = state;
       return { ...rest, environment: action.environment };
@@ -1085,8 +1093,13 @@ function applyNotification(state: AppState, method: HostNotificationMethod, para
     }
     case "pi/worker/status": {
       const p = params as HostNotifications["pi/worker/status"];
-      const next = { ...state, workers: { ...state.workers, [p.cwd]: { status: p.status, ...(p.message ? { message: p.message } : {}) } } };
-      return p.status === "crashed" ? pushToast(next, "error", `Worker for ${p.cwd} crashed: ${p.message ?? ""}`) : next;
+      const next = { ...state, workers: { ...state.workers, [p.cwd]: structuredClone(p) } };
+      if (p.status !== "crashed") return next;
+      const copy = runtimeRecoveryCopy({ ...p, mode: p.mode ?? "normal" });
+      const text = p.retryAt !== undefined && p.failure?.category === "process_exit"
+        ? "The project's agent stopped. Trying to reload the conversation…"
+        : copy.title;
+      return pushToast(next, "error", text);
     }
     case "agents/updated":
       return reduce(state, { type: "agents/updated", snapshot: params as HostNotifications["agents/updated"] });

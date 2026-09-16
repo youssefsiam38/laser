@@ -31,6 +31,7 @@ const CANARY = 987_654_321;
 const WORKER = `
 import { Socket } from "node:net";
 const cwd = process.argv[process.argv.indexOf("--cwd") + 1];
+const launchId = process.argv[process.argv.indexOf("--launch-id") + 1];
 const socket = new Socket({ fd: 3, readable: true, writable: true });
 const send = (m) => socket.write(JSON.stringify(m) + "\\n");
 let buffer = "";
@@ -47,7 +48,8 @@ socket.on("data", (chunk) => {
   }
 });
 socket.on("end", () => process.exit(0));
-send({ jsonrpc: "2.0", method: "pi/worker/status", params: { cwd, status: "ready" } });
+send({ jsonrpc: "2.0", method: "pi/worker/status", params: { cwd, status: "starting", launchId, mode: "normal" } });
+send({ jsonrpc: "2.0", method: "pi/worker/status", params: { cwd, status: "ready", launchId, mode: "normal" } });
 send({
   jsonrpc: "2.0",
   method: "pi/resource/pressure",

@@ -25,7 +25,7 @@ import type { ExtensionAPI, InlineExtension } from "@earendil-works/pi-coding-ag
 import type { AgentHarnessBridge, BackgroundWorkOptions } from "./agents-bridge.js";
 import type { PromptProvenanceObserver } from "./prompt-provenance.js";
 export { createPromptProvenanceObserver, recordInstructionWrite } from "./prompt-provenance.js";
-import { WIRE_NAMESPACE, type ProviderCaptureLink } from "@lasercode/protocol";
+import { WIRE_NAMESPACE, type ProviderCaptureLink, type RuntimeFailure, type RuntimeFailureCategory, type RuntimeFailureStage } from "@lasercode/protocol";
 import {
   modules,
   type CommandBus,
@@ -111,6 +111,15 @@ export interface LaserExtensionOptions {
  */
 export const LASER_EXTENSION_NAME: string = WIRE_NAMESPACE;
 
+function moduleFailure(
+  module: ModuleName,
+  stage: RuntimeFailureStage,
+  category: RuntimeFailureCategory,
+  message: string,
+): RuntimeFailure {
+  return { owner: { kind: "module", module }, stage, category, message };
+}
+
 export function createLaserExtension(options: LaserExtensionOptions): InlineExtension {
   return {
     name: LASER_EXTENSION_NAME,
@@ -128,29 +137,59 @@ export function createLaserExtension(options: LaserExtensionOptions): InlineExte
         ...(options.commands ? { commands: options.commands } : {}),
       };
       const wanted = new Set<ModuleName>(options.only ?? modules.map((m) => m.name));
-      const registrationErrors = new Map<ModuleName, string>();
+      const registrationErrors = new Map<ModuleName, RuntimeFailure>();
       for (const mod of modules) {
         if (!wanted.has(mod.name)) continue;
         try { mod.register?.(ctx); }
-        catch { registrationErrors.set(mod.name, "Could not register this capability. Restart the project or update the app."); }
+        catch {
+          registrationErrors.set(mod.name, moduleFailure(
+            mod.name,
+            "register",
+            "registration_error",
+            "Could not register this capability. Restart the project or update the app.",
+          ));
+        }
       }
 
       // Detection runs at session_start so extensions loaded after us are visible.
       pi.on("session_start", async (_event, session) => {
         ctx.session = session;
         const active: ModuleName[] = [];
-        const failed: Array<{ module: ModuleName; error: string }> = [];
+        const failed: Array<{ module: ModuleName; failure: RuntimeFailure }> = [];
         for (const mod of modules) {
           if (!wanted.has(mod.name)) continue;
           const registrationError = registrationErrors.get(mod.name);
-          if (registrationError) { failed.push({ module: mod.name, error: registrationError }); continue; }
+          if (registrationError) { failed.push({ module: mod.name, failure: registrationError }); continue; }
+          let detected: boolean;
           try {
-            if (!(await mod.detect(ctx))) continue;
+            detected = await mod.detect(ctx);
+          } catch {
+            failed.push({
+              module: mod.name,
+              failure: moduleFailure(
+                mod.name,
+                "detect",
+                "detection_error",
+                "Could not check this capability. Restart the project or update the app.",
+              ),
+            });
+            continue;
+          }
+          if (!detected) continue;
+          try {
             const dispose = await mod.activate(ctx);
             if (dispose) disposers.push(dispose);
             active.push(mod.name);
-          } catch (error) {
-            failed.push({ module: mod.name, error: error instanceof Error ? error.message : String(error) });
+          } catch {
+            failed.push({
+              module: mod.name,
+              failure: moduleFailure(
+                mod.name,
+                "activate",
+                "activation_error",
+                "Could not start this capability. Restart the project or update the app.",
+              ),
+            });
           }
         }
         options.send({ type: "lasercode/capabilities", active, failed });

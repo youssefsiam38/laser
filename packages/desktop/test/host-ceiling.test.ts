@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LaserPaths } from "@lasercode/cli";
+import { ENV } from "@lasercode/protocol";
 import { HostProcess, desktopNodeEnvironment } from "../src/host-process.js";
 import type { DesktopLog } from "../src/log.js";
 
@@ -60,6 +61,11 @@ describe("desktop-owned host generations", () => {
       expect(first[1]).toMatch(/cli[/\\]dist[/\\]main\.js$/);
       expect(first[2]).toBe("__daemon");
       expect(restarted).toEqual(first);
+      const firstEnv = (spawnProcess.mock.calls[0]![2] as { env: NodeJS.ProcessEnv }).env;
+      const restartedEnv = (spawnProcess.mock.calls[1]![2] as { env: NodeJS.ProcessEnv }).env;
+      expect(firstEnv[ENV.hostLaunchId]).toMatch(/^[0-9a-f]{32}$/);
+      expect(restartedEnv[ENV.hostLaunchId]).toMatch(/^[0-9a-f]{32}$/);
+      expect(restartedEnv[ENV.hostLaunchId]).not.toBe(firstEnv[ENV.hostLaunchId]);
     } finally {
       for (const child of children) child.removeAllListeners();
       rmSync(root, { recursive: true, force: true });

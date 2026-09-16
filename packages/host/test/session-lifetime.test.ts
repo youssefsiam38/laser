@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { SessionLifetime } from "../src/session-lifetime.js";
 import { WorkerRetiredError } from "../src/worker-client.js";
 import { WorkerPool } from "../src/worker-pool.js";
+import { RuntimeRepairLedger } from "../src/runtime-repair.js";
 
 // --------------------------------------------------------------- the policy
 
@@ -264,6 +265,7 @@ describe("SessionLifetime policy", () => {
 const SAFETY_WORKER = `
 import { Socket } from "node:net";
 const cwd = process.argv[process.argv.indexOf("--cwd") + 1];
+const launchId = process.argv[process.argv.indexOf("--launch-id") + 1];
 const socket = new Socket({ fd: 3, readable: true, writable: true });
 const send = (m) => socket.write(JSON.stringify(m) + "\\n");
 let buffer = "";
@@ -322,7 +324,8 @@ socket.on("data", (chunk) => {
   }
 });
 socket.on("end", () => process.exit(0));
-send({ jsonrpc: "2.0", method: "pi/worker/status", params: { cwd, status: "ready" } });
+send({ jsonrpc: "2.0", method: "pi/worker/status", params: { cwd, status: "starting", launchId, mode: "normal" } });
+send({ jsonrpc: "2.0", method: "pi/worker/status", params: { cwd, status: "ready", launchId, mode: "normal" } });
 `;
 
 /** The same worker, without RP-4's methods: an older generation the host must tolerate. */
@@ -337,7 +340,13 @@ describe("WorkerPool session lifetime", () => {
   let pool: WorkerPool | undefined;
 
   const makePool = (main: string, options: Partial<ConstructorParameters<typeof WorkerPool>[0]> = {}) =>
-    new WorkerPool({ workerMain: main, onNotification: () => {}, sweepMs: 0, ...options });
+    new WorkerPool({
+      workerMain: main,
+      repair: new RuntimeRepairLedger(join(dir, "runtime-repair.json"), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+      onNotification: () => {},
+      sweepMs: 0,
+      ...options,
+    });
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-lifetime-`));

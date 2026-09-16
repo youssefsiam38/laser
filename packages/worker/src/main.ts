@@ -20,7 +20,9 @@ import {
   LineDecoder,
   PRODUCT_NAME,
   configuredOldSpaceBytes,
+  launchIdSchema,
   parseJsonLine,
+  workerModeSchema,
   type FeatureId,
   type JsonRpcMessage,
 } from "@lasercode/protocol";
@@ -46,6 +48,7 @@ const SHUTDOWN_DRAIN_MS = 5_000;
  * else in this process waits for the capture.
  */
 const DRAIN_WAIT_MS = 10;
+let reportStartupFailure: (() => Promise<void>) | undefined;
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -138,6 +141,60 @@ async function main(): Promise<void> {
   // First of all, before anything here can float a promise: a worker that
   // dies takes every conversation in its project with it.
   installUnhandledRejectionGuard();
+  const cwd = arg("cwd") ?? process.cwd();
+  const launch = launchIdSchema.safeParse(arg("launch-id"));
+  if (!launch.success) {
+    console.error(`${PRODUCT_NAME} worker: the launcher did not provide a valid launch identity`);
+    process.exit(2);
+  }
+  const launchId = launch.data;
+  const parsedMode = workerModeSchema.safeParse(arg("worker-mode") ?? "normal");
+  if (!parsedMode.success) {
+    console.error(`${PRODUCT_NAME} worker: the launcher provided an invalid worker mode`);
+    process.exit(2);
+  }
+  const mode = parsedMode.data;
+  const transport = openTransport();
+  const send = (message: JsonRpcMessage) => {
+    const line = `${JSON.stringify(message)}\n`;
+    // Nothing we produce may be a message the host has to fault on (RP-7). A
+    // frame this large can only be a bug in something that should have bounded
+    // itself; refusing it here keeps the link, and every conversation on it,
+    // alive. Notifications are dropped with a note on stderr, requests answer
+    // with an error the caller can show.
+    if (Buffer.byteLength(line, "utf8") > FRAME_MAX_BYTES) {
+      const id = (message as { id?: string | number }).id;
+      console.error(`${PRODUCT_NAME} worker: refused to send a ${Buffer.byteLength(line, "utf8")} byte message`);
+      if (id !== undefined) {
+        transport.write(
+          `${JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32603, message: "that answer is too large to send" } })}\n`,
+        );
+      }
+      return;
+    }
+    transport.write(line);
+  };
+  send({ jsonrpc: "2.0", method: "pi/worker/status", params: { cwd, status: "starting", launchId, mode } });
+  reportStartupFailure = async () => {
+    send({
+      jsonrpc: "2.0",
+      method: "pi/worker/status",
+      params: {
+        cwd,
+        status: "crashed",
+        launchId,
+        mode,
+        failure: {
+          owner: { kind: "worker", launchId, cwd },
+          stage: "initialize",
+          category: "initialization_error",
+          message: "This project's runtime did not start. Try again; if this continues, update or reinstall the app.",
+        },
+      },
+    });
+    await transport.drain();
+  };
+
   // Belt and braces. The desktop shell and `laser doctor` both check the pin
   // before a worker is ever spawned, so in a shipped app this cannot fail —
   // but this is the process that actually imports the agent, and a worker that
@@ -153,7 +210,6 @@ async function main(): Promise<void> {
     throw error;
   }
 
-  const cwd = arg("cwd") ?? process.cwd();
   const agentDir = arg("agent-dir");
   const sessionDir = arg("session-dir");
   // The host's own state directory (agents, runs, prefs), used by Beam's
@@ -183,8 +239,7 @@ async function main(): Promise<void> {
   alignEngineAgentDir(agentDir, sessionDir);
   extendRuntimePath();
   if (projectTrusted !== undefined && projectTrusted !== "yes" && projectTrusted !== "no") {
-    console.error(`${PRODUCT_NAME} worker: --project-trusted must be "yes" or "no", got ${JSON.stringify(projectTrusted)}`);
-    process.exit(2);
+    throw new Error(`${PRODUCT_NAME} worker: --project-trusted must be "yes" or "no", got ${JSON.stringify(projectTrusted)}`);
   }
 
   // The host's bundled package manager, `[command, ...args]` as JSON (M10-T5).
@@ -207,27 +262,6 @@ async function main(): Promise<void> {
   } catch {
     // Malformed environment falls back to the product defaults.
   }
-
-  const transport = openTransport();
-  const send = (message: JsonRpcMessage) => {
-    const line = `${JSON.stringify(message)}\n`;
-    // Nothing we produce may be a message the host has to fault on (RP-7). A
-    // frame this large can only be a bug in something that should have bounded
-    // itself; refusing it here keeps the link, and every conversation on it,
-    // alive. Notifications are dropped with a note on stderr, requests answer
-    // with an error the caller can show.
-    if (Buffer.byteLength(line, "utf8") > FRAME_MAX_BYTES) {
-      const id = (message as { id?: string | number }).id;
-      console.error(`${PRODUCT_NAME} worker: refused to send a ${Buffer.byteLength(line, "utf8")} byte message`);
-      if (id !== undefined) {
-        transport.write(
-          `${JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32603, message: "that answer is too large to send" } })}\n`,
-        );
-      }
-      return;
-    }
-    transport.write(line);
-  };
 
   const server = new WorkerServer({
     cwd,
@@ -296,7 +330,7 @@ async function main(): Promise<void> {
   async function shutdown(code: number): Promise<void> {
     if (closing) return;
     closing = true;
-    server.notify("pi/worker/status", { cwd, status: "retired" });
+    server.notify("pi/worker/status", { cwd, status: "retired", launchId, mode });
     // Handlers accepted before the pipe closed finish first (RP-4). On the
     // normal retirement path there are none — `pi/worker/retire` proved that
     // before the host ended the pipe — so this returns at once. On an
@@ -315,10 +349,12 @@ async function main(): Promise<void> {
     process.exit(code);
   }
 
-  server.notify("pi/worker/status", { cwd, status: "ready" });
+  server.notify("pi/worker/status", { cwd, status: "ready", launchId, mode });
+  reportStartupFailure = undefined;
 }
 
-main().catch((error) => {
+main().catch(async (error) => {
+  await reportStartupFailure?.();
   console.error(`${PRODUCT_NAME} worker failed:`, error);
   process.exit(1);
 });

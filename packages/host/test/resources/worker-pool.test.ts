@@ -12,13 +12,16 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WorkerPool } from "../../src/worker-pool.js";
+import { RuntimeRepairLedger } from "../../src/runtime-repair.js";
 import { ResourceService } from "../../src/resources/service.js";
 
 const FAKE_WORKER = `
 import { Socket } from "node:net";
 const cwd = process.argv[process.argv.indexOf("--cwd") + 1];
+const launchId = process.argv[process.argv.indexOf("--launch-id") + 1];
 const socket = new Socket({ fd: 3, readable: true, writable: true });
-socket.write(JSON.stringify({ jsonrpc: "2.0", method: "pi/worker/status", params: { cwd, status: "ready" } }) + "\\n");
+socket.write(JSON.stringify({ jsonrpc: "2.0", method: "pi/worker/status", params: { cwd, status: "starting", launchId, mode: "normal" } }) + "\\n");
+socket.write(JSON.stringify({ jsonrpc: "2.0", method: "pi/worker/status", params: { cwd, status: "ready", launchId, mode: "normal" } }) + "\\n");
 // RP-4: retirement is the worker's own transition, so a worker that is asked
 // answers. This one holds nothing, so it always agrees.
 let buffer = "";
@@ -42,6 +45,7 @@ socket.on("end", () => process.exit(0));
 let dir: string;
 let project: string;
 let pool: WorkerPool | undefined;
+const repair = () => new RuntimeRepairLedger(join(dir, "runtime-repair.json"), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-resource-pool-`));
@@ -61,6 +65,7 @@ describe("worker registration", () => {
     const resources = new ResourceService({ hostPid: process.pid, minIntervalMs: 0 });
     pool = new WorkerPool({
       workerMain: join(dir, "fake-worker.mjs"),
+      repair: repair(),
       onNotification: () => {},
       onStatus: () => {},
       resources: {
@@ -99,7 +104,7 @@ describe("worker registration", () => {
   });
 
   it("leaves a pool without diagnostics exactly as it was", async () => {
-    pool = new WorkerPool({ workerMain: join(dir, "fake-worker.mjs"), onNotification: () => {}, onStatus: () => {} });
+    pool = new WorkerPool({ workerMain: join(dir, "fake-worker.mjs"), repair: repair(), onNotification: () => {}, onStatus: () => {} });
     const client = await pool.get(project);
     expect(client.pid).toBeDefined();
   });

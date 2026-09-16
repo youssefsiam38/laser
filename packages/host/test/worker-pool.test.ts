@@ -7,12 +7,14 @@
  */
 import { PRODUCT_NAME } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { JsonRpcNotification, WorkerInfo } from "@lasercode/protocol";
 import { AgentRunRegistry } from "../src/agents/runs.js";
 import { WorkerPool } from "../src/worker-pool.js";
+import type { WorkerClient } from "../src/worker-client.js";
+import { RuntimeRepairLedger } from "../src/runtime-repair.js";
 
 /**
  * Speaks just enough protocol: announces `ready`, answers `session/load`, and
@@ -21,6 +23,8 @@ import { WorkerPool } from "../src/worker-pool.js";
 const FAKE_WORKER = `
 import { Socket } from "node:net";
 const cwd = process.argv[process.argv.indexOf("--cwd") + 1];
+const launchId = process.argv[process.argv.indexOf("--launch-id") + 1];
+const workerMode = process.argv[process.argv.indexOf("--worker-mode") + 1];
 const socket = new Socket({ fd: 3, readable: true, writable: true });
 const send = (m) => socket.write(JSON.stringify(m) + "\\n");
 let buffer = "";
@@ -44,7 +48,7 @@ socket.on("data", (chunk) => {
     // that pins it, so it always agrees; a test that wants a refusal uses a
     // worker of its own (see session-lifetime.test.ts).
     if (req.method === "pi/worker/retire") { send({ jsonrpc: "2.0", id: req.id, result: { retiring: true } }); continue; }
-    if (req.method === "pi/test/argv") { send({ jsonrpc: "2.0", id: req.id, result: { argv: process.argv.slice(2), execArgv: process.execArgv, processCwd: process.cwd() } }); continue; }
+    if (req.method === "pi/test/argv") { send({ jsonrpc: "2.0", id: req.id, result: { argv: process.argv.slice(2), execArgv: process.execArgv, processCwd: process.cwd(), workerMode, features: JSON.parse(process.env.SYNTHETIC_FEATURES ?? "[]") } }); continue; }
     // RP-8: a worker's own pressure report, shaped as the real one is.
     if (req.method === "pi/test/pressure") {
       send({ jsonrpc: "2.0", method: "pi/resource/pressure", params: { generation: req.params.generation, level: "unknown", inputs: [], ran: [], results: [], stores: {} } });
@@ -60,7 +64,8 @@ socket.on("data", (chunk) => {
   }
 });
 socket.on("end", () => process.exit(0));
-send({ jsonrpc: "2.0", method: "pi/worker/status", params: { cwd, status: "ready" } });
+send({ jsonrpc: "2.0", method: "pi/worker/status", params: { cwd, status: "starting", launchId, mode: workerMode } });
+send({ jsonrpc: "2.0", method: "pi/worker/status", params: { cwd, status: "ready", launchId, mode: workerMode } });
 `;
 
 /**
@@ -79,6 +84,8 @@ let project: string;
 let notifications: JsonRpcNotification[];
 let statuses: WorkerInfo[];
 let pool: WorkerPool;
+const hostLaunchId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const repairLedger = () => new RuntimeRepairLedger(join(dir, "runtime-repair.json"), hostLaunchId);
 
 const statusesOf = (cwd: string) => statuses.filter((s) => s.cwd === cwd).map((s) => s.status);
 
@@ -89,6 +96,7 @@ function makePool(options: Partial<ConstructorParameters<typeof WorkerPool>[0]> 
   return new WorkerPool({
     workerMain,
     workerOldSpaceMiB: 1792,
+    repair: repairLedger(),
     onNotification: (_cwd, n) => notifications.push(n),
     onStatus: (info) => statuses.push(info),
     setTimer: (fn, ms) => {
@@ -100,7 +108,9 @@ function makePool(options: Partial<ConstructorParameters<typeof WorkerPool>[0]> 
 }
 
 const runTimers = () => {
-  const due = timers.splice(0, timers.length);
+  const next = Math.min(...timers.map((timer) => timer.ms));
+  const due = timers.filter((timer) => timer.ms === next);
+  timers = timers.filter((timer) => timer.ms !== next);
   for (const timer of due) timer.fn();
 };
 
@@ -127,6 +137,7 @@ describe("WorkerPool readiness", () => {
       expect(() => {
         pool = new WorkerPool({
           workerMain,
+          repair: repairLedger(),
           onNotification: (_cwd, notification) => notifications.push(notification),
           onStatus: (info) => statuses.push(info),
           setTimer: (fn, ms) => {
@@ -344,14 +355,20 @@ describe("WorkerPool", () => {
     pool.bindSession("/sessions/a.jsonl", project);
     const firstPid = client.pid;
 
-    client.request("pi/test/crash", {}).catch(() => {});
+    const rejected = client.request("pi/test/crash", {}).catch((error: unknown) => error as Error);
     await waitFor(() => statusesOf(project).includes("crashed"));
     expect(pool.openSessions(project)).toEqual([]); // desired reopen paths are not live sessions
+    const publicError = await rejected;
+    expect(publicError.message).toBe("This project's runtime stopped before the work finished.");
+    expect(publicError.message).not.toContain(project);
+    expect(publicError.message).not.toMatch(/SIG|exit code|pid/i);
     const crashed = statuses.findLast((s) => s.status === "crashed")!;
-    expect(crashed.message).toMatch(/Restarting in/);
+    expect(crashed.message).toBe("The project's agent stopped. Trying to reload the conversation…");
+    expect(crashed.message).not.toContain(project);
+    expect(crashed.message).not.toMatch(/SIG|exit code|pid/i);
     expect(crashed.restarts).toBe(1);
-    expect(timers).toHaveLength(1);
-    expect(timers[0]!.ms).toBe(10);
+    expect(timers.filter((timer) => timer.ms < 60_000)).toHaveLength(1);
+    expect(timers.find((timer) => timer.ms < 60_000)?.ms).toBe(10);
 
     runTimers();
     // Process readiness precedes session/load; wait for the recovery we assert,
@@ -381,50 +398,104 @@ describe("WorkerPool", () => {
     expect(result.processCwd).toBe(project);
   });
 
-  it("gives up after the restart cap and comes back on an explicit retry", async () => {
-    pool = makePool({ backoffMs: 1, maxRestarts: 2 });
-    const client = await pool.get(project);
-    pool.bindSession("/sessions/a.jsonl", project);
+  it("persists safe mode with an empty effective Feature set without changing desired preferences", async () => {
+    const prefs = join(dir, "prefs.json");
+    const desired = '{"features":{"value":"unchanged"}}\n';
+    writeFileSync(prefs, desired);
+    const repair = repairLedger();
+    pool = makePool({
+      repair,
+      envForCwd: (_cwd, mode) => ({ SYNTHETIC_FEATURES: JSON.stringify(mode === "safe" ? [] : ["desired-feature"]) }),
+    });
 
-    let current = client;
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      current.request("pi/test/crash", {}).catch(() => {});
-      await waitFor(() => statuses.filter((s) => s.status === "crashed").length === attempt);
-      if (attempt === 3) break;
-      runTimers();
-      await waitFor(() => statusesOf(project).at(-1) === "ready");
-      current = await pool.get(project);
-    }
-    const last = statuses.findLast((s) => s.status === "crashed")!;
-    expect(last.message).toMatch(/did not recover after 2 restarts/);
-    expect(last.canRestart).toBe(true);
-    expect(timers).toHaveLength(0); // no further automatic attempt
+    const info = await pool.restart(project, "safe");
+    const effective = await (await pool.get(project)).request<{ workerMode: string; features: string[] }>("pi/test/argv", {});
+    expect(info.mode).toBe("safe");
+    expect(effective).toEqual(expect.objectContaining({ workerMode: "safe", features: [] }));
+    expect(readFileSync(prefs, "utf8")).toBe(desired);
+    expect(new RuntimeRepairLedger(join(dir, "runtime-repair.json"), hostLaunchId).mode(project)).toBe("safe");
 
-    const info = await pool.restart(project);
-    expect(info.status).toBe("ready");
-    expect(info.restarts).toBe(0);
+    await pool.restart(project, "normal");
+    const normal = await (await pool.get(project)).request<{ workerMode: string; features: string[] }>("pi/test/argv", {});
+    expect(normal).toEqual(expect.objectContaining({ workerMode: "normal", features: ["desired-feature"] }));
+    expect(readFileSync(prefs, "utf8")).toBe(desired);
   });
 
-  it("bounds a crash loop at five automatic attempts with 1/2/4/8/16 second backoff", async () => {
-    pool = makePool({ backoffMs: 1_000, backoffCapMs: 30_000, maxRestarts: 5 });
+  it("leaves desired preferences byte-identical after failed normal and safe launches", async () => {
+    const prefs = join(dir, "prefs.json");
+    const desired = '{"features":{"global":{"goals":true}}}\n';
+    writeFileSync(prefs, desired);
+    pool = makePool({
+      workerMain: join(dir, "missing-worker.mjs"),
+      repair: repairLedger(),
+    });
+
+    await expect(pool.restart(project, "normal")).rejects.toThrow();
+    expect(readFileSync(prefs, "utf8")).toBe(desired);
+    await expect(pool.restart(project, "safe")).rejects.toThrow();
+    expect(readFileSync(prefs, "utf8")).toBe(desired);
+  });
+
+  it("pauses a malformed repair record until one explicit action replaces it", async () => {
+    const repairPath = join(dir, "runtime-repair.json");
+    writeFileSync(repairPath, "{truncated");
+    const repair = new RuntimeRepairLedger(repairPath, hostLaunchId);
+    pool = makePool({ repair });
+
+    await expect(pool.get(project)).rejects.toThrow(/Automatic repair is paused/);
+    expect(pool.liveClients()).toEqual([]);
+    expect(readdirSync(dir).filter((name) => name.startsWith("runtime-repair.json.corrupt-"))).toHaveLength(1);
+    await expect(pool.restart(project, "safe")).resolves.toMatchObject({ status: "ready", mode: "safe" });
+    expect(JSON.parse(readFileSync(repairPath, "utf8"))).toMatchObject({ version: 2 });
+  });
+
+  it("durably stops after two automatic retries until a person chooses an action", async () => {
+    const repair = repairLedger();
+    pool = makePool({ repair, backoffMs: 1 });
     let current = await pool.get(project);
     pool.bindSession("/sessions/a.jsonl", project);
 
-    for (let incident = 1; incident <= 6; incident += 1) {
+    for (let incident = 1; incident <= 3; incident += 1) {
       void current.request("pi/test/crash", {}).catch(() => undefined);
       await waitFor(() => statuses.filter((status) => status.status === "crashed").length === incident);
-      if (incident === 6) break;
+      if (incident === 3) break;
       runTimers();
       await waitFor(() => statusesOf(project).at(-1) === "ready");
       current = await pool.get(project);
     }
 
-    expect(timers.map((timer) => timer.ms)).toEqual([]);
-    expect(statuses.filter((status) => status.status === "crashed").slice(0, 5).map((status) => status.restarts)).toEqual([1, 2, 3, 4, 5]);
-    expect(statuses.findLast((status) => status.status === "crashed")?.message).toMatch(/did not recover after 5 restarts/);
-    // Fired timers were removed by `runTimers`; recover the delay evidence from retry timestamps.
-    const crashes = statuses.filter((status) => status.status === "crashed").slice(0, 5);
-    expect(crashes.map((status) => Date.parse(status.retryAt!) - Date.parse(status.since!))).toEqual([1_000, 2_000, 4_000, 8_000, 16_000]);
+    expect(pool.workerInfo(project)).toMatchObject({
+      status: "crashed",
+      repair: { state: "exhausted", automaticAttempts: 2 },
+      message: "This project's agent couldn't recover. Your conversation is saved. Try again, or start with optional Features off.",
+    });
+    expect(timers.filter((timer) => timer.ms < 60_000)).toHaveLength(0);
+    await expect(pool.get(project)).rejects.toThrow(/Try again or Start in safe mode/);
+    await expect(pool.restart(project, "safe")).resolves.toMatchObject({ status: "ready", mode: "safe" });
+  });
+
+  it("uses the one durable policy with exactly 1s/2s backoff and permits explicit recovery", async () => {
+    pool = makePool();
+    let current = await pool.get(project);
+    pool.bindSession("/sessions/a.jsonl", project);
+
+    for (let incident = 1; incident <= 3; incident += 1) {
+      void current.request("pi/test/crash", {}).catch(() => undefined);
+      await waitFor(() => statuses.filter((status) => status.status === "crashed").length === incident);
+      if (incident === 3) break;
+      expect(timers.at(-1)?.ms).toBe(incident * 1_000);
+      runTimers();
+      await waitFor(() => statusesOf(project).at(-1) === "ready");
+      current = await pool.get(project);
+    }
+
+    expect(pool.workerInfo(project)).toMatchObject({
+      status: "crashed",
+      repair: { state: "exhausted", automaticAttempts: 2 },
+      canRestart: true,
+    });
+    expect(timers.filter((timer) => timer.ms < 60_000)).toHaveLength(0);
+    await expect(pool.restart(project)).resolves.toMatchObject({ status: "ready", restarts: 0 });
   });
 
   it("starts a fresh incident after a generation stays healthy for sixty seconds", async () => {
@@ -441,6 +512,36 @@ describe("WorkerPool", () => {
     void current.request("pi/test/crash", {}).catch(() => undefined);
     await waitFor(() => statuses.filter((status) => status.status === "crashed").length === 2);
     expect(statuses.findLast((status) => status.status === "crashed")?.restarts).toBe(1);
+  });
+
+  it("fences late status frames and never broadcasts raw worker status as WorkerInfo", async () => {
+    pool = makePool();
+    const client = await pool.get(project);
+    const internal = pool as unknown as {
+      entries: Map<string, { client: WorkerClient; status: WorkerInfo["status"] }>;
+      onWorkerNotification(entry: unknown, client: WorkerClient, notification: JsonRpcNotification): void;
+    };
+    const entry = internal.entries.get(project)!;
+    const statusCount = statuses.length;
+    const notificationCount = notifications.length;
+
+    internal.onWorkerNotification(entry, client, {
+      jsonrpc: "2.0",
+      method: "pi/worker/status",
+      params: { cwd: project, status: "crashed", launchId: client.launchId, mode: "normal" },
+    });
+    expect(statuses).toHaveLength(statusCount);
+    expect(notifications).toHaveLength(notificationCount);
+
+    entry.status = "crashed";
+    entry.client = { generation: "successor" } as WorkerClient;
+    internal.onWorkerNotification(entry, client, {
+      jsonrpc: "2.0",
+      method: "pi/worker/status",
+      params: { cwd: project, status: "ready", launchId: client.launchId, mode: "normal" },
+    });
+    expect(entry.status).toBe("crashed");
+    entry.client = client;
   });
 
   it("sends pressure only to the exact worker generation selected", async () => {
@@ -617,11 +718,13 @@ describe("WorkerPool", () => {
   it("reports a worker that could not be spawned as crashed, with a retry", async () => {
     const losses: Array<{ exit: { kind: string }; message: string }> = [];
     pool = makePool({ nodeBinary: join(dir, "no-such-node"), onWorkerLoss: (loss) => losses.push(loss) });
-    await expect(pool.get(project)).rejects.toThrow(/ENOENT/);
+    await expect(pool.get(project)).rejects.toThrow("This project's runtime could not start. Check the app installation, then try again.");
     const info = pool.workerInfo(project)!;
     expect(info.status).toBe("crashed");
     expect(info.canRestart).toBe(true);
-    expect(info.message).toMatch(/could not start/);
+    expect(info.message).toMatch(/didn't start/);
+    expect(info.repair).toMatchObject({ state: "available", automaticAttempts: 0 });
+    expect(timers.filter((timer) => timer.ms < 60_000)).toHaveLength(0);
     expect(losses).toMatchObject([{ exit: { kind: "spawn_error" }, message: expect.stringContaining("could not start") }]);
   });
 

@@ -12,10 +12,10 @@
  * (see `docs/environment-policy.md` §3).
  */
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PRODUCT_NAME } from "@lasercode/protocol";
+import { ENV, PRODUCT_NAME } from "@lasercode/protocol";
 import { runDaemon } from "../src/daemon.js";
 import type { LaserPaths } from "../src/config.js";
 
@@ -35,16 +35,21 @@ function paths(base: string): LaserPaths {
 describe("the daemon and an unusable policy", () => {
   it("fails to start, says what to do, and never binds a port", async () => {
     const base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-daemon-policy-`));
+    const previousLaunchId = process.env[ENV.hostLaunchId];
     try {
+      process.env[ENV.hostLaunchId] = "00112233445566778899aabbccddeeff";
       mkdirSync(join(base, "state"), { recursive: true });
       writeFileSync(join(base, "state", "policy.json"), JSON.stringify({ remote: { scopes: ["everything"] } }));
       const lines: string[] = [];
       await expect(runDaemon({ paths: paths(base), log: (line) => lines.push(line) })).rejects.toThrow(
         /cannot be used/,
       );
-      // Nothing was recorded as running, so nothing can adopt it.
+      // Construction failed before this launch could publish even `starting`.
       expect(lines.some((line) => line.includes("host ready"))).toBe(false);
+      expect(existsSync(paths(base).hostFile)).toBe(false);
     } finally {
+      if (previousLaunchId === undefined) delete process.env[ENV.hostLaunchId];
+      else process.env[ENV.hostLaunchId] = previousLaunchId;
       rmSync(base, { recursive: true, force: true });
     }
   });

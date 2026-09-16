@@ -2,15 +2,15 @@
  * Pure view-model helpers for the app shell. No React, no DOM.
  * Tested in test/shell/model.test.ts.
  */
-import { PRODUCT_DISPLAY_NAME } from "@lasercode/protocol";
-import type { AgentRun, ProjectInfo, ProjectTrust, SessionSummary } from "@lasercode/protocol";
+import { PRODUCT_DISPLAY_NAME, runtimeRecoveryCopy } from "@lasercode/protocol";
+import type { AgentRun, ProjectInfo, ProjectTrust, SessionSummary, WorkerInfo as ProtocolWorkerInfo } from "@lasercode/protocol";
 import { mergeSessions, sessionAttention, sessionTitle, sortSessions } from "../../runtime/threadList.js";
 import { textOf, type Block, type SessionView } from "../../store.js";
 import { viewFirstUserText } from "../../view-summary.js";
 import { shortCwd, summariseArgs } from "../../format.js";
 import { aggregateStatus, statusRank, type Status } from "../status/status.js";
 
-export type WorkerInfo = { status: string; message?: string };
+export type WorkerInfo = Pick<ProtocolWorkerInfo, "status"> & Partial<Pick<ProtocolWorkerInfo, "message" | "mode" | "failure" | "repair">>;
 export type Views = Readonly<Record<string, SessionView | undefined>>;
 export type Workers = Readonly<Record<string, WorkerInfo | undefined>>;
 export type Projects = Readonly<Record<string, ProjectInfo | undefined>>;
@@ -183,23 +183,55 @@ export interface WorkerChip {
   tone: "attention" | "danger" | "muted";
   /** What went wrong, in full, for the tooltip. */
   detail?: string;
-  /** True when `pi/worker/restart` would do something: offer a retry. */
+  /** Explicit recovery actions; none is automatic. */
   canRetry: boolean;
+  canStartSafe: boolean;
+  canTryNormal: boolean;
 }
 
 /** Chip for the top bar; `undefined` when the worker is ready (nothing to say). */
 export function workerChip(worker: WorkerInfo | undefined): WorkerChip | undefined {
-  if (!worker || worker.status === "ready") return undefined;
+  if (!worker) return undefined;
+  if (worker.status === "ready" && worker.mode !== "safe") return undefined;
   const detail = worker.message ? { detail: worker.message } : {};
+  if (worker.mode === "safe" && worker.status === "ready") {
+    return {
+      label: "Safe mode is on",
+      tone: "attention",
+      detail: "Optional Features are off for this project. Your Feature choices were not changed.",
+      canRetry: false,
+      canStartSafe: false,
+      canTryNormal: true,
+    };
+  }
   switch (worker.status) {
     case "starting":
-      return { label: "Starting the agent", tone: "attention", canRetry: false, ...detail };
-    case "crashed":
-      return { label: "Worker crashed", tone: "danger", canRetry: true, ...detail };
+      return { label: "Starting the agent", tone: "attention", canRetry: false, canStartSafe: false, canTryNormal: false, ...detail };
+    case "crashed": {
+      const copy = runtimeRecoveryCopy({
+        status: worker.status,
+        mode: worker.mode ?? "normal",
+        ...(worker.failure ? { failure: worker.failure } : {}),
+        ...(worker.repair ? { repair: worker.repair } : {}),
+      });
+      let label = "Worker crashed";
+      if (copy.kind === "paused") label = "Automatic repair paused";
+      else if (copy.kind === "exhausted") {
+        label = copy.title.replace(/^This project's /, "").replace(/^./, (letter) => letter.toUpperCase());
+      }
+      return {
+        label,
+        tone: "danger",
+        canRetry: true,
+        canStartSafe: worker.mode !== "safe",
+        canTryNormal: worker.mode === "safe",
+        ...detail,
+      };
+    }
     case "retired":
-      return { label: "Worker asleep", tone: "muted", canRetry: true, ...detail };
+      return { label: "Worker asleep", tone: "muted", canRetry: true, canStartSafe: false, canTryNormal: false, ...detail };
     default:
-      return { label: `Worker ${worker.status}`, tone: "muted", canRetry: false, ...detail };
+      return { label: `Worker ${worker.status}`, tone: "muted", canRetry: false, canStartSafe: false, canTryNormal: false, ...detail };
   }
 }
 

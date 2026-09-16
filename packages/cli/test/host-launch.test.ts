@@ -2,6 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ENV } from "@lasercode/protocol";
 import { describe, expect, it } from "vitest";
 import type { LaserPaths } from "../src/config.js";
 import { hostDaemonArgv, nodeLaunchEnvironment, runForegroundHost } from "../src/host-control.js";
@@ -57,7 +58,7 @@ describe("host Node launches", () => {
     const root = mkdtempSync(join(tmpdir(), "host-launch-"));
     const entry = join(root, "probe.mjs");
     const output = join(root, "result.json");
-    writeFileSync(entry, `import { writeFileSync } from "node:fs";\nwriteFileSync(process.env.OUTPUT, JSON.stringify({ execArgv: process.execArgv, nodeOptions: process.env.NODE_OPTIONS }));\n`);
+    writeFileSync(entry, `import { writeFileSync } from "node:fs";\nwriteFileSync(process.env.OUTPUT, JSON.stringify({ execArgv: process.execArgv, nodeOptions: process.env.NODE_OPTIONS, launchId: process.env[${JSON.stringify(ENV.hostLaunchId)}] }));\n`);
     try {
       const result = await runForegroundHost(paths(root), {
         entry,
@@ -65,7 +66,10 @@ describe("host Node launches", () => {
         env: { OUTPUT: output, NODE_OPTIONS: "--max-old-space-size=1" },
       });
       expect(result).toEqual({ code: 0, signal: null });
-      expect(JSON.parse(readFileSync(output, "utf8"))).toEqual({ execArgv: ["--max-old-space-size=448"] });
+      expect(JSON.parse(readFileSync(output, "utf8"))).toEqual({
+        execArgv: ["--max-old-space-size=448"],
+        launchId: expect.stringMatching(/^[0-9a-f]{32}$/),
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

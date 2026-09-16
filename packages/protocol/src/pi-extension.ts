@@ -9,10 +9,11 @@ import type { SessionGoal } from "./features.js";
 import { PRODUCT_DISPLAY_NAME } from "./identity.js";
 import type { MemoryPressureDirectiveLevel } from "./memory-pressure.js";
 import type { ProviderCaptureMeta, ProviderCaptureOmission } from "./provider-capture.js";
+import type { RuntimeFailure, RuntimeModuleName } from "./runtime-recovery.js";
 import type { BackgroundTaskUpdate } from "./tasks.js";
 import type { McpRuntimeSnapshot } from "./mcp.js";
 
-export type PiExtensionModuleName = "provider-log" | "account-usage" | "subagents" | "background-work" | "file-freshness" | "transcribe" | "web-access" | "goal" | "mcp";
+export type PiExtensionModuleName = RuntimeModuleName;
 
 /** One server-owned allowance window for an account-authenticated provider. */
 export interface AccountUsageWindow {
@@ -145,7 +146,7 @@ export type PiExtensionMessage =
   | {
       type: "lasercode/capabilities";
       active: PiExtensionModuleName[];
-      failed: Array<{ module: PiExtensionModuleName; error: string }>;
+      failed: Array<{ module: PiExtensionModuleName; failure: RuntimeFailure }>;
     }
   | ({ type: "lasercode/provider/request" } & ProviderRequestRecord)
   | ({ type: "lasercode/provider/response" } & ProviderResponseRecord)

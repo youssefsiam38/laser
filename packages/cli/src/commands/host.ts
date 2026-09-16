@@ -14,7 +14,7 @@ import { hostUrl, wsUrl, type LaserPaths } from "../config.js";
 import { CliError, ExitCode } from "../errors.js";
 import { shortCwd } from "../format.js";
 import { logTail, openBrowser, runForegroundHost, startHost, stopHost } from "../host-control.js";
-import { inspectHost, portInUse, probeHealth, type HostRecord } from "../hostfile.js";
+import { inspectHost, portInUse, probeHealth, probeHealthLaunch, type HostRecord } from "../hostfile.js";
 import type { Terminal } from "../output.js";
 import { HostRpc, type NotificationHandler } from "../rpc.js";
 import { listSessions } from "../session-ref.js";
@@ -329,9 +329,12 @@ export async function requireHost(paths: LaserPaths): Promise<HostRecord> {
 /** A healthy laser host on the configured port that laser did not start. */
 async function adoptForeignHost(paths: LaserPaths): Promise<HostRecord | undefined> {
   const url = hostUrl(paths);
-  if (!(await probeHealth(url))) return undefined;
+  const launchId = await probeHealthLaunch(url);
+  if (!launchId) return undefined;
   return {
     pid: 0,
+    state: "ready",
+    launchId,
     host: paths.host,
     port: paths.port,
     url,

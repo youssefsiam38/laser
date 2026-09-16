@@ -343,7 +343,7 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("host end to end", () => {
     const { url } = await host.listen();
     expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
     const health = await fetch(`${url}/healthz`);
-    expect(await health.text()).toBe("ok");
+    expect(await health.json()).toEqual({ status: "ok", launchId: expect.stringMatching(/^[0-9a-f]{32}$/) });
 
     const client = new Client();
     await client.connect(url);

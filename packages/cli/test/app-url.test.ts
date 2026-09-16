@@ -40,6 +40,8 @@ function liveRecord(port: number, over: Partial<HostRecord> = {}): HostRecord {
   const identity = processIdentity(process.pid);
   return {
     pid: process.pid,
+    state: "ready",
+    launchId: "0123456789abcdef0123456789abcdef",
     host: "127.0.0.1",
     port,
     url: `http://127.0.0.1:${port}`,

@@ -1,7 +1,8 @@
 import { ENV, PRODUCT_VERSION } from "@lasercode/protocol";
-import { resolvePaths, writeHostFile } from "@lasercode/cli";
+import { resolvePaths } from "@lasercode/cli";
 import { createServer } from "node:http";
-import { mkdtempSync, rmSync } from "node:fs";
+import { EventEmitter } from "node:events";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -10,9 +11,9 @@ import { expect, it, vi } from "vitest";
 import { HostProcess } from "../src/host-process.js";
 import { DesktopLog } from "../src/log.js";
 
-it("same-version adoption sends the desktop environment and normal Quit leaves the host alive", async () => {
+it("adopts a same-version legacy host, refreshes its environment, and leaves it alive on Quit", async () => {
   const root = mkdtempSync(join(tmpdir(), "desktop-env-"));
-  const server = createServer((_req, res) => res.end("ok"));
+  const server = createServer((req, res) => res.end(req.url === "/healthz" ? "ok" : ""));
   const sockets = new WebSocketServer({ server, path: "/ws" });
   let received: { method: string; keys: string[]; hasSyntheticValue: boolean } | undefined;
   sockets.on("connection", (socket) => socket.on("message", (data) => {
@@ -24,7 +25,8 @@ it("same-version adoption sends the desktop environment and normal Quit leaves t
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const port = (server.address() as AddressInfo).port;
   const paths = resolvePaths({ flags: {}, positionals: [], rest: [], hasRest: false }, { HOME: root, [ENV.agentDir]: join(root, "agent"), [ENV.stateDir]: join(root, "state"), [ENV.port]: String(port) });
-  writeHostFile(paths.hostFile, { pid: process.pid, host: "127.0.0.1", port, url: `http://127.0.0.1:${port}`, agentDir: paths.agentDir, sessionDir: paths.sessionDir, stateDir: paths.stateDir, startedAt: new Date().toISOString(), cliVersion: PRODUCT_VERSION });
+  mkdirSync(paths.stateDir, { recursive: true });
+  writeFileSync(paths.hostFile, JSON.stringify({ pid: process.pid, host: "127.0.0.1", port, url: `http://127.0.0.1:${port}`, agentDir: paths.agentDir, sessionDir: paths.sessionDir, stateDir: paths.stateDir, startedAt: new Date().toISOString(), cliVersion: PRODUCT_VERSION }));
   const log = new DesktopLog(join(root, "desktop.log"));
   const lines: string[] = [];
   vi.spyOn(log, "line").mockImplementation((line) => { lines.push(line); });
@@ -43,6 +45,104 @@ it("same-version adoption sends the desktop environment and normal Quit leaves t
     kill.mockRestore();
     for (const socket of sockets.clients) socket.terminate();
     await new Promise<void>((resolve) => sockets.close(() => resolve()));
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it("refuses a ready responder whose launch identity differs from the desktop spawn", async () => {
+  const root = mkdtempSync(join(tmpdir(), "desktop-launch-mismatch-"));
+  const reservation = createServer();
+  await new Promise<void>((resolve) => reservation.listen(0, "127.0.0.1", resolve));
+  const port = (reservation.address() as AddressInfo).port;
+  await new Promise<void>((resolve) => reservation.close(() => resolve()));
+  const paths = resolvePaths(
+    { flags: {}, positionals: [], rest: [], hasRest: false },
+    { HOME: root, [ENV.agentDir]: join(root, "agent"), [ENV.stateDir]: join(root, "state"), [ENV.port]: String(port) },
+  );
+  const mismatch = "fedcba9876543210fedcba9876543210";
+  const responder = createServer((_req, res) => res.end(JSON.stringify({ status: "ok", launchId: mismatch })));
+  const child = Object.assign(new EventEmitter(), { exitCode: null, pid: 42, kill: vi.fn() });
+  const spawnProcess = vi.fn(() => {
+    responder.listen(port, "127.0.0.1", () => {
+      mkdirSync(paths.stateDir, { recursive: true });
+      writeFileSync(paths.hostFile, JSON.stringify({
+        pid: process.pid,
+        state: "ready",
+        launchId: mismatch,
+        host: paths.host,
+        port,
+        url: `http://${paths.host}:${port}`,
+        agentDir: paths.agentDir,
+        sessionDir: paths.sessionDir,
+        stateDir: paths.stateDir,
+        startedAt: new Date().toISOString(),
+        cliVersion: PRODUCT_VERSION,
+      }));
+    });
+    return child;
+  });
+  const host = new HostProcess({
+    paths,
+    packaged: false,
+    resourcesPath: root,
+    log: new DesktopLog(join(root, "desktop.log")),
+    spawnProcess: spawnProcess as never,
+    onChange: () => {},
+  });
+  (host as unknown as { runtime: { binary: string; version: string; execPath: string } }).runtime = {
+    binary: process.execPath,
+    version: process.version,
+    execPath: process.execPath,
+  };
+  try {
+    await expect((host as unknown as { spawnDaemon(): Promise<unknown> }).spawnDaemon()).resolves.toMatchObject({
+      state: "failed",
+      message: expect.stringContaining("not the process"),
+    });
+  } finally {
+    child.removeAllListeners();
+    await new Promise<void>((resolve) => responder.close(() => resolve()));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it("routes a different-version legacy host through the replacement confirmation", async () => {
+  const root = mkdtempSync(join(tmpdir(), "desktop-legacy-refresh-"));
+  const server = createServer((req, res) => res.end(req.url === "/healthz" ? "ok" : ""));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
+  const paths = resolvePaths(
+    { flags: {}, positionals: [], rest: [], hasRest: false },
+    { HOME: root, [ENV.agentDir]: join(root, "agent"), [ENV.stateDir]: join(root, "state"), [ENV.port]: String(port) },
+  );
+  mkdirSync(paths.stateDir, { recursive: true });
+  writeFileSync(paths.hostFile, JSON.stringify({
+    pid: process.pid,
+    host: "127.0.0.1",
+    port,
+    url: `http://127.0.0.1:${port}`,
+    agentDir: paths.agentDir,
+    sessionDir: paths.sessionDir,
+    stateDir: paths.stateDir,
+    startedAt: new Date().toISOString(),
+    cliVersion: "0.1.0",
+  }));
+  const log = new DesktopLog(join(root, "desktop.log"));
+  const confirm = vi.fn(async () => false);
+  const host = new HostProcess({
+    paths,
+    packaged: false,
+    resourcesPath: root,
+    log,
+    confirmHostRefresh: confirm,
+    onChange: () => {},
+  });
+  try {
+    await expect(host.start()).resolves.toMatchObject({ state: "failed", message: expect.stringContaining("different version") });
+    expect(confirm).toHaveBeenCalledWith("0.1.0");
+    expect(server.listening).toBe(true);
+  } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     rmSync(root, { recursive: true, force: true });
   }

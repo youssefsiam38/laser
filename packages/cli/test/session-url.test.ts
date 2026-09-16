@@ -39,12 +39,13 @@ const state = (path: string): SessionState => ({
 } as SessionState);
 
 const summary: SessionSummary = { path: "/s/a.jsonl", id: "0f3a91c2-1111", cwd: "/w", createdAt: "2026-09-05T00:00:00.000Z", modifiedAt: "2026-09-05T00:00:00.000Z", messageCount: 1 };
+const launchId = "0123456789abcdef0123456789abcdef";
 
 /** A host on whatever port the OS hands out: /healthz plus the two RPCs these verbs make. */
 async function fakeHost(): Promise<{ port: number; close: () => Promise<void> }> {
   const server: Server = createServer((req, res) => {
     if (req.url === "/healthz") {
-      res.writeHead(200, { "content-type": "text/plain" }).end("ok");
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ status: "ok", launchId }));
       return;
     }
     res.writeHead(404).end();
@@ -112,6 +113,8 @@ function record(port: number): void {
   const identity = processIdentity(process.pid);
   writeHostFile(join(dir, "host.json"), {
     pid: process.pid,
+    state: "ready",
+    launchId,
     host: "127.0.0.1",
     port,
     url: `http://127.0.0.1:${port}`,

@@ -31,6 +31,7 @@ import {
   hostDaemonArgv,
   inspectHost,
   logTail,
+  newLaunchId,
   piEnv,
   portInUse,
   probeHealth,
@@ -264,11 +265,12 @@ export class HostProcess {
       return this.publish({ state: "failed", message });
     }
 
+    const launchId = newLaunchId();
     mkdirSync(paths.stateDir, { recursive: true });
     // The daemon's own stdout and stderr go straight to the host log, the same
     // file `laser up` uses, so both ways of starting leave one trail.
     const logFd = openSync(paths.logFile, "a");
-    const env = this.hostEnv();
+    const env = { ...this.hostEnv(), [ENV.hostLaunchId]: launchId };
     let child: ChildProcess;
     try {
       const configuredBytes = configuredOldSpaceBytes(argv);
@@ -300,6 +302,12 @@ export class HostProcess {
     while (Date.now() < deadline) {
       const status = await inspectHost(paths, 1000);
       if (status.state === "running") {
+        if (status.record.launchId !== launchId) {
+          return this.publish({
+            state: "failed",
+            message: `The agent host that answered is not the process ${PRODUCT_NAME} just started. Quit every copy completely and open ${PRODUCT_NAME} again.`,
+          });
+        }
         if (hostNeedsRefresh(status.record.cliVersion, CLI_VERSION)) {
           await this.stop();
           return this.publish({ state: "failed", message: "The installed version changed during startup. Restart the app and host together when you are ready." });

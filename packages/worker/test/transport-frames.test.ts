@@ -36,7 +36,7 @@ describe.skipIf(!existsSync(MAIN))("the worker's frame ceiling", () => {
   it("answers a normal request, then ends on a message past the ceiling", async () => {
     child = spawn(
       process.execPath,
-      [MAIN, "--cwd", join(base, "project"), "--agent-dir", join(base, "agent"), "--session-dir", join(base, "sessions")],
+      [MAIN, "--cwd", join(base, "project"), "--launch-id", "00112233445566778899aabbccddeeff", "--worker-mode", "normal", "--agent-dir", join(base, "agent"), "--session-dir", join(base, "sessions")],
       { stdio: ["ignore", "pipe", "pipe", "pipe"] },
     );
     const pipe = child.stdio[3] as Duplex;

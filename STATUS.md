@@ -1,6 +1,6 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-16T16:47:13+03:00 · orchestrator `01a0a030` · HEAD: 98d12881
+**Last updated:** 2026-09-16T16:47:13+03:00 · orchestrator `01a0a030` · HEAD: merge-m19-t1
 **Current focus:** M18 closes RP-3 diagnostics on the finished RP-8 stack, finishes RP-13 capability consumption, then closes the RP-2 repeat baseline (RP-14 dropped, D-268).
 
 | Milestone | State |
