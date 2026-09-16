@@ -5,16 +5,20 @@
  * the host and nobody else. This proves the boundary against a real host, a
  * real socket and a real client: a worker sends a real-shaped report, and the
  * client — which is authorized for everything a local page is — never sees it,
- * nor the canary number inside it. The same `broadcast` is what feeds a paired
- * device's relay listener, so what cannot reach a socket here cannot reach one
- * there either.
+ * nor the canary number inside it, and neither does a listener standing where a
+ * paired device's relay client stands.
+ *
+ * The report the fake worker sends is a *valid* one, so this proves the
+ * boundary against a legitimate producer rather than against a message the
+ * contract would have refused anyway. The filtering itself is by method, not by
+ * shape: a malformed report must be kept private too.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocket } from "ws";
-import { PRODUCT_NAME, PROJECT_DIR_NAME, type JsonRpcMessage } from "@lasercode/protocol";
+import { PRODUCT_NAME, PROJECT_DIR_NAME, memoryPressureReportSchema, type JsonRpcMessage, type JsonRpcNotification } from "@lasercode/protocol";
 import { HostServer } from "../src/server.js";
 
 /** The canary: a generation nothing outside the host process may repeat. */
@@ -47,7 +51,14 @@ send({ jsonrpc: "2.0", method: "pi/worker/status", params: { cwd, status: "ready
 send({
   jsonrpc: "2.0",
   method: "pi/resource/pressure",
-  params: { generation: ${CANARY}, level: "warning", inputs: [], ran: [], results: [], stores: {} },
+  params: {
+    generation: ${CANARY},
+    level: "warning",
+    inputs: [{ kind: "physical", value: { status: "available", value: 1 } }],
+    ran: [],
+    results: [],
+    stores: {},
+  },
 });
 `;
 
@@ -110,6 +121,10 @@ describe("a worker's pressure report at the host boundary", () => {
   it("reaches no client, no relay listener and no log", async () => {
     const client = new Client();
     await client.connect((await host.listen()).url);
+    // Where a paired device's relay client subscribes (RP-13): the same set
+    // `broadcast` writes to, reached through the established test seam.
+    const relay: JsonRpcNotification[] = [];
+    (host as unknown as { notificationListeners: Set<(n: JsonRpcNotification) => void> }).notificationListeners.add((n) => relay.push(n));
     const cwd = join(base, "project");
     mkdirSync(join(cwd, PROJECT_DIR_NAME), { recursive: true });
     writeFileSync(join(cwd, PROJECT_DIR_NAME, "settings.json"), "{}");
@@ -123,7 +138,25 @@ describe("a worker's pressure report at the host boundary", () => {
       // to have been delivered if it were ever going to be.
       await new Promise((resolve) => setTimeout(resolve, 300));
 
+      // The producer's own message is one the contract accepts …
+      expect(memoryPressureReportSchema.safeParse({
+        generation: CANARY,
+        level: "warning",
+        inputs: [{ kind: "physical", value: { status: "available", value: 1 } }],
+        ran: [],
+        results: [],
+        stores: {},
+      }).success).toBe(true);
+
       const seen = JSON.stringify(client.inbound);
+      const relayed = JSON.stringify(relay);
+      // Non-vacuous: this listener is live and does receive what a device may
+      // hear, such as the worker's own status.
+      expect(relay.length).toBeGreaterThan(0);
+      expect(relay.some((notification) => notification.method === "pi/worker/status")).toBe(true);
+      expect(relay.some((notification) => notification.method === "pi/resource/pressure")).toBe(false);
+      expect(relayed).not.toContain(String(CANARY));
+      expect(relayed).not.toContain("pi/resource/pressure");
       expect(client.inbound.some((message) => "method" in message && message.method === "pi/resource/pressure")).toBe(false);
       expect(seen).not.toContain(String(CANARY));
       expect(seen).not.toContain("pi/resource/pressure");
