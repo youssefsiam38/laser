@@ -28,7 +28,7 @@ Authoritative detail, evidence and ownership live in `STATUS_DETAILED.md`; `STAT
 | RP-12 | M18-T12 | done — integrated `e9e3d8d` | RP-9 |
 | RP-13 | M18-T13 | done — host policy/storage isolation through `1e4eeba`; reviewed real-host browser matrices `a0111f9` | RP-12 |
 | RP-14 | M18-T14 | todo | RP-1..RP-13, M18-T15 |
-| Capability consumption | M18-T19 | in progress — T19a reviewed corrections and T19b in flight; consume the authoritative RP-13 descriptor in client affordances | RP-13 |
+| Capability consumption | M18-T19 | done — reviewed `76f475fa`: affordances derive from the authenticated descriptor and protocol policy tables, refuse before invocation, desktop/phone narrowed-policy matrices | RP-13 |
 | Recovery/update activation | M19-T1..T3 | todo — explicit launch, generation, repair, update and migration recovery tasks | M18 |
 
 ## Outcome
