@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
-import type { AgentRun, BackgroundTask, ResourceMeasure, ResourceProcess, ResourceSnapshot, SessionSummary } from "@lasercode/protocol";
+import { parseMemoryPressureSummary, type AgentRun, type BackgroundTask, type ResourceMeasure, type ResourceProcess, type ResourceSnapshot, type SessionSummary } from "@lasercode/protocol";
 
 import {
   physicalMeasure,
   physicalMeasureKind,
+  localPressureRole,
+  pressureActionView,
+  pressureCoverage,
+  pressureInputLabel,
+  pressureHostState,
+  pressureRefusalViews,
   processTree,
   resolveRunAssociation,
   resolveSessionAssociation,
@@ -198,6 +204,61 @@ describe("resource diagnostics projection", () => {
       status: "unavailable",
       reason: "Retained bytes are not currently reported by Project workers",
     });
+  });
+});
+
+describe("pressure diagnostics projection", () => {
+  it("recomputes the host aggregate without the renderer and maps every visible reason", () => {
+    const availableInput = [{ kind: "physical" as const, value: { status: "available" as const, value: 10 } }];
+    const row = (role: "host" | "project_worker" | "desktop_renderer" | "machine", level: "normal" | "warning" | "critical") => ({
+      role,
+      level,
+      inputs: availableInput,
+      coverage: { expected: 1, answered: 1, complete: true },
+    });
+    const summary = parseMemoryPressureSummary({
+      level: "critical",
+      roles: [row("host", "normal"), row("project_worker", "normal"), row("desktop_renderer", "critical"), row("machine", "warning")],
+      refusing: ["new_project_worker"],
+      totals: { events: 3, released: { count: 2, bytes: 1_024 }, refusals: 1 },
+    });
+    const hostPressure = pressureHostState(summary);
+    expect(hostPressure.level).toBe("warning");
+    expect(hostPressure.roles.map((role) => role.role)).toEqual(["host", "project_worker", "machine"]);
+    expect(JSON.stringify(hostPressure)).not.toContain("desktop_renderer");
+
+    expect(pressureRefusalViews(hostPressure.refusing, ["whole_transcript"])).toEqual([
+      expect.objectContaining({ label: "Starting work in another project", owners: "the application" }),
+      expect.objectContaining({ label: "Loading a whole conversation at once", owners: "this window" }),
+    ]);
+    expect(pressureActionView({ action: "renderer_views", outcome: "held", reason: "pins_held" })).toEqual({
+      action: "renderer_views",
+      label: "Conversation views",
+      outcome: "Kept for active work",
+      reason: "Work in a conversation is still using this memory.",
+    });
+  });
+
+  it("projects unavailable local inputs through the shared role and coverage language", () => {
+    const local = localPressureRole({
+      level: "unknown",
+      effective: "unknown",
+      host: { level: "unknown" },
+      inputs: [
+        { kind: "physical", value: { status: "unavailable", reason: "unsupported_platform" }, warningBytes: 100, criticalBytes: 200 },
+        { kind: "heap", value: { status: "unavailable", reason: "unsupported_platform" }, warningBytes: 100, criticalBytes: 200 },
+      ],
+    });
+    expect(local.role).toBe("desktop_renderer");
+    expect(local.level).toBe("unknown");
+    expect(local.coverage).toEqual({ expected: 2, answered: 0, complete: false, reason: "incomplete_coverage" });
+    expect(pressureCoverage(local)).toBe("0 of 2 answered · coverage is incomplete");
+    expect(pressureInputLabel(local.role, "physical")).toBe("Private resident memory");
+    expect(local.details).toEqual([
+      { label: "Local reading", value: "Not measured yet" },
+      { label: "Application signal", value: "Not measured yet" },
+    ]);
+    expect(pressureHostState({ level: "normal", roles: [], refusing: [], totals: { events: 0, released: { count: 0, bytes: 0 }, refusals: 0 } }).level).toBe("unknown");
   });
 });
 

@@ -15,7 +15,8 @@ import { activator, dismissInstallPrompt, scrub, watchPage } from './support.mjs
  *
  * States this script proves in the browser: loading, first-sample "no trend
  * yet", partial/unavailable coverage (no renderer process exists outside the
- * packaged desktop, and no owner reports retained bytes until RP-4…RP-7),
+ * packaged desktop, and no owner reports retained bytes until RP-4…RP-7), an
+ * injected critical local heap state with its refusal and recovery guidance,
  * disconnected-with-last-sample, disconnected-on-mount, reduced motion, and
  * the redacted export. The refresh-failure state needs a host that answers an
  * error, which no production route offers; it stays covered by
@@ -121,6 +122,70 @@ export default async function resourceDiagnostics(check) {
   if (phone) assert.equal(header.sameRow, false, 'on a phone the actions sit under the explanation, not beside it');
   await check.shot(`resources-summary-${label}`);
 
+  // ------------------------------------------ actor-local pressure protection
+  const pressure = root.locator('[data-section=memory-pressure]');
+  await pressure.waitFor();
+  await pressure.scrollIntoViewIfNeeded();
+  const initialPressure = scrub(await pressure.textContent());
+  assert.match(initialPressure, /Application · (Not available|Normal|Memory is tight|Memory is critically low|Not measured yet)/, `the host state has an explicit answer: ${initialPressure.slice(0, 200)}`);
+  assert.match(initialPressure, /This window · (Normal|Not measured yet)/, `the renderer has its own state before injection: ${initialPressure.slice(0, 240)}`);
+  assert.match(initialPressure, /Retained host journal/, 'host journal totals have one bounded subsection rather than being copied into history rows');
+
+  // First prove the fully unavailable browser: no desktop bridge and no heap.
+  // This is the Safari/phone shape and must say exactly that zero of the two
+  // possible readings answered, without decorating absence with thresholds.
+  const unavailableInjected = await page.evaluate(() => {
+    try {
+      window.__pressureMemoryDescriptor = Object.getOwnPropertyDescriptor(performance, 'memory');
+      Object.defineProperty(performance, 'memory', { configurable: true, value: undefined });
+      document.dispatchEvent(new Event('visibilitychange'));
+      return performance.memory === undefined;
+    } catch {
+      return false;
+    }
+  });
+  assert.equal(unavailableInjected, true, 'the browser case removed heap evidence at the sampler boundary');
+  await pressure.getByText('0 of 2 answered · coverage is incomplete', { exact: true }).waitFor();
+  const unavailablePressure = scrub(await pressure.locator('[data-pressure-role=desktop_renderer]').textContent());
+  assert.match(unavailablePressure, /Private resident memory.*Unavailable/, `the no-bridge reading stays unavailable: ${unavailablePressure}`);
+  assert.match(unavailablePressure, /JavaScript heap.*Unavailable/, `the no-heap reading stays unavailable: ${unavailablePressure}`);
+  assert.doesNotMatch(unavailablePressure, /tight at|critical at/, 'an unavailable measure is not decorated with thresholds');
+
+  // `performance.memory` is the real renderer sampler boundary. Replace its
+  // values, not React state or markup, then use the controller's supported
+  // visibility resample path twice: escalation deliberately requires two
+  // agreeing samples. This proves the live controller → refusal → diagnostics
+  // integration without adding a production test hook.
+  const injected = await page.evaluate(() => {
+    try {
+      Object.defineProperty(performance, 'memory', {
+        configurable: true,
+        value: { usedJSHeapSize: 900_000_000, totalJSHeapSize: 900_000_000, jsHeapSizeLimit: 1_000_000_000 },
+      });
+      document.dispatchEvent(new Event('visibilitychange'));
+      return performance.memory?.usedJSHeapSize === 900_000_000;
+    } catch {
+      return false;
+    }
+  });
+  assert.equal(injected, true, 'the browser case injected the renderer sampler, not surface text');
+  await page.waitForTimeout(150);
+  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await pressure.getByText('This window · Memory is critically low', { exact: true }).waitFor();
+  const criticalPressure = scrub(await pressure.textContent());
+  assert.match(criticalPressure, /Loading a whole conversation at once/, `the critical window names the paused operation: ${criticalPressure}`);
+  assert.match(criticalPressure, /Load earlier messages a page at a time, then try again after memory recovers/, 'the refusal tells the person what to do');
+  assert.match(criticalPressure, /Private resident memory|JavaScript heap/, 'the local card names evidence rather than calling it PSS');
+  assert.doesNotMatch(criticalPressure, /whole_transcript|admission_refused|desktop_renderer|epoch|generation/, 'the pressure surface exposes no wire enums or internal identities');
+  assert.ok(await pressure.locator('[data-section=pressure-actions] table').count() === 1, 'the latest local reason is a semantic table');
+  await check.shot(`resources-pressure-critical-${label}`);
+  await page.evaluate(() => {
+    const descriptor = window.__pressureMemoryDescriptor;
+    if (descriptor) Object.defineProperty(performance, 'memory', descriptor);
+    else delete performance.memory;
+    delete window.__pressureMemoryDescriptor;
+  });
+
   // --------------------------------------------------- history and the chart
   const trend = root.locator('[data-slot=chart]');
   const noTrend = page.getByText('Collecting another complete sample before drawing a trend', { exact: false });
@@ -142,7 +207,7 @@ export default async function resourceDiagnostics(check) {
   assert.match(retention, /evict independently/, `four independent bounds, said plainly: ${retention}`);
 
   // ------------------------------------------------- retained state, honestly
-  const table = root.locator('[data-slot=data-table]');
+  const table = root.locator('[data-section=retained-state]');
   const rows = table.locator('tbody tr');
   assert.ok(await rows.count() >= 10, 'every retained store has a row, reported or not');
   const retained = scrub(await table.innerText());

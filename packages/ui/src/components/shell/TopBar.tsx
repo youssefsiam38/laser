@@ -70,7 +70,9 @@ import { pendingSessionPath, sessionOpenPhase, sameSessionOpenPhase } from "@/ru
 import { currentView, samePresentationView } from "@/runtime/presentation-state";
 
 import { InlineRename } from "./InlineRename.js";
-import { lastPromptEntryId, sessionStateLabel, sessionStatus, workerChip } from "./model.js";
+import { LAST_PROMPT_MESSAGES, lastPromptEntry, lastPromptMessage } from "@/components/thread/last-prompt";
+
+import { sessionStateLabel, sessionStatus, workerChip } from "./model.js";
 import { errorText, useShell } from "./shell-context.js";
 import { requestMoveSession } from "./move-session.js";
 import { SessionIdentity } from "./SessionIdentity.js";
@@ -165,13 +167,12 @@ export function TopBar() {
   const forkFromLastPrompt = async () => {
     if (!view) return;
     try {
-      const { entries } = await client.request("pi/session/entries", { path: view.path });
-      const entryId = lastPromptEntryId(entries);
-      if (!entryId) {
-        actions.toast("warning", "Nothing to fork yet: this session has no prompt.");
+      const found = await lastPromptEntry(params => client.request("pi/session/entries", params), view.path);
+      if (!found.entryId) {
+        actions.toast("warning", lastPromptMessage(found) ?? LAST_PROMPT_MESSAGES["no-prompt"]);
         return;
       }
-      await actions.fork(entryId);
+      await actions.fork(found.entryId);
     } catch (error) {
       actions.toast("error", errorText(error));
     }

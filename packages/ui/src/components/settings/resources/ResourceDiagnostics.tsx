@@ -32,6 +32,7 @@ import { startVisiblePoll } from "@/runtime/visible-poll";
 
 import {
   ROLE_LABELS,
+  displayMetric,
   measureCell,
   physicalMeasure,
   physicalMeasureKind,
@@ -48,6 +49,7 @@ import {
   type ResourceOptionalStores,
   type RetainedStoreRow,
 } from "./model.js";
+import { PressureDiagnostics } from "./PressureDiagnostics.js";
 
 const RESOURCE_POLL_MS = 5_000;
 type RefreshCause = "initial" | "manual" | "retry" | "reconnect" | "poll";
@@ -331,6 +333,8 @@ export function ResourceDiagnostics({ optionalStores }: ResourceDiagnosticsProps
           </div>
         </section>
 
+        <PressureDiagnostics summary={snapshot.pressure} />
+
         <section aria-labelledby="resource-history-title" className="rounded-xl border border-line bg-surface p-4">
           <h3 id="resource-history-title" className="text-sm font-semibold text-ink">Bounded history</h3>
           {completeHistory >= 2 ? (
@@ -438,12 +442,6 @@ function MemoryCard({ label, summary }: { label: string; summary: { current: Met
       </div>
     </div>
   );
-}
-
-function displayMetric(metric: MetricCell, bytes = false): string {
-  if (metric.status === "available") return `${bytes ? formatBytes(metric.value) : metric.value.toLocaleString()}${metric.qualifier ? ` · ${metric.qualifier}` : ""}`;
-  const known = metric.knownValue === undefined ? "" : ` · known ${bytes ? formatBytes(metric.knownValue) : metric.knownValue.toLocaleString()}`;
-  return `Unavailable${known} · ${metric.reason}`;
 }
 
 function MetricValue({ metric, bytes = false }: { metric: MetricCell; bytes?: boolean }) {

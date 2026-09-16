@@ -163,6 +163,19 @@ export interface LaserDesktop {
    */
   openSourceFile?(path: string): Promise<{ opened: boolean; reason?: string }>;
 
+  /**
+   * What this desktop window can read about its own renderer process.
+   *
+   * The sandboxed preload owns this capability, so there is no IPC hop and no
+   * process identity leaves it. Browsers and phones have no desktop bridge;
+   * every desktop window always offers this field. A failed read resolves
+   * `undefined`, never an error string or a substituted number.
+   */
+  memory: {
+    /** Private-resident memory in Electron's native kilobyte unit. */
+    process(): Promise<{ private?: number } | undefined>;
+  };
+
   microphone: {
     status(): Promise<MicrophoneStatus>;
     /** Prompts once on macOS; resolves with whatever the system decided. */

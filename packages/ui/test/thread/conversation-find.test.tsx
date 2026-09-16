@@ -21,7 +21,7 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 const messages: ThreadMessageLike[] = [{ id: "first", role: "user", content: [{ type: "text", text: "Apple Apple" }] }, { id: "last", role: "assistant", content: [{ type: "reasoning", text: "Apple thought" }] }];
-type HistoryOptions = { partial?: boolean; loadAll?: () => Promise<boolean> };
+type HistoryOptions = { partial?: boolean; loadAll?: () => Promise<boolean>; refusal?: string | undefined };
 function Body(options: HistoryOptions) {
   const find = useConversationFind(options);
   return <div ref={find.root}>{find.bar}<div data-slot="thread-viewport"><div data-message-id="first">Apple Apple</div><SearchMessageContext value={find.selectedMessage === "last"}><div data-message-id="last"><ToolGroupRoot><ToolGroupTrigger>Reasoning</ToolGroupTrigger><ToolGroupContent>Apple thought</ToolGroupContent></ToolGroupRoot></div></SearchMessageContext></div></div>;
@@ -86,6 +86,18 @@ it("makes partial search explicit, loads missing messages once, and restores key
   await act(async () => { release(); await loadAll.mock.results[0]!.value; });
   expect(container.querySelector('[role="status"]')?.textContent).toBe("1 / 2");
   expect(document.activeElement).toBe(container.querySelector("input"));
+});
+
+it("explains a pressure refusal and never starts the whole-history read", async () => {
+  const loadAll = vi.fn(async () => true);
+  const refusal = "This window is low on memory, so loading a whole conversation at once is paused. Earlier messages still load a page at a time.";
+  await act(async () => root.render(<Fixture partial loadAll={loadAll} refusal={refusal} />));
+  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "f", ctrlKey: true })));
+  expect(container.textContent).toContain(refusal);
+  const button = [...container.querySelectorAll("button")].find(candidate => candidate.textContent === "Load all messages")!;
+  expect(button.disabled).toBe(true);
+  await act(async () => button.click());
+  expect(loadAll).not.toHaveBeenCalled();
 });
 
 it("keeps main and Beam find fields and native highlights independent", async () => {

@@ -67,6 +67,13 @@ import { initialState, reduce, type Action, type AppState, type SessionView } fr
 import { hydrationEpochOf, isDormantView } from "../view-summary.js";
 import { atLiveEdge, onStanding } from "./anchored-messages.js";
 import { createViewCache, type ActionReservation, type RendererViewCounters, type ViewCache } from "./view-cache.js";
+import {
+  PRESSURE_REFUSAL_MESSAGES,
+  PressureRefusedError,
+  createRendererPressureController,
+  createRendererPressureSampler,
+  type RendererPressureState,
+} from "./pressure/index.js";
 import { createThreadAdapter, sendToSession, type SendBehavior } from "./adapter.js";
 import { firstTurnFromRunConfig, useDiscardFirstTurnOnLeave } from "./first-turn.js";
 import { createSessionLauncher, type NewSessionOptions } from "./new-session.js";
@@ -264,6 +271,14 @@ export interface LaserContextValue {
    */
   rendererViews: () => RendererViewCounters;
   /**
+   * What this window has measured about its own memory, what it released and
+   * what it is refusing right now (RP-8, D-265). This device's own state: it is
+   * never sent anywhere, and it says nothing about any other window.
+   */
+  pressure: () => RendererPressureState;
+  /** Subscribe to that state; the returned function unsubscribes. */
+  subscribePressure: (listener: () => void) => () => void;
+  /**
    * Hold room in the renderer for something a person is about to do — today,
    * rebuilding an oversized prompt so it can be edited (RP-5b §2). The caller
    * keeps the token for as long as it holds those bytes.
@@ -317,6 +332,67 @@ export function useLaserStable(): LaserStable {
   return value;
 }
 
+function useStoreSelector<State, Selected>(
+  getState: () => State,
+  subscribe: (listener: () => void) => () => void,
+  selector: (state: State) => Selected,
+  isEqual: (left: Selected, right: Selected) => boolean,
+): Selected {
+  const selectorRef = useRef(selector);
+  selectorRef.current = selector;
+  const isEqualRef = useRef(isEqual);
+  isEqualRef.current = isEqual;
+  const cache = useRef<{ state: State; selector: (state: State) => Selected; value: Selected } | undefined>(undefined);
+  const getSnapshot = useCallback((): Selected => {
+    const state = getState();
+    const select = selectorRef.current;
+    const previous = cache.current;
+    // The selector is part of the key: one that closes over a prop must answer
+    // for the new prop even when no state has changed since.
+    if (previous && previous.state === state && previous.selector === select) return previous.value;
+    const next = select(state);
+    if (previous && isEqualRef.current(previous.value, next)) {
+      cache.current = { state, selector: select, value: previous.value };
+      return previous.value;
+    }
+    cache.current = { state, selector: select, value: next };
+    return next;
+  }, [getState]);
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+/**
+ * This window's own memory-pressure state, as a subscription (RP-8, D-265).
+ *
+ * Surfaces read it to say what is paused and why. It is local: a phone reading
+ * a desktop host's diagnostics reports its own window, never the other one.
+ */
+const pressureIdentity = (state: RendererPressureState): RendererPressureState => state;
+
+export function useRendererPressure(): RendererPressureState;
+export function useRendererPressure<T>(selector: (state: RendererPressureState) => T, isEqual?: (left: T, right: T) => boolean): T;
+export function useRendererPressure<T>(
+  selector?: (state: RendererPressureState) => T,
+  isEqual: (left: T, right: T) => boolean = Object.is,
+): T | RendererPressureState {
+  const { pressure, subscribePressure } = useLaserStable();
+  if (selector === undefined) return useStoreSelector(pressure, subscribePressure, pressureIdentity, Object.is);
+  return useStoreSelector(pressure, subscribePressure, selector, isEqual);
+}
+
+const selectWholeTranscriptPaused = (state: RendererPressureState): boolean => state.refusing.includes("whole_transcript");
+export interface WholeTranscriptRefusal {
+  readonly paused: boolean;
+  readonly explanation?: string | undefined;
+}
+const WHOLE_TRANSCRIPT_READY: WholeTranscriptRefusal = Object.freeze({ paused: false, explanation: undefined });
+const WHOLE_TRANSCRIPT_PAUSED: WholeTranscriptRefusal = Object.freeze({ paused: true, explanation: PRESSURE_REFUSAL_MESSAGES.whole_transcript });
+
+/** One stable policy view shared by every whole-transcript affordance. */
+export function useWholeTranscriptRefusal(): WholeTranscriptRefusal {
+  return useRendererPressure(selectWholeTranscriptPaused) ? WHOLE_TRANSCRIPT_PAUSED : WHOLE_TRANSCRIPT_READY;
+}
+
 const identity = <T,>(value: T): T => value;
 
 /** Conversations promoted into the cache's hot set per environment (RP-10/11). */
@@ -332,30 +408,7 @@ const PRIME_RECENT_SESSIONS = 8;
 export function useLaserState<T>(selector: (state: AppState) => T, isEqual: (a: T, b: T) => boolean = Object.is): T {
   const store = useContext(LaserStateContext);
   if (!store) throw new Error("useLaserState must be used inside <LaserProvider>.");
-  const selectorRef = useRef(selector);
-  selectorRef.current = selector;
-  const isEqualRef = useRef(isEqual);
-  isEqualRef.current = isEqual;
-  const cache = useRef<{ state: AppState; selector: (state: AppState) => T; value: T } | undefined>(undefined);
-
-  const getSnapshot = useCallback((): T => {
-    const state = store.getSnapshot();
-    const selector = selectorRef.current;
-    const previous = cache.current;
-    // The selector is part of the key: one that closes over a prop (a session
-    // path, a project list) must answer for the new prop even when no state
-    // has changed since. A memoized selector still pays nothing per render.
-    if (previous && previous.state === state && previous.selector === selector) return previous.value;
-    const next = selector(state);
-    if (previous && isEqualRef.current(previous.value, next)) {
-      cache.current = { state, selector, value: previous.value };
-      return previous.value;
-    }
-    cache.current = { state, selector, value: next };
-    return next;
-  }, [store]);
-
-  return useSyncExternalStore(store.subscribe, getSnapshot, getSnapshot);
+  return useStoreSelector(store.getSnapshot, store.subscribe, selector, isEqual);
 }
 
 /**
@@ -633,6 +686,12 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   /** Loads have an in-place Retry; a second toast would cover it on a phone. */
   const onError = useCallback((error: unknown) => {
     const text = error instanceof Error ? error.message : String(error);
+    // Not an error: this window said "not right now" on purpose, and the
+    // sentence already says what still works.
+    if (error instanceof PressureRefusedError) {
+      dispatch({ type: "toast", level: "warning", text });
+      return;
+    }
     const current = readState();
     if (error instanceof SessionLoadError || sessionOpenPhase(current, current.current).reason === text) return;
     dispatch({ type: "toast", level: "error", text });
@@ -835,6 +894,33 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     });
     return () => { stop(); viewCache.dispose(); };
   }, [store, viewCache]);
+
+  /**
+   * This window's own memory-pressure actor (RP-8, D-265).
+   *
+   * It measures what this environment can honestly measure, gives back its
+   * rebuildable caches and the transcripts nobody is reading, and refuses new
+   * whole-transcript hydration while it is under pressure. It reports nothing
+   * anywhere: a window's memory is its own business, and the host's summary
+   * arrives here rather than the other way round.
+   */
+  const pressure = useMemo(() => createRendererPressureController({
+    sample: createRendererPressureSampler(),
+    cache: { releaseUnder: (level) => viewCache.releaseUnder(level), counters: () => viewCache.counters() },
+  }), [viewCache]);
+  useEffect(() => {
+    pressure.start();
+    const stop = client.subscribe((method, params) => {
+      if (method === "resource/pressure") pressure.observePublication(params);
+    });
+    return () => { stop(); pressure.dispose(); };
+  }, [client, pressure]);
+  useEffect(() => {
+    // A socket that has just opened may be a host that restarted, and its
+    // pressure epoch starts again at one. A window holding the old fence would
+    // never hear it.
+    if (state.connection === "open") pressure.forgetHost();
+  }, [pressure, state.connection]);
   // The main window is registered wherever it is, so a scope that shows the
   // same session keeps its own loaded transcript instead of sharing this one.
   const mainWindowPath = mainPath(state.destination) ?? state.current;
@@ -1233,6 +1319,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     // Counters, recency and any tail captured but not handed over belong to
     // the environment they were taken in (RP-13).
     viewCache.reset();
+    pressure.reset();
     scopeClaims.current.clear();
     scopeClaimedAt.current.clear();
     detached.current.clear();
@@ -1336,6 +1423,16 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
    * inside the Beam bubble sets Beam's model, not the main session's.
    */
   const buildActions = useCallback((readScoped: () => AppState, history: HistoryReads = historyLoader): LaserActions => {
+    /**
+     * The one thing this window refuses while it is short of memory, recorded
+     * once and refused before any request leaves the process (RP-8, D-265).
+     * Every bounded read, every reconnect and every mutation stays available.
+     */
+    const refuseWholeTranscript = (): void => {
+      if (pressure.admits("whole_transcript")) return;
+      pressure.refused("whole_transcript");
+      throw new PressureRefusedError("whole_transcript", PRESSURE_REFUSAL_MESSAGES.whole_transcript);
+    };
     const requireCurrent = (): string => {
       const snapshot = readScoped();
       const path = snapshot.current;
@@ -1540,6 +1637,12 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       },
       refreshEntries: (options) =>
         guard(async () => {
+          // The whole tree, every branch and every version, is the largest read
+          // this window makes; under pressure it is the one thing it will not
+          // start (RP-8 step 7). Refused before anything is asked for, so no
+          // request is sent and nothing here changes. A manual refresh is not
+          // an exception to the policy — there is no way to force it.
+          if (!options?.tail) refuseWholeTranscript();
           const path = requireCurrent();
           if (moving.current.has(path)) return;
           const epoch = openEpochs.current.get(path);
@@ -1548,6 +1651,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           await history.metadata(path, accepting);
         }).then(() => undefined),
       loadAllEntries: () => guard(async () => {
+        refuseWholeTranscript();
         const path = requireCurrent();
         const epoch = openEpochs.current.get(path);
         return history.all(path, () => !moving.current.has(path) && openEpochs.current.get(path) === epoch);
@@ -1693,6 +1797,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     launchSession,
     markSeen,
     openSession,
+    pressure,
     readState,
     readHistory,
     historyLoader,
@@ -1857,8 +1962,10 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       actions,
       rendererViews: viewCache.counters,
       reserveViewAction: viewCache.reserveAction,
+      pressure: pressure.getSnapshot,
+      subscribePressure: pressure.subscribe,
     }),
-    [actions, archive, client, currentProject, dispatch, projectInfo, projects, setCurrentProject, startupRestoring, state.destination, trustRequests, viewCache],
+    [actions, archive, client, currentProject, dispatch, pressure, projectInfo, projects, setCurrentProject, startupRestoring, state.destination, trustRequests, viewCache],
   );
 
   const internals = useMemo<LaserInternals>(

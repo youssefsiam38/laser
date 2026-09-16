@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { CommandPalette as CommandPaletteElement, matchesCommand, type PaletteCommand } from "@/components/assistant-ui/elements/command-palette";
 import { StatusDot } from "@/components/status";
-import { userEntryIds } from "@/components/thread/entries";
+import { LAST_PROMPT_MESSAGES, lastPromptEntry, lastPromptMessage } from "@/components/thread/last-prompt";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { useWorkbench } from "@/components/workbench";
 import { relativeTime, shortCwd, shortcutLabel } from "@/format";
@@ -149,13 +149,12 @@ function usePaletteCommands(active: boolean): RunnableCommand[] {
  */
 async function forkFromLastPrompt(path: string, client: ReturnType<typeof useLaserStable>["client"], actions: ReturnType<typeof useLaserStable>["actions"]): Promise<void> {
   try {
-    const { entries, leafId } = await client.request("pi/session/entries", { path });
-    const entryId = userEntryIds(entries, leafId).at(-1);
-    if (entryId) {
-      await actions.fork(entryId);
+    const found = await lastPromptEntry(params => client.request("pi/session/entries", params), path);
+    if (found.entryId) {
+      await actions.fork(found.entryId);
       return;
     }
-    actions.toast("warning", "Nothing to fork yet: this session has no prompt.");
+    actions.toast("warning", lastPromptMessage(found) ?? LAST_PROMPT_MESSAGES["no-prompt"]);
   } catch (error) {
     actions.toast("error", errorText(error));
   }

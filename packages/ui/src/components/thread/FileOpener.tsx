@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { FileOpenerContext, type FileOpener, type FileViewerSource } from "@/lib/file-opener";
 import { ProjectFileCache } from "@/runtime/project-file-cache";
+import { registerEphemeralCache } from "@/runtime/pressure";
 import { useLaserStable } from "@/runtime";
 import { FileViewer } from "./FileViewer.js";
 
@@ -8,6 +9,9 @@ import { FileViewer } from "./FileViewer.js";
 export function FileOpenerProvider({ children, scope }: { children: ReactNode; scope?: string | undefined }) {
   const { client } = useLaserStable();
   const cache = useMemo(() => new ProjectFileCache((cwd, path) => client.request("pi/project/read", { cwd, path })), [client, scope]);
+  // Under memory pressure this window gives back what it can rebuild, and the
+  // bounded file reads a thread has accumulated are exactly that (RP-8 step 1).
+  useEffect(() => registerEphemeralCache(cache), [cache]);
   const [opened, setOpened] = useState<{ source: FileViewerSource; trigger: HTMLElement; scope: string | undefined }>();
   /**
    * A picture is shown from the image pool's own blob, and showing it is a

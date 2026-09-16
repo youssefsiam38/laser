@@ -39,7 +39,7 @@ import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { money, tokens } from "@/format";
 import { cn } from "@/lib/utils";
 import { useRunsForRoot } from "@/agents";
-import { useLaserStable, useLaserState, useSessionMeta } from "@/runtime";
+import { useLaserStable, useLaserState, useSessionMeta, useWholeTranscriptRefusal } from "@/runtime";
 
 import { CheckpointHistory } from "@/components/assistant-ui/elements/checkpoint-history";
 import {
@@ -547,6 +547,7 @@ export function HistorySection() {
     return Boolean(history && (!history.complete || history.branchesUnloaded));
   });
   const { actions } = useLaserStable();
+  const wholeTranscript = useWholeTranscriptRefusal();
   const meta = useSessionMeta();
   const shell = useShell();
   const entries = useLaserState((s) => s.current ? s.open[s.current]?.entries : undefined);
@@ -595,12 +596,23 @@ export function HistorySection() {
             </button>
           </CollapsibleTrigger>
           {shell.historyOpen && (
-            <TooltipIconButton tooltip="Refresh history" size="icon-xs" className="text-ink-3" onClick={() => void actions.refreshEntries()}>
+            <TooltipIconButton
+              tooltip={wholeTranscript.paused ? "Refresh paused while this window is low on memory" : "Refresh history"}
+              size="icon-xs"
+              className="text-ink-3"
+              disabled={wholeTranscript.paused}
+              onClick={() => void actions.refreshEntries()}
+            >
               <RefreshCw />
             </TooltipIconButton>
           )}
         </div>
         <CollapsibleContent>
+          {wholeTranscript.paused && (
+            <p data-slot="history-refresh-paused" className="px-4 pb-3 text-sm text-ink-2">
+              {wholeTranscript.explanation}
+            </p>
+          )}
           <CheckpointHistory
             rows={rows}
             busy={meta.running || meta.compacting}
