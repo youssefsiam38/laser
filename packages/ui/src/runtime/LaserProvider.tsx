@@ -1818,7 +1818,16 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   const actionsRef = useRef<LaserActions>(actions);
   actionsRef.current = actions;
 
-  const prepareProject = useWorkerReadiness({ currentProject, connection: state.connection, sessionsLoaded: state.sessionsLoaded, projects: projectList, client, readState, archive });
+  const prepareProject = useWorkerReadiness({
+    currentProject,
+    connection: state.connection,
+    sessionsLoaded: state.sessionsLoaded,
+    projects: projectList,
+    client,
+    readState,
+    archive,
+    enabled: capabilityFor(state.environment, "pi/worker/prepare").state === "available",
+  });
   const setCurrentProject = useCallback((cwd: string | undefined) => {
     destination.setCodeProject(cwd);
     prepareProject(cwd);

@@ -26,10 +26,11 @@ interface WorkerReadinessOptions {
   client: Pick<HostClient, "request">;
   readState: () => AppState;
   archive: ArchiveStore;
+  enabled: boolean;
 }
 
 /** One subscription for the main provider; default catalog selection is not intent. */
-export function useWorkerReadiness({ currentProject, connection, sessionsLoaded, projects, client, readState, archive }: WorkerReadinessOptions) {
+export function useWorkerReadiness({ currentProject, connection, sessionsLoaded, projects, client, readState, archive, enabled }: WorkerReadinessOptions) {
   // Capture restored memory before the provider's automatic project fallback.
   //
   // The remembered project is readable only once the environment is known
@@ -44,7 +45,7 @@ export function useWorkerReadiness({ currentProject, connection, sessionsLoaded,
   // in `currentProject` yet — only what the person left behind.
   if (memory.current === undefined && controller.current === undefined) memory.current = currentProject;
   useEffect(() => {
-    if (connection !== "open" || !sessionsLoaded || projects.length === 0) return;
+    if (!enabled || connection !== "open" || !sessionsLoaded || projects.length === 0) return;
     const readiness = createWorkerReadiness(
       (cwd) => client.request("pi/worker/prepare", { cwd }),
       (cwd) => canPrepareProject(cwd, projects, readState().sessions, (path) => archive.has(path)),
@@ -62,7 +63,7 @@ export function useWorkerReadiness({ currentProject, connection, sessionsLoaded,
       if (cwd) readiness.want(cwd);
     });
     return () => { unsubscribe(); readiness.dispose(); controller.current = undefined; };
-  }, [archive, client, projects, readState, connection, sessionsLoaded]);
+  }, [archive, client, projects, readState, connection, enabled, sessionsLoaded]);
   return useCallback((cwd: string | undefined) => {
     if (!cwd) return;
     if (controller.current) controller.current.want(cwd);

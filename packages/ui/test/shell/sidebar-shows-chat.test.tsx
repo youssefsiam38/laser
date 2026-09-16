@@ -21,6 +21,7 @@ import { LaserStoreProvider, createStateStore, type StateStore } from "../../src
 import { toThreadMetadata } from "../../src/runtime/threadList.js";
 import { initialState, reduce, type AppState } from "../../src/store.js";
 import { snapshot, summary } from "../agents/fixtures.js";
+import { testDescriptor } from "../runtime/environment-fixture.js";
 
 const stable = vi.hoisted(() => ({
   projects: ["/one"],
@@ -76,7 +77,7 @@ let store: StateStore;
 const seed = (): AppState => {
   let state = reduce(initialState, { type: "agents/loaded", snapshot: snapshot() });
   state = reduce(state, { type: "sessions", sessions });
-  return { ...state, connection: "open" };
+  return { ...state, connection: "open", environment: testDescriptor() };
 };
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;

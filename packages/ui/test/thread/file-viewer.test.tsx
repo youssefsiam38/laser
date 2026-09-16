@@ -43,6 +43,14 @@ const click = async (element: HTMLElement) => { await act(async () => { element.
 const mount = async () => { await act(async () => root.render(<Fixture><FileCard path="src/example.ts" /></Fixture>)); await click(button("Open")); };
 const until = async (assertion: () => void) => { await vi.waitFor(async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); }); assertion(); }, { timeout: 5000 }); };
 
+it("keeps file reading available but omits Open in editor outside the local app", async () => {
+  await mount();
+  await until(() => expect(document.querySelector('[role="dialog"] code')?.textContent).toContain("const answer"));
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Copy path");
+  expect([...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].some(node => node.textContent === "Open in editor")).toBe(false);
+  expect(transport.request).toHaveBeenCalledExactlyOnceWith("pi/project/read", { cwd: "/project", path: "src/example.ts" });
+});
+
 it("reads with the owning cwd, highlights code, closes on Escape and restores focus", async () => {
   await mount();
   expect(transport.request).toHaveBeenCalledExactlyOnceWith("pi/project/read", { cwd: "/project", path: "src/example.ts" });

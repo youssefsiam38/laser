@@ -315,7 +315,7 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
                 projects={projects}
                 tab="code"
                 canCreate={connection === "open"}
-                onNewSession={(cwd) => void newSessionIn(cwd)}
+                onNewSession={createSession.state === "available" ? (cwd) => void newSessionIn(cwd) : undefined}
                 onOpen={onOpen}
               />
             )}

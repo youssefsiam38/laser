@@ -175,7 +175,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
   // Once Namer has named the call, the same row keeps that name in the
   // trigger while it runs, so the row is composed here instead.
   if (kind === "other") {
-    if (namerLabel === undefined) {
+    if (namerLabel === undefined && !approval && !interrupt) {
       return (
         <>
           <ToolFallback {...props} />

@@ -25,7 +25,7 @@ import { toThreadMetadata } from "../../src/runtime/threadList.js";
 import { initialState, reduce, type AppState } from "../../src/store.js";
 import { run, snapshot, summary } from "../agents/fixtures.js";
 import { DEVICE_KEYS } from "../../src/runtime/device-storage.js";
-import { activateTestEnvironment, seedDeviceValue } from "../../test/runtime/environment-fixture.js";
+import { activateTestEnvironment, seedDeviceValue, testDescriptor } from "../../test/runtime/environment-fixture.js";
 
 const stable = vi.hoisted(() => ({
   projects: ["/one", "/two"],
@@ -36,7 +36,7 @@ const stable = vi.hoisted(() => ({
   archive: { add: vi.fn(), has: () => false },
   client: { request: vi.fn(async () => ({ hits: [], unreadable: 0 })) },
 }));
-vi.mock("@/runtime", async (importActual) => ({ ...(await importActual<typeof import("../../src/runtime/index.js")>()), useCapability: () => ({ state: "available" }), useLaserStable: () => stable }));
+vi.mock("@/runtime", async (importActual) => ({ ...(await importActual<typeof import("../../src/runtime/index.js")>()), useLaserStable: () => stable }));
 
 const ROOT = "/one/root.jsonl";
 const CHILD = "/one/.worktrees/explorer/child.jsonl";
@@ -96,7 +96,7 @@ let store: StateStore;
 const seed = (): AppState => {
   let state = reduce(initialState, { type: "agents/loaded", snapshot: snapshot() });
   state = reduce(state, { type: "sessions", sessions });
-  state = { ...state, connection: "open" };
+  state = { ...state, connection: "open", environment: testDescriptor() };
   for (const r of runs) state = reduce(state, { type: "agents/run", run: r });
   return state;
 };
@@ -109,6 +109,8 @@ beforeEach(() => {
   sessionsList.reset();
   stable.actions.openSession.mockClear();
   stable.actions.goTab.mockClear();
+  stable.actions.newSession.mockClear();
+  stable.client.request.mockClear();
   stable.setCurrentProject.mockClear();
   stable.dispatch.mockClear();
   sessionFolds.reset();
@@ -225,6 +227,24 @@ describe("sessions panel tabs", () => {
 });
 
 describe("Beam and children in the Code tab", () => {
+  it("keeps session and Beam reads while hiding every local-only lifecycle entry", async () => {
+    store.dispatch({ type: "environment", environment: testDescriptor({ actor: { class: "local_browser", id: "browser" }, localOnly: ["session/new", "pi/session/rename", "pi/session/delete", "pi/session/move", "agents/runs/stop"] }) });
+    await mount();
+    expect(rowTitled("Ship the release")).toBeDefined();
+    expect(rowTitled("Why is the dock empty")).toBeDefined();
+    expect(container.querySelector('[data-slot="new-session"]')).toBeNull();
+    expect(container.querySelector('[aria-label="New Beam chat"]')).toBeNull();
+    let menu = await openMenu("Actions for explorer");
+    expect(menu?.textContent).not.toMatch(/Rename|Delete|Move|End agent/);
+    await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    menu = await openMenu("Actions for Ship the release");
+    expect(menu?.textContent).not.toMatch(/Rename|Delete|Move|End agent/);
+    await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "n", ctrlKey: true, bubbles: true })));
+    expect(stable.actions.newSession).not.toHaveBeenCalled();
+    expect(endRequest).toBeFalsy();
+    expect(stable.client.request).not.toHaveBeenCalled();
+  });
+
   it("lists Beam as a spark-marked group after the projects and marks its rows", async () => {
     await mount();
     const groups = [...container.querySelectorAll<HTMLElement>("section[data-cwd]")];

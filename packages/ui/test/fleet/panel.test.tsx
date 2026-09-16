@@ -16,7 +16,10 @@ import type { BackgroundTask } from "@lasercode/protocol";
 import { FleetPanel } from "../../src/components/fleet/FleetPanel.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { resetFleetState, revealInFleet } from "../../src/fleet/fleet-state.js";
+import { createStateStore, LaserStoreProvider, type StateStore } from "../../src/runtime/LaserProvider.js";
+import { initialState } from "../../src/store.js";
 import { run, summary, view } from "../agents/fixtures.js";
+import { testDescriptor } from "../runtime/environment-fixture.js";
 
 const ROOT = "/p/root.jsonl";
 const CHILD = "/p/child.jsonl";
@@ -60,19 +63,20 @@ const fixture = vi.hoisted(() => ({
   },
   endAgent: vi.fn(),
   removeWorktree: vi.fn(),
+  request: vi.fn(),
 }));
 
 vi.mock("@/runtime", async (importActual) => ({
   ...(await importActual<typeof import("../../src/runtime/index.js")>()),
-  useCapability: () => ({ state: "available" }),
   useLaserState: (selector: (s: unknown) => unknown) => selector(fixture.state),
-  useLaserStable: () => ({ actions: fixture.actions }),
+  useLaserStable: () => ({ actions: fixture.actions, client: { request: fixture.request } }),
 }));
 vi.mock("@/components/agents/end-agent", () => ({ requestEndAgent: fixture.endAgent }));
 vi.mock("@/agents/worktree", () => ({ requestRemoveWorktree: fixture.removeWorktree }));
 
 let container: HTMLDivElement;
 let root: Root;
+let store: StateStore;
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -82,7 +86,8 @@ beforeEach(() => {
   fixture.state.open = { [ROOT]: view({ path: ROOT }) };
   fixture.state.agents.runs = {};
   fixture.state.tasks.tasks = {};
-  for (const spy of [fixture.actions.openSession, fixture.actions.tasks.stop, fixture.actions.tasks.output, fixture.endAgent, fixture.removeWorktree]) spy.mockClear();
+  for (const spy of [fixture.actions.openSession, fixture.actions.tasks.stop, fixture.actions.tasks.output, fixture.endAgent, fixture.removeWorktree, fixture.request]) spy.mockClear();
+  store = createStateStore({ ...initialState, environment: testDescriptor() });
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -94,7 +99,7 @@ afterEach(async () => {
 });
 
 const render = async (): Promise<void> => {
-  await act(async () => root.render(<TooltipProvider><FleetPanel variant="panel" /></TooltipProvider>));
+  await act(async () => root.render(<LaserStoreProvider store={store}><TooltipProvider><FleetPanel variant="panel" /></TooltipProvider></LaserStoreProvider>));
 };
 const rows = (): HTMLElement[] => [...container.querySelectorAll<HTMLElement>('[data-slot="fleet-row"]')];
 const rowFor = (title: string): HTMLElement => rows().find((row) => row.textContent?.includes(title))!;
@@ -109,6 +114,22 @@ const openFinished = async (): Promise<void> => {
 };
 
 describe("the fleet column", () => {
+  it("keeps fleet reads but hides every denied stop and worktree mutation", async () => {
+    store.dispatch({ type: "environment", environment: testDescriptor({ actor: { class: "paired_device", id: "phone" }, scopes: ["handshake", "read", "diagnostics"] }) });
+    fixture.state.agents.runs = { r1: child };
+    fixture.state.tasks.tasks = { t1: task({ id: "t1", sessionPath: ROOT }) };
+    await render();
+    expect(container.textContent).toContain("explorer");
+    expect(container.textContent).toContain("pnpm vite dev");
+    for (const row of rows()) await act(async () => row.querySelector<HTMLButtonElement>("button")?.click());
+    const text = container.textContent ?? "";
+    expect(text).not.toMatch(/End agent|Stop command|Remove worktree/);
+    expect(fixture.actions.tasks.stop).not.toHaveBeenCalled();
+    expect(fixture.endAgent).not.toHaveBeenCalled();
+    expect(fixture.removeWorktree).not.toHaveBeenCalled();
+    expect(fixture.request).not.toHaveBeenCalled();
+  });
+
   it("draws an empty state that says what would fill it", async () => {
     await render();
     expect(container.textContent).toContain("Nothing is running here");
