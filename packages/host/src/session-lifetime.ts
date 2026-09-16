@@ -21,7 +21,7 @@
  * lifetime whose sweep fires after retirement has already happened would be a
  * policy that never runs, which is worse than one that is switched off.
  */
-import type { SessionPin } from "@lasercode/protocol";
+import type { MemoryPressureActionResult, MemoryPressureLevel, SessionPin } from "@lasercode/protocol";
 
 export interface SessionLifetimeDeps {
   /** Connections and scopes following this session right now (RP-6). Read-only. */
@@ -147,6 +147,70 @@ export class SessionLifetime {
     });
     this.sweeping = pass;
     return pass;
+  }
+
+  /**
+   * Step 5 of one host pressure pass: choose at most one loaded session by the
+   * same oldest-first, membership, pin and refusal-backoff rules as the sweep.
+   * `allow` is called once while choosing and again at the destructive boundary;
+   * it binds the release to evidence from the exact live worker generation.
+   */
+  async pressurePass(
+    _level: MemoryPressureLevel,
+    allow: (cwd: string) => boolean,
+  ): Promise<MemoryPressureActionResult> {
+    if (this.stopped) return { action: "idle_session_unload", outcome: "unavailable" };
+    const at = this.now();
+    const rows = this.deps.loadedSessions()
+      .map(({ cwd, path }) => ({ cwd, path, activity: this.deps.lastActivity(path) ?? at }))
+      .sort((a, b) => a.activity - b.activity || a.path.localeCompare(b.path));
+    const loadedByWorker = new Map<string, number>();
+    for (const row of rows) loadedByWorker.set(row.cwd, (loadedByWorker.get(row.cwd) ?? 0) + 1);
+    let membershipHeld = false;
+    let backoffHeld = false;
+    for (const row of rows) {
+      if (!allow(row.cwd)) continue;
+      const idle = at - row.activity >= this.sessionIdleMs;
+      const overBudget = (loadedByWorker.get(row.cwd) ?? 0) > this.maxLoadedPerWorker;
+      if (!idle && !overBudget) continue;
+      this.counters.scanned += 1;
+      const backoff = this.refusals.get(row.path);
+      if (backoff && backoff.until > at) {
+        backoffHeld = true;
+        continue;
+      }
+      if (this.deps.holders(row.path) > 0) {
+        membershipHeld = true;
+        continue;
+      }
+      // Re-check both fences immediately before the only destructive call.
+      if (!allow(row.cwd)) return { action: "idle_session_unload", outcome: "refused", reason: "generation_mismatch" };
+      if (this.deps.holders(row.path) > 0) return { action: "idle_session_unload", outcome: "held", reason: "membership_held" };
+      this.counters.considered += 1;
+      this.counters.budgetTarget += 1;
+      try {
+        const answer = await this.deps.unload(row.cwd, row.path, "budget");
+        if (answer.unloaded) {
+          this.counters.unloaded += 1;
+          this.counters.budgetRemoved += 1;
+          this.refusals.delete(row.path);
+          return { action: "idle_session_unload", outcome: "released", released: { count: 1 } };
+        }
+        if (answer.pins.length > 0) {
+          this.counters.refused += 1;
+          for (const pin of answer.pins) this.counters.pins[pin.kind] = (this.counters.pins[pin.kind] ?? 0) + 1;
+          this.backOff(row.path, at);
+          return { action: "idle_session_unload", outcome: "held", reason: "pins_held" };
+        }
+        return { action: "idle_session_unload", outcome: "unavailable" };
+      } catch {
+        this.backOff(row.path, at);
+        return { action: "idle_session_unload", outcome: "unavailable" };
+      }
+    }
+    if (membershipHeld) return { action: "idle_session_unload", outcome: "held", reason: "membership_held" };
+    if (backoffHeld) return { action: "idle_session_unload", outcome: "held", reason: "pins_held" };
+    return { action: "idle_session_unload", outcome: "nothing_to_give" };
   }
 
   private async run(): Promise<void> {

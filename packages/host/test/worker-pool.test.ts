@@ -51,6 +51,10 @@ socket.on("data", (chunk) => {
       send({ jsonrpc: "2.0", id: req.id, result: {} });
       continue;
     }
+    if (req.method === "pi/worker/pressure") {
+      send({ jsonrpc: "2.0", id: req.id, result: { applied: true, ran: ["ephemeral_caches"], results: [{ action: "ephemeral_caches", outcome: "released", released: { count: 1 } }], stores: {} } });
+      continue;
+    }
     if (req.method === "session/load" && req.params.path === "/sessions/unwritten.jsonl") { send({ jsonrpc: "2.0", id: req.id, error: { code: -32001, message: "No saved transcript. Start a new session." } }); continue; }
     send({ jsonrpc: "2.0", id: req.id, result: { ok: true, method: req.method } });
   }
@@ -350,6 +354,42 @@ describe("WorkerPool", () => {
     const info = await pool.restart(project);
     expect(info.status).toBe("ready");
     expect(info.restarts).toBe(0);
+  });
+
+  it("sends pressure only to the exact worker generation selected", async () => {
+    pool = makePool({ idleMs: 0, sweepMs: 0 });
+    await pool.get(project);
+    const selected = pool.pressureWorkers()[0]!;
+    expect(await pool.pressureDirective(project, selected, { level: "critical", epoch: 1, generation: selected.workerGeneration })).toMatchObject({
+      applied: true,
+      ran: ["ephemeral_caches"],
+    });
+    await expect(pool.pressureDirective(project, { ...selected, clientGeneration: "gone" }, { level: "critical", epoch: 2, generation: selected.workerGeneration })).rejects.toThrow(/no longer available/i);
+  });
+
+  it("pressure retires at most one exact idle worker and never an attached or live-run project", async () => {
+    let attached = true;
+    let liveRun = false;
+    pool = makePool({ idleMs: 0, sweepMs: 0, isAttached: () => attached, hasLiveRun: () => liveRun });
+    await pool.get(project);
+    const selected = pool.pressureWorkers()[0]!;
+    const allow = new Map([[project, { clientGeneration: selected.clientGeneration, workerGeneration: selected.workerGeneration }]]);
+    expect(await pool.retireIdleUnderPressure(1, allow)).toEqual({ retired: 0, held: false, unavailable: false, generationMismatch: false });
+    attached = false;
+    liveRun = true;
+    expect(await pool.retireIdleUnderPressure(1, allow)).toEqual({ retired: 0, held: false, unavailable: false, generationMismatch: false });
+    liveRun = false;
+    expect(await pool.retireIdleUnderPressure(1, allow)).toEqual({ retired: 1, held: false, unavailable: false, generationMismatch: false });
+    await waitFor(() => statusesOf(project).at(-1) === "retired");
+  });
+
+  it("pressure refuses a generation mismatch before retirement", async () => {
+    pool = makePool({ idleMs: 0, sweepMs: 0 });
+    await pool.get(project);
+    const selected = pool.pressureWorkers()[0]!;
+    const answer = await pool.retireIdleUnderPressure(1, new Map([[project, { clientGeneration: "stale", workerGeneration: selected.workerGeneration }]]));
+    expect(answer).toEqual({ retired: 0, held: false, unavailable: false, generationMismatch: true });
+    expect(pool.pressureWorkers()).toHaveLength(1);
   });
 
   it("retires an idle worker, but not one a client is attached to", async () => {

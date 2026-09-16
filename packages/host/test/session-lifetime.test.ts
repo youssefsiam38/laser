@@ -67,6 +67,45 @@ const row = (path: string, patch: Partial<Loaded> = {}): Loaded => ({
 });
 
 describe("SessionLifetime policy", () => {
+  it("pressure releases at most one oldest authorized session", async () => {
+    const world = policyWorld([
+      row("/s/new.jsonl", { activity: 900 }),
+      row("/s/old.jsonl", { activity: 100 }),
+    ]);
+    const result = await world.lifetime.pressurePass("critical", () => true);
+    expect(result).toEqual({ action: "idle_session_unload", outcome: "released", released: { count: 1 } });
+    expect(world.asked).toEqual([{ path: "/s/old.jsonl", reason: "budget" }]);
+    expect(world.loaded.has("/s/new.jsonl")).toBe(true);
+  });
+
+  it("pressure preserves a pinned session and uses the sweep's refusal backoff", async () => {
+    const world = policyWorld([row("/s/pinned.jsonl", { pins: [{ kind: "turn", detail: "running" }] })], { maxLoadedPerWorker: 0 });
+    expect(await world.lifetime.pressurePass("warning", () => true)).toEqual({ action: "idle_session_unload", outcome: "held", reason: "pins_held" });
+    expect(await world.lifetime.pressurePass("warning", () => true)).toEqual({ action: "idle_session_unload", outcome: "held", reason: "pins_held" });
+    expect(world.asked).toHaveLength(1);
+  });
+
+  it("pressure preserves membership acquired on its destructive recheck", async () => {
+    let checks = 0;
+    const unload = vi.fn();
+    const lifetime = new SessionLifetime({
+      holders: () => ++checks === 1 ? 0 : 1,
+      loadedSessions: () => [{ cwd: "/repo", path: "/s/race.jsonl" }],
+      lastActivity: () => 1,
+      unload,
+      now: () => 2,
+    }, { workerIdleMs: 0, maxLoadedPerWorker: 0 });
+    expect(await lifetime.pressurePass("critical", () => true)).toEqual({ action: "idle_session_unload", outcome: "held", reason: "membership_held" });
+    expect(unload).not.toHaveBeenCalled();
+  });
+
+  it("pressure refuses a generation that changes on its destructive recheck", async () => {
+    let checks = 0;
+    const world = policyWorld([row("/s/race.jsonl")], { maxLoadedPerWorker: 0 });
+    expect(await world.lifetime.pressurePass("critical", () => ++checks === 1)).toEqual({ action: "idle_session_unload", outcome: "refused", reason: "generation_mismatch" });
+    expect(world.asked).toEqual([]);
+  });
+
   it("never releases a session a connection or a scope is holding", async () => {
     const world = policyWorld([row("/s/held.jsonl", { holders: 1 })]);
     world.advance(10 * 60_000);

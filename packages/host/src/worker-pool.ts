@@ -30,7 +30,7 @@
  * touch: an unanswered question, a message waiting in the tray, a command still
  * running.
  */
-import type { ClientRequests, HostNotifications, JsonRpcNotification, SessionPin, SessionUnloadReason, WorkerInfo, WorkerRetireMode, WorkerStatus } from "@lasercode/protocol";
+import type { ClientRequests, HostNotifications, JsonRpcNotification, MemoryPressureDirective, MemoryPressureDirectiveResult, SessionPin, SessionUnloadReason, WorkerInfo, WorkerRetireMode, WorkerStatus } from "@lasercode/protocol";
 import { ErrorCodes, ProtocolError, environmentOverlay } from "@lasercode/protocol";
 import { canonical } from "./trust.js";
 import { SessionRouteLeases } from "./session-route-lease.js";
@@ -297,6 +297,87 @@ export class WorkerPool {
       out.push({ cwd: entry.cwd, clientGeneration: entry.client.generation, workerGeneration });
     }
     return out;
+  }
+
+  /**
+   * Ask one exact worker generation to run its bounded pressure pass.
+   * Never spawns and never substitutes a successor for the process selected.
+   */
+  async pressureDirective(
+    cwd: string,
+    expect: { clientGeneration: string; workerGeneration: number },
+    params: MemoryPressureDirective,
+  ): Promise<MemoryPressureDirectiveResult> {
+    const entry = this.entries.get(canonical(cwd));
+    const client = entry?.client;
+    if (
+      !client?.alive ||
+      entry?.status !== "ready" ||
+      entry.warm ||
+      client.generation !== expect.clientGeneration ||
+      client.workerGeneration !== expect.workerGeneration
+    ) {
+      throw new ProtocolError(ErrorCodes.InvalidRequest, "That worker generation is no longer available.");
+    }
+    return client.request<MemoryPressureDirectiveResult>("pi/worker/pressure", params);
+  }
+
+  /**
+   * Retire at most `limit` unused workers under pressure. The idle clock is the
+   * only ordinary sweep guard omitted; every safety/attachment/run guard and
+   * the worker's atomic retirement decision remains in force.
+   */
+  async retireIdleUnderPressure(
+    limit: number,
+    allow: ReadonlyMap<string, { clientGeneration: string; workerGeneration: number }>,
+  ): Promise<{ retired: number; held: boolean; unavailable: boolean; generationMismatch: boolean }> {
+    let retired = 0;
+    let held = false;
+    let unavailable = false;
+    let generationMismatch = false;
+    const candidates = [...this.entries.values()]
+      .filter(
+        (entry) =>
+          !entry.warm &&
+          entry.client?.alive &&
+          entry.status === "ready" &&
+          entry.running.size === 0 &&
+          !entry.stopping &&
+          !entry.stopped &&
+          !(this.options.isAttached?.(entry.cwd) ?? false) &&
+          !(this.options.hasLiveRun?.(entry.cwd) ?? false),
+      )
+      .sort((a, b) => a.lastActivity - b.lastActivity || a.cwd.localeCompare(b.cwd));
+    for (const entry of candidates) {
+      if (retired >= Math.max(0, limit)) break;
+      const expected = allow.get(entry.cwd);
+      const client = entry.client;
+      if (!expected) continue;
+      if (!client || client.generation !== expected.clientGeneration || client.workerGeneration !== expected.workerGeneration) {
+        generationMismatch = true;
+        continue;
+      }
+      // The candidate list was only a snapshot. Re-check every ordinary sweep
+      // guard at the destructive boundary; an arrival, attachment or live run
+      // always wins over memory pressure.
+      if (
+        !client.alive ||
+        entry.status !== "ready" ||
+        entry.running.size > 0 ||
+        entry.stopping ||
+        entry.stopped ||
+        (this.options.isAttached?.(entry.cwd) ?? false) ||
+        (this.options.hasLiveRun?.(entry.cwd) ?? false)
+      ) {
+        held = true;
+        continue;
+      }
+      const outcome = await this.askToRetire(entry, "automatic", "retired under memory pressure");
+      if (outcome.retired) retired += 1;
+      else if (outcome.pins && outcome.pins.length > 0) held = true;
+      else unavailable = true;
+    }
+    return { retired, held, unavailable, generationMismatch };
   }
 
   /** Workers that are up right now. Never spawns; used for broadcasts. */
