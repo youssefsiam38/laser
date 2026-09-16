@@ -185,6 +185,17 @@ interface PreAcceptanceHydration {
 
 interface Live {
   driver: SessionDriver;
+  /**
+   * When this conversation was last *used* — opened, or named by a request
+   * this worker served (RP-8).
+   *
+   * Not the same as the replay buffer's last activity, which is when the
+   * session last *produced* an update: a conversation somebody reopened and
+   * read a minute ago is recently used even though nothing has streamed in it
+   * since yesterday. Pressure asks each session's companion to keep less
+   * starting with the ones nobody has touched, so it needs this one.
+   */
+  touchedAtMs: number;
   historyEpoch: string;
   /** Durable revision fold for this session (RP-9), kept across reads. */
   revisions: SessionRevisionTracker;
@@ -1647,7 +1658,7 @@ export class WorkerServer {
     // have used it, where a person can read it.
     await this.ensureProjectEnv().catch(() => {});
     const driver = this.options.createDriver();
-    const live: Live = { driver, historyEpoch: randomUUID(), revisions: new SessionRevisionTracker(this.environmentId), seq: 0, buffer: new ReplayBuffer(this.replayBuffer, this.options.replayBytes ?? REPLAY_BYTES_PER_SESSION, this.replayBudget), unsubscribe: () => {}, path: "" };
+    const live: Live = { driver, historyEpoch: randomUUID(), revisions: new SessionRevisionTracker(this.environmentId), seq: 0, touchedAtMs: Date.now(), buffer: new ReplayBuffer(this.replayBuffer, this.options.replayBytes ?? REPLAY_BYTES_PER_SESSION, this.replayBudget), unsubscribe: () => {}, path: "" };
     driver.setExtensionModelWorkHandler?.((request) => this.admitExtensionModelWork(live, request));
     const queued: DriverEvent[] = [];
     let ready = false;
@@ -1924,7 +1935,12 @@ export class WorkerServer {
    * the next pass.
    */
   private releaseTaskRecords(level: "warning" | "critical"): PressureActionOutcome {
-    const candidates = [...this.runtimes.values()].sort((a, b) => a.buffer.lastActivity - b.buffer.lastActivity);
+    // Least recently used first, where "used" is the later of somebody asking
+    // for this conversation and the conversation itself producing something:
+    // a session read a minute ago is not the one to ask, even if it has
+    // streamed nothing since yesterday.
+    const usedAt = (live: Live): number => Math.max(live.touchedAtMs, live.buffer.lastActivity);
+    const candidates = [...this.runtimes.values()].sort((a, b) => usedAt(a) - usedAt(b));
     const told = candidates.slice(0, PRESSURE_MAX_TASK_SESSIONS);
     let delivered = 0;
     for (const live of told) {
@@ -1951,6 +1967,9 @@ export class WorkerServer {
   private live(path: string): Live {
     const live = this.runtimes.get(path);
     if (!live) throw new ProtocolError(ErrorCodes.SessionNotFound, `session ${path} is not open in this worker`);
+    // Every path-routed request comes through here, so this is where "somebody
+    // is using this conversation" is known (RP-8).
+    live.touchedAtMs = Date.now();
     return live;
   }
 

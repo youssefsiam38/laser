@@ -50,6 +50,7 @@ class PressureDriver implements SessionDriver {
   async prompt() { return { accepted: true, queued: false }; }
   async steer() { return true; }
   async cancel() {}
+  async abort() { return true; }
   subscribe(listener: DriverListener) {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
@@ -89,6 +90,7 @@ function harness(options: { workerGeneration?: number } = {}) {
 }
 
 let nextId = 1_000;
+let nextCall = 5_000;
 const open = async (h: ReturnType<typeof harness>, path: string) => {
   const answer = await h.call((nextId += 1), "session/load", { path });
   expect(answer.error, JSON.stringify(answer.error)).toBeUndefined();
@@ -161,6 +163,32 @@ describe("the directive the host sends", () => {
     for (const driver of told) {
       expect(driver.commands).toEqual([{ type: "lasercode/task/pressure", level: "critical" }]);
     }
+    await h.server.dispose();
+  });
+
+  it("asks the conversations nobody has used lately, and no more than sixteen", async () => {
+    const h = harness({ workerGeneration: 3 });
+    // Twenty conversations, opened oldest-first; then the four oldest are used
+    // again, which is exactly what must keep them out of this pass.
+    const paths = Array.from({ length: 20 }, (_, index) => `/tmp/fake/s${index}.jsonl`);
+    for (const path of paths) await open(h, path);
+    const recentlyUsed = paths.slice(0, 4);
+    // A moment later, so "used since" is a real ordering and not a tie.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    for (const path of recentlyUsed) {
+      const answer = await h.call((nextCall += 1), "session/cancel", { path });
+      expect(answer.error, JSON.stringify(answer.error)).toBeUndefined();
+    }
+
+    await h.call(40, "pi/worker/pressure", { level: "critical", epoch: 1, generation: 3 });
+    const told = h.drivers.filter((driver) => driver.commands.length > 0);
+    expect(told).toHaveLength(16);
+    const toldPaths = new Set(told.map((driver) => driver.state().path));
+    // Used a moment ago: not this pass's business.
+    for (const path of recentlyUsed) expect(toldPaths.has(path)).toBe(false);
+    // And the pass says work was left over rather than claiming it finished.
+    const answer = (await h.call(41, "pi/worker/retained-stores", {})) as { result: { stores: Record<string, unknown> } };
+    expect(answer.result.stores["workerSessions"]).toEqual({ count: 20 });
     await h.server.dispose();
   });
 

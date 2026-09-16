@@ -62,6 +62,18 @@ export interface WorkerPoolOptions {
    * mistaken for its successor's (RP-7). Opaque and host-internal.
    */
   onNotification: (cwd: string, notification: JsonRpcNotification, source: { generation: string }) => void;
+  /**
+   * A worker's own memory-pressure report (RP-8).
+   *
+   * Its own callback, not the general notification stream, because it is not a
+   * notification in the sense everything else here is: it is one process of
+   * this app telling another what it found in itself, it carries this spawn's
+   * private generation, and no client and no paired device may ever see it.
+   * Routing it here means it cannot reach the broadcast path by accident — a
+   * filter can be forgotten, a separate road cannot be taken. Milestone E will
+   * validate and consume it; until then the host takes it and drops it.
+   */
+  onWorkerPressure?: (cwd: string, notification: JsonRpcNotification, source: { generation: string }) => void;
   /** That process is gone: nothing it started can still be completed. */
   onWorkerGone?: (source: { cwd: string; generation: string }) => void;
   onStderr?: (cwd: string, text: string) => void;
@@ -822,6 +834,12 @@ export class WorkerPool {
    */
   private onWorkerNotification(entry: Entry, client: WorkerClient, notification: JsonRpcNotification): void {
     entry.lastActivity = this.now();
+    if (notification.method === "pi/resource/pressure") {
+      // Taken off the general road immediately (RP-8): nothing observes it,
+      // nothing broadcasts it, and no warm worker's report is kept either.
+      if (!entry.warm) this.options.onWorkerPressure?.(entry.cwd, notification, { generation: client.generation });
+      return;
+    }
     if (notification.method === "pi/worker/status") {
       const status = (notification.params as { status?: WorkerStatus } | null)?.status;
       if (status === "ready") {

@@ -278,6 +278,61 @@ describe("the level machine", () => {
     expect(h.controller.counters().level).toBe("unknown");
   });
 
+  it("makes missing evidence interrupt a candidate, not merely the level", async () => {
+    // One warning, then nothing readable, then one warning: the run is broken,
+    // so the second fresh warning is the *first* of a new pair.
+    const h = harness();
+    h.feed(sampleOf({ atMs: h.at(), physicalMiB: 1_300 }), "fail", sampleOf({ atMs: h.at(), physicalMiB: 1_300 }));
+    await h.controller.probeNow();
+    await h.controller.probeNow();
+    await h.controller.probeNow();
+    expect(h.controller.counters().level).toBe("unknown");
+    expect(h.log).toEqual([]);
+    // Only the second consecutive valid warning settles it.
+    h.feed(sampleOf({ atMs: h.at(), physicalMiB: 1_300 }));
+    await h.controller.probeNow();
+    expect(h.controller.counters().level).toBe("warning");
+  });
+
+  it("makes a stale reading interrupt a candidate too", async () => {
+    const h = harness();
+    h.feed(sampleOf({ atMs: h.at(), physicalMiB: 1_300 }));
+    await h.controller.probeNow();
+    // A reading older than three cadences is no evidence at all.
+    h.feed(sampleOf({ atMs: h.at() - 10 * PRESSURE_NORMAL_INTERVAL_MS, physicalMiB: 1_300 }));
+    await h.controller.probeNow();
+    expect(h.controller.counters().staleSamples).toBe(1);
+    expect(h.controller.counters().level).toBe("unknown");
+    h.feed(sampleOf({ atMs: h.at(), physicalMiB: 1_300 }));
+    await h.controller.probeNow();
+    expect(h.controller.counters().level).toBe("unknown");
+    expect(h.log).toEqual([]);
+    h.feed(sampleOf({ atMs: h.at(), physicalMiB: 1_300 }));
+    await h.controller.probeNow();
+    expect(h.controller.counters().level).toBe("warning");
+  });
+
+  it("makes missing evidence interrupt a de-escalation as well", async () => {
+    const h = harness();
+    h.feed(sampleOf({ atMs: h.at(), physicalMiB: 1_300 }), sampleOf({ atMs: h.at(), physicalMiB: 1_300 }));
+    await h.controller.probeNow();
+    await h.controller.probeNow();
+    expect(h.controller.counters().level).toBe("warning");
+    // Two calm readings, then nothing readable: the three-sample run is broken
+    // and the level goes to unknown rather than sliding into normal.
+    h.advance(PRESSURE_WARNING_COOLDOWN_MS + 1);
+    h.feed(sampleOf({ atMs: h.at(), physicalMiB: 100 }), sampleOf({ atMs: h.at(), physicalMiB: 100 }), "fail");
+    await h.controller.probeNow();
+    await h.controller.probeNow();
+    await h.controller.probeNow();
+    expect(h.controller.counters().level).toBe("unknown");
+    h.feed(sampleOf({ atMs: h.at(), physicalMiB: 100 }), sampleOf({ atMs: h.at(), physicalMiB: 100 }));
+    await h.controller.probeNow();
+    await h.controller.probeNow();
+    // Two calm readings from unknown are what a known level needs.
+    expect(h.controller.counters().level).toBe("normal");
+  });
+
   it("discards a stale sample and says so", async () => {
     const h = harness();
     h.advance(10 * PRESSURE_NORMAL_INTERVAL_MS);

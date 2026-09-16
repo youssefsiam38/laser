@@ -389,12 +389,20 @@ export function createWorkerPressureController(deps: PressureDeps, options: Pres
 
   // --- sampling and the level ---------------------------------------------
 
+  /** Forget the samples that were agreeing with each other. */
+  const forgetStreak = (): void => {
+    streakLevel = undefined;
+    streak = 0;
+  };
+
   const settle = (next: MemoryPressureLevelState): boolean => {
+    // The candidate is dropped whether or not the published level moves: a
+    // sample that disagrees with the one before it has broken the run, and a
+    // run is what a change is made of.
+    forgetStreak();
     if (next === level) return false;
     level = next;
     counters.level = next;
-    streakLevel = undefined;
-    streak = 0;
     return true;
   };
 
@@ -404,8 +412,7 @@ export function createWorkerPressureController(deps: PressureDeps, options: Pres
     // wait out, and it is never allowed to settle as `normal`.
     if (reading.level === "unknown") return settle("unknown");
     if (reading.level === level) {
-      streakLevel = undefined;
-      streak = 0;
+      forgetStreak();
       return false;
     }
     const escalating = LEVEL_SEVERITY[reading.level] > LEVEL_SEVERITY[level] || level === "unknown";
@@ -413,8 +420,7 @@ export function createWorkerPressureController(deps: PressureDeps, options: Pres
     if (!escalating && isDirectiveLevel(level) && !belowRelease(reading, level)) {
       // Still above the release line: a value hovering on a threshold does not
       // get to flap.
-      streakLevel = undefined;
-      streak = 0;
+      forgetStreak();
       return false;
     }
     streak = streakLevel === reading.level ? streak + 1 : 1;
