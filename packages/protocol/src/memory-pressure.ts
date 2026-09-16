@@ -441,13 +441,18 @@ export interface MemoryPressureJournalPage {
  * pass's set and order — and TypeScript cannot express them. So the shapes
  * above stay readable, and the *validated* forms are branded: the only way to
  * obtain one is to parse, which is what makes the boundary between a producer
- * and this contract explicit. The mark exists in the type system only; it is
- * never a field, and a message that carries one as a key is refused.
+ * and this contract explicit.
+ *
+ * The mark is a required property keyed by a `unique symbol` that exists only
+ * in the type system. Required and symbol-keyed on purpose: an optional mark
+ * would make the brand a weak type, and an object that merely has no property
+ * in common with it would be accepted — which is exactly the hole a nominal
+ * boundary exists to close. Nothing writes the key at runtime, no encoder ever
+ * sees it, and a message that carries a property of its own is refused by the
+ * strict schemas regardless.
  */
-export interface MemoryPressureValidatedBrand {
-  readonly __memoryPressureValidated?: never;
-}
-export type MemoryPressureValidated<T> = T & MemoryPressureValidatedBrand;
+declare const memoryPressureValidated: unique symbol;
+export type MemoryPressureValidated<T> = T & { readonly [memoryPressureValidated]: true };
 
 /** Retained-store counters as a process reports them beside a pass (RP-3). */
 export type MemoryPressureStores = Partial<Record<ResourceStoreKey, ResourceStoreValue>>;
@@ -878,10 +883,25 @@ export const memoryPressureReportSchema = memoryPressureReportShape.transform(
   (value) => value as unknown as ValidatedMemoryPressureReport,
 );
 
-/** Host → the windows on this machine. A summary, never the journal. */
-export const memoryPressurePublishSchema = z
-  .object({ epoch: ordinal, summary: memoryPressureSummarySchema })
-  .strict();
+/**
+ * Host → the windows on this machine. A summary, never the journal.
+ *
+ * The whole payload is validated, not only the summary inside it: an epoch is
+ * a number a producer chooses, and a fractional or unsafe one would be a
+ * generation nothing can compare. So the outer object is branded too, and the
+ * notification carries that form rather than a raw `{ epoch, summary }`.
+ */
+const memoryPressurePublishShape = z.object({ epoch: ordinal, summary: memoryPressureSummarySchema }).strict();
+
+export interface MemoryPressurePublishShape {
+  epoch: number;
+  summary: ValidatedMemoryPressureSummary;
+}
+export type ValidatedMemoryPressurePublish = MemoryPressureValidated<MemoryPressurePublishShape>;
+
+export const memoryPressurePublishSchema = memoryPressurePublishShape.transform(
+  (value) => value as unknown as ValidatedMemoryPressurePublish,
+);
 
 export const memoryPressureParamsSchemas = {
   "pi/worker/pressure": memoryPressureDirectiveSchema,
@@ -900,6 +920,7 @@ export const parseMemoryPressureJournalPage = (value: unknown): ValidatedMemoryP
 export const parseMemoryPressureDirectiveResult = (value: unknown): ValidatedMemoryPressureDirectiveResult =>
   memoryPressureDirectiveResultSchema.parse(value);
 export const parseMemoryPressureReport = (value: unknown): ValidatedMemoryPressureReport => memoryPressureReportSchema.parse(value);
+export const parseMemoryPressurePublish = (value: unknown): ValidatedMemoryPressurePublish => memoryPressurePublishSchema.parse(value);
 
 /** What a diagnostic export carries about pressure: the state, and one page. */
 export interface MemoryPressureExportSection {
@@ -966,7 +987,7 @@ declare module "./messages.js" {
      * safe to drop when a connection is behind, because the same summary is
      * readable from `resource/snapshot`.
      */
-    "resource/pressure": { epoch: number; summary: ValidatedMemoryPressureSummary };
+    "resource/pressure": MemoryPressurePublish;
   }
 }
 

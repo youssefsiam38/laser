@@ -43,6 +43,7 @@ import {
   memoryPressureSummarySchema,
   memoryPressureWorkerActionResultSchema,
   notificationScope,
+  parseMemoryPressurePublish,
   parseMemoryPressureSummary,
   type MemoryPressureJournalPageInput,
   type MemoryPressureReportInput,
@@ -516,6 +517,7 @@ describe("the summary", () => {
   it("publishes a fixed-size summary and refuses one that grew", () => {
     const publish = { epoch: 4, summary };
     expect(memoryPressurePublishSchema.parse(publish)).toEqual(publish);
+    expect(parseMemoryPressurePublish(publish)).toEqual(publish);
     expect(memoryPressureSummarySchema.parse(summary)).toEqual(summary);
     expect(parseMemoryPressureSummary(summary)).toEqual(summary);
     expect(memoryPressureSummarySchema.safeParse({ ...summary, latestEventId: "latest" }).success).toBe(false);
@@ -524,8 +526,23 @@ describe("the summary", () => {
       memoryPressureSummarySchema.safeParse({ ...summary, totals: { events: 1, released: { count: 1, bytes: 1.2 }, refusals: 0 } })
         .success,
     ).toBe(false);
-    // The validation mark is a type, never a field.
+    // The validation mark is a type, never a field: a message carrying one as
+    // a property is refused like any other stranger.
     expect(memoryPressureSummarySchema.safeParse({ ...summary, __memoryPressureValidated: true }).success).toBe(false);
+  });
+
+  it("validates the whole published payload, not only the summary inside it", () => {
+    const publish = { epoch: 4, summary };
+    // An epoch is a generation, so it is a real, exact, non-negative integer.
+    for (const epoch of [1.5, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1, "4", null, undefined]) {
+      expect(memoryPressurePublishSchema.safeParse({ ...publish, epoch }).success, String(epoch)).toBe(false);
+    }
+    expect(memoryPressurePublishSchema.safeParse({ ...publish, epoch: 0 }).success).toBe(true);
+    expect(memoryPressurePublishSchema.safeParse({ ...publish, epoch: Number.MAX_SAFE_INTEGER }).success).toBe(true);
+    // And a summary that is not one of ours does not become one by being
+    // published beside a sound epoch.
+    expect(memoryPressurePublishSchema.safeParse({ ...publish, summary: { ...summary, level: "critical" } }).success).toBe(false);
+    expect(memoryPressurePublishSchema.safeParse({ ...publish, journal: [] }).success).toBe(false);
   });
 
   it("reports every role exactly once, so an omission cannot become calm", () => {

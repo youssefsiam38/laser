@@ -10,17 +10,30 @@
  */
 import { describe, expectTypeOf, it } from "vitest";
 import type {
+  HostNotifications,
   MemoryPressureActionResult,
   MemoryPressureDirectiveResult,
+  MemoryPressureDirectiveResultInput,
   MemoryPressureJournalPage,
+  MemoryPressureJournalPageInput,
+  MemoryPressurePublish,
   MemoryPressureReport,
+  MemoryPressureReportInput,
   MemoryPressureSummary,
   MemoryPressureSummaryInput,
   MemoryPressureWorkerActionResult,
   ResourceSnapshot,
+  ValidatedMemoryPressureJournalPage,
+  ValidatedMemoryPressurePublish,
   ValidatedMemoryPressureSummary,
 } from "../src/index.js";
-import { parseMemoryPressureSummary } from "../src/index.js";
+import {
+  parseMemoryPressureDirectiveResult,
+  parseMemoryPressureJournalPage,
+  parseMemoryPressurePublish,
+  parseMemoryPressureReport,
+  parseMemoryPressureSummary,
+} from "../src/index.js";
 
 describe("a step's row", () => {
   it("cannot say it released nothing, or release without saying so", () => {
@@ -95,5 +108,51 @@ describe("the validated forms", () => {
     expectTypeOf<MemoryPressureDirectiveResult>().toMatchTypeOf<{ applied: boolean }>();
     expectTypeOf<MemoryPressureReport>().toMatchTypeOf<{ generation: number }>();
     expectTypeOf<ValidatedMemoryPressureSummary>().toMatchTypeOf<MemoryPressureSummary>();
+    expectTypeOf<MemoryPressurePublish>().toEqualTypeOf<ValidatedMemoryPressurePublish>();
+  });
+
+  it("refuse every raw value, in every shape that has a parser", () => {
+    const rawSummary: MemoryPressureSummaryInput = {
+      level: "unknown",
+      roles: [],
+      refusing: [],
+      totals: { events: 0, released: { count: 0, bytes: 0 }, refusals: 0 },
+    };
+    const rawPage: MemoryPressureJournalPageInput = {
+      events: [],
+      retention: { maxEvents: 200, maxAgeMs: 3_600_000, maxBytes: 262_144, events: 0, bytes: 0 },
+    };
+    const rawAnswer: MemoryPressureDirectiveResultInput = { applied: false, ran: [], events: [], stores: {} };
+    const rawReport: MemoryPressureReportInput = { generation: 1, level: "unknown", inputs: [], ran: [], results: [], stores: {} };
+
+    // @ts-expect-error a summary is validated or it is not one of ours
+    const summary: ValidatedMemoryPressureSummary = rawSummary;
+    // @ts-expect-error … and so is a page,
+    const journal: ValidatedMemoryPressureJournalPage = rawPage;
+    // @ts-expect-error … a directive answer,
+    const answer: MemoryPressureDirectiveResult = rawAnswer;
+    // @ts-expect-error … and a worker's report.
+    const report: MemoryPressureReport = rawReport;
+    void summary;
+    void journal;
+    void answer;
+    void report;
+
+    // A sound epoch beside a validated summary is still a raw payload: the
+    // whole message is validated, or none of it is.
+    const validSummary = parseMemoryPressureSummary(rawSummary);
+    // @ts-expect-error the published payload is validated as a whole
+    const publish: MemoryPressurePublish = { epoch: 1, summary: validSummary };
+    // @ts-expect-error and the notification carries exactly that validated form
+    const notification: HostNotifications["resource/pressure"] = { epoch: 1, summary: validSummary };
+    void publish;
+    void notification;
+
+    // Parsed values are accepted everywhere their raw counterparts were not.
+    const parsed: HostNotifications["resource/pressure"] = parseMemoryPressurePublish({ epoch: 1, summary: rawSummary });
+    expectTypeOf(parsed).toEqualTypeOf<ValidatedMemoryPressurePublish>();
+    expectTypeOf(parseMemoryPressureJournalPage(rawPage)).toEqualTypeOf<ValidatedMemoryPressureJournalPage>();
+    expectTypeOf(parseMemoryPressureDirectiveResult(rawAnswer)).toEqualTypeOf<MemoryPressureDirectiveResult>();
+    expectTypeOf(parseMemoryPressureReport(rawReport)).toEqualTypeOf<MemoryPressureReport>();
   });
 });
