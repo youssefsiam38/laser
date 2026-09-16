@@ -26,8 +26,8 @@ export function resourceTarget(mode = 'quick') {
       [ENV.node]: runtime.node, [PI_AGENT_DIR_ENV]: agentDir, [PI_SESSION_DIR_ENV]: sessionDir, PI_MCP_ADAPTER_TEST_AUTH_STORE: 'memory' };
     runtime.spawn(runtime.node, [provider, runtime.root, mode], { name: 'resource-provider', env: baseEnv });
     await runtime.until(() => existsSync(join(runtime.root, 'provider.json')), 'resource provider', runtime.timeout);
-    const inspectEnv = { ...baseEnv, NODE_OPTIONS: `--require=${preload}`, RESOURCE_SOAK_INSPECT_DIR: inspectDir };
-    runtime.spawn(runtime.node, [host, runtime.root, mode], { name: 'resource-host', env: inspectEnv });
+    const inspectEnv = { ...baseEnv, RESOURCE_SOAK_INSPECT_DIR: inspectDir };
+    runtime.spawn(runtime.node, [`--require=${preload}`, host, runtime.root, mode], { name: 'resource-host', env: inspectEnv });
     await runtime.until(() => existsSync(join(runtime.root, 'host.json')), 'resource host', runtime.timeout);
     const hostRecord = JSON.parse(readFileSync(join(runtime.root, 'host.json'), 'utf8'));
     await runtime.until(async () => (await fetch(`${hostRecord.url}/healthz`, { signal: AbortSignal.timeout(1000) })).ok, 'resource host health', runtime.timeout);

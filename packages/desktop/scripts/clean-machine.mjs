@@ -22,8 +22,9 @@
  * reported and are *not* a failure: a clean machine has none, and that is the
  * user's first-run problem, not a packaging one.
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -171,6 +172,159 @@ function lastJsonLine(text) {
   return undefined;
 }
 
+const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+
+async function freePort() {
+  const server = createServer();
+  await new Promise((done, fail) => {
+    server.once("error", fail);
+    server.listen(0, "127.0.0.1", done);
+  });
+  const port = server.address().port;
+  await new Promise((done) => server.close(done));
+  return port;
+}
+
+function processAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    if (process.platform === "linux") {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+      if (fields[0] === "Z") return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Linux's process table is the packaged gate's exact descendant proof. */
+function linuxDescendants(rootPid) {
+  if (process.platform !== "linux") return [];
+  const children = new Map();
+  for (const entry of readdirSync("/proc", { withFileTypes: true })) {
+    if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue;
+    try {
+      const pid = Number(entry.name);
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+      const ppid = Number(fields[1]);
+      const rows = children.get(ppid) ?? [];
+      rows.push(pid);
+      children.set(ppid, rows);
+    } catch {
+      // A process can exit while /proc is being walked.
+    }
+  }
+  const found = [];
+  const pending = [...(children.get(rootPid) ?? [])];
+  while (pending.length > 0) {
+    const pid = pending.pop();
+    if (found.includes(pid)) continue;
+    found.push(pid);
+    pending.push(...(children.get(pid) ?? []));
+  }
+  return found;
+}
+
+async function waitForChildExit(child, timeoutMs) {
+  if (child.exitCode !== null || child.signalCode !== null) return { code: child.exitCode, signal: child.signalCode, timedOut: false };
+  return new Promise((done) => {
+    const timer = setTimeout(() => {
+      child.removeListener("exit", onExit);
+      done({ code: child.exitCode, signal: child.signalCode, timedOut: true });
+    }, timeoutMs);
+    const onExit = (code, signal) => {
+      clearTimeout(timer);
+      done({ code, signal, timedOut: false });
+    };
+    child.once("exit", onExit);
+  });
+}
+
+const PACKAGED_RPC_PROBE = String.raw`
+const { createRequire } = require("node:module");
+const WebSocket = createRequire(process.env.PROBE_REQUIRE_FROM)("ws");
+const sleep = ms => new Promise(done => setTimeout(done, ms));
+async function connect() {
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline) {
+    const socket = new WebSocket(process.env.PROBE_WS_URL);
+    const opened = await new Promise(done => {
+      socket.once("open", () => done(true));
+      socket.once("error", () => done(false));
+    });
+    if (opened) return socket;
+    socket.close();
+    await sleep(100);
+  }
+  throw new Error("the packaged host did not accept an RPC connection");
+}
+(async () => {
+const socket = await connect();
+let nextId = 1;
+const pending = new Map();
+socket.on("message", data => {
+  const message = JSON.parse(data.toString());
+  if (message.id === undefined) return;
+  const settle = pending.get(message.id);
+  if (!settle) return;
+  pending.delete(message.id);
+  if (message.error) settle.reject(new Error(message.error.message));
+  else settle.resolve(message.result);
+});
+function request(method, params) {
+  const id = nextId++;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { pending.delete(id); reject(new Error(method + " timed out")); }, 15000);
+    pending.set(id, {
+      resolve: value => { clearTimeout(timer); resolve(value); },
+      reject: error => { clearTimeout(timer); reject(error); },
+    });
+    socket.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
+  });
+}
+try {
+  const created = await request("session/new", { cwd: process.env.PROBE_PROJECT });
+  const listed = await request("pi/model/list", { path: created.state.path });
+  const deadline = Date.now() + 60000;
+  let proof;
+  while (Date.now() < deadline) {
+    const answer = await request("resource/snapshot", { refresh: true });
+    const rows = answer.snapshot?.pressure?.roles ?? [];
+    const host = rows.find(row => row.role === "host");
+    const worker = rows.find(row => row.role === "project_worker");
+    const hostMeasured = host?.ceiling?.measuredLimit;
+    const workerMeasured = worker?.ceiling?.measuredLimit;
+    if (host?.ceiling?.configuredBytes === 469762048 && hostMeasured?.status === "available" && hostMeasured.value > 0
+      && worker?.coverage?.answered > 0 && worker?.coverage?.complete === true
+      && Number.isSafeInteger(worker?.ceiling?.configuredBytes) && worker.ceiling.configuredBytes > 0
+      && workerMeasured?.status === "available" && workerMeasured.value > 0) {
+      proof = {
+        modelCount: listed.models?.length ?? 0,
+        hostConfiguredBytes: host.ceiling.configuredBytes,
+        hostMeasuredLimit: hostMeasured.value,
+        workerConfiguredBytes: worker.ceiling.configuredBytes,
+        workerMeasuredLimit: workerMeasured.value,
+      };
+      break;
+    }
+    await sleep(1000);
+  }
+  if (!proof) throw new Error("fresh configured and measured ceiling rows did not arrive");
+  console.log(JSON.stringify({ ok: proof.modelCount > 0 && proof.hostConfiguredBytes !== proof.hostMeasuredLimit
+    && proof.workerConfiguredBytes !== proof.workerMeasuredLimit, ...proof }));
+} finally {
+  socket.close();
+}
+})().catch(error => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
+});
+`;
+
 // ---------------------------------------------------------------------------
 
 const { dir: dirArg, json } = parseArgv(process.argv.slice(2));
@@ -240,9 +394,22 @@ record(
 const sandbox = mkdtempSync(join(tmpdir(), `${identity.name}-clean-`));
 const emptyBin = join(sandbox, "bin");
 const fakeHome = join(sandbox, "home");
+const scratchAgent = join(sandbox, identity.dirName, "agent");
+const scratchSessions = join(sandbox, identity.dirName, "sessions");
+const scratchState = join(sandbox, identity.dirName, "state");
+const scratchProject = join(sandbox, "project");
 const decoyAgentDir = join(fakeHome, ".pi", "agent");
-mkdirSync(emptyBin, { recursive: true });
-mkdirSync(decoyAgentDir, { recursive: true });
+for (const directory of [emptyBin, decoyAgentDir, scratchAgent, scratchSessions, scratchState, scratchProject]) {
+  mkdirSync(directory, { recursive: true });
+}
+writeFileSync(join(scratchAgent, "models.json"), JSON.stringify({ providers: {
+  packaged: { baseUrl: "http://127.0.0.1:9/v1", api: "openai-completions", apiKey: "offline", models: [
+    { id: "packaged", name: "Packaged", contextWindow: 8192, maxTokens: 256 },
+  ] },
+} }));
+writeFileSync(join(scratchAgent, "settings.json"), JSON.stringify({
+  defaultProvider: "packaged", defaultModel: "packaged", enabledModels: ["packaged/packaged"],
+}));
 const decoyPath = join(decoyAgentDir, "settings.json");
 writeFileSync(decoyPath, DECOY_SETTINGS);
 const decoyBefore = statSync(decoyPath);
@@ -252,8 +419,9 @@ const bareEnv = {
   HOME: fakeHome,
   // Named explicitly so this run cannot land in the real one, and so the
   // decoy above is the only agent directory anywhere near it.
-  [identity.env.agentDir]: join(sandbox, identity.dirName, "agent"),
-  [identity.env.stateDir]: join(sandbox, identity.dirName, "state"),
+  [identity.env.agentDir]: scratchAgent,
+  [identity.env.sessionDir]: scratchSessions,
+  [identity.env.stateDir]: scratchState,
   // A port nothing else is on, so "the port is busy" cannot masquerade as a
   // packaging failure.
   [identity.env.port]: "47311",
@@ -369,6 +537,7 @@ record(
 );
 
 // 7 ── a real session loads every bundled feature --------------------------
+const cli = join(modules, "@lasercode", "cli", "dist", "main.js");
 const sessionProbe = join(modules, "@lasercode", "worker", "dist", "check-packaged-session.js");
 const mcpFixture = join(resources, "checks", "mcp-server.mjs");
 const sessionRun = runBare(nodeBinary, [sessionProbe, mcpFixture], {
@@ -416,6 +585,66 @@ record(
   "Preserve the adapter's executable sources and dependencies; stdio must resolve node through the worker's bundled-runtime PATH additions.",
 );
 
+// 7b ── the packaged daemon and worker keep their launch ceilings -----------
+let packagedHostReport;
+let packagedHostFailure;
+let packagedHostGraceful = false;
+let packagedHostSurvivors = [];
+const packagedHostPort = await freePort();
+const packagedHost = spawn(nodeBinary, [
+  "--max-old-space-size=448",
+  cli,
+  "__daemon",
+  "--port",
+  String(packagedHostPort),
+  "--agent-dir",
+  scratchAgent,
+  "--session-dir",
+  scratchSessions,
+  "--state-dir",
+  scratchState,
+], {
+  cwd: scratchState,
+  env: bareEnv,
+  stdio: ["ignore", "ignore", "ignore"],
+});
+packagedHost.once("error", (error) => { packagedHostFailure = error.message; });
+try {
+  const run = runBare(nodeBinary, ["-e", PACKAGED_RPC_PROBE], {
+    ...bareEnv,
+    PROBE_REQUIRE_FROM: join(modules, "clean-machine-rpc.cjs"),
+    PROBE_WS_URL: `ws://127.0.0.1:${packagedHostPort}/ws`,
+    PROBE_PROJECT: scratchProject,
+  }, 90_000);
+  packagedHostReport = lastJsonLine(run.stdout);
+  if (!packagedHostReport?.ok) packagedHostFailure = run.stderr.trim() || "the packaged RPC probe did not prove its claims";
+} finally {
+  const descendants = packagedHost.pid ? linuxDescendants(packagedHost.pid) : [];
+  packagedHost.kill("SIGTERM");
+  let exit = await waitForChildExit(packagedHost, 20_000);
+  if (exit.timedOut) {
+    packagedHost.kill("SIGKILL");
+    exit = await waitForChildExit(packagedHost, 5_000);
+  }
+  packagedHostGraceful = !exit.timedOut && exit.code === 0 && exit.signal === null;
+  for (let attempt = 0; attempt < 100 && descendants.some(processAlive); attempt += 1) await sleep(50);
+  packagedHostSurvivors = descendants.filter(processAlive);
+  for (const pid of packagedHostSurvivors) {
+    try { process.kill(pid, "SIGKILL"); } catch {}
+  }
+}
+record(
+  "the packaged daemon and worker enforce distinct configured and measured heap ceilings",
+  Boolean(packagedHostReport?.ok) && packagedHostReport.modelCount > 0 && packagedHostGraceful && packagedHostSurvivors.length === 0
+    && !Object.hasOwn(bareEnv, "NODE_OPTIONS"),
+  packagedHostReport?.ok
+    ? `${packagedHostReport.modelCount} model(s); host configured ${human(packagedHostReport.hostConfiguredBytes)}, measured ${human(packagedHostReport.hostMeasuredLimit)}; ` +
+      `worker configured ${human(packagedHostReport.workerConfiguredBytes)}, measured ${human(packagedHostReport.workerMeasuredLimit)}; ` +
+      `SIGTERM clean=${packagedHostGraceful}; survivors=${packagedHostSurvivors.length}`
+    : packagedHostFailure ?? "the packaged host did not answer",
+  "Run the packaged CLI daemon with the bundled Node, preserve its explicit old-space argv, and wait for one fresh worker pressure report.",
+);
+
 // 8 ── the machine's own agent is found and not used ------------------------
 record(
   "an agent directory on the machine is seen and not used",
@@ -429,7 +658,6 @@ record(
 );
 
 // 9 ── doctor, from inside the package, with nothing on PATH ----------------
-const cli = join(modules, "@lasercode", "cli", "dist", "main.js");
 const doctorRun = runBare(nodeBinary, [cli, "doctor", "--skip-worker", "--json", "--no-color"], bareEnv);
 const doctorReport = lastJsonLine(doctorRun.stdout);
 const rows = doctorReport?.checks ?? [];
