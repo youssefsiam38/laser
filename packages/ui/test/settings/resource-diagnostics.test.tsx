@@ -286,6 +286,22 @@ it("shows honest summaries, retained-state table semantics, human copy and keybo
   expect(text()).toContain("They do not divide or allocate its memory");
 });
 
+it("shows zero usable local inputs honestly and hides thresholds without a measurement", async () => {
+  fixture.pressure = {
+    ...fixture.pressure,
+    inputs: [
+      { kind: "physical", value: { status: "unavailable", reason: "unsupported_platform" }, warningBytes: 100, criticalBytes: 200 },
+      { kind: "heap", value: { status: "unavailable", reason: "collector_failed" }, warningBytes: 100, criticalBytes: 200 },
+    ],
+  };
+  await mount();
+  const local = container!.querySelector('[data-pressure-role="desktop_renderer"]')!;
+  expect(local.textContent).toContain("0 of 2 answered · coverage is incomplete");
+  expect(local.textContent).toContain("Not available on this platform");
+  expect(local.textContent).toContain("The operating system measurement failed");
+  expect(local.textContent).not.toMatch(/tight at|critical at/);
+});
+
 it("separates the host aggregate from this window and explains active critical refusals", async () => {
   const role = (name: "host" | "project_worker" | "desktop_renderer" | "machine", level: "normal" | "warning" | "critical") => ({
     role: name,
@@ -329,6 +345,7 @@ it("separates the host aggregate from this window and explains active critical r
   expect(section.textContent).toContain("Starting work in another project");
   expect(section.textContent).toContain("Finish or close other project work");
   expect(section.textContent).toContain("Latest memory-pressure actions in this window");
+  expect(section.textContent).toContain("Protected by this window.");
   expect(section.textContent).not.toMatch(/mp_8|epoch|desktop_renderer|new_project_worker|whole_transcript/);
   expect(section.querySelector('[data-pressure-role="desktop_renderer"]')).not.toBeNull();
 });

@@ -160,6 +160,7 @@ export {
   type SessionMeta,
   type ThreadScopeRefusal,
   type Toasts,
+  type WholeTranscriptRefusal,
 } from "./LaserProvider.js";
 
 export {

@@ -4,7 +4,9 @@ import {
   type AgentRun,
   type MemoryPressureAction,
   type MemoryPressureActionResult,
+  type MemoryPressureCoverage,
   type MemoryPressureInput,
+  type MemoryPressureInputKind,
   type MemoryPressureLevelState,
   type MemoryPressureOutcome,
   type MemoryPressureReason,
@@ -21,6 +23,9 @@ import {
   type ResourceStoreKey,
   type SessionSummary,
 } from "@lasercode/protocol";
+
+import { formatBytes } from "@/format";
+import type { RendererPressureState } from "@/runtime/pressure/controller";
 
 export type MetricCell =
   | { status: "available"; value: number; qualifier?: string | undefined }
@@ -57,6 +62,12 @@ export function measureCell(measure: ResourceMeasure): MetricCell {
   if (measure.status === "available") return { status: "available", value: measure.value };
   const reason = UNAVAILABLE_LABELS[measure.reason];
   return { status: "unavailable", reason: measure.detail ? `${reason}: ${measure.detail}` : reason };
+}
+
+export function displayMetric(metric: MetricCell, bytes = false): string {
+  if (metric.status === "available") return `${bytes ? formatBytes(metric.value) : metric.value.toLocaleString()}${metric.qualifier ? ` · ${metric.qualifier}` : ""}`;
+  const known = metric.knownValue === undefined ? "" : ` · known ${bytes ? formatBytes(metric.knownValue) : metric.knownValue.toLocaleString()}`;
+  return `Unavailable${known} · ${metric.reason}`;
 }
 
 export type PhysicalMeasureKind = "pss" | "privateResident";
@@ -153,11 +164,15 @@ export const PRESSURE_ROLE_LABELS = {
   desktop_renderer: "This window",
 } as const satisfies Readonly<Record<MemoryPressureRole, string>>;
 
-export const PRESSURE_INPUT_LABELS = {
+const PRESSURE_INPUT_LABELS = {
   physical: "Physical memory",
   heap: "JavaScript heap",
   machine_available: "Memory available on this computer",
-} as const satisfies Readonly<Record<MemoryPressureInput["kind"], string>>;
+} as const satisfies Readonly<Record<MemoryPressureInputKind, string>>;
+
+export function pressureInputLabel(role: MemoryPressureRole, kind: MemoryPressureInputKind): string {
+  return role === "desktop_renderer" && kind === "physical" ? "Private resident memory" : PRESSURE_INPUT_LABELS[kind];
+}
 
 export const PRESSURE_REASON_SENTENCES = {
   pins_held: "Work in a conversation is still using this memory.",
@@ -219,10 +234,19 @@ export const PRESSURE_REFUSAL_COPY = {
   },
 } as const satisfies Readonly<Record<MemoryPressureRefusal, { label: string; guidance: string }>>;
 
+export interface PressureDetailRow {
+  label: string;
+  value: string;
+}
+
+export interface PressureRoleView extends MemoryPressureRoleState {
+  details: PressureDetailRow[];
+}
+
 export interface PressureHostState {
   available: boolean;
   level: MemoryPressureLevelState;
-  roles: MemoryPressureRoleState[];
+  roles: PressureRoleView[];
   totals?: MemoryPressureSummary["totals"] | undefined;
   refusing: MemoryPressureRefusal[];
 }
@@ -230,17 +254,46 @@ export interface PressureHostState {
 /** The host decides from itself, workers and the machine; never its unknown renderer row. */
 export function pressureHostState(summary: MemoryPressureSummary | undefined): PressureHostState {
   if (!summary) return { available: false, level: "unknown", roles: [], refusing: [] };
-  const roles = summary.roles.filter((row) => row.role !== "desktop_renderer");
+  const roles = summary.roles
+    .filter((row) => row.role !== "desktop_renderer")
+    .map((row) => ({ ...row, details: [] }));
   return {
     available: true,
-    level: aggregateMemoryPressureLevel(roles.map((row) => row.level)),
+    level: roles.length === 0 ? "unknown" : aggregateMemoryPressureLevel(roles.map((row) => row.level)),
     roles,
     totals: summary.totals,
     refusing: [...summary.refusing],
   };
 }
 
-export function pressureCoverage(role: MemoryPressureRoleState): string {
+/** Project the actor-local controller through the same role-card contract as host rows. */
+export function localPressureRole(
+  state: Pick<RendererPressureState, "effective" | "host" | "inputs" | "level" | "sampleAgeMs">,
+): PressureRoleView {
+  const inputs = [...state.inputs];
+  const answered = inputs.filter((input) => input.value.status === "available").length;
+  const expected = inputs.length || 2;
+  const complete = answered === expected;
+  const coverage: MemoryPressureCoverage = {
+    expected,
+    answered,
+    complete,
+    ...(complete ? {} : { reason: "incomplete_coverage" }),
+  };
+  return {
+    role: "desktop_renderer",
+    level: state.effective,
+    ...(state.sampleAgeMs === undefined ? {} : { sampleAgeMs: state.sampleAgeMs }),
+    inputs,
+    coverage,
+    details: [
+      { label: "Local reading", value: PRESSURE_LEVEL_LABELS[state.level] },
+      { label: "Application signal", value: PRESSURE_LEVEL_LABELS[state.host.level] },
+    ],
+  };
+}
+
+export function pressureCoverage(role: Pick<MemoryPressureRoleState, "role" | "coverage">): string {
   const { expected, answered } = role.coverage;
   if (expected === 0) return role.role === "project_worker" ? "No live project workers to measure" : "Nothing live to measure";
   if (role.coverage.complete) return `${answered} of ${expected} answered`;
@@ -256,11 +309,11 @@ export interface PressureRefusalView {
 
 export function pressureRefusalViews(
   host: readonly MemoryPressureRefusal[],
-  window: readonly MemoryPressureRefusal[],
+  local: readonly MemoryPressureRefusal[],
 ): PressureRefusalView[] {
-  const kinds = new Set<MemoryPressureRefusal>([...host, ...window]);
+  const kinds = new Set<MemoryPressureRefusal>([...host, ...local]);
   return [...kinds].map((kind) => {
-    const owners = [host.includes(kind) ? "Application" : undefined, window.includes(kind) ? "This window" : undefined]
+    const owners = [host.includes(kind) ? "the application" : undefined, local.includes(kind) ? "this window" : undefined]
       .filter((owner): owner is string => owner !== undefined)
       .join(" and ");
     return { kind, ...PRESSURE_REFUSAL_COPY[kind], owners };

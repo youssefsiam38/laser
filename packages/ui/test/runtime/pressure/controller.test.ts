@@ -400,7 +400,7 @@ describe("the host's summary", () => {
     expect(h.controller.getSnapshot().host.level).toBe("unknown");
   });
 
-  it("acts on a valid newer epoch and never on an older or repeated one", async () => {
+  it("acts on a valid newer epoch, refreshes an equal one, and never acts on an older one", async () => {
     const h = harness();
     h.controller.observePublication(publication(4, { host: "critical" }));
     await h.controller.probeNow();
@@ -411,7 +411,7 @@ describe("the host's summary", () => {
     h.controller.observePublication(publication(4, { host: "critical" }));
     await h.controller.probeNow();
     expect(h.releaseCalls).toEqual(["critical"]);
-    expect(h.controller.getSnapshot().counters.directivesStale).toBe(2);
+    expect(h.controller.getSnapshot().counters.directivesStale).toBe(1);
   });
 
   it("reads the host's level the way the host decides it, renderer row excluded", async () => {
@@ -423,12 +423,20 @@ describe("the host's summary", () => {
     expect(h.controller.admits("whole_transcript")).toBe(true);
   });
 
-  it("expires a silent host level without letting an older publication revive it", async () => {
+  it("keeps an equal-epoch publication fresh, then expires true silence without reviving an older one", async () => {
     const h = harness();
     h.controller.observePublication(publication(5, { host: "warning" }));
     await h.controller.probeNow();
     expect(h.controller.admits("whole_transcript")).toBe(false);
-    h.advance(PRESSURE_STALE_CADENCES * PRESSURE_ELEVATED_INTERVAL_MS + 1);
+    const freshness = PRESSURE_STALE_CADENCES * PRESSURE_ELEVATED_INTERVAL_MS;
+    h.advance(freshness - 1);
+    h.controller.observePublication(publication(5, { host: "warning" }));
+    const refreshedAt = h.controller.getSnapshot().host.atMs;
+    expect(refreshedAt).toBe(h.now());
+    h.advance(freshness - 1);
+    expect(h.controller.admits("whole_transcript")).toBe(false);
+    expect(h.releaseCalls).toEqual(["warning"]);
+    h.advance(2);
     expect(h.controller.admits("whole_transcript")).toBe(true);
     h.controller.observePublication(publication(4, { host: "warning" }));
     expect(h.controller.admits("whole_transcript")).toBe(true);

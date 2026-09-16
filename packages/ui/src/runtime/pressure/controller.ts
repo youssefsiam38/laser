@@ -384,7 +384,7 @@ export function createRendererPressureController(deps: RendererPressureDeps): Re
     released: { count: number; bytes: number },
     atMs: number,
     passLevel: MemoryPressureDirectiveLevel,
-  ): RendererPressureRow => {
+  ): RendererPressureRow | undefined => {
     if (released.count > 0 && released.bytes > 0) {
       return { action, outcome: "released", released: { count: released.count, bytes: released.bytes }, atMs, level: passLevel };
     }
@@ -394,12 +394,13 @@ export function createRendererPressureController(deps: RendererPressureDeps): Re
     if (released.bytes > 0) {
       return { action, outcome: "released", released: { bytes: released.bytes }, atMs, level: passLevel };
     }
-    throw new Error("a released row needs measured evidence");
+    return undefined;
   };
 
   const ephemeralStep = (at: number, passLevel: MemoryPressureDirectiveLevel): RendererPressureRow => {
     const released = ephemeral();
-    if (released.count > 0 || released.bytes > 0) return releasedRow("ephemeral_caches", released, at, passLevel);
+    const row = releasedRow("ephemeral_caches", released, at, passLevel);
+    if (row) return row;
     // A cache that threw is the only thing between "nothing was there" and
     // "we could not tell": that difference is the row.
     if (released.failures > 0) return { action: "ephemeral_caches", outcome: "unavailable", atMs: at, level: passLevel };
@@ -417,7 +418,8 @@ export function createRendererPressureController(deps: RendererPressureDeps): Re
     const count = outcome.released.length;
     if (count > 0 || delta > 0) {
       const bytes = delta > 0 ? delta : outcome.bytesReleased;
-      return releasedRow("renderer_views", { count, bytes }, at, passLevel);
+      const row = releasedRow("renderer_views", { count, bytes }, at, passLevel);
+      if (row) return row;
     }
     // Over budget with nothing releasable means every candidate is a
     // conversation somebody is using. Work is never taken.
@@ -595,10 +597,16 @@ export function createRendererPressureController(deps: RendererPressureDeps): Re
         return;
       }
       const publication = parsed.data;
-      if (hostEpoch !== undefined && publication.epoch <= hostEpoch) {
-        // Stale or out of order: an older decision never overrides a newer one,
-        // and a decision already acted on is not acted on twice.
+      if (hostEpoch !== undefined && publication.epoch < hostEpoch) {
+        // Stale or out of order: an older decision never overrides a newer one.
         counters.directivesStale += 1;
+        changed();
+        return;
+      }
+      if (hostEpoch !== undefined && publication.epoch === hostEpoch) {
+        // A repeated publication is freshness evidence, not another decision:
+        // keep its level, refresh its local receipt time and run no second pass.
+        host = { ...host, atMs: now() };
         changed();
         return;
       }

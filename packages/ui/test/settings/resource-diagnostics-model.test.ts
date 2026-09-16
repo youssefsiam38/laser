@@ -4,7 +4,10 @@ import { parseMemoryPressureSummary, type AgentRun, type BackgroundTask, type Re
 import {
   physicalMeasure,
   physicalMeasureKind,
+  localPressureRole,
   pressureActionView,
+  pressureCoverage,
+  pressureInputLabel,
   pressureHostState,
   pressureRefusalViews,
   processTree,
@@ -225,8 +228,8 @@ describe("pressure diagnostics projection", () => {
     expect(JSON.stringify(hostPressure)).not.toContain("desktop_renderer");
 
     expect(pressureRefusalViews(hostPressure.refusing, ["whole_transcript"])).toEqual([
-      expect.objectContaining({ label: "Starting work in another project", owners: "Application" }),
-      expect.objectContaining({ label: "Loading a whole conversation at once", owners: "This window" }),
+      expect.objectContaining({ label: "Starting work in another project", owners: "the application" }),
+      expect.objectContaining({ label: "Loading a whole conversation at once", owners: "this window" }),
     ]);
     expect(pressureActionView({ action: "renderer_views", outcome: "held", reason: "pins_held" })).toEqual({
       action: "renderer_views",
@@ -234,6 +237,28 @@ describe("pressure diagnostics projection", () => {
       outcome: "Kept for active work",
       reason: "Work in a conversation is still using this memory.",
     });
+  });
+
+  it("projects unavailable local inputs through the shared role and coverage language", () => {
+    const local = localPressureRole({
+      level: "unknown",
+      effective: "unknown",
+      host: { level: "unknown" },
+      inputs: [
+        { kind: "physical", value: { status: "unavailable", reason: "unsupported_platform" }, warningBytes: 100, criticalBytes: 200 },
+        { kind: "heap", value: { status: "unavailable", reason: "unsupported_platform" }, warningBytes: 100, criticalBytes: 200 },
+      ],
+    });
+    expect(local.role).toBe("desktop_renderer");
+    expect(local.level).toBe("unknown");
+    expect(local.coverage).toEqual({ expected: 2, answered: 0, complete: false, reason: "incomplete_coverage" });
+    expect(pressureCoverage(local)).toBe("0 of 2 answered · coverage is incomplete");
+    expect(pressureInputLabel(local.role, "physical")).toBe("Private resident memory");
+    expect(local.details).toEqual([
+      { label: "Local reading", value: "Not measured yet" },
+      { label: "Application signal", value: "Not measured yet" },
+    ]);
+    expect(pressureHostState({ level: "normal", roles: [], refusing: [], totals: { events: 0, released: { count: 0, bytes: 0 }, refusals: 0 } }).level).toBe("unknown");
   });
 });
 

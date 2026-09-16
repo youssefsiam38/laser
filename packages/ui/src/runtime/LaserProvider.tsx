@@ -332,6 +332,35 @@ export function useLaserStable(): LaserStable {
   return value;
 }
 
+function useStoreSelector<State, Selected>(
+  getState: () => State,
+  subscribe: (listener: () => void) => () => void,
+  selector: (state: State) => Selected,
+  isEqual: (left: Selected, right: Selected) => boolean,
+): Selected {
+  const selectorRef = useRef(selector);
+  selectorRef.current = selector;
+  const isEqualRef = useRef(isEqual);
+  isEqualRef.current = isEqual;
+  const cache = useRef<{ state: State; selector: (state: State) => Selected; value: Selected } | undefined>(undefined);
+  const getSnapshot = useCallback((): Selected => {
+    const state = getState();
+    const select = selectorRef.current;
+    const previous = cache.current;
+    // The selector is part of the key: one that closes over a prop must answer
+    // for the new prop even when no state has changed since.
+    if (previous && previous.state === state && previous.selector === select) return previous.value;
+    const next = select(state);
+    if (previous && isEqualRef.current(previous.value, next)) {
+      cache.current = { state, selector: select, value: previous.value };
+      return previous.value;
+    }
+    cache.current = { state, selector: select, value: next };
+    return next;
+  }, [getState]);
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
 /**
  * This window's own memory-pressure state, as a subscription (RP-8, D-265).
  *
@@ -342,38 +371,25 @@ const pressureIdentity = (state: RendererPressureState): RendererPressureState =
 
 export function useRendererPressure(): RendererPressureState;
 export function useRendererPressure<T>(selector: (state: RendererPressureState) => T, isEqual?: (left: T, right: T) => boolean): T;
-export function useRendererPressure<T = RendererPressureState>(
-  selector: (state: RendererPressureState) => T = pressureIdentity as (state: RendererPressureState) => T,
+export function useRendererPressure<T>(
+  selector?: (state: RendererPressureState) => T,
   isEqual: (left: T, right: T) => boolean = Object.is,
-): T {
+): T | RendererPressureState {
   const { pressure, subscribePressure } = useLaserStable();
-  const selectorRef = useRef(selector);
-  selectorRef.current = selector;
-  const isEqualRef = useRef(isEqual);
-  isEqualRef.current = isEqual;
-  const cache = useRef<{ state: RendererPressureState; selector: (state: RendererPressureState) => T; value: T } | undefined>(undefined);
-  const getSnapshot = useCallback((): T => {
-    const state = pressure();
-    const select = selectorRef.current;
-    const previous = cache.current;
-    if (previous && previous.state === state && previous.selector === select) return previous.value;
-    const next = select(state);
-    if (previous && isEqualRef.current(previous.value, next)) {
-      cache.current = { state, selector: select, value: previous.value };
-      return previous.value;
-    }
-    cache.current = { state, selector: select, value: next };
-    return next;
-  }, [pressure]);
-  return useSyncExternalStore(subscribePressure, getSnapshot, getSnapshot);
+  if (selector === undefined) return useStoreSelector(pressure, subscribePressure, pressureIdentity, Object.is);
+  return useStoreSelector(pressure, subscribePressure, selector, isEqual);
 }
 
 const selectWholeTranscriptPaused = (state: RendererPressureState): boolean => state.refusing.includes("whole_transcript");
-const WHOLE_TRANSCRIPT_READY = Object.freeze({ paused: false, explanation: undefined });
-const WHOLE_TRANSCRIPT_PAUSED = Object.freeze({ paused: true, explanation: PRESSURE_REFUSAL_MESSAGES.whole_transcript });
+export interface WholeTranscriptRefusal {
+  readonly paused: boolean;
+  readonly explanation?: string | undefined;
+}
+const WHOLE_TRANSCRIPT_READY: WholeTranscriptRefusal = Object.freeze({ paused: false, explanation: undefined });
+const WHOLE_TRANSCRIPT_PAUSED: WholeTranscriptRefusal = Object.freeze({ paused: true, explanation: PRESSURE_REFUSAL_MESSAGES.whole_transcript });
 
 /** One stable policy view shared by every whole-transcript affordance. */
-export function useWholeTranscriptRefusal(): { readonly paused: boolean; readonly explanation?: string | undefined } {
+export function useWholeTranscriptRefusal(): WholeTranscriptRefusal {
   return useRendererPressure(selectWholeTranscriptPaused) ? WHOLE_TRANSCRIPT_PAUSED : WHOLE_TRANSCRIPT_READY;
 }
 
@@ -392,30 +408,7 @@ const PRIME_RECENT_SESSIONS = 8;
 export function useLaserState<T>(selector: (state: AppState) => T, isEqual: (a: T, b: T) => boolean = Object.is): T {
   const store = useContext(LaserStateContext);
   if (!store) throw new Error("useLaserState must be used inside <LaserProvider>.");
-  const selectorRef = useRef(selector);
-  selectorRef.current = selector;
-  const isEqualRef = useRef(isEqual);
-  isEqualRef.current = isEqual;
-  const cache = useRef<{ state: AppState; selector: (state: AppState) => T; value: T } | undefined>(undefined);
-
-  const getSnapshot = useCallback((): T => {
-    const state = store.getSnapshot();
-    const selector = selectorRef.current;
-    const previous = cache.current;
-    // The selector is part of the key: one that closes over a prop (a session
-    // path, a project list) must answer for the new prop even when no state
-    // has changed since. A memoized selector still pays nothing per render.
-    if (previous && previous.state === state && previous.selector === selector) return previous.value;
-    const next = selector(state);
-    if (previous && isEqualRef.current(previous.value, next)) {
-      cache.current = { state, selector, value: previous.value };
-      return previous.value;
-    }
-    cache.current = { state, selector, value: next };
-    return next;
-  }, [store]);
-
-  return useSyncExternalStore(store.subscribe, getSnapshot, getSnapshot);
+  return useStoreSelector(store.getSnapshot, store.subscribe, selector, isEqual);
 }
 
 /**

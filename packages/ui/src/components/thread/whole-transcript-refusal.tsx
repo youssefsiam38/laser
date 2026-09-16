@@ -1,9 +1,6 @@
 import { createContext, useContext, type ReactNode } from "react";
 
-export interface WholeTranscriptRefusal {
-  readonly paused: boolean;
-  readonly explanation?: string | undefined;
-}
+import type { WholeTranscriptRefusal } from "@/runtime";
 
 const READY: WholeTranscriptRefusal = Object.freeze({ paused: false, explanation: undefined });
 const Context = createContext<WholeTranscriptRefusal>(READY);

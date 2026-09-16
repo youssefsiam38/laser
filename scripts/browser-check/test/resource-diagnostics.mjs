@@ -129,8 +129,27 @@ export default async function resourceDiagnostics(check) {
   const initialPressure = scrub(await pressure.textContent());
   assert.match(initialPressure, /Application · (Not available|Normal|Memory is tight|Memory is critically low|Not measured yet)/, `the host state has an explicit answer: ${initialPressure.slice(0, 200)}`);
   assert.match(initialPressure, /This window · (Normal|Not measured yet)/, `the renderer has its own state before injection: ${initialPressure.slice(0, 240)}`);
-  assert.match(initialPressure, /Nothing missing is treated as zero|JavaScript heap/, 'missing local evidence stays unavailable rather than becoming zero');
   assert.match(initialPressure, /Retained host journal/, 'host journal totals have one bounded subsection rather than being copied into history rows');
+
+  // First prove the fully unavailable browser: no desktop bridge and no heap.
+  // This is the Safari/phone shape and must say exactly that zero of the two
+  // possible readings answered, without decorating absence with thresholds.
+  const unavailableInjected = await page.evaluate(() => {
+    try {
+      window.__pressureMemoryDescriptor = Object.getOwnPropertyDescriptor(performance, 'memory');
+      Object.defineProperty(performance, 'memory', { configurable: true, value: undefined });
+      document.dispatchEvent(new Event('visibilitychange'));
+      return performance.memory === undefined;
+    } catch {
+      return false;
+    }
+  });
+  assert.equal(unavailableInjected, true, 'the browser case removed heap evidence at the sampler boundary');
+  await pressure.getByText('0 of 2 answered · coverage is incomplete', { exact: true }).waitFor();
+  const unavailablePressure = scrub(await pressure.locator('[data-pressure-role=desktop_renderer]').textContent());
+  assert.match(unavailablePressure, /Private resident memory.*Unavailable/, `the no-bridge reading stays unavailable: ${unavailablePressure}`);
+  assert.match(unavailablePressure, /JavaScript heap.*Unavailable/, `the no-heap reading stays unavailable: ${unavailablePressure}`);
+  assert.doesNotMatch(unavailablePressure, /tight at|critical at/, 'an unavailable measure is not decorated with thresholds');
 
   // `performance.memory` is the real renderer sampler boundary. Replace its
   // values, not React state or markup, then use the controller's supported
@@ -160,6 +179,12 @@ export default async function resourceDiagnostics(check) {
   assert.doesNotMatch(criticalPressure, /whole_transcript|admission_refused|desktop_renderer|epoch|generation/, 'the pressure surface exposes no wire enums or internal identities');
   assert.ok(await pressure.locator('[data-section=pressure-actions] table').count() === 1, 'the latest local reason is a semantic table');
   await check.shot(`resources-pressure-critical-${label}`);
+  await page.evaluate(() => {
+    const descriptor = window.__pressureMemoryDescriptor;
+    if (descriptor) Object.defineProperty(performance, 'memory', descriptor);
+    else delete performance.memory;
+    delete window.__pressureMemoryDescriptor;
+  });
 
   // --------------------------------------------------- history and the chart
   const trend = root.locator('[data-slot=chart]');
