@@ -84,6 +84,7 @@ const EXPECTED_METHOD_CAPABILITIES = {
   "pi/transcribe/cancel": [],
   "pi/ui/response": [],
   "pi/worker/prepare": [],
+  "pi/worker/recover-agent-failures": [],
   "pi/worker/restart": [],
   "pi/worker/stop": [],
   "tasks/stop": [],
