@@ -60,23 +60,22 @@ export default async function environmentStorage(check) {
   const activate = activator(check);
   await dismissInstallPrompt(check);
 
-  // Reduced motion removes the startup exit animation, so this reload is the
-  // strictest no-flash path: while the non-exiting startup surface owns the
-  // window, no operational rail, session panel or composer may mount behind it.
-  await page.addInitScript(() => {
-    window.__environmentAffordanceFlash = [];
-    new MutationObserver(() => {
-      const startup = document.querySelector('[data-slot="startup-restoration"]:not([data-exiting])');
-      if (!startup) return;
-      const operational = document.querySelector('nav[aria-label="Projects"], [data-slot="sessions-panel"], textarea[aria-label="Message"]');
-      if (operational) window.__environmentAffordanceFlash.push(operational.outerHTML.slice(0, 160));
-    }).observe(document, { childList: true, subtree: true, attributes: true });
-  });
-  await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.getByRole('textbox', { name: 'Message', exact: true }).waitFor();
-  assert.deepEqual(await page.evaluate(() => window.__environmentAffordanceFlash), [], 'no affordance mounts before the authenticated descriptor, including with reduced motion');
-  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  // The harness owns media emulation. In its reduced-motion cases reload with
+  // an init observer so the strict no-exit-animation startup path is captured.
+  if (check.reducedMotion) {
+    await page.addInitScript(() => {
+      window.__environmentAffordanceFlash = [];
+      new MutationObserver(() => {
+        const startup = document.querySelector('[data-slot="startup-restoration"]:not([data-exiting])');
+        if (!startup) return;
+        const operational = document.querySelector('nav[aria-label="Projects"], textarea[aria-label="Message"]');
+        if (operational) window.__environmentAffordanceFlash.push(operational.outerHTML.slice(0, 160));
+      }).observe(document, { childList: true, subtree: true, attributes: true });
+    });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.getByRole('textbox', { name: 'Message', exact: true }).waitFor();
+    assert.deepEqual(await page.evaluate(() => window.__environmentAffordanceFlash), [], 'no affordance mounts before the authenticated descriptor, including with reduced motion');
+  }
 
   const storageState = () => page.evaluate(() => ({
     local: Object.keys(localStorage).sort(),

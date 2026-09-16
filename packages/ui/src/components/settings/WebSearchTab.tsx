@@ -5,6 +5,7 @@ import { Check, ChevronRight, Globe, KeyRound, Link2, Loader2, RefreshCw } from 
 import { WEB_SEARCH_PROVIDERS, type FeatureState, type ProviderAuthInfo, type WebSearchChange, type WebSearchConnection, type WebSearchProvider, type WebSearchProviderStatus, type WebSearchStatus } from "@lasercode/protocol";
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
+import { CapabilityNotice } from "@/components/capability-gate";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -16,7 +17,7 @@ import { cn } from "@/lib/utils";
 
 /** ProviderStep's connection/disclosure pattern, using the adopted settings
  * primitives. Keys are write-only: never restored from responses or drafts. */
-export function WebSearchTab({ cwd }: { cwd: string }) {
+export function WebSearchTab({ cwd, writable = true, readOnlyExplanation }: { cwd: string; writable?: boolean; readOnlyExplanation?: string | undefined }) {
   const { client } = useLaserStable();
   const [status, setStatus] = useState<WebSearchStatus>();
   const [models, setModels] = useState<ProviderAuthInfo[]>([]);
@@ -86,10 +87,11 @@ export function WebSearchTab({ cwd }: { cwd: string }) {
           <div><h2 className="text-lg font-semibold text-ink">Web search</h2><p className="mt-1 text-sm leading-6 text-ink-2">Fresh answers with source links, through a provider you choose.</p></div>
           <Button variant="ghost" size="sm" aria-label="Refresh search connections" disabled={busy} onClick={() => void load()}><RefreshCw /></Button>
         </header>
+        {!writable && readOnlyExplanation ? <CapabilityNotice explanation={readOnlyExplanation} /> : null}
         <section className="rounded-xl border border-line bg-surface p-4" aria-label="Search availability">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0"><div className="flex items-center gap-2"><Globe className="size-4 text-ink-2" /><h3 className="text-sm font-semibold">Enable web search</h3></div><p className="mt-1 text-sm leading-6 text-ink-2">Turning on tests the selected provider with a real search; charges may apply. Switching off keeps your connections saved.</p></div>
-            <Toggle variant="outline" pressed={feature?.globalEnabled ?? false} disabled={busy || !feature} aria-label="Enable web search" onPressedChange={(enabled) => void toggle(enabled)}>{feature?.globalEnabled ? "On" : "Off"}</Toggle>
+            <Toggle variant="outline" pressed={feature?.globalEnabled ?? false} disabled={!writable || busy || !feature} aria-label="Enable web search" onPressedChange={(enabled) => void toggle(enabled)}>{feature?.globalEnabled ? "On" : "Off"}</Toggle>
           </div>
           <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-line pt-3 text-sm"><span className="text-ink-2">Searches go to</span><span className="font-medium">{selected.name}</span><Badge variant="outline">{selectedStatus.configured ? selectedStatus.source === "none" ? "No key needed" : "Connection saved" : "Setup needed"}</Badge></div>
           {!selectedStatus.configured && <p className="mt-2 text-sm text-attention">Configure {selected.name} below before searching.</p>}
@@ -110,7 +112,7 @@ export function WebSearchTab({ cwd }: { cwd: string }) {
                 {status.selectedProvider === provider.id && <Badge variant="outline"><Check className="size-3" /> Selected</Badge>}
                 {pending?.provider === provider.id && <Loader2 aria-label={pending.label} className="size-4 shrink-0 text-live motion-safe:animate-busy" />}
               </CollapsibleTrigger>
-              <CollapsibleContent><SearchConnection key={`${provider.id}:${connection.source}:${connection.sharedProvider ?? ""}`} provider={provider} connection={connection} models={models} busy={busy} progress={pending?.provider === provider.id ? pending.label : undefined} selected={status.selectedProvider === provider.id} onChange={change} /></CollapsibleContent>
+              <CollapsibleContent><SearchConnection key={`${provider.id}:${connection.source}:${connection.sharedProvider ?? ""}`} provider={provider} connection={connection} models={models} busy={busy} progress={pending?.provider === provider.id ? pending.label : undefined} selected={status.selectedProvider === provider.id} writable={writable} onChange={change} /></CollapsibleContent>
             </Collapsible>;
           })}
           {!shown.length && <p className="p-4 text-sm text-ink-2">No providers match “{filter}”. Try another name.</p>}
@@ -120,8 +122,8 @@ export function WebSearchTab({ cwd }: { cwd: string }) {
   );
 }
 
-function SearchConnection({ provider, connection, models, busy, progress, selected, onChange }: {
-  provider: WebSearchProvider; connection: WebSearchProviderStatus; models: ProviderAuthInfo[]; busy: boolean; progress?: string | undefined; selected: boolean; onChange: (change: WebSearchChange) => Promise<boolean>;
+function SearchConnection({ provider, connection, models, busy, progress, selected, writable, onChange }: {
+  provider: WebSearchProvider; connection: WebSearchProviderStatus; models: ProviderAuthInfo[]; busy: boolean; progress?: string | undefined; selected: boolean; writable: boolean; onChange: (change: WebSearchChange) => Promise<boolean>;
 }) {
   const [key, setKey] = useState("");
   const [baseUrl, setBaseUrl] = useState(connection.baseUrl ?? "");
@@ -138,17 +140,17 @@ function SearchConnection({ provider, connection, models, busy, progress, select
     {shared.length > 0 && <section className="flex flex-col gap-2" aria-label={`${provider.name} shared connections`}>
       {shared.map((entry) => <div key={entry.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-surface-2 p-3">
         <div className="min-w-0"><p className="flex items-center gap-2 text-sm font-medium"><Link2 className="size-4" />{entry.name}</p><p className="mt-1 text-xs text-ink-2">{entry.configured ? "Reuse this model connection; no second key is stored." : "Connect this provider in Models and dictation first."}</p></div>
-        <Button variant="secondary" size="sm" disabled={busy || (!entry.configured && !(connection.source === "shared" && connection.sharedProvider === entry.id))} onClick={() => void save(connection.source === "shared" && connection.sharedProvider === entry.id ? "none" : "shared", connection.source === "shared" && connection.sharedProvider === entry.id ? undefined : entry.id)}>{connection.source === "shared" && connection.sharedProvider === entry.id ? "Revoke search access" : "Allow, test and use"}</Button>
+        <Button variant="secondary" size="sm" disabled={!writable || busy || (!entry.configured && !(connection.source === "shared" && connection.sharedProvider === entry.id))} onClick={() => void save(connection.source === "shared" && connection.sharedProvider === entry.id ? "none" : "shared", connection.source === "shared" && connection.sharedProvider === entry.id ? undefined : entry.id)}>{connection.source === "shared" && connection.sharedProvider === entry.id ? "Revoke search access" : "Allow, test and use"}</Button>
       </div>)}
     </section>}
-    {provider.endpoint && <label className="flex flex-col gap-1 text-sm">SearXNG address<Input disabled={busy} type="url" value={baseUrl} placeholder="https://search.example.com" onChange={(event) => setBaseUrl(event.target.value)} /></label>}
-    {provider.zone && <label className="flex flex-col gap-1 text-sm">SERP zone<Input disabled={busy} value={zone} placeholder="Your SERP zone name" onChange={(event) => setZone(event.target.value)} /></label>}
-    {provider.key !== "none" && <label className="flex flex-col gap-1 text-sm"><span className="flex items-center gap-2"><KeyRound className="size-4 text-ink-2" />{shared.length ? "Or use a separate search-only key" : "Search API key"}</span><Input disabled={busy} type="password" autoComplete="new-password" value={key} onChange={(event) => setKey(event.target.value)} placeholder={connection.hasKey ? "Saved key is never shown; paste to replace" : "Paste an API key"} /></label>}
+    {provider.endpoint && <label className="flex flex-col gap-1 text-sm">SearXNG address<Input disabled={!writable || busy} type="url" value={baseUrl} placeholder="https://search.example.com" onChange={(event) => setBaseUrl(event.target.value)} /></label>}
+    {provider.zone && <label className="flex flex-col gap-1 text-sm">SERP zone<Input disabled={!writable || busy} value={zone} placeholder="Your SERP zone name" onChange={(event) => setZone(event.target.value)} /></label>}
+    {provider.key !== "none" && <label className="flex flex-col gap-1 text-sm"><span className="flex items-center gap-2"><KeyRound className="size-4 text-ink-2" />{shared.length ? "Or use a separate search-only key" : "Search API key"}</span><Input disabled={!writable || busy} type="password" autoComplete="new-password" value={key} onChange={(event) => setKey(event.target.value)} placeholder={connection.hasKey ? "Saved key is never shown; paste to replace" : "Paste an API key"} /></label>}
     <div className="flex flex-wrap gap-2">
-      {provider.key !== "none" && <Button size="sm" variant="secondary" disabled={busy || (!key.trim() && !connection.hasKey)} onClick={() => void save("dedicated")}>Test and use key</Button>}
-      {provider.key !== "required" && <Button size="sm" variant="secondary" disabled={busy || (provider.endpoint && !baseUrl.trim())} onClick={() => void save("none")}>{provider.endpoint ? "Test and use instance" : "Test and use without a key"}</Button>}
-      {connection.hasKey && <Button size="sm" variant="ghost" disabled={busy} onClick={() => void save(connection.source === "shared" ? "shared" : "none", connection.sharedProvider, true)}>Remove search-only key</Button>}
-      <Button size="sm" disabled={busy || !connection.configured} onClick={() => void onChange({ action: "select", provider: provider.id })}>{selected ? "Test selected provider" : "Test and use saved connection"}</Button>
+      {provider.key !== "none" && <Button size="sm" variant="secondary" disabled={!writable || busy || (!key.trim() && !connection.hasKey)} onClick={() => void save("dedicated")}>Test and use key</Button>}
+      {provider.key !== "required" && <Button size="sm" variant="secondary" disabled={!writable || busy || (provider.endpoint && !baseUrl.trim())} onClick={() => void save("none")}>{provider.endpoint ? "Test and use instance" : "Test and use without a key"}</Button>}
+      {connection.hasKey && <Button size="sm" variant="ghost" disabled={!writable || busy} onClick={() => void save(connection.source === "shared" ? "shared" : "none", connection.sharedProvider, true)}>Remove search-only key</Button>}
+      <Button size="sm" disabled={!writable || busy || !connection.configured} onClick={() => void onChange({ action: "select", provider: provider.id })}>{selected ? "Test selected provider" : "Test and use saved connection"}</Button>
     </div>
     <p className="text-xs leading-5 text-ink-3">Testing makes a real search call and may incur provider charges. Only a successful test switches the selected provider. All other providers stay inactive, including free ones. No fallback is used.</p>
   </div>;

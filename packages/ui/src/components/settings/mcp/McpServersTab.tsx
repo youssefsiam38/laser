@@ -14,6 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
+import { CapabilityNotice } from "@/components/capability-gate";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -30,7 +31,7 @@ import { rowKey, serverTitle } from "./model.js";
 
 type ScopeFilter = McpScope | "all";
 
-export function McpServersTab({ cwd, projectOpen = true }: { cwd: string; projectOpen?: boolean }) {
+export function McpServersTab({ cwd, projectOpen = true, writable = true, readOnlyExplanation }: { cwd: string; projectOpen?: boolean; writable?: boolean; readOnlyExplanation?: string | undefined }) {
   const { client, actions } = useLaserStable();
   const [servers, setServers] = useState<McpServerState[]>();
   const [conversations, setConversations] = useState<NonNullable<ClientRequests["mcp/list"]["result"]["conversations"]>>([]);
@@ -152,9 +153,9 @@ export function McpServersTab({ cwd, projectOpen = true }: { cwd: string; projec
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <Button type="button" size="sm" onClick={() => setAdding({})}>
+            {writable ? <Button type="button" size="sm" onClick={() => setAdding({})}>
               <Plus aria-hidden="true" /> Add a server
-            </Button>
+            </Button> : null}
             <Button type="button" variant="ghost" size="sm" aria-label="Reload servers" onClick={() => void load()}>
               <RefreshCw aria-hidden="true" />
             </Button>
@@ -163,6 +164,8 @@ export function McpServersTab({ cwd, projectOpen = true }: { cwd: string; projec
             </Button>
           </div>
         </header>
+
+        {!writable && readOnlyExplanation ? <CapabilityNotice explanation={readOnlyExplanation} /> : null}
 
         {error && (
           <p role="alert" className="text-sm leading-6 text-danger">
@@ -176,7 +179,7 @@ export function McpServersTab({ cwd, projectOpen = true }: { cwd: string; projec
           </p>
         )}
 
-        <McpImportBanner sources={sources} onOpen={() => setImporting(true)} />
+        {writable ? <McpImportBanner sources={sources} onOpen={() => setImporting(true)} /> : null}
 
         {!projectOpen && (
           <p className="text-sm leading-6 text-ink-2">
@@ -210,7 +213,7 @@ export function McpServersTab({ cwd, projectOpen = true }: { cwd: string; projec
           </div>
         )}
 
-        {servers.length === 0 ? (
+        {servers.length === 0 && writable ? (
           <section className="flex flex-col gap-4">
             <div>
               <h3 className="text-base font-semibold text-ink">Nothing yet — start with one of these</h3>
@@ -225,10 +228,10 @@ export function McpServersTab({ cwd, projectOpen = true }: { cwd: string; projec
             No server is saved for {scopeFilter === "project" ? "this project" : "every project"}. Add one, or look at All.
           </p>
         ) : (
-          <McpServerList servers={shown} selectedId={selectedId} onSelect={setSelectedId} onSignIn={openSignIn} />
+          <McpServerList servers={shown} selectedId={selectedId} {...(writable ? { onSelect: setSelectedId, onSignIn: openSignIn } : {})} />
         )}
 
-        {servers.length > 0 && (
+        {writable && servers.length > 0 && (
           <Collapsible className="mt-2">
             <CollapsibleTrigger className="text-start text-sm text-live underline-offset-4 hover:underline">
               Add another from the gallery
@@ -240,7 +243,7 @@ export function McpServersTab({ cwd, projectOpen = true }: { cwd: string; projec
         )}
       </div>
 
-      <McpAddDialog
+      {writable ? <McpAddDialog
         cwd={cwd}
         open={Boolean(adding)}
         onOpenChange={(open) => !open && setAdding(undefined)}
@@ -259,9 +262,9 @@ export function McpServersTab({ cwd, projectOpen = true }: { cwd: string; projec
             }
           }
         }}
-      />
+      /> : null}
 
-      <McpImportDialog
+      {writable ? <McpImportDialog
         cwd={cwd}
         open={importing}
         onOpenChange={setImporting}
@@ -274,9 +277,9 @@ export function McpServersTab({ cwd, projectOpen = true }: { cwd: string; projec
           actions.toast("info", imported.length ? `Imported ${imported.join(", ")}.` : "Nothing was imported.");
           void load();
         }}
-      />
+      /> : null}
 
-      <McpInspector
+      {writable ? <McpInspector
         conversations={conversations}
         cwd={cwd}
         state={selected}
@@ -293,15 +296,15 @@ export function McpServersTab({ cwd, projectOpen = true }: { cwd: string; projec
         onSignOut={() => {
           if (selected) setSignOut({ scope: selected.scope, name: selected.config.name, title: serverTitle(selected.config) });
         }}
-      />
+      /> : null}
 
-      <McpSignInDialog
+      {writable ? <McpSignInDialog
         cwd={cwd}
         target={signIn}
         onOpenChange={(open) => !open && setSignIn(undefined)}
         onDone={() => void load()}
-      />
-      <McpSignOutDialog
+      /> : null}
+      {writable ? <McpSignOutDialog
         cwd={cwd}
         target={signOut}
         onOpenChange={(open) => !open && setSignOut(undefined)}
@@ -309,7 +312,7 @@ export function McpServersTab({ cwd, projectOpen = true }: { cwd: string; projec
           actions.toast("info", "Signed out. The server stays configured.");
           void load();
         }}
-      />
+      /> : null}
     </ScrollArea>
   );
 }

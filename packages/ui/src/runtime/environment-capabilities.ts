@@ -49,7 +49,7 @@ const unavailable = (presentation: CapabilityPresentation, explanation: string):
   presentation === "hidden" ? { state: "hidden" } : { state: "explained", explanation };
 
 /** Capability bits refine scope grants for the protocol families they describe. */
-function methodCapabilities(method: ClientMethod): readonly EnvironmentCapability[] {
+export function methodCapabilities(method: ClientMethod): readonly EnvironmentCapability[] {
   if (method === "session/revision") return ["revisions"];
   if (method === "session/search" || method === "session/search/cancel") return ["search"];
   if (method === "pi/session/entries" || method === "session/entry_range" || method === "session/entry_regions") return ["snapshots"];

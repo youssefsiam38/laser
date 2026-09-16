@@ -26,7 +26,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { cn } from "@/lib/utils";
 import { useCapability, useLaserStable } from "@/runtime";
-import { CapabilityGate } from "@/components/capability-gate";
+import { CapabilityNotice } from "@/components/capability-gate";
 import type { SettingsCatalog, SettingsScope, SettingsSnapshot } from "@lasercode/protocol";
 
 import { NotificationsSetting } from "@/components/mobile";
@@ -81,12 +81,17 @@ const TABS: Array<{ id: Tab; label: string }> = [
 export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | undefined; initialTab?: Tab | undefined }) {
   const { client, actions } = useLaserStable();
   const settingsRead = useCapability("pi/settings/get");
+  const settingsWrite = useCapability("pi/settings/set", { presentation: "explained" });
+  const featureWrite = useCapability("feature/set", { presentation: "explained" });
+  const mcpWrite = useCapability("mcp/save", { presentation: "explained" });
+  const keybindingsWrite = useCapability("pi/keybindings/set", { presentation: "explained" });
+  const trustWrite = useCapability("pi/project/trust", { presentation: "explained" });
   const features = useCapability("feature/list");
   const mcp = useCapability("mcp/list");
   const providers = useCapability("pi/providers/list");
   const usage = useCapability("pi/account-usage/refresh");
   const projects = useCapability("pi/project/list");
-  const diagnostics = useCapability("resource/snapshot", { capabilities: ["diagnostics"] });
+  const diagnostics = useCapability("resource/snapshot");
   // `initialTab` is only ever set by something that already knows the fix — a
   // rejected credential sending the person straight to Providers and models.
   const [tab, setTab] = useState<Tab>(initialTab ?? "general");
@@ -107,7 +112,7 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
     if (entry.id === "projects" || entry.id === "trust") return projects.state === "available";
     return true;
   });
-  const shownTab = visibleTabs.some((entry) => entry.id === tab) ? tab : visibleTabs[0]!.id;
+  const shownTab = visibleTabs.some((entry) => entry.id === tab) ? tab : (visibleTabs[0]?.id ?? "general");
 
   const tabStrip = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -254,9 +259,10 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
         ) : (
           <>
             {shownTab === "general" && cwd && catalog && snapshot && (
-              <CapabilityGate method="pi/settings/set">
-                <SettingsForm audience="general" cwd={cwd} catalog={catalog} snapshot={snapshot} onApply={apply} />
-              </CapabilityGate>
+              <>
+                {settingsWrite.state === "explained" ? <div className="p-4 pb-0"><CapabilityNotice explanation={settingsWrite.explanation!} /></div> : null}
+                <SettingsForm audience="general" cwd={cwd} catalog={catalog} snapshot={snapshot} writable={settingsWrite.state === "available"} onApply={apply} />
+              </>
             )}
             {shownTab === "advanced" && (
               <AdvancedTab
@@ -272,23 +278,15 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
               />
             )}
             {shownTab === "appearance" && <AppearanceTab />}
-            {shownTab === "features" && (
-              <CapabilityGate method="feature/set"><FeaturesScreen {...(cwd ? { cwd } : {})} {...(mcp.state === "available" ? { onManageServers: () => setTab("mcp") } : {})} /></CapabilityGate>
-            )}
+            {shownTab === "features" && <FeaturesScreen {...(cwd ? { cwd } : {})} writable={featureWrite.state === "available"} {...(featureWrite.state === "explained" ? { readOnlyExplanation: featureWrite.explanation } : {})} {...(mcp.state === "available" ? { onManageServers: () => setTab("mcp") } : {})} />}
             {/* Without a project this is the every-project list; the project
                 filter simply has nothing to show. */}
-            {shownTab === "mcp" && cwd && (
-              <CapabilityGate method="mcp/save"><McpServersTab cwd={cwd} projectOpen={Boolean(project)} /></CapabilityGate>
-            )}
+            {shownTab === "mcp" && cwd && <McpServersTab cwd={cwd} projectOpen={Boolean(project)} writable={mcpWrite.state === "available"} {...(mcpWrite.state === "explained" ? { readOnlyExplanation: mcpWrite.explanation } : {})} />}
             {shownTab === "models" && cwd && <ModelsTab cwd={cwd} snapshot={snapshot} onApply={apply} />}
             {shownTab === "usage" && <UsageTab />}
-            {shownTab === "keyboard" && (
-              <CapabilityGate method="pi/keybindings/set"><KeyboardTab cwd={cwd} /></CapabilityGate>
-            )}
+            {shownTab === "keyboard" && <KeyboardTab cwd={cwd} writable={keybindingsWrite.state === "available"} {...(keybindingsWrite.state === "explained" ? { readOnlyExplanation: keybindingsWrite.explanation } : {})} />}
             {shownTab === "projects" && <ProjectsTab activeCwd={project} />}
-            {shownTab === "trust" && (
-              <CapabilityGate method="pi/project/trust"><TrustTab /></CapabilityGate>
-            )}
+            {shownTab === "trust" && <TrustTab writable={trustWrite.state === "available"} {...(trustWrite.state === "explained" ? { readOnlyExplanation: trustWrite.explanation } : {})} />}
             {shownTab === "device" && <DeviceTab />}
           </>
         )}
@@ -316,8 +314,8 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
  * whole machine. Its copy names the computer for that reason.
  */
 export function DeviceTab() {
-  const push = useCapability("pi/push/config", { capabilities: ["push"] });
-  const logs = useCapability("pi/logs/stats", { capabilities: ["logs"] });
+  const push = useCapability("pi/push/config");
+  const logs = useCapability("pi/logs/stats");
   const setup = useCapability("pi/setup/complete");
   return (
     <ScrollArea className="h-full">

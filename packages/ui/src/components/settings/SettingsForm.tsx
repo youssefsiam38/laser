@@ -39,10 +39,11 @@ export interface SettingsFormProps {
   cwd: string;
   catalog: SettingsCatalog;
   snapshot: SettingsSnapshot;
+  writable?: boolean | undefined;
   onApply: (scope: SettingsScope, changes: SettingChange[]) => Promise<boolean>;
 }
 
-export function SettingsForm({ audience, cwd, catalog, snapshot, onApply }: SettingsFormProps) {
+export function SettingsForm({ audience, cwd, catalog, snapshot, writable = true, onApply }: SettingsFormProps) {
   const { client, projects, projectInfo, setCurrentProject } = useLaserStable();
   const [view, setView] = useState<View>("global");
   const [section, setSection] = useState<string>(catalog.sections[0]?.id ?? "model");
@@ -213,6 +214,7 @@ export function SettingsForm({ audience, cwd, catalog, snapshot, onApply }: Sett
                   modelCatalog={modelCatalog}
                   modelCatalogLoading={modelCatalogLoading}
                   modelCatalogError={modelCatalogError}
+                  environmentWritable={writable}
                   onApply={onApply}
                 />
               ))}
@@ -366,6 +368,7 @@ function FieldRowView({
   modelCatalog,
   modelCatalogLoading,
   modelCatalogError,
+  environmentWritable,
   onApply,
 }: {
   field: SettingDescriptor;
@@ -377,13 +380,14 @@ function FieldRowView({
   modelCatalog: { models: ModelCatalogEntry[]; connected: ModelCatalogEntry[]; defaultProvider?: string; defaultModel?: string };
   modelCatalogLoading: boolean;
   modelCatalogError: string | undefined;
+  environmentWritable: boolean;
   onApply: (scope: SettingsScope, changes: SettingChange[]) => Promise<boolean>;
 }) {
   const controlId = useId();
   const row = rowFor(field, snapshot);
   const scoped = scope === "global" ? row.global : row.project;
   const displayed = scoped ?? row.effective ?? field.default;
-  const writable = !field.managed && (scope === "global" || snapshot.projectTrust.writable);
+  const writable = environmentWritable && !field.managed && (scope === "global" || snapshot.projectTrust.writable);
   const section = catalog.sections.find((s) => s.id === field.section);
   const provider = String(getAtPath(snapshot.effective, "defaultProvider") ?? modelCatalog.defaultProvider ?? "");
 

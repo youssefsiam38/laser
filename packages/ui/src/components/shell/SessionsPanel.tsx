@@ -394,7 +394,7 @@ function SessionsTabs({ tab, onChange }: { tab: SessionsTab; onChange(tab: Sessi
 function SheetFooter() {
   const { theme, toggle } = useTheme();
   const addProject = useCapability("pi/project/add");
-  const logs = useCapability("pi/logs/query", { capabilities: ["logs"] });
+  const logs = useCapability("pi/logs/query");
   const shell = useShell();
   const workbench = useWorkbench();
   const openWorkbench = (page: "settings" | "logs") => {

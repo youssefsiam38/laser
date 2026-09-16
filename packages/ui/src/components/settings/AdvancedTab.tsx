@@ -7,7 +7,7 @@ import { GenerationLoader } from "@/components/assistant-ui/elements/loading-sta
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useCapability } from "@/runtime";
-import { CapabilityGate } from "@/components/capability-gate";
+import { CapabilityNotice } from "@/components/capability-gate";
 
 import { SettingsForm } from "./SettingsForm.js";
 import { ResourceDiagnostics } from "./resources/ResourceDiagnostics.js";
@@ -28,11 +28,12 @@ export interface AdvancedTabProps {
 
 /** Machine-wide resource truth beside, but never confused with, project-scoped engine configuration. */
 export function AdvancedTab({ view, onViewChange, cwd, catalog, snapshot, loading, error, onReload, onApply }: AdvancedTabProps) {
-  const resources = useCapability("resource/snapshot", { capabilities: ["diagnostics"] });
+  const resources = useCapability("resource/snapshot");
   const configuration = useCapability("pi/settings/get");
-  const shownView = view === "resources" && resources.state !== "available" ? "configuration"
-    : view === "configuration" && configuration.state !== "available" ? "resources"
-    : view;
+  const settingsWrite = useCapability("pi/settings/set", { presentation: "explained" });
+  let shownView = view;
+  if (shownView === "resources" && resources.state !== "available") shownView = "configuration";
+  if (shownView === "configuration" && configuration.state !== "available") shownView = "resources";
   const configured = Boolean(cwd && catalog && snapshot);
   return <div className="flex h-full min-h-0 flex-col">
     <div className="flex shrink-0 items-center gap-1 px-3 py-2 hairline-b" role="tablist" aria-label="Advanced settings sections">
@@ -93,9 +94,10 @@ export function AdvancedTab({ view, onViewChange, cwd, catalog, snapshot, loadin
         </div>
       ) : null}
       {!error && cwd && catalog && snapshot ? (
-        <CapabilityGate method="pi/settings/set">
-          <SettingsForm audience="advanced" cwd={cwd} catalog={catalog} snapshot={snapshot} onApply={onApply} />
-        </CapabilityGate>
+        <>
+          {settingsWrite.state === "explained" ? <div className="p-4 pb-0"><CapabilityNotice explanation={settingsWrite.explanation!} /></div> : null}
+          <SettingsForm audience="advanced" cwd={cwd} catalog={catalog} snapshot={snapshot} writable={settingsWrite.state === "available"} onApply={onApply} />
+        </>
       ) : null}
     </div>
   </div>;

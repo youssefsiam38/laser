@@ -93,7 +93,7 @@ function usePaletteCommands(active: boolean): RunnableCommand[] {
   const workers = useLaserState((s) => s.workers);
   const groups = useMemo(() => sessionGroups(projects, sessions, open, workers), [projects, sessions, open, workers]);
   const busy = meta.running || meta.compacting;
-  const logs = useCapability("pi/logs/query", { capabilities: ["logs"] });
+  const logs = useCapability("pi/logs/query");
   const addProject = useCapability("pi/project/add");
 
   return useMemo<RunnableCommand[]>(() => {

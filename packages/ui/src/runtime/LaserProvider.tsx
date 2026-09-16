@@ -400,6 +400,12 @@ const identity = <T,>(value: T): T => value;
 /** Conversations promoted into the cache's hot set per environment (RP-10/11). */
 const PRIME_RECENT_SESSIONS = 8;
 
+/** Decide one RPC-backed affordance against the authenticated environment. */
+export function useCapability(method: ClientMethod, requirements?: CapabilityRequirements): CapabilityDecision {
+  const environment = useLaserState((state) => state.environment);
+  return capabilityFor(environment, method, requirements);
+}
+
 /**
  * Subscribe to one slice of app state. A streamed token replaces the whole
  * `AppState`, so a component that reads the context value wholesale re-renders
@@ -407,11 +413,6 @@ const PRIME_RECENT_SESSIONS = 8;
  *
  * `isEqual` lets a selector that allocates (a derived list) stay stable.
  */
-export function useCapability(method: ClientMethod, requirements?: CapabilityRequirements): CapabilityDecision {
-  const environment = useLaserState((state) => state.environment);
-  return capabilityFor(environment, method, requirements);
-}
-
 export function useLaserState<T>(selector: (state: AppState) => T, isEqual: (a: T, b: T) => boolean = Object.is): T {
   const store = useContext(LaserStateContext);
   if (!store) throw new Error("useLaserState must be used inside <LaserProvider>.");

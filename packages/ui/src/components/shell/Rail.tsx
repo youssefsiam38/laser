@@ -67,7 +67,7 @@ export function Rail() {
   const shell = useShell();
   const { theme, toggle } = useTheme();
   const workbench = useWorkbench();
-  const logs = useCapability("pi/logs/query", { capabilities: ["logs"] });
+  const logs = useCapability("pi/logs/query");
 
   return (
     <nav
@@ -164,7 +164,7 @@ function ProjectList() {
   );
 
   return (
-    <DndContext sensors={manageProjects.state === "available" ? sensors : []} collisionDetection={closestCenter} onDragEnd={reorder}>
+    <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={reorder}>
       <SortableContext items={projects} strategy={verticalListSortingStrategy}>
         <ul role="list" className="mt-2 flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto py-1 scrollbar-none">
           {summaries.map((project) => (

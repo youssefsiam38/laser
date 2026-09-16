@@ -27,6 +27,7 @@ import {
 import { AlertTriangle, Keyboard, RotateCcw } from "lucide-react";
 import type { KeybindingsSnapshot } from "@lasercode/protocol";
 
+import { CapabilityNotice } from "@/components/capability-gate";
 import { Button } from "@/components/ui/button";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -89,7 +90,7 @@ function groups(mod: string): BindingGroup[] {
   ];
 }
 
-export function KeyboardTab({ cwd }: { cwd?: string | undefined }) {
+export function KeyboardTab({ cwd, writable = true, readOnlyExplanation }: { cwd?: string | undefined; writable?: boolean; readOnlyExplanation?: string | undefined }) {
   const mod = modKey();
   const list = useMemo(() => groups(mod), [mod]);
 
@@ -137,7 +138,8 @@ export function KeyboardTab({ cwd }: { cwd?: string | undefined }) {
           </section>
         ))}
 
-        <AgentKeys cwd={cwd} />
+        {!writable && readOnlyExplanation ? <CapabilityNotice explanation={readOnlyExplanation} /> : null}
+        <AgentKeys cwd={cwd} environmentWritable={writable} />
       </div>
     </ScrollArea>
   );
@@ -212,7 +214,7 @@ function baseKeyOf(key: string): string | undefined {
   return undefined;
 }
 
-function AgentKeys({ cwd }: { cwd?: string | undefined }) {
+function AgentKeys({ cwd, environmentWritable }: { cwd?: string | undefined; environmentWritable: boolean }) {
   const { client } = useLaserStable();
   const [snapshot, setSnapshot] = useState<KeybindingsSnapshot>();
   const [error, setError] = useState<string>();
@@ -315,7 +317,7 @@ function AgentKeys({ cwd }: { cwd?: string | undefined }) {
                   key={binding.id}
                   binding={binding}
                   first={index === 0}
-                  writable={snapshot.writable}
+                  writable={environmentWritable && snapshot.writable}
                   busy={busy}
                   capturing={capturing === binding.id}
                   onCapture={() => setCapturing(binding.id)}

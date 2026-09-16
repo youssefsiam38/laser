@@ -37,7 +37,7 @@ const PAGE_LABEL: Record<WorkbenchPage, string> = { settings: "Settings", agents
 export function Workbench() {
   const { page, tab: settingsTab, agents: agentsTarget, open, close } = useWorkbench();
   const { currentProject } = useLaserStable();
-  const logs = useCapability("pi/logs/query", { capabilities: ["logs"] });
+  const logs = useCapability("pi/logs/query");
   const visibleTabs = logs.state === "available" ? TABS : TABS.filter((tab) => tab.id !== "logs");
   // The project directory, not the session: reading the view re-rendered the
   // workbench for every streamed token (M16-T32).

@@ -5,6 +5,7 @@ import { Bot, Check, CircleDot, Globe, Plug, RotateCw, Target } from "lucide-rea
 import { useCallback, useEffect, useState } from "react";
 
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
+import { CapabilityNotice } from "@/components/capability-gate";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -12,7 +13,7 @@ import { Toggle } from "@/components/ui/toggle";
 import { cn } from "@/lib/utils";
 import { useLaserStable } from "@/runtime";
 
-export function FeaturesScreen({ cwd, onManageServers }: { cwd?: string; onManageServers?: () => void }) {
+export function FeaturesScreen({ cwd, onManageServers, writable = true, readOnlyExplanation }: { cwd?: string; onManageServers?: () => void; writable?: boolean; readOnlyExplanation?: string | undefined }) {
   const { client, actions } = useLaserStable();
   const [features, setFeatures] = useState<FeatureState[]>([]);
   const [scope, setScope] = useState<FeatureScope>("global");
@@ -74,6 +75,8 @@ export function FeaturesScreen({ cwd, onManageServers }: { cwd?: string; onManag
           </div>
         </header>
 
+        {!writable && readOnlyExplanation ? <CapabilityNotice explanation={readOnlyExplanation} /> : null}
+
         {loading ? (
           <GenerationLoader label="Loading features" />
         ) : (
@@ -98,7 +101,7 @@ export function FeaturesScreen({ cwd, onManageServers }: { cwd?: string; onManag
                     <Toggle
                       variant="outline"
                       pressed={selected}
-                      disabled={changing || (scope === "project" && !cwd)}
+                      disabled={!writable || changing || (scope === "project" && !cwd)}
                       onPressedChange={(pressed) => void change(feature, pressed)}
                       aria-label={`${selected ? "Disable" : "Enable"} ${feature.manifest.name}`}
                       className="min-w-20"
@@ -125,7 +128,7 @@ export function FeaturesScreen({ cwd, onManageServers }: { cwd?: string; onManag
                       Manage servers
                     </Button>
                   )}
-                  {scope === "project" && feature.projectEnabled !== undefined && (
+                  {writable && scope === "project" && feature.projectEnabled !== undefined && (
                     <Button type="button" variant="link" size="sm" className="mt-2 h-auto self-start p-0 text-xs" disabled={changing} onClick={() => void change(feature, null)}>
                       Use every-project choice
                     </Button>

@@ -2,7 +2,7 @@ import { RefreshCw, Landmark, CircleDollarSign } from "lucide-react";
 import type { ReactNode } from "react";
 import type { AccountCredits, AccountUsageState } from "@lasercode/protocol";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
-import { useLaserStable } from "@/runtime";
+import { useCapability, useLaserStable } from "@/runtime";
 import { cn } from "@/lib/utils";
 import { AccountAllowances, AllowanceHelp } from "./AccountAllowances.js";
 import { creditsExplanation } from "./account-allowance.js";
@@ -14,7 +14,9 @@ function InstrumentCard({ className, children }: { className?: string; children:
 
 export function AccountUsage({ state, compact = false, canRefresh = true }: { state: AccountUsageState | undefined; compact?: boolean; canRefresh?: boolean }) {
   const { actions, client } = useLaserStable();
-  const { display, choose, saveError } = useResetDisplay(client);
+  const prefRead = useCapability("pi/prefs/get");
+  const prefWrite = useCapability("pi/prefs/set");
+  const { display, choose, saveError } = useResetDisplay(client, { read: prefRead.state === "available", write: prefWrite.state === "available" });
   const snapshot = state?.snapshot;
   const loading = state?.status === "loading";
   return (
