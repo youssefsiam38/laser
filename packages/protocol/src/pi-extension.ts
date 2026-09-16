@@ -7,6 +7,7 @@
 
 import type { SessionGoal } from "./features.js";
 import { PRODUCT_DISPLAY_NAME } from "./identity.js";
+import type { MemoryPressureDirectiveLevel } from "./memory-pressure.js";
 import type { ProviderCaptureMeta, ProviderCaptureOmission } from "./provider-capture.js";
 import type { BackgroundTaskUpdate } from "./tasks.js";
 import type { McpRuntimeSnapshot } from "./mcp.js";
@@ -217,4 +218,14 @@ export type PiExtensionCommand =
    * another runtime's files, it tells each owner how much it may keep.
    */
   | { type: "lasercode/task/log-budget"; bytes: number }
+  /**
+   * The worker is short of memory and this session's **finished** commands are
+   * asked to keep less for one sweep (RP-8).
+   *
+   * A level, and nothing else: the module decides what that means for its own
+   * records. It never touches a running command, a live tail or a durable log,
+   * so a command keeps running and `task_output` keeps answering — the bounds
+   * return to their declared values when the level does.
+   */
+  | { type: "lasercode/task/pressure"; level: MemoryPressureDirectiveLevel }
   | { type: "lasercode/account-usage/refresh" };

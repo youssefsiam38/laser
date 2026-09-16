@@ -283,6 +283,7 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/session/unload": { path: "/s.jsonl", reason: "idle" },
   "pi/worker/safety": {},
   "pi/worker/retire": { mode: "automatic" },
+  "pi/worker/pressure": { level: "warning", epoch: 3, generation: 7 },
 };
 
 describe("process inventory methods", () => {

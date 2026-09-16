@@ -23,12 +23,15 @@ describe("what may be shed", () => {
     expect(Object.keys(NOTIFICATION_PRESSURE).sort()).toEqual(Object.keys(NOTIFICATION_SCOPE).sort());
   });
 
-  it("sheds exactly the three notifications a client can read back", () => {
+  it("sheds exactly the notifications a client can read back", () => {
     const sheddable = Object.entries(NOTIFICATION_PRESSURE)
       .filter(([, value]) => value === "diagnostic")
       .map(([method]) => method)
       .sort();
-    expect(sheddable).toEqual(["pi/logs/append", "pi/packages/progress", "resource/refresh_request"]);
+    // RP-8's `resource/pressure` joined the list: `resource/snapshot` carries
+    // the same pressure summary, so losing the push costs a client nothing it
+    // cannot ask for again.
+    expect(sheddable).toEqual(["pi/logs/append", "pi/packages/progress", "resource/pressure", "resource/refresh_request"]);
   });
 
   it("never sheds state, questions, tasks, runs or a login step", () => {

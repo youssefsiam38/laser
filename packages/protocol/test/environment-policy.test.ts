@@ -58,15 +58,19 @@ describe("the method table", () => {
     // already-live workers what they are holding, never a client's call. RP-4's
     // `pi/session/unload` and `pi/worker/safety` are the same shape: the app
     // managing and inspecting its own session runtimes on this machine.
+    // RP-8's `pi/worker/pressure` is the newest of that family: asking a worker
+    // to give memory back releases runtime state, so it is the app's own call.
     expect(restricted).toEqual([
       "agents/sync",
       "pi/host/environment",
       "pi/session/unload",
+      "pi/worker/pressure",
       "pi/worker/retained-stores",
       "pi/worker/retire",
       "pi/worker/safety",
       "resource/report",
     ]);
+    expect(METHOD_POLICY["pi/worker/pressure"]).toMatchObject({ scope: "work_control", reach: "native" });
     // The phone's redacted inventory summary stays reachable (RP-3); only the
     // desktop's measurement *input* is local.
     for (const method of ["resource/snapshot", "resource/history", "resource/export"] as const) {

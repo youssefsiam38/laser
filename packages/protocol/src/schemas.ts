@@ -27,6 +27,7 @@ import { ErrorCodes, type JsonRpcRequest } from "./jsonrpc.js";
 import { PREFS_MAX_BYTES } from "./messages.js";
 import { resourceParamsSchemas } from "./resources.js";
 import { sessionLifetimeParamsSchemas } from "./session-lifetime.js";
+import { memoryPressureParamsSchemas } from "./memory-pressure.js";
 import { environmentParamsSchemas } from "./environment-policy.js";
 import type { ClientMethod, ClientRequests } from "./messages.js";
 import { TASK_COMMAND_MAX, TASK_LINE_MAX, TASK_LOG_SEGMENTS_MAX } from "./tasks.js";
@@ -938,6 +939,9 @@ export const clientParamsSchemas = {
 
   // --- RP-4 worker session lifetime. Shapes live in session-lifetime.ts ---
   ...sessionLifetimeParamsSchemas,
+
+  // --- RP-8 memory pressure. Shapes live in memory-pressure.ts ---
+  ...memoryPressureParamsSchemas,
 
   // --- RP-13 environment descriptor. Shape lives in environment-policy.ts ---
   ...environmentParamsSchemas,

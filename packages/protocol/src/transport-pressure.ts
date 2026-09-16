@@ -10,8 +10,10 @@
  *   closed, and the peer's normal reconnect re-reads them authoritatively —
  *   rather than disappearing out of a queue. There is no second resume path
  *   (`docs/security.md` §7): a fenced peer keeps nothing queued.
- * - **Only three notifications may be shed**, and each is explicitly
- *   re-readable by a request the client already makes.
+ * - **Only a notification a client can read back may be shed**, and each one
+ *   that may is explicitly re-readable by a request the client already makes.
+ *   The list is short on purpose and grows only with a message whose whole
+ *   truth another request already returns.
  * - **A command is never cancelled, paused or throttled** by any of this.
  *   Backpressure shapes what a *diagnostic* costs, never what work runs.
  */
@@ -98,6 +100,9 @@ export const NOTIFICATION_PRESSURE = {
   "pi/packages/progress": "diagnostic",
   // A nudge to re-measure; the next poll asks again.
   "resource/refresh_request": "diagnostic",
+  // Re-readable: `resource/snapshot` carries the same pressure summary, so a
+  // connection that is behind may lose this one rather than grow (RP-8).
+  "resource/pressure": "diagnostic",
 
   // State, attention, questions, work. Never dropped.
   "session/update": "state",
@@ -114,6 +119,9 @@ export const NOTIFICATION_PRESSURE = {
   "pi/providers/login/event": "state",
   "pi/prefs/updated": "state",
   "pi/resource/process": "state",
+  // Worker → host, never broadcast: losing it would lose the only record of
+  // what a worker released, which nothing else can re-read (RP-8).
+  "pi/resource/pressure": "state",
   "agents/updated": "state",
   "agents/run": "state",
   "agents/event": "state",
@@ -122,7 +130,7 @@ export const NOTIFICATION_PRESSURE = {
   "tasks/update": "state",
 } satisfies Record<keyof HostNotifications, NotificationPressureClass>;
 
-/** True only for the three notifications a client can read back explicitly. */
+/** True only for the notifications a client can read back explicitly. */
 export function isSheddable(method: string): boolean {
   return (
     Object.prototype.hasOwnProperty.call(NOTIFICATION_PRESSURE, method) &&

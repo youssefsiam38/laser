@@ -310,6 +310,11 @@ export const METHOD_POLICY = {
   "pi/session/unload": { scope: "work_control", reach: "native", refusal: NATIVE_SYNC_REFUSAL },
   "pi/worker/safety": { scope: "diagnostics", reach: "native", refusal: NATIVE_SYNC_REFUSAL },
   "pi/worker/retire": { scope: "work_control", reach: "native", refusal: NATIVE_SYNC_REFUSAL },
+  // Host → its own already-live workers (RP-8): give memory back at this level.
+  // It releases runtime state, so it is `work_control`, and it is the app
+  // managing its own processes on this machine, so it is `native` — a client
+  // asking would be choosing which worker to make release something.
+  "pi/worker/pressure": { scope: "work_control", reach: "native", refusal: NATIVE_SYNC_REFUSAL },
 
   // ------------------------------------------------------------- device ---
   "pi/push/config": { scope: "device", reach: "any" },
@@ -358,9 +363,14 @@ export const NOTIFICATION_SCOPE = {
   "agents/beam/choose-model": "read",
   "mcp/changed": "read",
   "resource/refresh_request": "diagnostics",
+  // The pressure summary a window reads is the same one `resource/snapshot`
+  // carries; it is published to local sockets only (RP-8).
+  "resource/pressure": "diagnostics",
   // Worker → host only, and dropped before broadcast: the scope is here
   // because the table is compiler-complete, not because a client hears it.
   "pi/resource/process": "diagnostics",
+  // Worker → host only as well (RP-8), consumed at ingress and never forwarded.
+  "pi/resource/pressure": "diagnostics",
   "tasks/update": "read",
 } satisfies Record<keyof HostNotifications, MethodScope>;
 
