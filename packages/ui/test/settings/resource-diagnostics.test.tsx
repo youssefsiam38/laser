@@ -21,6 +21,7 @@ const fixture = vi.hoisted(() => ({
 }));
 
 vi.mock("@/runtime", () => ({
+  useCapability: () => ({ state: "available" }),
   useLaserStable: () => ({
     client: fixture.client,
     actions: fixture.actions,

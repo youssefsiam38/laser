@@ -11,12 +11,14 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { shortCwd } from "@/format";
 import { cn } from "@/lib/utils";
-import { useLaserStable } from "@/runtime";
+import { useCapability, useLaserStable } from "@/runtime";
+import { CapabilityNotice } from "@/components/capability-gate";
 
 import { Empty } from "./SettingsScreen.js";
 
 export function ProjectsTab({ activeCwd }: { activeCwd: string | undefined }) {
   const { client, projectInfo } = useLaserStable();
+  const execution = useCapability("pi/project/env/set", { presentation: "explained" });
   const projects = useMemo(
     () => Object.values(projectInfo).sort((a, b) => {
       if (a.cwd === activeCwd) return -1;
@@ -84,6 +86,9 @@ export function ProjectsTab({ activeCwd }: { activeCwd: string | undefined }) {
             Give any project one optional command to prepare its shell. Each project keeps its own setting.
           </p>
         </div>
+        {execution.state === "explained" ? (
+          <CapabilityNotice title="Project setup changes are unavailable here" explanation={execution.explanation ?? "Use a connection with execution access to change project setup."} />
+        ) : null}
         <div className="flex flex-col gap-2">
           {projects.map(project => (
             <ProjectSection
@@ -92,6 +97,7 @@ export function ProjectsTab({ activeCwd }: { activeCwd: string | undefined }) {
               status={statuses[project.cwd]}
               loadError={failures[project.cwd]}
               defaultOpen={project.cwd === activeCwd}
+              writable={execution.state === "available"}
               onSave={save}
             />
           ))}
@@ -106,12 +112,14 @@ function ProjectSection({
   status,
   loadError,
   defaultOpen,
+  writable,
   onSave,
 }: {
   project: ProjectInfo;
   status: ProjectEnvStatus | undefined;
   loadError: string | undefined;
   defaultOpen: boolean;
+  writable: boolean;
   onSave: (cwd: string, command: string) => Promise<ProjectEnvStatus>;
 }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -186,6 +194,7 @@ function ProjectSection({
               onChange={event => { setCommand(event.target.value); setDirty(true); setNote(undefined); }}
               placeholder="source .venv/bin/activate"
               spellCheck={false}
+              disabled={!writable}
               className="font-mono [font-variant-ligatures:none]"
             />
           </label>
@@ -204,7 +213,7 @@ function ProjectSection({
           {loadError && <p className="text-xs leading-5 text-danger" role="alert">{loadError}</p>}
           {note && <p className={cn("text-xs leading-5", note.error ? "text-danger" : "text-ink-2")} role={note.error ? "alert" : "status"}>{note.text}</p>}
           <div>
-            <Button size="sm" onClick={() => void submit()} disabled={busy}>
+            <Button size="sm" onClick={() => void submit()} disabled={busy || !writable}>
               {busy ? "Saving…" : command.trim() ? "Save command" : "Remove command"}
             </Button>
           </div>

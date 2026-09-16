@@ -26,7 +26,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { revealInFleet } from "@/fleet/fleet-state";
 import { dateTime, duration, formatBytes, formatElapsed, relativeTime } from "@/format";
 import { cn } from "@/lib/utils";
-import { useLaserStable, useLaserState } from "@/runtime";
+import { useCapability, useLaserStable, useLaserState } from "@/runtime";
 import { rendererViewsStore } from "@/runtime/view-cache";
 import { startVisiblePoll } from "@/runtime/visible-poll";
 
@@ -77,6 +77,8 @@ function mergeHistory(current: readonly ResourceSnapshot[], incoming: readonly R
 
 export function ResourceDiagnostics({ optionalStores }: ResourceDiagnosticsProps) {
   const { client, rendererViews } = useLaserStable();
+  const historyCapability = useCapability("resource/history");
+  const exportCapability = useCapability("resource/export");
   const open = useLaserState((state) => state.open);
   const catalogGroups = useLaserState((state) => state.catalogGroups);
   const sessionsLoaded = useLaserState((state) => state.sessionsLoaded);
@@ -165,10 +167,10 @@ export function ResourceDiagnostics({ optionalStores }: ResourceDiagnosticsProps
   // Snapshot first, then history: the page includes the sample that caused collection.
   const loadedHistoryFor = useRef<string | undefined>(undefined);
   useEffect(() => {
-    if (!snapshot || loadedHistoryFor.current) return;
+    if (historyCapability.state !== "available" || !snapshot || loadedHistoryFor.current) return;
     loadedHistoryFor.current = snapshot.id;
     void loadHistory();
-  }, [loadHistory, snapshot]);
+  }, [historyCapability.state, loadHistory, snapshot]);
 
   const saveExport = useCallback(async () => {
     setActionError(undefined);
@@ -270,7 +272,7 @@ export function ResourceDiagnostics({ optionalStores }: ResourceDiagnosticsProps
               <RefreshCw className={cn(refreshing && "motion-safe:animate-sweep")} />
               {refreshing ? "Refreshing" : "Refresh"}
             </Button>
-            <Button
+            {exportCapability.state === "available" ? <Button
               type="button"
               size="sm"
               variant="secondary"
@@ -280,7 +282,7 @@ export function ResourceDiagnostics({ optionalStores }: ResourceDiagnosticsProps
             >
               <Download />
               {exportState === "saving" ? "Preparing report" : "Download redacted report"}
-            </Button>
+            </Button> : null}
           </div>
         </header>
 
@@ -335,7 +337,7 @@ export function ResourceDiagnostics({ optionalStores }: ResourceDiagnosticsProps
 
         <PressureDiagnostics summary={snapshot.pressure} />
 
-        <section aria-labelledby="resource-history-title" className="rounded-xl border border-line bg-surface p-4">
+        {historyCapability.state === "available" ? <section aria-labelledby="resource-history-title" className="rounded-xl border border-line bg-surface p-4">
           <h3 id="resource-history-title" className="text-sm font-semibold text-ink">Bounded history</h3>
           {completeHistory >= 2 ? (
             <Chart
@@ -352,7 +354,7 @@ export function ResourceDiagnostics({ optionalStores }: ResourceDiagnosticsProps
             </p>
           )}
           {retention ? <RetentionFacts retention={retention} /> : null}
-        </section>
+        </section> : null}
 
         <section aria-labelledby="resource-stores-title" className="flex flex-col gap-3">
           <div>

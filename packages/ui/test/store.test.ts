@@ -290,12 +290,15 @@ describe("blocksFromEntries", () => {
 
 describe("the environment (RP-13)", () => {
   const environment = {
-    contract: "ep1",
+    contract: "ep1" as const,
+    version: "0.6.4",
     deployment: "cloud" as const,
+    actor: { class: "local_browser" as const, id: "l1.browser" },
     environmentKey: "e1.AAAAAAAAAAAAAAAAAAAAAA",
     capabilities: { revisions: true, deltas: true, snapshots: true, durableReads: true, search: true, diagnostics: true, logs: true, push: true },
     cache: { transcripts: "allowed" as const, maxSessions: 24, maxBytes: 1024, maxEntriesPerSession: 200, maxAgeHours: 336, attachments: "reference" as const, requireDeviceEncryption: false },
-    scopes: ["handshake", "read"] as never,
+    scopes: ["handshake", "read"] as ["handshake", "read"],
+    localOnly: [],
   };
 
   it("clears a failure when an environment is established, and keeps one sentence otherwise", () => {

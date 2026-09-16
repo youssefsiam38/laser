@@ -23,7 +23,10 @@ const mocks = vi.hoisted(() => {
     },
   };
 });
-vi.mock("@/runtime", () => ({ useLaserStable: () => mocks.stable }));
+vi.mock("@/runtime", () => ({
+  useCapability: () => ({ state: "available" }),
+  useLaserStable: () => mocks.stable,
+}));
 
 import { SettingsScreen } from "../../src/components/settings/SettingsScreen.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";

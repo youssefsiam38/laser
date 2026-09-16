@@ -31,7 +31,7 @@ import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { initials } from "@/format";
 import { useTheme } from "@/hooks";
 import { cn } from "@/lib/utils";
-import { useLaserStable, useLaserState } from "@/runtime";
+import { useCapability, useLaserStable, useLaserState } from "@/runtime";
 
 import { projectSummaries, trustLabel, type ProjectSummary } from "./model.js";
 import { sessionsList, useSessionsList } from "./session-groups.js";
@@ -67,6 +67,7 @@ export function Rail() {
   const shell = useShell();
   const { theme, toggle } = useTheme();
   const workbench = useWorkbench();
+  const logs = useCapability("pi/logs/query", { capabilities: ["logs"] });
 
   return (
     <nav
@@ -90,16 +91,18 @@ export function Rail() {
         </TooltipIconButton>
         {/* Agents page (M13-T5), above Logs. */}
         <AgentsButton side="right" />
-        <TooltipIconButton
-          tooltip="Logs"
-          side="right"
-          size="icon"
-          aria-current={workbench.page === "logs" ? "page" : undefined}
-          className={cn("text-ink-3 hover:text-ink", workbench.page === "logs" && "bg-surface text-ink")}
-          onClick={() => workbench.open("logs")}
-        >
-          <FileClock />
-        </TooltipIconButton>
+        {logs.state === "available" ? (
+          <TooltipIconButton
+            tooltip="Logs"
+            side="right"
+            size="icon"
+            aria-current={workbench.page === "logs" ? "page" : undefined}
+            className={cn("text-ink-3 hover:text-ink", workbench.page === "logs" && "bg-surface text-ink")}
+            onClick={() => workbench.open("logs")}
+          >
+            <FileClock />
+          </TooltipIconButton>
+        ) : null}
         <TooltipIconButton
           tooltip="Settings"
           side="right"
@@ -119,6 +122,8 @@ export function Rail() {
 
 function ProjectList() {
   const { projects, projectInfo, currentProject, actions } = useLaserStable();
+  const manageProjects = useCapability("pi/project/reorder");
+  const addProject = useCapability("pi/project/add");
   const shell = useShell();
   const { filter } = useSessionsList();
   // Derived inside the selector so a streamed token that changes nothing the
@@ -159,7 +164,7 @@ function ProjectList() {
   );
 
   return (
-    <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={reorder}>
+    <DndContext sensors={manageProjects.state === "available" ? sensors : []} collisionDetection={closestCenter} onDragEnd={reorder}>
       <SortableContext items={projects} strategy={verticalListSortingStrategy}>
         <ul role="list" className="mt-2 flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto py-1 scrollbar-none">
           {summaries.map((project) => (
@@ -169,9 +174,10 @@ function ProjectList() {
               active={project.cwd === currentProject}
               filtered={filter === project.cwd}
               onSelect={() => select(project.cwd)}
+              sortable={manageProjects.state === "available"}
             />
           ))}
-          <li>
+          {addProject.state === "available" ? <li>
             <TooltipIconButton
               tooltip="Add project"
               side="right"
@@ -181,7 +187,7 @@ function ProjectList() {
             >
               <FolderPlus />
             </TooltipIconButton>
-          </li>
+          </li> : null}
         </ul>
       </SortableContext>
     </DndContext>
@@ -189,7 +195,7 @@ function ProjectList() {
 }
 
 function SortableProjectButton(props: ProjectButtonProps) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: props.project.cwd });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: props.project.cwd, disabled: !props.sortable });
   const style: CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -239,9 +245,10 @@ interface ProjectButtonProps {
   onSelect(): void;
   dragging?: boolean;
   dragHandleProps?: ButtonHTMLAttributes<HTMLButtonElement>;
+  sortable?: boolean;
 }
 
-function ProjectButton({ project, active, filtered, onSelect, dragging = false, dragHandleProps }: ProjectButtonProps) {
+function ProjectButton({ project, active, filtered, onSelect, dragging = false, dragHandleProps, sortable = true }: ProjectButtonProps) {
   const count = `${project.sessionCount} session${project.sessionCount === 1 ? "" : "s"}`;
   const trust = trustLabel(project.trust);
   return (
@@ -255,7 +262,8 @@ function ProjectButton({ project, active, filtered, onSelect, dragging = false, 
           aria-pressed={filtered}
           aria-label={`${project.name} — ${project.cwd}`}
           className={cn(
-            "relative flex size-10 cursor-grab items-center justify-center rounded-lg active:cursor-grabbing",
+            "relative flex size-10 items-center justify-center rounded-lg",
+            sortable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
             "transition-[background-color,color] duration-(--motion-instant) outline-none",
             "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-live",
             filtered
@@ -290,7 +298,7 @@ function ProjectButton({ project, active, filtered, onSelect, dragging = false, 
                 ? "Current for new chats and project settings · click to filter"
                 : "Click to make current and show only this project's sessions"}
           </span>
-          <span className="text-xs leading-4 opacity-70">Drag to change project priority</span>
+          {sortable ? <span className="text-xs leading-4 opacity-70">Drag to change project priority</span> : null}
         </span>
       </TooltipContent>
     </Tooltip>

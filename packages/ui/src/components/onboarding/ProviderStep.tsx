@@ -17,7 +17,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { useLaserStable } from "@/runtime";
+import { useCapability, useLaserStable } from "@/runtime";
+import { CapabilityNotice } from "@/components/capability-gate";
 import type { ProviderAuthInfo, ProviderLoginMethod } from "@lasercode/protocol";
 
 import { ProviderSignIn } from "./ProviderSignIn.js";
@@ -53,6 +54,7 @@ const credentialBadge = (provider: { oauth: boolean; source?: string | undefined
 
 export function ProviderStep({ cwd, onConfigured, onBusyChange }: ProviderStepProps) {
   const { client } = useLaserStable();
+  const manageProviders = useCapability("pi/providers/login/start", { presentation: "explained" });
   const [providers, setProviders] = useState<ProviderAuthInfo[]>();
   const [error, setError] = useState<string>();
   const [selected, setSelected] = useState<string>();
@@ -107,6 +109,25 @@ export function ProviderStep({ cwd, onConfigured, onBusyChange }: ProviderStepPr
     return (
       <div className="flex items-center justify-center rounded-xl border border-line px-3 py-8">
         <GenerationLoader label="Loading providers" layout="inline" />
+      </div>
+    );
+  }
+
+  if (manageProviders.state !== "available") {
+    return (
+      <div className="flex flex-col gap-2">
+        {manageProviders.state === "explained" ? (
+          <CapabilityNotice title="Provider changes are unavailable here" explanation={manageProviders.explanation ?? "Use a connection with settings access to change providers."} />
+        ) : null}
+        <ul className="flex max-h-72 flex-col gap-1 overflow-y-auto pe-0.5" aria-label="Providers">
+          {shown.map((provider) => (
+            <li key={provider.id} className="flex items-center gap-2.5 rounded-lg border border-line bg-surface px-3 py-2">
+              <ProviderLogo provider={provider.id} className="size-5 shrink-0" />
+              <span className="min-w-0 flex-1 text-sm font-medium text-ink">{provider.name}</span>
+              {provider.configured ? <Badge variant="ok">{credentialBadge(provider)}</Badge> : null}
+            </li>
+          ))}
+        </ul>
       </div>
     );
   }

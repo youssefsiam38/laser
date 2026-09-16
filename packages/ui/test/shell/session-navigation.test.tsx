@@ -20,6 +20,7 @@ const fixture = vi.hoisted(() => ({ state: { destination: { phase: "ready-code",
 ], open: {}, workers: {}, agents: { snapshot: null, loading: false, error: null, runs: {}, events: [], chooseBeamModel: null } } }));
 vi.mock("@/runtime", async () => ({
   ...await import("../../src/runtime/threadList.js"),
+  useCapability: () => ({ state: "available" }),
   useLaserState: (selector: (s: unknown) => unknown) => selector(fixture.state),
   useLaserStable: () => ({ currentProject: "/one", actions: { toast: vi.fn(), removeProject: vi.fn() }, archive: { add: vi.fn() } }),
 }));

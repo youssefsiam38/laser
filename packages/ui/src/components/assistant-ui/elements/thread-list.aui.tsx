@@ -121,7 +121,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { dateTime, shortCwd } from "@/format";
 import { useCopy } from "@/hooks";
 import { cn } from "@/lib/utils";
-import { mergeSessions, useLaserStable, useLaserState } from "@/runtime";
+import { mergeSessions, useCapability, useLaserStable, useLaserState } from "@/runtime";
 import { mainPath, pendingSessionPath, sessionOpenPhase } from "@/runtime/main-destination";
 import { sessionSubtreePaths } from "@/runtime/threadList";
 import type { AppState } from "@/store";
@@ -701,6 +701,7 @@ const ProjectGroup = memo(function ProjectGroup({ group, collapsed, isCurrent, s
   const workspaces = useContext(WorkspacesContext);
   const aui = useAui();
   const { actions, archive } = useLaserStable();
+  const removeProject = useCapability("pi/project/remove");
   const sessions = useLaserState((state) => state.sessions);
   const { revealed } = useSessionsList();
   const catalogPage = useLaserState(state => state.catalogGroups?.find(page => page.cwd === group.cwd));
@@ -798,7 +799,7 @@ const ProjectGroup = memo(function ProjectGroup({ group, collapsed, isCurrent, s
             >
               <Archive /> Archive chats
             </DropdownMenuItem>
-            {!beam && (
+            {!beam && removeProject.state === "available" && (
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={() => void actions.removeProject(group.cwd)}>

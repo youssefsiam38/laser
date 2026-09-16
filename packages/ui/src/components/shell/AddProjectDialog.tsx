@@ -11,7 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { useLaserStable } from "@/runtime";
+import { useCapability, useLaserStable } from "@/runtime";
 
 import { useShell } from "./shell-context.js";
 
@@ -38,10 +38,15 @@ export function desktopFolderPicker(): DesktopFolderPicker | undefined {
 export function AddProjectDialog() {
   const { addProjectOpen, setAddProjectOpen } = useShell();
   const { actions } = useLaserStable();
+  const capability = useCapability("pi/project/add");
   const opening = useRef(false);
   const desktop = desktopFolderPicker();
 
   useEffect(() => {
+    if (capability.state !== "available") {
+      if (addProjectOpen) setAddProjectOpen(false);
+      return;
+    }
     if (!addProjectOpen || !desktop || opening.current) return;
     opening.current = true;
 
@@ -62,11 +67,11 @@ export function AddProjectDialog() {
         opening.current = false;
         setAddProjectOpen(false);
       });
-  }, [actions, addProjectOpen, desktop, setAddProjectOpen]);
+  }, [actions, addProjectOpen, capability.state, desktop, setAddProjectOpen]);
 
   // Electron owns the visible dialog. Do not put a second Laser modal behind
   // it: cancellation should return directly to the surface that launched it.
-  if (desktop) return null;
+  if (desktop || capability.state !== "available") return null;
 
   return (
     <Dialog open={addProjectOpen} onOpenChange={setAddProjectOpen}>

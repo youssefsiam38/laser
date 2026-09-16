@@ -32,6 +32,7 @@ import {
 } from "@assistant-ui/react";
 import type { AssistantRuntime, RemoteThreadListAdapter, ThreadComposerRuntime, ThreadMessageLike } from "@assistant-ui/react";
 import type {
+  ClientMethod,
   ContentBlock,
   GoalAction,
   HostNotificationMethod,
@@ -100,6 +101,7 @@ import {
 import { createCatalogLoader } from "./catalog-loader.js";
 import { DEVICE_KEYS, deviceStore } from "./device-storage.js";
 import { createEnvironmentLifecycle, useEnvironmentSubtreeKey, type EnvironmentLifecycle } from "./environment-lifecycle.js";
+import { capabilityFor, type CapabilityDecision, type CapabilityRequirements } from "./environment-capabilities.js";
 import { tailCache } from "./tail-cache/index.js";
 import { sessionIdForPath } from "./provisional-paint.js";
 import { createProvisionalAuthority, sessionAuthorityRefusal } from "./provisional-authority.js";
@@ -405,6 +407,11 @@ const PRIME_RECENT_SESSIONS = 8;
  *
  * `isEqual` lets a selector that allocates (a derived list) stay stable.
  */
+export function useCapability(method: ClientMethod, requirements?: CapabilityRequirements): CapabilityDecision {
+  const environment = useLaserState((state) => state.environment);
+  return capabilityFor(environment, method, requirements);
+}
+
 export function useLaserState<T>(selector: (state: AppState) => T, isEqual: (a: T, b: T) => boolean = Object.is): T {
   const store = useContext(LaserStateContext);
   if (!store) throw new Error("useLaserState must be used inside <LaserProvider>.");

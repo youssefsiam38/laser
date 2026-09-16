@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Check, ChevronRight, ChevronsUpDown, Eye, Loader2, Mic2, RefreshCw, Sparkles } from "lucide-react";
 
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
+import { CapabilityGate } from "@/components/capability-gate";
 import { DataTable, type DataTableColumn } from "@/components/assistant-ui/elements/data-table";
 import { modelProvenance, ProviderFilterField, ProviderModelMultiPicker } from "@/components/assistant-ui/elements/model-selector";
 import { ProviderLogo } from "@/components/assistant-ui/elements/logos";
@@ -35,7 +36,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { money, tokens } from "@/format";
 import { cn } from "@/lib/utils";
-import { useLaserStable } from "@/runtime";
+import { useCapability, useLaserStable } from "@/runtime";
 import type {
   ModelCatalogEntry,
   ProviderAuthInfo,
@@ -80,16 +81,17 @@ export interface ModelsTabProps {
 }
 
 export function ModelsTab(props: ModelsTabProps) {
+  const webSearch = useCapability("web-search/status");
   return (
     <Tabs.Root defaultValue="models" className="flex h-full min-h-0 flex-col">
       <Tabs.List aria-label="Provider settings" className="flex shrink-0 gap-1 border-b border-line px-4 py-2">
         <Tabs.Trigger value="models" asChild><Button variant="ghost" size="sm" className="data-[state=active]:bg-surface-2">Models and dictation</Button></Tabs.Trigger>
         <Tabs.Trigger value="fallback" asChild><Button variant="ghost" size="sm" className="data-[state=active]:bg-surface-2">Fallback chains</Button></Tabs.Trigger>
-        <Tabs.Trigger value="search" asChild><Button variant="ghost" size="sm" className="data-[state=active]:bg-surface-2">Web search</Button></Tabs.Trigger>
+        {webSearch.state === "available" ? <Tabs.Trigger value="search" asChild><Button variant="ghost" size="sm" className="data-[state=active]:bg-surface-2">Web search</Button></Tabs.Trigger> : null}
       </Tabs.List>
-      <Tabs.Content value="models" className="min-h-0 flex-1"><ModelConnectionsTab {...props} /></Tabs.Content>
-      <Tabs.Content value="fallback" className="min-h-0 flex-1"><FallbackChainsTab {...props} /></Tabs.Content>
-      <Tabs.Content value="search" className="min-h-0 flex-1"><WebSearchTab key={props.cwd} cwd={props.cwd} /></Tabs.Content>
+      <Tabs.Content value="models" className="min-h-0 flex-1"><CapabilityGate method="pi/settings/set"><ModelConnectionsTab {...props} /></CapabilityGate></Tabs.Content>
+      <Tabs.Content value="fallback" className="min-h-0 flex-1"><CapabilityGate method="pi/settings/set"><FallbackChainsTab {...props} /></CapabilityGate></Tabs.Content>
+      {webSearch.state === "available" ? <Tabs.Content value="search" className="min-h-0 flex-1"><CapabilityGate method="web-search/configure"><WebSearchTab key={props.cwd} cwd={props.cwd} /></CapabilityGate></Tabs.Content> : null}
     </Tabs.Root>
   );
 }

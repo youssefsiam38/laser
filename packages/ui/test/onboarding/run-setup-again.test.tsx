@@ -15,6 +15,7 @@ vi.mock("../../src/runtime/index.js", async () => {
   return {
     forgetRememberedSessions,
     SESSION_STORAGE_KEY,
+    useCapability: () => ({ state: "available" }),
     useLaserStable: () => ({ client: { request: mocks.request }, actions: { toast: mocks.toast } }),
     useLaserState: () => undefined,
     useLaserView: () => undefined,

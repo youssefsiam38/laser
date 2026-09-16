@@ -20,7 +20,7 @@ import { useWorkbench } from "@/components/workbench";
 import { shortCwd, shortcutLabel } from "@/format";
 import { useTheme } from "@/hooks";
 import { cn } from "@/lib/utils";
-import { mainTab, useLaserStable, useLaserState } from "@/runtime";
+import { mainTab, useCapability, useLaserStable, useLaserState } from "@/runtime";
 import { onVisible } from "@/runtime/visible-poll";
 import type { AppState } from "@/store";
 
@@ -77,6 +77,7 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
   const { projects, currentProject, actions } = useLaserStable();
   const shell = useShell();
   const list = useSessionsList();
+  const addProject = useCapability("pi/project/add");
   const tab = useLaserState((s) => mainTab(s.destination));
   useClock();
 
@@ -300,12 +301,12 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
               <EmptyState
                 title="No project yet"
                 body={`Point ${PRODUCT_NAME} at a directory. Sessions already saved there show up too.`}
-                action={
+                action={addProject.state === "available" ? (
                   <Button size="sm" variant="outline" onClick={() => shell.setAddProjectOpen(true)}>
                     <FolderPlus />
                     Add project
                   </Button>
-                }
+                ) : null}
               />
             ) : (
               <ThreadList
@@ -392,6 +393,8 @@ function SessionsTabs({ tab, onChange }: { tab: SessionsTab; onChange(tab: Sessi
 
 function SheetFooter() {
   const { theme, toggle } = useTheme();
+  const addProject = useCapability("pi/project/add");
+  const logs = useCapability("pi/logs/query", { capabilities: ["logs"] });
   const shell = useShell();
   const workbench = useWorkbench();
   const openWorkbench = (page: "settings" | "logs") => {
@@ -403,14 +406,14 @@ function SheetFooter() {
       <TooltipIconButton tooltip={theme === "dark" ? "Light theme" : "Dark theme"} side="top" onClick={toggle}>
         {theme === "dark" ? <Sun /> : <Moon />}
       </TooltipIconButton>
-      <TooltipIconButton tooltip="Add project" side="top" onClick={() => shell.setAddProjectOpen(true)}>
+      {addProject.state === "available" ? <TooltipIconButton tooltip="Add project" side="top" onClick={() => shell.setAddProjectOpen(true)}>
         <FolderPlus />
-      </TooltipIconButton>
+      </TooltipIconButton> : null}
       {/* There is no rail on mobile, so agents, settings and logs are reachable here. */}
       <AgentsButton side="top" afterOpen={() => shell.setSessionsOpen(false)} className="text-ink-2" />
-      <TooltipIconButton tooltip="Logs" side="top" onClick={() => openWorkbench("logs")}>
+      {logs.state === "available" ? <TooltipIconButton tooltip="Logs" side="top" onClick={() => openWorkbench("logs")}>
         <FileClock />
-      </TooltipIconButton>
+      </TooltipIconButton> : null}
       <TooltipIconButton tooltip="Settings" side="top" onClick={() => openWorkbench("settings")}>
         <Settings />
       </TooltipIconButton>
@@ -425,7 +428,7 @@ function SheetFooter() {
 // Empty
 // ---------------------------------------------------------------------------
 
-function EmptyState({ icon, title, body, action }: { icon?: React.ReactNode; title: string; body: React.ReactNode; action: React.ReactNode }) {
+function EmptyState({ icon, title, body, action }: { icon?: React.ReactNode; title: string; body: React.ReactNode; action: React.ReactNode | null }) {
   return (
     <div className="flex h-full min-h-48 flex-col items-center justify-center gap-4 px-6 py-8 text-center">
       <StatusRing status="idle" size={40} thickness={2} aria-hidden="true">

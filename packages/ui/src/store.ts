@@ -18,6 +18,7 @@ import type {
   AgentsSnapshot,
   HostNotificationMethod,
   HostNotifications,
+  EnvironmentDescriptor,
   MessageSpeaker,
   PendingMessage,
   PiExtensionModuleName,
@@ -351,16 +352,12 @@ export const initialAgents: AgentsSlice = {
 /**
  * Which environment this connection is in (RP-13).
  *
- * The opaque public key and nothing else. The rest of the descriptor is not
- * copied here on purpose: the host decides what a request may do, every time
- * it is asked, and state nothing renders or reads is state that goes stale
- * without anybody noticing. What the app does with this key is identity —
- * device storage is scoped to it, and the screens below the provider are
- * keyed by it so none of their local state can outlive a switch.
+ * The complete authenticated descriptor is one atomic snapshot: its key owns
+ * identity and device storage, while its scopes, reach class, local-only list
+ * and capability bits own presentation. Replacing the object together keeps a
+ * render from mixing one environment's identity with another's authority.
  */
-export interface EnvironmentSnapshot {
-  environmentKey: string;
-}
+export type EnvironmentSnapshot = EnvironmentDescriptor;
 
 export interface AppState {
   versionMismatch?: string;

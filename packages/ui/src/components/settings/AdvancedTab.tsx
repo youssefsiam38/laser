@@ -6,6 +6,8 @@ import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useCapability } from "@/runtime";
+import { CapabilityGate } from "@/components/capability-gate";
 
 import { SettingsForm } from "./SettingsForm.js";
 import { ResourceDiagnostics } from "./resources/ResourceDiagnostics.js";
@@ -26,37 +28,42 @@ export interface AdvancedTabProps {
 
 /** Machine-wide resource truth beside, but never confused with, project-scoped engine configuration. */
 export function AdvancedTab({ view, onViewChange, cwd, catalog, snapshot, loading, error, onReload, onApply }: AdvancedTabProps) {
+  const resources = useCapability("resource/snapshot", { capabilities: ["diagnostics"] });
+  const configuration = useCapability("pi/settings/get");
+  const shownView = view === "resources" && resources.state !== "available" ? "configuration"
+    : view === "configuration" && configuration.state !== "available" ? "resources"
+    : view;
   const configured = Boolean(cwd && catalog && snapshot);
   return <div className="flex h-full min-h-0 flex-col">
     <div className="flex shrink-0 items-center gap-1 px-3 py-2 hairline-b" role="tablist" aria-label="Advanced settings sections">
-      <Button
+      {resources.state === "available" ? <Button
         type="button"
         role="tab"
-        aria-selected={view === "resources"}
+        aria-selected={shownView === "resources"}
         aria-controls="advanced-resources"
         variant="ghost"
         size="sm"
         onClick={() => onViewChange("resources")}
-        className={cn("pointer-coarse:min-h-11", view === "resources" && "bg-surface-2 text-ink")}
+        className={cn("pointer-coarse:min-h-11", shownView === "resources" && "bg-surface-2 text-ink")}
       >
         Resources
-      </Button>
-      <Button
+      </Button> : null}
+      {configuration.state === "available" ? <Button
         type="button"
         role="tab"
-        aria-selected={view === "configuration"}
+        aria-selected={shownView === "configuration"}
         aria-controls="advanced-configuration"
         variant="ghost"
         size="sm"
         onClick={() => onViewChange("configuration")}
-        className={cn("pointer-coarse:min-h-11", view === "configuration" && "bg-surface-2 text-ink")}
+        className={cn("pointer-coarse:min-h-11", shownView === "configuration" && "bg-surface-2 text-ink")}
       >
         Configuration
-      </Button>
+      </Button> : null}
     </div>
 
-    <div id="advanced-resources" role="tabpanel" aria-label="Resources" className="min-h-0 flex-1" hidden={view !== "resources"}>
-      {view === "resources" ? <ResourceDiagnostics /> : null}
+    <div id="advanced-resources" role="tabpanel" aria-label="Resources" className="min-h-0 flex-1" hidden={shownView !== "resources"}>
+      {shownView === "resources" ? <ResourceDiagnostics /> : null}
     </div>
 
     <div
@@ -64,8 +71,8 @@ export function AdvancedTab({ view, onViewChange, cwd, catalog, snapshot, loadin
       role="tabpanel"
       aria-label="Configuration"
       className="min-h-0 flex-1"
-      hidden={view !== "configuration"}
-      inert={view !== "configuration" ? true : undefined}
+      hidden={shownView !== "configuration"}
+      inert={shownView !== "configuration" ? true : undefined}
     >
       {error ? (
         <div className="mx-auto max-w-160 px-6 py-6">
@@ -86,7 +93,9 @@ export function AdvancedTab({ view, onViewChange, cwd, catalog, snapshot, loadin
         </div>
       ) : null}
       {!error && cwd && catalog && snapshot ? (
-        <SettingsForm audience="advanced" cwd={cwd} catalog={catalog} snapshot={snapshot} onApply={onApply} />
+        <CapabilityGate method="pi/settings/set">
+          <SettingsForm audience="advanced" cwd={cwd} catalog={catalog} snapshot={snapshot} onApply={onApply} />
+        </CapabilityGate>
       ) : null}
     </div>
   </div>;

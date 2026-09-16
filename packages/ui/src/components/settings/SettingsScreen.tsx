@@ -25,7 +25,8 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { cn } from "@/lib/utils";
-import { useLaserStable } from "@/runtime";
+import { useCapability, useLaserStable } from "@/runtime";
+import { CapabilityGate } from "@/components/capability-gate";
 import type { SettingsCatalog, SettingsScope, SettingsSnapshot } from "@lasercode/protocol";
 
 import { NotificationsSetting } from "@/components/mobile";
@@ -79,6 +80,13 @@ const TABS: Array<{ id: Tab; label: string }> = [
 
 export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | undefined; initialTab?: Tab | undefined }) {
   const { client, actions } = useLaserStable();
+  const settingsRead = useCapability("pi/settings/get");
+  const features = useCapability("feature/list");
+  const mcp = useCapability("mcp/list");
+  const providers = useCapability("pi/providers/list");
+  const usage = useCapability("pi/account-usage/refresh");
+  const projects = useCapability("pi/project/list");
+  const diagnostics = useCapability("resource/snapshot", { capabilities: ["diagnostics"] });
   // `initialTab` is only ever set by something that already knows the fix — a
   // rejected credential sending the person straight to Providers and models.
   const [tab, setTab] = useState<Tab>(initialTab ?? "general");
@@ -89,6 +97,17 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
   const [advancedView, setAdvancedView] = useState<AdvancedView>("resources");
+  const visibleTabs = TABS.filter((entry) => {
+    if (entry.id === "general") return settingsRead.state === "available";
+    if (entry.id === "features") return features.state === "available";
+    if (entry.id === "mcp") return mcp.state === "available";
+    if (entry.id === "models") return providers.state === "available";
+    if (entry.id === "usage") return usage.state === "available";
+    if (entry.id === "advanced") return settingsRead.state === "available" || diagnostics.state === "available";
+    if (entry.id === "projects" || entry.id === "trust") return projects.state === "available";
+    return true;
+  });
+  const shownTab = visibleTabs.some((entry) => entry.id === tab) ? tab : visibleTabs[0]!.id;
 
   const tabStrip = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -105,11 +124,11 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
     const observer = new ResizeObserver(reveal);
     observer.observe(strip);
     return () => observer.disconnect();
-  }, [tab]);
+  }, [shownTab]);
 
   // The host's project-less directory, fetched once and only when it is needed.
   useEffect(() => {
-    if (project || setupCwd) return;
+    if (project || setupCwd || settingsRead.state !== "available") return;
     let cancelled = false;
     void client
       .request("pi/setup/state", {})
@@ -122,14 +141,14 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
     return () => {
       cancelled = true;
     };
-  }, [client, project, setupCwd]);
+  }, [client, project, setupCwd, settingsRead.state]);
 
-  const cwd = tab === "usage" || tab === "projects" ? undefined : project ?? (GLOBAL_THROUGH_SETUP.includes(tab) ? setupCwd : undefined);
+  const cwd = shownTab === "usage" || shownTab === "projects" ? undefined : project ?? (GLOBAL_THROUGH_SETUP.includes(shownTab) ? setupCwd : undefined);
   const cwdRef = useRef(cwd);
   cwdRef.current = cwd;
 
   const load = useCallback(async () => {
-    if (!cwd) return;
+    if (!cwd || settingsRead.state !== "available") return;
     if (snapshotCwd !== cwd) {
       setSnapshotCwd(undefined);
     }
@@ -155,7 +174,7 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
     } finally {
       if (cwdRef.current === cwd) setLoading(false);
     }
-  }, [client, cwd, catalog, snapshotCwd]);
+  }, [client, cwd, catalog, snapshotCwd, settingsRead.state]);
 
   useEffect(() => {
     void load();
@@ -184,9 +203,9 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
   // "No project" is a state of one tab, not of the screen: the tab strip has
   // to stay on screen or Appearance, Help and shortcuts, Trust and This device become
   // unreachable on a machine with no project yet — which is every first run.
-  const needsProject = !cwd && !PROJECTLESS.includes(tab);
-  const switchingProject = Boolean(cwd && snapshot && snapshotCwd !== cwd && (tab !== "advanced" || advancedView === "configuration"));
-  const settingsControlsVisible = tab !== "advanced" || advancedView === "configuration";
+  const needsProject = !cwd && !PROJECTLESS.includes(shownTab);
+  const switchingProject = Boolean(cwd && snapshot && snapshotCwd !== cwd && (shownTab !== "advanced" || advancedView === "configuration"));
+  const settingsControlsVisible = shownTab !== "advanced" || advancedView === "configuration";
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -194,20 +213,20 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
         {/* Seven tabs do not fit a phone. The strip scrolls inside itself
             rather than the page scrolling sideways (DESIGN.md, the floor). */}
         <div ref={tabStrip} className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
-          {TABS.map((entry) => (
+          {visibleTabs.map((entry) => (
             <Button
               key={entry.id}
               variant="ghost"
               size="sm"
               onClick={() => setTab(entry.id)}
-              aria-current={tab === entry.id ? "page" : undefined}
-              className={cn("shrink-0", tab === entry.id && "bg-surface-2 text-ink")}
+              aria-current={shownTab === entry.id ? "page" : undefined}
+              className={cn("shrink-0", shownTab === entry.id && "bg-surface-2 text-ink")}
             >
               {entry.label}
             </Button>
           ))}
         </div>
-        {tab !== "usage" && tab !== "projects" && settingsControlsVisible && <div className="ms-auto flex items-center gap-2">
+        {shownTab !== "usage" && shownTab !== "projects" && settingsControlsVisible && settingsRead.state === "available" && <div className="ms-auto flex items-center gap-2">
           {loading && <GenerationLoader label="Loading settings" layout="inline" />}
           <TooltipIconButton tooltip="Reload settings" onClick={() => void load()}>
             <RefreshCw />
@@ -215,7 +234,7 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
         </div>}
       </div>
 
-      {error && !needsProject && tab !== "advanced" && tab !== "usage" && tab !== "projects" && (
+      {error && !needsProject && shownTab !== "advanced" && shownTab !== "usage" && shownTab !== "projects" && (
         <div className="m-3 flex items-start gap-2 rounded-lg bg-[color-mix(in_oklab,var(--danger)_10%,transparent)] px-3 py-2 text-sm text-danger">
           <AlertTriangle className="mt-0.5 size-4 shrink-0" />
           <div className="min-w-0">
@@ -234,10 +253,12 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
           />
         ) : (
           <>
-            {tab === "general" && cwd && catalog && snapshot && (
-              <SettingsForm audience="general" cwd={cwd} catalog={catalog} snapshot={snapshot} onApply={apply} />
+            {shownTab === "general" && cwd && catalog && snapshot && (
+              <CapabilityGate method="pi/settings/set">
+                <SettingsForm audience="general" cwd={cwd} catalog={catalog} snapshot={snapshot} onApply={apply} />
+              </CapabilityGate>
             )}
-            {tab === "advanced" && (
+            {shownTab === "advanced" && (
               <AdvancedTab
                 view={advancedView}
                 onViewChange={setAdvancedView}
@@ -250,17 +271,25 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
                 onApply={apply}
               />
             )}
-            {tab === "appearance" && <AppearanceTab />}
-            {tab === "features" && <FeaturesScreen {...(cwd ? { cwd } : {})} onManageServers={() => setTab("mcp")} />}
+            {shownTab === "appearance" && <AppearanceTab />}
+            {shownTab === "features" && (
+              <CapabilityGate method="feature/set"><FeaturesScreen {...(cwd ? { cwd } : {})} {...(mcp.state === "available" ? { onManageServers: () => setTab("mcp") } : {})} /></CapabilityGate>
+            )}
             {/* Without a project this is the every-project list; the project
                 filter simply has nothing to show. */}
-            {tab === "mcp" && cwd && <McpServersTab cwd={cwd} projectOpen={Boolean(project)} />}
-            {tab === "models" && cwd && <ModelsTab cwd={cwd} snapshot={snapshot} onApply={apply} />}
-            {tab === "usage" && <UsageTab />}
-            {tab === "keyboard" && <KeyboardTab cwd={cwd} />}
-            {tab === "projects" && <ProjectsTab activeCwd={project} />}
-            {tab === "trust" && <TrustTab />}
-            {tab === "device" && <DeviceTab />}
+            {shownTab === "mcp" && cwd && (
+              <CapabilityGate method="mcp/save"><McpServersTab cwd={cwd} projectOpen={Boolean(project)} /></CapabilityGate>
+            )}
+            {shownTab === "models" && cwd && <ModelsTab cwd={cwd} snapshot={snapshot} onApply={apply} />}
+            {shownTab === "usage" && <UsageTab />}
+            {shownTab === "keyboard" && (
+              <CapabilityGate method="pi/keybindings/set"><KeyboardTab cwd={cwd} /></CapabilityGate>
+            )}
+            {shownTab === "projects" && <ProjectsTab activeCwd={project} />}
+            {shownTab === "trust" && (
+              <CapabilityGate method="pi/project/trust"><TrustTab /></CapabilityGate>
+            )}
+            {shownTab === "device" && <DeviceTab />}
           </>
         )}
         </div>
@@ -287,13 +316,16 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
  * whole machine. Its copy names the computer for that reason.
  */
 export function DeviceTab() {
+  const push = useCapability("pi/push/config", { capabilities: ["push"] });
+  const logs = useCapability("pi/logs/stats", { capabilities: ["logs"] });
+  const setup = useCapability("pi/setup/complete");
   return (
     <ScrollArea className="h-full">
       <div className="mx-auto flex max-w-160 flex-col gap-6 px-6 py-6">
-        <NotificationsSetting />
+        {push.state === "available" ? <NotificationsSetting /> : null}
         <DeviceCacheSetting />
-        <LogStoreSetting />
-        <RunSetupAgain />
+        {logs.state === "available" ? <LogStoreSetting /> : null}
+        {setup.state === "available" ? <RunSetupAgain /> : null}
       </div>
     </ScrollArea>
   );
