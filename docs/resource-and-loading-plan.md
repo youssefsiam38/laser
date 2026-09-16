@@ -21,7 +21,7 @@ Authoritative detail, evidence and ownership live in `STATUS_DETAILED.md`; `STAT
 | RP-5b | M18-T16 | done — integrated `42344a58` (implementation `2fca59d3`); every hydrated view is hard-bounded, large bodies use revision-fenced authoritative ranges, focused/full/browser gates pass, and exact-tip full-mode scenarios 1–5 completed with zero survivors | RP-5, RP-10 |
 | RP-6 | M18-T6 | done — integrated `a256efe`; reviewed membership, task/log retention and cleanup/security gates | RP-2 |
 | RP-7 | M18-T7 | done — integrated `0542a58e`; reviewed bounded decoder/provider/body-store/direct+relay pressure, privacy/browser and unchanged-workload footprint gates pass | RP-2 |
-| RP-8 | M18-T8 | in progress — final-base B0 passed unchanged quick/full-through-5 with zero survivors and recalibrated thresholds in D-261; number-free protocol milestone B resumes from `/tmp/m18-t8-b-contract.patch` | RP-4, RP-5 |
+| RP-8 | M18-T8 | in progress — B0 calibrated D-261; validated protocol/router milestone B integrated through `23fbf4ae`; worker-local controller milestone C is in architecture planning | RP-4, RP-5 |
 | RP-9 | M18-T9 | done — integrated `dd637f3` | protocol integration follows RP-1 |
 | RP-10 | M18-T10 | done — reviewed bounded device tail cache integrated at `c7375791`; parent exact-tip cache 113 + readiness 18, UI types/build, lifecycle/race browser matrices and same-workload memory evidence pass | RP-5, RP-9 |
 | RP-11 | M18-T11 | done — `fa68dd02` plus reviewed corrections `eddc9f38`, `bae977d9`, `78b22c83`; one shared authority fence, exact-revision cache settlement and real offline mismatch matrices prove 0-frame warm paint, preserved focus/draft/reading place and zero survivors | RP-10 |
