@@ -2859,8 +2859,8 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
-| M19-T1 | Launch identity, safe mode and bounded repair | in-progress | m19-recovery-plan `01a0aa8f-8f82-714d-99c8-190890feefc7` | — | changes requested; see notes |
-| M19-T2 | Immutable generation activation and correlated updates | todo | — | — | added by D-264; depends on M19-T1 |
+| M19-T1 | Launch identity, safe mode and bounded repair | done | m19-recovery-plan `01a0aa8f-8f82-714d-99c8-190890feefc7` | `23787c27` (T1A `0371eb6c`, T1B `58b0ea1f`, T1C `d43b0a57`, review fixes `208487bd`, copy `d7891ebe`); host 858, CLI 88, desktop 173/1 skipped, worker 1029/4 skipped, UI 2277/1 skipped; verify, pack, clean-machine, pointer+touch matrices | see notes; added by D-264 |
+| M19-T2 | Immutable generation activation and correlated updates | in-progress | m19-recovery-plan `01a0aa8f-8f82-714d-99c8-190890feefc7` | — | added by D-264; depends on M19-T1 |
 | M19-T3 | Migration snapshot and interrupted-restore recovery | todo | — | — | added by D-264; depends on M19-T2 |
 
 #### M19-T1 notes
@@ -2873,6 +2873,10 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 - 2026-09-16 review-fix checkpoint: CLI/desktop legacy, conflict, permission and launch-mismatch tests pass; one ledger-backed 1s/2s policy now owns spawn/crash/OOM recovery; host 83/83, package suites, build/typecheck/static/release, pack and clean-machine gates pass. Pointer/touch recovery matrices are being refreshed before the final verify.
 - 2026-09-16 all review findings addressed: connect-time worker snapshots preserve recovery after UI reload; explicit recovery reopens a failed destination; narrow top bars and touch targets pass. Final evidence: serialized `npm_config_workspace_concurrency=1 pnpm verify`, desktop pack, clean-machine gate, identity/diff checks, and long-fixture pointer `/tmp/m19-t1-browser-fixes-pointer/run-j5WJfD` plus touch `/tmp/m19-t1-browser-fixes-touch/run-HA9vZv`, all pass with zero survivors. Report: `/tmp/m19-t1-report.md`; awaiting parent verification before T1 done or T2 starts.
 - 2026-09-16 parent verification found two copy defects: raw child-exit diagnostics could reach pending RPC/UI text, and exhausted recovery copy appeared in the notice, load error and composer. Fixed with categorical pending/status/toast copy, one notice-owned explanation, a title-only load error and neutral unavailable composer. Host 83/858 and UI 255/2265 pass; final long-fixture pointer `/tmp/m19-t1-copy-pointer/run-2fKhZQ` and touch `/tmp/m19-t1-copy-touch/run-nGbYbE` matrices pass with assertions for no cwd/SIG/exit/pid and one explanation owner.
+- 2026-09-16 integrated at merge `23787c27` after review `/tmp/m19-t1-review.md` (B1–B5 + seven non-blocking corrected in `208487bd`) and the parent's copy correction (`d7891ebe`: no cwd/signal/exit code in person copy, one recovery notice owns the exhausted explanation). Parent post-merge: host 858/858, UI 2277/1 skipped, CLI 88, build, identity. Owner continues into M19-T2.
+
+#### M19-T2 notes
+- 2026-09-16 claimed by the T1 owner on base `cf9a21aa` per the approved plan (T2A verified-inventory generation store under D-266, T2B non-destructive park gate, T2C durable update transaction with one update id across reconnect); one review for T2.
 
 #### M19 notes
 - 2026-09-16 D-264 turns `docs/resource-and-loading-plan.md`'s supporting recovery/update prose into three dependency-ordered tasks after containment. They strengthen activation and recovery; the reviewed release orchestrator remains authoritative.

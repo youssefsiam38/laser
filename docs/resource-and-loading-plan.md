@@ -29,7 +29,7 @@ Authoritative detail, evidence and ownership live in `STATUS_DETAILED.md`; `STAT
 | RP-13 | M18-T13 | done — host policy/storage isolation through `1e4eeba`; reviewed real-host browser matrices `a0111f9` | RP-12 |
 | RP-14 | M18-T14 | dropped — D-268: no shell migration gate; Electron stays | — |
 | Capability consumption | M18-T19 | done — reviewed `76f475fa`: affordances derive from the authenticated descriptor and protocol policy tables, refuse before invocation, desktop/phone narrowed-policy matrices | RP-13 |
-| Recovery/update activation | M19-T1..T3 | todo — explicit launch, generation, repair, update and migration recovery tasks | M18 |
+| Recovery/update activation | M19-T1..T3 | in progress — M19-T1 done `23787c27` (launch identity, structured failure, bounded repair, safe mode, host-loss reconciliation); T2 in progress; T3 next | M18 |
 
 ## Outcome
 
