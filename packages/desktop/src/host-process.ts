@@ -28,7 +28,7 @@ import { closeSync, existsSync, mkdirSync, openSync } from "node:fs";
 import {
   CLI_VERSION,
   cliEntry,
-  daemonArgs,
+  hostDaemonArgv,
   inspectHost,
   logTail,
   piEnv,
@@ -51,6 +51,19 @@ const STOP_GRACE_MS = 8000;
 const MAX_RESTARTS = 2;
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+export function desktopHostArgv(paths: LaserPaths, capacityBytes?: number, entry = cliEntry()): string[] {
+  return hostDaemonArgv(paths, capacityBytes, entry);
+}
+
+/** Sanitize after all caller overlays, so none can restore Node/Electron control. */
+export function desktopNodeEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env = { ...source };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith("ELECTRON_") || key.toUpperCase() === "NODE_OPTIONS") delete env[key];
+  }
+  return env;
+}
 
 export interface HostProcessOptions {
   paths: LaserPaths;
@@ -244,6 +257,14 @@ export class HostProcess {
     const runtime = this.runtime;
     if (!runtime) return this.publish({ state: "failed", message: "The Node runtime was not resolved." });
 
+    let argv: string[];
+    try {
+      argv = desktopHostArgv(paths);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "The runtime memory limit could not be read.";
+      return this.publish({ state: "failed", message });
+    }
+
     mkdirSync(paths.stateDir, { recursive: true });
     // The daemon's own stdout and stderr go straight to the host log, the same
     // file `laser up` uses, so both ways of starting leave one trail.
@@ -251,8 +272,8 @@ export class HostProcess {
     const env = this.hostEnv();
     let child: ChildProcess;
     try {
-      log.line(`spawning the host: ${runtime.binary} ${cliEntry()} __daemon`);
-      child = spawn(runtime.binary, [cliEntry(), "__daemon", ...daemonArgs(paths)], {
+      log.line("spawning the host with a 448 MiB old-space ceiling");
+      child = spawn(runtime.binary, argv, {
         stdio: ["ignore", logFd, logFd],
         env,
         cwd: paths.stateDir,
@@ -401,7 +422,7 @@ export class HostProcess {
    * thing we verify and the thing we run can never diverge.
    */
   private hostEnv(): NodeJS.ProcessEnv {
-    return {
+    return desktopNodeEnvironment({
       ...piEnv(this.options.paths, this.electronFreeEnv()),
       // The package manager that came out of the pinned Node archive. Settings
       // installs extensions with it, on a machine that has never had Node.
@@ -409,7 +430,7 @@ export class HostProcess {
       // @lasercode/desktop runtime`, and the host says so rather than guessing.
       ...(this.runtime?.npmCli ? { [ENV.npmCli]: this.runtime.npmCli } : {}),
       ...this.options.env,
-    };
+    });
   }
 
   /**
@@ -418,12 +439,7 @@ export class HostProcess {
    * gets a clean environment plus the laser path pins.
    */
   private electronFreeEnv(): NodeJS.ProcessEnv {
-    const env = { ...(this.options.baseEnv ?? process.env) };
-    for (const key of Object.keys(env)) {
-      if (key.startsWith("ELECTRON_")) delete env[key];
-    }
-    delete env["NODE_OPTIONS"]; // An inspector flag meant for the shell must not land in the host.
-    return env;
+    return desktopNodeEnvironment(this.options.baseEnv ?? process.env);
   }
 
   private publish(patch: HostInfoPatch): DesktopHostInfo {

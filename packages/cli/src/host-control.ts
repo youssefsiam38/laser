@@ -7,6 +7,7 @@
  * they type it a second time.
  */
 import { PRODUCT_NAME, environmentOverlay } from "@lasercode/protocol";
+import { hostOldSpaceMiB, oldSpaceSizeFlag } from "@lasercode/host";
 import { HostRpc, HostRpcError } from "./rpc.js";
 import { spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync, readFileSync } from "node:fs";
@@ -52,6 +53,46 @@ export function unpacked(file: string): string {
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Remove every case spelling before Node parses its environment. */
+export function nodeLaunchEnvironment(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env = { ...base };
+  for (const key of Object.keys(env)) {
+    if (key.toUpperCase() === "NODE_OPTIONS") delete env[key];
+  }
+  return env;
+}
+
+/** Node argv for every CLI-owned host generation: flag, then script. */
+export function hostDaemonArgv(paths: LaserPaths, capacityBytes?: number, entry = cliEntry()): string[] {
+  return [oldSpaceSizeFlag(hostOldSpaceMiB(capacityBytes)), entry, "__daemon", ...daemonArgs(paths)];
+}
+
+export interface ForegroundHostResult {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+}
+
+/** Re-exec because an already-created V8 isolate cannot acquire a heap flag. */
+export async function runForegroundHost(
+  paths: LaserPaths,
+  options: { nodeBinary?: string; entry?: string; capacityBytes?: number; env?: NodeJS.ProcessEnv } = {},
+): Promise<ForegroundHostResult> {
+  mkdirSync(paths.stateDir, { recursive: true });
+  const child = spawn(
+    options.nodeBinary ?? process.execPath,
+    hostDaemonArgv(paths, options.capacityBytes, options.entry ?? cliEntry()),
+    {
+      stdio: "inherit",
+      env: nodeLaunchEnvironment(options.env ?? process.env),
+      cwd: paths.stateDir,
+    },
+  );
+  return new Promise<ForegroundHostResult>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", (code, signal) => resolve({ code, signal }));
+  });
+}
+
 export interface StartResult {
   record: HostRecord;
   /** False when a host was already up and we simply attached to it. */
@@ -83,12 +124,13 @@ export async function startHost(paths: LaserPaths, timeoutMs = 30_000): Promise<
 
   await assertPortIsOurs(paths);
 
+  const argv = hostDaemonArgv(paths);
   mkdirSync(paths.stateDir, { recursive: true });
   const logFd = openSync(paths.logFile, "a");
-  const child = spawn(process.execPath, [cliEntry(), "__daemon", ...daemonArgs(paths)], {
+  const child = spawn(process.execPath, argv, {
     detached: true,
     stdio: ["ignore", logFd, logFd],
-    env: process.env,
+    env: nodeLaunchEnvironment(process.env),
     cwd: paths.stateDir,
   });
   closeSync(logFd);

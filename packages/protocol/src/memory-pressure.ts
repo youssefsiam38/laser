@@ -639,8 +639,11 @@ export const memoryPressureEventSchema = z
   .superRefine(refineActionRow);
 
 export const memoryPressureCeilingSchema = z
-  .object({ configuredBytes: count.optional(), measuredLimit: memoryPressureMeasureSchema.optional() })
-  .strict();
+  .object({ configuredBytes: count.positive().optional(), measuredLimit: memoryPressureMeasureSchema.optional() })
+  .strict()
+  .refine((ceiling) => ceiling.configuredBytes !== undefined || ceiling.measuredLimit !== undefined, {
+    message: "a ceiling reports at least one configured or measured fact",
+  });
 
 /** One input per kind: a role cannot give two answers to one question. */
 const inputsSchema = z
@@ -870,6 +873,7 @@ const memoryPressureReportShape = z
     level: memoryPressureLevelStateSchema,
     sampleAgeMs: count.optional(),
     inputs: inputsSchema,
+    ceiling: memoryPressureCeilingSchema.optional(),
     ran: z.array(memoryPressureWorkerActionSchema).max(MEMORY_PRESSURE_WORKER_ACTIONS.length),
     results: z.array(memoryPressureWorkerActionResultSchema).max(MEMORY_PRESSURE_WORKER_ACTIONS.length),
     stores: memoryPressureStoresSchema,
@@ -902,6 +906,7 @@ export interface MemoryPressureReportShape {
   level: MemoryPressureLevelState;
   sampleAgeMs?: number;
   inputs: MemoryPressureInput[];
+  ceiling?: MemoryPressureCeiling;
   ran: MemoryPressureWorkerAction[];
   results: MemoryPressureWorkerActionResult[];
   stores: MemoryPressureStores;

@@ -18,6 +18,7 @@ import {
   PRESSURE_QUIET_COOLDOWN_MS,
   PRESSURE_REPORT_WINDOW_MS,
   PRESSURE_WARNING_COOLDOWN_MS,
+  configuredOldSpaceBytes,
   createWorkerPressureController,
   inputsOf,
   rowOf,
@@ -50,6 +51,7 @@ interface Timer { id: number; fn: () => void; at: number; unrefs: number; unref(
 /** One controller, one fake clock, one recorded action log. */
 function harness(options: {
   generation?: number;
+  configuredOldSpaceBytes?: number;
   outcomes?: Partial<Record<"ephemeral_caches" | "replay_suffixes" | "task_records", PressureActionOutcome>>;
   throwOn?: string;
   /** A link that will not take a report. */
@@ -108,7 +110,10 @@ function harness(options: {
       clearTimer: (handle) => timers.delete((handle as { id: number }).id),
       log: (line) => lines.push(line),
     },
-    { generation: options.generation ?? 7 },
+    {
+      generation: options.generation ?? 7,
+      ...(options.configuredOldSpaceBytes !== undefined ? { configuredOldSpaceBytes: options.configuredOldSpaceBytes } : {}),
+    },
   );
 
   return {
@@ -146,6 +151,38 @@ function harness(options: {
     },
   };
 }
+
+describe("the explicit old-space configuration", () => {
+  it("parses only a positive explicit Node flag, with the last spelling effective", () => {
+    expect(configuredOldSpaceBytes([])).toBeUndefined();
+    expect(configuredOldSpaceBytes(["--max-old-space-size=bad"])).toBeUndefined();
+    expect(configuredOldSpaceBytes(["--max-old-space-size=256", "--max-old-space-size", "448"])).toBe(448 * MiB);
+    expect(configuredOldSpaceBytes(["--max-old-space-size=448", "--max-old-space-size=0"])).toBeUndefined();
+  });
+
+  it("reports configured and measured limits separately, and omits absent configuration", async () => {
+    const configured = harness({ configuredOldSpaceBytes: 1728 * MiB });
+    configured.feed(
+      sampleOf({ atMs: configured.at(), physicalMiB: 100, heapUsed: 10, heapLimit: 1800 * MiB }),
+      sampleOf({ atMs: configured.at(), physicalMiB: 100, heapUsed: 10, heapLimit: 1800 * MiB }),
+    );
+    await configured.controller.probeNow();
+    await configured.controller.probeNow();
+    expect(configured.reports[0]!.ceiling).toEqual({
+      configuredBytes: 1728 * MiB,
+      measuredLimit: { status: "available", value: 1800 * MiB },
+    });
+
+    const direct = harness();
+    direct.feed(
+      sampleOf({ atMs: direct.at(), physicalMiB: 100, heapLimit: 4096 * MiB }),
+      sampleOf({ atMs: direct.at(), physicalMiB: 100, heapLimit: 4096 * MiB }),
+    );
+    await direct.controller.probeNow();
+    await direct.controller.probeNow();
+    expect(direct.reports[0]!.ceiling).toEqual({ measuredLimit: { status: "available", value: 4096 * MiB } });
+  });
+});
 
 describe("reading this process", () => {
   it("says what it could not read instead of reporting a zero", async () => {

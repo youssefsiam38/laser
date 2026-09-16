@@ -43,7 +43,7 @@ socket.on("data", (chunk) => {
       socket.write("\\"}}\\n");
       continue;
     }
-    if (req.method === "pi/test/argv") { send({ jsonrpc: "2.0", id: req.id, result: { argv: process.argv.slice(2) } }); continue; }
+    if (req.method === "pi/test/argv") { send({ jsonrpc: "2.0", id: req.id, result: { argv: process.argv.slice(2), execArgv: process.execArgv, nodeOptions: process.env.NODE_OPTIONS } }); continue; }
     if (req.method === "pi/test/utf8") { send({ jsonrpc: "2.0", id: req.id, result: { text: "日本語🚀".repeat(req.params.times) } }); continue; }
     send({ jsonrpc: "2.0", id: req.id, result: { ok: true } });
   }
@@ -156,6 +156,29 @@ it("mints a distinct, monotonic generation for each spawn and never wraps (RP-8)
   expect(seen.size).toBe(100);
 });
 
+it("puts a validated old-space ceiling before the worker entry and strips inherited Node options", { timeout: 20_000 }, async () => {
+  const worker = new WorkerClient({
+    cwd: project,
+    workerMain,
+    oldSpaceMiB: 256,
+    baseEnv: { ...process.env, NODE_OPTIONS: "--max-old-space-size=8192" },
+    env: { NODE_OPTIONS: "--max-old-space-size=1" },
+    onNotification: () => {},
+    onExit: () => {},
+  });
+  try {
+    await worker.ready;
+    expect(worker.configuredOldSpaceBytes).toBe(256 * 1024 * 1024);
+    const answer = await worker.request<{ argv: string[]; execArgv: string[]; nodeOptions?: string }>("pi/test/argv", {});
+    expect(answer.execArgv).toContain("--max-old-space-size=256");
+    expect(answer.argv).not.toContain("--max-old-space-size=256");
+    expect(answer.nodeOptions).toBeUndefined();
+  } finally {
+    await worker.stop();
+  }
+  expect(() => new WorkerClient({ cwd: project, workerMain, oldSpaceMiB: 1.5, onNotification: () => {}, onExit: () => {} })).toThrow(/positive integer/);
+});
+
 it("passes the generation it was given, and passes nothing when it has none", { timeout: 20_000 }, async () => {
   // Both clients take the exit callback the pool always supplies: a child that
   // ends after the test has stopped it still reports, and a missing handler
@@ -173,6 +196,7 @@ it("passes the generation it was given, and passes nothing when it has none", { 
   try {
     await without.ready;
     expect(without.workerGeneration).toBeUndefined();
+    expect(without.configuredOldSpaceBytes).toBeUndefined();
     const answer = await without.request<{ argv: string[] }>("pi/test/argv", {});
     expect(answer.argv).not.toContain("--worker-generation");
   } finally {

@@ -8,12 +8,12 @@ import { PRODUCT_NAME } from "@lasercode/protocol";
 import { resolve } from "node:path";
 import type { HostNotifications } from "@lasercode/protocol";
 import { bool } from "../args.js";
+import { runDaemon } from "../daemon.js";
 import type { Command } from "../command.js";
 import { hostUrl, wsUrl, type LaserPaths } from "../config.js";
-import { runDaemon } from "../daemon.js";
 import { CliError, ExitCode } from "../errors.js";
 import { shortCwd } from "../format.js";
-import { logTail, openBrowser, startHost, stopHost } from "../host-control.js";
+import { logTail, openBrowser, runForegroundHost, startHost, stopHost } from "../host-control.js";
 import { inspectHost, portInUse, probeHealth, type HostRecord } from "../hostfile.js";
 import type { Terminal } from "../output.js";
 import { HostRpc, type NotificationHandler } from "../rpc.js";
@@ -84,8 +84,14 @@ tmux startup script, or muscle memory.
         });
       }
       term.note(`${term.err.dim(`starting the ${PRODUCT_NAME} host in the foreground; Ctrl-C stops it`)}`);
-      await runDaemon({ paths });
-      await new Promise<never>(() => {}); // runDaemon owns the process from here.
+      const result = await runForegroundHost(paths);
+      if (result.code !== 0 || result.signal) {
+        throw new CliError(`the ${PRODUCT_NAME} host stopped (${result.signal ?? `exit code ${result.code}`})`, {
+          details: logTail(paths.logFile),
+          fix: `Full log: ${paths.logFile}`,
+        });
+      }
+      return;
     }
 
     const { record, started } = await startHost(paths);

@@ -74,6 +74,26 @@ export const PRESSURE_MAX_REPLAY_DROPS = 512;
 /** Sessions one pass may ask to keep less. */
 export const PRESSURE_MAX_TASK_SESSIONS = 16;
 
+const MIB = 1024 * 1024;
+
+/** Parse configuration only from Node's explicit argv, never from a measured limit. */
+export function configuredOldSpaceBytes(execArgv: readonly string[]): number | undefined {
+  let raw: string | undefined;
+  for (let index = 0; index < execArgv.length; index += 1) {
+    const value = execArgv[index]!;
+    if (value === "--max-old-space-size") {
+      raw = execArgv[index + 1];
+      index += 1;
+      continue;
+    }
+    if (value.startsWith("--max-old-space-size=")) raw = value.slice("--max-old-space-size=".length);
+  }
+  if (raw === undefined || !/^[1-9]\d*$/.test(raw)) return undefined;
+  const mib = Number(raw);
+  const bytes = mib * MIB;
+  return Number.isSafeInteger(mib) && Number.isSafeInteger(bytes) ? bytes : undefined;
+}
+
 /** What one step did, as this worker measured it. */
 export interface PressureActionOutcome {
   /** Things given back. Absent or zero means nothing was released. */
@@ -114,6 +134,8 @@ export interface PressureOptions {
    * because a fence it cannot prove is not a fence.
    */
   generation?: number;
+  /** Explicit old-space request parsed from this process's Node argv. */
+  configuredOldSpaceBytes?: number;
   thresholds?: PressureThresholds;
   normalIntervalMs?: number;
   elevatedIntervalMs?: number;
@@ -297,6 +319,10 @@ export function createWorkerPressureController(deps: PressureDeps, options: Pres
       level: reported,
       ...(sampleAgeMs !== undefined ? { sampleAgeMs } : {}),
       inputs: inputsOf(sample, reading, thresholds),
+      ceiling: {
+        ...(options.configuredOldSpaceBytes !== undefined ? { configuredBytes: options.configuredOldSpaceBytes } : {}),
+        measuredLimit: sample.heapLimit,
+      },
       ran,
       results,
       stores: safeStores(),

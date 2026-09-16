@@ -160,6 +160,8 @@ export interface WorkerServerOptions {
    * at all rather than claiming an identity nobody gave it.
    */
   workerGeneration?: number;
+  /** Explicit V8 old-space request parsed from this exact process's argv. */
+  configuredOldSpaceBytes?: number;
 }
 
 /** Sessions whose first prompt may wait for a Namer model; a worker holds few at once. */
@@ -404,7 +406,10 @@ export class WorkerServer {
         report: (report) => this.notify("pi/resource/pressure", report),
         log: (line) => console.error(`${PRODUCT_NAME} worker: ${line}`),
       },
-      options.workerGeneration !== undefined ? { generation: options.workerGeneration } : {},
+      {
+        ...(options.workerGeneration !== undefined ? { generation: options.workerGeneration } : {}),
+        ...(options.configuredOldSpaceBytes !== undefined ? { configuredOldSpaceBytes: options.configuredOldSpaceBytes } : {}),
+      },
     );
     if (options.workerGeneration !== undefined) this.pressure.start();
   }

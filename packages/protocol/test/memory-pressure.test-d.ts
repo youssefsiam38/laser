@@ -140,7 +140,10 @@ describe("the validated forms", () => {
 
   it("are what the wire types are, so a shape cannot drift from its parser", () => {
     expectTypeOf<MemoryPressureDirectiveResult>().toMatchTypeOf<{ applied: boolean }>();
-    expectTypeOf<MemoryPressureReport>().toMatchTypeOf<{ generation: number }>();
+    expectTypeOf<MemoryPressureReport>().toMatchTypeOf<{
+      generation: number;
+      ceiling?: { configuredBytes?: number; measuredLimit?: { status: "available"; value: number } | { status: "unavailable"; reason: string } };
+    }>();
     expectTypeOf<ValidatedMemoryPressureSummary>().toMatchTypeOf<MemoryPressureSummary>();
     expectTypeOf<MemoryPressurePublish>().toEqualTypeOf<ValidatedMemoryPressurePublish>();
   });
@@ -157,7 +160,15 @@ describe("the validated forms", () => {
       retention: { maxEvents: 200, maxAgeMs: 3_600_000, maxBytes: 262_144, events: 0, bytes: 0 },
     };
     const rawAnswer: MemoryPressureDirectiveResultInput = { applied: false, ran: [], results: [], stores: {} };
-    const rawReport: MemoryPressureReportInput = { generation: 1, level: "unknown", inputs: [], ran: [], results: [], stores: {} };
+    const rawReport: MemoryPressureReportInput = {
+      generation: 1,
+      level: "unknown",
+      inputs: [],
+      ceiling: { configuredBytes: 2_147_483_648, measuredLimit: { status: "available", value: 2_197_815_296 } },
+      ran: [],
+      results: [],
+      stores: {},
+    };
 
     // @ts-expect-error a summary is validated or it is not one of ours
     const summary: ValidatedMemoryPressureSummary = rawSummary;
