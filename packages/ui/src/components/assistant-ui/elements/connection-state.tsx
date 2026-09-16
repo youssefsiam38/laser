@@ -104,8 +104,10 @@ type UpdateNoticeState = {
   state: string;
   updateId?: string;
   version?: string;
+  title?: string;
   message?: string;
-  blockers?: { conversations: number; agents: number; questions: number; approvals: number; commands: number; mutations: number; workers: number };
+  action?: "prepare" | "cancel" | "activate" | "retry" | "none";
+  actionLabel?: string;
 };
 
 type DesktopUpdates = {
@@ -120,16 +122,24 @@ type DesktopUpdates = {
   };
 };
 
-function blockerText(blockers: UpdateNoticeState["blockers"]): string | undefined {
-  if (!blockers) return undefined;
-  const labels: Array<[number, string, string]> = [
-    [blockers.conversations, "conversation", "conversations"],
-    [blockers.agents, "agent", "agents"],
-    [blockers.questions + blockers.approvals, "question or approval", "questions or approvals"],
-    [blockers.commands, "command", "commands"],
-  ];
-  const visible = labels.filter(([count]) => count > 0).map(([count, one, many]) => `${count} ${count === 1 ? one : many}`);
-  return visible.length > 0 ? visible.join(" · ") : undefined;
+function UpdateNoticeAction({ update, onRestart, onPrepare, onCancel }: {
+  update: UpdateNoticeState;
+  onRestart?: (() => void) | undefined;
+  onPrepare?: (() => void) | undefined;
+  onCancel?: (() => void) | undefined;
+}) {
+  const props = { variant: "outline" as const, size: "sm" as const, className: "pointer-coarse:min-h-11" };
+  switch (update.action) {
+    case "prepare":
+      return onPrepare ? <Button {...props} onClick={onPrepare}>{update.actionLabel}</Button> : null;
+    case "cancel":
+      return onCancel ? <Button {...props} onClick={onCancel}>{update.actionLabel}</Button> : null;
+    case "activate":
+    case "retry":
+      return onRestart ? <Button {...props} onClick={onRestart}>{update.actionLabel}</Button> : null;
+    default:
+      return null;
+  }
 }
 
 export function VersionNotice({ hostVersion, desktopVersion, update, onRefresh, onRestart, onPrepare, onCancel }: {
@@ -140,42 +150,27 @@ export function VersionNotice({ hostVersion, desktopVersion, update, onRefresh, 
   const hostOlder = hostVersion !== undefined && hostVersion !== "unknown" &&
     hostVersion.localeCompare(PRODUCT_VERSION, undefined, { numeric: true }) < 0;
   const restart = local || hostOlder || hostVersion === "unknown";
-  const updateTitle = update?.state === "downloaded"
-    ? "Update downloaded."
-    : update?.state === "failed"
-      ? "The update was not activated."
-    : update?.state === "parking"
-      ? "Waiting for current work to finish."
-      : update?.state === "ready" || update?.state === "restarting"
-        ? "The update is ready to activate."
-        : undefined;
-  const updateDetail = update?.state === "downloaded"
-    ? "Prepare a restart when your current work is finished."
-    : update?.state === "failed"
-      ? update.message ?? "The current verified version remains selected."
-    : update?.state === "parking"
-      ? blockerText(update.blockers) ?? "Finishing the work already in progress."
-      : updateTitle
-        ? "Saved sessions are kept. No active work will be stopped."
-        : undefined;
+  const fallbackTitle = restart ? `${PRODUCT_DISPLAY_NAME} is ready to restart` : "Refresh this view to continue";
+  const fallbackDetail = restart
+    ? "Restart the app and host together on the host computer when you are ready. Saved sessions are kept; active work will stop during restart."
+    : "The host has been updated. This refresh only updates your frontend. Your sessions and running agents will not be affected.";
+  let action = update
+    ? <UpdateNoticeAction update={update} onRestart={onRestart} onPrepare={onPrepare} onCancel={onCancel} />
+    : null;
+  if (!update && restart && local && onRestart) {
+    action = <Button variant="outline" size="sm" className="pointer-coarse:min-h-11" onClick={onRestart}>Restart when ready…</Button>;
+  } else if (!update && !restart) {
+    action = <Button variant="outline" size="sm" className="pointer-coarse:min-h-11" onClick={onRefresh}>Refresh view</Button>;
+  }
   return (
     <div role="status" data-slot="version-notice" data-update-state={update?.state} className="relative z-110 flex shrink-0 flex-wrap items-center gap-3 border-b border-line bg-surface px-4 py-3 text-sm">
       <RefreshCwIcon aria-hidden="true" className="size-4 shrink-0 text-live" />
       <div className="min-w-0 flex-1 basis-48">
-        <p className="font-medium text-ink">{updateTitle ?? (restart ? `${PRODUCT_DISPLAY_NAME} is ready to restart` : "Refresh this view to continue")}</p>
-        <p className="mt-1 text-xs text-ink-2">{updateDetail ?? (restart
-          ? "Restart the app and host together on the host computer when you are ready. Saved sessions are kept; active work will stop during restart."
-          : "The host has been updated. This refresh only updates your frontend. Your sessions and running agents will not be affected.")}</p>
+        <p className="font-medium text-ink">{update?.title ?? fallbackTitle}</p>
+        <p className="mt-1 text-xs text-ink-2">{update?.message ?? fallbackDetail}</p>
         <p className="mt-1 text-xs text-ink-3">{update?.version ? `Update ${update.version} · Running ${desktopVersion}` : `This view ${PRODUCT_VERSION} · Host ${hostVersion}`}</p>
       </div>
-      {update?.state === "parking" && onCancel
-        ? <Button variant="outline" size="sm" className="pointer-coarse:min-h-11" onClick={onCancel}>Keep working</Button>
-        : update?.state === "downloaded" && onPrepare
-          ? <Button variant="outline" size="sm" className="pointer-coarse:min-h-11" onClick={onPrepare}>Prepare restart</Button>
-          : update?.state === "ready" && onRestart
-            ? <Button variant="outline" size="sm" className="pointer-coarse:min-h-11" onClick={onRestart}>Restart and update</Button>
-            : restart ? (local && onRestart && <Button variant="outline" size="sm" className="pointer-coarse:min-h-11" onClick={onRestart}>Restart when ready…</Button>)
-              : <Button variant="outline" size="sm" className="pointer-coarse:min-h-11" onClick={onRefresh}>Refresh view</Button>}
+      {action}
     </div>
   );
 }

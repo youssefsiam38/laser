@@ -78,9 +78,11 @@ export { sessionFragment } from "./commands/session.js";
 export { CLI_VERSION } from "./version.js";
 export {
   UpdateTransactionStore,
+  prepareRuntimeGeneration,
   readRuntimeGenerationPointer,
   runtimeReferenceFromManifest,
   runtimeUpdateId,
+  runtimeVerificationMetrics,
   selectRuntimeGeneration,
   stageRuntimeGeneration,
   verifyRuntimeGeneration,
@@ -89,6 +91,8 @@ export {
   type RuntimeGenerationManifest,
   type RuntimeGenerationPointer,
   type RuntimeGenerationReference,
+  type RuntimeGenerationVerification,
+  type RuntimeVerificationMetrics,
   type UpdateTransaction,
   type UpdateTransactionPhase,
 } from "@lasercode/host";

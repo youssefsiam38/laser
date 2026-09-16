@@ -299,6 +299,10 @@ async function installUpdate(_announce = false, forceRelaunch = false): Promise<
     await activation?.prepare();
     return;
   }
+  if (updateStatus.state === "failed") {
+    await quit({ relaunch: true, liveWorkConfirmed: true });
+    return;
+  }
   if (updateStatus.state === "parking") return;
   if (updateStatus.state !== "ready") { updater.install(); return; }
   nativePromptOpen = true;

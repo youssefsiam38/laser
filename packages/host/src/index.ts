@@ -31,6 +31,8 @@ export {
   RuntimeGenerationError,
   RuntimeGenerationGuard,
   RUNTIME_GENERATION_ERROR,
+  RUNTIME_MANIFEST_ERROR,
+  RUNTIME_UPDATE_INSTALLED_ERROR,
   RUNTIME_MANIFEST_NAME,
   RUNTIME_POINTER_NAME,
   findRuntimeManifest,
@@ -38,6 +40,7 @@ export {
   readRuntimeGenerationPointer,
   runtimeGenerationId,
   runtimeManifestDigest,
+  runtimeVerificationMetrics,
   runtimeReferenceFromEnvironment,
   runtimeReferenceFromManifest,
   runtimeUpdateId,
@@ -50,6 +53,9 @@ export {
   type RuntimeGenerationManifest,
   type RuntimeGenerationPointer,
   type RuntimeGenerationReference,
+  type RuntimeGenerationSelection,
+  type RuntimeGenerationVerification,
+  type RuntimeVerificationMetrics,
   type RuntimeInventoryRow,
 } from "./runtime-generation.js";
 export {

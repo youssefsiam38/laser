@@ -5,9 +5,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   FeatureGenerationStore,
   RuntimeGenerationError,
+  RuntimeGenerationGuard,
   prepareRuntimeGeneration,
   readRuntimeGenerationPointer,
+  runtimeVerificationMetrics,
   selectRuntimeGeneration,
+  stageRuntimeGeneration,
   runtimeReferenceFromManifest,
   verifyRuntimeGeneration,
   writeRuntimeGenerationManifest,
@@ -65,25 +68,61 @@ describe("runtime generation inventory", () => {
     );
   });
 
-  it("selects atomically and retains only active, previous and pending references", () => {
+  it("treats a self-consistent manifest replaced in one fixed root as a staged update", () => {
     const state = mkdtempSync(join(tmpdir(), "runtime-generation-state-"));
     roots.push(state);
-    const first = fixture("active");
-    const selected = prepareRuntimeGeneration(state, first.cli);
-    expect(selected.pointer).toEqual({ schemaVersion: 1, active: runtimeReferenceFromManifest(first.path) });
+    const installed = fixture("active");
+    const running = runtimeReferenceFromManifest(installed.path);
+    const selected = prepareRuntimeGeneration(state, installed.cli);
+    expect(selected.pointer).toMatchObject({
+      schemaVersion: 1,
+      active: runtimeReferenceFromManifest(installed.path),
+    });
+    expect(selected.pointer.active.verification).toBeDefined();
     expect(statSync(join(state, "runtime-generation.json")).mode & 0o777).toBe(0o600);
 
-    const second = fixture("pending");
-    const staged = prepareRuntimeGeneration(state, second.cli);
-    expect(staged.pointer.active.generationId).toBe(first.manifest.generationId);
-    expect(staged.pointer.pending?.generationId).toBe(second.manifest.generationId);
+    writeFileSync(installed.worker, "worker-updated");
+    const updated = writeRuntimeGenerationManifest({
+      installRoot: installed.root,
+      files: [installed.extension, installed.worker, installed.cli, installed.node],
+      entries: { cli: "app/cli.js", worker: "app/worker.js", node: "runtime/node" },
+      productVersion: "1.1.0",
+      buildIdentity: "build-updated",
+    });
+    expect(() => new RuntimeGenerationGuard(running).verify()).toThrowError(
+      "An update was installed. Restart the app and its host to use it.",
+    );
+    const staged = stageRuntimeGeneration(state, installed.cli);
+    expect(staged.pointer.active.generationId).toBe(installed.manifest.generationId);
+    expect(staged.pointer.pending?.generationId).toBe(updated.manifest.generationId);
     expect(readRuntimeGenerationPointer(state)).toEqual(staged.pointer);
-    expect(readFileSync(join(state, "runtime-generation.json"), "utf8")).not.toContain("inventory");
+    expect(readFileSync(join(state, "runtime-generation.json"), "utf8")).not.toContain('"inventory"');
 
-    const activated = selectRuntimeGeneration(state, second.manifest.generationId);
-    expect(activated.active.generationId).toBe(second.manifest.generationId);
-    expect(activated.previous?.generationId).toBe(first.manifest.generationId);
+    const activated = selectRuntimeGeneration(state, updated.manifest.generationId);
+    expect(activated.active.generationId).toBe(updated.manifest.generationId);
+    expect(activated.previousGenerationId).toBe(installed.manifest.generationId);
     expect(activated.pending).toBeUndefined();
+    expect(() => verifyRuntimeGeneration(runtimeReferenceFromManifest(installed.path))).not.toThrow();
+  });
+
+  it("bounds unchanged verification and hashes bundled Node only once per generation", () => {
+    const state = mkdtempSync(join(tmpdir(), "runtime-generation-bounded-"));
+    roots.push(state);
+    const built = fixture("bounded");
+    prepareRuntimeGeneration(state, built.cli);
+    const cold = runtimeVerificationMetrics();
+    expect(cold).toMatchObject({ generationId: built.manifest.generationId, full: true, hashedFiles: 4 });
+
+    prepareRuntimeGeneration(state, built.cli);
+    const warm = runtimeVerificationMetrics();
+    expect(warm).toMatchObject({ generationId: built.manifest.generationId, full: false, hashedFiles: 2 });
+    expect(warm.hashedBytes).toBeLessThan(cold.hashedBytes);
+    expect(warm.durationMs).toBeGreaterThanOrEqual(0);
+
+    const before = statSync(built.extension);
+    utimesSync(built.extension, before.atime, new Date(before.mtimeMs + 1_000));
+    prepareRuntimeGeneration(state, built.cli);
+    expect(runtimeVerificationMetrics()).toMatchObject({ full: false, hashedFiles: 3 });
   });
 
   it("writes immutable feature manifests that reference the runtime without retaining cwd", () => {

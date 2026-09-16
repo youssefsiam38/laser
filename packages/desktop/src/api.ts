@@ -122,6 +122,10 @@ export type UpdateStatus =
       state: "downloaded" | "parking" | "ready" | "restarting" | "succeeded" | "failed";
       /** Durable correlation across download, gate, restart and result. */
       updateId: string;
+      title: string;
+      message: string;
+      action: "prepare" | "cancel" | "activate" | "retry" | "none";
+      actionLabel?: string;
       blockers?: { conversations: number; agents: number; questions: number; approvals: number; commands: number; mutations: number; workers: number };
     });
 

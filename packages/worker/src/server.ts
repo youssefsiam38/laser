@@ -22,7 +22,7 @@
  * growing the process.
  */
 
-import { AGENT_MAX_DEPTH_LIMIT, EDITABLE_TEXT_MAX_BYTES, ENV, ErrorCodes, createBodyRangeReader, entryRegionsPage, utf8ByteLength, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type AgentRun, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type MemoryPressureStores, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TypedClientRequest, type WorkerActivationState, WIRE_NAMESPACE } from "@lasercode/protocol";
+import { AGENT_MAX_DEPTH_LIMIT, EDITABLE_TEXT_MAX_BYTES, ENV, ErrorCodes, createBodyRangeReader, entryRegionsPage, utf8ByteLength, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, methodStartsWork, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type AgentRun, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type MemoryPressureStores, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TypedClientRequest, type WorkerActivationState, WIRE_NAMESPACE } from "@lasercode/protocol";
 import { CaptureReservations } from "./capture-reservations.js";
 import {
   PRESSURE_MAX_REPLAY_DROPS,
@@ -35,14 +35,6 @@ import { createPressureSampler } from "./pressure-sampler.js";
 
 /** RP-5b body digests. The one hash both authorities sign a body with. */
 const sha256Hex = (text: string): string => createHash("sha256").update(text, "utf8").digest("hex");
-
-const ACTIVATION_ROOT_METHODS = new Set([
-  "session/new",
-  "session/prompt",
-  "session/goal/action",
-  "pi/session/steer",
-  "pi/session/follow_up",
-]);
 
 /**
  * A prompt handed back for editing, bounded before it is serialized (RP-5b B3).
@@ -529,9 +521,7 @@ export class WorkerServer {
   // ------------------------------------------------------------- dispatch
 
   private async dispatch(req: TypedClientRequest): Promise<unknown> {
-    if (this.activationGate && ACTIVATION_ROOT_METHODS.has(req.method)) {
-      throw new ProtocolError(ErrorCodes.SessionBusy, "An update is waiting for current work to finish. Keep working by cancelling update preparation first.");
-    }
+    if (methodStartsWork(req.method)) this.admitNewWork();
     switch (req.method) {
       case "session/new":
         return this.sessionNew(req.params);
@@ -1802,6 +1792,12 @@ export class WorkerServer {
     return this.lifetime.safety();
   }
 
+  private admitNewWork(): void {
+    if (this.activationGate) {
+      throw new ProtocolError(ErrorCodes.SessionBusy, "An update is waiting for current work to finish. Keep working by cancelling update preparation first.");
+    }
+  }
+
   private activationState(updateId: string): WorkerActivationState {
     const gate = this.activationGate;
     if (!gate || gate.updateId !== updateId) {
@@ -1872,7 +1868,9 @@ export class WorkerServer {
       liveRuns: work.liveRuns,
       liveChildRuns: work.liveChildRuns,
       queuedWork: queued,
-      trayMessages: live.pending?.list().length ?? 0,
+      trayMessages: live.pending
+        ? Math.max(live.pending.list().length, live.pending.deliveryInFlight() ? 1 : 0)
+        : 0,
       runningTasks: this.tasks.tasksOf(live.path).filter((task) => task.status === "running").length,
       // Naming this session is under way: a bounded Namer completion is in
       // flight and it ends in a rename through this runtime, which nothing
@@ -2078,6 +2076,7 @@ export class WorkerServer {
           ? this.queueIntoChild(live, content, "steer")
           : this.firstTurnLock.run(live.path, () => live.driver.steer(content)),
         prompt: (content, onAccepted) => this.promptWithFence(live, content, undefined, onAccepted, true),
+        admitNewWork: () => this.admitNewWork(),
         streaming: () => live.driver.state().isStreaming,
         publish: (pending) => this.onDriverEvent(live, { type: "update", update: { kind: "pending_update", pending } }),
       });

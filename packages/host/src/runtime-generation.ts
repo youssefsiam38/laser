@@ -16,9 +16,11 @@ import {
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { ENV, type FeatureId, type WorkerMode } from "@lasercode/protocol";
 
-export const RUNTIME_MANIFEST_NAME = "runtime-generation.json";
+export const RUNTIME_MANIFEST_NAME = "runtime-manifest.json";
 export const RUNTIME_POINTER_NAME = "runtime-generation.json";
 export const RUNTIME_GENERATION_ERROR = "The app's runtime files changed after they were installed. Reinstall the app before starting it.";
+export const RUNTIME_UPDATE_INSTALLED_ERROR = "An update was installed. Restart the app and its host to use it.";
+export const RUNTIME_MANIFEST_ERROR = "The app's runtime inventory is missing or damaged. Reinstall the app before starting it.";
 
 export interface RuntimeInventoryRow {
   path: string;
@@ -48,11 +50,29 @@ export interface RuntimeGenerationReference {
   manifestDigest: string;
 }
 
+export interface RuntimeFileVerification {
+  length: number;
+  mtimeMs: number;
+  ino: number;
+}
+
+export interface RuntimeGenerationVerification {
+  verifiedAt: string;
+  rows: Record<string, RuntimeFileVerification>;
+  /** Bundled Node is expensive and is hashed once per unchanged generation. */
+  node?: RuntimeFileVerification;
+}
+
+export interface RuntimeGenerationSelection extends RuntimeGenerationReference {
+  verification?: RuntimeGenerationVerification;
+}
+
 export interface RuntimeGenerationPointer {
   schemaVersion: 1;
-  active: RuntimeGenerationReference;
-  previous?: RuntimeGenerationReference;
-  pending?: RuntimeGenerationReference;
+  active: RuntimeGenerationSelection;
+  /** History only: fixed-root installers do not retain the previous bytes. */
+  previousGenerationId?: string;
+  pending?: RuntimeGenerationSelection;
 }
 
 export interface FeatureGenerationManifest {
@@ -65,10 +85,18 @@ export interface FeatureGenerationManifest {
   mode: WorkerMode;
 }
 
+export type RuntimeGenerationErrorReason = "missing" | "corrupt" | "drift" | "update" | "pointer";
+
 export class RuntimeGenerationError extends Error {
   override readonly name = "RuntimeGenerationError";
-  constructor(readonly reason: "missing" | "corrupt" | "drift" | "pointer") {
-    super(RUNTIME_GENERATION_ERROR);
+  constructor(readonly reason: RuntimeGenerationErrorReason) {
+    super(reason === "drift"
+      ? RUNTIME_GENERATION_ERROR
+      : reason === "update"
+        ? RUNTIME_UPDATE_INSTALLED_ERROR
+        : reason === "missing" || reason === "corrupt"
+          ? RUNTIME_MANIFEST_ERROR
+          : "The app could not select its verified runtime. Restart the app and try again.");
   }
 }
 
@@ -206,8 +234,38 @@ function inside(root: string, path: string): boolean {
   return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
 }
 
-/** Verify the exact selected install before host launch or worker spawn. */
-export function verifyRuntimeGeneration(reference: RuntimeGenerationReference, full = false): RuntimeGenerationManifest {
+export interface RuntimeVerificationMetrics {
+  generationId: string;
+  hashedFiles: number;
+  hashedBytes: number;
+  full: boolean;
+  durationMs: number;
+}
+
+const verificationCache = new Map<string, RuntimeGenerationVerification>();
+let latestVerificationMetrics: RuntimeVerificationMetrics | undefined;
+
+export function runtimeVerificationMetrics(): RuntimeVerificationMetrics | undefined {
+  return latestVerificationMetrics && { ...latestVerificationMetrics };
+}
+
+const verificationKey = (reference: RuntimeGenerationReference): string =>
+  `${reference.installRoot}\0${reference.generationId}\0${reference.manifestDigest}`;
+
+function fileVerification(stat: NonNullable<ReturnType<typeof lstatSync>>): RuntimeFileVerification {
+  return { length: Number(stat.size), mtimeMs: Number(stat.mtimeMs), ino: Number(stat.ino) };
+}
+
+function sameVerification(left: RuntimeFileVerification | undefined, right: RuntimeFileVerification): boolean {
+  return !!left && left.length === right.length && left.mtimeMs === right.mtimeMs && left.ino === right.ino;
+}
+
+function verifyRuntimeGenerationDetailed(
+  reference: RuntimeGenerationReference,
+  full = false,
+  persisted?: RuntimeGenerationVerification,
+): { manifest: RuntimeGenerationManifest; verification: RuntimeGenerationVerification } {
+  const started = performance.now();
   if (!HASH.test(reference.generationId) || !HASH.test(reference.manifestDigest) || !isAbsolute(reference.installRoot)) {
     throw new RuntimeGenerationError("pointer");
   }
@@ -220,46 +278,77 @@ export function verifyRuntimeGeneration(reference: RuntimeGenerationReference, f
     throw new RuntimeGenerationError("missing");
   }
   const manifest = parseManifest(raw.toString("utf8"));
-  const manifestMatches = runtimeManifestDigest(raw) === reference.manifestDigest
-    && manifest.generationId === reference.generationId;
-  const entryPaths = new Set(Object.values(manifest.entries));
-  const rowsToHash: RuntimeInventoryRow[] = [];
-  let metadataMismatch = !manifestMatches;
+  if (runtimeManifestDigest(raw) !== reference.manifestDigest || manifest.generationId !== reference.generationId) {
+    throw new RuntimeGenerationError("update");
+  }
+
+  const key = verificationKey(reference);
+  const baseline = verificationCache.get(key) ?? persisted;
+  const effectiveFull = full || !baseline;
+  const nodePath = manifest.entries.node;
+  const entryPaths = new Set(Object.values(manifest.entries).filter((path) => path !== nodePath));
+  const currentRows: Record<string, RuntimeFileVerification> = {};
+  const rowsToHash = new Map<string, RuntimeInventoryRow>();
+  let invalidFile = false;
   for (const row of manifest.inventory) {
     const absolute = resolve(root, row.path);
     if (!inside(root, absolute)) throw new RuntimeGenerationError("corrupt");
     try {
       const stat = lstatSync(absolute);
       if (!stat.isFile() || stat.isSymbolicLink()) {
-        metadataMismatch = true;
-        rowsToHash.push(row);
+        invalidFile = true;
+        rowsToHash.set(row.path, row);
         continue;
       }
-      if (full || entryPaths.has(row.path) || stat.size !== row.length || stat.mtimeMs !== row.mtimeMs) rowsToHash.push(row);
-      if (stat.size !== row.length || stat.mtimeMs !== row.mtimeMs) metadataMismatch = true;
+      const current = fileVerification(stat);
+      currentRows[row.path] = current;
+      const previous = baseline?.rows[row.path] ?? { length: row.length, mtimeMs: row.mtimeMs, ino: current.ino };
+      if (effectiveFull || entryPaths.has(row.path) || !sameVerification(previous, current)) rowsToHash.set(row.path, row);
+      if (row.path === nodePath && !sameVerification(baseline?.node, current)) rowsToHash.set(row.path, row);
     } catch {
-      metadataMismatch = true;
-      rowsToHash.push(row);
+      invalidFile = true;
+      rowsToHash.set(row.path, row);
     }
   }
-  let digestMismatch = false;
-  for (const row of rowsToHash) {
+
+  let digestMismatch = invalidFile;
+  let hashedBytes = 0;
+  for (const row of rowsToHash.values()) {
+    hashedBytes += row.length;
     try {
       const absolute = resolve(root, row.path);
       const stat = lstatSync(absolute);
-      if (!stat.isFile() || stat.size !== row.length || fileDigest(absolute) !== row.sha256) digestMismatch = true;
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== row.length || fileDigest(absolute) !== row.sha256) digestMismatch = true;
     } catch { digestMismatch = true; }
   }
-  // A changed or corrupt row triggers one complete pass before refusal, so a
-  // partial mismatch can never hide another changed executable.
-  if ((metadataMismatch || digestMismatch) && !full) {
-    const fullyVerified = verifyRuntimeGeneration(reference, true);
-    if (!manifestMatches) throw new RuntimeGenerationError("pointer");
-    return fullyVerified;
+  if (digestMismatch) {
+    if (!effectiveFull) return verifyRuntimeGenerationDetailed(reference, true);
+    throw new RuntimeGenerationError("drift");
   }
-  if (!manifestMatches) throw new RuntimeGenerationError("pointer");
-  if (digestMismatch) throw new RuntimeGenerationError("drift");
-  return manifest;
+
+  const verification: RuntimeGenerationVerification = {
+    verifiedAt: new Date().toISOString(),
+    rows: currentRows,
+    ...(nodePath && currentRows[nodePath] ? { node: currentRows[nodePath] } : {}),
+  };
+  verificationCache.set(key, verification);
+  latestVerificationMetrics = {
+    generationId: manifest.generationId,
+    hashedFiles: rowsToHash.size,
+    hashedBytes,
+    full: effectiveFull,
+    durationMs: performance.now() - started,
+  };
+  return { manifest, verification };
+}
+
+/** Verify files against the manifest shipped in their own install root. */
+export function verifyRuntimeGeneration(
+  reference: RuntimeGenerationReference,
+  full = false,
+  persisted?: RuntimeGenerationVerification,
+): RuntimeGenerationManifest {
+  return verifyRuntimeGenerationDetailed(reference, full, persisted).manifest;
 }
 
 function validReference(value: unknown): value is RuntimeGenerationReference {
@@ -281,17 +370,40 @@ export function runtimeReferenceFromEnvironment(env: NodeJS.ProcessEnv | Readonl
   return reference;
 }
 
+function validFileVerification(value: unknown): value is RuntimeFileVerification {
+  const row = value as Partial<RuntimeFileVerification> | undefined;
+  const length = row?.length;
+  const mtimeMs = row?.mtimeMs;
+  const ino = row?.ino;
+  return typeof length === "number" && Number.isSafeInteger(length) && length >= 0
+    && typeof mtimeMs === "number" && Number.isFinite(mtimeMs)
+    && typeof ino === "number" && Number.isSafeInteger(ino) && ino >= 0;
+}
+
+function validVerification(value: unknown): value is RuntimeGenerationVerification {
+  const verification = value as Partial<RuntimeGenerationVerification> | undefined;
+  if (!verification || typeof verification.verifiedAt !== "string" || !Number.isFinite(Date.parse(verification.verifiedAt))
+    || !verification.rows || typeof verification.rows !== "object") return false;
+  if (!Object.entries(verification.rows).every(([path, row]) => safeRelativePath(path) && validFileVerification(row))) return false;
+  return verification.node === undefined || validFileVerification(verification.node);
+}
+
+function validSelection(value: unknown): value is RuntimeGenerationSelection {
+  const selection = value as Partial<RuntimeGenerationSelection> | undefined;
+  return validReference(value) && (selection?.verification === undefined || validVerification(selection.verification));
+}
+
 export function readRuntimeGenerationPointer(stateDir: string): RuntimeGenerationPointer | undefined {
   try {
     const parsed = JSON.parse(readFileSync(join(stateDir, RUNTIME_POINTER_NAME), "utf8")) as Partial<RuntimeGenerationPointer>;
-    if (parsed.schemaVersion !== 1 || !validReference(parsed.active)
-      || (parsed.previous !== undefined && !validReference(parsed.previous))
-      || (parsed.pending !== undefined && !validReference(parsed.pending))) throw new RuntimeGenerationError("pointer");
+    if (parsed.schemaVersion !== 1 || !validSelection(parsed.active)
+      || (parsed.previousGenerationId !== undefined && !HASH.test(parsed.previousGenerationId))
+      || (parsed.pending !== undefined && !validSelection(parsed.pending))) return undefined;
     return parsed as RuntimeGenerationPointer;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    if (error instanceof RuntimeGenerationError) throw error;
-    throw new RuntimeGenerationError("pointer");
+  } catch {
+    // The pointer is selection history, never authority over the install. A
+    // complete self-consistent install rebuilds it on the next launch.
+    return undefined;
   }
 }
 
@@ -299,52 +411,69 @@ export function writeRuntimeGenerationPointer(stateDir: string, pointer: Runtime
   atomicWrite(join(stateDir, RUNTIME_POINTER_NAME), `${JSON.stringify(pointer, null, 2)}\n`, 0o600);
 }
 
-/** Select on first install; otherwise retain current as pending and launch active. */
+/** Verify the install-root manifest and retain it as pending without activating it. */
 export function stageRuntimeGeneration(stateDir: string, currentEntry: string): {
   pointer: RuntimeGenerationPointer;
   current: RuntimeGenerationReference;
   manifest: RuntimeGenerationManifest;
 } {
   const current = runtimeReferenceFromManifest(findRuntimeManifest(currentEntry));
-  const manifest = verifyRuntimeGeneration(current, true);
   let pointer = readRuntimeGenerationPointer(stateDir);
+  const retained = pointer?.active.generationId === current.generationId
+    ? pointer.active.verification
+    : pointer?.pending?.generationId === current.generationId
+      ? pointer.pending.verification
+      : undefined;
+  const checked = verifyRuntimeGenerationDetailed(current, false, retained);
+  const selection: RuntimeGenerationSelection = { ...current, verification: checked.verification };
   if (!pointer) {
-    pointer = { schemaVersion: 1, active: current };
-    writeRuntimeGenerationPointer(stateDir, pointer);
-  } else if (pointer.active.generationId !== current.generationId || pointer.active.installRoot !== current.installRoot) {
-    const alreadyRetained = [pointer.active, pointer.previous, pointer.pending]
-      .some((row) => row?.generationId === current.generationId && row.installRoot === current.installRoot);
-    if (!alreadyRetained) {
-      pointer = { ...pointer, pending: current };
-      writeRuntimeGenerationPointer(stateDir, pointer);
-    }
+    pointer = { schemaVersion: 1, active: selection };
+  } else if (pointer.active.generationId === current.generationId && pointer.active.installRoot === current.installRoot) {
+    pointer = { ...pointer, active: selection };
+  } else {
+    pointer = { ...pointer, pending: selection };
   }
-  return { pointer, current, manifest };
+  writeRuntimeGenerationPointer(stateDir, pointer);
+  return { pointer, current, manifest: checked.manifest };
 }
 
+/** A fresh launch activates the complete manifest currently shipped in the root. */
 export function prepareRuntimeGeneration(stateDir: string, currentEntry: string): {
   pointer: RuntimeGenerationPointer;
   manifest: RuntimeGenerationManifest;
 } {
   const staged = stageRuntimeGeneration(stateDir, currentEntry);
-  const manifest = verifyRuntimeGeneration(staged.pointer.active);
-  return { pointer: staged.pointer, manifest };
+  let pointer = staged.pointer;
+  if (pointer.active.generationId !== staged.current.generationId || pointer.active.installRoot !== staged.current.installRoot) {
+    const target = pointer.pending;
+    if (!target || target.generationId !== staged.current.generationId) throw new RuntimeGenerationError("pointer");
+    pointer = {
+      schemaVersion: 1,
+      active: target,
+      previousGenerationId: pointer.active.generationId,
+    };
+    writeRuntimeGenerationPointer(stateDir, pointer);
+  }
+  return { pointer, manifest: staged.manifest };
 }
 
-/** The only activation write: verify target, then atomically replace one pointer. */
+/** Activate one staged generation after the park gate settles. */
 export function selectRuntimeGeneration(stateDir: string, generationId: string): RuntimeGenerationPointer {
   const pointer = readRuntimeGenerationPointer(stateDir);
   if (!pointer) throw new RuntimeGenerationError("pointer");
-  const target = [pointer.active, pointer.previous, pointer.pending]
-    .find((reference) => reference?.generationId === generationId);
-  if (!target) throw new RuntimeGenerationError("pointer");
-  verifyRuntimeGeneration(target, true);
-  if (target.generationId === pointer.active.generationId && target.installRoot === pointer.active.installRoot) return pointer;
+  const target = pointer.active.generationId === generationId ? pointer.active : pointer.pending;
+  if (!target || target.generationId !== generationId) throw new RuntimeGenerationError("pointer");
+  const checked = verifyRuntimeGenerationDetailed(target, false, target.verification);
+  const active: RuntimeGenerationSelection = { ...target, verification: checked.verification };
+  if (pointer.active.generationId === generationId && pointer.active.installRoot === target.installRoot) {
+    const next = { ...pointer, active };
+    writeRuntimeGenerationPointer(stateDir, next);
+    return next;
+  }
   const next: RuntimeGenerationPointer = {
     schemaVersion: 1,
-    active: target,
-    previous: pointer.active,
-    ...(pointer.pending && pointer.pending.generationId !== target.generationId ? { pending: pointer.pending } : {}),
+    active,
+    previousGenerationId: pointer.active.generationId,
   };
   writeRuntimeGenerationPointer(stateDir, next);
   return next;
@@ -355,9 +484,9 @@ export function runtimeUpdateId(manifest: Pick<RuntimeGenerationManifest, "build
 }
 
 export class RuntimeGenerationGuard {
-  constructor(readonly reference: RuntimeGenerationReference) {}
+  constructor(readonly reference: RuntimeGenerationReference, private readonly persisted?: RuntimeGenerationVerification) {}
   verify(): RuntimeGenerationManifest {
-    return verifyRuntimeGeneration(this.reference);
+    return verifyRuntimeGeneration(this.reference, false, this.persisted);
   }
 }
 

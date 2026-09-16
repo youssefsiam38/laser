@@ -3,7 +3,7 @@ import {
   selectRuntimeGeneration,
   type UpdateTransaction,
 } from "@lasercode/cli";
-import type { RuntimeActivationState } from "@lasercode/protocol";
+import { runtimeUpdatePresentation, type ActivationBlockers, type RuntimeActivationState, type RuntimeUpdateNoticeState } from "@lasercode/protocol";
 import type { UpdateStatus } from "./api.js";
 import type { HostLink } from "./host-link.js";
 import type { NativeUpdateMarker } from "./native-update.js";
@@ -36,7 +36,7 @@ export class DesktopUpdateActivation {
   discover(marker: NativeUpdateMarker): UpdateStatus {
     this.marker = marker;
     const transaction = this.transactions.read(marker.updateId);
-    if (!transaction) return this.set({ state: "failed", updateId: marker.updateId, version: marker.version, message: "The downloaded update could not be prepared. Download it again." });
+    if (!transaction) return this.set(this.notice("failed", marker));
     return this.set(this.statusFor(transaction, marker));
   }
 
@@ -54,7 +54,7 @@ export class DesktopUpdateActivation {
         : await this.options.link.prepareActivation(marker.updateId, marker.generationId);
       return this.applyGate(gate);
     } catch {
-      return this.fail("activation_prepare_failed", "The update could not be prepared. Your current work is still running.");
+      return this.fail("activation_prepare_failed");
     }
   }
 
@@ -66,14 +66,9 @@ export class DesktopUpdateActivation {
       const transaction = this.requireTransaction(marker.updateId);
       if (transaction.phase === "parking") this.transactions.transition(marker.updateId, "staged");
       this.stopPolling();
-      return this.set({
-        state: "downloaded",
-        updateId: marker.updateId,
-        version: marker.version,
-        message: "Update downloaded. Prepare a restart when your current work is finished.",
-      });
+      return this.set(this.notice("downloaded", marker));
     } catch {
-      return this.fail("activation_cancel_failed", "The app could not reopen new work yet. Try Keep working again.");
+      return this.fail("activation_cancel_failed");
     }
   }
 
@@ -87,21 +82,19 @@ export class DesktopUpdateActivation {
         return false;
       }
       let transaction = this.requireTransaction(marker.updateId);
-      if (transaction.phase !== "ready") return false;
+      if (transaction.phase !== "ready") {
+        this.set(this.statusFor(transaction, marker));
+        return false;
+      }
       const pointer = selectRuntimeGeneration(this.options.stateDir, marker.generationId);
       if (pointer.active.generationId !== marker.generationId) return false;
       transaction = this.transactions.transition(marker.updateId, "selected");
       transaction = this.transactions.transition(marker.updateId, "restarting");
       this.stopPolling();
-      this.set({
-        state: "restarting",
-        updateId: marker.updateId,
-        version: marker.version,
-        message: "Restarting into the verified update…",
-      });
+      this.set(this.notice("restarting", marker));
       return transaction.phase === "restarting";
     } catch {
-      this.fail("activation_selection_failed", "The update could not be selected. Your current version remains active.");
+      this.fail("activation_selection_failed");
       return false;
     }
   }
@@ -110,26 +103,12 @@ export class DesktopUpdateActivation {
     const marker = this.marker;
     if (!marker) return;
     try {
-      let transaction = this.requireTransaction(marker.updateId);
+      const transaction = this.requireTransaction(marker.updateId);
       if (transaction.phase !== "restarting") return;
-      transaction = this.transactions.transition(marker.updateId, "failed", { failureCategory: "verified_launch_failed" });
-      transaction = this.transactions.transition(marker.updateId, "restoring");
-      selectRuntimeGeneration(this.options.stateDir, transaction.previousGenerationId);
-      this.transactions.transition(marker.updateId, "rolled_back");
-      this.set({
-        state: "failed",
-        updateId: marker.updateId,
-        version: marker.version,
-        message: "The update could not start. The previous verified version remains selected.",
-      });
-    } catch {
-      this.set({
-        state: "failed",
-        updateId: marker.updateId,
-        version: marker.version,
-        message: "The update could not start or restore the previous version. Reinstall the app before starting it.",
-      });
-    }
+      this.transactions.transition(marker.updateId, "failed", { failureCategory: "verified_launch_failed" });
+    } catch { /* The notice remains honest even if the transaction record is damaged. */ }
+    this.stopPolling();
+    this.set(this.notice("failed", marker));
   }
 
   completeLaunch(launch: { launchId: string; generationId: string; version: string }): void {
@@ -145,41 +124,25 @@ export class DesktopUpdateActivation {
       selectedLaunchId: launch.launchId,
       selectedVersion: launch.version,
     });
-    this.set({
-      state: "succeeded",
-      updateId: marker.updateId,
-      version: marker.version,
-      message: "The update is active.",
-    });
+    this.set(this.notice("succeeded", marker));
   }
 
   stop(): void { this.stopPolling(); }
 
   private applyGate(gate: RuntimeActivationState): UpdateStatus {
-    const marker = this.marker!;
+    const marker = this.marker;
+    if (!marker) return this.status;
     if (gate.updateId !== marker.updateId || gate.generationId !== marker.generationId) {
-      return this.fail("activation_identity_mismatch", "The update preparation reply did not match this update. Nothing was restarted.");
+      return this.fail("activation_identity_mismatch");
     }
     if (gate.phase === "parked" && Object.values(gate.blockers).every((count) => count === 0)) {
       const transaction = this.requireTransaction(marker.updateId);
       if (transaction.phase === "parking") this.transactions.transition(marker.updateId, "ready");
       this.stopPolling();
-      return this.set({
-        state: "ready",
-        updateId: marker.updateId,
-        version: marker.version,
-        blockers: gate.blockers,
-        message: "The update is ready to activate. Saved sessions are kept. No active work will be stopped.",
-      });
+      return this.set(this.notice("ready", marker, gate.blockers));
     }
     this.startPolling();
-    return this.set({
-      state: "parking",
-      updateId: marker.updateId,
-      version: marker.version,
-      blockers: gate.blockers,
-      message: "Waiting for current work to finish.",
-    });
+    return this.set(this.notice("parking", marker, gate.blockers));
   }
 
   private startPolling(): void {
@@ -199,9 +162,9 @@ export class DesktopUpdateActivation {
     this.timer = undefined;
   }
 
-  private fail(category: string, message: string): UpdateStatus {
+  private fail(category: string): UpdateStatus {
     const marker = this.marker;
-    if (!marker) return this.set({ state: "error", message });
+    if (!marker) return this.set({ state: "error", message: runtimeUpdatePresentation("failed").detail });
     try {
       const transaction = this.requireTransaction(marker.updateId);
       if (transaction.phase !== "succeeded" && transaction.phase !== "rolled_back") {
@@ -209,7 +172,7 @@ export class DesktopUpdateActivation {
       }
     } catch { /* The person-facing refusal still stands. */ }
     this.stopPolling();
-    return this.set({ state: "failed", updateId: marker.updateId, version: marker.version, message });
+    return this.set(this.notice("failed", marker));
   }
 
   private requireTransaction(updateId: string): UpdateTransaction {
@@ -219,13 +182,26 @@ export class DesktopUpdateActivation {
   }
 
   private statusFor(transaction: UpdateTransaction, marker: NativeUpdateMarker): UpdateStatus {
-    if (transaction.phase === "parking") return { state: "parking", updateId: marker.updateId, version: marker.version, message: "Waiting for current work to finish." };
-    if (transaction.phase === "ready") return { state: "ready", updateId: marker.updateId, version: marker.version, message: "The update is ready to activate. Saved sessions are kept. No active work will be stopped." };
-    if (transaction.phase === "selected" || transaction.phase === "restarting") return { state: "restarting", updateId: marker.updateId, version: marker.version, message: "Restarting into the verified update…" };
-    if (transaction.phase === "succeeded") return { state: "succeeded", updateId: marker.updateId, version: marker.version, message: "The update is active." };
-    if (transaction.phase === "failed") return { state: "failed", updateId: marker.updateId, version: marker.version, message: "The update could not be activated. Your current version remains selected." };
-    if (transaction.phase === "restoring" || transaction.phase === "rolled_back") return { state: "failed", updateId: marker.updateId, version: marker.version, message: "The update could not start. The previous verified version remains selected." };
-    return { state: "downloaded", updateId: marker.updateId, version: marker.version, message: "Update downloaded. Prepare a restart when your current work is finished." };
+    if (transaction.phase === "parking") return this.notice("parking", marker);
+    if (transaction.phase === "ready") return this.notice("ready", marker);
+    if (transaction.phase === "selected" || transaction.phase === "restarting") return this.notice("restarting", marker);
+    if (transaction.phase === "succeeded") return this.notice("succeeded", marker);
+    if (transaction.phase === "failed" || transaction.phase === "restoring" || transaction.phase === "rolled_back") return this.notice("failed", marker);
+    return this.notice("downloaded", marker);
+  }
+
+  private notice(state: RuntimeUpdateNoticeState, marker: NativeUpdateMarker, blockers?: ActivationBlockers): UpdateStatus {
+    const presentation = runtimeUpdatePresentation(state, blockers);
+    return {
+      state,
+      updateId: marker.updateId,
+      version: marker.version,
+      title: presentation.title,
+      message: presentation.detail,
+      action: presentation.action,
+      ...(presentation.actionLabel ? { actionLabel: presentation.actionLabel } : {}),
+      ...(blockers ? { blockers } : {}),
+    };
   }
 
   private set(status: UpdateStatus): UpdateStatus {

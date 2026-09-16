@@ -62,9 +62,13 @@ export class NativeUpdateWatch {
     const marker = readNativeUpdateMarker(join(this.options.resources, "native-update.json"));
     if (!marker || marker.version === this.options.running) return undefined;
     try {
-      const manifestPath = join(dirname(this.options.resources), "runtime-generation.json");
+      const manifestPath = join(dirname(this.options.resources), "runtime-manifest.json");
       const reference = runtimeReferenceFromManifest(manifestPath);
-      const manifest = verifyRuntimeGeneration(reference, true);
+      const retained = readRuntimeGenerationPointer(this.options.stateDir);
+      const verification = [retained?.active, retained?.pending]
+        .find((selection) => selection?.generationId === reference.generationId
+          && selection.installRoot === reference.installRoot)?.verification;
+      const manifest = verifyRuntimeGeneration(reference, false, verification);
       if (reference.generationId !== marker.generationId
         || reference.manifestDigest !== marker.manifestDigest
         || manifest.buildIdentity !== marker.buildIdentity

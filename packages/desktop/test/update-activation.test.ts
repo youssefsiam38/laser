@@ -22,8 +22,8 @@ function harness() {
   vi.useFakeTimers();
   const root = mkdtempSync(join(tmpdir(), "desktop-update-activation-")); roots.push(root);
   const stateDir = join(root, "state");
+  const install = join(root, "installed");
   const generation = (name: string, version: string) => {
-    const install = join(root, name);
     mkdirSync(join(install, "app"), { recursive: true });
     const cli = join(install, "app", "cli.js");
     const worker = join(install, "app", "worker.js");
@@ -34,8 +34,8 @@ function harness() {
     });
   };
   const old = generation("old", "1.0.0");
-  const target = generation("target", "1.1.0");
   const oldReference = runtimeReferenceFromManifest(old.path);
+  const target = generation("target", "1.1.0");
   const targetReference = runtimeReferenceFromManifest(target.path);
   writeRuntimeGenerationPointer(stateDir, { schemaVersion: 1, active: oldReference, pending: targetReference });
   const marker: NativeUpdateMarker = {
@@ -102,18 +102,25 @@ it("correlates download, parking, selection and exact launch success", async () 
   h.activation.stop();
 });
 
-it("restores the previous verified generation when the selected host cannot prove launch", async () => {
+it("keeps the fixed-root selection and offers honest recovery when verified launch fails", async () => {
   const h = harness();
   h.activation.discover(h.marker);
   h.setBlockers({});
   await h.activation.prepare();
   await h.activation.activate();
   const selected = readRuntimeGenerationPointer(h.stateDir)!;
-  const previousId = selected.previous!.generationId;
+  expect(selected.previousGenerationId).toBeDefined();
   h.activation.failLaunch();
-  expect(readRuntimeGenerationPointer(h.stateDir)?.active.generationId).toBe(previousId);
-  expect(new UpdateTransactionStore(h.stateDir).read(h.marker.updateId)?.phase).toBe("rolled_back");
-  expect(h.statuses.at(-1)).toMatchObject({ state: "failed", updateId: h.marker.updateId });
+  expect(readRuntimeGenerationPointer(h.stateDir)?.active.generationId).toBe(h.marker.generationId);
+  expect(new UpdateTransactionStore(h.stateDir).read(h.marker.updateId)?.phase).toBe("failed");
+  expect(h.statuses.at(-1)).toMatchObject({
+    state: "failed",
+    updateId: h.marker.updateId,
+    action: "retry",
+    actionLabel: "Try again",
+  });
+  expect((h.statuses.at(-1) as { message: string }).message).toContain("reinstall the app");
+  expect((h.statuses.at(-1) as { message: string }).message).toContain("available to restore");
   h.activation.stop();
 });
 

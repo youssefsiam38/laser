@@ -17,7 +17,7 @@
  * restarts on its own. `autoInstallOnAppQuit` means the next ordinary quit
  * picks it up, which is the polite version of the same thing.
  */
-import { PRODUCT_NAME } from "@lasercode/protocol";
+import { PRODUCT_NAME, runtimeUpdatePresentation } from "@lasercode/protocol";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -161,11 +161,15 @@ export class Updater {
           return;
         }
         const updateId = createHash("sha256").update(`${buildIdentity}\0${generationId}`).digest("hex");
+        const presentation = runtimeUpdatePresentation("downloaded");
         this.publish({
           state: "downloaded",
           updateId,
           version: info.version,
-          message: "Update downloaded. Prepare a restart when your current work is finished.",
+          title: presentation.title,
+          message: presentation.detail,
+          action: presentation.action,
+          ...(presentation.actionLabel ? { actionLabel: presentation.actionLabel } : {}),
         });
       });
       autoUpdater.on("error", (error: Error) => {

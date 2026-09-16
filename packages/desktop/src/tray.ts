@@ -216,20 +216,12 @@ export class TrayController {
       case "unsupported":
         return [];
       case "downloaded":
-        return [{ label: "Prepare restart", click: () => this.options.onInstallUpdate() }];
       case "failed":
-        return [{ label: "Update not activated", enabled: false }];
-      case "parking":
-        return [{ label: "Waiting for current work to finish…", enabled: false }];
       case "ready":
-        return [
-          {
-            label: `Restart and update${this.update.version ? ` to ${this.update.version}` : ""}`,
-            click: () => this.options.onInstallUpdate(),
-          },
-        ];
+        return [{ label: this.update.actionLabel ?? this.update.title, click: () => this.options.onInstallUpdate() }];
+      case "parking":
       case "restarting":
-        return [{ label: "Restarting into the update…", enabled: false }];
+        return [{ label: this.update.title, enabled: false }];
       case "downloading":
         return [
           {

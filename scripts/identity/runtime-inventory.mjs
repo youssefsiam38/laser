@@ -41,7 +41,7 @@ function collect(root, starts, include = () => true) {
 }
 
 function executableFile(path, stat) {
-  if (["native-update.json", "native-update-template.json", "runtime-generation.json"].includes(basename(path))) return false;
+  if (["native-update.json", "native-update-template.json", "runtime-manifest.json", "runtime-generation.json"].includes(basename(path))) return false;
   return EXECUTABLE_EXTENSIONS.has(extname(path).toLowerCase())
     || (stat.mode & 0o111) !== 0
     || basename(path) === "app.asar";

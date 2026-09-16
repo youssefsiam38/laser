@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   UpdateTransactionStore,
+  prepareRuntimeGeneration,
+  readRuntimeGenerationPointer,
   runtimeReferenceFromManifest,
   runtimeUpdateId,
   writeRuntimeGenerationPointer,
@@ -76,6 +78,17 @@ it("announces only a verified correlated install, stages it and never decides to
     targetGenerationId: marker.generationId,
     targetVersion: marker.version,
   });
+});
+
+it("activates an unattended fixed-root upgrade on the next closed-app launch", () => {
+  const f = installedFixture(), ready = vi.fn();
+  const before = readRuntimeGenerationPointer(f.stateDir)!.active.generationId;
+  const marker = f.publish("1.0.1", "closed");
+  const launched = prepareRuntimeGeneration(f.stateDir, f.cli);
+  expect(launched.pointer.active.generationId).toBe(marker.generationId);
+  expect(launched.pointer.previousGenerationId).toBe(before);
+  expect(launched.pointer.pending).toBeUndefined();
+  expect(ready).not.toHaveBeenCalled();
 });
 
 it("polling stops on exit and a subsequent verified update is announced once", () => {

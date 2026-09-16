@@ -19,6 +19,7 @@ import {
   HostServer,
   RuntimeGenerationGuard,
   migrateFormerIdentities,
+  readRuntimeGenerationPointer,
   runtimeReferenceFromEnvironment,
   type HostRelayOptions,
   type RuntimeGenerationReference,
@@ -90,7 +91,12 @@ export async function runDaemon(options: DaemonOptions): Promise<void> {
   const launchId = launch.data;
   const runtimeGeneration = options.runtimeGeneration ?? runtimeReferenceFromEnvironment(process.env);
   if (!runtimeGeneration) throw new Error("the host launcher did not bind a runtime generation");
-  const runtimeManifest = new RuntimeGenerationGuard(runtimeGeneration).verify();
+  const selected = readRuntimeGenerationPointer(paths.stateDir)?.active;
+  const persisted = selected?.generationId === runtimeGeneration.generationId
+    && selected.installRoot === runtimeGeneration.installRoot
+    ? selected.verification
+    : undefined;
+  const runtimeManifest = new RuntimeGenerationGuard(runtimeGeneration, persisted).verify();
   // Refuse a competing launch before it can replace the record that makes the
   // live host adoptable and stoppable. The port guard closes the no-record race.
   const existing = await inspectHost(paths);

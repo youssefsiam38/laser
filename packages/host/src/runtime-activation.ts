@@ -3,6 +3,7 @@ import {
   ProtocolError,
   isTerminalRunStatus,
   methodPolicy,
+  methodStartsWork,
   type ActivationBlockers,
   type ClientMethod,
   type RuntimeActivationState,
@@ -13,18 +14,6 @@ import { readRuntimeGenerationPointer, verifyRuntimeGeneration } from "./runtime
 import type { TaskRegister } from "./tasks/register.js";
 import type { WorkerPool } from "./worker-pool.js";
 
-const NEW_ROOTS = new Set<ClientMethod>([
-  "session/new",
-  "session/prompt",
-  "session/goal/action",
-  "session/pending/add",
-  "session/pending/edit",
-  "session/pending/steer",
-  "pi/session/steer",
-  "pi/session/follow_up",
-  "pi/session/compact",
-  "pi/transcribe/begin",
-]);
 const ACTIVATION_METHODS = new Set<ClientMethod>([
   "pi/runtime/activation/prepare",
   "pi/runtime/activation/status",
@@ -64,7 +53,7 @@ export class RuntimeActivationGate {
 
   /** Called around every routed request, even before a gate exists. */
   enter(method: ClientMethod): () => void {
-    if (this.gate && NEW_ROOTS.has(method)) {
+    if (this.gate && methodStartsWork(method)) {
       throw new ProtocolError(
         ErrorCodes.SessionBusy,
         "An update is waiting for current work to finish. Keep working by cancelling update preparation first.",
@@ -160,10 +149,10 @@ export class RuntimeActivationGate {
 
   private verifyTarget(generationId: string): void {
     const pointer = readRuntimeGenerationPointer(this.stateDir);
-    const target = pointer && [pointer.active, pointer.previous, pointer.pending]
+    const target = pointer && [pointer.active, pointer.pending]
       .find((reference) => reference?.generationId === generationId);
     if (!target) throw new ProtocolError(ErrorCodes.InvalidParams, "That runtime generation is not staged for activation.");
-    try { verifyRuntimeGeneration(target); }
+    try { verifyRuntimeGeneration(target, false, target.verification); }
     catch { throw new ProtocolError(ErrorCodes.InvalidParams, "The staged update could not be verified. Download it again before preparing a restart."); }
   }
 }
