@@ -16,7 +16,7 @@ Authoritative detail, evidence and ownership live in `STATUS_DETAILED.md`; `STAT
 | RP-3 | M18-T3 | browser gate/review `a0111f9` + correction `66ac605` + T4/T5/T6/T7 counter mapping `4ba58bd4`; final pressure subsection/closeout waits RP-8 | RP-1 |
 | RP-4 | M18-T4 | done — worker-owned atomic release/retirement, fair LRU unload and hard replay floors integrated at `eb18e147`; exact-head convergence verified | RP-2 |
 | RP-4b | M18-T17 | done — bounded token-safe naming lifecycle integrated at `890e6a86`; no-model parked intents retire while actual naming pins; focused worker 45, real-host E2E 4 and host 636 pass | RP-4 |
-| RP-4c | M18-T18 | in progress — host route lease serializes safe unload with ensure-open plus path-routed mutation; implementation follows `/tmp/m18-t15-session-reopen-plan.md`; blocks the unchanged repeat baseline | RP-4, RP-4b |
+| RP-4c | M18-T18 | done — integrated `916e30fa` (implementation/correction `55abfb12`/`c0754b3e`); one fail-closed route authority covers live reads, load/fork bookkeeping and exclusive moves; three unchanged exact-SHA full-mode scenario-5 runs completed with zero survivors | RP-4, RP-4b |
 | RP-5 | M18-T5 | done — byte/count-bounded unpinned hydrated views, light identities, complete pins, exact revision-fenced tail handoff and incremental counters integrated at `4f34a614` | RP-2 |
 | RP-5b | M18-T16 | done — integrated `42344a58` (implementation `2fca59d3`); every hydrated view is hard-bounded, large bodies use revision-fenced authoritative ranges, focused/full/browser gates pass, and exact-tip full-mode scenarios 1–5 completed with zero survivors | RP-5, RP-10 |
 | RP-6 | M18-T6 | done — integrated `a256efe`; reviewed membership, task/log retention and cleanup/security gates | RP-2 |
@@ -24,7 +24,7 @@ Authoritative detail, evidence and ownership live in `STATUS_DETAILED.md`; `STAT
 | RP-8 | M18-T8 | in progress — integrated-base threshold calibration complete with unchanged provisional values; source waits RP-10 schema handoff and pinned-view audit | RP-4, RP-5 |
 | RP-9 | M18-T9 | done — integrated `dd637f3` | protocol integration follows RP-1 |
 | RP-10 | M18-T10 | done — reviewed bounded device tail cache integrated at `c7375791`; parent exact-tip cache 113 + readiness 18, UI types/build, lifecycle/race browser matrices and same-workload memory evidence pass | RP-5, RP-9 |
-| RP-11 | M18-T11 | in progress — mapping the integrated device-cache/readiness seam before implementation; provisional paint remains local-first and every mutation host-authority-fenced | RP-10 |
+| RP-11 | M18-T11 | in progress — implementation `fa68dd02` paints warm validated cache tails provisionally in-frame, fences mutations and reconciles canonically; focused/full/browser gates pass and independent review is active | RP-10 |
 | RP-12 | M18-T12 | done — integrated `e9e3d8d` | RP-9 |
 | RP-13 | M18-T13 | done — host policy/storage isolation through `1e4eeba`; reviewed real-host browser matrices `a0111f9` | RP-12 |
 | RP-14 | M18-T14 | todo | RP-1..RP-13, M18-T15 |
