@@ -140,7 +140,13 @@ describe("the pressure vocabulary", () => {
 
   it("bounds an event id and a project id to shapes nothing can hide in", () => {
     expect(MEMORY_PRESSURE_EVENT_ID.test("mp_41")).toBe(true);
-    for (const bad of ["mp_", "mp_x", "41", "mp_41 ", "mp_0123456789012345", "MP_41", "mp_-1"]) {
+    expect(MEMORY_PRESSURE_EVENT_ID.test("mp_1")).toBe(true);
+    // A canonical ordinal: journals count from one, and one number has one
+    // spelling, so two ids can never name the same event.
+    for (const bad of ["mp_0", "mp_01", "mp_007"]) {
+      expect(MEMORY_PRESSURE_EVENT_ID.test(bad), bad).toBe(false);
+    }
+    for (const bad of ["mp_", "mp_x", "41", "mp_41 ", "mp_1234567890123456", "MP_41", "mp_-1"]) {
       expect(MEMORY_PRESSURE_EVENT_ID.test(bad), bad).toBe(false);
     }
     expect(MEMORY_PRESSURE_PROJECT_ID.test("0123456789abcdef")).toBe(true);
@@ -188,9 +194,22 @@ describe("a measured number", () => {
     // RP-1 may keep a human note beside an unavailable measure; this wire may not.
     expect(memoryPressureMeasureSchema.safeParse({ status: "unavailable", reason: "process_gone", detail: "gone" }).success).toBe(false);
     expect(memoryPressureMeasureSchema.safeParse({ status: "unavailable", reason: "because" }).success).toBe(false);
-    expect(memoryPressureMeasureSchema.safeParse({ status: "available", value: Number.POSITIVE_INFINITY }).success).toBe(false);
-    expect(memoryPressureMeasureSchema.safeParse({ status: "available", value: Number.NaN }).success).toBe(false);
-    expect(memoryPressureMeasureSchema.safeParse({ status: "available", value: "273297408" }).success).toBe(false);
+    // Every value here is a count of bytes, so it is a real, exact,
+    // non-negative integer and not any finite number.
+    for (const value of [
+      Number.POSITIVE_INFINITY,
+      Number.NaN,
+      -1,
+      -0.5,
+      1.5,
+      Number.MAX_SAFE_INTEGER + 1,
+      "273297408",
+      null,
+    ]) {
+      expect(memoryPressureMeasureSchema.safeParse({ status: "available", value }).success, String(value)).toBe(false);
+    }
+    expect(memoryPressureMeasureSchema.safeParse({ status: "available", value: Number.MAX_SAFE_INTEGER }).success).toBe(true);
+    expect(memoryPressureMeasureSchema.safeParse({ status: "available", value: 0 }).success).toBe(true);
     // Absent is absent: a missing measure is never a zero somebody may add up.
     expect(memoryPressureMeasureSchema.safeParse({ status: "available" }).success).toBe(false);
   });
@@ -201,6 +220,33 @@ describe("a measured number", () => {
     expect(memoryPressureInputSchema.safeParse({ kind: "physical", value: measure, warningBytes: -1 }).success).toBe(false);
     const many = Array.from({ length: MEMORY_PRESSURE_INPUTS_MAX + 1 }, () => ({ kind: "heap", value: measure }));
     expect(memoryPressureRoleStateSchema.safeParse({ ...roleState, inputs: many }).success).toBe(false);
+  });
+
+  it("takes one input of each kind, never two answers to one question", () => {
+    const twice = [
+      { kind: "physical", value: measure },
+      { kind: "physical", value: { status: "unavailable", reason: "collector_failed" } },
+    ];
+    expect(memoryPressureRoleStateSchema.safeParse({ ...roleState, inputs: twice }).success).toBe(false);
+    const each = MEMORY_PRESSURE_INPUT_KINDS.map((kind) => ({ kind, value: measure }));
+    expect(memoryPressureRoleStateSchema.safeParse({ ...roleState, inputs: each }).success).toBe(true);
+  });
+
+  it("keeps coverage arithmetic rather than an opinion", () => {
+    const complete = { expected: 2, answered: 2, complete: true } as const;
+    expect(memoryPressureRoleStateSchema.safeParse({ ...roleState, coverage: complete }).success).toBe(true);
+    // Nothing asked, nothing missing.
+    expect(memoryPressureRoleStateSchema.safeParse({ ...roleState, coverage: { expected: 0, answered: 0, complete: true } }).success).toBe(true);
+    for (const coverage of [
+      { expected: 1, answered: 2, complete: false, reason: "incomplete_coverage" }, // more answers than askings
+      { expected: 2, answered: 2, complete: false, reason: "incomplete_coverage" }, // equal but called incomplete
+      { expected: 2, answered: 1, complete: true }, // unequal but called complete
+      { expected: 2, answered: 2, complete: true, reason: "incomplete_coverage" }, // complete with an excuse
+      { expected: 2, answered: 1, complete: false }, // incomplete without one
+      { expected: 2, answered: 1, complete: false, reason: "collector_failed" }, // the wrong one
+    ]) {
+      expect(memoryPressureRoleStateSchema.safeParse({ ...roleState, coverage }).success, JSON.stringify(coverage)).toBe(false);
+    }
   });
 
   it("keeps a role honest about what it could not read", () => {
@@ -230,8 +276,34 @@ describe("what a step reports", () => {
     ).toBe(false);
   });
 
+  it("cannot contradict itself about releasing or refusing", () => {
+    const released = { action: "task_records", outcome: "released", released: { bytes: 1_024 } } as const;
+    expect(memoryPressureActionResultSchema.parse(released)).toEqual(released);
+    // A release says what it released, and only a release says so.
+    expect(memoryPressureActionResultSchema.safeParse({ action: "task_records", outcome: "released" }).success).toBe(false);
+    expect(memoryPressureActionResultSchema.safeParse({ ...released, released: {} }).success).toBe(false);
+    expect(
+      memoryPressureActionResultSchema.safeParse({ action: "task_records", outcome: "held", released: { bytes: 1 } }).success,
+    ).toBe(false);
+    // Refusing is a step of its own: it always names a refusal, and no other
+    // step ever does.
+    const refused = { action: "admission_refused", outcome: "refused", refusal: "new_project_worker" } as const;
+    expect(memoryPressureActionResultSchema.parse(refused)).toEqual(refused);
+    expect(memoryPressureActionResultSchema.safeParse({ action: "admission_refused", outcome: "refused" }).success).toBe(false);
+    expect(
+      memoryPressureActionResultSchema.safeParse({ action: "replay_suffixes", outcome: "held", refusal: "older_history" }).success,
+    ).toBe(false);
+  });
+
   it("gives a recorded event an identity its sender could not have chosen", () => {
     expect(memoryPressureEventSchema.parse(event)).toEqual(event);
+    // The row's own rules travel with the identity: an event that contradicts
+    // itself would be a record of something that never happened.
+    expect(memoryPressureEventSchema.safeParse({ ...event, outcome: "held" }).success).toBe(false);
+    expect(memoryPressureEventSchema.safeParse({ ...event, refusal: "older_history" }).success).toBe(false);
+    for (const id of ["mp_0", "mp_01"]) {
+      expect(memoryPressureEventSchema.safeParse({ ...event, id }).success, id).toBe(false);
+    }
     expect(memoryPressureEventSchema.safeParse({ ...event, id: "/home/me" }).success).toBe(false);
     expect(memoryPressureEventSchema.safeParse({ ...event, project: "/home/me/project" }).success).toBe(false);
     expect(memoryPressureEventSchema.safeParse({ ...event, level: "unknown" }).success).toBe(false);
@@ -273,10 +345,64 @@ describe("the three messages", () => {
   it("round-trips a directive answer and bounds it to one row per step", () => {
     const answer = { applied: true, ran: report.ran, events: report.results, stores: report.stores };
     expect(memoryPressureDirectiveResultSchema.parse(answer)).toEqual(answer);
-    const tooMany = Array.from({ length: MEMORY_PRESSURE_RESULTS_MAX + 1 }, () => ({ action: "task_records", outcome: "released" }));
+    const tooMany = Array.from({ length: MEMORY_PRESSURE_RESULTS_MAX + 1 }, () => ({
+      action: "task_records",
+      outcome: "released",
+      released: { bytes: 1 },
+    }));
     expect(memoryPressureDirectiveResultSchema.safeParse({ ...answer, events: tooMany }).success).toBe(false);
     expect(memoryPressureDirectiveResultSchema.safeParse({ ...answer, ran: [...tooMany.map(() => "task_records")] }).success).toBe(false);
     expect(memoryPressureDirectiveResultSchema.safeParse({ ...answer, applied: "yes" }).success).toBe(false);
+  });
+
+  it("refuses a pass that contradicts itself about which steps it ran", () => {
+    const answer = { applied: true, ran: report.ran, events: report.results, stores: report.stores };
+    // A step runs once and reports once.
+    expect(
+      memoryPressureDirectiveResultSchema.safeParse({
+        ...answer,
+        ran: ["ephemeral_caches", "ephemeral_caches"],
+        events: [
+          { action: "ephemeral_caches", outcome: "held", reason: "pins_held" },
+          { action: "ephemeral_caches", outcome: "held", reason: "pins_held" },
+        ],
+      }).success,
+    ).toBe(false);
+    // Every step that ran has a row, and no row names a step that did not.
+    expect(memoryPressureDirectiveResultSchema.safeParse({ ...answer, ran: ["ephemeral_caches"] }).success).toBe(false);
+    expect(memoryPressureDirectiveResultSchema.safeParse({ ...answer, events: [report.results[0]!] }).success).toBe(false);
+    expect(
+      memoryPressureDirectiveResultSchema.safeParse({
+        ...answer,
+        ran: ["ephemeral_caches", "task_records"],
+        events: report.results,
+      }).success,
+    ).toBe(false);
+    // And the steps are told in the policy's order, gaps allowed.
+    const reversed = {
+      ...answer,
+      ran: ["replay_suffixes", "ephemeral_caches"],
+      events: [report.results[1]!, report.results[0]!],
+    };
+    expect(memoryPressureDirectiveResultSchema.safeParse(reversed).success).toBe(false);
+    expect(
+      memoryPressureDirectiveResultSchema.safeParse({
+        ...answer,
+        ran: ["ephemeral_caches", "task_records"],
+        events: [report.results[0]!, { action: "task_records", outcome: "held", reason: "work_budget" }],
+      }).success,
+    ).toBe(true);
+  });
+
+  it("holds a worker's report to the same order and correspondence", () => {
+    expect(
+      memoryPressureReportSchema.safeParse({
+        ...report,
+        ran: ["replay_suffixes", "ephemeral_caches"],
+        results: [report.results[1]!, report.results[0]!],
+      }).success,
+    ).toBe(false);
+    expect(memoryPressureReportSchema.safeParse({ ...report, results: [report.results[0]!] }).success).toBe(false);
   });
 
   it("round-trips a worker's report and keeps every identity out of it", () => {
@@ -293,6 +419,14 @@ describe("the three messages", () => {
     const publish = { epoch: 4, summary };
     expect(memoryPressurePublishSchema.parse(publish)).toEqual(publish);
     expect(memoryPressureSummarySchema.parse(summary)).toEqual(summary);
+    // One row per role and one entry per refusal, so a summary cannot say two
+    // things about the same thing. With four roles and six refusal kinds, that
+    // is also what keeps the arrays inside their bounds.
+    expect(memoryPressureSummarySchema.safeParse({ ...summary, roles: [roleState, roleState] }).success).toBe(false);
+    expect(memoryPressureSummarySchema.safeParse({ ...summary, refusing: ["older_history", "older_history"] }).success).toBe(false);
+    const everyRole = MEMORY_PRESSURE_ROLES.map((role) => ({ ...roleState, role }));
+    expect(memoryPressureSummarySchema.safeParse({ ...summary, roles: everyRole }).success).toBe(true);
+    expect(memoryPressureSummarySchema.safeParse({ ...summary, refusing: [...MEMORY_PRESSURE_REFUSALS] }).success).toBe(true);
     const tooManyRoles = Array.from({ length: MEMORY_PRESSURE_ROLES_MAX + 1 }, () => roleState);
     expect(memoryPressureSummarySchema.safeParse({ ...summary, roles: tooManyRoles }).success).toBe(false);
     const tooManyRefusals = Array.from({ length: MEMORY_PRESSURE_REFUSALS_MAX + 1 }, () => "older_history");
@@ -317,11 +451,22 @@ describe("the three messages", () => {
       },
     };
     expect(memoryPressureJournalPageSchema.parse(page)).toEqual(page);
-    const tooMany = Array.from({ length: MEMORY_PRESSURE_EVENTS_PAGE + 1 }, (_, index) => ({ ...event, id: `mp_${index}` }));
+    const tooMany = Array.from({ length: MEMORY_PRESSURE_EVENTS_PAGE + 1 }, (_, index) => ({ ...event, id: `mp_${index + 1}` }));
     expect(memoryPressureJournalPageSchema.safeParse({ ...page, events: tooMany }).success).toBe(false);
     expect(
       memoryPressureJournalPageSchema.safeParse({ ...page, retention: { ...page.retention, lastEvictedBy: "pressure" } }).success,
     ).toBe(false);
+    // The bounds are this module's; a sender may not describe a journal nobody
+    // agreed to, and may not report retaining more than one allows.
+    for (const retention of [
+      { ...page.retention, maxEvents: MEMORY_PRESSURE_EVENTS_MAX + 1 },
+      { ...page.retention, maxAgeMs: MEMORY_PRESSURE_EVENT_MAX_AGE_MS * 2 },
+      { ...page.retention, maxBytes: MEMORY_PRESSURE_EVENTS_MAX_BYTES * 2 },
+      { ...page.retention, events: MEMORY_PRESSURE_EVENTS_MAX + 1 },
+      { ...page.retention, bytes: MEMORY_PRESSURE_EVENTS_MAX_BYTES + 1 },
+    ]) {
+      expect(memoryPressureJournalPageSchema.safeParse({ ...page, retention }).success, JSON.stringify(retention)).toBe(false);
+    }
   });
 });
 
