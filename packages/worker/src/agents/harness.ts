@@ -128,6 +128,8 @@ const ROLE_TASK_EXCERPT = 2000;
 const PENDING_EVENTS_MAX = 50;
 /** How many runs this worker keeps in memory; the host owns the durable record. */
 export const MAX_RETAINED_RUNS = 500;
+/** Persisted parent rows inspected once per recovery batch after worker loss. */
+export const RECOVERY_ENTRY_SCAN_MAX = 512;
 
 /** What the harness needs from the worker around it. */
 export interface SessionHost {
@@ -325,19 +327,22 @@ export function modelUnavailableMessage(model: AgentModelChoice): string {
   return `The model ${model.provider}/${model.id} is not available: connect ${model.provider} in Settings → Providers and models, or choose another model for this agent.`;
 }
 
-/** Inspect a bounded entry without serialising transcript bodies or following prototypes. */
-function containsRecoveredEvent(value: unknown, runId: string, depth = 0, budget = { left: 2_000 }): boolean {
-  if (depth > 10 || budget.left-- <= 0 || value === null || typeof value !== "object") return false;
-  const record = value as Record<string, unknown>;
-  const details = record.details;
-  if (record.customType === AGENT_EVENT_MESSAGE_TYPE && details && typeof details === "object") {
-    const event = details as { runId?: unknown; endedBy?: { initiator?: unknown }; run?: { endedBy?: { initiator?: unknown } } };
-    if (event.runId === runId && (event.endedBy?.initiator === "harness" || event.run?.endedBy?.initiator === "harness")) return true;
+/** The one persisted shape written by the companion's ordinary event listener. */
+function recoveredRunId(entry: unknown): string | undefined {
+  if (entry === null || typeof entry !== "object") return undefined;
+  const message = (entry as { message?: unknown }).message;
+  if (message === null || typeof message !== "object") return undefined;
+  const envelope = message as { customType?: unknown; details?: unknown };
+  if (envelope.customType !== AGENT_EVENT_MESSAGE_TYPE || envelope.details === null || typeof envelope.details !== "object") {
+    return undefined;
   }
-  for (const child of Object.values(record)) {
-    if (containsRecoveredEvent(child, runId, depth + 1, budget)) return true;
-  }
-  return false;
+  const event = envelope.details as {
+    runId?: unknown;
+    endedBy?: { initiator?: unknown };
+    run?: { endedBy?: { initiator?: unknown } };
+  };
+  if (typeof event.runId !== "string") return undefined;
+  return event.endedBy?.initiator === "harness" || event.run?.endedBy?.initiator === "harness" ? event.runId : undefined;
 }
 
 export class AgentHarness {
@@ -421,25 +426,45 @@ export class AgentHarness {
   }
 
   /**
-   * Re-deliver a terminal child failure after this worker replaced one that
-   * died. The parent must already be loaded; the host never asks us to open an
-   * unrelated runtime merely to write recovery state.
+   * Re-deliver terminal child failures after this worker replaced one that
+   * died. Each loaded parent gets one bounded tail read for the whole batch;
+   * the host never asks us to open an unrelated runtime merely to write
+   * recovery state.
    */
-  async recoverFailure(run: AgentRun): Promise<"delivered" | "duplicate"> {
-    if (run.status !== "failed" || run.endedBy?.initiator !== "harness" || !run.parent) {
-      throw new HarnessError("Only a harness-owned terminal child failure can be recovered.");
+  async recoverFailures(runs: readonly AgentRun[]): Promise<Array<"delivered" | "duplicate">> {
+    const groups = new Map<string, { driver: SessionDriver; runs: AgentRun[] }>();
+    for (const run of runs) {
+      if (run.status !== "failed" || run.endedBy?.initiator !== "harness" || !run.parent) {
+        throw new HarnessError("Only a harness-owned terminal child failure can be recovered.");
+      }
+      const parent = this.byPath.get(run.parent.sessionPath);
+      const driver = this.host.driver(run.parent.sessionPath);
+      if (!parent || !driver) throw new HarnessError("The failed run's parent is not loaded in this worker.");
+      if (parent.projectCwd !== run.projectCwd) throw new HarnessError("The failed run does not belong to this parent's project.");
+      const group = groups.get(run.parent.sessionPath) ?? { driver, runs: [] };
+      group.runs.push(run);
+      groups.set(run.parent.sessionPath, group);
     }
-    const parent = this.byPath.get(run.parent.sessionPath);
-    const driver = this.host.driver(run.parent.sessionPath);
-    if (!parent || !driver) throw new HarnessError("The failed run's parent is not loaded in this worker.");
-    if (parent.projectCwd !== run.projectCwd) throw new HarnessError("The failed run does not belong to this parent's project.");
 
-    const stored = await driver.entries();
-    const tail = stored.entries.slice(-MAX_RETAINED_RUNS);
-    const inspectionBudget = { left: 10_000 };
-    if (tail.some((entry) => containsRecoveredEvent(entry, run.runId, 0, inspectionBudget))) return "duplicate";
-    this.notifyParent(run, undefined);
-    return "delivered";
+    const outcomes = new Map<string, "delivered" | "duplicate">();
+    for (const group of groups.values()) {
+      const stored = await group.driver.entries({ tail: RECOVERY_ENTRY_SCAN_MAX });
+      const seen = new Set(stored.entries.map(recoveredRunId).filter((id): id is string => id !== undefined));
+      for (const run of group.runs) {
+        if (seen.has(run.runId)) {
+          outcomes.set(run.runId, "duplicate");
+          continue;
+        }
+        this.notifyParent(run, undefined);
+        seen.add(run.runId);
+        outcomes.set(run.runId, "delivered");
+      }
+    }
+    return runs.map((run) => outcomes.get(run.runId) ?? "duplicate");
+  }
+
+  async recoverFailure(run: AgentRun): Promise<"delivered" | "duplicate"> {
+    return (await this.recoverFailures([run]))[0]!;
   }
 
   roleOf(sessionPath: string): HarnessSessionRole | undefined {

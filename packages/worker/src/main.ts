@@ -19,6 +19,7 @@ import {
   FRAME_MAX_BYTES,
   LineDecoder,
   PRODUCT_NAME,
+  configuredOldSpaceBytes,
   parseJsonLine,
   type FeatureId,
   type JsonRpcMessage,
@@ -29,7 +30,6 @@ import { installUnhandledRejectionGuard } from "./process-guards.js";
 import { AgentResolutionError, assertBundledAgent } from "./resolve-pi.js";
 import { WorkerServer } from "./server.js";
 import { applyEnvironment } from "./environment.js";
-import { configuredOldSpaceBytes } from "./pressure.js";
 
 const PROTOCOL_FD = Number(process.env[ENV.workerFd] ?? 3);
 

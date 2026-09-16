@@ -18,7 +18,6 @@ import {
   PRESSURE_QUIET_COOLDOWN_MS,
   PRESSURE_REPORT_WINDOW_MS,
   PRESSURE_WARNING_COOLDOWN_MS,
-  configuredOldSpaceBytes,
   createWorkerPressureController,
   inputsOf,
   rowOf,
@@ -153,13 +152,6 @@ function harness(options: {
 }
 
 describe("the explicit old-space configuration", () => {
-  it("parses only a positive explicit Node flag, with the last spelling effective", () => {
-    expect(configuredOldSpaceBytes([])).toBeUndefined();
-    expect(configuredOldSpaceBytes(["--max-old-space-size=bad"])).toBeUndefined();
-    expect(configuredOldSpaceBytes(["--max-old-space-size=256", "--max-old-space-size", "448"])).toBe(448 * MiB);
-    expect(configuredOldSpaceBytes(["--max-old-space-size=448", "--max-old-space-size=0"])).toBeUndefined();
-  });
-
   it("reports configured and measured limits separately, and omits absent configuration", async () => {
     const configured = harness({ configuredOldSpaceBytes: 1728 * MiB });
     configured.feed(

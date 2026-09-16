@@ -140,20 +140,20 @@ export class AgentRunRegistry {
   }
 
   /**
-   * One bounded page from a worker-loss incident, in stable creation order.
-   * The registry remains authoritative; the recovery queue stores ids only.
+   * One bounded page of recoverable harness failures, in stable creation order.
+   * A single project cursor can therefore cover successive worker-loss
+   * incidents without retaining another copy of their rows.
    */
-  recoveryFailures(cwd: string, incidentAt: string, afterRunId: string | undefined, limit: number): AgentRun[] {
+  recoveryFailures(cwd: string, afterRunId: string | undefined, limit: number): AgentRun[] {
     const key = canonical(cwd);
     const ordered = [...this.runs.values()]
       .filter((run) => canonical(run.projectCwd) === key
-        && run.updatedAt === incidentAt
         && run.status === "failed"
         && run.endedBy?.initiator === "harness"
         && run.parent !== null)
       .sort((a, b) => (this.order.get(a.runId) ?? 0) - (this.order.get(b.runId) ?? 0));
-    const start = afterRunId === undefined ? 0 : Math.max(0, ordered.findIndex((run) => run.runId === afterRunId) + 1);
-    return structuredClone(ordered.slice(start, start + Math.max(0, limit)));
+    const cursor = afterRunId === undefined ? -1 : ordered.findIndex((run) => run.runId === afterRunId);
+    return structuredClone(ordered.slice(cursor + 1, cursor + 1 + Math.max(0, limit)));
   }
 
   /** The host failed unexpectedly: no person chose to stop these runs. */

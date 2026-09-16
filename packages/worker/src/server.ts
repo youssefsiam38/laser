@@ -1121,15 +1121,14 @@ export class WorkerServer {
         this.definitions.sync(req.params.snapshot);
         return {} satisfies Result<"agents/sync">;
       case "pi/worker/recover-agent-failures": {
-        const delivered: string[] = [];
-        for (const run of req.params.runs as AgentRun[]) {
+        const runs = req.params.runs as AgentRun[];
+        for (const run of runs) {
           if (run.projectCwd !== this.options.cwd || run.status !== "failed" || run.endedBy?.initiator !== "harness" || !run.parent) {
             throw new ProtocolError(ErrorCodes.InvalidParams, "The recovery batch contains a run this worker cannot recover.");
           }
-          await this.harness.recoverFailure(run);
-          delivered.push(run.runId);
         }
-        return { delivered } satisfies Result<"pi/worker/recover-agent-failures">;
+        await this.harness.recoverFailures(runs);
+        return { delivered: runs.map((run) => run.runId) } satisfies Result<"pi/worker/recover-agent-failures">;
       }
       case "agents/skills":
         this.assertCwd(req.params.cwd);

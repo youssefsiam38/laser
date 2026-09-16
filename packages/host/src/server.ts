@@ -33,10 +33,11 @@ import { totalmem } from "node:os";
 import { basename, dirname, extname, join, normalize, relative, resolve as resolvePath, sep } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { channelIdFor, type KeyPair } from "@lasercode/crypto";
-import { AGENT_FAILURE_RECOVERY_BATCH_MAX, ENV, ErrorCodes, FRAME_MAX_BYTES, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, isProviderCaptureMessage, isTerminalRunStatus, projectEnvWorkerConfig, type AgentRun, type ClientRequests, type DeviceGrants, type EnvironmentPolicyInput, type HostNotifications, type JsonRpcNotification, type LogEntry, type MemoryPressurePublish, type NamerState, type ProviderCaptureMeta, type ProviderCaptureOmission, type ResourceRetainedStores, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
+import { ENV, ErrorCodes, FRAME_MAX_BYTES, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, isProviderCaptureMessage, isTerminalRunStatus, projectEnvWorkerConfig, type ClientRequests, type DeviceGrants, type EnvironmentPolicyInput, type HostNotifications, type JsonRpcNotification, type LogEntry, type MemoryPressurePublish, type NamerState, type ProviderCaptureMeta, type ProviderCaptureOmission, type ResourceRetainedStores, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
 import { AccessControl, isLoopbackAddress, localActor, pairedActor, type ActorIdentity } from "./access.js";
 import { AccessAudit } from "./access-audit.js";
 import { loadEnvironmentPolicy } from "./environment-policy.js";
+import { AgentFailureRecoveryQueue } from "./agents/failure-recovery.js";
 import { suggestBeamModel } from "./agents/models.js";
 import { AgentRunRegistry } from "./agents/runs.js";
 import { SkillsCheck } from "./agents/skills-check.js";
@@ -161,15 +162,6 @@ export interface HostServerOptions {
 }
 
 /** What the host needs to relay to already-paired devices. Pairing itself is M5/M7. */
-interface AgentFailureRecoveryState {
-  queued: Set<string>;
-  overflow?: { incidentAt: string; afterRunId?: string };
-  inFlight?: { ids: string[]; overflowAfterRunId?: string };
-  unavailableLogged: boolean;
-}
-
-const AGENT_FAILURE_RECOVERY_IDS_MAX = 500;
-
 export interface HostRelayOptions {
   /** Relay WebSocket URL, e.g. `wss://relay.example/ws`. */
   url: string;
@@ -361,8 +353,8 @@ export class HostServer {
   private namerQualifying = false;
   /** Provider sets already benchmarked this run, so a failure is not retried on every worker. */
   private readonly namerQualified = new Set<string>();
-  /** Bounded ids awaiting delivery through the successor worker. */
-  private readonly agentFailureRecovery = new Map<string, AgentFailureRecoveryState>();
+  /** Bounded harness-failure handoff through exact successor workers. */
+  private readonly agentFailureRecovery: AgentFailureRecoveryQueue;
 
   constructor(private readonly options: HostServerOptions = {}) {
     this.uiDir = options.uiDir ?? defaultUiDir();
@@ -548,6 +540,7 @@ export class HostServer {
         this.logs?.observeAgentRun(run);
       },
     });
+    this.agentFailureRecovery = new AgentFailureRecoveryQueue(this.runs, (line) => this.log(line));
     this.skillsCheck = new SkillsCheck({
       agents: () => this.agents.snapshot().agents,
       report: (warnings) => this.agents.setWarnings(warnings),
@@ -678,9 +671,9 @@ export class HostServer {
       },
       onWorkerLoss: ({ cwd, message }) => {
         const changed = this.runs.workerLost(cwd, message);
-        this.queueAgentFailureRecovery(cwd, changed);
+        this.agentFailureRecovery.note(cwd, changed);
       },
-      onReopened: (client, cwd, paths) => this.deliverAgentFailureRecovery(client, cwd, paths),
+      onReopened: (client, cwd, paths) => this.agentFailureRecovery.deliver(client, cwd, paths),
       onStderr: (cwd, text) => {
         const safe = this.privateLogText(text);
         this.log(`[worker ${cwd}] ${safe.trimEnd()}`);
@@ -694,7 +687,7 @@ export class HostServer {
           this.forgetSessionsOf(info.cwd, "the worker stopped");
         } else if (info.status === "ready") this.attention.workerRecovered(info.cwd);
         else if (info.status === "retired") {
-          this.agentFailureRecovery.delete(canonical(info.cwd));
+          this.agentFailureRecovery.forget(info.cwd);
           this.attention.workerRetired(info.cwd);
           this.forgetSessionsOf(info.cwd, "the worker went to sleep");
           this.runs.workerLost(info.cwd);
@@ -938,105 +931,6 @@ export class HostServer {
     this.runs.close();
     await new Promise<void>((resolve) => this.wss.close(() => resolve()));
     await new Promise<void>((resolve) => this.http.close(() => resolve()));
-  }
-
-  /** Queue ids only; the durable run registry remains the source of payloads. */
-  private queueAgentFailureRecovery(cwd: string, runs: readonly AgentRun[]): void {
-    const recoverable = runs.filter((run) => run.parent !== null);
-    if (recoverable.length === 0) return;
-    const key = canonical(cwd);
-    const state = this.agentFailureRecovery.get(key) ?? {
-      queued: new Set<string>(),
-      unavailableLogged: false,
-    };
-    let lastQueuedThisIncident: string | undefined;
-    for (const run of recoverable) {
-      if (state.queued.has(run.runId) || state.inFlight?.ids.includes(run.runId)) continue;
-      if (state.queued.size < AGENT_FAILURE_RECOVERY_IDS_MAX) {
-        state.queued.add(run.runId);
-        lastQueuedThisIncident = run.runId;
-      } else if (!state.overflow) {
-        state.overflow = {
-          incidentAt: run.updatedAt,
-          ...(lastQueuedThisIncident !== undefined ? { afterRunId: lastQueuedThisIncident } : {}),
-        };
-      }
-    }
-    this.agentFailureRecovery.set(key, state);
-  }
-
-  /**
-   * Hand bounded batches to exactly the successor that reopened their parents.
-   * A refusal or exit leaves `inFlight` intact for the next successful reopen.
-   */
-  private async deliverAgentFailureRecovery(client: WorkerClient, cwd: string, paths: readonly string[]): Promise<void> {
-    const key = canonical(cwd);
-    const state = this.agentFailureRecovery.get(key);
-    if (!state) return;
-    const reopened = new Set(paths);
-
-    while (client.alive) {
-      if (!state.inFlight) {
-        const ids: string[] = [];
-        for (const id of state.queued) {
-          const run = this.runs.get(id);
-          if (!run) {
-            state.queued.delete(id);
-            continue;
-          }
-          if (!run.parent || !reopened.has(run.parent.sessionPath)) continue;
-          ids.push(id);
-          if (ids.length >= AGENT_FAILURE_RECOVERY_BATCH_MAX) break;
-        }
-        if (ids.length > 0) {
-          state.inFlight = { ids };
-        } else if (state.queued.size === 0 && state.overflow) {
-          const page = this.runs.recoveryFailures(
-            cwd,
-            state.overflow.incidentAt,
-            state.overflow.afterRunId,
-            AGENT_FAILURE_RECOVERY_BATCH_MAX,
-          );
-          if (page.length === 0) {
-            delete state.overflow;
-            continue;
-          }
-          const eligible = page.filter((run) => run.parent && reopened.has(run.parent.sessionPath));
-          if (eligible.length === 0) {
-            if (!state.unavailableLogged) {
-              state.unavailableLogged = true;
-              this.log("agent failure recovery unavailable: no failed run had a reopened parent");
-            }
-            return;
-          }
-          state.inFlight = { ids: eligible.map((run) => run.runId), overflowAfterRunId: page.at(-1)!.runId };
-        } else {
-          if (state.queued.size > 0 && !state.unavailableLogged) {
-            state.unavailableLogged = true;
-            this.log("agent failure recovery unavailable: a failed run's parent was not reopened");
-          }
-          if (state.queued.size === 0 && !state.overflow) this.agentFailureRecovery.delete(key);
-          return;
-        }
-      }
-
-      const batch = state.inFlight.ids.map((id) => this.runs.get(id)).filter((run): run is AgentRun => run !== undefined);
-      if (batch.length !== state.inFlight.ids.length) {
-        delete state.inFlight;
-        continue;
-      }
-      const result = await client.request<{ delivered: string[] }>("pi/worker/recover-agent-failures", { runs: batch });
-      if (result.delivered.length !== batch.length || result.delivered.some((id, index) => id !== batch[index]!.runId)) {
-        throw new Error("the recovered worker did not acknowledge the exact failure batch");
-      }
-      for (const id of state.inFlight.ids) state.queued.delete(id);
-      if (state.inFlight.overflowAfterRunId !== undefined && state.overflow) {
-        state.overflow.afterRunId = state.inFlight.overflowAfterRunId;
-      }
-      delete state.inFlight;
-      state.unavailableLogged = false;
-    }
-    throw new Error("the recovered worker exited before agent failure delivery completed");
   }
 
   /**

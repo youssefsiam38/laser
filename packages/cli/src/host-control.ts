@@ -6,7 +6,7 @@
  * host attaches to it and prints the URL, which is what a person means when
  * they type it a second time.
  */
-import { PRODUCT_NAME, environmentOverlay } from "@lasercode/protocol";
+import { PRODUCT_NAME, environmentOverlay, nodeLaunchEnvironment } from "@lasercode/protocol";
 import { hostOldSpaceMiB, oldSpaceSizeFlag } from "@lasercode/host";
 import { HostRpc, HostRpcError } from "./rpc.js";
 import { spawn } from "node:child_process";
@@ -53,14 +53,7 @@ export function unpacked(file: string): string {
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Remove every case spelling before Node parses its environment. */
-export function nodeLaunchEnvironment(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const env = { ...base };
-  for (const key of Object.keys(env)) {
-    if (key.toUpperCase() === "NODE_OPTIONS") delete env[key];
-  }
-  return env;
-}
+export { nodeLaunchEnvironment };
 
 /** Node argv for every CLI-owned host generation: flag, then script. */
 export function hostDaemonArgv(paths: LaserPaths, capacityBytes?: number, entry = cliEntry()): string[] {
@@ -72,10 +65,22 @@ export interface ForegroundHostResult {
   signal: NodeJS.Signals | null;
 }
 
+interface ForegroundSignalSource {
+  on(signal: "SIGINT" | "SIGTERM", listener: () => void): unknown;
+  off(signal: "SIGINT" | "SIGTERM", listener: () => void): unknown;
+}
+
 /** Re-exec because an already-created V8 isolate cannot acquire a heap flag. */
 export async function runForegroundHost(
   paths: LaserPaths,
-  options: { nodeBinary?: string; entry?: string; capacityBytes?: number; env?: NodeJS.ProcessEnv } = {},
+  options: {
+    nodeBinary?: string;
+    entry?: string;
+    capacityBytes?: number;
+    env?: NodeJS.ProcessEnv;
+    /** Test seam; production forwards signals from this process. */
+    signalSource?: ForegroundSignalSource;
+  } = {},
 ): Promise<ForegroundHostResult> {
   mkdirSync(paths.stateDir, { recursive: true });
   const child = spawn(
@@ -88,8 +93,23 @@ export async function runForegroundHost(
     },
   );
   return new Promise<ForegroundHostResult>((resolve, reject) => {
-    child.once("error", reject);
-    child.once("exit", (code, signal) => resolve({ code, signal }));
+    const signals = options.signalSource ?? process;
+    const forwardSigint = () => { if (child.exitCode === null) child.kill("SIGINT"); };
+    const forwardSigterm = () => { if (child.exitCode === null) child.kill("SIGTERM"); };
+    const cleanup = () => {
+      signals.off("SIGINT", forwardSigint);
+      signals.off("SIGTERM", forwardSigterm);
+    };
+    signals.on("SIGINT", forwardSigint);
+    signals.on("SIGTERM", forwardSigterm);
+    child.once("error", (error) => {
+      cleanup();
+      reject(error);
+    });
+    child.once("exit", (code, signal) => {
+      cleanup();
+      resolve({ code, signal });
+    });
   });
 }
 

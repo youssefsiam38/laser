@@ -155,8 +155,8 @@ describe("AgentRunRegistry", () => {
       endedBy: { initiator: "harness" },
     });
     expect(notified.map((r) => r.runId)).toEqual(["live", "live-2"]);
-    expect(registry.recoveryFailures(PROJECT, changed[0]!.updatedAt, undefined, 1).map((r) => r.runId)).toEqual(["live"]);
-    expect(registry.recoveryFailures(PROJECT, changed[0]!.updatedAt, "live", 32).map((r) => r.runId)).toEqual(["live-2"]);
+    expect(registry.recoveryFailures(PROJECT, undefined, 1).map((r) => r.runId)).toEqual(["live"]);
+    expect(registry.recoveryFailures(PROJECT, "live", 32).map((r) => r.runId)).toEqual(["live-2"]);
     expect(registry.get("done")?.status).toBe("completed");
     expect(registry.get("elsewhere")?.status).toBe("running");
     expect(registry.workerLost(PROJECT)).toEqual([]); // nothing left to fail

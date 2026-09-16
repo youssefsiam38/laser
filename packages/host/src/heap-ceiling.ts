@@ -1,6 +1,7 @@
 import { totalmem } from "node:os";
+import { MIB_BYTES, configuredOldSpaceBytes } from "@lasercode/protocol";
 
-const MIB = 1024 * 1024;
+const MIB = MIB_BYTES;
 const OLD_SPACE_QUANTUM_MIB = 64;
 
 export const HOST_OLD_SPACE_FLOOR_MIB = 448;
@@ -82,27 +83,4 @@ export function oldSpaceBytes(oldSpaceMiB: number): number {
   return bytes;
 }
 
-/**
- * Read only an explicit Node old-space flag. V8's measured heap limit is a
- * different fact and must never be reverse-engineered into configuration.
- */
-export function configuredOldSpaceBytes(execArgv: readonly string[]): number | undefined {
-  let raw: string | undefined;
-  for (let index = 0; index < execArgv.length; index += 1) {
-    const value = execArgv[index]!;
-    if (value === "--max-old-space-size") {
-      raw = execArgv[index + 1];
-      index += 1;
-      continue;
-    }
-    if (value.startsWith("--max-old-space-size=")) raw = value.slice("--max-old-space-size=".length);
-  }
-  if (raw === undefined || !/^[1-9]\d*$/.test(raw)) return undefined;
-  const mib = Number(raw);
-  if (!Number.isSafeInteger(mib)) return undefined;
-  try {
-    return oldSpaceBytes(mib);
-  } catch {
-    return undefined;
-  }
-}
+export { configuredOldSpaceBytes };

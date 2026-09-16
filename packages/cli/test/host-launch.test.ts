@@ -1,4 +1,5 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -24,6 +25,32 @@ describe("host Node launches", () => {
     expect(argv.slice(0, 3)).toEqual(["--max-old-space-size=448", "/app/cli.mjs", "__daemon"]);
     expect(nodeLaunchEnvironment({ HOME: "/tmp/home", NODE_OPTIONS: "--max-old-space-size=1", Node_Options: "--trace-warnings" }))
       .toEqual({ HOME: "/tmp/home" });
+  });
+
+  it.each(["SIGINT", "SIGTERM"] as const)("forwards %s and awaits the child's clean exit", async (signal) => {
+    const root = mkdtempSync(join(tmpdir(), "host-signal-"));
+    const entry = join(root, "signal.mjs");
+    const ready = join(root, "ready");
+    const stopped = join(root, "stopped");
+    writeFileSync(entry, `import { writeFileSync } from "node:fs";\nwriteFileSync(process.env.READY, "ready");\nfor (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { writeFileSync(process.env.STOPPED, signal); process.exit(0); });\nsetInterval(() => {}, 1000);\n`);
+    const signals = new EventEmitter();
+    try {
+      const running = runForegroundHost(paths(root), {
+        entry,
+        capacityBytes: 4096 * 1024 * 1024,
+        env: { READY: ready, STOPPED: stopped },
+        signalSource: signals,
+      });
+      for (let attempt = 0; attempt < 100 && !existsSync(ready); attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(existsSync(ready)).toBe(true);
+      signals.emit(signal);
+      await expect(running).resolves.toEqual({ code: 0, signal: null });
+      expect(readFileSync(stopped, "utf8")).toBe(signal);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("foreground re-exec runs in a fresh bounded isolate rather than this process", async () => {

@@ -27,6 +27,7 @@
  */
 import {
   MEMORY_PRESSURE_WORKER_ACTIONS,
+  configuredOldSpaceBytes,
   memoryPressureStoresSchema,
   parseMemoryPressureDirectiveResult,
   parseMemoryPressureReport,
@@ -73,26 +74,6 @@ export const PRESSURE_REPORT_WINDOW_MS = 5_000;
 export const PRESSURE_MAX_REPLAY_DROPS = 512;
 /** Sessions one pass may ask to keep less. */
 export const PRESSURE_MAX_TASK_SESSIONS = 16;
-
-const MIB = 1024 * 1024;
-
-/** Parse configuration only from Node's explicit argv, never from a measured limit. */
-export function configuredOldSpaceBytes(execArgv: readonly string[]): number | undefined {
-  let raw: string | undefined;
-  for (let index = 0; index < execArgv.length; index += 1) {
-    const value = execArgv[index]!;
-    if (value === "--max-old-space-size") {
-      raw = execArgv[index + 1];
-      index += 1;
-      continue;
-    }
-    if (value.startsWith("--max-old-space-size=")) raw = value.slice("--max-old-space-size=".length);
-  }
-  if (raw === undefined || !/^[1-9]\d*$/.test(raw)) return undefined;
-  const mib = Number(raw);
-  const bytes = mib * MIB;
-  return Number.isSafeInteger(mib) && Number.isSafeInteger(bytes) ? bytes : undefined;
-}
 
 /** What one step did, as this worker measured it. */
 export interface PressureActionOutcome {

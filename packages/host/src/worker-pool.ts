@@ -35,7 +35,7 @@ import { ErrorCodes, ProtocolError, environmentOverlay } from "@lasercode/protoc
 import { canonical } from "./trust.js";
 import { SessionRouteLeases } from "./session-route-lease.js";
 import { retirementRefused, retireWorker, type RetirementOutcome } from "./worker-retirement.js";
-import { workerOldSpaceMiB } from "./heap-ceiling.js";
+import { HeapCeilingCapacityError, workerOldSpaceMiB } from "./heap-ceiling.js";
 import { WorkerClient, nextWorkerGeneration, type WorkerClientOptions, type WorkerExit } from "./worker-client.js";
 
 export interface WorkerPoolOptions {
@@ -248,7 +248,6 @@ export class WorkerPool {
   private readonly sessionActivity = new Map<string, number>();
   private readonly now: () => number;
   private readonly setTimer: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
-  private readonly configuredWorkerOldSpaceMiB: number;
   private sweepTimer: ReturnType<typeof setInterval> | undefined;
   private closed = false;
   private preparing = false;
@@ -259,7 +258,6 @@ export class WorkerPool {
     this.leases = options.routeLeases ?? new SessionRouteLeases();
     this.now = options.now ?? Date.now;
     this.setTimer = options.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
-    this.configuredWorkerOldSpaceMiB = options.workerOldSpaceMiB ?? workerOldSpaceMiB();
     const sweepMs = options.sweepMs ?? DEFAULTS.sweepMs;
     if (sweepMs > 0) {
       this.sweepTimer = setInterval(() => this.sweep(), sweepMs);
@@ -871,6 +869,19 @@ export class WorkerPool {
     if (this.closed) throw new ProtocolError(ErrorCodes.DriverUnavailable, "the host is shutting down");
     if (entry.stopped) throw retiringError(entry.cwd);
 
+    let configuredWorkerOldSpaceMiB: number;
+    try {
+      // Capacity is read for each spawn, not for the pool: an undersized
+      // project is a project-level refusal and must never prevent HostServer
+      // itself from being constructed.
+      configuredWorkerOldSpaceMiB = this.options.workerOldSpaceMiB ?? workerOldSpaceMiB();
+    } catch (error) {
+      if (error instanceof HeapCeilingCapacityError) {
+        this.setStatus(entry, "crashed", error.message);
+      }
+      throw error;
+    }
+
     // Nothing may start until the host's own before-workers work has settled.
     // A failure there is not a reason to refuse a worker: the cleanup reports
     // itself and the machine carries on.
@@ -930,7 +941,7 @@ export class WorkerPool {
         ? { env: { ...(this.options.env ?? {}), ...(this.options.envForCwd?.(entry.cwd) ?? {}) } }
         : {}),
       ...(projectTrusted !== undefined ? { projectTrusted } : {}),
-      oldSpaceMiB: this.configuredWorkerOldSpaceMiB,
+      oldSpaceMiB: configuredWorkerOldSpaceMiB,
       onNotification: (n) => this.onWorkerNotification(entry, client, n),
       onExit: (code, signal, exit) => this.onExit(entry, client, code, signal, exit),
       ...(this.options.onStderr ? { onStderr: (t: string) => { if (!entry.warm) this.options.onStderr?.(entry.cwd, t); } } : {}),
@@ -1043,6 +1054,12 @@ export class WorkerPool {
     // offer the explicit Retry instead of a silent "starting" forever.
     if (client.spawnError) {
       entry.readyAt = undefined;
+      this.options.onWorkerLoss?.({
+        cwd: entry.cwd,
+        generation: client.generation,
+        exit,
+        message: "The project's worker could not start before this run ended.",
+      });
       this.setStatus(
         entry,
         "crashed",

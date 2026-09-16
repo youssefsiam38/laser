@@ -16,6 +16,7 @@ import {
   LineDecoder,
   isNotification,
   isResponse,
+  nodeLaunchEnvironment,
   type JsonRpcError,
   type JsonRpcMessage,
   type JsonRpcNotification,
@@ -208,12 +209,9 @@ export class WorkerClient {
     this.workerGeneration = options.workerGeneration;
     if (options.workerGeneration !== undefined) args.push("--worker-generation", String(options.workerGeneration));
 
-    const env: NodeJS.ProcessEnv = { ...(options.baseEnv ?? process.env), ...options.env, [ENV.workerFd]: "3" };
     // Node reads this before our entry exists. An inherited value could raise,
     // lower or invalidate the explicit ceiling, so no spelling reaches a child.
-    for (const key of Object.keys(env)) {
-      if (key.toUpperCase() === "NODE_OPTIONS") delete env[key];
-    }
+    const env = nodeLaunchEnvironment({ ...(options.baseEnv ?? process.env), ...options.env, [ENV.workerFd]: "3" });
     this.child = spawn(options.nodeBinary ?? process.execPath, args, {
       // --cwd configures the driver; it does not change the process directory.
       // Engine defaults and subprocesses must never inherit the host's state cwd.

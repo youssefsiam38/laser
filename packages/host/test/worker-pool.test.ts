@@ -121,6 +121,34 @@ afterEach(async () => {
 });
 
 describe("WorkerPool readiness", () => {
+  it("constructs the host pool on an undersized machine and refuses only the project spawn", async () => {
+    const constrained = vi.spyOn(process, "constrainedMemory").mockReturnValue(1024 * 1024 * 1024);
+    try {
+      expect(() => {
+        pool = new WorkerPool({
+          workerMain,
+          onNotification: (_cwd, notification) => notifications.push(notification),
+          onStatus: (info) => statuses.push(info),
+          setTimer: (fn, ms) => {
+            timers.push({ fn, ms });
+            return setTimeout(() => {}, 0) as ReturnType<typeof setTimeout>;
+          },
+        });
+      }).not.toThrow();
+
+      await expect(pool.get(project)).rejects.toThrow(/needs at least 1728 MiB/);
+      expect(pool.liveClients()).toEqual([]);
+      expect(timers).toEqual([]);
+      expect(statuses).toMatchObject([{
+        cwd: project,
+        status: "crashed",
+        message: expect.stringContaining("needs at least 1728 MiB"),
+      }]);
+    } finally {
+      constrained.mockRestore();
+    }
+  });
+
   it("exposes a warm entry as reserved while it is still before process spawn", async () => {
     let release!: () => void;
     const held = new Promise<void>((resolve) => { release = resolve; });
@@ -587,12 +615,14 @@ describe("WorkerPool", () => {
   });
 
   it("reports a worker that could not be spawned as crashed, with a retry", async () => {
-    pool = makePool({ nodeBinary: join(dir, "no-such-node") });
+    const losses: Array<{ exit: { kind: string }; message: string }> = [];
+    pool = makePool({ nodeBinary: join(dir, "no-such-node"), onWorkerLoss: (loss) => losses.push(loss) });
     await expect(pool.get(project)).rejects.toThrow(/ENOENT/);
     const info = pool.workerInfo(project)!;
     expect(info.status).toBe("crashed");
     expect(info.canRestart).toBe(true);
     expect(info.message).toMatch(/could not start/);
+    expect(losses).toMatchObject([{ exit: { kind: "spawn_error" }, message: expect.stringContaining("could not start") }]);
   });
 
   it("passes --state-dir and primes a worker before get() resolves, surviving a refused prime", async () => {

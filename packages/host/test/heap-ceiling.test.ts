@@ -3,7 +3,6 @@ import {
   HOST_OLD_SPACE_FLOOR_MIB,
   WORKER_OLD_SPACE_CAP_MIB,
   WORKER_OLD_SPACE_FLOOR_MIB,
-  configuredOldSpaceBytes,
   hostOldSpaceMiB,
   oldSpaceMiBFor,
   oldSpaceSizeFlag,
@@ -37,12 +36,5 @@ describe("the final old-space ceilings", () => {
     expect(oldSpaceMiBFor("project_worker", undefined)).toBe(1728);
     expect(() => hostOldSpaceMiB(447 * MiB)).toThrow(/needs at least 448 MiB/);
     expect(() => workerOldSpaceMiB(1727 * MiB)).toThrow(/needs at least 1728 MiB/);
-  });
-
-  it("reports only a valid explicit flag, with the last spelling effective", () => {
-    expect(configuredOldSpaceBytes([])).toBeUndefined();
-    expect(configuredOldSpaceBytes(["--max-old-space-size=bad"])).toBeUndefined();
-    expect(configuredOldSpaceBytes(["--max-old-space-size=256", "--max-old-space-size", "448"])).toBe(448 * MiB);
-    expect(configuredOldSpaceBytes(["--max-old-space-size=448", "--max-old-space-size=0"])).toBeUndefined();
   });
 });
