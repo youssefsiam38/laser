@@ -480,3 +480,46 @@ it("leaves the ordinary bounds, the shared timer and the disk budget where they 
   expect(TERMINAL_TASKS_MAX).toBe(200);
   expect(TERMINAL_TASK_MAX_AGE_MS).toBe(60 * 60_000);
 });
+
+it("measures the excerpt bound against finished commands alone, never a running one's", () => {
+  const dir = scratch();
+  const clock = 1_000_000;
+  const { retention, forgotten } = session({ now: () => clock });
+
+  // A running command whose live tail has been released keeps an excerpt of
+  // its own — a large one here, far past the critical ceiling.
+  const running = fakeTask("running", stalledLog(dir, "running", retention), 0);
+  running.tail = 0;
+  running.excerpt = 1024 * 1024;
+  retention.track(running);
+
+  // Ten finished commands holding 40 KiB in all: inside critical's twenty
+  // records and inside its 128 KiB of excerpts.
+  for (let index = 0; index < 10; index += 1) {
+    terminal(retention, dir, `done-${index}`, { startedAtMs: index, endedAtMs: clock - 1_000 + index, excerpt: 4 * 1024 });
+  }
+  expect(retention.snapshot().excerptBytes).toBe(1024 * 1024 + 10 * 4 * 1024);
+
+  retention.releaseUnder("critical");
+
+  // Every finished command stays: the bound is about finished work, and
+  // finished work is well inside it. The running command is untouched.
+  expect(forgotten).toEqual([]);
+  expect(retention.snapshot().terminal).toBe(10);
+  expect(retention.snapshot().live).toBe(1);
+  expect(running.excerpt).toBe(1024 * 1024);
+  expect(running.tail).toBe(0);
+  // The session's published total still counts both, as it always has.
+  expect(retention.snapshot().excerptBytes).toBe(1024 * 1024 + 10 * 4 * 1024);
+
+  // And the bound still bites when finished work really is over it.
+  for (let index = 0; index < 30; index += 1) {
+    terminal(retention, dir, `heavy-${index}`, { startedAtMs: 100 + index, endedAtMs: clock - 900 + index, excerpt: 8 * 1024 });
+  }
+  retention.releaseUnder("critical");
+  const after = retention.snapshot();
+  expect(after.terminal).toBeLessThanOrEqual(20);
+  const terminalExcerpts = after.excerptBytes - 1024 * 1024;
+  expect(terminalExcerpts).toBeLessThanOrEqual(128 * 1024);
+  expect(after.live).toBe(1);
+});

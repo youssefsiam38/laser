@@ -404,6 +404,15 @@ export class SessionRetention {
     const total = ordered.length;
     /** How many of the oldest may still go before the floor is reached. */
     let mayForget = total - protectedCount;
+    /**
+     * Excerpt bytes held by **finished** commands alone.
+     *
+     * `this.excerpts` is the session's whole excerpt total, and a *running*
+     * command has one too once its live tail has been released. The bound here
+     * is about finished work, as its name and its documentation both say, so a
+     * running command's excerpt must not be able to push finished ones out.
+     */
+    let terminalExcerpts = ordered.reduce((sum, entry) => sum + entry.excerpt, 0);
     const forget = (entry: Tracked): void => {
       this.tracked.delete(entry.task.id);
       this.terminalCount -= 1;
@@ -411,6 +420,7 @@ export class SessionRetention {
       this.pending -= entry.pending;
       this.tails -= entry.tail;
       this.excerpts -= entry.excerpt;
+      terminalExcerpts -= entry.excerpt;
       this.evicted += 1;
       // The bytes are still this session's to account for and to release: an
       // in-memory bound never deletes a durable log.
@@ -429,7 +439,7 @@ export class SessionRetention {
       if (endedAt !== undefined && now - endedAt > limits.ageMs) forget(entry);
     }
     while (mayForget > 0 && ordered.length > limits.records) forget(ordered[0]!);
-    while (mayForget > 0 && ordered.length > 0 && this.excerpts > limits.excerptBytes) forget(ordered[0]!);
+    while (mayForget > 0 && ordered.length > 0 && terminalExcerpts > limits.excerptBytes) forget(ordered[0]!);
     if (limits.trimOrphans) {
       while (this.orphans.length > TERMINAL_TASKS_MAX) {
         const oldest = this.orphans.shift();
