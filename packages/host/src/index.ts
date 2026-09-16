@@ -21,6 +21,12 @@ export { WorkerPool, type WorkerPoolOptions } from "./worker-pool.js";
 export { WorkerClient, WorkerRpcError, defaultWorkerMain, type WorkerClientOptions } from "./worker-client.js";
 export { RuntimeActivationGate } from "./runtime-activation.js";
 export {
+  UPDATE_TRANSACTION_PHASES,
+  UpdateTransactionStore,
+  type UpdateTransaction,
+  type UpdateTransactionPhase,
+} from "./update-transaction.js";
+export {
   FeatureGenerationStore,
   RuntimeGenerationError,
   RuntimeGenerationGuard,
@@ -34,6 +40,9 @@ export {
   runtimeManifestDigest,
   runtimeReferenceFromEnvironment,
   runtimeReferenceFromManifest,
+  runtimeUpdateId,
+  selectRuntimeGeneration,
+  stageRuntimeGeneration,
   verifyRuntimeGeneration,
   writeRuntimeGenerationManifest,
   writeRuntimeGenerationPointer,

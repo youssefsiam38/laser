@@ -76,3 +76,19 @@ export { HostRpc, HostRpcError, describeRpcError, type NotificationHandler } fro
 export { listSessions, matchSessions, resolveSession, resolveProject } from "./session-ref.js";
 export { sessionFragment } from "./commands/session.js";
 export { CLI_VERSION } from "./version.js";
+export {
+  UpdateTransactionStore,
+  readRuntimeGenerationPointer,
+  runtimeReferenceFromManifest,
+  runtimeUpdateId,
+  selectRuntimeGeneration,
+  stageRuntimeGeneration,
+  verifyRuntimeGeneration,
+  writeRuntimeGenerationManifest,
+  writeRuntimeGenerationPointer,
+  type RuntimeGenerationManifest,
+  type RuntimeGenerationPointer,
+  type RuntimeGenerationReference,
+  type UpdateTransaction,
+  type UpdateTransactionPhase,
+} from "@lasercode/host";

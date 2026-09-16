@@ -108,6 +108,7 @@ export async function runDaemon(options: DaemonOptions): Promise<void> {
     stateDir: paths.stateDir,
     startedAt,
     cliVersion: CLI_VERSION,
+    generationId: runtimeGeneration.generationId,
     ...(identity !== undefined ? { identity } : {}),
   };
 

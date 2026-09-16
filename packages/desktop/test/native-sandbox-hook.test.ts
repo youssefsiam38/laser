@@ -36,7 +36,7 @@ describe("native Linux sandbox install hook", () => {
   it("publishes an atomic ready marker without restarting any running process", async () => {
     const source = await readFile(hookPath, "utf8");
 
-    expect(source).toContain('cp "$MANIFEST" "$MARKER.tmp"');
+    expect(source).toContain('cp "$TEMPLATE" "$MARKER.tmp"');
     expect(source).toContain('mv -f "$MARKER.tmp" "$MARKER"');
     expect(source).not.toMatch(/kill -|pkill|systemctl restart/);
   });

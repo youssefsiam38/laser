@@ -83,6 +83,8 @@ export interface HostProcessOptions {
   spawnProcess?: typeof spawn;
   onChange: (info: DesktopHostInfo) => void;
   confirmHostRefresh?: (runningVersion: string) => Promise<boolean>;
+  /** Exact target handshake, after launch id, generation and compiled version agree. */
+  onVerifiedLaunch?: (launch: { launchId: string; generationId: string; version: string }) => void;
 }
 
 /** A partial update to the published info. `message: null` clears the message. */
@@ -333,6 +335,11 @@ export class HostProcess {
           await this.stop();
           return this.publish({ state: "failed", message: "The installed version changed during startup. Restart the app and host together when you are ready." });
         }
+        const expectedGeneration = this.installedRuntime?.reference.generationId;
+        if (!expectedGeneration || status.record.generationId !== expectedGeneration) {
+          await this.stop();
+          return this.publish({ state: "failed", message: "The updated runtime could not be verified. Reinstall the app before trying again." });
+        }
         // The host answers; the agent it will load is the last thing to prove.
         // Running an agent nobody pinned, or one that cannot load, is worse
         // than not starting — and it must be said now rather than at the first
@@ -344,6 +351,11 @@ export class HostProcess {
           return this.publish({ state: "failed", message: `${agent.message} ${agent.fix}` });
         }
         log.line(`host ready at ${status.record.url} (pid ${status.record.pid})`);
+        this.options.onVerifiedLaunch?.({
+          launchId: status.record.launchId,
+          generationId: status.record.generationId,
+          version: status.record.cliVersion,
+        });
         this.readyAt = Date.now();
         return this.publish({
           state: "ready",

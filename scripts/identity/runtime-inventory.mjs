@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, extname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { readIdentity, repoRoot } from "./identity.mjs";
@@ -41,6 +41,7 @@ function collect(root, starts, include = () => true) {
 }
 
 function executableFile(path, stat) {
+  if (["native-update.json", "native-update-template.json", "runtime-generation.json"].includes(basename(path))) return false;
   return EXECUTABLE_EXTENSIONS.has(extname(path).toLowerCase())
     || (stat.mode & 0o111) !== 0
     || basename(path) === "app.asar";
@@ -88,7 +89,7 @@ export async function generatePackagedManifest({ installRoot, resourcesPath, pla
     if (!existsSync(entry)) throw new Error(`packaged runtime entry is missing: ${relative(root, entry)}`);
   }
   const files = collect(root, [root], executableFile);
-  const { writeRuntimeGenerationManifest } = await writer();
+  const { runtimeUpdateId, writeRuntimeGenerationManifest } = await writer();
   const result = writeRuntimeGenerationManifest({
     installRoot: root,
     files,
@@ -101,8 +102,20 @@ export async function generatePackagedManifest({ installRoot, resourcesPath, pla
     productVersion: JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")).version,
     buildIdentity: buildIdentity(),
   });
+  const marker = {
+    schemaVersion: 1,
+    version: result.manifest.productVersion,
+    buildIdentity: result.manifest.buildIdentity,
+    generationId: result.manifest.generationId,
+    manifestDigest: result.manifestDigest,
+    updateId: runtimeUpdateId(result.manifest),
+  };
+  const template = join(resources, "native-update-template.json");
+  const temporary = `${template}.tmp`;
+  writeFileSync(temporary, `${JSON.stringify(marker, null, 2)}\n`, { mode: 0o644 });
+  renameSync(temporary, template);
   console.log(`${readIdentity().displayName}: runtime generation ${result.manifest.generationId.slice(0, 12)}… (${result.manifest.inventory.length} files)`);
-  return result;
+  return { ...result, marker };
 }
 
 const invoked = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);

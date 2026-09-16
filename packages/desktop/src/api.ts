@@ -99,11 +99,15 @@ export type UpdateState =
   | "checking"
   | "available"
   | "downloading"
+  | "error"
+  | "downloaded"
+  | "parking"
   | "ready"
-  | "error";
+  | "restarting"
+  | "succeeded"
+  | "failed";
 
-export interface UpdateStatus {
-  state: UpdateState;
+interface UpdateStatusBase {
   /** The version waiting to be installed, when there is one. */
   version?: string;
   /** 0–100 while downloading. */
@@ -111,6 +115,15 @@ export interface UpdateStatus {
   /** Written for a person. */
   message?: string;
 }
+
+export type UpdateStatus =
+  | (UpdateStatusBase & { state: "unsupported" | "idle" | "checking" | "available" | "downloading" | "error"; updateId?: never })
+  | (UpdateStatusBase & {
+      state: "downloaded" | "parking" | "ready" | "restarting" | "succeeded" | "failed";
+      /** Durable correlation across download, gate, restart and result. */
+      updateId: string;
+      blockers?: { conversations: number; agents: number; questions: number; approvals: number; commands: number; mutations: number; workers: number };
+    });
 
 export interface WindowChromeState {
   maximized: boolean;
@@ -208,7 +221,11 @@ export interface LaserDesktop {
     restart(): void;
     status(): Promise<UpdateStatus>;
     check(): Promise<UpdateStatus>;
-    /** Quit and install a downloaded update. No-op unless the state is `ready`. */
+    /** Close new-work admission and wait without cancelling anything. */
+    prepare(): Promise<UpdateStatus>;
+    /** Reopen admission for the same update id. */
+    cancel(): Promise<UpdateStatus>;
+    /** Activate only after the exact transaction is parked and verified. */
     install(): void;
     onStatus(listener: (status: UpdateStatus) => void): () => void;
   };

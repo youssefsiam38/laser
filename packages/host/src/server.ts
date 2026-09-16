@@ -1763,7 +1763,11 @@ export class HostServer {
     const url = new URL(req.url ?? "/", "http://localhost");
     if (url.pathname === "/healthz") {
       res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" })
-        .end(JSON.stringify({ status: "ok", launchId: this.launchId }));
+        .end(JSON.stringify({
+          status: "ok",
+          launchId: this.launchId,
+          ...(this.options.runtimeGeneration ? { generationId: this.options.runtimeGeneration.generationId } : {}),
+        }));
       return;
     }
     if (!this.uiDir) {

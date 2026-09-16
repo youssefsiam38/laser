@@ -300,12 +300,13 @@ export function writeRuntimeGenerationPointer(stateDir: string, pointer: Runtime
 }
 
 /** Select on first install; otherwise retain current as pending and launch active. */
-export function prepareRuntimeGeneration(stateDir: string, currentEntry: string): {
+export function stageRuntimeGeneration(stateDir: string, currentEntry: string): {
   pointer: RuntimeGenerationPointer;
+  current: RuntimeGenerationReference;
   manifest: RuntimeGenerationManifest;
 } {
   const current = runtimeReferenceFromManifest(findRuntimeManifest(currentEntry));
-  verifyRuntimeGeneration(current, true);
+  const manifest = verifyRuntimeGeneration(current, true);
   let pointer = readRuntimeGenerationPointer(stateDir);
   if (!pointer) {
     pointer = { schemaVersion: 1, active: current };
@@ -318,8 +319,39 @@ export function prepareRuntimeGeneration(stateDir: string, currentEntry: string)
       writeRuntimeGenerationPointer(stateDir, pointer);
     }
   }
-  const manifest = verifyRuntimeGeneration(pointer.active);
-  return { pointer, manifest };
+  return { pointer, current, manifest };
+}
+
+export function prepareRuntimeGeneration(stateDir: string, currentEntry: string): {
+  pointer: RuntimeGenerationPointer;
+  manifest: RuntimeGenerationManifest;
+} {
+  const staged = stageRuntimeGeneration(stateDir, currentEntry);
+  const manifest = verifyRuntimeGeneration(staged.pointer.active);
+  return { pointer: staged.pointer, manifest };
+}
+
+/** The only activation write: verify target, then atomically replace one pointer. */
+export function selectRuntimeGeneration(stateDir: string, generationId: string): RuntimeGenerationPointer {
+  const pointer = readRuntimeGenerationPointer(stateDir);
+  if (!pointer) throw new RuntimeGenerationError("pointer");
+  const target = [pointer.active, pointer.previous, pointer.pending]
+    .find((reference) => reference?.generationId === generationId);
+  if (!target) throw new RuntimeGenerationError("pointer");
+  verifyRuntimeGeneration(target, true);
+  if (target.generationId === pointer.active.generationId && target.installRoot === pointer.active.installRoot) return pointer;
+  const next: RuntimeGenerationPointer = {
+    schemaVersion: 1,
+    active: target,
+    previous: pointer.active,
+    ...(pointer.pending && pointer.pending.generationId !== target.generationId ? { pending: pointer.pending } : {}),
+  };
+  writeRuntimeGenerationPointer(stateDir, next);
+  return next;
+}
+
+export function runtimeUpdateId(manifest: Pick<RuntimeGenerationManifest, "buildIdentity" | "generationId">): string {
+  return sha256(`${manifest.buildIdentity}\0${manifest.generationId}`);
 }
 
 export class RuntimeGenerationGuard {

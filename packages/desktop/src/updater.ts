@@ -18,6 +18,7 @@
  * picks it up, which is the polite version of the same thing.
  */
 import { PRODUCT_NAME } from "@lasercode/protocol";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
@@ -111,13 +112,13 @@ export class Updater {
   }
 
   install(): void {
-    if (this.status.state !== "ready") return;
-    this.options.quitAndInstall();
+    // Download completion alone is not activation readiness. The native
+    // generation coordinator calls the quit path only after park + selection.
   }
 
   /** Called from the quit path once the host is stopped. */
   quitAndInstall(): boolean {
-    if (this.status.state !== "ready" || !this.updater) return false;
+    if (this.status.state !== "restarting" || !this.updater) return false;
     this.updater.quitAndInstall(false, true);
     return true;
   }
@@ -149,13 +150,24 @@ export class Updater {
       autoUpdater.on("download-progress", (progress: { percent: number }) =>
         this.publish({ state: "downloading", percent: progress.percent }),
       );
-      autoUpdater.on("update-downloaded", (info: { version: string }) =>
+      autoUpdater.on("update-downloaded", (info: { version: string; buildIdentity?: string; generationId?: string }) => {
+        const generationId = info.generationId;
+        const buildIdentity = info.buildIdentity;
+        if (!generationId || !/^[0-9a-f]{64}$/.test(generationId) || !buildIdentity) {
+          this.publish({
+            state: "error",
+            message: `${PRODUCT_NAME} downloaded an update without a runtime inventory. Download it from the releases page instead.`,
+          });
+          return;
+        }
+        const updateId = createHash("sha256").update(`${buildIdentity}\0${generationId}`).digest("hex");
         this.publish({
-          state: "ready",
+          state: "downloaded",
+          updateId,
           version: info.version,
-          message: `Version ${info.version} is ready. It installs the next time ${PRODUCT_NAME} restarts.`,
-        }),
-      );
+          message: "Update downloaded. Prepare a restart when your current work is finished.",
+        });
+      });
       autoUpdater.on("error", (error: Error) => {
         this.options.log.error("updater", error);
         this.publish({ state: "error", message: `${PRODUCT_NAME} could not download the update. It will try again later.` });

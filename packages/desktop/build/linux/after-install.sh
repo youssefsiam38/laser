@@ -164,10 +164,10 @@ fi
 # Atomic publication after installation. Never signal a running process here:
 # updating only the daemon leaves an old desktop around a new host, and stops
 # active work at a time the person did not choose.
-MANIFEST="$APP_DIR/resources/app.asar.unpacked/node_modules/@lasercode/cli/package.json"
+TEMPLATE="$APP_DIR/resources/native-update-template.json"
 MARKER="$APP_DIR/resources/native-update.json"
-if [ -f "$MANIFEST" ]; then
-    cp "$MANIFEST" "$MARKER.tmp"
+if [ -f "$TEMPLATE" ]; then
+    cp "$TEMPLATE" "$MARKER.tmp"
     chmod 644 "$MARKER.tmp"
     mv -f "$MARKER.tmp" "$MARKER"
 fi

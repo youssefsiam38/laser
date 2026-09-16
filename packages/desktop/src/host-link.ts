@@ -18,7 +18,7 @@
  * an update, `laser restart`) and the tray has to come back on its own.
  */
 import { WebSocket } from "ws";
-import type { AgentRun, BackgroundTask, HostNotificationMethod, HostNotifications, JsonRpcMessage, ProjectInfo, SessionSummary } from "@lasercode/protocol";
+import type { AgentRun, BackgroundTask, HostNotificationMethod, HostNotifications, JsonRpcMessage, ProjectInfo, RuntimeActivationState, SessionSummary } from "@lasercode/protocol";
 import type { AttentionChange, FleetSnapshot } from "./fleet.js";
 import { FleetModel } from "./fleet.js";
 import { electronProcessReport, type ElectronAppMetric } from "./resource-metrics.js";
@@ -152,6 +152,18 @@ export class HostLink {
       this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject, timer });
       socket.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
     });
+  }
+
+  prepareActivation(updateId: string, generationId: string): Promise<RuntimeActivationState> {
+    return this.request("pi/runtime/activation/prepare", { updateId, generationId });
+  }
+
+  activationStatus(updateId: string): Promise<RuntimeActivationState> {
+    return this.request("pi/runtime/activation/status", { updateId });
+  }
+
+  cancelActivation(updateId: string): Promise<RuntimeActivationState> {
+    return this.request("pi/runtime/activation/cancel", { updateId });
   }
 
   /**

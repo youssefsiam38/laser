@@ -7,6 +7,7 @@ import {
   RuntimeGenerationError,
   prepareRuntimeGeneration,
   readRuntimeGenerationPointer,
+  selectRuntimeGeneration,
   runtimeReferenceFromManifest,
   verifyRuntimeGeneration,
   writeRuntimeGenerationManifest,
@@ -25,7 +26,7 @@ function fixture(name = "one") {
   const worker = join(root, "app", "worker.js");
   const extension = join(root, "app", "extension.ts");
   const node = join(root, "runtime", "node");
-  for (const [path, text] of [[cli, "cli"], [worker, "worker"], [extension, "export default 1"], [node, "node"]]) {
+  for (const [path, text] of [[cli, "cli"], [worker, `worker-${name}`], [extension, "export default 1"], [node, "node"]]) {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, text);
   }
@@ -78,6 +79,11 @@ describe("runtime generation inventory", () => {
     expect(staged.pointer.pending?.generationId).toBe(second.manifest.generationId);
     expect(readRuntimeGenerationPointer(state)).toEqual(staged.pointer);
     expect(readFileSync(join(state, "runtime-generation.json"), "utf8")).not.toContain("inventory");
+
+    const activated = selectRuntimeGeneration(state, second.manifest.generationId);
+    expect(activated.active.generationId).toBe(second.manifest.generationId);
+    expect(activated.previous?.generationId).toBe(first.manifest.generationId);
+    expect(activated.pending).toBeUndefined();
   });
 
   it("writes immutable feature manifests that reference the runtime without retaining cwd", () => {
