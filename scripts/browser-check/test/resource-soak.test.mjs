@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
 import { once } from 'node:events';
 import { tmpdir } from 'node:os';
@@ -17,7 +17,7 @@ import { captureHeap } from '../resource/heap.mjs';
 import { captureMemoryInfra, dumpAllocators } from '../resource/memory-infra.mjs';
 import { memoryLabels } from '../resource/process-sampler.mjs';
 import { dispatchFindShortcut, findShortcutEvents } from '../resource/keyboard.mjs';
-import { partialFailureReport, providerAccounting, runResourceSoak, writeAtomicJson, writePartialReport } from '../resource-soak.mjs';
+import { compareRetainedRuns, partialFailureReport, providerAccounting, runResourceSoak, writeAtomicJson, writePartialReport } from '../resource-soak.mjs';
 import { SoakRun, classifySampledProcess, closedPageMetrics, connectWorkerInspector, safetyRefusalDetail, safetyRefusalMessage } from '../resource/context.mjs';
 import { assertNoLiveWork, dormantViews, proveNoLiveWork, reconcileDelivery, retirementGuardSnapshot, traverseRetainedViews } from '../resource/retirement.mjs';
 import { expectedRetainedCounts } from '../resource/retention.mjs';
@@ -68,7 +68,9 @@ test('post-GC slope fits and repeated owner ranks are deterministic', () => {
     display: '2 bytes/unit' });
   const flat = slopeSummary([{ x: 0, y: 10 }, { x: 1, y: 11 }, { x: 2, y: 9 }, { x: 3, y: 10 }], null, 'bytes/minute');
   assert.equal(flat.status, 'unresolved');
-  assert.equal(flat.value, null, 'an unresolved estimate is not serialized as a rate');
+  assert.equal(flat.value, null, 'an unresolved estimate is not displayed as a rate');
+  assert.ok(Number.isFinite(flat.estimate), 'D-269 retains the point estimate separately');
+  assert.equal(flat.estimateSource, 'reported');
   assert.match(flat.display, /^no drift resolved above ±[\d,.]+ bytes\/minute \(n=4, R²=/);
   const scenarios = Object.fromEntries(Array.from({ length: 9 }, (_, index) => [`scenario-${index + 1}`, 'complete']));
   const a={rankings:{host:[{owner:'sessions',bytes:5},{owner:'tasks',bytes:4},{owner:'logs',bytes:3},{owner:'socket',bytes:2},{owner:'pool',bytes:1}]},slopes:{host:{value:2}},scenarios};
@@ -1155,33 +1157,70 @@ test('resolved slopes repeat only when they point the same way and stay inside t
   assert.equal(SLOPE_POLICY.maximumCoefficientOfVariation, 0.25);
 });
 
-test('D-267 gates unresolved pairs by their noise floors and rejects a mixed pair', () => {
+test('D-267 gates null pairs by noise floors and D-269 gates mixed pairs by point estimates', () => {
   const scenarios = Object.fromEntries(SCENARIO_IDS.map(id => [id, 'complete']));
   const rankings = { host: [{ owner: 'HostServer', bytes: 1 }] };
   const run = slope => ({ scenarios, rankings, slopes: { growth: slope } });
-  const unresolved = residualStandardDeviation => ({ status: 'unresolved', value: null, residualStandardDeviation,
+  const unresolved = (estimate, residualStandardDeviation) => ({ status: 'unresolved', value: null, estimate, residualStandardDeviation,
     standardError: residualStandardDeviation / 2, resolutionLimit: residualStandardDeviation, rSquared: 0.01, samples: 6,
     display: `no drift resolved above ±${residualStandardDeviation} bytes/minute (n=6, R²=0.010)` });
-  const resolved = value => ({ status: 'resolved', value, display: `${value} bytes/minute` });
+  const resolved = value => ({ status: 'resolved', value, estimate: value, standardError: 10, rSquared: 0.9, samples: 6,
+    display: `${value} bytes/minute` });
 
-  const equivalentNull = compareRuns(run(unresolved(100)), run(unresolved(110))).slopes.growth;
+  const equivalentNull = compareRuns(run(unresolved(10, 100)), run(unresolved(-10, 110))).slopes.growth;
   assert.equal(equivalentNull.outcome, 'equivalent-null');
   assert.equal(equivalentNull.pass, true);
   assert.equal(equivalentNull.signAgrees, null);
   assert.ok(equivalentNull.noiseFloorCoefficientOfVariation <= SLOPE_POLICY.maximumCoefficientOfVariation);
   assert.match(equivalentNull.display, /A: no drift resolved above ±100 bytes\/minute/);
 
-  const noisyMismatch = compareRuns(run(unresolved(100)), run(unresolved(200))).slopes.growth;
+  const noisyMismatch = compareRuns(run(unresolved(10, 100)), run(unresolved(-10, 200))).slopes.growth;
   assert.equal(noisyMismatch.outcome, 'equivalent-null');
   assert.ok(noisyMismatch.noiseFloorCoefficientOfVariation > SLOPE_POLICY.maximumCoefficientOfVariation);
   assert.deepEqual([noisyMismatch.flaggedOver25Percent, noisyMismatch.pass], [true, false]);
 
-  const mixed = compareRuns(run(unresolved(100)), run(resolved(1_000))).slopes.growth;
-  assert.deepEqual([mixed.outcome, mixed.pass], ['resolution-mismatch', false]);
+  const mixedPass = compareRuns(run(unresolved(1_000, 100)), run(resolved(1_100))).slopes.growth;
+  assert.deepEqual([mixedPass.outcome, mixedPass.signAgrees, mixedPass.pass], ['mixed-resolution-point-estimates', true, true]);
+  assert.ok(mixedPass.coefficientOfVariation <= SLOPE_POLICY.maximumCoefficientOfVariation);
+  assert.match(mixedPass.display, /A=unresolved \(1,000; SE=50; R²=0.010\); B=resolved/);
+
+  const mixedSignFail = compareRuns(run(unresolved(-1_000, 100)), run(resolved(1_000))).slopes.growth;
+  assert.deepEqual([mixedSignFail.signAgrees, mixedSignFail.pass], [false, false]);
+  const mixedSpreadFail = compareRuns(run(unresolved(1_000, 100)), run(resolved(2_000))).slopes.growth;
+  assert.ok(mixedSpreadFail.coefficientOfVariation > SLOPE_POLICY.maximumCoefficientOfVariation);
+  assert.deepEqual([mixedSpreadFail.flaggedOver25Percent, mixedSpreadFail.pass], [true, false]);
+
+  const fromRetainedPoints = compareRuns(run({ ...unresolved(null, 100), points: [{ x: 0, y: 1 }, { x: 1, y: 3 }, { x: 2, y: 5 }] }), run(resolved(2.1))).slopes.growth;
+  assert.deepEqual([fromRetainedPoints.runs.a.estimate, fromRetainedPoints.runs.a.estimateSource, fromRetainedPoints.pass], [2, 'retained-points', true]);
 
   const resolvedPair = compareRuns(run(resolved(1_000)), run(resolved(1_100))).slopes.growth;
   assert.deepEqual([resolvedPair.outcome, resolvedPair.signAgrees, resolvedPair.pass], ['resolved-pair', true, true]);
   assert.equal(SLOPE_POLICY.unresolvedStandardErrors, 2);
+});
+
+test('compare-only recomputes retained reports without running a workload', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'resource-compare-only-'));
+  try {
+    await Promise.all([mkdir(join(root, 'run-a')), mkdir(join(root, 'run-b'))]);
+    const scenarios = Object.fromEntries(SCENARIO_IDS.map(id => [id, 'complete']));
+    const common = { implementationSha: 'a'.repeat(40), scenarios, rankings: { host: [{ owner: 'HostServer', bytes: 1 }] } };
+    const a = { ...common, slopes: { growth: { status: 'resolved', value: 100, estimate: 100, standardError: 10, rSquared: 0.9, samples: 3 } } };
+    const b = { ...common, slopes: { growth: { status: 'unresolved', value: null, residualStandardDeviation: 20,
+      standardError: 60, rSquared: 0.1, samples: 3, display: 'no drift resolved above ±120 bytes/unit (n=3, R²=0.100)',
+      points: [{ x: 0, y: 0 }, { x: 1, y: 110 }, { x: 2, y: 220 }] } } };
+    await Promise.all([
+      writeFile(join(root, 'run-a', 'report.json'), JSON.stringify(a)),
+      writeFile(join(root, 'run-b', 'report.json'), JSON.stringify(b)),
+      writeFile(join(root, 'manifest.json'), JSON.stringify({ implementationSha: common.implementationSha, comparisonPassed: false })),
+    ]);
+    const result = await compareRetainedRuns({ artifacts: root });
+    assert.equal(result.comparison.pass, true);
+    const written = JSON.parse(await readFile(join(root, 'comparison.json'), 'utf8'));
+    assert.deepEqual([written.slopes.growth.runs.b.estimate, written.slopes.growth.runs.b.estimateSource, written.slopes.growth.pass],
+      [110, 'retained-points', true]);
+    const manifest = JSON.parse(await readFile(join(root, 'manifest.json'), 'utf8'));
+    assert.equal(manifest.comparisonPassed, true);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test('a measurement-only calibration run cannot be mistaken for a baseline (RP-5)', async () => {

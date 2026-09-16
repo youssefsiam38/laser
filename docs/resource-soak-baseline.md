@@ -1,13 +1,13 @@
 # RP-2 post-containment repeat baseline
 
-Status: **not established**. Both unchanged full runs completed cleanly, every
-ranking gate passed, and D-267 made the flat host result a reproducible null.
-The pagination slope was resolved in A and unresolved in B, so its predeclared
-mixed-resolution gate failed. This is a repeatability finding, not a baseline.
+Status: **established**. Both unchanged full runs completed cleanly, every
+ranking gate passed, D-267 made the flat host result a reproducible null, and
+D-269 applies the original T2 sign/CV gate to the mixed-resolution pagination
+pair. Every predeclared gate passes.
 
 ## Provenance
 
-- Decision base: `6313a650` (D-267).
+- Decision base: `cf9a21aa` (D-267 as amended by D-269).
 - Measured implementation: `21a15a2a7336813f98eb841023289fc67ee3b7fa`.
 - Machine class: 24 logical CPUs; 31 GiB memory; Linux kernel major 7; x64;
   Node 24.20.0; Chromium 153.
@@ -23,11 +23,15 @@ Commands:
 ```sh
 pnpm test:browser-check
 node scripts/browser-check/resource-soak.mjs --full --runs 2 --electron --artifacts <external-artifact-root>
+node scripts/browser-check/resource-soak.mjs --compare-only --artifacts <external-artifact-root>
 ```
 
 The pre-soak browser-check gate passed 103/103. The full command ran in the
-background from the measured implementation above. A and B each passed; the
-emitted A/B comparison failed only the pagination slope gate.
+background from the measured implementation above and both A and B passed.
+After D-269, `--compare-only` recomputed the comparison from those two retained
+reports without rerunning either workload. The reports predate D-269's explicit
+`estimate` field, so the comparison derived both OLS point estimates from their
+retained points; new reports retain the estimate directly.
 
 ## Gate-by-gate verdict
 
@@ -40,11 +44,12 @@ emitted A/B comparison failed only the pagination slope gate.
 | Heap-snapshot cap | **pass** | Largest raw capture: A 196,025,576 bytes; B 198,401,584 bytes, each below 268,435,456; no raw capture remained. |
 | Zero survivors | **pass** | Browser and Electron teardown reported zero survivors in A and B. |
 | Retained-owner repeatability | **pass** | All 11 structural/evidence categories passed their predeclared policy. |
-| Post-GC slope repeatability | **fail** | Four metrics passed; pagination was resolved in A and unresolved in B. D-267 requires a mixed pair to fail. |
+| Post-GC slope repeatability | **pass** | All five metrics pass. Pagination is mixed-resolution but its retained OLS estimates have the same sign and 4.3% CV under D-269. |
 | Unsupported metrics explicit | **pass** | Listed below; unavailable evidence is never reported as zero. |
 
-The overall comparison is **failed**. M18-T15 remains blocked and this resource
-envelope must not be treated as a normal-resource baseline.
+The recomputed overall comparison is **passed**. This document is the
+post-containment normal-resource baseline for the declared machine class and
+fixture.
 
 ## Measurement corrections and D-267
 
@@ -67,11 +72,17 @@ Other validity corrections remain in force:
   threshold or 25% CV threshold changed.
 
 D-267 was recorded before these runs. An OLS slope whose absolute value is at
-most twice its SE is `unresolved`. It is reported as “no drift resolved above
+most twice its SE is `unresolved`. It is displayed as “no drift resolved above
 ±2·SE,” with residual SD, SE, R² and n, never as a rate. Two unresolved runs pass
 as an equivalent null only when their residual-SD noise floors agree within the
-same 25% CV; a mixed unresolved/resolved pair fails; two resolved runs retain
-the unchanged sign and 25% CV gates.
+same 25% CV; two resolved runs retain the unchanged sign and 25% CV gates.
+
+D-269 corrects D-267's over-strict mixed-pair addition: resolution is a label,
+not a verdict. A resolved/unresolved pair uses the original T2 gate on both
+retained OLS point estimates — same sign and CV at most 25% — while still
+showing both resolution labels and uncertainty. New reports retain `estimate`
+even when the displayed `value` is null; compare-only derived it from retained
+points for these pre-D-269 report files.
 
 ## Both retained-owner rankings
 
@@ -106,7 +117,7 @@ metric's slope unit.
 | Renderer heap / distinct session | A | resolved: 4,910.080 bytes/session | 12,548.166 | 396.808 | 0.981 | 5 |
 |  | B | resolved: 5,839.400 bytes/session | 18,782.287 | 593.948 | 0.970 | 5 |
 | Renderer heap / history page | A | resolved: 188,383.797 bytes/page | 2,504,779.173 | 90,265.976 | 0.186 | 21 |
-|  | B | no drift resolved above ±188,144.076 bytes/page | 2,610,393.109 | 94,072.038 | 0.157 | 21 |
+|  | B | no drift resolved above ±188,144.076 bytes/page; retained estimate 177,217.403 bytes/page | 2,610,393.109 | 94,072.038 | 0.157 | 21 |
 | Renderer heap / heavy-payload MiB | A | no drift resolved above ±3,724,116.093 bytes/MiB | 16,090,020.485 | 1,862,058.046 | 0.595 | 3 |
 |  | B | no drift resolved above ±3,655,460.568 bytes/MiB | 15,793,394.716 | 1,827,730.284 | 0.615 | 3 |
 | Renderer heap / Bash call | A | resolved: 30,195.184 bytes/call | 224,126.542 | 869.125 | 0.985 | 20 |
@@ -117,15 +128,17 @@ metric's slope unit.
 | Pair gate | Outcome | Pair statistic | Verdict |
 | --- | --- | ---: | --- |
 | Distinct sessions | both resolved, same sign | rate CV 12.2% | pass |
-| Pagination | A resolved, B unresolved | mixed resolution | **fail** |
+| Pagination | D-267 label: A resolved, B unresolved; D-269 verdict uses 188,383.797 vs 177,217.403 bytes/page, same sign | estimate CV 4.3% | pass |
 | Heavy payload | equivalent null | residual-SD CV 1.3% | pass |
 | Bash calls | both resolved, same sign | rate CV 1.7% | pass |
 | Host retirement | equivalent null | residual-SD CV 2.4% | pass |
 
-The pagination result is not converted to a null pair and is not rerun around.
-Per D-267, one resolved and one unresolved fit is a finding.
+Under D-267 alone, pagination's mixed labels produced the earlier failure.
+D-269 leaves those labels and uncertainty unchanged but removes that invented
+failure rule: the original T2 estimate gate passes at 4.3% CV. The retained
+workloads were not rerun or reclassified.
 
-## Resource envelope observed, not baselined
+## Baseline resource envelope
 
 | Measurement | Run A | Run B |
 | --- | ---: | ---: |
@@ -160,7 +173,7 @@ large-reasoning checkpoint, A/B renderer heaps were 203,003,544 / 131,503,912
 bytes and DOM counts were 9,176 / 5,482. Large-tool checkpoints remained below
 the ceiling, and post-image large-stream renderer heaps settled to 42,679,592 /
 44,767,252 bytes after collection. This demonstrates containment relative to
-T2; the pagination repeatability failure still prevents a baseline.
+T2; the D-269 comparison now establishes the repeat baseline.
 
 ## Unsupported metrics and limitations
 
@@ -176,8 +189,8 @@ T2; the pagination repeatability failure still prevents a baseline.
 - Sampled totals cover the host tree plus the measured renderer, not the whole
   application.
 - A resolved/unresolved boundary can remain sensitive when an estimate lies
-  near 2·SE; D-267 deliberately treats a mixed pair as failure rather than
-  smoothing or reclassifying it after the run.
+  near 2·SE. D-269 preserves that uncertainty label and applies the original
+  sign/CV gate to the retained point estimates rather than smoothing them.
 - Linux collectors were exercised. macOS and Windows collectors remain unproven.
 - No raw heap, transcript, session identifier, process identifier, credential,
   inspector endpoint or private scratch path is included here.

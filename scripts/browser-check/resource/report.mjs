@@ -12,7 +12,9 @@ export function theilSen(points) {
   return slopes.length ? slopes[Math.floor(slopes.length / 2)] : null;
 }
 
-const formatSlopeNumber = value => new Intl.NumberFormat('en-US', { maximumFractionDigits: 3 }).format(value);
+const formatSlopeNumber = value => Number.isFinite(value)
+  ? new Intl.NumberFormat('en-US', { maximumFractionDigits: 3 }).format(value)
+  : 'unavailable';
 const formatRSquared = value => Number.isFinite(value) ? value.toFixed(3) : 'unavailable';
 
 export function slopeSummary(points, intervalSeconds, unit = 'bytes/unit') {
@@ -40,8 +42,11 @@ export function slopeSummary(points, intervalSeconds, unit = 'bytes/unit') {
     : status === 'resolved' ? `${formatSlopeNumber(estimate)} ${unit}` : 'unavailable';
   return {
     status, display, estimator: 'ordinary-least-squares', measurementPhase: 'post-gc', unit,
-    // D-267: an unresolved slope is a null result, never a reported rate.
+    // D-267 keeps an unresolved slope from being displayed as a rate. D-269
+    // retains the point estimate separately so a mixed pair can apply T2's
+    // original sign/CV gate without changing either run's resolution label.
     value: status === 'resolved' ? estimate : null,
+    estimate, estimateSource: 'reported',
     resolutionLimit, intercept, standardError, residualStandardDeviation,
     relativeStandardError: standardError === null || estimate === 0 ? null : standardError / Math.abs(estimate),
     rSquared, samples: points.length, points: clean.map(point => ({ x: point.x, y: point.y })),
@@ -111,13 +116,27 @@ function spearmanWithTies(a, b) {
   return covariance / Math.sqrt(aa * bb);
 }
 function sign(value) { return value === 0 ? 0 : value > 0 ? 1 : -1; }
+function estimateFromPoints(points) {
+  const clean = (points ?? []).filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
+  if (clean.length < 3) return null;
+  const meanX = clean.reduce((sum, point) => sum + point.x, 0) / clean.length;
+  const meanY = clean.reduce((sum, point) => sum + point.y, 0) / clean.length;
+  const sxx = clean.reduce((sum, point) => sum + (point.x - meanX) ** 2, 0);
+  return sxx > 0 ? clean.reduce((sum, point) => sum + (point.x - meanX) * (point.y - meanY), 0) / sxx : null;
+}
 function slopeState(value) {
-  if (typeof value === 'number') return { status: 'resolved', value };
-  if (!value || value.status === 'unavailable') return { status: 'unavailable', value: null };
-  if (value.status === 'unresolved') return { status: 'unresolved', value: null,
-    residualStandardDeviation: value.residualStandardDeviation, standardError: value.standardError,
-    rSquared: value.rSquared, samples: value.samples, resolutionLimit: value.resolutionLimit, display: value.display };
-  return Number.isFinite(value.value) ? { status: 'resolved', value: value.value, display: value.display } : { status: 'unavailable', value: null };
+  if (typeof value === 'number') return { status: 'resolved', value, estimate: value, estimateSource: 'legacy-value' };
+  if (!value || value.status === 'unavailable') return { status: 'unavailable', value: null, estimate: null };
+  const reported = Number.isFinite(value.estimate) ? value.estimate : null;
+  const retained = reported ?? estimateFromPoints(value.points);
+  const estimateSource = reported !== null ? (value.estimateSource ?? 'reported')
+    : Number.isFinite(retained) ? 'retained-points' : Number.isFinite(value.value) ? 'legacy-value' : null;
+  const estimate = Number.isFinite(retained) ? retained : Number.isFinite(value.value) ? value.value : null;
+  const common = { residualStandardDeviation: value.residualStandardDeviation, standardError: value.standardError,
+    rSquared: value.rSquared, samples: value.samples, resolutionLimit: value.resolutionLimit, display: value.display,
+    estimate, estimateSource };
+  if (value.status === 'unresolved') return { ...common, status: 'unresolved', value: null };
+  return Number.isFinite(estimate) ? { ...common, status: 'resolved', value: estimate } : { ...common, status: 'unavailable', value: null };
 }
 function coefficientOfVariation(a, b) {
   if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
@@ -149,7 +168,8 @@ export const COMPARISON_POLICY = Object.freeze({
  * Resolved slopes repeat when they point the same way and stay within a declared
  * spread. D-267 treats |slope| <= 2·SE as unresolved: two unresolved slopes are
  * an equivalent null only when their residual-noise floors also repeat within
- * the same 25% CV. A mixed resolved/unresolved pair fails.
+ * the same 25% CV. D-269 judges a mixed pair by the original T2 sign/CV gate on
+ * its retained OLS point estimates while preserving both resolution labels.
  */
 export const SLOPE_POLICY = Object.freeze({ maximumCoefficientOfVariation: 0.25, unresolvedStandardErrors: 2 });
 export const EVIDENCE_CATEGORIES = Object.freeze(['host-allocation', 'worker-allocation', 'desktop-processes']);
@@ -201,9 +221,15 @@ export function compareRuns(a, b) {
       continue;
     }
     if (ar.status === 'unresolved' || br.status === 'unresolved') {
-      slopes[name] = { ...common, outcome: 'resolution-mismatch', signAgrees: null, coefficientOfVariation: null,
-        noiseFloorCoefficientOfVariation: null, flaggedOver25Percent: false,
-        display: `resolution mismatch; A=${ar.status}; B=${br.status}`, pass: false };
+      const estimatesAvailable = Number.isFinite(ar.estimate) && Number.isFinite(br.estimate);
+      const cv = estimatesAvailable ? coefficientOfVariation(ar.estimate, br.estimate) : null;
+      const signAgrees = estimatesAvailable ? sign(ar.estimate) === sign(br.estimate) : null;
+      const withinSpread = cv !== null && cv <= SLOPE_POLICY.maximumCoefficientOfVariation;
+      slopes[name] = { ...common, available: estimatesAvailable, outcome: 'mixed-resolution-point-estimates',
+        signAgrees, coefficientOfVariation: cv, noiseFloorCoefficientOfVariation: null,
+        flaggedOver25Percent: cv !== null && !withinSpread,
+        display: `mixed resolution; A=${ar.status} (${formatSlopeNumber(ar.estimate)}; SE=${formatSlopeNumber(ar.standardError)}; R²=${formatRSquared(ar.rSquared)}); B=${br.status} (${formatSlopeNumber(br.estimate)}; SE=${formatSlopeNumber(br.standardError)}; R²=${formatRSquared(br.rSquared)}); sign agrees=${signAgrees}; CV=${cv ?? 'unavailable'}`,
+        pass: estimatesAvailable && signAgrees && withinSpread };
       continue;
     }
     const available = ar.status === 'resolved' && br.status === 'resolved';

@@ -192,7 +192,11 @@ never summed.
 pnpm -r build
 node scripts/browser-check/resource-soak.mjs --quick --runs 1 --artifacts /tmp/resource-quick
 node scripts/browser-check/resource-soak.mjs --full --runs 2 --electron --artifacts /tmp/resource-full
+node scripts/browser-check/resource-soak.mjs --compare-only --artifacts /tmp/resource-full
 ```
+
+`--compare-only` reads the retained sanitized A/B reports, recomputes only the
+comparison and its manifest verdict, and never starts a workload.
 
 Its nine scenarios live one to a file under `resource/scenarios/`, behind one
 contract: a scenario returns the phase sample that evidences it, and the runner
