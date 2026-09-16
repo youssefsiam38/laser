@@ -1,4 +1,5 @@
 "use client";
+import type { CapabilityDecision } from "@/runtime/environment-capabilities";
 /**
  * Settings → Trust (M4-T7, the trust-store half).
  *
@@ -50,7 +51,9 @@ function headline(trust: ProjectTrust): string {
   }
 }
 
-export function TrustTab({ writable = true, readOnlyExplanation }: { writable?: boolean; readOnlyExplanation?: string | undefined }) {
+export function TrustTab({ decision }: { decision?: CapabilityDecision | undefined }) {
+  const writable = decision?.state === "available" || decision === undefined;
+  const readOnlyExplanation = decision?.state === "explained" ? decision.explanation : undefined;
   const { projectInfo, actions } = useLaserStable();
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState<string>();

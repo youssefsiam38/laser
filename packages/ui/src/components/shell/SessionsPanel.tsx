@@ -396,6 +396,7 @@ function SessionsTabs({ tab, onChange }: { tab: SessionsTab; onChange(tab: Sessi
 function SheetFooter() {
   const { theme, toggle } = useTheme();
   const addProject = useCapability("pi/project/add");
+  const createSession = useCapability("session/new");
   const logs = useCapability("pi/logs/query");
   const shell = useShell();
   const workbench = useWorkbench();
@@ -420,7 +421,7 @@ function SheetFooter() {
         <Settings />
       </TooltipIconButton>
       {/* Beam's spark, beside Settings: the rail's affordance, rendered where a phone has room for it. */}
-      <BeamSpark side="top" onOpen={() => shell.setSessionsOpen(false)} />
+      {createSession.state === "available" ? <BeamSpark side="top" onOpen={() => shell.setSessionsOpen(false)} /> : null}
       <span className="ms-auto pe-1 typed text-ink-3">{PRODUCT_NAME}</span>
     </footer>
   );

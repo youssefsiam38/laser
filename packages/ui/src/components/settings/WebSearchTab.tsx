@@ -1,4 +1,5 @@
 "use client";
+import type { CapabilityDecision } from "@/runtime/environment-capabilities";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, ChevronRight, Globe, KeyRound, Link2, Loader2, RefreshCw } from "lucide-react";
@@ -17,7 +18,9 @@ import { cn } from "@/lib/utils";
 
 /** ProviderStep's connection/disclosure pattern, using the adopted settings
  * primitives. Keys are write-only: never restored from responses or drafts. */
-export function WebSearchTab({ cwd, writable = true, readOnlyExplanation }: { cwd: string; writable?: boolean; readOnlyExplanation?: string | undefined }) {
+export function WebSearchTab({ cwd, decision }: { cwd: string; decision?: CapabilityDecision | undefined }) {
+  const writable = decision?.state === "available" || decision === undefined;
+  const readOnlyExplanation = decision?.state === "explained" ? decision.explanation : undefined;
   const { client } = useLaserStable();
   const [status, setStatus] = useState<WebSearchStatus>();
   const [models, setModels] = useState<ProviderAuthInfo[]>([]);

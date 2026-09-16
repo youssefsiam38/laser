@@ -1202,6 +1202,7 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
   archived = false,
 }) => {
   const { actions } = useLaserStable();
+  const renameSession = useCapability("pi/session/rename");
   const id = useAuiState((s) => s.threadListItem.id);
   const path = useAuiState((s) => s.threadListItem.externalId ?? s.threadListItem.remoteId);
   const title = useAuiState((s) => s.threadListItem.title);
@@ -1294,6 +1295,7 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
             openRow();
           }}
           onDoubleClick={(e) => {
+            if (renameSession.state !== "available") return;
             e.preventDefault();
             onEdit(id);
           }}

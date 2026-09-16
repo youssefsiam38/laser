@@ -1,4 +1,5 @@
 "use client";
+import type { CapabilityDecision } from "@/runtime/environment-capabilities";
 /**
  * Settings → Help and shortcuts (M4-T7, the keybindings half).
  *
@@ -90,7 +91,9 @@ function groups(mod: string): BindingGroup[] {
   ];
 }
 
-export function KeyboardTab({ cwd, writable = true, readOnlyExplanation }: { cwd?: string | undefined; writable?: boolean; readOnlyExplanation?: string | undefined }) {
+export function KeyboardTab({ cwd, decision }: { cwd?: string | undefined; decision?: CapabilityDecision | undefined }) {
+  const writable = decision?.state === "available" || decision === undefined;
+  const readOnlyExplanation = decision?.state === "explained" ? decision.explanation : undefined;
   const mod = modKey();
   const list = useMemo(() => groups(mod), [mod]);
 

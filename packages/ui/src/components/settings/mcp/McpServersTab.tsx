@@ -31,7 +31,9 @@ import { rowKey, serverTitle } from "./model.js";
 
 type ScopeFilter = McpScope | "all";
 
-export function McpServersTab({ cwd, projectOpen = true, writable = true, readOnlyExplanation }: { cwd: string; projectOpen?: boolean; writable?: boolean; readOnlyExplanation?: string | undefined }) {
+export function McpServersTab({ cwd, projectOpen = true, decision }: { cwd: string; projectOpen?: boolean; decision?: import("@/runtime/environment-capabilities").CapabilityDecision | undefined }) {
+  const writable = decision?.state === "available" || decision === undefined;
+  const readOnlyExplanation = decision?.state === "explained" ? decision.explanation : undefined;
   const { client, actions } = useLaserStable();
   const [servers, setServers] = useState<McpServerState[]>();
   const [conversations, setConversations] = useState<NonNullable<ClientRequests["mcp/list"]["result"]["conversations"]>>([]);

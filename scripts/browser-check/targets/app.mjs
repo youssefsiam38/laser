@@ -117,7 +117,7 @@ export async function target(runtime, options = {}) {
         await check.touch(check.state.touch);
         await check.reducedMotion(check.state.reducedMotion);
       }
-      await check.page.locator('textarea[aria-label="Message"], [data-slot="guardrail-notice"]').first().waitFor({ timeout: runtime.timeout });
+      await check.page.locator('textarea[aria-label="Message"], [data-slot="capability-notice"]').first().waitFor({ timeout: runtime.timeout });
       if (!landing) return;
       // The app has to agree, in its own words, that this is where it is: a
       // case that started on a different session would make every assertion

@@ -170,10 +170,10 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
     );
   }
 
-  // A tool Pi does not ship draws as the catalog's fallback row; the footer
-  // it renders itself covers approvals, so only the declared decision is added.
-  // Once Namer has named the call, the same row keeps that name in the
-  // trigger while it runs, so the row is composed here instead.
+  // A tool Pi does not ship normally draws as the catalog's fallback row.
+  // Decisions route through our composed footer so authenticated capability
+  // policy applies to both approvals and extension questions. Once Namer has
+  // named the call, the same composed row also keeps that name while it runs.
   if (kind === "other") {
     if (namerLabel === undefined && !approval && !interrupt) {
       return (
@@ -475,7 +475,7 @@ function RowApproval(props: ToolCallMessagePartProps) {
   if (capability.state !== "available") return capability.state === "explained" ? (
     <div className="flex flex-col gap-2">
       <p className="text-sm text-ink">{props.approval?.prompt ?? "Allow this?"}</p>
-      <CapabilityNotice title="This decision must be made elsewhere" explanation={capability.explanation!} />
+      <CapabilityNotice title="This decision must be made elsewhere" explanation={capability.explanation} />
     </div>
   ) : null;
   return (
@@ -530,7 +530,7 @@ function InterruptFooter({ payload, resume }: { payload: InterruptPayload; resum
     <div data-slot="interrupt-footer" className="mb-2 ms-6 flex flex-col gap-2 border-s-2 border-attention py-1 ps-3">
       <p className="text-sm font-medium text-ink">{payload.title}</p>
       {payload.message ? <p className="text-sm text-ink-2">{payload.message}</p> : null}
-      <CapabilityNotice title="This question must be answered elsewhere" explanation={capability.explanation!} />
+      <CapabilityNotice title="This question must be answered elsewhere" explanation={capability.explanation} />
     </div>
   ) : null;
   return (

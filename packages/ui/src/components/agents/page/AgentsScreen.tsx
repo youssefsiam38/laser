@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent }
 
 import { agentByName, agentDisplayName, isBuiltinAgent, isWorkspaceCwd, useAgentWarnings, useAgentsActions, useAgentsSnapshot, useAgentsStatus, warningsFor } from "@/agents";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
+import { CapabilityNotice } from "@/components/capability-gate";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -23,7 +24,7 @@ import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { useWorkbench, type AgentsTarget } from "@/components/workbench";
 import { useIsMobile } from "@/hooks";
 import { cn } from "@/lib/utils";
-import { useLaserStable } from "@/runtime";
+import { useCapability, useLaserStable } from "@/runtime";
 
 import { AgentEditor, type EditorFocus } from "./AgentEditor.js";
 import { AgentList } from "./AgentList.js";
@@ -49,6 +50,8 @@ export function AgentsScreen({ cwd, target }: AgentsScreenProps) {
   const { actions } = useLaserStable();
   const workbench = useWorkbench();
   const mobile = useIsMobile();
+  const write = useCapability("agents/save", { presentation: "explained" });
+  const writable = write.state === "available";
 
   const [selection, setSelection] = useState<AgentsSelection>(null);
   const [focus, setFocus] = useState<EditorFocus>();
@@ -168,6 +171,7 @@ export function AgentsScreen({ cwd, target }: AgentsScreenProps) {
         title={selection?.kind === "agent" ? agentDisplayName(selection.name) : selection?.kind === "new" ? "New agent" : selection?.kind === "harness" ? "Harness" : undefined}
         onNew={() => select({ kind: "new" })}
         onBack={() => select(null)}
+        disabled={!writable}
       />
       <div className="flex min-h-0 flex-1">
         {showList ? (
@@ -190,10 +194,11 @@ export function AgentsScreen({ cwd, target }: AgentsScreenProps) {
               mobile && "animate-in fade-in-0 ltr:slide-in-from-right-2 rtl:slide-in-from-left-2 fill-mode-both duration-(--motion-slow) motion-reduce:animate-none",
             )}
           >
+            {write.state === "explained" ? <div className="px-4 pt-4 md:px-6"><CapabilityNotice explanation={write.explanation} /></div> : null}
             {selection === null ? (
               <AgentsOverview snapshot={snapshot} warnings={warnings} onNew={() => select({ kind: "new" })} onOpen={(next, field) => select(next, field)} />
             ) : selection.kind === "harness" ? (
-              <HarnessPanel snapshot={snapshot} />
+              <HarnessPanel snapshot={snapshot} writable={writable} />
             ) : selection.kind === "new" ? (
               <AgentEditor
                 agent={undefined}
@@ -202,6 +207,7 @@ export function AgentsScreen({ cwd, target }: AgentsScreenProps) {
                 projectCwd={projectCwd}
                 warnings={[]}
                 focus={focus}
+                writable={writable}
                 onDirtyChange={setDirty}
                 onSaved={onSaved}
                 onDeleted={onDeleted}
@@ -212,7 +218,7 @@ export function AgentsScreen({ cwd, target }: AgentsScreenProps) {
                 <ErrorState title={`There is no agent named "${selection.name}" any more`} detail="It may have been deleted from another view." onRetry={() => select(null)} retryLabel="Back to the list" />
               </div>
             ) : isBuiltinAgent(selectedAgent) ? (
-              <BuiltinPanel name={selectedAgent.name as "beam" | "chat" | "namer"} snapshot={snapshot} routeCwd={routeCwd} />
+              <BuiltinPanel name={selectedAgent.name as "beam" | "chat" | "namer"} snapshot={snapshot} routeCwd={routeCwd} writable={writable} />
             ) : (
               <AgentEditor
                 agent={selectedAgent}
@@ -221,6 +227,7 @@ export function AgentsScreen({ cwd, target }: AgentsScreenProps) {
                 projectCwd={projectCwd}
                 warnings={selectedWarnings}
                 focus={focus}
+                writable={writable}
                 onDirtyChange={setDirty}
                 onSaved={onSaved}
                 onDeleted={onDeleted}

@@ -100,13 +100,14 @@ export interface AgentEditorProps {
   projectCwd: string | undefined;
   warnings: readonly AgentWarning[];
   focus: EditorFocus | undefined;
+  writable?: boolean;
   onDirtyChange(dirty: boolean): void;
   onSaved(agent: AgentDefinition): void;
   onDeleted(): void;
   onStartChat(name: string): void;
 }
 
-export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, focus, onDirtyChange, onSaved, onDeleted, onStartChat }: AgentEditorProps) {
+export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, focus, writable = true, onDirtyChange, onSaved, onDeleted, onStartChat }: AgentEditorProps) {
   const agents = useAgentsActions();
   const isNew = agent === undefined;
   const isDefaultAgent = agent?.name === DEFAULT_AGENT_NAME;
@@ -274,6 +275,8 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
       data-slot="agent-editor"
       data-agent={agent?.name ?? ""}
       aria-label={isNew ? "New agent" : `${agentDisplayName(agent.name)} settings`}
+      aria-readonly={!writable || undefined}
+      inert={!writable || undefined}
       className="flex min-h-full flex-col"
       onSubmit={onSubmit}
       onKeyDown={onKeyDown}
@@ -481,7 +484,7 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
         </Section>
 
         {/* Default */}
-        <Section id="default" title="Default for new sessions">
+        {writable ? <Section id="default" title="Default for new sessions">
           <div className="flex items-center gap-2">
             <SettingsToggleRow
               id={`${ids}-default`}
@@ -508,11 +511,11 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
               </PopoverContent>
             </Popover>
           </div>
-        </Section>
+        </Section> : null}
       </div>
 
       {/* Footer */}
-      <div data-slot="agent-editor-footer" className="sticky bottom-0 z-10 mt-auto bg-bg hairline-t">
+      {writable ? <div data-slot="agent-editor-footer" className="sticky bottom-0 z-10 mt-auto bg-bg hairline-t">
         {serverError ? (
           <div className="px-4 pt-3 md:px-6">
             <ErrorState title="Couldn’t save the agent" detail={serverError} onRetry={() => void save()} retryLabel="Try again" />
@@ -577,9 +580,9 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
             {deletable.reason}
           </p>
         ) : null}
-      </div>
+      </div> : null}
 
-      {agent ? (
+      {agent && writable ? (
         <DeleteAgentDialog
           name={agentDisplayName(agent.name)}
           open={confirmDelete}

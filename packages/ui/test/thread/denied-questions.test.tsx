@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { AssistantRuntimeProvider, useExternalStoreRuntime } from "@assistant-ui/react";
+import { AssistantRuntimeProvider, useExternalStoreRuntime, type ThreadMessageLike } from "@assistant-ui/react";
 
 const calls = vi.hoisted(() => ({ request: vi.fn(), answerDialog: vi.fn(), send: vi.fn() }));
 vi.mock("@/runtime", async (original) => ({
@@ -26,7 +26,7 @@ let container: HTMLDivElement;
 let store: StateStore;
 
 function Runtime({ children }: { children: React.ReactNode }) {
-  const runtime = useExternalStoreRuntime({ messages: [], isRunning: true, onNew: async () => {} });
+  const runtime = useExternalStoreRuntime({ convertMessage: (message: ThreadMessageLike) => message, messages: [] as ThreadMessageLike[], isRunning: true, onNew: async () => {} });
   return <LaserStoreProvider store={store}><AssistantRuntimeProvider runtime={runtime}><TooltipProvider>{children}</TooltipProvider></AssistantRuntimeProvider></LaserStoreProvider>;
 }
 
@@ -44,7 +44,7 @@ it.each([
 ])("keeps an approval readable while replacing its answer footer", async (environment) => {
   store.dispatch({ type: "environment", environment });
   const respond = vi.fn(); const resume = vi.fn();
-  await act(async () => root.render(<Runtime><ToolRow toolCallId="approval" toolName="read" args={{ path: "notes.md" }} argsText='{"path":"notes.md"}' status={{ type: "requires-action", reason: "tool-calls" }} approval={{ id: "approval", prompt: "Allow reading notes?" }} addResult={vi.fn()} resume={resume} respondToApproval={respond} /></Runtime>));
+  await act(async () => root.render(<Runtime><ToolRow type="tool-call" toolCallId="approval" toolName="read" args={{ path: "notes.md" }} argsText='{"path":"notes.md"}' status={{ type: "requires-action", reason: "tool-calls" }} approval={{ id: "approval", prompt: "Allow reading notes?" }} addResult={vi.fn()} resume={resume} respondToApproval={respond} /></Runtime>));
   expect(container.textContent).toContain("Allow reading notes?");
   expect(container.textContent).toContain("This decision must be made elsewhere");
   expect(container.textContent).toContain("notes.md");
@@ -53,9 +53,19 @@ it.each([
   expect(respond).not.toHaveBeenCalled(); expect(resume).not.toHaveBeenCalled(); expect(calls.request).not.toHaveBeenCalled();
 });
 
+it("keeps the permitted unknown-tool approval actionable", async () => {
+  store.dispatch({ type: "environment", environment: testDescriptor() });
+  const respond = vi.fn();
+  await act(async () => root.render(<Runtime><ToolRow type="tool-call" toolCallId="allowed" toolName="extension" args={{}} argsText="{}" status={{ type: "requires-action", reason: "tool-calls" }} approval={{ id: "allowed", prompt: "Allow extension?" }} addResult={vi.fn()} resume={vi.fn()} respondToApproval={respond} /></Runtime>));
+  expect(container.textContent).toContain("Allow extension?");
+  expect(container.textContent).toContain("Allow");
+  expect(container.textContent).toContain("Deny");
+  expect(container.textContent).not.toContain("must be made elsewhere");
+});
+
 it("keeps an extension question readable while replacing its answer footer", async () => {
   const resume = vi.fn();
-  await act(async () => root.render(<Runtime><ToolRow toolCallId="question" toolName="extension" args={{}} argsText="{}" status={{ type: "requires-action", reason: "interrupt" }} interrupt={{ type: "human", payload: { requestId: "q1", method: "input", title: "Choose a branch", message: "Which branch should continue?" } }} addResult={vi.fn()} resume={resume} respondToApproval={vi.fn()} /></Runtime>));
+  await act(async () => root.render(<Runtime><ToolRow type="tool-call" toolCallId="question" toolName="extension" args={{}} argsText="{}" status={{ type: "requires-action", reason: "interrupt" }} interrupt={{ type: "human", payload: { requestId: "q1", method: "input" as const, title: "Choose a branch", message: "Which branch should continue?" } }} addResult={vi.fn()} resume={resume} respondToApproval={vi.fn()} /></Runtime>));
   expect(container.textContent).toContain("Choose a branch");
   expect(container.textContent).toContain("Which branch should continue?");
   expect(container.textContent).toContain("This question must be answered elsewhere");

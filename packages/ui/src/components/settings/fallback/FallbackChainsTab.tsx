@@ -41,13 +41,13 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { cn } from "@/lib/utils";
+import type { CapabilityDecision } from "@/runtime/environment-capabilities";
 
 export interface FallbackChainsTabProps {
   cwd: string;
   snapshot: SettingsSnapshot | undefined;
   onApply: (scope: SettingsScope, changes: SettingChange[]) => Promise<boolean>;
-  writable?: boolean | undefined;
-  readOnlyExplanation?: string | undefined;
+  decision?: CapabilityDecision | undefined;
 }
 
 /** A draft chain is local until it has a model to fall back to; a chain of one cannot be saved. */
@@ -59,7 +59,9 @@ const nameOf = (model: FallbackModelRef, catalogue: readonly ModelCatalogEntry[]
 const sameChains = (a: readonly FallbackChain[], b: readonly FallbackChain[]): boolean =>
   JSON.stringify(a) === JSON.stringify(b);
 
-export function FallbackChainsTab({ cwd, snapshot, onApply, writable = true, readOnlyExplanation }: FallbackChainsTabProps) {
+export function FallbackChainsTab({ cwd, snapshot, onApply, decision }: FallbackChainsTabProps) {
+  const writable = decision?.state === "available" || decision === undefined;
+  const readOnlyExplanation = decision?.state === "explained" ? decision.explanation : undefined;
   const saved = useMemo(
     () => readFallbackChainsValue(snapshot?.global.values[FALLBACK_CHAINS_SETTING]),
     [snapshot],

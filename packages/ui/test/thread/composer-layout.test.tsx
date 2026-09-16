@@ -6,6 +6,7 @@ import {
   AssistantRuntimeProvider,
   useExternalStoreRuntime,
   type DictationAdapter,
+  type ThreadMessageLike,
 } from "@assistant-ui/react";
 
 import { view as makeView } from "../agents/fixtures.js";
@@ -48,7 +49,7 @@ vi.mock("@/components/assistant-ui/elements/context-display", () => ({
 vi.mock("@/components/assistant-ui/elements/draft-restore", () => ({ ComposerDraftRestore: () => null }));
 vi.mock("@/components/assistant-ui/elements/message-queue", () => ({ ComposerQueue: () => null }));
 vi.mock("@/components/assistant-ui/elements/quote.aui", () => ({ ComposerQuotePreview: () => null, quoteAsMarkdown: (text: string) => text }));
-vi.mock("@/components/assistant-ui/elements/composer-trigger-popover.aui", () => ({ ComposerTriggerPopover: () => null }));
+vi.mock("@/components/assistant-ui/elements/composer-trigger-popover.aui", () => ({ ComposerTriggerPopover: ({ char, adapter }: { char: string; adapter: { search?: (query: string) => Array<{ label?: string }> } }) => char === "/" ? <div data-slot="slash-items">{adapter.search?.("").map((item) => item.label).join(" ")}</div> : null }));
 vi.mock("@/components/thread/StatusLine.js", () => ({ StatusLine: () => null }));
 vi.mock("@/components/thread/session-preparation.js", () => ({
   SessionPreparationProvider: ({ children }: { children: ReactNode }) => children,
@@ -143,7 +144,8 @@ const dictation: DictationAdapter = {
 
 function Fixture() {
   const runtime = useExternalStoreRuntime({
-    messages: [],
+    convertMessage: (message: ThreadMessageLike) => message,
+    messages: [] as ThreadMessageLike[],
     isRunning: false,
     onNew: async () => {},
     adapters: { dictation },
@@ -246,6 +248,14 @@ describe("the production composer layout", () => {
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true }));
     });
     expect(mocks.client.request.mock.calls.filter(([method]) => method === "session/prompt" || String(method).startsWith("pi/transcribe/"))).toHaveLength(0);
+  });
+
+  it("removes the /project command when project setup is local-only", async () => {
+    store.dispatch({ type: "environment", environment: testDescriptor({ actor: { class: "local_browser", id: "browser" }, localOnly: ["pi/project/add"] }) });
+    await render();
+    expect(container.querySelector('[data-slot="slash-items"]')?.textContent).toContain("/compact");
+    expect(container.querySelector('[data-slot="slash-items"]')?.textContent).not.toContain("/project");
+    expect(mocks.client.request.mock.calls.filter(([method]) => method === "pi/project/add")).toHaveLength(0);
   });
 
   it("turns an already visible composer read-only in the same render without leaking a request", async () => {

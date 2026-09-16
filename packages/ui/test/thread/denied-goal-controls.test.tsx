@@ -19,7 +19,7 @@ afterEach(async () => { await act(async () => root.unmount()); container.remove(
 
 it("keeps the goal readable and hides all controls under local-only denial", async () => {
   const path = "/p/session.jsonl";
-  const opened = { ...view({ path }), goal: { id: "g1", objective: "Ship the release", status: "active", iteration: 2 } } as ReturnType<typeof view>;
+  const opened = { ...view({ path }), goal: { id: "g1", objective: "Ship the release", status: "active" as const, iteration: 2, automaticTurns: 2, startedAt: 1, updatedAt: 2 } };
   const store = createStateStore({ ...initialState, current: path, open: { [path]: opened }, environment: testDescriptor({ actor: { class: "local_browser", id: "browser" }, localOnly: ["session/goal/action"] }) });
   await act(async () => root.render(<LaserStoreProvider store={store}><TooltipProvider><GoalBar /></TooltipProvider></LaserStoreProvider>));
   expect(container.textContent).toContain("Ship the release");

@@ -260,8 +260,8 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
           <>
             {shownTab === "general" && cwd && catalog && snapshot && (
               <>
-                {settingsWrite.state === "explained" ? <div className="p-4 pb-0"><CapabilityNotice explanation={settingsWrite.explanation!} /></div> : null}
-                <SettingsForm audience="general" cwd={cwd} catalog={catalog} snapshot={snapshot} writable={settingsWrite.state === "available"} onApply={apply} />
+                {settingsWrite.state === "explained" ? <div className="p-4 pb-0"><CapabilityNotice explanation={settingsWrite.explanation} /></div> : null}
+                <SettingsForm audience="general" cwd={cwd} catalog={catalog} snapshot={snapshot} decision={settingsWrite} onApply={apply} />
               </>
             )}
             {shownTab === "advanced" && (
@@ -278,15 +278,15 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
               />
             )}
             {shownTab === "appearance" && <AppearanceTab />}
-            {shownTab === "features" && <FeaturesScreen {...(cwd ? { cwd } : {})} writable={featureWrite.state === "available"} {...(featureWrite.state === "explained" ? { readOnlyExplanation: featureWrite.explanation } : {})} {...(mcp.state === "available" ? { onManageServers: () => setTab("mcp") } : {})} />}
+            {shownTab === "features" && <FeaturesScreen {...(cwd ? { cwd } : {})} decision={featureWrite} {...(mcp.state === "available" ? { onManageServers: () => setTab("mcp") } : {})} />}
             {/* Without a project this is the every-project list; the project
                 filter simply has nothing to show. */}
-            {shownTab === "mcp" && cwd && <McpServersTab cwd={cwd} projectOpen={Boolean(project)} writable={mcpWrite.state === "available"} {...(mcpWrite.state === "explained" ? { readOnlyExplanation: mcpWrite.explanation } : {})} />}
+            {shownTab === "mcp" && cwd && <McpServersTab cwd={cwd} projectOpen={Boolean(project)} decision={mcpWrite} />}
             {shownTab === "models" && cwd && <ModelsTab cwd={cwd} snapshot={snapshot} onApply={apply} />}
             {shownTab === "usage" && <UsageTab />}
-            {shownTab === "keyboard" && <KeyboardTab cwd={cwd} writable={keybindingsWrite.state === "available"} {...(keybindingsWrite.state === "explained" ? { readOnlyExplanation: keybindingsWrite.explanation } : {})} />}
+            {shownTab === "keyboard" && <KeyboardTab cwd={cwd} decision={keybindingsWrite} />}
             {shownTab === "projects" && <ProjectsTab activeCwd={project} />}
-            {shownTab === "trust" && <TrustTab writable={trustWrite.state === "available"} {...(trustWrite.state === "explained" ? { readOnlyExplanation: trustWrite.explanation } : {})} />}
+            {shownTab === "trust" && <TrustTab decision={trustWrite} />}
             {shownTab === "device" && <DeviceTab />}
           </>
         )}

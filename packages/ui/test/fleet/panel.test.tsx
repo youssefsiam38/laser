@@ -58,7 +58,7 @@ const fixture = vi.hoisted(() => ({
     tasks: {
       stop: vi.fn(async () => undefined),
       list: vi.fn(async () => undefined),
-      output: vi.fn(async () => ({ id: "t1", from: 0, bytes: 11, chunk: "ready in 412 ms", eof: true })),
+      output: vi.fn(async (_path = "", _id = "", from = 0) => ({ id: "t1", from, bytes: 11, chunk: "ready in 412 ms", eof: true })),
     },
   },
   endAgent: vi.fn(),

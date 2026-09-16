@@ -84,15 +84,15 @@ function ComposerBody() {
   const destinationBusy = destination?.phase === "resolving";
   const placeholder = usePlaceholder();
   const write = useCapability("session/prompt", { presentation: "explained" });
-  if (write.state !== "available") {
-    return write.state === "explained" ? <CapabilityNotice title="This conversation is read-only here" explanation={write.explanation!} /> : null;
-  }
   return (
     <ComposerPrimitive.Unstable_TriggerPopoverRoot>
       <ComposerPrimitive.Root data-slot="composer" inert={inert} aria-busy={preparingSession || destinationBusy || undefined} className="relative flex flex-col gap-2" onSubmit={() => { if (canSend) transcript.latest(); }}>
         <ComposerDraftRestore />
         <ComposerQueue />
         <StatusLine />
+        {write.state !== "available" ? (
+          write.state === "explained" ? <CapabilityNotice title="This conversation is read-only here" explanation={write.explanation} /> : null
+        ) : <>
         {mobile ? <StagedAttachments /> : null}
         {mobile ? (
           <MobileComposer
@@ -146,6 +146,7 @@ function ComposerBody() {
         {/* `/` runs a laser command; `@` addresses a running subagent by handle. */}
         <ComposerTriggerPopover char="/" title="Commands & skills" matcher={matchLeadingSlash} adapter={slash.adapter} action={slash.action} onComplete={completeSlashDraft} {...(slash.iconMap ? { iconMap: slash.iconMap } : {})} fallbackIcon={SlashSquare} />
         <ComposerTriggerPopover char="@" title="Files & agents" matcher={matchProjectMention} adapter={mention.adapter} directive={mention.directive} navigation={mention.navigation} iconMap={MENTION_ICONS} fallbackIcon={AtSign} emptyItemsLabel="This folder is empty." unavailableLabel={mention.issue ? mention.issue.kind === 'refusal' ? 'Update the path to continue.' : 'Retry to load this folder.' : undefined} loadingLabel="Reading this folder…" isLoading={mention.loading} onQueryChange={mention.setQuery} onOpenChange={mention.setOpen} notice={mention.issue ? <>{mention.issue.message}{mention.retry && <button type="button" className="min-h-11 rounded-md px-2 underline underline-offset-2 focus-visible:outline focus-visible:outline-live" onClick={mention.retry}>Try again</button>}</> : <span className="block truncate" dir="ltr">{mention.directory ?? 'Choose a conversation to browse files.'}</span>} />
+        </>}
       </ComposerPrimitive.Root>
     </ComposerPrimitive.Unstable_TriggerPopoverRoot>
   );
@@ -449,6 +450,7 @@ function useSlashCommands() {
   const sessionPath = useLaserState(s => s.current);
   const shell = useShell();
   const { running, compacting } = useSessionMeta();
+  const addProject = useCapability("pi/project/add");
   const busy = running || compacting;
   const agent = useAgentCommands();
   const commands = useMemo(
@@ -458,7 +460,7 @@ function useSlashCommands() {
       { id: "new", label: "/new", description: "A new session in this project", icon: "new", execute: () => void shell.newSession() },
       { id: "queue", label: "/clear-queue", description: "Drop every waiting message back into the composer", icon: "queue", execute: () => void clearQueue() },
       { id: "history", label: "/history", description: "Open the session tree", icon: "history", execute: () => shell.openHistory() },
-      { id: "project", label: "/project", description: "Add a project directory", icon: "project", execute: () => shell.setAddProjectOpen(true) },
+      ...(addProject.state === "available" ? [{ id: "project", label: "/project", description: "Add a project directory", icon: "project", execute: () => shell.setAddProjectOpen(true) }] : []),
       ...agent.map((command) => ({
         id: `agent:${command.source}:${command.name}`,
         label: `/${command.name}`,
@@ -478,7 +480,7 @@ function useSlashCommands() {
       })),
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `aui` is stable; every other value the callbacks read is a dependency
-    [busy, actions, client, sessionPath, shell, agent],
+    [busy, actions, client, sessionPath, shell, agent, addProject.state],
   );
 
   /** The host's tree, at the moment of the command — never the rendered view's. */

@@ -95,8 +95,8 @@ export function AdvancedTab({ view, onViewChange, cwd, catalog, snapshot, loadin
       ) : null}
       {!error && cwd && catalog && snapshot ? (
         <>
-          {settingsWrite.state === "explained" ? <div className="p-4 pb-0"><CapabilityNotice explanation={settingsWrite.explanation!} /></div> : null}
-          <SettingsForm audience="advanced" cwd={cwd} catalog={catalog} snapshot={snapshot} writable={settingsWrite.state === "available"} onApply={onApply} />
+          {settingsWrite.state === "explained" ? <div className="p-4 pb-0"><CapabilityNotice explanation={settingsWrite.explanation} /></div> : null}
+          <SettingsForm audience="advanced" cwd={cwd} catalog={catalog} snapshot={snapshot} decision={settingsWrite} onApply={onApply} />
         </>
       ) : null}
     </div>

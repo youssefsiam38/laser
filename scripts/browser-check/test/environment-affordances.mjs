@@ -58,10 +58,11 @@ export default async function environmentAffordances(check) {
   await page.getByText('This conversation is read-only here', { exact: true }).waitFor();
   assert.equal(await page.getByRole('textbox', { name: 'Message', exact: true }).count(), 0, 'composer input stays hidden');
   assert.equal(await page.locator('[data-slot="new-session"], [data-slot="new-chat"]').count(), 0, 'new-session affordances stay hidden');
-  assert.equal(await page.getByRole('button', { name: 'Beam', exact: true }).count(), 0, 'Beam affordance stays hidden');
+  await check.shot('environment-read-only-conversation');
 
   const settings = page.getByRole('button', { name: 'Settings', exact: true });
   if (!await settings.isVisible()) await page.getByRole('button', { name: 'Sessions', exact: true }).click();
+  assert.equal(await page.getByRole('button', { name: 'Beam', exact: true }).count(), 0, 'Beam affordance stays hidden');
   await settings.click();
   await page.getByRole('button', { name: 'General', exact: true }).waitFor();
   await page.getByText(/read these settings/i).first().waitFor();
@@ -72,4 +73,5 @@ export default async function environmentAffordances(check) {
   assert.equal(await search.inputValue(), 'model');
   const enabledMutations = await page.locator('section[aria-label="Settings"] input:not([disabled]):not([placeholder="Search settings"]), section[aria-label="Settings"] select:not([disabled])').count();
   assert.equal(enabledMutations, 0, 'settings mutations stay disabled');
+  await check.shot('environment-read-only-settings');
 }

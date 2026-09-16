@@ -20,6 +20,7 @@ import { goalRecords } from "../../src/runtime/goal-history.js";
 import { projectMessages } from "../../src/runtime/projection.js";
 import { blocksFromEntries, initialState, reduce, type AppState } from "../../src/store.js";
 import { sessionState } from "../agents/fixtures.js";
+import { testDescriptor } from "../runtime/environment-fixture.js";
 
 const stable = vi.hoisted(() => ({
   // The real provider hands every consumer a host client; the "run it again with
@@ -43,7 +44,6 @@ const stable = vi.hoisted(() => ({
 }));
 vi.mock("@/runtime", async (importActual) => ({
   ...(await importActual<typeof import("../../src/runtime/index.js")>()),
-  useCapability: () => ({ state: "available" }),
   useLaserStable: () => stable,
 }));
 vi.mock("@/components/assistant-ui/elements/message-pair", async (importActual) => {
@@ -105,7 +105,7 @@ beforeEach(() => {
   let state: AppState = reduce(initialState, { type: "opened", state: sessionState({ path: SESSION }) });
   state = reduce(state, { type: "destination", destination: { phase: "ready-code", intent: 0, code: { kind: "project-session", project: "/p", path: SESSION } } });
   state = reduce(state, { type: "hydrate", path: SESSION, entries, leafId: LEAF });
-  store = createStateStore(state);
+  store = createStateStore({ ...state, environment: testDescriptor() });
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -216,6 +216,17 @@ describe("streaming footer subscriptions", () => {
 });
 
 describe("editing a message you sent", () => {
+  it("hides edit, branch, fork, jump and regenerate actions under a real read-only descriptor", async () => {
+    store.dispatch({ type: "environment", environment: testDescriptor({ actor: { class: "paired_device", id: "phone" }, scopes: ["handshake", "read", "diagnostics"] }) });
+    await mount();
+    const labels = [...container.querySelectorAll("button")].map((button) => button.getAttribute("aria-label") ?? button.textContent ?? "");
+    expect(labels.join(" ")).not.toMatch(/Edit|Fork|Jump|Regenerate|Previous version|Next version/i);
+    expect(container.textContent).toContain("eleven files");
+    expect(stable.actions.navigate).not.toHaveBeenCalled();
+    expect(stable.actions.fork).not.toHaveBeenCalled();
+    expect(stable.actions.send).not.toHaveBeenCalled();
+  });
+
   it("offers a plain Edit, not a fork, on the bubble", async () => {
     await mount();
     const bubble = userRoots().at(-1)!;

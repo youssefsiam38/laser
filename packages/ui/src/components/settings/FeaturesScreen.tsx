@@ -1,4 +1,5 @@
 "use client";
+import type { CapabilityDecision } from "@/runtime/environment-capabilities";
 
 import { PRODUCT_DISPLAY_NAME, type FeatureScope, type FeatureState } from "@lasercode/protocol";
 import { Bot, Check, CircleDot, Globe, Plug, RotateCw, Target } from "lucide-react";
@@ -13,7 +14,9 @@ import { Toggle } from "@/components/ui/toggle";
 import { cn } from "@/lib/utils";
 import { useLaserStable } from "@/runtime";
 
-export function FeaturesScreen({ cwd, onManageServers, writable = true, readOnlyExplanation }: { cwd?: string; onManageServers?: () => void; writable?: boolean; readOnlyExplanation?: string | undefined }) {
+export function FeaturesScreen({ cwd, onManageServers, decision }: { cwd?: string; onManageServers?: () => void; decision?: CapabilityDecision | undefined }) {
+  const writable = decision?.state === "available" || decision === undefined;
+  const readOnlyExplanation = decision?.state === "explained" ? decision.explanation : undefined;
   const { client, actions } = useLaserStable();
   const [features, setFeatures] = useState<FeatureState[]>([]);
   const [scope, setScope] = useState<FeatureScope>("global");

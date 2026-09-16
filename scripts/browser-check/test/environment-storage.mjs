@@ -62,7 +62,7 @@ export default async function environmentStorage(check) {
 
   // The harness owns media emulation. In its reduced-motion cases reload with
   // an init observer so the strict no-exit-animation startup path is captured.
-  if (check.reducedMotion) {
+  if (check.state.reducedMotion) {
     await page.addInitScript(() => {
       window.__environmentAffordanceFlash = [];
       new MutationObserver(() => {

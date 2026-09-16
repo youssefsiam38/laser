@@ -91,14 +91,16 @@ export function ModelsTab(props: ModelsTabProps) {
         <Tabs.Trigger value="fallback" asChild><Button variant="ghost" size="sm" className="data-[state=active]:bg-surface-2">Fallback chains</Button></Tabs.Trigger>
         {webSearch.state === "available" ? <Tabs.Trigger value="search" asChild><Button variant="ghost" size="sm" className="data-[state=active]:bg-surface-2">Web search</Button></Tabs.Trigger> : null}
       </Tabs.List>
-      <Tabs.Content value="models" className="min-h-0 flex-1"><ModelConnectionsTab {...props} writable={settingsWrite.state === "available"} {...(settingsWrite.state === "explained" ? { readOnlyExplanation: settingsWrite.explanation } : {})} /></Tabs.Content>
-      <Tabs.Content value="fallback" className="min-h-0 flex-1"><FallbackChainsTab {...props} writable={settingsWrite.state === "available"} {...(settingsWrite.state === "explained" ? { readOnlyExplanation: settingsWrite.explanation } : {})} /></Tabs.Content>
-      {webSearch.state === "available" ? <Tabs.Content value="search" className="min-h-0 flex-1"><WebSearchTab key={props.cwd} cwd={props.cwd} writable={searchWrite.state === "available"} {...(searchWrite.state === "explained" ? { readOnlyExplanation: searchWrite.explanation } : {})} /></Tabs.Content> : null}
+      <Tabs.Content value="models" className="min-h-0 flex-1"><ModelConnectionsTab {...props} decision={settingsWrite} /></Tabs.Content>
+      <Tabs.Content value="fallback" className="min-h-0 flex-1"><FallbackChainsTab {...props} decision={settingsWrite} /></Tabs.Content>
+      {webSearch.state === "available" ? <Tabs.Content value="search" className="min-h-0 flex-1"><WebSearchTab key={props.cwd} cwd={props.cwd} decision={searchWrite} /></Tabs.Content> : null}
     </Tabs.Root>
   );
 }
 
-function ModelConnectionsTab({ cwd, snapshot, onApply, writable = true, readOnlyExplanation }: ModelsTabProps & { writable?: boolean; readOnlyExplanation?: string | undefined }) {
+function ModelConnectionsTab({ cwd, snapshot, onApply, decision }: ModelsTabProps & { decision: import("@/runtime/environment-capabilities").CapabilityDecision }) {
+  const writable = decision.state === "available";
+  const readOnlyExplanation = decision.state === "explained" ? decision.explanation : undefined;
   const { client } = useLaserStable();
   const [providers, setProviders] = useState<ProviderAuthInfo[]>([]);
   const [dictation, setDictation] = useState<TranscribeStatus>();
@@ -334,10 +336,10 @@ function ModelConnectionsTab({ cwd, snapshot, onApply, writable = true, readOnly
             </Button>
           </div>
           <p className="text-xs leading-5 text-ink-2">
-            Which providers are signed in, and how. Pick one to sign in with an account or an API key, or to sign out.
-            {" "}{PRODUCT_DISPLAY_NAME} never reads the credential itself.
+            Which providers are signed in, and how. {writable ? "Pick one to sign in with an account or an API key, or to sign out. " : "Provider changes must be made from a connection with settings access. "}
+            {PRODUCT_DISPLAY_NAME} never reads the credential itself.
           </p>
-          {writable ? <ProviderStep cwd={cwd} onConfigured={handleProviderConfigured} /> : null}
+          <ProviderStep cwd={cwd} onConfigured={handleProviderConfigured} />
           <div className="flex items-start gap-3 rounded-xl border border-line bg-surface px-3 py-3">
             <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-[color-mix(in_oklab,var(--live)_12%,var(--surface))] text-live">
               <Mic2 className="size-4" aria-hidden="true" />

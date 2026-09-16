@@ -8,7 +8,7 @@
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AssistantRuntimeProvider, useExternalStoreRuntime, useRemoteThreadListRuntime, type RemoteThreadListAdapter } from "@assistant-ui/react";
+import { AssistantRuntimeProvider, useExternalStoreRuntime, useRemoteThreadListRuntime, type RemoteThreadListAdapter, type ThreadMessageLike } from "@assistant-ui/react";
 import type { SessionSummary } from "@lasercode/protocol";
 
 import { SessionsPanel } from "../../src/components/shell/SessionsPanel.js";
@@ -32,7 +32,7 @@ const stable = vi.hoisted(() => ({
   currentProject: "/one",
   setCurrentProject: vi.fn(),
   dispatch: vi.fn(),
-  actions: { toast: vi.fn(), removeProject: vi.fn(), newSession: vi.fn(async () => "/state/chat/new.jsonl"), openSession: vi.fn(async () => undefined), goTab: vi.fn(async () => undefined) },
+  actions: { toast: vi.fn(), removeProject: vi.fn(), newSession: vi.fn(async () => "/state/chat/new.jsonl"), openSession: vi.fn(async (_path?: string) => undefined), goTab: vi.fn(async () => undefined) },
   archive: { add: vi.fn(), has: () => false },
   client: { request: vi.fn(async () => ({ hits: [], unreadable: 0 })) },
 }));
@@ -66,9 +66,9 @@ const adapter: RemoteThreadListAdapter = {
   rename: async () => {}, archive: async () => {}, unarchive: async () => {}, delete: async () => {},
   generateTitle: async () => { throw new Error("Not used"); },
 };
-function useEmptyRuntime() { return useExternalStoreRuntime({ messages: [], isRunning: false, onNew: async () => {} }); }
+function useEmptyRuntime() { return useExternalStoreRuntime({ convertMessage: (message: ThreadMessageLike) => message, messages: [] as ThreadMessageLike[], isRunning: false, onNew: async () => {} }); }
 const shell: ShellContextValue = {
-  layout: "desktop", sessionsOpen: true, telemetryOpen: false, setSessionsOpen: () => {}, setTelemetryOpen: () => {}, toggleSessions: () => {}, toggleTelemetry: () => {},
+  layout: "desktop", sessionsOpen: true, fleetOpen: false, telemetryOpen: false, setSessionsOpen: () => {}, setFleetOpen: () => {}, setTelemetryOpen: () => {}, toggleSessions: () => {}, toggleFleet: () => {}, toggleTelemetry: () => {},
   historyOpen: false, setHistoryOpen: () => {}, openHistory: () => {}, toolsOpen: false, setToolsOpen: () => {}, addProjectOpen: false, setAddProjectOpen: () => {},
   newSession: async () => {}, canCreate: true, showChat: () => {}, returnToChat: () => {},
 };
@@ -234,6 +234,9 @@ describe("Beam and children in the Code tab", () => {
     expect(rowTitled("Why is the dock empty")).toBeDefined();
     expect(container.querySelector('[data-slot="new-session"]')).toBeNull();
     expect(container.querySelector('[aria-label="New Beam chat"]')).toBeNull();
+    const rootRow = rowTitled("Ship the release")!;
+    await act(async () => rootRow.querySelector<HTMLElement>('[data-slot="aui_thread-list-item-trigger"]')!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
+    expect(rootRow.querySelector("input")).toBeNull();
     let menu = await openMenu("Actions for explorer");
     expect(menu?.textContent).not.toMatch(/Rename|Delete|Move|End agent/);
     await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));

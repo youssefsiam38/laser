@@ -28,6 +28,7 @@ import { shortCwd } from "@/format";
 import { useLaserStable } from "@/runtime";
 import type { ModelCatalogEntry, SettingChange, SettingDescriptor, SettingsCatalog, SettingsScope, SettingsSnapshot, ThinkingLevel } from "@lasercode/protocol";
 
+import type { CapabilityDecision } from "@/runtime/environment-capabilities";
 import { SettingField } from "./fields.js";
 import { effectiveDiff, getAtPath, rowFor, searchFields, sectionsWithFields, type FieldRow } from "./model.js";
 import { OriginBadge, SearchInput } from "./SettingsScreen.js";
@@ -39,11 +40,12 @@ export interface SettingsFormProps {
   cwd: string;
   catalog: SettingsCatalog;
   snapshot: SettingsSnapshot;
-  writable?: boolean | undefined;
+  decision?: CapabilityDecision | undefined;
   onApply: (scope: SettingsScope, changes: SettingChange[]) => Promise<boolean>;
 }
 
-export function SettingsForm({ audience, cwd, catalog, snapshot, writable = true, onApply }: SettingsFormProps) {
+export function SettingsForm({ audience, cwd, catalog, snapshot, decision, onApply }: SettingsFormProps) {
+  const writable = decision?.state === "available" || decision === undefined;
   const { client, projects, projectInfo, setCurrentProject } = useLaserStable();
   const [view, setView] = useState<View>("global");
   const [section, setSection] = useState<string>(catalog.sections[0]?.id ?? "model");

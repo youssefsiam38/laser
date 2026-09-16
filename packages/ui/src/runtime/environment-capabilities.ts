@@ -11,10 +11,10 @@ export type CapabilityState = "available" | "hidden" | "explained";
 export type CapabilityPresentation = Exclude<CapabilityState, "available">;
 export type EnvironmentCapability = keyof EnvironmentCapabilities;
 
-export interface CapabilityDecision {
-  state: CapabilityState;
-  explanation?: string | undefined;
-}
+export type CapabilityDecision =
+  | { state: "available" }
+  | { state: "hidden" }
+  | { state: "explained"; explanation: string };
 
 export interface CapabilityRequirements {
   presentation?: CapabilityPresentation | undefined;
@@ -96,5 +96,5 @@ export function capabilityFor(
 }
 
 export function capabilityError(decision: CapabilityDecision): Error {
-  return new Error(decision.explanation ?? "This action is not available in this environment.");
+  return new Error(decision.state === "explained" ? decision.explanation : "This action is not available in this environment.");
 }
