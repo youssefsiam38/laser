@@ -32,7 +32,7 @@ import type { AddressInfo } from "node:net";
 import { basename, dirname, extname, join, normalize, relative, resolve as resolvePath, sep } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { channelIdFor, type KeyPair } from "@lasercode/crypto";
-import { ENV, ErrorCodes, FRAME_MAX_BYTES, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, isProviderCaptureMessage, isTerminalRunStatus, projectEnvWorkerConfig, type ClientRequests, type DeviceGrants, type EnvironmentPolicyInput, type HostNotifications, type JsonRpcNotification, type LogEntry, type NamerState, type ProviderCaptureMeta, type ProviderCaptureOmission, type ResourceRetainedStores, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
+import { ENV, ErrorCodes, FRAME_MAX_BYTES, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, isProviderCaptureMessage, isTerminalRunStatus, projectEnvWorkerConfig, type ClientRequests, type DeviceGrants, type EnvironmentPolicyInput, type HostNotifications, type JsonRpcNotification, type LogEntry, type MemoryPressurePublish, type NamerState, type ProviderCaptureMeta, type ProviderCaptureOmission, type ResourceRetainedStores, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
 import { AccessControl, isLoopbackAddress, localActor, pairedActor, type ActorIdentity } from "./access.js";
 import { AccessAudit } from "./access-audit.js";
 import { loadEnvironmentPolicy } from "./environment-policy.js";
@@ -54,6 +54,7 @@ import { ResourceService } from "./resources/index.js";
 import { TaskRegister } from "./tasks/register.js";
 import { defaultAgentDir, defaultStateDir, ensureWorkspace, projectRootOf, workspaceAgentFor, workspacesDir } from "./paths.js";
 import { canonical } from "./trust.js";
+import { createHostPressureController, createHostPressureSampler, type HostPressureController } from "./pressure/index.js";
 import { ProjectEnvStore, projectEnvTrustAllows } from "./project-env.js";
 import { ProjectRegistry } from "./projects.js";
 import { PushService } from "./push.js";
@@ -242,6 +243,15 @@ export class HostServer {
   readonly packages: PackageService;
   readonly setup: SetupService;
   readonly views: ViewCache;
+  /**
+   * What this host and this machine cost right now, what its workers reported,
+   * and the one journal of everything memory pressure has done (RP-8).
+   *
+   * It observes and records; it releases nothing and refuses nothing yet.
+   * Deliberately not called `pressure`: that name already belongs to this
+   * server's per-socket outbound transport pressure (RP-7).
+   */
+  readonly memoryPressure: HostPressureController;
   /** Raw identity is trusted spawn wiring only; it is never part of HostServer's public surface. */
   private readonly environment: EnvironmentIdentity;
   /** Durable revisions read without starting a worker (RP-9). */
@@ -538,6 +548,26 @@ export class HostServer {
         taskIdsOf: (cwd) => this.tasks.list().filter((task) => task.status === "running" && (this.pool.cwdOfSession(task.sessionPath) ?? this.catalog.cwdOf(task.sessionPath)) === cwd).map((task) => task.id),
       },
       retainedStores: () => this.retainedStores(),
+      // The fixed-size pressure summary rides with the snapshot it belongs to,
+      // and the journal is read once into an export (RP-8). A failure here
+      // leaves the section out; it never fails a snapshot.
+      pressure: () => this.memoryPressure.exportSection(),
+    });
+
+    // Memory pressure (RP-8). Self-sampled on its own small cadence: RP-1's
+    // collector walks every process on demand, and a host looking at itself
+    // every twenty seconds must not do that. Nothing here is released, asked
+    // for or refused yet — this generation observes, records and publishes.
+    this.memoryPressure = createHostPressureController({
+      sample: createHostPressureSampler(),
+      workers: () => this.pool.pressureWorkers(),
+      publish: (publication) => this.publishPressure(publication),
+      // The inventory's opaque salted project id, or nothing. Never a path.
+      projectIdOf: (cwd) => this.resources.ownership.projectIdentity(cwd).id,
+      // A window is connected, but until the renderer reports for itself its row
+      // is missing coverage rather than calm.
+      rendererPresent: () => this.hasWindowSocket(),
+      log: (line) => this.log(line),
     });
 
     // The host resolves the package manager the workers should use — the one
@@ -602,13 +632,18 @@ export class HostServer {
       // A worker's own pressure report (RP-8) arrives on a road of its own and
       // stops here. It is the app talking to itself: it carries that spawn's
       // private generation, and a client, a paired device, an audit line and
-      // another worker must never see it. Reading it is milestone E's; until
-      // then the host takes it and lets it go, without logging a byte of it.
-      onWorkerPressure: () => {},
+      // another worker must never see it. The controller binds it to the exact
+      // process that delivered it and records what it says; nothing about it is
+      // logged, published or forwarded.
+      onWorkerPressure: (cwd, notification, source) => this.memoryPressure.observeWorkerReport(cwd, notification, source),
       // The process that opened a capture is the only one that may advance or
       // end it (RP-7): its exit ends what it started, and cannot touch the
-      // successor that took its place.
-      onWorkerGone: ({ generation }) => this.captures.generationGone(generation),
+      // successor that took its place. The same exact identity retires that
+      // process's pressure evidence (RP-8).
+      onWorkerGone: ({ cwd, generation }) => {
+        this.captures.generationGone(generation);
+        this.memoryPressure.forgetWorker(cwd, generation);
+      },
       onStderr: (cwd, text) => {
         const safe = this.privateLogText(text);
         this.log(`[worker ${cwd}] ${safe.trimEnd()}`);
@@ -752,6 +787,7 @@ export class HostServer {
       this.http.listen(this.options.port ?? 0, host, () => {
         this.skillsCheck.start();
         this.sessionLifetime.start();
+        this.memoryPressure.start();
         resolve();
       });
     });
@@ -839,6 +875,10 @@ export class HostServer {
     this.relayClients.length = 0;
     this.notificationListeners.clear();
     this.skillsCheck.stop();
+    // Before the pool: a controller that is disposed publishes nothing, logs
+    // nothing and records nothing, so a worker's last message on the way out
+    // cannot reach a socket that is closing (RP-8).
+    this.memoryPressure.dispose();
     this.sessionLifetime.stop();
     if (this.logFlush) clearTimeout(this.logFlush);
     this.logFlush = undefined;
@@ -1381,6 +1421,41 @@ export class HostServer {
   }
 
   // ------------------------------------------------------------- sockets
+
+  /**
+   * The pressure summary, to the windows on this machine and nothing else (RP-8).
+   *
+   * Deliberately not `broadcast`: that writes to the relay listeners too, and a
+   * paired device's memory is its own business — a host in trouble must not
+   * make a phone release what it is showing. Every gate a direct notification
+   * already passes still applies (a proved actor, the diagnostics scope, the
+   * transcript filter, a `session/load` in flight, and outbound transport
+   * pressure, which may shed this one because `resource/snapshot` carries the
+   * same summary).
+   */
+  /**
+   * Is a *window* looking at this host right now (RP-8)?
+   *
+   * Not "is anything connected": the command line, a script and the desktop
+   * shell's own process are direct sockets too, and none of them is a renderer
+   * with a heap to answer for. The boundary already tells them apart — a page
+   * always sends `Origin`, which is what makes an actor `local_browser`
+   * (`access.ts`) — and a shell that has proved its own metrics is a window as
+   * well, even while its renderer's socket is still coming up. A paired device
+   * never enters `clients` at all, so a phone is never mistaken for a window.
+   */
+  private hasWindowSocket(): boolean {
+    for (const [ws, actor] of this.actors) {
+      if (ws.readyState === ws.OPEN && actor.class === "local_browser") return true;
+    }
+    return this.resources.desktopVerified;
+  }
+
+  private publishPressure(publication: MemoryPressurePublish): void {
+    const notification: JsonRpcNotification = { jsonrpc: "2.0", method: "resource/pressure", params: publication };
+    let line: string | undefined;
+    for (const ws of this.clients) this.emit(ws, notification, () => (line ??= JSON.stringify(notification)));
+  }
 
   private broadcast(notification: JsonRpcNotification): void {
     // Captures have already reached LogStore in observe(). Views inspect the
