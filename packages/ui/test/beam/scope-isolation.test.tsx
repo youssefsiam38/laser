@@ -194,6 +194,41 @@ describe("scope isolation", () => {
     expect(prompts[1]!.path).not.toBe(MAIN);
   });
 
+  it("detaches a scoped new-session response that has not landed in either visible view", async () => {
+    await act(async () => root.render(<Harness />));
+    await act(async () => settle(20));
+    world.calls.length = 0;
+
+    let created = "";
+    await act(async () => {
+      created = await handles.beam!.actions.newSession(BEAM_CWD, { select: false });
+      await settle(20);
+    });
+
+    expect(container.querySelector('[data-slot="probe-main"]')?.getAttribute("data-path")).toBe(MAIN);
+    expect(container.querySelector('[data-slot="probe-beam"]')?.getAttribute("data-path")).toBe(BEAM);
+    expect(world.calls.filter(call => call.method === "session/new")).toHaveLength(1);
+    expect(world.calls
+      .filter(call => call.method === "pi/session/detach")
+      .map(call => call.params))
+      .toContainEqual({ path: created });
+  });
+
+  it("releases the main default owner after leaving a path that its named scope still holds", async () => {
+    await act(async () => root.render(<Harness />));
+    await act(async () => settle(20));
+    world.calls.length = 0;
+
+    await act(async () => { await handles.main!.actions.openSession(BEAM); await settle(20); });
+    await act(async () => { await handles.main!.actions.openSession(MAIN); await settle(20); });
+
+    const releases = world.calls
+      .filter(call => call.method === "pi/session/detach" && (call.params as { path?: string }).path === BEAM)
+      .map(call => call.params as { path: string; owner?: string });
+    expect(releases).toEqual([{ path: BEAM }]);
+    expect(container.querySelector('[data-slot="probe-beam"]')?.getAttribute("data-path")).toBe(BEAM);
+  });
+
   it("opens the scoped session quietly and holds it with its own scope label", async () => {
     await act(async () => root.render(<Harness />));
     await act(async () => settle(20));

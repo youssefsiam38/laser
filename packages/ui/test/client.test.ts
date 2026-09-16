@@ -472,6 +472,80 @@ describe("delta coalescing", () => {
   });
 });
 
+describe("transcript hold observation", () => {
+  it("observes sent loads and detaches with their exact owner", async () => {
+    const hold = vi.fn(), release = vi.fn();
+    const { client } = build({ onTranscriptHold: hold, onTranscriptRelease: release });
+    client.connect();
+    const socket = FakeSocket.instances[0]!;
+    socket.accept();
+
+    const loaded = client.request("session/load", { path: "/scope.jsonl", owner: "scope:4", fromSeq: 7 });
+    const load = socket.frames().at(-1)!;
+    expect(hold).toHaveBeenCalledExactlyOnceWith("/scope.jsonl", "scope:4");
+    socket.deliver({ jsonrpc: "2.0", id: load.id, result: { state: {}, replayFrom: 7, seq: 7 } });
+    await loaded;
+
+    const detached = client.request("pi/session/detach", { path: "/scope.jsonl", owner: "scope:4" });
+    const detach = socket.frames().at(-1)!;
+    expect(release).toHaveBeenCalledExactlyOnceWith("/scope.jsonl", "scope:4");
+    socket.deliver({ jsonrpc: "2.0", id: detach.id, result: {} });
+    await detached;
+    client.close();
+  });
+
+  it("observes default holds admitted by new and fork responses", async () => {
+    const hold = vi.fn();
+    const { client } = build({ onTranscriptHold: hold });
+    client.connect();
+    const socket = FakeSocket.instances[0]!;
+    socket.accept();
+
+    const created = client.request("session/new", { cwd: "/work" });
+    const create = socket.frames().at(-1)!;
+    expect(hold).not.toHaveBeenCalled();
+    socket.deliver({ jsonrpc: "2.0", id: create.id, result: { state: { path: "/new.jsonl" } } });
+    await created;
+
+    const forked = client.request("pi/session/fork", { path: "/old.jsonl", entryId: "entry-1" });
+    const fork = socket.frames().at(-1)!;
+    socket.deliver({ jsonrpc: "2.0", id: fork.id, result: { state: { path: "/fork.jsonl" } } });
+    await forked;
+
+    expect(hold.mock.calls).toEqual([
+      ["/new.jsonl", undefined],
+      ["/fork.jsonl", undefined],
+    ]);
+    client.close();
+  });
+
+  it("clears old socket holds, then observes every reconnect resume load", () => {
+    vi.useFakeTimers();
+    const hold = vi.fn(), release = vi.fn();
+    const { client } = build({ onTranscriptHold: hold, onTranscriptRelease: release });
+    client.connect();
+    const first = FakeSocket.instances[0]!;
+    first.accept();
+    client.track("/current.jsonl", 3);
+    client.track("/dormant.jsonl", 8);
+
+    const initial = client.request("session/load", { path: "/current.jsonl", fromSeq: 3 });
+    const frame = first.frames().at(-1)!;
+    first.deliver({ jsonrpc: "2.0", id: frame.id, result: { state: {}, replayFrom: 3, seq: 3 } });
+    void initial;
+    first.close();
+    expect(release).toHaveBeenCalledWith("/current.jsonl", undefined);
+
+    vi.advanceTimersByTime(1000);
+    FakeSocket.instances[1]!.accept();
+    expect(hold.mock.calls.slice(-2)).toEqual([
+      ["/current.jsonl", undefined],
+      ["/dormant.jsonl", undefined],
+    ]);
+    client.close();
+  });
+});
+
 describe("reconnect resume", () => {
   const reconnect = (client: HostClient): FakeSocket => {
     vi.useFakeTimers();

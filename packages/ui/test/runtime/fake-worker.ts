@@ -18,6 +18,7 @@
  */
 import type { HostNotifications, SessionState, SessionSummary, SessionUpdate, SessionUpdateParams } from "@lasercode/protocol";
 import type { HostClientOptions } from "../../src/client.js";
+import { createTranscriptHoldLedger, type TranscriptHoldLedger } from "../../src/transcript-hold-ledger.js";
 import { testDescriptor } from "./environment-fixture.js";
 import { sessionState, snapshot as agentsSnapshot, summary } from "../agents/fixtures.js";
 
@@ -208,8 +209,14 @@ export class FakeWorkerClient {
 
   /** Session path → the highest seq this client has told the worker it holds. */
   readonly attached = new Map<string, number>();
+  /** Socket-scoped transcript owners, using the production ledger semantics. */
+  private readonly holds: TranscriptHoldLedger;
 
   constructor(readonly options: HostClientOptions) {
+    this.holds = createTranscriptHoldLedger({
+      hold: (path, owner) => this.options.onTranscriptHold?.(path, owner),
+      release: (path, owner) => this.options.onTranscriptRelease?.(path, owner),
+    });
     FakeWorkerClient.instances.push(this);
   }
 
@@ -222,10 +229,28 @@ export class FakeWorkerClient {
       this.options.onConnection?.("open");
     });
   }
-  reconnect(): void {}
-  close(): void {}
+  reconnect(): void {
+    this.clearHolds();
+    this.options.onConnection?.("closed");
+    queueMicrotask(async () => {
+      this.options.onConnection?.("open");
+      for (const [path, seq] of [...this.attached]) {
+        if (this.options.shouldResume && !this.options.shouldResume(path)) {
+          this.attached.delete(path);
+          continue;
+        }
+        const result = await this.request("session/load", { path, fromSeq: seq }) as { replayFrom: number };
+        this.options.onResume?.(path, result.replayFrom, seq);
+      }
+    });
+  }
+  close(): void {
+    this.clearHolds();
+    this.options.onConnection?.("closed");
+  }
   forgetAttachments(): void {
     this.attached.clear();
+    this.clearHolds();
   }
   track(path: string, seq = 0): void {
     if (!this.attached.has(path) || (this.attached.get(path) ?? 0) < seq) this.attached.set(path, seq);
@@ -266,14 +291,25 @@ export class FakeWorkerClient {
     const world = FakeWorkerClient.world;
     world.calls.push({ method, params });
     const p = (params ?? {}) as Record<string, unknown>;
+    if (method === "session/load") this.holds.hold(p.path as string, p.owner as string | undefined);
+    if (method === "pi/session/detach") this.holds.release(p.path as string, p.owner as string | undefined);
     // A move that stops a turn first is two steps inside one request, with
     // time between them — enough for whatever the settle triggers to arrive.
+    let result: unknown;
     if ((method === "pi/session/navigate" || method === "pi/session/fork") && p.stopFirst) {
       stopTurn(world, p.path as string);
       await settle(5);
-      return handle(world, this, method, { ...p, stopFirst: false });
+      result = handle(world, this, method, { ...p, stopFirst: false });
+    } else result = handle(world, this, method, p);
+    if (method === "session/new" || method === "pi/session/fork") {
+      const path = (result as { state?: { path?: string } }).state?.path;
+      if (path) this.holds.hold(path, undefined);
     }
-    return handle(world, this, method, p);
+    return result;
+  }
+
+  private clearHolds(): void {
+    this.holds.clear();
   }
 }
 

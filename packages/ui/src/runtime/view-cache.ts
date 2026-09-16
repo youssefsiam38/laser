@@ -355,6 +355,7 @@ export function pinReason(state: AppState, path: string, environment: ViewCacheE
   // chosen, before anything fetches or paints it.
   if (mainPath(state.destination) === path || pendingSessionPath(state.destination) === path) return "destination";
   for (const scoped of environment.scoped()) if (scoped === path) return "scope";
+  if (view !== undefined && hasUnsentWork(view)) return "unsent";
   if (environment.hasDraft(path)) return "draft";
   if (state.sessionLoads[path]?.phase === "opening") return "loading";
   if (view === undefined) return undefined;
@@ -369,6 +370,32 @@ export function pinReason(state: AppState, path: string, environment: ViewCacheE
   if (work.runs.has(path)) return "agent-run";
   if (work.tasks.has(path)) return "task";
   return undefined;
+}
+
+/** Whether a default host membership must survive for this canonical pin. */
+export function holdsTranscript(pin: PinReason | undefined): boolean {
+  if (pin === undefined) return false;
+  switch (pin) {
+    case "current":
+    case "destination":
+    case "question":
+    case "running":
+    case "queued":
+    case "agent-run":
+    case "task":
+    case "draft":
+    case "unsent":
+    case "action":
+      return true;
+    case "scope":
+    case "unstarted":
+    case "loading":
+      return false;
+    default: {
+      const exhaustive: never = pin;
+      return exhaustive;
+    }
+  }
 }
 
 export function createViewCache(options: ViewCacheOptions): ViewCache {
@@ -627,13 +654,10 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
     for (const [path, row] of owned) {
       const view = state.open[path];
       if (!view) continue;
-      // A prompt this surface sent and the engine has not persisted is the
-      // person's words; nothing else holds them.
-      const unsent = view.blocks.some((block) => block.kind === "user" && block.optimistic === true);
       // A view holding room for an action a person started is never a
       // candidate, and never trimmed out from under the draft it is building.
       const acting = heldForAction(path) + (options.environment.draftBytes?.(path) ?? 0);
-      const pin = acting ? ("action" as const) : unsent ? ("unsent" as const) : pinReason(state, path, options.environment, live);
+      const pin = acting ? ("action" as const) : pinReason(state, path, options.environment, live);
       const cost = row.measure.bytes + row.appended + acting;
       held.push({ path, bytes: cost, measure: row.measure, appended: row.appended, pin });
       bytes += cost;

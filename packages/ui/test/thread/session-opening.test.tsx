@@ -124,6 +124,51 @@ it("a worker reopen refreshes the tree even when both epochs have the same zero 
   expect(container.querySelector('[data-slot="conversation-skeleton"]')).toBeNull();
 });
 
+it("derives default membership: switching A to B detaches A and never detaches current B", async () => {
+  await visibleHistory();
+  world.calls.length = 0;
+
+  await act(async () => { await actions.openSession("/p/start.jsonl"); await settle(30); });
+
+  expect(state.current).toBe("/p/start.jsonl");
+  const detached = world.calls
+    .filter(call => call.method === "pi/session/detach")
+    .map(call => call.params as { path: string; owner?: string });
+  expect(detached).toContainEqual({ path });
+  expect(detached.some(call => call.path === "/p/start.jsonl" && call.owner === undefined)).toBe(false);
+});
+
+it.each(["worker reopen", "socket reconnect"])('detaches dormant A after a fresh %s load while B stays current', async source => {
+  await visibleHistory();
+  await act(async () => { await actions.openSession("/p/start.jsonl"); await settle(30); });
+  expect(state.current).toBe("/p/start.jsonl");
+  world.calls.length = 0;
+
+  await act(async () => {
+    if (source === "worker reopen") reopened();
+    else FakeHostClient.current.reconnect();
+    await settle(60);
+  });
+
+  const pathCalls = world.calls
+    .filter(call => ["session/load", "pi/session/detach"].includes(call.method)
+      && (call.params as { path?: string }).path === path)
+    .map(call => call.method);
+  expect(pathCalls).toEqual(["session/load", "pi/session/detach"]);
+
+  await act(async () => {
+    for (let seq = 1; seq <= 3; seq += 1) {
+      FakeHostClient.current.notify("session/update", {
+        sessionPath: "/p/start.jsonl", seq, at: new Date().toISOString(), update: { kind: "pending_update", pending: [] },
+      });
+    }
+    await settle(10);
+  });
+  expect(world.calls.filter(call => call.method === "pi/session/detach"
+    && (call.params as { path?: string }).path === path)).toHaveLength(1);
+  expect(state.current).toBe("/p/start.jsonl");
+});
+
 it("resumes a restarted worker epoch by re-hydrating while retaining visible history", async () => {
   const message = await visibleHistory();
   let release!: (value: ReturnType<typeof history>) => void;
@@ -143,6 +188,20 @@ it("resumes a restarted worker epoch by re-hydrating while retaining visible his
   expect(state.sessionLoads[path]).toBeUndefined();
   expect(container.textContent).toContain("Fresh history");
   expect(loading).toBe(false);
+});
+
+it("keeps an admitted New session held through the visible destination handoff", async () => {
+  await visibleHistory();
+  world.calls.length = 0;
+
+  let created = "";
+  await act(async () => { created = await actions.newSession("/p"); await settle(40); });
+
+  expect(state.current).toBe(created);
+  expect(world.calls.filter(call => call.method === "session/new")).toHaveLength(1);
+  expect(world.calls.filter(call => call.method === "pi/session/detach"
+    && (call.params as { path?: string; owner?: string }).path === created
+    && (call.params as { owner?: string }).owner === undefined)).toEqual([]);
 });
 
 it("New session waits quietly and a worker-start failure keeps its real reason", async () => {

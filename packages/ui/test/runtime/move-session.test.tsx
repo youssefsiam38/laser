@@ -115,9 +115,12 @@ describe("moving a Chat session into a project", () => {
     expect(probe("current")).toBe(MOVED);
     expect(probe("rows")).toBe(`${MOVED}@${PROJECT}:root`);
     expect(probe("blocks")).toBe("user:ideas for dinner|assistant:pasta");
-    // Nothing asked the worker for the old path after the move.
+    // The only later old-path request releases the host's default transcript
+    // membership. It does not reopen or mutate the moved worker session.
     const after = world.calls.slice(world.calls.findIndex((c) => c.method === "pi/session/move") + 1);
-    expect(after.filter((c) => (c.params as { path?: string } | null)?.path === CHAT)).toEqual([]);
+    expect(after.filter((c) => (c.params as { path?: string } | null)?.path === CHAT)).toEqual([
+      { method: "pi/session/detach", params: { path: CHAT } },
+    ]);
     expect(after.some((c) => c.method === "session/load" && (c.params as { path: string }).path === MOVED)).toBe(true);
   });
 

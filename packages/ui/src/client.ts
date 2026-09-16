@@ -27,10 +27,13 @@ import type {
   SessionUpdateParams,
 } from "@lasercode/protocol";
 import { capabilityError, capabilityFor } from "./runtime/environment-capabilities.js";
+import { createTranscriptHoldLedger, type TranscriptHoldLedger } from "./transcript-hold-ledger.js";
 
 export type NotificationHandler = <M extends HostNotificationMethod>(method: M, params: HostNotifications[M]) => void;
 
 export type ConnectionState = "connecting" | "open" | "closed";
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
 
 /**
  * What the app does with the environment it was just told about, before the
@@ -125,6 +128,10 @@ export interface HostClientOptions {
    * a Pi session the app no longer shows.
    */
   shouldResume?: (path: string) => boolean;
+  /** A transcript hold this socket asked the host to create or renew. */
+  onTranscriptHold?: (path: string, owner: string | undefined) => void;
+  /** A transcript hold this socket released, including every hold on close. */
+  onTranscriptRelease?: (path: string, owner: string | undefined) => void;
 }
 
 /** One encoder for the whole module: constructing one per update is not free. */
@@ -164,7 +171,7 @@ export function defaultHostUrl(): string {
 export class HostClient {
   private ws: WebSocket | undefined;
   private nextId = 1;
-  private readonly pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+  private readonly pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void; admitted: boolean }>();
   private readonly attached = new Map<string, number>(); // session path → last seq seen
   private backoffMs = 500;
   private closedByUser = false;
@@ -209,8 +216,29 @@ export class HostClient {
   private pendingBytes = 0;
   /** Extra notification listeners registered with `subscribe()`. */
   private readonly listeners = new Set<NotificationHandler>();
+  /**
+   * Transcript memberships this socket has asked the host to hold.
+   *
+   * This is not the reconnect watermark table above: `attached` survives a
+   * socket so a new connection can resume, while host membership belongs to
+   * exactly one socket and is empty the instant that socket closes.
+   */
+  private readonly transcriptHolds: TranscriptHoldLedger;
 
-  constructor(private readonly options: HostClientOptions) {}
+  constructor(private readonly options: HostClientOptions) {
+    const observe = (kind: "hold" | "release", path: string, owner: string | undefined): void => {
+      try {
+        if (kind === "hold") this.options.onTranscriptHold?.(path, owner);
+        else this.options.onTranscriptRelease?.(path, owner);
+      } catch {
+        /* observation cannot break transport */
+      }
+    };
+    this.transcriptHolds = createTranscriptHoldLedger({
+      hold: (path, owner) => observe("hold", path, owner),
+      release: (path, owner) => observe("release", path, owner),
+    });
+  }
 
   /**
    * One handler, registered once and removed in `close()`. A per-`connect()`
@@ -256,6 +284,7 @@ export class HostClient {
       }
     }
     this.flushUpdates();
+    this.transcriptHolds.clear();
     for (const p of this.pending.values()) p.reject(new Error(`reconnecting: ${reason}`));
     this.pending.clear();
     this.backoffMs = 500;
@@ -299,6 +328,7 @@ export class HostClient {
    */
   forgetAttachments(): void {
     this.attached.clear();
+    this.transcriptHolds.clear();
   }
 
   /** Adopt a worker's fresh `seq` epoch (see `HostClientOptions.onResume`). */
@@ -340,10 +370,23 @@ export class HostClient {
     const capability = capabilityFor(this.acceptedEnvironment, method, { presentation: "explained" });
     if (capability.state !== "available") return Promise.reject(capabilityError(capability));
     const id = this.nextId++;
-    return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
+    const response = new Promise<ClientRequests[M]["result"]>((resolve, reject) => {
+      this.pending.set(id, {
+        resolve: resolve as (v: unknown) => void,
+        reject,
+        admitted: method === "session/new" || method === "pi/session/fork",
+      });
       this.ws!.send(JSON.stringify({ jsonrpc: "2.0", id, method, params, clientVersion: PRODUCT_VERSION }));
+      this.observeSent(method, params);
     });
+    return response;
+  }
+
+  private observeSent(method: ClientMethod, params: unknown): void {
+    if (!isRecord(params) || typeof params.path !== "string") return;
+    const owner = typeof params.owner === "string" ? params.owner : undefined;
+    if (method === "session/load") this.transcriptHolds.hold(params.path, owner);
+    else if (method === "pi/session/detach") this.transcriptHolds.release(params.path, owner);
   }
 
   private setState(state: ConnectionState): void {
@@ -386,6 +429,7 @@ export class HostClient {
       if (this.ws !== ws) return;
       this.acceptedEnvironment = undefined;
       this.flushUpdates();
+      this.transcriptHolds.clear();
       this.setState("closed");
       for (const p of this.pending.values()) p.reject(new Error("connection closed"));
       this.pending.clear();
@@ -705,7 +749,12 @@ export class HostClient {
       // Keep the code and structured data: a refused agent save carries
       // `data.issues` so the form can land each refusal on its field.
       if (message.error) entry.reject(Object.assign(new Error(message.error.message), { code: message.error.code, data: message.error.data }));
-      else entry.resolve(message.result);
+      else {
+        if (entry.admitted && isRecord(message.result) && isRecord(message.result.state) && typeof message.result.state.path === "string") {
+          this.transcriptHolds.hold(message.result.state.path, undefined);
+        }
+        entry.resolve(message.result);
+      }
       return;
     }
     if ("method" in message) {

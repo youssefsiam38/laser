@@ -2,7 +2,7 @@ import type { SessionState } from "@lasercode/protocol";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { Action, AppState } from "../store.js";
-import type { NewSessionOptions } from "./new-session.js";
+import type { NewSessionOptions, SessionLaunchOptions } from "./new-session.js";
 import {
   codeDestinationForSession,
   destinationSessionForTab,
@@ -152,7 +152,8 @@ export interface MainDestinationControllerDeps {
    * cached tail, and what it paints is never authority.
    */
   paintProvisional(path: string, intent: number): void;
-  launchSession(cwd: string, options?: NewSessionOptions): Promise<string>;
+  launchSession(cwd: string, options?: SessionLaunchOptions): Promise<string>;
+  releaseLanding(path: string): void;
   archived(path: string): boolean;
   onError(error: unknown): void;
   beforeTransition(destination: MainDestination): void;
@@ -366,8 +367,9 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
     const visibleTab: MainTab = options.agentName === "chat" ? "chat" : "code";
     const target: MainTarget = visibleTab === "chat" ? { kind: "chat-tab" } : { kind: "project", project: cwd };
     const intent = begin(target);
+    let path: string | undefined;
     try {
-      const path = await depsRef.current.launchSession(cwd, { ...options, select: false });
+      path = await depsRef.current.launchSession(cwd, { ...options, select: false, landing: true });
       if (intent !== intentRef.current) return path;
       const current = depsRef.current.readState().destination;
       if (current.phase === "resolving" && current.intent === intent) transition({ ...current, target: { kind: "session", path, visibleTab } });
@@ -376,6 +378,8 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
     } catch (error) {
       if (intent === intentRef.current) fail(intent, error);
       throw error;
+    } finally {
+      if (path !== undefined) depsRef.current.releaseLanding(path);
     }
   }, [begin, fail, resolveSession, transition]);
 

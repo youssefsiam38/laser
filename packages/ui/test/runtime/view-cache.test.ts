@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentRun, BackgroundTask, SessionState } from "@lasercode/protocol";
 
 import { createStateStore } from "../../src/runtime/LaserProvider.js";
-import { createViewCache, DELIVERY_FALLBACK_MS, PENDING_TAIL_MAX_BYTES, PENDING_TAIL_MAX_ENTRIES, pinReason, rendererViewsStore, type ViewCacheEnvironment, type ViewCacheLimits } from "../../src/runtime/view-cache.js";
+import { createViewCache, DELIVERY_FALLBACK_MS, holdsTranscript, PENDING_TAIL_MAX_BYTES, PENDING_TAIL_MAX_ENTRIES, pinReason, rendererViewsStore, type PinReason, type ViewCacheEnvironment, type ViewCacheLimits } from "../../src/runtime/view-cache.js";
 import { VIEW_TAIL_MAX_ENTRIES, viewTailRetainedBytes, type ViewTailDto, type ViewTailSink } from "../../src/runtime/view-tail.js";
 import { initialState, isDormantView, reduce, type AppState } from "../../src/store.js";
 import { measurementWork, resetMeasurementWork } from "../../src/runtime/view-measure.js";
@@ -95,6 +95,26 @@ function load(h: Harness, path: string, options?: { entries?: number; size?: num
 }
 
 describe("what is never released", () => {
+  it("decides transcript membership explicitly for every pin reason", () => {
+    const policy = {
+      current: true,
+      destination: true,
+      scope: false,
+      question: true,
+      running: true,
+      queued: true,
+      "agent-run": true,
+      task: true,
+      unstarted: false,
+      loading: false,
+      draft: true,
+      unsent: true,
+      action: true,
+    } satisfies Record<PinReason, boolean>;
+    for (const [pin, held] of Object.entries(policy) as [PinReason, boolean][]) expect(holdsTranscript(pin)).toBe(held);
+    expect(holdsTranscript(undefined)).toBe(false);
+  });
+
   it("names the pin that holds each session", () => {
     let state: AppState = { ...initialState, connection: "open" };
     state = hydrate(state, pathOf(1));
