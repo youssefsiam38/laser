@@ -10,6 +10,7 @@
 
 import type { AgentWorktreeStatus, SessionAgentInfo, SessionWorktreeDisposition } from "./agents.js";
 import type { ProviderFailureClass } from "./provider-failure.js";
+import type { RuntimeFailure, WorkerMode } from "./runtime-recovery.js";
 import { WIRE_NAMESPACE } from "./identity.js";
 import type { HostEnvironmentParams } from "./environment.js";
 import type { ProjectEnvStatus } from "./project-env.js";
@@ -198,6 +199,12 @@ export type WorkerStatus = "starting" | "ready" | "crashed" | "retired";
 export interface WorkerInfo {
   cwd: string;
   status: WorkerStatus;
+  /** The exact child launch this status describes; absent before any child exists. */
+  launchId?: string;
+  /** Normal desired Features, or the explicit non-destructive minimal launch. */
+  mode?: WorkerMode;
+  /** Typed ownership and cause for a failed launch/runtime, before private logs. */
+  failure?: RuntimeFailure;
   /** Why it crashed, or what it is doing. Written for a person to read. */
   message?: string;
   pid?: number;
@@ -1453,8 +1460,8 @@ export interface ClientRequests {
   "pi/worker/list": { params: {}; result: { workers: WorkerInfo[] } };
   /** Best-effort readiness hint; never asks for trust or opens a session. */
   "pi/worker/prepare": { params: { cwd: string }; result: {} };
-  /** Start a worker now: retry after a crash, or wake a retired one. */
-  "pi/worker/restart": { params: { cwd: string }; result: { worker: WorkerInfo } };
+  /** Start a worker now: retry after a crash, or use the explicit minimal Feature set. */
+  "pi/worker/restart": { params: { cwd: string; mode?: WorkerMode }; result: { worker: WorkerInfo } };
   /** Retire a worker on purpose. Refused while one of its sessions is running. */
   "pi/worker/stop": { params: { cwd: string }; result: {} };
 

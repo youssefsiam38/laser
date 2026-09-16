@@ -2866,6 +2866,10 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 #### M19 notes
 - 2026-09-16 D-264 turns `docs/resource-and-loading-plan.md`'s supporting recovery/update prose into three dependency-ordered tasks after containment. They strengthen activation and recovery; the reviewed release orchestrator remains authoritative.
 
+#### M19-T1 notes
+- 2026-09-16 claimed by `m19-recovery-a0b859e3` on base `3d1027da`: implement approved T1A protocol/identity contract, T1B launch enforcement, then T1C bounded repair/safe mode/UI and host-loss reconciliation; one review after all three. D-266's runtime generation inventory amendment belongs to T2 and replaces the plan's byte-copy proposal.
+- 2026-09-16 T1A complete: added 128-bit launch IDs, closed runtime failure owner/stage/category values, safe/normal restart mode, strict schemas/round-trip samples, and sanitized structured companion failures; `pi/worker/status` remains non-sheddable state and `pi/worker/restart` remains work-control. Evidence: `pnpm -F @lasercode/protocol test`; `pnpm -F @lasercode/protocol typecheck`; `pnpm -F @lasercode/protocol build`; `pnpm -F @lasercode/pi-extension exec vitest run test/web-access.test.ts`; `pnpm -F @lasercode/pi-extension typecheck`.
+
 ## Handoffs
 
 ### H-14 · M18-T2 · 2026-09-14 · orchestrator

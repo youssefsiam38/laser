@@ -24,6 +24,7 @@ import {
 } from "./agents.js";
 import { MAX_FALLBACK_CHAIN_MODELS } from "./fallback.js";
 import { PROVIDER_FAILURE_CLASSES } from "./provider-failure.js";
+import { WORKER_MODES } from "./runtime-recovery.js";
 import { ErrorCodes, type JsonRpcRequest } from "./jsonrpc.js";
 import { PREFS_MAX_BYTES } from "./messages.js";
 import { resourceParamsSchemas } from "./resources.js";
@@ -829,7 +830,7 @@ export const clientParamsSchemas = {
 
   "pi/worker/list": z.object({}).strict(),
   "pi/worker/prepare": z.object({ cwd: z.string().min(1) }).strict(),
-  "pi/worker/restart": z.object({ cwd: z.string().min(1) }).strict(),
+  "pi/worker/restart": z.object({ cwd: z.string().min(1), mode: z.enum(WORKER_MODES).optional() }).strict(),
   "pi/worker/stop": z.object({ cwd: z.string().min(1) }).strict(),
 
   // --- M4: settings, packages, providers, logs ---

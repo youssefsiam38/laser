@@ -45,6 +45,7 @@ describe("what may be shed", () => {
       "pi/session/attention",
       "pi/providers/login/event",
       "pi/project/trust_request",
+      "pi/worker/status",
     ]) {
       expect(isSheddable(method), method).toBe(false);
     }

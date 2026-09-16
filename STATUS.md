@@ -25,7 +25,7 @@
 | M16 Conversation experience | in-progress |
 | M17 Coding experience | todo |
 | M18 Resource containment | in-progress |
-| M19 Runtime recovery/update activation | todo |
+| M19 Runtime recovery/update activation | in-progress |
 | MX Cross-cutting | in-progress |
 
 **Blockers:** M18-T15 — full run A stopped at scenario 9 (two attached transcript paths on one connection); fix owner `dormant-attach-leak` in flight, then A/B rerun.
