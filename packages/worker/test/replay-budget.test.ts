@@ -204,3 +204,55 @@ describe("a worker under replay pressure", () => {
     expect(replayed.length).toBeGreaterThanOrEqual(2);
   });
 });
+
+describe("giving replay back under pressure (RP-8)", () => {
+  const push = (buffer: ReplayBuffer, from: number, count: number) => {
+    for (let seq = from; seq < from + count; seq += 1) buffer.push(update(seq, "x".repeat(100)));
+  };
+
+  it("takes from the least recently active session first, advances floors and keeps the total exact", () => {
+    const budget = new ReplayBudget(1024 * 1024);
+    let clock = 0;
+    const older = new ReplayBuffer(100, 1024 * 1024, budget, () => (clock += 1));
+    const newer = new ReplayBuffer(100, 1024 * 1024, budget, () => (clock += 1));
+    push(older, 1, 10);
+    push(newer, 1, 10);
+    const before = budget.bytes;
+    const trimmed = budget.trimTo(Math.floor(before / 2), { maxDrops: 512 });
+    expect(trimmed.dropped).toBeGreaterThan(0);
+    expect(trimmed.bytes).toBe(before - budget.bytes);
+    expect(budget.bytes).toBeLessThanOrEqual(Math.floor(before / 2));
+    // The conversation nobody has touched for longest gives first.
+    expect(older.size).toBeLessThan(newer.size);
+    // A raised floor is what `session/load` turns into a resync.
+    expect(older.floor).toBeGreaterThan(0);
+    // What is left of it is still a contiguous suffix, and its floor still
+    // names the seq just before it.
+    const left = [...older].map((value) => value.seq);
+    expect(left).toEqual([...left].sort((a, b) => a - b));
+    if (older.first) expect(older.first.seq - 1).toBe(older.floor);
+    expect(trimmed.boundReached).toBe(false);
+  });
+
+  it("stops at its bound and says work was left, without claiming a zero release", () => {
+    const budget = new ReplayBudget(1024 * 1024);
+    const buffer = new ReplayBuffer(100, 1024 * 1024, budget);
+    push(buffer, 1, 20);
+    const bounded = budget.trimTo(0, { maxDrops: 3 });
+    expect(bounded).toMatchObject({ dropped: 3, boundReached: true });
+    expect(bounded.bytes).toBeGreaterThan(0);
+    // A bound of zero prevents the work before any release: nothing is claimed.
+    const none = budget.trimTo(0, { maxDrops: 0 });
+    expect(none).toEqual({ dropped: 0, bytes: 0, boundReached: true });
+  });
+
+  it("does nothing when the worker is already under the target", () => {
+    const budget = new ReplayBudget(1024 * 1024);
+    const buffer = new ReplayBuffer(100, 1024 * 1024, budget);
+    push(buffer, 1, 3);
+    const held = budget.bytes;
+    expect(budget.trimTo(1024 * 1024)).toEqual({ dropped: 0, bytes: 0, boundReached: false });
+    expect(budget.bytes).toBe(held);
+    expect(buffer.floor).toBe(0);
+  });
+});

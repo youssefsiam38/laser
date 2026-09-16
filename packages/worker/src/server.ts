@@ -22,8 +22,16 @@
  * growing the process.
  */
 
-import { AGENT_MAX_DEPTH_LIMIT, EDITABLE_TEXT_MAX_BYTES, ENV, ErrorCodes, createBodyRangeReader, entryRegionsPage, utf8ByteLength, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TypedClientRequest, WIRE_NAMESPACE } from "@lasercode/protocol";
+import { AGENT_MAX_DEPTH_LIMIT, EDITABLE_TEXT_MAX_BYTES, ENV, ErrorCodes, createBodyRangeReader, entryRegionsPage, utf8ByteLength, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type MemoryPressureStores, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TypedClientRequest, WIRE_NAMESPACE } from "@lasercode/protocol";
 import { CaptureReservations } from "./capture-reservations.js";
+import {
+  PRESSURE_MAX_REPLAY_DROPS,
+  PRESSURE_MAX_TASK_SESSIONS,
+  createWorkerPressureController,
+  type PressureActionOutcome,
+  type WorkerPressureController,
+} from "./pressure.js";
+import { createPressureSampler } from "./pressure-sampler.js";
 
 /** RP-5b body digests. The one hash both authorities sign a body with. */
 const sha256Hex = (text: string): string => createHash("sha256").update(text, "utf8").digest("hex");
@@ -144,6 +152,14 @@ export interface WorkerServerOptions {
    * can drop it (RP-7).
    */
   retainProviderBodies?: boolean;
+  /**
+   * Which spawn this worker is, as the host minted it before starting the
+   * process (RP-8). The worker stamps it on the reports it sends unasked and
+   * checks it on every directive. Absent — a worker constructed directly in a
+   * test, or a caller that minted none — it takes no part in memory pressure
+   * at all rather than claiming an identity nobody gave it.
+   */
+  workerGeneration?: number;
 }
 
 /** Sessions whose first prompt may wait for a Namer model; a worker holds few at once. */
@@ -285,6 +301,8 @@ export class WorkerServer {
   private readonly runningTools = new Map<string, Set<string>>();
   /** Held only through prompt preflight; prevents runtime replacement races. */
   private readonly firstTurnLock = new FirstTurnLock();
+  /** This worker's own memory-pressure controller (RP-8). One per process. */
+  private readonly pressure: WorkerPressureController;
 
   constructor(private readonly options: WorkerServerOptions) {
     this.environmentId = options.environmentId ?? UNCONFIGURED_ENVIRONMENT;
@@ -359,6 +377,25 @@ export class WorkerServer {
     // qualification itself finishes seconds after the first prompt. A session
     // whose first prompt found no model is named the moment one appears.
     this.definitions.onChange(() => this.nameWaitingSessions());
+    // This worker answers for its own memory (RP-8): it samples itself, runs
+    // the three steps it owns, and tells the host what it found. It takes part
+    // only when the host gave it a generation it can prove; without one it
+    // neither reports nor acts on a directive.
+    this.pressure = createWorkerPressureController(
+      {
+        sample: createPressureSampler(),
+        actions: {
+          ephemeralCaches: () => this.releaseEphemeralCaches(),
+          replaySuffixes: (level) => this.releaseReplaySuffixes(level),
+          taskRecords: (level) => this.releaseTaskRecords(level),
+        },
+        stores: () => this.retainedStores(),
+        report: (report) => this.notify("pi/resource/pressure", report),
+        log: (line) => console.error(`${PRODUCT_NAME} worker: ${line}`),
+      },
+      options.workerGeneration !== undefined ? { generation: options.workerGeneration } : {},
+    );
+    if (options.workerGeneration !== undefined) this.pressure.start();
   }
 
   /**
@@ -438,6 +475,9 @@ export class WorkerServer {
   }
 
   async dispose(): Promise<void> {
+    // Before anything is torn down: a pass in flight stops at its next step and
+    // nothing is reported afterwards (RP-8).
+    this.pressure.dispose();
     this.runtimes.clearLease();
     // Nothing of a body outlives this worker's service (RP-5b, RP-4).
     this.bodyRanges.forget();
@@ -824,32 +864,15 @@ export class WorkerServer {
         // The app asking its own worker what it is holding (RP-3/RP-6). Read
         // from state this process already has: nothing is collected, nothing
         // is opened and no session is touched to answer it.
-        const replay = this.replayStats();
-        return {
-          stores: {
-            ...this.tasks.retainedStores(),
-            // RP-4's own rows: the runtimes this worker holds, the replay it is
-            // keeping for them against its own ceiling, and the per-session
-            // tables beside them. Counts of state, never a share of memory.
-            workerSessions: { count: this.runtimes.size },
-            workerReplay: { count: replay.updates, bytes: replay.bytes },
-            workerCaches: { count: this.cacheRecords() },
-            // What this worker's link to the app is holding right now (RP-7):
-            // bytes accepted and not yet written, plus a partial frame being
-            // read. Numbers only; never a payload and never a path.
-            // Bytes accepted for the app and not yet written. A frame count
-            // is the host's to report: what is here is a byte backlog, and
-            // saying "one frame" for it would be a different number's name.
-            // Exact, both numbers: the messages this worker has accepted for
-            // the app and not yet written, and what they weigh. A half-read
-            // inbound frame is bytes, never a message.
-            providerQueues: {
-              count: (this.options.transportFrames?.() ?? 0) + this.captureReservations.held().open,
-              bytes: (this.options.transportPending?.() ?? 0) + this.captureReservations.held().bytes,
-            },
-          },
-        } satisfies Result<"pi/worker/retained-stores">;
+        return { stores: this.retainedStores() } satisfies Result<"pi/worker/retained-stores">;
       }
+
+      case "pi/worker/pressure":
+        // The host asking this worker to give memory back at a level (RP-8).
+        // Never a client's call: the router refuses it before anything is
+        // forwarded. The controller owns the fences and the bounds; nothing
+        // here can cancel work.
+        return (await this.pressure.directive(req.params)) satisfies Result<"pi/worker/pressure">;
 
       case "pi/task/stop": {
         // The companion extension owns the process, so Stop is a command to
@@ -1806,6 +1829,116 @@ export class WorkerServer {
    * the one naming attempt a session may have running.
    * Counts of records, never a claim about bytes of memory.
    */
+  /**
+   * What this worker is holding, for the host's diagnostics (RP-3) and for its
+   * own pressure reports (RP-8).
+   *
+   * One expression, read by both, so the two can never say different things
+   * about the same moment. Nothing is collected and no session is touched to
+   * answer it.
+   */
+  private retainedStores(): MemoryPressureStores {
+    const replay = this.replayStats();
+    return {
+      ...this.tasks.retainedStores(),
+      // RP-4's own rows: the runtimes this worker holds, the replay it is
+      // keeping for them against its own ceiling, and the per-session tables
+      // beside them. Counts of state, never a share of memory.
+      workerSessions: { count: this.runtimes.size },
+      workerReplay: { count: replay.updates, bytes: replay.bytes },
+      workerCaches: { count: this.cacheRecords() },
+      // What this worker's link to the app is holding right now (RP-7): bytes
+      // accepted and not yet written, plus a partial frame being read. Numbers
+      // only; never a payload and never a path. A frame count is the host's to
+      // report: what is here is a byte backlog, and saying "one frame" for it
+      // would be a different number's name.
+      providerQueues: {
+        count: (this.options.transportFrames?.() ?? 0) + this.captureReservations.held().open,
+        bytes: (this.options.transportPending?.() ?? 0) + this.captureReservations.held().bytes,
+      },
+    };
+  }
+
+  /**
+   * Step 1 of the pressure pass: memos this process can rebuild (RP-8).
+   *
+   * The body memo holds one body and is re-read from the file on the next
+   * slice. A session's `git status` answer is a 1.5-second memo over a command
+   * that can simply be run again — and only for a session holding nothing: the
+   * one safety authority decides that, and a session whose safety cannot be
+   * read keeps its memo rather than losing it on a guess. Baselines, the agent
+   * definitions the host pushed, canonical history and durable logs are not
+   * caches and are never touched here.
+   */
+  private releaseEphemeralCaches(): PressureActionOutcome {
+    let count = this.bodyRanges.forget() ? 1 : 0;
+    let held = false;
+    let safetyIncomplete = false;
+    const free: string[] = [];
+    for (const live of this.runtimes.values()) {
+      try {
+        if (sessionPins(this.safetySnapshot(live)).length === 0) free.push(live.path);
+        else held = true;
+      } catch {
+        // An unreadable safety answer is not permission: this session keeps
+        // everything it has.
+        safetyIncomplete = true;
+      }
+    }
+    if (this.gitService && free.length > 0) count += this.gitService.releaseStatusCache(free);
+    if (count > 0) return { released: { count } };
+    if (safetyIncomplete) return { safetyIncomplete: true };
+    if (held) return { held: true };
+    return {};
+  }
+
+  /**
+   * Step 3: replay suffixes (RP-8/RP-4).
+   *
+   * Half the worker's allowance at `warning`, a quarter at `critical`, taken
+   * from the least recently active conversation first. Each drop advances that
+   * session's floor, which `session/load` already turns into a resync, so a
+   * client re-reads rather than missing anything. No entry, question or
+   * terminal update lives only in a replay suffix.
+   */
+  private releaseReplaySuffixes(level: "warning" | "critical"): PressureActionOutcome {
+    const target = Math.floor(this.replayBudget.limitBytes / (level === "critical" ? 4 : 2));
+    const trimmed = this.replayBudget.trimTo(target, { maxDrops: PRESSURE_MAX_REPLAY_DROPS });
+    if (trimmed.dropped > 0) {
+      return {
+        released: { count: trimmed.dropped, bytes: trimmed.bytes },
+        ...(trimmed.boundReached ? { boundReached: true } : {}),
+      };
+    }
+    return trimmed.boundReached ? { boundReached: true } : {};
+  }
+
+  /**
+   * Step 4: finished commands' records (RP-8/RP-6).
+   *
+   * A level, delivered to each session's own companion, which decides what its
+   * *terminal* records keep. Nothing here pauses a command, shortens a live
+   * tail or deletes a durable log, and nothing waits for an answer: delivery
+   * is all this step can observe, so it never claims a release it cannot
+   * count. Bounded to the sessions least recently active; the rest wait for
+   * the next pass.
+   */
+  private releaseTaskRecords(level: "warning" | "critical"): PressureActionOutcome {
+    const candidates = [...this.runtimes.values()].sort((a, b) => a.buffer.lastActivity - b.buffer.lastActivity);
+    const told = candidates.slice(0, PRESSURE_MAX_TASK_SESSIONS);
+    let delivered = 0;
+    for (const live of told) {
+      if (live.driver.deliverExtensionCommand?.({ type: "lasercode/task/pressure", level }) === true) delivered += 1;
+    }
+    // Work left over outranks what was done with the rest: the host should see
+    // that this worker did not finish, not that it had nothing to do.
+    if (candidates.length > told.length) return { boundReached: true };
+    // Delivery is not a release. Until the companion reports what it let go
+    // (milestone D), an accepted delivery is an outcome nobody can measure.
+    if (delivered > 0) return { unobservable: true };
+    return {};
+  }
+
   private cacheRecords(): number {
     let records = this.unnamed.size + this.namingInFlight.size;
     for (const live of this.runtimes.values()) records += live.pending?.list().length ?? 0;

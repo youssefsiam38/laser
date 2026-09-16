@@ -71,6 +71,38 @@ export class ReplayBudget {
    * one still has bytes to give. When only `origin` is left it gives too, down
    * to nothing, so a single very large update cannot hold the budget open.
    */
+  /**
+   * Give bytes back until this worker is under `targetBytes` (RP-8).
+   *
+   * The same eviction the ceiling already performs, asked for early: the least
+   * recently active session goes first, each drop advances that buffer's floor
+   * — which `session/load` already turns into a resync — and the retained
+   * total is kept exact by the buffers themselves. There is no origin to spare
+   * here: nothing is pushing, this is a pass deciding to hold less.
+   *
+   * Bounded by `maxDrops`, so one pass can never walk an unbounded number of
+   * updates. Reaching the bound is reported by the caller as work left over,
+   * never as a failure.
+   */
+  trimTo(targetBytes: number, options: { maxDrops?: number } = {}): { dropped: number; bytes: number; boundReached: boolean } {
+    const maxDrops = Math.max(0, Math.floor(options.maxDrops ?? 512));
+    const target = Math.max(0, Math.floor(targetBytes));
+    const before = this.retained;
+    if (maxDrops === 0) return { dropped: 0, bytes: 0, boundReached: this.retained > target };
+    let dropped = 0;
+    const victims = [...this.buffers].sort((a, b) => a.lastActivity - b.lastActivity);
+    for (const victim of victims) {
+      while (this.retained > target && victim.size > 0 && dropped < maxDrops) {
+        if (victim.dropOldest() === undefined) break;
+        this.droppedUpdates += 1;
+        this.floorAdvancesCount += 1;
+        dropped += 1;
+      }
+      if (this.retained <= target || dropped >= maxDrops) break;
+    }
+    return { dropped, bytes: Math.max(0, before - this.retained), boundReached: dropped >= maxDrops && this.retained > target };
+  }
+
   enforce(origin: ReplayBuffer): void {
     if (this.retained <= this.limitBytes) return;
     const victims = [...this.buffers].sort((a, b) => {
