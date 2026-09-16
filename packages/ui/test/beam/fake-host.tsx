@@ -13,6 +13,7 @@
  */
 import type { AgentsSnapshot, EnvironmentDescriptor, HostNotificationMethod, HostNotifications, ModelCatalogEntry, ProviderAuthInfo, SessionState, SessionSummary } from "@lasercode/protocol";
 import type { HostClientOptions } from "../../src/client.js";
+import { createTranscriptHoldLedger, type TranscriptHoldLedger } from "../../src/transcript-hold-ledger.js";
 import { sessionState, snapshot as agentsSnapshot, summary } from "../agents/fixtures.js";
 import { testDescriptor } from "../runtime/environment-fixture.js";
 
@@ -76,7 +77,13 @@ export class FakeHostClient {
     return instance;
   }
 
+  private readonly holds: TranscriptHoldLedger;
+
   constructor(readonly options: HostClientOptions) {
+    this.holds = createTranscriptHoldLedger({
+      hold: (path, owner) => this.options.onTranscriptHold?.(path, owner),
+      release: (path, owner) => this.options.onTranscriptRelease?.(path, owner),
+    });
     FakeHostClient.instances.push(this);
   }
 
@@ -134,12 +141,30 @@ export class FakeHostClient {
     }
     this.options.onConnection?.("open");
   }
-  reconnect(): void {}
-  close(): void {}
+  reconnect(): void {
+    this.clearHolds();
+    this.options.onConnection?.("closed");
+    queueMicrotask(async () => {
+      this.options.onConnection?.("open");
+      for (const path of [...this.attached]) {
+        if (this.options.shouldResume && !this.options.shouldResume(path)) {
+          this.attached.delete(path);
+          continue;
+        }
+        const result = await this.request("session/load", { path, fromSeq: 0 }) as { replayFrom: number };
+        this.options.onResume?.(path, result.replayFrom, 0);
+      }
+    });
+  }
+  close(): void {
+    this.clearHolds();
+    this.options.onConnection?.("closed");
+  }
   /** Really forgotten, and observable: a test can assert nothing was kept. */
   readonly attached = new Set<string>();
   forgetAttachments(): void {
     this.attached.clear();
+    this.clearHolds();
   }
   track(path: string): void {
     this.attached.add(path);
@@ -163,9 +188,20 @@ export class FakeHostClient {
   async request(method: string, params: unknown): Promise<unknown> {
     const world = FakeHostClient.world;
     world.calls.push({ method, params });
+    const p = params as Record<string, unknown>;
+    if (method === "session/load") this.holds.hold(p.path as string, p.owner as string | undefined);
+    if (method === "pi/session/detach") this.holds.release(p.path as string, p.owner as string | undefined);
     const override = world.overrides[method];
-    if (override) return override(params as never);
-    return handle(world, method, params as Record<string, unknown>);
+    const result = override ? await override(params as never) : handle(world, method, p);
+    if (method === "session/new" || method === "pi/session/fork") {
+      const path = (result as { state?: { path?: string } }).state?.path;
+      if (path) this.holds.hold(path, undefined);
+    }
+    return result;
+  }
+
+  private clearHolds(): void {
+    this.holds.clear();
   }
 }
 

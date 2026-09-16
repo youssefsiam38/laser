@@ -29,6 +29,11 @@ export interface NewSessionOptions {
   select?: boolean;
 }
 
+/** Internal handoff policy used by the main destination and thread-list runtime. */
+export interface SessionLaunchOptions extends NewSessionOptions {
+  landing?: boolean;
+}
+
 interface SessionLauncherDeps {
   state(): AppState;
   archived(path: string): boolean;
@@ -37,7 +42,9 @@ interface SessionLauncherDeps {
   /** `select: false` loads without making the session current. */
   open(path: string, options?: { select?: boolean }): Promise<void>;
   select(path: string): void;
-  create(cwd: string, options: NewSessionOptions): Promise<string>;
+  create(cwd: string, options: SessionLaunchOptions): Promise<string>;
+  holdLanding(path: string): void;
+  releaseLanding(path: string): void;
   /**
    * The definition a name stands for, with `undefined` resolved to the default
    * agent. Applied to the request and to every catalog row alike, so an empty
@@ -48,7 +55,7 @@ interface SessionLauncherDeps {
 }
 
 /** The launcher every New session button, shortcut and the thread-list adapter share. */
-export type SessionLauncher = (cwd: string, options?: NewSessionOptions) => Promise<string>;
+export type SessionLauncher = (cwd: string, options?: SessionLaunchOptions) => Promise<string>;
 
 const agentNameOf = (summary: SessionSummary): string | undefined => summary.agent?.agentName;
 
@@ -57,13 +64,14 @@ const agentNameOf = (summary: SessionSummary): string | undefined => summary.age
  * This is navigation policy, not a change to explicit host creation/fork APIs.
  */
 export function createSessionLauncher(deps: SessionLauncherDeps): SessionLauncher {
-  const pending = new Map<string, { work: Promise<string>; selected?: Promise<string> }>();
+  const pending = new Map<string, { work: Promise<string>; selected?: Promise<string>; landing: { value: boolean } }>();
   const resolve = deps.resolveAgent ?? ((name) => name);
   return (cwd, options = {}) => {
     const wanted = resolve(options.agentName);
     const quiet = options.select === false;
     const key = `${cwd} ${wanted ?? ""}`;
-    const resultFor = (entry: { work: Promise<string>; selected?: Promise<string> }) => {
+    const resultFor = (entry: { work: Promise<string>; selected?: Promise<string>; landing: { value: boolean } }) => {
+      if (options.landing) entry.landing.value = true;
       if (quiet) return entry.work;
       // Allocation is shared, navigation is the caller's choice. A sidebar +
       // racing the bubble must select the same session, never allocate two.
@@ -71,6 +79,7 @@ export function createSessionLauncher(deps: SessionLauncherDeps): SessionLaunche
     };
     const existing = pending.get(key);
     if (existing) return resultFor(existing);
+    const landing = { value: options.landing === true };
     const work = (async () => {
       await deps.refresh();
       const state = deps.state();
@@ -91,21 +100,32 @@ export function createSessionLauncher(deps: SessionLauncherDeps): SessionLaunche
           || b.modifiedAt.localeCompare(a.modifiedAt));
       for (const candidate of candidates) {
         let view = deps.state().open[candidate.path];
+        let heldForLanding = false;
         if (!view?.hydrated) {
-          // Catalog counts alone cannot prove emptiness (goals, live work, stale scans).
-          await deps.open(candidate.path, { select: false });
-          view = deps.state().open[candidate.path];
+          // The probe load itself acquires membership. Hold it across the
+          // synchronous store publications until its caller lands the path.
+          if (landing.value) {
+            deps.holdLanding(candidate.path);
+            heldForLanding = true;
+          }
+          try {
+            await deps.open(candidate.path, { select: false });
+            view = deps.state().open[candidate.path];
+          } catch (error) {
+            if (heldForLanding) deps.releaseLanding(candidate.path);
+            throw error;
+          }
         }
-        if (view && isUnstartedSession(view) && !deps.archived(candidate.path)) {
-          return candidate.path;
-        }
+        if (view && isUnstartedSession(view) && !deps.archived(candidate.path)) return candidate.path;
+        if (heldForLanding) deps.releaseLanding(candidate.path);
       }
       return deps.create(cwd, {
         ...(options.agentName !== undefined ? { agentName: options.agentName } : {}),
         select: false,
+        ...(landing.value ? { landing: true } : {}),
       });
     })();
-    const entry = { work: work.finally(() => pending.delete(key)) };
+    const entry = { work: work.finally(() => pending.delete(key)), landing };
     pending.set(key, entry);
     return resultFor(entry);
   };

@@ -138,6 +138,8 @@ node scripts/browser-check/run.mjs --target scripts/browser-check/targets/app.mj
 # Advanced → Resources (RP-3) and the environment-scoped device store (RP-13 B):
 node scripts/browser-check/run.mjs --target scripts/browser-check/targets/app.mjs --fixture long --matrix --script scripts/browser-check/test/resource-diagnostics.mjs
 node scripts/browser-check/run.mjs --target scripts/browser-check/targets/app.mjs --fixture long --matrix --script scripts/browser-check/test/environment-storage.mjs
+# Real-host transcript membership (rerun whenever hold/release policy changes):
+node scripts/browser-check/run.mjs --target scripts/browser-check/targets/transcript-membership.mjs --fixture long --script scripts/browser-check/test/transcript-membership.mjs
 ```
 
 Two things those last two scripts rely on, so a later script does not rediscover

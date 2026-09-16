@@ -67,7 +67,8 @@ import { HostClient } from "../client.js";
 import { initialState, reduce, type Action, type AppState, type SessionView } from "../store.js";
 import { hydrationEpochOf, isDormantView } from "../view-summary.js";
 import { atLiveEdge, onStanding } from "./anchored-messages.js";
-import { createViewCache, type ActionReservation, type RendererViewCounters, type ViewCache } from "./view-cache.js";
+import { createViewCache, type ActionReservation, type RendererViewCounters, type ViewCache, type ViewCacheEnvironment } from "./view-cache.js";
+import { useTranscriptMembership, type TranscriptMembership } from "./transcript-membership.js";
 import {
   PRESSURE_REFUSAL_MESSAGES,
   PressureRefusedError,
@@ -612,6 +613,17 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   useEffect(() => () => archive.dispose(), [archive]);
   const archiveRevision = useSyncExternalStore(archive.subscribe, archive.getSnapshot, archive.getSnapshot);
 
+  /** Sessions shown by named surfaces, independently of the main view. */
+  const scopedPaths = useRef(new Map<string, number>());
+  /** Threads whose composer holds words a person wrote and nobody else has. */
+  const composerDrafts = useRef(new Map<string, number>());
+  const viewCacheEnvironment = useMemo<ViewCacheEnvironment>(() => ({
+    scoped: () => scopedPaths.current.keys(),
+    hasDraft: (path) => composerDrafts.current.has(path) || store.presentation.hasEditDraft(path),
+    draftBytes: (path) => composerDrafts.current.get(path) ?? 0,
+  }), [store]);
+  const transcriptMembershipBridge = useRef<TranscriptMembership | undefined>(undefined);
+
   /**
    * Host notifications the reducer does not model: the project list, trust
    * questions, per-session attention, and a worker that came back. Kept in a
@@ -645,7 +657,12 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         dispatch({ type: "notification", method, params });
         onHostNotification.current(method, params);
       },
-      onConnection: (s) => dispatch({ type: "connection", state: s }),
+      onConnection: (s) => {
+        if (s !== "open") transcriptMembershipBridge.current?.clear();
+        dispatch({ type: "connection", state: s });
+      },
+      onTranscriptHold: (path, owner) => transcriptMembershipBridge.current?.observer.hold(path, owner),
+      onTranscriptRelease: (path, owner) => transcriptMembershipBridge.current?.observer.release(path, owner),
       onVersionMismatch: (version) => dispatch({ type: "versionMismatch", version }),
       /**
        * The environment, before this connection opens (RP-13).
@@ -704,6 +721,16 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     if (error instanceof SessionLoadError || sessionOpenPhase(current, current.current).reason === text) return;
     dispatch({ type: "toast", level: "error", text });
   }, []);
+
+  const transcriptMembership = useTranscriptMembership({
+    connection: state.connection,
+    read: readState,
+    subscribe: store.subscribe,
+    environment: viewCacheEnvironment,
+    detach: (path) => client.request("pi/session/detach", { path }),
+    onError,
+  });
+  transcriptMembershipBridge.current = transcriptMembership;
 
   const guard = useCallback(
     <T,>(work: () => Promise<T>): Promise<T | undefined> =>
@@ -813,19 +840,6 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
    * The move re-hydrates when it lands, so the re-read has nothing to add.
    */
   const moving = useRef(new Set<string>());
-  /**
-   * Sessions a `LaserThreadScope` is showing (the Beam bubble). They are on
-   * screen too, so they stay attached for as long as the scope holds them;
-   * the counter re-runs the effect when a scope comes or goes.
-   */
-  const scopedPaths = useRef(new Map<string, number>());
-  /**
-   * Threads whose composer holds words a person wrote and nobody else has:
-   * text, an attachment, or a tentative first-turn choice. Reported by each
-   * thread runtime as its composer changes (RP-5); an empty composer reports
-   * nothing and pins nothing.
-   */
-  const composerDrafts = useRef(new Map<string, number>());
   const notifyPins = useRef<() => void>(() => {});
   /**
    * What a composer is holding, in bytes (RP-5, RP-5b B3). A boolean said a
@@ -842,8 +856,11 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     } else composerDrafts.current.set(path, bytes);
     // Words appearing or going is a change in what is held, and the store did
     // not move: the bound has to be told (RP-5).
-    if (before !== bytes) notifyPins.current();
-  }, []);
+    if (before !== bytes) {
+      notifyPins.current();
+      transcriptMembership.notifyPins();
+    }
+  }, [transcriptMembership]);
   /**
    * Room a composer is holding with the words it was given (RP-5b B3). It is
    * released when those words go — sent, cleared, the path closed, the
@@ -878,20 +895,16 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   const viewCache = useMemo(() => createViewCache({
     read: () => store.getSnapshot(),
     dispatch: store.dispatch,
-    environment: {
-      scoped: () => scopedPaths.current.keys(),
-      hasDraft: (path) => composerDrafts.current.has(path) || store.presentation.hasEditDraft(path),
-      // Exact bytes, so a draft read back from a conversation is counted for
-      // as long as the composer holds it, not merely pinned (RP-5b B3).
-      draftBytes: (path) => composerDrafts.current.get(path) ?? 0,
-    },
+    // Exact draft bytes keep the accounting and transcript pin policy on the
+    // same environment authority (RP-5b B3).
+    environment: viewCacheEnvironment,
     onRelease: (paths) => {
       // A released transcript is not resumed on the next reconnect: it would
       // arrive as a replay with nothing to apply it to, and re-read fifty
       // conversations nobody is looking at.
       for (const path of paths) client.untrack(path);
     },
-  }), [client, store]);
+  }), [client, store, viewCacheEnvironment]);
   notifyPins.current = viewCache.notifyPins;
   useEffect(() => {
     // The transaction, not the state after it: the bound follows the action to
@@ -1065,6 +1078,8 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       await refreshSessions();
     },
     open: openSession,
+    holdLanding: (path) => { transcriptMembership.holdLanding(path); },
+    releaseLanding: transcriptMembership.releaseLanding,
     // Main and scoped callers coordinate selection outside the quiet launcher.
     select: () => {},
     // A session with no attribution runs the default agent, and so does a
@@ -1076,14 +1091,20 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         cwd,
         ...(options.agentName !== undefined ? { agentName: options.agentName } : {}),
       });
-      client.track(session.path, 0);
-      dispatch({ type: "opened", state: session });
-      dispatch({ type: "hydrate", path: session.path, entries: [] });
-      dispatch({ type: "goal", path: session.path, goal: null });
-      void refreshSessions();
-      return session.path;
+      if (options.landing) transcriptMembership.holdLanding(session.path);
+      try {
+        client.track(session.path, 0);
+        dispatch({ type: "opened", state: session });
+        dispatch({ type: "hydrate", path: session.path, entries: [] });
+        dispatch({ type: "goal", path: session.path, goal: null });
+        void refreshSessions();
+        return session.path;
+      } catch (error) {
+        transcriptMembership.releaseLanding(session.path);
+        throw error;
+      }
     },
-  }), [archive, client, openSession, refreshSessions]);
+  }), [archive, client, openSession, refreshSessions, transcriptMembership]);
 
   // The extracted controller is the sole writer of the main destination.
   const destination = useMainDestinationController({
@@ -1093,6 +1114,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     loadSession: (path) => openSession(path, { select: false, policy: "recent" }),
     paintProvisional: provisional.paint,
     launchSession: (cwd, options) => launchSession(cwd, { ...options, select: false }),
+    releaseLanding: transcriptMembership.releaseLanding,
     archived: (path) => archive.has(path),
     onError,
     beforeTransition: (current) => landingDrafts.captureBeforeTransition(current),
@@ -1200,13 +1222,6 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   }, [state.connection]);
 
   /**
-   * Only the session on screen counts as "attached" for the host's idle
-   * retirement guard. The host used to add a path on every `session/load` and
-   * never remove one, so every project touched today kept its worker — and its
-   * whole Pi runtime — resident for the life of the window.
-   */
-  const detached = useRef(new Set<string>());
-  /**
    * The label each live scope holds its session with (RP-6).
    *
    * The host counts transcript delivery per connection *and* per surface, so a
@@ -1254,6 +1269,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     // A scope now holds this session, and letting go below releases it.
     notifyPins.current();
     setScopeRevision((n) => n + 1);
+    transcriptMembership.notifyPins();
     return () => {
       const left = (scopedPaths.current.get(path) ?? 1) - 1;
       if (left <= 0) scopedPaths.current.delete(path);
@@ -1263,8 +1279,9 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       client.request("pi/session/detach", { path, owner }).catch(() => {});
       notifyPins.current();
       setScopeRevision((n) => n + 1);
+      transcriptMembership.notifyPins();
     };
-  }, [claimScope, client]);
+  }, [claimScope, client, transcriptMembership]);
   // A reconnect is a new connection, so its membership starts empty: every
   // scope still on screen says so again before it can expect updates.
   useEffect(() => {
@@ -1279,26 +1296,6 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       claimScope(owner, path);
     }
   }, [claimScope, state.connection, scopeRevision]);
-  useEffect(() => {
-    if (state.connection !== "open") {
-      detached.current.clear();
-      return;
-    }
-    for (const path of Object.keys(state.open)) {
-      if (path === state.current) {
-        detached.current.delete(path);
-        continue;
-      }
-      if (detached.current.has(path)) continue;
-      detached.current.add(path);
-      // This view has stopped showing the session. A scope holding the same
-      // session keeps its own hold, so this releases one surface and not the
-      // conversation: nothing is closed, and switching back re-attaches
-      // through the `session/load` that `openSession` always sends.
-      client.request("pi/session/detach", { path }).catch(() => detached.current.delete(path));
-    }
-  }, [client, scopeRevision, state.connection, state.current, state.open]);
-
   const markSeen = useCallback(
     (path: string, seq: number, force = false) => {
       if (!force && (seenSeq.current.get(path) ?? -1) >= seq) return;
@@ -1330,7 +1327,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     pressure.reset();
     scopeClaims.current.clear();
     scopeClaimedAt.current.clear();
-    detached.current.clear();
+    transcriptMembership.clear();
     openInFlight.current.clear();
     openEpochs.current.clear();
     moving.current.clear();
@@ -1486,53 +1483,50 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       const path = requireCurrent();
       await ensureEntry(path, entryId);
       moving.current.add(path);
-      let session: SessionState;
-      let editorText: string | undefined;
-      let omitted = false;
       try {
         // A stop asked for here reaches this store as the original session's
         // own updates (the aborted reply, then settled) before the reply
         // below: its transcript records the stop before it is left behind.
         const forked = await client.request("pi/session/fork", { path, entryId, ...(options?.stopFirst ? { stopFirst: true } : {}) });
-        session = forked.state;
-        editorText = forked.editorText;
-        omitted = forked.editorTextOmitted === true;
-        client.untrack(path);
-        client.track(session.path, 0);
-        // Prepare the fork in its own cached view; the visible source survives
-        // until this tail (and any intervening live updates) is ready.
-        dispatch({ type: "opened", state: session });
-        await history.read(session.path);
+        const session = forked.state;
+        // HostClient observes admission before resolving the request. This
+        // scope spans every later exit, including a failed history read or
+        // destination handoff, so no landing can outlive its operation.
+        await transcriptMembership.withLandingHold(session.path, async () => {
+          client.untrack(path);
+          client.track(session.path, 0);
+          // Prepare the fork in its own cached view; the visible source survives
+          // until this tail (and any intervening live updates) is ready.
+          dispatch({ type: "opened", state: session });
+          await history.read(session.path);
+          dispatch({ type: "forked", from: path, state: session });
+          // The action was accepted and the row it named has done its work; only
+          // now may a replacement page be read (RP-5b §7).
+          reconcileAfterAction.current(session.path);
+          if (readScoped === readState) destination.replaceMainSession(path, session);
+          if (forked.editorTextOmitted === true) {
+            dispatch({ type: "toast", level: "warning", text: "That message is too large to put back in the composer here. It is unchanged in the conversation you forked from." });
+          } else if (forked.editorText) {
+            // A fork hands back the prompt it forked from. That prompt can be
+            // far larger than this surface may hold, so admit it against the
+            // renderer's own accounting before handing it to the composer.
+            const room = admitEditorText(viewCache, session.path, forked.editorText);
+            if (room) {
+              dispatch({
+                type: "notification",
+                method: "pi/ui/event",
+                params: { path: session.path, method: "setEditorText", text: forked.editorText },
+              });
+              holdForComposer(session.path, forked.editorText, room);
+            } else {
+              dispatch({ type: "toast", level: "warning", text: "That message is too large to put back in the composer here. It is unchanged in the conversation you forked from." });
+            }
+          }
+          void refreshSessions();
+        });
       } finally {
         moving.current.delete(path);
       }
-      dispatch({ type: "forked", from: path, state: session });
-      // The action was accepted and the row it named has done its work; only
-      // now may a replacement page be read (RP-5b §7).
-      reconcileAfterAction.current(session.path);
-      if (readScoped === readState) destination.replaceMainSession(path, session);
-      if (omitted) {
-        dispatch({ type: "toast", level: "warning", text: "That message is too large to put back in the composer here. It is unchanged in the conversation you forked from." });
-      } else if (editorText) {
-        // A fork hands back the prompt it forked from. That prompt can be far
-        // larger than this surface may hold, so it is admitted only when the
-        // renderer's own accounting has room for it — and refused in words
-        // otherwise, leaving the fork itself untouched (RP-5b §2).
-        const room = admitEditorText(viewCache, session.path, editorText);
-        if (room) {
-          dispatch({
-            type: "notification",
-            method: "pi/ui/event",
-            params: { path: session.path, method: "setEditorText", text: editorText },
-          });
-          // The composer holds these bytes now, and holds the room with them:
-          // the reservation is handed over, not given back (RP-5b B3).
-          holdForComposer(session.path, editorText, room);
-        } else {
-          dispatch({ type: "toast", level: "warning", text: "That message is too large to put back in the composer here. It is unchanged in the conversation you forked from." });
-        }
-      }
-      void refreshSessions();
     };
 
     /**
@@ -1811,6 +1805,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     historyLoader,
     refreshProjects,
     refreshSessions,
+    transcriptMembership,
   ]);
 
   const actions = useMemo<LaserActions>(() => buildActions(readState), [buildActions, readState]);
@@ -1888,9 +1883,18 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           const path = await launchSession(target.cwd, {
             ...(target.agentName !== undefined ? { agentName: target.agentName } : {}),
             select: false,
+            landing: true,
           });
           const token = target.intent === undefined ? undefined : initializationTokens.current.get(target.intent);
-          if (token) setTimeout(() => destination.finishInitialization(token, path), 0);
+          if (token) {
+            setTimeout(() => {
+              try {
+                destination.finishInitialization(token, path);
+              } finally {
+                transcriptMembership.releaseLanding(path);
+              }
+            }, 0);
+          } else transcriptMembership.releaseLanding(path);
           return path;
         },
         renameSession: async (path, name) => {
@@ -1924,7 +1928,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           destination.endInitialization(token);
         },
       }),
-    [archive, client, destination.beginInitialization, destination.creationTarget, destination.endInitialization, destination.finishInitialization, launchSession, openSession, refreshSessions],
+    [archive, client, destination.beginInitialization, destination.creationTarget, destination.endInitialization, destination.finishInitialization, launchSession, openSession, refreshSessions, transcriptMembership],
   );
 
   // Stable so `useRemoteThreadListRuntime` does not re-publish the hook (and

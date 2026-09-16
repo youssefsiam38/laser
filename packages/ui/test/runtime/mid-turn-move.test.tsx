@@ -195,6 +195,7 @@ describe("while a reply streams", () => {
     expect(calls("pi/session/fork").map((c) => c.params)).toEqual([{ path: SESSION, entryId: prompt.id, stopFirst: true }]);
     // The fork is open: history up to the prompt, nothing of the abandoned reply.
     expect(current()).not.toBe(SESSION);
+    expect(calls("pi/session/detach").some((call) => (call.params as { path: string }).path === current())).toBe(false);
     expect(transcript()).toBe(OPENING);
     expect(running()).toBe(false);
     expect(abortedOnDisk(current())).toHaveLength(0);

@@ -256,6 +256,8 @@ describe("a session created from outside while the project screen is up", () => 
     // The launcher's rule: an unstarted session in the project is the one to use.
     expect(calls("session/new")).toHaveLength(0);
     expect(calls("session/prompt").map((c) => (c.params as { path: string }).path)).toEqual([path]);
+    expect(calls("pi/session/detach").filter((c) => (c.params as { path: string; owner?: string }).path === path
+      && (c.params as { owner?: string }).owner === undefined)).toEqual([]);
     // One row for one session, and the screen is on it.
     expect(probe()?.dataset["current"]).toBe(path);
     expect(probe()?.dataset["remote"]).toBe(path);
@@ -301,6 +303,8 @@ describe("a session created from outside while the project screen is up", () => 
     expect(crash()).toBeUndefined();
     expect(errorsLike("useClientLookup")).toEqual([]);
     expect(calls("session/new")).toHaveLength(1);
+    expect(calls("pi/session/detach").filter((c) => (c.params as { path: string; owner?: string }).path === ownPath
+      && (c.params as { owner?: string }).owner === undefined)).toEqual([]);
     const own = (calls("session/prompt")[0]?.params as { path: string }).path;
     expect(own).not.toBe(path);
     expect(probe()?.dataset["current"]).toBe(own);
