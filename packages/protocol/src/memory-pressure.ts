@@ -201,6 +201,20 @@ export const MEMORY_PRESSURE_EVENT_ID = /^mp_[1-9]\d{0,14}$/;
 /** The process inventory's opaque salted project id (RP-1): 16 hex characters. */
 export const MEMORY_PRESSURE_PROJECT_ID = /^[0-9a-f]{16}$/;
 
+/**
+ * The steps a **worker** owns, in the policy's order (RP-8 §2, actor-local).
+ *
+ * A worker clears its own caches, lets go of old replay suffixes and asks its
+ * own finished commands to keep less. It does not release a renderer's views,
+ * unload a conversation's runtime, retire itself or refuse admission: those
+ * belong to the window and to the host, and a message claiming one of them is
+ * a worker describing work it cannot do. Both worker-facing shapes — the
+ * answer to a directive and the report a worker sends unasked — accept only
+ * these three.
+ */
+export const MEMORY_PRESSURE_WORKER_ACTIONS = ["ephemeral_caches", "replay_suffixes", "task_records"] as const;
+export type MemoryPressureWorkerAction = (typeof MEMORY_PRESSURE_WORKER_ACTIONS)[number];
+
 // ---------------------------------------------------------------------------
 // Shapes
 // ---------------------------------------------------------------------------
@@ -219,10 +233,22 @@ export type MemoryPressureMeasure =
   | { status: "available"; value: number }
   | { status: "unavailable"; reason: ResourceUnavailableReason };
 
+/** A type-level assertion: `Assert<false>` does not compile. */
+type Assert<T extends true> = T;
+
 /** Compile-time proof of the one-way relationship above. */
-type WireMeasureIsAResourceMeasure = MemoryPressureMeasure extends ResourceMeasure ? true : never;
-const _wireMeasureIsAResourceMeasure: WireMeasureIsAResourceMeasure = true;
-void _wireMeasureIsAResourceMeasure;
+export type MemoryPressureMeasureIsAResourceMeasure = MemoryPressureMeasure extends ResourceMeasure ? true : never;
+type _MeasureIsAResourceMeasure = Assert<MemoryPressureMeasureIsAResourceMeasure>;
+
+/**
+ * The thresholds a sample was compared against: both, or neither.
+ *
+ * One alone says nothing — a number is above a line only when there is a line
+ * — so the pair travels together, and its direction belongs to the kind:
+ * physical and heap grow into trouble, while available machine memory falls
+ * into it. The schema enforces the direction; the type enforces the pair.
+ */
+export type MemoryPressureThresholds = { warningBytes: number; criticalBytes: number } | { warningBytes?: never; criticalBytes?: never };
 
 /**
  * One number a level was decided from, with the thresholds it was compared
@@ -232,12 +258,29 @@ void _wireMeasureIsAResourceMeasure;
  * A role carries at most one input of each kind: two physical readings of the
  * same role at the same moment would be two different answers to one question.
  */
-export interface MemoryPressureInput {
-  kind: MemoryPressureInputKind;
-  value: MemoryPressureMeasure;
-  warningBytes?: number;
-  criticalBytes?: number;
-}
+export type MemoryPressureInput = { kind: MemoryPressureInputKind; value: MemoryPressureMeasure } & MemoryPressureThresholds;
+
+/**
+ * What a step gave back. Never empty: a release that cannot say what it
+ * released is not evidence of anything.
+ */
+export type MemoryPressureReleased = { count: number; bytes?: number } | { count?: number; bytes: number };
+
+/**
+ * Releasing, in the type as well as the schema: a step that reports what it
+ * released *is* a release, and no other step may carry the field.
+ */
+type MemoryPressureReleaseFields =
+  | { outcome: "released"; released: MemoryPressureReleased }
+  | { outcome: Exclude<MemoryPressureOutcome, "released">; released?: never };
+
+/**
+ * Refusing, likewise: the admission step is the only one that refuses, and it
+ * always names what it refused.
+ */
+type MemoryPressureRefusalFields =
+  | { action: "admission_refused"; refusal: MemoryPressureRefusal }
+  | { action: Exclude<MemoryPressureAction, "admission_refused">; refusal?: never };
 
 /**
  * What one step of one pass did.
@@ -246,22 +289,10 @@ export interface MemoryPressureInput {
  * the project, the file or the process it touched. The journal adds identity
  * when it records the event, from what the receiving process already knows.
  */
-export interface MemoryPressureActionResult {
-  action: MemoryPressureAction;
-  outcome: MemoryPressureOutcome;
-  reason?: MemoryPressureReason;
-  /**
-   * What was refused. Present exactly when the step is `admission_refused`:
-   * that step *is* the refusal, and no other step refuses anything.
-   */
-  refusal?: MemoryPressureRefusal;
-  /**
-   * How much this step gave back. Present exactly when the outcome is
-   * `released`, and never empty: a release that cannot say what it released is
-   * not evidence of anything.
-   */
-  released?: { count?: number; bytes?: number };
-}
+export type MemoryPressureActionResult = { reason?: MemoryPressureReason } & MemoryPressureReleaseFields & MemoryPressureRefusalFields;
+
+/** The same row, restricted to the steps a worker owns. */
+export type MemoryPressureWorkerActionResult = MemoryPressureActionResult & { action: MemoryPressureWorkerAction };
 
 /**
  * One recorded step, with the identity its journal gave it.
@@ -271,13 +302,13 @@ export interface MemoryPressureActionResult {
  * choose how its own actions are attributed, and a project is named only by
  * the opaque id the inventory already mints.
  */
-export interface MemoryPressureEvent extends MemoryPressureActionResult {
+export type MemoryPressureEvent = MemoryPressureActionResult & {
   id: string;
   atMs: number;
   role: MemoryPressureRole;
   level: MemoryPressureLevel;
   project?: string;
-}
+};
 
 /**
  * A ceiling, as two separate facts.
@@ -292,7 +323,31 @@ export interface MemoryPressureCeiling {
   measuredLimit?: MemoryPressureMeasure;
 }
 
-/** One role's current state: its level, what decided it, and how complete that is. */
+/**
+ * How much of a role was actually heard from.
+ *
+ * Arithmetic, not an opinion: `complete` is exactly `answered === expected`,
+ * an incomplete row says so with `incomplete_coverage`, and a complete one has
+ * nothing to explain. The schema enforces all three, which is why a validated
+ * row is branded.
+ */
+export interface MemoryPressureCoverage {
+  expected: number;
+  answered: number;
+  complete: boolean;
+  reason?: ResourceUnavailableReason;
+}
+
+/**
+ * One role's current state: its level, what decided it, and how complete that
+ * is.
+ *
+ * A known level needs evidence: `warning` and `critical` need at least one
+ * reading they could take, and `normal` needs that *and* complete coverage —
+ * except for an aggregate role with nothing in it at all (no live worker),
+ * which is genuinely calm with nothing to measure. Everything else is
+ * `unknown`, which is never presented as calm.
+ */
 export interface MemoryPressureRoleState {
   role: MemoryPressureRole;
   level: MemoryPressureLevelState;
@@ -300,12 +355,7 @@ export interface MemoryPressureRoleState {
   sampleAgeMs?: number;
   inputs: MemoryPressureInput[];
   ceiling?: MemoryPressureCeiling;
-  /**
-   * How much of this role was actually heard from. A role aggregated across
-   * live workers is incomplete when one of them did not answer, and an
-   * incomplete row is never presented as a total.
-   */
-  coverage: { expected: number; answered: number; complete: boolean; reason?: ResourceUnavailableReason };
+  coverage: MemoryPressureCoverage;
 }
 
 /**
@@ -326,14 +376,28 @@ export function inPolicyOrder(actions: readonly MemoryPressureAction[]): boolean
   return true;
 }
 
+/** The aggregate level of a set of role rows: the worst thing any of them knows. */
+export function aggregateMemoryPressureLevel(
+  levels: readonly MemoryPressureLevelState[],
+): MemoryPressureLevelState {
+  if (levels.includes("critical")) return "critical";
+  if (levels.includes("warning")) return "warning";
+  if (levels.includes("unknown")) return "unknown";
+  return "normal";
+}
+
 /**
  * The fixed-size state of pressure right now.
  *
  * This is what a snapshot, its retained history and a diagnostic export carry:
- * a few rows and a few numbers, whose size does not grow with how much has
+ * four role rows and a few numbers, whose size does not grow with how much has
  * happened. The events themselves live in exactly one journal and are read
  * from it once ({@link MemoryPressureJournalPage}), so retaining N snapshots
  * cannot retain N copies of the same history.
+ *
+ * Every role appears exactly once, so a role left out cannot read as calm, and
+ * `level` is the aggregate of those rows rather than a second opinion beside
+ * them.
  */
 export interface MemoryPressureSummary {
   level: MemoryPressureLevelState;
@@ -349,24 +413,41 @@ export interface MemoryPressureSummary {
   latestEventId?: string;
 }
 
-/** One bounded read of the journal, with the three bounds that shape it. */
+/**
+ * One bounded read of the journal, newest first.
+ *
+ * Newest first is the canonical order, and the page proves it: ids strictly
+ * descend by ordinal and times never go forward, so a page can be joined to
+ * `latestEventId` and audited. Its retention counters describe the journal it
+ * came from, with this module's bounds rather than a sender's.
+ */
 export interface MemoryPressureJournalPage {
   events: MemoryPressureEvent[];
   retention: {
-    maxEvents: number;
-    maxAgeMs: number;
-    maxBytes: number;
+    maxEvents: typeof MEMORY_PRESSURE_EVENTS_MAX;
+    maxAgeMs: typeof MEMORY_PRESSURE_EVENT_MAX_AGE_MS;
+    maxBytes: typeof MEMORY_PRESSURE_EVENTS_MAX_BYTES;
     events: number;
     bytes: number;
     lastEvictedBy?: "age" | "events" | "bytes";
   };
 }
 
-/** What a diagnostic export carries about pressure: the state, and one page. */
-export interface MemoryPressureExportSection {
-  summary: MemoryPressureSummary;
-  journal: MemoryPressureJournalPage;
+/**
+ * The mark a validated value carries.
+ *
+ * Several of this module's rules are relations between fields — coverage
+ * equality, a role's evidence, a summary's aggregate, a page's ordering, a
+ * pass's set and order — and TypeScript cannot express them. So the shapes
+ * above stay readable, and the *validated* forms are branded: the only way to
+ * obtain one is to parse, which is what makes the boundary between a producer
+ * and this contract explicit. The mark exists in the type system only; it is
+ * never a field, and a message that carries one as a key is refused.
+ */
+export interface MemoryPressureValidatedBrand {
+  readonly __memoryPressureValidated?: never;
 }
+export type MemoryPressureValidated<T> = T & MemoryPressureValidatedBrand;
 
 /** Retained-store counters as a process reports them beside a pass (RP-3). */
 export type MemoryPressureStores = Partial<Record<ResourceStoreKey, ResourceStoreValue>>;
@@ -391,6 +472,9 @@ export const memoryPressureRoleSchema = z.enum(MEMORY_PRESSURE_ROLES as unknown 
 export const memoryPressureActionSchema = z.enum(
   MEMORY_PRESSURE_ACTIONS as unknown as [MemoryPressureAction, ...MemoryPressureAction[]],
 );
+export const memoryPressureWorkerActionSchema = z.enum(
+  MEMORY_PRESSURE_WORKER_ACTIONS as unknown as [MemoryPressureWorkerAction, ...MemoryPressureWorkerAction[]],
+);
 export const memoryPressureOutcomeSchema = z.enum(
   MEMORY_PRESSURE_OUTCOMES as unknown as [MemoryPressureOutcome, ...MemoryPressureOutcome[]],
 );
@@ -410,14 +494,6 @@ const unavailableReasonSchema = z.enum(
   RESOURCE_UNAVAILABLE_REASONS as unknown as [ResourceUnavailableReason, ...ResourceUnavailableReason[]],
 );
 
-/**
- * A measured number, or the reason there is none.
- *
- * Written here rather than imported because RP-1 keeps its measurements as
- * types: this is the one place a measure crosses a parsed boundary, and a
- * reader of this file should be able to see that an "available" measure must
- * carry a real number and an unavailable one must carry a known reason.
- */
 export const memoryPressureMeasureSchema: z.ZodType<MemoryPressureMeasure> = z.union([
   // Every value on this wire is a count of bytes, so it is a non-negative,
   // exactly representable integer rather than any finite number.
@@ -428,6 +504,11 @@ export const memoryPressureMeasureSchema: z.ZodType<MemoryPressureMeasure> = z.u
   z.object({ status: z.literal("unavailable"), reason: unavailableReasonSchema }).strict(),
 ]);
 
+/** Every member of a list is distinct under `key`; the cardinality the types promise. */
+function allDistinct<T>(rows: readonly T[], key: (row: T) => string): boolean {
+  return new Set(rows.map(key)).size === rows.length;
+}
+
 export const memoryPressureInputSchema = z
   .object({
     kind: z.enum(MEMORY_PRESSURE_INPUT_KINDS as unknown as [MemoryPressureInputKind, ...MemoryPressureInputKind[]]),
@@ -435,48 +516,75 @@ export const memoryPressureInputSchema = z
     warningBytes: count.optional(),
     criticalBytes: count.optional(),
   })
-  .strict();
-
-/** Every member of a list is distinct under `key`; the cardinality the types promise. */
-function allDistinct<T>(rows: readonly T[], key: (row: T) => string): boolean {
-  return new Set(rows.map(key)).size === rows.length;
-}
-
-export const memoryPressureActionResultSchema = z
-  .object({
-    action: memoryPressureActionSchema,
-    outcome: memoryPressureOutcomeSchema,
-    reason: memoryPressureReasonSchema.optional(),
-    refusal: memoryPressureRefusalSchema.optional(),
-    released: z.object({ count: count.optional(), bytes: count.optional() }).strict().optional(),
-  })
   .strict()
-  .superRefine((row, ctx) => {
-    // A release says what it released, and nothing else claims to have released.
-    if (row.outcome === "released" && row.released === undefined) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["released"], message: "a released step must say what it released" });
+  .superRefine((input, ctx) => {
+    const has = { warning: input.warningBytes !== undefined, critical: input.criticalBytes !== undefined };
+    if (has.warning !== has.critical) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["criticalBytes"], message: "thresholds travel as a pair or not at all" });
+      return;
     }
-    if (row.outcome !== "released" && row.released !== undefined) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["released"], message: "only a released step may report what it released" });
-    }
-    if (row.released !== undefined && row.released.count === undefined && row.released.bytes === undefined) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["released"], message: "a release with no count and no bytes is not evidence" });
-    }
-    // Refusing is a step of its own: it is the only one that names a refusal,
-    // and it always names one.
-    if (row.action === "admission_refused" && row.refusal === undefined) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["refusal"], message: "an admission refusal must say what was refused" });
-    }
-    if (row.action !== "admission_refused" && row.refusal !== undefined) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["refusal"], message: "only the admission step refuses anything" });
+    if (!has.warning || input.warningBytes === undefined || input.criticalBytes === undefined) return;
+    // Direction belongs to the kind: memory in use grows into trouble, memory
+    // still available falls into it.
+    const grows = input.kind !== "machine_available";
+    const ordered = grows ? input.warningBytes < input.criticalBytes : input.criticalBytes < input.warningBytes;
+    if (!ordered) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["criticalBytes"],
+        message: grows ? "warning comes before critical as memory in use grows" : "critical comes before warning as memory available falls",
+      });
     }
   });
+
+/** The cross-field rules a row must keep, wherever it is carried. */
+function refineActionRow(
+  row: { action: MemoryPressureAction; outcome: MemoryPressureOutcome; refusal?: MemoryPressureRefusal | undefined; released?: { count?: number | undefined; bytes?: number | undefined } | undefined },
+  ctx: z.RefinementCtx,
+): void {
+  // A release says what it released, and nothing else claims to have released.
+  if (row.outcome === "released" && row.released === undefined) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["released"], message: "a released step must say what it released" });
+  }
+  if (row.outcome !== "released" && row.released !== undefined) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["released"], message: "only a released step may report what it released" });
+  }
+  if (row.released !== undefined && row.released.count === undefined && row.released.bytes === undefined) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["released"], message: "a release with no count and no bytes is not evidence" });
+  }
+  // Refusing is a step of its own: it is the only one that names a refusal,
+  // and it always names one.
+  if (row.action === "admission_refused" && row.refusal === undefined) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["refusal"], message: "an admission refusal must say what was refused" });
+  }
+  if (row.action !== "admission_refused" && row.refusal !== undefined) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["refusal"], message: "only the admission step refuses anything" });
+  }
+}
+
+const actionRowFields = {
+  outcome: memoryPressureOutcomeSchema,
+  reason: memoryPressureReasonSchema.optional(),
+  refusal: memoryPressureRefusalSchema.optional(),
+  released: z.object({ count: count.optional(), bytes: count.optional() }).strict().optional(),
+};
+
+export const memoryPressureActionResultSchema = z
+  .object({ action: memoryPressureActionSchema, ...actionRowFields })
+  .strict()
+  .superRefine(refineActionRow);
+
+/** The same row, accepted only for a step a worker owns. */
+export const memoryPressureWorkerActionResultSchema = z
+  .object({ action: memoryPressureWorkerActionSchema, ...actionRowFields })
+  .strict()
+  .superRefine(refineActionRow);
 
 /**
  * The same row, with the identity its journal gave it.
  *
- * The result's own cross-field rules are re-applied here rather than extended
- * from it: a refinement is not inherited by `extend`, and an event that could
+ * The row's own rules are re-applied rather than extended from the schema
+ * above: a refinement is not inherited by `extend`, and an event that could
  * contradict itself would be a record of something that never happened.
  */
 export const memoryPressureEventSchema = z
@@ -487,39 +595,30 @@ export const memoryPressureEventSchema = z
     level: memoryPressureLevelSchema,
     project: z.string().regex(MEMORY_PRESSURE_PROJECT_ID).optional(),
     action: memoryPressureActionSchema,
-    outcome: memoryPressureOutcomeSchema,
-    reason: memoryPressureReasonSchema.optional(),
-    refusal: memoryPressureRefusalSchema.optional(),
-    released: z.object({ count: count.optional(), bytes: count.optional() }).strict().optional(),
+    ...actionRowFields,
   })
   .strict()
-  .superRefine((row, ctx) => {
-    const result = memoryPressureActionResultSchema.safeParse({
-      action: row.action,
-      outcome: row.outcome,
-      ...(row.reason !== undefined ? { reason: row.reason } : {}),
-      ...(row.refusal !== undefined ? { refusal: row.refusal } : {}),
-      ...(row.released !== undefined ? { released: row.released } : {}),
-    });
-    if (result.success) return;
-    for (const issue of result.error.issues) ctx.addIssue({ ...issue, path: issue.path });
-  });
+  .superRefine(refineActionRow);
 
 export const memoryPressureCeilingSchema = z
   .object({ configuredBytes: count.optional(), measuredLimit: memoryPressureMeasureSchema.optional() })
   .strict();
 
-export const memoryPressureRoleStateSchema = z
+/** One input per kind: a role cannot give two answers to one question. */
+const inputsSchema = z
+  .array(memoryPressureInputSchema)
+  .max(MEMORY_PRESSURE_INPUTS_MAX)
+  .refine((rows) => allDistinct(rows, (row) => row.kind), { message: "one input of each kind" });
+
+const hasAvailableInput = (inputs: readonly { value: MemoryPressureMeasure }[]): boolean =>
+  inputs.some((input) => input.value.status === "available");
+
+const memoryPressureRoleStateShape = z
   .object({
     role: memoryPressureRoleSchema,
     level: memoryPressureLevelStateSchema,
     sampleAgeMs: count.optional(),
-    inputs: z
-      .array(memoryPressureInputSchema)
-      .max(MEMORY_PRESSURE_INPUTS_MAX)
-      .refine((rows) => allDistinct(rows, (row) => row.kind), {
-        message: "one input of each kind: a role cannot give two answers to one question",
-      }),
+    inputs: inputsSchema,
     ceiling: memoryPressureCeilingSchema.optional(),
     coverage: z
       .object({ expected: count, answered: count, complete: z.boolean(), reason: unavailableReasonSchema.optional() })
@@ -542,13 +641,27 @@ export const memoryPressureRoleStateSchema = z
         }
       }),
   })
-  .strict();
+  .strict()
+  .superRefine((role, ctx) => {
+    // A known level is a claim about evidence, so it needs some. The one
+    // exception is an aggregate with nothing in it: no live worker is not a
+    // missing reading, it is genuinely nothing to read.
+    const nothingToMeasure = role.coverage.expected === 0 && role.coverage.answered === 0 && role.inputs.length === 0;
+    if (role.level === "normal" && !role.coverage.complete) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["level"], message: "normal needs complete coverage; anything else is unknown" });
+    }
+    if (role.level !== "unknown" && !hasAvailableInput(role.inputs) && !(role.level === "normal" && nothingToMeasure)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["level"], message: "a known level needs at least one reading it could take" });
+    }
+  });
 
-export const memoryPressureSummarySchema = z
+export const memoryPressureRoleStateSchema = memoryPressureRoleStateShape;
+
+const memoryPressureSummaryShape = z
   .object({
     level: memoryPressureLevelStateSchema,
     roles: z
-      .array(memoryPressureRoleStateSchema)
+      .array(memoryPressureRoleStateShape)
       .max(MEMORY_PRESSURE_ROLES_MAX)
       .refine((rows) => allDistinct(rows, (row) => row.role), { message: "one row per role" }),
     refusing: z
@@ -564,9 +677,24 @@ export const memoryPressureSummarySchema = z
       .strict(),
     latestEventId: z.string().regex(MEMORY_PRESSURE_EVENT_ID).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((summary, ctx) => {
+    // Every role, every time: a row left out must not read as calm.
+    const present = new Set(summary.roles.map((row) => row.role));
+    for (const role of MEMORY_PRESSURE_ROLES) {
+      if (!present.has(role)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["roles"], message: `every role is reported, including ${role}` });
+      }
+    }
+    if (present.size !== MEMORY_PRESSURE_ROLES.length) return;
+    // And the aggregate is those rows, not a second opinion beside them.
+    const derived = aggregateMemoryPressureLevel(summary.roles.map((row) => row.level));
+    if (summary.level !== derived) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["level"], message: "the level is the worst thing its roles know" });
+    }
+  });
 
-export const memoryPressureJournalPageSchema = z
+const memoryPressureJournalPageShape = z
   .object({
     events: z.array(memoryPressureEventSchema).max(MEMORY_PRESSURE_EVENTS_PAGE),
     retention: z
@@ -582,7 +710,31 @@ export const memoryPressureJournalPageSchema = z
       })
       .strict(),
   })
-  .strict();
+  .strict()
+  .superRefine((page, ctx) => {
+    const ordinals = page.events.map((row) => Number(row.id.slice(3)));
+    if (!allDistinct(page.events, (row) => row.id)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["events"], message: "one row per event" });
+    }
+    // Newest first is the canonical order: ids descend and time never moves
+    // forward, so a page can be joined to `latestEventId` and audited.
+    if (ordinals.some((value, index) => index > 0 && value >= ordinals[index - 1]!)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["events"], message: "a page is newest first, by event id" });
+    }
+    if (page.events.some((row, index) => index > 0 && row.atMs > page.events[index - 1]!.atMs)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["events"], message: "a page is newest first, by time" });
+    }
+    // A page cannot carry events the journal says it does not retain.
+    if (page.events.length > page.retention.events) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["events"], message: "a page cannot hold more than the journal retains" });
+    }
+    if (page.retention.events === 0 && (page.retention.bytes !== 0 || page.events.length !== 0)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["retention", "bytes"], message: "an empty journal retains no bytes and no rows" });
+    }
+    if (page.retention.events > 0 && page.retention.bytes === 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["retention", "bytes"], message: "retained rows cost bytes" });
+    }
+  });
 
 const storeValue = z.object({ count: count.optional(), bytes: count.optional() }).strict().optional();
 
@@ -647,12 +799,12 @@ function refinePass(
   }
 }
 
-export const memoryPressureDirectiveResultSchema = z
+const memoryPressureDirectiveResultShape = z
   .object({
     applied: z.boolean(),
-    ran: z.array(memoryPressureActionSchema).max(MEMORY_PRESSURE_RESULTS_MAX),
+    ran: z.array(memoryPressureWorkerActionSchema).max(MEMORY_PRESSURE_WORKER_ACTIONS.length),
     /** One row per step it ran. Anonymous results; the host records the events. */
-    events: z.array(memoryPressureActionResultSchema).max(MEMORY_PRESSURE_RESULTS_MAX),
+    events: z.array(memoryPressureWorkerActionResultSchema).max(MEMORY_PRESSURE_WORKER_ACTIONS.length),
     stores: memoryPressureStoresSchema,
   })
   .strict()
@@ -663,20 +815,68 @@ export const memoryPressureDirectiveResultSchema = z
  *
  * It carries no identity of its own beyond the generation it believes it is:
  * the host binds the report to the worker that delivered it, and assigns the
- * time, the event ids and the project itself.
+ * time, the event ids and the project itself. A report at `normal` or
+ * `unknown` has run nothing — pressure that is absent or unproven acts on
+ * nothing — and a report that claims a level has at least one reading it
+ * could take.
  */
-export const memoryPressureReportSchema = z
+const memoryPressureReportShape = z
   .object({
     generation: ordinal,
     level: memoryPressureLevelStateSchema,
     sampleAgeMs: count.optional(),
-    inputs: z.array(memoryPressureInputSchema).max(MEMORY_PRESSURE_INPUTS_MAX),
-    ran: z.array(memoryPressureActionSchema).max(MEMORY_PRESSURE_RESULTS_MAX),
-    results: z.array(memoryPressureActionResultSchema).max(MEMORY_PRESSURE_RESULTS_MAX),
+    inputs: inputsSchema,
+    ran: z.array(memoryPressureWorkerActionSchema).max(MEMORY_PRESSURE_WORKER_ACTIONS.length),
+    results: z.array(memoryPressureWorkerActionResultSchema).max(MEMORY_PRESSURE_WORKER_ACTIONS.length),
     stores: memoryPressureStoresSchema,
   })
   .strict()
-  .superRefine((report, ctx) => refinePass(report.ran, report.results, "results", ctx));
+  .superRefine((report, ctx) => {
+    refinePass(report.ran, report.results, "results", ctx);
+    if (report.level !== "unknown" && !hasAvailableInput(report.inputs)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["level"], message: "a known level needs at least one reading it could take" });
+    }
+    if ((report.level === "normal" || report.level === "unknown") && (report.ran.length > 0 || report.results.length > 0)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["ran"], message: "nothing is released at normal, and nothing at all under unproven evidence" });
+    }
+  });
+
+// ---------------------------------------------------------------------------
+// Validated forms — the only way past the relations TypeScript cannot express
+// ---------------------------------------------------------------------------
+
+export type ValidatedMemoryPressureSummary = MemoryPressureValidated<MemoryPressureSummary>;
+export type ValidatedMemoryPressureJournalPage = MemoryPressureValidated<MemoryPressureJournalPage>;
+export interface MemoryPressureDirectiveResultShape {
+  applied: boolean;
+  ran: MemoryPressureWorkerAction[];
+  events: MemoryPressureWorkerActionResult[];
+  stores: MemoryPressureStores;
+}
+export interface MemoryPressureReportShape {
+  generation: number;
+  level: MemoryPressureLevelState;
+  sampleAgeMs?: number;
+  inputs: MemoryPressureInput[];
+  ran: MemoryPressureWorkerAction[];
+  results: MemoryPressureWorkerActionResult[];
+  stores: MemoryPressureStores;
+}
+export type ValidatedMemoryPressureDirectiveResult = MemoryPressureValidated<MemoryPressureDirectiveResultShape>;
+export type ValidatedMemoryPressureReport = MemoryPressureValidated<MemoryPressureReportShape>;
+
+export const memoryPressureSummarySchema = memoryPressureSummaryShape.transform(
+  (value) => value as unknown as ValidatedMemoryPressureSummary,
+);
+export const memoryPressureJournalPageSchema = memoryPressureJournalPageShape.transform(
+  (value) => value as unknown as ValidatedMemoryPressureJournalPage,
+);
+export const memoryPressureDirectiveResultSchema = memoryPressureDirectiveResultShape.transform(
+  (value) => value as unknown as ValidatedMemoryPressureDirectiveResult,
+);
+export const memoryPressureReportSchema = memoryPressureReportShape.transform(
+  (value) => value as unknown as ValidatedMemoryPressureReport,
+);
 
 /** Host → the windows on this machine. A summary, never the journal. */
 export const memoryPressurePublishSchema = z
@@ -687,23 +887,41 @@ export const memoryPressureParamsSchemas = {
   "pi/worker/pressure": memoryPressureDirectiveSchema,
 };
 
+/**
+ * The parse boundary.
+ *
+ * A producer inside the app holds ordinary objects and turns them into wire
+ * values here; there is no other way to obtain a validated one, which is what
+ * keeps the relations above from being bypassed by a cast.
+ */
+export const parseMemoryPressureSummary = (value: unknown): ValidatedMemoryPressureSummary => memoryPressureSummarySchema.parse(value);
+export const parseMemoryPressureJournalPage = (value: unknown): ValidatedMemoryPressureJournalPage =>
+  memoryPressureJournalPageSchema.parse(value);
+export const parseMemoryPressureDirectiveResult = (value: unknown): ValidatedMemoryPressureDirectiveResult =>
+  memoryPressureDirectiveResultSchema.parse(value);
+export const parseMemoryPressureReport = (value: unknown): ValidatedMemoryPressureReport => memoryPressureReportSchema.parse(value);
+
+/** What a diagnostic export carries about pressure: the state, and one page. */
+export interface MemoryPressureExportSection {
+  summary: ValidatedMemoryPressureSummary;
+  journal: ValidatedMemoryPressureJournalPage;
+}
+
+// The wire types are the schemas' own outputs, so a shape and its parser can
+// never drift apart; the `Input` aliases are what a producer may hand to the
+// parser before it is one of ours.
 export type MemoryPressureDirective = z.infer<typeof memoryPressureDirectiveSchema>;
-export type MemoryPressureDirectiveResult = {
-  applied: boolean;
-  ran: MemoryPressureAction[];
-  events: MemoryPressureActionResult[];
-  stores: MemoryPressureStores;
-};
-export type MemoryPressureReport = {
-  generation: number;
-  level: MemoryPressureLevelState;
-  sampleAgeMs?: number;
-  inputs: MemoryPressureInput[];
-  ran: MemoryPressureAction[];
-  results: MemoryPressureActionResult[];
-  stores: MemoryPressureStores;
-};
-export type MemoryPressurePublish = { epoch: number; summary: MemoryPressureSummary };
+export type MemoryPressureDirectiveResult = z.infer<typeof memoryPressureDirectiveResultSchema>;
+export type MemoryPressureReport = z.infer<typeof memoryPressureReportSchema>;
+export type MemoryPressurePublish = z.infer<typeof memoryPressurePublishSchema>;
+export type MemoryPressureSummaryInput = z.input<typeof memoryPressureSummarySchema>;
+// The readable shapes and the parser's input agree, so neither can drift.
+type _SummaryParses = Assert<MemoryPressureSummary extends MemoryPressureSummaryInput ? true : never>;
+type _ValidatedSummaryIsASummary = Assert<ValidatedMemoryPressureSummary extends MemoryPressureSummary ? true : never>;
+type _JournalParses = Assert<MemoryPressureJournalPage extends z.input<typeof memoryPressureJournalPageSchema> ? true : never>;
+export type MemoryPressureJournalPageInput = z.input<typeof memoryPressureJournalPageSchema>;
+export type MemoryPressureDirectiveResultInput = z.input<typeof memoryPressureDirectiveResultSchema>;
+export type MemoryPressureReportInput = z.input<typeof memoryPressureReportSchema>;
 
 // ---------------------------------------------------------------------------
 // Wire
@@ -724,7 +942,7 @@ declare module "./messages.js" {
      */
     "pi/worker/pressure": {
       params: MemoryPressureDirective;
-      result: MemoryPressureDirectiveResult;
+      result: ValidatedMemoryPressureDirectiveResult;
     };
   }
 
@@ -738,7 +956,7 @@ declare module "./messages.js" {
      * every identity in the journal itself — the message carries no session, no
      * path, no pid and no project.
      */
-    "pi/resource/pressure": MemoryPressureReport;
+    "pi/resource/pressure": ValidatedMemoryPressureReport;
 
     /**
      * Host → the windows on this machine: the current pressure summary.
@@ -748,7 +966,7 @@ declare module "./messages.js" {
      * safe to drop when a connection is behind, because the same summary is
      * readable from `resource/snapshot`.
      */
-    "resource/pressure": MemoryPressurePublish;
+    "resource/pressure": { epoch: number; summary: ValidatedMemoryPressureSummary };
   }
 }
 
@@ -759,8 +977,9 @@ declare module "./resources.js" {
      *
      * A fixed-size summary, deliberately: snapshots are retained in a bounded
      * history and copied into exports, and embedding a growing event list would
-     * multiply one journal by the length of that history.
+     * multiply one journal by the length of that history. It is the *validated*
+     * summary, so a producer cannot attach one this module has not checked.
      */
-    pressure?: MemoryPressureSummary;
+    pressure?: ValidatedMemoryPressureSummary;
   }
 }
