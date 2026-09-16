@@ -2630,10 +2630,12 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 | MX-T7 | One module defines the product's identity | done | claude-2026-09-05-identity | `product.json` at the repository root; `pnpm identity:generate` rewrites 14 files; `pnpm identity:check` runs inside `pnpm -r build` and `pnpm -r test`; renaming to `wavelet` and back proved end to end — see notes | The rename is one edit plus one command. A frozen `wireNamespace` is the deliberate exception (D-48) |
 | MX-T8 | Cross-package performance audit | done | perf-wide-audit | `docs/performance-wide-audit.md`; isolated `probes.mts` and `extra-probes.mts` exit 0 | 24 findings; report only; see notes; D-229 |
 | MX-T9 | Resource containment and instant conversation plan | done | orchestrator-01a09f76 | `docs/resource-and-loading-plan.md`; `git diff --check` | see notes; D-255 |
-| MX-T10 | Bundled runtime package-manager verification | todo | — | — | added by D-264; blocks a clean final `pnpm verify` |
+| MX-T10 | Bundled runtime package-manager verification | done | orchestrator-01a0a030 | `pnpm verify`; worker 969/4 skipped; focused 6/6; `/tmp/mx-t10-pnpm-verify.log` | self-contained fixture; independent review approved |
 
 #### MX-T10 notes
 - 2026-09-16 added by D-264: repeated clean-base reports cite `test/runtime-env.test.ts > runs real npm and npx in a bundled-style layout with no system PATH` failing because an unrelated installed `/opt/Laser/resources` lacks `npm/bin/npx-cli.js`. Make the verification fixture self-contained and restore a fully green `pnpm verify`; do not weaken the empty-PATH packaged-runtime assertion.
+- 2026-09-16 claimed by orchestrator: replace the test's accidental dependency on the running app's installed npm tree with self-contained executable npm/npx CLI fixtures; the shipped real-package-manager proof remains the packaged empty-PATH clean-machine gate.
+- 2026-09-16 done: the runtime PATH test now builds bounded executable npm/npx CLI fixtures instead of resolving the unrelated running app's sibling tree, while still executing both generated launchers with no system PATH. Independent review `run_92c1866e` found no issues. Focused test 6/6, worker 969/4 skipped, worker typecheck and full `pnpm verify` pass; log `/tmp/mx-t10-pnpm-verify.log`.
 
 #### MX-T9 notes
 - 2026-09-14 claimed: turn the read-only T3 Code, DSH Desktop and Laser memory analysis into one dependency-ordered implementation plan; preserve Electron and the single-engine/API boundaries.

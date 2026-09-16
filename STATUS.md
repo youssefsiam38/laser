@@ -1,6 +1,6 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-16T09:41:07+03:00 · orchestrator `01a0a030` · HEAD: f20948cc
+**Last updated:** 2026-09-16T09:51:35+03:00 · orchestrator `01a0a030` · HEAD: fc4e765b
 **Current focus:** M18 implements RP-8’s calibrated actor-local pressure policy before the unchanged post-containment baseline.
 
 | Milestone | State |
@@ -30,6 +30,6 @@
 
 **Blockers:** M18-T15 waits for RP-8; M18-T14 waits for T15 and Q-10; M19 waits for M18.
 **Next up:** finish/review/integrate RP-8 worker milestone C; implement companion D, host E, renderer F and ceilings G; then run two unchanged full baselines.
-**Recently done:** M18-T11 immediate paint (`78b22c83`); M18-T18 route authority (`916e30fa`); M18-T16 bounded bodies (`42344a58`); M18-T10 device tail cache (`c7375791`); T17 naming-pin correction (`890e6a86`).
+**Recently done:** MX-T10 self-contained bundled-runtime verification (`pnpm verify`); M18-T11 immediate paint (`78b22c83`); M18-T18 route authority (`916e30fa`); M18-T16 bounded bodies (`42344a58`); M18-T10 device tail cache (`c7375791`).
 
 Ownership and evidence: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`.

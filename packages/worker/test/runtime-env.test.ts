@@ -1,6 +1,6 @@
 import { ENV, PRODUCT_NAME } from "@lasercode/protocol";
 import { execFileSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -70,17 +70,18 @@ describe("runtime PATH", () => {
       .toBe('@echo off\r\nsetlocal DisableDelayedExpansion\r\n"C:\\App %%home%%!\\node.exe" "C:\\App\\npm\\bin\\npx-cli.js" %*\r\n');
   });
 
-  it.skipIf(process.platform === "win32")("runs real npm and npx in a bundled-style layout with no system PATH", () => {
+  it.skipIf(process.platform === "win32")("runs generated npm and npx launchers in a bundled-style layout with no system PATH", () => {
     const { runtime, execPath, agentDir, npmCli, env } = bundled();
-    const realNpm = dirname(dirname(realpathSync(join(dirname(process.execPath), "npm"))));
-    expect(existsSync(join(realNpm, "bin", "npx-cli.js"))).toBe(true);
-    rmSync(join(runtime, "npm"), { recursive: true });
-    symlinkSync(realNpm, join(runtime, "npm"), "dir");
+    const fixtureVersion = "11.6.0-fixture";
+    const cli = `if (process.argv[2] !== "--version") process.exitCode = 64; else process.stdout.write(${JSON.stringify(fixtureVersion + "\n")});\n`;
+    writeFileSync(npmCli, cli);
+    writeFileSync(join(dirname(npmCli), "npx-cli.js"), cli);
     copyFileSync(process.execPath, execPath);
     const additions = runtimePathAdditions(env, execPath);
     expect(additions).toEqual([runtime, join(agentDir, "bin")]);
     const childEnv = { ...process.env, PATH: additions.join(delimiter), HOME: root, npm_config_cache: join(root, "cache") };
     const version = execFileSync(execPath, [npmCli, "--version"], { env: childEnv, encoding: "utf8" }).trim();
+    expect(version).toBe(fixtureVersion);
     for (const command of ["npx", "npm"]) {
       expect(execFileSync(command, ["--version"], { env: childEnv, encoding: "utf8" }).trim()).toBe(version);
     }
