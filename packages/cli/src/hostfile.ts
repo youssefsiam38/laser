@@ -30,6 +30,8 @@ export interface HostRecord {
   startedAt: string;
   /** Version of the CLI that started it, so a stale daemon is identifiable. */
   cliVersion: string;
+  /** Immutable executable generation selected before this host was spawned. */
+  generationId?: string;
   /**
    * An identity for the *process*, not just its number: the machine's boot id
    * plus the process's own start time. A pid is reused, and this file outlives
@@ -74,6 +76,9 @@ export function readHostFile(path: string): HostRecord | undefined {
       stateDir: parsed.stateDir ?? "",
       startedAt: parsed.startedAt ?? "",
       cliVersion: parsed.cliVersion ?? "unknown",
+      ...(typeof parsed.generationId === "string" && /^[0-9a-f]{64}$/.test(parsed.generationId)
+        ? { generationId: parsed.generationId }
+        : {}),
       ...(typeof parsed.identity === "string" ? { identity: parsed.identity } : {}),
     };
   } catch {
@@ -151,7 +156,7 @@ export function isRecordedProcess(record: HostRecord): boolean | undefined {
   return current === record.identity;
 }
 
-type HealthIdentity = string | "legacy";
+type HealthIdentity = { launchId: string; generationId?: string } | "legacy";
 
 async function probeHealthIdentity(url: string, timeoutMs: number): Promise<HealthIdentity | undefined> {
   const controller = new AbortController();
@@ -161,10 +166,14 @@ async function probeHealthIdentity(url: string, timeoutMs: number): Promise<Heal
     if (!response.ok) return undefined;
     const text = await response.text();
     if (text.trim() === "ok") return "legacy";
-    const body = JSON.parse(text) as { status?: unknown; launchId?: unknown };
+    const body = JSON.parse(text) as { status?: unknown; launchId?: unknown; generationId?: unknown };
     if (body.status !== "ok") return undefined;
     if (body.launchId === undefined) return "legacy";
-    return launchIdSchema.safeParse(body.launchId).success ? body.launchId as string : undefined;
+    if (!launchIdSchema.safeParse(body.launchId).success) return undefined;
+    const generationId = typeof body.generationId === "string" && /^[0-9a-f]{64}$/.test(body.generationId)
+      ? body.generationId
+      : undefined;
+    return { launchId: body.launchId as string, ...(generationId ? { generationId } : {}) };
   } catch {
     return undefined;
   } finally {
@@ -175,13 +184,20 @@ async function probeHealthIdentity(url: string, timeoutMs: number): Promise<Heal
 /** `GET /healthz`; returns the valid identity the answering modern process proved. */
 export async function probeHealthLaunch(url: string, timeoutMs = 1500): Promise<string | undefined> {
   const identity = await probeHealthIdentity(url, timeoutMs);
-  return identity === "legacy" ? undefined : identity;
+  return identity === "legacy" ? undefined : identity?.launchId;
 }
 
 /** Exact identity for modern hosts; process + health proof for a legacy host when no id is expected. */
-export async function probeHealth(url: string, timeoutMs = 1500, expectedLaunchId?: string): Promise<boolean> {
+export async function probeHealth(
+  url: string,
+  timeoutMs = 1500,
+  expectedLaunchId?: string,
+  expectedGenerationId?: string,
+): Promise<boolean> {
   const identity = await probeHealthIdentity(url, timeoutMs);
-  return expectedLaunchId === undefined ? identity !== undefined : identity === expectedLaunchId;
+  if (expectedLaunchId === undefined) return identity !== undefined;
+  if (identity === undefined || identity === "legacy" || identity.launchId !== expectedLaunchId) return false;
+  return expectedGenerationId === undefined || identity.generationId === expectedGenerationId;
 }
 
 /** True when something accepts a TCP connection on the port. */
@@ -227,7 +243,7 @@ export async function inspectHost(paths: Pick<LaserPaths, "hostFile">, timeoutMs
       reason: `process ${record.pid} is alive but has not published a verified ready identity`,
     };
   }
-  if (await probeHealth(record.url, timeoutMs, record.launchId)) return { state: "running", record };
+  if (await probeHealth(record.url, timeoutMs, record.launchId, record.generationId)) return { state: "running", record };
   return {
     state: "unreachable",
     record,

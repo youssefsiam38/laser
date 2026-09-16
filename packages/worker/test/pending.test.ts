@@ -8,7 +8,7 @@
  * here — see `src/pending.ts`.
  */
 import { describe, expect, it } from "vitest";
-import type { ContentBlock, JsonRpcMessage, PendingMessage, SessionState } from "@lasercode/protocol";
+import { ErrorCodes, ProtocolError, type ContentBlock, type JsonRpcMessage, type PendingMessage, type SessionState } from "@lasercode/protocol";
 import type { DriverEvent, DriverListener, PromptOptions, SessionDriver } from "../src/driver.js";
 import { PendingTray } from "../src/pending.js";
 import { WorkerServer } from "../src/server.js";
@@ -87,6 +87,41 @@ describe("PendingTray · leaving it alone is the default", () => {
     await h.tray.drain();
     expect(h.prompted).toEqual([]);
     expect(h.tray.list()).toHaveLength(1);
+  });
+
+  it("holds the head behind activation admission and pins the accepted-to-streaming window", async () => {
+    let parked = true;
+    let release = () => {};
+    const acceptedWindow = new Promise<void>((resolve) => (release = resolve));
+    let prompts = 0;
+    const tray = new PendingTray({
+      admitNewWork: () => {
+        if (parked) throw new ProtocolError(ErrorCodes.SessionBusy, "parked");
+      },
+      prompt: async (_content, onAccepted) => {
+        prompts += 1;
+        onAccepted();
+        await acceptedWindow;
+        return { accepted: true };
+      },
+      steer: async () => {},
+      streaming: () => false,
+      publish: () => {},
+      newId: () => "p-parked",
+    });
+    tray.add(text("wait through activation"));
+    await tray.drain();
+    expect(prompts).toBe(0);
+    expect(tray.list()).toHaveLength(1);
+
+    parked = false;
+    const draining = tray.drain();
+    expect(prompts).toBe(1);
+    expect(tray.list()).toEqual([]);
+    expect(tray.deliveryInFlight()).toBe(true);
+    release();
+    await draining;
+    expect(tray.deliveryInFlight()).toBe(false);
   });
 
   it("acknowledges the exact message at accepted preflight, while its turn is still running", async () => {

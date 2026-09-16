@@ -11,6 +11,8 @@ export * from "./agents.js";
 export * from "./web-search.js";
 export * from "./provider-failure.js";
 export * from "./runtime-recovery.js";
+export * from "./runtime-activation.js";
+export * from "./runtime-activation-copy.js";
 export * from "./fallback.js";
 export * from "./mcp.js";
 export * from "./jsonrpc.js";

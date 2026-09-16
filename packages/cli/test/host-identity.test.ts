@@ -8,10 +8,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ENV } from "@lasercode/protocol";
 import type { LaserPaths } from "../src/config.js";
 import { runDaemon } from "../src/daemon.js";
-import { startHost } from "../src/host-control.js";
+import { prepareInstalledRuntime, startHost } from "../src/host-control.js";
 import { inspectHost, probeHealth, writeHostFile } from "../src/hostfile.js";
 
 const launchId = "0123456789abcdef0123456789abcdef";
+const generationId = "a".repeat(64);
 const roots: string[] = [];
 
 afterEach(() => {
@@ -28,7 +29,7 @@ async function fixture(legacy = false): Promise<{ paths: LaserPaths; close: () =
       return;
     }
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ status: "ok", launchId }));
+    res.end(JSON.stringify({ status: "ok", launchId, generationId }));
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const port = (server.address() as AddressInfo).port;
@@ -50,6 +51,8 @@ describe("host launch identity", () => {
     const { paths, close } = await fixture();
     try {
       expect(await probeHealth(`http://${paths.host}:${paths.port}`, 500, launchId)).toBe(true);
+      expect(await probeHealth(`http://${paths.host}:${paths.port}`, 500, launchId, generationId)).toBe(true);
+      expect(await probeHealth(`http://${paths.host}:${paths.port}`, 500, launchId, "b".repeat(64))).toBe(false);
       expect(await probeHealth(`http://${paths.host}:${paths.port}`, 500, "fedcba9876543210fedcba9876543210")).toBe(false);
     } finally {
       await close();
@@ -120,7 +123,8 @@ describe("host launch identity", () => {
     try {
       writeHostFile(paths.hostFile, original);
       process.env[ENV.hostLaunchId] = "fedcba9876543210fedcba9876543210";
-      await expect(runDaemon({ paths, log: () => undefined })).rejects.toThrow(/already running/);
+      const runtimeGeneration = prepareInstalledRuntime(paths).reference;
+      await expect(runDaemon({ paths, runtimeGeneration, log: () => undefined })).rejects.toThrow(/already running/);
       expect(JSON.parse(readFileSync(paths.hostFile, "utf8"))).toMatchObject({ launchId, state: "ready" });
       await expect(inspectHost(paths, 500)).resolves.toMatchObject({ state: "running", record: { launchId } });
     } finally {

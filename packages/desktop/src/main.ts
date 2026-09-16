@@ -42,12 +42,13 @@ import { connectedGpuVendors, linuxDisplayDecision, probeWaylandGlobals } from "
 import { loadDeviceCacheKey, loadSecrets } from "./keychain.js";
 import { DesktopLog } from "./log.js";
 import { Notifier } from "./notifications.js";
-import { NativeUpdateWatch } from "./native-update.js";
+import { NativeUpdateWatch, readNativeUpdateMarker } from "./native-update.js";
 import { commitLinuxRelaunch, linuxRelaunchCommand, prepareLinuxRelaunch, type PreparedRelaunch } from "./linux-relaunch.js";
 import { resolveNodeRuntime } from "./runtime.js";
 import { installPermissionGates, microphoneStatus, openMicrophoneSettings, requestMicrophone } from "./permissions.js";
 import { TrayController } from "./tray.js";
 import { Updater } from "./updater.js";
+import { DesktopUpdateActivation } from "./update-activation.js";
 import { chromeFor, WindowManager } from "./windows.js";
 
 /**
@@ -111,6 +112,7 @@ let quitPromptOpen = false;
 let startupGround: StartupGround | undefined = readStartupGround(paths.stateDir);
 let nativePromptOpen = false;
 let nativeVersion: string | undefined;
+let activation: DesktopUpdateActivation | undefined;
 
 // ------------------------------------------------------------ singleton ----
 
@@ -198,6 +200,7 @@ const host = new HostProcess({
   // nothing else has to change when it lands.)
   ...(devUiUrl ? { env: { [ENV.allowedOrigins]: originOf(devUiUrl) } } : {}),
   onChange: (info) => onHostChanged(info),
+  onVerifiedLaunch: (launch) => activation?.completeLaunch(launch),
   confirmHostRefresh: async () => {
     const liveWork = await hostStopDetail("Restarting");
     return (await dialog.showMessageBox({
@@ -244,6 +247,16 @@ const tray = new TrayController({
   },
 });
 
+activation = new DesktopUpdateActivation({
+  stateDir: paths.stateDir,
+  link,
+  publish: (status) => {
+    updateStatus = status;
+    tray.setUpdate(status);
+    windows.broadcast(IPC.updateChanged, status);
+  },
+});
+
 const updater = new Updater({
   packaged: app.isPackaged,
   log,
@@ -257,29 +270,53 @@ const updater = new Updater({
 });
 
 const nativeUpdate = new NativeUpdateWatch({
-  resources: process.resourcesPath, running: app.getVersion(),
-  onReady: (version) => {
-    nativeVersion = version;
-    updateStatus = { state: "ready", version, message: "Installed by your operating system. Restart the app and host together when you are ready." };
-    tray.setUpdate(updateStatus);
-    windows.broadcast(IPC.updateChanged, updateStatus);
-    void installUpdate(true);
+  resources: process.resourcesPath,
+  stateDir: paths.stateDir,
+  running: app.getVersion(),
+  onReady: (marker) => {
+    nativeVersion = marker.version;
+    activation!.discover(marker);
   },
 });
 
-async function installUpdate(announce = false, forceRelaunch = false): Promise<void> {
+async function installUpdate(_announce = false, forceRelaunch = false): Promise<void> {
   if (nativePromptOpen || quitting) return;
+  if (forceRelaunch) {
+    nativePromptOpen = true;
+    try {
+      const liveWork = await hostStopDetail("Restarting");
+      const { response } = await dialog.showMessageBox({
+        type: "question", title: `Restart ${PRODUCT_NAME} and its host?`,
+        message: "Restart the app and host together?",
+        detail: ["Saved sessions will be kept. Choose Later to leave current work running.", liveWork].filter(Boolean).join("\n\n"),
+        buttons: ["Later", "Restart together"], defaultId: 0, cancelId: 0,
+      });
+      if (response === 1 && !quitting) await quit({ relaunch: true, liveWorkConfirmed: true });
+    } finally { nativePromptOpen = false; }
+    return;
+  }
+  if (updateStatus.state === "downloaded") {
+    await activation?.prepare();
+    return;
+  }
+  if (updateStatus.state === "failed") {
+    await quit({ relaunch: true, liveWorkConfirmed: true });
+    return;
+  }
+  if (updateStatus.state === "parking") return;
+  if (updateStatus.state !== "ready") { updater.install(); return; }
   nativePromptOpen = true;
-  if (!forceRelaunch && !nativeUpdate.check()) { nativePromptOpen = false; if (!announce) updater.install(); return; }
   try {
-  const liveWork = await hostStopDetail("Restarting");
-  const { response } = await dialog.showMessageBox({
-    type: "question", title: `${PRODUCT_NAME} update ready`,
-    message: "Restart the app and host together?",
-    detail: ["Saved sessions will be kept. Choose Later to keep working; Restart is available from the system tray menu.", liveWork].filter(Boolean).join("\n\n"),
-    buttons: ["Later", "Restart now"], defaultId: 0, cancelId: 0,
-  });
-  if (response === 1 && !quitting) await quit({ relaunch: true, liveWorkConfirmed: true });
+    const { response } = await dialog.showMessageBox({
+      type: "question",
+      title: `${PRODUCT_NAME} update ready`,
+      message: "Restart and activate the update?",
+      detail: "Saved sessions are kept. No active work will be stopped.",
+      buttons: ["Later", "Restart and update"], defaultId: 0, cancelId: 0,
+    });
+    if (response === 1 && !quitting && await activation?.activate()) {
+      await quit({ relaunch: true, liveWorkConfirmed: true });
+    }
   } finally { nativePromptOpen = false; }
 }
 
@@ -345,6 +382,7 @@ function originOf(url: string): string {
 }
 
 function onHostChanged(info: DesktopHostInfo): void {
+  if (info.state === "failed") activation?.failLaunch();
   hostInfo = info;
   windows.broadcast(IPC.hostChanged, info);
   tray.setHostMessage(info.state === "ready" ? undefined : (info.message ?? "starting the agent host…"));
@@ -477,6 +515,7 @@ async function quit(options: { install?: boolean; relaunch?: boolean; liveWorkCo
   windows.beginQuit();
   updater.stop();
   nativeUpdate.stop();
+  activation?.stop();
   link.close();
   notifier.dispose();
   tray.destroy();
@@ -589,6 +628,8 @@ function installIpc(): void {
 
   ipcMain.handle(IPC.updateStatus, () => updateStatus);
   ipcMain.handle(IPC.updateCheck, () => nativeUpdate.check() ? updateStatus : updater.check());
+  ipcMain.handle(IPC.updatePrepare, () => activation?.prepare() ?? updateStatus);
+  ipcMain.handle(IPC.updateCancel, () => activation?.cancel() ?? updateStatus);
   ipcMain.on(IPC.updateInstall, (_event, options: unknown) => void installUpdate(false,
     !!options && typeof options === "object" && (options as { relaunch?: unknown }).relaunch === true));
 }
@@ -716,6 +757,10 @@ async function start(): Promise<void> {
   const shellEnvironment = startupInputs.shellEnvironment;
   Object.assign(process.env, shellEnvironment);
   Object.assign(environment, shellEnvironment);
+  if (app.isPackaged && process.platform === "linux") {
+    const marker = readNativeUpdateMarker(join(process.resourcesPath, "native-update.json"));
+    if (marker && activation?.resume(marker)) nativeVersion = marker.version;
+  }
   await host.start();
   updater.start();
   if (app.isPackaged && process.platform === "linux") nativeUpdate.start();

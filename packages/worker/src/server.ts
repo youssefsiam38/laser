@@ -22,7 +22,7 @@
  * growing the process.
  */
 
-import { AGENT_MAX_DEPTH_LIMIT, EDITABLE_TEXT_MAX_BYTES, ENV, ErrorCodes, createBodyRangeReader, entryRegionsPage, utf8ByteLength, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type AgentRun, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type MemoryPressureStores, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TypedClientRequest, WIRE_NAMESPACE } from "@lasercode/protocol";
+import { AGENT_MAX_DEPTH_LIMIT, EDITABLE_TEXT_MAX_BYTES, ENV, ErrorCodes, createBodyRangeReader, entryRegionsPage, utf8ByteLength, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, methodStartsWork, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type AgentRun, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type MemoryPressureStores, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TypedClientRequest, type WorkerActivationState, WIRE_NAMESPACE } from "@lasercode/protocol";
 import { CaptureReservations } from "./capture-reservations.js";
 import {
   PRESSURE_MAX_REPLAY_DROPS,
@@ -316,6 +316,8 @@ export class WorkerServer {
   private readonly firstTurnLock = new FirstTurnLock();
   /** This worker's own memory-pressure controller (RP-8). One per process. */
   private readonly pressure: WorkerPressureController;
+  /** Exact update fence; absent until this worker acknowledges park. */
+  private activationGate: { updateId: string; generationId: string } | undefined;
 
   constructor(private readonly options: WorkerServerOptions) {
     this.environmentId = options.environmentId ?? UNCONFIGURED_ENVIRONMENT;
@@ -361,6 +363,7 @@ export class WorkerServer {
       definitions: this.definitions,
       worktrees: new WorktreeManager(),
       ...(options.projectTrusted !== undefined ? { projectTrusted: options.projectTrusted } : {}),
+      admitNewWork: () => this.activationGate === undefined,
       backgroundWork: (cwd) => ({
         cwd,
         // The private directory command logs live in: the host's, when it gave
@@ -368,6 +371,7 @@ export class WorkerServer {
         // guessable path under the system temp directory.
         logRoot: this.taskLogRoot(),
         foregroundCommandSeconds: this.definitions.policy().foregroundCommandSeconds,
+        admitCommand: () => this.activationGate === undefined,
         // Resolved when each Bash call starts, so a Settings save takes effect
         // without ending an open parent or child session.
         commandPrefix: () => this.projectEnv?.preface,
@@ -517,6 +521,7 @@ export class WorkerServer {
   // ------------------------------------------------------------- dispatch
 
   private async dispatch(req: TypedClientRequest): Promise<unknown> {
+    if (methodStartsWork(req.method)) this.admitNewWork();
     switch (req.method) {
       case "session/new":
         return this.sessionNew(req.params);
@@ -591,6 +596,21 @@ export class WorkerServer {
         // retirement *decision* is `pi/worker/retire` below, which takes it
         // under a fence rather than from a snapshot.
         return this.sessionSafety() satisfies Result<"pi/worker/safety">;
+
+      case "pi/worker/activation/park":
+        if (this.activationGate && (this.activationGate.updateId !== req.params.updateId
+          || this.activationGate.generationId !== req.params.generationId)) {
+          throw new ProtocolError(ErrorCodes.SessionBusy, "Another update is already waiting for current work to finish.");
+        }
+        this.activationGate = { ...req.params };
+        return this.activationState(req.params.updateId) satisfies Result<"pi/worker/activation/park">;
+      case "pi/worker/activation/status":
+        return this.activationState(req.params.updateId) satisfies Result<"pi/worker/activation/status">;
+      case "pi/worker/activation/cancel": {
+        const state = this.activationState(req.params.updateId);
+        this.activationGate = undefined;
+        return { ...state, parked: false } satisfies Result<"pi/worker/activation/cancel">;
+      }
 
       case "pi/worker/retire":
         return await this.lifetime.retire(req.params.mode);
@@ -1772,6 +1792,36 @@ export class WorkerServer {
     return this.lifetime.safety();
   }
 
+  private admitNewWork(): void {
+    if (this.activationGate) {
+      throw new ProtocolError(ErrorCodes.SessionBusy, "An update is waiting for current work to finish. Keep working by cancelling update preparation first.");
+    }
+  }
+
+  private activationState(updateId: string): WorkerActivationState {
+    const gate = this.activationGate;
+    if (!gate || gate.updateId !== updateId) {
+      throw new ProtocolError(ErrorCodes.InvalidParams, "That update does not own this worker's preparation gate.");
+    }
+    const safety = this.sessionSafety();
+    const blockers = { conversations: 0, agents: 0, questions: 0, approvals: 0, commands: 0 };
+    for (const session of safety.sessions) {
+      for (const pin of session.pins) {
+        if (pin.kind === "agent_run" || pin.kind === "child_run") blockers.agents += 1;
+        else if (pin.kind === "question") blockers.questions += 1;
+        else if (pin.kind === "approval") blockers.approvals += 1;
+        else if (pin.kind === "task") blockers.commands += 1;
+        else if (pin.kind !== "no_record") blockers.conversations += 1;
+      }
+    }
+    return {
+      ...gate,
+      complete: safety.complete,
+      parked: safety.complete && Object.values(blockers).every((count) => count === 0),
+      blockers,
+    };
+  }
+
   /**
    * Everything a release of this session would destroy, read from state
    * already held.
@@ -1818,7 +1868,9 @@ export class WorkerServer {
       liveRuns: work.liveRuns,
       liveChildRuns: work.liveChildRuns,
       queuedWork: queued,
-      trayMessages: live.pending?.list().length ?? 0,
+      trayMessages: live.pending
+        ? Math.max(live.pending.list().length, live.pending.deliveryInFlight() ? 1 : 0)
+        : 0,
       runningTasks: this.tasks.tasksOf(live.path).filter((task) => task.status === "running").length,
       // Naming this session is under way: a bounded Namer completion is in
       // flight and it ends in a rename through this runtime, which nothing
@@ -2024,6 +2076,7 @@ export class WorkerServer {
           ? this.queueIntoChild(live, content, "steer")
           : this.firstTurnLock.run(live.path, () => live.driver.steer(content)),
         prompt: (content, onAccepted) => this.promptWithFence(live, content, undefined, onAccepted, true),
+        admitNewWork: () => this.admitNewWork(),
         streaming: () => live.driver.state().isStreaming,
         publish: (pending) => this.onDriverEvent(live, { type: "update", update: { kind: "pending_update", pending } }),
       });

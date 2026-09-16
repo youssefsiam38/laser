@@ -66,6 +66,8 @@ const IPC = {
   cacheKeyReset: "laser:cache/key/reset",
   updateStatus: "laser:update/status",
   updateCheck: "laser:update/check",
+  updatePrepare: "laser:update/prepare",
+  updateCancel: "laser:update/cancel",
   updateInstall: "laser:update/install",
   updateChanged: "laser:update/changed",
 } as const;
@@ -195,6 +197,8 @@ const api: LaserDesktop = {
     restart: (): void => { ipcRenderer.send(IPC.updateInstall, { relaunch: true }); },
     status: (): Promise<UpdateStatus> => ipcRenderer.invoke(IPC.updateStatus) as Promise<UpdateStatus>,
     check: (): Promise<UpdateStatus> => ipcRenderer.invoke(IPC.updateCheck) as Promise<UpdateStatus>,
+    prepare: (): Promise<UpdateStatus> => ipcRenderer.invoke(IPC.updatePrepare) as Promise<UpdateStatus>,
+    cancel: (): Promise<UpdateStatus> => ipcRenderer.invoke(IPC.updateCancel) as Promise<UpdateStatus>,
     install: (): void => {
       ipcRenderer.send(IPC.updateInstall);
     },

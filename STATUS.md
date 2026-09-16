@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-16T21:33:34+03:00 · orchestrator `01a0a030` · HEAD: f797f5b0
-**Current focus:** M19 runtime recovery and update activation (T2 generation/park/update transaction in progress); M18 resource containment is complete and audited (`/tmp/m18-final-audit.md`: 72 proven, 10 measurement-only weak, 0 missing).
+**Last updated:** 2026-09-16T23:59:54+03:00 · m19-recovery-plan `01a0aa8f` · HEAD: a316907d
+**Current focus:** M19-T2 D-270 review fixes are complete and awaiting parent verification/integration; M18 resource containment is complete and audited.
 
 | Milestone | State |
 | --- | --- |
@@ -29,7 +29,7 @@
 | MX Cross-cutting | in-progress |
 
 **Blockers:** none.
-**Next up:** M19-T2 review/integration; M19-T3 migration snapshot/restore; final packaged gate at the release tip.
-**Recently done:** M18-T15 repeat baseline (`7bfce5e8`); M19-T1 (`23787c27`); attachment membership fix (`98d12881`); M18-T19 (`76f475fa`); M18-T3 closeout.
+**Next up:** parent verification/integration of the M19-T2 D-270 fix batch; M19-T3 only after that integration; final packaged gate at the release tip.
+**Recently done:** M19-T2 D-270 review fixes (this batch; `/tmp/m19-t2-report.md`); M19-T2 implementation (`b09a6189`, `b2c84f96`, `1c2f3da2`, `8c127c8d`); M18-T15 repeat baseline (`7bfce5e8`); M19-T1 (`23787c27`); attachment membership fix (`98d12881`).
 
 Ownership and evidence: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`.

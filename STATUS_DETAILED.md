@@ -2862,7 +2862,7 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
 | M19-T1 | Launch identity, safe mode and bounded repair | done | m19-recovery-plan `01a0aa8f-8f82-714d-99c8-190890feefc7` | `23787c27` (T1A `0371eb6c`, T1B `58b0ea1f`, T1C `d43b0a57`, review fixes `208487bd`, copy `d7891ebe`); host 858, CLI 88, desktop 173/1 skipped, worker 1029/4 skipped, UI 2277/1 skipped; verify, pack, clean-machine, pointer+touch matrices | see notes; added by D-264 |
-| M19-T2 | Immutable generation activation and correlated updates | in-progress | m19-recovery-plan `01a0aa8f-8f82-714d-99c8-190890feefc7` | — | added by D-264; depends on M19-T1 |
+| M19-T2 | Immutable generation activation and correlated updates | done | m19-recovery-plan `01a0aa8f-8f82-714d-99c8-190890feefc7` | T2A `b09a6189`, T2B `b2c84f96`, T2C `1c2f3da2`, validation `8c127c8d`; D-270 review-fix batch and `/tmp/m19-t2-report.md` | see notes; added by D-264; depends on M19-T1 |
 | M19-T3 | Migration snapshot and interrupted-restore recovery | todo | — | — | added by D-264; depends on M19-T2 |
 
 #### M19-T1 notes
@@ -2879,6 +2879,11 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 
 #### M19-T2 notes
 - 2026-09-16 claimed by the T1 owner on base `cf9a21aa` per the approved plan (T2A verified-inventory generation store under D-266, T2B non-destructive park gate, T2C durable update transaction with one update id across reconnect); one review for T2.
+- 2026-09-16 T2A complete at `b09a6189`: generated immutable executable inventories, atomic active/previous/pending selection, per-launch/spawn verification, feature generations, and preserved-mtime/old-host drift tests.
+- 2026-09-16 T2B complete at `b2c84f96`: local-only exact-update-ID parking, independent blocker counts, settlement/control availability, cancellation, race retry and real worker/agent/background-command coverage; no active work is cancelled.
+- 2026-09-16 T2C complete at `1c2f3da2` plus validation fix `8c127c8d`: correlated native marker and durable transaction, exact generation selection, launch-ID/generation/version success, reconnect/cancel/rollback behavior, preload/IPC/tray/VersionNotice flow, packaged clean-machine binding and exact copy.
+- 2026-09-16 final evidence: protocol 321, pi-extension 200, worker 1033/4 skipped, host 873, CLI 88, desktop 176/1 skipped, UI 2279/1 skipped; build/typecheck, identity/direction, 45 release tests, package, clean-machine, packaged drift refusal, pointer+touch browser matrices and zero survivors pass. Resource soak intentionally excluded. Report `/tmp/m19-t2-report.md`; browser `/tmp/m19-t2-browser-pointer/run-GkKQdo` and `/tmp/m19-t2-browser-touch/run-OQCamk`.
+- 2026-09-16 D-270 review fixes complete in one batch after rebase to `497ad007`: the fixed-root manifest is authoritative, pointer history no longer claims old bytes, bounded verification persists Node metadata, typed method policy owns activation admission, pending drain closes the accepted-to-streaming race, binary rollback is removed, and one source owns update copy/actions. Final gate: protocol 322, pi-extension 200, worker 1034/4 skipped, host 874, CLI 88, desktop 177/1 skipped, UI 2279/1 skipped; build, identity/direction, 45 release tests, full verify, exact `.deb` fixed-root running/closed upgrade, clean-machine, preserved-mtime drift, pointer/touch matrices, and zero survivors pass. Evidence: `/tmp/m19-t2-report.md`; browser `/tmp/m19-t2-browser-review-pointer/run-ShMLO2`, `/tmp/m19-t2-browser-review-touch/run-EtrtKH`.
 
 #### M19 notes
 - 2026-09-16 D-264 turns `docs/resource-and-loading-plan.md`'s supporting recovery/update prose into three dependency-ordered tasks after containment. They strengthen activation and recovery; the reviewed release orchestrator remains authoritative.

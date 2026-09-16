@@ -415,6 +415,7 @@ const decoyPath = join(decoyAgentDir, "settings.json");
 writeFileSync(decoyPath, DECOY_SETTINGS);
 const decoyBefore = statSync(decoyPath);
 
+const packagedRuntime = JSON.parse(readFileSync(join(resources, "native-update-template.json"), "utf8"));
 const bareEnv = {
   PATH: emptyBin,
   HOME: fakeHome,
@@ -423,6 +424,9 @@ const bareEnv = {
   [identity.env.agentDir]: scratchAgent,
   [identity.env.sessionDir]: scratchSessions,
   [identity.env.stateDir]: scratchState,
+  [identity.env.runtimeGenerationId]: packagedRuntime.generationId,
+  [identity.env.runtimeInstallRoot]: appDir,
+  [identity.env.runtimeManifestDigest]: packagedRuntime.manifestDigest,
   // A port nothing else is on, so "the port is busy" cannot masquerade as a
   // packaging failure.
   [identity.env.port]: "47311",

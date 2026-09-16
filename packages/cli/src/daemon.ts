@@ -14,7 +14,16 @@
  */
 import { ENV, PRODUCT_NAME, launchIdSchema } from "@lasercode/protocol";
 import { fromBase64Url, isAuthorized } from "@lasercode/crypto";
-import { HostServer, migrateFormerIdentities, type HostRelayOptions } from "@lasercode/host";
+import { join } from "node:path";
+import {
+  HostServer,
+  RuntimeGenerationGuard,
+  migrateFormerIdentities,
+  readRuntimeGenerationPointer,
+  runtimeReferenceFromEnvironment,
+  type HostRelayOptions,
+  type RuntimeGenerationReference,
+} from "@lasercode/host";
 import { hostUrl, type LaserPaths } from "./config.js";
 import { clearHostFile, inspectHost, portInUse, processIdentity, writeHostFile } from "./hostfile.js";
 import { deviceListOf, loadIdentity, loadStaticKey, readRelayConfig } from "./relay-config.js";
@@ -24,6 +33,8 @@ export interface DaemonOptions {
   paths: LaserPaths;
   /** Where the host writes its own log lines. `process.stderr` when foreground. */
   log?: (line: string) => void;
+  /** Test seam; production receives this exact reference through its launcher environment. */
+  runtimeGeneration?: RuntimeGenerationReference;
 }
 
 /**
@@ -78,6 +89,14 @@ export async function runDaemon(options: DaemonOptions): Promise<void> {
   const launch = launchIdSchema.safeParse(process.env[ENV.hostLaunchId]);
   if (!launch.success) throw new Error("the host launcher did not provide a valid launch identity");
   const launchId = launch.data;
+  const runtimeGeneration = options.runtimeGeneration ?? runtimeReferenceFromEnvironment(process.env);
+  if (!runtimeGeneration) throw new Error("the host launcher did not bind a runtime generation");
+  const selected = readRuntimeGenerationPointer(paths.stateDir)?.active;
+  const persisted = selected?.generationId === runtimeGeneration.generationId
+    && selected.installRoot === runtimeGeneration.installRoot
+    ? selected.verification
+    : undefined;
+  const runtimeManifest = new RuntimeGenerationGuard(runtimeGeneration, persisted).verify();
   // Refuse a competing launch before it can replace the record that makes the
   // live host adoptable and stoppable. The port guard closes the no-record race.
   const existing = await inspectHost(paths);
@@ -95,6 +114,7 @@ export async function runDaemon(options: DaemonOptions): Promise<void> {
     stateDir: paths.stateDir,
     startedAt,
     cliVersion: CLI_VERSION,
+    generationId: runtimeGeneration.generationId,
     ...(identity !== undefined ? { identity } : {}),
   };
 
@@ -112,6 +132,9 @@ export async function runDaemon(options: DaemonOptions): Promise<void> {
     sessionDir: paths.sessionDir,
     stateDir: paths.stateDir,
     launchId,
+    runtimeGeneration,
+    workerMain: join(runtimeGeneration.installRoot, runtimeManifest.entries.worker),
+    ...(runtimeManifest.entries.node ? { nodeBinary: join(runtimeGeneration.installRoot, runtimeManifest.entries.node) } : {}),
     // Extra browser origins allowed to open the WebSocket, comma separated.
     // The desktop shell sets this when the UI is served by a dev server: Vite
     // proxies the browser's own Origin through, and the host has never heard

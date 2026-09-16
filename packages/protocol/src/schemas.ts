@@ -25,6 +25,7 @@ import {
 import { MAX_FALLBACK_CHAIN_MODELS } from "./fallback.js";
 import { PROVIDER_FAILURE_CLASSES } from "./provider-failure.js";
 import { WORKER_MODES } from "./runtime-recovery.js";
+import { runtimeActivationParamsSchemas } from "./runtime-activation.js";
 import { ErrorCodes, type JsonRpcRequest } from "./jsonrpc.js";
 import { PREFS_MAX_BYTES } from "./messages.js";
 import { resourceParamsSchemas } from "./resources.js";
@@ -992,6 +993,9 @@ export const clientParamsSchemas = {
 
   // --- RP-4 worker session lifetime. Shapes live in session-lifetime.ts ---
   ...sessionLifetimeParamsSchemas,
+
+  // --- M19 immutable runtime activation gate. ---
+  ...runtimeActivationParamsSchemas,
 
   // --- RP-8 memory pressure. Shapes live in memory-pressure.ts ---
   ...memoryPressureParamsSchemas,

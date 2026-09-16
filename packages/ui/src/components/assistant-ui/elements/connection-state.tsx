@@ -100,37 +100,77 @@ export function ConnectionState({ phase, attempt, first = false, onRetry, classN
 /** How long "Back online" stays before the line goes away. */
 const RESUMED_MS = 2500;
 
+type UpdateNoticeState = {
+  state: string;
+  updateId?: string;
+  version?: string;
+  title?: string;
+  message?: string;
+  action?: "prepare" | "cancel" | "activate" | "retry" | "none";
+  actionLabel?: string;
+};
+
 type DesktopUpdates = {
   version: string;
   updates: {
-    status(): Promise<{ state: string; version?: string; message?: string }>;
+    status(): Promise<UpdateNoticeState>;
+    prepare(): Promise<UpdateNoticeState>;
+    cancel(): Promise<UpdateNoticeState>;
     install(): void;
     restart?(): void;
-    onStatus(listener: (status: { state: string; version?: string; message?: string }) => void): () => void;
+    onStatus(listener: (status: UpdateNoticeState) => void): () => void;
   };
 };
 
-export function VersionNotice({ hostVersion, desktopVersion, installedVersion, onRefresh, onRestart }: {
-  hostVersion?: string; desktopVersion?: string; installedVersion?: string;
-  onRefresh: () => void; onRestart?: () => void;
+function UpdateNoticeAction({ update, onRestart, onPrepare, onCancel }: {
+  update: UpdateNoticeState;
+  onRestart?: (() => void) | undefined;
+  onPrepare?: (() => void) | undefined;
+  onCancel?: (() => void) | undefined;
+}) {
+  const props = { variant: "outline" as const, size: "sm" as const, className: "pointer-coarse:min-h-11" };
+  switch (update.action) {
+    case "prepare":
+      return onPrepare ? <Button {...props} onClick={onPrepare}>{update.actionLabel}</Button> : null;
+    case "cancel":
+      return onCancel ? <Button {...props} onClick={onCancel}>{update.actionLabel}</Button> : null;
+    case "activate":
+    case "retry":
+      return onRestart ? <Button {...props} onClick={onRestart}>{update.actionLabel}</Button> : null;
+    default:
+      return null;
+  }
+}
+
+export function VersionNotice({ hostVersion, desktopVersion, update, onRefresh, onRestart, onPrepare, onCancel }: {
+  hostVersion?: string; desktopVersion?: string; update?: UpdateNoticeState;
+  onRefresh: () => void; onRestart?: () => void; onPrepare?: () => void; onCancel?: () => void;
 }) {
   const local = desktopVersion !== undefined;
   const hostOlder = hostVersion !== undefined && hostVersion !== "unknown" &&
     hostVersion.localeCompare(PRODUCT_VERSION, undefined, { numeric: true }) < 0;
   const restart = local || hostOlder || hostVersion === "unknown";
+  const fallbackTitle = restart ? `${PRODUCT_DISPLAY_NAME} is ready to restart` : "Refresh this view to continue";
+  const fallbackDetail = restart
+    ? "Restart the app and host together on the host computer when you are ready. Saved sessions are kept; active work will stop during restart."
+    : "The host has been updated. This refresh only updates your frontend. Your sessions and running agents will not be affected.";
+  let action = update
+    ? <UpdateNoticeAction update={update} onRestart={onRestart} onPrepare={onPrepare} onCancel={onCancel} />
+    : null;
+  if (!update && restart && local && onRestart) {
+    action = <Button variant="outline" size="sm" className="pointer-coarse:min-h-11" onClick={onRestart}>Restart when ready…</Button>;
+  } else if (!update && !restart) {
+    action = <Button variant="outline" size="sm" className="pointer-coarse:min-h-11" onClick={onRefresh}>Refresh view</Button>;
+  }
   return (
-    <div role="status" data-slot="version-notice" className="relative z-110 flex shrink-0 flex-wrap items-center gap-3 border-b border-line bg-surface px-4 py-3 text-sm">
+    <div role="status" data-slot="version-notice" data-update-state={update?.state} className="relative z-110 flex shrink-0 flex-wrap items-center gap-3 border-b border-line bg-surface px-4 py-3 text-sm">
       <RefreshCwIcon aria-hidden="true" className="size-4 shrink-0 text-live" />
       <div className="min-w-0 flex-1 basis-48">
-        <p className="font-medium text-ink">{restart ? `${PRODUCT_DISPLAY_NAME} is ready to restart` : "Refresh this view to continue"}</p>
-        <p className="mt-1 text-xs text-ink-2">{restart
-          ? "Restart the app and host together on the host computer when you are ready. Saved sessions are kept; active work will stop during restart."
-          : "The host has been updated. This refresh only updates your frontend. Your sessions and running agents will not be affected."}</p>
-        <p className="mt-1 text-xs text-ink-3">{installedVersion ? `Installed ${installedVersion} · Running ${desktopVersion}` : `This view ${PRODUCT_VERSION} · Host ${hostVersion}`}</p>
+        <p className="font-medium text-ink">{update?.title ?? fallbackTitle}</p>
+        <p className="mt-1 text-xs text-ink-2">{update?.message ?? fallbackDetail}</p>
+        <p className="mt-1 text-xs text-ink-3">{update?.version ? `Update ${update.version} · Running ${desktopVersion}` : `This view ${PRODUCT_VERSION} · Host ${hostVersion}`}</p>
       </div>
-      {/* The action that gets a person out of a blocked view, on a phone too. */}
-      {restart ? (local && onRestart && <Button variant="outline" size="sm" className="pointer-coarse:min-h-11" onClick={onRestart}>Restart when ready…</Button>)
-        : <Button variant="outline" size="sm" className="pointer-coarse:min-h-11" onClick={onRefresh}>Refresh view</Button>}
+      {action}
     </div>
   );
 }
@@ -139,22 +179,25 @@ export function VersionNotice({ hostVersion, desktopVersion, installedVersion, o
 export function HostVersionNotice() {
   const mismatch = useLaserState((s) => s.versionMismatch);
   const desktop = (globalThis as typeof globalThis & { desktop?: DesktopUpdates }).desktop;
-  const [installed, setInstalled] = useState<string>();
+  const [update, setUpdate] = useState<UpdateNoticeState>();
   useEffect(() => {
     if (!desktop?.updates) return;
     let active = true;
-    const receive = (status: { state: string; version?: string }) => {
-      if (active && status.state === "ready") setInstalled(status.version);
+    const receive = (status: UpdateNoticeState) => {
+      const visible = ["downloaded", "parking", "ready", "restarting", "failed"].includes(status.state);
+      if (active) setUpdate(visible ? status : undefined);
     };
     void desktop.updates.status().then(receive).catch(() => {});
     const off = desktop.updates.onStatus(receive);
     return () => { active = false; off(); };
   }, [desktop]);
-  if (!mismatch && !installed) return null;
+  if (!mismatch && !update) return null;
   return <VersionNotice {...(mismatch ? { hostVersion: mismatch } : {})}
     {...(desktop ? { desktopVersion: desktop.version } : {})}
-    {...(installed ? { installedVersion: installed } : {})}
+    {...(update ? { update } : {})}
     {...(desktop?.updates?.restart ? { onRestart: () => mismatch ? desktop.updates.restart!() : desktop.updates.install() } : {})}
+    {...(desktop?.updates?.prepare ? { onPrepare: () => { void desktop.updates.prepare(); } } : {})}
+    {...(desktop?.updates?.cancel ? { onCancel: () => { void desktop.updates.cancel(); } } : {})}
     onRefresh={refreshFrontend} />;
 }
 

@@ -38,10 +38,12 @@ export {
   runForegroundHost,
   logTail,
   openBrowser,
+  prepareInstalledRuntime,
   refreshHostEnvironment,
   startHost,
   stopHost,
   type ForegroundHostResult,
+  type InstalledRuntimeLaunch,
   type StartResult,
   type StopResult,
 } from "./host-control.js";
@@ -74,3 +76,23 @@ export { HostRpc, HostRpcError, describeRpcError, type NotificationHandler } fro
 export { listSessions, matchSessions, resolveSession, resolveProject } from "./session-ref.js";
 export { sessionFragment } from "./commands/session.js";
 export { CLI_VERSION } from "./version.js";
+export {
+  UpdateTransactionStore,
+  prepareRuntimeGeneration,
+  readRuntimeGenerationPointer,
+  runtimeReferenceFromManifest,
+  runtimeUpdateId,
+  runtimeVerificationMetrics,
+  selectRuntimeGeneration,
+  stageRuntimeGeneration,
+  verifyRuntimeGeneration,
+  writeRuntimeGenerationManifest,
+  writeRuntimeGenerationPointer,
+  type RuntimeGenerationManifest,
+  type RuntimeGenerationPointer,
+  type RuntimeGenerationReference,
+  type RuntimeGenerationVerification,
+  type RuntimeVerificationMetrics,
+  type UpdateTransaction,
+  type UpdateTransactionPhase,
+} from "@lasercode/host";

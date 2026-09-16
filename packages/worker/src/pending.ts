@@ -22,6 +22,8 @@ export interface PendingTrayDeps {
    * per-invocation preflight acknowledgement; it fires before the turn runs.
    */
   prompt(content: ContentBlock[], onAccepted: () => void): Promise<{ accepted: boolean }>;
+  /** Same new-root admission seam used by direct prompts and agent work. */
+  admitNewWork?(): void;
   /** Whether the agent is working right now. */
   streaming(): boolean;
   /** The tray changed. Called with the list as clients should see it. */
@@ -39,6 +41,11 @@ export class PendingTray {
 
   list(): PendingMessage[] {
     return this.messages.map(clone);
+  }
+
+  /** Covers accepted preflight until the driver reports streaming/settles. */
+  deliveryInFlight(): boolean {
+    return this.draining;
   }
 
   add(content: ContentBlock[]): PendingMessage {
@@ -146,6 +153,10 @@ export class PendingTray {
     this.draining = true;
     try {
       while (this.messages.length > 0 && !this.deps.streaming()) {
+        // Keep the row and its pending-tray safety pin intact while activation
+        // is parked. It will drain after matching cancellation or restart.
+        try { this.deps.admitNewWork?.(); }
+        catch { return; }
         const head = this.messages[0]!;
         this.patch(head.id, "delivering");
         let accepted = false;

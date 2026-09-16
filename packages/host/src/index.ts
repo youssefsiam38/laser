@@ -19,6 +19,45 @@ export {
 } from "./identity-migration.js";
 export { WorkerPool, type WorkerPoolOptions } from "./worker-pool.js";
 export { WorkerClient, WorkerRpcError, defaultWorkerMain, type WorkerClientOptions } from "./worker-client.js";
+export { RuntimeActivationGate } from "./runtime-activation.js";
+export {
+  UPDATE_TRANSACTION_PHASES,
+  UpdateTransactionStore,
+  type UpdateTransaction,
+  type UpdateTransactionPhase,
+} from "./update-transaction.js";
+export {
+  FeatureGenerationStore,
+  RuntimeGenerationError,
+  RuntimeGenerationGuard,
+  RUNTIME_GENERATION_ERROR,
+  RUNTIME_MANIFEST_ERROR,
+  RUNTIME_UPDATE_INSTALLED_ERROR,
+  RUNTIME_MANIFEST_NAME,
+  RUNTIME_POINTER_NAME,
+  findRuntimeManifest,
+  prepareRuntimeGeneration,
+  readRuntimeGenerationPointer,
+  runtimeGenerationId,
+  runtimeManifestDigest,
+  runtimeVerificationMetrics,
+  runtimeReferenceFromEnvironment,
+  runtimeReferenceFromManifest,
+  runtimeUpdateId,
+  selectRuntimeGeneration,
+  stageRuntimeGeneration,
+  verifyRuntimeGeneration,
+  writeRuntimeGenerationManifest,
+  writeRuntimeGenerationPointer,
+  type FeatureGenerationManifest,
+  type RuntimeGenerationManifest,
+  type RuntimeGenerationPointer,
+  type RuntimeGenerationReference,
+  type RuntimeGenerationSelection,
+  type RuntimeGenerationVerification,
+  type RuntimeVerificationMetrics,
+  type RuntimeInventoryRow,
+} from "./runtime-generation.js";
 export {
   HOST_OLD_SPACE_CAP_MIB,
   HOST_OLD_SPACE_FLOOR_MIB,

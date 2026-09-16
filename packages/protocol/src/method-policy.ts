@@ -109,6 +109,8 @@ export interface MethodPolicy {
    * says: the reason for a refusal is the record that matters.
    */
   audit?: "summary";
+  /** Begins a new root of work and is fenced while update activation parks. */
+  startsWork?: true;
 }
 
 const NATIVE_ENVIRONMENT_REFUSAL = "Environment updates are only accepted from a local app or terminal.";
@@ -197,18 +199,18 @@ export const METHOD_POLICY = {
   "pi/packages/records": { scope: "read", reach: "any" },
 
   // ------------------------------------------------------ session writes ---
-  "session/new": { scope: "session_write", reach: "any" },
-  "session/prompt": { scope: "session_write", reach: "any" },
+  "session/new": { scope: "session_write", reach: "any", startsWork: true },
+  "session/prompt": { scope: "session_write", reach: "any", startsWork: true },
   "session/cancel": { scope: "session_write", reach: "any" },
   "session/set_mode": { scope: "session_write", reach: "any" },
-  "session/goal/action": { scope: "session_write", reach: "any" },
-  "session/pending/add": { scope: "session_write", reach: "any" },
-  "session/pending/edit": { scope: "session_write", reach: "any" },
+  "session/goal/action": { scope: "session_write", reach: "any", startsWork: true },
+  "session/pending/add": { scope: "session_write", reach: "any", startsWork: true },
+  "session/pending/edit": { scope: "session_write", reach: "any", startsWork: true },
   "session/pending/remove": { scope: "session_write", reach: "any" },
-  "session/pending/steer": { scope: "session_write", reach: "any" },
+  "session/pending/steer": { scope: "session_write", reach: "any", startsWork: true },
   "session/pending/clear": { scope: "session_write", reach: "any" },
-  "pi/session/steer": { scope: "session_write", reach: "any" },
-  "pi/session/follow_up": { scope: "session_write", reach: "any" },
+  "pi/session/steer": { scope: "session_write", reach: "any", startsWork: true },
+  "pi/session/follow_up": { scope: "session_write", reach: "any", startsWork: true },
   "pi/session/clear_queue": { scope: "session_write", reach: "any" },
   "pi/session/fork": { scope: "session_write", reach: "any" },
   "pi/session/navigate": { scope: "session_write", reach: "any" },
@@ -216,10 +218,10 @@ export const METHOD_POLICY = {
   "pi/session/delete": { scope: "session_write", reach: "any" },
   "pi/session/move": { scope: "session_write", reach: "any" },
   "pi/session/close": { scope: "session_write", reach: "any" },
-  "pi/session/compact": { scope: "session_write", reach: "any" },
+  "pi/session/compact": { scope: "session_write", reach: "any", startsWork: true },
   "pi/model/set": { scope: "session_write", reach: "any" },
   "pi/thinking/set": { scope: "session_write", reach: "any" },
-  "pi/transcribe/begin": { scope: "session_write", reach: "any" },
+  "pi/transcribe/begin": { scope: "session_write", reach: "any", startsWork: true },
   // Dictation sends a chunk every few hundred milliseconds. Counted, not
   // written per call: two minutes of speech is one audit row, not four hundred.
   "pi/transcribe/chunk": { scope: "session_write", reach: "any", audit: "summary" },
@@ -305,6 +307,14 @@ export const METHOD_POLICY = {
   // every method is, and it is `native` for the same reason `agents/sync` is:
   // nothing outside this machine's app may ask a worker what it is holding.
   "pi/worker/retained-stores": { scope: "diagnostics", reach: "native", refusal: NATIVE_SYNC_REFUSAL },
+  // Update activation is initiated only by the local shell/CLI. Browser and
+  // paired clients may keep settling existing work but cannot park the host.
+  "pi/runtime/activation/prepare": { scope: "work_control", reach: "native", refusal: NATIVE_SYNC_REFUSAL },
+  "pi/runtime/activation/status": { scope: "read", reach: "native", refusal: NATIVE_SYNC_REFUSAL },
+  "pi/runtime/activation/cancel": { scope: "work_control", reach: "native", refusal: NATIVE_SYNC_REFUSAL },
+  "pi/worker/activation/park": { scope: "work_control", reach: "native", refusal: NATIVE_SYNC_REFUSAL },
+  "pi/worker/activation/status": { scope: "diagnostics", reach: "native", refusal: NATIVE_SYNC_REFUSAL },
+  "pi/worker/activation/cancel": { scope: "work_control", reach: "native", refusal: NATIVE_SYNC_REFUSAL },
   // Host → its own already-live workers (RP-4): releasing an idle session's
   // runtime, and reading what each loaded session is holding. Both are the
   // app managing its own runtimes on this machine, never a client's call.
@@ -329,6 +339,10 @@ export function methodPolicy(method: string): MethodPolicy | undefined {
   return Object.prototype.hasOwnProperty.call(METHOD_POLICY, method)
     ? (METHOD_POLICY as Record<string, MethodPolicy>)[method]
     : undefined;
+}
+
+export function methodStartsWork(method: string): boolean {
+  return methodPolicy(method)?.startsWork === true;
 }
 
 /** Every method the table knows, for inventory tests and audit sanitisation. */

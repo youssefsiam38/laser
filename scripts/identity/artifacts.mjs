@@ -212,6 +212,7 @@ function ipcModule() {
     ["identity", "identity"],
     ["cacheKey", "cache/key"], ["cacheKeyReset", "cache/key/reset"],
     ["updateStatus", "update/status"], ["updateCheck", "update/check"],
+    ["updatePrepare", "update/prepare"], ["updateCancel", "update/cancel"],
     ["updateInstall", "update/install"], ["updateChanged", "update/changed"],
   ];
   const body = channels

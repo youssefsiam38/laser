@@ -707,6 +707,9 @@ export const backgroundWorkModule: LaserModule = {
         ),
       }),
       async execute(toolCallId, { command, timeout, background, notify }, signal, onUpdate, toolCtx): Promise<AgentToolResult<BashOverrideDetails>> {
+        if (options.admitCommand?.() === false) {
+          throw new Error("An update is waiting for current work to finish. Cancel update preparation before starting another command.");
+        }
         // A project that requires its environment does not run commands with the
         // wrong one. The refusal is a sentence, not a stack trace, and it says
         // what to do next.

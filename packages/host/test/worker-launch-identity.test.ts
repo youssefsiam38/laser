@@ -1,7 +1,9 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { ENV } from "@lasercode/protocol";
+import { runtimeReferenceFromManifest, writeRuntimeGenerationManifest } from "../src/runtime-generation.js";
 import { WorkerClient, type WorkerExit } from "../src/worker-client.js";
 
 const roots: string[] = [];
@@ -62,6 +64,36 @@ describe("worker first-frame launch identity", () => {
       kind: "initialization_error",
       failure: { stage: "initialize", category: "initialization_error" },
     });
+  });
+
+  it("refuses before spawn when an old host sees its selected worker changed in place", () => {
+    const root = mkdtempSync(join(tmpdir(), "worker-generation-drift-"));
+    roots.push(root);
+    mkdirSync(join(root, "app"), { recursive: true });
+    const cli = join(root, "app", "cli.js");
+    const main = join(root, "app", "worker.js");
+    writeFileSync(cli, "cli");
+    writeFileSync(main, "worker-one");
+    const { path } = writeRuntimeGenerationManifest({
+      installRoot: root,
+      files: [cli, main],
+      entries: { cli: "app/cli.js", worker: "app/worker.js" },
+      productVersion: "1.0.0",
+      buildIdentity: "old-host",
+    });
+    const selected = runtimeReferenceFromManifest(path);
+    writeFileSync(main, "worker-two");
+    expect(() => new WorkerClient({
+      cwd: root,
+      workerMain: main,
+      baseEnv: {
+        [ENV.runtimeGenerationId]: selected.generationId,
+        [ENV.runtimeInstallRoot]: selected.installRoot,
+        [ENV.runtimeManifestDigest]: selected.manifestDigest,
+      },
+      onNotification: () => undefined,
+      onExit: () => undefined,
+    })).toThrow(/runtime files changed/i);
   });
 
   it.each([

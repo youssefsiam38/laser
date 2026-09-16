@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ENV, PRODUCT_NAME } from "@lasercode/protocol";
 import { runDaemon } from "../src/daemon.js";
+import { prepareInstalledRuntime } from "../src/host-control.js";
 import type { LaserPaths } from "../src/config.js";
 
 function paths(base: string): LaserPaths {
@@ -41,7 +42,8 @@ describe("the daemon and an unusable policy", () => {
       mkdirSync(join(base, "state"), { recursive: true });
       writeFileSync(join(base, "state", "policy.json"), JSON.stringify({ remote: { scopes: ["everything"] } }));
       const lines: string[] = [];
-      await expect(runDaemon({ paths: paths(base), log: (line) => lines.push(line) })).rejects.toThrow(
+      const runtimeGeneration = prepareInstalledRuntime(paths(base)).reference;
+      await expect(runDaemon({ paths: paths(base), runtimeGeneration, log: (line) => lines.push(line) })).rejects.toThrow(
         /cannot be used/,
       );
       // Construction failed before this launch could publish even `starting`.

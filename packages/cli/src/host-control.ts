@@ -7,12 +7,18 @@
  * they type it a second time.
  */
 import { ENV, PRODUCT_NAME, environmentOverlay, nodeLaunchEnvironment } from "@lasercode/protocol";
-import { hostOldSpaceMiB, oldSpaceSizeFlag } from "@lasercode/host";
+import {
+  hostOldSpaceMiB,
+  oldSpaceSizeFlag,
+  prepareRuntimeGeneration,
+  type RuntimeGenerationManifest,
+  type RuntimeGenerationReference,
+} from "@lasercode/host";
 import { HostRpc, HostRpcError } from "./rpc.js";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { closeSync, mkdirSync, openSync, readFileSync } from "node:fs";
-import { sep } from "node:path";
+import { join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { LaserPaths } from "./config.js";
 import { hostUrl } from "./config.js";
@@ -66,6 +72,33 @@ export function hostDaemonArgv(paths: LaserPaths, capacityBytes?: number, entry 
   return [oldSpaceSizeFlag(hostOldSpaceMiB(capacityBytes)), entry, "__daemon", ...daemonArgs(paths)];
 }
 
+export interface InstalledRuntimeLaunch {
+  reference: RuntimeGenerationReference;
+  manifest: RuntimeGenerationManifest;
+  nodeBinary: string;
+  cliEntry: string;
+  workerEntry: string;
+  env: Readonly<Record<string, string>>;
+}
+
+/** Resolve and verify the generation selected by the atomic state pointer. */
+export function prepareInstalledRuntime(paths: LaserPaths, currentEntry = cliEntry()): InstalledRuntimeLaunch {
+  const { pointer, manifest } = prepareRuntimeGeneration(paths.stateDir, currentEntry);
+  const reference = pointer.active;
+  return {
+    reference,
+    manifest,
+    nodeBinary: manifest.entries.node ? join(reference.installRoot, manifest.entries.node) : process.execPath,
+    cliEntry: join(reference.installRoot, manifest.entries.cli),
+    workerEntry: join(reference.installRoot, manifest.entries.worker),
+    env: {
+      [ENV.runtimeGenerationId]: reference.generationId,
+      [ENV.runtimeInstallRoot]: reference.installRoot,
+      [ENV.runtimeManifestDigest]: reference.manifestDigest,
+    },
+  };
+}
+
 export interface ForegroundHostResult {
   code: number | null;
   signal: NodeJS.Signals | null;
@@ -90,12 +123,17 @@ export async function runForegroundHost(
 ): Promise<ForegroundHostResult> {
   mkdirSync(paths.stateDir, { recursive: true });
   const launchId = newLaunchId();
+  const installed = options.entry ? undefined : prepareInstalledRuntime(paths);
   const child = spawn(
-    options.nodeBinary ?? process.execPath,
-    hostDaemonArgv(paths, options.capacityBytes, options.entry ?? cliEntry()),
+    options.nodeBinary ?? installed?.nodeBinary ?? process.execPath,
+    hostDaemonArgv(paths, options.capacityBytes, options.entry ?? installed?.cliEntry ?? cliEntry()),
     {
       stdio: "inherit",
-      env: { ...nodeLaunchEnvironment(options.env ?? process.env), [ENV.hostLaunchId]: launchId },
+      env: {
+        ...nodeLaunchEnvironment(options.env ?? process.env),
+        ...installed?.env,
+        [ENV.hostLaunchId]: launchId,
+      },
       cwd: paths.stateDir,
     },
   );
@@ -156,13 +194,14 @@ export async function startHost(
   await assertPortIsOurs(paths);
 
   const launchId = newLaunchId();
-  const argv = hostDaemonArgv(paths);
+  const installed = prepareInstalledRuntime(paths);
+  const argv = hostDaemonArgv(paths, undefined, installed.cliEntry);
   mkdirSync(paths.stateDir, { recursive: true });
   const logFd = openSync(paths.logFile, "a");
-  const child = (dependencies.spawnProcess ?? spawn)(process.execPath, argv, {
+  const child = (dependencies.spawnProcess ?? spawn)(installed.nodeBinary, argv, {
     detached: true,
     stdio: ["ignore", logFd, logFd],
-    env: { ...nodeLaunchEnvironment(process.env), [ENV.hostLaunchId]: launchId },
+    env: { ...nodeLaunchEnvironment(process.env), ...installed.env, [ENV.hostLaunchId]: launchId },
     cwd: paths.stateDir,
   });
   closeSync(logFd);

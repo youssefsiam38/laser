@@ -192,6 +192,7 @@ function makeWorld(projectCwd = "/repo", projectTrusted = true) {
   let failOpen = false;
   let refuseWorktrees: string | undefined;
   let autoResolveChildPrompts = true;
+  let admitNewWork = true;
   let facts: WorktreeFacts = { exists: true, unmergedCommits: 0, uncommittedFiles: 0 };
   let root: string | undefined = "/repo";
   /** The worker's task index, as the harness reads it: commands by the session that ran them. */
@@ -236,7 +237,7 @@ function makeWorld(projectCwd = "/repo", projectTrusted = true) {
     taskLogRoot: () => tmpdir(),
   };
   const definitions = new DefinitionsCache();
-  const harness = new AgentHarness({ host, definitions, worktrees, projectTrusted, backgroundWork: (cwd) => ({ cwd, foregroundCommandSeconds: 120, commandPrefix: projectBashPrefix("source scripts/project-shell.sh") }), now: () => Date.now() });
+  const harness = new AgentHarness({ host, definitions, worktrees, projectTrusted, admitNewWork: () => admitNewWork, backgroundWork: (cwd) => ({ cwd, foregroundCommandSeconds: 120, commandPrefix: projectBashPrefix("source scripts/project-shell.sh") }), now: () => Date.now() });
   const openRoot = (name = "default", path = "/sessions/root.jsonl", id = "root-1") => {
     const def = definitions.definition(name)!;
     const handle = harness.prepareSession({ role: rootRole(name), definition: def, record: rootRecord(name), projectCwd });
@@ -253,6 +254,7 @@ function makeWorld(projectCwd = "/repo", projectTrusted = true) {
     setUnavailable: (value: boolean) => { unavailable = value; },
     setFailOpen: (value: boolean) => { failOpen = value; },
     setAutoResolveChildPrompts: (value: boolean) => { autoResolveChildPrompts = value; },
+    setAdmitNewWork: (value: boolean) => { admitNewWork = value; },
     /** Stand in for a project git cannot give a worktree: not a repository, no commit, a path another agent owns. */
     setRefuseWorktrees: (message: string | undefined) => { refuseWorktrees = message; },
     /** What the child's branch and directory hold, when the parent asks to remove them. */
@@ -277,6 +279,18 @@ describe("AgentHarness", () => {
   });
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("refuses a new child while activation is parked without changing existing runs", async () => {
+    const root = world.openRoot("lead");
+    world.setAdmitNewWork(false);
+    await expect(root.handle.bridge.startAgent({ agentName: "worker", subagentName: "later", task: "work" }))
+      .rejects.toThrow(/update is waiting/i);
+    expect(world.opened).toEqual([]);
+    expect(world.runsNotified()).toEqual([]);
+    world.setAdmitNewWork(true);
+    await expect(root.handle.bridge.startAgent({ agentName: "worker", subagentName: "later", task: "work" }))
+      .resolves.toMatchObject({ agentName: "worker", subagentName: "later" });
   });
 
   it("reads one bounded parent tail for a recovery batch and deduplicates its persisted event", async () => {

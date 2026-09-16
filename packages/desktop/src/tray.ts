@@ -215,13 +215,13 @@ export class TrayController {
     switch (this.update.state) {
       case "unsupported":
         return [];
+      case "downloaded":
+      case "failed":
       case "ready":
-        return [
-          {
-            label: `Restart to update${this.update.version ? ` to ${this.update.version}` : ""}`,
-            click: () => this.options.onInstallUpdate(),
-          },
-        ];
+        return [{ label: this.update.actionLabel ?? this.update.title, click: () => this.options.onInstallUpdate() }];
+      case "parking":
+      case "restarting":
+        return [{ label: this.update.title, enabled: false }];
       case "downloading":
         return [
           {

@@ -69,7 +69,11 @@ const CHECK_TIMEOUT_MS = 60_000;
  * `unpacked()` is applied again because a path built from it must be one the
  * bundled Node can open — Electron's own `fs` would happily stat the archive.
  */
-export function agentCheckScript(): string | undefined {
+export function agentCheckScript(workerMain?: string): string | undefined {
+  if (workerMain) {
+    const selected = join(dirname(workerMain), "resolve-pi.js");
+    return existsSync(selected) ? selected : undefined;
+  }
   let dir = resolve(dirname(cliEntry()));
   for (;;) {
     const candidate = join(dir, "node_modules", "@lasercode", "worker", "dist", "resolve-pi.js");
@@ -88,8 +92,9 @@ export function checkBundledAgent(options: {
   nodeBinary: string;
   env: NodeJS.ProcessEnv;
   log: DesktopLog;
+  workerMain?: string;
 }): Promise<AgentCheck> {
-  const script = agentCheckScript();
+  const script = agentCheckScript(options.workerMain);
   if (!script) {
     return Promise.resolve({
       ok: false,

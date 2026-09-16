@@ -687,3 +687,42 @@ describe("pi/session/unload", () => {
     expect(released.stores.workerReplay).toEqual({ count: 0, bytes: 0 });
   });
 });
+
+describe("runtime activation gate", () => {
+  const updateId = "a".repeat(64);
+  const generationId = "b".repeat(64);
+
+  it("acknowledges the exact fence, keeps settlement open and refuses new turns without cancellation", async () => {
+    const w = world();
+    await w.load();
+    w.drivers[0]!.patch({ isStreaming: true });
+    const parking = (await w.call<ClientRequests["pi/worker/activation/park"]["result"]>(
+      "pi/worker/activation/park", { updateId, generationId },
+    )).result!;
+    expect(parking).toMatchObject({ updateId, generationId, parked: false, blockers: { conversations: 1 } });
+
+    const prompt = await w.call("session/prompt", { path: PATH, content: text("new root") });
+    expect(prompt.error).toMatchObject({ code: ErrorCodes.SessionBusy });
+    expect(w.drivers[0]!.promptCalls).toBe(0);
+
+    const cancelTurn = await w.call("session/cancel", { path: PATH });
+    expect(cancelTurn.error).toBeUndefined();
+    expect(w.drivers[0]!.aborts).toBe(1);
+    w.drivers[0]!.patch({ isStreaming: false });
+    await expect(w.call<ClientRequests["pi/worker/activation/status"]["result"]>(
+      "pi/worker/activation/status", { updateId },
+    )).resolves.toMatchObject({ result: { parked: true } });
+
+    await w.call("pi/worker/activation/cancel", { updateId });
+    const accepted = await w.call("session/prompt", { path: PATH, content: text("after cancel") });
+    expect(accepted.error).toBeUndefined();
+    expect(w.drivers[0]!.promptCalls).toBe(1);
+  });
+
+  it("refuses missing and mismatched update identities", async () => {
+    const w = world();
+    await expect(w.call("pi/worker/activation/status", { updateId })).resolves.toMatchObject({ error: { code: ErrorCodes.InvalidParams } });
+    await w.call("pi/worker/activation/park", { updateId, generationId });
+    await expect(w.call("pi/worker/activation/status", { updateId: "c".repeat(64) })).resolves.toMatchObject({ error: { code: ErrorCodes.InvalidParams } });
+  });
+});

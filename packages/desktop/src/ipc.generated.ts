@@ -23,6 +23,8 @@ export const IPC = {
   cacheKeyReset: "laser:cache/key/reset",
   updateStatus: "laser:update/status",
   updateCheck: "laser:update/check",
+  updatePrepare: "laser:update/prepare",
+  updateCancel: "laser:update/cancel",
   updateInstall: "laser:update/install",
   updateChanged: "laser:update/changed",
 } as const;
