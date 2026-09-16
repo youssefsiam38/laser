@@ -2,7 +2,7 @@
  * Pure view-model helpers for the app shell. No React, no DOM.
  * Tested in test/shell/model.test.ts.
  */
-import { PRODUCT_DISPLAY_NAME } from "@lasercode/protocol";
+import { PRODUCT_DISPLAY_NAME, runtimeRecoveryCopy } from "@lasercode/protocol";
 import type { AgentRun, ProjectInfo, ProjectTrust, SessionSummary, WorkerInfo as ProtocolWorkerInfo } from "@lasercode/protocol";
 import { mergeSessions, sessionAttention, sessionTitle, sortSessions } from "../../runtime/threadList.js";
 import { textOf, type Block, type SessionView } from "../../store.js";
@@ -207,15 +207,27 @@ export function workerChip(worker: WorkerInfo | undefined): WorkerChip | undefin
   switch (worker.status) {
     case "starting":
       return { label: "Starting the agent", tone: "attention", canRetry: false, canStartSafe: false, canTryNormal: false, ...detail };
-    case "crashed":
+    case "crashed": {
+      const copy = runtimeRecoveryCopy({
+        status: worker.status,
+        mode: worker.mode ?? "normal",
+        ...(worker.failure ? { failure: worker.failure } : {}),
+        ...(worker.repair ? { repair: worker.repair } : {}),
+      });
+      let label = "Worker crashed";
+      if (copy.kind === "paused") label = "Automatic repair paused";
+      else if (copy.kind === "exhausted") {
+        label = copy.title.replace(/^This project's /, "").replace(/^./, (letter) => letter.toUpperCase());
+      }
       return {
-        label: worker.repair?.state === "paused" ? "Automatic repair paused" : "Agent couldn’t start",
+        label,
         tone: "danger",
         canRetry: true,
         canStartSafe: worker.mode !== "safe",
         canTryNormal: worker.mode === "safe",
         ...detail,
       };
+    }
     case "retired":
       return { label: "Worker asleep", tone: "muted", canRetry: true, canStartSafe: false, canTryNormal: false, ...detail };
     default:

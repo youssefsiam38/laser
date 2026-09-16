@@ -512,6 +512,8 @@ export type Action =
   /** The composer took `view.editorText`; it must not be applied twice. */
   | { type: "editorTextTaken"; path: string }
   | { type: "toast"; level: "info" | "warning" | "error"; text: string }
+  /** `pi/worker/list` on connect: authoritative, so a reopened UI keeps recovery controls. */
+  | { type: "workers"; workers: WorkerInfo[] }
   | { type: "notification"; method: HostNotificationMethod; params: HostNotifications[HostNotificationMethod] }
   | { type: "dismissToast"; id: number }
   // --- agents ---
@@ -556,6 +558,11 @@ export function reduce(state: AppState, action: Action): AppState {
       return { ...state, connection: action.state };
     case "versionMismatch":
       return { ...state, versionMismatch: action.version };
+    case "workers":
+      return {
+        ...state,
+        workers: Object.fromEntries(action.workers.map((worker) => [worker.cwd, structuredClone(worker)])),
+      };
     case "environment": {
       const { environmentError: _cleared, ...rest } = state;
       return { ...rest, environment: action.environment };

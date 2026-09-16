@@ -117,6 +117,7 @@ function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string
     openSessions: (cwd: string) => open[cwd] ?? [],
     cwdOfSession: (path: string) => bound.get(path),
     bindSession: (path: string, cwd: string) => bound.set(path, cwd),
+    recoverOpenedSession: async () => undefined,
     get: async (cwd: string) => ({
       request: async (method: string, params: unknown) => {
         workerRequests.push({ cwd, method, params });

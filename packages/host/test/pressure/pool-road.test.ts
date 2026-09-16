@@ -13,6 +13,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WorkerPool } from "../../src/worker-pool.js";
+import { RuntimeRepairLedger } from "../../src/runtime-repair.js";
 import { WorkerClient } from "../../src/worker-client.js";
 
 /** A worker that reports once, stamped with the generation its argv carries. */
@@ -57,6 +58,7 @@ socket.on("end", () => process.exit(0));
 let dir: string;
 let project: string;
 let pool: WorkerPool | undefined;
+const repair = () => new RuntimeRepairLedger(join(dir, "runtime-repair.json"), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-pressure-road-`));
@@ -77,6 +79,7 @@ describe("a worker's pressure report at the pool", () => {
     const pressure: Array<{ cwd: string; source: { generation: string; workerGeneration: number | undefined } }> = [];
     pool = new WorkerPool({
       workerMain: join(dir, "fake-worker.mjs"),
+      repair: repair(),
       sweepMs: 0,
       onNotification: (_cwd, notification) => general.push(notification),
       onWorkerPressure: (cwd, _notification, source) => pressure.push({ cwd, source }),
@@ -99,6 +102,7 @@ describe("a worker's pressure report at the pool", () => {
     const pressure: Array<{ generation: string }> = [];
     pool = new WorkerPool({
       workerMain: join(dir, "fake-worker.mjs"),
+      repair: repair(),
       sweepMs: 0,
       onNotification: () => undefined,
       onWorkerPressure: (_cwd, _notification, source) => pressure.push({ generation: source.generation }),
@@ -127,6 +131,7 @@ describe("a worker's pressure report at the pool", () => {
   it("counts only the workers a report can answer for", async () => {
     pool = new WorkerPool({
       workerMain: join(dir, "fake-worker.mjs"),
+      repair: repair(),
       workerOldSpaceMiB: 1792,
       sweepMs: 0,
       onNotification: () => undefined,

@@ -5,7 +5,6 @@ import { PRODUCT_DISPLAY_NAME, type FeatureScope, type FeatureState } from "@las
 import { Bot, Check, CircleDot, Globe, Plug, RotateCw, Target } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
-import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
 import { CapabilityNotice } from "@/components/capability-gate";
 import { Badge } from "@/components/ui/badge";
@@ -13,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Toggle } from "@/components/ui/toggle";
 import { cn } from "@/lib/utils";
+import { WorkerRecoveryNotice } from "@/components/worker-recovery-notice";
 import { useLaserStable, useLaserState } from "@/runtime";
 
 export function FeaturesScreen({ cwd, onManageServers, decision }: { cwd?: string; onManageServers?: () => void; decision?: CapabilityDecision | undefined }) {
@@ -82,33 +82,10 @@ export function FeaturesScreen({ cwd, onManageServers, decision }: { cwd?: strin
 
         {!writable && readOnlyExplanation ? <CapabilityNotice explanation={readOnlyExplanation} /> : null}
 
-        {cwd && worker?.status === "crashed" && (
-          <div className="flex flex-wrap items-end gap-2">
-            <ErrorState
-              className="min-w-0 flex-1"
-              title={worker.repair?.state === "paused"
-                ? "Automatic repair is paused because its recovery record could not be read."
-                : "This project’s agent couldn’t start."}
-              detail={worker.repair?.state === "paused"
-                ? "Your sessions and settings are unchanged."
-                : "Your Feature choices and conversations are unchanged."}
-              onRetry={() => void actions.restartWorker(cwd)}
-              retryLabel="Try again"
-            />
-            {worker.mode !== "safe" && (
-              <Button variant="outline" onClick={() => void actions.restartWorker(cwd, "safe")}>Start in safe mode</Button>
-            )}
-            {worker.mode === "safe" && (
-              <Button variant="outline" onClick={() => void actions.restartWorker(cwd, "normal")}>Try normal mode</Button>
-            )}
-          </div>
-        )}
-        {cwd && worker?.status === "ready" && worker.mode === "safe" && (
-          <ErrorState
-            title="Safe mode is on."
-            detail="Optional Features are off for this project. Your Feature choices were not changed."
-            onRetry={() => void actions.restartWorker(cwd, "normal")}
-            retryLabel="Try normal mode"
+        {cwd && (
+          <WorkerRecoveryNotice
+            worker={worker}
+            onRestart={(mode) => void actions.restartWorker(cwd, mode)}
           />
         )}
 

@@ -78,4 +78,35 @@ describe.skipIf(!existsSync(MAIN))("worker process over fd 3", () => {
     expect(code).toBe(0);
     expect(stdout).not.toContain('"jsonrpc"');
   }, 60_000);
+
+  it("drains a structured initialization failure before exiting", async () => {
+    child = spawn(
+      process.execPath,
+      [
+        MAIN,
+        "--cwd", join(base, "project"),
+        "--launch-id", "00112233445566778899aabbccddeeff",
+        "--worker-mode", "normal",
+        "--agent-dir", join(base, "agent"),
+        "--session-dir", join(base, "sessions"),
+        "--project-trusted", "invalid",
+      ],
+      { stdio: ["ignore", "pipe", "pipe", "pipe"] },
+    );
+    const pipe = child.stdio[3] as Duplex;
+    const inbound: JsonRpcMessage[] = [];
+    const decoder = new LineDecoder();
+    pipe.on("data", (chunk: Buffer) => {
+      for (const line of decoder.push(chunk)) inbound.push(JSON.parse(line) as JsonRpcMessage);
+    });
+    const code = await new Promise<number | null>((resolve) => child!.once("exit", resolve));
+    expect(code).toBe(1);
+    expect(inbound).toContainEqual(expect.objectContaining({
+      method: "pi/worker/status",
+      params: expect.objectContaining({
+        status: "crashed",
+        failure: expect.objectContaining({ stage: "initialize", category: "initialization_error" }),
+      }),
+    }));
+  }, 60_000);
 });

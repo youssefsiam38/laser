@@ -88,6 +88,7 @@ import {
   mainTab,
   sessionOpenPhase,
   sameSessionOpenPhase,
+  visibleSessionPath,
   rememberedCodeOf,
   type MainDestination,
   type MainTab,
@@ -720,6 +721,17 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     client.connect();
     return () => client.close();
   }, [client]);
+  useEffect(() => {
+    if (state.connection !== "open") return;
+    let active = true;
+    void client.request("pi/worker/list", {}).then(
+      ({ workers }) => {
+        if (active && readState().connection === "open") dispatch({ type: "workers", workers });
+      },
+      () => undefined,
+    );
+    return () => { active = false; };
+  }, [client, state.connection]);
 
   // The theme is host-owned (M11-T6): it arrives on connect and any device's
   // change reaches the others, so a phone opens wearing what the desktop wears.
@@ -1778,7 +1790,10 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         }).then(() => undefined),
       restartWorker: (cwd, mode) =>
         guard(async () => {
-          await client.request("pi/worker/restart", { cwd, ...(mode ? { mode } : {}) });
+          const { worker } = await client.request("pi/worker/restart", { cwd, ...(mode ? { mode } : {}) });
+          dispatch({ type: "notification", method: "pi/worker/status", params: worker });
+          const visible = visibleSessionPath(readState());
+          if (visible && readState().sessionLoads[visible]?.phase === "failed") await destination.openSession(visible);
         }).then(() => undefined),
       markSeen,
       dismissToast: (id) => dispatch({ type: "dismissToast", id }),
@@ -2552,10 +2567,14 @@ export interface SessionMeta {
 
 export function useSessionMeta(): SessionMeta {
   const path = useLaserState((s) => s.current);
+  const visiblePath = useLaserState(visibleSessionPath);
   const session = useLaserState((s) => s.current ? s.open[s.current]?.state : undefined);
   const running = useLaserState((s) => s.current ? s.open[s.current]?.running ?? false : false);
   const connection = useLaserState((s) => s.connection);
-  const worker = useLaserState((s) => session ? s.workers[session.cwd] : undefined);
+  const worker = useLaserState((s) => {
+    const cwd = visiblePath ? s.open[visiblePath]?.state.cwd ?? s.sessions.find((summary) => summary.path === visiblePath)?.cwd : undefined;
+    return cwd ? s.workers[cwd] : undefined;
+  });
   return useMemo(
     () => ({
       path: session ? path : undefined,

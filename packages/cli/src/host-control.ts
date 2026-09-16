@@ -133,7 +133,11 @@ export interface StartResult {
  * a host that dies on startup (port taken, bad agent dir, broken build) must
  * produce the log tail, not a hang.
  */
-export async function startHost(paths: LaserPaths, timeoutMs = 30_000): Promise<StartResult> {
+export async function startHost(
+  paths: LaserPaths,
+  timeoutMs = 30_000,
+  dependencies: { spawnProcess?: typeof spawn } = {},
+): Promise<StartResult> {
   const existing = await inspectHost(paths);
   if (existing.state === "running") {
     await refreshHostEnvironment(existing.record);
@@ -155,7 +159,7 @@ export async function startHost(paths: LaserPaths, timeoutMs = 30_000): Promise<
   const argv = hostDaemonArgv(paths);
   mkdirSync(paths.stateDir, { recursive: true });
   const logFd = openSync(paths.logFile, "a");
-  const child = spawn(process.execPath, argv, {
+  const child = (dependencies.spawnProcess ?? spawn)(process.execPath, argv, {
     detached: true,
     stdio: ["ignore", logFd, logFd],
     env: { ...nodeLaunchEnvironment(process.env), [ENV.hostLaunchId]: launchId },

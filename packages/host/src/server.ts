@@ -1,7 +1,7 @@
 /**
  * HostServer (M1-T1, M2) — HTTP + WebSocket on 127.0.0.1.
  *   GET /           → the UI bundle (SPA fallback), or a placeholder if not built
- *   GET /healthz    → ok
+ *   GET /healthz    → { status: "ok", launchId }
  *   WS  /ws         → JSON-RPC: client requests in, responses + worker notifications out
  *
  * This is where the host's pieces are wired together:
@@ -523,7 +523,7 @@ export class HostServer {
       onChange: (entry) => this.notify("pi/prefs/updated", entry),
     });
     this.features = new FeatureService(this.prefs);
-    this.repair = new RuntimeRepairLedger(join(stateDir, "runtime-repair.json"));
+    this.repair = new RuntimeRepairLedger(join(stateDir, "runtime-repair.json"), this.launchId);
 
     // The definitions live here; every worker gets a copy when it starts
     // (`prime`, below) and again whenever they change. Clients hear the same

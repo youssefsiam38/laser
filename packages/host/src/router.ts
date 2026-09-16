@@ -1508,10 +1508,7 @@ export class Router {
    */
   private async bindOpenedSession(path: string, cwd: string): Promise<void> {
     this.pool.bindSession(path, cwd);
-    const recover = (this.pool as WorkerPool & {
-      recoverOpenedSession?: (path: string, cwd: string) => Promise<void>;
-    }).recoverOpenedSession;
-    if (recover) await recover.call(this.pool, path, cwd);
+    await this.pool.recoverOpenedSession(path, cwd);
   }
 
   private async workerFor(path: string, ensureOpen = true) {

@@ -62,6 +62,7 @@ function harness(options: { path: string; open?: string[]; liveResult?: unknown 
     ownerOfSession: (path: string) => (path === options.path ? owner : undefined),
     cwdOfSession: () => undefined,
     bindSession: () => {},
+    recoverOpenedSession: async () => undefined,
     get: spawned,
   } as unknown as WorkerPool;
   const index = new SessionIndexCache();

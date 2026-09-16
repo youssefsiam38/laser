@@ -33,6 +33,7 @@ function harness(reply?: unknown) {
     openSessions: () => [],
     cwdOfSession: () => undefined,
     bindSession: () => {},
+    recoverOpenedSession: async () => undefined,
     get: async (cwd: string) => ({
       request: async (method: string, params: unknown) => {
         requests.push({ cwd, method, params });

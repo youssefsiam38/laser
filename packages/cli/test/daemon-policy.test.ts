@@ -12,7 +12,7 @@
  * (see `docs/environment-policy.md` §3).
  */
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ENV, PRODUCT_NAME } from "@lasercode/protocol";
@@ -44,8 +44,9 @@ describe("the daemon and an unusable policy", () => {
       await expect(runDaemon({ paths: paths(base), log: (line) => lines.push(line) })).rejects.toThrow(
         /cannot be used/,
       );
-      // Nothing was recorded as running, so nothing can adopt it.
+      // Construction failed before this launch could publish even `starting`.
       expect(lines.some((line) => line.includes("host ready"))).toBe(false);
+      expect(existsSync(paths(base).hostFile)).toBe(false);
     } finally {
       if (previousLaunchId === undefined) delete process.env[ENV.hostLaunchId];
       else process.env[ENV.hostLaunchId] = previousLaunchId;

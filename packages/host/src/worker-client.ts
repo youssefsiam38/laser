@@ -81,7 +81,16 @@ export interface WorkerClientOptions {
   onStderr?: (text: string) => void;
 }
 
-export type WorkerExitKind = RuntimeFailureCategory;
+export type WorkerExitKind = Extract<
+  RuntimeFailureCategory,
+  | "spawn_error"
+  | "launch_identity_missing"
+  | "launch_identity_mismatch"
+  | "initialization_error"
+  | "process_exit"
+  | "heap_oom"
+  | "transport_fault"
+>;
 export interface WorkerExit {
   kind: WorkerExitKind;
   code: number | null;
@@ -91,6 +100,36 @@ export interface WorkerExit {
 
 const OOM_MARKER = /Reached heap limit|JavaScript heap out of memory|Allocation failed/i;
 const STDERR_MARKER_WINDOW = 4096;
+const EXIT_FAILURE: Record<WorkerExitKind, { stage: RuntimeFailure["stage"]; message: string }> = {
+  spawn_error: {
+    stage: "spawn",
+    message: "This project's runtime could not start. Check the app installation, then try again.",
+  },
+  launch_identity_missing: {
+    stage: "announce",
+    message: "The app could not verify the project runtime it started. Try again; if this continues, update or reinstall the app.",
+  },
+  launch_identity_mismatch: {
+    stage: "announce",
+    message: "The app could not verify the project runtime it started. Try again; if this continues, update or reinstall the app.",
+  },
+  initialization_error: {
+    stage: "initialize",
+    message: "This project's runtime did not start. Try again; if this continues, update or reinstall the app.",
+  },
+  process_exit: {
+    stage: "runtime",
+    message: "This project's runtime stopped before the work finished.",
+  },
+  heap_oom: {
+    stage: "runtime",
+    message: "This project's agent ran out of memory.",
+  },
+  transport_fault: {
+    stage: "runtime",
+    message: "The project runtime sent an invalid message and was stopped. Try again.",
+  },
+};
 
 /** Marker plus abnormal termination: neither a SIGABRT nor a stray log line is enough alone. */
 export function classifyWorkerExit(
@@ -298,8 +337,10 @@ export class WorkerClient {
               resolveReady();
             } else if (params.status === "crashed" && !this.becameReady) {
               const parsed = runtimeFailureSchema.safeParse(params.failure);
-              const failure = parsed.success ? parsed.data : this.failureFor("initialization_error");
-              this.faultLaunch(failure.category, failure);
+              const failure = parsed.success && parsed.data.category === "initialization_error"
+                ? parsed.data
+                : this.failureFor("initialization_error");
+              this.faultLaunch("initialization_error", failure);
               continue;
             }
           }
@@ -359,23 +400,12 @@ export class WorkerClient {
   }
 
   private failureFor(kind: WorkerExitKind): RuntimeFailure {
-    const stage = kind === "spawn_error" ? "spawn" : kind.startsWith("launch_identity_") ? "announce" : kind === "initialization_error" ? "initialize" : "runtime";
-    const message = kind === "heap_oom"
-      ? "This project's agent ran out of memory."
-      : kind === "spawn_error"
-        ? "This project's runtime could not start. Check the app installation, then try again."
-        : kind === "launch_identity_missing" || kind === "launch_identity_mismatch"
-          ? "The app could not verify the project runtime it started. Try again; if this continues, update or reinstall the app."
-          : kind === "transport_fault"
-            ? "The project runtime sent an invalid message and was stopped. Try again."
-            : kind === "initialization_error"
-              ? "This project's runtime did not start. Try again; if this continues, update or reinstall the app."
-              : "This project's runtime stopped before the work finished.";
+    const copy = EXIT_FAILURE[kind];
     return {
       owner: { kind: "worker", launchId: this.launchId, cwd: this.options.cwd },
-      stage,
+      stage: copy.stage,
       category: kind,
-      message,
+      message: copy.message,
     };
   }
 

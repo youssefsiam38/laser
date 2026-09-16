@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync, fsyncSync, closeSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { RUNTIME_FAILURE_CATEGORIES, type RuntimeFailure, type WorkerMode } from "@lasercode/protocol";
+import { RUNTIME_FAILURE_CATEGORIES, launchIdSchema, type RuntimeFailure, type WorkerMode } from "@lasercode/protocol";
 
-const VERSION = 1;
+const VERSION = 2;
 const MAX_INCIDENTS = 64;
 const MAX_MODES = 64;
 const RETENTION_MS = 30 * 86_400_000;
@@ -14,13 +14,15 @@ interface RepairIncident {
   cwdDigest: string;
   owner: RuntimeFailure["owner"]["kind"];
   category: RuntimeFailure["category"];
-  generation: string;
+  mode: WorkerMode;
+  /** Automatic allowance is scoped to one host process and renews after host replacement. */
+  hostLaunchId: string;
   firstAt: string;
   lastAt: string;
   automaticAttempts: number;
   action: "observed" | "automatic_retry" | "try_again" | "safe_mode" | "normal_mode";
   outcome: "unresolved" | "healthy";
-  launchId?: string;
+  workerLaunchId?: string;
 }
 
 interface ProjectMode {
@@ -48,7 +50,12 @@ export class RuntimeRepairLedger {
   private state = EMPTY();
   private corrupted = false;
 
-  constructor(private readonly path: string, private readonly now: () => Date = () => new Date()) {
+  constructor(
+    private readonly path: string,
+    private readonly hostLaunchId: string,
+    private readonly now: () => Date = () => new Date(),
+  ) {
+    if (!launchIdSchema.safeParse(hostLaunchId).success) throw new Error("runtime repair requires a valid host launch identity");
     this.load();
   }
 
@@ -61,17 +68,26 @@ export class RuntimeRepairLedger {
     return this.state.modes.find((row) => row.cwdDigest === digest)?.mode ?? "normal";
   }
 
-  status(cwd: string, mode: WorkerMode): { state: "available" | "exhausted" | "paused"; automaticAttempts: number } {
+  status(
+    cwd: string,
+    mode: WorkerMode,
+    failure?: RuntimeFailure,
+  ): { state: "available" | "exhausted" | "paused"; automaticAttempts: number } {
     if (this.corrupted) return { state: "paused", automaticAttempts: 0 };
     const digest = cwdDigest(cwd);
+    const fingerprint = failure === undefined ? undefined : this.fingerprint(digest, mode, failure);
     const attempts = this.state.incidents
-      .filter((row) => row.cwdDigest === digest && row.generation === mode && row.outcome === "unresolved")
+      .filter((row) => row.cwdDigest === digest
+        && row.mode === mode
+        && row.hostLaunchId === this.hostLaunchId
+        && row.outcome === "unresolved"
+        && (fingerprint === undefined || row.fingerprint === fingerprint))
       .reduce((maximum, row) => Math.max(maximum, row.automaticAttempts), 0);
     return { state: attempts >= AUTOMATIC_RETRY_LIMIT ? "exhausted" : "available", automaticAttempts: attempts };
   }
 
-  /** Person-authorized actions replace a corrupt ledger and never rewrite prefs. */
-  authorize(cwd: string, mode: WorkerMode): void {
+  /** Person-authorized actions replace corruption, reset this incident and never rewrite prefs. */
+  authorize(cwd: string, mode: WorkerMode, failure?: RuntimeFailure): void {
     if (this.corrupted) {
       this.state = EMPTY();
       this.corrupted = false;
@@ -79,13 +95,16 @@ export class RuntimeRepairLedger {
     const digest = cwdDigest(cwd);
     const at = this.now().toISOString();
     const existing = this.state.modes.find((row) => row.cwdDigest === digest);
+    const previousMode = existing?.mode;
     if (existing) Object.assign(existing, { mode, updatedAt: at });
     else this.state.modes.push({ cwdDigest: digest, mode, updatedAt: at });
     this.state.modes.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     this.state.modes = this.state.modes.slice(0, MAX_MODES);
-    for (const incident of this.state.incidents) {
-      if (incident.cwdDigest !== digest || incident.outcome !== "unresolved") continue;
-      incident.action = mode === "safe" ? "safe_mode" : incident.action === "safe_mode" ? "normal_mode" : "try_again";
+
+    if (failure) {
+      const incident = this.incident(cwd, mode, failure);
+      incident.automaticAttempts = 0;
+      incident.action = mode === "safe" ? "safe_mode" : previousMode === "safe" ? "normal_mode" : "try_again";
       incident.lastAt = at;
     }
     this.persist();
@@ -117,7 +136,7 @@ export class RuntimeRepairLedger {
     const at = this.now().toISOString();
     let changed = false;
     for (const incident of this.state.incidents) {
-      if (incident.cwdDigest !== digest || incident.outcome === "healthy") continue;
+      if (incident.cwdDigest !== digest || incident.hostLaunchId !== this.hostLaunchId || incident.outcome === "healthy") continue;
       incident.outcome = "healthy";
       incident.lastAt = at;
       changed = true;
@@ -125,38 +144,43 @@ export class RuntimeRepairLedger {
     if (changed) this.persist();
   }
 
-  /** Test/diagnostic projection; contains digests only. */
+  /** Test/diagnostic projection; contains digests and launch identities only. */
   snapshot(): Readonly<RepairState> {
     return structuredClone(this.state);
+  }
+
+  private fingerprint(digest: string, mode: WorkerMode, failure: RuntimeFailure): string {
+    return createHash("sha256")
+      .update(`${failure.owner.kind}\0${digest}\0${mode}\0${failure.category}\0${this.hostLaunchId}`)
+      .digest("hex");
   }
 
   private incident(cwd: string, mode: WorkerMode, failure: RuntimeFailure): RepairIncident {
     this.prune();
     const digest = cwdDigest(cwd);
-    const generation = mode;
-    const fingerprint = createHash("sha256")
-      .update(`${failure.owner.kind}\0${digest}\0${generation}\0${failure.category}`)
-      .digest("hex");
+    const fingerprint = this.fingerprint(digest, mode, failure);
     const at = this.now().toISOString();
     let incident = this.state.incidents.find((row) => row.fingerprint === fingerprint && row.outcome === "unresolved");
+    const workerLaunchId = failure.owner.kind === "worker" ? failure.owner.launchId : undefined;
     if (!incident) {
       incident = {
         fingerprint,
         cwdDigest: digest,
         owner: failure.owner.kind,
         category: failure.category,
-        generation,
+        mode,
+        hostLaunchId: this.hostLaunchId,
         firstAt: at,
         lastAt: at,
         automaticAttempts: 0,
         action: "observed",
         outcome: "unresolved",
-        ...((failure.owner.kind === "host" || failure.owner.kind === "worker") ? { launchId: failure.owner.launchId } : {}),
+        ...(workerLaunchId ? { workerLaunchId } : {}),
       };
       this.state.incidents.push(incident);
     } else {
       incident.lastAt = at;
-      if (failure.owner.kind === "host" || failure.owner.kind === "worker") incident.launchId = failure.owner.launchId;
+      if (workerLaunchId) incident.workerLaunchId = workerLaunchId;
     }
     this.state.incidents.sort((a, b) => b.lastAt.localeCompare(a.lastAt));
     this.state.incidents = this.state.incidents.slice(0, MAX_INCIDENTS);
@@ -228,14 +252,15 @@ function validIncident(row: unknown): row is RepairIncident {
     && ["host", "worker", "module"].includes(incident.owner ?? "")
     && typeof incident.category === "string"
     && (RUNTIME_FAILURE_CATEGORIES as readonly string[]).includes(incident.category)
-    && (incident.generation === "normal" || incident.generation === "safe")
+    && (incident.mode === "normal" || incident.mode === "safe")
+    && launchIdSchema.safeParse(incident.hostLaunchId).success
     && validDate(incident.firstAt)
     && validDate(incident.lastAt)
     && Number.isInteger(incident.automaticAttempts)
     && (incident.automaticAttempts ?? -1) >= 0
     && ["observed", "automatic_retry", "try_again", "safe_mode", "normal_mode"].includes(incident.action ?? "")
     && (incident.outcome === "unresolved" || incident.outcome === "healthy")
-    && (incident.launchId === undefined || /^[0-9a-f]{32}$/.test(incident.launchId)));
+    && (incident.workerLaunchId === undefined || launchIdSchema.safeParse(incident.workerLaunchId).success));
 }
 
 function validDate(value: unknown): value is string {

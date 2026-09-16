@@ -144,11 +144,12 @@ export function TopBar() {
   });
   const status = sessionStatus(view, summary);
   const stateLabel = sessionStateLabel(view, meta.worker);
-  const chip = workerChip(meta.worker);
   // One rule for what a session is called, everywhere (runtime/threadList.ts).
   const open = useLaserState(s => sessionOpenPhase(s, s.current), sameSessionOpenPhase);
   const pendingPath = pendingSessionPath(destination);
   const pendingSummary = pendingPath ? sessions.find(session => session.path === pendingPath) : undefined;
+  const workerCwd = meta.session?.cwd ?? pendingSummary?.cwd;
+  const chip = workerChip(meta.worker);
   const title = pendingSummary ? sessionTitle(pendingSummary)
     : open.phase === "opening" || open.phase === "preparing" ? (open.path ? "Opening conversation" : "Preparing workspace")
     : open.phase === "failed" ? (open.path ? "Conversation unavailable" : "View unavailable")
@@ -245,7 +246,7 @@ export function TopBar() {
             composer (D-20 §5), where a phone and a desktop both find it in the
             same place. Here it is only the dot's accessible name. */}
 
-        {chip && meta.session && (
+        {chip && workerCwd && (
           <span className="flex shrink-0 items-center gap-1">
             <Tooltip>
               <TooltipTrigger asChild>
@@ -264,20 +265,21 @@ export function TopBar() {
               <Button
                 size="xs"
                 variant="outline"
-                onClick={() => void actions.restartWorker(meta.session!.cwd)}
-                title={`Start the agent for ${meta.session.cwd} again`}
+                className="hidden @xl/topbar:inline-flex"
+                onClick={() => void actions.restartWorker(workerCwd)}
+                title={`Start the agent for ${workerCwd} again`}
               >
                 <RotateCw />
                 Try again
               </Button>
             )}
             {chip.canStartSafe && (
-              <Button size="xs" variant="outline" onClick={() => void actions.restartWorker(meta.session!.cwd, "safe")}>
+              <Button size="xs" variant="outline" className="hidden @xl/topbar:inline-flex" onClick={() => void actions.restartWorker(workerCwd, "safe")}>
                 Start in safe mode
               </Button>
             )}
             {chip.canTryNormal && (
-              <Button size="xs" variant="outline" onClick={() => void actions.restartWorker(meta.session!.cwd, "normal")}>
+              <Button size="xs" variant="outline" onClick={() => void actions.restartWorker(workerCwd, "normal")}>
                 Try normal mode
               </Button>
             )}
@@ -286,7 +288,7 @@ export function TopBar() {
 
       </div>
 
-      <div className="flex shrink-0 items-center gap-0.5">
+      <div className={cn("shrink-0 items-center gap-0.5", chip ? "hidden @xl/topbar:flex" : "flex")}>
         <SessionIdentity agentName={persistedAgent?.agentName} model={meta.model} />
 
         {/* The context ring (docs/ux-elements.md "Context display"); the

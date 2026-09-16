@@ -262,6 +262,7 @@ describe("routing a revision request", () => {
       ownerOfSession: (path: string) => (path === options.path ? owner : undefined),
       cwdOfSession: () => undefined,
       bindSession: () => {},
+      recoverOpenedSession: async () => undefined,
       get: spawned,
     } as unknown as WorkerPool;
 

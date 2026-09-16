@@ -19,6 +19,8 @@ export interface HostRecord {
   state: "starting" | "ready";
   /** Exact launcher-minted identity echoed by this process's health response. */
   launchId: string;
+  /** A pre-launch-identity record, accepted only with process and health proof. */
+  legacy?: true;
   host: string;
   port: number;
   url: string;
@@ -58,10 +60,12 @@ export function readHostFile(path: string): HostRecord | undefined {
     if (typeof parsed.pid !== "number" || typeof parsed.port !== "number" || typeof parsed.host !== "string") {
       return undefined;
     }
+    const legacy = parsed.state === undefined && parsed.launchId === undefined;
     return {
       pid: parsed.pid,
-      state: parsed.state === "ready" ? "ready" : "starting",
+      state: legacy || parsed.state === "ready" ? "ready" : "starting",
       launchId: typeof parsed.launchId === "string" ? parsed.launchId : "",
+      ...(legacy ? { legacy: true as const } : {}),
       host: parsed.host,
       port: parsed.port,
       url: parsed.url ?? `http://${parsed.host}:${parsed.port}`,
@@ -147,15 +151,20 @@ export function isRecordedProcess(record: HostRecord): boolean | undefined {
   return current === record.identity;
 }
 
-/** `GET /healthz`; returns the valid identity the answering process proved. */
-export async function probeHealthLaunch(url: string, timeoutMs = 1500): Promise<string | undefined> {
+type HealthIdentity = string | "legacy";
+
+async function probeHealthIdentity(url: string, timeoutMs: number): Promise<HealthIdentity | undefined> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(`${url}/healthz`, { signal: controller.signal });
     if (!response.ok) return undefined;
-    const body = await response.json() as { status?: unknown; launchId?: unknown };
-    return body.status === "ok" && launchIdSchema.safeParse(body.launchId).success ? body.launchId as string : undefined;
+    const text = await response.text();
+    if (text.trim() === "ok") return "legacy";
+    const body = JSON.parse(text) as { status?: unknown; launchId?: unknown };
+    if (body.status !== "ok") return undefined;
+    if (body.launchId === undefined) return "legacy";
+    return launchIdSchema.safeParse(body.launchId).success ? body.launchId as string : undefined;
   } catch {
     return undefined;
   } finally {
@@ -163,10 +172,16 @@ export async function probeHealthLaunch(url: string, timeoutMs = 1500): Promise<
   }
 }
 
-/** Only a valid exact launch identity proves readiness. */
+/** `GET /healthz`; returns the valid identity the answering modern process proved. */
+export async function probeHealthLaunch(url: string, timeoutMs = 1500): Promise<string | undefined> {
+  const identity = await probeHealthIdentity(url, timeoutMs);
+  return identity === "legacy" ? undefined : identity;
+}
+
+/** Exact identity for modern hosts; process + health proof for a legacy host when no id is expected. */
 export async function probeHealth(url: string, timeoutMs = 1500, expectedLaunchId?: string): Promise<boolean> {
-  const launchId = await probeHealthLaunch(url, timeoutMs);
-  return launchId !== undefined && (expectedLaunchId === undefined || launchId === expectedLaunchId);
+  const identity = await probeHealthIdentity(url, timeoutMs);
+  return expectedLaunchId === undefined ? identity !== undefined : identity === expectedLaunchId;
 }
 
 /** True when something accepts a TCP connection on the port. */
@@ -196,6 +211,14 @@ export async function inspectHost(paths: Pick<LaserPaths, "hostFile">, timeoutMs
     // the host (a reboot, an OOM kill, a power cut). Drop it.
     clearHostFile(paths.hostFile);
     return { state: "stopped", removedStaleRecord: true };
+  }
+  if (record.legacy) {
+    if (await probeHealthIdentity(record.url, timeoutMs) === "legacy") return { state: "running", record };
+    return {
+      state: "unreachable",
+      record,
+      reason: `legacy process ${record.pid} is alive but ${record.url}/healthz did not answer within ${timeoutMs} ms`,
+    };
   }
   if (record.state !== "ready" || !launchIdSchema.safeParse(record.launchId).success) {
     return {

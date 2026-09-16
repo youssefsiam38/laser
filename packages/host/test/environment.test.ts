@@ -8,6 +8,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { HostServer } from "../src/server.js";
 import { WorkerPool } from "../src/worker-pool.js";
+import { RuntimeRepairLedger } from "../src/runtime-repair.js";
 
 class Client {
   private id = 0;
@@ -97,7 +98,14 @@ it("updates a real live worker and the base of a later worker without restarting
 }, 90_000);
 
 it("queues an update to an already spawned worker before it reports ready", async () => {
-  const pool = new WorkerPool({ agentDir: join(root, "agent"), sessionDir: join(root, "early-sessions"), stateDir: join(root, "early-state"), idleMs: 0, onNotification: () => {} });
+  const pool = new WorkerPool({
+    agentDir: join(root, "agent"),
+    sessionDir: join(root, "early-sessions"),
+    stateDir: join(root, "early-state"),
+    repair: new RuntimeRepairLedger(join(root, "early-state", "runtime-repair.json"), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+    idleMs: 0,
+    onNotification: () => {},
+  });
   const cwd = join(root, "one");
   try {
     const starting = pool.get(cwd);

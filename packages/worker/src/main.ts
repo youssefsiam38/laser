@@ -48,7 +48,7 @@ const SHUTDOWN_DRAIN_MS = 5_000;
  * else in this process waits for the capture.
  */
 const DRAIN_WAIT_MS = 10;
-let reportStartupFailure: (() => void) | undefined;
+let reportStartupFailure: (() => Promise<void>) | undefined;
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -175,22 +175,25 @@ async function main(): Promise<void> {
     transport.write(line);
   };
   send({ jsonrpc: "2.0", method: "pi/worker/status", params: { cwd, status: "starting", launchId, mode } });
-  reportStartupFailure = () => send({
-    jsonrpc: "2.0",
-    method: "pi/worker/status",
-    params: {
-      cwd,
-      status: "crashed",
-      launchId,
-      mode,
-      failure: {
-        owner: { kind: "worker", launchId, cwd },
-        stage: "initialize",
-        category: "initialization_error",
-        message: "This project's runtime did not start. Try again; if this continues, update or reinstall the app.",
+  reportStartupFailure = async () => {
+    send({
+      jsonrpc: "2.0",
+      method: "pi/worker/status",
+      params: {
+        cwd,
+        status: "crashed",
+        launchId,
+        mode,
+        failure: {
+          owner: { kind: "worker", launchId, cwd },
+          stage: "initialize",
+          category: "initialization_error",
+          message: "This project's runtime did not start. Try again; if this continues, update or reinstall the app.",
+        },
       },
-    },
-  });
+    });
+    await transport.drain();
+  };
 
   // Belt and braces. The desktop shell and `laser doctor` both check the pin
   // before a worker is ever spawned, so in a shipped app this cannot fail —
@@ -236,8 +239,7 @@ async function main(): Promise<void> {
   alignEngineAgentDir(agentDir, sessionDir);
   extendRuntimePath();
   if (projectTrusted !== undefined && projectTrusted !== "yes" && projectTrusted !== "no") {
-    console.error(`${PRODUCT_NAME} worker: --project-trusted must be "yes" or "no", got ${JSON.stringify(projectTrusted)}`);
-    process.exit(2);
+    throw new Error(`${PRODUCT_NAME} worker: --project-trusted must be "yes" or "no", got ${JSON.stringify(projectTrusted)}`);
   }
 
   // The host's bundled package manager, `[command, ...args]` as JSON (M10-T5).
@@ -351,8 +353,8 @@ async function main(): Promise<void> {
   reportStartupFailure = undefined;
 }
 
-main().catch((error) => {
-  reportStartupFailure?.();
+main().catch(async (error) => {
+  await reportStartupFailure?.();
   console.error(`${PRODUCT_NAME} worker failed:`, error);
   process.exit(1);
 });

@@ -10,7 +10,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function worker(mode: "correct" | "ready-first" | "wrong" | "malformed"): { client: WorkerClient; exit: Promise<WorkerExit>; statuses: unknown[] } {
+function worker(mode: "correct" | "ready-first" | "wrong" | "malformed" | "startup-failure"): { client: WorkerClient; exit: Promise<WorkerExit>; statuses: unknown[] } {
   const root = mkdtempSync(join(tmpdir(), "worker-launch-"));
   roots.push(root);
   const main = join(root, "worker.mjs");
@@ -23,6 +23,10 @@ const send = (status, id = launchId) => socket.write(JSON.stringify({ jsonrpc: "
 if (process.env.MODE === "malformed") socket.write("not-json\\n");
 else if (process.env.MODE === "ready-first") send("ready");
 else if (process.env.MODE === "wrong") { send("starting", "fedcba9876543210fedcba9876543210"); send("ready"); }
+else if (process.env.MODE === "startup-failure") {
+  send("starting");
+  socket.write(JSON.stringify({ jsonrpc: "2.0", method: "pi/worker/status", params: { cwd, status: "crashed", launchId, mode: "normal", failure: { owner: { kind: "worker", launchId, cwd }, stage: "initialize", category: "initialization_error", message: "This project's runtime did not start." } } }) + "\\n", () => process.exit(1));
+}
 else { send("starting"); send("ready"); }
 socket.on("end", () => process.exit(0));
 setInterval(() => {}, 1000);
@@ -49,6 +53,15 @@ describe("worker first-frame launch identity", () => {
       expect.objectContaining({ status: "ready", launchId: client.launchId }),
     ]);
     await client.stop();
+  });
+
+  it("delivers a drained structured initialization failure to onExit", async () => {
+    const { client, exit } = worker("startup-failure");
+    await expect(client.ready).rejects.toThrow(/did not start/i);
+    await expect(exit).resolves.toMatchObject({
+      kind: "initialization_error",
+      failure: { stage: "initialize", category: "initialization_error" },
+    });
   });
 
   it.each([

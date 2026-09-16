@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-16T16:47:13+03:00 · orchestrator `01a0a030` · HEAD: 76f475fa
-**Current focus:** M18 closes RP-3 diagnostics on the finished RP-8 stack, finishes RP-13 capability consumption, then runs the RP-2 repeat baseline and the RP-14 gate.
+**Last updated:** 2026-09-16T20:43:56+03:00 · m19-recovery-plan `01a0aa8f` · HEAD: d43b0a57
+**Current focus:** M19-T1 review fixes are complete and awaiting parent verification; M18-T15 containment baseline work remains in progress.
 
 | Milestone | State |
 | --- | --- |
@@ -28,8 +28,8 @@
 | M19 Runtime recovery/update activation | in-progress |
 | MX Cross-cutting | in-progress |
 
-**Blockers:** M18-T15 — full run A stopped at scenario 9 (two attached transcript paths on one connection); fix owner `dormant-attach-leak` in flight, then A/B rerun.
-**Next up:** attachment-leak fix then T15 A/B; M19-T1 (in progress); then T14, M19-T2/T3.
+**Blockers:** none recorded.
+**Next up:** parent verification of M19-T1; M18-T15 baseline completion; after T1 approval, M19-T2 then M19-T3.
 **Recently done:** M18-T19 capability consumption (`76f475fa`); M18-T3 diagnostics closeout; M18-T8 RP-8 complete (`ce455b99`); G1/G2 (`4f15add0`); host admission E3 (`49cc12d9`).
 
 Ownership and evidence: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`.

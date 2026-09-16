@@ -7,8 +7,8 @@
  * in the foreground (`laser up --foreground`) is the same code path without
  * the detach, which is what you want when you are debugging the host.
  *
- * It writes `<state-dir>/host.json` after the port is bound and removes it on
- * the way out, so the file is only ever present while a host is up. The record
+ * It refuses an existing record or busy port, then writes `<state-dir>/host.json`
+ * immediately before binding and removes only its own record on the way out. The record
  * carries an identity for this process (see `processIdentity`) so a file left
  * behind by a crash or a power cut cannot be mistaken for a live host.
  */
@@ -16,7 +16,7 @@ import { ENV, PRODUCT_NAME, launchIdSchema } from "@lasercode/protocol";
 import { fromBase64Url, isAuthorized } from "@lasercode/crypto";
 import { HostServer, migrateFormerIdentities, type HostRelayOptions } from "@lasercode/host";
 import { hostUrl, type LaserPaths } from "./config.js";
-import { clearHostFile, processIdentity, writeHostFile } from "./hostfile.js";
+import { clearHostFile, inspectHost, portInUse, processIdentity, writeHostFile } from "./hostfile.js";
 import { deviceListOf, loadIdentity, loadStaticKey, readRelayConfig } from "./relay-config.js";
 import { CLI_VERSION } from "./version.js";
 
@@ -78,6 +78,12 @@ export async function runDaemon(options: DaemonOptions): Promise<void> {
   const launch = launchIdSchema.safeParse(process.env[ENV.hostLaunchId]);
   if (!launch.success) throw new Error("the host launcher did not provide a valid launch identity");
   const launchId = launch.data;
+  // Refuse a competing launch before it can replace the record that makes the
+  // live host adoptable and stoppable. The port guard closes the no-record race.
+  const existing = await inspectHost(paths);
+  if (existing.state !== "stopped") throw new Error(`${PRODUCT_NAME} host process ${existing.record.pid} is already running`);
+  if (await portInUse(paths.host, paths.port)) throw new Error(`listen EADDRINUSE: address already in use ${paths.host}:${paths.port}`);
+
   const identity = processIdentity(process.pid);
   const startedAt = new Date().toISOString();
   const recordBase = {
@@ -91,12 +97,6 @@ export async function runDaemon(options: DaemonOptions): Promise<void> {
     cliVersion: CLI_VERSION,
     ...(identity !== undefined ? { identity } : {}),
   };
-  writeHostFile(paths.hostFile, {
-    ...recordBase,
-    state: "starting",
-    port: paths.port,
-    url: hostUrl(paths),
-  });
 
   // If this product was renamed, the person's sessions, settings and paired
   // devices are still under the old directory name. Move them before anything
@@ -128,7 +128,22 @@ export async function runDaemon(options: DaemonOptions): Promise<void> {
     log,
   });
 
-  const { url, port } = await server.listen();
+  writeHostFile(paths.hostFile, {
+    ...recordBase,
+    state: "starting",
+    port: paths.port,
+    url: hostUrl(paths),
+  });
+  let listening: { url: string; port: number };
+  try {
+    listening = await server.listen();
+  } catch (error) {
+    // A failed launch may remove only the record it published. A competitor
+    // that won the race keeps its own record intact.
+    clearHostFile(paths.hostFile, launchId);
+    throw error;
+  }
+  const { url, port } = listening;
   // The ready transition is one atomic replacement of this launch's record.
   writeHostFile(paths.hostFile, {
     ...recordBase,

@@ -71,6 +71,58 @@ export interface RuntimeFailure {
   message: string;
 }
 
+export interface RuntimeRecoveryState {
+  status: "starting" | "ready" | "crashed" | "retired";
+  mode: WorkerMode;
+  failure?: RuntimeFailure | undefined;
+  repair?: { state: "available" | "exhausted" | "paused"; automaticAttempts: number } | undefined;
+}
+
+export interface RuntimeRecoveryCopy {
+  title: string;
+  detail: string;
+  kind: "paused" | "launch-failed" | "runtime-stopped" | "exhausted";
+}
+
+/** One person-facing vocabulary for host errors, the recovery notice and the status chip. */
+export function runtimeRecoveryCopy(state: RuntimeRecoveryState): RuntimeRecoveryCopy {
+  if (state.repair?.state === "paused") {
+    return {
+      kind: "paused",
+      title: "Automatic repair is paused",
+      detail: "The recovery record could not be read. Your sessions and settings are unchanged.",
+    };
+  }
+  const launchFailure = state.failure?.stage === "spawn"
+    || state.failure?.stage === "announce"
+    || state.failure?.stage === "initialize";
+  if (state.repair?.state === "exhausted") {
+    return launchFailure
+      ? {
+          kind: "exhausted",
+          title: "This project's agent couldn't start",
+          detail: "Your Feature choices and conversations are unchanged.",
+        }
+      : {
+          kind: "exhausted",
+          title: "This project's agent couldn't recover",
+          detail: "Your conversation is saved. Try again, or start with optional Features off.",
+        };
+  }
+  if (launchFailure) {
+    return {
+      kind: "launch-failed",
+      title: "The project runtime didn't start",
+      detail: "Check the app installation, then try again. Your conversations and Feature choices are unchanged.",
+    };
+  }
+  return {
+    kind: "runtime-stopped",
+    title: state.failure?.category === "heap_oom" ? "This project's agent ran out of memory" : "Worker crashed",
+    detail: "Your conversation is saved. Try again to continue from it.",
+  };
+}
+
 const runtimeFailureOwnerSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("host"), launchId: launchIdSchema }).strict(),
   z.object({ kind: z.literal("worker"), launchId: launchIdSchema, cwd: z.string().min(1) }).strict(),

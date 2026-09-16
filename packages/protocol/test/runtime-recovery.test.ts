@@ -5,6 +5,7 @@ import {
   clientParamsSchemas,
   launchIdSchema,
   runtimeFailureSchema,
+  runtimeRecoveryCopy,
   type RuntimeFailure,
 } from "../src/index.js";
 
@@ -44,6 +45,28 @@ describe("runtime launch and failure contracts", () => {
     for (const sample of samples) expect(runtimeFailureSchema.parse(sample)).toEqual(sample);
     expect(runtimeFailureSchema.safeParse({ ...samples[0], stack: "private" }).success).toBe(false);
     expect(runtimeFailureSchema.safeParse({ ...samples[0], category: "look_at_stderr" }).success).toBe(false);
+  });
+
+  it("uses couldn't-start copy only for an exhausted launch failure", () => {
+    const launchFailure = samples[1]!;
+    expect(runtimeRecoveryCopy({
+      status: "crashed",
+      mode: "normal",
+      failure: launchFailure,
+      repair: { state: "available", automaticAttempts: 0 },
+    })).toMatchObject({ kind: "launch-failed", title: "The project runtime didn't start" });
+    expect(runtimeRecoveryCopy({
+      status: "crashed",
+      mode: "normal",
+      failure: launchFailure,
+      repair: { state: "exhausted", automaticAttempts: 2 },
+    })).toMatchObject({ kind: "exhausted", title: "This project's agent couldn't start" });
+    expect(runtimeRecoveryCopy({
+      status: "crashed",
+      mode: "normal",
+      failure: { ...launchFailure, stage: "runtime", category: "process_exit" },
+      repair: { state: "exhausted", automaticAttempts: 2 },
+    })).toMatchObject({ kind: "exhausted", title: "This project's agent couldn't recover" });
   });
 
   it("keeps safe mode explicit on the existing native work-control method", () => {

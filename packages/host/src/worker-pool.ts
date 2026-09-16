@@ -7,9 +7,9 @@
  *             even up: a slow first Pi load is the most common "is it broken?"
  *             moment, and silence there is the worst answer)
  *   ready     the worker answered on fd 3
- *   crashed   it exited without being asked to. If sessions were open, the pool
- *             restarts it with exponential backoff up to `maxRestarts`, then
- *             stops and waits for `pi/worker/restart`
+ *   crashed   it exited without being asked to. If sessions were open, the
+ *             durable recovery policy grants two 1s/2s retries, then waits for
+ *             an explicit `pi/worker/restart`
  *   retired   it was stopped on purpose: idle, or asked to stop
  *
  * Retirement is deliberately conservative. A worker is only retired when no
@@ -31,13 +31,14 @@
  * running.
  */
 import type { ClientRequests, HostNotifications, JsonRpcNotification, MemoryPressureActionResult, MemoryPressureDirective, MemoryPressureDirectiveResult, SessionPin, SessionUnloadReason, WorkerInfo, WorkerMode, WorkerRetireMode, WorkerStatus } from "@lasercode/protocol";
-import { ErrorCodes, ProtocolError, environmentOverlay } from "@lasercode/protocol";
+import { ErrorCodes, ProtocolError, environmentOverlay, runtimeRecoveryCopy } from "@lasercode/protocol";
 import { canonical } from "./trust.js";
 import { SessionRouteLeases } from "./session-route-lease.js";
 import { retirementRefused, retireWorker, type RetirementOutcome } from "./worker-retirement.js";
 import { HeapCeilingCapacityError, workerOldSpaceMiB } from "./heap-ceiling.js";
 import { WorkerClient, nextWorkerGeneration, type WorkerClientOptions, type WorkerExit } from "./worker-client.js";
 import type { RuntimeRepairLedger } from "./runtime-repair.js";
+import { WorkerRecoveryPolicy } from "./runtime-recovery.js";
 
 export interface WorkerPoolOptions {
   agentDir?: string;
@@ -60,8 +61,8 @@ export interface WorkerPoolOptions {
   env?: Readonly<Record<string, string>>;
   /** Environment resolved at spawn time, so project feature overrides apply. */
   envForCwd?: (cwd: string, mode: WorkerMode) => Readonly<Record<string, string>>;
-  /** Durable repair/safe-mode policy. Omitted only by focused pool tests. */
-  repair?: RuntimeRepairLedger;
+  /** Durable repair/safe-mode policy. Production and tests use the same decisions. */
+  repair: RuntimeRepairLedger;
   /**
    * `source.generation` names the exact worker process the notification came
    * from, so a late message from a process that has been replaced cannot be
@@ -170,16 +171,10 @@ export interface WorkerPoolOptions {
   idleMs?: number;
   /** How often idleness is checked. */
   sweepMs?: number;
-  maxRestarts?: number;
-  /**
-   * Uptime after which a worker counts as healthy again, so its crash counter
-   * resets. Without it a worker that dies every ten seconds restarts forever;
-   * with it, a crash loop hits the cap and stops asking.
-   */
+  /** Uptime after which the durable incident closes. */
   healthyMs?: number;
-  /** First backoff step; doubles per attempt up to `backoffCapMs`. */
+  /** Test seam; production retries after exactly 1 s then 2 s. */
   backoffMs?: number;
-  backoffCapMs?: number;
   now?: () => number;
   /** Injectable for tests, so a backoff does not mean a real wait. */
   setTimer?: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
@@ -241,10 +236,8 @@ interface Entry {
 const DEFAULTS = {
   idleMs: 10 * 60_000,
   sweepMs: 30_000,
-  maxRestarts: 5,
   healthyMs: 60_000,
   backoffMs: 1_000,
-  backoffCapMs: 30_000,
 };
 
 export class WorkerPool {
@@ -255,6 +248,7 @@ export class WorkerPool {
   private readonly sessionActivity = new Map<string, number>();
   private readonly now: () => number;
   private readonly setTimer: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
+  private readonly recovery: WorkerRecoveryPolicy;
   private sweepTimer: ReturnType<typeof setInterval> | undefined;
   private closed = false;
   private preparing = false;
@@ -265,6 +259,7 @@ export class WorkerPool {
     this.leases = options.routeLeases ?? new SessionRouteLeases();
     this.now = options.now ?? Date.now;
     this.setTimer = options.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
+    this.recovery = new WorkerRecoveryPolicy(options.repair, options.backoffMs ?? DEFAULTS.backoffMs);
     const sweepMs = options.sweepMs ?? DEFAULTS.sweepMs;
     if (sweepMs > 0) {
       this.sweepTimer = setInterval(() => this.sweep(), sweepMs);
@@ -545,16 +540,11 @@ export class WorkerPool {
       }
     }
     if (entry.client?.alive) return entry.client;
-    if (entry.repair?.state === "paused") {
+    if (entry.repair?.state === "paused" || entry.repair?.state === "exhausted") {
+      const copy = runtimeRecoveryCopy(entry);
       throw new ProtocolError(
         ErrorCodes.DriverUnavailable,
-        "Automatic repair is paused because its recovery record could not be read. Your sessions and settings are unchanged. Use Try again to replace the damaged record.",
-      );
-    }
-    if (entry.repair?.state === "exhausted") {
-      throw new ProtocolError(
-        ErrorCodes.DriverUnavailable,
-        "This project's agent couldn't start. Your Feature choices and conversations are unchanged. Use Try again or Start in safe mode.",
+        `${copy.title}. ${copy.detail} Use Try again${entry.mode === "safe" ? " or Try normal mode" : " or Start in safe mode"}.`,
       );
     }
 
@@ -717,7 +707,7 @@ export class WorkerPool {
       const outcome = await this.askToRetire(entry, "explicit", "restarting");
       if (!outcome.retired) throw retirementRefused(key, outcome.reason);
     }
-    this.options.repair?.authorize(key, mode);
+    this.recovery.authorize(key, mode, entry.failure);
     entry.mode = mode;
     entry.repair = undefined;
     entry.failure = undefined;
@@ -867,7 +857,7 @@ export class WorkerPool {
   private ensure(cwd: string): Entry {
     const existing = this.entries.get(cwd);
     if (existing) return existing;
-    const mode = this.options.repair?.mode(cwd) ?? "normal";
+    const mode = this.recovery.mode(cwd);
     const entry: Entry = {
       cwd,
       warm: false,
@@ -877,7 +867,7 @@ export class WorkerPool {
       status: "retired",
       message: undefined,
       failure: undefined,
-      repair: this.options.repair?.status(cwd, mode),
+      repair: this.recovery.status(cwd, mode),
       mode,
       since: this.now(),
       lastActivity: this.now(),
@@ -1027,7 +1017,6 @@ export class WorkerPool {
    * the pool's bookkeeping in step with the update stream.
    */
   private onWorkerNotification(entry: Entry, client: WorkerClient, notification: JsonRpcNotification): void {
-    entry.lastActivity = this.now();
     if (notification.method === "pi/resource/pressure") {
       // Taken off the general road immediately (RP-8): nothing observes it,
       // nothing broadcasts it, and no warm worker's report is kept either. A
@@ -1042,6 +1031,10 @@ export class WorkerPool {
       }
       return;
     }
+    // Every remaining frame belongs only to the client currently bound to this
+    // entry. A superseded process can finish flushing after its successor starts.
+    if (entry.client !== client) return;
+    entry.lastActivity = this.now();
     if (notification.method === "pi/worker/status") {
       const status = (notification.params as { status?: WorkerStatus } | null)?.status;
       if (status === "starting") return;
@@ -1050,7 +1043,7 @@ export class WorkerPool {
         entry.reopened = undefined;
         entry.readyAt = this.now();
         entry.failure = undefined;
-        entry.repair = this.options.repair?.status(entry.cwd, entry.mode);
+        entry.repair = this.recovery.status(entry.cwd, entry.mode);
         this.scheduleHealthy(entry, client);
         this.setStatus(entry, "ready", undefined, reopened);
         return;
@@ -1058,8 +1051,10 @@ export class WorkerPool {
       if (status === "retired") {
         entry.stopping = true;
         this.setStatus(entry, "retired", "worker exited");
-        return;
       }
+      // Worker lifecycle frames are never broadcast raw as WorkerInfo. The
+      // pool publishes only its enriched, schema-complete projection.
+      return;
     }
     if (notification.method === "session/update") {
       const params = notification.params as { sessionPath?: string; update?: { kind?: string } } | null;
@@ -1097,59 +1092,35 @@ export class WorkerPool {
       return;
     }
     entry.failure = exit.failure;
-    // The process never existed: retrying on a timer cannot help (a bad node
-    // binary or worker path does not fix itself), so say what happened and
-    // offer the explicit Retry instead of a silent "starting" forever.
-    if (client.spawnError && !this.options.repair) {
-      entry.readyAt = undefined;
-      this.options.onWorkerLoss?.({
-        cwd: entry.cwd,
-        generation: client.generation,
-        exit,
-        message: "The project's worker could not start before this run ended.",
-      });
-      this.setStatus(entry, "crashed", `${exit.failure.message} Use "Retry" once the cause is fixed.`);
-      return;
-    }
     // A worker that ran healthily for a while closes the previous incident.
     const uptime = entry.readyAt === undefined ? 0 : this.now() - entry.readyAt;
     if (uptime >= (this.options.healthyMs ?? DEFAULTS.healthyMs)) {
       entry.restarts = 0;
-      this.options.repair?.markHealthy(entry.cwd);
+      this.recovery.markHealthy(entry.cwd);
     }
     entry.readyAt = undefined;
     const reason = signal ? `killed by ${signal}` : `exited with code ${code ?? "unknown"}`;
-    const lossMessage = exit.kind === "heap_oom"
-      ? "The project's agent ran out of memory before this run ended."
-      : "The project's worker stopped before this run ended.";
+    let lossMessage = "The project's worker stopped before this run ended.";
+    if (client.spawnError) lossMessage = "The project's worker could not start before this run ended.";
+    else if (exit.kind === "heap_oom") lossMessage = "The project's agent ran out of memory before this run ended.";
     this.options.onWorkerLoss?.({ cwd: entry.cwd, generation: client.generation, exit, message: lossMessage });
 
-    const eligible = entry.open.size > 0;
-    const durable = this.options.repair;
-    const decision = durable && eligible ? durable.automaticRetry(entry.cwd, entry.mode, exit.failure) : undefined;
-    if (durable && !eligible) durable.noteFailure(entry.cwd, entry.mode, exit.failure);
-    entry.repair = durable?.status(entry.cwd, entry.mode);
-    const canRetry = eligible && (decision ? decision.allowed : entry.restarts < (this.options.maxRestarts ?? DEFAULTS.maxRestarts));
-    if (!canRetry) {
-      const message = entry.repair?.state === "paused"
-        ? "Automatic repair is paused because its recovery record could not be read. Your sessions and settings are unchanged."
-        : entry.repair?.state === "exhausted"
-          ? "This project's agent couldn't start. Your Feature choices and conversations are unchanged."
-          : exit.kind === "heap_oom"
-            ? (entry.open.size === 0
-                ? "This project's agent ran out of memory. It will start again on the next request."
-                : `This project's agent ran out of memory and did not recover after ${entry.restarts} restarts. Use "Retry" to start it again.`)
-            : (entry.open.size === 0
-                ? `Worker ${reason}. It will start again on the next request.`
-                : `Worker ${reason} and did not recover after ${entry.restarts} restarts. Use "Retry" to start it again.`);
-      this.setStatus(entry, "crashed", message);
+    const decision = this.recovery.failure({
+      cwd: entry.cwd,
+      mode: entry.mode,
+      failure: exit.failure,
+      hasOpenSessions: entry.open.size > 0,
+      spawnError: Boolean(client.spawnError),
+    });
+    entry.repair = decision.repair;
+    if (!decision.retry || decision.delayMs === undefined) {
+      const copy = runtimeRecoveryCopy(entry);
+      this.setStatus(entry, "crashed", `${copy.title}. ${copy.detail}`);
       return;
     }
-    const attempt = decision?.attempts ?? entry.restarts + 1;
-    const delay = Math.min(
-      (this.options.backoffMs ?? DEFAULTS.backoffMs) * 2 ** Math.max(0, attempt - 1),
-      this.options.backoffCapMs ?? DEFAULTS.backoffCapMs,
-    );
+
+    const attempt = decision.attempt;
+    const delay = decision.delayMs;
     entry.restarts = attempt;
     entry.retryAt = this.now() + delay;
     this.setStatus(
@@ -1300,13 +1271,12 @@ export class WorkerPool {
 
   private scheduleHealthy(entry: Entry, client: WorkerClient): void {
     this.clearHealthy(entry);
-    if (!this.options.repair) return;
     entry.healthyTimer = this.setTimer(() => {
       entry.healthyTimer = undefined;
       if (entry.client !== client || entry.status !== "ready" || !client.alive) return;
       entry.restarts = 0;
-      this.options.repair?.markHealthy(entry.cwd);
-      entry.repair = this.options.repair?.status(entry.cwd, entry.mode);
+      this.recovery.markHealthy(entry.cwd);
+      entry.repair = this.recovery.status(entry.cwd, entry.mode);
     }, this.options.healthyMs ?? DEFAULTS.healthyMs);
     entry.healthyTimer.unref?.();
   }

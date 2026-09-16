@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { AgentRun, WorkerInfo } from "@lasercode/protocol";
 import { AgentRunRegistry } from "../src/agents/runs.js";
 import { WorkerPool } from "../src/worker-pool.js";
+import { RuntimeRepairLedger } from "../src/runtime-repair.js";
 import type { WorkerExit } from "../src/worker-client.js";
 
 const OOM_WORKER = String.raw`
@@ -94,6 +95,7 @@ describe("a real worker old-space failure", () => {
 
     pool = new WorkerPool({
       workerMain,
+      repair: new RuntimeRepairLedger(join(scratch, "runtime-repair.json"), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
       workerOldSpaceMiB: 64,
       env: { OOM_ONCE_MARKER: marker, RECOVERY_MARKER: recoveryMarker },
       sweepMs: 0,
@@ -123,7 +125,7 @@ describe("a real worker old-space failure", () => {
     expect(losses[0]).toMatchObject({ kind: "heap_oom" });
     if (process.platform === "linux") expect(losses[0]!.signal).toBe("SIGABRT");
     expect(sawFatalMarker).toBe(true);
-    expect(delays).toEqual([1_000]);
+    expect(delays.filter((delay) => delay < 60_000)).toEqual([1_000]);
     expect(reopened).toEqual([[parentPath]]);
     expect(existsSync(recoveryMarker)).toBe(true);
     expect((await pool.get(project)).generation).not.toBe(first.generation);

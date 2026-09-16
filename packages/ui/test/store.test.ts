@@ -180,6 +180,23 @@ describe("applyUpdate", () => {
     expect(v.blocks.at(-1)).toMatchObject({ kind: "notice", level: "error" });
   });
 
+  it("replaces worker status from the authoritative connect snapshot", () => {
+    const stale = reduce(initialState, { type: "notification", method: "pi/worker/status", params: { cwd: "/stale", status: "ready" } });
+    const current = reduce(stale, {
+      type: "workers",
+      workers: [{
+        cwd: "/current",
+        status: "crashed",
+        message: "This project's agent couldn't recover.",
+        mode: "normal",
+        repair: { state: "exhausted", automaticAttempts: 2 },
+      }],
+    });
+    expect(current.workers).toEqual({
+      "/current": expect.objectContaining({ status: "crashed", repair: { state: "exhausted", automaticAttempts: 2 } }),
+    });
+  });
+
   it("tracks dialogs, statuses, widgets, toasts and worker status", () => {
     let s = reduce({ ...initialState, open: { "/s.jsonl": view() } }, { type: "notification", method: "pi/ui/request", params: { path: "/s.jsonl", method: "select", id: "u1", title: "Pick", options: ["a"] } });
     s = reduce(s, { type: "notification", method: "pi/ui/request", params: { path: "/s.jsonl", method: "select", id: "u1", title: "Pick", options: ["a"] } });

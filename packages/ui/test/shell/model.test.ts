@@ -149,7 +149,7 @@ describe("session rows", () => {
       label: "Starting the agent", tone: "attention", canRetry: false, canStartSafe: false, canTryNormal: false,
     });
     expect(workerChip({ status: "crashed", message: "exit 1" })).toEqual({
-      label: "Agent couldn’t start",
+      label: "Worker crashed",
       tone: "danger",
       canRetry: true,
       canStartSafe: true,
@@ -164,6 +164,17 @@ describe("session rows", () => {
     expect(workerChip({ status: "crashed", repair: { state: "paused", automaticAttempts: 0 } })).toMatchObject({
       label: "Automatic repair paused", canRetry: true,
     });
+    expect(workerChip({
+      status: "crashed",
+      mode: "normal",
+      failure: {
+        owner: { kind: "worker", launchId: "0123456789abcdef0123456789abcdef", cwd: "/project" },
+        stage: "initialize",
+        category: "initialization_error",
+        message: "failed",
+      },
+      repair: { state: "exhausted", automaticAttempts: 2 },
+    })).toMatchObject({ label: "Agent couldn't start", canRetry: true });
   });
 
   it("inbox lists what needs you across projects, most urgent first", () => {
