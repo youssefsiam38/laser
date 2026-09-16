@@ -9,7 +9,7 @@ import { pathToFileURL } from 'node:url';
 import { waitForRegistrations, captureConnectionTarget, connectInspector, queryInstances, scalarCounters, tailBufferCounters, linuxStartToken } from './inspector.mjs';
 import { DiscoveryRegistry } from './discovery.mjs';
 import { ProcessCensus, censusTotals, verdictFor } from './sampling.mjs';
-import { captureHeap } from './heap.mjs';
+import { captureHeap, sendBounded } from './heap.mjs';
 import { SAFETY } from './config.mjs';
 import { addHeapOwners, addRendererProjection } from './rankings.mjs';
 import { sanitizeError, sanitizeOwner } from './report.mjs';
@@ -209,6 +209,33 @@ export class SoakRun {
     const values = Object.fromEntries(metrics.metrics.map(row => [row.name, row.value]));
     return { ...state, jsHeapUsedBytes: values.JSHeapUsedSize ?? null, jsHeapTotalBytes: values.JSHeapTotalSize ?? null,
       documents: values.Documents ?? null, listeners: values.JSEventListeners ?? null, domNodes: dom.nodes, detachedNodes: dom.detachedNodes };
+  }
+
+  /** One explicitly post-GC renderer heap point for a slope fit. */
+  async rendererPostGcHeap(label) {
+    const check = this.check;
+    await sendBounded(check.cdp, 'HeapProfiler.enable', {}, 30_000);
+    await sendBounded(check.cdp, 'HeapProfiler.collectGarbage', {}, 30_000);
+    await sendBounded(check.cdp, 'HeapProfiler.collectGarbage', {}, 30_000);
+    await sendBounded(check.cdp, 'Performance.enable', {}, 30_000);
+    const metrics = await sendBounded(check.cdp, 'Performance.getMetrics', {}, 30_000);
+    const value = metrics.metrics?.find(row => row.name === 'JSHeapUsedSize')?.value;
+    if (!Number.isFinite(value)) throw new Error(`Post-GC renderer heap was unavailable at ${sanitizeOwner(label)}.`);
+    return { label: sanitizeOwner(label), phase: 'post-gc', rendererJsHeapBytes: value };
+  }
+
+  /** One host-tree PSS point after forcing collection in the retired host. */
+  async hostPostGcPss(label) {
+    return this.withHost(async ({ set }) => {
+      await sendBounded(set.host.client, 'HeapProfiler.enable', {}, 30_000);
+      await sendBounded(set.host.client, 'HeapProfiler.collectGarbage', {}, 30_000);
+      await sendBounded(set.host.client, 'HeapProfiler.collectGarbage', {}, 30_000);
+      const census = await this.census.take({ rendererPid: null, requiredPids: [this.check.fixture.hostRecord.pid] });
+      await verdictFor(census);
+      const value = censusTotals(census).totalPssBytes;
+      if (!Number.isFinite(value)) throw new Error(`Post-GC host PSS was unavailable at ${sanitizeOwner(label)}.`);
+      return { label: sanitizeOwner(label), phase: 'post-gc', totalPssBytes: value };
+    });
   }
 
   async workerGeneration(cwd) {

@@ -12,12 +12,44 @@ export function theilSen(points) {
   return slopes.length ? slopes[Math.floor(slopes.length / 2)] : null;
 }
 
-export function slopeSummary(points, intervalSeconds) {
-  const values = points.map(point => point.y).filter(Number.isFinite);
+const formatSlopeNumber = value => Number.isFinite(value)
+  ? new Intl.NumberFormat('en-US', { maximumFractionDigits: 3 }).format(value)
+  : 'unavailable';
+const formatRSquared = value => Number.isFinite(value) ? value.toFixed(3) : 'unavailable';
+
+export function slopeSummary(points, intervalSeconds, unit = 'bytes/unit') {
+  const clean = points.filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
+  const values = clean.map(point => point.y);
+  const available = clean.length === points.length && points.length >= 3;
+  const meanX = available ? clean.reduce((sum, point) => sum + point.x, 0) / clean.length : null;
+  const meanY = available ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+  const sxx = available ? clean.reduce((sum, point) => sum + (point.x - meanX) ** 2, 0) : 0;
+  const syy = available ? clean.reduce((sum, point) => sum + (point.y - meanY) ** 2, 0) : 0;
+  const estimate = available && sxx > 0
+    ? clean.reduce((sum, point) => sum + (point.x - meanX) * (point.y - meanY), 0) / sxx
+    : null;
+  const intercept = estimate === null ? null : meanY - estimate * meanX;
+  const residualSumSquares = estimate === null ? null
+    : clean.reduce((sum, point) => sum + (point.y - (intercept + estimate * point.x)) ** 2, 0);
+  const residualStandardDeviation = residualSumSquares === null ? null : Math.sqrt(residualSumSquares / (clean.length - 2));
+  const standardError = residualStandardDeviation === null || sxx <= 0 ? null : residualStandardDeviation / Math.sqrt(sxx);
+  const rSquared = residualSumSquares === null || syy === 0 ? null : 1 - residualSumSquares / syy;
+  const unresolved = estimate !== null && Number.isFinite(standardError) && Math.abs(estimate) <= 2 * standardError;
+  const status = estimate === null ? 'unavailable' : unresolved ? 'unresolved' : 'resolved';
+  const resolutionLimit = unresolved ? 2 * standardError : null;
+  const display = status === 'unresolved'
+    ? `no drift resolved above ±${formatSlopeNumber(resolutionLimit)} ${unit} (n=${clean.length}, R²=${formatRSquared(rSquared)})`
+    : status === 'resolved' ? `${formatSlopeNumber(estimate)} ${unit}` : 'unavailable';
   return {
-    status: values.length === points.length && points.length >= 3 ? 'available' : 'unavailable',
-    value: values.length === points.length && points.length >= 3 ? theilSen(points) : null,
-    samples: points.length,
+    status, display, estimator: 'ordinary-least-squares', measurementPhase: 'post-gc', unit,
+    // D-267 keeps an unresolved slope from being displayed as a rate. D-269
+    // retains the point estimate separately so a mixed pair can apply T2's
+    // original sign/CV gate without changing either run's resolution label.
+    value: status === 'resolved' ? estimate : null,
+    estimate, estimateSource: 'reported',
+    resolutionLimit, intercept, standardError, residualStandardDeviation,
+    relativeStandardError: standardError === null || estimate === 0 ? null : standardError / Math.abs(estimate),
+    rSquared, samples: points.length, points: clean.map(point => ({ x: point.x, y: point.y })),
     intervalSeconds,
     minimumBytes: values.length ? Math.min(...values) : null,
     maximumBytes: values.length ? Math.max(...values) : null,
@@ -43,8 +75,74 @@ export function spearman(a, b) {
   for (const value of common) d2 += (ar.indexOf(value) - br.indexOf(value)) ** 2;
   return 1 - (6 * d2) / (common.length * (common.length ** 2 - 1));
 }
+
+// V8 heap snapshots report retained self sizes in 8-byte units. Repeated
+// captures of the same low-size WorkerServer owner varied by at most 1.22% in
+// the two full validity runs, so the next quarter-percent is the declared
+// comparison resolution. This changes ranks, never bytes or gate thresholds.
+export const HEAP_RANK_RESOLUTION = Object.freeze({ absoluteBytes: 8, relative: 0.0125 });
+const HEAP_RANK_CATEGORIES = new Set(['host', 'host-nodes', 'renderer', 'renderer-nodes', 'worker', 'worker-nodes']);
+
+function tiedRanks(rows, category) {
+  const ranked = mergedRanks(rows).slice(0, 10);
+  if (!HEAP_RANK_CATEGORIES.has(category)) return ranked.map((row, index) => ({ ...row, rank: index + 1 }));
+  const result = [];
+  for (let start = 0; start < ranked.length;) {
+    let end = start + 1;
+    const high = ranked[start].bytes;
+    const tolerance = Math.max(HEAP_RANK_RESOLUTION.absoluteBytes, high * HEAP_RANK_RESOLUTION.relative);
+    while (end < ranked.length && high - ranked[end].bytes <= tolerance) end += 1;
+    const averageRank = ((start + 1) + end) / 2;
+    for (let index = start; index < end; index++) result.push({ ...ranked[index], rank: averageRank });
+    start = end;
+  }
+  return result;
+}
+
+function spearmanWithTies(a, b) {
+  const br = new Map(b.map(row => [row.owner, row.rank]));
+  const common = a.filter(row => br.has(row.owner));
+  if (common.length < 2) return null;
+  const av = common.map(row => row.rank);
+  const bv = common.map(row => br.get(row.owner));
+  const am = av.reduce((sum, value) => sum + value, 0) / av.length;
+  const bm = bv.reduce((sum, value) => sum + value, 0) / bv.length;
+  let covariance = 0, aa = 0, bb = 0;
+  for (let index = 0; index < av.length; index++) {
+    const ax = av[index] - am, bx = bv[index] - bm;
+    covariance += ax * bx; aa += ax * ax; bb += bx * bx;
+  }
+  if (aa === 0 || bb === 0) return aa === bb && av.every((value, index) => value === bv[index]) ? 1 : null;
+  return covariance / Math.sqrt(aa * bb);
+}
 function sign(value) { return value === 0 ? 0 : value > 0 ? 1 : -1; }
-function slopeValue(value) { return typeof value === 'number' ? value : value?.value; }
+function estimateFromPoints(points) {
+  const clean = (points ?? []).filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
+  if (clean.length < 3) return null;
+  const meanX = clean.reduce((sum, point) => sum + point.x, 0) / clean.length;
+  const meanY = clean.reduce((sum, point) => sum + point.y, 0) / clean.length;
+  const sxx = clean.reduce((sum, point) => sum + (point.x - meanX) ** 2, 0);
+  return sxx > 0 ? clean.reduce((sum, point) => sum + (point.x - meanX) * (point.y - meanY), 0) / sxx : null;
+}
+function slopeState(value) {
+  if (typeof value === 'number') return { status: 'resolved', value, estimate: value, estimateSource: 'legacy-value' };
+  if (!value || value.status === 'unavailable') return { status: 'unavailable', value: null, estimate: null };
+  const reported = Number.isFinite(value.estimate) ? value.estimate : null;
+  const retained = reported ?? estimateFromPoints(value.points);
+  const estimateSource = reported !== null ? (value.estimateSource ?? 'reported')
+    : Number.isFinite(retained) ? 'retained-points' : Number.isFinite(value.value) ? 'legacy-value' : null;
+  const estimate = Number.isFinite(retained) ? retained : Number.isFinite(value.value) ? value.value : null;
+  const common = { residualStandardDeviation: value.residualStandardDeviation, standardError: value.standardError,
+    rSquared: value.rSquared, samples: value.samples, resolutionLimit: value.resolutionLimit, display: value.display,
+    estimate, estimateSource };
+  if (value.status === 'unresolved') return { ...common, status: 'unresolved', value: null };
+  return Number.isFinite(estimate) ? { ...common, status: 'resolved', value: estimate } : { ...common, status: 'unavailable', value: null };
+}
+function coefficientOfVariation(a, b) {
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+  const meanMagnitude = (Math.abs(a) + Math.abs(b)) / 2;
+  return meanMagnitude ? Math.abs(Math.abs(a) - Math.abs(b)) / (Math.SQRT2 * meanMagnitude) : 0;
+}
 
 /**
  * Predeclared, category-specific repeatability. Retained-heap owners, the
@@ -67,11 +165,13 @@ export const COMPARISON_POLICY = Object.freeze({
 });
 
 /**
- * Slopes repeat when they point the same way and stay within a declared spread.
- * The 25% coefficient of variation is a gate, not a note in the margin: a run
- * whose slope doubled between A and B did not reproduce, whatever its sign.
+ * Resolved slopes repeat when they point the same way and stay within a declared
+ * spread. D-267 treats |slope| <= 2·SE as unresolved: two unresolved slopes are
+ * an equivalent null only when their residual-noise floors also repeat within
+ * the same 25% CV. D-269 judges a mixed pair by the original T2 sign/CV gate on
+ * its retained OLS point estimates while preserving both resolution labels.
  */
-export const SLOPE_POLICY = Object.freeze({ maximumCoefficientOfVariation: 0.25 });
+export const SLOPE_POLICY = Object.freeze({ maximumCoefficientOfVariation: 0.25, unresolvedStandardErrors: 2 });
 export const EVIDENCE_CATEGORIES = Object.freeze(['host-allocation', 'worker-allocation', 'desktop-processes']);
 export function policyFor(category) {
   return EVIDENCE_CATEGORIES.includes(category) ? COMPARISON_POLICY.evidence : COMPARISON_POLICY.strict;
@@ -81,10 +181,12 @@ export function compareRuns(a, b) {
   const categories = {};
   for (const name of [...new Set([...Object.keys(a.rankings ?? {}), ...Object.keys(b.rankings ?? {})])]) {
     const policy = policyFor(name);
-    const ar = rankNames(a.rankings?.[name] ?? []);
-    const br = rankNames(b.rankings?.[name] ?? []);
+    const rankedA = tiedRanks(a.rankings?.[name] ?? [], name);
+    const rankedB = tiedRanks(b.rankings?.[name] ?? [], name);
+    const ar = rankedA.map(row => row.owner);
+    const br = rankedB.map(row => row.owner);
     const overlap = ar.slice(0, 5).filter(owner => br.slice(0, 5).includes(owner)).length;
-    const correlation = spearman(ar, br);
+    const correlation = spearmanWithTies(rankedA, rankedB);
     const common = ar.filter(owner => br.includes(owner)).length;
     const enough = ar.length >= policy.minimumOwners && br.length >= policy.minimumOwners;
     const topOwnerSame = ar[0] !== undefined && ar[0] === br[0];
@@ -99,21 +201,46 @@ export function compareRuns(a, b) {
       policy: policy.kind, topOwnerSame, topFiveOverlap: overlap, requiredOverlap, spearman: correlation,
       commonOwners: common, rankStability: trivial ? 'trivial: one common owner' : correlation === null ? 'unavailable' : 'correlated',
       owners: { a: ar.length, b: br.length },
+      rankResolution: HEAP_RANK_CATEGORIES.has(name) ? HEAP_RANK_RESOLUTION : null,
       pass: enough && (policy.requireSameTopOwner ? topOwnerSame : true) && overlap >= requiredOverlap && correlationOk,
     };
   }
   const slopes = {};
   for (const name of [...new Set([...Object.keys(a.slopes ?? {}), ...Object.keys(b.slopes ?? {})])]) {
-    const av = slopeValue(a.slopes?.[name]);
-    const bv = slopeValue(b.slopes?.[name]);
-    const available = Number.isFinite(av) && Number.isFinite(bv);
-    const meanMagnitude = available ? (Math.abs(av) + Math.abs(bv)) / 2 : null;
-    const cv = available && meanMagnitude ? Math.abs(Math.abs(av) - Math.abs(bv)) / (Math.SQRT2 * meanMagnitude) : available ? 0 : null;
+    const ar = slopeState(a.slopes?.[name]);
+    const br = slopeState(b.slopes?.[name]);
+    const common = { available: ar.status !== 'unavailable' && br.status !== 'unavailable',
+      runs: { a: ar, b: br }, maximumCoefficientOfVariation: SLOPE_POLICY.maximumCoefficientOfVariation };
+    if (ar.status === 'unresolved' && br.status === 'unresolved') {
+      const floorCv = coefficientOfVariation(ar.residualStandardDeviation, br.residualStandardDeviation);
+      const withinSpread = floorCv !== null && floorCv <= SLOPE_POLICY.maximumCoefficientOfVariation;
+      slopes[name] = { ...common, outcome: 'equivalent-null', signAgrees: null, coefficientOfVariation: null,
+        noiseFloorCoefficientOfVariation: floorCv, flaggedOver25Percent: floorCv !== null && !withinSpread,
+        display: `equivalent null; A: ${ar.display}; B: ${br.display}; residual-SD CV=${floorCv ?? 'unavailable'}`,
+        pass: common.available && withinSpread };
+      continue;
+    }
+    if (ar.status === 'unresolved' || br.status === 'unresolved') {
+      const estimatesAvailable = Number.isFinite(ar.estimate) && Number.isFinite(br.estimate);
+      const cv = estimatesAvailable ? coefficientOfVariation(ar.estimate, br.estimate) : null;
+      const signAgrees = estimatesAvailable ? sign(ar.estimate) === sign(br.estimate) : null;
+      const withinSpread = cv !== null && cv <= SLOPE_POLICY.maximumCoefficientOfVariation;
+      slopes[name] = { ...common, available: estimatesAvailable, outcome: 'mixed-resolution-point-estimates',
+        signAgrees, coefficientOfVariation: cv, noiseFloorCoefficientOfVariation: null,
+        flaggedOver25Percent: cv !== null && !withinSpread,
+        display: `mixed resolution; A=${ar.status} (${formatSlopeNumber(ar.estimate)}; SE=${formatSlopeNumber(ar.standardError)}; R²=${formatRSquared(ar.rSquared)}); B=${br.status} (${formatSlopeNumber(br.estimate)}; SE=${formatSlopeNumber(br.standardError)}; R²=${formatRSquared(br.rSquared)}); sign agrees=${signAgrees}; CV=${cv ?? 'unavailable'}`,
+        pass: estimatesAvailable && signAgrees && withinSpread };
+      continue;
+    }
+    const available = ar.status === 'resolved' && br.status === 'resolved';
+    const cv = available ? coefficientOfVariation(ar.value, br.value) : null;
     const withinSpread = cv !== null && cv <= SLOPE_POLICY.maximumCoefficientOfVariation;
-    slopes[name] = { available, signAgrees: available && sign(av) === sign(bv), coefficientOfVariation: cv,
-      maximumCoefficientOfVariation: SLOPE_POLICY.maximumCoefficientOfVariation,
-      flaggedOver25Percent: cv !== null && cv > SLOPE_POLICY.maximumCoefficientOfVariation,
-      pass: available && sign(av) === sign(bv) && withinSpread };
+    slopes[name] = { ...common, available, outcome: available ? 'resolved-pair' : 'unavailable',
+      signAgrees: available ? sign(ar.value) === sign(br.value) : null, coefficientOfVariation: cv,
+      noiseFloorCoefficientOfVariation: null,
+      flaggedOver25Percent: cv !== null && !withinSpread,
+      display: available ? `resolved pair; sign agrees=${sign(ar.value) === sign(br.value)}; CV=${cv}` : 'unavailable',
+      pass: available && sign(ar.value) === sign(br.value) && withinSpread };
   }
   const scenariosComplete = [a, b].every(run => Object.values(run.scenarios ?? {}).every(value => value === 'complete'));
   return {
@@ -193,7 +320,7 @@ function markdown(report) {
   for (const [category, rows] of Object.entries(report.rankings ?? {})) {
     lines.push(`### ${category} (${policyFor(category).kind})`, ...mergedRanks(rows).slice(0, 10).map((row, index) => `${index + 1}. \`${row.owner}\` — ${row.bytes} bytes`), '');
   }
-  lines.push('## Slopes', '', ...Object.entries(report.slopes ?? {}).map(([name, value]) => `- ${name}: ${typeof value === 'number' ? value : value?.value ?? 'unavailable'}`), '',
+  lines.push('## Slopes', '', ...Object.entries(report.slopes ?? {}).map(([name, value]) => `- ${name}: ${typeof value === 'number' ? value : value?.display ?? 'unavailable'}`), '',
     '## Capabilities and limitations', '', ...Object.entries(report.capabilities ?? {}).map(([name, value]) => `- ${name}: ${value}`),
     ...(report.unsupported ?? []).map(value => `- unavailable: ${value}`), '',
     'Raw heap snapshots, memory traces, inspector registrations, URLs, scratch paths, session identifiers, commands and payloads are deliberately omitted.', '');

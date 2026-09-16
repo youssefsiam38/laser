@@ -67,6 +67,10 @@ export default {
       const session = bashSessions[(index - 1) % bashSessions.length];
       await prompt(check.rpc, session.path, `resource:bash:${background ? 'bg' : 'fg'}:${ordinal} bytes=16384 RESOURCE-SOAK-COMMAND-CANARY`, run.until.bind(run), config.phaseTimeoutMs);
       bashCalls.push({ background, generation: await run.workerGeneration(session.cwd) });
+      if (index % config.bashSlopeCheckpointEvery === 0 || index === totalCalls) {
+        const postGc = await run.rendererPostGcHeap(`bash-slope-${index}`);
+        (report.bashSlopeCheckpoints ??= []).push({ calls: index, rendererJsHeapBytes: postGc.rendererJsHeapBytes, phase: postGc.phase });
+      }
       if (index % config.bashCheckpointEvery === 0 || index === totalCalls) {
         const checkpoint = await run.samplePhase(`bash-${index}`);
         (report.taskCheckpoints ??= []).push({ calls: index, rendererJsHeapBytes: checkpoint.renderer?.jsHeapUsedBytes ?? null });
@@ -119,7 +123,7 @@ export default {
       replacedGenerationCalls: retention.replacedGenerationCalls, heavyToolGenerationSurvived: retention.heavyToolGenerationSurvived };
     report.retainedTaskRecords = { extensionTailBuffers: phase.tailBuffers.count, workerTaskRows, hostTaskRows: phase.host.tasks,
       expectedExtensionTailBuffers: retention.tailBuffers, expectedWorkerTaskRows: retention.workerBackgroundTasks };
-    report.slopes.rendererBashHeapBytesPerCall = slopeSummary((report.taskCheckpoints ?? []).map(row => ({ x: row.calls, y: row.rendererJsHeapBytes })), null);
+    report.slopes.rendererBashHeapBytesPerCall = slopeSummary((report.bashSlopeCheckpoints ?? []).map(row => ({ x: row.calls, y: row.rendererJsHeapBytes })), null, 'bytes/call');
     report.temporaryPeaks.bashRendererJsBytes = Number.isFinite(phase.postGc?.renderer?.jsHeapUsedBytes)
       ? Math.max(...(report.taskCheckpoints ?? []).map(row => row.rendererJsHeapBytes).filter(Number.isFinite), phase.renderer?.jsHeapUsedBytes ?? 0)
         - phase.postGc.renderer.jsHeapUsedBytes : null;

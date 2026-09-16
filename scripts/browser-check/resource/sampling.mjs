@@ -22,6 +22,9 @@ import { descendantPids } from './inspector.mjs';
 
 export const SCOPE = 'host process tree and the renderer of the measured page';
 
+class PhysicalMemoryUnavailable extends Error {}
+const settleExitingProcess = () => new Promise(resolve => setTimeout(resolve, 50));
+
 export class ProcessCensus {
   constructor({ hostPid, sample = processSample, descendants = descendantPids } = {}) {
     this.hostPid = hostPid;
@@ -42,19 +45,43 @@ export class ProcessCensus {
     const unreadable = [];
     const exited = [];
     const replaced = [];
+    const record = row => {
+      // A readable stat row is not complete Linux memory evidence when
+      // smaps_rollup could not supply either required physical metric. Treat
+      // that process as unreadable so totals and the safety verdict cannot
+      // silently proceed from a partial census.
+      if (!Number.isFinite(row.pssBytes) || !Number.isFinite(row.privateResidentBytes)) {
+        throw new PhysicalMemoryUnavailable('Linux proportional or private-resident memory is unavailable for a sampled process.');
+      }
+      this.identities.set(row.pid, row.startToken);
+      rows.push(row);
+    };
     for (const pid of pids) {
       const known = this.identities.get(pid) ?? null;
       try {
         const row = await this.sample(pid, known ?? undefined);
-        this.identities.set(pid, row.startToken);
-        rows.push(row);
+        record(row);
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
+        if (error instanceof PhysicalMemoryUnavailable) {
+          // A process in its exit window can retain a readable stat row after
+          // smaps_rollup has gone away. Re-sample once after a bounded settle:
+          // ENOENT is then an honest exit; another metric-less row remains an
+          // unreadable safety refusal.
+          await settleExitingProcess();
+          try { const row = await this.sample(pid, known ?? undefined); record(row); }
+          catch (retry) {
+            const retryReason = retry instanceof Error ? retry.message : String(retry);
+            if (/ENOENT|ESRCH|no such file/i.test(retryReason)) { exited.push(pid); this.identities.delete(pid); }
+            else unreadable.push({ pid, reason: retryReason });
+          }
+          continue;
+        }
         if (/changed identity/.test(reason)) {
           // A new process reusing a pid is a different process, not a bad read.
           replaced.push(pid);
           this.identities.delete(pid);
-          try { const row = await this.sample(pid); this.identities.set(pid, row.startToken); rows.push(row); }
+          try { const row = await this.sample(pid); record(row); }
           catch (retry) { unreadable.push({ pid, reason: retry instanceof Error ? retry.message : String(retry) }); }
           continue;
         }

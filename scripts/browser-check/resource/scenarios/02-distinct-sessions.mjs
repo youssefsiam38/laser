@@ -33,16 +33,20 @@ export default {
     const sessions = await createSessions(check, config);
     assert.equal(sessions.length, expected.projectSessions);
     const visitCheckpoints = [];
+    const visitSlopeCheckpoints = [];
     const open = await hydrate(check, sessions, config.hydrateCheckpointEvery, async visited => {
       const checkpoint = await run.samplePhase(`visited-${visited}`);
       visitCheckpoints.push({ visited, openSessions: await check.page.evaluate(() => Object.keys(window.__resourceSoak.store.getSnapshot().open).length),
         rendererJsHeapBytes: checkpoint.renderer?.jsHeapUsedBytes ?? null, totalPssBytes: checkpoint.totalPssBytes });
+      const postGc = await run.rendererPostGcHeap(`visited-${visited}`);
+      visitSlopeCheckpoints.push({ visited, rendererJsHeapBytes: postGc.rendererJsHeapBytes, phase: postGc.phase });
     });
     assert.equal(open, sessions.length, 'every distinct project session is held by the UI store');
     for (const session of sessions) await selectSession(check, session);
     const workspaceSessions = await createWorkspaceSessions(run, config.workspaceSessionsPerKind);
     assert.equal(workspaceSessions.length, expected.workspaceSessions);
     report.visitCheckpoints = visitCheckpoints;
+    report.visitSlopeCheckpoints = visitSlopeCheckpoints;
     report.workspaceSessions = { beam: workspaceSessions.filter(row => row.kind === 'beam').length, chat: workspaceSessions.filter(row => row.kind === 'chat').length };
 
     const onePerWorkspace = [...new Map([...sessions, ...workspaceSessions].map(session => [session.cwd, session])).values()];
@@ -59,7 +63,8 @@ export default {
 
     const phase = await run.samplePhase('distinct-sessions', { heap: true });
     assert.equal(phase.host.workers, expected.workers, 'host retains one row per project/private workspace');
-    report.slopes.rendererDistinctSessionHeapBytesPerSession = slopeSummary(visitCheckpoints.map(row => ({ x: row.visited, y: row.rendererJsHeapBytes })), null);
-    return { phase, state: { sessions, workspaceSessions, distinctPhase: phase } };
+    const distinctPostGc = await run.rendererPostGcHeap('distinct-sessions');
+    report.slopes.rendererDistinctSessionHeapBytesPerSession = slopeSummary(visitSlopeCheckpoints.map(row => ({ x: row.visited, y: row.rendererJsHeapBytes })), null, 'bytes/session');
+    return { phase, state: { sessions, workspaceSessions, distinctPhase: phase, distinctPostGcRendererHeapBytes: distinctPostGc.rendererJsHeapBytes } };
   },
 };

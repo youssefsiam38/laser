@@ -226,6 +226,48 @@ async function oneRun(mode, artifacts, implementationSha, electron, until) {
   return { report, evidence: evidenceSummary };
 }
 
+function comparisonMarkdown(implementationSha, comparison) {
+  return `# Resource soak comparison\n\nImplementation: \`${implementationSha}\`\n\nResult: **${comparison.pass ? 'pass' : 'failed'}**\n\n`
+    + `Categories are gated by a predeclared policy: structural owners strictly, sampled evidence loosely.\n\n`
+    + Object.entries(comparison.categories).map(([name, value]) => `- ${name} (${value.policy}): top=${value.topOwnerSame}; overlap=${value.topFiveOverlap}/5; Spearman=${value.spearman ?? 'unavailable'}; pass=${value.pass}`).join('\n')
+    + `\n\n## Slopes\n\n` + Object.entries(comparison.slopes).map(([name, value]) => `- ${name}: ${value.display}; pass=${value.pass}`).join('\n') + '\n';
+}
+
+async function writeComparisonArtifacts(artifacts, implementationSha, comparison) {
+  const text = `${JSON.stringify({ implementationSha, ...comparison }, null, 2)}\n`;
+  const markdown = comparisonMarkdown(implementationSha, comparison);
+  assertRedacted(text); assertRedacted(markdown);
+  await Promise.all([
+    writeFile(join(artifacts, 'comparison.json'), text, { mode: 0o600 }),
+    writeFile(join(artifacts, 'comparison.md'), markdown, { mode: 0o600 }),
+  ]);
+}
+
+/** Recompute only the A/B verdict from retained sanitized reports; never run a workload. */
+export async function compareRetainedRuns({ artifacts }) {
+  const [aText, bText] = await Promise.all([
+    readFile(join(artifacts, 'run-a', 'report.json'), 'utf8'),
+    readFile(join(artifacts, 'run-b', 'report.json'), 'utf8'),
+  ]);
+  assertRedacted(aText); assertRedacted(bText);
+  const a = JSON.parse(aText), b = JSON.parse(bText);
+  assert.equal(a.implementationSha, b.implementationSha, 'retained reports must describe the same implementation');
+  const implementationSha = a.implementationSha;
+  const comparison = compareRuns(a, b);
+  await writeComparisonArtifacts(artifacts, implementationSha, comparison);
+  const manifestPath = join(artifacts, 'manifest.json');
+  const manifestText = await readFile(manifestPath, 'utf8').catch(() => null);
+  if (manifestText !== null) {
+    assertRedacted(manifestText);
+    const manifest = JSON.parse(manifestText);
+    assert.equal(manifest.implementationSha, implementationSha, 'retained manifest must match the reports');
+    const updated = `${JSON.stringify({ ...manifest, comparisonPolicy: comparison.policy, comparisonPassed: comparison.pass }, null, 2)}\n`;
+    assertRedacted(updated);
+    await writeFile(manifestPath, updated, { mode: 0o600 });
+  }
+  return { implementationSha, comparison };
+}
+
 export async function runResourceSoak({ mode = 'quick', runs = 1, artifacts = '/tmp/resource-soak', electron = false, until } = {}) {
   if (process.platform !== 'linux') throw new Error('The full resource soak requires Linux /proc PSS accounting.');
   // Measurement-only calibration (RP-5): the unchanged full workload, stopped
@@ -259,17 +301,7 @@ export async function runResourceSoak({ mode = 'quick', runs = 1, artifacts = '/
   let comparison = null;
   if (results.length === 2) {
     comparison = compareRuns(results[0].report, results[1].report);
-    const text = `${JSON.stringify({ implementationSha, ...comparison }, null, 2)}\n`;
-    assertRedacted(text);
-    const markdown = `# Resource soak comparison\n\nImplementation: \`${implementationSha}\`\n\nResult: **${comparison.pass ? 'pass' : 'failed'}**\n\n`
-      + `Categories are gated by a predeclared policy: structural owners strictly, sampled evidence loosely.\n\n`
-      + Object.entries(comparison.categories).map(([name, value]) => `- ${name} (${value.policy}): top=${value.topOwnerSame}; overlap=${value.topFiveOverlap}/5; Spearman=${value.spearman ?? 'unavailable'}; pass=${value.pass}`).join('\n')
-      + `\n\n## Slopes\n\n` + Object.entries(comparison.slopes).map(([name, value]) => `- ${name}: sign agrees=${value.signAgrees}; CV=${value.coefficientOfVariation ?? 'unavailable'}${value.flaggedOver25Percent ? ' (flagged over 25%)' : ''}`).join('\n') + '\n';
-    assertRedacted(markdown);
-    await Promise.all([
-      writeFile(join(artifacts, 'comparison.json'), text, { mode: 0o600 }),
-      writeFile(join(artifacts, 'comparison.md'), markdown, { mode: 0o600 }),
-    ]);
+    await writeComparisonArtifacts(artifacts, implementationSha, comparison);
   }
   const manifest = { schemaVersion: 1, implementationSha, mode, runs, electron,
     ...(until ? { until, purpose: 'calibration', partial: true, remainingScenarios: results[0]?.report.remainingScenarios ?? null } : {}),
@@ -291,10 +323,15 @@ export async function runResourceSoak({ mode = 'quick', runs = 1, artifacts = '/
 export { closedPageMetrics };
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
-  const { values } = parseArgs({ options: { quick: { type: 'boolean' }, full: { type: 'boolean' }, runs: { type: 'string' }, artifacts: { type: 'string' }, electron: { type: 'boolean' }, until: { type: 'string' } } });
+  const { values } = parseArgs({ options: { quick: { type: 'boolean' }, full: { type: 'boolean' }, runs: { type: 'string' }, artifacts: { type: 'string' }, electron: { type: 'boolean' }, until: { type: 'string' }, 'compare-only': { type: 'boolean' } } });
   const mode = values.full ? 'full' : 'quick';
-  const result = await runResourceSoak({ mode, runs: Number(values.runs ?? (values.until ? 1 : mode === 'full' ? 2 : 1)), electron: values.electron ?? false,
-    ...(values.until ? { until: values.until } : {}),
-    artifacts: resolve(values.artifacts ?? `/tmp/resource-soak-${mode}`) });
-  console.log(JSON.stringify({ implementationSha: result.implementationSha, pass: result.results.every(run => run.pass) && (result.comparison?.pass ?? true) }, null, 2));
+  if (values['compare-only']) {
+    const result = await compareRetainedRuns({ artifacts: resolve(values.artifacts ?? `/tmp/resource-soak-${mode}`) });
+    console.log(JSON.stringify({ implementationSha: result.implementationSha, pass: result.comparison.pass }, null, 2));
+  } else {
+    const result = await runResourceSoak({ mode, runs: Number(values.runs ?? (values.until ? 1 : mode === 'full' ? 2 : 1)), electron: values.electron ?? false,
+      ...(values.until ? { until: values.until } : {}),
+      artifacts: resolve(values.artifacts ?? `/tmp/resource-soak-${mode}`) });
+    console.log(JSON.stringify({ implementationSha: result.implementationSha, pass: result.results.every(run => run.pass) && (result.comparison?.pass ?? true) }, null, 2));
+  }
 }
