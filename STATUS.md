@@ -29,7 +29,7 @@
 | MX Cross-cutting | in-progress |
 
 **Blockers:** M18-T15 waits for RP-8; M18-T14 waits for T15 and Q-10; M19 waits for M18.
-**Next up:** T3 closeout matrix; T19b; T15 two full clean baselines; then T14 and M19.
-**Recently done:** M18-T8 RP-8 complete with ceilings proof G3 (`ce455b99`); G1/G2 (`4f15add0`); host admission E3 (`49cc12d9`); renderer pressure F (`1b5fbfa7`); host pass E2 (`55350823`).
+**Next up:** T19b denied-affordance tests + review; T15 two full clean baselines; then T14 and M19.
+**Recently done:** M18-T3 RP-3 diagnostics closeout (`ce455b99` matrix); M18-T8 RP-8 complete (`ce455b99`); G1/G2 (`4f15add0`); host admission E3 (`49cc12d9`); renderer pressure F (`1b5fbfa7`).
 
 Ownership and evidence: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`.
