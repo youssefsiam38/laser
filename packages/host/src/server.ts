@@ -54,7 +54,7 @@ import { ResourceService } from "./resources/index.js";
 import { TaskRegister } from "./tasks/register.js";
 import { defaultAgentDir, defaultStateDir, ensureWorkspace, projectRootOf, workspaceAgentFor, workspacesDir } from "./paths.js";
 import { canonical } from "./trust.js";
-import { createHostPressureController, createHostPressureSampler, type HostPressureController } from "./pressure/index.js";
+import { createHostPressureController, createHostPressureSampler, type HostPressureController, type HostPressureSample } from "./pressure/index.js";
 import { ProjectEnvStore, projectEnvTrustAllows } from "./project-env.js";
 import { ProjectRegistry } from "./projects.js";
 import { PushService } from "./push.js";
@@ -107,6 +107,8 @@ export interface HostServerOptions {
    * derived from `workerIdleMs`.
    */
   sessionLifetime?: SessionLifetimeOptions;
+  /** Test seam for RP-8; production always uses the self-only sampler. */
+  pressureSample?: () => Promise<HostPressureSample>;
   /**
    * Extra browser origins allowed to open the WebSocket, on top of this host's
    * own `http://127.0.0.1:<port>` / `http://localhost:<port>`. Only add one you
@@ -556,10 +558,11 @@ export class HostServer {
 
     // Memory pressure (RP-8). Self-sampled on its own small cadence: RP-1's
     // collector walks every process on demand, and a host looking at itself
-    // every twenty seconds must not do that. Nothing here is released, asked
-    // for or refused yet — this generation observes, records and publishes.
+    // every twenty seconds must not do that. E2's host pass uses only the body
+    // memo, exact worker generations and the existing session/worker safety
+    // decisions; admission remains E3 and is deliberately absent.
     this.memoryPressure = createHostPressureController({
-      sample: createHostPressureSampler(),
+      sample: options.pressureSample ?? createHostPressureSampler(),
       workers: () => this.pool.pressureWorkers(),
       publish: (publication) => this.publishPressure(publication),
       // The inventory's opaque salted project id, or nothing. Never a path.
@@ -568,6 +571,12 @@ export class HostServer {
       // is missing coverage rather than calm.
       rendererPresent: () => this.hasWindowSocket(),
       log: (line) => this.log(line),
+      actions: {
+        releaseEphemeral: () => this.bodyRange.forget(),
+        directive: (cwd, expect, params) => this.pool.pressureDirective(cwd, expect, params),
+        unloadIdle: (allow) => this.sessionLifetime.pressurePass(allow),
+        retireIdle: (allow) => this.pool.retireIdleUnderPressure(allow),
+      },
     });
 
     // The host resolves the package manager the workers should use — the one

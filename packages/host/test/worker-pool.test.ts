@@ -6,7 +6,7 @@
  * worker: this is the pool's state machine under test, not Pi.
  */
 import { PRODUCT_NAME } from "@lasercode/protocol";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -49,6 +49,10 @@ socket.on("data", (chunk) => {
     if (req.method === "pi/test/pressure") {
       send({ jsonrpc: "2.0", method: "pi/resource/pressure", params: { generation: req.params.generation, level: "unknown", inputs: [], ran: [], results: [], stores: {} } });
       send({ jsonrpc: "2.0", id: req.id, result: {} });
+      continue;
+    }
+    if (req.method === "pi/worker/pressure") {
+      send({ jsonrpc: "2.0", id: req.id, result: { applied: true, ran: ["ephemeral_caches"], results: [{ action: "ephemeral_caches", outcome: "released", released: { count: 1 } }], stores: {} } });
       continue;
     }
     if (req.method === "session/load" && req.params.path === "/sessions/unwritten.jsonl") { send({ jsonrpc: "2.0", id: req.id, error: { code: -32001, message: "No saved transcript. Start a new session." } }); continue; }
@@ -350,6 +354,55 @@ describe("WorkerPool", () => {
     const info = await pool.restart(project);
     expect(info.status).toBe("ready");
     expect(info.restarts).toBe(0);
+  });
+
+  it("sends pressure only to the exact worker generation selected", async () => {
+    pool = makePool({ idleMs: 0, sweepMs: 0 });
+    await pool.get(project);
+    const selected = pool.pressureWorkers()[0]!;
+    expect(await pool.pressureDirective(project, selected, { level: "critical", epoch: 1, generation: selected.workerGeneration })).toMatchObject({
+      applied: true,
+      ran: ["ephemeral_caches"],
+    });
+    await expect(pool.pressureDirective(project, { ...selected, clientGeneration: "gone" }, { level: "critical", epoch: 2, generation: selected.workerGeneration })).rejects.toThrow(/no longer available/i);
+  });
+
+  it("pressure retires at most one exact idle worker and never an attached or live-run project", async () => {
+    let attached = true;
+    let liveRun = false;
+    pool = makePool({ idleMs: 0, sweepMs: 0, isAttached: () => attached, hasLiveRun: () => liveRun });
+    await pool.get(project);
+    const selected = pool.pressureWorkers()[0]!;
+    const allow = new Map([[project, { clientGeneration: selected.clientGeneration, workerGeneration: selected.workerGeneration }]]);
+    expect(await pool.retireIdleUnderPressure(allow)).toEqual({ action: "worker_retirement", outcome: "nothing_to_give" });
+    attached = false;
+    liveRun = true;
+    expect(await pool.retireIdleUnderPressure(allow)).toEqual({ action: "worker_retirement", outcome: "nothing_to_give" });
+    liveRun = false;
+    expect(await pool.retireIdleUnderPressure(allow)).toEqual({ action: "worker_retirement", outcome: "released", released: { count: 1 } });
+    await waitFor(() => statusesOf(project).at(-1) === "retired");
+  });
+
+  it("pressure refuses a generation mismatch before retirement", async () => {
+    pool = makePool({ idleMs: 0, sweepMs: 0 });
+    await pool.get(project);
+    const selected = pool.pressureWorkers()[0]!;
+    const answer = await pool.retireIdleUnderPressure(new Map([[project, { clientGeneration: "stale", workerGeneration: selected.workerGeneration }]]));
+    expect(answer).toEqual({ action: "worker_retirement", outcome: "refused", reason: "generation_mismatch" });
+    expect(pool.pressureWorkers()).toHaveLength(1);
+  });
+
+  it("reports an arrival fence separately from worker pins", async () => {
+    let checks = 0;
+    pool = makePool({ idleMs: 0, sweepMs: 0, isAttached: () => ++checks > 1 });
+    await pool.get(project);
+    const selected = pool.pressureWorkers()[0]!;
+    const allow = new Map([[project, { clientGeneration: selected.clientGeneration, workerGeneration: selected.workerGeneration }]]);
+    expect(await pool.retireIdleUnderPressure(allow)).toEqual({ action: "worker_retirement", outcome: "refused", reason: "arrival_fence" });
+
+    checks = -100;
+    vi.spyOn(pool as unknown as { askToRetire: () => Promise<unknown> }, "askToRetire").mockResolvedValue({ retired: false, reason: "held", pins: [{ path: "/s", pins: [{ kind: "turn", detail: "running" }] }] });
+    expect(await pool.retireIdleUnderPressure(allow)).toEqual({ action: "worker_retirement", outcome: "held", reason: "pins_held" });
   });
 
   it("retires an idle worker, but not one a client is attached to", async () => {

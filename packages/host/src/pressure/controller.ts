@@ -1,31 +1,9 @@
 /**
- * The host's own answer for memory pressure (RP-8), milestone E1: evidence and
- * the record.
- *
- * One controller, one serialized chain, one journal. It samples this process
- * and this machine, settles a level for each of them, takes in the reports its
- * workers send unasked — bound to the exact process that delivered them — and
- * publishes one fixed-size summary to the windows on this machine.
- *
- * What it deliberately does **not** do yet: it releases nothing, asks no worker
- * for anything, unloads no conversation, retires no worker and refuses no
- * admission. Those are the host's ordered steps 1, 5, 6 and 7, and they are
- * milestones E2 and E3. Everything here is observation, arithmetic and
- * bookkeeping, so that when the acting arrives it acts on evidence that was
- * already proved.
- *
- * Three rules are structural rather than stylistic:
- *
- * - **Missing evidence is missing.** A level nothing could establish is
- *   `"unknown"`, never `"normal"`; a counter nobody could read is `unavailable`
- *   with a reason, never a zero; an age that is not an exact non-negative
- *   integer is left out rather than reported as none.
- * - **Nothing a worker sends chooses its own identity.** A report is bound to
- *   the delivering process's private numeric generation *and* to the opaque
- *   client generation, re-read inside this chain before anything is recorded.
- * - **A failure is categorical.** A sampler, a store, a publication or a parse
- *   that fails is counted and named in one fixed sentence; it never throws into
- *   a timer, never retries, and never takes the host with it.
+ * RP-8 host evidence and record. One serialized controller samples this host,
+ * binds worker evidence to both private generations, publishes a fixed summary
+ * locally, and invokes E2's bounded pass at settled warning/critical. Missing
+ * evidence stays unknown; failures are categorical and never retried. E3
+ * admission is deliberately absent.
  */
 import {
   MEMORY_PRESSURE_EVENTS_MAX,
@@ -51,6 +29,12 @@ import {
 } from "@lasercode/protocol";
 import { PressureJournal } from "./journal.js";
 import {
+  createHostPressurePass,
+  type HostPressureActions,
+  type HostPressurePassCounters,
+  type HostPressureWorker,
+} from "./pass.js";
+import {
   LEVEL_SEVERITY,
   belowRelease,
   blindSample,
@@ -74,14 +58,7 @@ import {
   type MachinePressureThresholds,
 } from "./thresholds.js";
 
-/** One live worker, as the host currently knows it. */
-export interface HostPressureWorker {
-  cwd: string;
-  /** The opaque per-process identity (RP-7). Host-internal; never published. */
-  clientGeneration: string;
-  /** The private numeric spawn generation (D-262). Host-internal; never published. */
-  workerGeneration: number;
-}
+export type { HostPressureActions, HostPressureWorker } from "./pass.js";
 
 export interface HostPressureDeps {
   /** This process and this machine, read by us, about us. Never throws upward. */
@@ -99,6 +76,8 @@ export interface HostPressureDeps {
   clearTimer?: (handle: unknown) => void;
   /** A categorical line for the host's own log. Never a report, never a path. */
   log?: (line: string) => void;
+  /** Absent keeps the E1 controller observational (and its tests unchanged). */
+  actions?: HostPressureActions;
 }
 
 export interface HostPressureOptions {
@@ -110,12 +89,23 @@ export interface HostPressureOptions {
   /** How old a worker's report may be before that worker is unanswered. */
   workerFreshMs?: number;
   journal?: PressureJournal;
+  directiveStageMs?: number;
+  workerDirectiveSkipMs?: number;
 }
 
 /** The seams this controller reaches out through, for counting their failures. */
-export type HostPressureCallback = "sample" | "workers" | "publish" | "projectId" | "rendererPresent" | "log";
+export type HostPressureCallback =
+  | "sample"
+  | "workers"
+  | "publish"
+  | "projectId"
+  | "rendererPresent"
+  | "log"
+  | "releaseEphemeral"
+  | "unloadIdle"
+  | "retireIdle";
 
-export interface HostPressureCounters {
+export interface HostPressureCounters extends HostPressurePassCounters {
   /**
    * The settled level of the combined probe: what E2 and E3 act on, and what a
    * transition is published for. Hysteresis lives here and nowhere else.
@@ -149,6 +139,7 @@ export interface HostPressureCounters {
   reportsStaleClient: number;
   /** Workers whose evidence was dropped because that exact process went away. */
   workersForgotten: number;
+  hostRows: number;
   journal: { events: number; bytes: number; lastEvictedBy?: "age" | "events" | "bytes"; refusedRows: number };
 }
 
@@ -191,7 +182,7 @@ interface DecisionState {
   streak: number;
 }
 
-const isDirectiveLevel = (level: MemoryPressureLevelState): level is MemoryPressureLevel =>
+const isDirectiveLevel = (level: MemoryPressureLevelState): level is "warning" | "critical" =>
   level === "warning" || level === "critical";
 
 /** A role nobody could measure, said out loud. */
@@ -224,6 +215,8 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
   const elevatedIntervalMs = options.elevatedIntervalMs ?? HOST_PRESSURE_ELEVATED_INTERVAL_MS;
   const publishWindowMs = options.publishWindowMs ?? HOST_PRESSURE_PUBLISH_WINDOW_MS;
   const workerFreshMs = options.workerFreshMs ?? WORKER_REPORT_FRESH_MS;
+  const directiveStageMs = options.directiveStageMs ?? 5_000;
+  const workerDirectiveSkipMs = options.workerDirectiveSkipMs ?? 30_000;
   const journal = options.journal ?? new PressureJournal({ now });
 
   let disposed = false;
@@ -259,6 +252,9 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
     projectId: 0,
     rendererPresent: 0,
     log: 0,
+    releaseEphemeral: 0,
+    unloadIdle: 0,
+    retireIdle: 0,
   };
 
   const counters = {
@@ -279,6 +275,17 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
     reportsGenerationMismatch: 0,
     reportsStaleClient: 0,
     workersForgotten: 0,
+    passes: 0,
+    passCooldownSkips: 0,
+    passFailures: 0,
+    directivesSent: 0,
+    directivesTimedOut: 0,
+    directivesMalformed: 0,
+    directivesRefused: 0,
+    directivesStale: 0,
+    directivesFailed: 0,
+    directivesLate: 0,
+    hostRows: 0,
   };
 
   const serialize = <T>(work: () => Promise<T>): Promise<T> => {
@@ -701,7 +708,7 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
     usable: [...probed.host.usable, ...probed.machine.usable],
   });
 
-  const probe = async (): Promise<void> => {
+  const probe = async (updateDecision = true): Promise<HostPressureProbe> => {
     let sample: HostPressureSample;
     try {
       sample = await deps.sample();
@@ -715,9 +722,9 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
       sample = blindSample(now());
       lastProbe = { sample, host: blindReading, machine: blindReading, level: "unknown" };
       counters.probes += 1;
-      observe(decision, blindReading);
+      if (updateDecision) observe(decision, blindReading);
       refresh();
-      return;
+      return lastProbe;
     }
     counters.probes += 1;
     const at = now();
@@ -732,8 +739,50 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
     // One state machine, over the combined probe: two agreeing probes to
     // escalate, three inside the release line to come back, and any unknown
     // breaks both runs at once.
-    observe(decision, combined(probed));
+    if (updateDecision) observe(decision, combined(probed));
     refresh();
+    return probed;
+  };
+
+  const pressurePass = deps.actions
+    ? createHostPressurePass({
+        actions: deps.actions,
+        now,
+        workers: liveWorkers,
+        freshLevel(worker, at) {
+          const record = evidence.get(worker.cwd);
+          if (!record || record.clientGeneration !== worker.clientGeneration || record.workerGeneration !== worker.workerGeneration) return undefined;
+          const age = freshnessAgeMs(record, at);
+          return age !== undefined && age <= workerFreshMs ? record.level : undefined;
+        },
+        projectId: (cwd) => safely("projectId", () => deps.projectIdOf?.(cwd), undefined),
+        addRow(row, role, level, project) {
+          const event = journal.add(row, { role, level, ...(project ? { project } : {}) });
+          if (event && role === "host") counters.hostRows += 1;
+        },
+        async reprobe(level) {
+          const reading = combined(await probe(false));
+          if (reading.level === "unknown") return "unknown";
+          return belowRelease(reading, level) ? "relieved" : "still_elevated";
+        },
+        refresh,
+        serialize,
+        nextEpoch: () => ++epoch,
+        isDisposed: () => disposed,
+        callbackFailed(kind) {
+          callbackFailed[kind] += 1;
+        },
+        counters,
+        directiveStageMs,
+        workerDirectiveSkipMs,
+        setTimer: schedule,
+        clearTimer,
+      })
+    : undefined;
+
+  const probeAndAct = async (): Promise<void> => {
+    await probe(true);
+    if (isDirectiveLevel(decision.level)) await pressurePass?.run(decision.level);
   };
 
   const armTimer = (): void => {
@@ -741,7 +790,9 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
     if (timer !== undefined) clearTimer(timer);
     timer = schedule(() => {
       timer = undefined;
-      void tick();
+      void tick().catch(() => {
+        counters.passFailures += 1;
+      });
     }, cadence());
   };
 
@@ -749,8 +800,11 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
     try {
       await serialize(async () => {
         if (disposed) return;
-        await probe();
+        await probeAndAct();
       });
+    } catch {
+      counters.passFailures += 1;
+      note("memory pressure: the host pass failed and was dropped");
     } finally {
       armTimer();
     }
@@ -827,6 +881,7 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
   };
 
   const forgetWorker = (cwd: string, clientGeneration: string): void => {
+    pressurePass?.forgetWorker(cwd, clientGeneration);
     const record = evidence.get(cwd);
     if (!record || record.clientGeneration !== clientGeneration) return;
     evidence.delete(cwd);
@@ -863,7 +918,7 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
     probeNow() {
       return serialize(async () => {
         if (disposed) return;
-        await probe();
+        await probeAndAct();
       });
     },
     counters() {

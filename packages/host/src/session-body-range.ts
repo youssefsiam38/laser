@@ -79,10 +79,10 @@ export class SessionBodyRange {
    * a file that changed, a host asked to give memory back (RP-8) — each of them
    * calls this, and the next read starts again from the file.
    */
-  forget(): void {
+  forget(): boolean {
     this.generation += 1;
     if (this.idle !== undefined) { clearTimeout(this.idle); this.idle = undefined; }
-    this.reader.forget();
+    return this.reader.forget();
   }
 
   /** Release on a timer as well, so an idle host does not keep a body resident. */
