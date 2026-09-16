@@ -2,7 +2,7 @@
 
 Status: implementation authorized and active as M18.
 
-Architecture task: MX-T9. Implementation tasks: M18-T1..T17. Decisions: D-255, D-256, D-257, D-258, D-259.
+Architecture task: MX-T9. Implementation tasks: M18-T1..T19 and M19-T1..T3. Decisions: D-255 through D-264.
 
 ## Progress
 
@@ -12,8 +12,8 @@ Authoritative detail, evidence and ownership live in `STATUS_DETAILED.md`; `STAT
 | --- | --- | --- | --- |
 | RP-1 | M18-T1 | done | `1628349`; build, protocol 153, host 403, desktop 160 |
 | RP-2 initial | M18-T2 | done — reviewed harness and sanitized finding integrated through `ad8c188`; full A refuses B at unchanged renderer ceiling with zero survivors | RP-1 |
-| RP-2 repeat | M18-T15 | in progress — reviewed harness repair `cec6c07a`; corrected terminal TailBuffer proof `2430622b`; unchanged quick all nine scenarios passes with zero survivors; full A/B waits RP-8/RP-5b | RP-4..RP-8, RP-5b |
-| RP-3 | M18-T3 | browser gate/review `a0111f9` + correction `66ac605` + T4/T5/T6/T7 counter mapping `4ba58bd4`; final pressure subsection/closeout waits RP-8 | RP-1 |
+| RP-2 repeat | M18-T15 | in progress — reviewed harness repair `cec6c07a`; corrected terminal TailBuffer proof `2430622b`; unchanged quick all nine scenarios passes with zero survivors; full A/B waits RP-8 | RP-4..RP-8, RP-5b |
+| RP-3 | M18-T3 | in progress — browser gate/review `a0111f9` + correction `66ac605` + T4/T5/T6/T7 counter mapping `4ba58bd4`; final pressure subsection/closeout waits RP-8 | RP-1 |
 | RP-4 | M18-T4 | done — worker-owned atomic release/retirement, fair LRU unload and hard replay floors integrated at `eb18e147`; exact-head convergence verified | RP-2 |
 | RP-4b | M18-T17 | done — bounded token-safe naming lifecycle integrated at `890e6a86`; no-model parked intents retire while actual naming pins; focused worker 45, real-host E2E 4 and host 636 pass | RP-4 |
 | RP-4c | M18-T18 | done — integrated `916e30fa` (implementation/correction `55abfb12`/`c0754b3e`); one fail-closed route authority covers live reads, load/fork bookkeeping and exclusive moves; three unchanged exact-SHA full-mode scenario-5 runs completed with zero survivors | RP-4, RP-4b |
@@ -21,13 +21,15 @@ Authoritative detail, evidence and ownership live in `STATUS_DETAILED.md`; `STAT
 | RP-5b | M18-T16 | done — integrated `42344a58` (implementation `2fca59d3`); every hydrated view is hard-bounded, large bodies use revision-fenced authoritative ranges, focused/full/browser gates pass, and exact-tip full-mode scenarios 1–5 completed with zero survivors | RP-5, RP-10 |
 | RP-6 | M18-T6 | done — integrated `a256efe`; reviewed membership, task/log retention and cleanup/security gates | RP-2 |
 | RP-7 | M18-T7 | done — integrated `0542a58e`; reviewed bounded decoder/provider/body-store/direct+relay pressure, privacy/browser and unchanged-workload footprint gates pass | RP-2 |
-| RP-8 | M18-T8 | in progress — B0 calibrated D-261; validated protocol/router milestone B integrated through `23fbf4ae`; worker-local controller milestone C is in architecture planning | RP-4, RP-5 |
+| RP-8 | M18-T8 | in progress — B0 calibrated D-261; validated protocol/router milestone B integrated through `23fbf4ae`; worker-local controller milestone C is implementing under D-262/D-263 | RP-4, RP-5 |
 | RP-9 | M18-T9 | done — integrated `dd637f3` | protocol integration follows RP-1 |
 | RP-10 | M18-T10 | done — reviewed bounded device tail cache integrated at `c7375791`; parent exact-tip cache 113 + readiness 18, UI types/build, lifecycle/race browser matrices and same-workload memory evidence pass | RP-5, RP-9 |
 | RP-11 | M18-T11 | done — `fa68dd02` plus reviewed corrections `eddc9f38`, `bae977d9`, `78b22c83`; one shared authority fence, exact-revision cache settlement and real offline mismatch matrices prove 0-frame warm paint, preserved focus/draft/reading place and zero survivors | RP-10 |
 | RP-12 | M18-T12 | done — integrated `e9e3d8d` | RP-9 |
 | RP-13 | M18-T13 | done — host policy/storage isolation through `1e4eeba`; reviewed real-host browser matrices `a0111f9` | RP-12 |
 | RP-14 | M18-T14 | todo | RP-1..RP-13, M18-T15 |
+| Capability consumption | M18-T19 | todo — consume the authoritative RP-13 descriptor in client affordances | RP-13 |
+| Recovery/update activation | M19-T1..T3 | todo — explicit launch, generation, repair, update and migration recovery tasks | M18 |
 
 ## Outcome
 

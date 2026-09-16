@@ -2417,22 +2417,23 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 | --- | --- | --- | --- | --- | --- |
 | M18-T1 | RP-1 process identity and correct accounting | done | orchestrator-01a0a030 + resource-inventory worker | `1628349`; build + protocol 153 + host 403 + desktop 160 pass | see notes; D-255/D-256 |
 | M18-T2 | RP-2 controlled reproduction and heap attribution | done | orchestrator-01a0a030 + resource-soak worker | `ad8c188`; browser-check 67/67; corrected full A finding | see notes; depends on M18-T1 |
-| M18-T3 | RP-3 Advanced resource diagnostics | in-progress | orchestrator-01a0a030 + resource-diagnostics worker | — | see notes; depends on M18-T1 |
+| M18-T3 | RP-3 Advanced resource diagnostics | in-progress | orchestrator-01a0a030 + resource-diagnostics worker | `a0111f9`, `66ac605`, `4ba58bd4`; pressure panel/review/matrix remain | see notes; depends on M18-T1 |
 | M18-T4 | RP-4 bounded worker session lifetime | done | orchestrator-01a0a030 + worker-session-lifetime | `eb18e147`; focused protocol 40 + worker 44 + host 46 pass; exact-head convergence | see notes; depends on M18-T2 |
 | M18-T5 | RP-5 bounded renderer session lifetime | done | orchestrator-01a0a030 + renderer-session-lifetime | `4f34a614`; UI focused 84 + typecheck; UI full 1874; browser 4/4; partial exact-code calibration | see notes; depends on M18-T2 |
 | M18-T6 | RP-6 bounded task and transcript-delivery lifetime | done | orchestrator-01a0a030 + task-delivery-lifetime worker | `a256efe`; build/typecheck + pi-extension 168 + host 530 + protocol 186 + browser-check 69 pass | see notes; depends on M18-T2 |
 | M18-T7 | RP-7 bounded provider logging and transport pressure | done | orchestrator-01a0a030 + transport-pressure | `0542a58e`; focused protocol/pi-extension/host 117 pass; full/browser/privacy/footprint report | see notes; depends on M18-T2 |
-| M18-T8 | RP-8 memory-pressure policy and safety ceilings | in-progress | memory-pressure-policy `01a0a397-d49e-76c8-926f-532d5ea2d1da` | B0 `/tmp/m18-t8-report.md`; protocol B `ddd2a15b`…`23fbf4ae`; C plan active | see notes; depends on M18-T4/M18-T5 |
+| M18-T8 | RP-8 memory-pressure policy and safety ceilings | in-progress | memory-pressure-policy `01a0a397-d49e-76c8-926f-532d5ea2d1da` | B0 `/tmp/m18-t8-report.md`; protocol B `ddd2a15b`…`23fbf4ae`; C implementing | see notes; depends on M18-T4/M18-T5 |
 | M18-T9 | RP-9 durable session revision contract | done | orchestrator-01a0a030 + revision-read worker | `dd637f3`; build/typecheck + protocol 165 + host 445 pass | see notes |
 | M18-T10 | RP-10 bounded device tail cache | done | device-tail-cache `01a0a2fe-219e-76c8-926f-52f9c3310b62` + orchestrator | `c7375791`; parent exact-tip cache 113 + readiness 18, UI types/build; reviewed browser/resource evidence | see notes; depends on M18-T5/M18-T9 |
 | M18-T11 | RP-11 immediate paint and authoritative reconciliation | done | immediate-paint owner + orchestrator | `fa68dd02`, `eddc9f38`, `bae977d9`, `78b22c83`; UI 2,161/1 skipped; browser 12/12, zero survivors | see notes; depends on M18-T10 |
 | M18-T12 | RP-12 worker-free authoritative reads | done | orchestrator-01a0a030 + revision-read worker | `e9e3d8d`; focused protocol/host/worker + typecheck/identity/direction pass | see notes |
 | M18-T13 | RP-13 remote/cloud/enterprise policy | done | orchestrator-01a0a030 + environment-policy/browser workers | `a0111f9`; real host/browser 4×2 matrices + UI 1789 + browser-check 69 | see notes; depends on M18-T12 |
 | M18-T14 | RP-14 Electron/Tauri decision gate | todo | — | — | depends on M18-T1..T13/M18-T15 |
-| M18-T15 | RP-2 post-containment repeat baseline | in-progress | orchestrator-01a0a030 | `cec6c07a`, `2430622b`; unchanged quick all nine scenarios pass | harness ready; full A/B waits M18-T8/M18-T16 |
+| M18-T15 | RP-2 post-containment repeat baseline | in-progress | orchestrator-01a0a030 | `cec6c07a`, `2430622b`; unchanged quick all nine scenarios pass | harness ready; full A/B waits M18-T8 |
 | M18-T16 | RP-5b bounded single-conversation hydration and rendering | done | pinned-view-budget `01a0a430-0193-76c8-926f-5380c13c9ab3` + orchestrator | `42344a58` (implementation `2fca59d3`); protocol 47, UI 2123/1 skipped, host 655/656 with one unrelated timeout, focused worker 39; exact-tip full-mode scenarios 1–5 zero survivors | see notes; depends on M18-T10 |
 | M18-T17 | RP-4 impossible naming-pin correction | done | naming-pin-correction `01a0a464-3123-76c8-926f-53c73cf80a31` | `890e6a86`; worker 45 + real host E2E 4 + host 636 pass | see notes; added by D-259 |
 | M18-T18 | RP-4 path-routed mutation authority | done | route-authority worker + orchestrator | `916e30fa` (implementation `55abfb12`, correction `c0754b3e`); host 687, lease/move 31, real E2E 9; three exact-SHA full-mode scenario-5 runs zero survivors | see notes; added by D-260 |
+| M18-T19 | Consume environment capabilities in client affordances | todo | — | — | added by D-264; depends on M18-T13 |
 
 #### M18-T1 notes
 - 2026-09-14 baseline: protocol 144/144 and host 316/316 pass at `ec1c42d`. Desktop 155/156 passes; `test/host-environment.test.ts` reproducibly expects same-version adoption but receives `failed` before this task changes code. Treat as a pre-existing baseline, not a telemetry regression; M18-T1 must keep every other desktop test green and report this exact case separately if unchanged.
@@ -2518,7 +2519,7 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 - 2026-09-15 one review-fix run `run_fd175b3e` completed: exact revision/entry/leaf tuples now invalidate on uncovered live or buffered mutations and adopt only matching authoritative windows; action/path-directed measurement uses allocation-free exact UTF-8 deltas and stable counter snapshots; pins sit beside six event-touched unpinned LRU views while all bytes remain bounded; pending tails coalesce by opaque environment/session identity and refuse unidentified records.
 - 2026-09-15 done and integrated at merge `4f34a614` (implementation `fc32986`, evidence/docs `6ba0817`): parent rerun passed 84 focused tests plus UI typecheck; worker evidence passed UI 1874/1 skipped, build/identity/direction/diff, browser matrix 4/4 at `/tmp/browser-check/run-I5CZP9`, and exact-code partial calibration `/tmp/resource-soak-t5-review` with four intended phases, zero survivors/raw heaps and flat retained counters (50 light identities, six unpinned transcript slots beside pins, 4 MiB/1.5 MiB byte limits). T15 owns two-run repeatability; this calibration does not claim it.
 - 2026-09-15 T8 milestone-A calibration found the full scenario-4 renderer sample inconclusive because it followed heap-snapshot instrumentation, while quick natural scenario 4 reached 631 MiB PSS/230 MiB JS heap in one current pinned view. Investigation owner `01a0a430-0193-76c8-926f-5380c13c9ab3` run `run_808ad44c` is separating residue from actual retention and auditing whether the 1.5 MiB per-view/4 MiB total contract truly bounds a single pinned/streaming view; plan-only, no source overlap with T10.
-- Ownership ledger: renderer session lifetime · implementation `4f34a614`; post-calibration proof/possible correction plan owned by `01a0a430-0193-76c8-926f-5380c13c9ab3` · artifact `/tmp/m18-pinned-view-plan.md` · base `bb6b1e25` · status done pending audit result.
+- Ownership ledger: renderer session lifetime · implementation `4f34a614`; post-calibration audit became M18-T16 and is integrated at `42344a58` · ownership released to T8/T18 · status done.
 
 #### M18-T6 notes
 - 2026-09-14 claimed: owner `01a0a1f8-57b2-76c8-926f-52ac71acb877` investigates task/TailBuffer durability and connection/scope delivery reference counting before code, and must settle T4 pins plus T7 queue boundaries. Plan: `/tmp/m18-t6-plan.md`; isolated base `ad8c188`; no source writes until approval.
@@ -2564,7 +2565,11 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 - 2026-09-16 milestone B integrated through `23fbf4ae`: compiler-complete enum/number-only protocol, validated/branded egress shapes, actor-local ordered worker passes, fail-closed evidence/coverage, newest-first bounded journal shape and zero-forward Router refusal. Independent review `/tmp/m18-t8-b-review.md` findings were corrected in `c912cbe9`; parent closed the outer publish-validation boundary in `23fbf4ae`. Verification: protocol 306/306 plus seven type tests, focused router/access 62/62, full host 687/687 and pi-extension 190/190 reported, workspace build/typecheck/identity/direction/diff green.
 - 2026-09-16 milestone C plan claimed on integrated base `23fbf4ae`: map one worker-local scheduler, self-sampling, generation-fenced directive/report, step 1/3/4 release seams and bounded tests before source. Plan artifact `/tmp/m18-t8-c-plan.md`; no code until orchestrator approval.
 - 2026-09-16 milestone C plan `/tmp/m18-t8-c-plan.md` approved with D-262 and implementation corrections: per-spawn host-minted argv generation replaces the impossible post-spawn RP-1 record id; definitions/baselines stay; body-range forget reports whether held; refused/cooldown directives return empty rows; a valid host directive may run safe steps under unknown local evidence but its response exclusively owns those results; autonomous reports cover self passes and every level transition without duplicating directive outcomes or dropping an action report during coalescing.
-- Ownership ledger: worker pressure controller · owner `01a0a397-d49e-76c8-926f-532d5ea2d1da` · current milestone C implementation; permitted worker pressure/sampler/server/replay/git/main/tests, protocol body-range boolean/tests, and narrow host worker-generation argv/pool/tests; base `369589ca`; prerequisite B/C plan done · in progress; next handoff parent inspection and one independent review.
+- 2026-09-16 final-gap audit `/tmp/m18-remaining-gap-audit.md` found the remaining dependency chain C→D→E→F/G→T15→T14, the stale ledger claims corrected in D-264, and two pressure-contract ambiguities. D-263 settles them before D/E consume the rows: directive results are anonymous `results`, not journal `events`; `admission_refused` always has outcome `refused`; `held` always names a held reason.
+- Ownership ledger: worker pressure controller · owner `01a0a397-d49e-76c8-926f-532d5ea2d1da` · current milestone C implementation/correction; permitted worker pressure/sampler/server/replay/git/main/tests, protocol body-range and D-263 pressure-shape/tests, and narrow host worker-generation argv/pool/tests; base `f20948cc`; prerequisite B/C plan done · in progress; next handoff parent inspection and one independent review.
+
+#### M18-T19 notes
+- 2026-09-16 added by D-264 from the only remaining completed-slice audit finding: the host publishes authenticated scopes, local-only methods and diagnostics capability, but client affordances do not consume them. Implementation waits for the RP-8 UI/controller critical path and must reuse the descriptor rather than inventing a client policy table.
 
 #### M18-T9 notes
 - 2026-09-14 claimed: specify the opaque durable revision and worker-free bounded snapshot/read contract together before code, because RP-9 is the validation foundation for RP-10/RP-11/RP-12. Implementation waits for the RP-1 protocol merge to avoid competing writers in shared inventory files.
@@ -2625,6 +2630,10 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 | MX-T7 | One module defines the product's identity | done | claude-2026-09-05-identity | `product.json` at the repository root; `pnpm identity:generate` rewrites 14 files; `pnpm identity:check` runs inside `pnpm -r build` and `pnpm -r test`; renaming to `wavelet` and back proved end to end — see notes | The rename is one edit plus one command. A frozen `wireNamespace` is the deliberate exception (D-48) |
 | MX-T8 | Cross-package performance audit | done | perf-wide-audit | `docs/performance-wide-audit.md`; isolated `probes.mts` and `extra-probes.mts` exit 0 | 24 findings; report only; see notes; D-229 |
 | MX-T9 | Resource containment and instant conversation plan | done | orchestrator-01a09f76 | `docs/resource-and-loading-plan.md`; `git diff --check` | see notes; D-255 |
+| MX-T10 | Bundled runtime package-manager verification | todo | — | — | added by D-264; blocks a clean final `pnpm verify` |
+
+#### MX-T10 notes
+- 2026-09-16 added by D-264: repeated clean-base reports cite `test/runtime-env.test.ts > runs real npm and npx in a bundled-style layout with no system PATH` failing because an unrelated installed `/opt/Laser/resources` lacks `npm/bin/npx-cli.js`. Make the verification fixture self-contained and restore a fully green `pnpm verify`; do not weaken the empty-PATH packaged-runtime assertion.
 
 #### MX-T9 notes
 - 2026-09-14 claimed: turn the read-only T3 Code, DSH Desktop and Laser memory analysis into one dependency-ordered implementation plan; preserve Electron and the single-engine/API boundaries.
@@ -2815,6 +2824,17 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 | M17-T18 | One noun for an agent | todo | — | — | audit §4 |
 | M17-T19 | Rows shrink their arguments, never their verbs | todo | — | — | audit §4 |
 | M17-T20 | The map never covers the conversation | todo | — | — | audit §4 |
+
+## M19 · Runtime recovery and update activation
+
+| ID | Task | State | Owner | Evidence | Notes |
+| --- | --- | --- | --- | --- | --- |
+| M19-T1 | Launch identity, safe mode and bounded repair | todo | — | — | added by D-264; depends on M18 |
+| M19-T2 | Immutable generation activation and correlated updates | todo | — | — | added by D-264; depends on M19-T1 |
+| M19-T3 | Migration snapshot and interrupted-restore recovery | todo | — | — | added by D-264; depends on M19-T2 |
+
+#### M19 notes
+- 2026-09-16 D-264 turns `docs/resource-and-loading-plan.md`'s supporting recovery/update prose into three dependency-ordered tasks after containment. They strengthen activation and recovery; the reviewed release orchestrator remains authoritative.
 
 ## Handoffs
 
@@ -3630,6 +3650,7 @@ Consequences: no RP-2 requirement is dropped. T4–T8 may start only after T2's 
 | Q-7 | Adopt the proposed transcript-only compact density for 0.2.4: 14px/21px prose, tighter block rhythm and 20px message gaps while preserving control sizes and the 12px data floor? | — | answered by D-95: yes |
 | Q-8 | Resolved for implementation scope: person authorized a dedicated reviewed extension-generated model-admission seam; preserve goals, Pi pin and policy, no later-release authorization (D-193). | M13-T89, M13-T92, M13-T93, M13-T94 | person; implementation owner queued |
 | Q-9 | Should the desktop shell be served by Electron itself (custom privileged scheme) so the first frame no longer waits for host adoption, and should a renderer hidden for a long time be destroyed and rehydrated to reclaim tray memory? Both need new contracts (CSP/PWA path; durable renderer state). | — (report phases 4 and 6, D-244) | the person |
+| Q-10 | For the RP-14 shell gate: is a shell migration's measured benefit a product goal; must memory, package size and every no-regression gate all pass; is Linux-only evidence sufficient or must macOS/Windows be proven; and is distro-provided WebKitGTK acceptable for a Linux build? If cross-platform proof is required, may the project use paid runners/signing credentials? | M18-T14 final branch/outcome (Phase A may still run) | the person |
 
 ---
 
@@ -4925,3 +4946,13 @@ Next: T111 finishes routing; T108 completes its single review correction. Only t
 **Decision.** The host mints a monotonic numeric generation for every worker spawn and passes it in the private worker argv before startup. The worker never derives, echoes or chooses it; absence fails closed. This generation is distinct from RP-1's post-spawn process-record generation. Worker pressure is serialized and actor-local: self passes own autonomous reports; a host directive owns its response and is never duplicated as a notification. Autonomous reports publish each level transition, including normal or unknown with no actions, and preserve an action report ahead of a later coalesced state-only report.
 **Why.** RP-1's `resourceRegistration` does not exist until after spawn and may be absent, so an autonomous worker cannot truthfully carry it. A first directive cannot be allowed to define the fence that validates itself. Separating directive responses from autonomous reports prevents duplicate journal events and permits a valid host pressure request to run safe steps even when the worker's local sampler is unavailable. Transition reports are necessary so the host does not retain a stale warning forever.
 **Consequences.** Milestone C owns the narrow host argv/pool handshake and worker fence; milestone E binds ingress to the delivering `WorkerClient`. Cooldown also bounds host directives; a refused directive has `applied:false` with empty rows. `DefinitionsCache` and git baselines are canonical-until-replaced and never cleared; only the body-range memo and unpinned git status cache join step 1. Body-range `forget()` returns whether it actually released a memo. No private identity is exposed and no active work is cancelled.
+
+### D-263 · 2026-09-16 · Pressure rows say whether they are results, holds or refusals
+**Decision.** Rename the directive answer's anonymous action-row field from `events` to `results`; only the host journal creates identified events. An `admission_refused` action always has outcome `refused` and names the refusal. An outcome `held` always carries one of `pins_held`, `membership_held` or `safety_incomplete`, and those reasons appear only on held outcomes. Other outcome/reason pairings remain open where the same categorical reason can truthfully describe several actors.
+**Why.** Milestone B deliberately left these relations unsettled before a producer existed. Milestone C and the final-gap audit made the ambiguity concrete: calling anonymous rows events blurs the single journal authority, an admission row that did not refuse contradicts its action, and an unexplained hold cannot tell the UI which safety owner prevented release.
+**Consequences.** Milestone C amends the protocol/tests and its producer before review. Milestones D/E consume `results`; no compatibility alias is added because no released producer or client has used this internal method. The wire remains enums/numbers only.
+
+### D-264 · 2026-09-16 · Every remaining resource-plan obligation has a durable owner
+**Decision.** Add M18-T19 for client consumption of the RP-13 environment descriptor, MX-T10 for the unexplained bundled-runtime verification failure, and M19-T1..T3 for the resource plan's post-containment launch, repair, activation, update-correlation and migration-recovery work. Update M18's ledger to include T18 and D-260..D-263 rather than leaving those facts only in history.
+**Why.** `/tmp/m18-remaining-gap-audit.md` found the completed RP slices intact but identified three obligations with no task row and thirteen stale progress claims. The person asked for the referenced plan end to end; prose without an owner would disappear when M18 closes, while an unexplained clean-base red test cannot be final verification evidence.
+**Consequences.** M18's critical path remains C→D→E→F/G→T15→T14. M18-T19 waits behind that UI/controller work; MX-T10 must be green before final verification. M19 begins only after M18 and does not replace or weaken the reviewed release orchestrator.
