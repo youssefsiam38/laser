@@ -124,8 +124,9 @@ export default {
     const quiet = [];
     for (let index = 0; index < config.quietSamples; index++) {
       await sleep(config.quietIntervalMs);
-      const phase = await run.samplePhase(`retired-quiet-${index + 1}`, { includeWorkers: false, pageClosed: true });
-      quiet.push({ x: index * (config.quietIntervalMs / 60_000), y: phase.totalPssBytes });
+      await run.samplePhase(`retired-quiet-${index + 1}`, { includeWorkers: false, pageClosed: true });
+      const postGc = await run.hostPostGcPss(`retired-quiet-${index + 1}`);
+      quiet.push({ x: index * (config.quietIntervalMs / 60_000), y: postGc.totalPssBytes });
     }
     report.slopes.hostPostRetirementPssBytesPerMinute = slopeSummary(quiet, config.quietIntervalMs / 1000);
     await removeRegistrations((await waitForRegistrations(check.fixture.inspectDir, { rootPid: check.fixture.hostRecord.pid, minimum: 1 }))

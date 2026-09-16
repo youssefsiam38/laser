@@ -13,11 +13,28 @@ export function theilSen(points) {
 }
 
 export function slopeSummary(points, intervalSeconds) {
-  const values = points.map(point => point.y).filter(Number.isFinite);
+  const clean = points.filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
+  const values = clean.map(point => point.y);
+  const available = clean.length === points.length && points.length >= 3;
+  const meanX = available ? clean.reduce((sum, point) => sum + point.x, 0) / clean.length : null;
+  const meanY = available ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+  const sxx = available ? clean.reduce((sum, point) => sum + (point.x - meanX) ** 2, 0) : 0;
+  const syy = available ? clean.reduce((sum, point) => sum + (point.y - meanY) ** 2, 0) : 0;
+  const value = available && sxx > 0
+    ? clean.reduce((sum, point) => sum + (point.x - meanX) * (point.y - meanY), 0) / sxx
+    : null;
+  const intercept = value === null ? null : meanY - value * meanX;
+  const residualSumSquares = value === null ? null
+    : clean.reduce((sum, point) => sum + (point.y - (intercept + value * point.x)) ** 2, 0);
+  const residualStandardDeviation = residualSumSquares === null ? null : Math.sqrt(residualSumSquares / (clean.length - 2));
+  const standardError = residualStandardDeviation === null || sxx <= 0 ? null : residualStandardDeviation / Math.sqrt(sxx);
   return {
-    status: values.length === points.length && points.length >= 3 ? 'available' : 'unavailable',
-    value: values.length === points.length && points.length >= 3 ? theilSen(points) : null,
-    samples: points.length,
+    status: value === null ? 'unavailable' : 'available',
+    estimator: 'ordinary-least-squares', measurementPhase: 'post-gc',
+    value, intercept, standardError, residualStandardDeviation,
+    relativeStandardError: standardError === null || value === 0 ? null : standardError / Math.abs(value),
+    rSquared: residualSumSquares === null || syy === 0 ? null : 1 - residualSumSquares / syy,
+    samples: points.length, points: clean.map(point => ({ x: point.x, y: point.y })),
     intervalSeconds,
     minimumBytes: values.length ? Math.min(...values) : null,
     maximumBytes: values.length ? Math.max(...values) : null,
@@ -42,6 +59,46 @@ export function spearman(a, b) {
   let d2 = 0;
   for (const value of common) d2 += (ar.indexOf(value) - br.indexOf(value)) ** 2;
   return 1 - (6 * d2) / (common.length * (common.length ** 2 - 1));
+}
+
+// V8 heap snapshots report retained self sizes in 8-byte units. Repeated
+// captures of the same low-size WorkerServer owner varied by at most 1.22% in
+// the two full validity runs, so the next quarter-percent is the declared
+// comparison resolution. This changes ranks, never bytes or gate thresholds.
+export const HEAP_RANK_RESOLUTION = Object.freeze({ absoluteBytes: 8, relative: 0.0125 });
+const HEAP_RANK_CATEGORIES = new Set(['host', 'host-nodes', 'renderer', 'renderer-nodes', 'worker', 'worker-nodes']);
+
+function tiedRanks(rows, category) {
+  const ranked = mergedRanks(rows).slice(0, 10);
+  if (!HEAP_RANK_CATEGORIES.has(category)) return ranked.map((row, index) => ({ ...row, rank: index + 1 }));
+  const result = [];
+  for (let start = 0; start < ranked.length;) {
+    let end = start + 1;
+    const high = ranked[start].bytes;
+    const tolerance = Math.max(HEAP_RANK_RESOLUTION.absoluteBytes, high * HEAP_RANK_RESOLUTION.relative);
+    while (end < ranked.length && high - ranked[end].bytes <= tolerance) end += 1;
+    const averageRank = ((start + 1) + end) / 2;
+    for (let index = start; index < end; index++) result.push({ ...ranked[index], rank: averageRank });
+    start = end;
+  }
+  return result;
+}
+
+function spearmanWithTies(a, b) {
+  const br = new Map(b.map(row => [row.owner, row.rank]));
+  const common = a.filter(row => br.has(row.owner));
+  if (common.length < 2) return null;
+  const av = common.map(row => row.rank);
+  const bv = common.map(row => br.get(row.owner));
+  const am = av.reduce((sum, value) => sum + value, 0) / av.length;
+  const bm = bv.reduce((sum, value) => sum + value, 0) / bv.length;
+  let covariance = 0, aa = 0, bb = 0;
+  for (let index = 0; index < av.length; index++) {
+    const ax = av[index] - am, bx = bv[index] - bm;
+    covariance += ax * bx; aa += ax * ax; bb += bx * bx;
+  }
+  if (aa === 0 || bb === 0) return aa === bb && av.every((value, index) => value === bv[index]) ? 1 : null;
+  return covariance / Math.sqrt(aa * bb);
 }
 function sign(value) { return value === 0 ? 0 : value > 0 ? 1 : -1; }
 function slopeValue(value) { return typeof value === 'number' ? value : value?.value; }
@@ -81,10 +138,12 @@ export function compareRuns(a, b) {
   const categories = {};
   for (const name of [...new Set([...Object.keys(a.rankings ?? {}), ...Object.keys(b.rankings ?? {})])]) {
     const policy = policyFor(name);
-    const ar = rankNames(a.rankings?.[name] ?? []);
-    const br = rankNames(b.rankings?.[name] ?? []);
+    const rankedA = tiedRanks(a.rankings?.[name] ?? [], name);
+    const rankedB = tiedRanks(b.rankings?.[name] ?? [], name);
+    const ar = rankedA.map(row => row.owner);
+    const br = rankedB.map(row => row.owner);
     const overlap = ar.slice(0, 5).filter(owner => br.slice(0, 5).includes(owner)).length;
-    const correlation = spearman(ar, br);
+    const correlation = spearmanWithTies(rankedA, rankedB);
     const common = ar.filter(owner => br.includes(owner)).length;
     const enough = ar.length >= policy.minimumOwners && br.length >= policy.minimumOwners;
     const topOwnerSame = ar[0] !== undefined && ar[0] === br[0];
@@ -99,6 +158,7 @@ export function compareRuns(a, b) {
       policy: policy.kind, topOwnerSame, topFiveOverlap: overlap, requiredOverlap, spearman: correlation,
       commonOwners: common, rankStability: trivial ? 'trivial: one common owner' : correlation === null ? 'unavailable' : 'correlated',
       owners: { a: ar.length, b: br.length },
+      rankResolution: HEAP_RANK_CATEGORIES.has(name) ? HEAP_RANK_RESOLUTION : null,
       pass: enough && (policy.requireSameTopOwner ? topOwnerSame : true) && overlap >= requiredOverlap && correlationOk,
     };
   }

@@ -17,7 +17,7 @@ export const MODES = Object.freeze({
     runTimeoutMs: 8 * 60_000,
     // Pacing and sampling.
     baselineSettleMs: 500, baselineNaturalSamples: 2, baselineNaturalIntervalMs: 1_000,
-    hydrateCheckpointEvery: 10, bashCheckpointEvery: 2, allocationWindowCalls: 2,
+    hydrateCheckpointEvery: 10, bashCheckpointEvery: 2, bashSlopeCheckpointEvery: 2, allocationWindowCalls: 2,
     workerHeapCaptures: 1, historyPageSize: 40,
     slowReplayAttempts: 24, slowReplayPaceMs: 150, backpressureTimeoutMs: 15_000,
     quietSamples: 3, quietIntervalMs: 1_000,
@@ -39,7 +39,7 @@ export const MODES = Object.freeze({
     idleMs: 15_000, sweepMs: 500, phaseTimeoutMs: 5 * 60_000,
     runTimeoutMs: 30 * 60_000,
     baselineSettleMs: 10_000, baselineNaturalSamples: 5, baselineNaturalIntervalMs: 1_000,
-    hydrateCheckpointEvery: 10, bashCheckpointEvery: 50, allocationWindowCalls: 50,
+    hydrateCheckpointEvery: 10, bashCheckpointEvery: 50, bashSlopeCheckpointEvery: 10, allocationWindowCalls: 50,
     workerHeapCaptures: 3, historyPageSize: 40,
     slowReplayAttempts: 2, slowReplayPaceMs: 150, backpressureTimeoutMs: 60_000,
     quietSamples: 6, quietIntervalMs: 5_000,

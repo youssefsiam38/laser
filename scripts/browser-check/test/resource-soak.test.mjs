@@ -11,7 +11,7 @@ import { EventEmitter } from 'node:events';
 import { promisify } from 'node:util';
 import { modeConfig, expected, SAFETY } from '../resource/config.mjs';
 import { syntheticPng, imagePayload } from '../resource/fixtures.mjs';
-import { theilSen, compareRuns, assertRedacted, sanitizeOwner, sanitizeError, COMPARISON_POLICY, SLOPE_POLICY } from '../resource/report.mjs';
+import { theilSen, slopeSummary, compareRuns, assertRedacted, sanitizeOwner, sanitizeError, COMPARISON_POLICY, SLOPE_POLICY, HEAP_RANK_RESOLUTION } from '../resource/report.mjs';
 import { connectInspector, InspectorClient } from '../resource/inspector.mjs';
 import { captureHeap } from '../resource/heap.mjs';
 import { captureMemoryInfra, dumpAllocators } from '../resource/memory-infra.mjs';
@@ -40,6 +40,7 @@ test('fixture matrix pins the full acceptance workload', () => {
     images: 12, side: 2048, logical: 192 * 1024 * 1024 });
   assert.equal(SAFETY.snapshotBytes, 256 * 1024 * 1024);
   assert.equal(SAFETY.parserHeapMb, 384);
+  assert.deepEqual([full.bashCheckpointEvery, full.bashSlopeCheckpointEvery], [50, 10], 'measurement cadence changes no Bash workload');
 });
 
 test('quick fixture still exercises every bounded mechanism', () => {
@@ -58,8 +59,12 @@ test('PNG generator is deterministic, valid and uniquely seeded', () => {
   assert.equal(images.reduce((n,image) => n + image.logicalBytes, 0), 8192);
 });
 
-test('robust slopes and repeated owner ranks are deterministic', () => {
+test('post-GC slope fits and repeated owner ranks are deterministic', () => {
   assert.equal(theilSen([{x:0,y:10},{x:1,y:12},{x:2,y:14},{x:3,y:100}]), 30);
+  const fit = slopeSummary([{ x: 0, y: 1 }, { x: 1, y: 3 }, { x: 2, y: 5 }, { x: 3, y: 7 }], null);
+  assert.deepEqual({ estimator: fit.estimator, phase: fit.measurementPhase, value: fit.value, standardError: fit.standardError,
+    residual: fit.residualStandardDeviation, rSquared: fit.rSquared, samples: fit.samples },
+  { estimator: 'ordinary-least-squares', phase: 'post-gc', value: 2, standardError: 0, residual: 0, rSquared: 1, samples: 4 });
   const scenarios = Object.fromEntries(Array.from({ length: 9 }, (_, index) => [`scenario-${index + 1}`, 'complete']));
   const a={rankings:{host:[{owner:'sessions',bytes:5},{owner:'tasks',bytes:4},{owner:'logs',bytes:3},{owner:'socket',bytes:2},{owner:'pool',bytes:1}]},slopes:{host:{value:2}},scenarios};
   const b={rankings:{host:[{owner:'sessions',bytes:6},{owner:'tasks',bytes:5},{owner:'logs',bytes:3},{owner:'socket',bytes:2},{owner:'pool',bytes:1}]},slopes:{host:{value:2.2}},scenarios};
@@ -67,6 +72,22 @@ test('robust slopes and repeated owner ranks are deterministic', () => {
   // The same rankings with a slope half again as large do not repeat.
   const spread={...b,slopes:{host:{value:3}}};
   assert.equal(compareRuns(a,spread).slopes.host.pass,false);
+});
+
+test('heap-snapshot ranks share average ranks inside the declared byte resolution', () => {
+  assert.deepEqual(HEAP_RANK_RESOLUTION, { absoluteBytes: 8, relative: 0.0125 });
+  const scenarios = Object.fromEntries(Array.from({ length: 9 }, (_, index) => [`scenario-${index + 1}`, 'complete']));
+  const owners = [
+    { owner: 'dominant-a', bytes: 1_812_528 }, { owner: 'dominant-b', bytes: 1_812_432 },
+    { owner: 'low-a', bytes: 111_528 }, { owner: 'low-b', bytes: 111_136 },
+    { owner: 'low-c', bytes: 110_944 }, { owner: 'low-d', bytes: 110_168 },
+  ];
+  const a = { rankings: { worker: owners }, slopes: { stable: { value: 2 } }, scenarios };
+  const b = { rankings: { worker: [owners[0], owners[1], owners[5], owners[4], owners[3], owners[2]] }, slopes: { stable: { value: 2 } }, scenarios };
+  const compared = compareRuns(a, b).categories.worker;
+  assert.equal(compared.spearman, 1);
+  assert.equal(compared.pass, true);
+  assert.deepEqual(compared.rankResolution, HEAP_RANK_RESOLUTION);
 });
 
 test('report redaction rejects paths, inspector URLs, payloads, ids and canaries', () => {
@@ -764,6 +785,22 @@ function soakRunFixture({ order = [], census, touched = [], workerCounterFails =
   return { run, report, order, touched };
 }
 
+test('renderer slope checkpoints force collection before reading heap usage', async () => {
+  const { run } = soakRunFixture({ census: async () => completeCensus([]) });
+  const calls = [];
+  run.check.cdp = {
+    async send(method) {
+      calls.push(method);
+      if (method === 'Performance.getMetrics') return { metrics: [{ name: 'JSHeapUsedSize', value: 1234 }] };
+      return {};
+    },
+  };
+  const sample = await run.rendererPostGcHeap('slope-point');
+  assert.deepEqual(calls, ['HeapProfiler.enable', 'HeapProfiler.collectGarbage', 'HeapProfiler.collectGarbage',
+    'Performance.enable', 'Performance.getMetrics']);
+  assert.deepEqual(sample, { label: 'slope-point', phase: 'post-gc', rendererJsHeapBytes: 1234 });
+});
+
 const completeCensus = rows => ({
   rows, unreadable: [], exited: [], replaced: [], missingRequired: [],
   coverage: { scope: 'test', expected: rows.length, measured: rows.length, complete: true, unreadableProcesses: 0, exitedProcesses: 0, replacedProcesses: 0,
@@ -834,6 +871,21 @@ test('a stat row without Linux physical metrics is unreadable, never complete co
   assert.equal(taken.coverage.unreadableProcesses, 1);
   assert.deepEqual([censusTotals(taken).totalPssBytes, censusTotals(taken).totalPrivateResidentBytes], [null, null]);
   await assert.rejects(verdictFor(taken), /coverage is inconclusive/);
+});
+
+test('a metric-less row is rechecked once so an exiting process is recorded as exited', async () => {
+  let samples = 0;
+  const census = new ProcessCensus({
+    hostPid: 1,
+    descendants: async () => [1],
+    sample: async () => {
+      samples += 1;
+      if (samples === 1) return { pid: 1, startToken: 'a', pssBytes: null, privateResidentBytes: null };
+      throw new Error('ENOENT: no such file or directory');
+    },
+  });
+  const taken = await census.take();
+  assert.deepEqual([samples, taken.exited, taken.unreadable, taken.coverage.complete], [2, [1], [], true]);
 });
 
 test('a process that exited is not an unreadable row, and a reused pid is re-identified', async () => {

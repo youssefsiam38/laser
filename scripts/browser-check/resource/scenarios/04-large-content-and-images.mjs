@@ -16,6 +16,7 @@ export default {
     await selectSession(check, heavy);
     await prompt(check.rpc, heavy.path, 'resource:large-stream RESOURCE-SOAK-PROMPT-CANARY', run.until.bind(run), config.phaseTimeoutMs);
     const afterReasoning = await run.samplePhase('large-reasoning-markdown');
+    const afterReasoningPostGc = await run.rendererPostGcHeap('large-reasoning-markdown');
     await prompt(check.rpc, heavy.path, 'resource:tool-large', run.until.bind(run), config.phaseTimeoutMs);
 
     // The extension's tail buffers, read from the heap of the worker that would
@@ -43,6 +44,7 @@ export default {
     // later, the buffer goes with it and the retention expectation must know.
     const heavyToolGeneration = await run.workerGeneration(heavy.cwd);
     const afterTool = await run.samplePhase('large-tool-output');
+    const afterToolPostGc = await run.rendererPostGcHeap('large-tool-output');
 
     const images = imagePayload(config);
     const accepted = await check.rpc('session/prompt', { path: heavy.path,
@@ -67,9 +69,9 @@ export default {
 
     const phase = await run.samplePhase('large-stream', { heap: true });
     report.slopes.rendererHeavyPayloadHeapBytesPerMiB = slopeSummary([
-      { x: 0, y: state.distinctPhase?.renderer?.jsHeapUsedBytes ?? null },
-      { x: (config.reasoningBytes + config.markdownBytes) / 1024 / 1024, y: afterReasoning.renderer?.jsHeapUsedBytes ?? null },
-      { x: (config.reasoningBytes + config.markdownBytes + config.toolBytes) / 1024 / 1024, y: afterTool.renderer?.jsHeapUsedBytes ?? null },
+      { x: 0, y: state.distinctPostGcRendererHeapBytes ?? null },
+      { x: (config.reasoningBytes + config.markdownBytes) / 1024 / 1024, y: afterReasoningPostGc.rendererJsHeapBytes },
+      { x: (config.reasoningBytes + config.markdownBytes + config.toolBytes) / 1024 / 1024, y: afterToolPostGc.rendererJsHeapBytes },
     ], null);
     report.imageOwnership = { count: images.length, decodedCount: phase.renderer?.images?.filter(image => image.decoded).length ?? 0,
       logicalPixelBytes: images.reduce((n, image) => n + image.logicalBytes, 0), encodedBytes: images.reduce((n, image) => n + image.bytes.length, 0),

@@ -22,6 +22,9 @@ import { descendantPids } from './inspector.mjs';
 
 export const SCOPE = 'host process tree and the renderer of the measured page';
 
+class PhysicalMemoryUnavailable extends Error {}
+const settleExitingProcess = () => new Promise(resolve => setTimeout(resolve, 50));
+
 export class ProcessCensus {
   constructor({ hostPid, sample = processSample, descendants = descendantPids } = {}) {
     this.hostPid = hostPid;
@@ -48,7 +51,7 @@ export class ProcessCensus {
       // that process as unreadable so totals and the safety verdict cannot
       // silently proceed from a partial census.
       if (!Number.isFinite(row.pssBytes) || !Number.isFinite(row.privateResidentBytes)) {
-        throw new Error('Linux proportional or private-resident memory is unavailable for a sampled process.');
+        throw new PhysicalMemoryUnavailable('Linux proportional or private-resident memory is unavailable for a sampled process.');
       }
       this.identities.set(row.pid, row.startToken);
       rows.push(row);
@@ -60,6 +63,20 @@ export class ProcessCensus {
         record(row);
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
+        if (error instanceof PhysicalMemoryUnavailable) {
+          // A process in its exit window can retain a readable stat row after
+          // smaps_rollup has gone away. Re-sample once after a bounded settle:
+          // ENOENT is then an honest exit; another metric-less row remains an
+          // unreadable safety refusal.
+          await settleExitingProcess();
+          try { const row = await this.sample(pid, known ?? undefined); record(row); }
+          catch (retry) {
+            const retryReason = retry instanceof Error ? retry.message : String(retry);
+            if (/ENOENT|ESRCH|no such file/i.test(retryReason)) { exited.push(pid); this.identities.delete(pid); }
+            else unreadable.push({ pid, reason: retryReason });
+          }
+          continue;
+        }
         if (/changed identity/.test(reason)) {
           // A new process reusing a pid is a different process, not a bad read.
           replaced.push(pid);
