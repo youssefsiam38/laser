@@ -40,6 +40,7 @@ describe("durable runtime repair policy", () => {
     expect(ledger.automaticRetry("/project", "normal", failure("/project"))).toMatchObject({ allowed: false, attempts: 2 });
     expect(ledger.status("/project", "normal", failure("/project"))).toEqual({ state: "exhausted", automaticAttempts: 2 });
     expect(JSON.stringify(ledger.snapshot())).not.toContain("/project");
+    expect(readFileSync(path, "utf8")).not.toContain("/project");
     const stored = JSON.parse(readFileSync(path, "utf8"));
     expect(stored.incidents).toHaveLength(1);
     expect(stored.incidents[0]).toMatchObject({ mode: "normal", hostLaunchId });

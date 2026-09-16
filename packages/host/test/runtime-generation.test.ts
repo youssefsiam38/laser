@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -125,16 +125,38 @@ describe("runtime generation inventory", () => {
     expect(runtimeVerificationMetrics()).toMatchObject({ full: false, hashedFiles: 3 });
   });
 
-  it("writes immutable feature manifests that reference the runtime without retaining cwd", () => {
+  it("keys immutable feature manifests to Feature prefs and retains only current plus previous", () => {
     const state = mkdtempSync(join(tmpdir(), "feature-generation-state-"));
     roots.push(state);
+    const root = join(state, "feature-generations");
     const store = new FeatureGenerationStore(state, "a".repeat(64));
-    const first = store.ensure({ cwd: "/private/project", desiredPrefsRevision: 7, effectiveFeatures: ["web-access", "goals"], mode: "normal" });
-    const second = store.ensure({ cwd: "/private/project", desiredPrefsRevision: 7, effectiveFeatures: ["goals", "web-access"], mode: "normal" });
-    expect(second).toEqual(first);
-    const text = readFileSync(join(state, "feature-generations", `${first.featureGenerationId}.json`), "utf8");
+    const first = store.ensure({ cwd: "/private/project", featurePrefsRevision: 7, effectiveFeatures: ["web-access", "goals"], mode: "normal" });
+    const pointerPath = join(root, "projects", `${first.cwdDigest}.json`);
+    const unchanged = new Date("2001-01-01T00:00:00.000Z");
+    utimesSync(pointerPath, unchanged, unchanged);
+
+    // Reordering IDs — and unrelated preference writes, which do not change
+    // featurePrefsRevision — cannot mint or rewrite a generation.
+    const same = store.ensure({ cwd: "/private/project", featurePrefsRevision: 7, effectiveFeatures: ["goals", "web-access"], mode: "normal" });
+    expect(same).toEqual(first);
+    expect(statSync(pointerPath).mtimeMs).toBe(unchanged.getTime());
+
+    const second = store.ensure({ cwd: "/private/project", featurePrefsRevision: 8, effectiveFeatures: ["goals", "web-access"], mode: "normal" });
+    const third = store.ensure({ cwd: "/private/project", featurePrefsRevision: 8, effectiveFeatures: [], mode: "safe" });
+    expect(new Set([first.featureGenerationId, second.featureGenerationId, third.featureGenerationId]).size).toBe(3);
+    expect(JSON.parse(readFileSync(pointerPath, "utf8"))).toEqual({
+      schemaVersion: 1,
+      featureGenerationId: third.featureGenerationId,
+      previousFeatureGenerationId: second.featureGenerationId,
+    });
+    expect(readdirSync(root).filter((name) => name.endsWith(".json")).sort()).toEqual([
+      `${second.featureGenerationId}.json`,
+      `${third.featureGenerationId}.json`,
+    ].sort());
+
+    const text = readFileSync(join(root, `${third.featureGenerationId}.json`), "utf8");
     expect(text).not.toContain("/private/project");
-    expect(JSON.parse(text)).toMatchObject({ runtimeGenerationId: "a".repeat(64), desiredPrefsRevision: 7, mode: "normal" });
-    expect(statSync(join(state, "feature-generations", `${first.featureGenerationId}.json`)).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(text)).toMatchObject({ runtimeGenerationId: "a".repeat(64), desiredPrefsRevision: 8, mode: "safe" });
+    expect(statSync(join(root, `${third.featureGenerationId}.json`)).mode & 0o777).toBe(0o600);
   });
 });

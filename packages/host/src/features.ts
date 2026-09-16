@@ -22,6 +22,11 @@ const EMPTY: StoredFeatures = { version: 1, global: {}, projects: {} };
 export class FeatureService {
   constructor(private readonly prefs: PrefsStore) {}
 
+  /** Revision of the only preference namespace that can change Feature generations. */
+  get revision(): number {
+    return this.prefs.get(NAMESPACE)[0]?.revision ?? 0;
+  }
+
   list(cwd?: string): FeatureState[] {
     const stored = this.read();
     return FEATURE_MANIFESTS.map((manifest) => {

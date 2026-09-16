@@ -18,6 +18,18 @@ describe("FeatureService", () => {
     ]);
   });
 
+  it("keys its revision only to the features preference namespace", () => {
+    const prefs = new PrefsStore();
+    const service = new FeatureService(prefs);
+    expect(service.revision).toBe(0);
+    prefs.set("theme", { id: "graphite" });
+    expect(service.revision).toBe(0);
+    service.set("goals", false, "global");
+    expect(service.revision).toBe(2);
+    prefs.set("theme", { id: "paper" });
+    expect(service.revision).toBe(2);
+  });
+
   it("lets a project override the global choice without changing another project", () => {
     const service = new FeatureService(new PrefsStore());
     service.set("subagents", false, "global");

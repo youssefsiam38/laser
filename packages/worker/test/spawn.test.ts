@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Duplex } from "node:stream";
-import { LineDecoder, PRODUCT_NAME, type JsonRpcMessage } from "@lasercode/protocol";
+import { ENV, LineDecoder, PRODUCT_NAME, type JsonRpcMessage } from "@lasercode/protocol";
 
 const MAIN = join(import.meta.dirname, "../dist/main.js");
 
@@ -31,10 +31,14 @@ afterEach(async () => {
 
 describe.skipIf(!existsSync(MAIN))("worker process over fd 3", () => {
   it("reports ready, opens a session, and exits cleanly on pipe close", async () => {
+    const featureGenerationId = "f".repeat(64);
     child = spawn(
       process.execPath,
       [MAIN, "--cwd", join(base, "project"), "--launch-id", "00112233445566778899aabbccddeeff", "--worker-mode", "normal", "--agent-dir", join(base, "agent"), "--session-dir", join(base, "sessions")],
-      { stdio: ["ignore", "pipe", "pipe", "pipe"] },
+      {
+        stdio: ["ignore", "pipe", "pipe", "pipe"],
+        env: { ...process.env, [ENV.featureGenerationId]: featureGenerationId },
+      },
     );
     const pipe = child.stdio[3] as Duplex;
     const inbound: JsonRpcMessage[] = [];
@@ -58,8 +62,9 @@ describe.skipIf(!existsSync(MAIN))("worker process over fd 3", () => {
     child.stderr!.on("data", (c: Buffer) => (stderr += c.toString()));
 
     const starting = await waitFor((m) => "method" in m && m.method === "pi/worker/status" && (m.params as { status: string }).status === "starting");
-    expect(starting).toMatchObject({ params: { launchId: "00112233445566778899aabbccddeeff", mode: "normal" } });
-    await waitFor((m) => "method" in m && m.method === "pi/worker/status" && (m.params as { status: string }).status === "ready");
+    expect(starting).toMatchObject({ params: { launchId: "00112233445566778899aabbccddeeff", mode: "normal", featureGenerationId } });
+    const ready = await waitFor((m) => "method" in m && m.method === "pi/worker/status" && (m.params as { status: string }).status === "ready");
+    expect(ready).toMatchObject({ params: { featureGenerationId } });
 
     pipe.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "session/new", params: { cwd: join(base, "project") } })}\n`);
     const res = await waitFor((m) => "id" in m && m.id === 1);

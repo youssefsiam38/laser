@@ -87,6 +87,7 @@ export type WorkerExitKind = Extract<
   | "spawn_error"
   | "launch_identity_missing"
   | "launch_identity_mismatch"
+  | "feature_generation_mismatch"
   | "initialization_error"
   | "process_exit"
   | "heap_oom"
@@ -111,6 +112,10 @@ const EXIT_FAILURE: Record<WorkerExitKind, { stage: RuntimeFailure["stage"]; mes
     message: "The app could not verify the project runtime it started. Try again; if this continues, update or reinstall the app.",
   },
   launch_identity_mismatch: {
+    stage: "announce",
+    message: "The app could not verify the project runtime it started. Try again; if this continues, update or reinstall the app.",
+  },
+  feature_generation_mismatch: {
     stage: "announce",
     message: "The app could not verify the project runtime it started. Try again; if this continues, update or reinstall the app.",
   },
@@ -217,6 +222,8 @@ export class WorkerClient {
    * is keyed by pid and minted after the spawn.
    */
   readonly workerGeneration: number | undefined;
+  /** Immutable effective Feature configuration expected from every lifecycle frame. */
+  readonly featureGenerationId: string | undefined;
   /** What this exact child was explicitly asked to use; absent means unconfigured. */
   readonly configuredOldSpaceBytes: number | undefined;
   private readonly child: ChildProcess;
@@ -250,8 +257,10 @@ export class WorkerClient {
     // A long-lived old host may survive an installer replacing files beneath
     // it. Re-verify its launcher-bound generation before every child spawn;
     // drift refuses before any new project work can begin.
-    const runtime = runtimeReferenceFromEnvironment({ ...(options.baseEnv ?? process.env), ...options.env });
+    const launchEnvironment = { ...(options.baseEnv ?? process.env), ...options.env };
+    const runtime = runtimeReferenceFromEnvironment(launchEnvironment);
     if (runtime) new RuntimeGenerationGuard(runtime).verify();
+    this.featureGenerationId = launchEnvironment[ENV.featureGenerationId];
 
     const args: string[] = [];
     this.configuredOldSpaceBytes = options.oldSpaceMiB === undefined ? undefined : oldSpaceBytes(options.oldSpaceMiB);
@@ -276,7 +285,7 @@ export class WorkerClient {
 
     // Node reads this before our entry exists. An inherited value could raise,
     // lower or invalidate the explicit ceiling, so no spelling reaches a child.
-    const env = nodeLaunchEnvironment({ ...(options.baseEnv ?? process.env), ...options.env, [ENV.workerFd]: "3" });
+    const env = nodeLaunchEnvironment({ ...launchEnvironment, [ENV.workerFd]: "3" });
     this.child = spawn(options.nodeBinary ?? process.execPath, args, {
       // --cwd configures the driver; it does not change the process directory.
       // Engine defaults and subprocesses must never inherit the host's state cwd.
@@ -316,10 +325,14 @@ export class WorkerClient {
         }
         if (!this.announced) {
           const params = isNotification(message) && message.method === "pi/worker/status"
-            ? message.params as { cwd?: unknown; status?: unknown; launchId?: unknown }
+            ? message.params as { cwd?: unknown; status?: unknown; launchId?: unknown; featureGenerationId?: unknown }
             : undefined;
           if (params?.status !== "starting" || params.cwd !== options.cwd || params.launchId !== this.launchId) {
             this.faultLaunch(params?.launchId === undefined ? "launch_identity_missing" : "launch_identity_mismatch");
+            continue;
+          }
+          if (!this.matchesFeatureGeneration(params.featureGenerationId)) {
+            this.faultLaunch("feature_generation_mismatch");
             continue;
           }
           this.announced = true;
@@ -334,9 +347,13 @@ export class WorkerClient {
           else entry.resolve(message.result);
         } else if (isNotification(message)) {
           if (message.method === "pi/worker/status") {
-            const params = message.params as { status?: unknown; launchId?: unknown; failure?: unknown };
+            const params = message.params as { status?: unknown; launchId?: unknown; featureGenerationId?: unknown; failure?: unknown };
             if (params.launchId !== this.launchId) {
               this.faultLaunch(params.launchId === undefined ? "launch_identity_missing" : "launch_identity_mismatch");
+              continue;
+            }
+            if (!this.matchesFeatureGeneration(params.featureGenerationId)) {
+              this.faultLaunch("feature_generation_mismatch");
               continue;
             }
             if (params.status === "ready") {
@@ -384,6 +401,10 @@ export class WorkerClient {
     this.pipe.write(line, () => {
       this.inFlightWrites = Math.max(0, this.inFlightWrites - 1);
     });
+  }
+
+  private matchesFeatureGeneration(value: unknown): boolean {
+    return this.featureGenerationId === undefined || value === this.featureGenerationId;
   }
 
   /** Fail everything in flight and report the exit, exactly once. */

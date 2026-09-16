@@ -1287,6 +1287,9 @@ export class WorkerPool {
       status: entry.status,
       ...(launchId !== undefined ? { launchId } : {}),
       mode: entry.mode,
+      ...(entry.client?.featureGenerationId !== undefined
+        ? { featureGenerationId: entry.client.featureGenerationId }
+        : {}),
       ...(entry.failure !== undefined ? { failure: entry.failure } : {}),
       ...(entry.repair !== undefined ? { repair: entry.repair } : {}),
       ...(entry.message !== undefined ? { message: entry.message } : {}),

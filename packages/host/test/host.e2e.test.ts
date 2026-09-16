@@ -4,13 +4,14 @@
  * and receives seq-numbered updates. Requires `pnpm -r build` (spawns the
  * worker's dist). Sandboxed dirs; never touches ~/.pi/agent.
  */
-import { PRODUCT_NAME, PRODUCT_VERSION, PROJECT_DIR_NAME, isEnvironmentKey, isSessionRevision } from "@lasercode/protocol";
+import { ENV, PRODUCT_NAME, PRODUCT_VERSION, PROJECT_DIR_NAME, isEnvironmentKey, isSessionRevision } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import WebSocket from "ws";
 import type { JsonRpcMessage, SessionState, SessionUpdateParams } from "@lasercode/protocol";
 import { HostServer, defaultWorkerMain } from "../src/index.js";
@@ -160,6 +161,51 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("host end to end", () => {
       expect(host.pool.workerInfo(cwd)?.pid).toBe(pid);
     } finally { client.close(); }
   });
+  it("starts safe mode with no optional Features without changing desired preferences", async () => {
+    await host.close();
+    const stateDir = join(base, "state");
+    const prefsPath = join(stateDir, "prefs.json");
+    const desired = JSON.stringify({
+      version: 1,
+      revision: 3,
+      namespaces: {
+        features: {
+          value: { version: 1, global: { goals: true }, projects: {} },
+          revision: 2,
+          at: "2026-01-01T00:00:00.000Z",
+        },
+        theme: { value: { id: "graphite" }, revision: 3, at: "2026-01-01T00:00:01.000Z" },
+      },
+    }, null, 2);
+    writeFileSync(prefsPath, desired);
+    const captured = join(base, "safe-worker-env.json");
+    const wrapper = join(base, "safe-worker.mjs");
+    writeFileSync(wrapper, `
+import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(captured)}, JSON.stringify({ features: process.env[${JSON.stringify(ENV.features)}] }));
+await import(${JSON.stringify(pathToFileURL(defaultWorkerMain()).href)});
+`);
+    host = new HostServer({
+      agentDir: join(base, "agent"),
+      sessionDir: join(base, "sessions"),
+      stateDir,
+      workerMain: wrapper,
+      log: (line) => logs.push(line),
+    });
+    const client = new Client();
+    await client.connect((await host.listen()).url);
+    const cwd = join(base, "project");
+    try {
+      await client.request("pi/project/add", { cwd });
+      await client.request("pi/project/trust", { cwd, trusted: true });
+      await client.request("pi/worker/restart", { cwd, mode: "safe" });
+      expect(JSON.parse(readFileSync(captured, "utf8"))).toEqual({ features: "[]" });
+      expect(readFileSync(prefsPath, "utf8")).toBe(desired);
+    } finally {
+      client.close();
+    }
+  });
+
   it("reopens genuine empty project, Beam and Chat sessions after worker retirement and a full host restart", async () => {
     // Give a later host a different default. The saved empty-session tuple,
     // not that changed default, must win on reopen.

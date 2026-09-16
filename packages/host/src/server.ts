@@ -660,7 +660,7 @@ export class HostServer {
         const effectiveFeatures = mode === "safe" ? [] : this.features.enabled(cwd);
         const featureGeneration = featureGenerations?.ensure({
           cwd,
-          desiredPrefsRevision: this.prefs.currentRevision,
+          featurePrefsRevision: this.features.revision,
           effectiveFeatures,
           mode,
         });

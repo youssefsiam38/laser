@@ -203,6 +203,8 @@ export interface WorkerInfo {
   launchId?: string;
   /** Normal desired Features, or the explicit non-destructive minimal launch. */
   mode?: WorkerMode;
+  /** Immutable effective Feature configuration carried by this exact child. */
+  featureGenerationId?: string;
   /** Typed ownership and cause for a failed launch/runtime, before private logs. */
   failure?: RuntimeFailure;
   /** Durable automatic-repair policy for this failure. */

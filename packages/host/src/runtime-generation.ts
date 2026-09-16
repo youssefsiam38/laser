@@ -11,6 +11,7 @@ import {
   realpathSync,
   renameSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -80,6 +81,7 @@ export interface FeatureGenerationManifest {
   featureGenerationId: string;
   runtimeGenerationId: string;
   cwdDigest: string;
+  /** Revision of the `features` preference namespace, not the global prefs revision. */
   desiredPrefsRevision: number;
   effectiveFeatures: FeatureId[];
   mode: WorkerMode;
@@ -490,28 +492,72 @@ export class RuntimeGenerationGuard {
   }
 }
 
+interface FeatureGenerationPointer {
+  schemaVersion: 1;
+  featureGenerationId: string;
+  previousFeatureGenerationId?: string;
+}
+
 export class FeatureGenerationStore {
   constructor(private readonly stateDir: string, private readonly runtimeGenerationId: string) {}
 
-  ensure(input: { cwd: string; desiredPrefsRevision: number; effectiveFeatures: FeatureId[]; mode: WorkerMode }): FeatureGenerationManifest {
+  ensure(input: { cwd: string; featurePrefsRevision: number; effectiveFeatures: FeatureId[]; mode: WorkerMode }): FeatureGenerationManifest {
     const cwdDigest = sha256(input.cwd);
     const effectiveFeatures = [...input.effectiveFeatures].sort();
-    const body = `${this.runtimeGenerationId}\0${cwdDigest}\0${input.desiredPrefsRevision}\0${input.mode}\0${effectiveFeatures.join("\0")}`;
+    const body = `${this.runtimeGenerationId}\0${cwdDigest}\0${input.featurePrefsRevision}\0${input.mode}\0${effectiveFeatures.join("\0")}`;
     const featureGenerationId = sha256(body);
     const manifest: FeatureGenerationManifest = {
       schemaVersion: 1,
       featureGenerationId,
       runtimeGenerationId: this.runtimeGenerationId,
       cwdDigest,
-      desiredPrefsRevision: input.desiredPrefsRevision,
+      desiredPrefsRevision: input.featurePrefsRevision,
       effectiveFeatures,
       mode: input.mode,
     };
     const root = join(this.stateDir, "feature-generations");
     const manifestPath = join(root, `${featureGenerationId}.json`);
-    if (!existsSync(manifestPath)) atomicWrite(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 0o600);
-    else if (readFileSync(manifestPath, "utf8") !== `${JSON.stringify(manifest, null, 2)}\n`) throw new RuntimeGenerationError("corrupt");
-    atomicWrite(join(root, "projects", `${cwdDigest}.json`), `${JSON.stringify({ schemaVersion: 1, featureGenerationId })}\n`, 0o600);
+    const manifestText = `${JSON.stringify(manifest, null, 2)}\n`;
+    const pointerPath = join(root, "projects", `${cwdDigest}.json`);
+    let pointer: FeatureGenerationPointer | undefined;
+    if (existsSync(pointerPath)) {
+      try {
+        const parsed = JSON.parse(readFileSync(pointerPath, "utf8")) as Partial<FeatureGenerationPointer>;
+        if (parsed.schemaVersion !== 1 || !HASH.test(parsed.featureGenerationId ?? "")
+          || (parsed.previousFeatureGenerationId !== undefined && !HASH.test(parsed.previousFeatureGenerationId))) {
+          throw new RuntimeGenerationError("corrupt");
+        }
+        pointer = parsed as FeatureGenerationPointer;
+      } catch (error) {
+        if (error instanceof RuntimeGenerationError) throw error;
+        throw new RuntimeGenerationError("corrupt");
+      }
+    }
+
+    if (pointer?.featureGenerationId === featureGenerationId) {
+      if (!existsSync(manifestPath) || readFileSync(manifestPath, "utf8") !== manifestText) {
+        throw new RuntimeGenerationError("corrupt");
+      }
+      return manifest;
+    }
+
+    if (!existsSync(manifestPath)) atomicWrite(manifestPath, manifestText, 0o600);
+    else if (readFileSync(manifestPath, "utf8") !== manifestText) throw new RuntimeGenerationError("corrupt");
+    const next: FeatureGenerationPointer = {
+      schemaVersion: 1,
+      featureGenerationId,
+      ...(pointer ? { previousFeatureGenerationId: pointer.featureGenerationId } : {}),
+    };
+    atomicWrite(pointerPath, `${JSON.stringify(next)}\n`, 0o600);
+
+    const dropped = pointer?.previousFeatureGenerationId;
+    if (dropped && dropped !== featureGenerationId && dropped !== next.previousFeatureGenerationId) {
+      try {
+        unlinkSync(join(root, `${dropped}.json`));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
     return manifest;
   }
 }

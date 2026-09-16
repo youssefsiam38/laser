@@ -30,7 +30,8 @@ function blockerDetail(blockers?: ActivationBlockers): string {
 
 /** The only source for native update notice copy and actions. */
 export type RuntimeMigrationCopyKey =
-  | "newer-schema" | "unsafe" | "space" | "owner" | "snapshot-damaged" | "restore-space" | "restore-failed";
+  | "newer-schema" | "unsafe" | "space" | "owner" | "snapshot-damaged" | "restore-space" | "restore-failed"
+  | "prepare-failed";
 
 export function runtimeMigrationEventCopy(phase: "preparing" | "migrating" | "ready"): string {
   if (phase === "ready") return "Data preparation finished.";
@@ -45,6 +46,7 @@ export function runtimeMigrationCopy(key: RuntimeMigrationCopyKey): string {
     case "snapshot-damaged": return "The previous data snapshot is damaged.";
     case "restore-space": return "There is not enough free space to restore the previous data snapshot.";
     case "restore-failed": return "The previous data snapshot could not be restored safely.";
+    case "prepare-failed": return "The app could not prepare your data for this update. Try again, or restore your previous data.";
     case "unsafe": return "The update could not prepare your data safely.";
   }
 }

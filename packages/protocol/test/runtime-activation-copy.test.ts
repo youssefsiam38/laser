@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { runtimeUpdatePresentation } from "../src/runtime-activation-copy.js";
+import { runtimeMigrationCopy, runtimeUpdatePresentation } from "../src/runtime-activation-copy.js";
 
 describe("runtime update presentation", () => {
   it("keeps migration preparation, failure and restoration copy exact", () => {
+    expect(runtimeMigrationCopy("prepare-failed")).toBe(
+      "The app could not prepare your data for this update. Try again, or restore your previous data.",
+    );
     expect(runtimeUpdatePresentation("preparing-data")).toEqual({
       title: "Preparing your data for this update…",
       detail: "Your current data snapshot is being verified before anything changes.",

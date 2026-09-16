@@ -22,7 +22,15 @@
  * rewrite, and the log line below records the exact command so a failed start
  * on someone else's machine is one line to read rather than a guess.
  */
-import { ENV, MIB_BYTES, PRODUCT_NAME, configuredOldSpaceBytes, nodeLaunchEnvironment, runtimeUpdatePresentation } from "@lasercode/protocol";
+import {
+  ENV,
+  MIB_BYTES,
+  PRODUCT_NAME,
+  configuredOldSpaceBytes,
+  nodeLaunchEnvironment,
+  runtimeMigrationCopy,
+  runtimeUpdatePresentation,
+} from "@lasercode/protocol";
 import { type ChildProcess, spawn } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -159,7 +167,9 @@ export class HostProcess {
       log.error("runtime generation verification failed", error);
       return this.publish({
         state: "failed",
-        message: error instanceof Error ? error.message : "The app could not verify its installed runtime. Reinstall the app.",
+        message: error instanceof MigrationActivationError
+          ? error.message
+          : runtimeMigrationCopy("prepare-failed"),
         ...(error instanceof MigrationActivationError
           ? { migration: { updateId: error.updateId, snapshot: error.snapshot, canRestore: error.canRestore } }
           : {}),

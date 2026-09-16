@@ -25,6 +25,12 @@ const samples: RuntimeFailure[] = [
     message: "This project's runtime did not start.",
   },
   {
+    owner: { kind: "worker", launchId, cwd: "/project" },
+    stage: "announce",
+    category: "feature_generation_mismatch",
+    message: "The app could not verify the project runtime it started.",
+  },
+  {
     owner: { kind: "module", module: "web-access", sessionPath: "/sessions/one.jsonl" },
     stage: "activate",
     category: "activation_error",

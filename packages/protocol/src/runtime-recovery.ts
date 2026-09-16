@@ -42,6 +42,7 @@ export const RUNTIME_FAILURE_CATEGORIES = [
   "spawn_error",
   "launch_identity_missing",
   "launch_identity_mismatch",
+  "feature_generation_mismatch",
   "initialization_error",
   "registration_error",
   "detection_error",
