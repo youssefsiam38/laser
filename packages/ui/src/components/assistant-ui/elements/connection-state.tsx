@@ -164,7 +164,7 @@ export function VersionNotice({ hostVersion, desktopVersion, update, onRefresh, 
       <div className="min-w-0 flex-1 basis-48">
         <p className="font-medium text-ink">{updateTitle ?? (restart ? `${PRODUCT_DISPLAY_NAME} is ready to restart` : "Refresh this view to continue")}</p>
         <p className="mt-1 text-xs text-ink-2">{updateDetail ?? (restart
-          ? "Restart the app and host together on the host computer when you are ready. Saved sessions are kept."
+          ? "Restart the app and host together on the host computer when you are ready. Saved sessions are kept; active work will stop during restart."
           : "The host has been updated. This refresh only updates your frontend. Your sessions and running agents will not be affected.")}</p>
         <p className="mt-1 text-xs text-ink-3">{update?.version ? `Update ${update.version} · Running ${desktopVersion}` : `This view ${PRODUCT_VERSION} · Host ${hostVersion}`}</p>
       </div>
