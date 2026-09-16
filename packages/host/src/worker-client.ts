@@ -8,6 +8,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
 import type { Duplex } from "node:stream";
+import { oldSpaceBytes, oldSpaceSizeFlag } from "./heap-ceiling.js";
 import {
   ENV,
   ErrorCodes,
@@ -15,6 +16,7 @@ import {
   LineDecoder,
   isNotification,
   isResponse,
+  nodeLaunchEnvironment,
   type JsonRpcError,
   type JsonRpcMessage,
   type JsonRpcNotification,
@@ -58,6 +60,8 @@ export interface WorkerClientOptions {
    * the worker then refuses to report or to act on a directive.
    */
   workerGeneration?: number;
+  /** Explicit V8 old-space ceiling for this exact worker spawn, in MiB. */
+  oldSpaceMiB?: number;
   /** Path to the worker entry; defaults to the workspace `@lasercode/worker` build. */
   workerMain?: string;
   /** Node binary to run the worker with; defaults to the current one. */
@@ -67,8 +71,28 @@ export interface WorkerClientOptions {
   /** Extra environment for the worker, on top of the host's own. */
   env?: Readonly<Record<string, string>>;
   onNotification: (notification: JsonRpcNotification) => void;
-  onExit: (code: number | null, signal: NodeJS.Signals | null) => void;
+  onExit: (code: number | null, signal: NodeJS.Signals | null, exit: WorkerExit) => void;
   onStderr?: (text: string) => void;
+}
+
+export type WorkerExitKind = "heap_oom" | "process_exit" | "spawn_error" | "transport_fault";
+export interface WorkerExit {
+  kind: WorkerExitKind;
+  code: number | null;
+  signal: NodeJS.Signals | null;
+}
+
+const OOM_MARKER = /Reached heap limit|JavaScript heap out of memory|Allocation failed/i;
+const STDERR_MARKER_WINDOW = 4096;
+
+/** Marker plus abnormal termination: neither a SIGABRT nor a stray log line is enough alone. */
+export function classifyWorkerExit(
+  stderrTail: string,
+  code: number | null,
+  signal: NodeJS.Signals | null,
+): WorkerExitKind {
+  const abnormal = signal !== null || (code !== null && code !== 0);
+  return abnormal && OOM_MARKER.test(stderrTail) ? "heap_oom" : "process_exit";
 }
 
 export class WorkerRpcError extends Error {
@@ -144,6 +168,8 @@ export class WorkerClient {
    * is keyed by pid and minted after the spawn.
    */
   readonly workerGeneration: number | undefined;
+  /** What this exact child was explicitly asked to use; absent means unconfigured. */
+  readonly configuredOldSpaceBytes: number | undefined;
   private readonly child: ChildProcess;
   private readonly pipe: Duplex;
   private readonly pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
@@ -165,10 +191,15 @@ export class WorkerClient {
   /** Complete messages handed to the pipe and not yet written. */
   private inFlightWrites = 0;
   private rejectReady: ((error: Error) => void) | undefined;
+  /** Only enough stderr to recognize stable fatal markers; never surfaced as status copy. */
+  private stderrMarkerTail = "";
   readonly ready: Promise<void>;
 
   constructor(private readonly options: WorkerClientOptions) {
-    const args = [options.workerMain ?? defaultWorkerMain(), "--cwd", options.cwd];
+    const args: string[] = [];
+    this.configuredOldSpaceBytes = options.oldSpaceMiB === undefined ? undefined : oldSpaceBytes(options.oldSpaceMiB);
+    if (options.oldSpaceMiB !== undefined) args.push(oldSpaceSizeFlag(options.oldSpaceMiB));
+    args.push(options.workerMain ?? defaultWorkerMain(), "--cwd", options.cwd);
     if (options.agentDir) args.push("--agent-dir", options.agentDir);
     if (options.sessionDir) args.push("--session-dir", options.sessionDir);
     if (options.stateDir) args.push("--state-dir", options.stateDir);
@@ -178,12 +209,15 @@ export class WorkerClient {
     this.workerGeneration = options.workerGeneration;
     if (options.workerGeneration !== undefined) args.push("--worker-generation", String(options.workerGeneration));
 
+    // Node reads this before our entry exists. An inherited value could raise,
+    // lower or invalidate the explicit ceiling, so no spelling reaches a child.
+    const env = nodeLaunchEnvironment({ ...(options.baseEnv ?? process.env), ...options.env, [ENV.workerFd]: "3" });
     this.child = spawn(options.nodeBinary ?? process.execPath, args, {
       // --cwd configures the driver; it does not change the process directory.
       // Engine defaults and subprocesses must never inherit the host's state cwd.
       cwd: options.cwd,
       stdio: ["ignore", "pipe", "pipe", "pipe"],
-      env: { ...(options.baseEnv ?? process.env), ...options.env, [ENV.workerFd]: "3" },
+      env,
     });
     this.pipe = this.child.stdio[3] as Duplex;
     // A notification can race a worker exit before the process's exit event.
@@ -228,7 +262,11 @@ export class WorkerClient {
         }
       }
     });
-    this.child.stderr?.on("data", (c: Buffer) => options.onStderr?.(c.toString()));
+    this.child.stderr?.on("data", (c: Buffer) => {
+      const text = c.toString();
+      this.stderrMarkerTail = `${this.stderrMarkerTail}${text}`.slice(-STDERR_MARKER_WINDOW);
+      options.onStderr?.(text);
+    });
     this.child.stdout?.on("data", () => {}); // drain; Pi/extension logs are not ours
     this.child.on("exit", (code, signal) => {
       this.exited = true;
@@ -239,7 +277,7 @@ export class WorkerClient {
       // `ready`, fail the pending calls, and tell the pool the worker is gone.
       this.exited = true;
       this.startError ??= error;
-      this.settle(error, rejectReady, null, null);
+      this.settle(error, rejectReady, null, null, "spawn_error");
     });
   }
 
@@ -261,6 +299,7 @@ export class WorkerClient {
     rejectReady: (e: Error) => void,
     code: number | null,
     signal: NodeJS.Signals | null,
+    kind = classifyWorkerExit(this.stderrMarkerTail, code, signal),
   ): void {
     if (this.reported) return;
     this.reported = true;
@@ -270,7 +309,7 @@ export class WorkerClient {
     rejectReady(error);
     for (const entry of this.pending.values()) entry.reject(error);
     this.pending.clear();
-    this.options.onExit(code, signal);
+    this.options.onExit(code, signal, { kind, code, signal });
   }
 
   /**
@@ -296,7 +335,7 @@ export class WorkerClient {
     } catch {
       // Already gone; the settle below is what matters.
     }
-    this.settle(error, this.rejectReady ?? ((): void => {}), null, null);
+    this.settle(error, this.rejectReady ?? ((): void => {}), null, null, "transport_fault");
   }
 
   /**

@@ -108,6 +108,7 @@ const report: MemoryPressureReportInput = {
   level: "warning",
   sampleAgeMs: 1_000,
   inputs: [{ kind: "physical", value: measure }],
+  ceiling: { configuredBytes: 2_147_483_648, measuredLimit: { status: "available", value: 2_197_815_296 } },
   ran: ["ephemeral_caches", "replay_suffixes"],
   results: [
     { action: "ephemeral_caches", outcome: "released", released: { bytes: 4_194_304 } },
@@ -539,6 +540,10 @@ describe("a worker's pass", () => {
     }
     expect(memoryPressureReportSchema.safeParse({ ...report, generation: -1 }).success).toBe(false);
     expect(memoryPressureReportSchema.safeParse({ ...report, sampleAgeMs: Number.POSITIVE_INFINITY }).success).toBe(false);
+    expect(memoryPressureReportSchema.safeParse({ ...report, ceiling: {} }).success).toBe(false);
+    expect(memoryPressureReportSchema.safeParse({ ...report, ceiling: { configuredBytes: 0 } }).success).toBe(false);
+    expect(memoryPressureReportSchema.safeParse({ ...report, ceiling: { measuredLimit: missing } }).success).toBe(true);
+    expect(memoryPressureReportSchema.safeParse({ ...report, ceiling: undefined }).success).toBe(true);
   });
 
   it("acts on nothing at normal, and on nothing at all under unproven evidence", () => {

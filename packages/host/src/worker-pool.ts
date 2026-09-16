@@ -35,7 +35,8 @@ import { ErrorCodes, ProtocolError, environmentOverlay } from "@lasercode/protoc
 import { canonical } from "./trust.js";
 import { SessionRouteLeases } from "./session-route-lease.js";
 import { retirementRefused, retireWorker, type RetirementOutcome } from "./worker-retirement.js";
-import { WorkerClient, nextWorkerGeneration, type WorkerClientOptions } from "./worker-client.js";
+import { HeapCeilingCapacityError, workerOldSpaceMiB } from "./heap-ceiling.js";
+import { WorkerClient, nextWorkerGeneration, type WorkerClientOptions, type WorkerExit } from "./worker-client.js";
 
 export interface WorkerPoolOptions {
   agentDir?: string;
@@ -52,6 +53,8 @@ export interface WorkerPoolOptions {
   providerPayloads?: "full" | "summary";
   workerMain?: string;
   nodeBinary?: string;
+  /** Test-only validated override; production derives the final capped value once. */
+  workerOldSpaceMiB?: number;
   /** Extra environment for every worker (the bundled package manager, M10-T5). */
   env?: Readonly<Record<string, string>>;
   /** Environment resolved at spawn time, so project feature overrides apply. */
@@ -84,6 +87,10 @@ export interface WorkerPoolOptions {
   ) => void;
   /** That process is gone: nothing it started can still be completed. */
   onWorkerGone?: (source: { cwd: string; generation: string }) => void;
+  /** An unasked-for generation loss, classified without carrying stderr. */
+  onWorkerLoss?: (loss: { cwd: string; generation: string; exit: WorkerExit; message: string }) => void;
+  /** After the successor has reopened every canonical session it could. */
+  onReopened?: (client: WorkerClient, cwd: string, paths: readonly string[]) => Promise<void>;
   onStderr?: (cwd: string, text: string) => void;
   /** Called for every lifecycle change, after the notification is sent. */
   onStatus?: (info: WorkerInfo) => void;
@@ -288,13 +295,20 @@ export class WorkerPool {
    * at ingress, so counting it as expected coverage would make a row that can
    * never be answered. Never spawns, never blocks.
    */
-  pressureWorkers(): Array<{ cwd: string; clientGeneration: string; workerGeneration: number }> {
-    const out: Array<{ cwd: string; clientGeneration: string; workerGeneration: number }> = [];
+  pressureWorkers(): Array<{ cwd: string; clientGeneration: string; workerGeneration: number; configuredOldSpaceBytes?: number }> {
+    const out: Array<{ cwd: string; clientGeneration: string; workerGeneration: number; configuredOldSpaceBytes?: number }> = [];
     for (const entry of this.entries.values()) {
       if (entry.warm || !entry.client?.alive || entry.status !== "ready") continue;
       const workerGeneration = entry.client.workerGeneration;
       if (workerGeneration === undefined) continue;
-      out.push({ cwd: entry.cwd, clientGeneration: entry.client.generation, workerGeneration });
+      out.push({
+        cwd: entry.cwd,
+        clientGeneration: entry.client.generation,
+        workerGeneration,
+        ...(entry.client.configuredOldSpaceBytes !== undefined
+          ? { configuredOldSpaceBytes: entry.client.configuredOldSpaceBytes }
+          : {}),
+      });
     }
     return out;
   }
@@ -677,13 +691,22 @@ export class WorkerPool {
     }
     entry.reopened = paths;
     const client = await this.get(key);
+    const reopened: string[] = [];
     for (const path of paths) {
       // Same as after a crash: the worker's `seq` restarts at 1 and clients
       // resync through `session/load`'s `replayFrom`.
       await client.request("session/load", { path }).then(
-        () => this.bindSession(path, key),
+        () => {
+          this.bindSession(path, key);
+          reopened.push(path);
+        },
         () => {},
       );
+    }
+    if (entry.client === client && client.alive && this.options.onReopened) {
+      await this.options.onReopened(client, entry.cwd, reopened).catch(() => {
+        this.options.onStderr?.(entry.cwd, "agent failure recovery unavailable; it will retry after the next successful reopen\n");
+      });
     }
     return this.infoOf(entry);
   }
@@ -846,6 +869,19 @@ export class WorkerPool {
     if (this.closed) throw new ProtocolError(ErrorCodes.DriverUnavailable, "the host is shutting down");
     if (entry.stopped) throw retiringError(entry.cwd);
 
+    let configuredWorkerOldSpaceMiB: number;
+    try {
+      // Capacity is read for each spawn, not for the pool: an undersized
+      // project is a project-level refusal and must never prevent HostServer
+      // itself from being constructed.
+      configuredWorkerOldSpaceMiB = this.options.workerOldSpaceMiB ?? workerOldSpaceMiB();
+    } catch (error) {
+      if (error instanceof HeapCeilingCapacityError) {
+        this.setStatus(entry, "crashed", error.message);
+      }
+      throw error;
+    }
+
     // Nothing may start until the host's own before-workers work has settled.
     // A failure there is not a reason to refuse a worker: the cleanup reports
     // itself and the machine carries on.
@@ -905,8 +941,9 @@ export class WorkerPool {
         ? { env: { ...(this.options.env ?? {}), ...(this.options.envForCwd?.(entry.cwd) ?? {}) } }
         : {}),
       ...(projectTrusted !== undefined ? { projectTrusted } : {}),
+      oldSpaceMiB: configuredWorkerOldSpaceMiB,
       onNotification: (n) => this.onWorkerNotification(entry, client, n),
-      onExit: (code, signal) => this.onExit(entry, client, code, signal),
+      onExit: (code, signal, exit) => this.onExit(entry, client, code, signal, exit),
       ...(this.options.onStderr ? { onStderr: (t: string) => { if (!entry.warm) this.options.onStderr?.(entry.cwd, t); } } : {}),
     };
     const client = new WorkerClient({ ...clientOptions, ...(generation !== undefined ? { workerGeneration: generation } : {}) });
@@ -995,7 +1032,7 @@ export class WorkerPool {
     if (!entry.warm) this.options.onNotification(entry.cwd, notification, { generation: client.generation });
   }
 
-  private onExit(entry: Entry, client: WorkerClient, code: number | null, signal: NodeJS.Signals | null): void {
+  private onExit(entry: Entry, client: WorkerClient, code: number | null, signal: NodeJS.Signals | null, exit: WorkerExit): void {
     // Even a superseded process's exit ends what that process started.
     this.options.onWorkerGone?.({ cwd: entry.cwd, generation: client.generation });
     if (entry.client !== client) return; // a superseded process; ignore
@@ -1017,6 +1054,12 @@ export class WorkerPool {
     // offer the explicit Retry instead of a silent "starting" forever.
     if (client.spawnError) {
       entry.readyAt = undefined;
+      this.options.onWorkerLoss?.({
+        cwd: entry.cwd,
+        generation: client.generation,
+        exit,
+        message: "The project's worker could not start before this run ended.",
+      });
       this.setStatus(
         entry,
         "crashed",
@@ -1030,14 +1073,22 @@ export class WorkerPool {
     if (uptime >= (this.options.healthyMs ?? DEFAULTS.healthyMs)) entry.restarts = 0;
     entry.readyAt = undefined;
     const reason = signal ? `killed by ${signal}` : `exited with code ${code ?? "unknown"}`;
+    const lossMessage = exit.kind === "heap_oom"
+      ? "The project's agent ran out of memory before this run ended."
+      : "The project's worker stopped before this run ended.";
+    this.options.onWorkerLoss?.({ cwd: entry.cwd, generation: client.generation, exit, message: lossMessage });
     const canRetry = entry.open.size > 0 && entry.restarts < (this.options.maxRestarts ?? DEFAULTS.maxRestarts);
     if (!canRetry) {
       this.setStatus(
         entry,
         "crashed",
-        entry.open.size === 0
-          ? `Worker ${reason}. It will start again on the next request.`
-          : `Worker ${reason} and did not recover after ${entry.restarts} restarts. Use "Retry" to start it again.`,
+        exit.kind === "heap_oom"
+          ? (entry.open.size === 0
+              ? "This project's agent ran out of memory. It will start again on the next request."
+              : `This project's agent ran out of memory and did not recover after ${entry.restarts} restarts. Use "Retry" to start it again.`)
+          : (entry.open.size === 0
+              ? `Worker ${reason}. It will start again on the next request.`
+              : `Worker ${reason} and did not recover after ${entry.restarts} restarts. Use "Retry" to start it again.`),
       );
       return;
     }
@@ -1048,7 +1099,13 @@ export class WorkerPool {
     );
     entry.restarts = attempt;
     entry.retryAt = this.now() + delay;
-    this.setStatus(entry, "crashed", `Worker ${reason}. Restarting in ${Math.round(delay / 1000)}s (attempt ${attempt}).`);
+    this.setStatus(
+      entry,
+      "crashed",
+      exit.kind === "heap_oom"
+        ? `This project's agent ran out of memory. Restarting it from saved conversation state in ${Math.round(delay / 1000)}s (attempt ${attempt}).`
+        : `Worker ${reason}. Restarting in ${Math.round(delay / 1000)}s (attempt ${attempt}).`,
+    );
     entry.retryTimer = this.setTimer(() => {
       entry.retryTimer = undefined;
       entry.retryAt = undefined;
@@ -1068,13 +1125,22 @@ export class WorkerPool {
     } catch {
       return; // `onExit`/`spawn` already reported why
     }
+    const reopened: string[] = [];
     for (const path of paths) {
       // The worker restarts its `seq` counter at 1; clients notice through
       // `session/load`'s `replayFrom` and resync (see the UI's `onResume`).
       await client.request("session/load", { path }).then(
-        () => this.bindSession(path, entry.cwd),
+        () => {
+          this.bindSession(path, entry.cwd);
+          reopened.push(path);
+        },
         () => entry.open.delete(path),
       );
+    }
+    if (entry.client === client && client.alive && this.options.onReopened) {
+      await this.options.onReopened(client, entry.cwd, reopened).catch(() => {
+        this.options.onStderr?.(entry.cwd, "agent failure recovery unavailable; it will retry after the next successful reopen\n");
+      });
     }
   }
 

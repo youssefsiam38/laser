@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  AGENT_FAILURE_RECOVERY_BATCH_MAX,
   AGENT_FLEET_ROWS_MAX,
   AGENT_MESSAGE_MODES,
   AGENT_RUN_STATUSES,
@@ -9,6 +10,7 @@ import {
   HARNESS_TOOL_NAMES,
   ProtocolError,
   MCP_KNOWN_SERVERS,
+  METHOD_POLICY,
   mcpConversationContextSchema,
   type McpCatalogOption,
   agentMessageModeSchema,
@@ -271,6 +273,14 @@ const samples: Record<ClientMethod, unknown> = {
   "agents/builtin/set-instructions": { name: "chat", instructions: "Answer like an exacting editor." },
   "agents/namer/qualify": { cwd: "/p" },
   "agents/sync": { snapshot: { revision: 3, agents: [], defaultAgent: "default" } },
+  "pi/worker/recover-agent-failures": { runs: [{
+    agentName: "reviewer", subagentName: "review-auth", sessionId: "child-1", runId: "run_7",
+    sessionPath: "/child.jsonl", projectCwd: "/p", rootSessionPath: "/parent.jsonl", depth: 1,
+    parent: { sessionPath: "/parent.jsonl", sessionId: "parent-1" }, worktree: null,
+    origin: "agent", status: "failed", task: "review", error: "worker lost",
+    endedBy: { initiator: "harness", reason: "worker lost" },
+    startedAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:01:00.000Z", endedAt: "2026-01-01T00:01:00.000Z",
+  }] },
   "resource/snapshot": { refresh: true },
   "resource/history": { sinceId: "rs_4", limit: 10 },
   "resource/export": {},
@@ -664,6 +674,15 @@ describe("run status vocabulary", () => {
     // D-162: the same rule for background commands — no `task_wait`; every
     // exit reaches the model as a message.
     expect([...BACKGROUND_TOOL_NAMES]).not.toContain("task_wait");
+  });
+
+  it("bounds the private worker-loss recovery request", () => {
+    const schema = clientParamsSchemas["pi/worker/recover-agent-failures"];
+    const sample = (samples["pi/worker/recover-agent-failures"] as { runs: unknown[] }).runs[0]!;
+    expect(schema.safeParse({ runs: [sample] }).success).toBe(true);
+    expect(schema.safeParse({ runs: [] }).success).toBe(false);
+    expect(schema.safeParse({ runs: Array.from({ length: AGENT_FAILURE_RECOVERY_BATCH_MAX + 1 }, () => sample) }).success).toBe(false);
+    expect(METHOD_POLICY["pi/worker/recover-agent-failures"]).toEqual(expect.objectContaining({ scope: "work_control", reach: "native" }));
   });
 
   it("names one fleet tool and no list of either kind (D-163)", () => {

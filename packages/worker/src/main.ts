@@ -19,6 +19,7 @@ import {
   FRAME_MAX_BYTES,
   LineDecoder,
   PRODUCT_NAME,
+  configuredOldSpaceBytes,
   parseJsonLine,
   type FeatureId,
   type JsonRpcMessage,
@@ -172,6 +173,9 @@ async function main(): Promise<void> {
   const parsedGeneration = generationArg === undefined ? Number.NaN : Number(generationArg);
   const workerGeneration =
     Number.isSafeInteger(parsedGeneration) && parsedGeneration >= 0 ? parsedGeneration : undefined;
+  // Configuration and V8's measured heap limit are separate facts. This one
+  // exists only when the launcher put an explicit flag in Node's own argv.
+  const configuredHeapBytes = configuredOldSpaceBytes(process.execArgv);
   // Whether this installation's log store keeps provider request bodies
   // (RP-7). `summary` means a capture is recorded without one, and the body is
   // never serialized here at all.
@@ -235,6 +239,7 @@ async function main(): Promise<void> {
     ...(projectTrusted !== undefined ? { projectTrusted: projectTrusted === "yes" } : {}),
     ...(environmentId ? { environmentId } : {}),
     ...(workerGeneration !== undefined ? { workerGeneration } : {}),
+    ...(configuredHeapBytes !== undefined ? { configuredOldSpaceBytes: configuredHeapBytes } : {}),
     ...(npmCommand ? { npmCommand } : {}),
     features,
     transportPending: () => transport.pending(),

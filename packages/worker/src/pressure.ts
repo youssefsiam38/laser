@@ -27,6 +27,7 @@
  */
 import {
   MEMORY_PRESSURE_WORKER_ACTIONS,
+  configuredOldSpaceBytes,
   memoryPressureStoresSchema,
   parseMemoryPressureDirectiveResult,
   parseMemoryPressureReport,
@@ -114,6 +115,8 @@ export interface PressureOptions {
    * because a fence it cannot prove is not a fence.
    */
   generation?: number;
+  /** Explicit old-space request parsed from this process's Node argv. */
+  configuredOldSpaceBytes?: number;
   thresholds?: PressureThresholds;
   normalIntervalMs?: number;
   elevatedIntervalMs?: number;
@@ -297,6 +300,10 @@ export function createWorkerPressureController(deps: PressureDeps, options: Pres
       level: reported,
       ...(sampleAgeMs !== undefined ? { sampleAgeMs } : {}),
       inputs: inputsOf(sample, reading, thresholds),
+      ceiling: {
+        ...(options.configuredOldSpaceBytes !== undefined ? { configuredBytes: options.configuredOldSpaceBytes } : {}),
+        measuredLimit: sample.heapLimit,
+      },
       ran,
       results,
       stores: safeStores(),

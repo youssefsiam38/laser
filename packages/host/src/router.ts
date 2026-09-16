@@ -994,6 +994,7 @@ export class Router {
         return { removed: removal?.removed === true, worktree: removal?.worktree ?? found.status };
       }
       case "agents/sync":
+      case "pi/worker/recover-agent-failures":
         throw new ProtocolError(ErrorCodes.Unsupported, "The app sends this to its own workers.");
       // Same rule, and said here rather than left to the forwarder: a client
       // asking a worker what it is retaining would reach a worker of its

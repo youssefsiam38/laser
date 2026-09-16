@@ -40,7 +40,11 @@ interface Harness {
   decision: () => string;
 }
 
-function harness(options: { publish?: (p: ValidatedMemoryPressurePublish) => void; workers?: HostPressureWorker[] } = {}): Harness {
+function harness(options: {
+  publish?: (p: ValidatedMemoryPressurePublish) => void;
+  workers?: HostPressureWorker[];
+  configuredHostOldSpaceBytes?: number;
+} = {}): Harness {
   let at = 10_000;
   let sample: Partial<HostPressureSample> | "throw" = {};
   let workers: HostPressureWorker[] = options.workers ?? [];
@@ -81,7 +85,13 @@ function harness(options: { publish?: (p: ValidatedMemoryPressurePublish) => voi
     log: (line) => logs.push(line),
   };
 
-  const controller = createHostPressureController(deps, { publishWindowMs: 5_000, workerFreshMs: 15_000 });
+  const controller = createHostPressureController(deps, {
+    publishWindowMs: 5_000,
+    workerFreshMs: 15_000,
+    ...(options.configuredHostOldSpaceBytes !== undefined
+      ? { configuredHostOldSpaceBytes: options.configuredHostOldSpaceBytes }
+      : {}),
+  });
   return {
     controller,
     published,
@@ -335,6 +345,40 @@ describe("the summary", () => {
     const summary = h.controller.summary();
     expect(summary.roles.map((row) => row.role).sort()).toEqual(["desktop_renderer", "host", "machine", "project_worker"]);
     expect(() => parseMemoryPressureSummary(summary)).not.toThrow();
+  });
+
+  it("keeps configured and measured ceilings distinct, and omits facts it cannot prove", async () => {
+    const h = harness({
+      configuredHostOldSpaceBytes: 448 * MiB,
+      workers: [
+        { cwd: "/a", clientGeneration: "aa", workerGeneration: 7, configuredOldSpaceBytes: 1792 * MiB },
+        { cwd: "/b", clientGeneration: "bb", workerGeneration: 8, configuredOldSpaceBytes: 1792 * MiB },
+      ],
+    });
+    await probe(h);
+    expect(h.role("host").ceiling).toEqual({
+      configuredBytes: 448 * MiB,
+      measuredLimit: { status: "available", value: 1_000 * MiB },
+    });
+    // Configuration is known from the exact live clients even before reports.
+    expect(h.role("project_worker").ceiling).toEqual({ configuredBytes: 1792 * MiB });
+
+    h.controller.observeWorkerReport("/a", notificationOf(reportOf({
+      ceiling: { configuredBytes: 1792 * MiB, measuredLimit: { status: "available", value: 1824 * MiB } },
+    })), { generation: "aa", workerGeneration: 7 });
+    h.controller.observeWorkerReport("/b", notificationOf(reportOf({
+      generation: 8,
+      ceiling: { configuredBytes: 1792 * MiB, measuredLimit: { status: "available", value: 1856 * MiB } },
+    })), { generation: "bb", workerGeneration: 8 });
+    await h.controller.probeNow();
+    expect(h.role("project_worker").ceiling).toMatchObject({ configuredBytes: 1792 * MiB });
+    expect(h.role("project_worker").ceiling?.measuredLimit?.status).toBe("available");
+
+    h.setWorkers([
+      { cwd: "/a", clientGeneration: "aa", workerGeneration: 7, configuredOldSpaceBytes: 1792 * MiB },
+      { cwd: "/b", clientGeneration: "bb", workerGeneration: 8, configuredOldSpaceBytes: 2048 * MiB },
+    ]);
+    expect(h.role("project_worker").ceiling).not.toHaveProperty("configuredBytes");
   });
 
   it("calls a fleet with nothing in it calm, and one that has not answered unknown", async () => {

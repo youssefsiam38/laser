@@ -639,6 +639,14 @@ describe("Router · agents (docs/agents-leap)", () => {
       });
       expect(await rpc(h.router, "agents/runs/list", {})).toMatchObject({ result: { runs: [] } });
       expect(await rpc(h.router, "agents/sync", { snapshot: { revision: 1 } })).toMatchObject({ error: { message: "The app sends this to its own workers." } });
+      expect(await rpc(h.router, "pi/worker/recover-agent-failures", { runs: [{
+        agentName: "reviewer", subagentName: "review-auth", sessionId: "child-1", runId: "run-1",
+        sessionPath: "/child.jsonl", projectCwd: CWD_A, rootSessionPath: PATH_A, depth: 1,
+        parent: { sessionPath: PATH_A, sessionId: "parent-1" }, worktree: null,
+        origin: "agent", status: "failed", task: "review", error: "worker lost",
+        endedBy: { initiator: "harness", reason: "worker lost" },
+        startedAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:01:00.000Z", endedAt: "2026-01-01T00:01:00.000Z",
+      }] })).toMatchObject({ error: { message: "The app sends this to its own workers." } });
       // Same rule for the retained-store question (RP-6): a client asking it
       // would be choosing which worker to ask, and it is never forwarded.
       expect(await rpc(h.router, "pi/worker/retained-stores", {})).toMatchObject({ error: { message: "The app sends this to its own workers." } });

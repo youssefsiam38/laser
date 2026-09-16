@@ -19,6 +19,21 @@ export {
 } from "./identity-migration.js";
 export { WorkerPool, type WorkerPoolOptions } from "./worker-pool.js";
 export { WorkerClient, WorkerRpcError, defaultWorkerMain, type WorkerClientOptions } from "./worker-client.js";
+export {
+  HOST_OLD_SPACE_CAP_MIB,
+  HOST_OLD_SPACE_FLOOR_MIB,
+  WORKER_OLD_SPACE_CAP_MIB,
+  WORKER_OLD_SPACE_FLOOR_MIB,
+  HeapCeilingCapacityError,
+  configuredOldSpaceBytes,
+  hostOldSpaceMiB,
+  oldSpaceBytes,
+  oldSpaceMiBFor,
+  oldSpaceSizeFlag,
+  runtimeMemoryCapacityBytes,
+  workerOldSpaceMiB,
+  type HeapCeilingRole,
+} from "./heap-ceiling.js";
 export { SessionCatalog, defaultSessionDir, type CatalogEntry } from "./catalog.js";
 export { AttentionTracker, type AttentionSnapshot, type AttentionTrackerOptions } from "./attention.js";
 export { PrefsStore, type PrefsStoreOptions } from "./prefs.js";

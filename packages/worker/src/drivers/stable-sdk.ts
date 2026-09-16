@@ -889,14 +889,17 @@ export class StableSdkDriver implements SessionDriver {
     }
   }
 
-  async entries(options?: { live?: boolean }): Promise<{ entries: unknown[]; leafId: string | null; live?: HistoryLiveSnapshot }> {
+  async entries(options?: { live?: boolean; tail?: number }): Promise<{ entries: unknown[]; leafId: string | null; live?: HistoryLiveSnapshot }> {
     const session = this.session();
     const manager = session.sessionManager;
     // Every branch, plus the pointer that says which one is the conversation.
     // The leaf is in-memory only — the engine rebuilds it as the last entry in
     // the file — so a navigation that has appended nothing yet is visible here
-    // and nowhere else.
-    const snapshot = { entries: manager.getEntries(), leafId: manager.getLeafId() };
+    // and nowhere else. Recovery inspection asks for a bounded suffix because
+    // it runs immediately after a lost worker generation.
+    const retained = manager.getEntries();
+    const entries = options?.tail === undefined ? retained : retained.slice(-Math.max(0, options.tail));
+    const snapshot = { entries, leafId: manager.getLeafId() };
     if (!options?.live) return snapshot;
     return { ...snapshot, live: this.historySnapshot.snapshot() };
   }

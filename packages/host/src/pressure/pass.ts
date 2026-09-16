@@ -13,6 +13,8 @@ export interface HostPressureWorker {
   cwd: string;
   clientGeneration: string;
   workerGeneration: number;
+  /** What this exact process was explicitly asked to use, when configured. */
+  configuredOldSpaceBytes?: number;
 }
 
 /** Step 5's exact answer at its destructive boundary. */

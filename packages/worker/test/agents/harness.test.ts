@@ -14,13 +14,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DriverAgentOptions, DriverEvent, DriverListener, ExtensionModelWorkRequest, PromptOptions, SessionDriver } from "../../src/driver.js";
 import type { AgentModelEvent, HarnessSessionRole } from "../../src/agents/bridge.js";
 import { DefinitionsCache, fallbackDefaultAgent, fallbackSnapshot } from "../../src/agents/definitions.js";
-import { AgentHarness, MAX_RETAINED_RUNS, NUDGE_TEXT, type SessionHost, type WorktreeProvider } from "../../src/agents/harness.js";
+import { AgentHarness, MAX_RETAINED_RUNS, NUDGE_TEXT, RECOVERY_ENTRY_SCAN_MAX, type SessionHost, type WorktreeProvider } from "../../src/agents/harness.js";
 import { HarnessError } from "../../src/agents/errors.js";
 import { rootRecord, rootRole } from "../../src/agents/session-config.js";
 import { WorktreeManager, type CreateWorktreeInput, type Worktree, type WorktreeFacts } from "../../src/agents/worktrees.js";
 import { projectBashPrefix } from "../../src/project-env.js";
 import type { IndexedTask } from "../../src/agents/tasks.js";
-import { PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE, SESSION_RUN_ENTRY_TYPE, type AgentDefinition, type AgentRun, type AgentsSnapshot, type ContentBlock, type SessionState, type UiDialogRequest, type UiDialogResponse } from "@lasercode/protocol";
+import { AGENT_EVENT_MESSAGE_TYPE, PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE, SESSION_RUN_ENTRY_TYPE, type AgentDefinition, type AgentRun, type AgentsSnapshot, type ContentBlock, type SessionState, type UiDialogRequest, type UiDialogResponse } from "@lasercode/protocol";
 
 class FakeDriver implements SessionDriver {
   readonly kind = "stable-sdk" as const;
@@ -52,6 +52,7 @@ class FakeDriver implements SessionDriver {
   dialogCancellationSettlesPrompt = false;
   /** The session file's lines, for `entries()`; the last one is the leaf. */
   lines: Array<Record<string, unknown>> = [];
+  entryReads: Array<{ tail?: number }> = [];
   private readonly listeners = new Set<DriverListener>();
   private invocationSerial = 0;
   constructor(private st: SessionState) {}
@@ -157,7 +158,11 @@ class FakeDriver implements SessionDriver {
   resolveDialog(id: string) { this.pending = this.pending.filter((p) => p.id !== id); this.emit({ type: "ui_event", event: { method: "dialogResolved", id } }); }
   async commands() { return []; }
   async prompts() { return []; }
-  async entries() { return { entries: [...this.lines], leafId: (this.lines.at(-1)?.["id"] as string | undefined) ?? null }; }
+  async entries(options?: { tail?: number }) {
+    this.entryReads.push(options ?? {});
+    const entries = options?.tail === undefined ? this.lines : this.lines.slice(-options.tail);
+    return { entries: [...entries], leafId: (this.lines.at(-1)?.["id"] as string | undefined) ?? null };
+  }
   async goalState() { return this.goal ? { id: this.goal.id, objective: this.goal.objective, status: "active" as const, startedAt: 0, updatedAt: 0, iteration: 0, automaticTurns: 0 } : null; }
   async appendEntry(type: string, data: unknown) { this.custom.push({ type, data }); return `e${this.custom.length}`; }
   lastAssistantText() { return this.lastText; }
@@ -272,6 +277,31 @@ describe("AgentHarness", () => {
   });
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("reads one bounded parent tail for a recovery batch and deduplicates its persisted event", async () => {
+    const root = world.openRoot("lead");
+    const delivered: AgentModelEvent[] = [];
+    root.handle.bridge.onEvent((event) => delivered.push(event));
+    const run: AgentRun = {
+      agentName: "worker", subagentName: "review-auth", sessionId: "child-1", runId: "run-recovered",
+      sessionPath: "/sessions/child-1.jsonl", projectCwd: "/repo", rootSessionPath: root.path, depth: 1,
+      parent: { sessionPath: root.path, sessionId: root.id }, worktree: null, origin: "agent", status: "failed",
+      task: "review auth", error: "The project's agent ran out of memory before this run ended.",
+      endedBy: { initiator: "harness", reason: "The project's agent ran out of memory before this run ended." },
+      startedAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:01:00.000Z", endedAt: "2026-01-01T00:01:00.000Z",
+    };
+    const second = { ...run, runId: "run-recovered-2", sessionId: "child-2", sessionPath: "/sessions/child-2.jsonl" };
+
+    await expect(world.harness.recoverFailures([run, second])).resolves.toEqual(["delivered", "delivered"]);
+    expect(root.driver.entryReads).toEqual([{ tail: RECOVERY_ENTRY_SCAN_MAX }]);
+    expect(delivered).toHaveLength(2);
+    expect(delivered[0]).toMatchObject({ type: "agent.failed", runId: run.runId, endedBy: { initiator: "harness" } });
+
+    root.driver.lines.push({ message: { customType: AGENT_EVENT_MESSAGE_TYPE, details: delivered[0] } });
+    await expect(world.harness.recoverFailure(run)).resolves.toBe("duplicate");
+    expect(delivered).toHaveLength(2);
+    await expect(world.harness.recoverFailure({ ...run, endedBy: { initiator: "user" } })).rejects.toThrow(/harness-owned/);
   });
 
   it.each(["ok", "failed", "timed-out", "parent-stop", "user-stop", "interrupt", "stop-after-exit", "untrusted", "interrupt-then-stop"])("gates the first turn on real setup: %s", async (outcome) => {

@@ -99,6 +99,8 @@ export type BackgroundToolName = (typeof BACKGROUND_TOOL_NAMES)[number];
  * carries the id to follow it with, so nothing is unreachable.
  */
 export const AGENT_FLEET_ROWS_MAX = 50;
+/** One host→worker recovery request stays small even after a large worker loss. */
+export const AGENT_FAILURE_RECOVERY_BATCH_MAX = 32;
 
 // ---------- definitions ----------
 
@@ -528,6 +530,8 @@ declare module "./messages.js" {
     "agents/namer/qualify": { params: { cwd: string }; result: NamerState };
     /** Host → worker only: the current definitions. Refused from clients. */
     "agents/sync": { params: { snapshot: AgentsSnapshot }; result: {} };
+    /** Host → a recovered worker only: re-deliver harness-owned child failures to loaded parents. */
+    "pi/worker/recover-agent-failures": { params: { runs: AgentRun[] }; result: { delivered: string[] } };
   }
 
   interface HostNotifications {

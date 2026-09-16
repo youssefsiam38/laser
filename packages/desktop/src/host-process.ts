@@ -22,13 +22,13 @@
  * rewrite, and the log line below records the exact command so a failed start
  * on someone else's machine is one line to read rather than a guess.
  */
-import { ENV, PRODUCT_NAME } from "@lasercode/protocol";
+import { ENV, MIB_BYTES, PRODUCT_NAME, configuredOldSpaceBytes, nodeLaunchEnvironment } from "@lasercode/protocol";
 import { type ChildProcess, spawn } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync } from "node:fs";
 import {
   CLI_VERSION,
   cliEntry,
-  daemonArgs,
+  hostDaemonArgv,
   inspectHost,
   logTail,
   piEnv,
@@ -49,8 +49,14 @@ const START_TIMEOUT_MS = 30_000;
 const STOP_GRACE_MS = 8000;
 /** Automatic restarts after an unexpected exit, then we stop and say so. */
 const MAX_RESTARTS = 2;
+const HEALTHY_RESTART_RESET_MS = 60_000;
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Sanitize after all caller overlays, so none can restore Node/Electron control. */
+export function desktopNodeEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return nodeLaunchEnvironment(source, { dropPrefixes: ["ELECTRON_"] });
+}
 
 export interface HostProcessOptions {
   paths: LaserPaths;
@@ -69,6 +75,8 @@ export interface HostProcessOptions {
    * origin it does not know, and Vite forwards the browser's own.
    */
   env?: Readonly<Record<string, string>>;
+  /** Internal launch seam used to prove every supervised generation gets the same argv. */
+  spawnProcess?: typeof spawn;
   onChange: (info: DesktopHostInfo) => void;
   confirmHostRefresh?: (runningVersion: string) => Promise<boolean>;
 }
@@ -93,6 +101,7 @@ export class HostProcess {
    */
   private agentCheck: Promise<AgentCheck> | undefined;
   private restarts = 0;
+  private readyAt: number | undefined;
   private stopping = false;
   private info: DesktopHostInfo;
 
@@ -116,6 +125,9 @@ export class HostProcess {
   async start(): Promise<DesktopHostInfo> {
     const { paths, log } = this.options;
     this.stopping = false;
+    // An explicit start is a new incident. Automatic restarts call
+    // `spawnDaemon` directly and therefore retain their bounded count.
+    this.restarts = 0;
 
     // Our own child is already running: a retry must not "adopt" it, or we
     // would forget that we own it and leave it behind on quit.
@@ -244,6 +256,14 @@ export class HostProcess {
     const runtime = this.runtime;
     if (!runtime) return this.publish({ state: "failed", message: "The Node runtime was not resolved." });
 
+    let argv: string[];
+    try {
+      argv = hostDaemonArgv(paths);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "The runtime memory limit could not be read.";
+      return this.publish({ state: "failed", message });
+    }
+
     mkdirSync(paths.stateDir, { recursive: true });
     // The daemon's own stdout and stderr go straight to the host log, the same
     // file `laser up` uses, so both ways of starting leave one trail.
@@ -251,8 +271,10 @@ export class HostProcess {
     const env = this.hostEnv();
     let child: ChildProcess;
     try {
-      log.line(`spawning the host: ${runtime.binary} ${cliEntry()} __daemon`);
-      child = spawn(runtime.binary, [cliEntry(), "__daemon", ...daemonArgs(paths)], {
+      const configuredBytes = configuredOldSpaceBytes(argv);
+      if (configuredBytes === undefined) throw new Error("the host launch is missing its old-space ceiling");
+      log.line(`spawning the host with a ${configuredBytes / MIB_BYTES} MiB old-space ceiling`);
+      child = (this.options.spawnProcess ?? spawn)(runtime.binary, argv, {
         stdio: ["ignore", logFd, logFd],
         env,
         cwd: paths.stateDir,
@@ -292,8 +314,8 @@ export class HostProcess {
           this.stopping = false;
           return this.publish({ state: "failed", message: `${agent.message} ${agent.fix}` });
         }
-        this.restarts = 0;
         log.line(`host ready at ${status.record.url} (pid ${status.record.pid})`);
+        this.readyAt = Date.now();
         return this.publish({
           state: "ready",
           url: status.record.url,
@@ -343,7 +365,10 @@ export class HostProcess {
 
   private onChildExit(code: number | null, signal: NodeJS.Signals | null): void {
     this.child = undefined;
+    const uptime = this.readyAt === undefined ? 0 : Date.now() - this.readyAt;
+    this.readyAt = undefined;
     if (this.stopping) return;
+    if (uptime >= HEALTHY_RESTART_RESET_MS) this.restarts = 0;
     const { log, paths } = this.options;
     log.line(`host exited unexpectedly (${signal ?? `code ${code}`})`);
     if (this.restarts >= MAX_RESTARTS) {
@@ -401,7 +426,7 @@ export class HostProcess {
    * thing we verify and the thing we run can never diverge.
    */
   private hostEnv(): NodeJS.ProcessEnv {
-    return {
+    return desktopNodeEnvironment({
       ...piEnv(this.options.paths, this.electronFreeEnv()),
       // The package manager that came out of the pinned Node archive. Settings
       // installs extensions with it, on a machine that has never had Node.
@@ -409,7 +434,7 @@ export class HostProcess {
       // @lasercode/desktop runtime`, and the host says so rather than guessing.
       ...(this.runtime?.npmCli ? { [ENV.npmCli]: this.runtime.npmCli } : {}),
       ...this.options.env,
-    };
+    });
   }
 
   /**
@@ -418,12 +443,7 @@ export class HostProcess {
    * gets a clean environment plus the laser path pins.
    */
   private electronFreeEnv(): NodeJS.ProcessEnv {
-    const env = { ...(this.options.baseEnv ?? process.env) };
-    for (const key of Object.keys(env)) {
-      if (key.startsWith("ELECTRON_")) delete env[key];
-    }
-    delete env["NODE_OPTIONS"]; // An inspector flag meant for the shell must not land in the host.
-    return env;
+    return desktopNodeEnvironment(this.options.baseEnv ?? process.env);
   }
 
   private publish(patch: HostInfoPatch): DesktopHostInfo {

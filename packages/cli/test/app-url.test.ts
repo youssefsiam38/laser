@@ -13,7 +13,7 @@ import { ENV } from "@lasercode/protocol";
 import { HOST_DEFAULT_PORT } from "@lasercode/host";
 import type { ParsedArgs } from "../src/args.js";
 import { appAddress, appUrl, hostUrl, resolvePaths } from "../src/config.js";
-import { processIdentity, writeHostFile, type HostRecord } from "../src/hostfile.js";
+import { inspectHost, processIdentity, writeHostFile, type HostRecord } from "../src/hostfile.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -106,6 +106,13 @@ describe("appAddress", () => {
     writeHostFile(p.hostFile, liveRecord(41493, { identity: "linux:another-boot:1" }));
     if (processIdentity(process.pid) === undefined) return; // platform cannot compare; nothing to assert
     expect(appAddress(p)).toMatchObject({ port: HOST_DEFAULT_PORT, source: "configured" });
+  });
+
+  it("a lifecycle inspection removes the stale record left by an OOM-killed detached host", async () => {
+    const p = paths();
+    writeHostFile(p.hostFile, liveRecord(41493, { pid: deadPid(), identity: "linux:gone:1" }));
+    await expect(inspectHost(p, 10)).resolves.toEqual({ state: "stopped", removedStaleRecord: true });
+    expect(existsSync(p.hostFile)).toBe(false);
   });
 
   it("does not delete a stale record: reading an address is not a lifecycle action", () => {

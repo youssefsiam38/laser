@@ -37,6 +37,7 @@ import { ENV, ErrorCodes, FRAME_MAX_BYTES, PRODUCT_NAME, WIRE_NAMESPACE, decisio
 import { AccessControl, isLoopbackAddress, localActor, pairedActor, type ActorIdentity } from "./access.js";
 import { AccessAudit } from "./access-audit.js";
 import { loadEnvironmentPolicy } from "./environment-policy.js";
+import { AgentFailureRecoveryQueue } from "./agents/failure-recovery.js";
 import { suggestBeamModel } from "./agents/models.js";
 import { AgentRunRegistry } from "./agents/runs.js";
 import { SkillsCheck } from "./agents/skills-check.js";
@@ -73,6 +74,7 @@ import { SessionBodyRange } from "./session-body-range.js";
 import { SessionRevisions } from "./session-revision.js";
 import { environmentIdentity, type EnvironmentIdentity } from "./environment-identity.js";
 import { ViewCache } from "./views.js";
+import { configuredOldSpaceBytes } from "./heap-ceiling.js";
 import { WorkerRetiredError, type WorkerClient } from "./worker-client.js";
 import { WorkerPool, type WorkerPoolOptions } from "./worker-pool.js";
 
@@ -99,6 +101,8 @@ export interface HostServerOptions {
   workerIdleMs?: number;
   /** Test seam for the pool's idle sweep cadence. */
   workerSweepMs?: number;
+  /** Test-only worker old-space ceiling; production derives it from capacity. */
+  workerOldSpaceMiB?: number;
   /**
    * Internal seam for the session-lifetime policy (RP-4).
    *
@@ -349,6 +353,8 @@ export class HostServer {
   private namerQualifying = false;
   /** Provider sets already benchmarked this run, so a failure is not retried on every worker. */
   private readonly namerQualified = new Set<string>();
+  /** Bounded harness-failure handoff through exact successor workers. */
+  private readonly agentFailureRecovery: AgentFailureRecoveryQueue;
 
   constructor(private readonly options: HostServerOptions = {}) {
     this.uiDir = options.uiDir ?? defaultUiDir();
@@ -534,6 +540,7 @@ export class HostServer {
         this.logs?.observeAgentRun(run);
       },
     });
+    this.agentFailureRecovery = new AgentFailureRecoveryQueue(this.runs, (line) => this.log(line));
     this.skillsCheck = new SkillsCheck({
       agents: () => this.agents.snapshot().agents,
       report: (warnings) => this.agents.setWarnings(warnings),
@@ -557,6 +564,7 @@ export class HostServer {
       pressure: () => this.memoryPressure.exportSection(),
     });
 
+    const hostConfiguredOldSpaceBytes = configuredOldSpaceBytes(process.execArgv);
     // Memory pressure (RP-8). Self-sampled on its own small cadence: RP-1's
     // collector walks every process on demand, and a host looking at itself
     // every twenty seconds must not do that. E2's host pass uses only the body
@@ -580,6 +588,10 @@ export class HostServer {
         unloadIdle: (allow) => this.sessionLifetime.pressurePass(allow),
         retireIdle: (allow) => this.pool.retireIdleUnderPressure(allow),
       },
+    }, {
+      ...(hostConfiguredOldSpaceBytes !== undefined
+        ? { configuredHostOldSpaceBytes: hostConfiguredOldSpaceBytes }
+        : {}),
     });
 
     // The host resolves the package manager the workers should use — the one
@@ -623,6 +635,7 @@ export class HostServer {
       ...(options.nodeBinary ? { nodeBinary: options.nodeBinary } : {}),
       ...(options.workerIdleMs !== undefined ? { idleMs: options.workerIdleMs } : {}),
       ...(options.workerSweepMs !== undefined ? { sweepMs: options.workerSweepMs } : {}),
+      ...(options.workerOldSpaceMiB !== undefined ? { workerOldSpaceMiB: options.workerOldSpaceMiB } : {}),
       // A worker's first request already sees the agent definitions.
       prime: async (client, cwd, speculative) => {
         // Priming runs inside the spawn, before anything can ask this worker to
@@ -656,6 +669,11 @@ export class HostServer {
         this.captures.generationGone(generation);
         this.memoryPressure.forgetWorker(cwd, generation);
       },
+      onWorkerLoss: ({ cwd, message }) => {
+        const changed = this.runs.workerLost(cwd, message);
+        this.agentFailureRecovery.note(cwd, changed);
+      },
+      onReopened: (client, cwd, paths) => this.agentFailureRecovery.deliver(client, cwd, paths),
       onStderr: (cwd, text) => {
         const safe = this.privateLogText(text);
         this.log(`[worker ${cwd}] ${safe.trimEnd()}`);
@@ -667,9 +685,9 @@ export class HostServer {
         if (info.status === "crashed") {
           this.attention.workerCrashed(info.cwd, info.message ?? "worker crashed");
           this.forgetSessionsOf(info.cwd, "the worker stopped");
-          this.runs.workerLost(info.cwd);
         } else if (info.status === "ready") this.attention.workerRecovered(info.cwd);
         else if (info.status === "retired") {
+          this.agentFailureRecovery.forget(info.cwd);
           this.attention.workerRetired(info.cwd);
           this.forgetSessionsOf(info.cwd, "the worker went to sleep");
           this.runs.workerLost(info.cwd);
@@ -907,6 +925,7 @@ export class HostServer {
     this.actors.clear();
     for (const deliveries of this.loadDeliveries.values()) for (const delivery of deliveries) delivery.dispose();
     this.loadDeliveries.clear();
+    this.agentFailureRecovery.clear();
     await this.pool.stopAll();
     // After the workers: their exit fails what was still running.
     this.runs.close();

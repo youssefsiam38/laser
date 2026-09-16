@@ -263,9 +263,10 @@ export interface SessionDriver {
    * Replay persisted entries (for reattach). The session file is a tree, so
    * this is every branch; `leafId` says which one is live — the conversation
    * is the path from the root to that entry. `null` is a leaf reset to before
-   * the first entry (`SessionManager.resetLeaf`).
+   * the first entry (`SessionManager.resetLeaf`). `tail` bounds a diagnostic
+   * read to the newest rows instead of returning the whole retained history.
    */
-  entries(options?: { live?: boolean }): Promise<{ entries: unknown[]; leafId: string | null; live?: HistoryLiveSnapshot }>;
+  entries(options?: { live?: boolean; tail?: number }): Promise<{ entries: unknown[]; leafId: string | null; live?: HistoryLiveSnapshot }>;
 
   /**
    * The same entries and leaf, **synchronously**, when this driver can answer

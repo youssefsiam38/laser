@@ -44,7 +44,7 @@ socket.on("data", (chunk) => {
     // that pins it, so it always agrees; a test that wants a refusal uses a
     // worker of its own (see session-lifetime.test.ts).
     if (req.method === "pi/worker/retire") { send({ jsonrpc: "2.0", id: req.id, result: { retiring: true } }); continue; }
-    if (req.method === "pi/test/argv") { send({ jsonrpc: "2.0", id: req.id, result: { argv: process.argv.slice(2), processCwd: process.cwd() } }); continue; }
+    if (req.method === "pi/test/argv") { send({ jsonrpc: "2.0", id: req.id, result: { argv: process.argv.slice(2), execArgv: process.execArgv, processCwd: process.cwd() } }); continue; }
     // RP-8: a worker's own pressure report, shaped as the real one is.
     if (req.method === "pi/test/pressure") {
       send({ jsonrpc: "2.0", method: "pi/resource/pressure", params: { generation: req.params.generation, level: "unknown", inputs: [], ran: [], results: [], stores: {} } });
@@ -88,6 +88,7 @@ let timers: Array<{ fn: () => void; ms: number }>;
 function makePool(options: Partial<ConstructorParameters<typeof WorkerPool>[0]> = {}): WorkerPool {
   return new WorkerPool({
     workerMain,
+    workerOldSpaceMiB: 1792,
     onNotification: (_cwd, n) => notifications.push(n),
     onStatus: (info) => statuses.push(info),
     setTimer: (fn, ms) => {
@@ -120,6 +121,34 @@ afterEach(async () => {
 });
 
 describe("WorkerPool readiness", () => {
+  it("constructs the host pool on an undersized machine and refuses only the project spawn", async () => {
+    const constrained = vi.spyOn(process, "constrainedMemory").mockReturnValue(1024 * 1024 * 1024);
+    try {
+      expect(() => {
+        pool = new WorkerPool({
+          workerMain,
+          onNotification: (_cwd, notification) => notifications.push(notification),
+          onStatus: (info) => statuses.push(info),
+          setTimer: (fn, ms) => {
+            timers.push({ fn, ms });
+            return setTimeout(() => {}, 0) as ReturnType<typeof setTimeout>;
+          },
+        });
+      }).not.toThrow();
+
+      await expect(pool.get(project)).rejects.toThrow(/needs at least 1728 MiB/);
+      expect(pool.liveClients()).toEqual([]);
+      expect(timers).toEqual([]);
+      expect(statuses).toMatchObject([{
+        cwd: project,
+        status: "crashed",
+        message: expect.stringContaining("needs at least 1728 MiB"),
+      }]);
+    } finally {
+      constrained.mockRestore();
+    }
+  });
+
   it("exposes a warm entry as reserved while it is still before process spawn", async () => {
     let release!: () => void;
     const held = new Promise<void>((resolve) => { release = resolve; });
@@ -376,10 +405,51 @@ describe("WorkerPool", () => {
     expect(info.restarts).toBe(0);
   });
 
+  it("bounds a crash loop at five automatic attempts with 1/2/4/8/16 second backoff", async () => {
+    pool = makePool({ backoffMs: 1_000, backoffCapMs: 30_000, maxRestarts: 5 });
+    let current = await pool.get(project);
+    pool.bindSession("/sessions/a.jsonl", project);
+
+    for (let incident = 1; incident <= 6; incident += 1) {
+      void current.request("pi/test/crash", {}).catch(() => undefined);
+      await waitFor(() => statuses.filter((status) => status.status === "crashed").length === incident);
+      if (incident === 6) break;
+      runTimers();
+      await waitFor(() => statusesOf(project).at(-1) === "ready");
+      current = await pool.get(project);
+    }
+
+    expect(timers.map((timer) => timer.ms)).toEqual([]);
+    expect(statuses.filter((status) => status.status === "crashed").slice(0, 5).map((status) => status.restarts)).toEqual([1, 2, 3, 4, 5]);
+    expect(statuses.findLast((status) => status.status === "crashed")?.message).toMatch(/did not recover after 5 restarts/);
+    // Fired timers were removed by `runTimers`; recover the delay evidence from retry timestamps.
+    const crashes = statuses.filter((status) => status.status === "crashed").slice(0, 5);
+    expect(crashes.map((status) => Date.parse(status.retryAt!) - Date.parse(status.since!))).toEqual([1_000, 2_000, 4_000, 8_000, 16_000]);
+  });
+
+  it("starts a fresh incident after a generation stays healthy for sixty seconds", async () => {
+    let now = 1_000;
+    pool = makePool({ backoffMs: 1, healthyMs: 60_000, now: () => now });
+    let current = await pool.get(project);
+    pool.bindSession("/sessions/a.jsonl", project);
+    void current.request("pi/test/crash", {}).catch(() => undefined);
+    await waitFor(() => statuses.filter((status) => status.status === "crashed").length === 1);
+    runTimers();
+    await waitFor(() => statusesOf(project).at(-1) === "ready");
+    current = await pool.get(project);
+    now += 60_001;
+    void current.request("pi/test/crash", {}).catch(() => undefined);
+    await waitFor(() => statuses.filter((status) => status.status === "crashed").length === 2);
+    expect(statuses.findLast((status) => status.status === "crashed")?.restarts).toBe(1);
+  });
+
   it("sends pressure only to the exact worker generation selected", async () => {
     pool = makePool({ idleMs: 0, sweepMs: 0 });
     await pool.get(project);
     const selected = pool.pressureWorkers()[0]!;
+    expect(selected.configuredOldSpaceBytes).toBe(1792 * 1024 * 1024);
+    const argv = await (await pool.get(project)).request<{ execArgv: string[] }>("pi/test/argv", {});
+    expect(argv.execArgv).toContain("--max-old-space-size=1792");
     expect(await pool.pressureDirective(project, selected, { level: "critical", epoch: 1, generation: selected.workerGeneration })).toMatchObject({
       applied: true,
       ran: ["ephemeral_caches"],
@@ -545,12 +615,14 @@ describe("WorkerPool", () => {
   });
 
   it("reports a worker that could not be spawned as crashed, with a retry", async () => {
-    pool = makePool({ nodeBinary: join(dir, "no-such-node") });
+    const losses: Array<{ exit: { kind: string }; message: string }> = [];
+    pool = makePool({ nodeBinary: join(dir, "no-such-node"), onWorkerLoss: (loss) => losses.push(loss) });
     await expect(pool.get(project)).rejects.toThrow(/ENOENT/);
     const info = pool.workerInfo(project)!;
     expect(info.status).toBe("crashed");
     expect(info.canRestart).toBe(true);
     expect(info.message).toMatch(/could not start/);
+    expect(losses).toMatchObject([{ exit: { kind: "spawn_error" }, message: expect.stringContaining("could not start") }]);
   });
 
   it("passes --state-dir and primes a worker before get() resolves, surviving a refused prime", async () => {
