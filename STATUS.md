@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-17T00:17:12+03:00 · m19-recovery-plan `01a0a030` · HEAD: 0f0b86b5
-**Current focus:** M19-T3A migration snapshot/restore core is complete; T3B launcher and update integration is next.
+**Last updated:** 2026-09-17T00:44:39+03:00 · m19-recovery-plan `01a0a030` · HEAD: 6e7c07e9
+**Current focus:** M19-T3B pre-host migration activation is implemented and validated; checkpoint commit, then T3C real-process/package recovery.
 
 | Milestone | State |
 | --- | --- |
@@ -29,7 +29,7 @@
 | MX Cross-cutting | in-progress |
 
 **Blockers:** none.
-**Next up:** M19-T3B launcher/update integration; T3C real-process recovery; then one T3 review.
-**Recently done:** M19-T3A migration core (pending commit); M19-T2 generation activation (`d59f74e8`); M18-T15 repeat baseline (`7bfce5e8`); M19-T1 (`23787c27`); attachment membership fix (`98d12881`).
+**Next up:** commit M19-T3B; T3C real-process recovery and fixed-root package cycle; then one T3 review.
+**Recently done:** M19-T3A migration core (`6e7c07e9`); M19-T2 generation activation (`d59f74e8`); M18-T15 repeat baseline (`7bfce5e8`); M19-T1 (`23787c27`); attachment membership fix (`98d12881`).
 
 Ownership and evidence: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`.

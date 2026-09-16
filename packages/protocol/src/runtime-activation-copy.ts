@@ -1,13 +1,17 @@
 import type { ActivationBlockers } from "./runtime-activation.js";
 
-export type RuntimeUpdateNoticeState = "downloaded" | "parking" | "ready" | "restarting" | "succeeded" | "failed";
-export type RuntimeUpdateNoticeAction = "prepare" | "cancel" | "activate" | "retry" | "none";
+export type RuntimeUpdateNoticeState =
+  | "downloaded" | "parking" | "preparing-data" | "ready" | "restarting"
+  | "succeeded" | "failed" | "migration-failed" | "restoring" | "restored";
+export type RuntimeUpdateNoticeAction = "prepare" | "cancel" | "activate" | "retry" | "restore" | "none";
 
 export interface RuntimeUpdatePresentation {
   title: string;
   detail: string;
   action: RuntimeUpdateNoticeAction;
   actionLabel?: string;
+  secondaryAction?: RuntimeUpdateNoticeAction;
+  secondaryActionLabel?: string;
 }
 
 function blockerDetail(blockers?: ActivationBlockers): string {
@@ -44,6 +48,12 @@ export function runtimeUpdatePresentation(
         action: "cancel",
         actionLabel: "Keep working",
       };
+    case "preparing-data":
+      return {
+        title: "Preparing your data for this update…",
+        detail: "Your current data snapshot is being verified before anything changes.",
+        action: "none",
+      };
     case "ready":
       return {
         title: "The update is ready to activate.",
@@ -63,6 +73,24 @@ export function runtimeUpdatePresentation(
       return {
         title: "The update could not start.",
         detail: "Try again or reinstall the app. Your saved data remains available to restore.",
+        action: "retry",
+        actionLabel: "Try again",
+      };
+    case "migration-failed":
+      return {
+        title: "The update could not be finished.",
+        detail: "Your previous data snapshot is intact.",
+        action: "retry",
+        actionLabel: "Try again",
+        secondaryAction: "restore",
+        secondaryActionLabel: "Restore previous data",
+      };
+    case "restoring":
+      return { title: "Restoring your previous data…", detail: "Keep the app open while restoration finishes.", action: "none" };
+    case "restored":
+      return {
+        title: "Previous data restored. The update was not activated.",
+        detail: "Your previous data is intact. You can try the update again when you are ready.",
         action: "retry",
         actionLabel: "Try again",
       };

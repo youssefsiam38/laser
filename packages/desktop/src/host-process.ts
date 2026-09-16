@@ -28,6 +28,7 @@ import { closeSync, existsSync, mkdirSync, openSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   CLI_VERSION,
+  MigrationActivationError,
   cliEntry,
   hostDaemonArgv,
   inspectHost,
@@ -41,6 +42,7 @@ import {
   stopHost,
   type InstalledRuntimeLaunch,
   type LaserPaths,
+  type MigrationLaunchEvent,
 } from "@lasercode/cli";
 import { hostNeedsRefresh } from "./host-compatibility.js";
 import { installedHostVersion } from "./native-update.js";
@@ -85,6 +87,7 @@ export interface HostProcessOptions {
   confirmHostRefresh?: (runningVersion: string) => Promise<boolean>;
   /** Exact target handshake, after launch id, generation and compiled version agree. */
   onVerifiedLaunch?: (launch: { launchId: string; generationId: string; version: string }) => void;
+  onMigrationEvent?: (event: MigrationLaunchEvent) => void;
 }
 
 /** A partial update to the published info. `message: null` clears the message. */
@@ -95,6 +98,7 @@ interface HostInfoPatch {
   port?: number;
   startedByUs?: boolean;
   runtime?: DesktopHostInfo["runtime"];
+  migration?: DesktopHostInfo["migration"] | null;
   message?: string | null;
 }
 
@@ -141,12 +145,20 @@ export class HostProcess {
     if (this.child && this.child.exitCode === null) return this.info;
 
     try {
-      this.installedRuntime = prepareInstalledRuntime(paths);
+      this.installedRuntime = prepareInstalledRuntime(paths, cliEntry(), {
+        onMigrationEvent: (event) => {
+          this.options.onMigrationEvent?.(event);
+          this.publish({ state: "starting", message: event.message, migration: { updateId: event.updateId, canRestore: false } });
+        },
+      });
     } catch (error) {
       log.error("runtime generation verification failed", error);
       return this.publish({
         state: "failed",
         message: error instanceof Error ? error.message : "The app could not verify its installed runtime. Reinstall the app.",
+        ...(error instanceof MigrationActivationError
+          ? { migration: { updateId: error.updateId, canRestore: error.canRestore } }
+          : {}),
       });
     }
 
@@ -489,12 +501,14 @@ export class HostProcess {
   }
 
   private publish(patch: HostInfoPatch): DesktopHostInfo {
-    const { message, runtime, ...rest } = patch;
+    const { message, runtime, migration, ...rest } = patch;
     const next: DesktopHostInfo = {
       ...this.info,
       ...rest,
       ...(runtime !== undefined ? { runtime } : {}),
     };
+    if (migration === null || patch.state === "ready") delete next.migration;
+    else if (migration !== undefined) next.migration = migration;
     // `null` clears the message; leaving the key out keeps whatever was there.
     // Under `exactOptionalPropertyTypes` an explicit `undefined` cannot say
     // either of those things, so it does not appear in the patch type.

@@ -1,10 +1,12 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
+  MigrationEngine,
   UpdateTransactionStore,
   readRuntimeGenerationPointer,
+  type MigrationRegistry,
   runtimeReferenceFromManifest,
   runtimeUpdateId,
   writeRuntimeGenerationManifest,
@@ -70,9 +72,14 @@ function harness() {
     cancelActivation: vi.fn(async () => ({ ...gate(), phase: "cancelled" as const })),
   } as unknown as HostLink;
   const statuses: unknown[] = [];
-  const activation = new DesktopUpdateActivation({ stateDir, link, publish: (status) => statuses.push(status) });
+  const paths = {
+    stateDir, agentDir: join(root, "agent"), sessionDir: join(root, "agent", "sessions"),
+    hostFile: join(stateDir, "host.json"), logFile: join(stateDir, "host.log"),
+    host: "127.0.0.1", port: 1, portIsExplicit: true,
+  };
+  const activation = new DesktopUpdateActivation({ stateDir, paths, link, publish: (status) => statuses.push(status) });
   return {
-    activation, marker, stateDir, link, statuses,
+    activation, marker, stateDir, paths, link, statuses,
     setBlockers(next: Partial<RuntimeActivationState["blockers"]>) {
       blockers = { conversations: 0, agents: 0, questions: 0, approvals: 0, commands: 0, mutations: 0, workers: 0, ...next };
     },
@@ -124,13 +131,42 @@ it("keeps the fixed-root selection and offers honest recovery when verified laun
   h.activation.stop();
 });
 
+it("offers and completes exact snapshot restore after migration failure", async () => {
+  const h = harness();
+  const unit = { root: "stateDir" as const, path: "synthetic.txt", type: "file" as const };
+  writeFileSync(join(h.stateDir, unit.path), "before\n", { mode: 0o600 });
+  const registry: MigrationRegistry = {
+    targetSchema: 2,
+    steps: [{ id: "synthetic-v2", fromSchema: 1, toSchema: 2, units: [unit], run(context) {
+      context.writeFile(unit, "after\n");
+      throw new Error("fault");
+    } }],
+  };
+  const transactions = new UpdateTransactionStore(h.stateDir);
+  transactions.transition(h.marker.updateId, "parking");
+  transactions.transition(h.marker.updateId, "snapshotting");
+  transactions.transition(h.marker.updateId, "migrating");
+  expect(() => new MigrationEngine({
+    roots: { stateDir: h.paths.stateDir, agentDir: h.paths.agentDir, sessionDir: h.paths.sessionDir }, registry,
+  }).migrate({ updateId: h.marker.updateId, targetGenerationId: h.marker.generationId })).toThrow(/prepare your data safely/);
+  transactions.transition(h.marker.updateId, "failed", { failureCategory: "migration_failed" });
+  h.activation.discover(h.marker);
+
+  await expect(h.activation.restore()).resolves.toMatchObject({
+    state: "restored", title: "Previous data restored. The update was not activated.",
+  });
+  expect(readFileSync(join(h.stateDir, unit.path), "utf8")).toBe("before\n");
+  expect(transactions.read(h.marker.updateId)?.phase).toBe("rolled_back");
+  h.activation.stop();
+});
+
 it("survives coordinator replacement by update id and matching cancel reopens admission", async () => {
   const h = harness();
   h.activation.discover(h.marker);
   await h.activation.prepare();
   h.activation.stop();
   const resumedStatuses: unknown[] = [];
-  const resumed = new DesktopUpdateActivation({ stateDir: h.stateDir, link: h.link, publish: (status) => resumedStatuses.push(status) });
+  const resumed = new DesktopUpdateActivation({ stateDir: h.stateDir, paths: h.paths, link: h.link, publish: (status) => resumedStatuses.push(status) });
   expect(resumed.resume(h.marker)).toMatchObject({ state: "parking", updateId: h.marker.updateId });
   await expect(resumed.cancel()).resolves.toMatchObject({ state: "downloaded", updateId: h.marker.updateId });
   expect(h.link.cancelActivation).toHaveBeenCalledExactlyOnceWith(h.marker.updateId);

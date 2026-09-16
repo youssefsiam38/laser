@@ -1,6 +1,11 @@
 import {
+  MigrationActivationError,
   UpdateTransactionStore,
+  prepareUpdateData,
+  restoreUpdateData,
   selectRuntimeGeneration,
+  type LaserPaths,
+  type MigrationLaunchEvent,
   type UpdateTransaction,
 } from "@lasercode/cli";
 import { runtimeUpdatePresentation, type ActivationBlockers, type RuntimeActivationState, type RuntimeUpdateNoticeState } from "@lasercode/protocol";
@@ -18,6 +23,7 @@ export class DesktopUpdateActivation {
 
   constructor(private readonly options: {
     stateDir: string;
+    paths: LaserPaths;
     link: HostLink;
     publish: (status: UpdateStatus) => void;
   }) {
@@ -70,6 +76,29 @@ export class DesktopUpdateActivation {
     } catch {
       return this.fail("activation_cancel_failed");
     }
+  }
+
+  async restore(): Promise<UpdateStatus> {
+    const marker = this.marker;
+    if (!marker) return this.status;
+    try {
+      this.set(this.notice("restoring", marker));
+      restoreUpdateData(this.options.paths, marker.updateId, (event) => this.applyMigrationEvent(event));
+      await this.options.link.cancelActivation(marker.updateId).catch(() => undefined);
+      this.stopPolling();
+      return this.set(this.notice("restored", marker));
+    } catch {
+      return this.set(this.notice("migration-failed", marker));
+    }
+  }
+
+  applyMigrationEvent(event: MigrationLaunchEvent): void {
+    const marker = this.marker;
+    if (!marker || event.updateId !== marker.updateId) return;
+    if (event.phase === "preparing" || event.phase === "migrating") this.set(this.notice("preparing-data", marker));
+    else if (event.phase === "restoring") this.set(this.notice("restoring", marker));
+    else if (event.phase === "restored") this.set(this.notice("restored", marker));
+    else if (event.phase === "failed") this.set(this.notice("migration-failed", marker));
   }
 
   async activate(): Promise<boolean> {
@@ -136,8 +165,16 @@ export class DesktopUpdateActivation {
       return this.fail("activation_identity_mismatch");
     }
     if (gate.phase === "parked" && Object.values(gate.blockers).every((count) => count === 0)) {
-      const transaction = this.requireTransaction(marker.updateId);
-      if (transaction.phase === "parking") this.transactions.transition(marker.updateId, "ready");
+      try {
+        this.set(this.notice("preparing-data", marker, gate.blockers));
+        prepareUpdateData(this.options.paths, {
+          updateId: marker.updateId,
+          targetGenerationId: marker.generationId,
+        }, (event) => this.applyMigrationEvent(event));
+      } catch (error) {
+        this.stopPolling();
+        return this.set(this.notice(error instanceof MigrationActivationError && !error.canRestore ? "restored" : "migration-failed", marker));
+      }
       this.stopPolling();
       return this.set(this.notice("ready", marker, gate.blockers));
     }
@@ -200,6 +237,8 @@ export class DesktopUpdateActivation {
       message: presentation.detail,
       action: presentation.action,
       ...(presentation.actionLabel ? { actionLabel: presentation.actionLabel } : {}),
+      ...(presentation.secondaryAction ? { secondaryAction: presentation.secondaryAction } : {}),
+      ...(presentation.secondaryActionLabel ? { secondaryActionLabel: presentation.secondaryActionLabel } : {}),
       ...(blockers ? { blockers } : {}),
     };
   }

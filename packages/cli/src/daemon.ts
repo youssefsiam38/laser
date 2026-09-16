@@ -17,6 +17,8 @@ import { fromBase64Url, isAuthorized } from "@lasercode/crypto";
 import { join } from "node:path";
 import {
   HostServer,
+  MIGRATION_REGISTRY,
+  MigrationEngine,
   RuntimeGenerationGuard,
   migrateFormerIdentities,
   readRuntimeGenerationPointer,
@@ -89,6 +91,10 @@ export async function runDaemon(options: DaemonOptions): Promise<void> {
   const launch = launchIdSchema.safeParse(process.env[ENV.hostLaunchId]);
   if (!launch.success) throw new Error("the host launcher did not provide a valid launch identity");
   const launchId = launch.data;
+  if (new MigrationEngine({
+    roots: { stateDir: paths.stateDir, agentDir: paths.agentDir, sessionDir: paths.sessionDir },
+    registry: MIGRATION_REGISTRY,
+  }).currentState()) throw new Error("data preparation is incomplete; restart through the launcher before starting the host");
   const runtimeGeneration = options.runtimeGeneration ?? runtimeReferenceFromEnvironment(process.env);
   if (!runtimeGeneration) throw new Error("the host launcher did not bind a runtime generation");
   const selected = readRuntimeGenerationPointer(paths.stateDir)?.active;

@@ -25,6 +25,7 @@ export const IPC = {
   updateCheck: "laser:update/check",
   updatePrepare: "laser:update/prepare",
   updateCancel: "laser:update/cancel",
+  updateRestore: "laser:update/restore",
   updateInstall: "laser:update/install",
   updateChanged: "laser:update/changed",
 } as const;

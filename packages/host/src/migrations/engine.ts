@@ -373,6 +373,7 @@ export class MigrationEngine {
     const next: MigrationState = { ...state, updatedAt: this.now().toISOString() };
     this.boundary?.("marker", next.phase);
     atomicWrite(this.statePath(), `${JSON.stringify(next, null, 2)}\n`, 0o600, this.boundary);
+    this.options.onState?.(next);
     return next;
   }
 

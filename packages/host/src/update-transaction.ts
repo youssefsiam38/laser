@@ -45,7 +45,7 @@ const ALLOWED: Readonly<Record<UpdateTransactionPhase, readonly UpdateTransactio
   migrating: ["ready", "failed", "restoring"],
   ready: ["selected", "failed"],
   selected: ["restarting", "failed", "restoring"],
-  restarting: ["succeeded", "failed", "restoring"],
+  restarting: ["succeeded", "failed", "restoring", "snapshotting"],
   succeeded: [],
   failed: ["parking", "restoring", "rolled_back"],
   restoring: ["rolled_back", "failed"],

@@ -14,7 +14,7 @@
  * fails, the same window shows a written explanation instead — a state that was
  * designed, not a blank page.
  */
-import { APP_ID, DATA_DIR_NAME, ENV, PRODUCT_NAME } from "@lasercode/protocol";
+import { APP_ID, DATA_DIR_NAME, ENV, PRODUCT_NAME, runtimeUpdatePresentation } from "@lasercode/protocol";
 import { BrowserWindow, Menu, app, dialog, ipcMain, nativeTheme, session, shell } from "electron";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -201,6 +201,7 @@ const host = new HostProcess({
   ...(devUiUrl ? { env: { [ENV.allowedOrigins]: originOf(devUiUrl) } } : {}),
   onChange: (info) => onHostChanged(info),
   onVerifiedLaunch: (launch) => activation?.completeLaunch(launch),
+  onMigrationEvent: (event) => activation?.applyMigrationEvent(event),
   confirmHostRefresh: async () => {
     const liveWork = await hostStopDetail("Restarting");
     return (await dialog.showMessageBox({
@@ -249,6 +250,7 @@ const tray = new TrayController({
 
 activation = new DesktopUpdateActivation({
   stateDir: paths.stateDir,
+  paths,
   link,
   publish: (status) => {
     updateStatus = status;
@@ -382,7 +384,7 @@ function originOf(url: string): string {
 }
 
 function onHostChanged(info: DesktopHostInfo): void {
-  if (info.state === "failed") activation?.failLaunch();
+  if (info.state === "failed" && !info.migration) activation?.failLaunch();
   hostInfo = info;
   windows.broadcast(IPC.hostChanged, info);
   tray.setHostMessage(info.state === "ready" ? undefined : (info.message ?? "starting the agent host…"));
@@ -415,6 +417,17 @@ function routeMainWindow(): void {
         title: `${PRODUCT_NAME} cannot start its agent host`,
         message: hostInfo?.message ?? "Something stopped the host from starting.",
         logFile: hostInfo?.logFile ?? paths.logFile,
+        ...(hostInfo?.migration?.canRestore ? (() => {
+          const failed = runtimeUpdatePresentation("migration-failed");
+          const restoring = runtimeUpdatePresentation("restoring");
+          const restored = runtimeUpdatePresentation("restored");
+          return { restore: {
+            label: failed.secondaryActionLabel ?? "",
+            pendingLabel: restoring.title,
+            successTitle: restored.title,
+            successMessage: restored.detail,
+          } };
+        })() : {}),
       }),
       true,
     );
@@ -630,6 +643,7 @@ function installIpc(): void {
   ipcMain.handle(IPC.updateCheck, () => nativeUpdate.check() ? updateStatus : updater.check());
   ipcMain.handle(IPC.updatePrepare, () => activation?.prepare() ?? updateStatus);
   ipcMain.handle(IPC.updateCancel, () => activation?.cancel() ?? updateStatus);
+  ipcMain.handle(IPC.updateRestore, () => activation?.restore() ?? updateStatus);
   ipcMain.on(IPC.updateInstall, (_event, options: unknown) => void installUpdate(false,
     !!options && typeof options === "object" && (options as { relaunch?: unknown }).relaunch === true));
 }

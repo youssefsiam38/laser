@@ -77,6 +77,18 @@ export { listSessions, matchSessions, resolveSession, resolveProject } from "./s
 export { sessionFragment } from "./commands/session.js";
 export { CLI_VERSION } from "./version.js";
 export {
+  MigrationActivationError,
+  ensureUpdateTransaction,
+  migrationEventLine,
+  migrationPhaseForState,
+  prepareUpdateData,
+  restoreUpdateData,
+  type MigrationEventSink,
+  type MigrationLaunchEvent,
+  type MigrationLaunchPhase,
+} from "./migration-activation.js";
+export {
+  MigrationEngine,
   UpdateTransactionStore,
   prepareRuntimeGeneration,
   readRuntimeGenerationPointer,
@@ -90,6 +102,7 @@ export {
   writeRuntimeGenerationPointer,
   type RuntimeGenerationManifest,
   type RuntimeGenerationPointer,
+  type MigrationRegistry,
   type RuntimeGenerationReference,
   type RuntimeGenerationVerification,
   type RuntimeVerificationMetrics,

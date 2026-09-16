@@ -74,6 +74,7 @@ export interface MigrationEngineOptions {
   registry: MigrationRegistry;
   /** Test-only fault seam. Production leaves it absent. */
   boundary?: (boundary: MigrationBoundary, detail: string) => void;
+  onState?: (state: MigrationState) => void;
   now?: () => Date;
 }
 

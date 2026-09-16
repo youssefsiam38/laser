@@ -21,6 +21,7 @@ const notice = (state: RuntimeUpdateNoticeState, blockers?: ActivationBlockers) 
     state, updateId: "update-1", version: "1.1.0",
     title: presentation.title, message: presentation.detail,
     action: presentation.action, actionLabel: presentation.actionLabel,
+    secondaryAction: presentation.secondaryAction, secondaryActionLabel: presentation.secondaryActionLabel,
   };
 };
 
@@ -77,4 +78,24 @@ it("only offers activation after the durable gate is ready", async () => {
   expect(container.querySelector("button")?.textContent).toBe("Try again");
   await act(async () => container.querySelector("button")!.click());
   expect(restart).toHaveBeenCalledOnce();
+});
+
+it("keeps migration failure retry and exact snapshot restore as separate actions", async () => {
+  const retry = vi.fn();
+  const restore = vi.fn();
+  await act(async () => root.render(<VersionNotice
+    desktopVersion="1.0.0"
+    update={notice("migration-failed")}
+    onRefresh={() => {}}
+    onPrepare={retry}
+    onRestore={restore}
+  />));
+  expect(container.textContent).toContain("The update could not be finished.");
+  expect(container.textContent).toContain("Your previous data snapshot is intact.");
+  const buttons = [...container.querySelectorAll("button")];
+  expect(buttons.map((button) => button.textContent)).toEqual(["Try again", "Restore previous data"]);
+  await act(async () => buttons[0]!.click());
+  await act(async () => buttons[1]!.click());
+  expect(retry).toHaveBeenCalledOnce();
+  expect(restore).toHaveBeenCalledOnce();
 });

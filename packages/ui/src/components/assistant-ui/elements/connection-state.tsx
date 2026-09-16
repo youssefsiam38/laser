@@ -106,8 +106,10 @@ type UpdateNoticeState = {
   version?: string;
   title?: string;
   message?: string;
-  action?: "prepare" | "cancel" | "activate" | "retry" | "none";
+  action?: "prepare" | "cancel" | "activate" | "retry" | "restore" | "none";
   actionLabel?: string;
+  secondaryAction?: "prepare" | "cancel" | "activate" | "retry" | "restore" | "none";
+  secondaryActionLabel?: string;
 };
 
 type DesktopUpdates = {
@@ -116,35 +118,41 @@ type DesktopUpdates = {
     status(): Promise<UpdateNoticeState>;
     prepare(): Promise<UpdateNoticeState>;
     cancel(): Promise<UpdateNoticeState>;
+    restore(): Promise<UpdateNoticeState>;
     install(): void;
     restart?(): void;
     onStatus(listener: (status: UpdateNoticeState) => void): () => void;
   };
 };
 
-function UpdateNoticeAction({ update, onRestart, onPrepare, onCancel }: {
+function UpdateNoticeAction({ update, onRestart, onPrepare, onCancel, onRestore }: {
   update: UpdateNoticeState;
   onRestart?: (() => void) | undefined;
   onPrepare?: (() => void) | undefined;
   onCancel?: (() => void) | undefined;
+  onRestore?: (() => void) | undefined;
 }) {
   const props = { variant: "outline" as const, size: "sm" as const, className: "pointer-coarse:min-h-11" };
-  switch (update.action) {
-    case "prepare":
-      return onPrepare ? <Button {...props} onClick={onPrepare}>{update.actionLabel}</Button> : null;
-    case "cancel":
-      return onCancel ? <Button {...props} onClick={onCancel}>{update.actionLabel}</Button> : null;
-    case "activate":
-    case "retry":
-      return onRestart ? <Button {...props} onClick={onRestart}>{update.actionLabel}</Button> : null;
-    default:
-      return null;
-  }
+  const action = (kind: UpdateNoticeState["action"], label: string | undefined, secondary = false) => {
+    let handler: (() => void) | undefined;
+    if (kind === "prepare") handler = onPrepare;
+    else if (kind === "cancel") handler = onCancel;
+    else if (kind === "restore") handler = onRestore;
+    else if (kind === "activate") handler = onRestart;
+    else if (kind === "retry") handler = update.state === "migration-failed" || update.state === "restored" ? onPrepare : onRestart;
+    return handler && label
+      ? <Button {...props} data-secondary-action={secondary || undefined} onClick={handler}>{label}</Button>
+      : null;
+  };
+  return <>
+    {action(update.action, update.actionLabel)}
+    {action(update.secondaryAction, update.secondaryActionLabel, true)}
+  </>;
 }
 
-export function VersionNotice({ hostVersion, desktopVersion, update, onRefresh, onRestart, onPrepare, onCancel }: {
+export function VersionNotice({ hostVersion, desktopVersion, update, onRefresh, onRestart, onPrepare, onCancel, onRestore }: {
   hostVersion?: string; desktopVersion?: string; update?: UpdateNoticeState;
-  onRefresh: () => void; onRestart?: () => void; onPrepare?: () => void; onCancel?: () => void;
+  onRefresh: () => void; onRestart?: () => void; onPrepare?: () => void; onCancel?: () => void; onRestore?: () => void;
 }) {
   const local = desktopVersion !== undefined;
   const hostOlder = hostVersion !== undefined && hostVersion !== "unknown" &&
@@ -155,7 +163,7 @@ export function VersionNotice({ hostVersion, desktopVersion, update, onRefresh, 
     ? "Restart the app and host together on the host computer when you are ready. Saved sessions are kept; active work will stop during restart."
     : "The host has been updated. This refresh only updates your frontend. Your sessions and running agents will not be affected.";
   let action = update
-    ? <UpdateNoticeAction update={update} onRestart={onRestart} onPrepare={onPrepare} onCancel={onCancel} />
+    ? <UpdateNoticeAction update={update} onRestart={onRestart} onPrepare={onPrepare} onCancel={onCancel} onRestore={onRestore} />
     : null;
   if (!update && restart && local && onRestart) {
     action = <Button variant="outline" size="sm" className="pointer-coarse:min-h-11" onClick={onRestart}>Restart when ready…</Button>;
@@ -184,7 +192,7 @@ export function HostVersionNotice() {
     if (!desktop?.updates) return;
     let active = true;
     const receive = (status: UpdateNoticeState) => {
-      const visible = ["downloaded", "parking", "ready", "restarting", "failed"].includes(status.state);
+      const visible = ["downloaded", "parking", "preparing-data", "migration-failed", "restoring", "restored", "ready", "restarting", "failed"].includes(status.state);
       if (active) setUpdate(visible ? status : undefined);
     };
     void desktop.updates.status().then(receive).catch(() => {});
@@ -198,6 +206,7 @@ export function HostVersionNotice() {
     {...(desktop?.updates?.restart ? { onRestart: () => mismatch ? desktop.updates.restart!() : desktop.updates.install() } : {})}
     {...(desktop?.updates?.prepare ? { onPrepare: () => { void desktop.updates.prepare(); } } : {})}
     {...(desktop?.updates?.cancel ? { onCancel: () => { void desktop.updates.cancel(); } } : {})}
+    {...(desktop?.updates?.restore ? { onRestore: () => { void desktop.updates.restore(); } } : {})}
     onRefresh={refreshFrontend} />;
 }
 
