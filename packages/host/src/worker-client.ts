@@ -52,6 +52,12 @@ export interface WorkerClientOptions {
    * flag ignores it.
    */
   providerPayloads?: "full" | "summary";
+  /**
+   * This spawn's memory-pressure generation (RP-8), minted by the host with
+   * {@link nextWorkerGeneration}. Omitted only by a caller that has none, and
+   * the worker then refuses to report or to act on a directive.
+   */
+  workerGeneration?: number;
   /** Path to the worker entry; defaults to the workspace `@lasercode/worker` build. */
   workerMain?: string;
   /** Node binary to run the worker with; defaults to the current one. */
@@ -90,6 +96,25 @@ export class WorkerRetiredError extends Error {
   }
 }
 
+/**
+ * The next memory-pressure generation this host process will hand to a worker
+ * (RP-8).
+ *
+ * One counter for the life of the host, starting at 1 and only ever going up,
+ * so a worker that is replaced can never be mistaken for the one that took its
+ * place. It fails closed rather than wrapping: past the last integer a number
+ * can represent exactly, there is no value that is still distinct, so the host
+ * hands out none and the worker simply does not take part in pressure. (At one
+ * spawn a millisecond that is a quarter of a million years away; the branch
+ * exists because wrapping would silently make two workers equal.)
+ */
+let lastWorkerGeneration = 0;
+export function nextWorkerGeneration(): number | undefined {
+  if (lastWorkerGeneration >= Number.MAX_SAFE_INTEGER) return undefined;
+  lastWorkerGeneration += 1;
+  return lastWorkerGeneration;
+}
+
 export function defaultWorkerMain(): string {
   return createRequire(import.meta.url).resolve("@lasercode/worker/main");
 }
@@ -102,6 +127,23 @@ export class WorkerClient {
    * this value is never logged, never stored and never sent to a client.
    */
   readonly generation: string = randomBytes(8).toString("hex");
+  /**
+   * What *this spawn* is, as a number the worker can prove it was given (RP-8).
+   *
+   * The worker stamps it on the memory-pressure reports it sends unasked and
+   * checks it on every directive, so a message from a process the host has
+   * already replaced can be refused rather than acted on. It is minted by the
+   * host before the process exists and passed in argv, which is why a worker
+   * can carry it truthfully from its first sample; the worker never invents,
+   * echoes or derives one. Absent (a direct client in a test, a caller that
+   * did not mint one) the worker fails closed and neither reports nor accepts
+   * a directive.
+   *
+   * Deliberately not {@link generation}, which is the opaque capture identity
+   * (RP-7), and deliberately not the RP-1 ownership record's generation, which
+   * is keyed by pid and minted after the spawn.
+   */
+  readonly workerGeneration: number | undefined;
   private readonly child: ChildProcess;
   private readonly pipe: Duplex;
   private readonly pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
@@ -133,6 +175,8 @@ export class WorkerClient {
     if (options.projectTrusted !== undefined) args.push("--project-trusted", options.projectTrusted ? "yes" : "no");
     if (options.environmentId) args.push("--environment-id", options.environmentId);
     if (options.providerPayloads) args.push("--provider-payloads", options.providerPayloads);
+    this.workerGeneration = options.workerGeneration;
+    if (options.workerGeneration !== undefined) args.push("--worker-generation", String(options.workerGeneration));
 
     this.child = spawn(options.nodeBinary ?? process.execPath, args, {
       // --cwd configures the driver; it does not change the process directory.

@@ -10,7 +10,7 @@
  *
  * Args: --cwd <dir> [--agent-dir <dir>] [--session-dir <dir>] [--state-dir <dir>]
  *       [--project-trusted yes|no] [--environment-id <id>]
- *       [--provider-payloads full|summary]
+ *       [--provider-payloads full|summary] [--worker-generation <n>]
  */
 import { Socket } from "node:net";
 import {
@@ -162,6 +162,16 @@ async function main(): Promise<void> {
   // Which environment the durable revisions this worker mints belong to
   // (RP-9). Never logged, never published: only its derived key is public.
   const environmentId = arg("environment-id");
+  // Which spawn this process is, as the host minted it before starting us
+  // (RP-8). Only an exactly representable non-negative integer is a
+  // generation; anything else is treated as none, and this worker then takes
+  // no part in memory pressure rather than claiming an identity it was not
+  // given. It is never logged and never leaves this process except on the
+  // trusted link it came from.
+  const generationArg = arg("worker-generation");
+  const parsedGeneration = generationArg === undefined ? Number.NaN : Number(generationArg);
+  const workerGeneration =
+    Number.isSafeInteger(parsedGeneration) && parsedGeneration >= 0 ? parsedGeneration : undefined;
   // Whether this installation's log store keeps provider request bodies
   // (RP-7). `summary` means a capture is recorded without one, and the body is
   // never serialized here at all.
@@ -224,6 +234,7 @@ async function main(): Promise<void> {
     ...(stateDir ? { stateDir } : {}),
     ...(projectTrusted !== undefined ? { projectTrusted: projectTrusted === "yes" } : {}),
     ...(environmentId ? { environmentId } : {}),
+    ...(workerGeneration !== undefined ? { workerGeneration } : {}),
     ...(npmCommand ? { npmCommand } : {}),
     features,
     transportPending: () => transport.pending(),

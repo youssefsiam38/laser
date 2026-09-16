@@ -579,3 +579,37 @@ async function waitFor(predicate: () => boolean, ms = 5000): Promise<void> {
     await new Promise((r) => setTimeout(r, 5));
   }
 }
+
+describe("the generation a worker can prove (RP-8)", () => {
+  it("mints one per spawn, passes it in argv, and never reuses it across a restart", async () => {
+    pool = makePool({ backoffMs: 10 });
+    const first = await pool.get(project);
+    const before = await first.request<{ argv: string[] }>("pi/test/argv", {});
+    const firstGeneration = Number(before.argv[before.argv.indexOf("--worker-generation") + 1]);
+    expect(Number.isSafeInteger(firstGeneration) && firstGeneration > 0).toBe(true);
+    // What the host holds is what the process was told.
+    expect(first.workerGeneration).toBe(firstGeneration);
+
+    // A second project is a second spawn, and a different generation.
+    const other = join(dir, "second");
+    mkdirSync(other);
+    const second = await pool.get(other);
+    expect(second.workerGeneration).toBeGreaterThan(firstGeneration);
+
+    // A replacement after a crash is a new spawn too: the old generation is
+    // gone, so a message from the process that died can be told apart.
+    pool.bindSession("/sessions/a.jsonl", project);
+    first.request("pi/test/crash", {}).catch(() => {});
+    await waitFor(() => statusesOf(project).includes("crashed"));
+    runTimers();
+    await waitFor(() => pool.openSessions(project).includes("/sessions/a.jsonl"));
+    const restarted = await pool.get(project);
+    expect(restarted.workerGeneration).toBeGreaterThan(second.workerGeneration!);
+    const after = await restarted.request<{ argv: string[] }>("pi/test/argv", {});
+    expect(Number(after.argv[after.argv.indexOf("--worker-generation") + 1])).toBe(restarted.workerGeneration);
+    // It is a number for the worker's own link and nothing else: no status, no
+    // notification and no client payload carries it.
+    expect(JSON.stringify(statuses)).not.toContain(String(restarted.workerGeneration));
+    expect(JSON.stringify(notifications)).not.toContain("workerGeneration");
+  });
+});

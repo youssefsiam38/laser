@@ -35,7 +35,7 @@ import { ErrorCodes, ProtocolError, environmentOverlay } from "@lasercode/protoc
 import { canonical } from "./trust.js";
 import { SessionRouteLeases } from "./session-route-lease.js";
 import { retirementRefused, retireWorker, type RetirementOutcome } from "./worker-retirement.js";
-import { WorkerClient, type WorkerClientOptions } from "./worker-client.js";
+import { WorkerClient, nextWorkerGeneration, type WorkerClientOptions } from "./worker-client.js";
 
 export interface WorkerPoolOptions {
   agentDir?: string;
@@ -196,6 +196,12 @@ interface Entry {
   reopened: string[] | undefined;
   /** Generation of this process's process-inventory record (RP-1), if any. */
   resourceRegistration?: number | undefined;
+  /**
+   * This spawn's memory-pressure generation (RP-8), minted before the process
+   * exists so the worker can prove which spawn it is. Separate from
+   * {@link Entry.resourceRegistration}, which is an RP-1 record's generation.
+   */
+  workerGeneration?: number | undefined;
 }
 
 const DEFAULTS = {
@@ -753,6 +759,10 @@ export class WorkerPool {
       if (entry.client?.alive) return entry.client;
     }
 
+    // Minted before the process exists, so the worker knows which spawn it is
+    // from its first line of code (RP-8). A host that has run out of distinct
+    // generations mints none, and that worker takes no part in pressure.
+    const generation = nextWorkerGeneration();
     const clientOptions: WorkerClientOptions = {
       cwd: entry.cwd,
       baseEnv: this.baseEnv,
@@ -771,7 +781,8 @@ export class WorkerPool {
       onExit: (code, signal) => this.onExit(entry, client, code, signal),
       ...(this.options.onStderr ? { onStderr: (t: string) => { if (!entry.warm) this.options.onStderr?.(entry.cwd, t); } } : {}),
     };
-    const client = new WorkerClient(clientOptions);
+    const client = new WorkerClient({ ...clientOptions, ...(generation !== undefined ? { workerGeneration: generation } : {}) });
+    entry.workerGeneration = client.workerGeneration;
     entry.resourceRegistration = this.options.resources?.noteWorker(entry.cwd, client.pid);
     entry.client = client;
     entry.stopping = false;
