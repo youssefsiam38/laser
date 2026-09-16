@@ -2593,6 +2593,7 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 
 #### M18-T11 notes
 - 2026-09-16 claimed: map the integrated T10 cache/readiness seam and T16 view reconciliation, then produce an implementation plan for one-frame provisional paint, authority-fenced actions, mismatch preservation and truthful offline retry before UI source changes.
+- 2026-09-16 plan `/tmp/m18-t11-plan.md` accepted with parent corrections: a cache-derived placeholder may fill required non-rendered `SessionState` fields only under an explicit provisional marker and strict action/metadata fence; removing the pre-request `historyReset` is required and its expectations must be deliberately replaced; drafts remain editable offline as well as while reconciling; delta/replace reconciliation must reuse the canonical T16 fold so overtaking live/optimistic/terminal updates survive. One-frame evidence is stated only for a validated warm `peek` hit; cold cache promotion stays honest.
 
 #### M18-T12 notes
 - 2026-09-14 claimed: extend the existing bounded `pi/session/entries` window with live-or-durable authority, host-side line-offset materialisation and no-spawn cold reads; no second read API or transcript authority.

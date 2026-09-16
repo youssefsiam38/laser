@@ -1,6 +1,6 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-16T02:54:00+03:00 · orchestrator `01a0a030` · HEAD: 01e5e502
+**Last updated:** 2026-09-16T03:02:00+03:00 · orchestrator `01a0a030` · HEAD: 712cf921
 **Current focus:** M18 route-authority implementation and immediate-paint design proceed in separate host/UI areas before pressure policy and the unchanged baseline.
 
 | Milestone | State |
