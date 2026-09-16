@@ -99,6 +99,11 @@ export function createRendererPressureSampler(io: RendererSamplerIo = {}): () =>
       heapUsed = unavailable("collector_failed");
       heapLimit = unavailable("collector_failed");
     }
-    return { atMs: Number.isSafeInteger(atMs) ? atMs : 0, physical, heapUsed, heapLimit };
+    return {
+      ...(Number.isSafeInteger(atMs) ? { atMs } : {}),
+      physical,
+      heapUsed,
+      heapLimit,
+    };
   };
 }

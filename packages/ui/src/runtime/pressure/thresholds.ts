@@ -84,7 +84,8 @@ export const worseLevel = (left: MemoryPressureLevelState, right: MemoryPressure
 
 /** One reading of this window: the two measures, and when they were taken. */
 export interface RendererPressureSample {
-  atMs: number;
+  /** Omitted when the sampling clock itself could not provide evidence. */
+  atMs?: number;
   /** Private resident memory of this window's process. Never PSS, never heap. */
   physical: MemoryPressureMeasure;
   heapUsed: MemoryPressureMeasure;

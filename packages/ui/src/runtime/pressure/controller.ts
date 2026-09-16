@@ -209,7 +209,7 @@ const defaultSchedule = (run: () => void, ms: number): (() => void) => {
 
 /** A pass that had nothing to measure: said out loud, never a zero. */
 const blindSample = (atMs: number): RendererPressureSample => ({
-  atMs: Number.isSafeInteger(atMs) ? atMs : 0,
+  ...(Number.isSafeInteger(atMs) ? { atMs } : {}),
   physical: { status: "unavailable", reason: "collector_failed" },
   heapUsed: { status: "unavailable", reason: "collector_failed" },
   heapLimit: { status: "unavailable", reason: "collector_failed" },
@@ -358,8 +358,8 @@ export function createRendererPressureController(deps: RendererPressureDeps): Re
     counters.samples += 1;
     const at = now();
     const reading = readingOf(sample, thresholds);
-    const age = at - sample.atMs;
-    if (!Number.isSafeInteger(age) || age < 0 || age > PRESSURE_STALE_CADENCES * cadence()) {
+    const age = sample.atMs === undefined ? undefined : at - sample.atMs;
+    if (age === undefined || !Number.isSafeInteger(age) || age < 0 || age > PRESSURE_STALE_CADENCES * cadence()) {
       counters.staleSamples += 1;
       const moved = settle("unknown");
       last = { sample, reading: BLIND_READING };
@@ -645,7 +645,7 @@ export function createRendererPressureController(deps: RendererPressureDeps): Re
     getSnapshot() {
       if (snapshot) return snapshot;
       const sample = last?.sample;
-      const age = sample ? now() - sample.atMs : undefined;
+      const age = sample?.atMs === undefined ? undefined : now() - sample.atMs;
       const sampleAgeMs = age !== undefined && Number.isSafeInteger(age) && age >= 0 ? age : undefined;
       return (snapshot = Object.freeze({
         level,

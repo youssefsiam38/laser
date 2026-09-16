@@ -171,6 +171,20 @@ describe("evidence before anything else", () => {
     await controller.probeNow();
     expect(controller.getSnapshot().sampleAgeMs).toBeUndefined();
   });
+
+  it("treats a sample with no safe timestamp as stale unknown", async () => {
+    const controller = createRendererPressureController({
+      sample: async () => ({ physical: { status: "available", value: 2_000 * MiB }, heapUsed: { status: "unavailable", reason: "unsupported_platform" }, heapLimit: { status: "unavailable", reason: "unsupported_platform" } }),
+      cache: { releaseUnder: () => NOTHING, counters: () => counters(0) },
+      now: () => 800_000,
+      schedule: () => () => {},
+    });
+    await controller.probeNow();
+    await controller.probeNow();
+    expect(controller.getSnapshot().level).toBe("unknown");
+    expect(controller.getSnapshot().sampleAgeMs).toBeUndefined();
+    expect(controller.getSnapshot().counters.staleSamples).toBe(2);
+  });
 });
 
 describe("hysteresis", () => {

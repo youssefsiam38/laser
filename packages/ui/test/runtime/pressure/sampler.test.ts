@@ -64,4 +64,13 @@ describe("the renderer's own measurement", () => {
     expect(sample.heapUsed).toEqual({ status: "unavailable", reason: "collector_failed" });
     expect(sample.heapLimit).toEqual({ status: "unavailable", reason: "collector_failed" });
   });
+
+  it("omits an unsafe sampling time instead of manufacturing timestamp zero", async () => {
+    const sample = await createRendererPressureSampler({
+      now: () => Number.NaN,
+      processMemory: () => ({ private: 1 }),
+    })();
+    expect(sample).not.toHaveProperty("atMs");
+    expect(sample.physical).toEqual({ status: "available", value: 1024 });
+  });
 });

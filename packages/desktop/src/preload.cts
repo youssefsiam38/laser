@@ -23,6 +23,7 @@ import type {
   DesktopPlatform,
   DeviceCacheKey,
   IdentitySummary,
+  LaserDesktop,
   MicrophoneStatus,
   UpdateStatus,
   WindowChromeState,
@@ -117,7 +118,7 @@ function subscribe<T>(channel: string, listener: (payload: T) => void): () => vo
   return () => ipcRenderer.removeListener(channel, wrapped);
 }
 
-const api = {
+const api: LaserDesktop = {
   version: bootstrap.version,
   platform: bootstrap.platform,
   chrome: bootstrap.chrome,
@@ -158,6 +159,20 @@ const api = {
   ...(bootstrap.sourceEditor === false ? {} : {
     openSourceFile: (path: string): Promise<{ opened: boolean; reason?: string }> => ipcRenderer.invoke(IPC.sourceFileOpen, path) as Promise<{ opened: boolean; reason?: string }>,
   }),
+
+  // This preload is the renderer process whose memory is being measured. Keep
+  // the capability here: no pid or extra process figure crosses the bridge,
+  // and a failed native read is simply unavailable evidence.
+  memory: {
+    process: async (): Promise<{ private?: number } | undefined> => {
+      try {
+        const info = await process.getProcessMemoryInfo();
+        return Number.isSafeInteger(info.private) && info.private >= 0 ? { private: info.private } : undefined;
+      } catch {
+        return undefined;
+      }
+    },
+  },
 
   microphone: {
     status: (): Promise<MicrophoneStatus> => ipcRenderer.invoke(IPC.microphoneStatus) as Promise<MicrophoneStatus>,

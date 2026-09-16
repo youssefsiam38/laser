@@ -52,6 +52,7 @@ describe.runIf(runnable)("the bridge, in a real window", () => {
        const bootstraps = ${JSON.stringify(bootstraps)};
        app.whenReady().then(async () => {
          const shapes = [];
+         const memoryShapes = [];
          for (const bootstrap of bootstraps) {
            const w = new BrowserWindow({
              show: false,
@@ -75,8 +76,11 @@ describe.runIf(runnable)("the bridge, in a real window", () => {
            shapes.push(await w.webContents.executeJavaScript(
              "(() => { const b = window[" + ${JSON.stringify(JSON.stringify(DESKTOP_BRIDGE))} + "]; return b ? Object.keys(b).sort() : null; })()",
            ));
+           memoryShapes.push(await w.webContents.executeJavaScript(
+             "(async () => { const b = window[" + ${JSON.stringify(JSON.stringify(DESKTOP_BRIDGE))} + "]; const value = await b.memory.process(); const n = value && value.private; return Number.isSafeInteger(n) && n > 0 ? 'positive-int' : value === undefined ? 'unavailable' : 'invalid'; })()",
+           ));
          }
-         process.stdout.write("RESULT" + JSON.stringify({ shapes, errors }));
+         process.stdout.write("RESULT" + JSON.stringify({ shapes, memoryShapes, errors }));
          app.exit(0);
        });`,
     );
@@ -92,6 +96,7 @@ describe.runIf(runnable)("the bridge, in a real window", () => {
       });
       const result = JSON.parse(output.slice(output.lastIndexOf("RESULT") + "RESULT".length)) as {
         shapes: (string[] | null)[];
+        memoryShapes: string[];
         errors: string[];
       };
       const [plain, editor, noEditor] = result.shapes;
@@ -99,13 +104,16 @@ describe.runIf(runnable)("the bridge, in a real window", () => {
       expect(plain, `window.${DESKTOP_BRIDGE} was not exposed`).not.toBeNull();
       // The surfaces the renderer depends on. A bridge missing one of these is
       // a window where some control silently does nothing.
-      expect(plain).toEqual(expect.arrayContaining(["host", "window", "identity", "updates", "microphone", "openSourceFile"]));
+      expect(plain).toEqual(expect.arrayContaining(["host", "window", "identity", "updates", "microphone", "memory", "openSourceFile"]));
+      // The bridge returns only a shape here; no process value is retained in
+      // test output or diagnostics.
+      expect(result.memoryShapes).toEqual(["positive-int", "positive-int", "positive-int"]);
       // A platform with no text editor to open must not carry the function the
       // UI reads as "this window can open files": the button has to disappear,
       // not fail with an explanation that was never true (M16-T49 #20).
       expect(editor).toContain("openSourceFile");
       expect(noEditor).not.toContain("openSourceFile");
-      expect(noEditor).toEqual(expect.arrayContaining(["host", "window", "identity", "updates", "microphone"]));
+      expect(noEditor).toEqual(expect.arrayContaining(["host", "window", "identity", "updates", "microphone", "memory"]));
     } finally {
       rmSync(userData, { recursive: true, force: true });
     }
