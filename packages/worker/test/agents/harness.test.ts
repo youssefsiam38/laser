@@ -20,7 +20,7 @@ import { rootRecord, rootRole } from "../../src/agents/session-config.js";
 import { WorktreeManager, type CreateWorktreeInput, type Worktree, type WorktreeFacts } from "../../src/agents/worktrees.js";
 import { projectBashPrefix } from "../../src/project-env.js";
 import type { IndexedTask } from "../../src/agents/tasks.js";
-import { PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE, SESSION_RUN_ENTRY_TYPE, type AgentDefinition, type AgentRun, type AgentsSnapshot, type ContentBlock, type SessionState, type UiDialogRequest, type UiDialogResponse } from "@lasercode/protocol";
+import { AGENT_EVENT_MESSAGE_TYPE, PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE, SESSION_RUN_ENTRY_TYPE, type AgentDefinition, type AgentRun, type AgentsSnapshot, type ContentBlock, type SessionState, type UiDialogRequest, type UiDialogResponse } from "@lasercode/protocol";
 
 class FakeDriver implements SessionDriver {
   readonly kind = "stable-sdk" as const;
@@ -272,6 +272,29 @@ describe("AgentHarness", () => {
   });
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("re-delivers one harness failure to a loaded parent and deduplicates its persisted event", async () => {
+    const root = world.openRoot("lead");
+    const delivered: AgentModelEvent[] = [];
+    root.handle.bridge.onEvent((event) => delivered.push(event));
+    const run: AgentRun = {
+      agentName: "worker", subagentName: "review-auth", sessionId: "child-1", runId: "run-recovered",
+      sessionPath: "/sessions/child-1.jsonl", projectCwd: "/repo", rootSessionPath: root.path, depth: 1,
+      parent: { sessionPath: root.path, sessionId: root.id }, worktree: null, origin: "agent", status: "failed",
+      task: "review auth", error: "The project's agent ran out of memory before this run ended.",
+      endedBy: { initiator: "harness", reason: "The project's agent ran out of memory before this run ended." },
+      startedAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:01:00.000Z", endedAt: "2026-01-01T00:01:00.000Z",
+    };
+
+    await expect(world.harness.recoverFailure(run)).resolves.toBe("delivered");
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]).toMatchObject({ type: "agent.failed", runId: run.runId, endedBy: { initiator: "harness" } });
+
+    root.driver.lines.push({ message: { customType: AGENT_EVENT_MESSAGE_TYPE, details: delivered[0] } });
+    await expect(world.harness.recoverFailure(run)).resolves.toBe("duplicate");
+    expect(delivered).toHaveLength(1);
+    await expect(world.harness.recoverFailure({ ...run, endedBy: { initiator: "user" } })).rejects.toThrow(/harness-owned/);
   });
 
   it.each(["ok", "failed", "timed-out", "parent-stop", "user-stop", "interrupt", "stop-after-exit", "untrusted", "interrupt-then-stop"])("gates the first turn on real setup: %s", async (outcome) => {

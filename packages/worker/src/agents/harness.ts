@@ -31,6 +31,7 @@
  */
 import { randomBytes } from "node:crypto";
 import {
+  AGENT_EVENT_MESSAGE_TYPE,
   AGENT_INSPECT_MESSAGES_DEFAULT,
   AGENT_INSPECT_MESSAGES_MAX,
   AGENT_MESSAGE_MAX,
@@ -324,6 +325,21 @@ export function modelUnavailableMessage(model: AgentModelChoice): string {
   return `The model ${model.provider}/${model.id} is not available: connect ${model.provider} in Settings → Providers and models, or choose another model for this agent.`;
 }
 
+/** Inspect a bounded entry without serialising transcript bodies or following prototypes. */
+function containsRecoveredEvent(value: unknown, runId: string, depth = 0, budget = { left: 2_000 }): boolean {
+  if (depth > 10 || budget.left-- <= 0 || value === null || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  const details = record.details;
+  if (record.customType === AGENT_EVENT_MESSAGE_TYPE && details && typeof details === "object") {
+    const event = details as { runId?: unknown; endedBy?: { initiator?: unknown }; run?: { endedBy?: { initiator?: unknown } } };
+    if (event.runId === runId && (event.endedBy?.initiator === "harness" || event.run?.endedBy?.initiator === "harness")) return true;
+  }
+  for (const child of Object.values(record)) {
+    if (containsRecoveredEvent(child, runId, depth + 1, budget)) return true;
+  }
+  return false;
+}
+
 export class AgentHarness {
   private readonly host: SessionHost;
   private readonly definitions: DefinitionsCache;
@@ -402,6 +418,28 @@ export class AgentHarness {
   /** The bridge for an attached session, for tests and for the server's own use. */
   bridgeOf(sessionPath: string): AgentHarnessBridge | undefined {
     return this.byPath.get(sessionPath)?.bridge;
+  }
+
+  /**
+   * Re-deliver a terminal child failure after this worker replaced one that
+   * died. The parent must already be loaded; the host never asks us to open an
+   * unrelated runtime merely to write recovery state.
+   */
+  async recoverFailure(run: AgentRun): Promise<"delivered" | "duplicate"> {
+    if (run.status !== "failed" || run.endedBy?.initiator !== "harness" || !run.parent) {
+      throw new HarnessError("Only a harness-owned terminal child failure can be recovered.");
+    }
+    const parent = this.byPath.get(run.parent.sessionPath);
+    const driver = this.host.driver(run.parent.sessionPath);
+    if (!parent || !driver) throw new HarnessError("The failed run's parent is not loaded in this worker.");
+    if (parent.projectCwd !== run.projectCwd) throw new HarnessError("The failed run does not belong to this parent's project.");
+
+    const stored = await driver.entries();
+    const tail = stored.entries.slice(-MAX_RETAINED_RUNS);
+    const inspectionBudget = { left: 10_000 };
+    if (tail.some((entry) => containsRecoveredEvent(entry, run.runId, 0, inspectionBudget))) return "duplicate";
+    this.notifyParent(run, undefined);
+    return "delivered";
   }
 
   roleOf(sessionPath: string): HarnessSessionRole | undefined {

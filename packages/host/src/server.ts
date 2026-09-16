@@ -33,7 +33,7 @@ import { totalmem } from "node:os";
 import { basename, dirname, extname, join, normalize, relative, resolve as resolvePath, sep } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { channelIdFor, type KeyPair } from "@lasercode/crypto";
-import { ENV, ErrorCodes, FRAME_MAX_BYTES, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, isProviderCaptureMessage, isTerminalRunStatus, projectEnvWorkerConfig, type ClientRequests, type DeviceGrants, type EnvironmentPolicyInput, type HostNotifications, type JsonRpcNotification, type LogEntry, type MemoryPressurePublish, type NamerState, type ProviderCaptureMeta, type ProviderCaptureOmission, type ResourceRetainedStores, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
+import { AGENT_FAILURE_RECOVERY_BATCH_MAX, ENV, ErrorCodes, FRAME_MAX_BYTES, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, isProviderCaptureMessage, isTerminalRunStatus, projectEnvWorkerConfig, type AgentRun, type ClientRequests, type DeviceGrants, type EnvironmentPolicyInput, type HostNotifications, type JsonRpcNotification, type LogEntry, type MemoryPressurePublish, type NamerState, type ProviderCaptureMeta, type ProviderCaptureOmission, type ResourceRetainedStores, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
 import { AccessControl, isLoopbackAddress, localActor, pairedActor, type ActorIdentity } from "./access.js";
 import { AccessAudit } from "./access-audit.js";
 import { loadEnvironmentPolicy } from "./environment-policy.js";
@@ -100,6 +100,8 @@ export interface HostServerOptions {
   workerIdleMs?: number;
   /** Test seam for the pool's idle sweep cadence. */
   workerSweepMs?: number;
+  /** Test-only worker old-space ceiling; production derives it from capacity. */
+  workerOldSpaceMiB?: number;
   /**
    * Internal seam for the session-lifetime policy (RP-4).
    *
@@ -159,6 +161,15 @@ export interface HostServerOptions {
 }
 
 /** What the host needs to relay to already-paired devices. Pairing itself is M5/M7. */
+interface AgentFailureRecoveryState {
+  queued: Set<string>;
+  overflow?: { incidentAt: string; afterRunId?: string };
+  inFlight?: { ids: string[]; overflowAfterRunId?: string };
+  unavailableLogged: boolean;
+}
+
+const AGENT_FAILURE_RECOVERY_IDS_MAX = 500;
+
 export interface HostRelayOptions {
   /** Relay WebSocket URL, e.g. `wss://relay.example/ws`. */
   url: string;
@@ -350,6 +361,8 @@ export class HostServer {
   private namerQualifying = false;
   /** Provider sets already benchmarked this run, so a failure is not retried on every worker. */
   private readonly namerQualified = new Set<string>();
+  /** Bounded ids awaiting delivery through the successor worker. */
+  private readonly agentFailureRecovery = new Map<string, AgentFailureRecoveryState>();
 
   constructor(private readonly options: HostServerOptions = {}) {
     this.uiDir = options.uiDir ?? defaultUiDir();
@@ -629,6 +642,7 @@ export class HostServer {
       ...(options.nodeBinary ? { nodeBinary: options.nodeBinary } : {}),
       ...(options.workerIdleMs !== undefined ? { idleMs: options.workerIdleMs } : {}),
       ...(options.workerSweepMs !== undefined ? { sweepMs: options.workerSweepMs } : {}),
+      ...(options.workerOldSpaceMiB !== undefined ? { workerOldSpaceMiB: options.workerOldSpaceMiB } : {}),
       // A worker's first request already sees the agent definitions.
       prime: async (client, cwd, speculative) => {
         // Priming runs inside the spawn, before anything can ask this worker to
@@ -662,6 +676,11 @@ export class HostServer {
         this.captures.generationGone(generation);
         this.memoryPressure.forgetWorker(cwd, generation);
       },
+      onWorkerLoss: ({ cwd, message }) => {
+        const changed = this.runs.workerLost(cwd, message);
+        this.queueAgentFailureRecovery(cwd, changed);
+      },
+      onReopened: (client, cwd, paths) => this.deliverAgentFailureRecovery(client, cwd, paths),
       onStderr: (cwd, text) => {
         const safe = this.privateLogText(text);
         this.log(`[worker ${cwd}] ${safe.trimEnd()}`);
@@ -673,9 +692,9 @@ export class HostServer {
         if (info.status === "crashed") {
           this.attention.workerCrashed(info.cwd, info.message ?? "worker crashed");
           this.forgetSessionsOf(info.cwd, "the worker stopped");
-          this.runs.workerLost(info.cwd);
         } else if (info.status === "ready") this.attention.workerRecovered(info.cwd);
         else if (info.status === "retired") {
+          this.agentFailureRecovery.delete(canonical(info.cwd));
           this.attention.workerRetired(info.cwd);
           this.forgetSessionsOf(info.cwd, "the worker went to sleep");
           this.runs.workerLost(info.cwd);
@@ -913,11 +932,111 @@ export class HostServer {
     this.actors.clear();
     for (const deliveries of this.loadDeliveries.values()) for (const delivery of deliveries) delivery.dispose();
     this.loadDeliveries.clear();
+    this.agentFailureRecovery.clear();
     await this.pool.stopAll();
     // After the workers: their exit fails what was still running.
     this.runs.close();
     await new Promise<void>((resolve) => this.wss.close(() => resolve()));
     await new Promise<void>((resolve) => this.http.close(() => resolve()));
+  }
+
+  /** Queue ids only; the durable run registry remains the source of payloads. */
+  private queueAgentFailureRecovery(cwd: string, runs: readonly AgentRun[]): void {
+    const recoverable = runs.filter((run) => run.parent !== null);
+    if (recoverable.length === 0) return;
+    const key = canonical(cwd);
+    const state = this.agentFailureRecovery.get(key) ?? {
+      queued: new Set<string>(),
+      unavailableLogged: false,
+    };
+    let lastQueuedThisIncident: string | undefined;
+    for (const run of recoverable) {
+      if (state.queued.has(run.runId) || state.inFlight?.ids.includes(run.runId)) continue;
+      if (state.queued.size < AGENT_FAILURE_RECOVERY_IDS_MAX) {
+        state.queued.add(run.runId);
+        lastQueuedThisIncident = run.runId;
+      } else if (!state.overflow) {
+        state.overflow = {
+          incidentAt: run.updatedAt,
+          ...(lastQueuedThisIncident !== undefined ? { afterRunId: lastQueuedThisIncident } : {}),
+        };
+      }
+    }
+    this.agentFailureRecovery.set(key, state);
+  }
+
+  /**
+   * Hand bounded batches to exactly the successor that reopened their parents.
+   * A refusal or exit leaves `inFlight` intact for the next successful reopen.
+   */
+  private async deliverAgentFailureRecovery(client: WorkerClient, cwd: string, paths: readonly string[]): Promise<void> {
+    const key = canonical(cwd);
+    const state = this.agentFailureRecovery.get(key);
+    if (!state) return;
+    const reopened = new Set(paths);
+
+    while (client.alive) {
+      if (!state.inFlight) {
+        const ids: string[] = [];
+        for (const id of state.queued) {
+          const run = this.runs.get(id);
+          if (!run) {
+            state.queued.delete(id);
+            continue;
+          }
+          if (!run.parent || !reopened.has(run.parent.sessionPath)) continue;
+          ids.push(id);
+          if (ids.length >= AGENT_FAILURE_RECOVERY_BATCH_MAX) break;
+        }
+        if (ids.length > 0) {
+          state.inFlight = { ids };
+        } else if (state.queued.size === 0 && state.overflow) {
+          const page = this.runs.recoveryFailures(
+            cwd,
+            state.overflow.incidentAt,
+            state.overflow.afterRunId,
+            AGENT_FAILURE_RECOVERY_BATCH_MAX,
+          );
+          if (page.length === 0) {
+            delete state.overflow;
+            continue;
+          }
+          const eligible = page.filter((run) => run.parent && reopened.has(run.parent.sessionPath));
+          if (eligible.length === 0) {
+            if (!state.unavailableLogged) {
+              state.unavailableLogged = true;
+              this.log("agent failure recovery unavailable: no failed run had a reopened parent");
+            }
+            return;
+          }
+          state.inFlight = { ids: eligible.map((run) => run.runId), overflowAfterRunId: page.at(-1)!.runId };
+        } else {
+          if (state.queued.size > 0 && !state.unavailableLogged) {
+            state.unavailableLogged = true;
+            this.log("agent failure recovery unavailable: a failed run's parent was not reopened");
+          }
+          if (state.queued.size === 0 && !state.overflow) this.agentFailureRecovery.delete(key);
+          return;
+        }
+      }
+
+      const batch = state.inFlight.ids.map((id) => this.runs.get(id)).filter((run): run is AgentRun => run !== undefined);
+      if (batch.length !== state.inFlight.ids.length) {
+        delete state.inFlight;
+        continue;
+      }
+      const result = await client.request<{ delivered: string[] }>("pi/worker/recover-agent-failures", { runs: batch });
+      if (result.delivered.length !== batch.length || result.delivered.some((id, index) => id !== batch[index]!.runId)) {
+        throw new Error("the recovered worker did not acknowledge the exact failure batch");
+      }
+      for (const id of state.inFlight.ids) state.queued.delete(id);
+      if (state.inFlight.overflowAfterRunId !== undefined && state.overflow) {
+        state.overflow.afterRunId = state.inFlight.overflowAfterRunId;
+      }
+      delete state.inFlight;
+      state.unavailableLogged = false;
+    }
+    throw new Error("the recovered worker exited before agent failure delivery completed");
   }
 
   /**

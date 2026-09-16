@@ -12,7 +12,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FRAME_MAX_BYTES } from "@lasercode/protocol";
-import { WorkerClient, nextWorkerGeneration } from "../src/worker-client.js";
+import { WorkerClient, classifyWorkerExit, nextWorkerGeneration } from "../src/worker-client.js";
 
 /**
  * A worker that answers with a payload of the size it is asked for, in one
@@ -80,6 +80,13 @@ function connect(onExit: (code: number | null) => void = () => {}): WorkerClient
   });
   return client;
 }
+
+it("classifies only a marked abnormal exit as heap OOM", () => {
+  expect(classifyWorkerExit("FATAL ERROR: Reached heap limit Allocation failed", null, "SIGABRT")).toBe("heap_oom");
+  expect(classifyWorkerExit("JavaScript heap out of memory", 134, null)).toBe("heap_oom");
+  expect(classifyWorkerExit("ordinary abort", null, "SIGABRT")).toBe("process_exit");
+  expect(classifyWorkerExit("Reached heap limit", 0, null)).toBe("process_exit");
+});
 
 it("decodes a 16 MiB frame completely, and holds no more than that frame", async () => {
   const worker = connect();

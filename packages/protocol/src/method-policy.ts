@@ -282,6 +282,7 @@ export const METHOD_POLICY = {
   "pi/host/environment": { scope: "settings", reach: "native", refusal: NATIVE_ENVIRONMENT_REFUSAL },
   // Host → worker plumbing that happens to share the client vocabulary.
   "agents/sync": { scope: "settings", reach: "native", refusal: NATIVE_SYNC_REFUSAL },
+  "pi/worker/recover-agent-failures": { scope: "work_control", reach: "native", refusal: NATIVE_SYNC_REFUSAL },
 
   // ----------------------------------------------------------- features ---
   "feature/list": { scope: "features", reach: "any" },

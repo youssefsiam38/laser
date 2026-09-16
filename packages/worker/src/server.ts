@@ -22,7 +22,7 @@
  * growing the process.
  */
 
-import { AGENT_MAX_DEPTH_LIMIT, EDITABLE_TEXT_MAX_BYTES, ENV, ErrorCodes, createBodyRangeReader, entryRegionsPage, utf8ByteLength, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type MemoryPressureStores, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TypedClientRequest, WIRE_NAMESPACE } from "@lasercode/protocol";
+import { AGENT_MAX_DEPTH_LIMIT, EDITABLE_TEXT_MAX_BYTES, ENV, ErrorCodes, createBodyRangeReader, entryRegionsPage, utf8ByteLength, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type AgentRun, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type MemoryPressureStores, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TypedClientRequest, WIRE_NAMESPACE } from "@lasercode/protocol";
 import { CaptureReservations } from "./capture-reservations.js";
 import {
   PRESSURE_MAX_REPLAY_DROPS,
@@ -1120,6 +1120,17 @@ export class WorkerServer {
       case "agents/sync":
         this.definitions.sync(req.params.snapshot);
         return {} satisfies Result<"agents/sync">;
+      case "pi/worker/recover-agent-failures": {
+        const delivered: string[] = [];
+        for (const run of req.params.runs as AgentRun[]) {
+          if (run.projectCwd !== this.options.cwd || run.status !== "failed" || run.endedBy?.initiator !== "harness" || !run.parent) {
+            throw new ProtocolError(ErrorCodes.InvalidParams, "The recovery batch contains a run this worker cannot recover.");
+          }
+          await this.harness.recoverFailure(run);
+          delivered.push(run.runId);
+        }
+        return { delivered } satisfies Result<"pi/worker/recover-agent-failures">;
+      }
       case "agents/skills":
         this.assertCwd(req.params.cwd);
         return listAgentSkills({

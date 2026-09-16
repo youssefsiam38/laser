@@ -377,6 +377,44 @@ describe("WorkerPool", () => {
     expect(info.restarts).toBe(0);
   });
 
+  it("bounds a crash loop at five automatic attempts with 1/2/4/8/16 second backoff", async () => {
+    pool = makePool({ backoffMs: 1_000, backoffCapMs: 30_000, maxRestarts: 5 });
+    let current = await pool.get(project);
+    pool.bindSession("/sessions/a.jsonl", project);
+
+    for (let incident = 1; incident <= 6; incident += 1) {
+      void current.request("pi/test/crash", {}).catch(() => undefined);
+      await waitFor(() => statuses.filter((status) => status.status === "crashed").length === incident);
+      if (incident === 6) break;
+      runTimers();
+      await waitFor(() => statusesOf(project).at(-1) === "ready");
+      current = await pool.get(project);
+    }
+
+    expect(timers.map((timer) => timer.ms)).toEqual([]);
+    expect(statuses.filter((status) => status.status === "crashed").slice(0, 5).map((status) => status.restarts)).toEqual([1, 2, 3, 4, 5]);
+    expect(statuses.findLast((status) => status.status === "crashed")?.message).toMatch(/did not recover after 5 restarts/);
+    // Fired timers were removed by `runTimers`; recover the delay evidence from retry timestamps.
+    const crashes = statuses.filter((status) => status.status === "crashed").slice(0, 5);
+    expect(crashes.map((status) => Date.parse(status.retryAt!) - Date.parse(status.since!))).toEqual([1_000, 2_000, 4_000, 8_000, 16_000]);
+  });
+
+  it("starts a fresh incident after a generation stays healthy for sixty seconds", async () => {
+    let now = 1_000;
+    pool = makePool({ backoffMs: 1, healthyMs: 60_000, now: () => now });
+    let current = await pool.get(project);
+    pool.bindSession("/sessions/a.jsonl", project);
+    void current.request("pi/test/crash", {}).catch(() => undefined);
+    await waitFor(() => statuses.filter((status) => status.status === "crashed").length === 1);
+    runTimers();
+    await waitFor(() => statusesOf(project).at(-1) === "ready");
+    current = await pool.get(project);
+    now += 60_001;
+    void current.request("pi/test/crash", {}).catch(() => undefined);
+    await waitFor(() => statuses.filter((status) => status.status === "crashed").length === 2);
+    expect(statuses.findLast((status) => status.status === "crashed")?.restarts).toBe(1);
+  });
+
   it("sends pressure only to the exact worker generation selected", async () => {
     pool = makePool({ idleMs: 0, sweepMs: 0 });
     await pool.get(project);

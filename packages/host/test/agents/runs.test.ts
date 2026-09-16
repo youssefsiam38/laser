@@ -141,18 +141,22 @@ describe("AgentRunRegistry", () => {
     const notified: AgentRun[] = [];
     const registry = new AgentRunRegistry({ onRun: (r) => notified.push(r), now: () => new Date("2026-06-02T00:00:00.000Z") });
     registry.upsert(run("live"));
+    registry.upsert(run("live-2"));
     registry.upsert(run("done", { status: "completed", result: { status: "completed", message: "ok" } }));
     registry.upsert(run("elsewhere", { projectCwd: "/projects/b" }));
 
-    const changed = registry.workerLost(PROJECT);
-    expect(changed.map((r) => r.runId)).toEqual(["live"]);
+    const reason = "The project's agent ran out of memory before this run ended.";
+    const changed = registry.workerLost(PROJECT, reason);
+    expect(changed.map((r) => r.runId)).toEqual(["live", "live-2"]);
     expect(changed[0]).toMatchObject({
       status: "failed",
-      error: "The project's worker stopped before this run ended.",
+      error: reason,
       endedAt: "2026-06-02T00:00:00.000Z",
       endedBy: { initiator: "harness" },
     });
-    expect(notified.map((r) => r.runId)).toEqual(["live"]);
+    expect(notified.map((r) => r.runId)).toEqual(["live", "live-2"]);
+    expect(registry.recoveryFailures(PROJECT, changed[0]!.updatedAt, undefined, 1).map((r) => r.runId)).toEqual(["live"]);
+    expect(registry.recoveryFailures(PROJECT, changed[0]!.updatedAt, "live", 32).map((r) => r.runId)).toEqual(["live-2"]);
     expect(registry.get("done")?.status).toBe("completed");
     expect(registry.get("elsewhere")?.status).toBe("running");
     expect(registry.workerLost(PROJECT)).toEqual([]); // nothing left to fail

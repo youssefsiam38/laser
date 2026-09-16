@@ -36,7 +36,7 @@ import { canonical } from "./trust.js";
 import { SessionRouteLeases } from "./session-route-lease.js";
 import { retirementRefused, retireWorker, type RetirementOutcome } from "./worker-retirement.js";
 import { workerOldSpaceMiB } from "./heap-ceiling.js";
-import { WorkerClient, nextWorkerGeneration, type WorkerClientOptions } from "./worker-client.js";
+import { WorkerClient, nextWorkerGeneration, type WorkerClientOptions, type WorkerExit } from "./worker-client.js";
 
 export interface WorkerPoolOptions {
   agentDir?: string;
@@ -87,6 +87,10 @@ export interface WorkerPoolOptions {
   ) => void;
   /** That process is gone: nothing it started can still be completed. */
   onWorkerGone?: (source: { cwd: string; generation: string }) => void;
+  /** An unasked-for generation loss, classified without carrying stderr. */
+  onWorkerLoss?: (loss: { cwd: string; generation: string; exit: WorkerExit; message: string }) => void;
+  /** After the successor has reopened every canonical session it could. */
+  onReopened?: (client: WorkerClient, cwd: string, paths: readonly string[]) => Promise<void>;
   onStderr?: (cwd: string, text: string) => void;
   /** Called for every lifecycle change, after the notification is sent. */
   onStatus?: (info: WorkerInfo) => void;
@@ -689,13 +693,22 @@ export class WorkerPool {
     }
     entry.reopened = paths;
     const client = await this.get(key);
+    const reopened: string[] = [];
     for (const path of paths) {
       // Same as after a crash: the worker's `seq` restarts at 1 and clients
       // resync through `session/load`'s `replayFrom`.
       await client.request("session/load", { path }).then(
-        () => this.bindSession(path, key),
+        () => {
+          this.bindSession(path, key);
+          reopened.push(path);
+        },
         () => {},
       );
+    }
+    if (entry.client === client && client.alive && this.options.onReopened) {
+      await this.options.onReopened(client, entry.cwd, reopened).catch(() => {
+        this.options.onStderr?.(entry.cwd, "agent failure recovery unavailable; it will retry after the next successful reopen\n");
+      });
     }
     return this.infoOf(entry);
   }
@@ -919,7 +932,7 @@ export class WorkerPool {
       ...(projectTrusted !== undefined ? { projectTrusted } : {}),
       oldSpaceMiB: this.configuredWorkerOldSpaceMiB,
       onNotification: (n) => this.onWorkerNotification(entry, client, n),
-      onExit: (code, signal) => this.onExit(entry, client, code, signal),
+      onExit: (code, signal, exit) => this.onExit(entry, client, code, signal, exit),
       ...(this.options.onStderr ? { onStderr: (t: string) => { if (!entry.warm) this.options.onStderr?.(entry.cwd, t); } } : {}),
     };
     const client = new WorkerClient({ ...clientOptions, ...(generation !== undefined ? { workerGeneration: generation } : {}) });
@@ -1008,7 +1021,7 @@ export class WorkerPool {
     if (!entry.warm) this.options.onNotification(entry.cwd, notification, { generation: client.generation });
   }
 
-  private onExit(entry: Entry, client: WorkerClient, code: number | null, signal: NodeJS.Signals | null): void {
+  private onExit(entry: Entry, client: WorkerClient, code: number | null, signal: NodeJS.Signals | null, exit: WorkerExit): void {
     // Even a superseded process's exit ends what that process started.
     this.options.onWorkerGone?.({ cwd: entry.cwd, generation: client.generation });
     if (entry.client !== client) return; // a superseded process; ignore
@@ -1043,14 +1056,22 @@ export class WorkerPool {
     if (uptime >= (this.options.healthyMs ?? DEFAULTS.healthyMs)) entry.restarts = 0;
     entry.readyAt = undefined;
     const reason = signal ? `killed by ${signal}` : `exited with code ${code ?? "unknown"}`;
+    const lossMessage = exit.kind === "heap_oom"
+      ? "The project's agent ran out of memory before this run ended."
+      : "The project's worker stopped before this run ended.";
+    this.options.onWorkerLoss?.({ cwd: entry.cwd, generation: client.generation, exit, message: lossMessage });
     const canRetry = entry.open.size > 0 && entry.restarts < (this.options.maxRestarts ?? DEFAULTS.maxRestarts);
     if (!canRetry) {
       this.setStatus(
         entry,
         "crashed",
-        entry.open.size === 0
-          ? `Worker ${reason}. It will start again on the next request.`
-          : `Worker ${reason} and did not recover after ${entry.restarts} restarts. Use "Retry" to start it again.`,
+        exit.kind === "heap_oom"
+          ? (entry.open.size === 0
+              ? "This project's agent ran out of memory. It will start again on the next request."
+              : `This project's agent ran out of memory and did not recover after ${entry.restarts} restarts. Use "Retry" to start it again.`)
+          : (entry.open.size === 0
+              ? `Worker ${reason}. It will start again on the next request.`
+              : `Worker ${reason} and did not recover after ${entry.restarts} restarts. Use "Retry" to start it again.`),
       );
       return;
     }
@@ -1061,7 +1082,13 @@ export class WorkerPool {
     );
     entry.restarts = attempt;
     entry.retryAt = this.now() + delay;
-    this.setStatus(entry, "crashed", `Worker ${reason}. Restarting in ${Math.round(delay / 1000)}s (attempt ${attempt}).`);
+    this.setStatus(
+      entry,
+      "crashed",
+      exit.kind === "heap_oom"
+        ? `This project's agent ran out of memory. Restarting it from saved conversation state in ${Math.round(delay / 1000)}s (attempt ${attempt}).`
+        : `Worker ${reason}. Restarting in ${Math.round(delay / 1000)}s (attempt ${attempt}).`,
+    );
     entry.retryTimer = this.setTimer(() => {
       entry.retryTimer = undefined;
       entry.retryAt = undefined;
@@ -1081,13 +1108,22 @@ export class WorkerPool {
     } catch {
       return; // `onExit`/`spawn` already reported why
     }
+    const reopened: string[] = [];
     for (const path of paths) {
       // The worker restarts its `seq` counter at 1; clients notice through
       // `session/load`'s `replayFrom` and resync (see the UI's `onResume`).
       await client.request("session/load", { path }).then(
-        () => this.bindSession(path, entry.cwd),
+        () => {
+          this.bindSession(path, entry.cwd);
+          reopened.push(path);
+        },
         () => entry.open.delete(path),
       );
+    }
+    if (entry.client === client && client.alive && this.options.onReopened) {
+      await this.options.onReopened(client, entry.cwd, reopened).catch(() => {
+        this.options.onStderr?.(entry.cwd, "agent failure recovery unavailable; it will retry after the next successful reopen\n");
+      });
     }
   }
 

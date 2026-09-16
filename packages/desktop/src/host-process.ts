@@ -129,6 +129,9 @@ export class HostProcess {
   async start(): Promise<DesktopHostInfo> {
     const { paths, log } = this.options;
     this.stopping = false;
+    // An explicit start is a new incident. Automatic restarts call
+    // `spawnDaemon` directly and therefore retain their bounded count.
+    this.restarts = 0;
 
     // Our own child is already running: a retry must not "adopt" it, or we
     // would forget that we own it and leave it behind on quit.
@@ -313,7 +316,6 @@ export class HostProcess {
           this.stopping = false;
           return this.publish({ state: "failed", message: `${agent.message} ${agent.fix}` });
         }
-        this.restarts = 0;
         log.line(`host ready at ${status.record.url} (pid ${status.record.pid})`);
         return this.publish({
           state: "ready",

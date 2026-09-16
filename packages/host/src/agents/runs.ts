@@ -121,14 +121,14 @@ export class AgentRunRegistry {
   }
 
   /** The project's worker is gone: nothing in flight there can end on its own. */
-  workerLost(cwd: string): AgentRun[] {
+  workerLost(cwd: string, reason = WORKER_LOST_MESSAGE): AgentRun[] {
     const key = canonical(cwd);
     const at = this.now().toISOString();
     const changed: AgentRun[] = [];
     for (const run of this.runs.values()) {
       if (isTerminalRunStatus(run.status) || canonical(run.projectCwd) !== key) continue;
-      const updated: AgentRun = { ...run, status: "failed", error: WORKER_LOST_MESSAGE,
-        endedBy: { initiator: "harness", reason: WORKER_LOST_MESSAGE }, endedAt: at, updatedAt: at };
+      const updated: AgentRun = { ...run, status: "failed", error: reason,
+        endedBy: { initiator: "harness", reason }, endedAt: at, updatedAt: at };
       this.put(updated);
       changed.push(structuredClone(updated));
     }
@@ -137,6 +137,23 @@ export class AgentRunRegistry {
       for (const run of changed) this.options.onRun?.(run);
     }
     return changed;
+  }
+
+  /**
+   * One bounded page from a worker-loss incident, in stable creation order.
+   * The registry remains authoritative; the recovery queue stores ids only.
+   */
+  recoveryFailures(cwd: string, incidentAt: string, afterRunId: string | undefined, limit: number): AgentRun[] {
+    const key = canonical(cwd);
+    const ordered = [...this.runs.values()]
+      .filter((run) => canonical(run.projectCwd) === key
+        && run.updatedAt === incidentAt
+        && run.status === "failed"
+        && run.endedBy?.initiator === "harness"
+        && run.parent !== null)
+      .sort((a, b) => (this.order.get(a.runId) ?? 0) - (this.order.get(b.runId) ?? 0));
+    const start = afterRunId === undefined ? 0 : Math.max(0, ordered.findIndex((run) => run.runId === afterRunId) + 1);
+    return structuredClone(ordered.slice(start, start + Math.max(0, limit)));
   }
 
   /** The host failed unexpectedly: no person chose to stop these runs. */

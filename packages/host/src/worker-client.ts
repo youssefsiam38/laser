@@ -70,8 +70,28 @@ export interface WorkerClientOptions {
   /** Extra environment for the worker, on top of the host's own. */
   env?: Readonly<Record<string, string>>;
   onNotification: (notification: JsonRpcNotification) => void;
-  onExit: (code: number | null, signal: NodeJS.Signals | null) => void;
+  onExit: (code: number | null, signal: NodeJS.Signals | null, exit: WorkerExit) => void;
   onStderr?: (text: string) => void;
+}
+
+export type WorkerExitKind = "heap_oom" | "process_exit" | "spawn_error" | "transport_fault";
+export interface WorkerExit {
+  kind: WorkerExitKind;
+  code: number | null;
+  signal: NodeJS.Signals | null;
+}
+
+const OOM_MARKER = /Reached heap limit|JavaScript heap out of memory|Allocation failed/i;
+const STDERR_MARKER_WINDOW = 4096;
+
+/** Marker plus abnormal termination: neither a SIGABRT nor a stray log line is enough alone. */
+export function classifyWorkerExit(
+  stderrTail: string,
+  code: number | null,
+  signal: NodeJS.Signals | null,
+): WorkerExitKind {
+  const abnormal = signal !== null || (code !== null && code !== 0);
+  return abnormal && OOM_MARKER.test(stderrTail) ? "heap_oom" : "process_exit";
 }
 
 export class WorkerRpcError extends Error {
@@ -170,6 +190,8 @@ export class WorkerClient {
   /** Complete messages handed to the pipe and not yet written. */
   private inFlightWrites = 0;
   private rejectReady: ((error: Error) => void) | undefined;
+  /** Only enough stderr to recognize stable fatal markers; never surfaced as status copy. */
+  private stderrMarkerTail = "";
   readonly ready: Promise<void>;
 
   constructor(private readonly options: WorkerClientOptions) {
@@ -242,7 +264,11 @@ export class WorkerClient {
         }
       }
     });
-    this.child.stderr?.on("data", (c: Buffer) => options.onStderr?.(c.toString()));
+    this.child.stderr?.on("data", (c: Buffer) => {
+      const text = c.toString();
+      this.stderrMarkerTail = `${this.stderrMarkerTail}${text}`.slice(-STDERR_MARKER_WINDOW);
+      options.onStderr?.(text);
+    });
     this.child.stdout?.on("data", () => {}); // drain; Pi/extension logs are not ours
     this.child.on("exit", (code, signal) => {
       this.exited = true;
@@ -253,7 +279,7 @@ export class WorkerClient {
       // `ready`, fail the pending calls, and tell the pool the worker is gone.
       this.exited = true;
       this.startError ??= error;
-      this.settle(error, rejectReady, null, null);
+      this.settle(error, rejectReady, null, null, "spawn_error");
     });
   }
 
@@ -275,6 +301,7 @@ export class WorkerClient {
     rejectReady: (e: Error) => void,
     code: number | null,
     signal: NodeJS.Signals | null,
+    kind = classifyWorkerExit(this.stderrMarkerTail, code, signal),
   ): void {
     if (this.reported) return;
     this.reported = true;
@@ -284,7 +311,7 @@ export class WorkerClient {
     rejectReady(error);
     for (const entry of this.pending.values()) entry.reject(error);
     this.pending.clear();
-    this.options.onExit(code, signal);
+    this.options.onExit(code, signal, { kind, code, signal });
   }
 
   /**
@@ -310,7 +337,7 @@ export class WorkerClient {
     } catch {
       // Already gone; the settle below is what matters.
     }
-    this.settle(error, this.rejectReady ?? ((): void => {}), null, null);
+    this.settle(error, this.rejectReady ?? ((): void => {}), null, null, "transport_fault");
   }
 
   /**

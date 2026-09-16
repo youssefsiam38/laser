@@ -12,6 +12,7 @@ import { WEB_SEARCH_PROVIDER_IDS } from "./web-search.js";
 import { MCP_IMPORT_SOURCES, MCP_PROTOCOL_VERSIONS, MCP_STARTUP_MODES } from "./mcp.js";
 import {
   AGENT_DESCRIPTION_MAX,
+  AGENT_FAILURE_RECOVERY_BATCH_MAX,
   AGENT_INSTRUCTIONS_MAX,
   AGENT_MAX_DEPTH_LIMIT,
   AGENT_MESSAGE_MODES,
@@ -519,11 +520,11 @@ export const worktreeSetupSchema = z.discriminatedUnion("status", [
  * with no chain, never with half a traversal. Strict, so a new field cannot
  * appear without this schema and the round-trip sample saying what it means.
  */
+const isoInstant = z.string().min(1).max(64);
 const fallbackModelRefSchema = z
   .object({ provider: z.string().min(1).max(100), id: z.string().min(1).max(200) })
   .strict();
 const providerFailureClassSchema = z.enum(PROVIDER_FAILURE_CLASSES as unknown as [string, ...string[]]);
-const isoInstant = z.string().min(1).max(64);
 export const sessionFallbackEntrySchema = z
   .object({
     version: z.literal(1),
@@ -577,6 +578,56 @@ export const sessionFallbackEntrySchema = z
   })
   .strict();
 const runId = z.string().min(1).max(100);
+const recoveryAgentRunSchema = z
+  .object({
+    agentName: agentNameSchema,
+    subagentName: z.string().min(1).max(60),
+    sessionId: z.string().min(1).max(200),
+    runId,
+    sessionPath: z.string().min(1).max(4096),
+    projectCwd: z.string().min(1).max(4096),
+    rootSessionPath: z.string().min(1).max(4096),
+    depth: z.number().int().nonnegative().max(AGENT_MAX_DEPTH_LIMIT),
+    parent: z.object({ sessionPath: z.string().min(1).max(4096), sessionId: z.string().min(1).max(200), runId: runId.optional() }).strict().nullable(),
+    worktree: z.object({
+      path: z.string().min(1).max(4096),
+      branch: z.string().min(1).max(500),
+      baseCommit: z.string().min(1).max(200),
+      removedAt: isoInstant.optional(),
+      environment: worktreeEnvironmentSchema.optional(),
+      setup: worktreeSetupSchema.optional(),
+    }).strict().nullable(),
+    cwd: z.string().min(1).max(4096).optional(),
+    origin: z.enum(["agent", "user"]),
+    status: agentRunStatusSchema,
+    task: z.string().max(500),
+    result: z.object({ status: z.enum(["completed", "blocked"]), message: z.string().max(64 * 1024) }).strict().optional(),
+    error: z.string().max(4000).optional(),
+    endedBy: z.object({ initiator: z.enum(["parent", "user", "harness"]), reason: z.string().max(4000).optional() }).strict().optional(),
+    goal: z.object({ id: z.string().min(1).max(200), objective: z.string().max(4000) }).strict().optional(),
+    model: modelRefSchema.nullable().optional(),
+    activity: z.object({
+      turns: z.number().int().nonnegative(),
+      tools: z.number().int().nonnegative(),
+      currentTool: z.string().max(200).optional(),
+      label: z.string().max(500).optional(),
+      lastAt: isoInstant,
+    }).strict().optional(),
+    question: z.object({
+      id: z.string().min(1).max(200),
+      kind: z.enum(["select", "confirm", "input", "editor"]),
+      title: z.string().max(4000),
+      detail: z.string().max(64 * 1024).optional(),
+      options: z.array(z.string().max(4000)).max(200).optional(),
+      toolCallId: z.string().max(200).optional(),
+      toolName: z.string().max(200).optional(),
+      askedAt: isoInstant,
+    }).strict().optional(),
+    startedAt: isoInstant,
+    updatedAt: isoInstant,
+    endedAt: isoInstant.optional(),
+  })
+  .strict();
 /** Loose on purpose: the host relays what a worker produced; the worker validated it. */
 const agentsSnapshotSchema = z.object({ revision: z.number().int().nonnegative() }).passthrough();
 
@@ -933,6 +984,7 @@ export const clientParamsSchemas = {
   "agents/builtin/set-instructions": z.object({ name: builtinAgentNameSchema, instructions: z.string().max(AGENT_INSTRUCTIONS_MAX).nullable() }).strict(),
   "agents/namer/qualify": z.object({ cwd }).strict(),
   "agents/sync": z.object({ snapshot: agentsSnapshotSchema }).strict(),
+  "pi/worker/recover-agent-failures": z.object({ runs: z.array(recoveryAgentRunSchema).min(1).max(AGENT_FAILURE_RECOVERY_BATCH_MAX) }).strict(),
 
   // --- RP-1 process inventory (host-owned; demand-driven). Shapes live in resources.ts ---
   ...resourceParamsSchemas,
