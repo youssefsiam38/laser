@@ -54,6 +54,7 @@ import type { PushService } from "./push.js";
 import { RESOURCE_REPORT_METHOD } from "./resources/guard.js";
 import type { ResourceService } from "./resources/index.js";
 import { canonical } from "./trust.js";
+import { SessionRouteLeases } from "./session-route-lease.js";
 import type { SessionProjection } from "./session-projection.js";
 import type { SessionBodyRange } from "./session-body-range.js";
 import type { SessionRevisions } from "./session-revision.js";
@@ -129,6 +130,12 @@ export interface RouterDeps {
   access: AccessControl;
   /** The access audit (RP-13). Absent = decisions are not recorded. */
   audit?: AccessAudit | undefined;
+  /**
+   * Per-session route leases (RP-4c), shared with the pool that releases under
+   * them. Absent, this Router owns a private one: routing is still serialized
+   * against itself, but only the shared instance can see a release in flight.
+   */
+  routeLeases?: SessionRouteLeases | undefined;
 }
 
 /** Methods answered by the worker that owns `params.cwd` (M4). */
@@ -213,11 +220,33 @@ export class Router {
    */
   private readonly uploads = new Map<string, { cwd: string; at: number }>();
 
+  /**
+   * RP-4c: the reader half of the session route lease. Every path-routed
+   * request runs under it, ensure-open included.
+   */
+  private readonly leases: SessionRouteLeases;
+
   constructor(
     private readonly pool: WorkerPool,
     private readonly catalog: SessionCatalog,
     private readonly deps: RouterDeps,
-  ) {}
+  ) {
+    // The host wires one instance into both; `Partial` because a pool is also
+    // stood up as a stub in tests, where nothing releases anything.
+    this.leases = deps.routeLeases ?? (pool as Partial<WorkerPool>).routeLeases ?? new SessionRouteLeases();
+  }
+
+  /**
+   * Run one path-routed request under this session's route lease (RP-4c).
+   *
+   * The lease must cover ensure-open *and* the request that follows it: the
+   * whole point is that the decision not to re-open cannot go stale between the
+   * two. A release in flight is waited out first, and a release the host cannot
+   * prove the outcome of refuses the route having written nothing.
+   */
+  private route<T>(path: string, work: () => Promise<T>): Promise<T> {
+    return this.leases.route(path, work);
+  }
 
   private now(): number {
     return this.deps.now?.() ?? Date.now();
@@ -488,7 +517,7 @@ export class Router {
         // Pi may still understand unsupported/large/changing content, and can
         // also give the authoritative error for parser/unreadable cases once
         // normal path ownership has proved this is its transcript.
-        const forwarded = await (await this.workerFor(path)).request(req.method, req.params);
+        const forwarded = await this.route(path, async () => (await this.workerFor(path)).request(req.method, req.params));
         return revisions.validateLive(forwarded);
       }
 
@@ -514,7 +543,7 @@ export class Router {
         if (answer.kind === "answer") return answer.result;
         if (answer.kind === "refuse") throw answer.error;
         // Only an unmigrated format routes live, exactly as the page reader does.
-        return await (await this.workerFor(path)).request(req.method, req.params);
+        return await this.route(path, async () => (await this.workerFor(path)).request(req.method, req.params));
       }
 
       // RP-5b §2: the attachments inside one body. Same authorization, same
@@ -536,7 +565,7 @@ export class Router {
         const answer = await bodyRange.regions(path, req.params);
         if (answer.kind === "answer") return answer.result;
         if (answer.kind === "refuse") throw answer.error;
-        return await (await this.workerFor(path)).request(req.method, req.params);
+        return await this.route(path, async () => (await this.workerFor(path)).request(req.method, req.params));
       }
 
       case "pi/session/move":
@@ -552,8 +581,7 @@ export class Router {
         if (req.params.authority === "any") return this.readAnyHistory(req);
         if (req.params.window) {
           // Default/explicit `live` preserves today's worker-owned behavior.
-          const worker = await this.workerFor(path);
-          const result = await worker.request(req.method, req.params);
+          const result = await this.route(path, async () => (await this.workerFor(path)).request(req.method, req.params));
           return this.deps.revisions ? this.deps.revisions.validateWindow(result) : result;
         }
         const cached = this.deps.views.get(path);
@@ -561,8 +589,9 @@ export class Router {
         // appending anything, so a cache that kept only the entries would
         // hand back the branch the person just left.
         if (cached) return cached;
-        const worker = await this.workerFor(path);
-        const result = await worker.request<{ entries: unknown[]; leafId?: string | null }>(req.method, req.params);
+        const result = await this.route(path, async () =>
+          (await this.workerFor(path)).request<{ entries: unknown[]; leafId?: string | null }>(req.method, req.params),
+        );
         this.deps.views.set(path, result);
         return result;
       }
@@ -851,8 +880,9 @@ export class Router {
           throw new ProtocolError(ErrorCodes.InvalidParams, "That task is not one of this session's, so it cannot be stopped from here.");
         }
         if (task.status !== "running") return { task };
-        const worker = await this.workerFor(req.params.path);
-        const { delivered } = await worker.request<{ delivered: boolean }>("pi/task/stop", req.params);
+        const { delivered } = await this.route(req.params.path, async () =>
+          (await this.workerFor(req.params.path)).request<{ delivered: boolean }>("pi/task/stop", req.params),
+        );
         if (!delivered) {
           throw new ProtocolError(
             ErrorCodes.InvalidParams,
@@ -982,12 +1012,15 @@ export class Router {
     const live = this.deps.runs?.list(path).some((run) => !isTerminalRunStatus(run.status)) ?? false;
     if (live) throw new ProtocolError(ErrorCodes.SessionBusy, "An agent this session started is still working. Wait for it to finish, or end it, then move the session.");
     // One writer per file: the worker lets go before the host touches it. A
-    // streaming turn is refused by the worker with its own reason.
-    if (this.pool.openSessions(entry.cwd).includes(path)) {
+    // streaming turn is refused by the worker with its own reason. Under the
+    // route lease (RP-4c), so the close cannot straddle a release in flight and
+    // meet a worker that has already let the runtime go mid-move.
+    await this.route(path, async () => {
+      if (!this.pool.openSessions(entry.cwd).includes(path)) return;
       const worker = await this.pool.get(entry.cwd);
       await worker.request("pi/session/close", { path });
       this.pool.forgetSession(path);
-    }
+    });
     const dest = destinationFor(this.catalog.sessionDir, path, target);
     if (dest !== path && existsSync(dest)) {
       throw new ProtocolError(ErrorCodes.Internal, `That project already has a session file named ${dest.split(/[\\/]/).pop() ?? dest}. Nothing was moved.`);
@@ -1093,7 +1126,7 @@ export class Router {
     const answer = await projection.read(path, params.window, req.params.baseRevision, req.params.bodyLimit);
     if (answer.kind === "refuse") throw answer.error;
     if (answer.kind === "route-live") {
-      const forwarded = await (await this.workerFor(path)).request(req.method, params);
+      const forwarded = await this.route(path, async () => (await this.workerFor(path)).request(req.method, params));
       return revisions.validateWindow(forwarded);
     }
     return answer.result;
@@ -1231,8 +1264,14 @@ export class Router {
 
         const path = (req.params as { path: string }).path;
         const loading = req.method === "session/load";
-        const worker = await this.workerFor(path, !loading);
-        const forwarded = await worker.request(req.method, req.params);
+        // RP-4c: ensure-open and the request are one lease. Between them the
+        // lifetime sweep, a retirement or a crash may otherwise take the runtime
+        // this decided not to re-open, and the mutation would reach a worker
+        // that had correctly let the session go.
+        const forwarded = await this.route(path, async () => {
+          const worker = await this.workerFor(path, !loading);
+          return worker.request(req.method, req.params);
+        });
         const result = loading && this.deps.revisions ? this.deps.revisions.validateLoad(forwarded) : forwarded;
         const cwd = this.pool.cwdOfSession(path) ?? this.cwdOf(path);
         if (loading && cwd) this.pool.bindSession(path, cwd);
@@ -1394,6 +1433,29 @@ export class Router {
     const cwd = this.cwdOf(path);
     if (!cwd) throw new ProtocolError(ErrorCodes.SessionNotFound, `no project known for session ${path}`);
     if (!this.isWorkspace(cwd)) this.deps.projects.assertProject(cwd);
+    // Refuse before anything is started, so a session with nothing to recover
+    // never costs a worker process.
+    this.openOrRefuse(path, cwd);
+    const worker = await this.pool.get(cwd);
+    // Read again on this side of the await (RP-4c). Getting the worker can wait
+    // out a retirement, replace a crashed process or return a successor, and any
+    // of those empties the pool's membership for this path. The whole guard is
+    // re-evaluated, not only `open`: after an explicit stop a path with no saved
+    // file can lose its runtime, and a stale `open` would let `session/load`
+    // create a different session under that filename.
+    const open = this.openOrRefuse(path, cwd);
+    if (ensureOpen && !open) {
+      await worker.request("session/load", { path });
+      this.pool.bindSession(path, cwd);
+    }
+    return worker;
+  }
+
+  /**
+   * Whether this worker holds the session right now, refusing when it does not
+   * and there is nothing saved to re-open.
+   */
+  private openOrRefuse(path: string, cwd: string): boolean {
     const open = this.pool.openSessions(cwd).includes(path);
     if (!open && !this.catalog.get(path) && !existsSync(path)) {
       throw new ProtocolError(
@@ -1401,12 +1463,7 @@ export class Router {
         "This session is no longer open and has no saved transcript. Start a new session.",
       );
     }
-    const worker = await this.pool.get(cwd);
-    if (ensureOpen && !open) {
-      await worker.request("session/load", { path });
-      this.pool.bindSession(path, cwd);
-    }
-    return worker;
+    return open;
   }
 }
 

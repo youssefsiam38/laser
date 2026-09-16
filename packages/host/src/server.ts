@@ -62,6 +62,7 @@ import { Router } from "./router.js";
 import { SessionLoadDelivery } from "./session-load-delivery.js";
 import { TranscriptDelivery, type SessionMembershipView } from "./transcript-delivery.js";
 import { SessionLifetime, type SessionLifetimeOptions } from "./session-lifetime.js";
+import { SessionRouteLeases } from "./session-route-lease.js";
 import { cleanupTaskLogsBeforeWorkers } from "./tasks/cleanup.js";
 import { SearchCancellation } from "./search-cancellation.js";
 import { SessionIndexCache } from "./session-index.js";
@@ -280,6 +281,12 @@ export class HostServer {
    * whole worker would be retired.
    */
   readonly sessionLifetime: SessionLifetime;
+  /**
+   * Per-session route leases (RP-4c): path-routed requests are readers, a
+   * lifetime release is the writer. Shared by the router and the pool, so
+   * releasing a runtime never releases the host's authority over that session.
+   */
+  readonly routeLeases: SessionRouteLeases;
   /**
    * Large provider captures, reassembled before they become one log row
    * (RP-7). Bounded per session, per worker generation and globally; a capture
@@ -549,7 +556,13 @@ export class HostServer {
     const npmCommand = this.packages.npmCommand();
     this.log(npmCommand ? `packages: installer ${npmCommand.join(" ")}` : "packages: no installer found; installs will be refused with a reason");
 
+    // RP-4c: one instance for the whole host. The router routes under it and
+    // the pool releases under it, so a path-routed request and a release of the
+    // same session are one decision rather than two that can straddle.
+    this.routeLeases = new SessionRouteLeases();
+
     const poolOptions: WorkerPoolOptions = {
+      routeLeases: this.routeLeases,
       ...(options.agentDir ? { agentDir: options.agentDir } : {}),
       env: { ...(npmCommand ? { [ENV.npmCommand]: JSON.stringify(npmCommand) } : {}), [ENV.taskLogRoot]: this.taskLogRoot },
       envForCwd: (cwd) => ({
@@ -650,7 +663,10 @@ export class HostServer {
     // never written: `holders` is RP-6's one authority on who is following what.
     this.sessionLifetime = new SessionLifetime(
       {
-        holders: (path) => this.sessionMembership().holders(path),
+        // Membership (RP-6) plus the routed requests in flight (RP-4c): a
+        // session a mutation is being routed to is not a candidate at all, so
+        // the sweep spends its tick elsewhere instead of being declined.
+        holders: (path) => this.sessionMembership().holders(path) + this.routeLeases.routedHolders(path),
         loadedSessions: () => this.pool.loadedSessions(),
         lastActivity: (path) => this.pool.lastSessionActivity(path),
         unload: (cwd, path, reason) => this.pool.unloadSession(cwd, path, reason),
@@ -684,6 +700,7 @@ export class HostServer {
       bodyRange: this.bodyRange,
       access: this.access,
       audit: this.audit,
+      routeLeases: this.routeLeases,
     });
 
     this.http = createServer((req, res) => this.serveHttp(req, res));

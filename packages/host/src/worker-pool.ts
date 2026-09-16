@@ -33,6 +33,7 @@
 import type { ClientRequests, HostNotifications, JsonRpcNotification, SessionPin, SessionUnloadReason, WorkerInfo, WorkerRetireMode, WorkerStatus } from "@lasercode/protocol";
 import { ErrorCodes, ProtocolError, environmentOverlay } from "@lasercode/protocol";
 import { canonical } from "./trust.js";
+import { SessionRouteLeases } from "./session-route-lease.js";
 import { retirementRefused, retireWorker, type RetirementOutcome } from "./worker-retirement.js";
 import { WorkerClient, type WorkerClientOptions } from "./worker-client.js";
 
@@ -128,6 +129,13 @@ export interface WorkerPoolOptions {
    * to it again. A test seam; the default matches the worker's.
    */
   retireLeaseMs?: number;
+  /**
+   * The host's per-session route leases (RP-4c). Shared with the router, so a
+   * release and a path-routed request cannot straddle each other. Absent, the
+   * pool owns a private one: correct on its own, but only the shared instance
+   * makes routing and releasing one decision.
+   */
+  routeLeases?: SessionRouteLeases;
   /** Ordinary idle retirement. 0 disables it, but not unused warm expiry. */
   idleMs?: number;
   /** How often idleness is checked. */
@@ -210,8 +218,11 @@ export class WorkerPool {
   private sweepTimer: ReturnType<typeof setInterval> | undefined;
   private closed = false;
   private preparing = false;
+  /** RP-4c: the writer half of the route lease lives on `unloadSession`. */
+  private readonly leases: SessionRouteLeases;
 
   constructor(private readonly options: WorkerPoolOptions) {
+    this.leases = options.routeLeases ?? new SessionRouteLeases();
     this.now = options.now ?? Date.now;
     this.setTimer = options.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
     const sweepMs = options.sweepMs ?? DEFAULTS.sweepMs;
@@ -430,18 +441,33 @@ export class WorkerPool {
    * when it refuses. A release that succeeds is bookkeeping here too — nothing
    * routes to that session in this worker until it is loaded again — and a
    * refusal changes nothing at all.
+   *
+   * The whole of it runs under the session's route lease (RP-4c), bookkeeping
+   * included: a path a routed request is holding is declined here, before any
+   * worker is asked, and a routed request that arrives while this is in flight
+   * waits for the outcome instead of writing to a worker that has already let
+   * the runtime go. A decline is `{ unloaded: false, pins: [] }` — the shape the
+   * sweep already reads as "left alone", with no backoff and no escalation.
    */
   async unloadSession(cwd: string, path: string, reason: SessionUnloadReason = "idle"): Promise<{ unloaded: boolean; pins: SessionPin[] }> {
-    const key = canonical(cwd);
-    const entry = this.entries.get(key);
-    if (!entry?.client?.alive || entry.status !== "ready" || entry.stopping || entry.stopped) return { unloaded: false, pins: [] };
-    const answer = await entry.client.request<ClientRequests["pi/session/unload"]["result"]>("pi/session/unload", { path, reason });
-    // A worker that does not answer in this shape did not release anything: an
-    // older generation replies to an unknown method rather than refusing it,
-    // and forgetting the session on that would lose the route to a live runtime.
-    if (typeof answer?.unloaded !== "boolean") return { unloaded: false, pins: [] };
-    if (answer.unloaded) this.forgetSession(path);
-    return { unloaded: answer.unloaded, pins: Array.isArray(answer.pins) ? answer.pins : [] };
+    const answer = await this.leases.release(path, async () => {
+      const key = canonical(cwd);
+      const entry = this.entries.get(key);
+      if (!entry?.client?.alive || entry.status !== "ready" || entry.stopping || entry.stopped) return { unloaded: false, pins: [] as SessionPin[] };
+      const reply = await entry.client.request<ClientRequests["pi/session/unload"]["result"]>("pi/session/unload", { path, reason });
+      // A worker that does not answer in this shape did not release anything: an
+      // older generation replies to an unknown method rather than refusing it,
+      // and forgetting the session on that would lose the route to a live runtime.
+      if (typeof reply?.unloaded !== "boolean") return { unloaded: false, pins: [] as SessionPin[] };
+      if (reply.unloaded) this.forgetSession(path);
+      return { unloaded: reply.unloaded, pins: Array.isArray(reply.pins) ? reply.pins : [] };
+    });
+    return answer ?? { unloaded: false, pins: [] };
+  }
+
+  /** The route leases this pool releases under (RP-4c); shared with the router. */
+  get routeLeases(): SessionRouteLeases {
+    return this.leases;
   }
 
   cwdOfSession(path: string): string | undefined {
