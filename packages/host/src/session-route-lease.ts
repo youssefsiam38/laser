@@ -12,12 +12,17 @@
  *
  * The rule here is a readers–writer lease per session path, host-local:
  *
- * - **path-routed requests are readers.** One lease covers ensure-open *and*
- *   the request that follows it, so the decision not to re-open cannot go stale
- *   between the two.
- * - **a lifetime release is the writer.** It runs only when no reader holds the
+ * - **path-routed requests are readers.** One lease covers choosing the worker,
+ *   ensure-open, the request itself *and* the host bookkeeping that records
+ *   where that session now lives, so none of those decisions can go stale
+ *   between the others.
+ * - **a lifetime release is a writer.** It runs only when no reader holds the
  *   path, and it declines synchronously when one does — no worker is asked, so
  *   nothing is written and nothing is refused after the fact.
+ * - **moving a session is the other writer.** Closing the runtime, rewriting the
+ *   file and handing the caches their new path is one exclusive operation over
+ *   both the old and the new path: readers cannot run beside it, and it is
+ *   refused outright rather than queued when anything else holds either path.
  *
  * And the fail-closed half (D-260): a route that meets a release in flight waits
  * for that release's *outcome*, bounded. A release that failed, and a gate that
@@ -45,6 +50,14 @@ export const ROUTE_GATE_WAIT_MS = 10_000;
 export const ROUTE_GATE_REFUSAL =
   "This conversation is being put to sleep and has not finished letting go. Nothing was sent. Try again in a moment.";
 
+/** The same, for a route that met a move of the same conversation. */
+export const MOVE_GATE_REFUSAL =
+  "This conversation is being moved to another project. Nothing was sent. Try again in a moment.";
+
+/** And what a move is told when the conversation is busy with something else. */
+export const EXCLUSIVE_BUSY_REFUSAL =
+  "This conversation is busy right now. Nothing was moved. Try again in a moment.";
+
 /**
  * How many consecutive release gates one routed request waits out before it
  * refuses. A release never waits for a reader, so a route can only ever meet a
@@ -54,6 +67,9 @@ export const ROUTE_GATE_REFUSAL =
 const MAX_GATES_PER_ROUTE = 3;
 
 type GateOutcome = "settled" | "failed";
+
+/** Why a path is held against readers: released, or moved. */
+type WriterKind = "release" | "move";
 
 export interface SessionRouteLeaseOptions {
   /** Test seam for the route wait bound. */
@@ -67,7 +83,7 @@ export interface SessionRouteLeaseOptions {
  * with the release's outcome, so no waiter can see an unhandled rejection and no
  * waiter can mistake a failed release for a finished one.
  */
-class ReleaseGate {
+class WriterGate {
   /** Set when the shared bound passed while this gate was still unsettled. */
   overBound = false;
   readonly outcome: Promise<GateOutcome>;
@@ -78,6 +94,7 @@ class ReleaseGate {
   private done = false;
 
   constructor(
+    readonly kind: WriterKind,
     private readonly waitMs: number,
     private readonly setTimer: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>,
     private readonly clearTimer: (timer: ReturnType<typeof setTimeout>) => void,
@@ -117,8 +134,10 @@ class ReleaseGate {
 export class SessionRouteLeases {
   /** Routed requests in flight, by path. Deleted at zero. */
   private readonly routed = new Map<string, number>();
-  /** At most one release gate per path. Deleted when the release finishes. */
-  private readonly releasing = new Map<string, ReleaseGate>();
+  /** Routed requests waiting on a writer, by path. Deleted at zero. */
+  private readonly waiting = new Map<string, number>();
+  /** At most one writer gate per path. Deleted when that writer finishes. */
+  private readonly writers = new Map<string, WriterGate>();
   private readonly waitMs: number;
   private readonly setTimer: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
   private readonly clearTimer: (timer: ReturnType<typeof setTimeout>) => void;
@@ -140,13 +159,19 @@ export class SessionRouteLeases {
    */
   async route<T>(path: string, work: () => Promise<T>): Promise<T> {
     for (let gates = 0; ; gates += 1) {
-      const gate = this.releasing.get(path);
+      const gate = this.writers.get(path);
       if (!gate) break;
       // A gate that already passed its bound refuses at once: N waiters must not
       // each pay the full wait for one uncertainty.
-      if (gate.overBound || gates >= MAX_GATES_PER_ROUTE) throw routeRefusal();
-      const outcome = await gate.wait();
-      if (outcome !== "settled") throw routeRefusal();
+      if (gate.overBound || gates >= MAX_GATES_PER_ROUTE) throw routeRefusal(gate.kind);
+      this.note(this.waiting, path, 1);
+      let outcome: GateOutcome | "expired";
+      try {
+        outcome = await gate.wait();
+      } finally {
+        this.note(this.waiting, path, -1);
+      }
+      if (outcome !== "settled") throw routeRefusal(gate.kind);
     }
     this.routed.set(path, (this.routed.get(path) ?? 0) + 1);
     try {
@@ -163,14 +188,19 @@ export class SessionRouteLeases {
     return this.routed.get(path) ?? 0;
   }
 
-  /** Whether a release for this path is in flight. */
-  releasePending(path: string): boolean {
-    return this.releasing.has(path);
+  /** Routed requests parked on a writer of this path right now. */
+  waitingRoutes(path: string): number {
+    return this.waiting.get(path) ?? 0;
+  }
+
+  /** Whether a writer of this path is in flight, and which kind. */
+  writerPending(path: string): WriterKind | undefined {
+    return this.writers.get(path)?.kind;
   }
 
   /** Bookkeeping sizes, so a test can prove nothing is retained per path. */
-  stats(): { routed: number; releasing: number } {
-    return { routed: this.routed.size, releasing: this.releasing.size };
+  stats(): { routed: number; waiting: number; writers: number } {
+    return { routed: this.routed.size, waiting: this.waiting.size, writers: this.writers.size };
   }
 
   /**
@@ -184,9 +214,9 @@ export class SessionRouteLeases {
    */
   async release<T>(path: string, work: () => Promise<T>): Promise<T | undefined> {
     if (this.routedHolders(path) > 0) return undefined;
-    if (this.releasing.has(path)) return undefined;
-    const gate = new ReleaseGate(this.waitMs, this.setTimer, this.clearTimer);
-    this.releasing.set(path, gate);
+    if (this.writers.has(path)) return undefined;
+    const gate = new WriterGate("release", this.waitMs, this.setTimer, this.clearTimer);
+    this.writers.set(path, gate);
     let outcome: GateOutcome = "failed";
     try {
       const result = await work();
@@ -196,12 +226,62 @@ export class SessionRouteLeases {
       // Cleanup always happens — a failed release, a dead worker, an unknown
       // method — so no path can be leased for ever. The outcome is what decides
       // whether a waiting route may run, and only `settled` does.
-      this.releasing.delete(path);
+      this.writers.delete(path);
       gate.settle(outcome);
     }
   }
+
+  /**
+   * Run one exclusive operation over these paths: no reader may run beside it
+   * and no release may start under it, for the whole of it.
+   *
+   * Moving a session is the case this exists for. It closes a runtime, rewrites
+   * a file and moves the host's record of where that conversation lives, and
+   * every one of those steps is authority over the same path — a reader lease,
+   * which coexists with other readers, would not make it the one writer.
+   *
+   * Unlike a release, this is a person's operation, so it never waits on an
+   * uncertain authority: anything else holding either path refuses it at once,
+   * with a sentence saying nothing was moved. Acquisition is synchronous across
+   * every path, so two exclusive operations can never each hold half of what
+   * they need.
+   */
+  async exclusive<T>(paths: readonly string[], work: () => Promise<T>): Promise<T> {
+    const held = [...new Set(paths)];
+    for (const path of held) {
+      if (this.routedHolders(path) > 0 || this.waitingRoutes(path) > 0 || this.writers.has(path)) {
+        throw new ProtocolError(ErrorCodes.SessionBusy, EXCLUSIVE_BUSY_REFUSAL);
+      }
+    }
+    const gates = held.map((path) => {
+      const gate = new WriterGate("move", this.waitMs, this.setTimer, this.clearTimer);
+      this.writers.set(path, gate);
+      return { path, gate };
+    });
+    let outcome: GateOutcome = "failed";
+    try {
+      const result = await work();
+      outcome = "settled";
+      return result;
+    } finally {
+      // A move that failed leaves the same uncertainty a failed release does:
+      // the entries go, so nothing is held for ever, and the waiters that were
+      // parked on it are refused rather than let through.
+      for (const { path, gate } of gates) {
+        this.writers.delete(path);
+        gate.settle(outcome);
+      }
+    }
+  }
+
+  /** Move a bounded counter, deleting the row at zero. */
+  private note(counters: Map<string, number>, path: string, delta: number): void {
+    const next = (counters.get(path) ?? 0) + delta;
+    if (next > 0) counters.set(path, next);
+    else counters.delete(path);
+  }
 }
 
-function routeRefusal(): ProtocolError {
-  return new ProtocolError(ErrorCodes.SessionBusy, ROUTE_GATE_REFUSAL);
+function routeRefusal(kind: WriterKind): ProtocolError {
+  return new ProtocolError(ErrorCodes.SessionBusy, kind === "move" ? MOVE_GATE_REFUSAL : ROUTE_GATE_REFUSAL);
 }

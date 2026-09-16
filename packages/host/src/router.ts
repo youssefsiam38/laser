@@ -60,7 +60,7 @@ import type { SessionBodyRange } from "./session-body-range.js";
 import type { SessionRevisions } from "./session-revision.js";
 import type { ViewCache } from "./views.js";
 import type { WorkerPool } from "./worker-pool.js";
-import { WorkerRpcError } from "./worker-client.js";
+import { WorkerRpcError, type WorkerClient } from "./worker-client.js";
 
 /** Attention order for the inbox (DESIGN.md "Status language"). */
 const ATTENTION_RANK: Record<SessionAttention, number> = {
@@ -246,6 +246,27 @@ export class Router {
    */
   private route<T>(path: string, work: () => Promise<T>): Promise<T> {
     return this.leases.route(path, work);
+  }
+
+  /**
+   * Ask the worker that already owns this session, under the lease (RP-4c).
+   *
+   * Every live fast path goes through here instead of snapshotting
+   * `liveWorkerFor` and then awaiting a request against that snapshot: the
+   * owner is chosen again *inside* the lease, so a release that took the
+   * runtime in between is waited out and then seen. When nothing owns the
+   * session once the lease is held, this answers `undefined` and the caller
+   * reads the durable record exactly as it does for a cold session.
+   */
+  private async routeLive<T>(path: string, send: (worker: WorkerClient) => Promise<T>): Promise<{ answered: true; result: T } | { answered: false }> {
+    // Nothing owns it: no lease is taken, and no worker is asked. A durable
+    // read needs no authority over a runtime that does not exist.
+    if (!this.liveWorkerFor(path)) return { answered: false };
+    return this.route(path, async () => {
+      const live = this.liveWorkerFor(path);
+      if (!live) return { answered: false as const };
+      return { answered: true as const, result: await send(live) };
+    });
   }
 
   private now(): number {
@@ -507,8 +528,8 @@ export class Router {
         // The owning worker wins whenever there is one: its leaf can be ahead
         // of anything the file shows. Its answer still has to belong to this
         // host's environment; an unconfigured/stale worker is never trusted.
-        const live = this.liveWorkerFor(path);
-        if (live) return revisions.validateLive(await live.request(req.method, req.params));
+        const live = await this.routeLive(path, (worker) => worker.request(req.method, req.params));
+        if (live.answered) return revisions.validateLive(live.result);
         if (!existsSync(path)) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation is no longer stored here.");
 
         const answer = await revisions.read(path, req.params.baseRevision);
@@ -536,8 +557,8 @@ export class Router {
         this.assertDurableReadPath(path);
         // The owning worker wins: its entries can be ahead of the file, and a
         // turn that has not been written yet exists only there.
-        const live = this.liveWorkerFor(path);
-        if (live) return await live.request(req.method, req.params);
+        const live = await this.routeLive(path, (worker) => worker.request(req.method, req.params));
+        if (live.answered) return live.result;
         if (!existsSync(path)) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation is no longer stored here.");
         const answer = await bodyRange.read(path, req.params);
         if (answer.kind === "answer") return answer.result;
@@ -559,8 +580,8 @@ export class Router {
           );
         }
         this.assertDurableReadPath(path);
-        const live = this.liveWorkerFor(path);
-        if (live) return await live.request(req.method, req.params);
+        const live = await this.routeLive(path, (worker) => worker.request(req.method, req.params));
+        if (live.answered) return live.result;
         if (!existsSync(path)) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation is no longer stored here.");
         const answer = await bodyRange.regions(path, req.params);
         if (answer.kind === "answer") return answer.result;
@@ -1011,37 +1032,51 @@ export class Router {
     const agentName = this.agents().defaultAgentName;
     const live = this.deps.runs?.list(path).some((run) => !isTerminalRunStatus(run.status)) ?? false;
     if (live) throw new ProtocolError(ErrorCodes.SessionBusy, "An agent this session started is still working. Wait for it to finish, or end it, then move the session.");
-    // One writer per file: the worker lets go before the host touches it. A
-    // streaming turn is refused by the worker with its own reason. Under the
-    // route lease (RP-4c), so the close cannot straddle a release in flight and
-    // meet a worker that has already let the runtime go mid-move.
-    await this.route(path, async () => {
-      if (!this.pool.openSessions(entry.cwd).includes(path)) return;
-      const worker = await this.pool.get(entry.cwd);
-      await worker.request("pi/session/close", { path });
-      this.pool.forgetSession(path);
-    });
     const dest = destinationFor(this.catalog.sessionDir, path, target);
+    // Refused before anything is held, so a collision costs the conversation
+    // nothing at all.
+    this.assertNoDestinationFile(path, dest);
+    // One writer per file, and one authority over both names (RP-4c). A move
+    // closes the runtime, rewrites the file and hands the caches the new path;
+    // all three are authority over the same conversation, so they are one
+    // exclusive operation over the old and the new path rather than a reader
+    // that other routes may run beside. A release cannot start under it, a
+    // routed request cannot straddle it, and nothing else can be writing the
+    // destination. A streaming turn is still refused by the worker itself.
+    return this.leases.exclusive([path, dest], async () => {
+      if (this.pool.openSessions(entry.cwd).includes(path)) {
+        const worker = await this.pool.get(entry.cwd);
+        await worker.request("pi/session/close", { path });
+        this.pool.forgetSession(path);
+      }
+      // Re-read on this side of the close: the destination is only proved free
+      // while this operation holds it.
+      this.assertNoDestinationFile(path, dest);
+      rewriteSessionFile(path, dest, { cwd: target, agentName });
+      this.catalog.invalidate(path);
+      this.catalog.invalidate(dest);
+      this.deps.views.invalidate(path);
+      this.deps.revisions?.invalidate(path);
+      this.deps.revisions?.invalidate(dest);
+      this.unwritten.delete(path);
+      // Read where it was read: a session someone had caught up on must not
+      // come back as unread for having moved.
+      const seenAt = this.deps.attention.seenAt(path);
+      this.deps.attention.forget(path);
+      if (seenAt !== undefined) this.deps.attention.markSeen(dest, target);
+      // The project the person chose is a project from now on, exactly as the
+      // rail's Add project makes one: pinned, so it outlives its sessions.
+      this.deps.projects.add(target);
+      this.deps.projects.touch(target);
+      return { path: dest };
+    });
+  }
+
+  /** A move never writes over a file that is already there. */
+  private assertNoDestinationFile(path: string, dest: string): void {
     if (dest !== path && existsSync(dest)) {
       throw new ProtocolError(ErrorCodes.Internal, `That project already has a session file named ${dest.split(/[\\/]/).pop() ?? dest}. Nothing was moved.`);
     }
-    rewriteSessionFile(path, dest, { cwd: target, agentName });
-    this.catalog.invalidate(path);
-    this.catalog.invalidate(dest);
-    this.deps.views.invalidate(path);
-    this.deps.revisions?.invalidate(path);
-    this.deps.revisions?.invalidate(dest);
-    this.unwritten.delete(path);
-    // Read where it was read: a session someone had caught up on must not
-    // come back as unread for having moved.
-    const seenAt = this.deps.attention.seenAt(path);
-    this.deps.attention.forget(path);
-    if (seenAt !== undefined) this.deps.attention.markSeen(dest, target);
-    // The project the person chose is a project from now on, exactly as the
-    // rail's Add project makes one: pinned, so it outlives its sessions.
-    this.deps.projects.add(target);
-    this.deps.projects.touch(target);
-    return { path: dest };
   }
 
   /**
@@ -1116,8 +1151,8 @@ export class Router {
     // Omitted `window` under `any` means a bounded first screen. Default/live
     // omission remains the legacy whole-transcript route in the switch above.
     const params = req.params.window ? req.params : { ...req.params, window: { tail: 40 } as const };
-    const live = this.liveWorkerFor(path);
-    if (live) return revisions.validateWindow(await live.request(req.method, params));
+    const live = await this.routeLive(path, (worker) => worker.request(req.method, params));
+    if (live.answered) return revisions.validateWindow(live.result);
     if (!existsSync(path)) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation is no longer stored here.");
 
     // Bounds/unreadability refuse truthfully instead of silently spawning.
@@ -1264,30 +1299,37 @@ export class Router {
 
         const path = (req.params as { path: string }).path;
         const loading = req.method === "session/load";
-        // RP-4c: ensure-open and the request are one lease. Between them the
-        // lifetime sweep, a retirement or a crash may otherwise take the runtime
-        // this decided not to re-open, and the mutation would reach a worker
-        // that had correctly let the session go.
-        const forwarded = await this.route(path, async () => {
+        // RP-4c: choosing the worker, ensure-open, the request *and* the host's
+        // record of where this session now lives are one lease. Between any two
+        // of them the lifetime sweep, a retirement or a crash may otherwise take
+        // the runtime, and the mutation would reach a worker that had correctly
+        // let the session go — or the pool would keep advertising a path the
+        // worker has already re-keyed under a fork.
+        const { result, cwd, forked } = await this.route(path, async () => {
           const worker = await this.workerFor(path, !loading);
-          return worker.request(req.method, req.params);
+          const forwarded = await worker.request(req.method, req.params);
+          // Validated before anything is recorded: a load whose answer does not
+          // belong to this host must not become the pool's idea of ownership.
+          const answer = loading && this.deps.revisions ? this.deps.revisions.validateLoad(forwarded) : forwarded;
+          const owner = this.pool.cwdOfSession(path) ?? this.cwdOf(path);
+          if (loading && owner) this.pool.bindSession(path, owner);
+          // A fork answers with a new session path served by the same worker; a
+          // navigate rewrites the leaf, so the cached transcript is stale.
+          const state = (answer as { state?: SessionState } | null)?.state;
+          const moved = typeof state?.path === "string" && state.path !== path ? state.path : undefined;
+          if (moved && owner) {
+            // One runtime, one row (RP-4): the fork moved the session's file, so
+            // the pool's bookkeeping moves with it, inside the same lease that
+            // wrote the request. Leaving the source path behind would leave a row
+            // nobody serves, and every later lifetime question about this worker
+            // would disagree with it for ever.
+            this.pool.rekeySession(path, moved, owner);
+            if (state) this.noteUnwritten(state);
+          }
+          return { result: answer, cwd: owner, forked: moved };
         });
-        const result = loading && this.deps.revisions ? this.deps.revisions.validateLoad(forwarded) : forwarded;
-        const cwd = this.pool.cwdOfSession(path) ?? this.cwdOf(path);
-        if (loading && cwd) this.pool.bindSession(path, cwd);
+        // Presentation only from here: no authority over a runtime or a file.
         if (loading && cwd && !this.isWorkspace(cwd) && !this.isWorkspaceSession(path)) this.deps.projects.touch(cwd);
-        // A fork answers with a new session path served by the same worker; a
-        // navigate rewrites the leaf, so the cached transcript is stale.
-        const state = (result as { state?: SessionState } | null)?.state;
-        const forked = state?.path;
-        if (forked && cwd && forked !== path) {
-          // One runtime, one row (RP-4): the fork moved the session's file, so
-          // the pool's bookkeeping moves with it. Leaving the source path
-          // behind would leave a row nobody serves, and every later lifetime
-          // question about this worker would disagree with it for ever.
-          this.pool.rekeySession(path, forked, cwd);
-          if (state) this.noteUnwritten(state);
-        }
         if (req.method === "pi/session/fork" || req.method === "pi/session/navigate" || req.method === "pi/session/compact") {
           this.deps.views.invalidate(path);
           // The catalog resumes its byte-offset scan whenever a file only grew.

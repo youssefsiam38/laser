@@ -147,6 +147,27 @@ function userMessages(path: string): number {
     .filter((entry) => entry.message?.role === "user").length;
 }
 
+/** Record every host → worker request this client sends from now on. */
+function recordWorkerRequests(worker: { request: (method: string, params?: unknown) => Promise<unknown> }): string[] {
+  const sent: string[] = [];
+  const real = worker.request.bind(worker);
+  worker.request = (method: string, params?: unknown) => {
+    sent.push(method);
+    return real(method, params);
+  };
+  return sent;
+}
+
+/** Poll a condition that another task settles, with a bound and no fixed sleep. */
+async function until(ready: () => boolean, what: string, ms = 10_000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (ready()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`timed out waiting for ${what}`);
+}
+
 /** Wait for a session to stop streaming, the way the soak does: by polling. */
 async function settled(url: string, path: string): Promise<void> {
   const deadline = Date.now() + 60_000;
@@ -421,46 +442,63 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("routing a mutation while a ru
     expect(readFileSync(state.path, "utf8")).toContain("while releasing");
   }, 120_000);
 
-  it("refuses with an actionable sentence, and writes nothing, when the release fails", async () => {
+  it("refuses when the release fails, on the failure itself, with nothing written to the worker", async () => {
     const url = (await host.listen()).url;
     const cwd = join(base, "project");
     const state = await idleSession(url, cwd);
     const before = userMessages(state.path);
     const revisionBefore = await oneShot<{ revision: string }>(url, "session/revision", { path: state.path });
 
-    // A release that really drops the runtime and then fails: the host cannot
-    // prove whose bookkeeping is right, which is the only honest reading of a
-    // release whose outcome it lost.
+    // Every host → worker request from here on, at the real boundary: the
+    // acceptance criterion is zero writes, and a `session/load` appends no user
+    // message, so counting bytes cannot prove it.
+    const worker = await host.pool.get(cwd);
+    const sent = recordWorkerRequests(worker);
+
+    // A release that really drops the runtime and then fails, leaving the host
+    // unable to prove whose bookkeeping is right: the worker has let go and the
+    // pool still believes it holds the session.
     const dropped = deferred();
     const fail = deferred();
     const release = host.routeLeases.release(state.path, async () => {
-      const worker = await host.pool.get(cwd);
       const answer = await worker.request<{ unloaded: boolean }>("pi/session/unload", { path: state.path, reason: "idle" });
       expect(answer.unloaded).toBe(true);
-      host.pool.forgetSession(state.path);
       dropped.resolve();
       await fail.promise;
       throw new Error("the host lost the release answer");
     });
     await dropped.promise;
 
-    const refused = await oneShot(url, "session/prompt", { path: state.path, content: [{ type: "text", text: "refused" }] })
+    const startedAt = Date.now();
+    const answer = oneShot(url, "session/prompt", { path: state.path, content: [{ type: "text", text: "refused" }] })
       .then(() => undefined, (error: Error & { code?: number }) => error);
-    expect(refused?.code).toBe(ErrorCodes.SessionBusy);
-    expect(refused?.message).toMatch(/being put to sleep/);
-    expect(refused?.message).toMatch(/Nothing was sent/);
-
+    // Fail the release while the prompt is parked on its gate, so the refusal
+    // is the gate's "failed" outcome and not the route's bound.
+    await until(() => host.routeLeases.waitingRoutes(state.path) === 1, "the prompt to park on the release");
     fail.resolve();
     await expect(release).rejects.toThrow(/lost the release answer/);
 
-    // Zero writes: no user message, no new bytes, the same durable revision.
+    const refused = await answer;
+    expect(refused?.code).toBe(ErrorCodes.SessionBusy);
+    expect(refused?.message).toMatch(/being put to sleep/);
+    expect(refused?.message).toMatch(/Nothing was sent/);
+    // The failure, not the ten-second bound.
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+
+    // Zero writes at the boundary itself, and nothing in the record either.
+    expect(sent.filter((method) => method === "session/load" || method === "session/prompt")).toEqual([]);
     expect(userMessages(state.path)).toBe(before);
     expect(readFileSync(state.path, "utf8")).not.toContain("refused");
+
+    // The host does not repair the divergence a failed release leaves — its
+    // record of who holds the runtime and the worker's disagree, and until they
+    // are reconciled even a read routed to that worker is refused by it. The
+    // paths that own convergence do the repair; replacing the worker is one of
+    // them, and after it the conversation is whole again and the same message
+    // lands exactly once.
+    await host.pool.restart(cwd);
     const revisionAfter = await oneShot<{ revision: string }>(url, "session/revision", { path: state.path });
     expect(revisionAfter.revision).toBe(revisionBefore.revision);
-
-    // And the person may send it again: the host re-opens the conversation and
-    // the message lands exactly once.
     const accepted = await oneShot<{ accepted: boolean }>(url, "session/prompt", {
       path: state.path,
       content: [{ type: "text", text: "sent again" }],
@@ -476,6 +514,7 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("routing a mutation while a ru
     const state = await idleSession(url, cwd);
     const before = userMessages(state.path);
 
+    const sent = recordWorkerRequests(await host.pool.get(cwd));
     const never = deferred();
     const release = host.routeLeases.release(state.path, async () => {
       await never.promise;
@@ -486,6 +525,7 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("routing a mutation while a ru
       .then(() => undefined, (error: Error & { code?: number }) => error);
     expect(refused?.code).toBe(ErrorCodes.SessionBusy);
     expect(refused?.message).toMatch(/being put to sleep/);
+    expect(sent.filter((method) => method === "session/load" || method === "session/prompt")).toEqual([]);
     expect(userMessages(state.path)).toBe(before);
     expect(readFileSync(state.path, "utf8")).not.toContain("over the bound");
 
