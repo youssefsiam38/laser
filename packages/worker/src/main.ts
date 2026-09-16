@@ -154,6 +154,10 @@ async function main(): Promise<void> {
     process.exit(2);
   }
   const mode = parsedMode.data;
+  // Echo the immutable effective Feature configuration the host selected for
+  // this process. The host verifies it before accepting readiness.
+  const featureGenerationId = process.env[ENV.featureGenerationId];
+  const featureGeneration = featureGenerationId ? { featureGenerationId } : {};
   const transport = openTransport();
   const send = (message: JsonRpcMessage) => {
     const line = `${JSON.stringify(message)}\n`;
@@ -174,7 +178,7 @@ async function main(): Promise<void> {
     }
     transport.write(line);
   };
-  send({ jsonrpc: "2.0", method: "pi/worker/status", params: { cwd, status: "starting", launchId, mode } });
+  send({ jsonrpc: "2.0", method: "pi/worker/status", params: { cwd, status: "starting", launchId, mode, ...featureGeneration } });
   reportStartupFailure = async () => {
     send({
       jsonrpc: "2.0",
@@ -184,6 +188,7 @@ async function main(): Promise<void> {
         status: "crashed",
         launchId,
         mode,
+        ...featureGeneration,
         failure: {
           owner: { kind: "worker", launchId, cwd },
           stage: "initialize",
@@ -330,7 +335,7 @@ async function main(): Promise<void> {
   async function shutdown(code: number): Promise<void> {
     if (closing) return;
     closing = true;
-    server.notify("pi/worker/status", { cwd, status: "retired", launchId, mode });
+    server.notify("pi/worker/status", { cwd, status: "retired", launchId, mode, ...featureGeneration });
     // Handlers accepted before the pipe closed finish first (RP-4). On the
     // normal retirement path there are none — `pi/worker/retire` proved that
     // before the host ended the pipe — so this returns at once. On an
@@ -349,7 +354,7 @@ async function main(): Promise<void> {
     process.exit(code);
   }
 
-  server.notify("pi/worker/status", { cwd, status: "ready", launchId, mode });
+  server.notify("pi/worker/status", { cwd, status: "ready", launchId, mode, ...featureGeneration });
   reportStartupFailure = undefined;
 }
 
