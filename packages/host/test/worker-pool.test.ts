@@ -134,9 +134,13 @@ describe("WorkerPool readiness", () => {
     let priming = false;
     let uses = 0;
     pool = makePool({ prepareTrust: () => ({}), prime: async () => { priming = true; await held; }, onPreparedUse: () => { uses++; } });
+    expect(pool.reservedWorkerCount()).toBe(0);
     const hint = pool.prepare(project);
     await waitFor(() => priming);
     const pid = pool.liveClients()[0]!.client.pid;
+    // The same warm entry is both alive and still inside its starting promise;
+    // reservation counts entries, not flags.
+    expect(pool.reservedWorkerCount()).toBe(1);
     expect(pool.workers()).toEqual([]);
     expect(statuses).toEqual([]);
     expect(uses).toBe(0);
@@ -150,6 +154,7 @@ describe("WorkerPool readiness", () => {
     await hint;
     expect((await opening).pid).toBe(pid);
     expect((await pool.get(project)).pid).toBe(pid);
+    expect(pool.reservedWorkerCount()).toBe(1);
     expect(uses).toBe(1);
     expect(pool.workers()).toMatchObject([{ cwd: project, status: "ready" }]);
     expect(statusesOf(project)).toEqual(["ready"]);

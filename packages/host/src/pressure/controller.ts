@@ -2,8 +2,8 @@
  * RP-8 host evidence and record. One serialized controller samples this host,
  * binds worker evidence to both private generations, publishes a fixed summary
  * locally, and invokes E2's bounded pass at settled warning/critical. Missing
- * evidence stays unknown; failures are categorical and never retried. E3
- * admission is deliberately absent.
+ * evidence stays unknown; failures are categorical and never retried. E3's
+ * four bounded admission guards share the same current evidence.
  */
 import {
   MEMORY_PRESSURE_EVENTS_MAX,
@@ -27,6 +27,7 @@ import {
   type ValidatedMemoryPressurePublish,
   type ValidatedMemoryPressureSummary,
 } from "@lasercode/protocol";
+import { createPressureAdmission, type PressureAdmission } from "./admission.js";
 import { PressureJournal } from "./journal.js";
 import {
   createHostPressurePass,
@@ -76,6 +77,10 @@ export interface HostPressureDeps {
   clearTimer?: (handle: unknown) => void;
   /** A categorical line for the host's own log. Never a report, never a path. */
   log?: (line: string) => void;
+  /** Static machine capacity for the non-Linux admission fallback. */
+  totalMemoryBytes?: () => number;
+  /** Alive or starting worker processes, including warm workers. */
+  reservedWorkerCount?: () => number;
   /** Absent keeps the E1 controller observational (and its tests unchanged). */
   actions?: HostPressureActions;
 }
@@ -139,6 +144,9 @@ export interface HostPressureCounters extends HostPressurePassCounters {
   reportsStaleClient: number;
   /** Workers whose evidence was dropped because that exact process went away. */
   workersForgotten: number;
+  /** Refusal rows recorded, and repeats coalesced inside the five-second bound. */
+  admissionRefusals: number;
+  admissionSuppressed: number;
   hostRows: number;
   journal: { events: number; bytes: number; lastEvictedBy?: "age" | "events" | "bytes"; refusedRows: number };
 }
@@ -160,6 +168,8 @@ export interface HostPressureController {
   summary(): ValidatedMemoryPressureSummary;
   journalPage(): ValidatedMemoryPressureJournalPage;
   exportSection(): MemoryPressureExportSection;
+  /** Step 7 policy, shared by the four exact router call sites. */
+  admission: PressureAdmission;
   /** Run one probe now and settle. The test seam for the clock. */
   probeNow(): Promise<void>;
   counters(): HostPressureCounters;
@@ -275,6 +285,8 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
     reportsGenerationMismatch: 0,
     reportsStaleClient: 0,
     workersForgotten: 0,
+    admissionRefusals: 0,
+    admissionSuppressed: 0,
     passes: 0,
     passCooldownSkips: 0,
     passFailures: 0,
@@ -417,6 +429,28 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
     sampleAgeMs: number | undefined;
   }
 
+  const workerLevelFor = (cwd: string | undefined, at: number): MemoryPressureLevelState => {
+    const live = liveWorkers();
+    if (live === undefined) return "unknown";
+    const selected = cwd === undefined ? live : live.filter((worker) => worker.cwd === cwd);
+    if (selected.length === 0) return "normal";
+    const levels: MemoryPressureLevelState[] = [];
+    for (const worker of selected) {
+      const record = evidence.get(worker.cwd);
+      if (
+        !record ||
+        record.clientGeneration !== worker.clientGeneration ||
+        record.workerGeneration !== worker.workerGeneration
+      ) {
+        levels.push("unknown");
+        continue;
+      }
+      const age = freshnessAgeMs(record, at);
+      levels.push(age !== undefined && age <= workerFreshMs ? record.level : "unknown");
+    }
+    return aggregateMemoryPressureLevel(levels);
+  };
+
   const workerRow = (at: number): WorkerRow => {
     const live = liveWorkers();
     if (live === undefined) return { level: "unknown", coverage: unknownCoverage(), inputs: [], sampleAgeMs: undefined };
@@ -465,6 +499,27 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
       sampleAgeMs: chosen?.age,
     };
   };
+
+  const admission = createPressureAdmission({
+    hostLevel: () => decision.level,
+    workerLevel: (cwd) => workerLevelFor(cwd, now()),
+    machineAvailabilityKnown: () => lastProbe?.sample.machineAvailable.status === "available",
+    totalMemoryBytes: () => safely("sample", () => deps.totalMemoryBytes?.() ?? 0, 0),
+    reservedWorkerCount: () => safely("workers", () => deps.reservedWorkerCount?.() ?? 0, 0),
+    now,
+    onRefusal: ({ refusal, level, cwd }) => {
+      const project = cwd === undefined ? undefined : safely("projectId", () => deps.projectIdOf?.(cwd), undefined);
+      const event = journal.add(
+        { action: "admission_refused", outcome: "refused", refusal },
+        { role: "host", level, ...(project !== undefined ? { project } : {}) },
+      );
+      if (event) counters.admissionRefusals += 1;
+      refresh();
+    },
+    onSuppressed: () => {
+      counters.admissionSuppressed += 1;
+    },
+  });
 
   // --- the summary ---------------------------------------------------------
 
@@ -596,8 +651,7 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
       candidate = {
         level: aggregateMemoryPressureLevel(roles.map((row) => row.level)),
         roles,
-        // Milestone E3 owns step 7; nothing is being refused for memory yet.
-        refusing: [],
+        refusing: admission.refusing(),
         totals,
         ...(latestEventId !== undefined ? { latestEventId } : {}),
       };
@@ -915,6 +969,7 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
     exportSection() {
       return { summary: buildSummary(), journal: safePage() };
     },
+    admission,
     probeNow() {
       return serialize(async () => {
         if (disposed) return;

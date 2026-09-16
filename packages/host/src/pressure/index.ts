@@ -1,4 +1,6 @@
-/** The host's memory-pressure evidence, record and bounded pass (RP-8). */
+/** The host's memory-pressure evidence, record, bounded pass and admission (RP-8). */
+export { createPressureAdmission, workerReservationWouldOverflow } from "./admission.js";
+export type { HostAdmissionRefusal, PressureAdmission, PressureAdmissionDeps } from "./admission.js";
 export { createHostPressureController } from "./controller.js";
 export type {
   HostPressureActions,

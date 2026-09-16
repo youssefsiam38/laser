@@ -372,6 +372,16 @@ export class WorkerPool {
     return { action: "worker_retirement", outcome: "nothing_to_give" };
   }
 
+  /**
+   * Processes whose memory is already committed: alive or in a spawn attempt.
+   * Includes warm workers and counts each entry once. Never spawns or waits.
+   */
+  reservedWorkerCount(): number {
+    let count = 0;
+    for (const entry of this.entries.values()) if (entry.client?.alive || entry.starting) count += 1;
+    return count;
+  }
+
   /** Workers that are up right now. Never spawns; used for broadcasts. */
   liveClients(): Array<{ cwd: string; client: WorkerClient }> {
     const out: Array<{ cwd: string; client: WorkerClient }> = [];
