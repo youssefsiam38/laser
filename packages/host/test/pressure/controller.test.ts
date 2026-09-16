@@ -3,9 +3,8 @@
  *
  * Everything here is about evidence: what a level is allowed to be, what a
  * summary is allowed to claim, what a worker has to prove before it is
- * believed, and what happens when something the controller depends on fails.
- * No release, no directive and no refusal exists yet, and the tests say so
- * where it matters.
+ * believed, what happens when something the controller depends on fails, and
+ * how the four admission guards share that settled evidence.
  */
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -121,6 +120,34 @@ const reportOf = (over: Partial<MemoryPressureReportInput> = {}): MemoryPressure
 
 const notificationOf = (params: unknown): JsonRpcNotification => ({ jsonrpc: "2.0", method: "pi/resource/pressure", params });
 
+describe("pressure admission lifecycle", () => {
+  it("journals one opaque refusal, counts amplification, and clears the active set after release", async () => {
+    const h = harness();
+    h.setSample({ physical: { status: "available", value: 600 * MiB } });
+    await probe(h, 2);
+    expect(h.decision()).toBe("warning");
+    expect(h.controller.summary().refusing).toEqual(["whole_transcript", "speculative_worker"]);
+
+    expect(h.controller.admission.admits("whole_transcript", "/private/project")).toBe(false);
+    expect(h.controller.admission.admits("whole_transcript", "/private/project")).toBe(false);
+    expect(h.controller.counters()).toMatchObject({ admissionRefusals: 1, admissionSuppressed: 1 });
+    expect(h.controller.journalPage().events[0]).toMatchObject({
+      role: "host",
+      level: "warning",
+      project: "0123456789abcdef",
+      action: "admission_refused",
+      outcome: "refused",
+      refusal: "whole_transcript",
+    });
+    expect(JSON.stringify(h.controller.journalPage())).not.toContain("/private/project");
+
+    h.setSample({ physical: { status: "available", value: 100 * MiB } });
+    await probe(h, 3);
+    expect(h.decision()).toBe("normal");
+    expect(h.controller.summary().refusing).toEqual([]);
+  });
+});
+
 describe("what the host settles on", () => {
   it("starts unknown and publishes nothing it has not measured", () => {
     const h = harness();
@@ -231,6 +258,10 @@ describe("what the host settles on", () => {
     expect(h.role("host").level).toBe("critical");
     expect(h.role("machine").level).toBe("unknown");
     expect(h.controller.counters().level).toBe("critical");
+    // Unsupported MemAvailable never replaces the measured level policy.
+    expect(h.controller.admission.admits("new_project_worker", "/next")).toBe(false);
+    expect(h.controller.journalPage().events[0]).toMatchObject({ level: "critical", refusal: "new_project_worker" });
+    expect(h.controller.journalPage().events[0]!.reason).toBeUndefined();
   });
 
   it("stays unknown off Linux when all it knows is that nothing is wrong", async () => {
@@ -367,7 +398,12 @@ describe("the summary", () => {
     const summary = h.controller.summary();
     expect(summary.totals).toEqual({ events: 2, released: { count: 4, bytes: 900 }, refusals: 0 });
     expect(summary.latestEventId).toBe("mp_2");
-    expect(summary.refusing).toEqual([]);
+    expect(summary.refusing).toEqual([
+      "whole_transcript",
+      "speculative_worker",
+      "new_project_worker",
+      "worker_free_full_read",
+    ]);
   });
 });
 
@@ -608,8 +644,8 @@ describe("publishing", () => {
 
     const counters = controller.counters();
     // Every failure is counted by kind, and none of them was retried.
-    expect(counters.callbackFailed.sample).toBe(2);
-    expect(counters.sampleFailures).toBe(2);
+    expect(counters.callbackFailed.sample).toBe(3);
+    expect(counters.sampleFailures).toBe(3);
     expect(counters.callbackFailed.workers).toBeGreaterThan(0);
     expect(counters.callbackFailed.rendererPresent).toBeGreaterThan(0);
     expect(counters.callbackFailed.log).toBeGreaterThan(0);
@@ -695,17 +731,48 @@ describe("the timer and the end of the host's life", () => {
   it("looks every twenty seconds, and every five under pressure", async () => {
     const h = harness();
     h.controller.start();
-    expect(h.timers.at(-1)!.ms).toBe(20_000);
+    await h.controller.probeNow();
+    expect(h.timers.some((timer) => timer.ms === 20_000)).toBe(true);
     h.setSample({ physical: { status: "available", value: 900 * MiB } });
     await probe(h, 2);
-    h.timers.at(-1)!.fire();
+    h.timers.find((timer) => timer.ms === 20_000)!.fire();
     await Promise.resolve();
     await h.controller.probeNow();
-    expect(h.timers.at(-1)!.ms).toBe(5_000);
+    expect(h.timers.some((timer) => timer.ms === 5_000)).toBe(true);
     h.controller.dispose();
   });
 
-  it("never keeps the process alive: every timer it owns is unref'd", () => {
+  it("samples immediately but does not apply the unavailable-machine fallback before that sample settles", async () => {
+    let release!: (sample: HostPressureSample) => void;
+    const first = new Promise<HostPressureSample>((resolve) => { release = resolve; });
+    const sample: HostPressureSample = {
+      atMs: 0,
+      physical: { status: "available", value: 100 * MiB },
+      heapUsed: { status: "available", value: 100 * MiB },
+      heapLimit: { status: "available", value: 1_000 * MiB },
+      machineAvailable: { status: "available", value: 3_000 * MiB },
+    };
+    const read = vi.fn(async () => first);
+    const controller = createHostPressureController({
+      sample: read,
+      workers: () => [],
+      publish: () => undefined,
+      rendererPresent: () => false,
+      totalMemoryBytes: () => 4 * 1024 ** 3,
+      reservedWorkerCount: () => 1,
+      setTimer: (fn, ms) => ({ fn, ms }),
+      clearTimer: () => undefined,
+    });
+    controller.start();
+    await Promise.resolve();
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(controller.admission.admits("new_project_worker", "/second")).toBe(true);
+    release(sample);
+    await controller.probeNow();
+    controller.dispose();
+  });
+
+  it("never keeps the process alive: every timer it owns is unref'd", async () => {
     const unref = vi.fn();
     const controller = createHostPressureController({
       sample: async () => ({
@@ -722,6 +789,7 @@ describe("the timer and the end of the host's life", () => {
       clearTimer: () => undefined,
     });
     controller.start();
+    await controller.probeNow();
     expect(unref).toHaveBeenCalled();
     controller.dispose();
   });

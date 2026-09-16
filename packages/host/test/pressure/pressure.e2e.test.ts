@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
-import { PRODUCT_NAME, type JsonRpcMessage, type SessionState, type SessionUpdateParams } from "@lasercode/protocol";
+import { ErrorCodes, PRODUCT_NAME, type JsonRpcMessage, type SessionState, type SessionUpdateParams } from "@lasercode/protocol";
 import { HostServer, defaultWorkerMain } from "../../src/index.js";
 
 const MiB = 1024 * 1024;
@@ -39,11 +39,13 @@ class Client {
     this.ws.on("message", (data) => this.inbound.push(JSON.parse(data.toString()) as JsonRpcMessage));
     await new Promise<void>((resolve) => this.ws.once("open", resolve));
   }
-  request<R>(method: string, params?: unknown): Promise<R> {
+  async response<R>(method: string, params?: unknown): Promise<{ result?: R; error?: { code: number; message: string } }> {
     const id = this.id++;
     this.ws.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
-    return this.waitFor((message) => "id" in message && message.id === id).then((message) => {
-      const answer = message as { result?: R; error?: { message: string } };
+    return await this.waitFor((message) => "id" in message && message.id === id) as { result?: R; error?: { code: number; message: string } };
+  }
+  request<R>(method: string, params?: unknown): Promise<R> {
+    return this.response<R>(method, params).then((answer) => {
       if (answer.error) throw new Error(answer.error.message);
       return answer.result as R;
     });
@@ -68,11 +70,13 @@ let base: string;
 let host: HostServer;
 let stub: Awaited<ReturnType<typeof provider>>;
 let client: Client;
+let physicalBytes: number;
 
 beforeEach(async () => {
   base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-pressure-pass-`));
   for (const dir of ["project", "active-project", "agent"]) mkdirSync(join(base, dir), { recursive: true });
   stub = await provider();
+  physicalBytes = 900 * MiB;
   writeFileSync(join(base, "agent", "models.json"), JSON.stringify({ providers: { stub: { baseUrl: stub.url, api: "openai-completions", apiKey: "k", models: [{ id: "stub-1", contextWindow: 8000, maxTokens: 500 }] } } }));
   writeFileSync(join(base, "agent", "settings.json"), JSON.stringify({ defaultProvider: "stub", defaultModel: "stub-1", enabledModels: ["stub/stub-1"] }));
   host = new HostServer({
@@ -80,7 +84,7 @@ beforeEach(async () => {
     workerIdleMs: 600_000, workerSweepMs: 0, sessionLifetime: { sessionIdleMs: 1, sweepMs: 60_000 }, log: () => {},
     pressureSample: async () => ({
       atMs: Date.now(),
-      physical: { status: "available", value: 900 * MiB }, heapUsed: { status: "available", value: 900 * MiB }, heapLimit: { status: "available", value: 1_000 * MiB },
+      physical: { status: "available", value: physicalBytes }, heapUsed: { status: "available", value: 100 * MiB }, heapLimit: { status: "available", value: 1_000 * MiB },
       machineAvailable: { status: "available", value: 8_000 * MiB },
     }),
   });
@@ -102,7 +106,14 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("the host pressure pass, end t
     await client.request("session/prompt", { path: dormant.state.path, content: [{ type: "text", text: "finish this" }] });
     await client.waitFor((message) => "method" in message && message.method === "session/update" && (message as { params: SessionUpdateParams }).params.sessionPath === dormant.state.path && (message as { params: SessionUpdateParams }).params.update.kind === "agent_settled");
     const revision = await client.request<{ revision: string }>("session/revision", { path: dormant.state.path });
-    const entries = await client.request<{ entries: unknown[]; leafId: string | null }>("pi/session/entries", { path: dormant.state.path });
+    // The UI's bounded ensure shape remains a live-worker operation even at
+    // critical pressure; only the worker-free durable all-window path refuses.
+    const entries = await client.request<{ entries: unknown[]; leafId: string | null }>("pi/session/entries", {
+      path: dormant.state.path,
+      authority: "any",
+      window: { all: true },
+      bodyLimit: 64 * 1024,
+    });
     await client.request("pi/session/detach", { path: dormant.state.path });
     await new Promise((resolve) => setTimeout(resolve, 5));
 
@@ -123,8 +134,102 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("the host pressure pass, end t
     expect(client.inbound.some((message) => "method" in message && message.method === "session/update" && (message as { params: SessionUpdateParams }).params.sessionPath === active.state.path && (message as { params: SessionUpdateParams }).params.update.kind === "agent_settled")).toBe(false);
     const reopened = await client.request<{ revision?: string }>("session/load", { path: dormant.state.path });
     expect(reopened.revision).toBe(revision.revision);
-    const after = await client.request<{ entries: unknown[]; leafId: string | null }>("pi/session/entries", { path: dormant.state.path });
+    const after = await client.request<{ entries: unknown[]; leafId: string | null }>("pi/session/entries", {
+      path: dormant.state.path,
+      authority: "any",
+      window: { all: true },
+      bodyLimit: 64 * 1024,
+    });
     expect(after.leafId).toBe(entries.leafId);
     expect(after.entries).toEqual(entries.entries);
+  }, 60_000);
+
+  it("guards only the four heavy admissions and preserves the UI history actions", async () => {
+    const cwd = join(base, "project");
+    const state = (await client.request<{ state: SessionState }>("session/new", { cwd })).state;
+    await client.request("session/prompt", { path: state.path, content: [{ type: "text", text: "one turn" }] });
+    await client.waitFor((message) => "method" in message && message.method === "session/update"
+      && (message as { params: SessionUpdateParams }).params.sessionPath === state.path
+      && (message as { params: SessionUpdateParams }).params.update.kind === "agent_settled");
+
+    const initial = await client.request<{ entries: Array<{ id?: string; type?: string; message?: { role?: string } }>; leafId: string | null }>(
+      "pi/session/entries",
+      { path: state.path, window: { tail: 8 }, bodyLimit: 64 * 1024 },
+    );
+    const entryIds = initial.entries
+      .filter((entry) => entry.type === "message")
+      .map((entry) => entry.id)
+      .filter((id): id is string => typeof id === "string");
+    expect(entryIds.length).toBeGreaterThanOrEqual(2);
+    const beforeRefusal = readFileSync(state.path);
+    const workersBefore = host.pool.reservedWorkerCount();
+
+    physicalBytes = 600 * MiB;
+    await host.memoryPressure.probeNow();
+    await host.memoryPressure.probeNow();
+    expect(host.memoryPressure.counters().level).toBe("warning");
+
+    const refused = await client.response("pi/session/entries", { path: state.path });
+    expect(refused.error).toMatchObject({ code: ErrorCodes.SessionBusy, message: expect.stringMatching(/bounded recent window/) });
+    await client.response("pi/session/entries", { path: state.path });
+    await client.response("pi/session/entries", { path: state.path });
+    expect(readFileSync(state.path)).toEqual(beforeRefusal);
+    expect(host.pool.reservedWorkerCount()).toBe(workersBefore);
+    expect(host.memoryPressure.journalPage().events.filter((event) => event.refusal === "whole_transcript")).toHaveLength(1);
+    expect(host.memoryPressure.counters().admissionSuppressed).toBe(2);
+
+    const speculative = join(base, "speculative");
+    mkdirSync(speculative);
+    expect(await client.request("pi/worker/prepare", { cwd: speculative })).toEqual({});
+    expect(host.pool.reservedWorkerCount()).toBe(workersBefore);
+
+    // The UI's shared last-prompt helper sends a bounded live tail with no
+    // authority override. At warning it still finds the fork point while the
+    // otherwise identical windowless read above is refused.
+    const bounded = await client.request<{ entries: Array<{ id?: string; type?: string; message?: { role?: string } }> }>(
+      "pi/session/entries",
+      { path: state.path, window: { tail: 8 }, bodyLimit: 64 * 1024 },
+    );
+    const lastPrompt = bounded.entries
+      .filter((entry) => entry.type === "message" && entry.message?.role === "user")
+      .map((entry) => entry.id)
+      .filter((id): id is string => typeof id === "string")
+      .at(-1);
+    expect(lastPrompt).toBeDefined();
+    const moved = await client.response("pi/session/navigate", { path: state.path, entryId: lastPrompt! });
+    expect(moved.error).toBeUndefined();
+    const forked = await client.request<{ state: SessionState }>("pi/session/fork", { path: state.path, entryId: lastPrompt! });
+    expect(forked.state.path).not.toBe(state.path);
+    await client.request("pi/session/entries", { path: forked.state.path, window: { tail: 8 }, bodyLimit: 64 * 1024 });
+
+    const newProject = join(base, "new-project");
+    mkdirSync(newProject);
+    await client.request("pi/project/add", { cwd: newProject });
+    physicalBytes = 900 * MiB;
+    await host.memoryPressure.probeNow();
+    await host.memoryPressure.probeNow();
+    expect(host.memoryPressure.counters().level).toBe("critical");
+
+    // The actual bounded UI shape remains available at critical too.
+    const liveEnsure = await client.response("pi/session/entries", {
+      path: forked.state.path,
+      window: { tail: 8 },
+      bodyLimit: 64 * 1024,
+    });
+    expect(liveEnsure.error).toBeUndefined();
+
+    const stableBytes = readFileSync(state.path);
+    const stableWorkers = host.pool.reservedWorkerCount();
+    const newSession = await client.response("session/new", { cwd: newProject });
+    expect(newSession.error).toMatchObject({ code: ErrorCodes.SessionBusy, message: expect.stringMatching(/open project/) });
+    expect(readFileSync(state.path)).toEqual(stableBytes);
+    expect(host.pool.reservedWorkerCount()).toBe(stableWorkers);
+
+    const beamRoot = host.agents.workspaces.beam;
+    const beamBefore = readdirSync(beamRoot).sort();
+    const beamSession = await client.response("session/new", { cwd: beamRoot, agentName: "beam" });
+    expect(beamSession.error).toMatchObject({ code: ErrorCodes.SessionBusy });
+    expect(readdirSync(beamRoot).sort()).toEqual(beamBefore);
+    expect(host.pool.reservedWorkerCount()).toBe(stableWorkers);
   }, 60_000);
 });

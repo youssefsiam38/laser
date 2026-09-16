@@ -52,6 +52,7 @@ import type { FeatureService } from "./features.js";
 import type { ProjectRegistry } from "./projects.js";
 import type { PushService } from "./push.js";
 import { RESOURCE_REPORT_METHOD } from "./resources/guard.js";
+import type { PressureAdmission } from "./pressure/index.js";
 import type { ResourceService } from "./resources/index.js";
 import { canonical } from "./trust.js";
 import { SessionRouteLeases } from "./session-route-lease.js";
@@ -120,6 +121,8 @@ export interface RouterDeps {
    * rather than answered with an invented shape.
    */
   resources?: ResourceService | undefined;
+  /** Host memory-pressure step 7. Absent only in narrow router tests. */
+  admission?: PressureAdmission | undefined;
   /**
    * The boundary's authorization and environment descriptor (RP-13).
    *
@@ -605,6 +608,13 @@ export class Router {
           const result = await this.route(path, async () => (await this.workerFor(path)).request(req.method, req.params));
           return this.deps.revisions ? this.deps.revisions.validateWindow(result) : result;
         }
+        const transcriptCwd = this.cwdOf(path);
+        if (this.deps.admission && !this.deps.admission.admits("whole_transcript", transcriptCwd)) {
+          throw new ProtocolError(
+            ErrorCodes.SessionBusy,
+            "Memory is constrained, so this conversation cannot be loaded all at once. Open it normally to load a bounded recent window.",
+          );
+        }
         const cached = this.deps.views.get(path);
         // The leaf travels with the entries: a navigation moves it without
         // appending anything, so a cache that kept only the entries would
@@ -623,6 +633,12 @@ export class Router {
         // before allocating anything, so a refused request leaves no orphan.
         if (!this.isWorkspace(requestedCwd)) this.deps.projects.assertProject(requestedCwd);
         const agentName = this.resolveStartAgent(requestedCwd, req.params.agentName);
+        if (!this.pool.hasReservedWorker(requestedCwd) && this.deps.admission && !this.deps.admission.admits("new_project_worker", requestedCwd)) {
+          throw new ProtocolError(
+            ErrorCodes.SessionBusy,
+            "Memory is constrained, so another project cannot start right now. Continue in an open project, or close an idle project and try again.",
+          );
+        }
         // Beam and Chat workspaces are containers, not shared checkouts.
         // Starting at a root allocates one persistent, opaque directory for
         // this conversation; reopening it routes to that same directory from
@@ -790,6 +806,7 @@ export class Router {
         return { workers: this.pool.workers() };
 
       case "pi/worker/prepare":
+        if (this.deps.admission && !this.deps.admission.admits("speculative_worker", req.params.cwd)) return {};
         await this.pool.prepare(req.params.cwd);
         return {};
 
@@ -1135,12 +1152,13 @@ export class Router {
    * One ownership/project gate for every host-side transcript read. It runs
    * before any fd is opened, so an arbitrary path cannot become a file oracle.
    */
-  private assertDurableReadPath(path: string): void {
+  private assertDurableReadPath(path: string): string {
     const knownCwd = this.pool.cwdOfSession(path) ?? this.deps.runs?.projectCwdOf(path);
     const listedCwd = knownCwd === undefined ? this.catalog.cwdOfListed(path) : undefined;
     const cwd = knownCwd ?? (listedCwd ? projectRootOf(listedCwd) : undefined);
     if (!cwd) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation is not stored here.");
     if (!this.isWorkspace(cwd)) this.deps.projects.assertProject(cwd);
+    return cwd;
   }
 
   /** The complete `authority:any` route, including live-owner precedence. */
@@ -1151,13 +1169,24 @@ export class Router {
     if (!revisions || !projection) {
       throw new ProtocolError(ErrorCodes.RevisionUnavailable, "This host has no configured durable history reader. Restart the app and try again.");
     }
-    this.assertDurableReadPath(path);
+    const cwd = this.assertDurableReadPath(path);
 
     // Omitted `window` under `any` means a bounded first screen. Default/live
     // omission remains the legacy whole-transcript route in the switch above.
-    const params = req.params.window ? req.params : { ...req.params, window: { tail: 40 } as const };
+    const window = req.params.window ?? ({ tail: 40 } as const);
+    const params = { ...req.params, window };
     const live = await this.routeLive(path, (worker) => worker.request(req.method, params));
     if (live.answered) return revisions.validateWindow(live.result);
+    if (
+      "all" in window
+      && this.deps.admission
+      && !this.deps.admission.admits("worker_free_full_read", cwd)
+    ) {
+      throw new ProtocolError(
+        ErrorCodes.SessionBusy,
+        "Memory is constrained, so this conversation cannot be read all at once without its worker. Open it first, or load a bounded history window.",
+      );
+    }
     if (!existsSync(path)) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation is no longer stored here.");
 
     // Bounds/unreadability refuse truthfully instead of silently spawning.

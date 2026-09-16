@@ -254,6 +254,15 @@ describe("what a window is told, and what a paired device is not", () => {
     (host as unknown as { notificationListeners: Set<(n: JsonRpcNotification) => void> }).notificationListeners.add((n) => relay.push(n));
     try {
       await startWorker(client);
+      // Startup now publishes its immediate host probe first; the worker row is
+      // the coalesced next state, delivered within the fixed five-second window.
+      await expect.poll(
+        () => {
+          const latest = client.notifications("resource/pressure").at(-1);
+          return latest ? parseMemoryPressurePublish(latest.params).summary.roles.find((row) => row.role === "project_worker")?.level : undefined;
+        },
+        { timeout: 6_000 },
+      ).toBe("warning");
 
       const published = client.notifications("resource/pressure");
       expect(published.length).toBeGreaterThan(0);
@@ -290,7 +299,7 @@ describe("what a window is told, and what a paired device is not", () => {
     } finally {
       client.close();
     }
-  });
+  }, 10_000);
 
   it("carries the same summary on `resource/snapshot`, without the journal", async () => {
     const client = new Client();

@@ -29,6 +29,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
+import { totalmem } from "node:os";
 import { basename, dirname, extname, join, normalize, relative, resolve as resolvePath, sep } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { channelIdFor, type KeyPair } from "@lasercode/crypto";
@@ -560,7 +561,7 @@ export class HostServer {
     // collector walks every process on demand, and a host looking at itself
     // every twenty seconds must not do that. E2's host pass uses only the body
     // memo, exact worker generations and the existing session/worker safety
-    // decisions; admission remains E3 and is deliberately absent.
+    // decisions and E3 admission share this one current evidence source.
     this.memoryPressure = createHostPressureController({
       sample: options.pressureSample ?? createHostPressureSampler(),
       workers: () => this.pool.pressureWorkers(),
@@ -570,6 +571,8 @@ export class HostServer {
       // A window is connected, but until the renderer reports for itself its row
       // is missing coverage rather than calm.
       rendererPresent: () => this.hasWindowSocket(),
+      totalMemoryBytes: totalmem,
+      reservedWorkerCount: () => this.pool.reservedWorkerCount(),
       log: (line) => this.log(line),
       actions: {
         releaseEphemeral: () => this.bodyRange.forget(),
@@ -745,6 +748,7 @@ export class HostServer {
       agents: this.agents,
       runs: this.runs,
       resources: this.resources,
+      admission: this.memoryPressure.admission,
       revisions: this.revisions,
       projection: this.projection,
       bodyRange: this.bodyRange,

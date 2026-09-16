@@ -15,6 +15,7 @@ import type { SessionSummary } from "@lasercode/protocol";
 import { AttentionTracker } from "../src/attention.js";
 import type { SessionCatalog } from "../src/catalog.js";
 import { environmentIdentity, type EnvironmentIdentityFiles } from "../src/environment-identity.js";
+import type { PressureAdmission } from "../src/pressure/index.js";
 import { ProjectRegistry } from "../src/projects.js";
 import { Router } from "../src/router.js";
 import { SessionIndexCache } from "../src/session-index.js";
@@ -233,7 +234,7 @@ describe("this environment's identity", () => {
 });
 
 describe("routing a revision request", () => {
-  function harness(options: { open?: string[]; revisions?: SessionRevisions | undefined; projection?: SessionProjection | undefined; path: string; liveResult?: unknown; spawnedResult?: unknown } ) {
+  function harness(options: { open?: string[]; revisions?: SessionRevisions | undefined; projection?: SessionProjection | undefined; path: string; liveResult?: unknown; spawnedResult?: unknown; admission?: PressureAdmission } ) {
     const dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-revision-router-`));
     const rows: SessionSummary[] = [{ path: options.path, id: "session-1", cwd: CWD, createdAt: "2026-06-01T00:00:00.000Z", modifiedAt: "2026-06-01T00:00:00.000Z", messageCount: 2 }];
     const catalog = {
@@ -267,7 +268,7 @@ describe("routing a revision request", () => {
     const attention = new AttentionTracker({});
     const projects = new ProjectRegistry({ catalog, agentDir: dir });
     projects.add(CWD);
-    const router = new Router(pool, catalog, { attention, projects, views: new ViewCache(2), access: testAccess(), revisions: options.revisions, projection: options.projection });
+    const router = new Router(pool, catalog, { attention, projects, views: new ViewCache(2), access: testAccess(), revisions: options.revisions, projection: options.projection, admission: options.admission });
     return {
       router,
       catalog,
@@ -418,6 +419,58 @@ describe("routing a revision request", () => {
       expect(response.result.window).toMatchObject({ authority: "durable", mode: "replace" });
       expect(h.spawned).not.toHaveBeenCalled();
       expect(h.workerRequests).toEqual([]);
+    } finally {
+      h.cleanup();
+      cleanup();
+    }
+  });
+
+  it("refuses a worker-free full durable read before projection but keeps bounded reads available", async () => {
+    const { path, cleanup } = fixture();
+    const index = new SessionIndexCache();
+    const service = revisions({ index });
+    const projection = new SessionProjection({ index, revisions: service });
+    const read = vi.spyOn(projection, "read");
+    const admits = vi.fn((kind: string) => kind !== "worker_free_full_read");
+    const h = harness({ path, revisions: service, projection, admission: { admits, refusing: () => ["worker_free_full_read"] } });
+    try {
+      const refused = await h.router.handle(
+        { jsonrpc: "2.0", id: 1, method: "pi/session/entries", params: { path, authority: "any", window: { all: true }, bodyLimit: 4096 } },
+        LOCAL_ACCESS,
+      );
+      expect(refused).toMatchObject({ error: { code: ErrorCodes.SessionBusy, message: expect.stringMatching(/bounded history window/) } });
+      expect(read).not.toHaveBeenCalled();
+      expect(h.spawned).not.toHaveBeenCalled();
+
+      const bounded = await h.router.handle(
+        { jsonrpc: "2.0", id: 2, method: "pi/session/entries", params: { path, authority: "any", window: { tail: 40 }, bodyLimit: 4096 } },
+        LOCAL_ACCESS,
+      );
+      expect(bounded).toHaveProperty("result");
+      expect(read).toHaveBeenCalledTimes(1);
+    } finally {
+      h.cleanup();
+      cleanup();
+    }
+  });
+
+  it("lets a critical-pressure live owner answer the bounded all-window ensure shape", async () => {
+    const { path, cleanup } = fixture();
+    const index = new SessionIndexCache();
+    const service = revisions({ index });
+    const projection = new SessionProjection({ index, revisions: service });
+    const read = vi.spyOn(projection, "read");
+    const liveResult = { entries: [{ id: "live-only" }], leafId: "live-only", window: { revision: LIVE_REVISION, environmentKey: ENVIRONMENT_KEY, authority: "live", mode: "replace" } };
+    const admits = vi.fn(() => false);
+    const h = harness({ path, open: [path], revisions: service, projection, liveResult, admission: { admits, refusing: () => ["worker_free_full_read"] } });
+    try {
+      const response = await h.router.handle(
+        { jsonrpc: "2.0", id: 1, method: "pi/session/entries", params: { path, authority: "any", window: { all: true }, bodyLimit: 4096 } },
+        LOCAL_ACCESS,
+      );
+      expect(response).toMatchObject({ result: liveResult });
+      expect(admits).not.toHaveBeenCalled();
+      expect(read).not.toHaveBeenCalled();
     } finally {
       h.cleanup();
       cleanup();

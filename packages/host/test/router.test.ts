@@ -24,6 +24,7 @@ import { SessionCatalog } from "../src/catalog.js";
 import { ProjectRegistry } from "../src/projects.js";
 import { Router, UPLOAD_IDLE_MS } from "../src/router.js";
 import { ViewCache } from "../src/views.js";
+import { createHostPressureController, type HostPressureSample, type PressureAdmission } from "../src/pressure/index.js";
 import type { WorkerPool } from "../src/worker-pool.js";
 
 it("classifies shared project directories once per snapshot, never across requests", () => {
@@ -90,7 +91,7 @@ const WORKSPACE_ROOT = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-router-worksp
 const WORKSPACES = { beam: join(WORKSPACE_ROOT, "beam"), chat: join(WORKSPACE_ROOT, "chat") };
 
 /** A Router with fakes for everything but the piece under test. */
-function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string, string[]>; agents?: boolean; workspaces?: { beam: string; chat: string }; exclude?: string[]; now?: () => number; workerRequest?: (method: string, params: unknown) => Promise<unknown> } = {}) {
+function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string, string[]>; reserved?: string[]; agents?: boolean; workspaces?: { beam: string; chat: string }; exclude?: string[]; now?: () => number; workerRequest?: (method: string, params: unknown) => Promise<unknown>; admission?: PressureAdmission } = {}) {
   const dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-router-`));
   const catalogRows = options.catalogRows ?? [];
   const open = options.open ?? { [CWD_A]: [PATH_A] };
@@ -110,6 +111,9 @@ function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string
   const prepare = vi.fn(async (_cwd: string) => {});
   const pool = {
     prepare,
+    cwds: () => Object.keys(open),
+    liveClients: () => [],
+    hasReservedWorker: (cwd: string) => (options.reserved ?? Object.keys(open)).includes(cwd),
     openSessions: (cwd: string) => open[cwd] ?? [],
     cwdOfSession: (path: string) => bound.get(path),
     bindSession: (path: string, cwd: string) => bound.set(path, cwd),
@@ -135,7 +139,7 @@ function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string
   // Fixtures date from June; a fixed clock keeps retention from pruning them.
   const runs = options.agents ? new AgentRunRegistry({ now: () => new Date("2026-06-02T00:00:00.000Z") }) : undefined;
   const views = new ViewCache(2);
-  const router = new Router(pool, catalog, { attention, projects, views, agents, runs, access: testAccess(), ...(options.now ? { now: options.now } : {}) });
+  const router = new Router(pool, catalog, { attention, projects, views, agents, runs, access: testAccess(), admission: options.admission, ...(options.now ? { now: options.now } : {}) });
 
   // The Router only records a stub from inside `dispatch`; reach the private
   // recorder the same way `session/new` does, without standing up a worker.
@@ -187,6 +191,129 @@ describe("Router · paged catalog", () => {
   });
 });
 
+describe("Router · pressure admission", () => {
+  it("opens a second project while the immediate first Linux probe is still unsettled", async () => {
+    let release!: (sample: HostPressureSample) => void;
+    const first = new Promise<HostPressureSample>((resolve) => { release = resolve; });
+    const pressure = createHostPressureController({
+      sample: async () => first,
+      workers: () => [],
+      publish: () => undefined,
+      rendererPresent: () => false,
+      totalMemoryBytes: () => 4 * 1024 ** 3,
+      reservedWorkerCount: () => 1,
+      setTimer: (fn, ms) => ({ fn, ms }),
+      clearTimer: () => undefined,
+    });
+    pressure.start();
+    await Promise.resolve();
+    const h = harness({ open: {}, admission: pressure.admission });
+    h.projects.add(CWD_B);
+    try {
+      const response = await h.router.handle(
+        { jsonrpc: "2.0", id: 1, method: "session/new", params: { cwd: CWD_B } },
+        LOCAL_ACCESS,
+      );
+      expect(response).toHaveProperty("result.state.cwd", CWD_B);
+      expect(h.workerRequests.map(({ method }) => method)).toEqual(["session/new"]);
+    } finally {
+      release({
+        atMs: 0,
+        physical: { status: "available", value: 100 * 1024 ** 2 },
+        heapUsed: { status: "available", value: 100 * 1024 ** 2 },
+        heapLimit: { status: "available", value: 1_000 * 1024 ** 2 },
+        machineAvailable: { status: "available", value: 3_000 * 1024 ** 2 },
+      });
+      await pressure.probeNow();
+      pressure.dispose();
+      h.cleanup();
+    }
+  });
+
+  it("refuses only a windowless live transcript before cache and routing", async () => {
+    const admits = vi.fn((kind: string) => kind !== "whole_transcript");
+    const h = harness({ admission: { admits, refusing: () => ["whole_transcript"] } });
+    h.bind(PATH_A, CWD_A);
+    const cacheRead = vi.spyOn(h.views, "get");
+    try {
+      const refused = await h.router.handle(
+        { jsonrpc: "2.0", id: 1, method: "pi/session/entries", params: { path: PATH_A } },
+        LOCAL_ACCESS,
+      );
+      expect(refused).toMatchObject({ error: { code: ErrorCodes.SessionBusy, message: expect.stringMatching(/bounded recent window/) } });
+      expect(h.workerRequests).toEqual([]);
+      expect(cacheRead).not.toHaveBeenCalled();
+
+      const windowed = await h.router.handle(
+        { jsonrpc: "2.0", id: 2, method: "pi/session/entries", params: { path: PATH_A, window: { tail: 40 } } },
+        LOCAL_ACCESS,
+      );
+      expect(windowed).toHaveProperty("result");
+      expect(admits).toHaveBeenCalledTimes(1);
+    } finally { h.cleanup(); }
+  });
+
+  it("uses the global pressure aggregate when a windowless path has no known cwd", async () => {
+    const admits = vi.fn(() => false);
+    const h = harness({ admission: { admits, refusing: () => ["whole_transcript"] } });
+    try {
+      const response = await h.router.handle(
+        { jsonrpc: "2.0", id: 1, method: "pi/session/entries", params: { path: "/unknown/session.jsonl" } },
+        LOCAL_ACCESS,
+      );
+      expect(response).toMatchObject({ error: { code: ErrorCodes.SessionBusy } });
+      expect(admits).toHaveBeenCalledExactlyOnceWith("whole_transcript", undefined);
+      expect(h.workerRequests).toEqual([]);
+    } finally { h.cleanup(); }
+  });
+
+  it("validates the requested agent before considering a new-worker refusal", async () => {
+    const admits = vi.fn(() => false);
+    const h = harness({ open: {}, agents: true, admission: { admits, refusing: () => ["new_project_worker"] } });
+    h.projects.add(CWD_B);
+    try {
+      const response = await h.router.handle(
+        { jsonrpc: "2.0", id: 1, method: "session/new", params: { cwd: CWD_B, agentName: "does-not-exist" } },
+        LOCAL_ACCESS,
+      );
+      expect(response).toMatchObject({ error: { code: ErrorCodes.InvalidParams } });
+      expect(admits).not.toHaveBeenCalled();
+      expect(h.workerRequests).toEqual([]);
+    } finally { h.cleanup(); }
+  });
+
+  it("adopts an already-reserved warm/starting worker instead of treating it as new", async () => {
+    const admits = vi.fn(() => false);
+    const h = harness({ open: {}, reserved: [CWD_B], admission: { admits, refusing: () => ["new_project_worker"] } });
+    h.projects.add(CWD_B);
+    try {
+      const response = await h.router.handle(
+        { jsonrpc: "2.0", id: 1, method: "session/new", params: { cwd: CWD_B } },
+        LOCAL_ACCESS,
+      );
+      expect(response).toHaveProperty("result.state.cwd", CWD_B);
+      expect(admits).not.toHaveBeenCalled();
+      expect(h.workerRequests.map(({ method }) => method)).toEqual(["session/new"]);
+    } finally { h.cleanup(); }
+  });
+
+  it("refuses a first project worker after project and parameter validation but before pool or Namer work", async () => {
+    const admits = vi.fn((kind: string) => kind !== "new_project_worker");
+    const h = harness({ open: {}, admission: { admits, refusing: () => ["new_project_worker"] } });
+    h.projects.add(CWD_B);
+    try {
+      const response = await h.router.handle(
+        { jsonrpc: "2.0", id: 1, method: "session/new", params: { cwd: CWD_B } },
+        LOCAL_ACCESS,
+      );
+      expect(response).toMatchObject({ error: { code: ErrorCodes.SessionBusy, message: expect.stringMatching(/open project/) } });
+      expect(admits).toHaveBeenCalledExactlyOnceWith("new_project_worker", CWD_B);
+      expect(h.workerRequests).toEqual([]);
+      expect(h.catalogRows).toEqual([]);
+    } finally { h.cleanup(); }
+  });
+});
+
 describe("Router · history windows", () => {
   it("routes pages to the serving worker without reading or poisoning the full snapshot cache", async () => {
     const directory = mkdtempSync(join(tmpdir(), "history-window-"));
@@ -209,6 +336,17 @@ describe("Router · history windows", () => {
       expect(h.workerRequests[0]?.params).toEqual({ path, window: { tail: 40 } });
     } finally { h.cleanup(); rmSync(directory, { recursive: true, force: true }); }
   });
+});
+
+it("declines readiness hints before prepare and returns the same silent answer", async () => {
+  const admits = vi.fn(() => false);
+  const h = harness({ admission: { admits, refusing: () => ["speculative_worker"] } });
+  try {
+    expect(await h.router.dispatch({ jsonrpc: "2.0", id: 1, method: "pi/worker/prepare", params: { cwd: CWD_A } })).toEqual({});
+    expect(admits).toHaveBeenCalledExactlyOnceWith("speculative_worker", CWD_A);
+    expect(h.prepare).not.toHaveBeenCalled();
+    expect(h.workerRequests).toEqual([]);
+  } finally { h.cleanup(); }
 });
 
 it("routes readiness hints to admission without opening a session", async () => {
