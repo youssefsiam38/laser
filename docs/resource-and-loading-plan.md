@@ -1,8 +1,8 @@
 # Resource containment and instant conversation plan
 
-Status: implementation authorized and active as M18.
+Status: implemented — M18 (RP-1–RP-13, RP-2 repeat baseline; RP-14 dropped by D-268) and M19 (recovery and update activation) are done and audited (`/tmp/m18-final-audit.md`, `/tmp/m19-final-audit.md`); the tree carries the final packaged and quick-fixture gates at the release tip.
 
-Architecture task: MX-T9. Implementation tasks: M18-T1..T19 and M19-T1..T3. Decisions: D-255 through D-269.
+Architecture task: MX-T9. Implementation tasks: M18-T1..T19 and M19-T1..T3. Decisions: D-255 through D-270.
 
 ## Progress
 
@@ -12,7 +12,7 @@ Authoritative detail, evidence and ownership live in `STATUS_DETAILED.md`; `STAT
 | --- | --- | --- | --- |
 | RP-1 | M18-T1 | done | `1628349`; build, protocol 153, host 403, desktop 160 |
 | RP-2 initial | M18-T2 | done — reviewed harness and sanitized finding integrated through `ad8c188`; full A refuses B at unchanged renderer ceiling with zero survivors | RP-1 |
-| RP-2 repeat | M18-T15 | done — two clean unchanged full runs at `21a15a2a` pass every ceiling, coverage, survivor, ranking and slope gate (D-267/D-269); `docs/resource-soak-baseline.md`; integrated `7bfce5e8` | RP-4..RP-8, RP-5b |
+| RP-2 repeat | M18-T15 | done — two clean unchanged full runs at `21a15a2a` (off-main executable tree tagged `resource-baseline-m18-t15`, main minus the M19-T1 merge) pass every ceiling, coverage, survivor, ranking and slope gate (D-267/D-269); `docs/resource-soak-baseline.md`; integrated `7bfce5e8` | RP-4..RP-8, RP-5b |
 | RP-3 | M18-T3 | done — browser gate/review `a0111f9`, correction `66ac605`, counter mapping `4ba58bd4`, pressure subsection `1b5fbfa7` with G ceilings; final real-host matrix on `ce455b99` desktop/phone × dark/light × pointer/touch, zero survivors | RP-1 |
 | RP-4 | M18-T4 | done — worker-owned atomic release/retirement, fair LRU unload and hard replay floors integrated at `eb18e147`; exact-head convergence verified | RP-2 |
 | RP-4b | M18-T17 | done — bounded token-safe naming lifecycle integrated at `890e6a86`; no-model parked intents retire while actual naming pins; focused worker 45, real-host E2E 4 and host 636 pass | RP-4 |
