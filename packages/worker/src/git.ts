@@ -189,6 +189,30 @@ export class GitService {
     return work;
   }
 
+  /**
+   * Let go of remembered `status()` answers, and nothing else (RP-8).
+   *
+   * The status cache is a 1.5-second memo over a command this service can run
+   * again at any time, so releasing it costs a `git status` and nothing more.
+   * A **baseline** is not that: it is the working tree as a conversation
+   * started, and recapturing it later would silently redefine every diff after
+   * it. So baselines, the work capturing them, the in-flight reads and the
+   * first-key fallback are untouched here, whatever the caller passes.
+   *
+   * `keys` names the sessions whose memo may go; omitted, every memo goes.
+   * Answers how many entries were released.
+   */
+  releaseStatusCache(keys?: readonly string[]): number {
+    if (keys === undefined) {
+      const released = this.cache.size;
+      this.cache.clear();
+      return released;
+    }
+    let released = 0;
+    for (const key of keys) if (this.cache.delete(key)) released += 1;
+    return released;
+  }
+
   /** Drop a session's baseline (the session closed). */
   forget(key: string): void {
     this.baselines.delete(key);

@@ -879,7 +879,15 @@ export interface BodyRangeReader {
     authority: "live" | "durable",
     digest: (text: string) => string,
   ): { ok: true; result: BodyRangeAnswerResult } | { ok: false; refusal: BodyRangeRefusal };
-  forget(): void;
+  /**
+   * Let go of the body this reader is holding.
+   *
+   * Answers whether there was one. A caller giving memory back under pressure
+   * (RP-8) reports a release only when something was actually released, and a
+   * reader that was already empty is `nothing_to_give` rather than a claim
+   * nobody can check.
+   */
+  forget(): boolean;
 }
 
 /** One reader per authority instance; it holds at most one body. */
@@ -919,7 +927,11 @@ export function createBodyRangeReader(): BodyRangeReader {
         }),
       };
     },
-    forget() { held = undefined; },
+    forget() {
+      const had = held !== undefined;
+      held = undefined;
+      return had;
+    },
   };
 }
 

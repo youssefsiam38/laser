@@ -18,6 +18,7 @@ import {
   bodyProjectionWork,
   bodyRangeSlice,
   createAttachmentScanner,
+  createBodyRangeReader,
   sliceUtf8RangeFrom,
   streamBodyText,
   elideOversizedEntries,
@@ -724,5 +725,20 @@ describe("the method itself", () => {
     expect(schema.safeParse({ path: "/s.jsonl", environmentKey: "k", revision: "r", entryId: "e1", component: { kind: "assistant_text" }, offset: -1 }).success).toBe(false);
     expect(schema.safeParse({ path: "/s.jsonl", environmentKey: "k", revision: "r", entryId: "e1", component: { kind: "assistant_text" }, offset: 0, limit: ENTRY_RANGE_MAX_BYTES + 1 }).success).toBe(false);
     expect(schema.safeParse({ path: "/s.jsonl", environmentKey: "k", revision: "r", entryId: "e1", component: { kind: "assistant_text" }, offset: 0, extra: 1 }).success).toBe(false);
+  });
+});
+
+describe("the body memo answers whether it was holding anything (RP-8)", () => {
+  it("says so once, and says no when it is already empty", () => {
+    const reader = createBodyRangeReader();
+    const entry = { type: "message", message: { role: "user", content: [{ type: "text", text: "hello memo" }] } };
+    const key = { path: "/s.jsonl", revision: "r1", entryId: "e1", component: { kind: "user_text" as const } };
+    const read = reader.read(key, () => entry, { component: key.component, offset: 0 }, "durable", (text) => `d:${text.length}`);
+    expect(read.ok).toBe(true);
+    // A caller giving memory back reports a release only when there was one.
+    expect(reader.forget()).toBe(true);
+    expect(reader.forget()).toBe(false);
+    // And a reader that never read anything has nothing to give either.
+    expect(createBodyRangeReader().forget()).toBe(false);
   });
 });

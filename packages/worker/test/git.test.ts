@@ -160,3 +160,36 @@ describe.skipIf(!haveGit)("GitService against a repository", () => {
     }
   });
 });
+
+describe("releasing remembered status under pressure (RP-8)", () => {
+  it("drops only the status memo, and never a baseline", async () => {
+    const dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-git-pressure-`));
+    try {
+      execFileSync("git", ["init", "-q"], { cwd: dir });
+      execFileSync("git", ["config", "user.email", "t@example.com"], { cwd: dir });
+      execFileSync("git", ["config", "user.name", "T"], { cwd: dir });
+      writeFileSync(join(dir, "a.txt"), "one\n");
+      execFileSync("git", ["add", "-A"], { cwd: dir });
+      execFileSync("git", ["commit", "-qm", "first"], { cwd: dir });
+      const service = new GitService({ cwd: dir });
+      await service.baseline("s1");
+      const first = await service.status("s1");
+      // Written after the baseline: the diff is "since this session started".
+      writeFileSync(join(dir, "a.txt"), "one\ntwo\n");
+      const released = service.releaseStatusCache(["s1"]);
+      expect(released).toBe(1);
+      // The baseline survived, so the answer is still measured from it.
+      const after = await service.status("s1");
+      expect(after.isRepo).toBe(true);
+      expect(after.added).toBeGreaterThan(first.added);
+      // A key nobody remembers releases nothing, and clearing everything is
+      // still only the memo.
+      expect(service.releaseStatusCache(["unknown-session"])).toBe(0);
+      await service.status("s1");
+      expect(service.releaseStatusCache()).toBe(1);
+      expect((await service.status("s1")).isRepo).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

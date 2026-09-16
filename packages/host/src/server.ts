@@ -599,6 +599,12 @@ export class HostServer {
         this.observe(cwd, n, source);
         this.broadcast(n);
       },
+      // A worker's own pressure report (RP-8) arrives on a road of its own and
+      // stops here. It is the app talking to itself: it carries that spawn's
+      // private generation, and a client, a paired device, an audit line and
+      // another worker must never see it. Reading it is milestone E's; until
+      // then the host takes it and lets it go, without logging a byte of it.
+      onWorkerPressure: () => {},
       // The process that opened a capture is the only one that may advance or
       // end it (RP-7): its exit ends what it started, and cannot touch the
       // successor that took its place.
@@ -1383,6 +1389,10 @@ export class HostServer {
     // Process registrations are consumed by the inventory and go no further:
     // no client, no relay listener and no audit ever sees a pid (RP-1/RP-6).
     if (notification.method === "pi/resource/process") return;
+    // Belt and braces for RP-8: the pool already routes a worker's pressure
+    // report away from this path, and if one ever reached it, it would stop
+    // here rather than travel to a client or a relay listener.
+    if (notification.method === "pi/resource/pressure") return;
     if (notification.method === "pi/extension/message") {
       const { message } = notification.params as HostNotifications["pi/extension/message"];
       // One predicate over every capture message, so a new one cannot slip

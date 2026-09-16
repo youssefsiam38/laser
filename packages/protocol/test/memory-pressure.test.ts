@@ -7,6 +7,7 @@ import {
   MEMORY_PRESSURE_EVENTS_PAGE,
   MEMORY_PRESSURE_EVENT_ID,
   MEMORY_PRESSURE_EVENT_MAX_AGE_MS,
+  MEMORY_PRESSURE_HELD_REASONS,
   MEMORY_PRESSURE_INPUTS_MAX,
   MEMORY_PRESSURE_INPUT_KINDS,
   MEMORY_PRESSURE_LEVELS,
@@ -363,6 +364,51 @@ describe("what a step reports", () => {
     ).toBe(false);
   });
 
+  it("lets the admission step refuse, and do nothing else (D-263)", () => {
+    const refused = { action: "admission_refused", outcome: "refused", refusal: "new_project_worker" } as const;
+    expect(memoryPressureActionResultSchema.parse(refused)).toEqual(refused);
+    for (const outcome of ["released", "nothing_to_give", "held", "unavailable", "budget_reached"] as const) {
+      const row = outcome === "released"
+        ? { ...refused, outcome, released: { count: 1 } }
+        : outcome === "held"
+          ? { ...refused, outcome, reason: "pins_held" }
+          : { ...refused, outcome };
+      expect(memoryPressureActionResultSchema.safeParse(row).success, outcome).toBe(false);
+    }
+  });
+
+  it("makes a hold say what holds it, and nothing else say that (D-263)", () => {
+    for (const reason of MEMORY_PRESSURE_HELD_REASONS) {
+      expect(memoryPressureActionResultSchema.safeParse({ action: "task_records", outcome: "held", reason }).success, reason).toBe(true);
+    }
+    // A hold with no reason, or with a reason that explains something else.
+    expect(memoryPressureActionResultSchema.safeParse({ action: "task_records", outcome: "held" }).success).toBe(false);
+    for (const reason of MEMORY_PRESSURE_REASONS.filter((row) => !MEMORY_PRESSURE_HELD_REASONS.includes(row as never))) {
+      expect(memoryPressureActionResultSchema.safeParse({ action: "task_records", outcome: "held", reason }).success, reason).toBe(false);
+      // … and those reasons are free to explain other outcomes.
+      expect(
+        memoryPressureActionResultSchema.safeParse({ action: "task_records", outcome: "budget_reached", reason }).success,
+        reason,
+      ).toBe(true);
+    }
+    // The three holding reasons never explain anything but a hold.
+    for (const reason of MEMORY_PRESSURE_HELD_REASONS) {
+      for (const outcome of ["nothing_to_give", "unavailable", "budget_reached", "refused"] as const) {
+        expect(memoryPressureActionResultSchema.safeParse({ action: "task_records", outcome, reason }).success, `${outcome}/${reason}`).toBe(false);
+      }
+      expect(
+        memoryPressureActionResultSchema.safeParse({ action: "task_records", outcome: "released", released: { count: 1 }, reason }).success,
+        reason,
+      ).toBe(false);
+    }
+    // What D-263 leaves alone: a release with work left over, and an
+    // unavailable row that has no more to say.
+    expect(
+      memoryPressureActionResultSchema.safeParse({ action: "replay_suffixes", outcome: "released", released: { count: 1 }, reason: "work_budget" }).success,
+    ).toBe(true);
+    expect(memoryPressureActionResultSchema.safeParse({ action: "task_records", outcome: "unavailable" }).success).toBe(true);
+  });
+
   it("accepts only a worker's own steps in a worker's rows", () => {
     for (const action of MEMORY_PRESSURE_WORKER_ACTIONS) {
       expect(memoryPressureWorkerActionResultSchema.safeParse({ action, outcome: "nothing_to_give" }).success, action).toBe(true);
@@ -418,7 +464,7 @@ describe("the retained-store counters beside a pass", () => {
 
 describe("a worker's pass", () => {
   it("round-trips a directive answer and bounds it to one row per step", () => {
-    const answer = { applied: true, ran: report.ran, events: report.results, stores: report.stores };
+    const answer = { applied: true, ran: report.ran, results: report.results, stores: report.stores };
     expect(memoryPressureDirectiveResultSchema.parse(answer)).toEqual(answer);
     expect(memoryPressureDirectiveResultSchema.safeParse({ ...answer, applied: "yes" }).success).toBe(false);
     const tooMany = Array.from({ length: MEMORY_PRESSURE_WORKER_ACTIONS.length + 1 }, () => ({
@@ -426,17 +472,17 @@ describe("a worker's pass", () => {
       outcome: "released",
       released: { bytes: 1 },
     }));
-    expect(memoryPressureDirectiveResultSchema.safeParse({ ...answer, events: tooMany }).success).toBe(false);
+    expect(memoryPressureDirectiveResultSchema.safeParse({ ...answer, results: tooMany }).success).toBe(false);
   });
 
   it("refuses a step that belongs to another actor, in either worker shape", () => {
-    const answer = { applied: true, ran: report.ran, events: report.results, stores: report.stores };
+    const answer = { applied: true, ran: report.ran, results: report.results, stores: report.stores };
     for (const action of ["renderer_views", "idle_session_unload", "worker_retirement", "admission_refused"] as const) {
       const row =
         action === "admission_refused"
           ? { action, outcome: "refused", refusal: "new_project_worker" }
           : { action, outcome: "nothing_to_give" };
-      expect(memoryPressureDirectiveResultSchema.safeParse({ ...answer, ran: [action], events: [row] }).success, action).toBe(false);
+      expect(memoryPressureDirectiveResultSchema.safeParse({ ...answer, ran: [action], results: [row] }).success, action).toBe(false);
       expect(
         memoryPressureReportSchema.safeParse({ ...report, ran: [action], results: [row] }).success,
         `report ${action}`,
@@ -445,27 +491,27 @@ describe("a worker's pass", () => {
   });
 
   it("refuses a pass that contradicts itself about which steps it ran", () => {
-    const answer = { applied: true, ran: report.ran, events: report.results, stores: report.stores };
+    const answer = { applied: true, ran: report.ran, results: report.results, stores: report.stores };
     expect(
       memoryPressureDirectiveResultSchema.safeParse({
         ...answer,
         ran: ["ephemeral_caches", "ephemeral_caches"],
-        events: [
+        results: [
           { action: "ephemeral_caches", outcome: "held", reason: "pins_held" },
           { action: "ephemeral_caches", outcome: "held", reason: "pins_held" },
         ],
       }).success,
     ).toBe(false);
     expect(memoryPressureDirectiveResultSchema.safeParse({ ...answer, ran: ["ephemeral_caches"] }).success).toBe(false);
-    expect(memoryPressureDirectiveResultSchema.safeParse({ ...answer, events: [report.results[0]!] }).success).toBe(false);
+    expect(memoryPressureDirectiveResultSchema.safeParse({ ...answer, results: [report.results[0]!] }).success).toBe(false);
     expect(
-      memoryPressureDirectiveResultSchema.safeParse({ ...answer, ran: ["ephemeral_caches", "task_records"], events: report.results })
+      memoryPressureDirectiveResultSchema.safeParse({ ...answer, ran: ["ephemeral_caches", "task_records"], results: report.results })
         .success,
     ).toBe(false);
     const reversed = {
       ...answer,
       ran: ["replay_suffixes", "ephemeral_caches"],
-      events: [report.results[1]!, report.results[0]!],
+      results: [report.results[1]!, report.results[0]!],
     };
     expect(memoryPressureDirectiveResultSchema.safeParse(reversed).success).toBe(false);
     // Gaps are ordinary; order is not optional.
@@ -473,7 +519,7 @@ describe("a worker's pass", () => {
       memoryPressureDirectiveResultSchema.safeParse({
         ...answer,
         ran: ["ephemeral_caches", "task_records"],
-        events: [report.results[0]!, { action: "task_records", outcome: "held", reason: "work_budget" }],
+        results: [report.results[0]!, { action: "task_records", outcome: "held", reason: "pins_held" }],
       }).success,
     ).toBe(true);
   });

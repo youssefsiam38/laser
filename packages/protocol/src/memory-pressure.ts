@@ -275,12 +275,28 @@ type MemoryPressureReleaseFields =
   | { outcome: Exclude<MemoryPressureOutcome, "released">; released?: never };
 
 /**
- * Refusing, likewise: the admission step is the only one that refuses, and it
- * always names what it refused.
+ * Refusing, likewise: the admission step is the only one that refuses, it
+ * always names what it refused, and refusing is the only thing it does — an
+ * admission row's outcome is `refused` and nothing else (D-263).
  */
 type MemoryPressureRefusalFields =
-  | { action: "admission_refused"; refusal: MemoryPressureRefusal }
+  | { action: "admission_refused"; outcome: "refused"; refusal: MemoryPressureRefusal }
   | { action: Exclude<MemoryPressureAction, "admission_refused">; refusal?: never };
+
+/**
+ * Why something was held.
+ *
+ * A hold is the one outcome that must say who is holding: work in the
+ * conversation, somebody following it, or an answer about it that could not be
+ * read. And those three reasons say nothing about anything else, so they
+ * belong to `held` alone (D-263).
+ */
+export const MEMORY_PRESSURE_HELD_REASONS = ["pins_held", "membership_held", "safety_incomplete"] as const;
+export type MemoryPressureHeldReason = (typeof MEMORY_PRESSURE_HELD_REASONS)[number];
+
+type MemoryPressureReasonFields =
+  | { outcome: "held"; reason: MemoryPressureHeldReason }
+  | { outcome: Exclude<MemoryPressureOutcome, "held">; reason?: Exclude<MemoryPressureReason, MemoryPressureHeldReason> };
 
 /**
  * What one step of one pass did.
@@ -289,7 +305,7 @@ type MemoryPressureRefusalFields =
  * the project, the file or the process it touched. The journal adds identity
  * when it records the event, from what the receiving process already knows.
  */
-export type MemoryPressureActionResult = { reason?: MemoryPressureReason } & MemoryPressureReleaseFields & MemoryPressureRefusalFields;
+export type MemoryPressureActionResult = MemoryPressureReleaseFields & MemoryPressureRefusalFields & MemoryPressureReasonFields;
 
 /** The same row, restricted to the steps a worker owns. */
 export type MemoryPressureWorkerActionResult = MemoryPressureActionResult & { action: MemoryPressureWorkerAction };
@@ -544,7 +560,13 @@ export const memoryPressureInputSchema = z
 
 /** The cross-field rules a row must keep, wherever it is carried. */
 function refineActionRow(
-  row: { action: MemoryPressureAction; outcome: MemoryPressureOutcome; refusal?: MemoryPressureRefusal | undefined; released?: { count?: number | undefined; bytes?: number | undefined } | undefined },
+  row: {
+    action: MemoryPressureAction;
+    outcome: MemoryPressureOutcome;
+    reason?: MemoryPressureReason | undefined;
+    refusal?: MemoryPressureRefusal | undefined;
+    released?: { count?: number | undefined; bytes?: number | undefined } | undefined;
+  },
   ctx: z.RefinementCtx,
 ): void {
   // A release says what it released, and nothing else claims to have released.
@@ -557,13 +579,24 @@ function refineActionRow(
   if (row.released !== undefined && row.released.count === undefined && row.released.bytes === undefined) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["released"], message: "a release with no count and no bytes is not evidence" });
   }
-  // Refusing is a step of its own: it is the only one that names a refusal,
-  // and it always names one.
+  // Refusing is a step of its own: it is the only one that names a refusal, it
+  // always names one, and refusing is all it ever does (D-263).
   if (row.action === "admission_refused" && row.refusal === undefined) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["refusal"], message: "an admission refusal must say what was refused" });
   }
   if (row.action !== "admission_refused" && row.refusal !== undefined) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["refusal"], message: "only the admission step refuses anything" });
+  }
+  if (row.action === "admission_refused" && row.outcome !== "refused") {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["outcome"], message: "the admission step refuses; it does nothing else" });
+  }
+  // A hold says who is holding, and only a hold may say it (D-263).
+  const held = (MEMORY_PRESSURE_HELD_REASONS as readonly string[]).includes(row.reason ?? "");
+  if (row.outcome === "held" && !held) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["reason"], message: "a hold says what is holding it" });
+  }
+  if (row.outcome !== "held" && held) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["reason"], message: "only a hold is explained by what holds it" });
   }
 }
 
@@ -783,7 +816,7 @@ export const memoryPressureDirectiveSchema = z
 function refinePass(
   ran: readonly MemoryPressureAction[],
   rows: readonly { action: MemoryPressureAction }[],
-  rowsKey: "events" | "results",
+  rowsKey: "results",
   ctx: z.RefinementCtx,
 ): void {
   if (!allDistinct(ran, (action) => action)) {
@@ -808,12 +841,18 @@ const memoryPressureDirectiveResultShape = z
   .object({
     applied: z.boolean(),
     ran: z.array(memoryPressureWorkerActionSchema).max(MEMORY_PRESSURE_WORKER_ACTIONS.length),
-    /** One row per step it ran. Anonymous results; the host records the events. */
-    events: z.array(memoryPressureWorkerActionResultSchema).max(MEMORY_PRESSURE_WORKER_ACTIONS.length),
+    /**
+     * One row per step it ran.
+     *
+     * `results`, not `events`: these rows are anonymous — a step and what it
+     * did — and an *event* is what the host's journal makes of one when it
+     * adds the identity only the host can give it (D-263).
+     */
+    results: z.array(memoryPressureWorkerActionResultSchema).max(MEMORY_PRESSURE_WORKER_ACTIONS.length),
     stores: memoryPressureStoresSchema,
   })
   .strict()
-  .superRefine((answer, ctx) => refinePass(answer.ran, answer.events, "events", ctx));
+  .superRefine((answer, ctx) => refinePass(answer.ran, answer.results, "results", ctx));
 
 /**
  * Worker → host, on the pipe the host opened when it spawned that worker.
@@ -855,7 +894,7 @@ export type ValidatedMemoryPressureJournalPage = MemoryPressureValidated<MemoryP
 export interface MemoryPressureDirectiveResultShape {
   applied: boolean;
   ran: MemoryPressureWorkerAction[];
-  events: MemoryPressureWorkerActionResult[];
+  results: MemoryPressureWorkerActionResult[];
   stores: MemoryPressureStores;
 }
 export interface MemoryPressureReportShape {

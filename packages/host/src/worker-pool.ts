@@ -35,7 +35,7 @@ import { ErrorCodes, ProtocolError, environmentOverlay } from "@lasercode/protoc
 import { canonical } from "./trust.js";
 import { SessionRouteLeases } from "./session-route-lease.js";
 import { retirementRefused, retireWorker, type RetirementOutcome } from "./worker-retirement.js";
-import { WorkerClient, type WorkerClientOptions } from "./worker-client.js";
+import { WorkerClient, nextWorkerGeneration, type WorkerClientOptions } from "./worker-client.js";
 
 export interface WorkerPoolOptions {
   agentDir?: string;
@@ -62,6 +62,18 @@ export interface WorkerPoolOptions {
    * mistaken for its successor's (RP-7). Opaque and host-internal.
    */
   onNotification: (cwd: string, notification: JsonRpcNotification, source: { generation: string }) => void;
+  /**
+   * A worker's own memory-pressure report (RP-8).
+   *
+   * Its own callback, not the general notification stream, because it is not a
+   * notification in the sense everything else here is: it is one process of
+   * this app telling another what it found in itself, it carries this spawn's
+   * private generation, and no client and no paired device may ever see it.
+   * Routing it here means it cannot reach the broadcast path by accident — a
+   * filter can be forgotten, a separate road cannot be taken. Milestone E will
+   * validate and consume it; until then the host takes it and drops it.
+   */
+  onWorkerPressure?: (cwd: string, notification: JsonRpcNotification, source: { generation: string }) => void;
   /** That process is gone: nothing it started can still be completed. */
   onWorkerGone?: (source: { cwd: string; generation: string }) => void;
   onStderr?: (cwd: string, text: string) => void;
@@ -196,6 +208,12 @@ interface Entry {
   reopened: string[] | undefined;
   /** Generation of this process's process-inventory record (RP-1), if any. */
   resourceRegistration?: number | undefined;
+  /**
+   * This spawn's memory-pressure generation (RP-8), minted before the process
+   * exists so the worker can prove which spawn it is. Separate from
+   * {@link Entry.resourceRegistration}, which is an RP-1 record's generation.
+   */
+  workerGeneration?: number | undefined;
 }
 
 const DEFAULTS = {
@@ -753,6 +771,10 @@ export class WorkerPool {
       if (entry.client?.alive) return entry.client;
     }
 
+    // Minted before the process exists, so the worker knows which spawn it is
+    // from its first line of code (RP-8). A host that has run out of distinct
+    // generations mints none, and that worker takes no part in pressure.
+    const generation = nextWorkerGeneration();
     const clientOptions: WorkerClientOptions = {
       cwd: entry.cwd,
       baseEnv: this.baseEnv,
@@ -771,7 +793,8 @@ export class WorkerPool {
       onExit: (code, signal) => this.onExit(entry, client, code, signal),
       ...(this.options.onStderr ? { onStderr: (t: string) => { if (!entry.warm) this.options.onStderr?.(entry.cwd, t); } } : {}),
     };
-    const client = new WorkerClient(clientOptions);
+    const client = new WorkerClient({ ...clientOptions, ...(generation !== undefined ? { workerGeneration: generation } : {}) });
+    entry.workerGeneration = client.workerGeneration;
     entry.resourceRegistration = this.options.resources?.noteWorker(entry.cwd, client.pid);
     entry.client = client;
     entry.stopping = false;
@@ -785,6 +808,8 @@ export class WorkerPool {
       // needs one.
       if (entry.client === client) {
         entry.client = undefined;
+        // A process that never started leaves no identity behind either (RP-8).
+        entry.workerGeneration = undefined;
         const message = error instanceof Error ? error.message : String(error);
         this.setStatus(entry, "crashed", `Worker could not start: ${message}. Use "Retry" once the cause is fixed.`);
       }
@@ -809,6 +834,12 @@ export class WorkerPool {
    */
   private onWorkerNotification(entry: Entry, client: WorkerClient, notification: JsonRpcNotification): void {
     entry.lastActivity = this.now();
+    if (notification.method === "pi/resource/pressure") {
+      // Taken off the general road immediately (RP-8): nothing observes it,
+      // nothing broadcasts it, and no warm worker's report is kept either.
+      if (!entry.warm) this.options.onWorkerPressure?.(entry.cwd, notification, { generation: client.generation });
+      return;
+    }
     if (notification.method === "pi/worker/status") {
       const status = (notification.params as { status?: WorkerStatus } | null)?.status;
       if (status === "ready") {
@@ -847,6 +878,10 @@ export class WorkerPool {
     entry.client = undefined;
     this.options.resources?.noteExit(client.pid, entry.resourceRegistration);
     entry.resourceRegistration = undefined;
+    // The generation belonged to the process that has gone (RP-8). Keeping it
+    // here would leave an identity behind with nothing to answer for it; the
+    // next spawn mints a strictly newer one.
+    entry.workerGeneration = undefined;
     entry.running.clear();
     entry.active.clear();
     if (entry.stopping || this.closed) {

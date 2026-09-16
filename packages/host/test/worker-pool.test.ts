@@ -45,6 +45,12 @@ socket.on("data", (chunk) => {
     // worker of its own (see session-lifetime.test.ts).
     if (req.method === "pi/worker/retire") { send({ jsonrpc: "2.0", id: req.id, result: { retiring: true } }); continue; }
     if (req.method === "pi/test/argv") { send({ jsonrpc: "2.0", id: req.id, result: { argv: process.argv.slice(2), processCwd: process.cwd() } }); continue; }
+    // RP-8: a worker's own pressure report, shaped as the real one is.
+    if (req.method === "pi/test/pressure") {
+      send({ jsonrpc: "2.0", method: "pi/resource/pressure", params: { generation: req.params.generation, level: "unknown", inputs: [], ran: [], results: [], stores: {} } });
+      send({ jsonrpc: "2.0", id: req.id, result: {} });
+      continue;
+    }
     if (req.method === "session/load" && req.params.path === "/sessions/unwritten.jsonl") { send({ jsonrpc: "2.0", id: req.id, error: { code: -32001, message: "No saved transcript. Start a new session." } }); continue; }
     send({ jsonrpc: "2.0", id: req.id, result: { ok: true, method: req.method } });
   }
@@ -579,3 +585,83 @@ async function waitFor(predicate: () => boolean, ms = 5000): Promise<void> {
     await new Promise((r) => setTimeout(r, 5));
   }
 }
+
+describe("a worker's own pressure report (RP-8)", () => {
+  it("never reaches the stream a client and a paired device are served from", async () => {
+    const pressure: Array<{ cwd: string; notification: JsonRpcNotification }> = [];
+    pool = makePool({ onWorkerPressure: (cwd, notification) => pressure.push({ cwd, notification }) });
+    const client = await pool.get(project);
+    // A canary nobody outside this process may ever see.
+    const canary = 987_654_321;
+    await client.request("pi/test/pressure", { generation: canary });
+    await waitFor(() => pressure.length === 1);
+
+    // It arrived on its own road, with the project it came from …
+    expect(pressure[0]!.cwd).toBe(project);
+    expect(pressure[0]!.notification.method).toBe("pi/resource/pressure");
+    // … and it is not in the stream `HostServer` observes and broadcasts, which
+    // is the only path to a direct socket, a relay listener or an audit line.
+    expect(notifications.some((notification) => notification.method === "pi/resource/pressure")).toBe(false);
+    expect(JSON.stringify(notifications)).not.toContain(String(canary));
+    expect(JSON.stringify(statuses)).not.toContain(String(canary));
+  });
+
+  it("is dropped, not forwarded, when a host takes no interest in it yet", async () => {
+    // No `onWorkerPressure` at all: the report still leaves the general path.
+    pool = makePool();
+    const client = await pool.get(project);
+    await client.request("pi/test/pressure", { generation: 12_345 });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(notifications.some((notification) => notification.method === "pi/resource/pressure")).toBe(false);
+    expect(JSON.stringify(notifications)).not.toContain("12345");
+  });
+});
+
+describe("the generation a worker can prove (RP-8)", () => {
+  it("records none for a spawn that never started", async () => {
+    pool = makePool({ nodeBinary: join(dir, "no-such-node") });
+    await expect(pool.get(project)).rejects.toThrow();
+    const entries = (pool as unknown as { entries: Map<string, { workerGeneration?: number; client?: unknown }> }).entries;
+    expect(entries.get(project)?.workerGeneration).toBeUndefined();
+    expect(entries.get(project)?.client).toBeUndefined();
+  });
+
+  it("mints one per spawn, passes it in argv, and never reuses it across a restart", async () => {
+    pool = makePool({ backoffMs: 10 });
+    const first = await pool.get(project);
+    const before = await first.request<{ argv: string[] }>("pi/test/argv", {});
+    const firstGeneration = Number(before.argv[before.argv.indexOf("--worker-generation") + 1]);
+    expect(Number.isSafeInteger(firstGeneration) && firstGeneration > 0).toBe(true);
+    // What the host holds is what the process was told.
+    expect(first.workerGeneration).toBe(firstGeneration);
+
+    // A second project is a second spawn, and a different generation.
+    const other = join(dir, "second");
+    mkdirSync(other);
+    const second = await pool.get(other);
+    expect(second.workerGeneration).toBeGreaterThan(firstGeneration);
+
+    // A replacement after a crash is a new spawn too: the old generation is
+    // gone, so a message from the process that died can be told apart.
+    pool.bindSession("/sessions/a.jsonl", project);
+    first.request("pi/test/crash", {}).catch(() => {});
+    await waitFor(() => statusesOf(project).includes("crashed"));
+    runTimers();
+    await waitFor(() => pool.openSessions(project).includes("/sessions/a.jsonl"));
+    const restarted = await pool.get(project);
+    expect(restarted.workerGeneration).toBeGreaterThan(second.workerGeneration!);
+    const after = await restarted.request<{ argv: string[] }>("pi/test/argv", {});
+    expect(Number(after.argv[after.argv.indexOf("--worker-generation") + 1])).toBe(restarted.workerGeneration);
+    // An entry holds a generation only while that exact process is alive.
+    const entries = (pool as unknown as { entries: Map<string, { workerGeneration?: number }> }).entries;
+    expect(entries.get(project)!.workerGeneration).toBe(restarted.workerGeneration);
+    await pool.stop(project, "stopped for the test");
+    expect(entries.get(project)!.workerGeneration).toBeUndefined();
+
+    // It is a number for the worker's own link and nothing else: it is not a
+    // field of any status or notification the pool publishes.
+    expect(JSON.stringify(statuses)).not.toContain("workerGeneration");
+    expect(JSON.stringify(notifications)).not.toContain("workerGeneration");
+    expect(statuses.every((status) => !("workerGeneration" in status))).toBe(true);
+  });
+});

@@ -12,7 +12,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FRAME_MAX_BYTES } from "@lasercode/protocol";
-import { WorkerClient } from "../src/worker-client.js";
+import { WorkerClient, nextWorkerGeneration } from "../src/worker-client.js";
 
 /**
  * A worker that answers with a payload of the size it is asked for, in one
@@ -43,6 +43,7 @@ socket.on("data", (chunk) => {
       socket.write("\\"}}\\n");
       continue;
     }
+    if (req.method === "pi/test/argv") { send({ jsonrpc: "2.0", id: req.id, result: { argv: process.argv.slice(2) } }); continue; }
     if (req.method === "pi/test/utf8") { send({ jsonrpc: "2.0", id: req.id, result: { text: "日本語🚀".repeat(req.params.times) } }); continue; }
     send({ jsonrpc: "2.0", id: req.id, result: { ok: true } });
   }
@@ -140,3 +141,41 @@ it("counts the messages it has written to the worker, and owes nothing once it i
   await expect.poll(() => exits.length).toBeGreaterThan(0);
   expect(worker.transportPressure().pendingFrames).toBe(0);
 }, 30_000);
+
+it("mints a distinct, monotonic generation for each spawn and never wraps (RP-8)", () => {
+  const seen = new Set<number>();
+  let previous = 0;
+  for (let i = 0; i < 100; i += 1) {
+    const value = nextWorkerGeneration();
+    expect(value).toBeDefined();
+    expect(Number.isSafeInteger(value!)).toBe(true);
+    expect(value!).toBeGreaterThan(previous);
+    previous = value!;
+    seen.add(value!);
+  }
+  expect(seen.size).toBe(100);
+});
+
+it("passes the generation it was given, and passes nothing when it has none", { timeout: 20_000 }, async () => {
+  // Both clients take the exit callback the pool always supplies: a child that
+  // ends after the test has stopped it still reports, and a missing handler
+  // would surface as an unhandled failure rather than an assertion.
+  const withGeneration = new WorkerClient({ cwd: project, workerMain, workerGeneration: 42, onNotification: () => {}, onExit: () => {} });
+  try {
+    await withGeneration.ready;
+    expect(withGeneration.workerGeneration).toBe(42);
+    const answer = await withGeneration.request<{ argv: string[] }>("pi/test/argv", {});
+    expect(answer.argv[answer.argv.indexOf("--worker-generation") + 1]).toBe("42");
+  } finally {
+    await withGeneration.stop();
+  }
+  const without = new WorkerClient({ cwd: project, workerMain, onNotification: () => {}, onExit: () => {} });
+  try {
+    await without.ready;
+    expect(without.workerGeneration).toBeUndefined();
+    const answer = await without.request<{ argv: string[] }>("pi/test/argv", {});
+    expect(answer.argv).not.toContain("--worker-generation");
+  } finally {
+    await without.stop();
+  }
+});
