@@ -823,6 +823,19 @@ test('an expected process that cannot be read makes totals null, coverage false 
   await assert.rejects(verdictFor(taken), /coverage is inconclusive/);
 });
 
+test('a stat row without Linux physical metrics is unreadable, never complete coverage', async () => {
+  const census = new ProcessCensus({
+    hostPid: 1,
+    descendants: async () => [1],
+    sample: async () => ({ pid: 1, startToken: 'a', pssBytes: null, privateResidentBytes: null }),
+  });
+  const taken = await census.take({ requiredPids: [1] });
+  assert.equal(taken.coverage.complete, false);
+  assert.equal(taken.coverage.unreadableProcesses, 1);
+  assert.deepEqual([censusTotals(taken).totalPssBytes, censusTotals(taken).totalPrivateResidentBytes], [null, null]);
+  await assert.rejects(verdictFor(taken), /coverage is inconclusive/);
+});
+
 test('a process that exited is not an unreadable row, and a reused pid is re-identified', async () => {
   const seen = [];
   const census = new ProcessCensus({

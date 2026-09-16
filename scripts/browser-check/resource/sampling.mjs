@@ -42,19 +42,29 @@ export class ProcessCensus {
     const unreadable = [];
     const exited = [];
     const replaced = [];
+    const record = row => {
+      // A readable stat row is not complete Linux memory evidence when
+      // smaps_rollup could not supply either required physical metric. Treat
+      // that process as unreadable so totals and the safety verdict cannot
+      // silently proceed from a partial census.
+      if (!Number.isFinite(row.pssBytes) || !Number.isFinite(row.privateResidentBytes)) {
+        throw new Error('Linux proportional or private-resident memory is unavailable for a sampled process.');
+      }
+      this.identities.set(row.pid, row.startToken);
+      rows.push(row);
+    };
     for (const pid of pids) {
       const known = this.identities.get(pid) ?? null;
       try {
         const row = await this.sample(pid, known ?? undefined);
-        this.identities.set(pid, row.startToken);
-        rows.push(row);
+        record(row);
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         if (/changed identity/.test(reason)) {
           // A new process reusing a pid is a different process, not a bad read.
           replaced.push(pid);
           this.identities.delete(pid);
-          try { const row = await this.sample(pid); this.identities.set(pid, row.startToken); rows.push(row); }
+          try { const row = await this.sample(pid); record(row); }
           catch (retry) { unreadable.push({ pid, reason: retry instanceof Error ? retry.message : String(retry) }); }
           continue;
         }
