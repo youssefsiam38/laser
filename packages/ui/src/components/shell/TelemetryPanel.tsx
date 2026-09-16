@@ -39,7 +39,7 @@ import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { money, tokens } from "@/format";
 import { cn } from "@/lib/utils";
 import { useRunsForRoot } from "@/agents";
-import { useLaserStable, useLaserState, useSessionMeta } from "@/runtime";
+import { useLaserStable, useLaserState, useRendererPressure, useSessionMeta } from "@/runtime";
 
 import { CheckpointHistory } from "@/components/assistant-ui/elements/checkpoint-history";
 import {
@@ -547,6 +547,7 @@ export function HistorySection() {
     return Boolean(history && (!history.complete || history.branchesUnloaded));
   });
   const { actions } = useLaserStable();
+  const refreshPaused = useRendererPressure().refusing.includes("whole_transcript");
   const meta = useSessionMeta();
   const shell = useShell();
   const entries = useLaserState((s) => s.current ? s.open[s.current]?.entries : undefined);
@@ -595,12 +596,23 @@ export function HistorySection() {
             </button>
           </CollapsibleTrigger>
           {shell.historyOpen && (
-            <TooltipIconButton tooltip="Refresh history" size="icon-xs" className="text-ink-3" onClick={() => void actions.refreshEntries()}>
+            <TooltipIconButton
+              tooltip={refreshPaused ? "Refresh paused while this window is low on memory" : "Refresh history"}
+              size="icon-xs"
+              className="text-ink-3"
+              disabled={refreshPaused}
+              onClick={() => void actions.refreshEntries()}
+            >
               <RefreshCw />
             </TooltipIconButton>
           )}
         </div>
         <CollapsibleContent>
+          {refreshPaused && (
+            <p data-slot="history-refresh-paused" className="px-4 pb-3 text-sm text-ink-2">
+              Refreshing the whole history is paused while this window is low on memory. Recent activity continues to update.
+            </p>
+          )}
           <CheckpointHistory
             rows={rows}
             busy={meta.running || meta.compacting}

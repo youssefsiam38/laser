@@ -13,7 +13,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { ThreadDialogCards, WaitingNotice } from "@/dialogs";
 import { ToolRowScope } from "@/dialogs/tool-rows";
-import { useLaserStable, useLaserState, useLaserView } from "@/runtime";
+import { useLaserStable, useLaserState, useLaserView, useRendererPressure } from "@/runtime";
 import { sessionOpenPhase, sameSessionOpenPhase, visibleSessionPath } from "@/runtime/main-destination";
 import { useWorkbench } from "@/components/workbench/workbench-context";
 import { useSessionSeen } from "./use-session-seen.js";
@@ -222,6 +222,10 @@ function EntriesRefresh() {
 export function HistoryControls() {
   const { actions } = useLaserStable();
   const controller = useTranscriptViewport();
+  // While this window is short of memory it will not start a whole-transcript
+  // read (RP-8 step 7). The control says so in place rather than offering a
+  // button that answers with a refusal; reading upwards is unaffected.
+  const versionsPaused = useRendererPressure().refusing.includes("whole_transcript");
   const history = useLaserState(s => s.current ? s.open[s.current]?.history : undefined);
   const root = useRef<HTMLDivElement>(null);
   const pending = useRef<{ focused?: Element | null } | undefined>(undefined);
@@ -334,9 +338,11 @@ export function HistoryControls() {
     {/* Earlier messages arrive by scrolling up (and through the button above,
         which is the same thing for a keyboard). Only other versions of a prompt
         need asking for: no amount of scrolling reaches a branch. */}
-    {history.branchesUnloaded && <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" aria-disabled={loading !== null} onClick={() => void load(true)}>
-      {loading === "all" ? "Loading other versions…" : "Load other versions"}
-    </Button>}
+    {history.branchesUnloaded && (versionsPaused
+      ? <span data-slot="versions-paused">Loading other versions is paused while this window is low on memory. Earlier messages still load a page at a time.</span>
+      : <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" aria-disabled={loading !== null} onClick={() => void load(true)}>
+          {loading === "all" ? "Loading other versions…" : "Load other versions"}
+        </Button>)}
     <span role="status" className="sr-only">{announcement}</span>
   </div>;
 }

@@ -295,7 +295,11 @@ describe("completing a slash command", () => {
     // Choosing the row — with the mouse or a tap — is the person picking the
     // command, so it runs; it is still never a send.
     await chooseFork();
-    expect(mocks.client.request).toHaveBeenCalledWith("pi/session/entries", { path: "/project/session.jsonl" });
+    expect(mocks.client.request).toHaveBeenCalledWith("pi/session/entries", {
+      path: "/project/session.jsonl",
+      window: { tail: 8 },
+      bodyLimit: 16_384,
+    });
     expect(mocks.sent).not.toHaveBeenCalled();
     expect(input().value).toBe("");
   });
@@ -326,6 +330,7 @@ describe("/fork", () => {
   const hostEntries = (ids: readonly string[], leafId?: string) => ({
     entries: ids.map((id, index) => ({ id, parentId: index === 0 ? null : ids[index - 1], type: "message", message: { role: "user" } })),
     ...(leafId ? { leafId } : {}),
+    window: { complete: true },
   });
 
   it("forks the host's last prompt, not the one the composer last rendered", async () => {
@@ -337,14 +342,18 @@ describe("/fork", () => {
     await mount();
     await chooseFork();
 
-    expect(mocks.client.request).toHaveBeenCalledWith("pi/session/entries", { path: "/project/session.jsonl" });
+    expect(mocks.client.request).toHaveBeenCalledWith("pi/session/entries", {
+      path: "/project/session.jsonl",
+      window: { tail: 8 },
+      bodyLimit: 16_384,
+    });
     expect(mocks.fork).toHaveBeenCalledWith("e3");
     expect(mocks.toast).not.toHaveBeenCalled();
   });
 
   it("warns only when the host really has no prompt", async () => {
     mocks.client.request.mockImplementation(async (method: string) =>
-      method === "pi/session/entries" ? { entries: [] } : { commands: [] });
+      method === "pi/session/entries" ? { entries: [], window: { complete: true } } : { commands: [] });
     await mount();
     await chooseFork();
 

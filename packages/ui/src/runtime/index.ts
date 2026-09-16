@@ -140,6 +140,7 @@ export {
   useLaserStable,
   useLaserState,
   useLaserView,
+  useRendererPressure,
   useSessionMeta,
   useThreadScopeRefusal,
   useToasts,
@@ -193,6 +194,26 @@ export {
 } from "./view-tail.js";
 
 export { byteLength, measureView, type ViewMeasure } from "./view-measure.js";
+
+export {
+  PRESSURE_REFUSAL_MESSAGES,
+  PressureRefusedError,
+  RENDERER_PRESSURE_REFUSALS,
+  RENDERER_PRESSURE_STEPS,
+  RENDERER_PRESSURE_THRESHOLDS,
+  createRendererPressureController,
+  createRendererPressureSampler,
+  registerEphemeralCache,
+  releaseEphemeralCaches,
+  type EphemeralCache,
+  type EphemeralRelease,
+  type RendererHostPressure,
+  type RendererPressureController,
+  type RendererPressureCounters,
+  type RendererPressureRow,
+  type RendererPressureSample,
+  type RendererPressureState,
+} from "./pressure/index.js";
 
 export {
   TAIL_DATABASE_NAME,

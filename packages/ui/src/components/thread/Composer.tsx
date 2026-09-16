@@ -31,7 +31,7 @@ import { composerSendPlan, mainCodeProject, mainError, mainTab, provisionalSessi
 import { mergeRunConfigCustom } from "@/runtime/first-turn";
 import { completeLeadingSlash, matchLeadingSlash, rankSlashCommandMatches } from "./slash-completion.js";
 import { StatusLine } from "./StatusLine.js";
-import { userEntryIds } from "./entries.js";
+import { LAST_PROMPT_MESSAGES, lastPromptEntry, lastPromptMessage } from "./last-prompt.js";
 import { SessionPreparationProvider, useSessionPreparation } from "./session-preparation.js";
 import { useDirectoryPage } from "./use-directory-page.js";
 import { matchProjectMention } from "./project-path.js";
@@ -480,13 +480,12 @@ function useSlashCommands() {
   async function forkFromLastPrompt() {
     if (!sessionPath) return;
     try {
-      const { entries, leafId } = await client.request("pi/session/entries", { path: sessionPath });
-      const entryId = userEntryIds(entries, leafId).at(-1);
-      if (entryId) {
-        await actions.fork(entryId);
+      const found = await lastPromptEntry(params => client.request("pi/session/entries", params), sessionPath);
+      if (found.entryId) {
+        await actions.fork(found.entryId);
         return;
       }
-      actions.toast("warning", "Nothing to fork yet: this session has no prompt.");
+      actions.toast("warning", lastPromptMessage(found) ?? LAST_PROMPT_MESSAGES["no-prompt"]);
     } catch (error) {
       actions.toast("error", errorText(error));
     }

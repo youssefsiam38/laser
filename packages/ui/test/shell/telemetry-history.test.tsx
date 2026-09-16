@@ -8,11 +8,12 @@ import { HistorySection, ToolsSection } from "../../src/components/shell/Telemet
 import * as model from "../../src/components/shell/model.js";
 
 const mocks = vi.hoisted(() => ({ loadAllEntries: vi.fn(async () => true), refreshEntries: vi.fn(async () => {}), running: false,
-  current: "/session", entries: {} as Record<string, readonly unknown[]> }));
+  current: "/session", entries: {} as Record<string, readonly unknown[]>, refusing: [] as string[] }));
 vi.mock("../../src/runtime/index.js", () => ({
   useLaserState: (selector: (state: unknown) => unknown) => selector({ current: mocks.current, open: { [mocks.current]: { path: mocks.current, running: mocks.running, entries: mocks.entries[mocks.current], history: { complete: false, branchesUnloaded: false } } } }),
   useSessionMeta: () => ({ path: mocks.current, running: mocks.running, compacting: false }),
   useLaserStable: () => ({ actions: mocks }),
+  useRendererPressure: () => ({ refusing: mocks.refusing }),
 }));
 vi.mock("../../src/components/shell/shell-context.js", async () => {
   const { useState } = await import("react");
@@ -27,6 +28,7 @@ beforeEach(() => {
   mocks.running = false;
   mocks.current = "/session";
   mocks.entries = { "/session": [] };
+  mocks.refusing = [];
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
 });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks(); });
@@ -71,6 +73,21 @@ it("reuses immutable snapshots on switch-back while keeping folded counts truthf
   expect(container.textContent).toContain("2 loaded");
   expect(mocks.refreshEntries).not.toHaveBeenCalled();
   expect(mocks.loadAllEntries).not.toHaveBeenCalled();
+});
+
+it("explains a pressure refusal in place and does not offer a bypass", async () => {
+  const render = () => act(async () => root.render(<TooltipProvider><HistorySection /></TooltipProvider>));
+  await render();
+  const disclosure = container.querySelector<HTMLButtonElement>('button[aria-expanded]')!;
+  await act(async () => disclosure.click());
+  mocks.refreshEntries.mockClear();
+  mocks.refusing = ["whole_transcript"];
+  await render();
+  expect(container.textContent).toContain("Refreshing the whole history is paused while this window is low on memory.");
+  const refresh = container.querySelector<HTMLButtonElement>('button[aria-label^="Refresh paused"]')!;
+  expect(refresh.disabled).toBe(true);
+  await act(async () => refresh.click());
+  expect(mocks.refreshEntries).not.toHaveBeenCalled();
 });
 
 it("refreshes only metadata when History opens and while its run settles", async () => {

@@ -239,8 +239,11 @@ export class FakeWorkerClient {
   whenConnected(): Promise<void> {
     return Promise.resolve();
   }
-  subscribe(): () => void {
-    return () => {};
+  /** Extra listeners, as the real client keeps them beside the reducer's own. */
+  private readonly listeners = new Set<(method: string, params: unknown) => void>();
+  subscribe(handler: (method: string, params: unknown) => void): () => void {
+    this.listeners.add(handler);
+    return () => this.listeners.delete(handler);
   }
 
   /** Deliver a host notification, exactly as the socket would. */
@@ -250,6 +253,13 @@ export class FakeWorkerClient {
       if (this.attached.has(p.sessionPath)) this.attached.set(p.sessionPath, p.seq);
     }
     this.options.onNotification(method as Parameters<HostClientOptions["onNotification"]>[0], params);
+    for (const listener of [...this.listeners]) {
+      try {
+        listener(method, params);
+      } catch {
+        /* a screen's listener never breaks the socket */
+      }
+    }
   }
 
   async request(method: string, params: unknown): Promise<unknown> {
