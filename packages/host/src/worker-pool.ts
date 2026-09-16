@@ -70,10 +70,18 @@ export interface WorkerPoolOptions {
    * this app telling another what it found in itself, it carries this spawn's
    * private generation, and no client and no paired device may ever see it.
    * Routing it here means it cannot reach the broadcast path by accident — a
-   * filter can be forgotten, a separate road cannot be taken. Milestone E will
-   * validate and consume it; until then the host takes it and drops it.
+   * filter can be forgotten, a separate road cannot be taken.
+   *
+   * `source` names the exact process that delivered it, both ways: the opaque
+   * per-process identity (RP-7) and that spawn's private numeric generation
+   * (RP-8, D-262). The host binds the report to both before it believes a word
+   * of it; a spawn that was minted none carries `undefined` and fails closed.
    */
-  onWorkerPressure?: (cwd: string, notification: JsonRpcNotification, source: { generation: string }) => void;
+  onWorkerPressure?: (
+    cwd: string,
+    notification: JsonRpcNotification,
+    source: { generation: string; workerGeneration: number | undefined },
+  ) => void;
   /** That process is gone: nothing it started can still be completed. */
   onWorkerGone?: (source: { cwd: string; generation: string }) => void;
   onStderr?: (cwd: string, text: string) => void;
@@ -270,6 +278,25 @@ export class WorkerPool {
   /** User-requested workers, live or not, for `pi/worker/list`. */
   workers(): WorkerInfo[] {
     return [...this.entries.values()].filter((entry) => !entry.warm).map((entry) => this.infoOf(entry));
+  }
+
+  /**
+   * The workers memory pressure counts (RP-8): live, ready, user-requested and
+   * carrying the private generation their spawn was given.
+   *
+   * Speculation is deliberately absent — a warm worker's own report is dropped
+   * at ingress, so counting it as expected coverage would make a row that can
+   * never be answered. Never spawns, never blocks.
+   */
+  pressureWorkers(): Array<{ cwd: string; clientGeneration: string; workerGeneration: number }> {
+    const out: Array<{ cwd: string; clientGeneration: string; workerGeneration: number }> = [];
+    for (const entry of this.entries.values()) {
+      if (entry.warm || !entry.client?.alive || entry.status !== "ready") continue;
+      const workerGeneration = entry.client.workerGeneration;
+      if (workerGeneration === undefined) continue;
+      out.push({ cwd: entry.cwd, clientGeneration: entry.client.generation, workerGeneration });
+    }
+    return out;
   }
 
   /** Workers that are up right now. Never spawns; used for broadcasts. */
@@ -836,8 +863,16 @@ export class WorkerPool {
     entry.lastActivity = this.now();
     if (notification.method === "pi/resource/pressure") {
       // Taken off the general road immediately (RP-8): nothing observes it,
-      // nothing broadcasts it, and no warm worker's report is kept either.
-      if (!entry.warm) this.options.onWorkerPressure?.(entry.cwd, notification, { generation: client.generation });
+      // nothing broadcasts it, and no warm worker's report is kept either. A
+      // process this entry has already replaced is dropped here too: its
+      // notifications still arrive on the pipe it owns, and a report from a
+      // worker that is gone must not describe the one that took its place.
+      if (!entry.warm && entry.client === client) {
+        this.options.onWorkerPressure?.(entry.cwd, notification, {
+          generation: client.generation,
+          workerGeneration: client.workerGeneration,
+        });
+      }
       return;
     }
     if (notification.method === "pi/worker/status") {

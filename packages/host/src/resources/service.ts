@@ -39,6 +39,7 @@ import {
   RESOURCE_SNAPSHOT_PROCESS_MAX,
   RESOURCE_START_TIME_TOLERANCE_MS,
   RESOURCE_TABLE_CACHE_MAX_ROWS,
+  parseMemoryPressureJournalPage,
   boundedResourceIds,
   boundedResourceText,
   resourceAvailable,
@@ -49,6 +50,7 @@ import {
   type ResourceCoverage,
   type ResourceCrossCheckStatus,
   type ResourceDesktopReport,
+  type MemoryPressureExportSection,
   type ResourceMeasure,
   type ResourceProcess,
   type ResourceProcessRole,
@@ -91,6 +93,16 @@ export interface ResourceServiceOptions {
    * a zero and not a delay.
    */
   retainedStores?: () => Promise<ResourceRetainedStores>;
+  /**
+   * Memory pressure as this host currently knows it (RP-8).
+   *
+   * A snapshot carries the **summary** only: it is fixed-size, so a bounded
+   * history retains N summaries rather than N copies of one growing event list.
+   * A diagnostic document carries the summary plus exactly **one** bounded page
+   * of the single journal. A failure here leaves the section out; it is never a
+   * reason for a snapshot or an export to fail.
+   */
+  pressure?: () => MemoryPressureExportSection | undefined;
 }
 
 interface VerifiedReport {
@@ -198,7 +210,21 @@ export class ResourceService {
     // left something out says so.
     let truncated = recent.length < retention.snapshots;
 
-    let total = serialized.reduce((sum, entry) => sum + entry.bytes, 0) + envelope;
+    // Pressure travels as the summary plus exactly one page of the one journal
+    // (RP-8). The page is the first thing trimmed, oldest event first, because
+    // the process rows are what a person exported the document for.
+    let pressure = this.pressureSection();
+    let pressureBytes = sizeOf(pressure);
+    let total = serialized.reduce((sum, entry) => sum + entry.bytes, 0) + envelope + pressureBytes;
+    while (pressure !== undefined && pressure.journal.events.length > 0 && total > RESOURCE_EXPORT_MAX_BYTES) {
+      const trimmed = withFewerEvents(pressure, pressure.journal.events.length - 1);
+      const bytes = sizeOf(trimmed);
+      total += bytes - pressureBytes;
+      pressure = trimmed;
+      pressureBytes = bytes;
+      truncated = true;
+    }
+
     while (serialized.length > 1 && total > RESOURCE_EXPORT_MAX_BYTES) {
       total -= serialized.shift()!.bytes;
       truncated = true;
@@ -211,20 +237,64 @@ export class ResourceService {
       // something that is not the document it claims to be.
       const only = snapshots[0]!;
       const perRow = Math.max(1, Math.floor((only.processes.length ? Buffer.byteLength(JSON.stringify(only.processes), "utf8") : 1) / Math.max(1, only.processes.length)));
-      const room = Math.max(0, RESOURCE_EXPORT_MAX_BYTES - envelope * 4);
+      const room = Math.max(0, RESOURCE_EXPORT_MAX_BYTES - envelope * 4 - pressureBytes);
       const keep = Math.max(1, Math.floor(room / perRow));
       snapshots = [{ ...only, processes: only.processes.slice(0, keep) }];
       truncated = true;
     }
 
+    // The bound is on the bytes that actually leave this host, so it is checked
+    // on them. Each turn of this loop removes something real, and the last
+    // thing standing is the fixed-size summary beside an empty page: a document
+    // that is over its limit is never returned.
     for (;;) {
-      const document = JSON.stringify({ at: new Date(this.now()).toISOString(), platform: this.platformName(), retention, truncated, snapshots });
+      const document = JSON.stringify({
+        at: new Date(this.now()).toISOString(),
+        platform: this.platformName(),
+        retention,
+        truncated,
+        ...(pressure ? { pressure } : {}),
+        snapshots,
+      });
       const bytes = Buffer.byteLength(document, "utf8");
-      if (bytes <= RESOURCE_EXPORT_MAX_BYTES || snapshots.length <= 1) return { document, bytes, truncated };
-      // The estimate was close but not exact (a wide row, a long label): drop
-      // the oldest and check the real bytes again rather than hope.
-      snapshots = snapshots.slice(1);
+      if (bytes <= RESOURCE_EXPORT_MAX_BYTES) return { document, bytes, truncated };
       truncated = true;
+      if (snapshots.length > 1) {
+        // The estimate was close but not exact (a wide row, a long label): drop
+        // the oldest and check the real bytes again rather than hope.
+        snapshots = snapshots.slice(1);
+        continue;
+      }
+      const only = snapshots[0];
+      if (only && only.processes.length > 0) {
+        // One snapshot still too large: keep its shape and its totals and halve
+        // its rows, which converges rather than guessing a row size.
+        snapshots = [{ ...only, processes: only.processes.slice(0, Math.floor(only.processes.length / 2)) }];
+        continue;
+      }
+      if (pressure !== undefined && pressure.journal.events.length > 0) {
+        pressure = withFewerEvents(pressure, pressure.journal.events.length - 1);
+        continue;
+      }
+      if (snapshots.length > 0) {
+        // Last resort: even an empty snapshot's own fields do not fit. What
+        // survives is the retention it was measured against and the fixed-size
+        // pressure summary, which is never a document that lies about its size.
+        snapshots = [];
+        continue;
+      }
+      return { document, bytes, truncated };
+    }
+  }
+
+  /** Pressure as this host knows it, or nothing at all. Never throws. */
+  private pressureSection(): MemoryPressureExportSection | undefined {
+    try {
+      return this.options.pressure?.();
+    } catch {
+      // A diagnostic that cannot describe itself is left out; it is not a reason
+      // for a snapshot or a document to fail.
+      return undefined;
     }
   }
 
@@ -354,6 +424,7 @@ export class ResourceService {
     } catch {
       stores = undefined;
     }
+    const pressure = this.pressureSection();
     const snapshot: ResourceSnapshot = {
       id: `rs_${++this.counter}`,
       at: new Date(started).toISOString(),
@@ -369,6 +440,10 @@ export class ResourceService {
         crossCheck,
       },
       ...(stores ? { stores } : {}),
+      // The summary, never the journal: a snapshot is retained and copied, and
+      // embedding a growing event list would multiply one journal by the length
+      // of that history (RP-8).
+      ...(pressure ? { pressure: pressure.summary } : {}),
     };
 
     this.history.add(snapshot);
@@ -673,6 +748,38 @@ export class ResourceService {
 
   private platformName(): ResourceSnapshot["platform"] {
     return this.platform === "linux" || this.platform === "darwin" || this.platform === "win32" ? this.platform : "other";
+  }
+}
+
+/** The exact serialized size of the pressure section, or nothing to measure. */
+function sizeOf(section: MemoryPressureExportSection | undefined): number {
+  if (!section) return 0;
+  try {
+    return Buffer.byteLength(JSON.stringify(section), "utf8");
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * The same section carrying fewer events: the **newest** `keep` of them, so what
+ * goes is always the oldest.
+ *
+ * The retention counters are untouched on purpose — they describe the journal,
+ * not the slice of it this document could afford — and the page is re-validated,
+ * because a page that was trimmed by hand is a page nobody checked.
+ */
+function withFewerEvents(section: MemoryPressureExportSection, keep: number): MemoryPressureExportSection | undefined {
+  try {
+    return {
+      summary: section.summary,
+      journal: parseMemoryPressureJournalPage({
+        events: section.journal.events.slice(0, Math.max(0, keep)),
+        retention: section.journal.retention,
+      }),
+    };
+  } catch {
+    return undefined;
   }
 }
 
