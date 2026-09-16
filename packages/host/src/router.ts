@@ -989,6 +989,11 @@ export class Router {
       // a worker, and a person's detach already says everything a client can.
       case "pi/session/unload":
       case "pi/worker/safety":
+      // And RP-8's directive for the same reason: asking a worker to give
+      // memory back releases runtime state, so a client that could send it
+      // would be choosing which of this machine's workers releases something.
+      // The host decides that from what it measured itself.
+      case "pi/worker/pressure":
         throw new ProtocolError(ErrorCodes.Unsupported, "The app manages its own session runtimes.");
 
       default:

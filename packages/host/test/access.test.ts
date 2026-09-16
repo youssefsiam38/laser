@@ -296,10 +296,13 @@ describe("the descriptor", () => {
       // RP-4 adds two of the same kind: releasing a session's runtime and
       // asking a worker what its sessions are holding are the app managing its
       // own runtimes on this machine.
+      // RP-8 adds the third of that kind: asking a worker to give memory back
+      // releases runtime state, so it is the app's own call as well.
       expect(descriptor.localOnly).toEqual([
         "agents/sync",
         "pi/host/environment",
         "pi/session/unload",
+        "pi/worker/pressure",
         "pi/worker/retained-stores",
         "pi/worker/retire",
         "pi/worker/safety",

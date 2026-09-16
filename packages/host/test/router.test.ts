@@ -504,6 +504,19 @@ describe("Router · agents (docs/agents-leap)", () => {
       // Same rule for the retained-store question (RP-6): a client asking it
       // would be choosing which worker to ask, and it is never forwarded.
       expect(await rpc(h.router, "pi/worker/retained-stores", {})).toMatchObject({ error: { message: "The app sends this to its own workers." } });
+      // Same rule for RP-8's directive: a client that could ask a worker to
+      // give memory back would be choosing which worker releases something.
+      expect(await rpc(h.router, "pi/worker/pressure", { level: "critical", epoch: 1, generation: 1 })).toMatchObject({
+        error: { message: "The app manages its own session runtimes." },
+      });
+      // And the two RP-4 methods it sits beside, so the refusal is proved for
+      // every host-to-worker lifetime call rather than only the newest one.
+      expect(await rpc(h.router, "pi/session/unload", { path: "/tmp/does-not-exist.jsonl" })).toMatchObject({
+        error: { message: "The app manages its own session runtimes." },
+      });
+      expect(await rpc(h.router, "pi/worker/safety", {})).toMatchObject({
+        error: { message: "The app manages its own session runtimes." },
+      });
       expect(h.workerRequests).toEqual([]);
     } finally {
       h.cleanup();
