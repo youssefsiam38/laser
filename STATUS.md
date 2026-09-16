@@ -1,6 +1,6 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-16T07:14:24+03:00 · orchestrator `01a0a030` · HEAD: 78b22c83
+**Last updated:** 2026-09-16T07:30:34+03:00 · orchestrator `01a0a030` · HEAD: 58b47eba
 **Current focus:** M18 implements RP-8’s calibrated memory-pressure protocol and actor-local release policy before the unchanged post-containment baseline.
 
 | Milestone | State |
@@ -28,7 +28,7 @@
 | MX Cross-cutting | in-progress |
 
 **Blockers:** M18-T15 waits for RP-8 pressure policy and RP-3 closeout; RP-4c route authority and RP-11 immediate paint are complete.
-**Next up:** implement RP-8 from `/tmp/m18-t8-final-plan.md`; close RP-3; run two unchanged full clean baselines; execute RP-14.
+**Next up:** finish RP-8 protocol milestone B under D-261, then worker/companion/host/renderer milestones; close RP-3; run two unchanged full clean baselines.
 **Recently done:** M18-T11 immediate paint (`78b22c83`); M18-T18 route authority (`916e30fa`); M18-T16 bounded bodies (`42344a58`); M18-T10 device tail cache (`c7375791`); T17 naming-pin correction (`890e6a86`).
 
 Ownership and evidence: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`.
