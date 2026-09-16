@@ -1,124 +1,139 @@
 # RP-2 post-containment repeat baseline
 
-Status: **not established**. Both unchanged full runs completed cleanly, but the
-predeclared A/B gate failed the post-retirement host PSS slope. This is a
-repeatability finding, not a passing baseline.
+Status: **not established**. Both unchanged full runs completed cleanly, every
+ranking gate passed, and D-267 made the flat host result a reproducible null.
+The pagination slope was resolved in A and unresolved in B, so its predeclared
+mixed-resolution gate failed. This is a repeatability finding, not a baseline.
 
 ## Provenance
 
-- Product base: `98d12881a6af74fbc2720c6778da5b7477cbc418`.
-- Measurement revision recorded by the reports:
-  `f7eb506816205d170b4e78a31b8e16093756a8e3`, plus the measurement-validity
-  corrections described below and committed with this document.
+- Decision base: `6313a650` (D-267).
+- Measured implementation: `21a15a2a7336813f98eb841023289fc67ee3b7fa`.
 - Machine class: 24 logical CPUs; 31 GiB memory; Linux kernel major 7; x64;
   Node 24.20.0; Chromium 153.
 - Workload: 5 projects, 50 project sessions, 4 long 240-message transcripts,
   4 workspace sessions, 10 children, 100 foreground and 100 background Bash
   calls, 12 2048-square images, 2 MiB reasoning, 2 MiB Markdown, 8 MiB tool
   output, and the declared quick-scale Electron lifecycle lane.
-- The scratch environment used synthetic transcripts and a loopback provider.
-  It used no personal sessions or credentials.
+- The isolated scratch environment used synthetic transcripts and a loopback
+  provider. It used no personal sessions or credentials.
 
-Commands, in order:
+Commands:
 
 ```sh
-pnpm -r build
 pnpm test:browser-check
 node scripts/browser-check/resource-soak.mjs --full --runs 2 --electron --artifacts <external-artifact-root>
 ```
 
-Build passed. The pre-soak browser-check gate passed 101/101. After installing
-this clean worktree's package-managed Electron binary, the unchanged full A/B
-command completed both runs and emitted a failing comparison. An earlier attempt
-had completed the browser lane but could not start scenario 7 because that
-binary had not yet been downloaded; it is setup failure, not baseline evidence.
+The pre-soak browser-check gate passed 103/103. The full command ran in the
+background from the measured implementation above. A and B each passed; the
+emitted A/B comparison failed only the pagination slope gate.
 
-## Outcome
+## Gate-by-gate verdict
 
 | Gate | Verdict | Evidence |
 | --- | --- | --- |
 | Two clean full runs | **pass** | A and B each passed individually. |
 | All nine scenarios in both runs | **pass** | Both reports mark scenarios 1–9 complete. |
 | Complete physical-memory coverage | **pass** | Every phase in both reports has complete PSS/private coverage. |
-| Fixed safety ceilings | **pass** | No 1,610,612,736-byte process-PSS or 5,368,709,120-byte sampled-scope PSS refusal; sampled `MemAvailable` remained above 2,147,483,648 bytes. |
-| Heap-snapshot cap | **pass** | Largest raw capture: A 196,115,776 bytes; B 195,490,991 bytes, each below 268,435,456; no raw capture remained. |
+| Fixed safety ceilings | **pass** | No 1,610,612,736-byte process-PSS or 5,368,709,120-byte sampled-scope PSS refusal; sampled `MemAvailable` stayed above 2,147,483,648 bytes. |
+| Heap-snapshot cap | **pass** | Largest raw capture: A 196,025,576 bytes; B 198,401,584 bytes, each below 268,435,456; no raw capture remained. |
 | Zero survivors | **pass** | Browser and Electron teardown reported zero survivors in A and B. |
-| Retained-owner repeatability | **pass** | All 11 structural/evidence categories passed their predeclared top-owner, overlap and rank-correlation policy. |
-| Post-GC slope repeatability | **fail** | Four renderer slopes passed; host post-retirement PSS changed sign and had 52.4% A/B CV, above 25%. |
+| Retained-owner repeatability | **pass** | All 11 structural/evidence categories passed their predeclared policy. |
+| Post-GC slope repeatability | **fail** | Four metrics passed; pagination was resolved in A and unresolved in B. D-267 requires a mixed pair to fail. |
 | Unsupported metrics explicit | **pass** | Listed below; unavailable evidence is never reported as zero. |
 
-The overall comparison is therefore **failed**. M18-T15 remains blocked; the
-numbers below must not be used as a normal-resource baseline.
+The overall comparison is **failed**. M18-T15 remains blocked and this resource
+envelope must not be treated as a normal-resource baseline.
 
-## Measurement-validity corrections
+## Measurement corrections and D-267
 
-Review of the prior A/B reports found that renderer slopes used natural pre-GC
-phase values even though heap captures forced GC, so they did not satisfy RP-2's
-post-GC requirement. The corrected harness:
+Review of the earlier reports found a harness bug: renderer slopes used natural
+pre-GC phase counters even though the accompanying heap captures forced GC.
+The corrected harness takes explicit double-forced-GC renderer points, samples
+every existing history-page load and every existing 10-call Bash batch, forces
+host GC before existing retirement points, and fits ordinary least squares. It
+retains points, residual standard deviation, slope standard error, R² and n.
+The workload, timing and acceptance thresholds did not change.
 
-- takes explicit double-forced-GC renderer checkpoints and fits ordinary least
-  squares only to those points;
-- samples every existing history-page load and every existing 10-call Bash
-  batch, without changing either workload;
-- forces host GC before existing retirement points;
-- retains slope points, intercept, residual standard deviation, standard error,
-  relative standard error and R²;
-- gives structurally identical heap owners average tied ranks within the
-  declared resolution `max(8 bytes, 1.25%)`; and
-- refuses Linux process rows lacking PSS or private-resident memory, while
-  rechecking once after 50 ms so an actually exiting process is recorded as an
-  exit rather than false incomplete coverage.
+Other validity corrections remain in force:
 
-The pagination counter now records only page loads that actually occurred. No
-fixture, workload, scenario, ceiling, top-owner/overlap rule, 0.8 structural
-rank threshold or 25% slope-CV threshold changed.
+- pagination counts only page loads that actually occurred;
+- structurally identical heap owners share average ranks within the declared
+  `max(8 bytes, 1.25%)` retained-size resolution;
+- a Linux process row lacking PSS or private-resident memory makes coverage
+  inconclusive, with one bounded 50 ms recheck to distinguish an actual exit;
+- no fixture, scenario, ceiling, top-owner/overlap rule, 0.8 structural-rank
+  threshold or 25% CV threshold changed.
 
-## Repeatability
+D-267 was recorded before these runs. An OLS slope whose absolute value is at
+most twice its SE is `unresolved`. It is reported as “no drift resolved above
+±2·SE,” with residual SD, SE, R² and n, never as a rate. Two unresolved runs pass
+as an equivalent null only when their residual-SD noise floors agree within the
+same 25% CV; a mixed unresolved/resolved pair fails; two resolved runs retain
+the unchanged sign and 25% CV gates.
 
-All retained-owner categories passed:
+## Both retained-owner rankings
 
-| Category | Policy | Top owner | Top-five overlap | Spearman |
-| --- | --- | --- | ---: | ---: |
-| Host retained | strict | same | 5 | 0.972 |
-| Host nodes | strict | same | 5 | 1.000 |
-| Renderer retained | strict | same | 5 | 1.000 |
-| Renderer nodes | strict | same | 2/2 available | 1.000 |
-| Renderer state projection | strict | same | 5 | 1.000 |
-| Worker retained | strict | same | 4 | 1.000 |
-| Worker nodes | strict | same | 5 | 1.000 |
-| Renderer native allocators | strict | same | 5 | 1.000 |
-| Host sampled allocation | evidence | same | 4 | 0.939 |
-| Worker sampled allocation | evidence | same | 4 | 0.988 |
-| Desktop processes | evidence | same | 4 | 0.782 |
+The entries below are the top five per category in descending order. Synthetic
+transcript aliases are described by role rather than copied as session
+identifiers.
 
-Post-GC ordinary-least-squares slopes:
+| Category | Run A top five | Run B top five | Repeat gate |
+| --- | --- | --- | --- |
+| Host retained | retired 1,231,216; pre-detach 1,223,024; Bash-complete 1,211,880; paged 940,696; large-stream 849,656 | retired 1,220,120; pre-detach 1,215,112; Bash-complete 1,203,136; paged 915,008; large-stream 824,104 | top same; overlap 5; Spearman 1.000 |
+| Host nodes | array 7,320; string 3,320; `HostServer` 824; `PackageService` 272; `ResourceService` 256 | array 7,208; string 3,320; `HostServer` 824; `PackageService` 272; `ResourceService` 256 | top same; overlap 5; Spearman 1.000 |
+| Renderer retained | distinct, paged, large-stream, Bash-complete and pre-detach `stateOpen`, each 240 | same five, each 240 | top same; overlap 5; Spearman 1.000 |
+| Renderer nodes | native 212; object 28 | native 212; object 28 | top same; overlap 2/2; Spearman 1.000 |
+| Renderer state projection | long transcript 31,535; three long transcripts 14,237 each; short transcript 2,293 | same values and order | top same; overlap 5; Spearman 1.000 |
+| Worker retained | pre-detach primary 1,812,264; Bash-complete primary 1,812,168; large-stream secondary 111,040; large-stream primary 110,792; distinct tertiary 110,264 | pre-detach primary 1,812,208; Bash-complete primary 1,812,112; large-stream secondary 111,040; large-stream primary 110,832; paged primary 110,176 | top same; overlap 4; Spearman 1.000 |
+| Worker nodes | string 16,448; array 10,712; `WorkerServer` 416; `SettingsManager` 272; `ModelRuntime` 264 | same values and order | top same; overlap 5; Spearman 1.000 |
+| Renderer native allocators | `malloc` 69,345,280; partitions 69,345,280; allocator 68,726,784; unspecified 68,317,184; allocated objects 67,200,960 | `malloc` 69,918,720; partitions 69,918,720; allocator 69,226,496; unspecified 68,835,184; allocated objects 67,695,397 | top same; overlap 5; Spearman 1.000 |
+| Host sampled allocation | sampled 406,803,320; `take` 117,657,288; anonymous 105,322,216; `project` 57,257,688; `walk` 14,068,808 | sampled 406,868,960; `take` 118,569,952; anonymous 108,129,216; `project` 57,291,176; `next` 12,067,640 | top same; overlap 4; Spearman 0.952 |
+| Worker sampled allocation | sampled 1,261,287,576; `project` 153,428,840; encoder 153,265,896; `namesOf` 141,361,432; `notify` 118,375,640 | sampled 1,265,734,344; `project` 153,263,280; encoder 153,262,968; `namesOf` 139,853,424; `send` 118,473,224 | top same; overlap 4; Spearman 0.988 |
+| Desktop processes | visible worker 218,374,144; visible renderer 142,746,624; restored renderer 128,806,912; hidden renderer 128,730,112; restored main 128,717,824 | visible worker 216,064,000; visible renderer 135,412,736; visible main 129,860,608; restored main 128,733,184; hidden main 127,001,600 | top same; overlap 3; Spearman 0.806 |
 
-| Slope | A estimate | B estimate | Samples A/B | A/B relative SE | A/B R² | A/B CV | Gate |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| Renderer heap / distinct session | 5,769 B | 7,139 B | 5/5 | 9.0% / 16.9% | 0.976 / 0.921 | 15.0% | pass |
-| Renderer heap / history page | 182,161 B | 189,105 B | 21/21 | 49.6% / 47.7% | 0.176 / 0.188 | 2.6% | pass |
-| Renderer heap / heavy-payload MiB | 2,065,507 B | 2,176,216 B | 3/3 | 140.5% / 128.1% | 0.336 / 0.379 | 3.7% | pass |
-| Renderer heap / Bash call | 30,599 B | 30,257 B | 20/20 | 2.8% / 2.7% | 0.986 / 0.987 | 0.8% | pass |
-| Host post-retirement PSS / minute | -55,120 B | 120,071 B | 6/6 | 433.0% / 337.9% | 0.013 / 0.021 | 52.4% | **fail** |
+Values are retained bytes for heap categories and sampled proportional bytes for
+allocation/process categories. They are not disjoint totals.
 
-The failing host estimates are each much smaller than their own standard error
-(A 238,692; B 405,755 bytes/minute), with near-zero R². The unchanged six-point,
-30-second window cannot resolve a host trend at the required 25% precision on
-this machine. The harness does not reinterpret those noisy values as zero or
-relax the gate after observing them: opposite signs and 52.4% CV remain a
-blocking result. Pagination and heavy-payload slopes pass the between-run gate,
-but their high within-run uncertainty is retained here and prevents treating
-those point estimates as precise cost coefficients.
+## Both post-GC slope sets
+
+`± bound` is 2·SE. Residual SD is the observed-value noise floor; SE has the
+metric's slope unit.
+
+| Metric | Run | Result | Residual SD | SE | R² | n |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| Renderer heap / distinct session | A | resolved: 4,910.080 bytes/session | 12,548.166 | 396.808 | 0.981 | 5 |
+|  | B | resolved: 5,839.400 bytes/session | 18,782.287 | 593.948 | 0.970 | 5 |
+| Renderer heap / history page | A | resolved: 188,383.797 bytes/page | 2,504,779.173 | 90,265.976 | 0.186 | 21 |
+|  | B | no drift resolved above ±188,144.076 bytes/page | 2,610,393.109 | 94,072.038 | 0.157 | 21 |
+| Renderer heap / heavy-payload MiB | A | no drift resolved above ±3,724,116.093 bytes/MiB | 16,090,020.485 | 1,862,058.046 | 0.595 | 3 |
+|  | B | no drift resolved above ±3,655,460.568 bytes/MiB | 15,793,394.716 | 1,827,730.284 | 0.615 | 3 |
+| Renderer heap / Bash call | A | resolved: 30,195.184 bytes/call | 224,126.542 | 869.125 | 0.985 | 20 |
+|  | B | resolved: 29,466.333 bytes/call | 379,055.484 | 1,469.914 | 0.957 | 20 |
+| Host post-retirement PSS / minute | A | no drift resolved above ±349,998.004 bytes/minute | 61,006.112 | 174,999.002 | 0.019 | 6 |
+|  | B | no drift resolved above ±338,418.948 bytes/minute | 58,987.835 | 169,209.474 | 0.061 | 6 |
+
+| Pair gate | Outcome | Pair statistic | Verdict |
+| --- | --- | ---: | --- |
+| Distinct sessions | both resolved, same sign | rate CV 12.2% | pass |
+| Pagination | A resolved, B unresolved | mixed resolution | **fail** |
+| Heavy payload | equivalent null | residual-SD CV 1.3% | pass |
+| Bash calls | both resolved, same sign | rate CV 1.7% | pass |
+| Host retirement | equivalent null | residual-SD CV 2.4% | pass |
+
+The pagination result is not converted to a null pair and is not rerun around.
+Per D-267, one resolved and one unresolved fit is a finding.
 
 ## Resource envelope observed, not baselined
 
 | Measurement | Run A | Run B |
 | --- | ---: | ---: |
-| Peak sampled-scope PSS | 2,186,301,440 B | 2,190,387,200 B |
-| Peak sampled-scope private resident | 2,163,818,496 B | 2,167,971,840 B |
-| Peak renderer JavaScript heap | 212,117,848 B | 206,850,580 B |
-| Lowest phase-sampled `MemAvailable` | 12,345,479,168 B | 10,430,603,264 B |
-| Provider requests | 1,052 | 1,052 |
+| Peak sampled-scope PSS | 2,162,274,304 B | 2,153,728,000 B |
+| Peak sampled-scope private resident | 2,139,480,064 B | 2,127,048,704 B |
+| Peak renderer JavaScript heap | 203,003,544 B | 221,213,080 B |
+| Lowest phase-sampled `MemAvailable` | 13,735,309,312 B | 14,190,174,208 B |
+| Provider requests | 1,050 | 1,050 |
 | Retained views traversed at retirement | 54 | 54 |
 | Browser survivors | 0 | 0 |
 | Electron survivors | 0 | 0 |
@@ -128,9 +143,24 @@ observed bounded queue pressure, closed it, and recovered with a fresh consumer.
 Both proved zero terminal tail buffers after real tool work. Retirement ended
 with zero product connections, transcript attachment refs, attached paths,
 running sessions, live runs, tasks, questions, approvals and running tools.
-The Electron lane preserved the main and host generations through hide/restore,
+The Electron lane preserved main and host generations through hide/restore,
 proved keyboard behavior after restoration, rejected a second instance cleanly,
 and left no survivors.
+
+## Comparison with the initial T2 finding
+
+The initial T2 run refused before the large-tool heap capture when the measured
+renderer reached 1,977,168,896 bytes PSS, above the unchanged per-process
+ceiling. Its preceding large-reasoning checkpoint held a 449,173,956-byte
+renderer heap and 283,647 DOM nodes.
+
+These runs completed the unchanged large reasoning, Markdown, 8 MiB tool,
+12-image, 10-child, 200-call and slow-consumer workloads. At the comparable
+large-reasoning checkpoint, A/B renderer heaps were 203,003,544 / 131,503,912
+bytes and DOM counts were 9,176 / 5,482. Large-tool checkpoints remained below
+the ceiling, and post-image large-stream renderer heaps settled to 42,679,592 /
+44,767,252 bytes after collection. This demonstrates containment relative to
+T2; the pagination repeatability failure still prevents a baseline.
 
 ## Unsupported metrics and limitations
 
@@ -145,6 +175,9 @@ and left no survivors.
   totals overlap and are not presented as disjoint buckets. RSS is not summed.
 - Sampled totals cover the host tree plus the measured renderer, not the whole
   application.
+- A resolved/unresolved boundary can remain sensitive when an estimate lies
+  near 2·SE; D-267 deliberately treats a mixed pair as failure rather than
+  smoothing or reclassifying it after the run.
 - Linux collectors were exercised. macOS and Windows collectors remain unproven.
 - No raw heap, transcript, session identifier, process identifier, credential,
   inspector endpoint or private scratch path is included here.

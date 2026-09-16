@@ -62,9 +62,14 @@ test('PNG generator is deterministic, valid and uniquely seeded', () => {
 test('post-GC slope fits and repeated owner ranks are deterministic', () => {
   assert.equal(theilSen([{x:0,y:10},{x:1,y:12},{x:2,y:14},{x:3,y:100}]), 30);
   const fit = slopeSummary([{ x: 0, y: 1 }, { x: 1, y: 3 }, { x: 2, y: 5 }, { x: 3, y: 7 }], null);
-  assert.deepEqual({ estimator: fit.estimator, phase: fit.measurementPhase, value: fit.value, standardError: fit.standardError,
-    residual: fit.residualStandardDeviation, rSquared: fit.rSquared, samples: fit.samples },
-  { estimator: 'ordinary-least-squares', phase: 'post-gc', value: 2, standardError: 0, residual: 0, rSquared: 1, samples: 4 });
+  assert.deepEqual({ status: fit.status, estimator: fit.estimator, phase: fit.measurementPhase, value: fit.value, standardError: fit.standardError,
+    residual: fit.residualStandardDeviation, rSquared: fit.rSquared, samples: fit.samples, display: fit.display },
+  { status: 'resolved', estimator: 'ordinary-least-squares', phase: 'post-gc', value: 2, standardError: 0, residual: 0, rSquared: 1, samples: 4,
+    display: '2 bytes/unit' });
+  const flat = slopeSummary([{ x: 0, y: 10 }, { x: 1, y: 11 }, { x: 2, y: 9 }, { x: 3, y: 10 }], null, 'bytes/minute');
+  assert.equal(flat.status, 'unresolved');
+  assert.equal(flat.value, null, 'an unresolved estimate is not serialized as a rate');
+  assert.match(flat.display, /^no drift resolved above ±[\d,.]+ bytes\/minute \(n=4, R²=/);
   const scenarios = Object.fromEntries(Array.from({ length: 9 }, (_, index) => [`scenario-${index + 1}`, 'complete']));
   const a={rankings:{host:[{owner:'sessions',bytes:5},{owner:'tasks',bytes:4},{owner:'logs',bytes:3},{owner:'socket',bytes:2},{owner:'pool',bytes:1}]},slopes:{host:{value:2}},scenarios};
   const b={rankings:{host:[{owner:'sessions',bytes:6},{owner:'tasks',bytes:5},{owner:'logs',bytes:3},{owner:'socket',bytes:2},{owner:'pool',bytes:1}]},slopes:{host:{value:2.2}},scenarios};
@@ -1127,10 +1132,10 @@ test('two or more owners still have to correlate above the strict rank threshold
   assert.equal(reversedTail.pass, false, 'a scrambled tail below the rank threshold still fails');
 });
 
-test('a slope repeats only when it points the same way and stays inside the declared spread', () => {
+test('resolved slopes repeat only when they point the same way and stay inside the declared spread', () => {
   const scenarios = Object.fromEntries(SCENARIO_IDS.map(id => [id, 'complete']));
   const rankings = { host: [{ owner: 'HostServer', bytes: 1 }] };
-  const withSlope = value => ({ scenarios, rankings, slopes: { growth: { status: 'available', value } } });
+  const withSlope = value => ({ scenarios, rankings, slopes: { growth: { status: 'resolved', value } } });
   const tight = compareRuns(withSlope(1_000_000), withSlope(1_100_000)).slopes.growth;
   assert.equal(tight.pass, true);
   assert.ok(tight.coefficientOfVariation <= SLOPE_POLICY.maximumCoefficientOfVariation);
@@ -1148,6 +1153,35 @@ test('a slope repeats only when it points the same way and stays inside the decl
   const missing = compareRuns(withSlope(1_000_000), { scenarios, rankings, slopes: { growth: { status: 'unavailable', value: null } } }).slopes.growth;
   assert.deepEqual([missing.available, missing.coefficientOfVariation, missing.pass], [false, null, false]);
   assert.equal(SLOPE_POLICY.maximumCoefficientOfVariation, 0.25);
+});
+
+test('D-267 gates unresolved pairs by their noise floors and rejects a mixed pair', () => {
+  const scenarios = Object.fromEntries(SCENARIO_IDS.map(id => [id, 'complete']));
+  const rankings = { host: [{ owner: 'HostServer', bytes: 1 }] };
+  const run = slope => ({ scenarios, rankings, slopes: { growth: slope } });
+  const unresolved = residualStandardDeviation => ({ status: 'unresolved', value: null, residualStandardDeviation,
+    standardError: residualStandardDeviation / 2, resolutionLimit: residualStandardDeviation, rSquared: 0.01, samples: 6,
+    display: `no drift resolved above ±${residualStandardDeviation} bytes/minute (n=6, R²=0.010)` });
+  const resolved = value => ({ status: 'resolved', value, display: `${value} bytes/minute` });
+
+  const equivalentNull = compareRuns(run(unresolved(100)), run(unresolved(110))).slopes.growth;
+  assert.equal(equivalentNull.outcome, 'equivalent-null');
+  assert.equal(equivalentNull.pass, true);
+  assert.equal(equivalentNull.signAgrees, null);
+  assert.ok(equivalentNull.noiseFloorCoefficientOfVariation <= SLOPE_POLICY.maximumCoefficientOfVariation);
+  assert.match(equivalentNull.display, /A: no drift resolved above ±100 bytes\/minute/);
+
+  const noisyMismatch = compareRuns(run(unresolved(100)), run(unresolved(200))).slopes.growth;
+  assert.equal(noisyMismatch.outcome, 'equivalent-null');
+  assert.ok(noisyMismatch.noiseFloorCoefficientOfVariation > SLOPE_POLICY.maximumCoefficientOfVariation);
+  assert.deepEqual([noisyMismatch.flaggedOver25Percent, noisyMismatch.pass], [true, false]);
+
+  const mixed = compareRuns(run(unresolved(100)), run(resolved(1_000))).slopes.growth;
+  assert.deepEqual([mixed.outcome, mixed.pass], ['resolution-mismatch', false]);
+
+  const resolvedPair = compareRuns(run(resolved(1_000)), run(resolved(1_100))).slopes.growth;
+  assert.deepEqual([resolvedPair.outcome, resolvedPair.signAgrees, resolvedPair.pass], ['resolved-pair', true, true]);
+  assert.equal(SLOPE_POLICY.unresolvedStandardErrors, 2);
 });
 
 test('a measurement-only calibration run cannot be mistaken for a baseline (RP-5)', async () => {

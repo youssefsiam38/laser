@@ -72,7 +72,7 @@ export default {
       { x: 0, y: state.distinctPostGcRendererHeapBytes ?? null },
       { x: (config.reasoningBytes + config.markdownBytes) / 1024 / 1024, y: afterReasoningPostGc.rendererJsHeapBytes },
       { x: (config.reasoningBytes + config.markdownBytes + config.toolBytes) / 1024 / 1024, y: afterToolPostGc.rendererJsHeapBytes },
-    ], null);
+    ], null, 'bytes/MiB');
     report.imageOwnership = { count: images.length, decodedCount: phase.renderer?.images?.filter(image => image.decoded).length ?? 0,
       logicalPixelBytes: images.reduce((n, image) => n + image.logicalBytes, 0), encodedBytes: images.reduce((n, image) => n + image.bytes.length, 0),
       hashes: images.map(image => image.hash), physicalDecodedBytes: null,

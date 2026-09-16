@@ -264,7 +264,7 @@ export async function runResourceSoak({ mode = 'quick', runs = 1, artifacts = '/
     const markdown = `# Resource soak comparison\n\nImplementation: \`${implementationSha}\`\n\nResult: **${comparison.pass ? 'pass' : 'failed'}**\n\n`
       + `Categories are gated by a predeclared policy: structural owners strictly, sampled evidence loosely.\n\n`
       + Object.entries(comparison.categories).map(([name, value]) => `- ${name} (${value.policy}): top=${value.topOwnerSame}; overlap=${value.topFiveOverlap}/5; Spearman=${value.spearman ?? 'unavailable'}; pass=${value.pass}`).join('\n')
-      + `\n\n## Slopes\n\n` + Object.entries(comparison.slopes).map(([name, value]) => `- ${name}: sign agrees=${value.signAgrees}; CV=${value.coefficientOfVariation ?? 'unavailable'}${value.flaggedOver25Percent ? ' (flagged over 25%)' : ''}`).join('\n') + '\n';
+      + `\n\n## Slopes\n\n` + Object.entries(comparison.slopes).map(([name, value]) => `- ${name}: ${value.display}; pass=${value.pass}`).join('\n') + '\n';
     assertRedacted(markdown);
     await Promise.all([
       writeFile(join(artifacts, 'comparison.json'), text, { mode: 0o600 }),

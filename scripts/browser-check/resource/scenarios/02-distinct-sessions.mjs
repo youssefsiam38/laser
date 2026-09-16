@@ -64,7 +64,7 @@ export default {
     const phase = await run.samplePhase('distinct-sessions', { heap: true });
     assert.equal(phase.host.workers, expected.workers, 'host retains one row per project/private workspace');
     const distinctPostGc = await run.rendererPostGcHeap('distinct-sessions');
-    report.slopes.rendererDistinctSessionHeapBytesPerSession = slopeSummary(visitSlopeCheckpoints.map(row => ({ x: row.visited, y: row.rendererJsHeapBytes })), null);
+    report.slopes.rendererDistinctSessionHeapBytesPerSession = slopeSummary(visitSlopeCheckpoints.map(row => ({ x: row.visited, y: row.rendererJsHeapBytes })), null, 'bytes/session');
     return { phase, state: { sessions, workspaceSessions, distinctPhase: phase, distinctPostGcRendererHeapBytes: distinctPostGc.rendererJsHeapBytes } };
   },
 };

@@ -123,7 +123,7 @@ export default {
       replacedGenerationCalls: retention.replacedGenerationCalls, heavyToolGenerationSurvived: retention.heavyToolGenerationSurvived };
     report.retainedTaskRecords = { extensionTailBuffers: phase.tailBuffers.count, workerTaskRows, hostTaskRows: phase.host.tasks,
       expectedExtensionTailBuffers: retention.tailBuffers, expectedWorkerTaskRows: retention.workerBackgroundTasks };
-    report.slopes.rendererBashHeapBytesPerCall = slopeSummary((report.bashSlopeCheckpoints ?? []).map(row => ({ x: row.calls, y: row.rendererJsHeapBytes })), null);
+    report.slopes.rendererBashHeapBytesPerCall = slopeSummary((report.bashSlopeCheckpoints ?? []).map(row => ({ x: row.calls, y: row.rendererJsHeapBytes })), null, 'bytes/call');
     report.temporaryPeaks.bashRendererJsBytes = Number.isFinite(phase.postGc?.renderer?.jsHeapUsedBytes)
       ? Math.max(...(report.taskCheckpoints ?? []).map(row => row.rendererJsHeapBytes).filter(Number.isFinite), phase.renderer?.jsHeapUsedBytes ?? 0)
         - phase.postGc.renderer.jsHeapUsedBytes : null;

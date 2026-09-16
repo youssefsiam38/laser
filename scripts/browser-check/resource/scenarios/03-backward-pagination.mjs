@@ -27,7 +27,7 @@ export default {
     }
     assert.equal(checkpoints.length, loadedPages + 1, 'every history-page workload step has exactly one post-GC slope sample');
     const phase = await run.samplePhase('paged-history', { heap: true });
-    report.slopes.rendererPagedHistoryHeapBytesPerPage = slopeSummary(checkpoints.map(row => ({ x: row.pages, y: row.rendererJsHeapBytes })), null);
+    report.slopes.rendererPagedHistoryHeapBytesPerPage = slopeSummary(checkpoints.map(row => ({ x: row.pages, y: row.rendererJsHeapBytes })), null, 'bytes/page');
     return { phase, state: { pagedHistoryPhase: phase } };
   },
 };

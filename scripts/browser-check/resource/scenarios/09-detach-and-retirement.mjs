@@ -128,7 +128,7 @@ export default {
       const postGc = await run.hostPostGcPss(`retired-quiet-${index + 1}`);
       quiet.push({ x: index * (config.quietIntervalMs / 60_000), y: postGc.totalPssBytes });
     }
-    report.slopes.hostPostRetirementPssBytesPerMinute = slopeSummary(quiet, config.quietIntervalMs / 1000);
+    report.slopes.hostPostRetirementPssBytesPerMinute = slopeSummary(quiet, config.quietIntervalMs / 1000, 'bytes/minute');
     await removeRegistrations((await waitForRegistrations(check.fixture.inspectDir, { rootPid: check.fixture.hostRecord.pid, minimum: 1 }))
       .filter(record => record.pid !== check.fixture.hostRecord.pid));
     return { phase: retired };
