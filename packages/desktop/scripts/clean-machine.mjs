@@ -23,6 +23,7 @@
  * user's first-run problem, not a packaging one.
  */
 import { execFileSync, spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -605,7 +606,7 @@ const packagedHost = spawn(nodeBinary, [
   scratchState,
 ], {
   cwd: scratchState,
-  env: bareEnv,
+  env: { ...bareEnv, [identity.env.hostLaunchId]: randomBytes(16).toString("hex") },
   stdio: ["ignore", "ignore", "ignore"],
 });
 packagedHost.once("error", (error) => { packagedHostFailure = error.message; });

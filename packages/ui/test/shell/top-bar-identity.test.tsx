@@ -34,6 +34,7 @@ beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   localStorage.clear();
   stable.destination = { phase: "ready-code", intent: 0, code: { kind: "project-landing", project: "/project" } };
+  stable.actions.restartWorker.mockReset();
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -248,5 +249,39 @@ describe("connected top-bar identity", () => {
       container.querySelector<HTMLButtonElement>('[aria-label="More"]')!.dispatchEvent(event);
     });
     expect(document.querySelector('[data-slot="dropdown-menu-content"]')?.textContent).toContain("Open parent: A very long session title");
+  });
+
+  it("offers explicit retry, safe mode, and normal-mode recovery actions", async () => {
+    const store = createStateStore(seed());
+    store.dispatch({ type: "notification", method: "pi/worker/status", params: {
+      cwd: "/project",
+      status: "crashed",
+      mode: "normal",
+      repair: { state: "exhausted", automaticAttempts: 2 },
+      message: "This project’s agent couldn’t start.",
+      restarts: 2,
+      since: "2026-01-01T00:00:00.000Z",
+      canRestart: true,
+    } });
+    await mountTopBar(store);
+
+    const button = (label: string) => [...container.querySelectorAll<HTMLButtonElement>("button")]
+      .find((candidate) => candidate.textContent === label)!;
+    await act(async () => button("Try again").click());
+    await act(async () => button("Start in safe mode").click());
+    expect(stable.actions.restartWorker).toHaveBeenNthCalledWith(1, "/project");
+    expect(stable.actions.restartWorker).toHaveBeenNthCalledWith(2, "/project", "safe");
+
+    await act(async () => store.dispatch({ type: "notification", method: "pi/worker/status", params: {
+      cwd: "/project",
+      status: "ready",
+      mode: "safe",
+      restarts: 0,
+      since: "2026-01-01T00:01:00.000Z",
+      canRestart: false,
+    } }));
+    expect(container.textContent).toContain("Safe mode is on");
+    await act(async () => button("Try normal mode").click());
+    expect(stable.actions.restartWorker).toHaveBeenNthCalledWith(3, "/project", "normal");
   });
 });

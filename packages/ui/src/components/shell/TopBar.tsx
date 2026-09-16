@@ -265,10 +265,20 @@ export function TopBar() {
                 size="xs"
                 variant="outline"
                 onClick={() => void actions.restartWorker(meta.session!.cwd)}
-                title={`Start the worker for ${meta.session.cwd} again`}
+                title={`Start the agent for ${meta.session.cwd} again`}
               >
                 <RotateCw />
-                Retry
+                Try again
+              </Button>
+            )}
+            {chip.canStartSafe && (
+              <Button size="xs" variant="outline" onClick={() => void actions.restartWorker(meta.session!.cwd, "safe")}>
+                Start in safe mode
+              </Button>
+            )}
+            {chip.canTryNormal && (
+              <Button size="xs" variant="outline" onClick={() => void actions.restartWorker(meta.session!.cwd, "normal")}>
+                Try normal mode
               </Button>
             )}
           </span>

@@ -86,11 +86,16 @@ function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
   const { actions, destination } = useLaserStable();
   const open = useLaserState(s => sessionOpenPhase(s, visibleSessionPath(s)), sameSessionOpenPhase);
   const connected = useLaserState(s => s.connection === "open");
-  const { page } = useWorkbench();
+  const { page, open: openWorkbench } = useWorkbench();
   // A conversation painted from this device is already on screen: a loading
   // state over it would be a lie, and a skeleton would throw it away (RP-11).
   const loading = open.phase === "opening" && !open.hasTranscript && !open.provisional && open.expectsTranscript;
   const loadError = open.phase === "failed";
+  const cwd = useLaserState(s => {
+    const target = visibleSessionPath(s);
+    return target ? s.open[target]?.state.cwd : undefined;
+  });
+  const worker = useLaserState(s => cwd ? s.workers[cwd] : undefined);
   const slots: ThreadSlots = statusSlot !== undefined ? { statusLine: statusSlot } : {};
   const aui = useAui();
   const wholeTranscript = useWholeTranscriptRefusal();
@@ -111,6 +116,39 @@ function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
               {/* A long transcript gets a rail of ticks at the viewport's edge, on a wide screen only. */}
               <ConversationMapAui side="right" className="hidden lg:block" />
               <div className="mx-auto flex w-full max-w-(--measure-thread) flex-1 flex-col px-4 md:px-6">
+                {worker?.status === "crashed" && cwd && (
+                  <div className="mt-6 flex flex-wrap items-end gap-2">
+                    <ErrorState
+                      className="min-w-0 flex-1"
+                      title={worker.repair?.state === "paused"
+                        ? "Automatic repair is paused because its recovery record could not be read."
+                        : "This project’s agent couldn’t start."}
+                      detail={worker.repair?.state === "paused"
+                        ? "Your sessions and settings are unchanged."
+                        : "Your Feature choices and conversations are unchanged."}
+                      onRetry={() => void actions.restartWorker(cwd)}
+                      retryLabel="Try again"
+                    />
+                    {worker.mode !== "safe" && (
+                      <Button variant="outline" onClick={() => void actions.restartWorker(cwd, "safe")}>Start in safe mode</Button>
+                    )}
+                    {worker.mode === "safe" && (
+                      <Button variant="outline" onClick={() => void actions.restartWorker(cwd, "normal")}>Try normal mode</Button>
+                    )}
+                  </div>
+                )}
+                {worker?.status === "ready" && worker.mode === "safe" && cwd && (
+                  <div className="mt-6 flex flex-wrap items-end gap-2">
+                    <ErrorState
+                      className="min-w-0 flex-1"
+                      title="Safe mode is on."
+                      detail="Optional Features are off for this project. Your Feature choices were not changed."
+                      onRetry={() => void actions.restartWorker(cwd, "normal")}
+                      retryLabel="Try normal mode"
+                    />
+                    <Button variant="outline" onClick={() => openWorkbench("settings", "features")}>Open Features</Button>
+                  </div>
+                )}
                 {loadError && (
                   <ErrorState className="mt-6"
                     title={open.provisional ? "Couldn’t reach the host. This is your last view of this conversation."

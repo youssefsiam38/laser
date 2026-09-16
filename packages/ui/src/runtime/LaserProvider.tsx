@@ -231,8 +231,8 @@ export interface LaserActions {
   refreshProjects(): Promise<void>;
   /** Answer a `pi/project/trust_request`. The held-back worker starts (or does not). */
   answerTrust(cwd: string, trusted: boolean, remember: boolean): Promise<void>;
-  /** Start a crashed or retired worker again (`pi/worker/restart`). */
-  restartWorker(cwd: string): Promise<void>;
+  /** Explicitly start a crashed/retired worker in its current or chosen effective mode. */
+  restartWorker(cwd: string, mode?: "normal" | "safe"): Promise<void>;
   /** Tell the host this session has been read up to its latest update. */
   markSeen(path: string, seq: number, force?: boolean): void;
   /** The composer has taken the text a jump or fork handed back for `path`. */
@@ -1776,9 +1776,9 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           setProjectList((current) => current.map((p) => (p.cwd === project.cwd ? project : p)));
           setTrustRequests((current) => current.filter((r) => r.cwd !== project.cwd));
         }).then(() => undefined),
-      restartWorker: (cwd) =>
+      restartWorker: (cwd, mode) =>
         guard(async () => {
-          await client.request("pi/worker/restart", { cwd });
+          await client.request("pi/worker/restart", { cwd, ...(mode ? { mode } : {}) });
         }).then(() => undefined),
       markSeen,
       dismissToast: (id) => dispatch({ type: "dismissToast", id }),
@@ -2547,7 +2547,7 @@ export interface SessionMeta {
   compacting: boolean;
   connection: AppState["connection"];
   /** Worker status for this session's project directory. */
-  worker: { status: string; message?: string } | undefined;
+  worker: WorkerInfo | undefined;
 }
 
 export function useSessionMeta(): SessionMeta {

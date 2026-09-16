@@ -30,6 +30,7 @@ import type {
   UiDialogRequest,
   UiFireAndForget,
   Usage,
+  WorkerInfo,
 } from "@lasercode/protocol";
 
 import { activePathIds } from "./components/thread/entries.js";
@@ -382,7 +383,7 @@ export interface AppState {
   current: string | undefined;
   /** The sole tab/project/session intent for the main window. */
   destination: MainDestination;
-  workers: Record<string, { status: string; message?: string }>;
+  workers: Record<string, WorkerInfo>;
   toasts: Array<{ id: number; level: "info" | "warning" | "error"; text: string }>;
   agents: AgentsSlice;
   /** Background commands agents left running (docs/ux-fleet.md). */
@@ -1085,7 +1086,7 @@ function applyNotification(state: AppState, method: HostNotificationMethod, para
     }
     case "pi/worker/status": {
       const p = params as HostNotifications["pi/worker/status"];
-      const next = { ...state, workers: { ...state.workers, [p.cwd]: { status: p.status, ...(p.message ? { message: p.message } : {}) } } };
+      const next = { ...state, workers: { ...state.workers, [p.cwd]: structuredClone(p) } };
       return p.status === "crashed" ? pushToast(next, "error", `Worker for ${p.cwd} crashed: ${p.message ?? ""}`) : next;
     }
     case "agents/updated":

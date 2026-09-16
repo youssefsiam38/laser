@@ -239,7 +239,10 @@ describe("AgentRunRegistry", () => {
 
     const second = new AgentRunRegistry({ storePath: file, now: () => new Date("2026-06-11T00:00:00.000Z") });
     expect(second.get("live")).toMatchObject({ status: "failed", error: "The project's worker stopped before this run ended." });
+    expect(second.takeLoadedFailures().map((entry) => entry.runId)).toEqual(["live"]);
+    expect(second.takeLoadedFailures()).toEqual([]);
     expect(second.get("t3")?.status).toBe("completed");
+    second.close();
   });
 
   it("does not let a stale report resurrect an ended run", () => {

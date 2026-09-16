@@ -33,7 +33,7 @@ describe.skipIf(!existsSync(MAIN))("worker process over fd 3", () => {
   it("reports ready, opens a session, and exits cleanly on pipe close", async () => {
     child = spawn(
       process.execPath,
-      [MAIN, "--cwd", join(base, "project"), "--agent-dir", join(base, "agent"), "--session-dir", join(base, "sessions")],
+      [MAIN, "--cwd", join(base, "project"), "--launch-id", "00112233445566778899aabbccddeeff", "--worker-mode", "normal", "--agent-dir", join(base, "agent"), "--session-dir", join(base, "sessions")],
       { stdio: ["ignore", "pipe", "pipe", "pipe"] },
     );
     const pipe = child.stdio[3] as Duplex;
@@ -57,6 +57,8 @@ describe.skipIf(!existsSync(MAIN))("worker process over fd 3", () => {
     let stderr = "";
     child.stderr!.on("data", (c: Buffer) => (stderr += c.toString()));
 
+    const starting = await waitFor((m) => "method" in m && m.method === "pi/worker/status" && (m.params as { status: string }).status === "starting");
+    expect(starting).toMatchObject({ params: { launchId: "00112233445566778899aabbccddeeff", mode: "normal" } });
     await waitFor((m) => "method" in m && m.method === "pi/worker/status" && (m.params as { status: string }).status === "ready");
 
     pipe.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "session/new", params: { cwd: join(base, "project") } })}\n`);

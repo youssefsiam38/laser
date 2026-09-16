@@ -2856,7 +2856,7 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
-| M19-T1 | Launch identity, safe mode and bounded repair | in-progress | m19-recovery-plan `01a0aa8f-8f82-714d-99c8-190890feefc7` | — | added by D-264; depends on M18 |
+| M19-T1 | Launch identity, safe mode and bounded repair | in-progress | m19-recovery-plan `01a0aa8f-8f82-714d-99c8-190890feefc7` | — | changes requested; see notes |
 | M19-T2 | Immutable generation activation and correlated updates | todo | — | — | added by D-264; depends on M19-T1 |
 | M19-T3 | Migration snapshot and interrupted-restore recovery | todo | — | — | added by D-264; depends on M19-T2 |
 
@@ -2869,6 +2869,8 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 #### M19-T1 notes
 - 2026-09-16 claimed by `m19-recovery-a0b859e3` on base `3d1027da`: implement approved T1A protocol/identity contract, T1B launch enforcement, then T1C bounded repair/safe mode/UI and host-loss reconciliation; one review after all three. D-266's runtime generation inventory amendment belongs to T2 and replaces the plan's byte-copy proposal.
 - 2026-09-16 T1A complete: added 128-bit launch IDs, closed runtime failure owner/stage/category values, safe/normal restart mode, strict schemas/round-trip samples, and sanitized structured companion failures; `pi/worker/status` remains non-sheddable state and `pi/worker/restart` remains work-control. Evidence: `pnpm -F @lasercode/protocol test`; `pnpm -F @lasercode/protocol typecheck`; `pnpm -F @lasercode/protocol build`; `pnpm -F @lasercode/pi-extension exec vitest run test/web-access.test.ts`; `pnpm -F @lasercode/pi-extension typecheck`.
+- 2026-09-16 T1B complete: CLI and desktop mint exact 128-bit host identities; `host.json` moves atomically from `starting` to `ready`; health, adoption and worker first-frame readiness require the exact launch identity. Evidence: focused CLI/desktop/host launch tests and commit `95b5e084`.
+- 2026-09-16 T1C complete: bounded durable two-retry repair, corruption pause, persistent non-destructive safe mode, existing-element recovery actions in chat and Features, and load-time host-loss agent failure delivery. Full package tests, build/typecheck, release/browser tests, desktop pack, clean-machine gate, pointer/touch desktop+phone dark/light browser matrices and `pnpm verify` pass; soak intentionally not rerun. Sanitized evidence: `/tmp/m19-t1-report.md` and `/tmp/m19-t1-*`.
 
 ## Handoffs
 

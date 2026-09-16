@@ -7,12 +7,13 @@
  */
 import { PRODUCT_NAME } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { JsonRpcNotification, WorkerInfo } from "@lasercode/protocol";
 import { AgentRunRegistry } from "../src/agents/runs.js";
 import { WorkerPool } from "../src/worker-pool.js";
+import { RuntimeRepairLedger } from "../src/runtime-repair.js";
 
 /**
  * Speaks just enough protocol: announces `ready`, answers `session/load`, and
@@ -21,6 +22,8 @@ import { WorkerPool } from "../src/worker-pool.js";
 const FAKE_WORKER = `
 import { Socket } from "node:net";
 const cwd = process.argv[process.argv.indexOf("--cwd") + 1];
+const launchId = process.argv[process.argv.indexOf("--launch-id") + 1];
+const workerMode = process.argv[process.argv.indexOf("--worker-mode") + 1];
 const socket = new Socket({ fd: 3, readable: true, writable: true });
 const send = (m) => socket.write(JSON.stringify(m) + "\\n");
 let buffer = "";
@@ -44,7 +47,7 @@ socket.on("data", (chunk) => {
     // that pins it, so it always agrees; a test that wants a refusal uses a
     // worker of its own (see session-lifetime.test.ts).
     if (req.method === "pi/worker/retire") { send({ jsonrpc: "2.0", id: req.id, result: { retiring: true } }); continue; }
-    if (req.method === "pi/test/argv") { send({ jsonrpc: "2.0", id: req.id, result: { argv: process.argv.slice(2), execArgv: process.execArgv, processCwd: process.cwd() } }); continue; }
+    if (req.method === "pi/test/argv") { send({ jsonrpc: "2.0", id: req.id, result: { argv: process.argv.slice(2), execArgv: process.execArgv, processCwd: process.cwd(), workerMode, features: JSON.parse(process.env.SYNTHETIC_FEATURES ?? "[]") } }); continue; }
     // RP-8: a worker's own pressure report, shaped as the real one is.
     if (req.method === "pi/test/pressure") {
       send({ jsonrpc: "2.0", method: "pi/resource/pressure", params: { generation: req.params.generation, level: "unknown", inputs: [], ran: [], results: [], stores: {} } });
@@ -60,7 +63,8 @@ socket.on("data", (chunk) => {
   }
 });
 socket.on("end", () => process.exit(0));
-send({ jsonrpc: "2.0", method: "pi/worker/status", params: { cwd, status: "ready" } });
+send({ jsonrpc: "2.0", method: "pi/worker/status", params: { cwd, status: "starting", launchId, mode: workerMode } });
+send({ jsonrpc: "2.0", method: "pi/worker/status", params: { cwd, status: "ready", launchId, mode: workerMode } });
 `;
 
 /**
@@ -379,6 +383,82 @@ describe("WorkerPool", () => {
     const recovered = await pool.get(project);
     const result = await recovered.request<{ processCwd: string }>("pi/test/argv", {});
     expect(result.processCwd).toBe(project);
+  });
+
+  it("persists safe mode with an empty effective Feature set without changing desired preferences", async () => {
+    const prefs = join(dir, "prefs.json");
+    const desired = '{"features":{"value":"unchanged"}}\n';
+    writeFileSync(prefs, desired);
+    const repair = new RuntimeRepairLedger(join(dir, "runtime-repair.json"));
+    pool = makePool({
+      repair,
+      envForCwd: (_cwd, mode) => ({ SYNTHETIC_FEATURES: JSON.stringify(mode === "safe" ? [] : ["desired-feature"]) }),
+    });
+
+    const info = await pool.restart(project, "safe");
+    const effective = await (await pool.get(project)).request<{ workerMode: string; features: string[] }>("pi/test/argv", {});
+    expect(info.mode).toBe("safe");
+    expect(effective).toEqual(expect.objectContaining({ workerMode: "safe", features: [] }));
+    expect(readFileSync(prefs, "utf8")).toBe(desired);
+    expect(new RuntimeRepairLedger(join(dir, "runtime-repair.json")).mode(project)).toBe("safe");
+
+    await pool.restart(project, "normal");
+    const normal = await (await pool.get(project)).request<{ workerMode: string; features: string[] }>("pi/test/argv", {});
+    expect(normal).toEqual(expect.objectContaining({ workerMode: "normal", features: ["desired-feature"] }));
+    expect(readFileSync(prefs, "utf8")).toBe(desired);
+  });
+
+  it("leaves desired preferences byte-identical after failed normal and safe launches", async () => {
+    const prefs = join(dir, "prefs.json");
+    const desired = '{"features":{"global":{"goals":true}}}\n';
+    writeFileSync(prefs, desired);
+    pool = makePool({
+      workerMain: join(dir, "missing-worker.mjs"),
+      repair: new RuntimeRepairLedger(join(dir, "runtime-repair.json")),
+    });
+
+    await expect(pool.restart(project, "normal")).rejects.toThrow();
+    expect(readFileSync(prefs, "utf8")).toBe(desired);
+    await expect(pool.restart(project, "safe")).rejects.toThrow();
+    expect(readFileSync(prefs, "utf8")).toBe(desired);
+  });
+
+  it("pauses a malformed repair record until one explicit action replaces it", async () => {
+    const repairPath = join(dir, "runtime-repair.json");
+    writeFileSync(repairPath, "{truncated");
+    const repair = new RuntimeRepairLedger(repairPath);
+    pool = makePool({ repair });
+
+    await expect(pool.get(project)).rejects.toThrow(/Automatic repair is paused/);
+    expect(pool.liveClients()).toEqual([]);
+    expect(readdirSync(dir).filter((name) => name.startsWith("runtime-repair.json.corrupt-"))).toHaveLength(1);
+    await expect(pool.restart(project, "safe")).resolves.toMatchObject({ status: "ready", mode: "safe" });
+    expect(JSON.parse(readFileSync(repairPath, "utf8"))).toMatchObject({ version: 1 });
+  });
+
+  it("durably stops after two automatic retries until a person chooses an action", async () => {
+    const repair = new RuntimeRepairLedger(join(dir, "runtime-repair.json"));
+    pool = makePool({ repair, backoffMs: 1 });
+    let current = await pool.get(project);
+    pool.bindSession("/sessions/a.jsonl", project);
+
+    for (let incident = 1; incident <= 3; incident += 1) {
+      void current.request("pi/test/crash", {}).catch(() => undefined);
+      await waitFor(() => statuses.filter((status) => status.status === "crashed").length === incident);
+      if (incident === 3) break;
+      runTimers();
+      await waitFor(() => statusesOf(project).at(-1) === "ready");
+      current = await pool.get(project);
+    }
+
+    expect(pool.workerInfo(project)).toMatchObject({
+      status: "crashed",
+      repair: { state: "exhausted", automaticAttempts: 2 },
+      message: "This project's agent couldn't start. Your Feature choices and conversations are unchanged.",
+    });
+    expect(timers.filter((timer) => timer.ms < 60_000)).toHaveLength(0);
+    await expect(pool.get(project)).rejects.toThrow(/Try again or Start in safe mode/);
+    await expect(pool.restart(project, "safe")).resolves.toMatchObject({ status: "ready", mode: "safe" });
   });
 
   it("gives up after the restart cap and comes back on an explicit retry", async () => {

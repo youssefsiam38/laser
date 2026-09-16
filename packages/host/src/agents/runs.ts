@@ -42,6 +42,8 @@ export class AgentRunRegistry {
   private readonly terminals = new Map<string, Map<string, AgentRun>>();
   private readonly liveCounts = new Map<string, number>();
   private readonly order = new Map<string, number>();
+  /** Harness failures synthesized while loading, before the recovery queue exists. */
+  private loadedFailures: AgentRun[] = [];
   private nextOrder = 0;
   private pruneTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly now: () => Date;
@@ -118,6 +120,13 @@ export class AgentRunRegistry {
   /** The root session of the tree `path` is in: itself unless a run says otherwise. */
   rootOf(path: string): string {
     return this.firstIndexed(this.children.get(path))?.rootSessionPath ?? path;
+  }
+
+  /** Consume the load-time failures once, after the recovery queue is constructed. */
+  takeLoadedFailures(): AgentRun[] {
+    const failures = this.loadedFailures;
+    this.loadedFailures = [];
+    return structuredClone(failures);
   }
 
   /** The project's worker is gone: nothing in flight there can end on its own. */
@@ -363,8 +372,10 @@ export class AgentRunRegistry {
     let changed = false;
     for (const run of this.runs.values()) {
       if (isTerminalRunStatus(run.status)) continue;
-      this.put({ ...run, status: "failed", error: WORKER_LOST_MESSAGE,
-        endedBy: { initiator: "harness", reason: WORKER_LOST_MESSAGE }, endedAt: at, updatedAt: at });
+      const failed: AgentRun = { ...run, status: "failed", error: WORKER_LOST_MESSAGE,
+        endedBy: { initiator: "harness", reason: WORKER_LOST_MESSAGE }, endedAt: at, updatedAt: at };
+      this.put(failed);
+      this.loadedFailures.push(structuredClone(failed));
       changed = true;
     }
     this.prune();

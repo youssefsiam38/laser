@@ -205,6 +205,11 @@ export interface WorkerInfo {
   mode?: WorkerMode;
   /** Typed ownership and cause for a failed launch/runtime, before private logs. */
   failure?: RuntimeFailure;
+  /** Durable automatic-repair policy for this failure. */
+  repair?: {
+    state: "available" | "exhausted" | "paused";
+    automaticAttempts: number;
+  };
   /** Why it crashed, or what it is doing. Written for a person to read. */
   message?: string;
   pid?: number;

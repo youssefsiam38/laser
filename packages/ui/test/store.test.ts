@@ -320,7 +320,7 @@ describe("the environment (RP-13)", () => {
       sessionsLoaded: true,
       open: { "/p/s.jsonl": { path: "/p/s.jsonl" } as unknown as SessionView },
       current: "/p/s.jsonl",
-      workers: { "/p": { status: "ready" } },
+      workers: { "/p": { cwd: "/p", status: "ready" as const, restarts: 0, since: "2026-01-01T00:00:00.000Z", canRestart: false } },
       toasts: [{ id: 1, level: "info" as const, text: "kept nothing" }],
       agents: { ...initialState.agents, runs: { r1: { runId: "r1" } as never } },
       tasks: { tasks: { t1: { id: "t1" } as never }, listed: ["/p/s.jsonl"] },

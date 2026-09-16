@@ -15,7 +15,7 @@ import { describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PRODUCT_NAME } from "@lasercode/protocol";
+import { ENV, PRODUCT_NAME } from "@lasercode/protocol";
 import { runDaemon } from "../src/daemon.js";
 import type { LaserPaths } from "../src/config.js";
 
@@ -35,7 +35,9 @@ function paths(base: string): LaserPaths {
 describe("the daemon and an unusable policy", () => {
   it("fails to start, says what to do, and never binds a port", async () => {
     const base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-daemon-policy-`));
+    const previousLaunchId = process.env[ENV.hostLaunchId];
     try {
+      process.env[ENV.hostLaunchId] = "00112233445566778899aabbccddeeff";
       mkdirSync(join(base, "state"), { recursive: true });
       writeFileSync(join(base, "state", "policy.json"), JSON.stringify({ remote: { scopes: ["everything"] } }));
       const lines: string[] = [];
@@ -45,6 +47,8 @@ describe("the daemon and an unusable policy", () => {
       // Nothing was recorded as running, so nothing can adopt it.
       expect(lines.some((line) => line.includes("host ready"))).toBe(false);
     } finally {
+      if (previousLaunchId === undefined) delete process.env[ENV.hostLaunchId];
+      else process.env[ENV.hostLaunchId] = previousLaunchId;
       rmSync(base, { recursive: true, force: true });
     }
   });
