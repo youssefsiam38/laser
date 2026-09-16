@@ -28,7 +28,7 @@
 | M19 Runtime recovery/update activation | todo |
 | MX Cross-cutting | in-progress |
 
-**Blockers:** M18-T15 waits for RP-8; M18-T14 waits for T15 and Q-10; M19 waits for M18.
+**Blockers:** M18-T15 — full run A stopped at scenario 9 (two attached transcript paths on one connection); fix owner `dormant-attach-leak` in flight, then A/B rerun.
 **Next up:** T19b denied-affordance tests + review; T15 two full clean baselines; then T14 and M19.
 **Recently done:** M18-T3 RP-3 diagnostics closeout (`ce455b99` matrix); M18-T8 RP-8 complete (`ce455b99`); G1/G2 (`4f15add0`); host admission E3 (`49cc12d9`); renderer pressure F (`1b5fbfa7`).
 
