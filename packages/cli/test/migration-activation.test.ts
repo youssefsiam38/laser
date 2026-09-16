@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -6,9 +6,11 @@ import { PRODUCT_SLUG } from "@lasercode/protocol";
 import { UpdateTransactionStore, type MigrationRegistry } from "@lasercode/host";
 import {
   MigrationActivationError,
+  completeInstalledMigration,
   migrationEventLine,
   prepareUpdateData,
   restoreUpdateData,
+  type InstalledRuntimeLaunch,
   type LaserPaths,
   type MigrationLaunchEvent,
 } from "../src/index.js";
@@ -62,6 +64,25 @@ describe("pre-host migration activation", () => {
     expect(JSON.parse(line)).toMatchObject({ schemaVersion: 1, type: "migration", updateId, phase: "migrating" });
     expect(line).not.toContain(paths.stateDir);
     expect(line).not.toContain("before");
+
+    store.transition(updateId, "selected");
+    store.transition(updateId, "restarting");
+    const installed = {
+      migrationUpdateId: updateId,
+      reference: { generationId: "b".repeat(64) },
+      manifest: { productVersion: "2.0.0" },
+    } as unknown as InstalledRuntimeLaunch;
+    expect(completeInstalledMigration(paths, installed, {
+      launchId: "a".repeat(32), generationId: "e".repeat(64), cliVersion: "2.0.0",
+    })).toBe(false);
+    expect(completeInstalledMigration(paths, installed, {
+      launchId: "a".repeat(32), generationId: "b".repeat(64), cliVersion: "2.0.0",
+    })).toBe(true);
+    expect(store.read(updateId)?.phase).toBe("succeeded");
+    expect(existsSync(join(paths.stateDir, "migration-snapshots", updateId))).toBe(false);
+    expect(completeInstalledMigration(paths, installed, {
+      launchId: "a".repeat(32), generationId: "b".repeat(64), cliVersion: "2.0.0",
+    })).toBe(true);
   });
 
   it("keeps the snapshot on failure and restores exact bytes for the correlated update only", () => {
@@ -75,5 +96,9 @@ describe("pre-host migration activation", () => {
     restoreUpdateData(paths, updateId);
     expect(readFileSync(join(paths.stateDir, "fixture.txt"), "utf8")).toBe("before\n");
     expect(store.read(updateId)?.phase).toBe("rolled_back");
+
+    prepareUpdateData(paths, { updateId, targetGenerationId: "b".repeat(64) }, undefined, { registry: registry() });
+    expect(readFileSync(join(paths.stateDir, "fixture.txt"), "utf8")).toBe("after\n");
+    expect(store.read(updateId)?.phase).toBe("ready");
   });
 });

@@ -49,7 +49,7 @@ const ALLOWED: Readonly<Record<UpdateTransactionPhase, readonly UpdateTransactio
   succeeded: [],
   failed: ["parking", "restoring", "rolled_back"],
   restoring: ["rolled_back", "failed"],
-  rolled_back: [],
+  rolled_back: ["parking"],
 };
 
 export class UpdateTransactionStore {

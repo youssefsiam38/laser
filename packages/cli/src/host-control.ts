@@ -109,14 +109,11 @@ export function prepareInstalledRuntime(
   });
   const marker = engine.currentState();
   const schemaMigrationNeeded = engine.needsMigration();
+  const store = new UpdateTransactionStore(paths.stateDir);
+  const currentUpdateId = runtimeUpdateId(staged.manifest);
+  const existing = store.read(currentUpdateId);
   if (pointer.active.generationId !== staged.current.generationId || marker || schemaMigrationNeeded) {
-    const store = new UpdateTransactionStore(paths.stateDir);
-    const currentUpdateId = runtimeUpdateId(staged.manifest);
-    migrationUpdateId = marker?.updateId ?? (store.read(currentUpdateId) ? currentUpdateId : ensureUpdateTransaction(paths, staged.manifest));
-    const transaction = store.read(migrationUpdateId);
-    if (transaction?.phase === "rolled_back") {
-      throw new MigrationActivationError(migrationUpdateId, false, "Previous data restored. The update was not activated.");
-    }
+    migrationUpdateId = marker?.updateId ?? (existing ? currentUpdateId : ensureUpdateTransaction(paths, staged.manifest));
     prepareUpdateData(paths, { updateId: migrationUpdateId, targetGenerationId: staged.current.generationId }, options.onMigrationEvent);
     let ready = store.read(migrationUpdateId);
     if (ready?.phase !== "ready" && ready?.phase !== "selected" && ready?.phase !== "restarting" && ready?.phase !== "succeeded") {
@@ -130,6 +127,8 @@ export function prepareInstalledRuntime(
       pointer = readRuntimeGenerationPointer(paths.stateDir) ?? pointer;
     }
     if (engine.currentState()?.phase === "migrated") engine.acknowledgeSelection(migrationUpdateId);
+  } else if (existing?.phase === "restarting" || existing?.phase === "succeeded") {
+    migrationUpdateId = currentUpdateId;
   }
   const reference = pointer.active;
   return {
@@ -145,6 +144,31 @@ export function prepareInstalledRuntime(
     },
     ...(migrationUpdateId ? { migrationUpdateId } : {}),
   };
+}
+
+/** Commit success only after the exact launched generation and version answer health. */
+export function completeInstalledMigration(
+  paths: LaserPaths,
+  installed: InstalledRuntimeLaunch,
+  record: Pick<HostRecord, "launchId" | "generationId" | "cliVersion">,
+): boolean {
+  if (!installed.migrationUpdateId
+    || record.generationId !== installed.reference.generationId
+    || record.cliVersion !== installed.manifest.productVersion) return false;
+  const transactions = new UpdateTransactionStore(paths.stateDir);
+  const transaction = transactions.read(installed.migrationUpdateId);
+  if (transaction?.phase !== "restarting" && transaction?.phase !== "succeeded") return false;
+  if (transaction.phase === "restarting") {
+    transactions.transition(installed.migrationUpdateId, "succeeded", {
+      selectedLaunchId: record.launchId,
+      selectedVersion: record.cliVersion,
+    });
+  }
+  new MigrationEngine({
+    roots: { stateDir: paths.stateDir, agentDir: paths.agentDir, sessionDir: paths.sessionDir },
+    registry: MIGRATION_REGISTRY,
+  }).markSucceeded(installed.migrationUpdateId);
+  return true;
 }
 
 export interface ForegroundHostResult {
@@ -276,6 +300,7 @@ export async function startHost(
           fix: `Run \`${PRODUCT_NAME} status\`, then quit the other copy before trying again.`,
         });
       }
+      completeInstalledMigration(paths, installed, status.record);
       return { record: status.record, started: true };
     }
     if (spawnError) {

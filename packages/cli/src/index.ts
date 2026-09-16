@@ -30,6 +30,7 @@ export { GLOBAL_FLAGS, colorMode, flagsFor } from "./flags.js";
 export { TOPICS, findTopic, renderCommandHelp, renderRootHelp, type Topic } from "./help.js";
 export {
   cliEntry,
+  completeInstalledMigration,
   unpacked,
   daemonArgs,
   hostDaemonArgv,
@@ -88,6 +89,7 @@ export {
   type MigrationLaunchPhase,
 } from "./migration-activation.js";
 export {
+  MIGRATION_REGISTRY,
   MigrationEngine,
   UpdateTransactionStore,
   prepareRuntimeGeneration,

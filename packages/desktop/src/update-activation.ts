@@ -1,5 +1,7 @@
 import {
+  MIGRATION_REGISTRY,
   MigrationActivationError,
+  MigrationEngine,
   UpdateTransactionStore,
   prepareUpdateData,
   restoreUpdateData,
@@ -51,7 +53,7 @@ export class DesktopUpdateActivation {
     if (!marker) return this.status;
     try {
       let transaction = this.requireTransaction(marker.updateId);
-      if (transaction.phase === "staged" || transaction.phase === "failed") {
+      if (transaction.phase === "staged" || transaction.phase === "failed" || transaction.phase === "rolled_back") {
         transaction = this.transactions.transition(marker.updateId, "parking");
       }
       if (transaction.phase !== "parking" && transaction.phase !== "ready") return this.set(this.statusFor(transaction, marker));
@@ -146,14 +148,25 @@ export class DesktopUpdateActivation {
     let transaction: UpdateTransaction;
     try { transaction = this.requireTransaction(marker.updateId); }
     catch { return; }
-    if (transaction.phase !== "restarting"
+    if ((transaction.phase !== "restarting" && transaction.phase !== "succeeded")
       || launch.generationId !== transaction.targetGenerationId
       || launch.version !== transaction.targetVersion) return;
-    this.transactions.transition(marker.updateId, "succeeded", {
-      selectedLaunchId: launch.launchId,
-      selectedVersion: launch.version,
-    });
-    this.set(this.notice("succeeded", marker));
+    const newlySucceeded = transaction.phase === "restarting";
+    if (newlySucceeded) {
+      this.transactions.transition(marker.updateId, "succeeded", {
+        selectedLaunchId: launch.launchId,
+        selectedVersion: launch.version,
+      });
+    }
+    new MigrationEngine({
+      roots: {
+        stateDir: this.options.paths.stateDir,
+        agentDir: this.options.paths.agentDir,
+        sessionDir: this.options.paths.sessionDir,
+      },
+      registry: MIGRATION_REGISTRY,
+    }).markSucceeded(marker.updateId);
+    if (newlySucceeded) this.set(this.notice("succeeded", marker));
   }
 
   stop(): void { this.stopPolling(); }

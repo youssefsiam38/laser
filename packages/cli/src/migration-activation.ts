@@ -76,13 +76,12 @@ export function prepareUpdateData(
   const store = new UpdateTransactionStore(paths.stateDir);
   let transaction = store.read(input.updateId);
   if (!transaction || transaction.targetGenerationId !== input.targetGenerationId) throw new MigrationActivationError(input.updateId, false);
-  if (transaction.phase === "failed") transaction = store.transition(input.updateId, "parking");
+  if (transaction.phase === "failed" || transaction.phase === "rolled_back") transaction = store.transition(input.updateId, "parking");
   if (transaction.phase === "staged") transaction = store.transition(input.updateId, "parking");
   if (transaction.phase === "selected") transaction = store.transition(input.updateId, "restarting");
   if (transaction.phase === "restarting") transaction = store.transition(input.updateId, "snapshotting");
   if (transaction.phase === "parking") transaction = store.transition(input.updateId, "snapshotting");
   if (!["snapshotting", "migrating", "ready"].includes(transaction.phase)) {
-    if (transaction.phase === "rolled_back") throw new MigrationActivationError(input.updateId, false, messageFor("restored"));
     if (transaction.phase !== "selected" && transaction.phase !== "restarting" && transaction.phase !== "succeeded") {
       throw new MigrationActivationError(input.updateId, false);
     }
