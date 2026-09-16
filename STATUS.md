@@ -29,7 +29,7 @@
 | MX Cross-cutting | in-progress |
 
 **Blockers:** M18-T15 — full run A stopped at scenario 9 (two attached transcript paths on one connection); fix owner `dormant-attach-leak` in flight, then A/B rerun.
-**Next up:** T19b denied-affordance tests + review; T15 two full clean baselines; then T14 and M19.
+**Next up:** T19 final fix batch; attachment-leak fix then T15 A/B; M19-T1 (in progress), then T14, M19-T2/T3.
 **Recently done:** M18-T3 RP-3 diagnostics closeout (`ce455b99` matrix); M18-T8 RP-8 complete (`ce455b99`); G1/G2 (`4f15add0`); host admission E3 (`49cc12d9`); renderer pressure F (`1b5fbfa7`).
 
 Ownership and evidence: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`.

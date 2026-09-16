@@ -2853,9 +2853,12 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
-| M19-T1 | Launch identity, safe mode and bounded repair | todo | — | — | added by D-264; depends on M18 |
+| M19-T1 | Launch identity, safe mode and bounded repair | in-progress | m19-recovery-plan `01a0aa8f-8f82-714d-99c8-190890feefc7` | — | added by D-264; depends on M18 |
 | M19-T2 | Immutable generation activation and correlated updates | todo | — | — | added by D-264; depends on M19-T1 |
 | M19-T3 | Migration snapshot and interrupted-restore recovery | todo | — | — | added by D-264; depends on M19-T2 |
+
+#### M19-T1 notes
+- 2026-09-16 claimed after approved plan `/tmp/m19-plan.md` and D-266 on base `3d1027da`: T1A protocol launch/failure contract, T1B host/worker/CLI/desktop launch handshake, T1C repair ledger, safe mode, companion failure ownership and the G host-loss reconciliation; one review for T1.
 
 #### M19 notes
 - 2026-09-16 D-264 turns `docs/resource-and-loading-plan.md`'s supporting recovery/update prose into three dependency-ordered tasks after containment. They strengthen activation and recovery; the reviewed release orchestrator remains authoritative.
@@ -3660,6 +3663,11 @@ Consequences: M18 is the current focus. One continuing owner holds each cohesive
 Decision: split RP-2. M18-T2 owns the reviewed scratch harness, its first valid full measurement and the sanitized finding. M18-T15 owns the same unchanged fixtures' two consecutive clean full runs and repeatability baseline after M18-T4 through M18-T8.
 Why: corrected full A reproducibly drives the renderer to about 4.4 GiB private memory and correctly refuses run B at the fixed 1.5 GiB ceiling. Requiring a green B before starting the renderer-lifetime fix is a dependency cycle; raising the ceiling or shrinking the fixture would erase the finding.
 Consequences: no RP-2 requirement is dropped. T4–T8 may start only after T2's review correction and finding integrate. T15 retains all nine scenarios, owner-ranking/slope/peak repeatability, raw-artifact deletion, fixed ceilings and zero-survivor gates, and becomes a prerequisite of T14.
+
+### D-266 · 2026-09-16 · Runtime generations are verified inventories, not byte copies
+**Decision.** M19 defines a runtime generation as an immutable verified inventory (generation id = SHA-256 over the sorted executable-closure inventory of relative path, length and digest, including bundled Node and executable `.ts`) bound to an install location the installer already made immutable (packaged app directory for desktop, the npm install directory for the CLI). The atomic pointer selects a generation id plus install root; every host launch and worker spawn re-verifies what it is about to execute (manifest digest, entry files, and any row whose length/mtime changed since the recorded verification; full verification on mismatch) and refuses drift fail-closed with person-facing copy. Pending updates are staged by the existing updater/installer. Feature generations remain immutable manifests referencing a runtime generation id, cwd hash, desired-preferences revision, effective feature ids and mode. Safe mode is explicit after two automatic retries, runs the empty optional-feature set on the same data roots and never rewrites `prefs.json`; update activation waits behind a strict non-destructive park gate; migration snapshots persist through the first healthy target launch; rollback restores data and selection without installing an older package.
+**Why.** Copying the whole executable closure into state storage duplicates the installer's job, costs hundreds of megabytes per generation and adds a second mutable tree to protect; the actual hazard the plan names — an old host resolving a later worker from files changed in place — is closed by pinning and re-verifying the launched inventory. `AGENTS.md` §5a already makes lifecycle replacement, not schema compatibility, the answer to version skew.
+**Consequences.** M19-T1 owns launch identity, structured failure, the repair ledger, safe mode and the M18-T8 G host-loss reconciliation; M19-T2 owns the inventory/generation store, park gate and the durable update transaction with one update id across reconnect; M19-T3 owns the snapshot/restore boundary and interrupted-restore marker. Plan `/tmp/m19-plan.md`; owner `01a0aa8f-8f82-714d-99c8-190890feefc7`.
 
 ## Open questions
 
