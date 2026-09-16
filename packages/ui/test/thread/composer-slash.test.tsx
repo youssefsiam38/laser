@@ -68,6 +68,7 @@ vi.mock("@/components/shell/shell-context", () => ({
 vi.mock("@/agents", () => ({ useRunsForRoot: () => [{ runId: 'audit-1', subagentName: "audit", task: "Review the changes" }, { runId: 'audit-2', subagentName: 'auth-audit', task: 'Review authentication' }] }));
 vi.mock("@/runtime", async (importActual) => ({
   ...(await importActual<typeof import("../../src/runtime/index.js")>()),
+  useCapability: () => ({ state: "available" }),
   useLaserView: () => mocks.view,
   useLaserState: (selector: (state: ReturnType<typeof mockState>) => unknown) => selector(mockState()),
   useLaserStable: () => ({

@@ -95,17 +95,20 @@ function usePaletteCommands(active: boolean): RunnableCommand[] {
   const busy = meta.running || meta.compacting;
   const logs = useCapability("pi/logs/query");
   const addProject = useCapability("pi/project/add");
+  const createSession = useCapability("session/new");
+  const compactSession = useCapability("pi/session/compact");
+  const forkSession = useCapability("pi/session/fork");
 
   return useMemo<RunnableCommand[]>(() => {
     const session: RunnableCommand[] = view
       ? [
-          { id: "compact", group: "This session", label: "Compact context", detail: busy ? "Waits for the turn to finish" : undefined, icon: Shrink, disabled: busy, run: () => void actions.compact() },
-          { id: "fork", group: "This session", label: "Fork from last prompt", icon: GitFork, disabled: meta.running, run: () => void forkFromLastPrompt(view.path, client, actions) },
+          ...(compactSession.state === "available" ? [{ id: "compact", group: "This session", label: "Compact context", detail: busy ? "Waits for the turn to finish" : undefined, icon: Shrink, disabled: busy, run: () => void actions.compact() } satisfies RunnableCommand] : []),
+          ...(forkSession.state === "available" ? [{ id: "fork", group: "This session", label: "Fork from last prompt", icon: GitFork, disabled: meta.running, run: () => void forkFromLastPrompt(view.path, client, actions) } satisfies RunnableCommand] : []),
           { id: "history", group: "This session", label: "Open history", keys: ["]"], icon: GitBranch, run: () => shell.openHistory() },
         ]
       : [];
     const app: RunnableCommand[] = [
-      { id: "new", group: "App", label: currentProject ? `New session in ${shortCwd(currentProject)}` : "New session", keys: [shortcutLabel("N")], icon: Plus, disabled: !shell.canCreate, run: () => void shell.newSession() },
+      ...(createSession.state === "available" ? [{ id: "new", group: "App", label: currentProject ? `New session in ${shortCwd(currentProject)}` : "New session", keys: [shortcutLabel("N")], icon: Plus, disabled: !shell.canCreate, run: () => void shell.newSession() } satisfies RunnableCommand] : []),
       ...(addProject.state === "available" ? [{ id: "add-project", group: "App", label: "Add a project", icon: FolderPlus, run: () => shell.setAddProjectOpen(true) } satisfies RunnableCommand] : []),
       { id: "sessions", group: "App", label: shell.sessionsOpen ? "Hide sessions" : "Show sessions", keys: ["["], icon: PanelLeft, run: () => shell.toggleSessions() },
       { id: "telemetry", group: "App", label: shell.telemetryOpen ? "Hide telemetry" : "Show telemetry", keys: ["]"], icon: Activity, run: () => shell.toggleTelemetry() },
@@ -139,7 +142,7 @@ function usePaletteCommands(active: boolean): RunnableCommand[] {
       })),
     );
     return [...session, ...app, ...sessionRows, ...projectRows];
-  }, [actions, addProject.state, busy, client, currentProject, groups, logs.state, meta.running, shell, theme, toggle, view, workbench]);
+  }, [actions, addProject.state, busy, client, compactSession.state, createSession.state, currentProject, forkSession.state, groups, logs.state, meta.running, shell, theme, toggle, view, workbench]);
 }
 
 /**

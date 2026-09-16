@@ -19,7 +19,7 @@ import { EndAgentDialog } from "@/components/agents/EndAgentDialog";
 import { RemoveWorktreeDialog } from "@/components/agents/RemoveWorktreeDialog";
 // Beam: the bubble and its model choice, mounted once (docs/agents.md "Beam").
 import { BeamBubble, BeamModelDialog } from "@/components/beam";
-import { mergeSessions, sessionTitle, useLaserStable, useLaserState } from "@/runtime";
+import { mergeSessions, sessionTitle, useCapability, useLaserStable, useLaserState } from "@/runtime";
 import { currentView, samePresentationView } from "@/runtime/presentation-state";
 
 import { AddProjectDialog } from "./AddProjectDialog.js";
@@ -232,9 +232,11 @@ function ShellFrame() {
   // M13-T50: the sidebar's selection and the logo, two ways back to the chat.
   const { showChat, returnToChat } = useChatNavigation({ closeSheets });
 
-  const canCreate = connection === "open" && (currentProject !== undefined || view !== undefined);
+  const createSession = useCapability("session/new");
+  const canCreate = createSession.state === "available" && connection === "open" && (currentProject !== undefined || view !== undefined);
 
   const newSession = useCallback(async () => {
+    if (createSession.state !== "available") return;
     const cwd = currentProject ?? view?.state.cwd;
     if (!cwd) {
       setAddProjectOpen(true);
@@ -251,7 +253,7 @@ function ShellFrame() {
     } catch (error) {
       actions.toast("error", errorText(error));
     }
-  }, [actions, connection, currentProject, showChat, view?.state.cwd]);
+  }, [actions, connection, createSession.state, currentProject, showChat, view?.state.cwd]);
 
   // Keyboard: [ ] toggle rails, Cmd/Ctrl+N new session, Cmd/Ctrl+K the
   // palette. Esc is handled by the overlays themselves (Radix) and by the
@@ -264,7 +266,7 @@ function ShellFrame() {
         setPaletteOpen((open) => !open);
         return;
       }
-      if (mod && !e.shiftKey && !e.altKey && (e.key === "n" || e.key === "N")) {
+      if (createSession.state === "available" && mod && !e.shiftKey && !e.altKey && (e.key === "n" || e.key === "N")) {
         e.preventDefault();
         void newSession();
         return;
@@ -283,7 +285,7 @@ function ShellFrame() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [newSession, toggleFleet, toggleSessions, toggleTelemetry]);
+  }, [createSession.state, newSession, toggleFleet, toggleSessions, toggleTelemetry]);
 
   // Tab title carries the same vocabulary as the dots: "(2) name · laser".
   // Derived in the selector: a streamed token that changes no session's

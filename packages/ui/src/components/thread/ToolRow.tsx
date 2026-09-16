@@ -18,11 +18,12 @@ import {
   toolRowState,
 } from "@/components/assistant-ui/elements/tool-fallback.aui";
 import { TOOL_ICONS } from "@/components/assistant-ui/elements/tool-group.aui";
+import { CapabilityNotice } from "@/components/capability-gate";
 import { Button } from "@/components/ui/button";
 import { Hint } from "@/components/ui/hint";
 import { useIsTouch } from "@/hooks/use-mobile";
 import { DialogBody, dialogFormOf, ToolRowDialog, uiResponseFor, useRegisterToolRow } from "@/dialogs";
-import { toolDetailsDefaultOpen, toolDisplayResult, useActivityDetailLevel, useLaserStable, useLaserState } from "@/runtime";
+import { toolDetailsDefaultOpen, toolDisplayResult, useActivityDetailLevel, useCapability, useLaserStable, useLaserState } from "@/runtime";
 import { BodyOverflow } from "./BodyOverflow.js";
 import type { BlockBodies } from "@/store";
 import { useActivityDisclosureOverride } from "@/runtime/sessionPreferences";
@@ -463,6 +464,7 @@ function TextBody({ args, text, failed }: { args: unknown; text: string; failed:
  */
 function RowApproval(props: ToolCallMessagePartProps) {
   const { actions } = useLaserStable();
+  const capability = useCapability("pi/ui/response", { presentation: "explained" });
   const running = useAuiState((s) => s.thread.isRunning);
   const denyFeedback = useCallback(
     async (reason: string) => {
@@ -470,6 +472,12 @@ function RowApproval(props: ToolCallMessagePartProps) {
     },
     [actions, running],
   );
+  if (capability.state !== "available") return capability.state === "explained" ? (
+    <div className="flex flex-col gap-2">
+      <p className="text-sm text-ink">{props.approval?.prompt ?? "Allow this?"}</p>
+      <CapabilityNotice title="This decision must be made elsewhere" explanation={capability.explanation!} />
+    </div>
+  ) : null;
   return (
     <ToolFallbackApproval
       approval={props.approval}
@@ -517,6 +525,14 @@ function InterruptFooter({ payload, resume }: { payload: InterruptPayload; resum
     [payload],
   );
   const touch = useIsTouch();
+  const capability = useCapability("pi/ui/response", { presentation: "explained" });
+  if (capability.state !== "available") return capability.state === "explained" ? (
+    <div data-slot="interrupt-footer" className="mb-2 ms-6 flex flex-col gap-2 border-s-2 border-attention py-1 ps-3">
+      <p className="text-sm font-medium text-ink">{payload.title}</p>
+      {payload.message ? <p className="text-sm text-ink-2">{payload.message}</p> : null}
+      <CapabilityNotice title="This question must be answered elsewhere" explanation={capability.explanation!} />
+    </div>
+  ) : null;
   return (
     <div data-slot="interrupt-footer" className="mb-2 ms-6 border-s-2 border-attention py-1 ps-3">
       <DialogBody

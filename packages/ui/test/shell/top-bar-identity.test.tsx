@@ -14,6 +14,7 @@ const stable = vi.hoisted(() => ({
 }));
 vi.mock("@/runtime", async (original) => ({
   ...(await original<typeof import("../../src/runtime/index.js")>()),
+  useCapability: () => ({ state: "available" }),
   useLaserStable: () => stable,
 }));
 vi.mock("@/components/assistant-ui/elements/context-display", () => ({ ContextRingButton: () => <button type="button">Context</button> }));

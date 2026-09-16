@@ -1437,6 +1437,10 @@ function ThreadListItemMore({
 }) {
   const { actions } = useLaserStable();
   const { copy } = useCopy();
+  const renameSession = useCapability("pi/session/rename");
+  const moveSession = useCapability("pi/session/move");
+  const deleteSession = useCapability("pi/session/delete");
+  const stopAgent = useCapability("agents/runs/stop");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const { pinned } = useSessionsList();
   const isPinned = pinned.has(path ?? "");
@@ -1474,13 +1478,13 @@ function ThreadListItemMore({
               {isPinned ? "Unpin chat" : "Pin chat"}
             </ThreadListItemMorePrimitive.Item>
           )}
-          {!archived && (
+          {!archived && renameSession.state === "available" && (
             <ThreadListItemMorePrimitive.Item className={menuItemClass} onSelect={onRename}>
               <Pencil />
               Rename
             </ThreadListItemMorePrimitive.Item>
           )}
-          {movable && (
+          {movable && moveSession.state === "available" && (
             <ThreadListItemMorePrimitive.Item
               data-slot="move-session-item"
               className={menuItemClass}
@@ -1491,7 +1495,7 @@ function ThreadListItemMore({
               Move to a project…
             </ThreadListItemMorePrimitive.Item>
           )}
-          {endable !== undefined && !archived && (
+          {endable !== undefined && !archived && stopAgent.state === "available" && (
             <ThreadListItemMorePrimitive.Item data-slot="end-agent-item" className={cn(menuItemClass, "text-danger focus:text-danger [&_svg]:text-danger")} onSelect={() => requestEndAgent(endable)}>
               <CircleStop />
               End agent…
@@ -1510,9 +1514,9 @@ function ThreadListItemMore({
                   Unarchive
                 </ThreadListItemMorePrimitive.Item>
               </ThreadListItemPrimitive.Unarchive>
-              <ThreadListItemMorePrimitive.Item className={cn(menuItemClass, "text-danger focus:text-danger")} onSelect={() => setDeleteOpen(true)}>
+              {deleteSession.state === "available" ? <ThreadListItemMorePrimitive.Item className={cn(menuItemClass, "text-danger focus:text-danger")} onSelect={() => setDeleteOpen(true)}>
                 <Trash2 /> Delete permanently
-              </ThreadListItemMorePrimitive.Item>
+              </ThreadListItemMorePrimitive.Item> : null}
             </>
           ) : (
             <ThreadListItemPrimitive.Archive asChild>

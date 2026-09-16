@@ -23,11 +23,12 @@ import { SessionModelSelector } from "@/components/assistant-ui/elements/model-s
 import { ThinkingEffort } from "@/components/assistant-ui/elements/reasoning-effort";
 import { useRunsForRoot } from "@/agents";
 import { DictateButton } from "@/components/mobile";
+import { CapabilityNotice } from "@/components/capability-gate";
 import { errorText, useShell } from "@/components/shell/shell-context";
 import { useIsMobile, useIsTouch } from "@/hooks/use-mobile";
 import { finishActiveDictation } from "@/pwa";
 import { appendAttachedPrompt, splitAttachedFiles, wrapFileAttachment } from "@/runtime/attachments";
-import { composerSendPlan, mainCodeProject, mainError, mainTab, provisionalSessionPath, useLaserStable, useLaserState, useSessionMeta } from "@/runtime";
+import { composerSendPlan, mainCodeProject, mainError, mainTab, provisionalSessionPath, useCapability, useLaserStable, useLaserState, useSessionMeta } from "@/runtime";
 import { mergeRunConfigCustom } from "@/runtime/first-turn";
 import { completeLeadingSlash, matchLeadingSlash, rankSlashCommandMatches } from "./slash-completion.js";
 import { StatusLine } from "./StatusLine.js";
@@ -82,6 +83,10 @@ function ComposerBody() {
   const transcript = useTranscriptViewport();
   const destinationBusy = destination?.phase === "resolving";
   const placeholder = usePlaceholder();
+  const write = useCapability("session/prompt", { presentation: "explained" });
+  if (write.state !== "available") {
+    return write.state === "explained" ? <CapabilityNotice title="This conversation is read-only here" explanation={write.explanation!} /> : null;
+  }
   return (
     <ComposerPrimitive.Unstable_TriggerPopoverRoot>
       <ComposerPrimitive.Root data-slot="composer" inert={inert} aria-busy={preparingSession || destinationBusy || undefined} className="relative flex flex-col gap-2" onSubmit={() => { if (canSend) transcript.latest(); }}>

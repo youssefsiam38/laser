@@ -41,7 +41,7 @@ import { useTaskOutput } from "@/fleet/output";
 import { projectFleetSections, type FleetItem, type FleetProjectedItem, type FleetSections } from "@/fleet/model";
 import { formatBytes, formatElapsed } from "@/format";
 import { cn } from "@/lib/utils";
-import { useLaserStable, useLaserState } from "@/runtime";
+import { useCapability, useLaserStable, useLaserState } from "@/runtime";
 
 export interface FleetPanelProps {
   variant: "panel" | "sheet";
@@ -357,17 +357,19 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 function AgentDetail({ item, contextOnly }: { item: FleetItem; contextOnly: boolean }) {
   const run = item.run;
+  const stopCapability = useCapability("agents/runs/stop");
+  const removeCapability = useCapability("agents/worktree/remove");
   // Ending an agent is the one confirmation in the app (`EndAgentDialog`), so
   // this asks it rather than inventing a second way to stop a run.
   const target = item.stop?.kind === "agent" ? item.stop.runId : undefined;
-  const stop = target === undefined ? undefined : () => requestEndAgent(target);
+  const stop = target === undefined || stopCapability.state !== "available" ? undefined : () => requestEndAgent(target);
   // The parent owns merging and removing this worktree (D-157). A parent that
   // never got to it leaves the directory for ever, so a person can clear it
   // from here — but only once the run is over, and never while it is the
   // agent's own working directory.
   const label = run?.subagentName ?? item.title;
   const removable = run?.worktree && !run.worktree.removedAt && target === undefined ? run : undefined;
-  const removeWorktree = removable ? () => requestRemoveWorktree(removable.sessionPath, label) : undefined;
+  const removeWorktree = removable && removeCapability.state === "available" ? () => requestRemoveWorktree(removable.sessionPath, label) : undefined;
   return (
     <div className="min-w-0">
       <dl className="flex flex-col gap-2">
@@ -422,6 +424,7 @@ function AgentDetail({ item, contextOnly }: { item: FleetItem; contextOnly: bool
 
 function TaskDetail({ item, contextOnly }: { item: FleetItem; contextOnly: boolean }) {
   const { actions } = useLaserStable();
+  const stopCapability = useCapability("tasks/stop");
   const [reload, setReload] = useState(0);
   const [stopping, setStopping] = useState(false);
   const output = useTaskOutput(item.sessionPath, item.task?.id, { bytes: item.outputBytes, reloadToken: reload });
@@ -478,7 +481,7 @@ function TaskDetail({ item, contextOnly }: { item: FleetItem; contextOnly: boole
         )}
       </div>
 
-      <DetailActions item={item} onStop={item.stop?.kind === "task" ? stop : undefined} stopping={stopping} />
+      <DetailActions item={item} onStop={item.stop?.kind === "task" && stopCapability.state === "available" ? stop : undefined} stopping={stopping} />
     </div>
   );
 }

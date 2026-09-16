@@ -23,6 +23,7 @@ vi.mock("@/runtime", async () => ({
   ...await import("../../src/runtime/sessionPreferences.js"),
   ...await import("../../src/runtime/projection.js"),
   useActivityDetailLevel: () => preferences.level,
+  useCapability: () => ({ state: "available" }),
   useLaserState: () => preferences.path,
   useLaserStable: () => ({ actions: { answerDialog: vi.fn(), send: vi.fn(async () => {}) } }),
   useLaserView: () => ({ dialogs: [] }),

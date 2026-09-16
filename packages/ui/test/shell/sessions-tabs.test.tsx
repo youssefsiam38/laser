@@ -36,7 +36,7 @@ const stable = vi.hoisted(() => ({
   archive: { add: vi.fn(), has: () => false },
   client: { request: vi.fn(async () => ({ hits: [], unreadable: 0 })) },
 }));
-vi.mock("@/runtime", async (importActual) => ({ ...(await importActual<typeof import("../../src/runtime/index.js")>()), useLaserStable: () => stable }));
+vi.mock("@/runtime", async (importActual) => ({ ...(await importActual<typeof import("../../src/runtime/index.js")>()), useCapability: () => ({ state: "available" }), useLaserStable: () => stable }));
 
 const ROOT = "/one/root.jsonl";
 const CHILD = "/one/.worktrees/explorer/child.jsonl";

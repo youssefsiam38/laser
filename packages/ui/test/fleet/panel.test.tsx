@@ -64,6 +64,7 @@ const fixture = vi.hoisted(() => ({
 
 vi.mock("@/runtime", async (importActual) => ({
   ...(await importActual<typeof import("../../src/runtime/index.js")>()),
+  useCapability: () => ({ state: "available" }),
   useLaserState: (selector: (s: unknown) => unknown) => selector(fixture.state),
   useLaserStable: () => ({ actions: fixture.actions }),
 }));

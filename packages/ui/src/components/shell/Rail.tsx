@@ -68,6 +68,7 @@ export function Rail() {
   const { theme, toggle } = useTheme();
   const workbench = useWorkbench();
   const logs = useCapability("pi/logs/query");
+  const createSession = useCapability("session/new");
 
   return (
     <nav
@@ -114,7 +115,7 @@ export function Rail() {
           <Settings />
         </TooltipIconButton>
         {/* Beam's spark: the last item, directly below Settings. */}
-        <BeamSpark side="right" size="icon" />
+        {createSession.state === "available" ? <BeamSpark side="right" size="icon" /> : null}
       </div>
     </nav>
   );

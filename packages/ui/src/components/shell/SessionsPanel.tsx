@@ -78,6 +78,8 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
   const shell = useShell();
   const list = useSessionsList();
   const addProject = useCapability("pi/project/add");
+  const createSession = useCapability("session/new");
+  const searchSessions = useCapability("session/search");
   const tab = useLaserState((s) => mainTab(s.destination));
   useClock();
 
@@ -220,8 +222,8 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
           <h2 className="truncate text-sm leading-5 font-semibold text-ink">Sessions</h2>
           {total > 0 && <span className="shrink-0 typed text-ink-3">{total}</span>}
         </div>
-        <TooltipIconButton tooltip="Search all sessions" shortcut="Ctrl+Shift+F" onClick={() => { if (variant === "sheet") shell.setSessionsOpen(false); openGlobalSearch(); }}><Search /></TooltipIconButton>
-        {variant === "panel" && (
+        {searchSessions.state === "available" ? <TooltipIconButton tooltip="Search all sessions" shortcut="Ctrl+Shift+F" onClick={() => { if (variant === "sheet") shell.setSessionsOpen(false); openGlobalSearch(); }}><Search /></TooltipIconButton> : null}
+        {variant === "panel" && createSession.state === "available" && (
           <TooltipIconButton
             tooltip={newLabel}
             {...(chat ? {} : { shortcut: shortcutLabel("N") })}
@@ -236,7 +238,7 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
 
       <SessionsTabs tab={tab} onChange={changeTab} />
 
-      {variant === "sheet" && (
+      {variant === "sheet" && createSession.state === "available" && (
         <div className="flex shrink-0 items-center px-3 py-2 hairline-b">
           <Button size="sm" variant="outline" className="w-full justify-start" onClick={onNew} disabled={!canNew} data-slot={chat ? "new-chat" : "new-session"}>
             {chat ? <MessageSquarePlus /> : <Plus />}
@@ -246,7 +248,7 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
         </div>
       )}
 
-      {total > 0 && (
+      {total > 0 && searchSessions.state === "available" && (
         <div className="shrink-0 px-3 py-2">
           <ThreadListSearch
             value={query}
@@ -285,12 +287,12 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
               icon={<MessageSquarePlus className="size-4 text-ink-3" />}
               title="No chats yet"
               body="Chats are conversations that are not about a project. Ask anything; nothing here touches your code."
-              action={
+              action={createSession.state === "available" ? (
                 <Button size="sm" variant="outline" onClick={() => void newChat()} disabled={!canChat} data-slot="new-chat">
                   <MessageSquarePlus />
                   New chat
                 </Button>
-              }
+              ) : undefined}
             />
           ) : (
             <ThreadList projects={projects} tab="chat" onOpen={onOpen} />

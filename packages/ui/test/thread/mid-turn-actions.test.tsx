@@ -54,6 +54,7 @@ const stable = vi.hoisted(() => ({
 }));
 vi.mock("@/runtime", async (importActual) => ({
   ...(await importActual<typeof import("../../src/runtime/index.js")>()),
+  useCapability: () => ({ state: "available" }),
   useLaserStable: () => stable,
 }));
 vi.mock("@/dialogs", () => ({

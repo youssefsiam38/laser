@@ -61,6 +61,7 @@ import {
   sessionTitle,
   setActivityDetailLevel,
   useActivityDetailLevel,
+  useCapability,
   useLaserStable,
   useLaserState,
   useSessionMeta,
@@ -157,6 +158,11 @@ export function TopBar() {
   // whose session was deleted, which the fleet carries because nothing else can.
   const fleet = useFleet();
   const busy = meta.running || meta.compacting;
+  const renameSession = useCapability("pi/session/rename");
+  const compactSession = useCapability("pi/session/compact");
+  const forkSession = useCapability("pi/session/fork");
+  const moveSession = useCapability("pi/session/move");
+  const restartWorker = useCapability("pi/worker/restart");
 
   const copyPath = async () => {
     if (!view) return;
@@ -212,7 +218,7 @@ export function TopBar() {
             it came from — its parent's title, one press away — before its own. */}
         {view && !renaming && roomy && parentPath && parentTitle ? <ParentCrumb path={parentPath} title={parentTitle} /> : null}
 
-        {renaming && view ? (
+        {renaming && view && renameSession.state === "available" ? (
           <InlineRename
             initial={view.state.name ?? ""}
             className="max-w-sm"
@@ -228,8 +234,8 @@ export function TopBar() {
               "min-w-0 truncate leading-5 select-none",
               untitled ? "text-sm text-ink-2 italic" : "text-sm font-semibold text-ink",
             )}
-            title={view ? `${view.path}\nDouble-click to rename` : undefined}
-            onDoubleClick={() => view && setRenaming(true)}
+            title={view ? renameSession.state === "available" ? `${view.path}\nDouble-click to rename` : view.path : undefined}
+            onDoubleClick={() => { if (view && renameSession.state === "available") setRenaming(true); }}
           >
             {title}
           </h1>
@@ -254,7 +260,7 @@ export function TopBar() {
                 </span>
               </TooltipContent>
             </Tooltip>
-            {chip.canRetry && (
+            {chip.canRetry && restartWorker.state === "available" && (
               <Button
                 size="xs"
                 variant="outline"
@@ -339,10 +345,10 @@ export function TopBar() {
                 </DropdownMenuItem>
               </>
             ) : null}
-            <DropdownMenuItem disabled={!view || renaming} onSelect={() => setRenaming(true)} className="pointer-coarse:min-h-11">
+            {renameSession.state === "available" ? <DropdownMenuItem disabled={!view || renaming} onSelect={() => setRenaming(true)} className="pointer-coarse:min-h-11">
               <SquarePen />
               Rename session
-            </DropdownMenuItem>
+            </DropdownMenuItem> : null}
             <DropdownMenuItem disabled={!view} onSelect={() => openConversationFind()} className="pointer-coarse:min-h-11">
               <Search />
               Find in conversation
@@ -352,21 +358,23 @@ export function TopBar() {
               <Waypoints />
               {mapOpen ? "Show conversation" : "Show agent map"}
             </DropdownMenuItem>
-            {view && sessionAgent?.kind === "chat" ? (
+            {view && sessionAgent?.kind === "chat" && moveSession.state === "available" ? (
               <DropdownMenuItem onSelect={() => requestMoveSession({ path: view.path, title })} className="pointer-coarse:min-h-11">
                 <FolderInput />
                 Move chat to a project
               </DropdownMenuItem>
             ) : null}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem disabled={!view || busy} onSelect={() => void actions.compact()}>
-              <Shrink />
-              Compact context
-            </DropdownMenuItem>
-            <DropdownMenuItem disabled={!view || busy} onSelect={() => setCompactOpen(true)}>
-              <SquarePen />
-              Compact with instructions…
-            </DropdownMenuItem>
+            {compactSession.state === "available" ? <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem disabled={!view || busy} onSelect={() => void actions.compact()}>
+                <Shrink />
+                Compact context
+              </DropdownMenuItem>
+              <DropdownMenuItem disabled={!view || busy} onSelect={() => setCompactOpen(true)}>
+                <SquarePen />
+                Compact with instructions…
+              </DropdownMenuItem>
+            </> : null}
             <DropdownMenuSeparator />
             <DropdownMenuLabel>Activity detail</DropdownMenuLabel>
             <DropdownMenuRadioGroup
@@ -400,10 +408,10 @@ export function TopBar() {
               </DropdownMenuRadioItem>
             </DropdownMenuRadioGroup>
             <DropdownMenuSeparator />
-            <DropdownMenuItem disabled={!view || meta.running} onSelect={() => void forkFromLastPrompt()}>
+            {forkSession.state === "available" ? <DropdownMenuItem disabled={!view || meta.running} onSelect={() => void forkFromLastPrompt()}>
               <GitFork />
               Fork from last prompt
-            </DropdownMenuItem>
+            </DropdownMenuItem> : null}
             <DropdownMenuItem disabled={!view} onSelect={() => void copyPath()}>
               <Copy />
               Copy session path

@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Textarea } from "@/components/ui/textarea";
 import { Hint } from "@/components/ui/hint";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
-import { useLaserStable, useLaserState } from "@/runtime";
+import { useCapability, useLaserStable, useLaserState } from "@/runtime";
 
 /** Persistent session objective, directly below the run/panel row. */
 export function GoalBar() {
@@ -22,6 +22,7 @@ export function GoalBar() {
   const [editing, setEditing] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [objective, setObjective] = useState("");
+  const write = useCapability("session/goal/action");
 
   if (!goal) return null;
   const resumable = goal.status !== "active" && goal.status !== "complete";
@@ -46,7 +47,7 @@ export function GoalBar() {
             <p className="mt-1 whitespace-pre-wrap wrap-break-word text-sm font-medium leading-5 text-ink">{goal.objective}</p>
             {goal.latestReason && <p className="mt-1 text-xs leading-5 text-ink-2">{goal.latestReason}</p>}
           </div>
-          <div className="flex shrink-0 items-center gap-0.5">
+          {write.state === "available" ? <div className="flex shrink-0 items-center gap-0.5">
             <TooltipIconButton
               tooltip={goal.status === "active" ? "Pause goal" : "Resume goal"}
               onClick={() => void actions.goal(goal.status === "active" ? { action: "pause" } : { action: "resume" })}
@@ -60,11 +61,11 @@ export function GoalBar() {
             <TooltipIconButton tooltip="Clear goal" onClick={() => setClearing(true)}>
               <Trash2 />
             </TooltipIconButton>
-          </div>
+          </div> : null}
         </div>
       </section>
 
-      <Dialog open={editing} onOpenChange={setEditing}>
+      {write.state === "available" ? <Dialog open={editing} onOpenChange={setEditing}>
         <DialogContent className="sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>Edit session goal</DialogTitle>
@@ -76,9 +77,9 @@ export function GoalBar() {
             <Button disabled={!objective.trim()} onClick={() => { void actions.goal({ action: "edit", objective: objective.trim() }); setEditing(false); }}>Save goal</Button>
           </DialogFooter>
         </DialogContent>
-      </Dialog>
+      </Dialog> : null}
 
-      <Dialog open={clearing} onOpenChange={setClearing}>
+      {write.state === "available" ? <Dialog open={clearing} onOpenChange={setClearing}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Clear this goal?</DialogTitle>
@@ -89,7 +90,7 @@ export function GoalBar() {
             <Button variant="destructive" onClick={() => { void actions.goal({ action: "clear" }); setClearing(false); }}>Clear goal</Button>
           </DialogFooter>
         </DialogContent>
-      </Dialog>
+      </Dialog> : null}
     </>
   );
 }
