@@ -95,6 +95,25 @@ function harness(options: {
   return { call, commands, retention, updates, send, cwd, held: () => backgroundWorkRetention(ctx)! };
 }
 
+/**
+ * Run the record bound until it has seen the session's writes settle.
+ *
+ * A finished command whose bytes are still on their way to disk is passed over
+ * by every bound (RP-8), and the bound runs when a command finishes — so a test
+ * that wants the steady-state count finishes one more command until the count
+ * is the bound's, rather than asserting on the first pass.
+ */
+async function boundSettled(h: ReturnType<typeof harness>, want: number, tries = 20): Promise<number> {
+  let extra = 0;
+  for (let attempt = 0; attempt < tries && h.held().terminal > want; attempt += 1) {
+    const nudge = await h.call("bash", { command: "printf 'settle\\n'", background: true, notify: false });
+    await settled(h, (nudge.details as { taskId: string }).taskId);
+    extra += 1;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  return extra;
+}
+
 /** Wait for a task to leave `running`, the way the model would: by reading it. */
 async function settled(h: ReturnType<typeof harness>, taskId: string, timeoutMs = 20_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -142,6 +161,10 @@ it(
       ids.push((details as { taskId: string }).taskId);
     }
     for (const id of ids) await settled(h, id);
+    // A finished command whose bytes are still on their way to disk is passed
+    // over by the bound (RP-8); one more command runs it again once they have
+    // landed, and each of those is a record of its own.
+    const extra = await boundSettled(h, 200);
     // The retention message is published when what is held changes, never on a
     // timer, so the last one is the truth about now.
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -152,7 +175,7 @@ it(
     expect(held.liveTailBytes).toBe(0);
     // The count bound, and the five oldest forgotten by it.
     expect(held.terminal).toBe(200);
-    expect(held.evicted).toBe(5);
+    expect(held.evicted).toBe(5 + extra);
     expect(held.excerptBytes).toBeLessThanOrEqual(2 * 1024 * 1024);
     // 205 × 256 KiB would have been 52 MiB of tails alone.
     expect(held.excerptBytes + held.liveTailBytes).toBeLessThan(2 * 1024 * 1024);
@@ -194,6 +217,10 @@ it(
       ids.push((finished as { details: { taskId: string } }).details.taskId);
     }
     for (const id of ids) await settled(h, id);
+    // A finished command whose bytes are still on their way to disk is passed
+    // over by every bound (RP-8); one more finished command runs the bound
+    // again once they have landed.
+    await boundSettled(h, 200);
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     const held = h.retention()!;
@@ -642,6 +669,66 @@ it(
 
     // An unknown command is still not this module's.
     expect(h.commands.deliver({ type: "lasercode/unknown/command" } as never)).toBe(false);
+  },
+  120_000,
+);
+
+it(
+  "does not forget a finished command whose log is still draining, and keeps publishing where its bytes are (RP-8)",
+  async () => {
+    // A writer that settles only when this test says so: a real command can
+    // finish, be compacted and marked terminal with its bytes still in flight.
+    const waiting: Array<{ resolve: (written: number) => void; length: number }> = [];
+    let hold = true;
+    const h = harness({
+      write: async (_fd, chunk: Uint8Array) => {
+        if (!hold) return chunk.length;
+        return new Promise<number>((resolve) => waiting.push({ resolve, length: chunk.length }));
+      },
+    });
+
+    // The oldest command prints enough to rotate later; six newer ones settle
+    // immediately, so the floor of five is not what protects the first.
+    const { details } = await h.call("bash", { command: "printf 'abcdefghij'", background: true, notify: false });
+    const draining = (details as { taskId: string }).taskId;
+    await settled(h, draining);
+    hold = false;
+    const later: string[] = [];
+    for (let index = 0; index < 6; index += 1) {
+      const answer = await h.call("bash", { command: `printf later${index}`, background: true, notify: false });
+      later.push((answer.details as { taskId: string }).taskId);
+    }
+    for (const id of later) await settled(h, id);
+
+    const before = h.held();
+    expect(before.pendingLogBytes).toBeGreaterThan(0);
+    const rowBefore = h.updates().filter((update) => update.id === draining).at(-1)!;
+
+    expect(h.commands.deliver({ type: "lasercode/task/pressure", level: "critical" })).toBe(true);
+
+    const after = h.held();
+    // Its bytes are still in flight, so nothing about it moved: not its
+    // pending count, not its durable bytes, not a release counter.
+    expect(after.pendingLogBytes).toBe(before.pendingLogBytes);
+    expect(after.released).toBe(before.released);
+    expect(after.logBytes).toBe(before.logBytes);
+
+    // It is still this module's to publish for: the writes settle, the log
+    // window moves, and the row for that exact task is sent again.
+    const sent = h.updates().length;
+    for (const write of waiting.splice(0)) write.resolve(write.length);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const rowAfter = h.updates().filter((update) => update.id === draining).at(-1)!;
+    expect(h.updates().length).toBeGreaterThanOrEqual(sent);
+    expect(rowAfter.outputBytes).toBe(rowBefore.outputBytes);
+    expect(rowAfter.outputDigest).toBe(rowBefore.outputDigest);
+
+    // And the command is still readable from this session's own memory of it.
+    const answer = await h.call("task_output", { taskId: draining, tail: 5 });
+    expect((answer.details as { taskId: string; status: string }).taskId).toBe(draining);
+    expect((answer.details as { status: string }).status).toBe("completed");
+    expect((answer.details as { outputBytes: number }).outputBytes).toBe(rowBefore.outputBytes);
+    expect(h.held().pendingLogBytes).toBe(0);
   },
   120_000,
 );

@@ -523,3 +523,56 @@ it("measures the excerpt bound against finished commands alone, never a running 
   expect(terminalExcerpts).toBeLessThanOrEqual(128 * 1024);
   expect(after.live).toBe(1);
 });
+
+it("passes over a finished command whose log is still draining, and releases it once it is not", async () => {
+  const dir = scratch();
+  const clock = 1_000_000;
+  const { retention, forgotten } = session({ now: () => clock });
+
+  // One finished command whose writes are still with the platform, and six
+  // more that settled — enough that the floor of five is not what keeps the
+  // draining one.
+  let release: (() => void) | undefined;
+  const stalled: TaskLog = new TaskLog({
+    dir,
+    id: "draining",
+    segmentBytes: 1024 * 1024,
+    queueBytes: 64 * 1024,
+    write: () => new Promise<number>((resolve) => { release = () => resolve(10); }),
+    admit: (bytes) => retention.admit(stalled, bytes),
+    onChange: () => retention.note("draining"),
+  });
+  const held = fakeTask("draining", stalled, 0);
+  held.excerpt = 8 * 1024;
+  retention.track(held);
+  stalled.append(Buffer.from("0123456789"));
+  held.endedAtMs = clock - 30 * 60_000;
+  retention.markTerminal("draining");
+  expect(retention.snapshot().pendingLogBytes).toBe(10);
+
+  for (let index = 0; index < 6; index += 1) {
+    terminal(retention, dir, `settled-${index}`, { startedAtMs: 10 + index, endedAtMs: clock - 30 * 60_000, excerpt: 8 * 1024 });
+  }
+
+  retention.releaseUnder("critical");
+
+  // Every bound would forget it — it is the oldest, it is far past five
+  // minutes — and none of them may, because its bytes are still in flight.
+  expect(forgotten).not.toContain("draining");
+  expect(retention.snapshot().pendingLogBytes).toBe(10);
+  expect(stalled.bytes).toBe(10);
+  expect(stalled.digest()).toMatch(/^[0-9a-f]{64}$/);
+  expect(retention.released).toBe(0);
+  // It is not one of the five the floor protects either: the settled records
+  // were judged on their own.
+  expect(forgotten.length).toBe(1);
+  expect(forgotten[0]).toBe("settled-0");
+
+  // The write settles; the next sweep sees a record with nothing in flight.
+  release?.();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  expect(retention.snapshot().pendingLogBytes).toBe(0);
+  retention.releaseUnder("critical");
+  expect(forgotten).toContain("draining");
+  expect(stalled.bytes).toBe(10);
+});

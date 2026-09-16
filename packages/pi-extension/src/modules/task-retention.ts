@@ -399,7 +399,23 @@ export class SessionRetention {
    */
   private sweepTerminal(limits: { records: number; ageMs: number; excerptBytes: number; keepNewest: number; trimOrphans: boolean }): void {
     const now = this.now();
-    let ordered = [...this.tracked.values()].filter((entry) => !entry.live).sort(byAge);
+    // A finished command whose log is still draining is not finished with this
+    // module yet. `close()` does not wait for the writes already handed to the
+    // platform, and this record is the only thing that still publishes where
+    // that log's bytes are: forget it now and a rotation moments later moves
+    // segments nobody will be told about, leaving the worker's row naming a
+    // file that no longer exists. So a record with bytes in flight is passed
+    // over by every bound — the ordinary ones and pressure alike — and is left
+    // exactly as it is: its counters, its log, its digest and its publication
+    // owner untouched. A session may therefore sit over a bound while writes
+    // are outstanding; that is the honest state, and the next sweep, once the
+    // drain is observed, releases it.
+    // Asked of the log itself rather than of the counter beside it: the
+    // counter is refreshed when a log reports a change, and a record that has
+    // just been forgotten by another bound stops reporting. What matters here
+    // is whether bytes are in flight *now*.
+    const draining = (entry: Tracked): boolean => entry.task.log.pendingBytes > 0;
+    let ordered = [...this.tracked.values()].filter((entry) => !entry.live && !draining(entry)).sort(byAge);
     const protectedCount = Math.max(0, Math.min(limits.keepNewest, ordered.length));
     const total = ordered.length;
     /** How many of the oldest may still go before the floor is reached. */
