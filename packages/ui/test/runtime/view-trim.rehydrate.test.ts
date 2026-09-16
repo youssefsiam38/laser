@@ -105,8 +105,10 @@ describe("releasing the older part of a conversation somebody is using", () => {
 
     await loader.recent(path, () => true);
 
-    // One ordinary bounded read, carrying the per-body limit this surface can hold.
-    expect(request).toHaveBeenCalledWith({ path, window: { tail: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES });
+    // One ordinary bounded read, carrying the per-body limit this surface can
+    // hold and the durable revision it still holds whole — so the host may
+    // answer it as a proved suffix instead of a replacement (RP-9/RP-11).
+    expect(request).toHaveBeenCalledWith({ path, window: { tail: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES, baseRevision: trimmed.validated!.revision });
     const after = store.open[path]!;
     expect(after.trimmed).toBeUndefined();
     // A fresh cursor came back with it, so paging further back works again.

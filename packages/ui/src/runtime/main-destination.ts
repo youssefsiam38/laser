@@ -80,12 +80,42 @@ export function pendingSessionPath(destination: MainDestination): string | undef
     && destination.target.kind === "session" ? destination.target.path : undefined;
 }
 
+/**
+ * The conversation on screen, committed or not (RP-11).
+ *
+ * `current` is the committed destination and nothing else — every action reads
+ * it, so widening it would unfence them. While a navigation resolves, the rows
+ * on screen belong to the row that was chosen, and the surfaces that *draw*
+ * that conversation read it here.
+ */
+export function visibleSessionPath(state: AppState): string | undefined {
+  const destination = state.destination as MainDestination | undefined;
+  return state.current ?? (destination ? pendingSessionPath(destination) : undefined);
+}
+
+/**
+ * The chosen row whose transcript is currently this device's own last view
+ * rather than the host's answer (RP-11). Present only while the paint is on
+ * screen and the destination has not committed.
+ */
+export function provisionalSessionPath(state: AppState): string | undefined {
+  const destination = state.destination as MainDestination | undefined;
+  const path = destination ? pendingSessionPath(destination) : undefined;
+  return path !== undefined && state.open[path]?.provisional !== undefined ? path : undefined;
+}
+
 export interface SessionOpenPhase {
   phase: "idle" | "preparing" | "opening" | "ready" | "failed";
   path: string | undefined;
   hasTranscript: boolean;
   expectsTranscript: boolean;
   reason: string | undefined;
+  /**
+   * What is on screen came from this device's cache and the host has not
+   * confirmed it (RP-11): truthful provisional content, never a loading state
+   * and never an authority actions may run against.
+   */
+  provisional: boolean;
 }
 
 /** Transaction state, not snapshot freshness. Refreshes retain their transcript. */
@@ -109,12 +139,13 @@ export function sessionOpenPhase(state: AppState, path: string | undefined): Ses
     // transcript may still be coming.
     expectsTranscript: target !== undefined && (hasTranscript || (view?.hydrated ? false : (view?.state.messageCount ?? summary?.messageCount) !== 0)),
     reason,
+    provisional: view?.provisional !== undefined,
   };
 }
 
 export function sameSessionOpenPhase(a: SessionOpenPhase, b: SessionOpenPhase): boolean {
   return a.phase === b.phase && a.path === b.path && a.hasTranscript === b.hasTranscript
-    && a.expectsTranscript === b.expectsTranscript && a.reason === b.reason;
+    && a.expectsTranscript === b.expectsTranscript && a.reason === b.reason && a.provisional === b.provisional;
 }
 
 export function isMainReady(destination: MainDestination): boolean {

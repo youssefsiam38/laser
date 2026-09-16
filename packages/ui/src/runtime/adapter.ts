@@ -444,6 +444,15 @@ export interface ThreadAdapterDeps {
 }
 
 const attachmentAdapter = new ConversationAttachmentAdapter();
+
+/**
+ * What this thread's runtime says about sending, for anything that needs to
+ * read it rather than re-derive it (`thread.extras`). Two frozen values, so a
+ * publication that did not change the answer changes no identity.
+ */
+export interface ThreadRuntimeExtras { readonly sendDisabled: boolean }
+const SEND_ALLOWED: ThreadRuntimeExtras = Object.freeze({ sendDisabled: false });
+const SEND_FENCED: ThreadRuntimeExtras = Object.freeze({ sendDisabled: true });
 // assistant-ui invalidates its message cache when this callback changes.
 // Metadata-only adapter publications must retain unchanged message identities.
 const convertMessage = (message: ThreadMessageLike): ThreadMessageLike => message;
@@ -509,6 +518,21 @@ export function createThreadAdapter(deps: ThreadAdapterDeps): ExternalStoreAdapt
     }
   };
 
+  /**
+   * Whether this runtime may send at all. The imperative `assertCanAct` in
+   * every verb below is the guarantee; this is the same question asked once, so
+   * the composer and the surfaces around it can say so before a person tries.
+   */
+  const sendDisabled = deps.connection !== "open"
+    || (deps.openPhase?.phase === "failed" && !deps.openPhase.hasTranscript) || (() => {
+      try {
+        deps.assertCanAct?.();
+        return false;
+      } catch {
+        return true;
+      }
+    })();
+
   const { items, steerItems } = queueItemsOf(deps.view);
   /** Run `work` for the tray row `queueItemId`, or do nothing if it is not one. */
   const onPending = (queueItemId: string, work: (path: string, id: string) => Promise<unknown>): void => {
@@ -557,18 +581,22 @@ export function createThreadAdapter(deps: ThreadAdapterDeps): ExternalStoreAdapt
     messages: projection.messages,
     convertMessage,
     isRunning: projection.isRunning,
-    isLoading: deps.openPhase?.phase === "opening" && !deps.openPhase.hasTranscript && deps.openPhase.expectsTranscript,
-    // Background refreshes never disable a bound composer. The destination
-    // fence still prevents sending through the previous session's runtime.
-    isDisabled: deps.connection !== "open"
-      || (deps.openPhase?.phase === "failed" && !deps.openPhase.hasTranscript) || (() => {
-      try {
-        deps.assertCanAct?.();
-        return false;
-      } catch {
-        return true;
-      }
-    })(),
+    // Content this device painted from its own cache is content: it is not a
+    // loading state, and saying otherwise would be untrue (RP-11).
+    isLoading: deps.openPhase?.phase === "opening" && !deps.openPhase.hasTranscript
+      && !deps.openPhase.provisional && deps.openPhase.expectsTranscript,
+    // Words a person is writing are theirs, and nothing here takes them away: a
+    // composer is only disabled when there is no conversation for it to write
+    // to at all. Everything else — a host that has not answered, a dropped
+    // socket, a conversation still resolving — blocks **sending** and leaves the
+    // draft exactly where it is (RP-11; assistant-ui `isSendDisabled`).
+    isDisabled: deps.path === undefined && deps.resolvePath === undefined,
+    // Background refreshes never fence a bound composer. The destination fence
+    // still prevents sending through the previous session's runtime, and the
+    // imperative `assertCanAct` in every verb below remains the guarantee —
+    // this flag is what the person sees, not what enforces it.
+    isSendDisabled: sendDisabled,
+    extras: sendDisabled ? SEND_FENCED : SEND_ALLOWED,
     queue,
     unstable_capabilities: { copy: true },
     // Enables ComposerPrimitive.AddAttachment and paste-to-attach; the pending

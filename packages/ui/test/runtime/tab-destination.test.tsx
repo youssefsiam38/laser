@@ -36,7 +36,8 @@ type Controls = {
   tab: "chat" | "code";
   path: string | undefined;
   phase: string;
-  disabled: boolean;
+  /** The runtime refuses to send: a fence, not a composer taken away (RP-11). */
+  sendBlocked: boolean;
   text: string;
   attachments: number;
   codeProject: string | undefined;
@@ -51,13 +52,14 @@ function Probe() {
   const toasts = useLaserState((state) => state.toasts.map((toast) => toast.text));
   const view = useLaserView();
   const aui = useAui();
-  const disabled = useAuiState((state) => state.thread.isDisabled);
+  const sendBlocked = useAuiState((state) =>
+    state.thread.isDisabled || (state.thread.extras as { sendDisabled?: boolean } | undefined)?.sendDisabled === true);
   const text = useAuiState((state) => state.composer.text);
   const attachments = useAuiState((state) => state.composer.attachments.length);
   const tab = mainTab(destination);
   const phase = isMainReady(destination) ? "ready" : destination.phase;
-  controls = { actions, aui, tab, path: view?.path, phase, disabled, text, attachments, codeProject: currentProject, dialogs: view?.dialogs.length ?? 0, toasts };
-  return <output data-tab={tab} data-path={view?.path ?? ""} data-phase={phase} data-disabled={disabled} />;
+  controls = { actions, aui, tab, path: view?.path, phase, sendBlocked, text, attachments, codeProject: currentProject, dialogs: view?.dialogs.length ?? 0, toasts };
+  return <output data-tab={tab} data-path={view?.path ?? ""} data-phase={phase} data-send-blocked={sendBlocked} />;
 }
 
 let root: Root;
@@ -113,7 +115,7 @@ describe("main destination isolation", () => {
     const history: Record<string, ContentBlock[][]> = { [CODE]: [[{ type: "text", text: "original code history" }]] };
     persistPrompts(history);
     await mount();
-    expect(controls).toMatchObject({ tab: "code", path: CODE, phase: "ready", disabled: false });
+    expect(controls).toMatchObject({ tab: "code", path: CODE, phase: "ready", sendBlocked: false });
 
     let switching!: Promise<void>;
     await act(async () => {
@@ -125,7 +127,7 @@ describe("main destination isolation", () => {
     const created = calls("session/new");
     expect(created).toHaveLength(1);
     expect(created[0]!.params).toMatchObject({ cwd: world.snapshot.workspaces.chat, agentName: "chat" });
-    expect(controls).toMatchObject({ tab: "chat", phase: "ready", disabled: false, codeProject: PROJECT_CWD });
+    expect(controls).toMatchObject({ tab: "chat", phase: "ready", sendBlocked: false, codeProject: PROJECT_CWD });
     expect(controls.path).not.toBe(CODE);
 
     await send("hi");
@@ -179,7 +181,7 @@ describe("main destination isolation", () => {
       controls.aui.composer.send();
       await settle(10);
     });
-    expect(controls).toMatchObject({ tab: "chat", phase: "resolving", disabled: true });
+    expect(controls).toMatchObject({ tab: "chat", phase: "resolving", sendBlocked: true });
     expect(calls("session/prompt")).toHaveLength(0);
 
     await act(async () => { releaseNew(); await switching; await settle(25); });
@@ -325,16 +327,16 @@ describe("main destination isolation", () => {
     addSession(world, CHAT, "/state/chat", { agent: { agentName: "chat", kind: "chat" } });
     localStorage.setItem(SESSIONS_TAB_STORAGE_KEY, "chat");
     await mount();
-    expect(controls).toMatchObject({ tab: "chat", path: CHAT, phase: "ready", disabled: false });
+    expect(controls).toMatchObject({ tab: "chat", path: CHAT, phase: "ready", sendBlocked: false });
     const missing = "/state/chat/missing.jsonl";
 
     await act(async () => { await controls.actions.openSession(missing); await settle(20); });
-    expect(controls).toMatchObject({ tab: "chat", path: undefined, phase: "unavailable", disabled: true });
+    expect(controls).toMatchObject({ tab: "chat", path: undefined, phase: "unavailable", sendBlocked: true });
     expect(calls("session/prompt")).toHaveLength(0);
     expect(calls("session/new")).toHaveLength(0);
 
     await act(async () => { await controls.actions.retryDestination(); await settle(20); });
-    expect(controls).toMatchObject({ tab: "chat", path: undefined, phase: "unavailable", disabled: true });
+    expect(controls).toMatchObject({ tab: "chat", path: undefined, phase: "unavailable", sendBlocked: true });
     expect(calls("session/load").filter((call) => (call.params as { path: string }).path === missing)).toHaveLength(2);
     expect(calls("session/prompt")).toHaveLength(0);
   });
@@ -367,13 +369,13 @@ describe("main destination isolation", () => {
     seedProject(PROJECT_CWD);
     localStorage.setItem(SESSIONS_TAB_STORAGE_KEY, "chat");
     await mount();
-    expect(controls).toMatchObject({ tab: "chat", path: undefined, phase: "unavailable", disabled: true });
+    expect(controls).toMatchObject({ tab: "chat", path: undefined, phase: "unavailable", sendBlocked: true });
     expect(calls("session/new")).toHaveLength(0);
     expect(calls("session/prompt")).toHaveLength(0);
     expect(calls("session/load").map((call) => (call.params as { path: string }).path)).toContain(CHAT);
 
     await act(async () => { await controls.actions.retryDestination(); await settle(20); });
-    expect(controls).toMatchObject({ tab: "chat", path: undefined, phase: "unavailable", disabled: true });
+    expect(controls).toMatchObject({ tab: "chat", path: undefined, phase: "unavailable", sendBlocked: true });
     expect(calls("session/new")).toHaveLength(0);
     expect(calls("session/prompt")).toHaveLength(0);
     expect(calls("session/load").filter((call) => (call.params as { path: string }).path === CHAT)).toHaveLength(2);
@@ -455,12 +457,12 @@ describe("main destination isolation", () => {
     };
     await mount();
     await act(async () => { await controls.actions.goTab("chat"); await settle(20); });
-    expect(controls).toMatchObject({ tab: "chat", path: undefined, phase: "unavailable", disabled: true });
+    expect(controls).toMatchObject({ tab: "chat", path: undefined, phase: "unavailable", sendBlocked: true });
     expect(calls("session/new")).toHaveLength(1);
     expect(failedPath).toBeTruthy();
 
     await act(async () => { await controls.actions.retryDestination(); await settle(20); });
-    expect(controls).toMatchObject({ tab: "chat", path: failedPath, phase: "ready", disabled: false });
+    expect(controls).toMatchObject({ tab: "chat", path: failedPath, phase: "ready", sendBlocked: false });
     expect(calls("session/new")).toHaveLength(1);
     expect(calls("session/load").filter((call) => (call.params as { path: string }).path === failedPath)).toHaveLength(2);
   });
@@ -568,7 +570,7 @@ describe("main destination isolation", () => {
     localStorage.setItem(SESSIONS_TAB_STORAGE_KEY, "chat");
     globalThis.history.replaceState(null, "", "/#/session/%E0%A4%A");
     await mount();
-    expect(controls).toMatchObject({ tab: "code", codeProject: PROJECT_CWD, path: undefined, phase: "ready", disabled: false });
+    expect(controls).toMatchObject({ tab: "code", codeProject: PROJECT_CWD, path: undefined, phase: "ready", sendBlocked: false });
     expect(globalThis.location.hash).toBe("");
   });
 });

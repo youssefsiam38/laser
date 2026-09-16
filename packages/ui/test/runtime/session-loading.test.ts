@@ -32,13 +32,17 @@ describe("canonical session open phase", () => {
     expect(sessionOpenPhase(state, path)).toMatchObject({ phase: "failed", hasTranscript: true, reason: "History is unavailable. Retry." });
     expect(adapter(state).messages).toHaveLength(1);
     expect(adapter(state).isDisabled).toBe(false);
+    expect(adapter(state).isSendDisabled).toBe(false);
   });
 
   it("retains a pre-view failure reason and clears it on Retry/close", () => {
     let state = reduce(initialState, { type: "sessionLoad", path, phase: "error", reason: "The host is offline." });
     expect(sessionOpenPhase(state, path)).toMatchObject({ phase: "failed", reason: "The host is offline." });
     expect(adapter(state).isLoading).toBe(false);
-    expect(adapter(state).isDisabled).toBe(true);
+    // A conversation that did not open fences sending; the composer still
+    // belongs to the person (RP-11).
+    expect(adapter(state).isSendDisabled).toBe(true);
+    expect(adapter(state).isDisabled).toBe(false);
     state = reduce(state, { type: "sessionLoad", path, phase: "opening" });
     expect(sessionOpenPhase(state, path).reason).toBeUndefined();
     state = reduce(state, { type: "closeView", path });

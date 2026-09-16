@@ -49,10 +49,13 @@ describe("stable external-store conversion", () => {
     await act(async () => root.render(<Harness messages={messages} connection="open" />));
     const before = runtime.thread.getState().messages;
     await act(async () => root.render(<Harness messages={messages} connection="closed" />));
-    expect(runtime.thread.getState().isDisabled).toBe(true);
+    // A dropped socket fences sending and takes nothing away: the composer
+    // keeps the person's words and the conversion keeps every identity (RP-11).
+    expect(runtime.thread.getState().extras).toEqual({ sendDisabled: true });
+    expect(runtime.thread.getState().isDisabled).toBe(false);
     expect(runtime.thread.getState().messages).toBe(before);
     await act(async () => root.render(<Harness messages={messages} connection="open" />));
-    expect(runtime.thread.getState().isDisabled).toBe(false);
+    expect(runtime.thread.getState().extras).toEqual({ sendDisabled: false });
     expect(runtime.thread.getState().messages).toBe(before);
     const changed = [...messages];
     changed[120] = { ...changed[120]!, content: [{ type: "text", text: "Updated content" }] };
@@ -153,9 +156,13 @@ describe("main sidebar accepted selection", () => {
     expect(row("Conversation A").closest('[data-slot="aui_thread-list-item"]')?.hasAttribute("aria-current")).toBe(false);
     expect(row("Conversation A").hasAttribute("aria-current")).toBe(false);
     expect(row("Conversation C").closest('[data-slot="aui_thread-list-item"]')?.getAttribute("aria-current")).toBe("page");
-    expect(mounts.filter(id => id.includes(C))).toHaveLength(0);
+    // The chosen conversation is on screen while the host is asked: this view
+    // still held its transcript, so its rows mount at once — once (RP-11).
+    expect(mounts.filter(id => id.includes(C))).toHaveLength(1);
+    expect(aui.thread.getState().extras).toEqual({ sendDisabled: true });
     await act(async () => { release(); await settle(40); });
     expect(mounts.filter(id => id.includes(C))).toHaveLength(1);
+    expect(aui.thread.getState().extras).toEqual({ sendDisabled: false });
     expect(onOpen).toHaveBeenCalledTimes(1);
     expect(world.calls.filter(call => call.method === "session/prompt")).toHaveLength(0);
     expect(aui.composer.getState()).toMatchObject({ text: "", quote: undefined });
@@ -259,12 +266,12 @@ describe("main sidebar accepted selection", () => {
     await act(async () => { row("Conversation C").click(); await settle(40); });
     expect(container.querySelector("output")?.getAttribute("data-phase")).toBe("unavailable");
     expect(mounts.filter(id => id.includes(C))).toHaveLength(0);
-    expect(aui.thread.getState().isDisabled).toBe(true);
+    expect(aui.thread.getState().extras).toEqual({ sendDisabled: true });
     delete world.overrides["session/load"];
     await act(async () => { row("Conversation C").click(); await settle(40); });
     expect(row("Conversation C").getAttribute("aria-current")).toBe("page");
     expect(mounts.filter(id => id.includes(C))).toHaveLength(1);
-    expect(aui.thread.getState().isDisabled).toBe(false);
+    expect(aui.thread.getState().extras).toEqual({ sendDisabled: false });
     expect(onOpen).toHaveBeenCalledTimes(2);
   });
 });

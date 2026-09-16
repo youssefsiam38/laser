@@ -361,10 +361,48 @@ describe("createThreadAdapter", () => {
     expect(adapter.onReload).toBeUndefined();
   });
 
-  it("disables the thread while the socket is down", () => {
-    expect(build({ connection: "open" }).adapter.isDisabled).toBe(false);
-    expect(build({ connection: "closed" }).adapter.isDisabled).toBe(true);
-    expect(build({ connection: "connecting" }).adapter.isDisabled).toBe(true);
+  it("fences sending while the socket is down and still lets a person write (RP-11)", () => {
+    for (const connection of ["open", "closed", "connecting"] as const) {
+      // A composer with a conversation to write to is never taken away: words
+      // a person is typing survive a dropped socket.
+      expect(build({ connection }).adapter.isDisabled).toBe(false);
+    }
+    expect(build({ connection: "open" }).adapter.isSendDisabled).toBe(false);
+    expect(build({ connection: "closed" }).adapter.isSendDisabled).toBe(true);
+    expect(build({ connection: "connecting" }).adapter.isSendDisabled).toBe(true);
+    expect(build({ connection: "connecting" }).adapter.extras).toEqual({ sendDisabled: true });
+    expect(build({ connection: "open" }).adapter.extras).toEqual({ sendDisabled: false });
+  });
+
+  it("disables a composer that has nowhere at all to write", () => {
+    const { adapter } = build({ path: undefined, resolvePath: undefined });
+    expect(adapter.isDisabled).toBe(true);
+  });
+
+  it("lets nothing through while the destination has not confirmed authority (RP-11)", async () => {
+    const dialog = { method: "confirm" as const, id: "u1", title: "Sure?", toolCallId: "t1" };
+    const { adapter, client, dispatch } = build({
+      view: view({ dialogs: [dialog], pending: [{ id: "p1", content: [{ type: "text", text: "waiting" }], text: "waiting", images: 0, createdAt: "2026-09-16T00:00:00.000Z", state: "waiting" }] }),
+      assertCanAct: () => { throw new Error("That conversation is still changing. Your action was not sent."); },
+    });
+    // Send, stop, approve, answer and every queue mutation: one fence, and not
+    // one request behind it.
+    await expect(adapter.onNew(message())).rejects.toThrow("was not sent");
+    await expect(adapter.onCancel!()).rejects.toThrow("was not sent");
+    await expect(adapter.onRespondToToolApproval!({ approvalId: "u1", approved: true })).rejects.toThrow("was not sent");
+    adapter.onResumeToolCall!({ toolCallId: "t1", payload: { type: "text", value: "answer" } as never });
+    adapter.queue!.enqueue(message());
+    adapter.queue!.steer(message());
+    adapter.queue!.edit("pending:p1", message());
+    adapter.queue!.remove("pending:p1");
+    adapter.queue!.move("pending:p1", { lane: "steer" });
+    await flush();
+    expect(client.calls).toEqual([]);
+    expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: "dialogAnswered" }));
+    // The person still sees a composer and the rows they were reading.
+    expect(adapter.isDisabled).toBe(false);
+    expect(adapter.isSendDisabled).toBe(true);
+    expect(adapter.messages?.length ?? 0).toBeGreaterThanOrEqual(0);
   });
 
   it("queue.enqueue prompts when idle", async () => {

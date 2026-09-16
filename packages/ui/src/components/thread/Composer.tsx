@@ -27,7 +27,7 @@ import { errorText, useShell } from "@/components/shell/shell-context";
 import { useIsMobile, useIsTouch } from "@/hooks/use-mobile";
 import { finishActiveDictation } from "@/pwa";
 import { appendAttachedPrompt, splitAttachedFiles, wrapFileAttachment } from "@/runtime/attachments";
-import { composerSendPlan, mainCodeProject, mainError, mainTab, useLaserStable, useLaserState, useSessionMeta } from "@/runtime";
+import { composerSendPlan, mainCodeProject, mainError, mainTab, provisionalSessionPath, useLaserStable, useLaserState, useSessionMeta } from "@/runtime";
 import { mergeRunConfigCustom } from "@/runtime/first-turn";
 import { completeLeadingSlash, matchLeadingSlash, rankSlashCommandMatches } from "./slash-completion.js";
 import { StatusLine } from "./StatusLine.js";
@@ -71,14 +71,21 @@ function ComposerBody() {
   const { pending: preparingSession } = useSessionPreparation();
   const { destination } = useLaserStable();
   const allowProjectLanding = !destination || mainTab(destination) !== "chat";
-  const disabled = useAuiState((s) => s.thread.isDisabled) || blocked !== undefined || preparingSession;
+  // Both hooks run unconditionally: `||` short-circuits, and a hook behind a
+  // short circuit is a hook that sometimes does not run.
+  const threadDisabled = useAuiState((s) => s.thread.isDisabled);
+  const noDestination = useNoComposerDestination();
+  // Only a composer with nowhere to write is inert. A fenced one still takes
+  // the person's words; it simply cannot send them yet (RP-11).
+  const inert = threadDisabled || noDestination !== undefined;
+  const disabled = blocked !== undefined || preparingSession;
   const canSend = useAuiState((s) => s.composer.canSend);
   const transcript = useTranscriptViewport();
   const destinationBusy = destination?.phase === "resolving";
   const placeholder = usePlaceholder();
   return (
     <ComposerPrimitive.Unstable_TriggerPopoverRoot>
-      <ComposerPrimitive.Root data-slot="composer" inert={disabled} aria-busy={preparingSession || destinationBusy || undefined} className="relative flex flex-col gap-2" onSubmit={() => { if (canSend) transcript.latest(); }}>
+      <ComposerPrimitive.Root data-slot="composer" inert={inert} aria-busy={preparingSession || destinationBusy || undefined} className="relative flex flex-col gap-2" onSubmit={() => { if (canSend) transcript.latest(); }}>
         <ComposerDraftRestore />
         <ComposerQueue />
         <StatusLine />
@@ -104,7 +111,7 @@ function ComposerBody() {
             leading={<ComposerAttachButton size="icon-lg" className={MobileComposerButtonClass()} />}
             trailing={<SendOrStop mobile />}
             onInputKeyDown={onInputKeyDown}
-            disabled={disabled}
+            disabled={inert}
             placeholder={placeholder}
           />
         ) : (
@@ -145,13 +152,16 @@ function ComposerBody() {
 // ---------------------------------------------------------------------------
 
 /**
- * The reason nothing can be sent, or `undefined` when something can.
+ * Nothing this composer could ever write to, or `undefined`.
  *
  * With no session open and no project chosen there is nothing to start a
  * session *in*: `threadList.initialize` throws "Pick a project before starting
  * a session", and that throw never reached the screen — the person typed,
- * pressed Enter, and the text simply sat there. A composer that cannot send is
- * disabled and says why, rather than accepting input it will drop.
+ * pressed Enter, and the text simply sat there.
+ *
+ * This is also the **only** state in which typing itself is refused (RP-11).
+ * A host that has not answered yet, a dropped socket or a conversation still
+ * resolving all block *sending*; the words stay where the person put them.
  */
 function useNothingToSendTo(): string | undefined {
   const { destination, currentProject } = useLaserStable();
@@ -168,18 +178,46 @@ function useNothingToSendTo(): string | undefined {
   return "Open a project first — the agent works inside a folder on this computer.";
 }
 
+/** The composer has nowhere at all to write to: the one case that takes typing away. */
+function useNoComposerDestination(): string | undefined {
+  const { destination } = useLaserStable();
+  const blocked = useNothingToSendTo();
+  if (destination?.phase === "resolving" || destination?.phase === "unavailable") return undefined;
+  return blocked;
+}
+
+/**
+ * The reason this composer cannot send yet, or `undefined`.
+ *
+ * Send admission only. Everything here leaves the draft editable: a
+ * conversation still resolving (including one painted from this device's cache,
+ * which the host has not confirmed), a conversation that failed to open, a
+ * socket that is not up, and a session being created. The imperative
+ * `assertCanAct`/`requireCurrent` guards in the runtime remain the guarantee;
+ * this is what the person is told.
+ */
+function useSendBlockedReason(): string | undefined {
+  const blocked = useNothingToSendTo();
+  const connection = useLaserState(s => s.connection);
+  const provisional = useLaserState(s => provisionalSessionPath(s) !== undefined);
+  const { pending: preparingSession } = useSessionPreparation();
+  if (provisional) return "Checking with the host before sending…";
+  if (blocked) return blocked;
+  if (connection !== "open") return connection === "connecting" ? "Reconnecting to the host…" : "Disconnected from the host…";
+  return preparingSession ? "Preparing this conversation…" : undefined;
+}
+
 function StagedAttachments() {
   return <ComposerAttachments><ComposerPrimitive.Attachments>{() => <ComposerAttachmentTile />}</ComposerPrimitive.Attachments></ComposerAttachments>;
 }
 
 function usePlaceholder(): string {
   const running = useAuiState((s) => s.thread.isRunning);
-  const disabled = useAuiState((s) => s.thread.isDisabled);
-  const blocked = useNothingToSendTo();
-  if (blocked) return blocked;
+  const sendBlocked = useSendBlockedReason();
+  if (sendBlocked) return sendBlocked;
   // While the agent works, what Enter does is join the queue — say so, rather
   // than promise an interrupt the person has to ask for separately.
-  return disabled ? "Reconnecting to the host…" : running ? "Queue a message…" : "Message the agent…";
+  return running ? "Queue a message…" : "Message the agent…";
 }
 
 /**
@@ -264,9 +302,9 @@ function ComposerInput() {
   // Both hooks run unconditionally: `||` short-circuits, and a hook behind a
   // short circuit is a hook that sometimes does not run.
   const threadDisabled = useAuiState((s) => s.thread.isDisabled);
-  const blocked = useNothingToSendTo();
-  const { pending: preparingSession } = useSessionPreparation();
-  const disabled = threadDisabled || blocked !== undefined || preparingSession;
+  const noDestination = useNoComposerDestination();
+  // Typing is never taken away for a fence the host owns (RP-11).
+  const disabled = threadDisabled || noDestination !== undefined;
   const placeholder = usePlaceholder();
   return (
     <ComposerPrimitive.Input
@@ -292,10 +330,9 @@ function SendOrStop({ mobile = false }: { mobile?: boolean }) {
   const running = useAuiState((s) => s.thread.isRunning);
   const empty = useAuiState((s) => s.composer.isEmpty);
   const dictating = useAuiState((s) => s.composer.dictation != null);
-  const { pending: preparingSession } = useSessionPreparation();
   const threadDisabled = useAuiState((s) => s.thread.isDisabled);
-  const blocked = useNothingToSendTo();
-  const disabled = preparingSession || threadDisabled || blocked !== undefined;
+  const sendBlocked = useSendBlockedReason();
+  const disabled = threadDisabled || sendBlocked !== undefined;
   const stop = running && empty && !disabled;
   const size = mobile ? "icon-lg" : "icon-sm";
   const className = mobile ? MobileComposerButtonClass(true) : undefined;

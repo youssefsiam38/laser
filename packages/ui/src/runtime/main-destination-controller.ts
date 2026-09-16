@@ -12,6 +12,7 @@ import {
   mainCodeProject,
   mainPath,
   mainTab,
+  pendingSessionPath,
   projectReturnOf,
   rememberedCodeOf,
   type CodeDestination,
@@ -143,6 +144,14 @@ export interface MainDestinationControllerDeps {
   readState(): AppState;
   dispatch(action: Action): void;
   loadSession(path: string): Promise<void>;
+  /**
+   * Put this device's last view of the chosen conversation on screen, now
+   * (RP-11). Synchronous by contract: it runs in the same turn as the person's
+   * click, before anything is asked of the host, so the rows are committed in
+   * the same frame as the selection. It paints nothing when there is no valid
+   * cached tail, and what it paints is never authority.
+   */
+  paintProvisional(path: string, intent: number): void;
   launchSession(cwd: string, options?: NewSessionOptions): Promise<string>;
   archived(path: string): boolean;
   onError(error: unknown): void;
@@ -239,6 +248,9 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
     if (pending.target.kind !== "session" || pending.target.path !== path || pending.target.visibleTab !== visibleTab) {
       transition({ ...pending, target: { kind: "session", path, visibleTab } });
     }
+    // The row is chosen and pinned: this is the moment this device can show
+    // what it last saw, before a single byte is asked of the host (RP-11).
+    depsRef.current.paintProvisional(path, intent);
     try { await depsRef.current.loadSession(path); }
     catch (error) {
       if (intent !== intentRef.current) return false;
@@ -512,7 +524,10 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
   return useMemo(() => ({
     startupRestoring,
     initializing,
-    controlledPath: initializing > 0 ? heldPath.current : mainPath(state.destination),
+    // While a navigation resolves, the thread stays bound to the row that was
+    // chosen: letting it fall to an unbound thread is what used to put an empty
+    // new-session frame between two conversations (RP-11).
+    controlledPath: initializing > 0 ? heldPath.current : mainPath(state.destination) ?? pendingSessionPath(state.destination),
     goTab,
     goProject,
     openSession,

@@ -151,6 +151,7 @@ export type Block =
 export const CUSTOM_MESSAGE_BLOCK_TYPES: ReadonlySet<string> = new Set([AGENT_EVENT_MESSAGE_TYPE, TASK_EVENT_MESSAGE_TYPE]);
 
 import { awake, dehydrateView, hasUnsentWork, isDormantView, trimView } from "./view-summary.js";
+import type { ProvisionalMark } from "./runtime/provisional-paint.js";
 export type { EvictionReason, SessionViewSummary, ValidatedRevision } from "./view-summary.js";
 export { awake, dehydrateView, hasUnsentWork, hydrationEpochOf, isDormantView, summaryOfView, viewFirstUserText, viewHasHistory, viewHasUserMessage } from "./view-summary.js";
 import type { EvictionReason, SessionViewSummary, ValidatedRevision } from "./view-summary.js";
@@ -289,6 +290,15 @@ export interface SessionView {
    * updates that arrive while it is in flight.
    */
   dormant?: { at: string; reason: EvictionReason } | undefined;
+  /**
+   * This transcript was painted from this device's cache and the host has not
+   * answered yet (RP-11). It is what this device last saw, truthfully labelled
+   * and never authority: the view carries no `validated` revision while this is
+   * set, every mutation is refused because the destination is still resolving,
+   * and the first authoritative window replaces it — as a delta when the host
+   * proves the base, atomically otherwise.
+   */
+  provisional?: ProvisionalMark | undefined;
 }
 
 
@@ -453,6 +463,24 @@ export type Action =
   | { type: "views/reconcile"; path: string; at: string; token: string; entries: unknown[]; leafId?: string | null | undefined; window: HistoryWindow }
   /** A reconciliation read that failed or was refused; the stamp spent a read. */
   | { type: "views/reconcileFailed"; path: string; at: string; token: string }
+  /**
+   * Paint what this device last saw of a conversation, while the host is asked
+   * (RP-11). Refused unless `intent` is still the destination's own, and never
+   * applied over a hydrated transcript, a read in flight or rows already on
+   * screen: this replaces nothing, it fills a view that is otherwise empty.
+   */
+  | {
+      type: "views/provisional";
+      path: string;
+      /** The navigation this paint belongs to. A superseded one paints nothing. */
+      intent: number;
+      entries: unknown[];
+      stubs: EntryStub[];
+      leafId: string | null;
+      mark: ProvisionalMark;
+      /** Only for a conversation this page holds no view for. */
+      state?: SessionState | undefined;
+    }
   /**
    * Replace the transcript from a persisted snapshot. `expectSeq` guards the
    * round trip: when live updates advanced `lastSeq` while `pi/session/entries`
@@ -655,6 +683,7 @@ export function reduce(state: AppState, action: Action): AppState {
     case "historyReset":
     case "historyEnd":
     case "historySnapshot":
+    case "historyDelta":
     case "historyMetadata":
     case "historyPrepend":
       return updateView(state, action.path, v => reduceHistory(v, action, historyFold));
@@ -697,6 +726,48 @@ export function reduce(state: AppState, action: Action): AppState {
         }
         return candidate;
       });
+    case "views/provisional": {
+      // The navigation that asked for this paint is the only one it belongs to.
+      if (state.destination.intent !== action.intent) return state;
+      const existing = state.open[action.path];
+      // Never over authority, never over a read in flight, never over rows a
+      // person is already looking at.
+      if (existing && (existing.hydrated || existing.historyPending !== undefined || existing.blocks.length > 0)) return state;
+      if (!existing && action.state === undefined) return state;
+      const base: SessionView = existing ? awake(existing) : {
+        path: action.path,
+        state: action.state!,
+        blocks: [],
+        lastSeq: 0,
+        running: false,
+        queue: { steering: [], followUp: [] },
+        pending: [],
+        dialogs: [],
+        statuses: {},
+        widgets: {},
+        openedAt: new Date(action.mark.at).toISOString(),
+        hydrated: false,
+        entries: [],
+        capabilities: [],
+        goal: null,
+        namerLabels: {},
+      };
+      const view: SessionView = {
+        ...base,
+        entries: action.entries,
+        stubs: action.stubs,
+        leafId: action.leafId,
+        // Blocks are built by the same fold every authoritative page uses, so a
+        // provisional row renders exactly as the row that replaces it will.
+        blocks: blocksFromEntries(action.entries, action.leafId, modelNamesOf(base.state), { stubs: action.stubs, revision: action.mark.revision }),
+        // A provisional view claims no durable revision: it is what this device
+        // last saw, and only the host can say what that is worth now.
+        validated: undefined,
+        hydrated: false,
+        provisional: action.mark,
+      };
+      return { ...state, open: { ...state.open, [action.path]: view } };
+    }
     case "views/reconcileFailed":
       return updateView(state, action.path, (v) => {
         const ended = reduceHistory(v, { type: "historyEnd", path: action.path, token: action.token }, historyFold);
@@ -718,13 +789,13 @@ export function reduce(state: AppState, action: Action): AppState {
         // (RP-5b); the incoming array is dropped with this fold.
         const retained = retainEntries(action.entries);
         return action.expectSeq !== undefined && v.lastSeq !== action.expectSeq
-          ? { ...v, entries: retained.entries, stubs: retained.stubs, leafId: action.leafId, history: undefined, historyPending: undefined, hydrated: true, lastSeq, validated: undefined }
-          : { ...v, blocks: blocksFromEntries(retained.entries, action.leafId, modelNamesOf(v.state), { stubs: retained.stubs }), entries: retained.entries, stubs: retained.stubs, leafId: action.leafId, history: undefined, historyPending: undefined, hydrated: true, pendingSentBy: undefined, lastSeq, validated: undefined };
+          ? { ...v, entries: retained.entries, stubs: retained.stubs, leafId: action.leafId, history: undefined, historyPending: undefined, hydrated: true, lastSeq, validated: undefined, provisional: undefined }
+          : { ...v, blocks: blocksFromEntries(retained.entries, action.leafId, modelNamesOf(v.state), { stubs: retained.stubs }), entries: retained.entries, stubs: retained.stubs, leafId: action.leafId, history: undefined, historyPending: undefined, hydrated: true, pendingSentBy: undefined, lastSeq, validated: undefined, provisional: undefined };
       });
     case "entries":
       return updateView(state, action.path, (v) => {
         const retained = retainEntries(action.entries);
-        return { ...v, entries: retained.entries, stubs: retained.stubs, leafId: action.leafId, validated: undefined };
+        return { ...v, entries: retained.entries, stubs: retained.stubs, leafId: action.leafId, validated: undefined, provisional: undefined };
       });
     case "goal":
       return updateView(state, action.path, (v) => ({ ...v, goal: action.goal }));

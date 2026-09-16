@@ -51,7 +51,9 @@ it("shows skeleton, not welcome; arriving history wins immediately over optional
   expect(container.querySelector('[data-slot="conversation-skeleton"]')).toBeNull();
   await act(async () => { vi.advanceTimersByTime(150); });
   expect(container.querySelector('[data-slot="conversation-skeleton"]')).not.toBeNull();
-  expect(container.querySelector("textarea")?.disabled).toBe(true);
+  // The composer belongs to the person even while the conversation opens: the
+  // draft is editable and only sending waits for the host (RP-11).
+  expect(container.querySelector("textarea")?.disabled).toBe(false);
   await act(async () => { release(); await settle(30); });
   expect(loading).toBe(false);
   expect(container.textContent).toContain("Existing conversation");

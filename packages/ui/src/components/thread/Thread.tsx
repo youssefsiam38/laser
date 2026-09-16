@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { ThreadDialogCards, WaitingNotice } from "@/dialogs";
 import { ToolRowScope } from "@/dialogs/tool-rows";
 import { useLaserStable, useLaserState, useLaserView } from "@/runtime";
-import { sessionOpenPhase, sameSessionOpenPhase } from "@/runtime/main-destination";
+import { sessionOpenPhase, sameSessionOpenPhase, visibleSessionPath } from "@/runtime/main-destination";
 import { useWorkbench } from "@/components/workbench/workbench-context";
 import { useSessionSeen } from "./use-session-seen.js";
 import { FileOpenerProvider } from "./FileOpener.js";
@@ -61,7 +61,10 @@ const FOLLOW_UPS = AuiConfig({
 });
 
 export function Thread(props: ThreadProps = {}) {
-  const path = useLaserState(s => s.current ?? "");
+  // The conversation on screen, which during a navigation is the row that was
+  // chosen rather than the one still committed (RP-11): tool rows, file opening
+  // and find keep following the transcript a person is actually looking at.
+  const path = useLaserState(s => visibleSessionPath(s) ?? "");
   return <TranscriptViewportProvider><ToolRowScope scope={path}><ThreadContent {...props} /></ToolRowScope></TranscriptViewportProvider>;
 }
 
@@ -72,17 +75,20 @@ function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
   // streamed batch. What this component draws changes far more rarely, and the
   // two things that do follow the stream (the seen watermark, the entries
   // refresh) subscribe for themselves below and render nothing.
-  const path = useLaserState(s => (s.current ? s.open[s.current]?.path : undefined));
+  const path = useLaserState(s => { const target = visibleSessionPath(s); return target ? s.open[target]?.path : undefined; });
   const partialHistory = useLaserState(s => {
-    const history = s.current ? s.open[s.current]?.history : undefined;
+    const target = visibleSessionPath(s);
+    const history = target ? s.open[target]?.history : undefined;
     return Boolean(history && !history.complete);
   });
   const suggestions = useMemo(() => (followUps ? AuiConfig({ suggestions: Suggestions([...followUps]) }) : FOLLOW_UPS), [followUps]);
   const { actions, destination } = useLaserStable();
-  const open = useLaserState(s => sessionOpenPhase(s, s.current), sameSessionOpenPhase);
+  const open = useLaserState(s => sessionOpenPhase(s, visibleSessionPath(s)), sameSessionOpenPhase);
   const connected = useLaserState(s => s.connection === "open");
   const { page } = useWorkbench();
-  const loading = open.phase === "opening" && !open.hasTranscript && open.expectsTranscript;
+  // A conversation painted from this device is already on screen: a loading
+  // state over it would be a lie, and a skeleton would throw it away (RP-11).
+  const loading = open.phase === "opening" && !open.hasTranscript && !open.provisional && open.expectsTranscript;
   const loadError = open.phase === "failed";
   const slots: ThreadSlots = statusSlot !== undefined ? { statusLine: statusSlot } : {};
   const aui = useAui();
@@ -105,7 +111,8 @@ function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
               <div className="mx-auto flex w-full max-w-(--measure-thread) flex-1 flex-col px-4 md:px-6">
                 {loadError && (
                   <ErrorState className="mt-6"
-                    title={open.hasTranscript ? "Couldn’t refresh this conversation." : open.path ? "This session didn’t load." : "Couldn’t open this view."}
+                    title={open.provisional ? "Couldn’t reach the host. This is your last view of this conversation."
+                      : open.hasTranscript ? "Couldn’t refresh this conversation." : open.path ? "This session didn’t load." : "Couldn’t open this view."}
                     detail={open.reason}
                     onRetry={() => {
                       if (destination.phase === "unavailable") void actions.retryDestination();

@@ -41,24 +41,29 @@ describe("history request ownership", () => {
     expect(f.view().historyRevision).toBe(revision);
   });
 
-  it("puts the old loaded transcript away before the recent one is requested, and replays what arrives meanwhile", async () => {
+  it("keeps the loaded transcript on screen until the recent one replaces it, and replays what arrives meanwhile", async () => {
     const pending = deferred<Result>();
     const f = fixture(async params => params.window && "tail" in params.window && f.view().hydrated
       ? pending.promise : historyWindow(source, params.window!, scope));
     await f.loader.read(state.path, true);
     expect(f.view().blocks).toHaveLength(80);
+    const before = f.view().blocks;
     f.dispatch({ type: "optimisticUser", path: state.path, id: "sending", text: "Sent from here", images: [] });
-    const reset = f.loader.recent(state.path, () => true);
-    // Synchronously, before the response: nothing older is on screen, the view
-    // is honestly not hydrated, and this surface's own unsent message stands.
-    expect(f.view().entries).toEqual([]);
-    expect(f.view().blocks).toEqual([expect.objectContaining({ id: "sending", optimistic: true })]);
-    expect(f.view().hydrated).toBe(false);
-    expect(f.view().history).toBeUndefined();
+    const replacement = f.loader.recent(state.path, () => true);
+    // Nothing is retired before the answer arrives (RP-11): what a person was
+    // reading stays exactly where it was, and their unsent message with it.
+    expect(f.view().entries).toHaveLength(80);
+    expect(f.view().blocks.slice(0, 80)).toEqual(before);
+    expect(f.view().blocks.at(-1)).toMatchObject({ id: "sending", optimistic: true });
+    expect(f.view().hydrated).toBe(true);
+    expect(f.view().history).toBeDefined();
     f.dispatch({ type: "notification", method: "session/update", params: { sessionPath: state.path, epoch: scope.epoch, seq: 9, at: "2026-01-01T00:00:00Z", update: { kind: "agent_start" } } });
     pending.resolve(historyWindow(source, { tail: 40 }, { ...scope, seq: 8 }));
-    await reset;
+    await replacement;
+    // One transaction replaced it: the older page is gone, the tail is here,
+    // and the unsent message and the update that overtook the read both stand.
     expect(f.view().hydrated).toBe(true);
+    expect(f.view().entries).toHaveLength(40);
     expect(f.view().blocks).toHaveLength(41);
     expect(f.view().blocks.at(-1)).toMatchObject({ id: "sending", optimistic: true });
     expect(f.view().lastSeq).toBe(9);

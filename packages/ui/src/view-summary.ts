@@ -119,6 +119,9 @@ export function dehydrateView(view: SessionView, reason: EvictionReason, at: str
     stubs: [],
     hydrated: false,
     namerLabels: {},
+    // Nothing painted from this device survives a release: the next open reads
+    // it again, from the cache or from the host (RP-11).
+    provisional: undefined,
     summary: summaryOfView(view),
     ...(view.validated ? { validated: view.validated } : {}),
     hydrationEpoch: (view.hydrationEpoch ?? 0) + 1,

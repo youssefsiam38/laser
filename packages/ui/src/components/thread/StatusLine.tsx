@@ -6,7 +6,7 @@ import type { Status } from "@/components/status/status";
 import { duration, tokens } from "@/format";
 import { cn } from "@/lib/utils";
 import { useLaserState } from "@/runtime";
-import { sessionOpenPhase } from "@/runtime/main-destination";
+import { sessionOpenPhase, visibleSessionPath } from "@/runtime/main-destination";
 import type { AppState } from "@/store";
 import { useSessionUpdates } from "./session-updates.js";
 import { useThreadSlots } from "./thread-slots.js";
@@ -21,12 +21,18 @@ interface Words {
 
 /** The session's state in words, lowercase, next to where you type (D-20 §5). */
 const wordsFor = (s: AppState): Words | undefined => {
-  const path = s.current;
+  const path = visibleSessionPath(s);
   const view = path ? s.open[path] : undefined;
   const open = sessionOpenPhase(s, path);
   if (s.connection !== "open") {
+    // What is on screen came from this device, and the host cannot be reached
+    // to confirm it. Say both things, in that order (RP-11).
+    if (open.provisional) return { status: "error", text: "offline · showing your last view", live: false };
     return { status: "error", text: s.connection === "connecting" ? "reconnecting to the host" : "disconnected from the host", live: false };
   }
+  // Provisional content is content: it is never described as loading, and it
+  // never claims to be a confirmed live connection.
+  if (open.provisional) return { status: "idle", text: "showing your last view · checking with the host", live: false };
   if (open.phase === "opening") {
     return { status: "working", text: open.hasTranscript ? "refreshing the conversation" : "loading the conversation", live: false };
   }
@@ -95,7 +101,7 @@ function useTurnStats(path: string | undefined, running: boolean): TurnStats {
  */
 export function StatusLine() {
   const words = useLaserState(wordsFor, sameWords);
-  const path = useLaserState((s) => s.current);
+  const path = useLaserState(visibleSessionPath);
   const slots = useThreadSlots();
   const stats = useTurnStats(path, words?.live === true && words.status === "working");
   const ticking = stats.startedAt !== undefined && stats.endedAt === undefined && words?.live === true;

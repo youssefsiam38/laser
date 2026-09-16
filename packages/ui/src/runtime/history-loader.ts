@@ -10,7 +10,15 @@ export type HistoryAction =
   | { type: "historyBegin"; path: string; token: string }
   | { type: "historyReset"; path: string; token: string }
   | { type: "historyEnd"; path: string; token: string }
-  | { type: "historySnapshot"; path: string; token: string; entries: unknown[]; leafId?: string | null; window: HistoryWindow; replaceWindow?: true }
+  | { type: "historySnapshot"; path: string; token: string; entries: unknown[]; leafId?: string | null; window: HistoryWindow; replaceWindow?: true; keepStubs?: readonly EntryStub[] }
+  /**
+   * An append-only suffix the host proved against a revision this view still
+   * holds (`mode: "delta"`, RP-9/RP-11). It is folded through the canonical
+   * snapshot below — live turn, buffered updates, unsent prompts, block
+   * identity and all — over the merged entry set, so a delta can never lose an
+   * update that overtook it. Refused, whole, when the base has moved.
+   */
+  | { type: "historyDelta"; path: string; token: string; baseRevision: string; entries: unknown[]; leafId?: string | null | undefined; window: HistoryWindow }
   | { type: "historyPrepend"; path: string; before: string; entries: unknown[]; window: HistoryWindow; revision?: string | undefined }
   | { type: "historyMetadata"; path: string; from?: string | null | undefined; entries: unknown[]; leafId?: string | null | undefined; window: HistoryWindow; revision?: string | undefined };
 
@@ -152,11 +160,15 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
       const incoming = retainEntries(action.entries);
       const elided = (action.window.elided ?? []).map(stubOfElided);
       const entries = retainTree ? [...new Map([...v.entries, ...incoming.entries].map(entry => [(entry as { id: string }).id, entry])).values()] : incoming.entries;
-      const stubs = retainTree ? mergeStubs(v.stubs ?? [], [...incoming.stubs, ...elided]) : [...incoming.stubs, ...elided];
+      // `keepStubs` is how a page that *extends* what this view holds keeps the
+      // rows it already points at (RP-11 delta). A replacement carries none.
+      const stubs = retainTree ? mergeStubs(v.stubs ?? [], [...incoming.stubs, ...elided]) : mergeStubs(action.keepStubs ?? [], [...incoming.stubs, ...elided]);
       const history = retainTree ? { ...window, complete: true, branchesUnloaded: false, userOffset: 0, context: [], priorGoalIds: [] } : window;
       if (retainTree) delete history.before;
       const { trimmed: _released, ...base } = v;
       let next: SessionView = { ...awake(base as SessionView), entries, stubs, leafId: action.leafId, history, hydrated: true, validated: validatedOf(window, v),
+        // The host has answered: nothing on screen is this device's guess now.
+        provisional: undefined,
         historyRevision: action.replaceWindow ? action.token : v.historyRevision,
         blocks: blocksFromEntries(entries, action.leafId, modelNamesOf(v.state), { stubs, revision: window.revision }),
         running: live?.running ?? v.running, lastSeq: action.window.seq, updateEpoch: history.epoch, pendingSentBy: undefined, historyPending: undefined };
@@ -194,6 +206,46 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
       // longer describes what this view holds.
       return settled.entries === entries && settled.leafId === action.leafId
         ? settled : keepValidated({ ...settled, entries, leafId: action.leafId }, settled);
+    }
+    case "historyDelta": {
+      if (v.historyPending?.token !== action.token) return v;
+      const base = v.validated;
+      const held = v.history;
+      // Every fence, and all of them: this view must still hold the exact
+      // authoritative window the host proved the suffix against, in this
+      // environment and this worker generation. Anything else is replaced.
+      if (!base || !held || base.revision !== action.baseRevision || held.revision !== action.baseRevision
+        || base.environmentKey !== action.window.environmentKey || held.epoch !== action.window.epoch) return v;
+      const known = new Set<string>();
+      for (const entry of v.entries) {
+        const id = (entry as { id?: unknown } | null)?.id;
+        if (typeof id === "string") known.add(id);
+      }
+      for (const stub of v.stubs ?? []) known.add(stub.id);
+      const suffix = action.entries.filter(entry => {
+        const id = (entry as { id?: unknown } | null)?.id;
+        return typeof id === "string" && !known.has(id);
+      });
+      // A delta's own page metadata describes the suffix it carries, not the
+      // conversation this view holds: the cached cursor, anchor, coverage and
+      // goal context stay exactly as they were, and only the live edge moves.
+      const { before: _suffixCursor, anchor: _suffixAnchor, ...answered } = action.window;
+      const window: HistoryWindow = {
+        ...answered,
+        ...(held.before !== undefined ? { before: held.before } : {}),
+        ...(held.anchor !== undefined ? { anchor: held.anchor } : {}),
+        userOffset: held.userOffset,
+        complete: held.complete,
+        branchesUnloaded: held.branchesUnloaded || action.window.branchesUnloaded,
+        hasHistory: held.hasHistory || action.window.hasHistory,
+        context: held.context,
+        priorGoalIds: held.priorGoalIds,
+      };
+      return reduceHistory(v, {
+        type: "historySnapshot", path: action.path, token: action.token, window, replaceWindow: true,
+        entries: [...v.entries, ...suffix], keepStubs: v.stubs ?? [],
+        ...(action.leafId !== undefined ? { leafId: action.leafId } : {}),
+      }, { applyUpdate, blocksFromEntries, modelNamesOf, stampNewBlocks, textOf });
     }
     case "historyMetadata": {
       if (v.historyRevision !== action.revision || (v.history && v.history.epoch !== action.window.epoch)) return v;
@@ -264,10 +316,10 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     return () => accepting() && (generations.get(path) ?? 0) === generation && deps.get(path)?.historyRevision === revision
       && (deps.get(path)?.hydrationEpoch ?? 0) === hydration;
   };
-  const read = async (path: string, all = false, accepting: () => boolean = () => true, legacySeq?: number, policy?: "recent"): Promise<void> => {
+  const read = async (path: string, all = false, accepting: () => boolean = () => true, legacySeq?: number, policy?: "recent", allowDelta = true): Promise<void> => {
     if (!accepting()) return;
     if (policy === "recent") generations.set(path, (generations.get(path) ?? 0) + 1);
-    let active = fence(path, accepting);
+    const active = fence(path, accepting);
     const pending = policy === "recent" ? undefined : reads.get(path);
     if (pending) {
       await pending;
@@ -275,21 +327,26 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     }
     const token = String(++nextToken);
     const expectSeq = deps.get(path)?.lastSeq ?? 0;
+    // Nothing is retired before the answer arrives (RP-11): what this surface
+    // is showing — the conversation it already held, or the tail this device
+    // painted from its cache — stays on screen until the authoritative window
+    // replaces it in one transaction, or does not arrive at all.
     deps.dispatch({ type: "historyBegin", path, token });
-    if (policy === "recent") {
-      // Retiring the window clears the revision this read is replacing, so the
-      // fence is taken again afterwards: a read must not refuse its own reset.
-      deps.dispatch({ type: "historyReset", path, token });
-      active = fence(path, accepting);
-    }
+    /** A proved suffix the fold refused: the same read is spent again, once. */
+    let refusedDelta = false;
     const work = (async () => {
       const anchor = policy === "recent" ? undefined : deps.get(path)?.history?.anchor;
       const window: HistoryWindowRequest = policy === "recent" ? { tail: 40 } : all ? { all: true } : anchor ? { from: anchor } : { tail: 40 };
+      // The durable revision this view still holds, when it holds one whole
+      // (RP-9): the host may then answer the tail as a proved suffix instead of
+      // a replacement. A cache-painted view holds no window, so it asks for a
+      // replacement and gets one.
+      const base = allowDelta && policy === "recent" ? deltaBaseOf(deps.get(path)) : undefined;
       // RP-5b: this surface cannot hold a body larger than its excerpt bound,
       // so every page it asks for leaves those bodies out and lists the records
       // that carry them — which is also what lets a page of a conversation with
       // one enormous turn still carry the turns around it.
-      const result = await deps.request({ path, window, bodyLimit: BODY_EXCERPT_MAX_BYTES }).catch(error => {
+      const result = await deps.request({ path, window, bodyLimit: BODY_EXCERPT_MAX_BYTES, ...(base ? { baseRevision: base } : {}) }).catch(error => {
         if (!("from" in window) || (error as { code?: number }).code !== ErrorCodes.InvalidParams) throw error;
         return deps.request({ path, window: { tail: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES });
       });
@@ -298,8 +355,17 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
 
       const epoch = current.history?.epoch ?? current.updateEpoch;
       if (result.window && epoch && epoch !== result.window.epoch) deps.adoptEpoch(path, result.window.seq);
-      if (result.window) deps.dispatch({ type: "historySnapshot", path, token, ...result, window: result.window, ...(policy === "recent" ? { replaceWindow: true } : {}) });
-      else deps.dispatch({ type: "hydrate", path, entries: result.entries, leafId: result.leafId, expectSeq, ...(legacySeq !== undefined ? { seq: legacySeq } : {}) });
+      if (result.window && base !== undefined && result.window.mode === "delta") {
+        deps.dispatch({ type: "historyDelta", path, token, baseRevision: base, entries: result.entries, window: result.window, ...(result.leafId !== undefined ? { leafId: result.leafId } : {}) });
+        // The fold refuses a suffix whose base moved while it was in flight. A
+        // refused page is kept by nobody: the conversation is read again, once,
+        // as an atomic replacement.
+        if (deps.get(path)?.historyRevision !== token) { refusedDelta = true; return; }
+      } else if (result.window) {
+        deps.dispatch({ type: "historySnapshot", path, token, ...result, window: result.window, ...(policy === "recent" ? { replaceWindow: true } : {}) });
+      } else {
+        deps.dispatch({ type: "hydrate", path, entries: result.entries, leafId: result.leafId, expectSeq, ...(legacySeq !== undefined ? { seq: legacySeq } : {}) });
+      }
       deps.track(path, deps.get(path)?.lastSeq ?? 0);
     })();
     reads.set(path, work);
@@ -307,6 +373,21 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
       deps.dispatch({ type: "historyEnd", path, token });
       if (reads.get(path) === work) reads.delete(path);
     }
+    if (refusedDelta) await read(path, false, accepting, legacySeq, "recent", false);
+  };
+
+  /**
+   * The revision a delta may be proved against, or nothing.
+   *
+   * Only a view that holds one whole authoritative window qualifies: the same
+   * durable revision on the light record and on the loaded window. A view
+   * painted from this device's cache (RP-11) holds a captured revision and no
+   * window, so it asks for — and receives — a replacement.
+   */
+  const deltaBaseOf = (view: SessionView | undefined): string | undefined => {
+    const revision = view?.validated?.revision;
+    return revision !== undefined && view?.history?.revision === revision && view.hydrated && view.provisional === undefined
+      ? revision : undefined;
   };
   const all = async (path: string, accepting: () => boolean): Promise<boolean> => {
     const active = fence(path, accepting);
