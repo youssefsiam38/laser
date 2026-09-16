@@ -336,8 +336,12 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
           continue;
         }
         if (op.kind === "supersede") {
-          superseding.delete(op.sessionId);
+          // Keep the revision-selective fence through the proved deletion. A
+          // release of that same stale revision may arrive while `remove`
+          // awaits storage; admitting it here would resurrect the row as soon
+          // as this op left the queue. Different revisions remain admissible.
           const ok = await supersedePass(op.sessionId, op.revision, until);
+          superseding.delete(op.sessionId);
           const waiters = supersedeWaiters.get(op.sessionId);
           supersedeWaiters.delete(op.sessionId);
           answer(waiters, ok);

@@ -156,6 +156,8 @@ export interface StoreFaults {
   stuckScan?: boolean;
   /** `remove` never settles. */
   stuckRemove?: boolean;
+  /** `remove` waits for this before deleting: a proved deletion a test can hold open. */
+  pauseRemove?: Promise<void>;
   /** `scan` hands back a row with a key this build cannot address. */
   unaddressableRows?: number;
   /** Every `put` fails to commit. */
@@ -279,6 +281,7 @@ export function createTestStore(seed: readonly TailRow[] = [], faults: StoreFaul
 
     async remove(keys, batch, limits) {
       if (store.faults.stuckRemove) return new Promise<never>(() => {});
+      if (store.faults.pauseRemove) await store.faults.pauseRemove;
       if (closed || store.faults.refuseRemove) return false;
       if (keys.length > (limits?.rows ?? TAIL_SCAN_LIMITS.deleteRows)) return false;
       const expired = (): boolean => limits?.deadline !== undefined && time.now > limits.deadline;

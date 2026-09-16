@@ -875,6 +875,27 @@ describe("supersession is a proved deletion, not a hidden object", () => {
     expect(peek(view.cache)).toMatchObject({ revision: REVISION, seq: 40 });
   });
 
+  it("does not admit the stale revision again while its proved removal is awaiting storage", async () => {
+    let releaseRemove!: () => void;
+    const view = harness({
+      rows: [row()],
+      faults: { pauseRemove: new Promise<void>((resolve) => { releaseRemove = resolve; }) },
+    });
+    await view.cache.prepare(descriptor());
+
+    view.cache.supersede("session-a", REVISION);
+    // `supersede` is now inside the paused store removal. The same stale tail
+    // arriving here must be refused until that deletion is proved; otherwise
+    // it would sit behind the op and resurrect the row immediately afterwards.
+    view.cache.release(tail({ revision: REVISION, seq: 50 }));
+    releaseRemove();
+    view.store.faults.pauseRemove = undefined;
+    await view.flush();
+
+    expect(peek(view.cache)).toBeUndefined();
+    expect([...view.store.rows.values()].some((value) => value.sessionId === "session-a")).toBe(false);
+  });
+
   it("closes the cache when a superseded row cannot be proved gone", async () => {
     const store = createTestStore([row()], { silentRemove: true });
     const view = harness({ store });
