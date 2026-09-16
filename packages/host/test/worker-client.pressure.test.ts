@@ -157,7 +157,10 @@ it("mints a distinct, monotonic generation for each spawn and never wraps (RP-8)
 });
 
 it("passes the generation it was given, and passes nothing when it has none", { timeout: 20_000 }, async () => {
-  const withGeneration = new WorkerClient({ cwd: project, workerMain, workerGeneration: 42, onNotification: () => {} });
+  // Both clients take the exit callback the pool always supplies: a child that
+  // ends after the test has stopped it still reports, and a missing handler
+  // would surface as an unhandled failure rather than an assertion.
+  const withGeneration = new WorkerClient({ cwd: project, workerMain, workerGeneration: 42, onNotification: () => {}, onExit: () => {} });
   try {
     await withGeneration.ready;
     expect(withGeneration.workerGeneration).toBe(42);
@@ -166,7 +169,7 @@ it("passes the generation it was given, and passes nothing when it has none", { 
   } finally {
     await withGeneration.stop();
   }
-  const without = new WorkerClient({ cwd: project, workerMain, onNotification: () => {} });
+  const without = new WorkerClient({ cwd: project, workerMain, onNotification: () => {}, onExit: () => {} });
   try {
     await without.ready;
     expect(without.workerGeneration).toBeUndefined();

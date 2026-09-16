@@ -66,6 +66,8 @@ function harness(options: {
   const lines: string[] = [];
   let queued: Array<PressureSample | "fail"> = [];
   let failNext = 0;
+  let gate: Promise<void> | undefined;
+  let openGate: (() => void) | undefined;
 
   const outcome = (name: "ephemeral_caches" | "replay_suffixes" | "task_records"): PressureActionOutcome => {
     log.push(name);
@@ -76,6 +78,7 @@ function harness(options: {
   const controller = createWorkerPressureController(
     {
       sample: async () => {
+        if (gate) await gate;
         if (failNext > 0) {
           failNext -= 1;
           throw new Error("no counters");
@@ -117,6 +120,17 @@ function harness(options: {
     get timers() { return [...timers.values()]; },
     feed(...next: Array<PressureSample | "fail">) { queued = [...queued, ...next]; },
     failSampler(times = 1) { failNext = times; },
+    /** Hold the next sample until `release()` is called. */
+    hold() {
+      gate = new Promise<void>((resolve) => {
+        openGate = () => {
+          gate = undefined;
+          openGate = undefined;
+          resolve();
+        };
+      });
+    },
+    release() { openGate?.(); },
     advance(ms: number) { clock += ms; },
     at() { return clock; },
     /** Run every timer whose moment has come, oldest first. */
@@ -427,14 +441,22 @@ describe("a pass this worker decides to run", () => {
     expect(threw.log.length).toBeGreaterThan(threwRan);
   });
 
-  it("stops early when a re-probe proves the pressure relieved", async () => {
-    const h = harness();
-    climb(h, 2_000);
+  it("stops early when a re-probe proves the pressure relieved, after exactly the steps it took", async () => {
+    const h = harness({ outcomes: { ephemeral_caches: { released: { count: 3 } } } });
+    // Two readings make it critical; the third, taken between the first step
+    // and the second, is a calm machine.
+    h.feed(
+      sampleOf({ atMs: h.at(), physicalMiB: 2_000 }),
+      sampleOf({ atMs: h.at(), physicalMiB: 2_000 }),
+      sampleOf({ atMs: h.at(), physicalMiB: 100 }),
+    );
     await h.controller.probeNow();
+    const before = h.log.length;
     await h.controller.probeNow();
-    // The probe between steps sees a calm machine, so the rest of the list is
-    // not run — and what did run is still reported.
-    expect(h.log.length).toBeLessThanOrEqual(3);
+    expect(h.log.slice(before)).toEqual(["ephemeral_caches"]);
+    const action = h.reports.find((report) => report.ran.length > 0)!;
+    expect(action.ran).toEqual(["ephemeral_caches"]);
+    expect(action.level).toBe("critical");
   });
 
   it("stops at a step that threw, reports it as unavailable and says nothing else", async () => {
@@ -533,6 +555,78 @@ describe("what leaves this worker", () => {
     expect(h.reports.length).toBeGreaterThanOrEqual(firstBatch);
     // Cooldowns make two action reports inside one window impossible.
     expect(h.controller.counters().actionCollisions).toBe(0);
+  });
+
+  it("keeps one row-less report for a window, and it carries the newest state", async () => {
+    const h = harness();
+    // Calm, established: this is the first transition and it goes out at once.
+    h.feed(sampleOf({ atMs: h.at(), physicalMiB: 100 }), sampleOf({ atMs: h.at(), physicalMiB: 100 }));
+    await h.controller.probeNow();
+    await h.controller.probeNow();
+    expect(h.reports.map((report) => report.level)).toEqual(["normal"]);
+    const sent = h.reports.length;
+
+    // Three more transitions inside the same five seconds: sight lost, found
+    // again, and lost once more.
+    h.advance(1_000);
+    h.feed(sampleOf({ atMs: h.at() }));
+    await h.controller.probeNow();
+    h.advance(1_000);
+    h.feed(sampleOf({ atMs: h.at(), physicalMiB: 100 }), sampleOf({ atMs: h.at(), physicalMiB: 100 }));
+    await h.controller.probeNow();
+    await h.controller.probeNow();
+    h.advance(1_000);
+    h.feed(sampleOf({ atMs: h.at() }));
+    await h.controller.probeNow();
+    expect(h.reports.length).toBe(sent);
+
+    // One report when the window opens, and it is the state this worker is in
+    // now rather than any of the ones it passed through.
+    h.advance(PRESSURE_REPORT_WINDOW_MS + 1);
+    await h.fire();
+    const later = h.reports.slice(sent);
+    expect(later).toHaveLength(1);
+    expect(later[0]!.level).toBe("unknown");
+    expect(later[0]!.ran).toEqual([]);
+    expect(later[0]!.results).toEqual([]);
+    // Three transitions, one report: what the window holds back is replaced,
+    // never queued into a backlog.
+    expect(h.controller.counters().level).toBe("unknown");
+  });
+
+  it("refuses to send a report it built wrongly, and says so without a payload", async () => {
+    // A counter that is not a count: the level machine can still read it, and
+    // the wire cannot accept it.
+    const broken = sampleOf({ atMs: 0, physicalMiB: 0 });
+    const h = harness();
+    h.feed(
+      { ...broken, atMs: h.at(), physical: { status: "available", value: -5 } } as PressureSample,
+      { ...broken, atMs: h.at(), physical: { status: "available", value: -5 } } as PressureSample,
+    );
+    await h.controller.probeNow();
+    await h.controller.probeNow();
+    await h.fire();
+    expect(h.controller.counters().invalidReports).toBeGreaterThan(0);
+    expect(h.controller.counters().reports).toBe(0);
+    expect(h.reports).toEqual([]);
+    expect(h.lines.some((line) => line.includes("did not match the contract"))).toBe(true);
+    expect(h.lines.every((line) => !line.includes("-5"))).toBe(true);
+  });
+
+  it("says nothing and does nothing when a probe in flight outlives its controller", async () => {
+    const h = harness({ outcomes: { ephemeral_caches: { released: { count: 1 } } } });
+    h.feed(sampleOf({ atMs: h.at(), physicalMiB: 2_000 }), sampleOf({ atMs: h.at(), physicalMiB: 2_000 }));
+    await h.controller.probeNow();
+    const ran = h.log.length;
+    // The next probe is held open, and the controller is disposed while it is.
+    h.hold();
+    const pending = h.controller.probeNow();
+    h.controller.dispose();
+    h.release();
+    await pending;
+    expect(h.reports).toEqual([]);
+    expect(h.log.length).toBe(ran);
+    expect(h.timers.length).toBe(0);
   });
 
   it("reports nothing after disposal, and leaves no timer behind", async () => {

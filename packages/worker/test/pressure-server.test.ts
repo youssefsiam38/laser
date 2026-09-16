@@ -8,6 +8,8 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  ErrorCodes,
+  LIFETIME_RETRY,
   memoryPressureDirectiveResultSchema,
   memoryPressureReportSchema,
   type JsonRpcMessage,
@@ -121,6 +123,22 @@ describe("the directive the host sends", () => {
     expect(refused.result.applied).toBe(false);
     await h.server.dispose();
     await blind.server.dispose();
+  });
+
+  it("refuses a directive once this worker has agreed to retire, before anything runs", async () => {
+    const h = harness({ workerGeneration: 3 });
+    await open(h, "/tmp/fake/a.jsonl");
+    const retired = (await h.call(20, "pi/worker/retire", { mode: "explicit" })) as { result?: { retiring: boolean } };
+    expect(retired.result).toEqual({ retiring: true });
+    // Admission never reopens, and it refuses before the handler is reached:
+    // a worker that is going does not start releasing things.
+    const late = (await h.call(21, "pi/worker/pressure", { level: "critical", epoch: 1, generation: 3 })) as {
+      error?: { code: number; data?: { retry?: string } };
+    };
+    expect(late.error?.code).toBe(ErrorCodes.DriverUnavailable);
+    expect(late.error?.data?.retry).toBe(LIFETIME_RETRY);
+    for (const driver of h.drivers) expect(driver.commands).toEqual([]);
+    await h.server.dispose();
   });
 
   it("refuses a directive that arrives after this worker was disposed", async () => {
