@@ -45,10 +45,18 @@ function sampleOf(options: { atMs: number; physicalMiB?: number; heapUsed?: numb
   };
 }
 
-interface Timer { id: number; fn: () => void; at: number }
+interface Timer { id: number; fn: () => void; at: number; unrefs: number; unref(): void }
 
 /** One controller, one fake clock, one recorded action log. */
-function harness(options: { generation?: number; outcomes?: Partial<Record<"ephemeral_caches" | "replay_suffixes" | "task_records", PressureActionOutcome>>; throwOn?: string } = {}) {
+function harness(options: {
+  generation?: number;
+  outcomes?: Partial<Record<"ephemeral_caches" | "replay_suffixes" | "task_records", PressureActionOutcome>>;
+  throwOn?: string;
+  /** A link that will not take a report. */
+  reportThrows?: boolean;
+  /** Counters that cannot be read, or that come back malformed. */
+  stores?: () => never | Record<string, unknown>;
+} = {}) {
   let clock = 1_000;
   let nextTimer = 1;
   const timers = new Map<number, Timer>();
@@ -56,7 +64,7 @@ function harness(options: { generation?: number; outcomes?: Partial<Record<"ephe
   const log: string[] = [];
   const reports: ValidatedMemoryPressureReport[] = [];
   const lines: string[] = [];
-  let queued: PressureSample[] = [];
+  let queued: Array<PressureSample | "fail"> = [];
   let failNext = 0;
 
   const outcome = (name: "ephemeral_caches" | "replay_suffixes" | "task_records"): PressureActionOutcome => {
@@ -73,6 +81,7 @@ function harness(options: { generation?: number; outcomes?: Partial<Record<"ephe
           throw new Error("no counters");
         }
         const next = queued.shift() ?? samples[samples.length - 1] ?? sampleOf({ atMs: clock });
+        if (next === "fail") throw new Error("no counters");
         samples.push(next);
         return next;
       },
@@ -81,15 +90,19 @@ function harness(options: { generation?: number; outcomes?: Partial<Record<"ephe
         replaySuffixes: () => outcome("replay_suffixes"),
         taskRecords: () => outcome("task_records"),
       },
-      stores: () => ({ workerSessions: { count: 2 } }),
-      report: (report) => reports.push(report),
+      stores: (options.stores ?? (() => ({ workerSessions: { count: 2 } }))) as () => never,
+      report: (report) => {
+        if (options.reportThrows) throw new Error("the link is gone");
+        reports.push(report);
+      },
       now: () => clock,
       setTimer: (fn, ms) => {
         const id = nextTimer++;
-        timers.set(id, { id, fn, at: clock + ms });
-        return id;
+        const handle = { id, fn, at: clock + ms, unrefs: 0, unref() { this.unrefs += 1; } };
+        timers.set(id, handle);
+        return handle;
       },
-      clearTimer: (handle) => timers.delete(handle as number),
+      clearTimer: (handle) => timers.delete((handle as { id: number }).id),
       log: (line) => lines.push(line),
     },
     { generation: options.generation ?? 7 },
@@ -102,7 +115,7 @@ function harness(options: { generation?: number; outcomes?: Partial<Record<"ephe
     lines,
     samples,
     get timers() { return [...timers.values()]; },
-    feed(...next: PressureSample[]) { queued = [...queued, ...next]; },
+    feed(...next: Array<PressureSample | "fail">) { queued = [...queued, ...next]; },
     failSampler(times = 1) { failNext = times; },
     advance(ms: number) { clock += ms; },
     at() { return clock; },
@@ -261,13 +274,62 @@ describe("the level machine", () => {
     expect(h.log).toEqual([]);
   });
 
-  it("treats a sampler failure as unknown and runs nothing", async () => {
+  it("treats a sampler failure as unknown, runs nothing, and reports the transition once", async () => {
     const h = harness();
+    // A level this worker had, and then lost the ability to see.
+    h.feed(sampleOf({ atMs: h.at(), physicalMiB: 1_300 }), sampleOf({ atMs: h.at(), physicalMiB: 1_300 }));
+    await h.controller.probeNow();
+    await h.controller.probeNow();
+    expect(h.controller.counters().level).toBe("warning");
+    const before = h.reports.length;
+    const ran = h.log.length;
+
+    h.advance(PRESSURE_REPORT_WINDOW_MS + 1);
     h.failSampler();
     await h.controller.probeNow();
+    await h.fire();
     expect(h.controller.counters().sampleFailures).toBe(1);
     expect(h.controller.counters().level).toBe("unknown");
-    expect(h.log).toEqual([]);
+    // Nothing ran on evidence nobody has.
+    expect(h.log.length).toBe(ran);
+    const sent = h.reports.slice(before).filter((report) => report.level === "unknown");
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.ran).toEqual([]);
+    expect(sent[0]!.results).toEqual([]);
+    // Its readings say they could not be taken; none of them is a zero.
+    for (const input of sent[0]!.inputs) expect(input.value).toEqual({ status: "unavailable", reason: "collector_failed" });
+
+    // Failing again while already unknown is not a new transition.
+    h.advance(PRESSURE_REPORT_WINDOW_MS + 1);
+    h.failSampler();
+    await h.controller.probeNow();
+    await h.fire();
+    expect(h.reports.filter((report) => report.level === "unknown")).toHaveLength(1);
+  });
+
+  it("leaves the age out when it cannot be computed, rather than calling it zero", async () => {
+    const h = harness();
+    // A reading stamped in the future: the age is not a number anyone can use.
+    h.feed(sampleOf({ atMs: h.at() + 10_000, physicalMiB: 1_300 }), sampleOf({ atMs: h.at() + 10_000, physicalMiB: 1_300 }));
+    await h.controller.probeNow();
+    await h.controller.probeNow();
+    await h.fire();
+    const report = h.reports[0]!;
+    expect(report).toBeDefined();
+    expect("sampleAgeMs" in report).toBe(false);
+  });
+
+  it("unrefs every timer it owns, cadence and coalescing alike", async () => {
+    const h = harness();
+    h.controller.start();
+    expect(h.timers.length).toBeGreaterThan(0);
+    h.feed(sampleOf({ atMs: h.at(), physicalMiB: 2_000 }), sampleOf({ atMs: h.at(), physicalMiB: 2_000 }));
+    await h.controller.probeNow();
+    await h.controller.probeNow();
+    // Two kinds of handle exist by now: the cadence timer and the one holding
+    // a report back inside its window.
+    expect(h.timers.length).toBeGreaterThanOrEqual(1);
+    for (const timer of h.timers) expect(timer.unrefs).toBeGreaterThanOrEqual(1);
   });
 
   it("samples faster while elevated and slower when calm", async () => {
@@ -307,6 +369,62 @@ describe("a pass this worker decides to run", () => {
     // Its rows are exactly what the steps said.
     expect(action.results.map((row) => row.outcome)).toEqual(["released", "released", "nothing_to_give"]);
     expect(memoryPressureReportSchema.safeParse(action).success).toBe(true);
+  });
+
+  it("stops when a probe between steps loses sight of the machine, and reports that", async () => {
+    const h = harness({ outcomes: { ephemeral_caches: { released: { count: 2 } } } });
+    h.feed(sampleOf({ atMs: h.at(), physicalMiB: 1_300 }), sampleOf({ atMs: h.at(), physicalMiB: 1_300 }));
+    await h.controller.probeNow();
+    await h.controller.probeNow();
+    expect(h.controller.counters().level).toBe("warning");
+    // The pass began; the probe after its first step cannot read anything.
+    h.advance(PRESSURE_WARNING_COOLDOWN_MS + 1);
+    // The pass's own probe reads a warning; the probe after its first step
+    // cannot read anything at all.
+    h.feed(sampleOf({ atMs: h.at(), physicalMiB: 1_300 }), "fail");
+    const before = h.log.length;
+    const sent = h.reports.length;
+    await h.controller.probeNow();
+    const ran = h.log.slice(before);
+    expect(ran).toEqual(["ephemeral_caches"]);
+    expect(h.controller.counters().level).toBe("unknown");
+    // The action report goes first, at the level that authorized it …
+    const action = h.reports.slice(sent).find((report) => report.ran.length > 0)!;
+    expect(action.level).toBe("warning");
+    expect(action.ran).toEqual(["ephemeral_caches"]);
+    // … and the transition the inter-step probe found is not lost.
+    h.advance(PRESSURE_REPORT_WINDOW_MS + 1);
+    await h.fire();
+    const state = h.reports.slice(sent).find((report) => report.level === "unknown")!;
+    expect(state).toBeDefined();
+    expect(state.ran).toEqual([]);
+    expect(h.reports.indexOf(state)).toBeGreaterThan(h.reports.indexOf(action));
+  });
+
+  it("calls a pass quiet only when every step had nothing to give", async () => {
+    // `unavailable` is not quiet: the ordinary cooldown applies, not the long one.
+    const h = harness({ outcomes: { ephemeral_caches: { unobservable: true }, replay_suffixes: {}, task_records: {} } });
+    expect((await h.controller.directive({ level: "critical", epoch: 1, generation: 7 })).applied).toBe(true);
+    const ran = h.log.length;
+    h.advance(PRESSURE_CRITICAL_COOLDOWN_MS + 1);
+    expect((await h.controller.directive({ level: "critical", epoch: 2, generation: 7 })).applied).toBe(true);
+    expect(h.log.length).toBeGreaterThan(ran);
+
+    // Nor is a bound: work was left over, so this worker tries again soon.
+    const bounded = harness({ outcomes: { ephemeral_caches: { boundReached: true }, replay_suffixes: {}, task_records: {} } });
+    await bounded.controller.directive({ level: "critical", epoch: 1, generation: 7 });
+    const boundedRan = bounded.log.length;
+    bounded.advance(PRESSURE_CRITICAL_COOLDOWN_MS + 1);
+    await bounded.controller.directive({ level: "critical", epoch: 2, generation: 7 });
+    expect(bounded.log.length).toBeGreaterThan(boundedRan);
+
+    // A step that threw is not quiet either.
+    const threw = harness({ throwOn: "ephemeral_caches" });
+    await threw.controller.directive({ level: "critical", epoch: 1, generation: 7 });
+    const threwRan = threw.log.length;
+    threw.advance(PRESSURE_CRITICAL_COOLDOWN_MS + 1);
+    await threw.controller.directive({ level: "critical", epoch: 2, generation: 7 });
+    expect(threw.log.length).toBeGreaterThan(threwRan);
   });
 
   it("stops early when a re-probe proves the pressure relieved", async () => {
@@ -431,13 +549,62 @@ describe("what leaves this worker", () => {
   });
 });
 
+describe("when something outside this controller fails", () => {
+  it("drops a report the link would not take, and keeps working", async () => {
+    const h = harness({ reportThrows: true });
+    h.controller.start();
+    h.feed(sampleOf({ atMs: h.at(), physicalMiB: 2_000 }), sampleOf({ atMs: h.at(), physicalMiB: 2_000 }));
+    await h.controller.probeNow();
+    await h.controller.probeNow();
+    const ran = h.log.length;
+    expect(ran).toBeGreaterThan(0);
+    expect(h.controller.counters().reportFailures).toBeGreaterThan(0);
+    expect(h.controller.counters().reports).toBe(0);
+    expect(h.reports).toEqual([]);
+    // Nothing is retried, and the cadence timer is still armed.
+    h.advance(PRESSURE_REPORT_WINDOW_MS + 1);
+    await h.fire();
+    expect(h.log.length).toBe(ran);
+    expect(h.timers.length).toBeGreaterThan(0);
+    // And the log says what happened without quoting anything.
+    expect(h.lines.every((line) => !line.includes("the link is gone"))).toBe(true);
+    h.controller.dispose();
+    expect(h.timers.length).toBe(0);
+  });
+
+  it("answers with no counters rather than failing when they cannot be read", async () => {
+    const throwing = harness({ stores: () => { throw new Error("subsystem down"); } });
+    const answer = await throwing.controller.directive({ level: "warning", epoch: 1, generation: 7 });
+    expect(answer.applied).toBe(true);
+    expect(answer.stores).toEqual({});
+    expect(throwing.controller.counters().storeFailures).toBeGreaterThan(0);
+    // A scheduled pass survives it too, and still reports.
+    throwing.feed(sampleOf({ atMs: throwing.at(), physicalMiB: 2_000 }), sampleOf({ atMs: throwing.at(), physicalMiB: 2_000 }));
+    throwing.advance(PRESSURE_QUIET_COOLDOWN_MS + 1);
+    await throwing.controller.probeNow();
+    await throwing.controller.probeNow();
+    expect(throwing.lines.every((line) => !line.includes("subsystem down"))).toBe(true);
+
+    // Counters of a shape this wire does not accept are the same kind of fault.
+    const malformed = harness({ stores: () => ({ workerSessions: { count: -1 }, invented: { count: 1 } }) });
+    const refused = await malformed.controller.directive({ level: "warning", epoch: 1, generation: 7 });
+    expect(refused.stores).toEqual({});
+    expect(malformed.controller.counters().storeFailures).toBeGreaterThan(0);
+    malformed.feed(sampleOf({ atMs: malformed.at(), physicalMiB: 2_000 }), sampleOf({ atMs: malformed.at(), physicalMiB: 2_000 }));
+    malformed.advance(PRESSURE_QUIET_COOLDOWN_MS + 1);
+    await malformed.controller.probeNow();
+    await malformed.controller.probeNow();
+    for (const report of malformed.reports) expect(report.stores).toEqual({});
+  });
+});
+
 describe("a directive", () => {
   it("runs the pass, answers with its own rows, and reports none of them", async () => {
     const h = harness();
     const answer = await h.controller.directive({ level: "warning", epoch: 4, generation: 7 });
     expect(answer.applied).toBe(true);
     expect(answer.ran).toEqual(["ephemeral_caches", "replay_suffixes", "task_records"]);
-    expect(answer.events.map((row) => row.action)).toEqual(answer.ran);
+    expect(answer.results.map((row) => row.action)).toEqual(answer.ran);
     // The rows belong to the answer; an unasked notification never repeats them.
     expect(h.reports.every((report) => report.ran.length === 0)).toBe(true);
   });
@@ -456,7 +623,7 @@ describe("a directive", () => {
     const stale = await h.controller.directive({ level: "warning", epoch: 4, generation: 7 });
     expect(stale.applied).toBe(false);
     expect(stale.ran).toEqual([]);
-    expect(stale.events).toEqual([]);
+    expect(stale.results).toEqual([]);
     h.controller.dispose();
     expect((await h.controller.directive({ level: "warning", epoch: 9, generation: 7 })).applied).toBe(false);
   });
@@ -475,7 +642,48 @@ describe("a directive", () => {
     const h = harness({ throwOn: "ephemeral_caches" });
     const answer = await h.controller.directive({ level: "warning", epoch: 1, generation: 7 });
     expect(answer.applied).toBe(false);
-    expect(answer.events).toEqual([{ action: "ephemeral_caches", outcome: "unavailable" }]);
+    expect(answer.results).toEqual([{ action: "ephemeral_caches", outcome: "unavailable" }]);
+  });
+
+  it("fences a lower epoch even when two directives race", async () => {
+    const h = harness();
+    // Both are handed in before either can run: the newer one must win, and
+    // the older one must never act, whatever order the queue takes them in.
+    const [newer, older] = await Promise.all([
+      h.controller.directive({ level: "critical", epoch: 2, generation: 7 }),
+      h.controller.directive({ level: "warning", epoch: 1, generation: 7 }),
+    ]);
+    expect(newer.applied).toBe(true);
+    expect(older.applied).toBe(false);
+    expect(older.ran).toEqual([]);
+    expect(h.controller.counters().passes).toBe(1);
+  });
+
+  it("keeps fencing after a cooldown refusal, so a late older directive is still stale", async () => {
+    const h = harness();
+    expect((await h.controller.directive({ level: "warning", epoch: 5, generation: 7 })).applied).toBe(true);
+    // Newer, but inside the cooldown: refused, and still the newest thing seen.
+    expect((await h.controller.directive({ level: "warning", epoch: 9, generation: 7 })).applied).toBe(false);
+    h.advance(PRESSURE_WARNING_COOLDOWN_MS + 1);
+    const late = await h.controller.directive({ level: "warning", epoch: 6, generation: 7 });
+    expect(late.applied).toBe(false);
+    expect(late.ran).toEqual([]);
+    // The one that was refused may come back once the window has passed.
+    const retry = await h.controller.directive({ level: "warning", epoch: 9, generation: 7 });
+    expect(retry.applied).toBe(true);
+  });
+
+  it("bounds the next pass by the level of the pass that ran, not by the latest reading", async () => {
+    const h = harness();
+    // A warning pass is followed by warning's long gap …
+    expect((await h.controller.directive({ level: "warning", epoch: 1, generation: 7 })).applied).toBe(true);
+    h.advance(PRESSURE_CRITICAL_COOLDOWN_MS + 1);
+    expect((await h.controller.directive({ level: "critical", epoch: 2, generation: 7 })).applied).toBe(false);
+    h.advance(PRESSURE_WARNING_COOLDOWN_MS);
+    expect((await h.controller.directive({ level: "critical", epoch: 3, generation: 7 })).applied).toBe(true);
+    // … and a critical pass by critical's short one, whatever the sampler says.
+    h.advance(PRESSURE_CRITICAL_COOLDOWN_MS + 1);
+    expect((await h.controller.directive({ level: "warning", epoch: 4, generation: 7 })).applied).toBe(true);
   });
 
   it("never overlaps a scheduled pass", async () => {

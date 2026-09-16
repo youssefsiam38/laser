@@ -581,6 +581,14 @@ async function waitFor(predicate: () => boolean, ms = 5000): Promise<void> {
 }
 
 describe("the generation a worker can prove (RP-8)", () => {
+  it("records none for a spawn that never started", async () => {
+    pool = makePool({ nodeBinary: join(dir, "no-such-node") });
+    await expect(pool.get(project)).rejects.toThrow();
+    const entries = (pool as unknown as { entries: Map<string, { workerGeneration?: number; client?: unknown }> }).entries;
+    expect(entries.get(project)?.workerGeneration).toBeUndefined();
+    expect(entries.get(project)?.client).toBeUndefined();
+  });
+
   it("mints one per spawn, passes it in argv, and never reuses it across a restart", async () => {
     pool = makePool({ backoffMs: 10 });
     const first = await pool.get(project);
@@ -607,9 +615,16 @@ describe("the generation a worker can prove (RP-8)", () => {
     expect(restarted.workerGeneration).toBeGreaterThan(second.workerGeneration!);
     const after = await restarted.request<{ argv: string[] }>("pi/test/argv", {});
     expect(Number(after.argv[after.argv.indexOf("--worker-generation") + 1])).toBe(restarted.workerGeneration);
-    // It is a number for the worker's own link and nothing else: no status, no
-    // notification and no client payload carries it.
-    expect(JSON.stringify(statuses)).not.toContain(String(restarted.workerGeneration));
+    // An entry holds a generation only while that exact process is alive.
+    const entries = (pool as unknown as { entries: Map<string, { workerGeneration?: number }> }).entries;
+    expect(entries.get(project)!.workerGeneration).toBe(restarted.workerGeneration);
+    await pool.stop(project, "stopped for the test");
+    expect(entries.get(project)!.workerGeneration).toBeUndefined();
+
+    // It is a number for the worker's own link and nothing else: it is not a
+    // field of any status or notification the pool publishes.
+    expect(JSON.stringify(statuses)).not.toContain("workerGeneration");
     expect(JSON.stringify(notifications)).not.toContain("workerGeneration");
+    expect(statuses.every((status) => !("workerGeneration" in status))).toBe(true);
   });
 });

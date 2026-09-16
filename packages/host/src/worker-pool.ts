@@ -796,6 +796,8 @@ export class WorkerPool {
       // needs one.
       if (entry.client === client) {
         entry.client = undefined;
+        // A process that never started leaves no identity behind either (RP-8).
+        entry.workerGeneration = undefined;
         const message = error instanceof Error ? error.message : String(error);
         this.setStatus(entry, "crashed", `Worker could not start: ${message}. Use "Retry" once the cause is fixed.`);
       }
@@ -858,6 +860,10 @@ export class WorkerPool {
     entry.client = undefined;
     this.options.resources?.noteExit(client.pid, entry.resourceRegistration);
     entry.resourceRegistration = undefined;
+    // The generation belonged to the process that has gone (RP-8). Keeping it
+    // here would leave an identity behind with nothing to answer for it; the
+    // next spawn mints a strictly newer one.
+    entry.workerGeneration = undefined;
     entry.running.clear();
     entry.active.clear();
     if (entry.stopping || this.closed) {

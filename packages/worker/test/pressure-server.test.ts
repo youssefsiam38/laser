@@ -97,7 +97,7 @@ describe("the directive the host sends", () => {
     const h = harness({ workerGeneration: 3 });
     await open(h, "/tmp/fake/a.jsonl");
     const answer = (await h.call(10, "pi/worker/pressure", { level: "warning", epoch: 1, generation: 3 })) as {
-      result: { applied: boolean; ran: string[]; events: unknown[] };
+      result: { applied: boolean; ran: string[]; results: unknown[] };
     };
     expect(answer.result.applied).toBe(true);
     expect(answer.result.ran).toEqual(["ephemeral_caches", "replay_suffixes", "task_records"]);
@@ -112,7 +112,7 @@ describe("the directive the host sends", () => {
     const wrong = (await h.call(1, "pi/worker/pressure", { level: "warning", epoch: 1, generation: 4 })) as {
       result: { applied: boolean; ran: string[] };
     };
-    expect(wrong.result).toMatchObject({ applied: false, ran: [], events: [] });
+    expect(wrong.result).toMatchObject({ applied: false, ran: [], results: [] });
 
     const blind = harness();
     const refused = (await blind.call(1, "pi/worker/pressure", { level: "critical", epoch: 1, generation: 1 })) as {
@@ -151,9 +151,9 @@ describe("the directive the host sends", () => {
     await open(h, "/tmp/fake/a.jsonl");
     for (const driver of h.drivers) driver.accepts = false;
     const answer = (await h.call(3, "pi/worker/pressure", { level: "warning", epoch: 1, generation: 3 })) as {
-      result: { events: Array<{ action: string; outcome: string; released?: unknown }> };
+      result: { results: Array<{ action: string; outcome: string; released?: unknown }> };
     };
-    const row = answer.result.events.find((event) => event.action === "task_records")!;
+    const row = answer.result.results.find((event) => event.action === "task_records")!;
     expect(row.outcome).toBe("nothing_to_give");
     expect(row.released).toBeUndefined();
 
@@ -163,9 +163,9 @@ describe("the directive the host sends", () => {
     const other = harness({ workerGeneration: 3 });
     await open(other, "/tmp/fake/a.jsonl");
     const again = (await other.call(4, "pi/worker/pressure", { level: "warning", epoch: 2, generation: 3 })) as {
-      result: { events: Array<{ action: string; outcome: string; released?: unknown }> };
+      result: { results: Array<{ action: string; outcome: string; released?: unknown }> };
     };
-    const accepted = again.result.events.find((event) => event.action === "task_records")!;
+    const accepted = again.result.results.find((event) => event.action === "task_records")!;
     expect(accepted.outcome).toBe("unavailable");
     expect(accepted.released).toBeUndefined();
     await other.server.dispose();
@@ -177,9 +177,9 @@ describe("the directive the host sends", () => {
     await open(h, "/tmp/fake/a.jsonl");
     h.drivers[0]!.setStreaming(true);
     const answer = (await h.call(5, "pi/worker/pressure", { level: "warning", epoch: 1, generation: 3 })) as {
-      result: { events: Array<{ action: string; outcome: string; reason?: string }> };
+      result: { results: Array<{ action: string; outcome: string; reason?: string }> };
     };
-    const row = answer.result.events.find((event) => event.action === "ephemeral_caches")!;
+    const row = answer.result.results.find((event) => event.action === "ephemeral_caches")!;
     // Nothing was released, and the reason is the pin rather than a shrug.
     expect(row).toMatchObject({ outcome: "held", reason: "pins_held" });
     await h.server.dispose();

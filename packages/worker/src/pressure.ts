@@ -27,6 +27,7 @@
  */
 import {
   MEMORY_PRESSURE_WORKER_ACTIONS,
+  memoryPressureStoresSchema,
   parseMemoryPressureDirectiveResult,
   parseMemoryPressureReport,
   type MemoryPressureAction,
@@ -125,6 +126,12 @@ export interface PressureCounters {
   passes: number;
   directives: number;
   reports: number;
+  /** Reports this controller built wrongly and refused to send. */
+  invalidReports: number;
+  /** Reports the link would not take. Counted, never retried. */
+  reportFailures: number;
+  /** Times the retained-store counters could not be read or trusted. */
+  storeFailures: number;
   /** Notifications held back by the window and sent later. */
   coalesced: number;
   /** Action reports that met another one inside a window. Cooldowns make this 0. */
@@ -188,11 +195,18 @@ export function inputsOf(sample: PressureSample, reading: PressureReading, thres
 export function createWorkerPressureController(deps: PressureDeps, options: PressureOptions = {}): WorkerPressureController {
   const thresholds = options.thresholds ?? WORKER_PRESSURE_THRESHOLDS;
   const now = deps.now ?? Date.now;
-  const schedule = deps.setTimer ?? ((fn: () => void, ms: number) => {
-    const handle = setTimeout(fn, ms);
-    handle.unref?.();
+  const setTimer = deps.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms));
+  /**
+   * Every timer this controller owns is unref'd, whoever made it: giving
+   * memory back is never a reason for a process to stay alive. The default
+   * timer is asked twice, harmlessly, rather than leaving an injected one to
+   * remember.
+   */
+  const schedule = (fn: () => void, ms: number): unknown => {
+    const handle = setTimer(fn, ms);
+    (handle as { unref?: () => void } | undefined)?.unref?.();
     return handle;
-  });
+  };
   const cancel = deps.clearTimer ?? ((handle: unknown) => clearTimeout(handle as NodeJS.Timeout));
   const normalIntervalMs = options.normalIntervalMs ?? PRESSURE_NORMAL_INTERVAL_MS;
   const elevatedIntervalMs = options.elevatedIntervalMs ?? PRESSURE_ELEVATED_INTERVAL_MS;
@@ -216,7 +230,14 @@ export function createWorkerPressureController(deps: PressureDeps, options: Pres
   let lastSample: { sample: PressureSample; reading: PressureReading } | undefined;
   let lastPassAtMs: number | undefined;
   let lastPassQuiet = false;
-  let lastEpoch = -1;
+  /** The level of the pass that ran, which is what its cooldown is measured by. */
+  let lastPassLevel: MemoryPressureDirectiveLevel | undefined;
+  /**
+   * The highest epoch any accepted directive has been *seen* at, recorded
+   * before a cooldown can refuse it: a newer directive that arrives while this
+   * worker is resting still fences an older one arriving after.
+   */
+  let highestEpochSeen = -1;
   /** Coalescing: one action report at most, plus the newest state-only one. */
   let pendingAction: MemoryPressureReportInput | undefined;
   let pendingState: MemoryPressureReportInput | undefined;
@@ -228,6 +249,9 @@ export function createWorkerPressureController(deps: PressureDeps, options: Pres
     passes: 0,
     directives: 0,
     reports: 0,
+    invalidReports: 0,
+    reportFailures: 0,
+    storeFailures: 0,
     coalesced: 0,
     actionCollisions: 0,
     staleSamples: 0,
@@ -236,9 +260,19 @@ export function createWorkerPressureController(deps: PressureDeps, options: Pres
 
   const cadence = (): number => (isDirectiveLevel(level) ? elevatedIntervalMs : normalIntervalMs);
 
+  /**
+   * How long after a pass the next one may run.
+   *
+   * From the level of the pass that happened, not from whatever this worker's
+   * sampler says now: a critical pass is followed by critical's short gap even
+   * if the reading has since eased, and a warning pass by warning's long one
+   * even if things have got worse — the sample that says so will be the one
+   * that authorizes the next pass. A pass that gave nothing back waits longer
+   * than either.
+   */
   const cooldownMs = (): number => {
     if (lastPassQuiet) return PRESSURE_QUIET_COOLDOWN_MS;
-    return level === "critical" ? PRESSURE_CRITICAL_COOLDOWN_MS : PRESSURE_WARNING_COOLDOWN_MS;
+    return lastPassLevel === "critical" ? PRESSURE_CRITICAL_COOLDOWN_MS : PRESSURE_WARNING_COOLDOWN_MS;
   };
 
   const inCooldown = (at: number): boolean => lastPassAtMs !== undefined && at - lastPassAtMs < cooldownMs();
@@ -254,15 +288,18 @@ export function createWorkerPressureController(deps: PressureDeps, options: Pres
     atMs: number,
   ): MemoryPressureReportInput | undefined => {
     if (generation === undefined) return undefined;
-    const age = Math.max(0, atMs - sample.atMs);
+    // How old the reading is, when that is a number at all: an age nobody can
+    // compute is left out, because a missing one is not an age of zero.
+    const age = atMs - sample.atMs;
+    const sampleAgeMs = Number.isSafeInteger(age) && age >= 0 ? age : undefined;
     return {
       generation,
       level: reported,
-      sampleAgeMs: Number.isSafeInteger(age) ? age : 0,
+      ...(sampleAgeMs !== undefined ? { sampleAgeMs } : {}),
       inputs: inputsOf(sample, reading, thresholds),
       ran,
       results,
-      stores: deps.stores(),
+      stores: safeStores(),
     };
   };
 
@@ -273,11 +310,47 @@ export function createWorkerPressureController(deps: PressureDeps, options: Pres
     } catch {
       // A report this controller cannot build correctly is a fault of its own,
       // and the host is told nothing rather than something untrue.
+      counters.invalidReports += 1;
       deps.log?.("memory pressure: a report did not match the contract and was not sent");
       return;
     }
+    try {
+      deps.report(validated);
+    } catch {
+      // The link is gone, or refused it. A diagnostic that cannot be delivered
+      // is counted and forgotten: it is never retried, never queued for later
+      // and never allowed to take this controller — or the process — down with
+      // it. The next state this worker reaches will be reported on its own.
+      counters.reportFailures += 1;
+      deps.log?.("memory pressure: a report could not be delivered and was dropped");
+      return;
+    }
     counters.reports += 1;
-    deps.report(validated);
+  };
+
+  /**
+   * The retained-store counters, or none at all.
+   *
+   * Reading them touches several subsystems, and a reader that throws must not
+   * fail a directive, reject a scheduled probe or leave a timer's work
+   * unhandled. A shape this wire would refuse is the same kind of fault. Either
+   * way the answer is an empty set — evidence omitted, never invented — so what
+   * leaves this controller is always something the contract accepts.
+   */
+  const safeStores = (): MemoryPressureStores => {
+    let value: MemoryPressureStores;
+    try {
+      value = deps.stores();
+    } catch {
+      counters.storeFailures += 1;
+      deps.log?.("memory pressure: the retained-store counters could not be read");
+      return {};
+    }
+    const parsed = memoryPressureStoresSchema.safeParse(value);
+    if (parsed.success) return parsed.data as MemoryPressureStores;
+    counters.storeFailures += 1;
+    deps.log?.("memory pressure: the retained-store counters did not match the contract");
+    return {};
   };
 
   const flush = (): void => {
@@ -351,14 +424,29 @@ export function createWorkerPressureController(deps: PressureDeps, options: Pres
     return settle(reading.level);
   };
 
-  const probe = async (): Promise<{ reading: PressureReading; sample: PressureSample; changed: boolean } | undefined> => {
+  /** What a reading looks like when there was none: nothing, said out loud. */
+  const blindReading: PressureReading = { level: "unknown", usable: [], anyAvailable: false };
+  const blindSample = (at: number): PressureSample => ({
+    atMs: Number.isSafeInteger(at) ? at : 0,
+    physical: { status: "unavailable", reason: "collector_failed" },
+    heapUsed: { status: "unavailable", reason: "collector_failed" },
+    heapLimit: { status: "unavailable", reason: "collector_failed" },
+  });
+
+  const probe = async (): Promise<{ reading: PressureReading; sample: PressureSample; changed: boolean }> => {
     let sample: PressureSample;
     try {
       sample = await deps.sample();
     } catch {
+      // A sampler that failed is still a fact about this worker, and the host
+      // is owed it: the level becomes unknown and the transition is reported
+      // like any other, with readings that say they could not be taken rather
+      // than numbers nobody read.
       counters.sampleFailures += 1;
       const changed = settle("unknown");
-      return changed ? undefined : undefined;
+      const sample = blindSample(now());
+      lastSample = { sample, reading: blindReading };
+      return { sample, reading: blindReading, changed };
     }
     counters.samples += 1;
     const at = now();
@@ -381,13 +469,15 @@ export function createWorkerPressureController(deps: PressureDeps, options: Pres
     ran: MemoryPressureWorkerAction[];
     results: MemoryPressureWorkerActionResult[];
     quiet: boolean;
+    /** The probe that ended a self pass, carried out so its change is not lost. */
+    stopped?: { sample: PressureSample; reading: PressureReading; changed: boolean };
   }
 
   const runPass = async (passLevel: MemoryPressureDirectiveLevel, stopWhenRelieved: boolean): Promise<PassOutcome> => {
     const ran: MemoryPressureWorkerAction[] = [];
     const results: MemoryPressureWorkerActionResult[] = [];
     let completed = true;
-    let quiet = true;
+    let stopped: PassOutcome["stopped"];
     counters.passes += 1;
     for (const [index, step] of steps.entries()) {
       if (disposed) {
@@ -407,23 +497,35 @@ export function createWorkerPressureController(deps: PressureDeps, options: Pres
         break;
       }
       ran.push(step.action);
-      const row = rowOf(step.action, outcome);
-      results.push(row);
-      if (row.outcome === "released") quiet = false;
+      results.push(rowOf(step.action, outcome));
       // A cheap look between steps: pressure this worker found itself and has
       // already relieved does not need the rest of the list, and stopping
-      // there is a completed pass. A directive is not stopped this way: the
-      // host asked on evidence of its own, and every step here is safe.
+      // there is a completed pass. Evidence that has gone missing stops it
+      // too: acting on nothing is exactly what this controller must not do.
+      // A directive is not stopped either way — the host asked on evidence of
+      // its own, and every step here is safe.
       if (stopWhenRelieved && index < steps.length - 1) {
         const seen = await probe();
-        if (seen && (seen.reading.level === "normal" || (isDirectiveLevel(level) && belowRelease(seen.reading, passLevel)))) break;
         if (disposed) {
           completed = false;
+          stopped = seen;
+          break;
+        }
+        const relieved = seen.reading.level === "normal" || belowRelease(seen.reading, passLevel);
+        if (seen.reading.level === "unknown" || relieved) {
+          // Carried out rather than dropped: this probe may be the only place
+          // the level changed, and a change nobody reports leaves the host
+          // believing a warning that has passed.
+          stopped = seen;
           break;
         }
       }
     }
-    return { completed, ran, results, quiet };
+    // Quiet is exactly "nothing was there to give": a step that could not be
+    // measured, one that ran out of budget and one that threw are not quiet,
+    // and none of them earns the long cooldown.
+    const quiet = results.length > 0 && results.every((row) => row.outcome === "nothing_to_give" || row.outcome === "held");
+    return { completed, ran, results, quiet, ...(stopped ? { stopped } : {}) };
   };
 
   /**
@@ -441,20 +543,23 @@ export function createWorkerPressureController(deps: PressureDeps, options: Pres
   const selfPass = async (authorized: MemoryPressureDirectiveLevel, sample: PressureSample, reading: PressureReading): Promise<void> => {
     const outcome = await runPass(authorized, true);
     lastPassAtMs = now();
+    lastPassLevel = authorized;
     lastPassQuiet = outcome.quiet;
-    const after = await probe();
+    // The probe that stopped the pass is the state of this worker now; only a
+    // pass that ran to its end needs another one.
+    const after = outcome.stopped ?? (await probe());
     if (disposed) return;
     if (outcome.ran.length > 0) {
       const reported = reportedLevelFor(authorized);
       // The inputs beside action rows are the ones that authorized them, unless
       // the pass ended with this worker still under pressure and a fresher
       // reading says so.
-      const useAfter = after && isDirectiveLevel(after.reading.level);
+      const useAfter = isDirectiveLevel(after.reading.level);
       const rowsSample = useAfter ? after.sample : sample;
       const rowsReading = useAfter ? after.reading : reading;
       queue(reportOf(reported, rowsSample, rowsReading, outcome.ran, outcome.results, now()), "action");
     }
-    if (after?.changed && lastSample) {
+    if (after.changed && lastSample) {
       queue(reportOf(level, lastSample.sample, lastSample.reading, [], [], now()), "state");
     }
   };
@@ -483,14 +588,14 @@ export function createWorkerPressureController(deps: PressureDeps, options: Pres
     if (disposed) return;
     const seen = await probe();
     if (disposed) return;
-    const passing = Boolean(seen) && isDirectiveLevel(level) && generation !== undefined && !inCooldown(now());
+    const passing = isDirectiveLevel(level) && generation !== undefined && !inCooldown(now());
     // A change that leads straight into a pass is not reported twice: the
     // action report carries this level and these readings, and a state-only
     // report before it would take the window the rows need.
-    if (seen?.changed && lastSample && !passing) {
+    if (seen.changed && lastSample && !passing) {
       queue(reportOf(level, lastSample.sample, lastSample.reading, [], [], now()), "state");
     }
-    if (!passing || !seen || !isDirectiveLevel(level)) return;
+    if (!passing || !isDirectiveLevel(level)) return;
     await selfPass(level, seen.sample, seen.reading);
   };
 
@@ -519,37 +624,45 @@ export function createWorkerPressureController(deps: PressureDeps, options: Pres
           return parseMemoryPressureDirectiveResult(result);
         } catch {
           deps.log?.("memory pressure: a directive answer did not match the contract and was refused instead");
-          return parseMemoryPressureDirectiveResult({ applied: false, ran: [], events: [], stores: result.stores });
+          counters.invalidReports += 1;
+          return parseMemoryPressureDirectiveResult({ applied: false, ran: [], results: [], stores: {} });
         }
       };
-      const refused: MemoryPressureDirectiveResultInput = { applied: false, ran: [], events: [], stores: deps.stores() };
+      const refused: MemoryPressureDirectiveResultInput = { applied: false, ran: [], results: [], stores: safeStores() };
       if (disposed) return validate(refused);
       // A fence this worker cannot prove is not a fence: without a generation
       // it refuses every directive rather than acting on an unchecked one.
       if (generation === undefined || params.generation !== generation) return validate(refused);
-      if (params.epoch < lastEpoch) return validate(refused);
+      // Every other decision is taken inside the queue, against the state as it
+      // is when this directive's turn comes: two directives racing must not
+      // both pass a check taken before either of them ran.
       return serialize(async () => {
-        if (disposed) return validate(refused);
-        if (inCooldown(now())) return validate({ ...refused, stores: deps.stores() });
-        lastEpoch = Math.max(lastEpoch, params.epoch);
+        if (disposed) return validate({ ...refused, stores: safeStores() });
+        // An epoch older than the newest one this worker has *seen* is stale,
+        // whether or not that newer one was allowed to act: a cooldown refusal
+        // still fences what came before it.
+        if (params.epoch < highestEpochSeen) return validate({ ...refused, stores: safeStores() });
+        highestEpochSeen = Math.max(highestEpochSeen, params.epoch);
+        if (inCooldown(now())) return validate({ ...refused, stores: safeStores() });
         // The host asked, and every step here is safe: this worker runs them
         // even when its own evidence is unknown (D-262 §5).
         const before = lastSample;
         const outcome = await runPass(params.level, false);
         lastPassAtMs = now();
+        lastPassLevel = params.level;
         lastPassQuiet = outcome.quiet;
         const after = await probe();
         // A directive's own probe may move this worker's level; that is a
         // state change of its own and is reported without any of these rows.
-        if (after?.changed && lastSample && !disposed) {
+        if (after.changed && lastSample && !disposed) {
           queue(reportOf(level, lastSample.sample, lastSample.reading, [], [], now()), "state");
         }
         void before;
         return validate({
           applied: outcome.completed,
           ran: outcome.ran,
-          events: outcome.results,
-          stores: deps.stores(),
+          results: outcome.results,
+          stores: safeStores(),
         });
       });
     },

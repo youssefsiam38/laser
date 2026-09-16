@@ -51,12 +51,46 @@ describe("a step's row", () => {
     void impostor;
   });
 
+  it("lets the admission step refuse and do nothing else, and makes a hold say what holds it", () => {
+    const refused: MemoryPressureActionResult = { action: "admission_refused", outcome: "refused", refusal: "older_history" };
+    const held: MemoryPressureActionResult = { action: "task_records", outcome: "held", reason: "pins_held" };
+    expectTypeOf(refused).toMatchTypeOf<MemoryPressureActionResult>();
+    expectTypeOf(held).toMatchTypeOf<MemoryPressureActionResult>();
+
+    // @ts-expect-error the admission step refuses; it does nothing else (D-263)
+    const busy: MemoryPressureActionResult = { action: "admission_refused", outcome: "held", refusal: "older_history", reason: "pins_held" };
+    // @ts-expect-error a hold says what is holding it (D-263)
+    const mute: MemoryPressureActionResult = { action: "task_records", outcome: "held" };
+    // @ts-expect-error … and it says one of the three that can hold something
+    const wrong: MemoryPressureActionResult = { action: "task_records", outcome: "held", reason: "work_budget" };
+    // @ts-expect-error … while those three explain nothing else
+    const stray: MemoryPressureActionResult = { action: "task_records", outcome: "budget_reached", reason: "pins_held" };
+    void busy;
+    void mute;
+    void wrong;
+    void stray;
+
+    // What D-263 leaves alone stays expressible.
+    const budgeted: MemoryPressureActionResult = {
+      action: "replay_suffixes",
+      outcome: "released",
+      released: { count: 1 },
+      reason: "work_budget",
+    };
+    const quiet: MemoryPressureActionResult = { action: "task_records", outcome: "unavailable" };
+    void budgeted;
+    void quiet;
+  });
+
   it("refuses anything but the admission step to name a refusal", () => {
     const refused: MemoryPressureActionResult = { action: "admission_refused", outcome: "refused", refusal: "new_project_worker" };
     expectTypeOf(refused).toMatchTypeOf<MemoryPressureActionResult>();
 
     // @ts-expect-error an admission refusal must name what was refused
     const nameless: MemoryPressureActionResult = { action: "admission_refused", outcome: "refused" };
+    // @ts-expect-error and a worker's rows never carry a refusal at all
+    const worker: MemoryPressureWorkerActionResult = { action: "task_records", outcome: "refused", refusal: "older_history" };
+    void worker;
     // @ts-expect-error no other step refuses anything
     const foreign: MemoryPressureActionResult = { action: "replay_suffixes", outcome: "held", refusal: "older_history" };
     void nameless;
@@ -122,7 +156,7 @@ describe("the validated forms", () => {
       events: [],
       retention: { maxEvents: 200, maxAgeMs: 3_600_000, maxBytes: 262_144, events: 0, bytes: 0 },
     };
-    const rawAnswer: MemoryPressureDirectiveResultInput = { applied: false, ran: [], events: [], stores: {} };
+    const rawAnswer: MemoryPressureDirectiveResultInput = { applied: false, ran: [], results: [], stores: {} };
     const rawReport: MemoryPressureReportInput = { generation: 1, level: "unknown", inputs: [], ran: [], results: [], stores: {} };
 
     // @ts-expect-error a summary is validated or it is not one of ours
