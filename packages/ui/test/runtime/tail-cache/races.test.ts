@@ -835,6 +835,46 @@ describe("supersession is a proved deletion, not a hidden object", () => {
     expect(view.cache.peek({ sessionId: "session-a" })?.revision).toBe(REVISION_2);
   });
 
+  it("keeps a newer tail this device had already accepted, and still retires the stale one", async () => {
+    // A tail of another conversation is mid-write, so the newer tail of this
+    // one is accepted and **queued** when the supersession is asked for. Under
+    // a session-wide tombstone that queued write was dropped and the device was
+    // left with nothing; a supersession retires one revision, not a session.
+    const view = harness({ rows: [row()] });
+    await view.cache.prepare(descriptor());
+    let release!: () => void;
+    view.store.faults.pausePut = new Promise<void>((resolve) => { release = () => resolve(); });
+
+    view.cache.release(tail({ sessionId: "session-blocker", path: "/p/b.jsonl", revision: REVISION_2, seq: 3 }));
+    view.deliver();
+    await Promise.resolve();
+    view.cache.release(tail({ revision: REVISION_2, seq: 20 }));
+    view.deliver();
+    // The reader replaced what it painted: the old revision, and only it.
+    view.cache.supersede("session-a", REVISION);
+
+    release();
+    view.store.faults.pausePut = undefined;
+    await view.flush();
+
+    // The newer record is what this device holds, in memory and on disk.
+    expect(peek(view.cache)).toMatchObject({ revision: REVISION_2, seq: 20 });
+    const stored = [...view.store.rows.values()].filter((value) => value.sessionId === "session-a");
+    expect(stored).toHaveLength(1);
+    expect(view.cache.state()).toMatchObject({ kind: "open" });
+
+    // And a supersession of the revision this device now holds still retires it.
+    view.cache.supersede("session-a", REVISION_2);
+    await view.flush();
+    expect(peek(view.cache)).toBeUndefined();
+    expect([...view.store.rows.values()].some((value) => value.sessionId === "session-a")).toBe(false);
+
+    // A later fresh release of the same conversation is accepted as usual.
+    view.cache.release(tail({ revision: REVISION, seq: 40 }));
+    await view.flush();
+    expect(peek(view.cache)).toMatchObject({ revision: REVISION, seq: 40 });
+  });
+
   it("closes the cache when a superseded row cannot be proved gone", async () => {
     const store = createTestStore([row()], { silentRemove: true });
     const view = harness({ store });

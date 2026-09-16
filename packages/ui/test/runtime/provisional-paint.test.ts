@@ -1,11 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PRODUCT_VERSION } from "@lasercode/protocol";
 
 import { initialState, reduce, type AppState } from "../../src/store.js";
 import { TAIL_HARD_LIMITS, TAIL_RECORD_SCHEMA } from "../../src/runtime/tail-cache/bounds.js";
 import type { TailRecord } from "../../src/runtime/tail-cache/record.js";
 import { BODY_EXCERPT_MAX_BYTES } from "../../src/runtime/body-excerpt.js";
-import { NOT_CONFIRMED, pathsOfRun, sessionAuthorityRefusal } from "../../src/runtime/provisional-authority.js";
+import { NOT_CONFIRMED, createProvisionalAuthority, pathsOfRun, sessionAuthorityRefusal } from "../../src/runtime/provisional-authority.js";
 import {
   PROVISIONAL_SESSION_ID_MAX,
   provisionalPaintFrom,
@@ -283,5 +283,79 @@ describe("the fence every host-mutating control asks", () => {
       parent: { sessionPath: "/p/parent.jsonl", sessionId: "parent" },
     } as Parameters<typeof pathsOfRun>[0];
     expect(pathsOfRun(child)).toEqual(["/p/child.jsonl", "/p/parent.jsonl", "/p/root.jsonl"]);
+  });
+});
+
+
+describe("what a paint holds on to", () => {
+  const environmentRecord = (index: number, environmentKey: string): TailRecord =>
+    record({ sessionId: `session-${index}`, environmentKey, revision: `r1.env.${index}` });
+
+  const harness = (environmentKey = ENVIRONMENT) => {
+    let app: AppState = { ...initialState, environment: { environmentKey } };
+    const source = {
+      peek: vi.fn((target: { sessionId: string }) => held.get(target.sessionId)),
+      prime: vi.fn(async () => {}),
+      supersede: vi.fn(),
+    };
+    const held = new Map<string, TailRecord>();
+    const authority = createProvisionalAuthority({
+      readState: () => app,
+      dispatch: (action) => { app = reduce(app, action); },
+      appVersion: PRODUCT_VERSION,
+      now: () => NOW,
+      source: () => source,
+    });
+    return {
+      authority, source, held,
+      environment(key: string) { app = { ...app, environment: { environmentKey: key } }; },
+      /** One navigation that chooses `path` and never gets an answer. */
+      choose(path: string, index: number, environmentKey: string) {
+        held.set(`session-${index}`, environmentRecord(index, environmentKey));
+        app = {
+          ...app,
+          sessions: [summary({ path, id: `session-${index}`, cwd: "/p" })],
+          destination: { phase: "resolving", intent: index, target: { kind: "session", path, visibleTab: "code" }, rememberedCode: { kind: "no-project-landing" } },
+        };
+        authority.paint(path, index);
+      },
+      state: () => app,
+    };
+  };
+
+  it("holds one paint at a time however many conversations fail to open", () => {
+    const view = harness();
+    for (let index = 1; index <= 60; index++) {
+      // Every one of these is a host that never answered: nothing settles.
+      view.choose(`/p/failed-${index}.jsonl`, index, ENVIRONMENT);
+      expect(view.state().open[`/p/failed-${index}.jsonl`]?.provisional).toBeDefined();
+      expect(view.authority.retainedCaptures()).toBe(1);
+    }
+    // Environments come and go under the same owner; the bound does not move.
+    for (let index = 61; index <= 80; index++) {
+      const environmentKey = `e1.environment-${index}`;
+      view.environment(environmentKey);
+      view.choose(`/p/switched-${index}.jsonl`, index, environmentKey);
+      expect(view.authority.retainedCaptures()).toBe(1);
+    }
+    expect(view.authority.retainedCaptures()).toBe(1);
+    // And nothing was retired for any of them: the host never spoke.
+    expect(view.source.supersede).not.toHaveBeenCalled();
+  });
+
+  it("settles only the conversation it is holding, and holds nothing afterwards", () => {
+    const view = harness();
+    view.choose("/p/one.jsonl", 1, ENVIRONMENT);
+    expect(view.authority.retainedCaptures()).toBe(1);
+    // A conversation this owner is not holding settles nothing and keeps nothing.
+    view.authority.settle("/p/another.jsonl");
+    expect(view.authority.retainedCaptures()).toBe(1);
+    expect(view.source.supersede).not.toHaveBeenCalled();
+    view.authority.settle("/p/one.jsonl");
+    expect(view.authority.retainedCaptures()).toBe(0);
+    // Nothing authoritative was accepted, so nothing was retired either.
+    expect(view.source.supersede).not.toHaveBeenCalled();
+    view.authority.settle("/p/one.jsonl");
+    expect(view.authority.retainedCaptures()).toBe(0);
   });
 });

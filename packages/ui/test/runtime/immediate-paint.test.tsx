@@ -304,6 +304,10 @@ describe("immediate paint from this device", () => {
     await act(async () => { retry!.click(); await settle(40); });
     expect(container.textContent).toContain(AUTHORITATIVE_TEXT);
     expect(sendDisabled).toBe(false);
+    // The retry owns what was on screen: the record it replaced is retired by
+    // its own revision, exactly once, even though the paint happened before
+    // the failure rather than during the retry.
+    expect(source.supersede.mock.calls).toEqual([[SEEN_ID, "r1.env.cached"]]);
   });
 
   it("paints nothing from another environment, another build or an expired capture, and stays truthful", async () => {

@@ -114,12 +114,33 @@ async function showLatest(check, text) {
   await waitForTranscript(check, text);
 }
 
-/** Read back up the transcript the way a person does: real wheel input. */
+/**
+ * One real finger drag from `from` to `to`, through the browser's own touch
+ * events: Playwright's touchscreen can tap and nothing else, so the gesture is
+ * driven with CDP's input domain, which is the same path a tap takes. Dragging
+ * down the screen scrolls the conversation back; dragging up moves it on.
+ */
+async function drag(check, x, from, to) {
+  const session = await check.page.context().newCDPSession(check.page);
+  try {
+    const point = y => ({ x, y, radiusX: 8, radiusY: 8, force: 1 });
+    await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point(from)] });
+    const steps = 12;
+    for (let step = 1; step <= steps; step++) {
+      await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [point(from + ((to - from) * step) / steps)] });
+      await check.page.waitForTimeout(16);
+    }
+    await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  } finally {
+    await session.detach().catch(() => {});
+  }
+}
+
+/** Read back up the transcript: a real wheel with a pointer, a real drag with a finger. */
 async function scrollUp(check) {
   const viewport = check.page.locator('[data-slot="thread-viewport"]').first();
   const box = await viewport.boundingBox();
   assert.ok(box, 'The transcript viewport has no box to scroll.');
-  await check.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   const start = await readingPlace(check);
   assert.ok(start, 'The transcript showed no message to scroll.');
   const range = start.scrollHeight - start.clientHeight;
@@ -127,9 +148,38 @@ async function scrollUp(check) {
   // Back up about a third of the way: far enough to leave the live edge, never
   // so far that it lands on the top and has nothing above it.
   const distance = Math.max(160, Math.floor(range / 3));
-  for (let moved = 0; moved < distance; moved += 240) {
-    await check.page.mouse.wheel(0, -240);
-    await check.page.waitForTimeout(60);
+  if (check.state.touch) {
+    // A finger, because that is how this person reads: real touch drags down
+    // the page, which is what tells the transcript they have left the live edge
+    // on a phone. A drag carries momentum, so each one is measured rather than
+    // counted out in advance: enough to leave the edge, never so far that the
+    // conversation has nothing above it.
+    const x = Math.round(box.x + box.width / 2);
+    const near = Math.round(box.y + box.height * 0.3);
+    const far = Math.round(box.y + box.height * 0.75);
+    for (let stroke = 0; stroke < 8; stroke++) {
+      const place = await readingPlace(check);
+      if (!place) break;
+      const edge = place.scrollHeight - place.clientHeight - place.scrollTop;
+      if (edge >= Math.min(distance, 240)) break;
+      if (place.scrollTop <= 0) break;
+      await drag(check, x, near, far);
+      await check.page.waitForTimeout(200);
+    }
+    // A fling that carried all the way to the top: come back down a little, so
+    // the person is reading the conversation rather than its beginning.
+    for (let stroke = 0; stroke < 4; stroke++) {
+      const place = await readingPlace(check);
+      if (!place || place.scrollTop > 0) break;
+      await drag(check, x, far, near);
+      await check.page.waitForTimeout(200);
+    }
+  } else {
+    await check.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    for (let moved = 0; moved < distance; moved += 240) {
+      await check.page.mouse.wheel(0, -240);
+      await check.page.waitForTimeout(60);
+    }
   }
   await check.page.waitForTimeout(250);
   const place = await readingPlace(check);

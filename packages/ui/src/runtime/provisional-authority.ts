@@ -69,6 +69,13 @@ export interface ProvisionalAuthority extends MutationAuthority {
    * and only that record, and only when the answer replaced it.
    */
   settle(path: string): void;
+  /**
+   * How many paints this owner is still holding the identity of. One, or none:
+   * the main window paints one conversation at a time, and a paint that was
+   * never settled is replaced by the next rather than kept. For the bound's
+   * own test; it carries no path and no revision.
+   */
+  retainedCaptures(): number;
   /** Promote records for a later paint, fenced against a late landing. */
   warm(targets: readonly { path: string; sessionId: string }[]): void;
   /** The refusal for this conversation, or `undefined` when it may act. */
@@ -105,8 +112,16 @@ export function pathsOfRun(run: AgentRun | undefined): string[] {
 export function createProvisionalAuthority(deps: ProvisionalAuthorityDeps): ProvisionalAuthority {
   const now = deps.now ?? (() => Date.now());
   const sourceOf = deps.source ?? provisionalSource;
-  /** What is on screen from this device, by path, until the host answers. */
-  const painted = new Map<string, ProvisionalMark>();
+  /**
+   * The one paint whose identity is still owed a settlement.
+   *
+   * Deliberately a single slot rather than a map by path: the main window is
+   * painting one conversation at a time, a paint that is never settled — a host
+   * that never answered, a person who navigated away — is replaced by the next
+   * one, and nothing accumulates per conversation visited. A path this owner is
+   * no longer holding simply settles nothing.
+   */
+  let capture: { path: string; mark: ProvisionalMark } | undefined;
 
   const refusalForSession = (path: string | undefined): string | undefined =>
     sessionAuthorityRefusal(deps.readState(), path);
@@ -163,8 +178,17 @@ export function createProvisionalAuthority(deps: ProvisionalAuthorityDeps): Prov
       const environmentKey = state.environment?.environmentKey;
       if (environmentKey === undefined) return;
       const existing = state.open[path];
-      // Authority, a read in flight, or rows already on screen: nothing to paint.
-      if (existing && (existing.hydrated || existing.historyPending !== undefined || existing.blocks.length > 0)) return;
+      // Authority, a read in flight, or rows already on screen: nothing to
+      // paint. Rows already on screen *from this device* are a different
+      // matter: a Retry after a host that would not answer repaints nothing and
+      // must still own what is on screen, or the retry could never retire it.
+      if (existing && (existing.hydrated || existing.historyPending !== undefined || existing.blocks.length > 0)) {
+        capture = existing.provisional ? { path, mark: existing.provisional } : undefined;
+        return;
+      }
+      // Whatever was owed for another conversation is not owed any more: this
+      // navigation replaces it.
+      capture = undefined;
       const sessionId = sessionIdForPath(state, path);
       if (sessionId === undefined) return;
       const source = sourceOf();
@@ -190,13 +214,15 @@ export function createProvisionalAuthority(deps: ProvisionalAuthorityDeps): Prov
       });
       // What is on screen, captured **before** anything is asked of the host:
       // the settlement below retires this exact record and no other.
-      if (deps.readState().open[path]?.provisional === paint.mark) painted.set(path, paint.mark);
+      if (deps.readState().open[path]?.provisional === paint.mark) capture = { path, mark: paint.mark };
     },
 
+    retainedCaptures: () => (capture ? 1 : 0),
+
     settle(path) {
-      const captured = painted.get(path);
-      if (!captured) return;
-      painted.delete(path);
+      if (capture?.path !== path) return;
+      const captured = capture.mark;
+      capture = undefined;
       const state = deps.readState();
       if (state.environment?.environmentKey !== captured.environmentKey) return;
       const validated = state.open[path]?.validated;

@@ -146,6 +146,8 @@ export function row(overrides: Partial<TailRow> = {}, payload = payloadOf()): Ta
 export interface StoreFaults {
   /** `put` never settles. */
   stuckPut?: boolean;
+  /** `put` waits for this before committing: a store write a test can release. */
+  pausePut?: Promise<void>;
   /** A row whose metadata is a Windows-style locator. */
   windowsLocatorRows?: number;
   /** `scan` rejects outright (a store that throws rather than reports). */
@@ -262,8 +264,9 @@ export function createTestStore(seed: readonly TailRow[] = [], faults: StoreFaul
       return report;
     },
 
-    put(stored) {
+    async put(stored) {
       if (store.faults.stuckPut) return new Promise<never>(() => {});
+      if (store.faults.pausePut) await store.faults.pausePut;
       transactions.put += 1;
       puts += 1;
       if (closed || store.faults.refusePut) return Promise.resolve(false);

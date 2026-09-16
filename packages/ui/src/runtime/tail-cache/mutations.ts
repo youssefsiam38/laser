@@ -182,6 +182,18 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
   let promoteQueued = false;
   let promoteWanted = new Set<string>();
   const tombstoned = new Set<string>();
+  /**
+   * A supersession that has been accepted and not run yet, by session: the
+   * exact revision the reader replaced.
+   *
+   * Revision-selective on purpose. A deletion (`forget`, `clear`) tombstones a
+   * session, because everything of it is going. A supersession retires **one
+   * revision**: a newer tail this device accepted before the supersession was
+   * asked for is not the record that was replaced, and dropping it would throw
+   * away the only current thing this device has. One entry per session, so the
+   * bound is the record ceiling, like every other lane here.
+   */
+  const superseding = new Map<string, string>();
   const pendingTouch = new Set<string>();
   let writeBytes = 0;
   let writing = false;
@@ -236,6 +248,7 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
   const untouched = (sessionId: string): boolean =>
     !deps.recency.has(sessionId)
     && !tombstoned.has(sessionId)
+    && !superseding.has(sessionId)
     && !pendingTouch.has(sessionId)
     && !work.some((op) => op.kind === "write" && op.sessionId === sessionId)
     && !writingSession.has(sessionId)
@@ -284,7 +297,11 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
           // Dropped rather than committed: this session has been deleted, or
           // the environment is being cleared. Either way the bytes must not
           // come back.
-          if (!deps.live() || nonWriting || tombstoned.has(op.sessionId)) continue;
+          // A write of the very revision a supersession is retiring would
+          // bring it back; any other revision is newer work this device
+          // accepted, and it is committed before the supersession runs.
+          if (!deps.live() || nonWriting || tombstoned.has(op.sessionId)
+            || superseding.get(op.sessionId) === op.request.payload.revision) continue;
           writingSession.add(op.sessionId);
           try {
             await commit(op.request, until);
@@ -295,7 +312,7 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
         }
         if (op.kind === "touch") {
           pendingTouch.delete(op.sessionId);
-          if (!deps.live() || nonWriting || tombstoned.has(op.sessionId)) {
+          if (!deps.live() || nonWriting || tombstoned.has(op.sessionId) || superseding.has(op.sessionId)) {
             // Dropped before it could be written: the in-memory recency it
             // moved goes back with it.
             deps.recency.untouch(op.sessionId, op.previous);
@@ -319,10 +336,10 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
           continue;
         }
         if (op.kind === "supersede") {
+          superseding.delete(op.sessionId);
           const ok = await supersedePass(op.sessionId, op.revision, until);
           const waiters = supersedeWaiters.get(op.sessionId);
           supersedeWaiters.delete(op.sessionId);
-          releaseTombstone(op.sessionId);
           answer(waiters, ok);
           continue;
         }
@@ -417,7 +434,8 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
       sessionId: request.sessionId,
       capturedAt: request.capturedAt,
     })), undefined, until);
-    if (!deps.live() || nonWriting || tombstoned.has(request.sessionId)) return;
+    if (!deps.live() || nonWriting || tombstoned.has(request.sessionId)
+      || superseding.get(request.sessionId) === request.payload.revision) return;
     if (!sealedBody) {
       // Nothing could be written, so nothing is held: said in the counters
       // rather than kept in memory as if it were stored.
@@ -446,7 +464,8 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
         deps.onFault("purge");
         return;
       }
-      if (!deps.live() || nonWriting || tombstoned.has(request.sessionId)) return;
+      if (!deps.live() || nonWriting || tombstoned.has(request.sessionId)
+        || superseding.get(request.sessionId) === request.payload.revision) return;
       written = await bounded(deps.store.put(row, { deadline: until }), false, until);
       if (!written) {
         // Still no room after making some: counted, and nothing is held.
@@ -716,7 +735,8 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
     },
 
     write(request) {
-      if (sealed || nonWriting || !deps.live() || tombstoned.has(request.sessionId)) {
+      if (sealed || nonWriting || !deps.live() || tombstoned.has(request.sessionId)
+        || superseding.get(request.sessionId) === request.payload.revision) {
         deps.onWriteRefused();
         return false;
       }
@@ -782,13 +802,16 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
       // Nothing held and nothing queued: there is nothing to supersede, and no
       // tombstone is taken for a session this device is not holding.
       if (untouched(sessionId)) return Promise.resolve(true);
-      // Transient, not permanent: it stops a write queued before this from
-      // bringing the stale revision back, and `releaseTombstone` drops it as
-      // soon as nothing is queued for that session.
-      tombstoned.add(sessionId);
+      // Revision-selective, and behind the work this device has already
+      // accepted: a newer tail queued before this supersession was asked for is
+      // not what the reader replaced, so it is written first and then found by
+      // the compare below, which leaves it alone. Only a queued write of the
+      // exact stale revision is dropped, and a fresh write afterwards is
+      // accepted as usual.
+      superseding.set(sessionId, revision);
       const op = pending();
       supersedeWaiters.set(sessionId, op);
-      control.push({ kind: "supersede", sessionId, revision });
+      work.push({ kind: "supersede", sessionId, revision });
       pump();
       return op.promise;
     },
@@ -835,7 +858,7 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
       writes: work.filter((op) => op.kind === "write").length,
       touches: pendingTouch.size,
       control: control.length,
-      tombstones: tombstoned.size,
+      tombstones: tombstoned.size + superseding.size,
     }),
 
     seal() {
@@ -845,6 +868,7 @@ export function createMutationOwner(deps: MutationDeps): MutationOwner {
       writeBytes = 0;
       pendingTouch.clear();
       tombstoned.clear();
+      superseding.clear();
       promoteWanted = new Set();
       promoteRunning = undefined;
       promoteInFlight = undefined;
