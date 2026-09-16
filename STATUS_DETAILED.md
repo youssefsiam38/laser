@@ -2433,7 +2433,7 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 | M18-T16 | RP-5b bounded single-conversation hydration and rendering | done | pinned-view-budget `01a0a430-0193-76c8-926f-5380c13c9ab3` + orchestrator | `42344a58` (implementation `2fca59d3`); protocol 47, UI 2123/1 skipped, host 655/656 with one unrelated timeout, focused worker 39; exact-tip full-mode scenarios 1–5 zero survivors | see notes; depends on M18-T10 |
 | M18-T17 | RP-4 impossible naming-pin correction | done | naming-pin-correction `01a0a464-3123-76c8-926f-53c73cf80a31` | `890e6a86`; worker 45 + real host E2E 4 + host 636 pass | see notes; added by D-259 |
 | M18-T18 | RP-4 path-routed mutation authority | done | route-authority worker + orchestrator | `916e30fa` (implementation `55abfb12`, correction `c0754b3e`); host 687, lease/move 31, real E2E 9; three exact-SHA full-mode scenario-5 runs zero survivors | see notes; added by D-260 |
-| M18-T19 | Consume environment capabilities in client affordances | todo | — | — | added by D-264; depends on M18-T13 |
+| M18-T19 | Consume environment capabilities in client affordances | in-progress | capability-affordances | — | added by D-264; depends on M18-T13 |
 
 #### M18-T1 notes
 - 2026-09-14 baseline: protocol 144/144 and host 316/316 pass at `ec1c42d`. Desktop 155/156 passes; `test/host-environment.test.ts` reproducibly expects same-version adoption but receives `failed` before this task changes code. Treat as a pre-existing baseline, not a telemetry regression; M18-T1 must keep every other desktop test green and report this exact case separately if unchanged.
@@ -2583,6 +2583,7 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 - Ownership ledger: pressure policy · companion owner `01a0a397-d49e-76c8-926f-532d5ea2d1da` released after reviewed/integrated D `87e65720`; host orchestration owner `01a0a965-2d5f-714d-99c8-17d52027fea4` owns approved host E3 paths on base `55350823`; host owner `01a0a965-2d5f-714d-99c8-17d52027fea4` released after integrated E3 `49cc12d9`; ceilings owner `01a0aa00-05e9-714d-99c8-187dd64a979c` owns G1a paths (heap-ceiling, worker-client, CLI/desktop launchers, worker main/pressure, protocol ceiling field) on base `d165df2e`; renderer owner `01a0a97f-12fe-714d-99c8-17ed413cc297` released after integrated F `1b5fbfa7` · next handoff parent inspection and one independent review per E1 and F1.
 
 #### M18-T19 notes
+- 2026-09-16 claimed for planning by fresh owner `01a0aa10-9cff-714d-99c8-188e4f0fa006` on base `8925c8d8` after E3 integration: inventory every descriptor-gated affordance, one selector over the received descriptor and the protocol's compiler-complete scope tables, hide-vs-explain per DESIGN.md, refusal before invocation, desktop/phone matrix. Write set `packages/ui/**` plus one browser-check script; plan approval precedes code.
 - 2026-09-16 added by D-264 from the only remaining completed-slice audit finding: the host publishes authenticated scopes, local-only methods and diagnostics capability, but client affordances do not consume them. Implementation waits for the RP-8 UI/controller critical path and must reuse the descriptor rather than inventing a client policy table.
 
 #### M18-T9 notes
