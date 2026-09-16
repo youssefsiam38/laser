@@ -20,14 +20,14 @@ export interface PressureAdmissionDeps {
   hostLevel(): MemoryPressureLevelState;
   /** Fresh exact-generation worker evidence, globally or for one project. */
   workerLevel(cwd?: string): MemoryPressureLevelState;
-  /** True only when MemAvailable was actually measured. */
-  machineAvailabilityKnown(): boolean;
+  /** True with MemAvailable, false when unsupported/failed, undefined before the first probe. */
+  machineAvailabilityKnown(): boolean | undefined;
   /** Static machine capacity. Invalid/zero readings make the fallback inert. */
   totalMemoryBytes(): number;
   /** Alive or starting worker processes, including warm workers. */
   reservedWorkerCount(): number;
   now?: () => number;
-  onRefusal?(event: { refusal: HostAdmissionRefusal; level: MemoryPressureLevel; cwd?: string }): void;
+  onRefusal?(event: { refusal: HostAdmissionRefusal; level: MemoryPressureLevel; reason?: "work_budget"; cwd?: string }): void;
   onSuppressed?(refusal: HostAdmissionRefusal): void;
 }
 
@@ -75,17 +75,30 @@ export function createPressureAdmission(deps: PressureAdmissionDeps): PressureAd
   const now = deps.now ?? Date.now;
   const lastRecorded = new Map<HostAdmissionRefusal, number>();
 
-  const decision = (refusal: HostAdmissionRefusal, cwd?: string): { refused: boolean; level: MemoryPressureLevelState } => {
+  const decision = (
+    refusal: HostAdmissionRefusal,
+    cwd?: string,
+  ):
+    | { refused: false; level: MemoryPressureLevelState }
+    | { refused: true; level: MemoryPressureLevel; reason?: "work_budget" } => {
     const threshold = THRESHOLD[refusal];
-    if (WORKER_CREATION.has(refusal) && !deps.machineAvailabilityKnown()) {
-      const refused = workerReservationWouldOverflow(deps.totalMemoryBytes(), deps.reservedWorkerCount());
-      return { refused, level: refused ? threshold : "unknown" };
-    }
     const level = aggregateMemoryPressureLevel([
       deps.hostLevel(),
       deps.workerLevel(PATH_SCOPED.has(refusal) ? cwd : undefined),
     ]);
-    return { refused: reaches(level, threshold), level };
+    const levelRefuses = reaches(level, threshold);
+    const reservationRefuses = WORKER_CREATION.has(refusal)
+      && deps.machineAvailabilityKnown() === false
+      && workerReservationWouldOverflow(deps.totalMemoryBytes(), deps.reservedWorkerCount());
+    // A capacity fallback supplements measured pressure; it never turns the
+    // absence of a settled level into authority to refuse.
+    if (level === "unknown") return { refused: false, level };
+    if (!levelRefuses && !reservationRefuses) return { refused: false, level };
+    return {
+      refused: true,
+      level,
+      ...(reservationRefuses && !levelRefuses ? { reason: "work_budget" as const } : {}),
+    };
   };
 
   return {
@@ -101,7 +114,8 @@ export function createPressureAdmission(deps: PressureAdmissionDeps): PressureAd
       lastRecorded.set(refusal, at);
       deps.onRefusal?.({
         refusal,
-        level: result.level === "warning" || result.level === "critical" ? result.level : THRESHOLD[refusal],
+        level: result.level,
+        ...(result.reason !== undefined ? { reason: result.reason } : {}),
         ...(cwd !== undefined ? { cwd } : {}),
       });
       return false;

@@ -6,7 +6,7 @@
  */
 import { PRODUCT_NAME } from "@lasercode/protocol";
 import { resolve } from "node:path";
-import type { SessionState, SessionSummary, SessionUpdateParams } from "@lasercode/protocol";
+import type { ClientRequests, SessionState, SessionSummary, SessionUpdateParams } from "@lasercode/protocol";
 import { bool, num, str } from "../args.js";
 import type { Command, CommandContext } from "../command.js";
 import { appUrl } from "../config.js";
@@ -430,6 +430,18 @@ it has produced so far; this is Escape in the app, not a delete.
 
 // ------------------------------------------------------------------- entries
 
+export async function readSessionEntries(rpc: HostRpc, path: string, limit: number) {
+  return rpc.request("pi/session/entries", { path, window: { tail: Math.max(1, limit) } });
+}
+
+export function incompleteEntriesNote(
+  window: ClientRequests["pi/session/entries"]["result"]["window"],
+): string | undefined {
+  return window?.complete === false
+    ? "older entries were not shown; increase --limit to read a larger bounded tail"
+    : undefined;
+}
+
 export const entriesCommand: Command = {
   name: "entries",
   group: "Sessions",
@@ -453,16 +465,19 @@ file, not from ${PRODUCT_NAME}; the preview column is best-effort.
     try {
       const summary = await pick(rpc, context, context.args.positionals[0]);
       await loadSession(rpc, summary.path);
-      const { entries } = await rpc.request("pi/session/entries", { path: summary.path }).catch((error: unknown) => {
+      const limit = num(context.args, "limit") ?? 30;
+      const { entries, window } = await readSessionEntries(rpc, summary.path, limit).catch((error: unknown) => {
         throw describeRpcError(error, "could not read the session's entries");
       });
-      const limit = num(context.args, "limit") ?? 30;
-      const shown = entries.slice(-Math.max(1, limit)).map(describeEntry);
+      const selected = entries.slice(-Math.max(1, limit));
+      const shown = selected.map(describeEntry);
 
       if (term.json) {
-        term.data({ session: summary.path, entries: entries.slice(-Math.max(1, limit)) });
+        term.data({ session: summary.path, entries: selected, ...(window ? { window } : {}) });
         return;
       }
+      const incomplete = incompleteEntriesNote(window);
+      if (incomplete) term.note(term.err.dim(`  … ${incomplete}`));
       if (shown.length === 0) {
         term.note("this session has no entries yet");
         return;

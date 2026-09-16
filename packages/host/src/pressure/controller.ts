@@ -503,14 +503,14 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
   const admission = createPressureAdmission({
     hostLevel: () => decision.level,
     workerLevel: (cwd) => workerLevelFor(cwd, now()),
-    machineAvailabilityKnown: () => lastProbe?.sample.machineAvailable.status === "available",
+    machineAvailabilityKnown: () => lastProbe === undefined ? undefined : lastProbe.sample.machineAvailable.status === "available",
     totalMemoryBytes: () => safely("sample", () => deps.totalMemoryBytes?.() ?? 0, 0),
     reservedWorkerCount: () => safely("workers", () => deps.reservedWorkerCount?.() ?? 0, 0),
     now,
-    onRefusal: ({ refusal, level, cwd }) => {
+    onRefusal: ({ refusal, level, reason, cwd }) => {
       const project = cwd === undefined ? undefined : safely("projectId", () => deps.projectIdOf?.(cwd), undefined);
       const event = journal.add(
-        { action: "admission_refused", outcome: "refused", refusal },
+        { action: "admission_refused", outcome: "refused", refusal, ...(reason !== undefined ? { reason } : {}) },
         { role: "host", level, ...(project !== undefined ? { project } : {}) },
       );
       if (event) counters.admissionRefusals += 1;
@@ -947,7 +947,9 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
     start() {
       if (started || disposed) return;
       started = true;
-      armTimer();
+      // The first sample belongs to startup, not twenty seconds after it. It
+      // still enters the same serialized chain as reports and explicit probes.
+      void tick();
     },
     dispose() {
       disposed = true;

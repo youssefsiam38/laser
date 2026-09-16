@@ -382,6 +382,12 @@ export class WorkerPool {
     return count;
   }
 
+  /** Whether this exact project already has an alive or starting process. */
+  hasReservedWorker(cwd: string): boolean {
+    const entry = this.entries.get(canonical(cwd));
+    return Boolean(entry && (entry.client?.alive || entry.starting));
+  }
+
   /** Workers that are up right now. Never spawns; used for broadcasts. */
   liveClients(): Array<{ cwd: string; client: WorkerClient }> {
     const out: Array<{ cwd: string; client: WorkerClient }> = [];

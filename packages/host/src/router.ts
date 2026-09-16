@@ -609,7 +609,7 @@ export class Router {
           return this.deps.revisions ? this.deps.revisions.validateWindow(result) : result;
         }
         const transcriptCwd = this.cwdOf(path);
-        if (transcriptCwd && this.deps.admission && !this.deps.admission.admits("whole_transcript", transcriptCwd)) {
+        if (this.deps.admission && !this.deps.admission.admits("whole_transcript", transcriptCwd)) {
           throw new ProtocolError(
             ErrorCodes.SessionBusy,
             "Memory is constrained, so this conversation cannot be loaded all at once. Open it normally to load a bounded recent window.",
@@ -632,16 +632,13 @@ export class Router {
         // Validate the requested agent against the public workspace root
         // before allocating anything, so a refused request leaves no orphan.
         if (!this.isWorkspace(requestedCwd)) this.deps.projects.assertProject(requestedCwd);
-        const requestedKey = canonical(requestedCwd);
-        const hasWorker = this.pool.cwds().some((cwd) => canonical(cwd) === requestedKey)
-          || this.pool.liveClients().some(({ cwd }) => canonical(cwd) === requestedKey);
-        if (!hasWorker && this.deps.admission && !this.deps.admission.admits("new_project_worker", requestedCwd)) {
+        const agentName = this.resolveStartAgent(requestedCwd, req.params.agentName);
+        if (!this.pool.hasReservedWorker(requestedCwd) && this.deps.admission && !this.deps.admission.admits("new_project_worker", requestedCwd)) {
           throw new ProtocolError(
             ErrorCodes.SessionBusy,
             "Memory is constrained, so another project cannot start right now. Continue in an open project, or close an idle project and try again.",
           );
         }
-        const agentName = this.resolveStartAgent(requestedCwd, req.params.agentName);
         // Beam and Chat workspaces are containers, not shared checkouts.
         // Starting at a root allocates one persistent, opaque directory for
         // this conversation; reopening it routes to that same directory from

@@ -120,6 +120,21 @@ afterEach(async () => {
 });
 
 describe("WorkerPool readiness", () => {
+  it("exposes a warm entry as reserved while it is still before process spawn", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const other = join(dir, "other"); mkdirSync(other);
+    pool = makePool({ prepareTrust: () => ({}), beforeSpawn: async () => held });
+    const hint = pool.prepare(project);
+    await waitFor(() => pool.reservedWorkerCount() === 1);
+    expect(pool.liveClients()).toEqual([]);
+    expect(pool.cwds()).toEqual([]);
+    expect(pool.hasReservedWorker(project)).toBe(true);
+    expect(pool.hasReservedWorker(other)).toBe(false);
+    release();
+    await hint;
+  });
+
   it("does nothing without nonprompting admission", async () => {
     let questions = 0;
     pool = makePool({ resolveTrust: async () => { questions++; return true; } });

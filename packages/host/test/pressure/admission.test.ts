@@ -6,18 +6,19 @@ function fixture(overrides: Partial<{
   host: MemoryPressureLevelState;
   workers: Record<string, MemoryPressureLevelState>;
   globalWorker: MemoryPressureLevelState;
-  machineKnown: boolean;
+  /** null means the first probe has not completed. */
+  machineKnown: boolean | null;
   total: number;
   reserved: number;
   now: number;
 }> = {}) {
   let now = overrides.now ?? 0;
-  const rows: Array<{ refusal: string; level: string; cwd?: string }> = [];
+  const rows: Array<{ refusal: string; level: string; reason?: string; cwd?: string }> = [];
   let suppressed = 0;
   const admission = createPressureAdmission({
     hostLevel: () => overrides.host ?? "normal",
     workerLevel: (cwd) => cwd === undefined ? (overrides.globalWorker ?? "normal") : (overrides.workers?.[cwd] ?? "normal"),
-    machineAvailabilityKnown: () => overrides.machineKnown ?? true,
+    machineAvailabilityKnown: () => overrides.machineKnown === null ? undefined : (overrides.machineKnown ?? true),
     totalMemoryBytes: () => overrides.total ?? 16 * 1024 ** 3,
     reservedWorkerCount: () => overrides.reserved ?? 0,
     now: () => now,
@@ -100,15 +101,33 @@ describe("worker reservation fallback", () => {
     expect(workerReservationWouldOverflow(8 * 1024 ** 3, -1)).toBe(false);
   });
 
-  it("governs only worker creation when machine availability is unavailable", () => {
-    const allowed = fixture({ machineKnown: false, host: "critical", total: 8 * 1024 ** 3, reserved: 2 });
+  it("supplements rather than replaces pressure policy when machine availability is unavailable", () => {
+    const critical = fixture({ machineKnown: false, host: "critical", total: 32 * 1024 ** 3, reserved: 0 });
+    expect(critical.admission.admits("speculative_worker")).toBe(false);
+    expect(critical.admission.admits("new_project_worker")).toBe(false);
+    expect(critical.rows.map(({ level, reason }) => ({ level, reason }))).toEqual([
+      { level: "critical", reason: undefined },
+      { level: "critical", reason: undefined },
+    ]);
+
+    const allowed = fixture({ machineKnown: false, host: "normal", total: 8 * 1024 ** 3, reserved: 2 });
     expect(allowed.admission.admits("speculative_worker")).toBe(true);
     expect(allowed.admission.admits("new_project_worker")).toBe(true);
-    expect(allowed.admission.admits("whole_transcript", "/a")).toBe(false);
 
-    const refused = fixture({ machineKnown: false, total: 8 * 1024 ** 3, reserved: 3 });
+    const refused = fixture({ machineKnown: false, host: "normal", total: 8 * 1024 ** 3, reserved: 3 });
     expect(refused.admission.admits("speculative_worker")).toBe(false);
     expect(refused.admission.admits("new_project_worker")).toBe(false);
-    expect(refused.rows.map((row) => row.level)).toEqual(["warning", "critical"]);
+    expect(refused.admission.refusing()).toEqual(["speculative_worker", "new_project_worker"]);
+    expect(refused.rows.map(({ level, reason }) => ({ level, reason }))).toEqual([
+      { level: "normal", reason: "work_budget" },
+      { level: "normal", reason: "work_budget" },
+    ]);
+  });
+
+  it("does not treat an unfinished first probe as an unsupported machine", () => {
+    const fresh = fixture({ machineKnown: null, host: "unknown", total: 4 * 1024 ** 3, reserved: 10 });
+    expect(fresh.admission.admits("speculative_worker")).toBe(true);
+    expect(fresh.admission.admits("new_project_worker")).toBe(true);
+    expect(fresh.rows).toEqual([]);
   });
 });

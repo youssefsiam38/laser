@@ -154,7 +154,7 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("the host pressure pass, end t
 
     const initial = await client.request<{ entries: Array<{ id?: string; type?: string; message?: { role?: string } }>; leafId: string | null }>(
       "pi/session/entries",
-      { path: state.path, authority: "any", window: { all: true }, bodyLimit: 64 * 1024 },
+      { path: state.path, window: { tail: 8 }, bodyLimit: 64 * 1024 },
     );
     const entryIds = initial.entries
       .filter((entry) => entry.type === "message")
@@ -183,15 +183,24 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("the host pressure pass, end t
     expect(await client.request("pi/worker/prepare", { cwd: speculative })).toEqual({});
     expect(host.pool.reservedWorkerCount()).toBe(workersBefore);
 
-    // history-loader.ensure(): windowed all + body bound. At warning this is
-    // admitted, so Jump (navigate), Fork and Edit (ensure then fork) keep their
-    // existing worker-owned behavior.
-    await client.request("pi/session/entries", { path: state.path, authority: "any", window: { all: true }, bodyLimit: 64 * 1024 });
-    const moved = await client.response("pi/session/navigate", { path: state.path, entryId: entryIds[0] });
+    // The UI's shared last-prompt helper sends a bounded live tail with no
+    // authority override. At warning it still finds the fork point while the
+    // otherwise identical windowless read above is refused.
+    const bounded = await client.request<{ entries: Array<{ id?: string; type?: string; message?: { role?: string } }> }>(
+      "pi/session/entries",
+      { path: state.path, window: { tail: 8 }, bodyLimit: 64 * 1024 },
+    );
+    const lastPrompt = bounded.entries
+      .filter((entry) => entry.type === "message" && entry.message?.role === "user")
+      .map((entry) => entry.id)
+      .filter((id): id is string => typeof id === "string")
+      .at(-1);
+    expect(lastPrompt).toBeDefined();
+    const moved = await client.response("pi/session/navigate", { path: state.path, entryId: lastPrompt! });
     expect(moved.error).toBeUndefined();
-    const forked = await client.request<{ state: SessionState }>("pi/session/fork", { path: state.path, entryId: entryIds[0] });
+    const forked = await client.request<{ state: SessionState }>("pi/session/fork", { path: state.path, entryId: lastPrompt! });
     expect(forked.state.path).not.toBe(state.path);
-    await client.request("pi/session/entries", { path: forked.state.path, authority: "any", window: { all: true }, bodyLimit: 64 * 1024 });
+    await client.request("pi/session/entries", { path: forked.state.path, window: { tail: 8 }, bodyLimit: 64 * 1024 });
 
     const newProject = join(base, "new-project");
     mkdirSync(newProject);
@@ -201,11 +210,10 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("the host pressure pass, end t
     await host.memoryPressure.probeNow();
     expect(host.memoryPressure.counters().level).toBe("critical");
 
-    // A live owner wins before the worker-free full-read guard, even critical.
+    // The actual bounded UI shape remains available at critical too.
     const liveEnsure = await client.response("pi/session/entries", {
       path: forked.state.path,
-      authority: "any",
-      window: { all: true },
+      window: { tail: 8 },
       bodyLimit: 64 * 1024,
     });
     expect(liveEnsure.error).toBeUndefined();
