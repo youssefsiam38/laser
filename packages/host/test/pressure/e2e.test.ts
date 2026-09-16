@@ -79,8 +79,13 @@ class Client {
   private ws!: WebSocket;
   readonly inbound: JsonRpcMessage[] = [];
   private nextId = 1;
-  async connect(url: string): Promise<void> {
-    this.ws = new WebSocket(`${url.replace("http", "ws")}/ws`);
+  /**
+   * `origin` makes this socket a page: the boundary derives a `local_browser`
+   * actor from the header a browser always sends, and its absence is the
+   * command line or the shell itself (`access.ts`).
+   */
+  async connect(url: string, origin?: string): Promise<void> {
+    this.ws = new WebSocket(`${url.replace("http", "ws")}/ws`, origin ? { origin } : {});
     this.ws.on("message", (data) => this.inbound.push(JSON.parse(data.toString()) as JsonRpcMessage));
     await new Promise<void>((resolve) => this.ws.once("open", () => resolve()));
   }
@@ -195,6 +200,47 @@ describe("a worker's report, end to end", () => {
     } finally {
       client.close();
     }
+  });
+});
+
+describe("which sockets count as a window", () => {
+  it("does not call the command line a renderer", async () => {
+    // No `Origin`: the CLI, a script, the desktop shell's own process.
+    const cli = new Client();
+    await cli.connect((await host.listen()).url);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const row = host.memoryPressure.summary().roles.find((entry) => entry.role === "desktop_renderer")!;
+      // Genuinely nothing to measure: there is no window on this machine.
+      expect(row).toMatchObject({ level: "normal", coverage: { expected: 0, answered: 0, complete: true } });
+    } finally {
+      cli.close();
+    }
+  });
+
+  it("calls a page a window, and waits for its own evidence", async () => {
+    const url = (await host.listen()).url;
+    const page = new Client();
+    await page.connect(url, url);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const row = host.memoryPressure.summary().roles.find((entry) => entry.role === "desktop_renderer")!;
+      // Connected, and has told this host nothing about its own memory yet.
+      expect(row).toMatchObject({
+        level: "unknown",
+        coverage: { expected: 1, answered: 0, complete: false, reason: "incomplete_coverage" },
+      });
+    } finally {
+      page.close();
+    }
+  });
+
+  it("never counts a paired device, which is not on this machine at all", async () => {
+    await host.listen();
+    const relay: JsonRpcNotification[] = [];
+    (host as unknown as { notificationListeners: Set<(n: JsonRpcNotification) => void> }).notificationListeners.add((n) => relay.push(n));
+    const row = host.memoryPressure.summary().roles.find((entry) => entry.role === "desktop_renderer")!;
+    expect(row).toMatchObject({ level: "normal", coverage: { expected: 0, answered: 0 } });
   });
 });
 

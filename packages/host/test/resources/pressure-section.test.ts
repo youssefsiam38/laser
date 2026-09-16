@@ -236,7 +236,7 @@ describe("the diagnostic document", () => {
     }
   });
 
-  it("has one irreducible floor, and it is the fixed-size summary", async () => {
+  it("gives up the page, then the snapshots, then the section itself, in that order", async () => {
     const journal = filledJournal(MEMORY_PRESSURE_EVENTS_MAX);
     const resources = new ResourceService({
       collector: collector(200),
@@ -247,16 +247,76 @@ describe("the diagnostic document", () => {
       pressure: () => sectionOf(journal),
     });
     for (let index = 0; index < 6; index += 1) await resources.snapshot();
-    // Far below anything the real 4 MiB constant permits: everything that can
-    // go has gone, and what is left is the summary beside a valid empty page.
-    const floor = exportWithBudget(resources, 1024);
-    const parsed = JSON.parse(floor.document) as { snapshots: unknown[]; pressure: MemoryPressureExportSection; truncated: boolean };
-    expect(parsed.snapshots).toEqual([]);
-    expect(parsed.pressure.summary).toEqual(summary);
-    expect(parsed.pressure.journal.events).toHaveLength(0);
-    expect(parsed.truncated).toBe(true);
-    // Two kilobytes of fixed-size evidence, whatever the machine is doing.
-    expect(floor.bytes).toBeLessThan(4 * 1024);
+
+    // Small enough that the page has to go, large enough for the summary.
+    const kept = exportWithBudget(resources, 4 * 1024);
+    const keptParsed = JSON.parse(kept.document) as { snapshots: unknown[]; pressure: MemoryPressureExportSection; truncated: boolean };
+    expect(keptParsed.pressure.summary).toEqual(summary);
+    expect(keptParsed.pressure.journal.events).toHaveLength(0);
+    expect(keptParsed.truncated).toBe(true);
+    expect(kept.bytes).toBeLessThanOrEqual(4 * 1024);
+
+    // Smaller than the summary itself: the section goes too, rather than a
+    // document over its bound leaving this host.
+    const floor = exportWithBudget(resources, 900);
+    const floorParsed = JSON.parse(floor.document) as { truncated: boolean; snapshots: unknown[]; pressure?: unknown };
+    expect(floorParsed.pressure).toBeUndefined();
+    expect(floorParsed.snapshots).toEqual([]);
+    expect(floorParsed.truncated).toBe(true);
+    expect(floor.bytes).toBeLessThanOrEqual(900);
+
+    // And when even the wrapper does not fit, what comes back is the smallest
+    // document this host can describe, still valid and still honest.
+    const smallest = exportWithBudget(resources, 64);
+    const smallestParsed = JSON.parse(smallest.document) as Record<string, unknown>;
+    expect(Object.keys(smallestParsed).sort()).toEqual(["at", "platform", "snapshots", "truncated"]);
+    expect(smallestParsed.truncated).toBe(true);
+  });
+
+  it("refuses a section the contract would not accept, whatever its size", async () => {
+    // The reviewer's case: a callback that hands over something branded but not
+    // true — here an oversized summary — produced a 4,195,743-byte document
+    // against a 4,194,304-byte maximum. The section is re-validated at the
+    // boundary now, so it is left out instead.
+    const oversized = {
+      ...summary,
+      roles: summary.roles.map((row) => ({ ...row, padding: "PADDING".repeat(150_000) })),
+    } as unknown as MemoryPressureExportSection["summary"];
+    const journal = filledJournal(4);
+    const resources = new ResourceService({
+      collector: collector(2),
+      platform: "linux",
+      hostPid: 200,
+      minIntervalMs: 0,
+      now: () => NOW,
+      pressure: () => ({ summary: oversized, journal: journal.page() }),
+    });
+    await resources.snapshot();
+    const exported = resources.export();
+    expect(exported.bytes).toBeLessThanOrEqual(RESOURCE_EXPORT_MAX_BYTES);
+    expect(exported.document).not.toContain("PADDING");
+    expect(JSON.parse(exported.document)).not.toHaveProperty("pressure");
+    // A snapshot taken while the callback is lying carries no section either.
+    const taken = await resources.snapshot();
+    expect(taken.snapshot.pressure).toBeUndefined();
+  });
+
+  it("carries only the fields the contract knows, never a caller's extras", async () => {
+    const journal = filledJournal(3);
+    const resources = new ResourceService({
+      collector: collector(2),
+      platform: "linux",
+      hostPid: 200,
+      minIntervalMs: 0,
+      now: () => NOW,
+      pressure: () => ({ ...sectionOf(journal), smuggled: "/home/someone/project" }) as MemoryPressureExportSection,
+    });
+    await resources.snapshot();
+    const exported = resources.export();
+    expect(exported.document).not.toContain("smuggled");
+    expect(exported.document).not.toContain("/home/someone/project");
+    const parsed = JSON.parse(exported.document) as { pressure: MemoryPressureExportSection };
+    expect(parsed.pressure.journal.events).toHaveLength(3);
   });
 });
 

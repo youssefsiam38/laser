@@ -37,6 +37,8 @@ interface Harness {
   advance: (ms: number) => void;
   at: () => number;
   role: (name: MemoryPressureRole) => MemoryPressureSummary["roles"][number];
+  /** The settled combined level: what E2 and E3 will act on. */
+  decision: () => string;
 }
 
 function harness(options: { publish?: (p: ValidatedMemoryPressurePublish) => void; workers?: HostPressureWorker[] } = {}): Harness {
@@ -92,6 +94,7 @@ function harness(options: { publish?: (p: ValidatedMemoryPressurePublish) => voi
     advance: (ms) => (at += ms),
     at: () => at,
     role: (name) => controller.summary().roles.find((row) => row.role === name)!,
+    decision: () => controller.counters().level,
   };
 }
 
@@ -129,54 +132,91 @@ describe("what the host settles on", () => {
     expect(() => parseMemoryPressureSummary(summary)).not.toThrow();
   });
 
-  it("needs two agreeing samples to escalate and three to come back", async () => {
+  it("needs two agreeing probes to escalate and three to come back", async () => {
     const h = harness();
     h.setSample({ physical: { status: "available", value: 600 * MiB } });
     await probe(h);
-    expect(h.role("host").level).toBe("unknown"); // one sample is a candidate, not a fact
+    expect(h.decision()).toBe("unknown"); // one probe is a candidate, not a fact
     await probe(h);
-    expect(h.role("host").level).toBe("warning");
+    expect(h.decision()).toBe("warning");
 
     // Well inside the release line, but not yet for long enough.
     h.setSample({ physical: { status: "available", value: 100 * MiB } });
     await probe(h, 2);
-    expect(h.role("host").level).toBe("warning");
+    expect(h.decision()).toBe("warning");
     await probe(h);
+    expect(h.decision()).toBe("normal");
+  });
+
+  it("escalates on the probe, not on one role: two probes, two different sources", async () => {
+    const h = harness();
+    // Probe one: this host is warning, the machine is fine.
+    h.setSample({ physical: { status: "available", value: 600 * MiB } });
+    await probe(h);
+    // Probe two: this host is fine, the machine is short.
+    h.setSample({
+      physical: { status: "available", value: 100 * MiB },
+      machineAvailable: { status: "available", value: 1_500 * MiB },
+    });
+    await probe(h);
+    // Both probes aggregated to warning, so the decision is warning — the
+    // pressure was continuous even though no single role saw it twice.
+    expect(h.decision()).toBe("warning");
+    // And the rows still say what each of them actually read.
     expect(h.role("host").level).toBe("normal");
+    expect(h.role("machine").level).toBe("warning");
+  });
+
+  it("publishes rows as readings and keeps the decision settled", async () => {
+    const h = harness();
+    h.setSample({ physical: { status: "available", value: 100 * MiB } });
+    await probe(h, 2);
+    expect(h.decision()).toBe("normal");
+
+    // One critical reading: the row is evidence and says so immediately …
+    h.setSample({ physical: { status: "available", value: 900 * MiB } });
+    await probe(h);
+    expect(h.role("host").level).toBe("critical");
+    // … while the decision waits for a second probe that agrees.
+    expect(h.decision()).toBe("normal");
+    await probe(h);
+    expect(h.decision()).toBe("critical");
   });
 
   it("will not leave a level for a value hovering on its threshold", async () => {
     const h = harness();
     h.setSample({ physical: { status: "available", value: 600 * MiB } });
     await probe(h, 2);
-    expect(h.role("host").level).toBe("warning");
+    expect(h.decision()).toBe("warning");
     // Under 512 MiB, but not under 0.85 × 512 MiB.
     h.setSample({ physical: { status: "available", value: 500 * MiB } });
     await probe(h, 5);
-    expect(h.role("host").level).toBe("warning");
+    expect(h.decision()).toBe("warning");
   });
 
   it("goes unknown at once, and an unknown breaks every run", async () => {
     const h = harness();
     h.setSample({ physical: { status: "available", value: 600 * MiB } });
     await probe(h, 2);
-    expect(h.role("host").level).toBe("warning");
+    expect(h.decision()).toBe("warning");
 
     h.setSample({
       physical: { status: "unavailable", reason: "collector_failed" },
       heapUsed: { status: "unavailable", reason: "collector_failed" },
       heapLimit: { status: "unavailable", reason: "collector_failed" },
+      machineAvailable: { status: "unavailable", reason: "collector_failed" },
     });
     await probe(h);
+    expect(h.decision()).toBe("unknown");
     expect(h.role("host").level).toBe("unknown");
 
-    // The run that was under way is gone: two fresh agreeing samples are needed
+    // The run that was under way is gone: two fresh agreeing probes are needed
     // again, not one.
     h.setSample({ physical: { status: "available", value: 600 * MiB } });
     await probe(h);
-    expect(h.role("host").level).toBe("unknown");
+    expect(h.decision()).toBe("unknown");
     await probe(h);
-    expect(h.role("host").level).toBe("warning");
+    expect(h.decision()).toBe("warning");
   });
 
   it("acts on a heap alone where there are no proportional pages", async () => {
@@ -512,6 +552,107 @@ describe("publishing", () => {
     h.advance(60_000);
     for (const timer of [...h.timers]) timer.fire();
     expect(failing.mock.calls.length).toBe(calls);
+  });
+
+  it("survives every seam it depends on throwing at once", async () => {
+    let at = 1_000;
+    const timers: Array<{ ms: number; fire: () => void }> = [];
+    const thrown = (name: string) => () => {
+      throw new Error(`${name} failed`);
+    };
+    const controller = createHostPressureController(
+      {
+        sample: async () => {
+          throw new Error("sample failed");
+        },
+        workers: thrown("workers") as () => HostPressureWorker[],
+        publish: thrown("publish"),
+        projectIdOf: thrown("projectId") as () => string,
+        rendererPresent: thrown("rendererPresent") as () => boolean,
+        log: thrown("log"),
+        now: () => at,
+        setTimer: (fn, ms) => {
+          const entry = { ms, fire: fn };
+          timers.push(entry);
+          return entry;
+        },
+        clearTimer: (handle) => {
+          const index = timers.indexOf(handle as { ms: number; fire: () => void });
+          if (index >= 0) timers.splice(index, 1);
+        },
+      },
+      { publishWindowMs: 5_000 },
+    );
+
+    controller.start();
+    // A tick settles, and the cadence it arms next is untouched by the failures.
+    await controller.probeNow();
+    at += 20_000;
+    expect(timers.at(-1)!.ms).toBe(20_000);
+
+    // Ingress settles too, both for a report the contract refuses and for one it
+    // accepts (whose project identity is what throws).
+    expect(() =>
+      controller.observeWorkerReport("/p", notificationOf({ nonsense: true }), { generation: "aa", workerGeneration: 7 }),
+    ).not.toThrow();
+    expect(() =>
+      controller.observeWorkerReport("/p", notificationOf(reportOf()), { generation: "aa", workerGeneration: 7 }),
+    ).not.toThrow();
+    await controller.probeNow();
+
+    // And so do the diagnostic reads.
+    expect(() => controller.summary()).not.toThrow();
+    expect(() => controller.journalPage()).not.toThrow();
+    expect(() => controller.exportSection()).not.toThrow();
+    expect(() => parseMemoryPressureSummary(controller.summary())).not.toThrow();
+
+    const counters = controller.counters();
+    // Every failure is counted by kind, and none of them was retried.
+    expect(counters.callbackFailed.sample).toBe(2);
+    expect(counters.sampleFailures).toBe(2);
+    expect(counters.callbackFailed.workers).toBeGreaterThan(0);
+    expect(counters.callbackFailed.rendererPresent).toBeGreaterThan(0);
+    expect(counters.callbackFailed.log).toBeGreaterThan(0);
+    // The pool could not be asked, so a report that could not be proved was
+    // refused rather than believed, and nothing reached the journal.
+    expect(counters.reportsMalformed).toBe(1);
+    expect(counters.reportsStaleClient).toBe(1);
+    expect(counters.reportsAccepted).toBe(0);
+    expect(controller.journalPage().events).toHaveLength(0);
+    // A publication that cannot be delivered is counted once, whatever else
+    // failed around it.
+    expect(counters.publishFailures).toBe(counters.callbackFailed.publish);
+    controller.dispose();
+  });
+
+  it("counts a project identity it could not mint, and keeps the row it explains", async () => {
+    let at = 1_000;
+    const live: HostPressureWorker[] = [{ cwd: "/p", clientGeneration: "aa", workerGeneration: 7 }];
+    const controller = createHostPressureController({
+      sample: async () => ({
+        atMs: at,
+        physical: { status: "available", value: 10 * MiB },
+        heapUsed: { status: "available", value: 1 },
+        heapLimit: { status: "available", value: 1_000 * MiB },
+        machineAvailable: { status: "available", value: 8_000 * MiB },
+      }),
+      workers: () => live,
+      publish: () => undefined,
+      projectIdOf: () => {
+        throw new Error("no identity");
+      },
+      rendererPresent: () => false,
+      now: () => at,
+      setTimer: (fn, ms) => ({ fn, ms }),
+      clearTimer: () => undefined,
+    });
+    controller.observeWorkerReport("/p", notificationOf(reportOf()), { generation: "aa", workerGeneration: 7 });
+    await controller.probeNow();
+    const page = controller.journalPage();
+    expect(page.events).toHaveLength(1);
+    expect(page.events[0]!.project).toBeUndefined();
+    expect(controller.counters().callbackFailed.projectId).toBe(1);
+    controller.dispose();
   });
 
   it("survives a pool and an inventory that throw, and says so as one line", async () => {

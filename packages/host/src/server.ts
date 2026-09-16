@@ -566,7 +566,7 @@ export class HostServer {
       projectIdOf: (cwd) => this.resources.ownership.projectIdentity(cwd).id,
       // A window is connected, but until the renderer reports for itself its row
       // is missing coverage rather than calm.
-      rendererPresent: () => this.clients.size > 0,
+      rendererPresent: () => this.hasWindowSocket(),
       log: (line) => this.log(line),
     });
 
@@ -1433,6 +1433,24 @@ export class HostServer {
    * pressure, which may shed this one because `resource/snapshot` carries the
    * same summary).
    */
+  /**
+   * Is a *window* looking at this host right now (RP-8)?
+   *
+   * Not "is anything connected": the command line, a script and the desktop
+   * shell's own process are direct sockets too, and none of them is a renderer
+   * with a heap to answer for. The boundary already tells them apart — a page
+   * always sends `Origin`, which is what makes an actor `local_browser`
+   * (`access.ts`) — and a shell that has proved its own metrics is a window as
+   * well, even while its renderer's socket is still coming up. A paired device
+   * never enters `clients` at all, so a phone is never mistaken for a window.
+   */
+  private hasWindowSocket(): boolean {
+    for (const [ws, actor] of this.actors) {
+      if (ws.readyState === ws.OPEN && actor.class === "local_browser") return true;
+    }
+    return this.resources.desktopVerified;
+  }
+
   private publishPressure(publication: MemoryPressurePublish): void {
     const notification: JsonRpcNotification = { jsonrpc: "2.0", method: "resource/pressure", params: publication };
     let line: string | undefined;

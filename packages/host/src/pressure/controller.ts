@@ -28,8 +28,12 @@
  *   a timer, never retries, and never takes the host with it.
  */
 import {
+  MEMORY_PRESSURE_EVENTS_MAX,
+  MEMORY_PRESSURE_EVENTS_MAX_BYTES,
+  MEMORY_PRESSURE_EVENT_MAX_AGE_MS,
   aggregateMemoryPressureLevel,
   memoryPressureReportSchema,
+  parseMemoryPressureJournalPage,
   parseMemoryPressurePublish,
   parseMemoryPressureSummary,
   type JsonRpcNotification,
@@ -108,12 +112,21 @@ export interface HostPressureOptions {
   journal?: PressureJournal;
 }
 
+/** The seams this controller reaches out through, for counting their failures. */
+export type HostPressureCallback = "sample" | "workers" | "publish" | "projectId" | "rendererPresent" | "log";
+
 export interface HostPressureCounters {
-  /** The level the host would act on: host, machine and the worker aggregate. */
+  /**
+   * The settled level of the combined probe: what E2 and E3 act on, and what a
+   * transition is published for. Hysteresis lives here and nowhere else.
+   */
   level: MemoryPressureLevelState;
+  /** The latest *readings*, which are evidence rather than decisions. */
   hostLevel: MemoryPressureLevelState;
   machineLevel: MemoryPressureLevelState;
   workerLevel: MemoryPressureLevelState;
+  /** Every seam that threw, by kind. Counted, never retried, never fatal. */
+  callbackFailed: Record<HostPressureCallback, number>;
   epoch: number;
   probes: number;
   samples: number;
@@ -172,7 +185,7 @@ interface WorkerEvidence {
   inputs: MemoryPressureInput[];
 }
 
-interface RoleState {
+interface DecisionState {
   level: MemoryPressureLevelState;
   streakLevel: MemoryPressureLevelState | undefined;
   streak: number;
@@ -219,16 +232,34 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
   let chain: Promise<void> = Promise.resolve();
   let epoch = 0;
   let lastProbe: HostPressureProbe | undefined;
-  const states: Record<"host" | "machine", RoleState> = {
-    host: { level: "unknown", streakLevel: undefined, streak: 0 },
-    machine: { level: "unknown", streakLevel: undefined, streak: 0 },
-  };
+  /**
+   * The one state machine: the settled level of the **combined** probe.
+   *
+   * The role rows in a summary are *readings* — what the last probe could see,
+   * per role — and this is the *decision*: what E2 and E3 will act on, and what
+   * a published transition is about. They are deliberately different things. A
+   * role row may move on one sample, because it is evidence and a person
+   * reading it is owed the newest evidence; the decision moves only on two
+   * agreeing probes, and comes back only on three that are well inside the line
+   * it crossed. Publication coalescing bounds how often a row's movement can
+   * reach a window.
+   */
+  const decision: DecisionState = { level: "unknown", streakLevel: undefined, streak: 0 };
   const evidence = new Map<string, WorkerEvidence>();
   let lastSignature: string | undefined;
   let lastSummary: ValidatedMemoryPressureSummary | undefined;
   let pending: { epoch: number; summary: ValidatedMemoryPressureSummary } | undefined;
   let windowUntilMs = 0;
   let publishTimer: unknown;
+
+  const callbackFailed: Record<HostPressureCallback, number> = {
+    sample: 0,
+    workers: 0,
+    publish: 0,
+    projectId: 0,
+    rendererPresent: 0,
+    log: 0,
+  };
 
   const counters = {
     probes: 0,
@@ -259,14 +290,62 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
     return next;
   };
 
+  // --- the seams this controller reaches out through ----------------------
+
+  /**
+   * One categorical line for this host's own log, and never anything more.
+   *
+   * A logger that throws is a fault of the log, not of memory pressure: it is
+   * counted and forgotten, and it is deliberately not logged — the only thing
+   * that could carry that news is the seam that just failed.
+   */
+  const note = (line: string): void => {
+    try {
+      deps.log?.(line);
+    } catch {
+      callbackFailed.log += 1;
+    }
+  };
+
+  /**
+   * Call out of this controller without letting anything back in.
+   *
+   * Every dependency here belongs to another part of the host — the pool, the
+   * inventory, the socket layer — and any of them may be in trouble at exactly
+   * the moment memory is short. A throw is counted by kind, answered with the
+   * honest fallback, never retried, and never allowed to escape into a timer,
+   * into worker-notification handling or into a diagnostic read.
+   */
+  const safely = <T>(kind: HostPressureCallback, call: () => T, fallback: T): T => {
+    try {
+      return call();
+    } catch {
+      callbackFailed[kind] += 1;
+      note(`memory pressure: the ${kind} it depends on failed and was left out`);
+      return fallback;
+    }
+  };
+
+  const liveWorkers = (): HostPressureWorker[] | undefined => {
+    try {
+      return deps.workers();
+    } catch {
+      // The pool could not say what it is running. That is missing coverage,
+      // not an empty fleet.
+      callbackFailed.workers += 1;
+      note("memory pressure: the worker list could not be read and was left out");
+      return undefined;
+    }
+  };
+
   // --- levels --------------------------------------------------------------
 
-  const forgetStreak = (state: RoleState): void => {
+  const forgetStreak = (state: DecisionState): void => {
     state.streakLevel = undefined;
     state.streak = 0;
   };
 
-  const settle = (state: RoleState, next: MemoryPressureLevelState): boolean => {
+  const settle = (state: DecisionState, next: MemoryPressureLevelState): boolean => {
     // The candidate is dropped whether or not the level moves: a sample that
     // disagrees with the one before it has broken the run, and a run is what a
     // change is made of.
@@ -277,8 +356,15 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
     return true;
   };
 
-  /** Fold one reading into one role's level. Returns true when it changed. */
-  const observe = (state: RoleState, reading: PressureReading): boolean => {
+  /**
+   * Fold one probe into the settled decision. Returns true when it changed.
+   *
+   * The reading it is given is the **combined** one: the level is the
+   * protocol's aggregate of this host and this machine, and the inputs are
+   * every reading either of them could take, so the release line is only
+   * cleared when all of them are well inside it.
+   */
+  const observe = (state: DecisionState, reading: PressureReading): boolean => {
     // Unknown is immediate: evidence that has gone missing is not something to
     // wait out, and it is never allowed to settle as `normal`.
     if (reading.level === "unknown") return settle(state, "unknown");
@@ -325,14 +411,8 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
   }
 
   const workerRow = (at: number): WorkerRow => {
-    let live: HostPressureWorker[];
-    try {
-      live = deps.workers();
-    } catch {
-      // The pool could not say what it is running. That is missing coverage,
-      // not an empty fleet.
-      return { level: "unknown", coverage: unknownCoverage(), inputs: [], sampleAgeMs: undefined };
-    }
+    const live = liveWorkers();
+    if (live === undefined) return { level: "unknown", coverage: unknownCoverage(), inputs: [], sampleAgeMs: undefined };
     if (live.length === 0) {
       // Genuinely nothing to measure: no live worker is not a missing reading.
       return { level: "normal", coverage: emptyCoverage(), inputs: [], sampleAgeMs: undefined };
@@ -416,13 +496,9 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
     if (role === "desktop_renderer") {
       // Milestone F owns the producer. Until then a window that is connected but
       // has told us nothing is missing coverage, and no window at all is a role
-      // with genuinely nothing in it.
-      let present = false;
-      try {
-        present = deps.rendererPresent();
-      } catch {
-        present = true;
-      }
+      // with genuinely nothing in it. A question this host cannot answer is not
+      // an answer of "no window": it is missing coverage too.
+      const present = safely("rendererPresent", () => deps.rendererPresent(), true);
       return present
         ? { role, level: "unknown", inputs: [], coverage: unknownCoverage() }
         : { role, level: "normal", inputs: [], coverage: emptyCoverage() };
@@ -434,7 +510,9 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
       const age = ageOf(probe.sample, at);
       return {
         role,
-        level: states.host.level,
+        // The reading, not the decision: a row is evidence about one role, and
+        // the settled level the host acts on is the combined probe's.
+        level: probe.host.level,
         ...(age !== undefined ? { sampleAgeMs: age } : {}),
         inputs: inputsOfHost(probe.sample, probe.host.usable),
         ceiling: { measuredLimit: probe.sample.heapLimit },
@@ -447,7 +525,7 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
     const age = ageOf(probe.sample, at);
     return {
       role,
-      level: states.machine.level,
+      level: probe.machine.level,
       ...(age !== undefined ? { sampleAgeMs: age } : {}),
       inputs: [
         {
@@ -473,6 +551,33 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
     refusing: [],
     totals: { events: 0, released: { count: 0, bytes: 0 }, refusals: 0 },
   });
+
+  /**
+   * One page of the journal, or an empty valid one.
+   *
+   * A diagnostic read is never a place to throw: a snapshot and an export are
+   * taken while something is already going wrong, and a page this controller
+   * could not build is reported as an empty journal rather than as a failure of
+   * the document that asked for it.
+   */
+  const safePage = (): ValidatedMemoryPressureJournalPage => {
+    try {
+      return journal.page();
+    } catch {
+      counters.invalidSummaries += 1;
+      note("memory pressure: a journal page did not match the contract and was left empty");
+      return parseMemoryPressureJournalPage({
+        events: [],
+        retention: {
+          maxEvents: MEMORY_PRESSURE_EVENTS_MAX,
+          maxAgeMs: MEMORY_PRESSURE_EVENT_MAX_AGE_MS,
+          maxBytes: MEMORY_PRESSURE_EVENTS_MAX_BYTES,
+          events: 0,
+          bytes: 0,
+        },
+      });
+    }
+  };
 
   const buildSummary = (): ValidatedMemoryPressureSummary => {
     const at = now();
@@ -500,21 +605,18 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
       // A summary this controller built wrongly is its own fault, and a surface
       // is told the last thing that was true rather than something invalid.
       counters.invalidSummaries += 1;
-      deps.log?.("memory pressure: a summary did not match the contract and was not published");
+      note("memory pressure: a summary did not match the contract and was not published");
       return lastSummary ?? parseMemoryPressureSummary(blindSummary());
     }
   };
-
-  /** The decision level: this host, this machine, and its workers. */
-  const decisionLevel = (summary: ValidatedMemoryPressureSummary): MemoryPressureLevelState =>
-    aggregateMemoryPressureLevel(
-      summary.roles.filter((row) => row.role !== "desktop_renderer").map((row) => row.level),
-    );
 
   // --- publication ---------------------------------------------------------
 
   const signatureOf = (summary: ValidatedMemoryPressureSummary): string =>
     JSON.stringify([
+      // The settled decision is part of what a reader is told changed, beside
+      // the readings themselves: a transition is the thing E2 and E3 act on.
+      decision.level,
       summary.level,
       summary.roles.map((row) => [row.role, row.level, row.coverage.expected, row.coverage.answered]),
       summary.refusing,
@@ -531,7 +633,7 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
       validated = parseMemoryPressurePublish(publication);
     } catch {
       counters.invalidPublications += 1;
-      deps.log?.("memory pressure: a publication did not match the contract and was not sent");
+      note("memory pressure: a publication did not match the contract and was not sent");
       return;
     }
     try {
@@ -541,7 +643,8 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
       // retried, never queued for later, never fatal. The next state this host
       // reaches is published on its own.
       counters.publishFailures += 1;
-      deps.log?.("memory pressure: a summary could not be published and was dropped");
+      callbackFailed.publish += 1;
+      note("memory pressure: a summary could not be published and was dropped");
       return;
     }
     counters.publications += 1;
@@ -584,13 +687,19 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
 
   // --- probing -------------------------------------------------------------
 
-  const cadence = (): number => {
-    const summary = lastSummary;
-    const level = summary ? decisionLevel(summary) : "unknown";
-    return isDirectiveLevel(level) ? elevatedIntervalMs : normalIntervalMs;
-  };
+  const cadence = (): number => (isDirectiveLevel(decision.level) ? elevatedIntervalMs : normalIntervalMs);
 
   const blindReading: PressureReading = { level: "unknown", usable: [] };
+
+  /**
+   * The probe as the decision sees it: the protocol's aggregate of this host
+   * and this machine, with every reading either of them could take, so a
+   * release is only granted when all of them are well inside the line.
+   */
+  const combined = (probed: HostPressureProbe): PressureReading => ({
+    level: probed.level,
+    usable: [...probed.host.usable, ...probed.machine.usable],
+  });
 
   const probe = async (): Promise<void> => {
     let sample: HostPressureSample;
@@ -602,11 +711,11 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
       // unknown and the transition is published like any other, with readings
       // that say they could not be taken rather than numbers nobody read.
       counters.sampleFailures += 1;
+      callbackFailed.sample += 1;
       sample = blindSample(now());
       lastProbe = { sample, host: blindReading, machine: blindReading, level: "unknown" };
       counters.probes += 1;
-      observe(states.host, blindReading);
-      observe(states.machine, blindReading);
+      observe(decision, blindReading);
       refresh();
       return;
     }
@@ -620,9 +729,10 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
       probed = { sample, host: blindReading, machine: blindReading, level: "unknown" };
     }
     lastProbe = probed;
-    // Both, without short-circuiting: each role settles on its own evidence.
-    observe(states.host, probed.host);
-    observe(states.machine, probed.machine);
+    // One state machine, over the combined probe: two agreeing probes to
+    // escalate, three inside the release line to come back, and any unknown
+    // breaks both runs at once.
+    observe(decision, combined(probed));
     refresh();
   };
 
@@ -666,7 +776,7 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
       // Categorical: what was wrong with it is not said, because saying it would
       // mean putting a worker's message into this host's log.
       counters.reportsMalformed += 1;
-      deps.log?.("memory pressure: a worker's report did not match the contract and was dropped");
+      note("memory pressure: a worker's report did not match the contract and was dropped");
       return;
     }
     const report = parsed.data;
@@ -679,10 +789,10 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
       // Re-read on this side of the queue: between the message arriving and its
       // turn coming, the process that sent it may have been replaced, and a
       // report from a process that is gone changes nothing.
-      let live: HostPressureWorker[];
-      try {
-        live = deps.workers();
-      } catch {
+      const live = liveWorkers();
+      if (live === undefined) {
+        // The pool could not be asked, so nothing about this report can be
+        // proved. It is refused, like every other unprovable one.
         counters.reportsStaleClient += 1;
         return;
       }
@@ -704,12 +814,9 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
       // rows are recorded once. The wire already guarantees there are none at
       // `normal` or `unknown`.
       if (isDirectiveLevel(report.level)) {
-        let project: string | undefined;
-        try {
-          project = deps.projectIdOf?.(cwd);
-        } catch {
-          project = undefined;
-        }
+        // An identity the inventory cannot mint leaves the row unattributed;
+        // it is never a reason to lose what the worker actually did.
+        const project = safely("projectId", () => deps.projectIdOf?.(cwd), undefined);
         for (const row of report.results) {
           const event = journal.add(row, { role: "project_worker", level: report.level, ...(project ? { project } : {}) });
           if (event) counters.reportRows += 1;
@@ -748,10 +855,10 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
       return buildSummary();
     },
     journalPage() {
-      return journal.page();
+      return safePage();
     },
     exportSection() {
-      return { summary: buildSummary(), journal: journal.page() };
+      return { summary: buildSummary(), journal: safePage() };
     },
     probeNow() {
       return serialize(async () => {
@@ -762,11 +869,13 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
     counters() {
       const summary = lastSummary;
       return {
-        level: summary ? decisionLevel(summary) : "unknown",
-        hostLevel: states.host.level,
-        machineLevel: states.machine.level,
+        // The settled decision, and the latest readings beside it.
+        level: decision.level,
+        hostLevel: lastProbe?.host.level ?? "unknown",
+        machineLevel: lastProbe?.machine.level ?? "unknown",
         workerLevel: summary?.roles.find((row) => row.role === "project_worker")?.level ?? "unknown",
         epoch,
+        callbackFailed: { ...callbackFailed },
         ...counters,
         journal: journal.counts(),
       };

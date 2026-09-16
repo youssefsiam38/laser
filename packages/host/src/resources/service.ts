@@ -40,6 +40,7 @@ import {
   RESOURCE_START_TIME_TOLERANCE_MS,
   RESOURCE_TABLE_CACHE_MAX_ROWS,
   parseMemoryPressureJournalPage,
+  parseMemoryPressureSummary,
   boundedResourceIds,
   boundedResourceText,
   resourceAvailable,
@@ -277,23 +278,64 @@ export class ResourceService {
         continue;
       }
       if (snapshots.length > 0) {
-        // Last resort: even an empty snapshot's own fields do not fit. What
-        // survives is the retention it was measured against and the fixed-size
-        // pressure summary, which is never a document that lies about its size.
+        // Even an empty snapshot's own fields do not fit: what survives is the
+        // retention it was measured against and the fixed-size pressure summary.
         snapshots = [];
         continue;
       }
-      return { document, bytes, truncated };
+      if (pressure !== undefined) {
+        // A summary so large that nothing else fits beside it is not evidence
+        // worth an oversized document. It goes, and the document says so.
+        pressure = undefined;
+        continue;
+      }
+      // Nothing left to remove but the wrapper itself. The smallest document
+      // this host can describe is emitted instead of one over its bound: an
+      // oversized document never leaves here, whatever a caller handed us.
+      return this.smallestDocument();
     }
   }
 
-  /** Pressure as this host knows it, or nothing at all. Never throws. */
+  /**
+   * The document of last resort: what it is, when it was taken, and that it is
+   * not complete. Bounded by construction — a timestamp, a platform word and a
+   * flag — so it is returned without another measurement to fail.
+   */
+  private smallestDocument(): { document: string; bytes: number; truncated: boolean } {
+    const document = JSON.stringify({
+      at: new Date(this.now()).toISOString(),
+      platform: this.platformName(),
+      truncated: true,
+      snapshots: [],
+    });
+    return { document, bytes: Buffer.byteLength(document, "utf8"), truncated: true };
+  }
+
+  /**
+   * Pressure as this host knows it, or nothing at all.
+   *
+   * Never throws, and never trusts: the callback's answer is re-validated here
+   * against the contract's own parsers and rebuilt from the validated parts, so
+   * a section that carries a shape this wire refuses — or a field nobody agreed
+   * to — is left out rather than carried into a document that claims it was
+   * checked.
+   */
   private pressureSection(): MemoryPressureExportSection | undefined {
+    let section: MemoryPressureExportSection | undefined;
     try {
-      return this.options.pressure?.();
+      section = this.options.pressure?.();
     } catch {
       // A diagnostic that cannot describe itself is left out; it is not a reason
       // for a snapshot or a document to fail.
+      return undefined;
+    }
+    if (!section) return undefined;
+    try {
+      return {
+        summary: parseMemoryPressureSummary(section.summary),
+        journal: parseMemoryPressureJournalPage(section.journal),
+      };
+    } catch {
       return undefined;
     }
   }
@@ -333,6 +375,17 @@ export class ResourceService {
     // claim the host re-checks stays the one it could believe.
     this.claim = previousClaim;
     return { accepted: 0, rejected: report.processes.length, verified: false };
+  }
+
+  /**
+   * Has the desktop shell proved its own metrics to this host?
+   *
+   * Used to tell a window from the command line (RP-8): a shell whose report
+   * this host verified against its own process table is a window on this
+   * machine, even while that window's socket is still coming up.
+   */
+  get desktopVerified(): boolean {
+    return this.report !== undefined;
   }
 
   /** RP-6 / RP-7 publish background-command and helper pids here. */

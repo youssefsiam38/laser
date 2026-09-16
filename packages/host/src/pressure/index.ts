@@ -1,6 +1,7 @@
 /** The host's memory-pressure evidence and record (RP-8, milestone E1). */
 export { createHostPressureController } from "./controller.js";
 export type {
+  HostPressureCallback,
   HostPressureController,
   HostPressureCounters,
   HostPressureDeps,
