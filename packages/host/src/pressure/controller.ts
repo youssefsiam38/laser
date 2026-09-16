@@ -1,42 +1,21 @@
 /**
- * The host's own answer for memory pressure (RP-8): evidence, the record and
- * E2's bounded host pass.
- *
- * One controller, one serialized chain, one journal. It samples this process
- * and this machine, settles a level for each of them, takes in the reports its
- * workers send unasked — bound to the exact process that delivered them — and
- * publishes one fixed-size summary to the windows on this machine. At a settled
- * warning or critical level it runs only the host-owned E2 subsequence: its one
- * body memo, bounded worker directives, one idle-session release and one idle
- * worker retirement. E3 admission is deliberately absent.
- *
- * Three rules are structural rather than stylistic:
- *
- * - **Missing evidence is missing.** A level nothing could establish is
- *   `"unknown"`, never `"normal"`; a counter nobody could read is `unavailable`
- *   with a reason, never a zero; an age that is not an exact non-negative
- *   integer is left out rather than reported as none.
- * - **Nothing a worker sends chooses its own identity.** A report is bound to
- *   the delivering process's private numeric generation *and* to the opaque
- *   client generation, re-read inside this chain before anything is recorded.
- * - **A failure is categorical.** A sampler, a store, a publication or a parse
- *   that fails is counted and named in one fixed sentence; it never throws into
- *   a timer, never retries, and never takes the host with it.
+ * RP-8 host evidence and record. One serialized controller samples this host,
+ * binds worker evidence to both private generations, publishes a fixed summary
+ * locally, and invokes E2's bounded pass at settled warning/critical. Missing
+ * evidence stays unknown; failures are categorical and never retried. E3
+ * admission is deliberately absent.
  */
 import {
   MEMORY_PRESSURE_EVENTS_MAX,
   MEMORY_PRESSURE_EVENTS_MAX_BYTES,
   MEMORY_PRESSURE_EVENT_MAX_AGE_MS,
   aggregateMemoryPressureLevel,
-  memoryPressureDirectiveResultSchema,
   memoryPressureReportSchema,
   parseMemoryPressureJournalPage,
   parseMemoryPressurePublish,
   parseMemoryPressureSummary,
   type JsonRpcNotification,
   type MemoryPressureCoverage,
-  type MemoryPressureActionResult,
-  type MemoryPressureDirective,
   type MemoryPressureExportSection,
   type MemoryPressureInput,
   type MemoryPressureLevel,
@@ -49,6 +28,12 @@ import {
   type ValidatedMemoryPressureSummary,
 } from "@lasercode/protocol";
 import { PressureJournal } from "./journal.js";
+import {
+  createHostPressurePass,
+  type HostPressureActions,
+  type HostPressurePassCounters,
+  type HostPressureWorker,
+} from "./pass.js";
 import {
   LEVEL_SEVERITY,
   belowRelease,
@@ -73,28 +58,7 @@ import {
   type MachinePressureThresholds,
 } from "./thresholds.js";
 
-/** One live worker, as the host currently knows it. */
-export interface HostPressureWorker {
-  cwd: string;
-  /** The opaque per-process identity (RP-7). Host-internal; never published. */
-  clientGeneration: string;
-  /** The private numeric spawn generation (D-262). Host-internal; never published. */
-  workerGeneration: number;
-}
-
-export interface HostPressureActions {
-  /** Step 1. True only when the one body memo was actually held. */
-  releaseEphemeral(): boolean;
-  /** One exact worker generation. The controller validates the answer itself. */
-  directive(cwd: string, expect: HostPressureWorker, params: MemoryPressureDirective): Promise<unknown>;
-  /** Step 5. The callback rechecks `allow` at its destructive boundary. */
-  unloadIdle(level: MemoryPressureLevel, allow: (cwd: string) => boolean): Promise<MemoryPressureActionResult>;
-  /** Step 6. The pool rechecks the exact allowlist at its destructive boundary. */
-  retireIdle(
-    limit: number,
-    allow: ReadonlyMap<string, { clientGeneration: string; workerGeneration: number }>,
-  ): Promise<{ retired: number; held: boolean; unavailable: boolean; generationMismatch: boolean }>;
-}
+export type { HostPressureActions, HostPressureWorker } from "./pass.js";
 
 export interface HostPressureDeps {
   /** This process and this machine, read by us, about us. Never throws upward. */
@@ -141,7 +105,7 @@ export type HostPressureCallback =
   | "unloadIdle"
   | "retireIdle";
 
-export interface HostPressureCounters {
+export interface HostPressureCounters extends HostPressurePassCounters {
   /**
    * The settled level of the combined probe: what E2 and E3 act on, and what a
    * transition is published for. Hysteresis lives here and nowhere else.
@@ -175,14 +139,6 @@ export interface HostPressureCounters {
   reportsStaleClient: number;
   /** Workers whose evidence was dropped because that exact process went away. */
   workersForgotten: number;
-  passes: number;
-  passCooldownSkips: number;
-  directivesSent: number;
-  directivesTimedOut: number;
-  directivesMalformed: number;
-  directivesStale: number;
-  directivesFailed: number;
-  directivesLate: number;
   hostRows: number;
   journal: { events: number; bytes: number; lastEvictedBy?: "age" | "events" | "bytes"; refusedRows: number };
 }
@@ -226,7 +182,7 @@ interface DecisionState {
   streak: number;
 }
 
-const isDirectiveLevel = (level: MemoryPressureLevelState): level is MemoryPressureDirective["level"] =>
+const isDirectiveLevel = (level: MemoryPressureLevelState): level is "warning" | "critical" =>
   level === "warning" || level === "critical";
 
 /** A role nobody could measure, said out loud. */
@@ -321,19 +277,16 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
     workersForgotten: 0,
     passes: 0,
     passCooldownSkips: 0,
+    passFailures: 0,
     directivesSent: 0,
     directivesTimedOut: 0,
     directivesMalformed: 0,
+    directivesRefused: 0,
     directivesStale: 0,
     directivesFailed: 0,
     directivesLate: 0,
     hostRows: 0,
   };
-  let passEpoch = 0;
-  let lastPassAt = Number.NEGATIVE_INFINITY;
-  let passCooldownMs = 0;
-  let directiveRotation = 0;
-  const lastDirectedAt = new Map<string, number>();
 
   const serialize = <T>(work: () => Promise<T>): Promise<T> => {
     const next = chain.then(work, work);
@@ -755,7 +708,7 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
     usable: [...probed.host.usable, ...probed.machine.usable],
   });
 
-  const probe = async (): Promise<void> => {
+  const probe = async (updateDecision = true): Promise<HostPressureProbe> => {
     let sample: HostPressureSample;
     try {
       sample = await deps.sample();
@@ -769,9 +722,9 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
       sample = blindSample(now());
       lastProbe = { sample, host: blindReading, machine: blindReading, level: "unknown" };
       counters.probes += 1;
-      observe(decision, blindReading);
+      if (updateDecision) observe(decision, blindReading);
       refresh();
-      return;
+      return lastProbe;
     }
     counters.probes += 1;
     const at = now();
@@ -786,185 +739,50 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
     // One state machine, over the combined probe: two agreeing probes to
     // escalate, three inside the release line to come back, and any unknown
     // breaks both runs at once.
-    observe(decision, combined(probed));
+    if (updateDecision) observe(decision, combined(probed));
     refresh();
+    return probed;
   };
 
-  // --- the host's bounded pass (E2) ---------------------------------------
-
-  const journalRow = (row: MemoryPressureActionResult, role: MemoryPressureRole, level: MemoryPressureLevel, project?: string): void => {
-    const event = journal.add(row, { role, level, ...(project ? { project } : {}) });
-    if (event && role === "host") counters.hostRows += 1;
-  };
-
-  const currentWorker = (selected: HostPressureWorker): boolean => {
-    const live = liveWorkers();
-    return Boolean(live?.some((worker) => worker.cwd === selected.cwd && worker.clientGeneration === selected.clientGeneration && worker.workerGeneration === selected.workerGeneration));
-  };
-
-  const processDirectiveAnswer = (selected: HostPressureWorker, value: unknown, level: MemoryPressureLevel, late: boolean, collect?: (row: MemoryPressureActionResult) => void): boolean => {
-    if (disposed) return false;
-    const parsed = memoryPressureDirectiveResultSchema.safeParse(value);
-    if (!parsed.success) { counters.directivesMalformed += 1; return false; }
-    if (!currentWorker(selected)) { counters.directivesStale += 1; return false; }
-    const project = safely("projectId", () => deps.projectIdOf?.(selected.cwd), undefined);
-    for (const row of parsed.data.results) {
-      journalRow(row, "project_worker", level, project);
-      collect?.(row);
-    }
-    if (late) counters.directivesLate += 1;
-    return true;
-  };
-
-  const freshAuthorized = (at: number): Map<string, HostPressureWorker> => {
-    const answer = new Map<string, HostPressureWorker>();
-    for (const worker of liveWorkers() ?? []) {
-      const record = evidence.get(worker.cwd);
-      if (!record || record.clientGeneration !== worker.clientGeneration || record.workerGeneration !== worker.workerGeneration) continue;
-      const age = freshnessAgeMs(record, at);
-      if (age !== undefined && age <= workerFreshMs) answer.set(worker.cwd, worker);
-    }
-    return answer;
-  };
-
-  const selectedWorkers = (at: number): HostPressureWorker[] => {
-    const candidates = (liveWorkers() ?? []).filter((worker) => at - (lastDirectedAt.get(worker.cwd) ?? Number.NEGATIVE_INFINITY) >= workerDirectiveSkipMs);
-    const rank = (worker: HostPressureWorker): number => {
-      const row = evidence.get(worker.cwd);
-      const age = row ? freshnessAgeMs(row, at) : undefined;
-      if (!row || age === undefined || age > workerFreshMs) return -1;
-      return LEVEL_SEVERITY[row.level];
-    };
-    const ties = [...candidates].map((worker) => worker.cwd).sort();
-    const rotatedTie = (cwd: string): number => {
-      const index = ties.indexOf(cwd);
-      return (index - directiveRotation + ties.length) % Math.max(1, ties.length);
-    };
-    candidates.sort((a, b) =>
-      rank(b) - rank(a) ||
-      (lastDirectedAt.get(a.cwd) ?? -1) - (lastDirectedAt.get(b.cwd) ?? -1) ||
-      rotatedTie(a.cwd) - rotatedTie(b.cwd),
-    );
-    directiveRotation = (directiveRotation + 1) % Math.max(1, candidates.length);
-    return candidates.slice(0, 4);
-  };
-
-  const runDirectives = async (level: MemoryPressureDirective["level"], actionEpoch: number, allow: Map<string, HostPressureWorker>, collect: (row: MemoryPressureActionResult) => void): Promise<void> => {
-    const selected = selectedWorkers(now());
-    if (selected.length === 0) return;
-    type State = { selected: HostPressureWorker; settled: boolean; processed: boolean; value?: unknown; failed?: boolean };
-    const states: State[] = selected.map((worker) => ({ selected: worker, settled: false, processed: false }));
-    const requests = states.map(async (state) => {
-      lastDirectedAt.set(state.selected.cwd, now());
-      counters.directivesSent += 1;
-      try {
-        state.value = await deps.actions!.directive(state.selected.cwd, state.selected, { level, epoch: actionEpoch, generation: state.selected.workerGeneration });
-      } catch { state.failed = true; }
-      finally { state.settled = true; }
-    });
-    let deadline: unknown;
-    let timedOut = false;
-    await Promise.race([
-      Promise.all(requests),
-      new Promise<void>((resolve) => {
-        deadline = schedule(() => { timedOut = true; resolve(); }, directiveStageMs);
-      }),
-    ]);
-    if (!timedOut && deadline !== undefined) clearTimer(deadline);
-    for (const state of states) {
-      if (!state.settled) { counters.directivesTimedOut += 1; continue; }
-      state.processed = true;
-      if (state.failed) { counters.directivesFailed += 1; continue; }
-      if (processDirectiveAnswer(state.selected, state.value, level, false, collect)) allow.set(state.selected.cwd, state.selected);
-    }
-    let lateOrder = Promise.resolve();
-    for (let index = 0; index < states.length; index += 1) {
-      const state = states[index]!;
-      if (state.processed) continue;
-      // These requests are already running concurrently; only their eventual
-      // journal insertion is chained, preserving the selection order even when
-      // replies cross after the deadline.
-      lateOrder = lateOrder
-        .then(() => requests[index])
-        .then(() => serialize(async () => {
-          if (disposed || state.processed) return;
-          state.processed = true;
-          if (state.failed) counters.directivesFailed += 1;
-          else processDirectiveAnswer(state.selected, state.value, level, true);
-          refresh();
-        }));
-    }
-    void lateOrder;
-  };
-
-  const relieved = (ran: MemoryPressureLevel): boolean => {
-    const latest = lastProbe?.level ?? "unknown";
-    return latest === "unknown" || LEVEL_SEVERITY[latest] < LEVEL_SEVERITY[ran];
-  };
-
-  const runPass = async (level: MemoryPressureDirective["level"]): Promise<void> => {
-    const actions = deps.actions;
-    if (!actions) return;
-    const at = now();
-    if (at - lastPassAt < passCooldownMs) { counters.passCooldownSkips += 1; return; }
-    counters.passes += 1;
-    const actionEpoch = ++passEpoch;
-    const rows: MemoryPressureActionResult[] = [];
-    const record = (row: MemoryPressureActionResult): void => { rows.push(row); journalRow(row, "host", level); refresh(); };
-    try {
-      try {
-        const gave = actions.releaseEphemeral();
-        record(gave ? { action: "ephemeral_caches", outcome: "released", released: { count: 1 } } : { action: "ephemeral_caches", outcome: "nothing_to_give" });
-      } catch {
-        callbackFailed.releaseEphemeral += 1;
-        record({ action: "ephemeral_caches", outcome: "unavailable" });
-      }
-      await probe();
-      if (relieved(level)) return;
-
-      const allow = freshAuthorized(now());
-      await runDirectives(level, actionEpoch, allow, (row) => rows.push(row));
-      await probe();
-      if (relieved(level)) return;
-
-      const matchesAllow = (cwd: string): boolean => { const expected = allow.get(cwd); return expected ? currentWorker(expected) : false; };
-      let unload: MemoryPressureActionResult;
-      try { unload = await actions.unloadIdle(level, matchesAllow); }
-      catch {
-        callbackFailed.unloadIdle += 1;
-        unload = { action: "idle_session_unload", outcome: "unavailable" };
-      }
-      if (unload.outcome === "nothing_to_give" && [...allow.values()].some((worker) => !currentWorker(worker))) unload = { action: "idle_session_unload", outcome: "refused", reason: "generation_mismatch" };
-      record(unload);
-      await probe();
-      if (relieved(level)) return;
-
-      try {
-        const exact = new Map([...allow].map(([cwd, worker]) => [cwd, { clientGeneration: worker.clientGeneration, workerGeneration: worker.workerGeneration }]));
-        const answer = await actions.retireIdle(1, exact);
-        record(answer.retired > 0
-          ? { action: "worker_retirement", outcome: "released", released: { count: answer.retired } }
-          : answer.generationMismatch
-            ? { action: "worker_retirement", outcome: "refused", reason: "generation_mismatch" }
-            : answer.held
-              ? { action: "worker_retirement", outcome: "held", reason: "pins_held" }
-              : answer.unavailable
-                ? { action: "worker_retirement", outcome: "unavailable" }
-                : { action: "worker_retirement", outcome: "nothing_to_give" });
-      } catch {
-        callbackFailed.retireIdle += 1;
-        record({ action: "worker_retirement", outcome: "unavailable" });
-      }
-    } finally {
-      lastPassAt = now();
-      const quiet = rows.length > 0 && rows.every((row) => row.outcome === "nothing_to_give" || row.outcome === "held");
-      passCooldownMs = quiet ? 60_000 : level === "critical" ? 10_000 : 30_000;
-    }
-  };
+  const pressurePass = deps.actions
+    ? createHostPressurePass({
+        actions: deps.actions,
+        now,
+        workers: liveWorkers,
+        freshLevel(worker, at) {
+          const record = evidence.get(worker.cwd);
+          if (!record || record.clientGeneration !== worker.clientGeneration || record.workerGeneration !== worker.workerGeneration) return undefined;
+          const age = freshnessAgeMs(record, at);
+          return age !== undefined && age <= workerFreshMs ? record.level : undefined;
+        },
+        projectId: (cwd) => safely("projectId", () => deps.projectIdOf?.(cwd), undefined),
+        addRow(row, role, level, project) {
+          const event = journal.add(row, { role, level, ...(project ? { project } : {}) });
+          if (event && role === "host") counters.hostRows += 1;
+        },
+        async reprobe(level) {
+          const reading = combined(await probe(false));
+          if (reading.level === "unknown") return "unknown";
+          return belowRelease(reading, level) ? "relieved" : "still_elevated";
+        },
+        refresh,
+        serialize,
+        nextEpoch: () => ++epoch,
+        isDisposed: () => disposed,
+        callbackFailed(kind) {
+          callbackFailed[kind] += 1;
+        },
+        counters,
+        directiveStageMs,
+        workerDirectiveSkipMs,
+        setTimer: schedule,
+        clearTimer,
+      })
+    : undefined;
 
   const probeAndAct = async (): Promise<void> => {
-    await probe();
-    if (isDirectiveLevel(decision.level)) await runPass(decision.level);
+    await probe(true);
+    if (isDirectiveLevel(decision.level)) await pressurePass?.run(decision.level);
   };
 
   const armTimer = (): void => {
@@ -972,7 +790,9 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
     if (timer !== undefined) clearTimer(timer);
     timer = schedule(() => {
       timer = undefined;
-      void tick();
+      void tick().catch(() => {
+        counters.passFailures += 1;
+      });
     }, cadence());
   };
 
@@ -982,6 +802,9 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
         if (disposed) return;
         await probeAndAct();
       });
+    } catch {
+      counters.passFailures += 1;
+      note("memory pressure: the host pass failed and was dropped");
     } finally {
       armTimer();
     }
@@ -1058,6 +881,7 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
   };
 
   const forgetWorker = (cwd: string, clientGeneration: string): void => {
+    pressurePass?.forgetWorker(cwd, clientGeneration);
     const record = evidence.get(cwd);
     if (!record || record.clientGeneration !== clientGeneration) return;
     evidence.delete(cwd);

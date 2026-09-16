@@ -72,7 +72,7 @@ describe("SessionLifetime policy", () => {
       row("/s/new.jsonl", { activity: 900 }),
       row("/s/old.jsonl", { activity: 100 }),
     ]);
-    const result = await world.lifetime.pressurePass("critical", () => true);
+    const result = await world.lifetime.pressurePass(() => "authorized");
     expect(result).toEqual({ action: "idle_session_unload", outcome: "released", released: { count: 1 } });
     expect(world.asked).toEqual([{ path: "/s/old.jsonl", reason: "budget" }]);
     expect(world.loaded.has("/s/new.jsonl")).toBe(true);
@@ -80,8 +80,8 @@ describe("SessionLifetime policy", () => {
 
   it("pressure preserves a pinned session and uses the sweep's refusal backoff", async () => {
     const world = policyWorld([row("/s/pinned.jsonl", { pins: [{ kind: "turn", detail: "running" }] })], { maxLoadedPerWorker: 0 });
-    expect(await world.lifetime.pressurePass("warning", () => true)).toEqual({ action: "idle_session_unload", outcome: "held", reason: "pins_held" });
-    expect(await world.lifetime.pressurePass("warning", () => true)).toEqual({ action: "idle_session_unload", outcome: "held", reason: "pins_held" });
+    expect(await world.lifetime.pressurePass(() => "authorized")).toEqual({ action: "idle_session_unload", outcome: "held", reason: "pins_held" });
+    expect(await world.lifetime.pressurePass(() => "authorized")).toEqual({ action: "idle_session_unload", outcome: "held", reason: "pins_held" });
     expect(world.asked).toHaveLength(1);
   });
 
@@ -95,15 +95,32 @@ describe("SessionLifetime policy", () => {
       unload,
       now: () => 2,
     }, { workerIdleMs: 0, maxLoadedPerWorker: 0 });
-    expect(await lifetime.pressurePass("critical", () => true)).toEqual({ action: "idle_session_unload", outcome: "held", reason: "membership_held" });
+    expect(await lifetime.pressurePass(() => "authorized")).toEqual({ action: "idle_session_unload", outcome: "held", reason: "membership_held" });
     expect(unload).not.toHaveBeenCalled();
   });
 
-  it("pressure refuses a generation that changes on its destructive recheck", async () => {
-    let checks = 0;
-    const world = policyWorld([row("/s/race.jsonl")], { maxLoadedPerWorker: 0 });
-    expect(await world.lifetime.pressurePass("critical", () => ++checks === 1)).toEqual({ action: "idle_session_unload", outcome: "refused", reason: "generation_mismatch" });
-    expect(world.asked).toEqual([]);
+  it("pressure distinguishes a moved generation from a worker outside this pass", async () => {
+    const moved = policyWorld([row("/s/race.jsonl")], { maxLoadedPerWorker: 0 });
+    expect(await moved.lifetime.pressurePass(() => "generation_moved")).toEqual({ action: "idle_session_unload", outcome: "refused", reason: "generation_mismatch" });
+    expect(moved.asked).toEqual([]);
+
+    const absent = policyWorld([row("/s/not-authorized.jsonl")], { maxLoadedPerWorker: 0 });
+    expect(await absent.lifetime.pressurePass(() => "not_in_pass")).toEqual({ action: "idle_session_unload", outcome: "nothing_to_give" });
+    expect(absent.asked).toEqual([]);
+  });
+
+  it("does not call a transport-failure backoff pins held", async () => {
+    let attempts = 0;
+    const lifetime = new SessionLifetime({
+      holders: () => 0,
+      loadedSessions: () => [{ cwd: "/repo", path: "/s/unavailable.jsonl" }],
+      lastActivity: () => 0,
+      unload: async () => { attempts += 1; throw new Error("pipe closed"); },
+      now: () => 1_000_000,
+    }, { workerIdleMs: 0, maxLoadedPerWorker: 0 });
+    expect(await lifetime.pressurePass(() => "authorized")).toEqual({ action: "idle_session_unload", outcome: "unavailable" });
+    expect(await lifetime.pressurePass(() => "authorized")).toEqual({ action: "idle_session_unload", outcome: "unavailable" });
+    expect(attempts).toBe(1);
   });
 
   it("never releases a session a connection or a scope is holding", async () => {

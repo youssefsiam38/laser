@@ -21,7 +21,8 @@
  * lifetime whose sweep fires after retirement has already happened would be a
  * policy that never runs, which is worse than one that is switched off.
  */
-import type { MemoryPressureActionResult, MemoryPressureLevel, SessionPin } from "@lasercode/protocol";
+import type { MemoryPressureActionResult, SessionPin } from "@lasercode/protocol";
+import type { PressureAllowDecision } from "./pressure/pass.js";
 
 export interface SessionLifetimeDeps {
   /** Connections and scopes following this session right now (RP-6). Read-only. */
@@ -93,7 +94,7 @@ export class SessionLifetime {
     sweeps: 0, scanned: 0, considered: 0, unloaded: 0, refused: 0, skippedBackoff: 0, budgetTarget: 0, budgetRemoved: 0, pins: {},
   };
   /** Rows that refused recently, with their strike count: bounded by the live set. */
-  private readonly refusals = new Map<string, { strikes: number; until: number }>();
+  private readonly refusals = new Map<string, { strikes: number; until: number; cause: "pins" | "unavailable" }>();
   /** Which worker this sweep starts with, so no project is always last. */
   private rotation = 0;
 
@@ -152,12 +153,11 @@ export class SessionLifetime {
   /**
    * Step 5 of one host pressure pass: choose at most one loaded session by the
    * same oldest-first, membership, pin and refusal-backoff rules as the sweep.
-   * `allow` is called once while choosing and again at the destructive boundary;
-   * it binds the release to evidence from the exact live worker generation.
+   * `allow` answers at the destructive boundary whether this candidate belongs
+   * to the pass and whether that exact worker generation is still live.
    */
   async pressurePass(
-    _level: MemoryPressureLevel,
-    allow: (cwd: string) => boolean,
+    allow: (cwd: string) => PressureAllowDecision,
   ): Promise<MemoryPressureActionResult> {
     if (this.stopped) return { action: "idle_session_unload", outcome: "unavailable" };
     const at = this.now();
@@ -167,24 +167,29 @@ export class SessionLifetime {
     const loadedByWorker = new Map<string, number>();
     for (const row of rows) loadedByWorker.set(row.cwd, (loadedByWorker.get(row.cwd) ?? 0) + 1);
     let membershipHeld = false;
-    let backoffHeld = false;
+    let pinsHeld = false;
+    let unavailable = false;
     for (const row of rows) {
-      if (!allow(row.cwd)) continue;
       const idle = at - row.activity >= this.sessionIdleMs;
       const overBudget = (loadedByWorker.get(row.cwd) ?? 0) > this.maxLoadedPerWorker;
       if (!idle && !overBudget) continue;
+      const decision = allow(row.cwd);
+      if (decision === "not_in_pass") continue;
+      if (decision === "generation_moved") {
+        return { action: "idle_session_unload", outcome: "refused", reason: "generation_mismatch" };
+      }
       this.counters.scanned += 1;
       const backoff = this.refusals.get(row.path);
       if (backoff && backoff.until > at) {
-        backoffHeld = true;
+        if (backoff.cause === "pins") pinsHeld = true;
+        else unavailable = true;
         continue;
       }
       if (this.deps.holders(row.path) > 0) {
         membershipHeld = true;
         continue;
       }
-      // Re-check both fences immediately before the only destructive call.
-      if (!allow(row.cwd)) return { action: "idle_session_unload", outcome: "refused", reason: "generation_mismatch" };
+      // Membership is re-checked immediately before the only destructive call.
       if (this.deps.holders(row.path) > 0) return { action: "idle_session_unload", outcome: "held", reason: "membership_held" };
       this.counters.considered += 1;
       this.counters.budgetTarget += 1;
@@ -199,17 +204,18 @@ export class SessionLifetime {
         if (answer.pins.length > 0) {
           this.counters.refused += 1;
           for (const pin of answer.pins) this.counters.pins[pin.kind] = (this.counters.pins[pin.kind] ?? 0) + 1;
-          this.backOff(row.path, at);
+          this.backOff(row.path, at, "pins");
           return { action: "idle_session_unload", outcome: "held", reason: "pins_held" };
         }
         return { action: "idle_session_unload", outcome: "unavailable" };
       } catch {
-        this.backOff(row.path, at);
+        this.backOff(row.path, at, "unavailable");
         return { action: "idle_session_unload", outcome: "unavailable" };
       }
     }
     if (membershipHeld) return { action: "idle_session_unload", outcome: "held", reason: "membership_held" };
-    if (backoffHeld) return { action: "idle_session_unload", outcome: "held", reason: "pins_held" };
+    if (pinsHeld) return { action: "idle_session_unload", outcome: "held", reason: "pins_held" };
+    if (unavailable) return { action: "idle_session_unload", outcome: "unavailable" };
     return { action: "idle_session_unload", outcome: "nothing_to_give" };
   }
 
@@ -289,11 +295,11 @@ export class SessionLifetime {
           if (answer.pins.length === 0) continue;
           this.counters.refused += 1;
           for (const pin of answer.pins) this.counters.pins[pin.kind] = (this.counters.pins[pin.kind] ?? 0) + 1;
-          this.backOff(row.path, now);
+          this.backOff(row.path, now, "pins");
         } catch (error) {
           // A worker that cannot answer keeps its session: a failed release is
           // not a reason to do anything else to it.
-          this.backOff(row.path, now);
+          this.backOff(row.path, now, "unavailable");
           this.deps.log?.(`session lifetime: release refused by the worker for ${cwd} — ${error instanceof Error ? error.message : String(error)}`);
         }
       }
@@ -305,11 +311,11 @@ export class SessionLifetime {
    * time and capped, so a permanently pinned conversation costs one attempt
    * occasionally instead of the whole tick for ever.
    */
-  private backOff(path: string, now: number): void {
+  private backOff(path: string, now: number, cause: "pins" | "unavailable"): void {
     const previous = this.refusals.get(path);
     const strikes = Math.min((previous?.strikes ?? 0) + 1, 8);
     const wait = Math.min(this.sweepMs * 2 ** strikes, this.sessionIdleMs);
-    this.refusals.set(path, { strikes, until: now + wait });
+    this.refusals.set(path, { strikes, until: now + wait, cause });
   }
 
   /** Drop backoff state for sessions this worker no longer holds; bounded by construction. */

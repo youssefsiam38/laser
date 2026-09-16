@@ -574,8 +574,8 @@ export class HostServer {
       actions: {
         releaseEphemeral: () => this.bodyRange.forget(),
         directive: (cwd, expect, params) => this.pool.pressureDirective(cwd, expect, params),
-        unloadIdle: (level, allow) => this.sessionLifetime.pressurePass(level, allow),
-        retireIdle: (limit, allow) => this.pool.retireIdleUnderPressure(limit, allow),
+        unloadIdle: (allow) => this.sessionLifetime.pressurePass(allow),
+        retireIdle: (allow) => this.pool.retireIdleUnderPressure(allow),
       },
     });
 
