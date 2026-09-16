@@ -25,6 +25,7 @@
 import { ENV, MIB_BYTES, PRODUCT_NAME, configuredOldSpaceBytes, nodeLaunchEnvironment } from "@lasercode/protocol";
 import { type ChildProcess, spawn } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync } from "node:fs";
+import { dirname, join } from "node:path";
 import {
   CLI_VERSION,
   cliEntry,
@@ -34,9 +35,11 @@ import {
   newLaunchId,
   piEnv,
   portInUse,
+  prepareInstalledRuntime,
   probeHealth,
   refreshHostEnvironment,
   stopHost,
+  type InstalledRuntimeLaunch,
   type LaserPaths,
 } from "@lasercode/cli";
 import { hostNeedsRefresh } from "./host-compatibility.js";
@@ -96,6 +99,7 @@ interface HostInfoPatch {
 export class HostProcess {
   private child: ChildProcess | undefined;
   private runtime: NodeRuntime | undefined;
+  private installedRuntime: InstalledRuntimeLaunch | undefined;
   /**
    * Started next to the daemon spawn and awaited before "ready", so proving the
    * bundled agent costs nothing on a healthy install and is never skipped.
@@ -133,6 +137,16 @@ export class HostProcess {
     // Our own child is already running: a retry must not "adopt" it, or we
     // would forget that we own it and leave it behind on quit.
     if (this.child && this.child.exitCode === null) return this.info;
+
+    try {
+      this.installedRuntime = prepareInstalledRuntime(paths);
+    } catch (error) {
+      log.error("runtime generation verification failed", error);
+      return this.publish({
+        state: "failed",
+        message: error instanceof Error ? error.message : "The app could not verify its installed runtime. Reinstall the app.",
+      });
+    }
 
     if (this.options.packaged && installedHostVersion(this.options.resourcesPath) !== CLI_VERSION) {
       return this.publish({ state: "failed", message: "An update is installed. Restart the app and host together when you are ready." });
@@ -181,7 +195,13 @@ export class HostProcess {
     }
 
     try {
-      this.runtime = resolveNodeRuntime({ packaged: this.options.packaged, resourcesPath: this.options.resourcesPath });
+      const current = resolveNodeRuntime({ packaged: this.options.packaged, resourcesPath: this.options.resourcesPath });
+      const selectedNode = this.installedRuntime.manifest.entries.node;
+      this.runtime = selectedNode ? {
+        ...current,
+        binary: this.installedRuntime.nodeBinary,
+        npmCli: join(dirname(this.installedRuntime.nodeBinary), "npm", "bin", "npm-cli.js"),
+      } : current;
     } catch (error) {
       if (error instanceof RuntimeError) {
         log.error("no usable Node runtime", error);
@@ -197,6 +217,7 @@ export class HostProcess {
       nodeBinary: this.runtime.binary,
       env: this.hostEnv(),
       log,
+      workerMain: this.installedRuntime.workerEntry,
     }).then((result) => {
       if (result.ok) {
         log.line(
@@ -223,7 +244,7 @@ export class HostProcess {
     // asar-aware and would answer `true` for the archive path, so this check
     // has to stat the same path the spawn uses or it is a guaranteed pass in
     // exactly the case it exists to catch.
-    const entry = cliEntry();
+    const entry = this.installedRuntime.cliEntry;
     if (!existsSync(entry)) {
       log.error(`the host entry is missing at ${entry}`, new Error("cliEntry does not exist"));
       return this.publish({
@@ -259,7 +280,7 @@ export class HostProcess {
 
     let argv: string[];
     try {
-      argv = hostDaemonArgv(paths);
+      argv = hostDaemonArgv(paths, undefined, this.installedRuntime?.cliEntry);
     } catch (error) {
       const message = error instanceof Error ? error.message : "The runtime memory limit could not be read.";
       return this.publish({ state: "failed", message });
@@ -441,6 +462,7 @@ export class HostProcess {
       // Absent in a development build that has not run `pnpm -F
       // @lasercode/desktop runtime`, and the host says so rather than guessing.
       ...(this.runtime?.npmCli ? { [ENV.npmCli]: this.runtime.npmCli } : {}),
+      ...this.installedRuntime?.env,
       ...this.options.env,
     });
   }

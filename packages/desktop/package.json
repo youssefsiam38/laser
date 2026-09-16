@@ -17,6 +17,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "postbuild": "node ../../scripts/identity/runtime-inventory.mjs --workspace",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "pretest": "pnpm run linux:assets",
     "test": "vitest run",

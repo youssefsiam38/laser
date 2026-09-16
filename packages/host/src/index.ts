@@ -20,6 +20,29 @@ export {
 export { WorkerPool, type WorkerPoolOptions } from "./worker-pool.js";
 export { WorkerClient, WorkerRpcError, defaultWorkerMain, type WorkerClientOptions } from "./worker-client.js";
 export {
+  FeatureGenerationStore,
+  RuntimeGenerationError,
+  RuntimeGenerationGuard,
+  RUNTIME_GENERATION_ERROR,
+  RUNTIME_MANIFEST_NAME,
+  RUNTIME_POINTER_NAME,
+  findRuntimeManifest,
+  prepareRuntimeGeneration,
+  readRuntimeGenerationPointer,
+  runtimeGenerationId,
+  runtimeManifestDigest,
+  runtimeReferenceFromEnvironment,
+  runtimeReferenceFromManifest,
+  verifyRuntimeGeneration,
+  writeRuntimeGenerationManifest,
+  writeRuntimeGenerationPointer,
+  type FeatureGenerationManifest,
+  type RuntimeGenerationManifest,
+  type RuntimeGenerationPointer,
+  type RuntimeGenerationReference,
+  type RuntimeInventoryRow,
+} from "./runtime-generation.js";
+export {
   HOST_OLD_SPACE_CAP_MIB,
   HOST_OLD_SPACE_FLOOR_MIB,
   WORKER_OLD_SPACE_CAP_MIB,

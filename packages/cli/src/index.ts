@@ -38,10 +38,12 @@ export {
   runForegroundHost,
   logTail,
   openBrowser,
+  prepareInstalledRuntime,
   refreshHostEnvironment,
   startHost,
   stopHost,
   type ForegroundHostResult,
+  type InstalledRuntimeLaunch,
   type StartResult,
   type StopResult,
 } from "./host-control.js";

@@ -79,12 +79,19 @@ import { configuredOldSpaceBytes } from "./heap-ceiling.js";
 import { WorkerRetiredError, type WorkerClient } from "./worker-client.js";
 import { WorkerPool, type WorkerPoolOptions } from "./worker-pool.js";
 import { RuntimeRepairLedger } from "./runtime-repair.js";
+import {
+  FeatureGenerationStore,
+  RuntimeGenerationGuard,
+  type RuntimeGenerationReference,
+} from "./runtime-generation.js";
 
 export interface HostServerOptions {
   host?: string;
   port?: number;
   /** Launcher-minted identity echoed by health; production always supplies it. */
   launchId?: string;
+  /** Immutable install generation bound by the launcher before this process existed. */
+  runtimeGeneration?: RuntimeGenerationReference;
   agentDir?: string;
   sessionDir?: string;
   workerMain?: string;
@@ -524,6 +531,11 @@ export class HostServer {
     });
     this.features = new FeatureService(this.prefs);
     this.repair = new RuntimeRepairLedger(join(stateDir, "runtime-repair.json"), this.launchId);
+    const runtimeGuard = options.runtimeGeneration ? new RuntimeGenerationGuard(options.runtimeGeneration) : undefined;
+    runtimeGuard?.verify();
+    const featureGenerations = options.runtimeGeneration
+      ? new FeatureGenerationStore(stateDir, options.runtimeGeneration.generationId)
+      : undefined;
 
     // The definitions live here; every worker gets a copy when it starts
     // (`prime`, below) and again whenever they change. Clients hear the same
@@ -634,13 +646,31 @@ export class HostServer {
     const poolOptions: WorkerPoolOptions = {
       routeLeases: this.routeLeases,
       ...(options.agentDir ? { agentDir: options.agentDir } : {}),
-      env: { ...(npmCommand ? { [ENV.npmCommand]: JSON.stringify(npmCommand) } : {}), [ENV.taskLogRoot]: this.taskLogRoot },
-      envForCwd: (cwd, mode) => ({
-        [ENV.features]: JSON.stringify(mode === "safe" ? [] : this.features.enabled(cwd)),
-        // Non-secret: the executable, its arguments and whether this exact pair
-        // was approved. Values never travel this way; the worker runs the hook.
-        ...this.projectEnvForWorker(cwd),
-      }),
+      env: {
+        ...(npmCommand ? { [ENV.npmCommand]: JSON.stringify(npmCommand) } : {}),
+        [ENV.taskLogRoot]: this.taskLogRoot,
+        ...(options.runtimeGeneration ? {
+          [ENV.runtimeGenerationId]: options.runtimeGeneration.generationId,
+          [ENV.runtimeInstallRoot]: options.runtimeGeneration.installRoot,
+          [ENV.runtimeManifestDigest]: options.runtimeGeneration.manifestDigest,
+        } : {}),
+      },
+      envForCwd: (cwd, mode) => {
+        const effectiveFeatures = mode === "safe" ? [] : this.features.enabled(cwd);
+        const featureGeneration = featureGenerations?.ensure({
+          cwd,
+          desiredPrefsRevision: this.prefs.currentRevision,
+          effectiveFeatures,
+          mode,
+        });
+        return {
+          [ENV.features]: JSON.stringify(effectiveFeatures),
+          ...(featureGeneration ? { [ENV.featureGenerationId]: featureGeneration.featureGenerationId } : {}),
+          // Non-secret: the executable, its arguments and whether this exact pair
+          // was approved. Values never travel this way; the worker runs the hook.
+          ...this.projectEnvForWorker(cwd),
+        };
+      },
       ...(options.sessionDir ? { sessionDir: options.sessionDir } : {}),
       stateDir,
       environmentId: this.environment.id,

@@ -11,6 +11,7 @@ dist-report/
 coverage/
 packages/desktop/out/
 packages/desktop/runtime/
+runtime-generation.json
 # scripts/release/build-linux.sh's staging directory: ~600 MB of artifacts per
 # architecture. The release lives on GitHub, never in git.
 /release/

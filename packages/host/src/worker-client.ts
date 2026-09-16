@@ -9,6 +9,7 @@ import { randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
 import type { Duplex } from "node:stream";
 import { oldSpaceBytes, oldSpaceSizeFlag } from "./heap-ceiling.js";
+import { RuntimeGenerationGuard, runtimeReferenceFromEnvironment } from "./runtime-generation.js";
 import {
   ENV,
   ErrorCodes,
@@ -246,6 +247,12 @@ export class WorkerClient {
   readonly ready: Promise<void>;
 
   constructor(private readonly options: WorkerClientOptions) {
+    // A long-lived old host may survive an installer replacing files beneath
+    // it. Re-verify its launcher-bound generation before every child spawn;
+    // drift refuses before any new project work can begin.
+    const runtime = runtimeReferenceFromEnvironment({ ...(options.baseEnv ?? process.env), ...options.env });
+    if (runtime) new RuntimeGenerationGuard(runtime).verify();
+
     const args: string[] = [];
     this.configuredOldSpaceBytes = options.oldSpaceMiB === undefined ? undefined : oldSpaceBytes(options.oldSpaceMiB);
     if (options.oldSpaceMiB !== undefined) args.push(oldSpaceSizeFlag(options.oldSpaceMiB));

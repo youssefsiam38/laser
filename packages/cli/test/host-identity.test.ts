@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ENV } from "@lasercode/protocol";
 import type { LaserPaths } from "../src/config.js";
 import { runDaemon } from "../src/daemon.js";
-import { startHost } from "../src/host-control.js";
+import { prepareInstalledRuntime, startHost } from "../src/host-control.js";
 import { inspectHost, probeHealth, writeHostFile } from "../src/hostfile.js";
 
 const launchId = "0123456789abcdef0123456789abcdef";
@@ -120,7 +120,8 @@ describe("host launch identity", () => {
     try {
       writeHostFile(paths.hostFile, original);
       process.env[ENV.hostLaunchId] = "fedcba9876543210fedcba9876543210";
-      await expect(runDaemon({ paths, log: () => undefined })).rejects.toThrow(/already running/);
+      const runtimeGeneration = prepareInstalledRuntime(paths).reference;
+      await expect(runDaemon({ paths, runtimeGeneration, log: () => undefined })).rejects.toThrow(/already running/);
       expect(JSON.parse(readFileSync(paths.hostFile, "utf8"))).toMatchObject({ launchId, state: "ready" });
       await expect(inspectHost(paths, 500)).resolves.toMatchObject({ state: "running", record: { launchId } });
     } finally {

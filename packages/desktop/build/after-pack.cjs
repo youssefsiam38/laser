@@ -27,57 +27,68 @@ const { dirname, join } = require("node:path");
 const GENERATED = join(__dirname, "linux", "generated");
 
 exports.default = async function afterPack(context) {
-  if (context.electronPlatformName !== "linux") return;
-
   // product.mjs is ESM and this hook is CJS, so the identity arrives through a
   // dynamic import rather than a second copy of the names.
   const { identity, METAINFO_FILE_NAME } = await import("./linux/product.mjs");
-  const launcherSource = join(GENERATED, "launcher.sh");
-  if (!existsSync(launcherSource)) {
-    throw new Error(
-      `${identity.name}: ${launcherSource} is missing, so the packaged app would start Electron ` +
-        `directly and make no decision about the sandbox.\nRun \`pnpm -F @lasercode/desktop linux:assets\`.`,
-    );
-  }
-
   const appOutDir = context.appOutDir;
-  const executable = context.packager.executableName;
-  const launcher = join(appOutDir, executable);
-  const real = join(appOutDir, `${executable}-bin`);
 
-  if (existsSync(real)) {
-    // A rebuild into the same directory: the rename already happened and
-    // `launcher` is our script, not Electron. Refresh the script and stop.
-    copyFileSync(launcherSource, launcher);
-    chmodSync(launcher, 0o755);
-  } else {
-    if (!existsSync(launcher)) {
+  if (context.electronPlatformName === "linux") {
+    const launcherSource = join(GENERATED, "launcher.sh");
+    if (!existsSync(launcherSource)) {
       throw new Error(
-        `${identity.name}: expected Electron's executable at ${launcher} and it is not there. ` +
-          `electron-builder names it after linux.executableName; if that changed, ` +
-          `build/after-pack.cjs and build/linux/apparmor.tpl have to change with it.`,
+        `${identity.name}: ${launcherSource} is missing, so the packaged app would start Electron ` +
+          `directly and make no decision about the sandbox.\nRun \`pnpm -F @lasercode/desktop linux:assets\`.`,
       );
     }
-    renameSync(launcher, real);
-    copyFileSync(launcherSource, launcher);
-    chmodSync(launcher, 0o755);
-    chmodSync(real, 0o755);
+
+    const executable = context.packager.executableName;
+    const launcher = join(appOutDir, executable);
+    const real = join(appOutDir, `${executable}-bin`);
+
+    if (existsSync(real)) {
+      // A rebuild into the same directory: the rename already happened and
+      // `launcher` is our script, not Electron. Refresh the script and stop.
+      copyFileSync(launcherSource, launcher);
+      chmodSync(launcher, 0o755);
+    } else {
+      if (!existsSync(launcher)) {
+        throw new Error(
+          `${identity.name}: expected Electron's executable at ${launcher} and it is not there. ` +
+            `electron-builder names it after linux.executableName; if that changed, ` +
+            `build/after-pack.cjs and build/linux/apparmor.tpl have to change with it.`,
+        );
+      }
+      renameSync(launcher, real);
+      copyFileSync(launcherSource, launcher);
+      chmodSync(launcher, 0o755);
+      chmodSync(real, 0o755);
+    }
+
+    const metainfoSource = join(GENERATED, METAINFO_FILE_NAME);
+    if (!existsSync(metainfoSource)) {
+      throw new Error(
+        `${identity.name}: ${metainfoSource} is missing, so GNOME Software and KDE Discover would show this ` +
+          `package with no name and no description.\nRun \`pnpm -F @lasercode/desktop linux:assets\`.`,
+      );
+    }
+    const metainfoTarget = join(appOutDir, "usr", "share", "metainfo", METAINFO_FILE_NAME);
+    mkdirSync(dirname(metainfoTarget), { recursive: true });
+    copyFileSync(metainfoSource, metainfoTarget);
+
+    assertFpmPathsResolve(context, identity, METAINFO_FILE_NAME);
+    console.log(`${identity.name}: ${executable} is now the launcher; Electron is ${executable}-bin`);
   }
 
-  const metainfoSource = join(GENERATED, METAINFO_FILE_NAME);
-  if (!existsSync(metainfoSource)) {
-    throw new Error(
-      `${identity.name}: ${metainfoSource} is missing, so GNOME Software and KDE Discover would show this ` +
-        `package with no name and no description.\nRun \`pnpm -F @lasercode/desktop linux:assets\`.`,
-    );
-  }
-  const metainfoTarget = join(appOutDir, "usr", "share", "metainfo", METAINFO_FILE_NAME);
-  mkdirSync(dirname(metainfoTarget), { recursive: true });
-  copyFileSync(metainfoSource, metainfoTarget);
-
-  assertFpmPathsResolve(context, identity, METAINFO_FILE_NAME);
-
-  console.log(`${identity.name}: ${executable} is now the launcher; Electron is ${executable}-bin`);
+  // The inventory is the last write to the packaged application. It therefore
+  // covers the Linux launcher rename as well as app.asar, unpacked executable
+  // source (including extension .ts files), native modules and bundled Node.
+  const macBundle = join(appOutDir, `${context.packager.appInfo.productFilename}.app`);
+  const installRoot = context.electronPlatformName === "darwin" ? macBundle : appOutDir;
+  const resourcesPath = context.electronPlatformName === "darwin"
+    ? join(macBundle, "Contents", "Resources")
+    : join(appOutDir, "resources");
+  const { generatePackagedManifest } = await import("../../../scripts/identity/runtime-inventory.mjs");
+  await generatePackagedManifest({ installRoot, resourcesPath, platform: context.electronPlatformName });
 };
 
 /**
