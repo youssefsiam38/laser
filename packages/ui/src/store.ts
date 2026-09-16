@@ -36,7 +36,7 @@ import { appendLive, BODY_EXCERPT_MAX_BYTES, excerptHead, excerptLiveTail, LIVE_
 import { retainEntries, stubOfElided, retainedRows, type EntryStub } from "./runtime/retained-entries.js";
 import { boundedBodyText, sameBodyComponent, utf8ByteLength, type BodyComponent } from "@lasercode/protocol";
 import { blockBytes, entryBytes, imageMeasure, UNKNOWN_IMAGE_DECODED_BYTES } from "./runtime/view-measure.js";
-import { initialMainDestination, mainPath, type MainDestination } from "./runtime/main-destination.js";
+import { initialMainDestination, mainPath, pendingSessionPath, type MainDestination } from "./runtime/main-destination.js";
 import { receiveHistoryUpdate, reduceHistory, type HistoryAction } from "./runtime/history-loader.js";
 
 /**
@@ -727,8 +727,11 @@ export function reduce(state: AppState, action: Action): AppState {
         return candidate;
       });
     case "views/provisional": {
-      // The navigation that asked for this paint is the only one it belongs to.
+      // The navigation that asked for this paint is the only one it belongs to,
+      // it must still be resolving, and it must still be resolving *this* row.
       if (state.destination.intent !== action.intent) return state;
+      if (state.destination.phase !== "resolving") return state;
+      if (pendingSessionPath(state.destination) !== action.path) return state;
       const existing = state.open[action.path];
       // Never over authority, never over a read in flight, never over rows a
       // person is already looking at.

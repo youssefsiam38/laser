@@ -798,7 +798,8 @@ describe("supersession is a proved deletion, not a hidden object", () => {
     await view.cache.prepare(descriptor());
     expect(peek(view.cache, "cold")).toBeUndefined();
 
-    view.cache.supersede("cold", REVISION_2);
+    // The reader retires the revision it actually used.
+    view.cache.supersede("cold", REVISION);
     // Out of the candidates synchronously, and out of the store when the
     // queued deletion has proved itself.
     expect(view.cache.counters().records).toBe(rows.length - 1);
@@ -813,7 +814,7 @@ describe("supersession is a proved deletion, not a hidden object", () => {
   it("accepts a later fresh release of the same conversation", async () => {
     const view = harness({ rows: [row()] });
     await view.cache.prepare(descriptor());
-    view.cache.supersede("session-a", REVISION_2);
+    view.cache.supersede("session-a", REVISION);
     await view.flush();
     expect(view.store.rows.size).toBe(0);
 
@@ -826,8 +827,9 @@ describe("supersession is a proved deletion, not a hidden object", () => {
   it("leaves a newer record alone when the superseded revision is not the one held", async () => {
     const view = harness({ rows: [row({}, payloadOf({ revision: REVISION_2, seq: 40 }))] });
     await view.cache.prepare(descriptor());
-    // RP-11 supersedes what it painted; a newer record has landed since.
-    view.cache.supersede("session-a", REVISION_2);
+    // RP-11 retires exactly what it painted; a newer record landed since, and
+    // nobody replaced that one.
+    view.cache.supersede("session-a", REVISION);
     await view.flush();
     expect(view.store.rows.size).toBe(1);
     expect(view.cache.peek({ sessionId: "session-a" })?.revision).toBe(REVISION_2);
@@ -837,7 +839,7 @@ describe("supersession is a proved deletion, not a hidden object", () => {
     const store = createTestStore([row()], { silentRemove: true });
     const view = harness({ store });
     await view.cache.prepare(descriptor());
-    view.cache.supersede("session-a", REVISION_2);
+    view.cache.supersede("session-a", REVISION);
     await view.flush();
     expect(view.cache.state()).toMatchObject({ kind: "refused", reason: "purge" });
   });

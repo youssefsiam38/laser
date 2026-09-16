@@ -78,12 +78,20 @@ export type ProvisionalRefusal =
   | "app-version"
   | "environment"
   | "identity"
+  | "foreign-session"
   | "revision"
   | "expired"
   | "empty";
 
 export interface ProvisionalPaintOptions {
   path: string;
+  /**
+   * The session this paint is for, from canonical state. A record that is not
+   * this exact conversation's never paints, however well formed it is and
+   * whatever handed it over: the cache's authenticated lookup is the first
+   * layer of that boundary, and this is the second.
+   */
+  expectedSessionId: string;
   /** The environment the open connection is in. A record from another never paints. */
   environmentKey: string;
   /** This build. A record written by another build of the app never paints. */
@@ -128,6 +136,7 @@ export function refusalFor(record: TailRecord, options: ProvisionalPaintOptions)
   if (record.appVersion !== options.appVersion) return "app-version";
   if (record.environmentKey !== options.environmentKey) return "environment";
   if (boundedId(record.sessionId) === undefined) return "identity";
+  if (record.sessionId !== options.expectedSessionId) return "foreign-session";
   if (typeof record.revision !== "string" || record.revision === "") return "revision";
   const captured = Date.parse(record.capturedAt);
   const age = Number.isFinite(captured) ? options.now - captured : Number.POSITIVE_INFINITY;

@@ -94,8 +94,8 @@ import { createCatalogLoader } from "./catalog-loader.js";
 import { DEVICE_KEYS, deviceStore } from "./device-storage.js";
 import { createEnvironmentLifecycle, useEnvironmentSubtreeKey, type EnvironmentLifecycle } from "./environment-lifecycle.js";
 import { tailCache } from "./tail-cache/index.js";
-import { provisionalPaintFrom, sessionIdForPath, summaryForPath } from "./provisional-paint.js";
-import { provisionalSource } from "./provisional-source.js";
+import { sessionIdForPath } from "./provisional-paint.js";
+import { createProvisionalAuthority, sessionAuthorityRefusal } from "./provisional-authority.js";
 import { createHistoryLoader, type HistoryReads } from "./history-loader.js";
 import { createHistoryWindows, MAIN_WINDOW_SCOPE, type HistoryWindowOwner, type HistoryWindows } from "./history-owners.js";
 import { sessionsList } from "../components/shell/session-groups.js";
@@ -861,49 +861,16 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   const sessionIdOf = useCallback((path: string): string | undefined => sessionIdForPath(readState(), path), []);
 
   /**
-   * Put this device's last view of a conversation on screen, in this turn
-   * (RP-11).
-   *
-   * Synchronous from the person's click to the committed store transaction:
-   * `peek` is a hot-set read, the record is validated and parsed here, and the
-   * reducer builds its rows with the same fold an authoritative page uses. What
-   * lands is marked provisional — no durable revision, no authority, every
-   * mutation still refused by the destination fence — until the host answers.
-   *
-   * A conversation this device has nothing valid for paints nothing: the
-   * ordinary loading state stays, truthfully, and the record is promoted for
-   * next time.
+   * The lifecycle of what this device paints before the host answers (RP-11):
+   * the paint itself, retiring exactly the record it painted, bounded warming,
+   * and the one fence every host-mutating control asks. It lives in its own
+   * module; the provider only wires it to the store and the cache.
    */
-  const paintProvisional = useCallback((path: string, intent: number): void => {
-    const state = readState();
-    const environmentKey = state.environment?.environmentKey;
-    if (environmentKey === undefined) return;
-    const existing = state.open[path];
-    // Authority, a read in flight, or rows already on screen: nothing to paint.
-    if (existing && (existing.hydrated || existing.historyPending !== undefined || existing.blocks.length > 0)) return;
-    const sessionId = sessionIdForPath(state, path);
-    if (sessionId === undefined) return;
-    const source = provisionalSource();
-    const record = source.peek({ sessionId });
-    if (!record) {
-      void source.prime([sessionId]).catch(() => {});
-      return;
-    }
-    const paint = provisionalPaintFrom(record, {
-      path,
-      environmentKey,
-      appVersion: PRODUCT_VERSION,
-      now: Date.now(),
-      previous: existing,
-      summary: summaryForPath(state, path),
-    });
-    if (!paint) return;
-    dispatch({
-      type: "views/provisional", path, intent,
-      entries: paint.entries, stubs: paint.stubs, leafId: paint.leafId, mark: paint.mark,
-      ...(paint.state ? { state: paint.state } : {}),
-    });
-  }, []);
+  const provisional = useMemo(() => createProvisionalAuthority({
+    readState,
+    dispatch,
+    appVersion: PRODUCT_VERSION,
+  }), []);
 
   /** Hydrate one cached view. Main-window selection belongs to the controller. */
   const openSession = useCallback(
@@ -968,10 +935,9 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           if (accepting() && expectPending) dispatch({ type: "pending", path, messages, expectPending });
         }).catch(() => {});
         await history;
-        // The host has spoken for this conversation: a cached tail that is not
-        // what it just said stops being a candidate to paint from (RP-10/11).
-        const settled = readState().open[path]?.validated;
-        if (settled?.sessionId) provisionalSource().supersede(settled.sessionId, settled.revision);
+        // The host has spoken for this conversation: if it replaced what this
+        // device painted, exactly that record is retired (RP-10/11).
+        provisional.settle(path);
         // Monotonic: the resume `session/load` after a dropped socket asks from
         // here, so an unstamped view would replay its whole buffer there too.
         client.track(path, readState().open[path]?.lastSeq ?? loadedSeq);
@@ -1031,7 +997,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     readState,
     dispatch,
     loadSession: (path) => openSession(path, { select: false, policy: "recent" }),
-    paintProvisional,
+    paintProvisional: provisional.paint,
     launchSession: (cwd, options) => launchSession(cwd, { ...options, select: false }),
     archived: (path) => archive.has(path),
     onError,
@@ -1046,7 +1012,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
 
   // --- agents -------------------------------------------------------------
 
-  const agentsActions = useMemo(() => createAgentsActions({ client, dispatch, guard }), [client, guard]);
+  const agentsActions = useMemo(() => createAgentsActions({ client, dispatch, guard, authority: provisional }), [client, guard, provisional]);
   /**
    * RP-5b §7: replacing what a trim released.
    *
@@ -1096,7 +1062,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   }, [reconcileNow]);
   reconcileAfterAction.current = afterAction;
 
-  const tasksActions = useMemo(() => createTasksActions({ client, dispatch, guard }), [client, guard]);
+  const tasksActions = useMemo(() => createTasksActions({ client, dispatch, guard, authority: provisional }), [client, guard, provisional]);
 
   // Definitions and the run registry come up with the connection and again
   // after every reconnect: a restarted host may hold different agents, and a
@@ -1109,22 +1075,24 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
 
   // Warm the conversations a person is most likely to open, bounded by the
   // cache's own hot set (RP-10): a promoted record is what lets the next
-  // re-entry paint in the same frame as the click (RP-11). Once per
-  // environment, from the catalog the host published — never per keystroke,
-  // and never a read this device pays for twice.
-  const primedFor = useRef<string | undefined>(undefined);
+  // re-entry paint in the same frame as the click (RP-11). From the catalog
+  // the host published, and again only when that shortlist actually changes —
+  // never per keystroke, and never a read this device pays for twice.
+  const warmedFor = useRef<string | undefined>(undefined);
   useEffect(() => {
     const environmentKey = state.environment?.environmentKey;
     if (state.connection !== "open" || !state.sessionsLoaded || environmentKey === undefined) return;
-    if (primedFor.current === environmentKey) return;
-    primedFor.current = environmentKey;
-    const ids = [...state.sessions]
+    const targets = [...state.sessions]
       .sort((left, right) => Date.parse(right.modifiedAt) - Date.parse(left.modifiedAt))
-      .slice(0, PRIME_RECENT_SESSIONS)
-      .map((summary) => summary.id)
-      .filter((id): id is string => typeof id === "string" && id !== "");
-    if (ids.length > 0) void provisionalSource().prime(ids).catch(() => {});
-  }, [state.connection, state.environment?.environmentKey, state.sessions, state.sessionsLoaded]);
+      .flatMap((summary) => (typeof summary.id === "string" && summary.id !== ""
+        ? [{ path: summary.path, sessionId: summary.id }] : []))
+      .slice(0, PRIME_RECENT_SESSIONS);
+    if (targets.length === 0) return;
+    const shortlist = `${environmentKey}\u0000${targets.map((target) => target.sessionId).join("\u0000")}`;
+    if (warmedFor.current === shortlist) return;
+    warmedFor.current = shortlist;
+    provisional.warm(targets);
+  }, [provisional, state.connection, state.environment?.environmentKey, state.sessions, state.sessionsLoaded]);
 
   // --- attention ("seen") -------------------------------------------------
 
@@ -1641,6 +1609,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         else await refreshProjects();
       },
       moveSession: async (path, cwd) => {
+        provisional.assertSession(path);
         const { path: moved } = await client.request("pi/session/move", { path, cwd });
         // The host has closed and moved it: the old path has no worker and no
         // file. Drop this side's view and stop following it before the lists
@@ -1803,9 +1772,13 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           return path;
         },
         renameSession: async (path, name) => {
+          // Renaming a row is a mutation on that conversation: it waits for the
+          // host's authority exactly as the conversation's own verbs do (RP-11).
+          provisional.assertSession(path);
           await client.request("pi/session/rename", { path, name });
         },
         deleteSession: async (path) => {
+          provisional.assertSession(path);
           // The delete confirmation left its answer about the child's worktree
           // here; absent, the host keeps it (M13-T42).
           const sessionId = sessionIdOf(path);
@@ -2291,9 +2264,15 @@ export function LaserThreadScope({ path, onPathChange, filter, createIn, unavail
           }
         },
         renameSession: async (target, name) => {
+          // The same conversation-addressed fence a scope can answer for
+          // itself: what is painted from this device is shared state (RP-11).
+          const refusal = sessionAuthorityRefusal(scopedStore.getSnapshot(), target);
+          if (refusal) throw new Error(refusal);
           await client.request("pi/session/rename", { path: target, name });
         },
         deleteSession: async (target) => {
+          const refusal = sessionAuthorityRefusal(scopedStore.getSnapshot(), target);
+          if (refusal) throw new Error(refusal);
           // The scope's own snapshot owns the path ↔ opaque id mapping here,
           // for the same reason the main window's does (RP-10).
           const snapshot = scopedStore.getSnapshot();

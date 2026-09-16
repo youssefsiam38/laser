@@ -27,6 +27,7 @@ import type {
   NamerState,
 } from "@lasercode/protocol";
 import type { HostClient } from "../client.js";
+import { OPEN_AUTHORITY, type MutationAuthority } from "../runtime/provisional-authority.js";
 import type { Action } from "../store.js";
 
 export interface AgentsActions {
@@ -82,11 +83,19 @@ export interface AgentsActionsDeps {
   dispatch(action: Action): void;
   /** Toast-and-swallow, shared with every other action. */
   guard<T>(work: () => Promise<T>): Promise<T | undefined>;
+  /**
+   * The conversation-addressed fence (RP-11). Stopping a run and taking a
+   * child's worktree away are mutations on the conversations they belong to,
+   * and these controls stay on screen while one of those conversations is
+   * painted from this device rather than confirmed by the host. A run in any
+   * other conversation is untouched.
+   */
+  authority?: MutationAuthority | undefined;
 }
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
-export function createAgentsActions({ client, dispatch, guard }: AgentsActionsDeps): AgentsActions {
+export function createAgentsActions({ client, dispatch, guard, authority = OPEN_AUTHORITY }: AgentsActionsDeps): AgentsActions {
   const settle = (work: () => Promise<void>): Promise<void> => guard(work).then(() => undefined);
   return {
     refresh: async () => {
@@ -136,6 +145,7 @@ export function createAgentsActions({ client, dispatch, guard }: AgentsActionsDe
       }
     },
     stopRun: async (runId, reason) => {
+      authority.assertRun(runId);
       const { run } = await client.request("agents/runs/stop", { runId, ...(reason !== undefined ? { reason } : {}) });
       dispatch({ type: "agents/run", run });
       return run;
@@ -144,7 +154,10 @@ export function createAgentsActions({ client, dispatch, guard }: AgentsActionsDe
       const { worktree } = await client.request("agents/worktree/status", { path });
       return worktree;
     },
-    removeWorktree: async (path, force) => client.request("agents/worktree/remove", { path, ...(force !== undefined ? { force } : {}) }),
+    removeWorktree: async (path, force) => {
+      authority.assertSession(path);
+      return client.request("agents/worktree/remove", { path, ...(force !== undefined ? { force } : {}) });
+    },
     setBuiltinModel: (name, model) =>
       settle(async () => {
         const { snapshot } = await client.request("agents/builtin/set-model", { name, model });

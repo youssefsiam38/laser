@@ -30,8 +30,9 @@ import { LaserProvider, useLaserStable, useLaserState, type LaserActions } from 
 import { installProvisionalSource, type ProvisionalSource } from "../../src/runtime/provisional-source.js";
 import { TAIL_RECORD_SCHEMA } from "../../src/runtime/tail-cache/bounds.js";
 import type { TailRecord } from "../../src/runtime/tail-cache/record.js";
-import type { AppState } from "../../src/store.js";
+import type { Action, AppState } from "../../src/store.js";
 import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../beam/fake-host.js";
+import { run as agentRun } from "../agents/fixtures.js";
 import { seedProject, seedRememberedSessions, TEST_ENVIRONMENT_KEY } from "./environment-fixture.js";
 
 const SEEN = `${PROJECT_CWD}/seen.jsonl`;
@@ -66,7 +67,7 @@ const cached = (over: Partial<TailRecord> = {}): TailRecord => {
   };
 };
 
-const authoritative = (path: string) => {
+const authoritative = (path: string, revision = "r1.env.current") => {
   if (path !== SEEN) {
     const other = [entry("s1", null, "user", "Another conversation entirely")];
     return historyWindow({ entries: other, leafId: "s1" }, { tail: 40 }, {
@@ -75,17 +76,18 @@ const authoritative = (path: string) => {
   }
   const rows = [entry("h1", null, "user", "The question the host still has"), entry("h2", "h1", "assistant", AUTHORITATIVE_TEXT)];
   return historyWindow({ entries: rows, leafId: "h2" }, { tail: 40 }, {
-    sessionId: SEEN_ID, epoch: "worker-new", seq: 3, revision: "r1.env.current", environmentKey: TEST_ENVIRONMENT_KEY,
+    sessionId: SEEN_ID, epoch: "worker-new", seq: 3, revision, environmentKey: TEST_ENVIRONMENT_KEY,
   });
 };
 
 let actions: LaserActions;
+let dispatch: (action: Action) => void;
 let state: AppState;
 let aui: ReturnType<typeof useAui>;
 let sendDisabled: boolean;
 function Probe() {
   state = useLaserState((s) => s);
-  actions = useLaserStable().actions;
+  ({ actions, dispatch } = useLaserStable());
   aui = useAui();
   sendDisabled = useAuiState((s) => (s.thread.extras as { sendDisabled?: boolean } | undefined)?.sendDisabled === true);
   return null;
@@ -98,11 +100,15 @@ let source: ProvisionalSource & { peek: ReturnType<typeof vi.fn>; prime: ReturnT
 let restore: ProvisionalSource;
 let record: TailRecord | undefined;
 
-const mutations = () => world.calls.filter((call) => [
+/** Every host method that changes something, by its exact wire name. */
+const MUTATIONS = [
   "session/prompt", "session/cancel", "pi/ui/response", "pi/session/fork", "pi/session/navigate",
-  "pi/session/rename", "pi/session/delete", "session/pending/steer", "session/pending/edit",
-  "session/pending/remove", "pi/model/set", "pi/thinking/set", "agents/stop", "tasks/stop", "pi/session/compact",
-].includes(call.method));
+  "pi/session/rename", "pi/session/delete", "pi/session/move", "session/pending/add", "session/pending/steer",
+  "session/pending/edit", "session/pending/remove", "session/pending/clear", "pi/session/steer",
+  "pi/session/follow_up", "pi/session/clear_queue", "pi/model/set", "pi/thinking/set", "pi/session/compact",
+  "session/goal/action", "agents/runs/stop", "agents/worktree/remove", "tasks/stop",
+];
+const mutations = () => world.calls.filter((call) => MUTATIONS.includes(call.method)).map((call) => call.method);
 
 beforeEach(async () => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -134,6 +140,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  // Nothing of this case may land during another's: settle first, then unmount.
+  await act(async () => { await settle(20); });
   await act(async () => root.unmount());
   container.remove();
   installProvisionalSource(restore);
@@ -170,7 +178,8 @@ describe("immediate paint from this device", () => {
     // Nothing on screen is a loading state, and nothing reads as a new session.
     expect(container.querySelector('[data-slot="conversation-skeleton"]')).toBeNull();
     expect(container.textContent).not.toContain("New session");
-    release();
+    // Let the held load finish inside the test, so nothing lands after it.
+    await act(async () => { release(); await settle(20); });
   });
 
   it("shows no empty frame and no skeleton from the click to the host's answer", async () => {
@@ -230,7 +239,52 @@ describe("immediate paint from this device", () => {
     expect(view.validated).toMatchObject({ revision: "r1.env.current", environmentKey: TEST_ENVIRONMENT_KEY, sessionId: SEEN_ID });
     expect(view.entries.map((value) => (value as { id: string }).id)).toEqual(["h1", "h2"]);
     expect(container.textContent).toContain(AUTHORITATIVE_TEXT);
-    expect(source.supersede).toHaveBeenCalledWith(SEEN_ID, "r1.env.current");
+    // Exactly the record that was painted is retired, by its own revision, once.
+    expect(source.supersede.mock.calls).toEqual([[SEEN_ID, "r1.env.cached"]]);
+  });
+
+  it("retires nothing when the host agrees with what was painted, and nothing for an open that painted nothing", async () => {
+    // The host answers at the very revision the cached record carries.
+    world.overrides["pi/session/entries"] = (({ path }: { path: string }) => authoritative(path, "r1.env.cached")) as never;
+    const agreed = openHeld();
+    await act(async () => { agreed.release(); await agreed.opened; await settle(30); });
+    expect(state.open[SEEN]?.validated?.revision).toBe("r1.env.cached");
+    expect(source.supersede).not.toHaveBeenCalled();
+
+    // A conversation this device painted nothing for retires nothing either.
+    record = undefined;
+    await act(async () => { await actions.openSession(START); await settle(20); });
+    await act(async () => { await actions.openSession(SEEN); await settle(30); });
+    expect(source.supersede).not.toHaveBeenCalled();
+  });
+
+  it("retires a record a late promotion warmed after the host had already answered", async () => {
+    // Cold at the click: the paint promotes instead of guessing, and that
+    // promotion lands after the authoritative window has been accepted.
+    record = undefined;
+    let promoted!: () => void;
+    source.prime.mockImplementation(async () => {
+      await new Promise<void>((resolve) => { promoted = () => { record = cached(); resolve(); }; });
+    });
+    const { release, opened } = openHeld();
+    await act(async () => { release(); await opened; await settle(30); });
+    expect(state.open[SEEN]?.validated?.revision).toBe("r1.env.current");
+    expect(source.supersede).not.toHaveBeenCalled();
+    await act(async () => { promoted(); await settle(10); });
+    // The promotion put a record the host has already contradicted into the hot
+    // set; it is retired by its own revision rather than left to paint later.
+    expect(source.supersede.mock.calls).toEqual([[SEEN_ID, "r1.env.cached"]]);
+  });
+
+  it("paints nothing when the source hands over a well-formed record for another conversation", async () => {
+    record = cached({ sessionId: "session-somewhere-else" });
+    source.peek.mockImplementation(() => record);
+    const { release, opened } = openHeld();
+    expect(state.open[SEEN]?.provisional).toBeUndefined();
+    await act(async () => {});
+    expect(container.textContent).not.toContain(CACHED_TEXT);
+    await act(async () => { release(); await opened; await settle(30); });
+    expect(source.supersede).not.toHaveBeenCalled();
   });
 
   it("keeps the readable snapshot, says so and offers Retry when the host cannot be reached", async () => {
@@ -269,12 +323,67 @@ describe("immediate paint from this device", () => {
     }
   });
 
-  it("paints nothing for a conversation this device has never seen, and promotes it for next time", () => {
+  it("paints nothing for a conversation this device has never seen, and promotes it for next time", async () => {
     record = undefined;
-    const { release } = openHeld();
+    const { release, opened } = openHeld();
     expect(state.open[SEEN]?.provisional).toBeUndefined();
     expect(source.prime).toHaveBeenCalledWith([SEEN_ID]);
-    release();
+    await act(async () => { release(); await opened; await settle(20); });
+  });
+
+  it("refuses every host mutation addressed to the painted conversation, and leaves other conversations alone", async () => {
+    const stopped: string[] = [];
+    world.overrides["agents/runs/stop"] = (({ runId }: { runId: string }) => {
+      stopped.push(runId);
+      return { run: agentRun({ runId, sessionPath: runId === "run-seen" ? SEEN : START, rootSessionPath: runId === "run-seen" ? SEEN : START, parent: null, status: "cancelled" }) };
+    }) as never;
+    world.overrides["tasks/stop"] = (({ path, id }: { path: string; id: string }) => ({
+      task: { id, sessionPath: path, command: "pnpm test", title: "pnpm test", status: "exited", origin: "background", startedAt: "2026-09-16T00:00:00.000Z", outputBytes: 0 },
+    })) as never;
+    world.overrides["agents/worktree/remove"] = (() => ({ removed: true })) as never;
+    world.overrides["pi/session/move"] = (() => ({ path: SEEN })) as never;
+    await act(async () => {
+      dispatch({ type: "agents/run", run: agentRun({ runId: "run-seen", sessionPath: SEEN, rootSessionPath: SEEN, parent: null }) });
+      dispatch({ type: "agents/run", run: agentRun({ runId: "run-other", sessionPath: START, rootSessionPath: START, parent: null }) });
+    });
+
+    const { release, opened } = openHeld();
+    await act(async () => { await settle(5); });
+    expect(state.open[SEEN]?.provisional).toBeDefined();
+    const before = world.calls.length;
+
+    await act(async () => {
+      await expect(actions.agents.stopRun("run-seen")).rejects.toThrow(/still changing/);
+      await expect(actions.tasks.stop(SEEN, "task-seen")).rejects.toThrow(/still changing/);
+      await expect(actions.agents.removeWorktree(SEEN)).rejects.toThrow(/still changing/);
+      await expect(actions.moveSession(SEEN, "/elsewhere")).rejects.toThrow(/still changing/);
+      // The sidebar's own verbs for the selected row, through the real runtime.
+      await Promise.resolve(aui.threadListItem.rename("Renamed while fenced")).catch(() => {});
+      await Promise.resolve(aui.threadListItem.delete()).catch(() => {});
+      await settle(20);
+    });
+    // Exactly nothing reached the host for any of them.
+    expect(world.calls.slice(before).filter((call) => MUTATIONS.includes(call.method))).toEqual([]);
+    expect(stopped).toEqual([]);
+
+    // A run and a command in a conversation nobody is painting are untouched.
+    await act(async () => {
+      await actions.agents.stopRun("run-other");
+      await actions.tasks.stop(START, "task-other");
+      await settle(10);
+    });
+    expect(stopped).toEqual(["run-other"]);
+    expect(world.calls.filter((call) => call.method === "tasks/stop").map((call) => (call.params as { path: string }).path)).toEqual([START]);
+
+    // Authority arrives, and the same verbs reach the host.
+    await act(async () => { release(); await opened; await settle(30); });
+    await act(async () => {
+      await actions.agents.stopRun("run-seen");
+      await actions.tasks.stop(SEEN, "task-seen");
+      await settle(10);
+    });
+    expect(stopped).toEqual(["run-other", "run-seen"]);
+    expect(world.calls.filter((call) => call.method === "tasks/stop")).toHaveLength(2);
   });
 
   it("never paints over a conversation that is already on screen", async () => {

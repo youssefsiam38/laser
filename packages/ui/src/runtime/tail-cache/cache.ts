@@ -50,8 +50,14 @@ export interface TailCache {
   peek(target: { sessionId: string }): TailRecord | undefined;
   /** RP-11: promote records into the hot set for a later `peek`. Bounded. */
   prime(sessionIds: readonly string[]): Promise<void>;
-  /** A record RP-11 has replaced stops being a candidate. */
-  supersede(sessionId: string, revision: string): void;
+  /**
+   * Retire the exact record a reader has replaced: a compare-and-delete.
+   *
+   * `staleRevision` is the revision that reader actually used — what RP-11
+   * painted — not the current one. A different record held for that session is
+   * a newer one nobody replaced, and it survives untouched.
+   */
+  supersede(sessionId: string, staleRevision: string): void;
   /** A conversation the person deleted loses its tail: awaited and proved. */
   forget(target: { sessionId: string }): Promise<boolean>;
   /** The person's own clear, and the environment-reset path. */
@@ -140,19 +146,22 @@ export function createTailCache(deps: TailCacheDeps): TailCache {
       await live.mutations.promote(sessionIds);
     },
 
-    supersede(sessionId, revision) {
+    supersede(sessionId, staleRevision) {
       const live = lifecycle.open();
       if (!live) return;
       const held = live.recency.held(sessionId);
-      if (!held || held.revision === revision) return;
+      // Nothing held, or something newer than what the caller replaced: there
+      // is nothing of theirs left to retire.
+      if (!held || held.revision !== staleRevision) return;
       // Superseded, so it stops being a candidate **now** — synchronously, off
       // the paint path — and its row is deleted and proved by the one owner
       // that deletes anything. The session is not tombstoned for good: a later,
       // fresh release of the same conversation is accepted as usual.
       // Queued first, while the record is still held: the coordinator fences
-      // the deletion by the revision it can see. The candidate set is then
-      // cleared synchronously, so nothing paints or warms from it again.
-      void live.mutations.supersede(sessionId, held.revision);
+      // the deletion by that same revision, so a write that lands in between
+      // cannot be deleted in its place. The candidate set is then cleared
+      // synchronously, so nothing paints or warms from it again.
+      void live.mutations.supersede(sessionId, staleRevision);
       live.recency.forget(sessionId);
     },
 

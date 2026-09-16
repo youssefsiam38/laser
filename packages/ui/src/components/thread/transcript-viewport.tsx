@@ -1,6 +1,6 @@
 import { ThreadPrimitive, useAuiState, useThreadViewport, unstable_useThreadMessageIds } from "@assistant-ui/react";
 import { createContext, memo, useContext, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { useLaserState } from "@/runtime";
+import { useLaserState, visibleSessionPath } from "@/runtime";
 import { activityDetailLevel } from "@/runtime/sessionPreferences";
 import { motionMs } from "@/motion";
 import { HeightIndex, windowRanges } from "./transcript-window.js";
@@ -90,14 +90,18 @@ export class TranscriptViewport {
   configure(path: string, leafId?: string | null, loaded?: string) {
     this.leafId = leafId;
     if (this.path === path) {
-      // This surface reloaded the session's recent tail: its old place in a
-      // transcript it no longer holds is gone, and latest is where it opens.
+      // This surface read the session's recent tail again. That is not a reason
+      // to take the person back to the latest turn: an authoritative page
+      // replacing what this device painted is the same conversation, and they
+      // are still reading where they were (RP-11). `restore()` keeps the anchor
+      // while its row is still here and falls back to the latest turn only when
+      // the window genuinely no longer holds it — which is the case this reset
+      // was written for. Somebody who *was* at the live edge stays there.
       if (loaded !== undefined && loaded !== this.loaded) {
         this.cancel();
-        this.place = { following: true };
-        this.places.delete(path);
         this.loaded = loaded;
-        this.arriving = true;
+        this.windowDirty = true;
+        if (this.place.following) this.arriving = true;
         this.schedule();
       }
       return;
@@ -568,12 +572,17 @@ export function useTranscriptViewport(): TranscriptViewport {
 }
 export function TranscriptViewportProvider({ children }: { children: ReactNode }) {
   const [controller] = useState(() => new TranscriptViewport());
-  const path = useLaserState(s => s.current ?? "");
+  // The conversation on screen, which while a navigation resolves is the row
+  // that was chosen rather than the one committed (RP-11). Keyed on the
+  // committed path this controller would change identity the moment the host
+  // confirmed the paint — and take the person back to the latest turn, in the
+  // middle of reading.
+  const path = useLaserState(s => visibleSessionPath(s) ?? "");
   const paths = useLaserState(s => Object.keys(s.open).join("\0"));
   const destination = useLaserState(s => s.destination);
-  const epoch = useLaserState(s => s.current ? s.open[s.current]?.updateEpoch : undefined);
-  const leafId = useLaserState(s => s.current ? s.open[s.current]?.leafId : undefined);
-  const loaded = useLaserState(s => s.current ? s.open[s.current]?.historyRevision : undefined);
+  const epoch = useLaserState(s => { const target = visibleSessionPath(s); return target ? s.open[target]?.updateEpoch : undefined; });
+  const leafId = useLaserState(s => { const target = visibleSessionPath(s); return target ? s.open[target]?.leafId : undefined; });
+  const loaded = useLaserState(s => { const target = visibleSessionPath(s); return target ? s.open[target]?.historyRevision : undefined; });
   const previous = useRef({ destination, epoch });
   if (previous.current.destination !== destination || previous.current.epoch !== epoch) {
     controller.cancel(previous.current.destination !== destination ? undefined : "structure");

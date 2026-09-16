@@ -78,7 +78,6 @@ function ComposerBody() {
   // Only a composer with nowhere to write is inert. A fenced one still takes
   // the person's words; it simply cannot send them yet (RP-11).
   const inert = threadDisabled || noDestination !== undefined;
-  const disabled = blocked !== undefined || preparingSession;
   const canSend = useAuiState((s) => s.composer.canSend);
   const transcript = useTranscriptViewport();
   const destinationBusy = destination?.phase === "resolving";

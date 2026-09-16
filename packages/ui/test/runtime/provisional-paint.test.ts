@@ -5,6 +5,7 @@ import { initialState, reduce, type AppState } from "../../src/store.js";
 import { TAIL_HARD_LIMITS, TAIL_RECORD_SCHEMA } from "../../src/runtime/tail-cache/bounds.js";
 import type { TailRecord } from "../../src/runtime/tail-cache/record.js";
 import { BODY_EXCERPT_MAX_BYTES } from "../../src/runtime/body-excerpt.js";
+import { NOT_CONFIRMED, pathsOfRun, sessionAuthorityRefusal } from "../../src/runtime/provisional-authority.js";
 import {
   PROVISIONAL_SESSION_ID_MAX,
   provisionalPaintFrom,
@@ -50,7 +51,13 @@ function record(over: Partial<TailRecord> = {}): TailRecord {
   };
 }
 
-const options = { path: PATH, environmentKey: ENVIRONMENT, appVersion: PRODUCT_VERSION, now: NOW };
+const options = { path: PATH, environmentKey: ENVIRONMENT, expectedSessionId: "session-1", appVersion: PRODUCT_VERSION, now: NOW };
+
+/** A navigation that has chosen this row and is still resolving it. */
+const resolving = (intent = 0): AppState["destination"] => ({
+  phase: "resolving", intent, target: { kind: "session", path: PATH, visibleTab: "code" },
+  rememberedCode: { kind: "no-project-landing" },
+});
 
 describe("choosing what a paint may come from", () => {
   it("takes the session's own id from the open view first, then the catalog, and refuses an unusable one", () => {
@@ -74,6 +81,9 @@ describe("choosing what a paint may come from", () => {
     expect(refusalFor(record({ appVersion: "0.0.1-other" }), options)).toBe("app-version");
     expect(refusalFor(record({ schema: "tail-cache/1" as TailRecord["schema"] }), options)).toBe("schema");
     expect(refusalFor(record({ sessionId: "" }), options)).toBe("identity");
+    // A well-formed record for another conversation, however it arrived here.
+    expect(refusalFor(record({ sessionId: "session-2" }), options)).toBe("foreign-session");
+    expect(provisionalPaintFrom(record({ sessionId: "session-2" }), options)).toBeUndefined();
     expect(refusalFor(record({ revision: "" }), options)).toBe("revision");
     expect(refusalFor(record({ entries: [] }), options)).toBe("empty");
     const old = new Date(NOW - (TAIL_HARD_LIMITS.ageHours * 60 * 60 * 1000 + 1)).toISOString();
@@ -96,7 +106,7 @@ describe("choosing what a paint may come from", () => {
 
 describe("the provisional transaction", () => {
   const paint = (over: Partial<AppState> = {}, intent = 0) => {
-    const base: AppState = { ...initialState, sessions: [summary({ path: PATH, id: "session-1", cwd: "/p" })], ...over };
+    const base: AppState = { ...initialState, destination: resolving(intent), sessions: [summary({ path: PATH, id: "session-1", cwd: "/p" })], ...over };
     const rows = provisionalPaintFrom(record(), { ...options, summary: summaryForPath(base, PATH), previous: base.open[PATH] })!;
     return reduce(base, {
       type: "views/provisional", path: PATH, intent,
@@ -115,14 +125,29 @@ describe("the provisional transaction", () => {
     expect(view.hydrated).toBe(false);
   });
 
-  it("is refused by a navigation that has already been superseded", () => {
+  it("is refused by a navigation that has already been superseded, and by one that is not resolving this row", () => {
     const moved: AppState = {
       ...initialState,
       sessions: [summary({ path: PATH, id: "session-1" })],
-      destination: { phase: "resolving", intent: 4, target: { kind: "session", path: PATH, visibleTab: "code" }, rememberedCode: { kind: "no-project-landing" } },
+      destination: resolving(4),
     };
     expect(paint(moved, 3).open[PATH]).toBeUndefined();
     expect(paint(moved, 4).open[PATH]?.provisional).toBeDefined();
+
+    // Committed elsewhere, or resolving another row: this paint belongs to no
+    // navigation on screen and is refused.
+    const elsewhere: AppState = {
+      ...initialState,
+      sessions: [summary({ path: PATH, id: "session-1" })],
+      destination: { phase: "ready-code", intent: 4, code: { kind: "project-session", project: "/p", path: PATH } },
+    };
+    expect(paint(elsewhere, 4).open[PATH]).toBeUndefined();
+    const otherRow: AppState = {
+      ...initialState,
+      sessions: [summary({ path: PATH, id: "session-1" })],
+      destination: { phase: "resolving", intent: 4, target: { kind: "session", path: "/p/other.jsonl", visibleTab: "code" }, rememberedCode: { kind: "no-project-landing" } },
+    };
+    expect(paint(otherRow, 4).open[PATH]).toBeUndefined();
   });
 
   it("never paints over authority, a read in flight, or rows already on screen", () => {
@@ -209,5 +234,54 @@ describe("turning a cached record into rows", () => {
       previous: reduce(initialState, { type: "opened", state: sessionState({ path: PATH, id: "session-1" }) }).open[PATH]!,
     })!;
     expect(warm.state).toBeUndefined();
+  });
+});
+
+describe("the fence every host-mutating control asks", () => {
+  const painted = (): AppState => {
+    const base: AppState = {
+      ...initialState,
+      destination: resolving(2),
+      sessions: [summary({ path: PATH, id: "session-1", cwd: "/p" })],
+    };
+    const rows = provisionalPaintFrom(record(), { ...options, summary: summaryForPath(base, PATH) })!;
+    return reduce(base, {
+      type: "views/provisional", path: PATH, intent: 2,
+      entries: rows.entries, stubs: rows.stubs, leafId: rows.leafId, mark: rows.mark,
+      ...(rows.state ? { state: rows.state } : {}),
+    });
+  };
+
+  it("refuses a conversation painted from this device, one still resolving and one that failed", () => {
+    expect(sessionAuthorityRefusal(painted(), PATH)).toBe(NOT_CONFIRMED);
+
+    const resolvingOnly: AppState = { ...initialState, destination: resolving(1) };
+    expect(sessionAuthorityRefusal(resolvingOnly, PATH)).toBe(NOT_CONFIRMED);
+
+    const failed: AppState = {
+      ...initialState,
+      destination: { phase: "unavailable", intent: 1, target: { kind: "session", path: PATH, visibleTab: "code" }, rememberedCode: { kind: "no-project-landing" }, error: "It did not open." },
+    };
+    expect(sessionAuthorityRefusal(failed, PATH)).toBe(NOT_CONFIRMED);
+  });
+
+  it("refuses nothing for a conversation nobody is painting, or for no conversation at all", () => {
+    const state = painted();
+    expect(sessionAuthorityRefusal(state, "/p/another.jsonl")).toBeUndefined();
+    expect(sessionAuthorityRefusal(state, undefined)).toBeUndefined();
+    const committed: AppState = {
+      ...initialState,
+      destination: { phase: "ready-code", intent: 2, code: { kind: "project-session", project: "/p", path: PATH } },
+    };
+    expect(sessionAuthorityRefusal(committed, PATH)).toBeUndefined();
+  });
+
+  it("reads an agent run's conversations from the registry: its own, its parent's and its root", () => {
+    expect(pathsOfRun(undefined)).toEqual([]);
+    const child = {
+      runId: "r1", sessionPath: "/p/child.jsonl", rootSessionPath: "/p/root.jsonl",
+      parent: { sessionPath: "/p/parent.jsonl", sessionId: "parent" },
+    } as Parameters<typeof pathsOfRun>[0];
+    expect(pathsOfRun(child)).toEqual(["/p/child.jsonl", "/p/parent.jsonl", "/p/root.jsonl"]);
   });
 });

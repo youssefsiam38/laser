@@ -9,6 +9,7 @@
  */
 import type { BackgroundTask, TaskOutputChunk } from "@lasercode/protocol";
 import type { HostClient } from "../client.js";
+import { OPEN_AUTHORITY, type MutationAuthority } from "../runtime/provisional-authority.js";
 import type { Action } from "../store.js";
 
 export interface TasksActions {
@@ -28,9 +29,16 @@ export interface TasksActionsDeps {
   dispatch(action: Action): void;
   /** Toast-and-swallow, shared with every other action. */
   guard<T>(work: () => Promise<T>): Promise<T | undefined>;
+  /**
+   * The conversation-addressed fence (RP-11): stopping a command is a mutation
+   * on the conversation that owns it, and the fleet stays on screen while that
+   * conversation is painted from this device rather than confirmed by the host.
+   * A command in any other conversation is untouched.
+   */
+  authority?: MutationAuthority | undefined;
 }
 
-export function createTasksActions({ client, dispatch, guard }: TasksActionsDeps): TasksActions {
+export function createTasksActions({ client, dispatch, guard, authority = OPEN_AUTHORITY }: TasksActionsDeps): TasksActions {
   return {
     list: (path) =>
       guard(async () => {
@@ -38,6 +46,7 @@ export function createTasksActions({ client, dispatch, guard }: TasksActionsDeps
         dispatch({ type: "tasks/loaded", tasks, ...(path !== undefined ? { path } : {}) });
       }).then(() => undefined),
     stop: async (path, id) => {
+      authority.assertSession(path);
       const { task } = await client.request("tasks/stop", { path, id });
       dispatch({ type: "tasks/update", task });
       return task;

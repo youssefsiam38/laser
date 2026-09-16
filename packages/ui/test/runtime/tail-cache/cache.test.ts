@@ -503,11 +503,22 @@ describe("peek is synchronous, allocation-free and fenced", () => {
     expect(peek(view)).toBeDefined();
   });
 
-  it("stops offering a record RP-11 has replaced", async () => {
+  it("stops offering the exact record RP-11 has replaced, and keeps a newer one", async () => {
     const view = harness();
     await prepared(view);
     view.cache.release(tail());
     await view.flush();
+    // A revision this device never held is nobody's replacement.
+    view.cache.supersede("session-a", REVISION_2);
+    expect(peek(view)).toMatchObject({ revision: REVISION });
+
+    // A newer record lands while a reader is reconciling the old one: the
+    // reader's supersession must not take the newer record with it (RP-11).
+    view.cache.release(tail({ revision: REVISION_2, seq: 20 }));
+    await view.flush();
+    view.cache.supersede("session-a", REVISION);
+    expect(peek(view)).toMatchObject({ revision: REVISION_2 });
+
     view.cache.supersede("session-a", REVISION_2);
     expect(peek(view)).toBeUndefined();
   });
