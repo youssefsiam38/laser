@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-16T20:43:56+03:00 · m19-recovery-plan `01a0aa8f` · HEAD: d43b0a57
-**Current focus:** M19-T1 review fixes are complete and awaiting parent verification; M18-T15 containment baseline work remains in progress.
+**Last updated:** 2026-09-16T21:03:02+03:00 · m19-recovery-plan `01a0aa8f` · HEAD: 208487bd
+**Current focus:** M19-T1 copy follow-up is complete and awaiting parent verification; M18-T15 containment baseline work remains in progress.
 
 | Milestone | State |
 | --- | --- |

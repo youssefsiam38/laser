@@ -356,14 +356,14 @@ export class WorkerClient {
     this.child.stdout?.on("data", () => {}); // drain; Pi/extension logs are not ours
     this.child.on("exit", (code, signal) => {
       this.exited = true;
-      this.settle(new Error(`worker for ${options.cwd} exited (${code ?? signal})`), rejectReady, code, signal);
+      this.settle(rejectReady, code, signal);
     });
     this.child.on("error", (error) => {
       // No `exit` follows a failed spawn, so this is the only chance to unblock
       // `ready`, fail the pending calls, and tell the pool the worker is gone.
       this.exited = true;
       this.startError ??= error;
-      this.settle(error, rejectReady, null, null, "spawn_error");
+      this.settle(rejectReady, null, null, "spawn_error");
     });
   }
 
@@ -381,7 +381,6 @@ export class WorkerClient {
 
   /** Fail everything in flight and report the exit, exactly once. */
   private settle(
-    error: Error,
     rejectReady: (e: Error) => void,
     code: number | null,
     signal: NodeJS.Signals | null,
@@ -390,11 +389,14 @@ export class WorkerClient {
   ): void {
     if (this.reported) return;
     this.reported = true;
+    // Child diagnostics stay on the host; pending RPCs receive categorical
+    // person copy, never a project path, pid, signal, exit code or frame size.
+    const publicError = new WorkerRpcError({ code: ErrorCodes.DriverUnavailable, message: failure.message });
     // Nothing is owed on a link that is gone, and a late callback cannot make
     // it negative or resurrect a count.
     this.inFlightWrites = 0;
-    rejectReady(error);
-    for (const entry of this.pending.values()) entry.reject(error);
+    rejectReady(publicError);
+    for (const entry of this.pending.values()) entry.reject(publicError);
     this.pending.clear();
     this.options.onExit(code, signal, { kind, code, signal, failure });
   }
@@ -413,10 +415,9 @@ export class WorkerClient {
   private faultLaunch(kind: WorkerExitKind, failure = this.failureFor(kind)): void {
     if (this.reported) return;
     this.exited = true;
-    const error = new Error(failure.message);
     try { this.pipe.destroy(); } catch { /* already closed */ }
     try { this.child.kill("SIGKILL"); } catch { /* already gone */ }
-    this.settle(error, this.rejectReady ?? ((): void => {}), null, null, kind, failure);
+    this.settle(this.rejectReady ?? ((): void => {}), null, null, kind, failure);
   }
 
   /**
@@ -442,7 +443,7 @@ export class WorkerClient {
     } catch {
       // Already gone; the settle below is what matters.
     }
-    this.settle(error, this.rejectReady ?? ((): void => {}), null, null, "transport_fault");
+    this.settle(this.rejectReady ?? ((): void => {}), null, null, "transport_fault");
   }
 
   /**

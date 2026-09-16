@@ -6,7 +6,7 @@
  * `entry_appended` only for extension custom entries, so it is not the source
  * of transcript state). Past sessions hydrate from `pi/session/entries`.
  */
-import { AGENT_EVENT_MESSAGE_TYPE, SESSION_FALLBACK_ENTRY_TYPE, SESSION_RUN_ENTRY_TYPE, TASK_EVENT_MESSAGE_TYPE, failureWording, isTerminalRunStatus } from "@lasercode/protocol";
+import { AGENT_EVENT_MESSAGE_TYPE, SESSION_FALLBACK_ENTRY_TYPE, SESSION_RUN_ENTRY_TYPE, TASK_EVENT_MESSAGE_TYPE, failureWording, isTerminalRunStatus, runtimeRecoveryCopy } from "@lasercode/protocol";
 import { imagesOfContent, splitAttachedFiles, type AttachedFile } from "./runtime/attachments.js";
 import type {
   ImageContent,
@@ -1094,7 +1094,12 @@ function applyNotification(state: AppState, method: HostNotificationMethod, para
     case "pi/worker/status": {
       const p = params as HostNotifications["pi/worker/status"];
       const next = { ...state, workers: { ...state.workers, [p.cwd]: structuredClone(p) } };
-      return p.status === "crashed" ? pushToast(next, "error", `Worker for ${p.cwd} crashed: ${p.message ?? ""}`) : next;
+      if (p.status !== "crashed") return next;
+      const copy = runtimeRecoveryCopy({ ...p, mode: p.mode ?? "normal" });
+      const text = p.retryAt !== undefined && p.failure?.category === "process_exit"
+        ? "The project's agent stopped. Trying to reload the conversation…"
+        : copy.title;
+      return pushToast(next, "error", text);
     }
     case "agents/updated":
       return reduce(state, { type: "agents/updated", snapshot: params as HostNotifications["agents/updated"] });

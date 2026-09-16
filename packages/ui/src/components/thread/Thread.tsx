@@ -128,7 +128,7 @@ function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
                   <ErrorState className="mt-6"
                     title={open.provisional ? "Couldn’t reach the host. This is your last view of this conversation."
                       : open.hasTranscript ? "Couldn’t refresh this conversation." : open.path ? "This session didn’t load." : "Couldn’t open this view."}
-                    detail={open.reason}
+                    detail={worker?.status === "crashed" ? undefined : open.reason}
                     onRetry={() => {
                       if (destination.phase === "unavailable") void actions.retryDestination();
                       else if (open.path) void actions.openSession(open.path).catch(() => {});

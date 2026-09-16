@@ -355,11 +355,17 @@ describe("WorkerPool", () => {
     pool.bindSession("/sessions/a.jsonl", project);
     const firstPid = client.pid;
 
-    client.request("pi/test/crash", {}).catch(() => {});
+    const rejected = client.request("pi/test/crash", {}).catch((error: unknown) => error as Error);
     await waitFor(() => statusesOf(project).includes("crashed"));
     expect(pool.openSessions(project)).toEqual([]); // desired reopen paths are not live sessions
+    const publicError = await rejected;
+    expect(publicError.message).toBe("This project's runtime stopped before the work finished.");
+    expect(publicError.message).not.toContain(project);
+    expect(publicError.message).not.toMatch(/SIG|exit code|pid/i);
     const crashed = statuses.findLast((s) => s.status === "crashed")!;
-    expect(crashed.message).toMatch(/Restarting in/);
+    expect(crashed.message).toBe("The project's agent stopped. Trying to reload the conversation…");
+    expect(crashed.message).not.toContain(project);
+    expect(crashed.message).not.toMatch(/SIG|exit code|pid/i);
     expect(crashed.restarts).toBe(1);
     expect(timers.filter((timer) => timer.ms < 60_000)).toHaveLength(1);
     expect(timers.find((timer) => timer.ms < 60_000)?.ms).toBe(10);
@@ -712,7 +718,7 @@ describe("WorkerPool", () => {
   it("reports a worker that could not be spawned as crashed, with a retry", async () => {
     const losses: Array<{ exit: { kind: string }; message: string }> = [];
     pool = makePool({ nodeBinary: join(dir, "no-such-node"), onWorkerLoss: (loss) => losses.push(loss) });
-    await expect(pool.get(project)).rejects.toThrow(/ENOENT/);
+    await expect(pool.get(project)).rejects.toThrow("This project's runtime could not start. Check the app installation, then try again.");
     const info = pool.workerInfo(project)!;
     expect(info.status).toBe("crashed");
     expect(info.canRestart).toBe(true);

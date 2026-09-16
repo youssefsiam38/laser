@@ -1099,8 +1099,7 @@ export class WorkerPool {
       this.recovery.markHealthy(entry.cwd);
     }
     entry.readyAt = undefined;
-    const reason = signal ? `killed by ${signal}` : `exited with code ${code ?? "unknown"}`;
-    let lossMessage = "The project's worker stopped before this run ended.";
+    let lossMessage = "The project's agent stopped before this run ended.";
     if (client.spawnError) lossMessage = "The project's worker could not start before this run ended.";
     else if (exit.kind === "heap_oom") lossMessage = "The project's agent ran out of memory before this run ended.";
     this.options.onWorkerLoss?.({ cwd: entry.cwd, generation: client.generation, exit, message: lossMessage });
@@ -1127,8 +1126,8 @@ export class WorkerPool {
       entry,
       "crashed",
       exit.kind === "heap_oom"
-        ? `This project's agent ran out of memory. Restarting it from saved conversation state in ${Math.round(delay / 1000)}s (attempt ${attempt}).`
-        : `Worker ${reason}. Restarting in ${Math.round(delay / 1000)}s (attempt ${attempt}).`,
+        ? "This project's agent ran out of memory. Trying to reload the conversation…"
+        : "The project's agent stopped. Trying to reload the conversation…",
     );
     entry.retryTimer = this.setTimer(() => {
       entry.retryTimer = undefined;

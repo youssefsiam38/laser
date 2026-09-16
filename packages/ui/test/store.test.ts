@@ -203,14 +203,33 @@ describe("applyUpdate", () => {
     s = reduce(s, { type: "notification", method: "pi/ui/event", params: { path: "/s.jsonl", method: "setStatus", key: "k", text: "busy" } });
     s = reduce(s, { type: "notification", method: "pi/ui/event", params: { path: "/s.jsonl", method: "setWidget", key: "w", lines: ["l1"], placement: "belowEditor" } });
     s = reduce(s, { type: "notification", method: "pi/ui/event", params: { path: "/s.jsonl", method: "notify", message: "hey", level: "warning" } });
-    s = reduce(s, { type: "notification", method: "pi/worker/status", params: { cwd: "/p", status: "crashed", message: "exit 1" } });
+    s = reduce(s, {
+      type: "notification",
+      method: "pi/worker/status",
+      params: {
+        cwd: "/private/project",
+        status: "crashed",
+        message: "worker for /private/project exited (SIGKILL)",
+        mode: "normal",
+        retryAt: 2_000,
+        repair: { state: "available", automaticAttempts: 1 },
+        failure: {
+          owner: { kind: "worker", cwd: "/private/project", launchId: "0123456789abcdef0123456789abcdef" },
+          stage: "runtime",
+          category: "process_exit",
+          message: "This project's runtime stopped before the work finished.",
+        },
+      },
+    });
     const v = s.open["/s.jsonl"]!;
     expect(v.dialogs).toHaveLength(1);
     expect(reduce(s, { type: "dialogAnswered", id: "u1" }).open["/s.jsonl"]!.dialogs).toHaveLength(0);
     expect(v.statuses).toEqual({ k: "busy" });
     expect(v.widgets["w"]).toEqual({ lines: ["l1"], placement: "belowEditor" });
     expect(s.toasts.map((t) => t.level)).toEqual(["warning", "error"]);
-    expect(s.workers["/p"]).toMatchObject({ status: "crashed" });
+    expect(s.toasts.at(-1)?.text).toBe("The project's agent stopped. Trying to reload the conversation…");
+    expect(s.toasts.at(-1)?.text).not.toMatch(/\/private\/project|SIG|exit code|pid/i);
+    expect(s.workers["/private/project"]).toMatchObject({ status: "crashed" });
   });
 });
 
