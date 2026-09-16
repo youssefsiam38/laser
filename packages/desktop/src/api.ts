@@ -56,6 +56,8 @@ export interface DesktopHostInfo {
   };
   /** Where the host writes its log, for an error state that needs a next step. */
   logFile: string;
+  /** Present only while pre-host update data preparation owns startup. */
+  migration?: { updateId: string; snapshot: "available" | "none" | "restored"; canRestore: boolean };
 }
 
 export type DeepLink =
@@ -102,6 +104,11 @@ export type UpdateState =
   | "error"
   | "downloaded"
   | "parking"
+  | "preparing-data"
+  | "migration-failed"
+  | "restoring"
+  | "restored"
+  | "no-snapshot"
   | "ready"
   | "restarting"
   | "succeeded"
@@ -119,13 +126,15 @@ interface UpdateStatusBase {
 export type UpdateStatus =
   | (UpdateStatusBase & { state: "unsupported" | "idle" | "checking" | "available" | "downloading" | "error"; updateId?: never })
   | (UpdateStatusBase & {
-      state: "downloaded" | "parking" | "ready" | "restarting" | "succeeded" | "failed";
+      state: "downloaded" | "parking" | "preparing-data" | "migration-failed" | "restoring" | "restored" | "no-snapshot" | "ready" | "restarting" | "succeeded" | "failed";
       /** Durable correlation across download, gate, restart and result. */
       updateId: string;
       title: string;
       message: string;
-      action: "prepare" | "cancel" | "activate" | "retry" | "none";
+      action: "prepare" | "cancel" | "activate" | "retry" | "restore" | "none";
       actionLabel?: string;
+      secondaryAction?: "prepare" | "cancel" | "activate" | "retry" | "restore" | "none";
+      secondaryActionLabel?: string;
       blockers?: { conversations: number; agents: number; questions: number; approvals: number; commands: number; mutations: number; workers: number };
     });
 
@@ -229,6 +238,8 @@ export interface LaserDesktop {
     prepare(): Promise<UpdateStatus>;
     /** Reopen admission for the same update id. */
     cancel(): Promise<UpdateStatus>;
+    /** Restore the exact verified snapshot without selecting the update. */
+    restore(updateId?: string): Promise<UpdateStatus>;
     /** Activate only after the exact transaction is parked and verified. */
     install(): void;
     onStatus(listener: (status: UpdateStatus) => void): () => void;

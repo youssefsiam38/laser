@@ -16,6 +16,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ENV, PRODUCT_NAME } from "@lasercode/protocol";
+import { MigrationEngine, type MigrationRegistry } from "@lasercode/host";
 import { runDaemon } from "../src/daemon.js";
 import { prepareInstalledRuntime } from "../src/host-control.js";
 import type { LaserPaths } from "../src/config.js";
@@ -49,6 +50,43 @@ describe("the daemon and an unusable policy", () => {
       // Construction failed before this launch could publish even `starting`.
       expect(lines.some((line) => line.includes("host ready"))).toBe(false);
       expect(existsSync(paths(base).hostFile)).toBe(false);
+    } finally {
+      if (previousLaunchId === undefined) delete process.env[ENV.hostLaunchId];
+      else process.env[ENV.hostLaunchId] = previousLaunchId;
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("never binds while a durable migration marker still owns startup", async () => {
+    const base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-daemon-migration-`));
+    const previousLaunchId = process.env[ENV.hostLaunchId];
+    try {
+      process.env[ENV.hostLaunchId] = "00112233445566778899aabbccddeeff";
+      const resolved = paths(base);
+      mkdirSync(resolved.stateDir, { recursive: true });
+      writeFileSync(join(resolved.stateDir, "fixture.txt"), "before\n");
+      const runtimeGeneration = prepareInstalledRuntime(resolved).reference;
+      const unit = { root: "stateDir" as const, path: "fixture.txt", type: "file" as const };
+      const registry: MigrationRegistry = {
+        targetSchema: 2,
+        steps: [{ id: "synthetic-v2", fromSchema: 1, toSchema: 2, units: [unit], run(context) {
+          context.writeFile(unit, "after\n");
+        } }],
+      };
+      const engine = new MigrationEngine({
+        roots: { stateDir: resolved.stateDir, agentDir: resolved.agentDir, sessionDir: resolved.sessionDir }, registry,
+      });
+      engine.migrate({ updateId: "d".repeat(64), targetGenerationId: runtimeGeneration.generationId });
+
+      await expect(runDaemon({ paths: resolved, runtimeGeneration, log: () => {} })).rejects.toThrow(
+        /data preparation is incomplete/,
+      );
+      expect(existsSync(resolved.hostFile)).toBe(false);
+
+      engine.markLaunchAttempt("d".repeat(64), process.env[ENV.hostLaunchId]!);
+      writeFileSync(join(resolved.stateDir, "policy.json"), JSON.stringify({ remote: { scopes: ["everything"] } }));
+      await expect(runDaemon({ paths: resolved, runtimeGeneration, log: () => {} })).rejects.toThrow(/cannot be used/);
+      expect(existsSync(resolved.hostFile)).toBe(false);
     } finally {
       if (previousLaunchId === undefined) delete process.env[ENV.hostLaunchId];
       else process.env[ENV.hostLaunchId] = previousLaunchId;

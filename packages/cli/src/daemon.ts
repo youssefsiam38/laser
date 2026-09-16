@@ -19,6 +19,7 @@ import {
   HostServer,
   RuntimeGenerationGuard,
   migrateFormerIdentities,
+  readMigrationState,
   readRuntimeGenerationPointer,
   runtimeReferenceFromEnvironment,
   type HostRelayOptions,
@@ -28,6 +29,7 @@ import { hostUrl, type LaserPaths } from "./config.js";
 import { clearHostFile, inspectHost, portInUse, processIdentity, writeHostFile } from "./hostfile.js";
 import { deviceListOf, loadIdentity, loadStaticKey, readRelayConfig } from "./relay-config.js";
 import { CLI_VERSION } from "./version.js";
+import { completeMigrationLaunch } from "./migration-activation.js";
 
 export interface DaemonOptions {
   paths: LaserPaths;
@@ -91,6 +93,12 @@ export async function runDaemon(options: DaemonOptions): Promise<void> {
   const launchId = launch.data;
   const runtimeGeneration = options.runtimeGeneration ?? runtimeReferenceFromEnvironment(process.env);
   if (!runtimeGeneration) throw new Error("the host launcher did not bind a runtime generation");
+  const migration = readMigrationState(paths.stateDir);
+  if (migration && !(migration.phase === "migrated"
+    && migration.targetGenerationId === runtimeGeneration.generationId
+    && migration.launchAttemptId === launchId)) {
+    throw new Error("data preparation is incomplete; restart through the launcher before starting the host");
+  }
   const selected = readRuntimeGenerationPointer(paths.stateDir)?.active;
   const persisted = selected?.generationId === runtimeGeneration.generationId
     && selected.installRoot === runtimeGeneration.installRoot
@@ -174,6 +182,18 @@ export async function runDaemon(options: DaemonOptions): Promise<void> {
     port,
     url,
   });
+  try {
+    completeMigrationLaunch(paths, {
+      launchId,
+      generationId: runtimeGeneration.generationId,
+      version: CLI_VERSION,
+    });
+  } catch (error) {
+    log(`migration verified-launch commit failed: ${error instanceof Error ? error.message : String(error)}`);
+    await server.close({ initiator: "harness" });
+    clearHostFile(paths.hostFile, launchId);
+    throw error;
+  }
   log(`${PRODUCT_NAME} host ready at ${url} (pid ${process.pid})`);
   process.stdout.write(`${url}\n`);
 

@@ -163,6 +163,7 @@ export {
   type RelayClientStats,
 } from "./relay-client.js";
 export * from "./tasks/index.js";
+export * from "./migrations/index.js";
 export {
   ProcessOwnershipRegistry,
   ResourceHistory,

@@ -22,25 +22,28 @@
  * rewrite, and the log line below records the exact command so a failed start
  * on someone else's machine is one line to read rather than a guess.
  */
-import { ENV, MIB_BYTES, PRODUCT_NAME, configuredOldSpaceBytes, nodeLaunchEnvironment } from "@lasercode/protocol";
+import { ENV, MIB_BYTES, PRODUCT_NAME, configuredOldSpaceBytes, nodeLaunchEnvironment, runtimeUpdatePresentation } from "@lasercode/protocol";
 import { type ChildProcess, spawn } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   CLI_VERSION,
+  MigrationActivationError,
   cliEntry,
   hostDaemonArgv,
   inspectHost,
   logTail,
   newLaunchId,
+  markInstalledMigrationLaunch,
   piEnv,
   portInUse,
-  prepareInstalledRuntime,
   probeHealth,
+  readMigrationState,
   refreshHostEnvironment,
   stopHost,
   type InstalledRuntimeLaunch,
   type LaserPaths,
+  type MigrationLaunchEvent,
 } from "@lasercode/cli";
 import { hostNeedsRefresh } from "./host-compatibility.js";
 import { installedHostVersion } from "./native-update.js";
@@ -48,6 +51,7 @@ import { checkBundledAgent, type AgentCheck } from "./agent.js";
 import type { DesktopHostInfo } from "./api.js";
 import type { DesktopLog } from "./log.js";
 import { resolveNodeRuntime, RuntimeError, type NodeRuntime } from "./runtime.js";
+import { prepareInstalledRuntimeOffMain } from "./migration-preflight.js";
 
 const START_TIMEOUT_MS = 30_000;
 const STOP_GRACE_MS = 8000;
@@ -84,7 +88,8 @@ export interface HostProcessOptions {
   onChange: (info: DesktopHostInfo) => void;
   confirmHostRefresh?: (runningVersion: string) => Promise<boolean>;
   /** Exact target handshake, after launch id, generation and compiled version agree. */
-  onVerifiedLaunch?: (launch: { launchId: string; generationId: string; version: string }) => void;
+  onVerifiedLaunch?: (launch: { launchId: string; generationId: string; version: string; updateId?: string }) => void;
+  onMigrationEvent?: (event: MigrationLaunchEvent) => void;
 }
 
 /** A partial update to the published info. `message: null` clears the message. */
@@ -95,6 +100,7 @@ interface HostInfoPatch {
   port?: number;
   startedByUs?: boolean;
   runtime?: DesktopHostInfo["runtime"];
+  migration?: DesktopHostInfo["migration"] | null;
   message?: string | null;
 }
 
@@ -141,12 +147,22 @@ export class HostProcess {
     if (this.child && this.child.exitCode === null) return this.info;
 
     try {
-      this.installedRuntime = prepareInstalledRuntime(paths);
+      this.installedRuntime = await prepareInstalledRuntimeOffMain(paths, cliEntry(), (event) => {
+        this.options.onMigrationEvent?.(event);
+        this.publish({ state: "starting", message: event.message, migration: { updateId: event.updateId, snapshot: "none", canRestore: false } });
+      });
+      const migration = readMigrationState(paths.stateDir);
+      if (migration?.snapshotDigest) {
+        this.publish({ state: "starting", migration: { updateId: migration.updateId, snapshot: "available", canRestore: true } });
+      }
     } catch (error) {
       log.error("runtime generation verification failed", error);
       return this.publish({
         state: "failed",
         message: error instanceof Error ? error.message : "The app could not verify its installed runtime. Reinstall the app.",
+        ...(error instanceof MigrationActivationError
+          ? { migration: { updateId: error.updateId, snapshot: error.snapshot, canRestore: error.canRestore } }
+          : {}),
       });
     }
 
@@ -280,15 +296,22 @@ export class HostProcess {
     const runtime = this.runtime;
     if (!runtime) return this.publish({ state: "failed", message: "The Node runtime was not resolved." });
 
+    const installedRuntime = this.installedRuntime;
     let argv: string[];
     try {
-      argv = hostDaemonArgv(paths, undefined, this.installedRuntime?.cliEntry);
+      argv = hostDaemonArgv(paths, undefined, installedRuntime?.cliEntry);
     } catch (error) {
       const message = error instanceof Error ? error.message : "The runtime memory limit could not be read.";
       return this.publish({ state: "failed", message });
     }
 
     const launchId = newLaunchId();
+    try {
+      if (installedRuntime) markInstalledMigrationLaunch(paths, installedRuntime, launchId);
+    } catch (error) {
+      log.error("could not fence the migrated data to this host launch", error);
+      return this.publish({ state: "failed", message: runtimeUpdatePresentation("migration-failed").title });
+    }
     mkdirSync(paths.stateDir, { recursive: true });
     // The daemon's own stdout and stderr go straight to the host log, the same
     // file `laser up` uses, so both ways of starting leave one trail.
@@ -335,8 +358,8 @@ export class HostProcess {
           await this.stop();
           return this.publish({ state: "failed", message: "The installed version changed during startup. Restart the app and host together when you are ready." });
         }
-        const expectedGeneration = this.installedRuntime?.reference.generationId;
-        if (!expectedGeneration || status.record.generationId !== expectedGeneration) {
+        const expectedGeneration = installedRuntime?.reference.generationId;
+        if (expectedGeneration && status.record.generationId !== expectedGeneration) {
           await this.stop();
           return this.publish({ state: "failed", message: "The updated runtime could not be verified. Reinstall the app before trying again." });
         }
@@ -351,11 +374,14 @@ export class HostProcess {
           return this.publish({ state: "failed", message: `${agent.message} ${agent.fix}` });
         }
         log.line(`host ready at ${status.record.url} (pid ${status.record.pid})`);
-        this.options.onVerifiedLaunch?.({
-          launchId: status.record.launchId,
-          generationId: status.record.generationId,
-          version: status.record.cliVersion,
-        });
+        if (status.record.generationId) {
+          this.options.onVerifiedLaunch?.({
+            launchId: status.record.launchId,
+            generationId: status.record.generationId,
+            version: status.record.cliVersion,
+            ...(installedRuntime?.migrationUpdateId ? { updateId: installedRuntime.migrationUpdateId } : {}),
+          });
+        }
         this.readyAt = Date.now();
         return this.publish({
           state: "ready",
@@ -489,12 +515,14 @@ export class HostProcess {
   }
 
   private publish(patch: HostInfoPatch): DesktopHostInfo {
-    const { message, runtime, ...rest } = patch;
+    const { message, runtime, migration, ...rest } = patch;
     const next: DesktopHostInfo = {
       ...this.info,
       ...rest,
       ...(runtime !== undefined ? { runtime } : {}),
     };
+    if (migration === null || patch.state === "ready") delete next.migration;
+    else if (migration !== undefined) next.migration = migration;
     // `null` clears the message; leaving the key out keeps whatever was there.
     // Under `exactOptionalPropertyTypes` an explicit `undefined` cannot say
     // either of those things, so it does not appear in the patch type.

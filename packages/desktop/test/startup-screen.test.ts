@@ -85,6 +85,25 @@ describe("the screen that says the host could not start", () => {
     // The waiting variant is gone; nothing here animates a progress bar.
     expect(page).not.toContain("progressbar");
   });
+
+  it("offers exact snapshot restore only for a recoverable migration failure", () => {
+    const page = statusPageHtml({
+      title: "The update could not be finished.",
+      message: "Your previous data snapshot is intact.",
+      logFile: "/tmp/host.log",
+      restore: {
+        updateId: "d".repeat(64),
+        label: "Restore previous data",
+        pendingLabel: "Restoring your previous data…",
+      },
+    });
+    expect(page).toContain("Restore previous data");
+    expect(page).toContain("updates?.restore");
+    expect(page).toContain("d".repeat(64));
+    expect(page).not.toContain("querySelector(\"h1\")");
+    expect(statusPageHtml({ title: "Cannot start", message: "Stopped.", logFile: "/tmp/host.log" }))
+      .not.toContain("Restore previous data");
+  });
 });
 
 describe("what the renderer sends is validated, not trusted", () => {

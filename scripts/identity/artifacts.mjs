@@ -213,7 +213,7 @@ function ipcModule() {
     ["cacheKey", "cache/key"], ["cacheKeyReset", "cache/key/reset"],
     ["updateStatus", "update/status"], ["updateCheck", "update/check"],
     ["updatePrepare", "update/prepare"], ["updateCancel", "update/cancel"],
-    ["updateInstall", "update/install"], ["updateChanged", "update/changed"],
+    ["updateRestore", "update/restore"], ["updateInstall", "update/install"], ["updateChanged", "update/changed"],
   ];
   const body = channels
     .map(([key, suffix]) => `  ${key}: "${identity.name}:${suffix}",`)

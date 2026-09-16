@@ -30,6 +30,8 @@ export { GLOBAL_FLAGS, colorMode, flagsFor } from "./flags.js";
 export { TOPICS, findTopic, renderCommandHelp, renderRootHelp, type Topic } from "./help.js";
 export {
   cliEntry,
+  completeInstalledMigration,
+  markInstalledMigrationLaunch,
   unpacked,
   daemonArgs,
   hostDaemonArgv,
@@ -77,8 +79,24 @@ export { listSessions, matchSessions, resolveSession, resolveProject } from "./s
 export { sessionFragment } from "./commands/session.js";
 export { CLI_VERSION } from "./version.js";
 export {
+  MigrationActivationError,
+  completeMigrationLaunch,
+  ensureUpdateTransaction,
+  migrationEventLine,
+  prepareUpdateData,
+  recoverUpdateData,
+  restoreUpdateData,
+  type MigrationEventSink,
+  type MigrationLaunchEvent,
+  type MigrationLaunchPhase,
+  type MigrationSnapshotStatus,
+} from "./migration-activation.js";
+export {
+  MIGRATION_REGISTRY,
+  MigrationEngine,
   UpdateTransactionStore,
   prepareRuntimeGeneration,
+  readMigrationState,
   readRuntimeGenerationPointer,
   runtimeReferenceFromManifest,
   runtimeUpdateId,
@@ -90,6 +108,7 @@ export {
   writeRuntimeGenerationPointer,
   type RuntimeGenerationManifest,
   type RuntimeGenerationPointer,
+  type MigrationRegistry,
   type RuntimeGenerationReference,
   type RuntimeGenerationVerification,
   type RuntimeVerificationMetrics,

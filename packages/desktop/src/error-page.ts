@@ -71,16 +71,18 @@ export interface StatusPageContent {
   message: string;
   /** Absolute path to the host log, shown small and selectable. */
   logFile: string;
+  /** Offer exact snapshot restore when migration failed before host bind. */
+  restore?: { updateId: string; label: string; pendingLabel: string };
 }
 
 export function statusPageUrl(content: StatusPageContent): string {
   return `data:text/html;charset=utf-8,${encodeURIComponent(statusPageHtml(content))}`;
 }
 
-export function statusPageHtml({ title, message, logFile }: StatusPageContent): string {
+export function statusPageHtml({ title, message, logFile, restore }: StatusPageContent): string {
   // DESIGN.md tokens, both themes, no web fonts: this page renders before
   // anything has been downloaded, so it uses the platform's own UI stack.
-  const action = `<button id="retry" type="button">Try again</button>`;
+  const action = `<button id="retry" type="button">Try again</button>${restore ? `<button id="restore" type="button">${escapeHtml(restore.label)}</button>` : ""}`;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -170,6 +172,18 @@ export function statusPageHtml({ title, message, logFile }: StatusPageContent): 
       window.${DESKTOP_BRIDGE}?.retryHost?.();
     });
   }
+  ${restore ? `const restore = document.getElementById("restore");
+  if (restore) {
+    restore.addEventListener("click", async () => {
+      restore.disabled = true;
+      restore.textContent = ${JSON.stringify(restore.pendingLabel)};
+      const status = await window.${DESKTOP_BRIDGE}?.updates?.restore?.(${JSON.stringify(restore.updateId)});
+      if (status?.state !== "restored") {
+        restore.disabled = false;
+        restore.textContent = ${JSON.stringify(restore.label)};
+      }
+    });
+  }` : ""}
 </script>
 </body>
 </html>`;

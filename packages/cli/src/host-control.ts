@@ -8,16 +8,30 @@
  */
 import { ENV, PRODUCT_NAME, environmentOverlay, nodeLaunchEnvironment } from "@lasercode/protocol";
 import {
+  MIGRATION_REGISTRY,
+  MigrationEngine,
+  UpdateTransactionStore,
   hostOldSpaceMiB,
   oldSpaceSizeFlag,
   prepareRuntimeGeneration,
+  readMigrationState,
+  runtimeUpdateId,
+  stageRuntimeGeneration,
   type RuntimeGenerationManifest,
   type RuntimeGenerationReference,
 } from "@lasercode/host";
 import { HostRpc, HostRpcError } from "./rpc.js";
+import {
+  MigrationActivationError,
+  completeMigrationLaunch,
+  ensureUpdateTransaction,
+  prepareUpdateData,
+  recoverUpdateData,
+  type MigrationEventSink,
+} from "./migration-activation.js";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { closeSync, mkdirSync, openSync, readFileSync } from "node:fs";
+import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { LaserPaths } from "./config.js";
@@ -79,24 +93,128 @@ export interface InstalledRuntimeLaunch {
   cliEntry: string;
   workerEntry: string;
   env: Readonly<Record<string, string>>;
+  migrationUpdateId?: string;
 }
 
-/** Resolve and verify the generation selected by the atomic state pointer. */
-export function prepareInstalledRuntime(paths: LaserPaths, currentEntry = cliEntry()): InstalledRuntimeLaunch {
-  const { pointer, manifest } = prepareRuntimeGeneration(paths.stateDir, currentEntry);
-  const reference = pointer.active;
+/** Resolve, recover, migrate and canonically select the install-root generation before host bind. */
+export function prepareInstalledRuntime(
+  paths: LaserPaths,
+  currentEntry = cliEntry(),
+  options: { onMigrationEvent?: MigrationEventSink } = {},
+): InstalledRuntimeLaunch {
+  const preexistingMarker = readMigrationState(paths.stateDir);
+  let staged: ReturnType<typeof stageRuntimeGeneration>;
+  try {
+    staged = stageRuntimeGeneration(paths.stateDir, currentEntry);
+  } catch (error) {
+    if (preexistingMarker?.phase === "migrated") {
+      recoverUpdateData(paths, {
+        updateId: preexistingMarker.updateId,
+        targetGenerationId: preexistingMarker.targetGenerationId,
+        targetVerified: false,
+      }, options.onMigrationEvent);
+      throw new MigrationActivationError(preexistingMarker.updateId, "restored", undefined, { cause: error });
+    }
+    throw error;
+  }
+
+  const engine = new MigrationEngine({
+    roots: { stateDir: paths.stateDir, agentDir: paths.agentDir, sessionDir: paths.sessionDir },
+    registry: MIGRATION_REGISTRY,
+  });
+  let marker = engine.currentState();
+  const store = new UpdateTransactionStore(paths.stateDir);
+  const currentUpdateId = runtimeUpdateId(staged.manifest);
+  const existing = store.read(currentUpdateId);
+  let migrationUpdateId: string | undefined;
+
+  if (marker) {
+    migrationUpdateId = marker.updateId;
+    if (marker.targetGenerationId !== staged.current.generationId || (marker.phase === "migrated" && marker.launchAttemptId)) {
+      recoverUpdateData(paths, {
+        updateId: marker.updateId,
+        targetGenerationId: marker.targetGenerationId,
+        targetVerified: false,
+      }, options.onMigrationEvent);
+      throw new MigrationActivationError(marker.updateId, "restored");
+    }
+    if (marker.phase !== "migrated") {
+      const recovered = recoverUpdateData(paths, {
+        updateId: marker.updateId,
+        targetGenerationId: marker.targetGenerationId,
+        targetVerified: true,
+      }, options.onMigrationEvent);
+      if (recovered === "restored") throw new MigrationActivationError(marker.updateId, "restored");
+      marker = engine.currentState();
+    }
+  }
+
+  const selectionChanged = staged.pointer.active.generationId !== staged.current.generationId
+    || staged.pointer.active.installRoot !== staged.current.installRoot;
+  if (!marker && (selectionChanged || engine.needsMigration())) {
+    migrationUpdateId = existing ? currentUpdateId : ensureUpdateTransaction(paths, staged.manifest);
+    prepareUpdateData(paths, { updateId: migrationUpdateId, targetGenerationId: staged.current.generationId }, options.onMigrationEvent);
+    marker = engine.currentState();
+  } else if (!migrationUpdateId && (existing?.phase === "restarting" || existing?.phase === "succeeded")) {
+    migrationUpdateId = currentUpdateId;
+  }
+
+  // This is the one selection authority; it includes install-root moves as well
+  // as generation changes and runs only after migration/recovery has settled.
+  const selected = prepareRuntimeGeneration(paths.stateDir, currentEntry);
+  if (migrationUpdateId) {
+    let transaction = store.read(migrationUpdateId);
+    if (transaction?.phase === "ready") {
+      transaction = store.transition(migrationUpdateId, "selected");
+      store.transition(migrationUpdateId, "restarting");
+    }
+    if (transaction?.phase !== "selected" && transaction?.phase !== "restarting" && transaction?.phase !== "succeeded") {
+      throw new MigrationActivationError(migrationUpdateId, marker?.snapshotDigest ? "available" : "none");
+    }
+  }
+
+  const reference = selected.pointer.active;
   return {
     reference,
-    manifest,
-    nodeBinary: manifest.entries.node ? join(reference.installRoot, manifest.entries.node) : process.execPath,
-    cliEntry: join(reference.installRoot, manifest.entries.cli),
-    workerEntry: join(reference.installRoot, manifest.entries.worker),
+    manifest: selected.manifest,
+    nodeBinary: selected.manifest.entries.node ? join(reference.installRoot, selected.manifest.entries.node) : process.execPath,
+    cliEntry: join(reference.installRoot, selected.manifest.entries.cli),
+    workerEntry: join(reference.installRoot, selected.manifest.entries.worker),
     env: {
       [ENV.runtimeGenerationId]: reference.generationId,
       [ENV.runtimeInstallRoot]: reference.installRoot,
       [ENV.runtimeManifestDigest]: reference.manifestDigest,
     },
+    ...(migrationUpdateId ? { migrationUpdateId } : {}),
   };
+}
+
+export function markInstalledMigrationLaunch(paths: LaserPaths, installed: InstalledRuntimeLaunch, launchId: string): void {
+  if (!installed.migrationUpdateId) return;
+  const engine = new MigrationEngine({
+    roots: { stateDir: paths.stateDir, agentDir: paths.agentDir, sessionDir: paths.sessionDir }, registry: MIGRATION_REGISTRY,
+  });
+  const marker = engine.currentState();
+  if (marker?.phase === "migrated" && marker.targetGenerationId === installed.reference.generationId) {
+    engine.markLaunchAttempt(installed.migrationUpdateId, launchId);
+  }
+}
+
+/** Commit success only after the exact launched generation and version answer health. */
+export function completeInstalledMigration(
+  paths: LaserPaths,
+  installed: InstalledRuntimeLaunch,
+  record: Pick<HostRecord, "launchId" | "generationId" | "cliVersion">,
+): boolean {
+  if (!installed.migrationUpdateId
+    || record.generationId !== installed.reference.generationId
+    || record.cliVersion !== installed.manifest.productVersion) return false;
+  return completeMigrationLaunch(paths, {
+    updateId: installed.migrationUpdateId,
+    launchId: record.launchId,
+    generationId: record.generationId,
+    version: record.cliVersion,
+  });
 }
 
 export interface ForegroundHostResult {
@@ -123,7 +241,10 @@ export async function runForegroundHost(
 ): Promise<ForegroundHostResult> {
   mkdirSync(paths.stateDir, { recursive: true });
   const launchId = newLaunchId();
-  const installed = options.entry ? undefined : prepareInstalledRuntime(paths);
+  const installed = options.entry ? undefined : prepareInstalledRuntime(paths, cliEntry(), {
+    onMigrationEvent: (event) => process.stderr.write(`${JSON.stringify(event)}\n`),
+  });
+  if (installed) markInstalledMigrationLaunch(paths, installed, launchId);
   const child = spawn(
     options.nodeBinary ?? installed?.nodeBinary ?? process.execPath,
     hostDaemonArgv(paths, options.capacityBytes, options.entry ?? installed?.cliEntry ?? cliEntry()),
@@ -194,9 +315,12 @@ export async function startHost(
   await assertPortIsOurs(paths);
 
   const launchId = newLaunchId();
-  const installed = prepareInstalledRuntime(paths);
-  const argv = hostDaemonArgv(paths, undefined, installed.cliEntry);
   mkdirSync(paths.stateDir, { recursive: true });
+  const installed = prepareInstalledRuntime(paths, cliEntry(), {
+    onMigrationEvent: (event) => appendFileSync(paths.logFile, `${JSON.stringify(event)}\n`, { mode: 0o600 }),
+  });
+  markInstalledMigrationLaunch(paths, installed, launchId);
+  const argv = hostDaemonArgv(paths, undefined, installed.cliEntry);
   const logFd = openSync(paths.logFile, "a");
   const child = (dependencies.spawnProcess ?? spawn)(installed.nodeBinary, argv, {
     detached: true,
@@ -224,6 +348,7 @@ export async function startHost(
           fix: `Run \`${PRODUCT_NAME} status\`, then quit the other copy before trying again.`,
         });
       }
+      completeInstalledMigration(paths, installed, status.record);
       return { record: status.record, started: true };
     }
     if (spawnError) {
