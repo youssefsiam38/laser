@@ -338,9 +338,43 @@ export function useLaserStable(): LaserStable {
  * Surfaces read it to say what is paused and why. It is local: a phone reading
  * a desktop host's diagnostics reports its own window, never the other one.
  */
-export function useRendererPressure(): RendererPressureState {
+const pressureIdentity = (state: RendererPressureState): RendererPressureState => state;
+
+export function useRendererPressure(): RendererPressureState;
+export function useRendererPressure<T>(selector: (state: RendererPressureState) => T, isEqual?: (left: T, right: T) => boolean): T;
+export function useRendererPressure<T = RendererPressureState>(
+  selector: (state: RendererPressureState) => T = pressureIdentity as (state: RendererPressureState) => T,
+  isEqual: (left: T, right: T) => boolean = Object.is,
+): T {
   const { pressure, subscribePressure } = useLaserStable();
-  return useSyncExternalStore(subscribePressure, pressure, pressure);
+  const selectorRef = useRef(selector);
+  selectorRef.current = selector;
+  const isEqualRef = useRef(isEqual);
+  isEqualRef.current = isEqual;
+  const cache = useRef<{ state: RendererPressureState; selector: (state: RendererPressureState) => T; value: T } | undefined>(undefined);
+  const getSnapshot = useCallback((): T => {
+    const state = pressure();
+    const select = selectorRef.current;
+    const previous = cache.current;
+    if (previous && previous.state === state && previous.selector === select) return previous.value;
+    const next = select(state);
+    if (previous && isEqualRef.current(previous.value, next)) {
+      cache.current = { state, selector: select, value: previous.value };
+      return previous.value;
+    }
+    cache.current = { state, selector: select, value: next };
+    return next;
+  }, [pressure]);
+  return useSyncExternalStore(subscribePressure, getSnapshot, getSnapshot);
+}
+
+const selectWholeTranscriptPaused = (state: RendererPressureState): boolean => state.refusing.includes("whole_transcript");
+const WHOLE_TRANSCRIPT_READY = Object.freeze({ paused: false, explanation: undefined });
+const WHOLE_TRANSCRIPT_PAUSED = Object.freeze({ paused: true, explanation: PRESSURE_REFUSAL_MESSAGES.whole_transcript });
+
+/** One stable policy view shared by every whole-transcript affordance. */
+export function useWholeTranscriptRefusal(): { readonly paused: boolean; readonly explanation?: string | undefined } {
+  return useRendererPressure(selectWholeTranscriptPaused) ? WHOLE_TRANSCRIPT_PAUSED : WHOLE_TRANSCRIPT_READY;
 }
 
 const identity = <T,>(value: T): T => value;

@@ -39,7 +39,7 @@ import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { money, tokens } from "@/format";
 import { cn } from "@/lib/utils";
 import { useRunsForRoot } from "@/agents";
-import { useLaserStable, useLaserState, useRendererPressure, useSessionMeta } from "@/runtime";
+import { useLaserStable, useLaserState, useSessionMeta, useWholeTranscriptRefusal } from "@/runtime";
 
 import { CheckpointHistory } from "@/components/assistant-ui/elements/checkpoint-history";
 import {
@@ -547,7 +547,7 @@ export function HistorySection() {
     return Boolean(history && (!history.complete || history.branchesUnloaded));
   });
   const { actions } = useLaserStable();
-  const refreshPaused = useRendererPressure().refusing.includes("whole_transcript");
+  const wholeTranscript = useWholeTranscriptRefusal();
   const meta = useSessionMeta();
   const shell = useShell();
   const entries = useLaserState((s) => s.current ? s.open[s.current]?.entries : undefined);
@@ -597,10 +597,10 @@ export function HistorySection() {
           </CollapsibleTrigger>
           {shell.historyOpen && (
             <TooltipIconButton
-              tooltip={refreshPaused ? "Refresh paused while this window is low on memory" : "Refresh history"}
+              tooltip={wholeTranscript.paused ? "Refresh paused while this window is low on memory" : "Refresh history"}
               size="icon-xs"
               className="text-ink-3"
-              disabled={refreshPaused}
+              disabled={wholeTranscript.paused}
               onClick={() => void actions.refreshEntries()}
             >
               <RefreshCw />
@@ -608,9 +608,9 @@ export function HistorySection() {
           )}
         </div>
         <CollapsibleContent>
-          {refreshPaused && (
+          {wholeTranscript.paused && (
             <p data-slot="history-refresh-paused" className="px-4 pb-3 text-sm text-ink-2">
-              Refreshing the whole history is paused while this window is low on memory. Recent activity continues to update.
+              {wholeTranscript.explanation}
             </p>
           )}
           <CheckpointHistory

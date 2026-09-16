@@ -76,7 +76,8 @@ export type RendererPressureStep = (typeof RENDERER_PRESSURE_STEPS)[number];
  * bounded read, every reconnect, every mutation and every person's word stays
  * available at any level.
  */
-export const RENDERER_PRESSURE_REFUSALS: readonly MemoryPressureRefusal[] = ["whole_transcript"] as const;
+export const RENDERER_PRESSURE_REFUSALS = ["whole_transcript"] as const satisfies readonly MemoryPressureRefusal[];
+export type RendererPressureRefusal = (typeof RENDERER_PRESSURE_REFUSALS)[number];
 
 /**
  * What a person is told when this window will not start a whole-transcript
@@ -90,15 +91,10 @@ export class PressureRefusedError extends Error {
   }
 }
 
-/** The sentence for each thing this window can refuse. */
-export const PRESSURE_REFUSAL_MESSAGES: Record<MemoryPressureRefusal, string> = {
+/** The sentence for the one refusal this window owns. */
+export const PRESSURE_REFUSAL_MESSAGES: Record<RendererPressureRefusal, string> = {
   whole_transcript:
     "This window is low on memory, so loading a whole conversation at once is paused. Earlier messages still load a page at a time.",
-  older_history: "This window is low on memory, so reading further back is paused for a moment.",
-  background_session: "This window is low on memory, so opening another conversation in the background is paused for a moment.",
-  speculative_worker: "This window is low on memory, so preparing work ahead of time is paused for a moment.",
-  new_project_worker: "This window is low on memory, so starting another project is paused for a moment.",
-  worker_free_full_read: "This window is low on memory, so reading a whole stored conversation at once is paused.",
 };
 
 /** One step of one pass, as it happened, with the moment and level it happened at. */
@@ -269,7 +265,16 @@ export function createRendererPressureController(deps: RendererPressureDeps): Re
     }
   };
 
-  const effectiveLevel = (): MemoryPressureLevelState => worseLevel(level, host.level);
+  /** A host publication is evidence for at most three elevated cadences. */
+  const hostLevel = (): MemoryPressureLevelState => {
+    if (host.atMs === undefined) return "unknown";
+    const age = now() - host.atMs;
+    return Number.isSafeInteger(age) && age >= 0 && age < PRESSURE_STALE_CADENCES * elevatedIntervalMs
+      ? host.level
+      : "unknown";
+  };
+
+  const effectiveLevel = (): MemoryPressureLevelState => worseLevel(level, hostLevel());
 
   const refusingNow = (): readonly MemoryPressureRefusal[] =>
     isDirectiveLevel(effectiveLevel()) ? RENDERER_PRESSURE_REFUSALS : NO_REFUSALS;
@@ -374,20 +379,27 @@ export function createRendererPressureController(deps: RendererPressureDeps): Re
 
   // --- the steps -----------------------------------------------------------
 
+  const releasedRow = (
+    action: RendererPressureStep,
+    released: { count: number; bytes: number },
+    atMs: number,
+    passLevel: MemoryPressureDirectiveLevel,
+  ): RendererPressureRow => {
+    if (released.count > 0 && released.bytes > 0) {
+      return { action, outcome: "released", released: { count: released.count, bytes: released.bytes }, atMs, level: passLevel };
+    }
+    if (released.count > 0) {
+      return { action, outcome: "released", released: { count: released.count }, atMs, level: passLevel };
+    }
+    if (released.bytes > 0) {
+      return { action, outcome: "released", released: { bytes: released.bytes }, atMs, level: passLevel };
+    }
+    throw new Error("a released row needs measured evidence");
+  };
+
   const ephemeralStep = (at: number, passLevel: MemoryPressureDirectiveLevel): RendererPressureRow => {
     const released = ephemeral();
-    if (released.count > 0 || released.bytes > 0) {
-      return {
-        action: "ephemeral_caches",
-        outcome: "released",
-        released: {
-          ...(released.count > 0 ? { count: released.count } : {}),
-          ...(released.bytes > 0 ? { bytes: released.bytes } : {}),
-        } as { count: number; bytes?: number } | { count?: number; bytes: number },
-        atMs: at,
-        level: passLevel,
-      };
-    }
+    if (released.count > 0 || released.bytes > 0) return releasedRow("ephemeral_caches", released, at, passLevel);
     // A cache that threw is the only thing between "nothing was there" and
     // "we could not tell": that difference is the row.
     if (released.failures > 0) return { action: "ephemeral_caches", outcome: "unavailable", atMs: at, level: passLevel };
@@ -405,16 +417,7 @@ export function createRendererPressureController(deps: RendererPressureDeps): Re
     const count = outcome.released.length;
     if (count > 0 || delta > 0) {
       const bytes = delta > 0 ? delta : outcome.bytesReleased;
-      return {
-        action: "renderer_views",
-        outcome: "released",
-        released: {
-          ...(count > 0 ? { count } : {}),
-          ...(bytes > 0 ? { bytes } : {}),
-        } as { count: number; bytes?: number } | { count?: number; bytes: number },
-        atMs: at,
-        level: passLevel,
-      };
+      return releasedRow("renderer_views", { count, bytes }, at, passLevel);
     }
     // Over budget with nothing releasable means every candidate is a
     // conversation somebody is using. Work is never taken.
@@ -422,9 +425,14 @@ export function createRendererPressureController(deps: RendererPressureDeps): Re
     return { action: "renderer_views", outcome: "nothing_to_give", atMs: at, level: passLevel };
   };
 
+  const stepRunners: Record<RendererPressureStep, (at: number, level: MemoryPressureDirectiveLevel) => RendererPressureRow> = {
+    ephemeral_caches: ephemeralStep,
+    renderer_views: viewsStep,
+  };
+
   const runStep = (action: RendererPressureStep, at: number, passLevel: MemoryPressureDirectiveLevel): RendererPressureRow | undefined => {
     try {
-      return action === "ephemeral_caches" ? ephemeralStep(at, passLevel) : viewsStep(at, passLevel);
+      return stepRunners[action](at, passLevel);
     } catch {
       counters.stepFailures += 1;
       note(`memory pressure: the ${action} step could not complete`);
@@ -655,7 +663,7 @@ export function createRendererPressureController(deps: RendererPressureDeps): Re
         refusing: refusingNow(),
         rows: Object.freeze([...rows]),
         totals: { passes: totals.passes, released: { ...totals.released }, refusals: totals.refusals },
-        host: { ...host },
+        host: { ...host, level: hostLevel() },
         counters: { ...counters },
       }) as RendererPressureState);
     },

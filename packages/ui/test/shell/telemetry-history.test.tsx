@@ -13,7 +13,7 @@ vi.mock("../../src/runtime/index.js", () => ({
   useLaserState: (selector: (state: unknown) => unknown) => selector({ current: mocks.current, open: { [mocks.current]: { path: mocks.current, running: mocks.running, entries: mocks.entries[mocks.current], history: { complete: false, branchesUnloaded: false } } } }),
   useSessionMeta: () => ({ path: mocks.current, running: mocks.running, compacting: false }),
   useLaserStable: () => ({ actions: mocks }),
-  useRendererPressure: () => ({ refusing: mocks.refusing }),
+  useWholeTranscriptRefusal: () => ({ paused: mocks.refusing.includes("whole_transcript"), explanation: mocks.refusing.includes("whole_transcript") ? "This window is low on memory, so loading a whole conversation at once is paused. Earlier messages still load a page at a time." : undefined }),
 }));
 vi.mock("../../src/components/shell/shell-context.js", async () => {
   const { useState } = await import("react");
@@ -83,7 +83,7 @@ it("explains a pressure refusal in place and does not offer a bypass", async () 
   mocks.refreshEntries.mockClear();
   mocks.refusing = ["whole_transcript"];
   await render();
-  expect(container.textContent).toContain("Refreshing the whole history is paused while this window is low on memory.");
+  expect(container.textContent).toContain("This window is low on memory, so loading a whole conversation at once is paused. Earlier messages still load a page at a time.");
   const refresh = container.querySelector<HTMLButtonElement>('button[aria-label^="Refresh paused"]')!;
   expect(refresh.disabled).toBe(true);
   await act(async () => refresh.click());

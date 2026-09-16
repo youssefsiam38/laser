@@ -48,6 +48,13 @@ let actions: LaserActions;
 let view: ReturnType<typeof useLaserView>;
 let refusing: readonly string[] = [];
 let rows: readonly { action: string; refusal?: string | undefined }[] = [];
+let refusalRenders = 0;
+
+function RefusalProbe() {
+  useRendererPressure((state) => state.refusing.includes("whole_transcript"));
+  refusalRenders += 1;
+  return null;
+}
 
 function Controls() {
   const stable = useLaserStable();
@@ -97,11 +104,13 @@ beforeEach(async () => {
   addSession(world, PATH);
   for (let index = 1; index <= 60; index++) runTurn(world, PATH, `Prompt ${index}`, `Answer ${index}`);
   FakeWorkerClient.reset(world);
+  refusalRenders = 0;
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
   await act(async () => root.render(<LaserProvider url="ws://test"><TooltipProvider><ThreadPrimitive.Root>
     <Controls />
+    <RefusalProbe />
     <ComposerPrimitive.Root><ComposerPrimitive.Input data-test="composer" /></ComposerPrimitive.Root>
   </ThreadPrimitive.Root></TooltipProvider></LaserProvider>));
   await flush();
@@ -166,6 +175,19 @@ it("stops refusing when the host says the pressure has passed", async () => {
   await act(async () => { await actions.loadAllEntries(); });
   await flush();
   expect(wholeReads().length).toBeGreaterThan(0);
+});
+
+it("keeps a selected refusal subscriber still when unrelated pressure state changes", async () => {
+  const initial = refusalRenders;
+  await act(async () => {
+    for (const client of FakeWorkerClient.instances) client.deliver("resource/pressure", { malformed: true } as never);
+    await settle(5);
+  });
+  expect(refusalRenders).toBe(initial);
+  await publish(5, "critical");
+  expect(refusalRenders).toBe(initial + 1);
+  await publish(4, "critical");
+  expect(refusalRenders).toBe(initial + 1);
 });
 
 it("ignores a stale publication, so an older decision cannot lift a refusal", async () => {

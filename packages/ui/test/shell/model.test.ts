@@ -8,7 +8,6 @@ import {
   historyRows,
   inboxRows,
   isAbsolutePath,
-  lastPromptEntryId,
   needYouCount,
   projectSummaries,
   recentCwds,
@@ -367,8 +366,4 @@ describe("entries", () => {
     expect(depths([...input].reverse())).toEqual(depths(input));
   });
 
-  it("finds the last prompt to fork from", () => {
-    expect(lastPromptEntryId(entries)).toBe("u3");
-    expect(lastPromptEntryId([])).toBeUndefined();
-  });
 });

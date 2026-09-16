@@ -60,7 +60,7 @@ export function findTextMatches(root: HTMLElement, query: string, mode: "convers
 
 const NO_MESSAGES: readonly ThreadMessage[] = [];
 
-export function useConversationFind({ partial = false, loadAll }: { partial?: boolean; loadAll?: () => Promise<boolean> } = {}) {
+export function useConversationFind({ partial = false, loadAll, refusal }: { partial?: boolean; loadAll?: () => Promise<boolean>; refusal?: string | undefined } = {}) {
   const controller = useTranscriptViewport();
   const highlightScope = useMemo(() => Symbol("conversation-find"), []);
   const [open, setOpen] = useState(false);
@@ -77,7 +77,7 @@ export function useConversationFind({ partial = false, loadAll }: { partial?: bo
   const currentThread = useRef(threadId);
   currentThread.current = threadId;
   const loadHistory = useCallback(async () => {
-    if (!partial || loadingRef.current) return;
+    if (!partial || refusal || loadingRef.current) return;
     loadingRef.current = true;
     setLoadingAll(true);
     focusAfterLoad.current = document.activeElement;
@@ -85,7 +85,7 @@ export function useConversationFind({ partial = false, loadAll }: { partial?: bo
     finally { if (currentThread.current === threadId) {
       loadingRef.current = false; setLoadingAll(false);
     } }
-  }, [loadAll, partial, threadId]);
+  }, [loadAll, partial, refusal, threadId]);
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState(0);
   const input = useRef<HTMLInputElement>(null);
@@ -192,8 +192,8 @@ export function useConversationFind({ partial = false, loadAll }: { partial?: bo
     bar: open ? <ConversationSearch inputRef={input} query={query} hits={hits} activeIndex={activeIndex}
       aria-busy={loadingAll} status={loadingAll ? "Loading…" : undefined}
       toolbar={partial ? <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-3 py-2 text-xs text-ink-2">
-        <span>Only loaded messages are searched.</span>
-        <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" aria-disabled={loadingAll} onClick={() => void loadHistory()}>{loadingAll ? "Loading messages…" : "Load all messages"}</Button>
+        <span>{refusal ?? "Only loaded messages are searched."}</span>
+        <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" disabled={Boolean(refusal)} aria-disabled={loadingAll || Boolean(refusal)} onClick={() => void loadHistory()}>{loadingAll ? "Loading messages…" : "Load all messages"}</Button>
       </div> : undefined}
       onQueryChange={value => { setQuery(value); setIndex(0); }}
       onStep={delta => setIndex(hits.length ? (activeIndex + delta + hits.length) % hits.length : 0)} onClose={close} /> : null,

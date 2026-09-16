@@ -10,6 +10,7 @@ import { AGENT_COMPLETION_DATA_PART, AGENT_EVENT_DATA_PART, GOAL_DATA_PART, TASK
 import type { GoalRecord as GoalRecordData } from "@/runtime/goal-history";
 import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentPropsWithoutRef } from "react";
 import { useTranscriptViewport } from "./transcript-viewport.js";
+import { useThreadWholeTranscriptRefusal } from "./whole-transcript-refusal.js";
 import { useTranscriptPresentation } from "@/runtime/LaserProvider";
 import { MessageEditPresentation } from "@/runtime/transcript-presentation";
 import { useFileOpener } from "@/lib/file-opener";
@@ -199,6 +200,7 @@ export function UserMessage() {
   const leafId = useLeafId();
   const userOffset = useUserOffset();
   const partialHistory = usePartialHistory();
+  const wholeTranscript = useThreadWholeTranscriptRefusal();
   const id = useAuiState(s => s.message.id);
   const presentation = useTranscriptPresentation();
   const viewport = useTranscriptViewport();
@@ -406,7 +408,8 @@ export function UserMessage() {
             }}
           />
           <MessageActions
-            onLoadHistory={partialHistory ? () => void actions.loadAllEntries() : undefined}
+            onLoadHistory={partialHistory && !wholeTranscript.paused ? () => void actions.loadAllEntries() : undefined}
+            loadHistoryRefusal={partialHistory ? wholeTranscript.explanation : undefined}
             className={hoverReveal}
             copied={copied || copiedPartial}
             copyLabel={copying ? "Copying the whole message…" : copiedPartial ? "Copied what is shown" : undefined}
@@ -691,6 +694,7 @@ function AssistantFooter() {
   const leafId = useLeafId();
   const userOffset = useUserOffset();
   const partialHistory = usePartialHistory();
+  const wholeTranscript = useThreadWholeTranscriptRefusal();
   const busy = useAuiState((s) => s.thread.isRunning);
   const model = useLaserState((s) => (s.current ? s.open[s.current]?.state.model ?? null : null));
   const thinking = useLaserState((s) => (s.current ? s.open[s.current]?.state.thinkingLevel : undefined));
@@ -728,7 +732,8 @@ function AssistantFooter() {
   return (
     <MessageFooter>
       <MessageActions
-        onLoadHistory={partialHistory ? () => void actions.loadAllEntries() : undefined}
+        onLoadHistory={partialHistory && !wholeTranscript.paused ? () => void actions.loadAllEntries() : undefined}
+        loadHistoryRefusal={partialHistory ? wholeTranscript.explanation : undefined}
         className={hoverReveal}
         copied={copied || copiedPartial}
         copyLabel={copying ? "Copying the whole reply…" : copiedPartial ? "Copied what is shown" : undefined}

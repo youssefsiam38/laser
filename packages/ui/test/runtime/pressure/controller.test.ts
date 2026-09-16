@@ -23,6 +23,7 @@ import {
 import {
   PRESSURE_ELEVATED_INTERVAL_MS,
   PRESSURE_NORMAL_INTERVAL_MS,
+  PRESSURE_STALE_CADENCES,
   RENDERER_PRESSURE_THRESHOLDS,
   heapThresholds,
   type RendererPressureSample,
@@ -420,6 +421,19 @@ describe("the host's summary", () => {
     expect(h.controller.getSnapshot().host.level).toBe("normal");
     expect(h.releaseCalls).toEqual([]);
     expect(h.controller.admits("whole_transcript")).toBe(true);
+  });
+
+  it("expires a silent host level without letting an older publication revive it", async () => {
+    const h = harness();
+    h.controller.observePublication(publication(5, { host: "warning" }));
+    await h.controller.probeNow();
+    expect(h.controller.admits("whole_transcript")).toBe(false);
+    h.advance(PRESSURE_STALE_CADENCES * PRESSURE_ELEVATED_INTERVAL_MS + 1);
+    expect(h.controller.admits("whole_transcript")).toBe(true);
+    h.controller.observePublication(publication(4, { host: "warning" }));
+    expect(h.controller.admits("whole_transcript")).toBe(true);
+    expect(h.controller.getSnapshot().host.level).toBe("unknown");
+    expect(h.controller.getSnapshot().counters.directivesStale).toBe(1);
   });
 
   it("hears a restarted host again after the socket opens", async () => {

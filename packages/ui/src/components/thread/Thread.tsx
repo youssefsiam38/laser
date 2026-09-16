@@ -13,7 +13,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { ThreadDialogCards, WaitingNotice } from "@/dialogs";
 import { ToolRowScope } from "@/dialogs/tool-rows";
-import { useLaserStable, useLaserState, useLaserView, useRendererPressure } from "@/runtime";
+import { useLaserStable, useLaserState, useLaserView, useWholeTranscriptRefusal } from "@/runtime";
 import { sessionOpenPhase, sameSessionOpenPhase, visibleSessionPath } from "@/runtime/main-destination";
 import { useWorkbench } from "@/components/workbench/workbench-context";
 import { useSessionSeen } from "./use-session-seen.js";
@@ -22,6 +22,7 @@ import { Composer } from "./Composer.js";
 import { EmptyState } from "./EmptyState.js";
 import { ThreadSlotsProvider, type ThreadSlots } from "./thread-slots.js";
 import { useConversationFind } from "./use-conversation-find.js";
+import { WholeTranscriptRefusalProvider, useThreadWholeTranscriptRefusal } from "./whole-transcript-refusal.js";
 import { FindQueryContext, FindSelectionContext } from "./search-state.js";
 import { TranscriptViewportProvider, TranscriptViewportBinding, WindowedMessages, useTranscriptViewport } from "./transcript-viewport.js";
 
@@ -92,9 +93,10 @@ function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
   const loadError = open.phase === "failed";
   const slots: ThreadSlots = statusSlot !== undefined ? { statusLine: statusSlot } : {};
   const aui = useAui();
-  const find = useConversationFind({ partial: partialHistory, loadAll: actions.loadAllEntries });
+  const wholeTranscript = useWholeTranscriptRefusal();
+  const find = useConversationFind({ partial: partialHistory, loadAll: actions.loadAllEntries, refusal: wholeTranscript.explanation });
   return (
-    <>
+    <WholeTranscriptRefusalProvider value={wholeTranscript}>
     <SessionSeenBridge ready={connected && open.phase === "ready"} covered={page !== null} />
     <FindSelectionContext value={find.selectedMessage}>
     <FindQueryContext value={find.query}>
@@ -161,7 +163,7 @@ function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
     </ThreadSlotsProvider>
     </FindQueryContext>
     </FindSelectionContext>
-    </>
+    </WholeTranscriptRefusalProvider>
   );
 }
 
@@ -225,7 +227,7 @@ export function HistoryControls() {
   // While this window is short of memory it will not start a whole-transcript
   // read (RP-8 step 7). The control says so in place rather than offering a
   // button that answers with a refusal; reading upwards is unaffected.
-  const versionsPaused = useRendererPressure().refusing.includes("whole_transcript");
+  const wholeTranscript = useThreadWholeTranscriptRefusal();
   const history = useLaserState(s => s.current ? s.open[s.current]?.history : undefined);
   const root = useRef<HTMLDivElement>(null);
   const pending = useRef<{ focused?: Element | null } | undefined>(undefined);
@@ -338,8 +340,8 @@ export function HistoryControls() {
     {/* Earlier messages arrive by scrolling up (and through the button above,
         which is the same thing for a keyboard). Only other versions of a prompt
         need asking for: no amount of scrolling reaches a branch. */}
-    {history.branchesUnloaded && (versionsPaused
-      ? <span data-slot="versions-paused">Loading other versions is paused while this window is low on memory. Earlier messages still load a page at a time.</span>
+    {history.branchesUnloaded && (wholeTranscript.paused
+      ? <span data-slot="versions-paused">{wholeTranscript.explanation}</span>
       : <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" aria-disabled={loading !== null} onClick={() => void load(true)}>
           {loading === "all" ? "Loading other versions…" : "Load other versions"}
         </Button>)}

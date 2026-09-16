@@ -44,7 +44,7 @@ const stable = vi.hoisted(() => ({
 vi.mock("@/runtime", async original => ({
   ...await original<typeof import("../../src/runtime/index.js")>(),
   useLaserStable: () => stable,
-  useRendererPressure: () => ({ refusing: [] }),
+  useWholeTranscriptRefusal: () => ({ paused: false, explanation: undefined }),
   useActivityDetailLevel: () => "everything",
 }));
 vi.mock("@/dialogs", () => ({ ToolRowDialog: () => null, useRegisterToolRow: () => {}, DialogBody: () => null, dialogFormOf: () => ({}), uiResponseFor: () => ({}) }));

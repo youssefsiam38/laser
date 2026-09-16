@@ -15,6 +15,7 @@ export {
   type RendererPressureController,
   type RendererPressureCounters,
   type RendererPressureDeps,
+  type RendererPressureRefusal,
   type RendererPressureRow,
   type RendererPressureState,
 } from "./controller.js";

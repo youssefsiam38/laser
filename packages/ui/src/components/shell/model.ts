@@ -617,15 +617,6 @@ export function historyRows(entries: readonly unknown[]): HistoryRow[] {
   return rows;
 }
 
-/** Entry id of the most recent user prompt; what "fork from last prompt" forks at. */
-export function lastPromptEntryId(entries: readonly unknown[]): string | undefined {
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const e = entries[i] as RawEntry;
-    if (e.type === "message" && e.message?.role === "user" && e.id) return e.id;
-  }
-  return undefined;
-}
-
 export const HISTORY_KIND_LABEL: Record<HistoryKind, string> = {
   user: "You",
   assistant: "Agent",
