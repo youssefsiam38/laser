@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-16T05:05:09+03:00 · orchestrator `01a0a030` · HEAD: 916e30fa
-**Current focus:** M18 reviews RP-11 immediate paint, then implements RP-8 pressure policy before the unchanged post-containment baseline.
+**Last updated:** 2026-09-16T07:14:24+03:00 · orchestrator `01a0a030` · HEAD: 78b22c83
+**Current focus:** M18 implements RP-8’s calibrated memory-pressure protocol and actor-local release policy before the unchanged post-containment baseline.
 
 | Milestone | State |
 | --- | --- |
@@ -27,8 +27,8 @@
 | M18 Resource containment | in-progress |
 | MX Cross-cutting | in-progress |
 
-**Blockers:** M18-T15 waits for RP-8 pressure policy and RP-3 closeout; RP-4c’s action-versus-unload race is fixed and proved.
-**Next up:** complete RP-11 review; implement RP-8 from `/tmp/m18-t8-final-plan.md`; close RP-3; run two unchanged full clean baselines; execute RP-14.
-**Recently done:** M18-T18 route authority (`916e30fa`); M18-T16 bounded bodies (`42344a58`); M18-T10 device tail cache (`c7375791`); T17 naming-pin correction (`890e6a86`); T15 harness readiness (`cec6c07a`, `2430622b`).
+**Blockers:** M18-T15 waits for RP-8 pressure policy and RP-3 closeout; RP-4c route authority and RP-11 immediate paint are complete.
+**Next up:** implement RP-8 from `/tmp/m18-t8-final-plan.md`; close RP-3; run two unchanged full clean baselines; execute RP-14.
+**Recently done:** M18-T11 immediate paint (`78b22c83`); M18-T18 route authority (`916e30fa`); M18-T16 bounded bodies (`42344a58`); M18-T10 device tail cache (`c7375791`); T17 naming-pin correction (`890e6a86`).
 
 Ownership and evidence: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`.
