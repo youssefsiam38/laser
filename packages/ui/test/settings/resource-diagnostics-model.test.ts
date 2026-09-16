@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { AgentRun, BackgroundTask, ResourceMeasure, ResourceProcess, ResourceSnapshot, SessionSummary } from "@lasercode/protocol";
+import { parseMemoryPressureSummary, type AgentRun, type BackgroundTask, type ResourceMeasure, type ResourceProcess, type ResourceSnapshot, type SessionSummary } from "@lasercode/protocol";
 
 import {
   physicalMeasure,
   physicalMeasureKind,
+  pressureActionView,
+  pressureHostState,
+  pressureRefusalViews,
   processTree,
   resolveRunAssociation,
   resolveSessionAssociation,
@@ -197,6 +200,39 @@ describe("resource diagnostics projection", () => {
     expect(rows.find((row) => row.id === "workerCaches")!.bytes).toEqual({
       status: "unavailable",
       reason: "Retained bytes are not currently reported by Project workers",
+    });
+  });
+});
+
+describe("pressure diagnostics projection", () => {
+  it("recomputes the host aggregate without the renderer and maps every visible reason", () => {
+    const availableInput = [{ kind: "physical" as const, value: { status: "available" as const, value: 10 } }];
+    const row = (role: "host" | "project_worker" | "desktop_renderer" | "machine", level: "normal" | "warning" | "critical") => ({
+      role,
+      level,
+      inputs: availableInput,
+      coverage: { expected: 1, answered: 1, complete: true },
+    });
+    const summary = parseMemoryPressureSummary({
+      level: "critical",
+      roles: [row("host", "normal"), row("project_worker", "normal"), row("desktop_renderer", "critical"), row("machine", "warning")],
+      refusing: ["new_project_worker"],
+      totals: { events: 3, released: { count: 2, bytes: 1_024 }, refusals: 1 },
+    });
+    const hostPressure = pressureHostState(summary);
+    expect(hostPressure.level).toBe("warning");
+    expect(hostPressure.roles.map((role) => role.role)).toEqual(["host", "project_worker", "machine"]);
+    expect(JSON.stringify(hostPressure)).not.toContain("desktop_renderer");
+
+    expect(pressureRefusalViews(hostPressure.refusing, ["whole_transcript"])).toEqual([
+      expect.objectContaining({ label: "Starting work in another project", owners: "Application" }),
+      expect.objectContaining({ label: "Loading a whole conversation at once", owners: "This window" }),
+    ]);
+    expect(pressureActionView({ action: "renderer_views", outcome: "held", reason: "pins_held" })).toEqual({
+      action: "renderer_views",
+      label: "Conversation views",
+      outcome: "Kept for active work",
+      reason: "Work in a conversation is still using this memory.",
     });
   });
 });

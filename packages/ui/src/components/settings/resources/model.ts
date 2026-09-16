@@ -1,6 +1,17 @@
 import {
   RESOURCE_PROCESS_ROLES,
+  aggregateMemoryPressureLevel,
   type AgentRun,
+  type MemoryPressureAction,
+  type MemoryPressureActionResult,
+  type MemoryPressureInput,
+  type MemoryPressureLevelState,
+  type MemoryPressureOutcome,
+  type MemoryPressureReason,
+  type MemoryPressureRefusal,
+  type MemoryPressureRole,
+  type MemoryPressureRoleState,
+  type MemoryPressureSummary,
   type BackgroundTask,
   type ResourceMeasure,
   type ResourceProcess,
@@ -126,6 +137,158 @@ export function roleSummaries(snapshot: ResourceSnapshot, history: readonly Reso
       processCount: processes,
     };
   });
+}
+
+export const PRESSURE_LEVEL_LABELS = {
+  normal: "Normal",
+  warning: "Memory is tight",
+  critical: "Memory is critically low",
+  unknown: "Not measured yet",
+} as const satisfies Readonly<Record<MemoryPressureLevelState, string>>;
+
+export const PRESSURE_ROLE_LABELS = {
+  host: "This app’s host",
+  project_worker: "Project workers",
+  machine: "This computer",
+  desktop_renderer: "This window",
+} as const satisfies Readonly<Record<MemoryPressureRole, string>>;
+
+export const PRESSURE_INPUT_LABELS = {
+  physical: "Physical memory",
+  heap: "JavaScript heap",
+  machine_available: "Memory available on this computer",
+} as const satisfies Readonly<Record<MemoryPressureInput["kind"], string>>;
+
+export const PRESSURE_REASON_SENTENCES = {
+  pins_held: "Work in a conversation is still using this memory.",
+  membership_held: "Someone is still following this conversation.",
+  safety_incomplete: "The owner could not safely describe everything it holds.",
+  arrival_fence: "New work arrived before this release could finish.",
+  generation_mismatch: "The process changed before this release could finish.",
+  directive_timeout: "The process did not answer within the bounded wait.",
+  malformed_answer: "The answer could not be read safely.",
+  sample_unavailable: "No memory measurement was available.",
+  sample_stale: "The newest memory measurement was too old to use.",
+  cooldown: "Memory was released recently, so another pass is waiting.",
+  work_budget: "This bounded pass finished; more can be released on the next pass.",
+} as const satisfies Readonly<Record<MemoryPressureReason, string>>;
+
+export const PRESSURE_ACTION_LABELS = {
+  ephemeral_caches: "Rebuildable caches",
+  renderer_views: "Conversation views",
+  replay_suffixes: "Reconnect history",
+  task_records: "Finished command records",
+  idle_session_unload: "Idle conversations",
+  worker_retirement: "Idle project workers",
+  admission_refused: "Paused heavy work",
+} as const satisfies Readonly<Record<MemoryPressureAction, string>>;
+
+export const PRESSURE_OUTCOME_LABELS = {
+  released: "Released memory",
+  nothing_to_give: "Nothing was available to release",
+  held: "Kept for active work",
+  unavailable: "Could not measure safely",
+  refused: "Paused",
+  budget_reached: "Bound reached",
+} as const satisfies Readonly<Record<MemoryPressureOutcome, string>>;
+
+export const PRESSURE_REFUSAL_COPY = {
+  whole_transcript: {
+    label: "Loading a whole conversation at once",
+    guidance: "Load earlier messages a page at a time, then try again after memory recovers.",
+  },
+  older_history: {
+    label: "Loading more older messages",
+    guidance: "Keep working with the messages already loaded, then try again after memory recovers.",
+  },
+  background_session: {
+    label: "Preparing another conversation in the background",
+    guidance: "Open that conversation when you need it rather than preparing it ahead of time.",
+  },
+  speculative_worker: {
+    label: "Preparing project work ahead of time",
+    guidance: "Start that work explicitly when you are ready for it.",
+  },
+  new_project_worker: {
+    label: "Starting work in another project",
+    guidance: "Finish or close other project work, then try again.",
+  },
+  worker_free_full_read: {
+    label: "Reading a whole saved conversation at once",
+    guidance: "Open the conversation and load earlier messages a page at a time.",
+  },
+} as const satisfies Readonly<Record<MemoryPressureRefusal, { label: string; guidance: string }>>;
+
+export interface PressureHostState {
+  available: boolean;
+  level: MemoryPressureLevelState;
+  roles: MemoryPressureRoleState[];
+  totals?: MemoryPressureSummary["totals"] | undefined;
+  refusing: MemoryPressureRefusal[];
+}
+
+/** The host decides from itself, workers and the machine; never its unknown renderer row. */
+export function pressureHostState(summary: MemoryPressureSummary | undefined): PressureHostState {
+  if (!summary) return { available: false, level: "unknown", roles: [], refusing: [] };
+  const roles = summary.roles.filter((row) => row.role !== "desktop_renderer");
+  return {
+    available: true,
+    level: aggregateMemoryPressureLevel(roles.map((row) => row.level)),
+    roles,
+    totals: summary.totals,
+    refusing: [...summary.refusing],
+  };
+}
+
+export function pressureCoverage(role: MemoryPressureRoleState): string {
+  const { expected, answered } = role.coverage;
+  if (expected === 0) return role.role === "project_worker" ? "No live project workers to measure" : "Nothing live to measure";
+  if (role.coverage.complete) return `${answered} of ${expected} answered`;
+  return `${answered} of ${expected} answered · coverage is incomplete`;
+}
+
+export interface PressureRefusalView {
+  kind: MemoryPressureRefusal;
+  label: string;
+  guidance: string;
+  owners: string;
+}
+
+export function pressureRefusalViews(
+  host: readonly MemoryPressureRefusal[],
+  window: readonly MemoryPressureRefusal[],
+): PressureRefusalView[] {
+  const kinds = new Set<MemoryPressureRefusal>([...host, ...window]);
+  return [...kinds].map((kind) => {
+    const owners = [host.includes(kind) ? "Application" : undefined, window.includes(kind) ? "This window" : undefined]
+      .filter((owner): owner is string => owner !== undefined)
+      .join(" and ");
+    return { kind, ...PRESSURE_REFUSAL_COPY[kind], owners };
+  });
+}
+
+export interface PressureActionView {
+  action: MemoryPressureAction;
+  label: string;
+  outcome: string;
+  reason: string;
+  released?: { count?: number | undefined; bytes?: number | undefined } | undefined;
+}
+
+/** A local action row projected only through fixed enum language. */
+export function pressureActionView(row: MemoryPressureActionResult): PressureActionView {
+  const reason = row.reason
+    ? PRESSURE_REASON_SENTENCES[row.reason]
+    : row.refusal
+      ? PRESSURE_REFUSAL_COPY[row.refusal].guidance
+      : PRESSURE_OUTCOME_LABELS[row.outcome];
+  return {
+    action: row.action,
+    label: PRESSURE_ACTION_LABELS[row.action],
+    outcome: PRESSURE_OUTCOME_LABELS[row.outcome],
+    reason,
+    ...(row.released ? { released: row.released } : {}),
+  };
 }
 
 export interface ProcessNode {

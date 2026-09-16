@@ -2,7 +2,7 @@
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { ResourceMeasure, ResourceProcess, ResourceRetention, ResourceSnapshot } from "@lasercode/protocol";
+import { parseMemoryPressureSummary, type ResourceMeasure, type ResourceProcess, type ResourceRetention, type ResourceSnapshot } from "@lasercode/protocol";
 
 const fixture = vi.hoisted(() => ({
   state: undefined as any,
@@ -17,6 +17,7 @@ const fixture = vi.hoisted(() => ({
   poll: vi.fn(),
   pollStop: vi.fn(),
   pollRefresh: undefined as (() => void) | undefined,
+  pressure: undefined as any,
 }));
 
 vi.mock("@/runtime", () => ({
@@ -26,6 +27,7 @@ vi.mock("@/runtime", () => ({
     rendererViews: () => ({ hydrated: Object.keys(fixture.state.open).length, bytes: 4_096 }),
   }),
   useLaserState: (selector: (state: unknown) => unknown) => selector(fixture.state),
+  useRendererPressure: () => fixture.pressure,
 }));
 vi.mock("@/components/workbench", () => ({ useWorkbench: () => ({ close: fixture.close }) }));
 vi.mock("@/fleet/fleet-state", () => ({ revealInFleet: fixture.reveal }));
@@ -109,6 +111,20 @@ beforeEach(() => {
   fixture.poll.mockReset();
   fixture.pollStop.mockReset();
   fixture.pollRefresh = undefined;
+  fixture.pressure = {
+    level: "unknown",
+    effective: "unknown",
+    inputs: [],
+    refusing: [],
+    rows: [],
+    totals: { passes: 0, released: { count: 0, bytes: 0 }, refusals: 0 },
+    host: { level: "unknown" },
+    counters: {
+      samples: 0, sampleFailures: 0, staleSamples: 0, passes: 0, passesStoppedEarly: 0,
+      stepFailures: 0, directivesAccepted: 0, directivesStale: 0, directivesMalformed: 0,
+      refusals: 0, refusalsSuppressed: 0, callbackFailures: 0,
+    },
+  };
   fixture.state = {
     sessions: [{ id: "s1", path: "/p/s1.jsonl", cwd: "/p", createdAt: snapshot.at, modifiedAt: snapshot.at, messageCount: 1 }],
     agents: { runs: { r1: { runId: "r1", sessionPath: "/p/s1.jsonl", status: "running" } } },
@@ -243,7 +259,7 @@ it("shows honest summaries, retained-state table semantics, human copy and keybo
   expect(body).toContain("Process detailsWorking");
   expect(body).toContain("No desktop measurement is available yet");
   expect(body).toContain("3,600 samples");
-  expect(container!.querySelectorAll('[data-slot="number-ticker"]')).toHaveLength(3);
+  expect(container!.querySelectorAll('[aria-labelledby="resource-memory-title"] [data-slot="number-ticker"]')).toHaveLength(3);
   const table = container!.querySelector<HTMLTableElement>('[data-section="retained-state"] table')!;
   expect(table).toBeInstanceOf(HTMLTableElement);
   expect(table.querySelector("caption")?.textContent).toBe("Retained state by store and owner");
@@ -268,6 +284,53 @@ it("shows honest summaries, retained-state table semantics, human copy and keybo
   expect(unavailableValue.className).not.toContain("truncate");
   expect(text()).not.toContain("Associations hosted by a process");
   expect(text()).toContain("They do not divide or allocate its memory");
+});
+
+it("separates the host aggregate from this window and explains active critical refusals", async () => {
+  const role = (name: "host" | "project_worker" | "desktop_renderer" | "machine", level: "normal" | "warning" | "critical") => ({
+    role: name,
+    level,
+    sampleAgeMs: 500,
+    inputs: [{ kind: "physical" as const, value: { status: "available" as const, value: level === "normal" ? 100 : level === "warning" ? 250 : 300 }, warningBytes: 200, criticalBytes: 300 }],
+    coverage: { expected: 1, answered: 1, complete: true },
+  });
+  const pressure = parseMemoryPressureSummary({
+    // The protocol aggregate includes the renderer row. The surface must not.
+    level: "critical",
+    roles: [role("host", "normal"), role("project_worker", "normal"), role("desktop_renderer", "critical"), role("machine", "warning")],
+    refusing: ["new_project_worker"],
+    totals: { events: 8, released: { count: 5, bytes: 4_096 }, refusals: 2 },
+    latestEventId: "mp_8",
+  });
+  const pressured = { ...snapshot, pressure };
+  fixture.pressure = {
+    ...fixture.pressure,
+    level: "critical",
+    effective: "critical",
+    sampleAgeMs: 250,
+    inputs: [{ kind: "physical", value: { status: "available", value: 400 }, warningBytes: 200, criticalBytes: 300 }],
+    refusing: ["whole_transcript"],
+    rows: [{ atMs: Date.now() - 100, level: "critical", action: "admission_refused", outcome: "refused", refusal: "whole_transcript" }],
+    totals: { passes: 2, released: { count: 3, bytes: 2_048 }, refusals: 1 },
+    host: { level: "warning", epoch: 2, atMs: Date.now() },
+  };
+  fixture.client.request.mockImplementation((method: string) => method === "resource/snapshot"
+    ? Promise.resolve({ snapshot: pressured, retention })
+    : Promise.resolve({ snapshots: [pressured], retention }));
+  ({ root, container } = await render(<TooltipProvider><ResourceDiagnostics /></TooltipProvider>));
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+  const section = container!.querySelector('[data-section="memory-pressure"]')!;
+  expect(section.textContent).toContain("Application · Memory is tight");
+  expect(section.textContent).not.toContain("Application · Memory is critically low");
+  expect(section.textContent).toContain("This window · Memory is critically low");
+  expect(section.textContent).toContain("Loading a whole conversation at once");
+  expect(section.textContent).toContain("Load earlier messages a page at a time");
+  expect(section.textContent).toContain("Starting work in another project");
+  expect(section.textContent).toContain("Finish or close other project work");
+  expect(section.textContent).toContain("Latest memory-pressure actions in this window");
+  expect(section.textContent).not.toMatch(/mp_8|epoch|desktop_renderer|new_project_worker|whole_transcript/);
+  expect(section.querySelector('[data-pressure-role="desktop_renderer"]')).not.toBeNull();
 });
 
 it("renders the retained counters the host reports, and says what is still missing from them", async () => {

@@ -3,6 +3,9 @@
 import {
   RESOURCE_HISTORY_PAGE_MAX,
   isTerminalRunStatus,
+  type MemoryPressureInput,
+  type MemoryPressureLevelState,
+  type MemoryPressureRoleState,
   type ResourceMeasure,
   type ResourceProcess,
   type ResourceRetention,
@@ -26,7 +29,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { revealInFleet } from "@/fleet/fleet-state";
 import { dateTime, duration, formatBytes, formatElapsed, relativeTime } from "@/format";
 import { cn } from "@/lib/utils";
-import { useLaserStable, useLaserState } from "@/runtime";
+import { useLaserStable, useLaserState, useRendererPressure, type RendererPressureState } from "@/runtime";
 import { rendererViewsStore } from "@/runtime/view-cache";
 import { startVisiblePoll } from "@/runtime/visible-poll";
 
@@ -35,6 +38,13 @@ import {
   measureCell,
   physicalMeasure,
   physicalMeasureKind,
+  pressureActionView,
+  pressureCoverage,
+  pressureHostState,
+  PRESSURE_INPUT_LABELS,
+  PRESSURE_LEVEL_LABELS,
+  PRESSURE_ROLE_LABELS,
+  pressureRefusalViews,
   processTree,
   resolveRunAssociation,
   resolveSessionAssociation,
@@ -75,6 +85,7 @@ function mergeHistory(current: readonly ResourceSnapshot[], incoming: readonly R
 
 export function ResourceDiagnostics({ optionalStores }: ResourceDiagnosticsProps) {
   const { client, rendererViews } = useLaserStable();
+  const pressure = useRendererPressure();
   const open = useLaserState((state) => state.open);
   const catalogGroups = useLaserState((state) => state.catalogGroups);
   const sessionsLoaded = useLaserState((state) => state.sessionsLoaded);
@@ -331,6 +342,8 @@ export function ResourceDiagnostics({ optionalStores }: ResourceDiagnosticsProps
           </div>
         </section>
 
+        <PressureDiagnostics summary={snapshot.pressure} windowState={pressure} />
+
         <section aria-labelledby="resource-history-title" className="rounded-xl border border-line bg-surface p-4">
           <h3 id="resource-history-title" className="text-sm font-semibold text-ink">Bounded history</h3>
           {completeHistory >= 2 ? (
@@ -436,6 +449,230 @@ function MemoryCard({ label, summary }: { label: string; summary: { current: Met
         </div>
         <p className="text-xs text-ink-3">{summary.coverage}</p>
       </div>
+    </div>
+  );
+}
+
+function pressureBadgeVariant(level: MemoryPressureLevelState): "ok" | "attention" | "danger" | "outline" {
+  if (level === "normal") return "ok";
+  if (level === "warning") return "attention";
+  if (level === "critical") return "danger";
+  return "outline";
+}
+
+function pressureInputValue(input: MemoryPressureInput): string {
+  const value = displayMetric(measureCell(input.value), true);
+  if (input.warningBytes === undefined || input.criticalBytes === undefined) return value;
+  const direction = input.kind === "machine_available" ? "below" : "at";
+  return `${value} · tight ${direction} ${formatBytes(input.warningBytes)} · critical ${direction} ${formatBytes(input.criticalBytes)}`;
+}
+
+function pressureRoleRows(role: MemoryPressureRoleState): SpecRow[] {
+  return [
+    { label: "Coverage", value: pressureCoverage(role), wrap: true },
+    ...(role.sampleAgeMs === undefined ? [] : [{ label: "Newest reading", value: `${formatElapsed(role.sampleAgeMs)} old` }]),
+    ...role.inputs.map((input) => ({
+      label: PRESSURE_INPUT_LABELS[input.kind],
+      value: pressureInputValue(input),
+      typed: input.value.status === "available",
+      wrap: true,
+    })),
+    ...(role.ceiling?.configuredBytes === undefined ? [] : [{ label: "Configured limit", value: formatBytes(role.ceiling.configuredBytes), typed: true }]),
+    ...(role.ceiling?.measuredLimit === undefined ? [] : [{ label: "Measured limit", value: displayMetric(measureCell(role.ceiling.measuredLimit), true), typed: true, wrap: true }]),
+  ];
+}
+
+function PressureRoleCard({ role }: { role: MemoryPressureRoleState }) {
+  return (
+    <div className="rounded-xl border border-line bg-surface p-3" data-pressure-role={role.role}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h4 className="text-sm font-medium text-ink">{PRESSURE_ROLE_LABELS[role.role]}</h4>
+        <Badge variant={pressureBadgeVariant(role.level)}>{PRESSURE_LEVEL_LABELS[role.level]}</Badge>
+      </div>
+      <SpecSheet bare className="mt-3" rows={pressureRoleRows(role)} />
+    </div>
+  );
+}
+
+interface PressureActionRow {
+  id: string;
+  action: string;
+  result: string;
+  reason: string;
+  age: string;
+}
+
+const PRESSURE_ACTION_COLUMNS: readonly DataTableColumn<PressureActionRow>[] = [
+  { key: "action", label: "Action", render: (row) => <span className="font-medium text-ink">{row.action}</span> },
+  { key: "result", label: "Result", render: (row) => <span>{row.result}</span> },
+  { key: "reason", label: "Why", render: (row) => <span className="whitespace-normal text-ink-2">{row.reason}</span> },
+  { key: "age", label: "When", align: "end", render: (row) => <span className="typed text-ink-2">{row.age}</span> },
+];
+
+function PressureDiagnostics({
+  summary,
+  windowState,
+}: {
+  summary: ResourceSnapshot["pressure"];
+  windowState: RendererPressureState;
+}) {
+  const host = pressureHostState(summary);
+  const refusals = pressureRefusalViews(host.refusing, windowState.refusing);
+  const localInputs: SpecRow[] = [
+    {
+      label: "Coverage",
+      value: windowState.inputs.length > 0 ? "Measured in this window" : "No local measurement is available yet",
+      wrap: true,
+    },
+    {
+      label: "Local reading",
+      value: PRESSURE_LEVEL_LABELS[windowState.level],
+      emphasis: true,
+    },
+    ...(windowState.host.level === "unknown" ? [] : [{ label: "Application signal", value: PRESSURE_LEVEL_LABELS[windowState.host.level] }]),
+    ...(windowState.sampleAgeMs === undefined ? [] : [{ label: "Newest reading", value: `${formatElapsed(windowState.sampleAgeMs)} old` }]),
+    ...windowState.inputs.map((input) => ({
+      label: input.kind === "physical" ? "Private resident memory" : PRESSURE_INPUT_LABELS[input.kind],
+      value: pressureInputValue(input),
+      typed: input.value.status === "available",
+      wrap: true,
+    })),
+  ];
+  if (windowState.inputs.length === 0) {
+    localInputs.push({ label: "Measurement", value: "Nothing missing is treated as zero.", wrap: true });
+  }
+  const actionRows = windowState.rows.slice(0, 8).map((row, index): PressureActionRow => {
+    const view = pressureActionView(row);
+    const released = view.released
+      ? [view.released.count === undefined ? undefined : `${view.released.count.toLocaleString()} items`, view.released.bytes === undefined ? undefined : formatBytes(view.released.bytes)]
+          .filter((part): part is string => part !== undefined)
+          .join(" · ")
+      : undefined;
+    return {
+      id: `${row.atMs}-${row.action}-${index}`,
+      action: view.label,
+      result: released ? `${view.outcome} · ${released}` : view.outcome,
+      reason: view.reason,
+      age: `${formatElapsed(Math.max(0, Date.now() - row.atMs))} ago`,
+    };
+  });
+
+  return (
+    <section data-section="memory-pressure" aria-labelledby="resource-pressure-title" className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 id="resource-pressure-title" className="text-sm font-semibold text-ink">Memory pressure</h3>
+          <p className="mt-0.5 max-w-180 text-xs leading-5 text-ink-2">
+            The application state combines the host, this computer and project workers. This window measures and protects itself separately.
+          </p>
+          <p className="mt-0.5 max-w-180 text-xs leading-5 text-ink-3">
+            Updates may be combined while this window catches up. Refresh reads the current state again.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Badge variant={pressureBadgeVariant(host.level)}>Application · {host.available ? PRESSURE_LEVEL_LABELS[host.level] : "Not available"}</Badge>
+          <Badge variant={pressureBadgeVariant(windowState.effective)}>This window · {PRESSURE_LEVEL_LABELS[windowState.effective]}</Badge>
+        </div>
+      </div>
+
+      {host.available ? (
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          {host.roles.map((role) => <PressureRoleCard key={role.role} role={role} />)}
+          <div className="rounded-xl border border-line bg-surface p-3" data-pressure-role="desktop_renderer">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h4 className="text-sm font-medium text-ink">This window</h4>
+              <Badge variant={pressureBadgeVariant(windowState.effective)}>{PRESSURE_LEVEL_LABELS[windowState.effective]}</Badge>
+            </div>
+            <SpecSheet bare className="mt-3" rows={localInputs} />
+          </div>
+        </div>
+      ) : (
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="rounded-xl border border-line bg-surface px-4 py-5">
+            <p className="text-sm font-medium text-ink">Application pressure is not available</p>
+            <p className="mt-1 text-xs leading-5 text-ink-2">This host did not include pressure state in its latest sample. It is not shown as normal.</p>
+          </div>
+          <div className="rounded-xl border border-line bg-surface p-3" data-pressure-role="desktop_renderer">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h4 className="text-sm font-medium text-ink">This window</h4>
+              <Badge variant={pressureBadgeVariant(windowState.effective)}>{PRESSURE_LEVEL_LABELS[windowState.effective]}</Badge>
+            </div>
+            <SpecSheet bare className="mt-3" rows={localInputs} />
+          </div>
+        </div>
+      )}
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        <div className="rounded-xl border border-line bg-surface p-3">
+          <h4 className="text-sm font-medium text-ink">Retained host journal</h4>
+          {host.totals ? (
+            <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <PressureTotal label="Actions" value={host.totals.events} />
+              <PressureTotal label="Items released" value={host.totals.released.count} />
+              <PressureTotal label="Bytes released" value={formatBytes(host.totals.released.bytes)} />
+              <PressureTotal label="Refusals" value={host.totals.refusals} />
+            </div>
+          ) : (
+            <p className="mt-2 text-xs leading-5 text-ink-2">Journal totals are not available from this host.</p>
+          )}
+          <p className="mt-3 text-xs leading-5 text-ink-3">Only totals are carried in each history sample; action rows are retained once in the host journal.</p>
+        </div>
+        <div className="rounded-xl border border-line bg-surface p-3">
+          <h4 className="text-sm font-medium text-ink">This window’s bounded history</h4>
+          <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <PressureTotal label="Passes" value={windowState.totals.passes} />
+            <PressureTotal label="Items released" value={windowState.totals.released.count} />
+            <PressureTotal label="Bytes released" value={formatBytes(windowState.totals.released.bytes)} />
+            <PressureTotal label="Refusals" value={windowState.totals.refusals} />
+          </div>
+          <p className="mt-3 text-xs leading-5 text-ink-3">The latest local action reasons stay only in this window and reset when its environment changes.</p>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-line bg-surface p-3">
+        <h4 className="text-sm font-medium text-ink">Active protections</h4>
+        {refusals.length > 0 ? (
+          <div className="mt-3 grid gap-2 md:grid-cols-2">
+            {refusals.map((refusal) => (
+              <div key={refusal.kind} className="rounded-lg bg-surface-2 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="attention">Paused</Badge>
+                  <p className="text-sm font-medium text-ink">{refusal.label}</p>
+                </div>
+                <p className="mt-1 text-xs leading-5 text-ink-2">{refusal.guidance}</p>
+                <p className="mt-1 text-xs text-ink-3">Protected by {refusal.owners}.</p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="mt-2 text-xs leading-5 text-ink-2">No heavy reads or new work are paused for memory right now.</p>
+        )}
+      </div>
+
+      {actionRows.length > 0 ? (
+        <DataTable
+          data-section="pressure-actions"
+          columns={PRESSURE_ACTION_COLUMNS}
+          rows={actionRows}
+          rowKey={(row) => row.id}
+          caption="Latest memory-pressure actions in this window"
+          minWidth="38rem"
+        />
+      ) : (
+        <div className="rounded-xl border border-line bg-surface px-4 py-5">
+          <p className="text-sm font-medium text-ink">No local release actions yet</p>
+          <p className="mt-1 text-xs leading-5 text-ink-2">This window will record a reason here when it releases rebuildable state or pauses a heavy read.</p>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function PressureTotal({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div>
+      <p className="eyebrow">{label}</p>
+      <NumberTicker value={typeof value === "number" ? value.toLocaleString() : value} label={label} className="typed mt-0.5 text-ink" />
     </div>
   );
 }
