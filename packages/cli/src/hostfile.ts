@@ -10,10 +10,15 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createConnection } from "node:net";
 import { dirname, join } from "node:path";
+import { launchIdSchema } from "@lasercode/protocol";
 import type { LaserPaths } from "./config.js";
 
 export interface HostRecord {
   pid: number;
+  /** Atomic lifecycle: only `ready` records may be adopted. */
+  state: "starting" | "ready";
+  /** Exact launcher-minted identity echoed by this process's health response. */
+  launchId: string;
   host: string;
   port: number;
   url: string;
@@ -55,6 +60,8 @@ export function readHostFile(path: string): HostRecord | undefined {
     }
     return {
       pid: parsed.pid,
+      state: parsed.state === "ready" ? "ready" : "starting",
+      launchId: typeof parsed.launchId === "string" ? parsed.launchId : "",
       host: parsed.host,
       port: parsed.port,
       url: parsed.url ?? `http://${parsed.host}:${parsed.port}`,
@@ -78,7 +85,8 @@ export function writeHostFile(path: string, record: HostRecord): void {
   renameSync(tmp, path);
 }
 
-export function clearHostFile(path: string): void {
+export function clearHostFile(path: string, expectedLaunchId?: string): void {
+  if (expectedLaunchId !== undefined && readHostFile(path)?.launchId !== expectedLaunchId) return;
   rmSync(path, { force: true });
 }
 
@@ -139,18 +147,26 @@ export function isRecordedProcess(record: HostRecord): boolean | undefined {
   return current === record.identity;
 }
 
-/** `GET /healthz`. Resolves false on any failure, including a timeout. */
-export async function probeHealth(url: string, timeoutMs = 1500): Promise<boolean> {
+/** `GET /healthz`; returns the valid identity the answering process proved. */
+export async function probeHealthLaunch(url: string, timeoutMs = 1500): Promise<string | undefined> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(`${url}/healthz`, { signal: controller.signal });
-    return response.ok && (await response.text()).trim() === "ok";
+    if (!response.ok) return undefined;
+    const body = await response.json() as { status?: unknown; launchId?: unknown };
+    return body.status === "ok" && launchIdSchema.safeParse(body.launchId).success ? body.launchId as string : undefined;
   } catch {
-    return false;
+    return undefined;
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** Only a valid exact launch identity proves readiness. */
+export async function probeHealth(url: string, timeoutMs = 1500, expectedLaunchId?: string): Promise<boolean> {
+  const launchId = await probeHealthLaunch(url, timeoutMs);
+  return launchId !== undefined && (expectedLaunchId === undefined || launchId === expectedLaunchId);
 }
 
 /** True when something accepts a TCP connection on the port. */
@@ -181,10 +197,17 @@ export async function inspectHost(paths: Pick<LaserPaths, "hostFile">, timeoutMs
     clearHostFile(paths.hostFile);
     return { state: "stopped", removedStaleRecord: true };
   }
-  if (await probeHealth(record.url, timeoutMs)) return { state: "running", record };
+  if (record.state !== "ready" || !launchIdSchema.safeParse(record.launchId).success) {
+    return {
+      state: "unreachable",
+      record,
+      reason: `process ${record.pid} is alive but has not published a verified ready identity`,
+    };
+  }
+  if (await probeHealth(record.url, timeoutMs, record.launchId)) return { state: "running", record };
   return {
     state: "unreachable",
     record,
-    reason: `process ${record.pid} is alive but ${record.url}/healthz did not answer within ${timeoutMs} ms`,
+    reason: `process ${record.pid} is alive but ${record.url}/healthz did not confirm launch ${record.launchId} within ${timeoutMs} ms`,
   };
 }

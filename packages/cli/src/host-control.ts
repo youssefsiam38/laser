@@ -6,10 +6,11 @@
  * host attaches to it and prints the URL, which is what a person means when
  * they type it a second time.
  */
-import { PRODUCT_NAME, environmentOverlay, nodeLaunchEnvironment } from "@lasercode/protocol";
+import { ENV, PRODUCT_NAME, environmentOverlay, nodeLaunchEnvironment } from "@lasercode/protocol";
 import { hostOldSpaceMiB, oldSpaceSizeFlag } from "@lasercode/host";
 import { HostRpc, HostRpcError } from "./rpc.js";
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { closeSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -55,6 +56,11 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 
 export { nodeLaunchEnvironment };
 
+/** Minted by the launcher, before the host process exists. */
+export function newLaunchId(): string {
+  return randomBytes(16).toString("hex");
+}
+
 /** Node argv for every CLI-owned host generation: flag, then script. */
 export function hostDaemonArgv(paths: LaserPaths, capacityBytes?: number, entry = cliEntry()): string[] {
   return [oldSpaceSizeFlag(hostOldSpaceMiB(capacityBytes)), entry, "__daemon", ...daemonArgs(paths)];
@@ -83,12 +89,13 @@ export async function runForegroundHost(
   } = {},
 ): Promise<ForegroundHostResult> {
   mkdirSync(paths.stateDir, { recursive: true });
+  const launchId = newLaunchId();
   const child = spawn(
     options.nodeBinary ?? process.execPath,
     hostDaemonArgv(paths, options.capacityBytes, options.entry ?? cliEntry()),
     {
       stdio: "inherit",
-      env: nodeLaunchEnvironment(options.env ?? process.env),
+      env: { ...nodeLaunchEnvironment(options.env ?? process.env), [ENV.hostLaunchId]: launchId },
       cwd: paths.stateDir,
     },
   );
@@ -144,13 +151,14 @@ export async function startHost(paths: LaserPaths, timeoutMs = 30_000): Promise<
 
   await assertPortIsOurs(paths);
 
+  const launchId = newLaunchId();
   const argv = hostDaemonArgv(paths);
   mkdirSync(paths.stateDir, { recursive: true });
   const logFd = openSync(paths.logFile, "a");
   const child = spawn(process.execPath, argv, {
     detached: true,
     stdio: ["ignore", logFd, logFd],
-    env: nodeLaunchEnvironment(process.env),
+    env: { ...nodeLaunchEnvironment(process.env), [ENV.hostLaunchId]: launchId },
     cwd: paths.stateDir,
   });
   closeSync(logFd);
@@ -166,7 +174,15 @@ export async function startHost(paths: LaserPaths, timeoutMs = 30_000): Promise<
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const status = await inspectHost(paths, 1000);
-    if (status.state === "running") return { record: status.record, started: true };
+    if (status.state === "running") {
+      if (status.record.launchId !== launchId) {
+        throw new CliError(`the ${PRODUCT_NAME} host that answered is not the process this command started`, {
+          details: ["The launch identity changed while the host was starting."],
+          fix: `Run \`${PRODUCT_NAME} status\`, then quit the other copy before trying again.`,
+        });
+      }
+      return { record: status.record, started: true };
+    }
     if (spawnError) {
       throw new CliError(`could not start the ${PRODUCT_NAME} host: ${spawnError.message}`, {
         fix: `${PRODUCT_NAME} tried to run: ${process.execPath} ${cliEntry()} __daemon`,

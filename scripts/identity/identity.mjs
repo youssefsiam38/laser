@@ -28,6 +28,7 @@ export const ENV_NAMES = /** @type {const} */ ([
   "EXTENSION_NAME",
   "FEATURES",
   "HOME",
+  "HOST_LAUNCH_ID",
   "MCP_LIVE",
   "NODE",
   "NODE_MIRROR",

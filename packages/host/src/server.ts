@@ -26,6 +26,7 @@
  * and tests (which send none) keep working.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
@@ -81,6 +82,8 @@ import { WorkerPool, type WorkerPoolOptions } from "./worker-pool.js";
 export interface HostServerOptions {
   host?: string;
   port?: number;
+  /** Launcher-minted identity echoed by health; production always supplies it. */
+  launchId?: string;
   agentDir?: string;
   sessionDir?: string;
   workerMain?: string;
@@ -355,8 +358,10 @@ export class HostServer {
   private readonly namerQualified = new Set<string>();
   /** Bounded harness-failure handoff through exact successor workers. */
   private readonly agentFailureRecovery: AgentFailureRecoveryQueue;
+  private readonly launchId: string;
 
   constructor(private readonly options: HostServerOptions = {}) {
+    this.launchId = options.launchId ?? randomBytes(16).toString("hex");
     this.uiDir = options.uiDir ?? defaultUiDir();
     const agentDir = options.agentDir ?? defaultAgentDir();
     const stateDir = options.stateDir ?? defaultStateDir();
@@ -1712,7 +1717,8 @@ export class HostServer {
   private serveFile(req: IncomingMessage, res: ServerResponse): void {
     const url = new URL(req.url ?? "/", "http://localhost");
     if (url.pathname === "/healthz") {
-      res.writeHead(200, { "content-type": "text/plain" }).end("ok");
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" })
+        .end(JSON.stringify({ status: "ok", launchId: this.launchId }));
       return;
     }
     if (!this.uiDir) {

@@ -13,7 +13,8 @@ import { writeHostFile } from "../src/hostfile.js";
 
 it.each(["success", "unsupported", "failed", "disconnect", "timeout"])("terminal adoption is advisory on refresh %s", async (reply) => {
   const root = mkdtempSync(join(tmpdir(), "cli-env-"));
-  const server = createServer((_req, res) => res.end("ok"));
+  const launchId = "0123456789abcdef0123456789abcdef";
+  const server = createServer((req, res) => res.end(req.url === "/healthz" ? JSON.stringify({ status: "ok", launchId }) : ""));
   const sockets = new WebSocketServer({ server, path: "/ws" });
   let received = false;
   sockets.on("connection", (socket) => socket.on("message", (data) => {
@@ -31,7 +32,7 @@ it.each(["success", "unsupported", "failed", "disconnect", "timeout"])("terminal
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const port = (server.address() as AddressInfo).port;
   const paths = resolvePaths({ flags: {}, positionals: [], rest: [], hasRest: false }, { HOME: root, [ENV.agentDir]: join(root, "agent"), [ENV.stateDir]: join(root, "state"), [ENV.port]: String(port) });
-  const record = { pid: process.pid, host: "127.0.0.1", port, url: `http://127.0.0.1:${port}`, agentDir: paths.agentDir, sessionDir: paths.sessionDir, stateDir: paths.stateDir, startedAt: new Date().toISOString(), cliVersion: PRODUCT_VERSION };
+  const record = { pid: process.pid, state: "ready" as const, launchId, host: "127.0.0.1", port, url: `http://127.0.0.1:${port}`, agentDir: paths.agentDir, sessionDir: paths.sessionDir, stateDir: paths.stateDir, startedAt: new Date().toISOString(), cliVersion: PRODUCT_VERSION };
   writeHostFile(paths.hostFile, record);
   // Send only a minimal fixture environment; never the runner's credentials.
   const original = process.env;

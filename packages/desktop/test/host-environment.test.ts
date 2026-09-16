@@ -12,7 +12,8 @@ import { DesktopLog } from "../src/log.js";
 
 it("same-version adoption sends the desktop environment and normal Quit leaves the host alive", async () => {
   const root = mkdtempSync(join(tmpdir(), "desktop-env-"));
-  const server = createServer((_req, res) => res.end("ok"));
+  const launchId = "0123456789abcdef0123456789abcdef";
+  const server = createServer((req, res) => res.end(req.url === "/healthz" ? JSON.stringify({ status: "ok", launchId }) : ""));
   const sockets = new WebSocketServer({ server, path: "/ws" });
   let received: { method: string; keys: string[]; hasSyntheticValue: boolean } | undefined;
   sockets.on("connection", (socket) => socket.on("message", (data) => {
@@ -24,7 +25,7 @@ it("same-version adoption sends the desktop environment and normal Quit leaves t
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const port = (server.address() as AddressInfo).port;
   const paths = resolvePaths({ flags: {}, positionals: [], rest: [], hasRest: false }, { HOME: root, [ENV.agentDir]: join(root, "agent"), [ENV.stateDir]: join(root, "state"), [ENV.port]: String(port) });
-  writeHostFile(paths.hostFile, { pid: process.pid, host: "127.0.0.1", port, url: `http://127.0.0.1:${port}`, agentDir: paths.agentDir, sessionDir: paths.sessionDir, stateDir: paths.stateDir, startedAt: new Date().toISOString(), cliVersion: PRODUCT_VERSION });
+  writeHostFile(paths.hostFile, { pid: process.pid, state: "ready", launchId, host: "127.0.0.1", port, url: `http://127.0.0.1:${port}`, agentDir: paths.agentDir, sessionDir: paths.sessionDir, stateDir: paths.stateDir, startedAt: new Date().toISOString(), cliVersion: PRODUCT_VERSION });
   const log = new DesktopLog(join(root, "desktop.log"));
   const lines: string[] = [];
   vi.spyOn(log, "line").mockImplementation((line) => { lines.push(line); });

@@ -20,7 +20,11 @@ import {
   type JsonRpcError,
   type JsonRpcMessage,
   type JsonRpcNotification,
+  runtimeFailureSchema,
   type LineDecoderStats,
+  type RuntimeFailure,
+  type RuntimeFailureCategory,
+  type WorkerMode,
   type WorkerNotifications,
 } from "@lasercode/protocol";
 
@@ -62,6 +66,8 @@ export interface WorkerClientOptions {
   workerGeneration?: number;
   /** Explicit V8 old-space ceiling for this exact worker spawn, in MiB. */
   oldSpaceMiB?: number;
+  /** Effective feature mode for this spawn; desired preferences are never changed here. */
+  mode?: WorkerMode;
   /** Path to the worker entry; defaults to the workspace `@lasercode/worker` build. */
   workerMain?: string;
   /** Node binary to run the worker with; defaults to the current one. */
@@ -75,11 +81,12 @@ export interface WorkerClientOptions {
   onStderr?: (text: string) => void;
 }
 
-export type WorkerExitKind = "heap_oom" | "process_exit" | "spawn_error" | "transport_fault";
+export type WorkerExitKind = RuntimeFailureCategory;
 export interface WorkerExit {
   kind: WorkerExitKind;
   code: number | null;
   signal: NodeJS.Signals | null;
+  failure: RuntimeFailure;
 }
 
 const OOM_MARKER = /Reached heap limit|JavaScript heap out of memory|Allocation failed/i;
@@ -151,6 +158,8 @@ export class WorkerClient {
    * this value is never logged, never stored and never sent to a client.
    */
   readonly generation: string = randomBytes(8).toString("hex");
+  /** Exact 128-bit child identity, minted before spawn and required on its first frame. */
+  readonly launchId: string = randomBytes(16).toString("hex");
   /**
    * What *this spawn* is, as a number the worker can prove it was given (RP-8).
    *
@@ -193,13 +202,23 @@ export class WorkerClient {
   private rejectReady: ((error: Error) => void) | undefined;
   /** Only enough stderr to recognize stable fatal markers; never surfaced as status copy. */
   private stderrMarkerTail = "";
+  private announced = false;
+  private becameReady = false;
   readonly ready: Promise<void>;
 
   constructor(private readonly options: WorkerClientOptions) {
     const args: string[] = [];
     this.configuredOldSpaceBytes = options.oldSpaceMiB === undefined ? undefined : oldSpaceBytes(options.oldSpaceMiB);
     if (options.oldSpaceMiB !== undefined) args.push(oldSpaceSizeFlag(options.oldSpaceMiB));
-    args.push(options.workerMain ?? defaultWorkerMain(), "--cwd", options.cwd);
+    args.push(
+      options.workerMain ?? defaultWorkerMain(),
+      "--cwd",
+      options.cwd,
+      "--launch-id",
+      this.launchId,
+      "--worker-mode",
+      options.mode ?? "normal",
+    );
     if (options.agentDir) args.push("--agent-dir", options.agentDir);
     if (options.sessionDir) args.push("--session-dir", options.sessionDir);
     if (options.stateDir) args.push("--state-dir", options.stateDir);
@@ -246,6 +265,19 @@ export class WorkerClient {
         try {
           message = JSON.parse(line) as JsonRpcMessage;
         } catch {
+          if (!this.announced) this.faultLaunch("launch_identity_missing");
+          continue;
+        }
+        if (!this.announced) {
+          const params = isNotification(message) && message.method === "pi/worker/status"
+            ? message.params as { cwd?: unknown; status?: unknown; launchId?: unknown }
+            : undefined;
+          if (params?.status !== "starting" || params.cwd !== options.cwd || params.launchId !== this.launchId) {
+            this.faultLaunch(params?.launchId === undefined ? "launch_identity_missing" : "launch_identity_mismatch");
+            continue;
+          }
+          this.announced = true;
+          options.onNotification(message as JsonRpcNotification);
           continue;
         }
         if (isResponse(message)) {
@@ -255,8 +287,21 @@ export class WorkerClient {
           if (message.error) entry.reject(new WorkerRpcError(message.error));
           else entry.resolve(message.result);
         } else if (isNotification(message)) {
-          if (message.method === "pi/worker/status" && (message.params as { status?: string }).status === "ready") {
-            resolveReady();
+          if (message.method === "pi/worker/status") {
+            const params = message.params as { status?: unknown; launchId?: unknown; failure?: unknown };
+            if (params.launchId !== this.launchId) {
+              this.faultLaunch(params.launchId === undefined ? "launch_identity_missing" : "launch_identity_mismatch");
+              continue;
+            }
+            if (params.status === "ready") {
+              this.becameReady = true;
+              resolveReady();
+            } else if (params.status === "crashed" && !this.becameReady) {
+              const parsed = runtimeFailureSchema.safeParse(params.failure);
+              const failure = parsed.success ? parsed.data : this.failureFor("initialization_error");
+              this.faultLaunch(failure.category, failure);
+              continue;
+            }
           }
           options.onNotification(message);
         }
@@ -300,6 +345,7 @@ export class WorkerClient {
     code: number | null,
     signal: NodeJS.Signals | null,
     kind = classifyWorkerExit(this.stderrMarkerTail, code, signal),
+    failure = this.failureFor(kind),
   ): void {
     if (this.reported) return;
     this.reported = true;
@@ -309,7 +355,38 @@ export class WorkerClient {
     rejectReady(error);
     for (const entry of this.pending.values()) entry.reject(error);
     this.pending.clear();
-    this.options.onExit(code, signal, { kind, code, signal });
+    this.options.onExit(code, signal, { kind, code, signal, failure });
+  }
+
+  private failureFor(kind: WorkerExitKind): RuntimeFailure {
+    const stage = kind === "spawn_error" ? "spawn" : kind.startsWith("launch_identity_") ? "announce" : kind === "initialization_error" ? "initialize" : "runtime";
+    const message = kind === "heap_oom"
+      ? "This project's agent ran out of memory."
+      : kind === "spawn_error"
+        ? "This project's runtime could not start. Check the app installation, then try again."
+        : kind === "launch_identity_missing" || kind === "launch_identity_mismatch"
+          ? "The app could not verify the project runtime it started. Try again; if this continues, update or reinstall the app."
+          : kind === "transport_fault"
+            ? "The project runtime sent an invalid message and was stopped. Try again."
+            : kind === "initialization_error"
+              ? "This project's runtime did not start. Try again; if this continues, update or reinstall the app."
+              : "This project's runtime stopped before the work finished.";
+    return {
+      owner: { kind: "worker", launchId: this.launchId, cwd: this.options.cwd },
+      stage,
+      category: kind,
+      message,
+    };
+  }
+
+  /** A missing or mismatched first-frame identity can never become ready. */
+  private faultLaunch(kind: WorkerExitKind, failure = this.failureFor(kind)): void {
+    if (this.reported) return;
+    this.exited = true;
+    const error = new Error(failure.message);
+    try { this.pipe.destroy(); } catch { /* already closed */ }
+    try { this.child.kill("SIGKILL"); } catch { /* already gone */ }
+    this.settle(error, this.rejectReady ?? ((): void => {}), null, null, kind, failure);
   }
 
   /**

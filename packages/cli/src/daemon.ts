@@ -12,10 +12,10 @@
  * carries an identity for this process (see `processIdentity`) so a file left
  * behind by a crash or a power cut cannot be mistaken for a live host.
  */
-import { ENV, PRODUCT_NAME } from "@lasercode/protocol";
+import { ENV, PRODUCT_NAME, launchIdSchema } from "@lasercode/protocol";
 import { fromBase64Url, isAuthorized } from "@lasercode/crypto";
 import { HostServer, migrateFormerIdentities, type HostRelayOptions } from "@lasercode/host";
-import type { LaserPaths } from "./config.js";
+import { hostUrl, type LaserPaths } from "./config.js";
 import { clearHostFile, processIdentity, writeHostFile } from "./hostfile.js";
 import { deviceListOf, loadIdentity, loadStaticKey, readRelayConfig } from "./relay-config.js";
 import { CLI_VERSION } from "./version.js";
@@ -75,6 +75,28 @@ async function relayOptions(paths: LaserPaths, log: (line: string) => void): Pro
 export async function runDaemon(options: DaemonOptions): Promise<void> {
   const { paths } = options;
   const log = options.log ?? ((line: string) => process.stderr.write(`${line}\n`));
+  const launch = launchIdSchema.safeParse(process.env[ENV.hostLaunchId]);
+  if (!launch.success) throw new Error("the host launcher did not provide a valid launch identity");
+  const launchId = launch.data;
+  const identity = processIdentity(process.pid);
+  const startedAt = new Date().toISOString();
+  const recordBase = {
+    pid: process.pid,
+    launchId,
+    host: paths.host,
+    agentDir: paths.agentDir,
+    sessionDir: paths.sessionDir,
+    stateDir: paths.stateDir,
+    startedAt,
+    cliVersion: CLI_VERSION,
+    ...(identity !== undefined ? { identity } : {}),
+  };
+  writeHostFile(paths.hostFile, {
+    ...recordBase,
+    state: "starting",
+    port: paths.port,
+    url: hostUrl(paths),
+  });
 
   // If this product was renamed, the person's sessions, settings and paired
   // devices are still under the old directory name. Move them before anything
@@ -89,6 +111,7 @@ export async function runDaemon(options: DaemonOptions): Promise<void> {
     agentDir: paths.agentDir,
     sessionDir: paths.sessionDir,
     stateDir: paths.stateDir,
+    launchId,
     // Extra browser origins allowed to open the WebSocket, comma separated.
     // The desktop shell sets this when the UI is served by a dev server: Vite
     // proxies the browser's own Origin through, and the host has never heard
@@ -106,19 +129,12 @@ export async function runDaemon(options: DaemonOptions): Promise<void> {
   });
 
   const { url, port } = await server.listen();
-  // Recorded so `laser down` can prove this pid is still us before signalling.
-  const identity = processIdentity(process.pid);
+  // The ready transition is one atomic replacement of this launch's record.
   writeHostFile(paths.hostFile, {
-    pid: process.pid,
-    host: paths.host,
+    ...recordBase,
+    state: "ready",
     port,
     url,
-    agentDir: paths.agentDir,
-    sessionDir: paths.sessionDir,
-    stateDir: paths.stateDir,
-    startedAt: new Date().toISOString(),
-    cliVersion: CLI_VERSION,
-    ...(identity !== undefined ? { identity } : {}),
   });
   log(`${PRODUCT_NAME} host ready at ${url} (pid ${process.pid})`);
   process.stdout.write(`${url}\n`);
@@ -133,7 +149,7 @@ export async function runDaemon(options: DaemonOptions): Promise<void> {
     } catch (error) {
       log(`${PRODUCT_NAME} host close failed: ${error instanceof Error ? error.message : String(error)}`);
     }
-    clearHostFile(paths.hostFile);
+    clearHostFile(paths.hostFile, launchId);
     process.exit(code);
   };
 
