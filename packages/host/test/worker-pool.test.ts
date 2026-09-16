@@ -44,7 +44,7 @@ socket.on("data", (chunk) => {
     // that pins it, so it always agrees; a test that wants a refusal uses a
     // worker of its own (see session-lifetime.test.ts).
     if (req.method === "pi/worker/retire") { send({ jsonrpc: "2.0", id: req.id, result: { retiring: true } }); continue; }
-    if (req.method === "pi/test/argv") { send({ jsonrpc: "2.0", id: req.id, result: { argv: process.argv.slice(2), processCwd: process.cwd() } }); continue; }
+    if (req.method === "pi/test/argv") { send({ jsonrpc: "2.0", id: req.id, result: { argv: process.argv.slice(2), execArgv: process.execArgv, processCwd: process.cwd() } }); continue; }
     // RP-8: a worker's own pressure report, shaped as the real one is.
     if (req.method === "pi/test/pressure") {
       send({ jsonrpc: "2.0", method: "pi/resource/pressure", params: { generation: req.params.generation, level: "unknown", inputs: [], ran: [], results: [], stores: {} } });
@@ -88,6 +88,7 @@ let timers: Array<{ fn: () => void; ms: number }>;
 function makePool(options: Partial<ConstructorParameters<typeof WorkerPool>[0]> = {}): WorkerPool {
   return new WorkerPool({
     workerMain,
+    workerOldSpaceMiB: 1792,
     onNotification: (_cwd, n) => notifications.push(n),
     onStatus: (info) => statuses.push(info),
     setTimer: (fn, ms) => {
@@ -380,6 +381,9 @@ describe("WorkerPool", () => {
     pool = makePool({ idleMs: 0, sweepMs: 0 });
     await pool.get(project);
     const selected = pool.pressureWorkers()[0]!;
+    expect(selected.configuredOldSpaceBytes).toBe(1792 * 1024 * 1024);
+    const argv = await (await pool.get(project)).request<{ execArgv: string[] }>("pi/test/argv", {});
+    expect(argv.execArgv).toContain("--max-old-space-size=1792");
     expect(await pool.pressureDirective(project, selected, { level: "critical", epoch: 1, generation: selected.workerGeneration })).toMatchObject({
       applied: true,
       ran: ["ephemeral_caches"],

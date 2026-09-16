@@ -125,6 +125,7 @@ describe("a worker's pressure report at the pool", () => {
   it("counts only the workers a report can answer for", async () => {
     pool = new WorkerPool({
       workerMain: join(dir, "fake-worker.mjs"),
+      workerOldSpaceMiB: 1792,
       sweepMs: 0,
       onNotification: () => undefined,
       onWorkerPressure: () => undefined,
@@ -134,7 +135,12 @@ describe("a worker's pressure report at the pool", () => {
     const client = await pool.get(project);
     const workers = pool.pressureWorkers();
     expect(workers).toHaveLength(1);
-    expect(workers[0]).toEqual({ cwd: project, clientGeneration: client.generation, workerGeneration: client.workerGeneration });
+    expect(workers[0]).toEqual({
+      cwd: project,
+      clientGeneration: client.generation,
+      workerGeneration: client.workerGeneration,
+      configuredOldSpaceBytes: 1792 * 1024 * 1024,
+    });
 
     await pool.stop(project, "done");
     expect(pool.pressureWorkers()).toEqual([]);

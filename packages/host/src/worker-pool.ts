@@ -35,6 +35,7 @@ import { ErrorCodes, ProtocolError, environmentOverlay } from "@lasercode/protoc
 import { canonical } from "./trust.js";
 import { SessionRouteLeases } from "./session-route-lease.js";
 import { retirementRefused, retireWorker, type RetirementOutcome } from "./worker-retirement.js";
+import { workerOldSpaceMiB } from "./heap-ceiling.js";
 import { WorkerClient, nextWorkerGeneration, type WorkerClientOptions } from "./worker-client.js";
 
 export interface WorkerPoolOptions {
@@ -52,6 +53,8 @@ export interface WorkerPoolOptions {
   providerPayloads?: "full" | "summary";
   workerMain?: string;
   nodeBinary?: string;
+  /** Test-only validated override; production derives the final capped value once. */
+  workerOldSpaceMiB?: number;
   /** Extra environment for every worker (the bundled package manager, M10-T5). */
   env?: Readonly<Record<string, string>>;
   /** Environment resolved at spawn time, so project feature overrides apply. */
@@ -241,6 +244,7 @@ export class WorkerPool {
   private readonly sessionActivity = new Map<string, number>();
   private readonly now: () => number;
   private readonly setTimer: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
+  private readonly configuredWorkerOldSpaceMiB: number;
   private sweepTimer: ReturnType<typeof setInterval> | undefined;
   private closed = false;
   private preparing = false;
@@ -251,6 +255,7 @@ export class WorkerPool {
     this.leases = options.routeLeases ?? new SessionRouteLeases();
     this.now = options.now ?? Date.now;
     this.setTimer = options.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
+    this.configuredWorkerOldSpaceMiB = options.workerOldSpaceMiB ?? workerOldSpaceMiB();
     const sweepMs = options.sweepMs ?? DEFAULTS.sweepMs;
     if (sweepMs > 0) {
       this.sweepTimer = setInterval(() => this.sweep(), sweepMs);
@@ -288,13 +293,20 @@ export class WorkerPool {
    * at ingress, so counting it as expected coverage would make a row that can
    * never be answered. Never spawns, never blocks.
    */
-  pressureWorkers(): Array<{ cwd: string; clientGeneration: string; workerGeneration: number }> {
-    const out: Array<{ cwd: string; clientGeneration: string; workerGeneration: number }> = [];
+  pressureWorkers(): Array<{ cwd: string; clientGeneration: string; workerGeneration: number; configuredOldSpaceBytes?: number }> {
+    const out: Array<{ cwd: string; clientGeneration: string; workerGeneration: number; configuredOldSpaceBytes?: number }> = [];
     for (const entry of this.entries.values()) {
       if (entry.warm || !entry.client?.alive || entry.status !== "ready") continue;
       const workerGeneration = entry.client.workerGeneration;
       if (workerGeneration === undefined) continue;
-      out.push({ cwd: entry.cwd, clientGeneration: entry.client.generation, workerGeneration });
+      out.push({
+        cwd: entry.cwd,
+        clientGeneration: entry.client.generation,
+        workerGeneration,
+        ...(entry.client.configuredOldSpaceBytes !== undefined
+          ? { configuredOldSpaceBytes: entry.client.configuredOldSpaceBytes }
+          : {}),
+      });
     }
     return out;
   }
@@ -905,6 +917,7 @@ export class WorkerPool {
         ? { env: { ...(this.options.env ?? {}), ...(this.options.envForCwd?.(entry.cwd) ?? {}) } }
         : {}),
       ...(projectTrusted !== undefined ? { projectTrusted } : {}),
+      oldSpaceMiB: this.configuredWorkerOldSpaceMiB,
       onNotification: (n) => this.onWorkerNotification(entry, client, n),
       onExit: (code, signal) => this.onExit(entry, client, code, signal),
       ...(this.options.onStderr ? { onStderr: (t: string) => { if (!entry.warm) this.options.onStderr?.(entry.cwd, t); } } : {}),

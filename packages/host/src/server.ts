@@ -73,6 +73,7 @@ import { SessionBodyRange } from "./session-body-range.js";
 import { SessionRevisions } from "./session-revision.js";
 import { environmentIdentity, type EnvironmentIdentity } from "./environment-identity.js";
 import { ViewCache } from "./views.js";
+import { configuredOldSpaceBytes } from "./heap-ceiling.js";
 import { WorkerRetiredError, type WorkerClient } from "./worker-client.js";
 import { WorkerPool, type WorkerPoolOptions } from "./worker-pool.js";
 
@@ -557,6 +558,7 @@ export class HostServer {
       pressure: () => this.memoryPressure.exportSection(),
     });
 
+    const hostConfiguredOldSpaceBytes = configuredOldSpaceBytes(process.execArgv);
     // Memory pressure (RP-8). Self-sampled on its own small cadence: RP-1's
     // collector walks every process on demand, and a host looking at itself
     // every twenty seconds must not do that. E2's host pass uses only the body
@@ -580,6 +582,10 @@ export class HostServer {
         unloadIdle: (allow) => this.sessionLifetime.pressurePass(allow),
         retireIdle: (allow) => this.pool.retireIdleUnderPressure(allow),
       },
+    }, {
+      ...(hostConfiguredOldSpaceBytes !== undefined
+        ? { configuredHostOldSpaceBytes: hostConfiguredOldSpaceBytes }
+        : {}),
     });
 
     // The host resolves the package manager the workers should use — the one

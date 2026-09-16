@@ -15,6 +15,7 @@ import {
   parseMemoryPressurePublish,
   parseMemoryPressureSummary,
   type JsonRpcNotification,
+  type MemoryPressureCeiling,
   type MemoryPressureCoverage,
   type MemoryPressureExportSection,
   type MemoryPressureInput,
@@ -96,6 +97,8 @@ export interface HostPressureOptions {
   journal?: PressureJournal;
   directiveStageMs?: number;
   workerDirectiveSkipMs?: number;
+  /** Explicit old-space request parsed from this host process's Node argv. */
+  configuredHostOldSpaceBytes?: number;
 }
 
 /** The seams this controller reaches out through, for counting their failures. */
@@ -184,6 +187,7 @@ interface WorkerEvidence {
   reportedAgeMs: number | undefined;
   level: MemoryPressureLevelState;
   inputs: MemoryPressureInput[];
+  ceiling?: MemoryPressureCeiling;
 }
 
 interface DecisionState {
@@ -427,6 +431,7 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
     coverage: MemoryPressureCoverage;
     inputs: MemoryPressureInput[];
     sampleAgeMs: number | undefined;
+    ceiling?: MemoryPressureCeiling;
   }
 
   const workerLevelFor = (cwd: string | undefined, at: number): MemoryPressureLevelState => {
@@ -458,6 +463,11 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
       // Genuinely nothing to measure: no live worker is not a missing reading.
       return { level: "normal", coverage: emptyCoverage(), inputs: [], sampleAgeMs: undefined };
     }
+    const configuredValues = live.map((worker) => worker.configuredOldSpaceBytes);
+    const configuredBytes = configuredValues.length > 0
+      && configuredValues.every((value) => value !== undefined && value === configuredValues[0])
+      ? configuredValues[0]
+      : undefined;
     const answered: Array<{ record: WorkerEvidence; age: number }> = [];
     for (const worker of live) {
       const record = evidence.get(worker.cwd);
@@ -478,7 +488,13 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
     if (level === "unknown") {
       // The aggregate rests on evidence somebody could not give; showing one
       // worker's numbers beside it would explain the wrong thing.
-      return { level, coverage, inputs: [], sampleAgeMs: undefined };
+      return {
+        level,
+        coverage,
+        inputs: [],
+        sampleAgeMs: undefined,
+        ...(configuredBytes !== undefined ? { ceiling: { configuredBytes } } : {}),
+      };
     }
     // One row carries one input per kind, so it carries *one* worker's: the
     // worst of them, which is the one this level came from. Ties go to the most
@@ -497,6 +513,16 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
       coverage,
       inputs: chosen ? chosen.record.inputs : [],
       sampleAgeMs: chosen?.age,
+      ...(configuredBytes !== undefined || chosen?.record.ceiling?.measuredLimit !== undefined
+        ? {
+            ceiling: {
+              ...(configuredBytes !== undefined ? { configuredBytes } : {}),
+              ...(chosen?.record.ceiling?.measuredLimit !== undefined
+                ? { measuredLimit: chosen.record.ceiling.measuredLimit }
+                : {}),
+            },
+          }
+        : {}),
     };
   };
 
@@ -552,6 +578,7 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
         level: row.level,
         ...(row.sampleAgeMs !== undefined ? { sampleAgeMs: row.sampleAgeMs } : {}),
         inputs: row.inputs,
+        ...(row.ceiling !== undefined ? { ceiling: row.ceiling } : {}),
         coverage: row.coverage,
       };
     }
@@ -577,7 +604,12 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
         level: probe.host.level,
         ...(age !== undefined ? { sampleAgeMs: age } : {}),
         inputs: inputsOfHost(probe.sample, probe.host.usable),
-        ceiling: { measuredLimit: probe.sample.heapLimit },
+        ceiling: {
+          ...(options.configuredHostOldSpaceBytes !== undefined
+            ? { configuredBytes: options.configuredHostOldSpaceBytes }
+            : {}),
+          measuredLimit: probe.sample.heapLimit,
+        },
         coverage: answered
           ? { expected: 1, answered: 1, complete: true }
           : unknownCoverage(),
@@ -916,6 +948,7 @@ export function createHostPressureController(deps: HostPressureDeps, options: Ho
         reportedAgeMs: report.sampleAgeMs,
         level: report.level,
         inputs: report.inputs,
+        ...(report.ceiling !== undefined ? { ceiling: report.ceiling } : {}),
       });
       counters.reportsAccepted += 1;
       // A worker's autonomous report owns the rows of the pass it ran, and those
