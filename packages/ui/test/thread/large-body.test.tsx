@@ -3,7 +3,7 @@
  * RP-5b acceptance A10: what a person sees when the window is holding an
  * excerpt, and what reading the rest costs.
  *
- * The row says exactly how much is not shown and offers to read it; the viewer
+ * The row folds into the reply with one action that says how much there is; the viewer
  * pages in bounded slices and never builds the whole body; a reply still being
  * written says so instead of offering something that cannot be read yet.
  */
@@ -98,7 +98,7 @@ async function mount(entries: unknown[], leafId: string) {
 }
 
 describe("a reply the window is holding an excerpt of", () => {
-  it("says exactly how much is not shown and offers to read it", async () => {
+  it("folds into the reply with one action that says how much there is", async () => {
     await mount([
       { id: "e0", parentId: null, type: "message", message: { role: "user", content: [{ type: "text", text: "go" }] } },
       { id: "e1", parentId: "e0", type: "message", message: { role: "assistant", content: [{ type: "text", text: BODY }] } },
@@ -106,9 +106,8 @@ describe("a reply the window is holding an excerpt of", () => {
 
     const notice = container.querySelector('[data-slot="body-overflow"]');
     expect(notice).not.toBeNull();
-    expect(notice!.textContent).toMatch(/more of this reply is not kept in this window/);
-    expect(notice!.textContent).toMatch(/MB/);
-    const button = [...container.querySelectorAll("button")].find(node => node.textContent === "Read all of it");
+    expect(notice!.textContent).toMatch(/^Show full reply · \d+\.\d MB$/);
+    const button = container.querySelector('[data-slot="body-overflow-open"]');
     expect(button).toBeDefined();
     // The row it belongs to renders only its excerpt, not four megabytes.
     expect(container.textContent!.length).toBeLessThan(200_000);
@@ -132,8 +131,8 @@ describe("a reply the window is holding an excerpt of", () => {
     expect(block.bodies?.text).toBeDefined();
     const notice = container.querySelector('[data-slot="body-overflow"]');
     expect(notice, container.innerHTML.slice(0, 400)).not.toBeNull();
-    expect(notice!.textContent).toMatch(/It will be readable when the reply finishes/);
-    expect([...container.querySelectorAll("button")].some(node => node.textContent === "Read all of it")).toBe(false);
+    expect(notice!.textContent).toBe("Full reply available when the reply finishes");
+    expect(notice!.querySelector("button")).toBeNull();
   });
 });
 

@@ -27,7 +27,7 @@
  *     decoder. A dev server prints in colour; the transcript's `bash` tool
  *     hands back text Pi has already flattened, so it does not ask for this.
  */
-import { useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type UIEvent } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode, type UIEvent } from "react";
 
 import { AnsiText } from "@/components/assistant-ui/elements/ansi-text";
 import { StatusDot } from "@/components/status";
@@ -55,6 +55,12 @@ export interface TerminalBlockProps extends Omit<ComponentProps<"div">, "childre
   truncatedHead?: boolean | undefined;
   /** Decode SGR colour escapes instead of showing them as text. */
   ansi?: boolean | undefined;
+  /**
+   * The end of the output area when the transcript holds only part of it
+   * (M16-T60): the fold that fades what is shown and opens the whole output.
+   * With it, the block does not elide again — the excerpt is already bounded.
+   */
+  overflow?: ReactNode;
 }
 
 /**
@@ -74,6 +80,7 @@ export function TerminalBlock({
   follow = false,
   truncatedHead = false,
   ansi = false,
+  overflow,
   className,
   ...props
 }: TerminalBlockProps) {
@@ -86,8 +93,8 @@ export function TerminalBlock({
   const [showAll, setShowAll] = useState(false);
   const reveal = useSearchReveal();
   const elided = useMemo<ElidedText>(
-    () => (truncatedHead ? { text: output, truncated: false, note: "" } : elideText(output)),
-    [output, truncatedHead],
+    () => (truncatedHead || overflow ? { text: output, truncated: false, note: "" } : elideText(output)),
+    [output, truncatedHead, overflow],
   );
   const shown = showAll || reveal ? output : elided.text;
 
@@ -152,9 +159,10 @@ export function TerminalBlock({
           {ansi ? <AnsiText text={shown} /> : shown}
           {running ? <span aria-hidden="true" className="caret" /> : null}
         </pre>
-      ) : (
+      ) : overflow ? null : (
         <p className="px-3 py-2 text-terminal-ink-2">no output</p>
       )}
+      {overflow}
       {elided.truncated && !showAll ? (
         <button
           type="button"

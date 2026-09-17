@@ -45,6 +45,7 @@ import { useActivityDisclosureOverride } from "@/runtime/sessionPreferences";
 import { BodyOverflow } from "@/components/thread/BodyOverflow";
 import { JsonViewer, parseJsonText } from "./json-viewer.js";
 import type { BlockBodies } from "@/store";
+import { omittedBytes } from "@/runtime/body-excerpt";
 import { toolOutputText } from "@lasercode/protocol";
 
 import { activityRow, activityTrigger, collapsePanel, mono, pressable } from "./surfaces.js";
@@ -307,17 +308,32 @@ function ToolFallbackSection({ label, children }: { label: string; children: Rea
 // Args / Result / Error
 // ---------------------------------------------------------------------------
 
+/**
+ * A body the transcript holds only part of (M16-T60): the excerpt and its fold
+ * share one inset ground, so the fold is the end of the output area rather
+ * than a box beside it.
+ */
+function FoldedText({ text, overflow }: { text: string; overflow: ReactNode }) {
+  return (
+    <div data-slot="tool-fallback-folded" className="overflow-hidden rounded-lg border border-line bg-surface-2">
+      {text ? <pre dir="ltr" data-search-content className="max-h-80 overflow-auto px-3 py-2 font-mono text-xs leading-sm wrap-break-word whitespace-pre-wrap text-ink-2">{text}</pre> : null}
+      {overflow}
+    </div>
+  );
+}
+
 function ToolFallbackArgs({
   argsText,
+  overflow,
   className,
   ...props
-}: React.ComponentProps<"div"> & { argsText?: string | undefined }) {
-  if (!argsText) return null;
-  const json = parseJsonText(argsText);
+}: React.ComponentProps<"div"> & { argsText?: string | undefined; overflow?: ReactNode }) {
+  if (!argsText && !overflow) return null;
+  const json = overflow || !argsText ? undefined : parseJsonText(argsText);
   return (
     <div data-slot="tool-fallback-args" className={cn(className)} {...props}>
       <ToolFallbackSection label="args">
-        {json === undefined ? <pre dir="ltr" className="max-h-80 overflow-auto rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-xs leading-sm wrap-break-word whitespace-pre-wrap text-ink-2">{argsText}</pre> : <JsonViewer value={json} expandedDepth={1} className="max-h-80" />}
+        {overflow ? <FoldedText text={argsText ?? ""} overflow={overflow} /> : json === undefined ? <pre dir="ltr" className="max-h-80 overflow-auto rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-xs leading-sm wrap-break-word whitespace-pre-wrap text-ink-2">{argsText}</pre> : <JsonViewer value={json} expandedDepth={1} className="max-h-80" />}
       </ToolFallbackSection>
     </div>
   );
@@ -325,12 +341,23 @@ function ToolFallbackArgs({
 
 function ToolFallbackResult({
   result: rawResult,
+  overflow,
   className,
   ...props
-}: React.ComponentProps<"div"> & { result?: unknown }) {
+}: React.ComponentProps<"div"> & { result?: unknown; overflow?: ReactNode }) {
   // Transport envelopes are not conversation content. Hydrated and live calls
   // show the same output; opaque non-envelope JSON retains its fallback viewer.
   const result = toolOutputText(rawResult) ?? rawResult;
+  if (overflow) {
+    const excerpt = result === undefined ? "" : typeof result === "string" ? result : JSON.stringify(result, null, 2);
+    return (
+      <div data-slot="tool-fallback-result" className={cn(className)} {...props}>
+        <ToolFallbackSection label="result">
+          <FoldedText text={excerpt} overflow={overflow} />
+        </ToolFallbackSection>
+      </div>
+    );
+  }
   if (result === undefined) return null;
   const text = typeof result === "string" ? result : JSON.stringify(result, null, 2);
   if (!text) return null;
@@ -688,19 +715,20 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
   const [manualOpen, rememberOpen] = useActivityDisclosureOverride(path, `tool:${toolCallId}`);
   const open = manualOpen ?? toolDetailsDefaultOpen(activityLevel);
 
-  const hasBody = Boolean(argsText) || result !== undefined || status?.type === "incomplete";
-  // RP-5b: what this window is not holding of this call, and the way to read
-  // the rest. It belongs outside the fold — a row whose output was elided shows
-  // nothing at all inside one — and before the approval footer, which stays
-  // last. A tool with no typed row of its own draws here, so it must say the
-  // same thing `ToolRow` does rather than quietly showing less.
+  // M16-T60: what this window is not holding of this call is folded into the
+  // output area it belongs to — the result's, or the arguments' — with the one
+  // action that reads the whole of it. A tool with no typed row of its own
+  // draws here, so it says the same thing `ToolRow` does.
   const bodies = (artifact as { bodies?: BlockBodies } | undefined)?.bodies;
-  const overflow = bodies ? (
-    <>
-      <BodyOverflow body={bodies.result} path={path ?? undefined} label="output" />
-      <BodyOverflow body={bodies.args} path={path ?? undefined} label="request" />
-    </>
-  ) : null;
+  const outputBody = bodies?.result ?? (state === "running" ? bodies?.partial : undefined);
+  const context = { toolName, command: argsText, state };
+  const resultFold = omittedBytes(outputBody) > 0
+    ? <BodyOverflow body={outputBody} path={path ?? undefined} label="output" ground="surface-2" finishes="the tool finishes" tool={context} fade={Boolean(result)} />
+    : undefined;
+  const argsFold = omittedBytes(bodies?.args) > 0
+    ? <BodyOverflow body={bodies?.args} path={path ?? undefined} label="request" ground="surface-2" finishes="the tool finishes" tool={{ toolName, state }} fade={Boolean(argsText)} />
+    : undefined;
+  const hasBody = Boolean(argsText) || result !== undefined || status?.type === "incomplete" || Boolean(resultFold) || Boolean(argsFold);
   const tone = state === "failed" ? "danger" : state === "awaiting" ? "attention" : undefined;
 
   return (
@@ -715,11 +743,10 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
       {hasBody ? (
         <ToolFallbackContent>
           <ToolFallbackError status={status} />
-          <ToolFallbackArgs argsText={argsText} className={cn(state === "cancelled" && "opacity-60")} />
-          {state !== "cancelled" ? <ToolFallbackResult result={result} /> : null}
+          <ToolFallbackArgs argsText={argsText} overflow={argsFold} className={cn(state === "cancelled" && "opacity-60")} />
+          {state !== "cancelled" ? <ToolFallbackResult result={result} overflow={resultFold} /> : null}
         </ToolFallbackContent>
       ) : null}
-      {overflow}
       {shouldRenderApproval ? (
         <ToolFallbackApproval
           addResult={addResult}

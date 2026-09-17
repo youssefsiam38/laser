@@ -2,7 +2,7 @@ import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 import { useAuiState } from "@assistant-ui/react";
 import type { UiDialogRequest } from "@lasercode/protocol";
 import { Bot, FolderOpen, GitBranch, MessageSquare } from "lucide-react";
-import { lazy, memo, Suspense, useCallback, useMemo } from "react";
+import { lazy, memo, Suspense, useCallback, useMemo, type ReactNode } from "react";
 
 import { useNamerLabel, useSessionMcpServers } from "@/agents/hooks";
 import { CodeDiff, DiffStat, diffStatDescription } from "@/components/assistant-ui/elements/code-diff";
@@ -24,7 +24,9 @@ import { Hint } from "@/components/ui/hint";
 import { useIsTouch } from "@/hooks/use-mobile";
 import { DialogBody, dialogFormOf, ToolRowDialog, uiResponseFor, useRegisterToolRow } from "@/dialogs";
 import { toolDetailsDefaultOpen, toolDisplayResult, useActivityDetailLevel, useCapability, useLaserStable, useLaserState } from "@/runtime";
-import { BodyOverflow } from "./BodyOverflow.js";
+import { BodyOverflow, type FoldGround } from "./BodyOverflow.js";
+import type { OutputContext } from "./LargeBodyViewer.js";
+import { omittedBytes } from "@/runtime/body-excerpt";
 import type { BlockBodies } from "@/store";
 import { useActivityDisclosureOverride } from "@/runtime/sessionPreferences";
 import { FileCard } from "./FileCard.js";
@@ -114,13 +116,39 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
     ? (diffView.stats ?? diffStats(diffView.hunks))
     : undefined;
   const diffDescription = appliedDiffStats ? diffStatDescription(appliedDiffStats) : undefined;
-  // RP-5b: what of this call's output the window is not holding, and the way
-  // to read the rest. Outside the fold, like every other decision row.
+  // M16-T60: what of this call the window is not holding folds into the output
+  // area it belongs to, with one action that reads the whole of it. A body
+  // still being written says when it can be read instead.
   const bodies = (props.artifact as { bodies?: BlockBodies } | undefined)?.bodies;
+  const outputBody = bodies?.result ?? (running ? bodies?.partial : undefined);
+  const outputOverflows = omittedBytes(outputBody) > 0;
+  const argsOverflow = omittedBytes(bodies?.args) > 0;
+  const finishes = kind === "bash" ? "the command finishes" : "the tool finishes";
+  const bash = kind === "bash" ? parseBashOutput(text, isError === true) : undefined;
+  const context: OutputContext = {
+    toolName,
+    command: kind === "bash" && typeof (args as { command?: unknown })?.command === "string" ? (args as { command: string }).command : summary.summary,
+    state,
+    // An excerpt's head does not carry the exit trailer; only a known code is said.
+    ...(bash && (!outputOverflows || /exited with code/i.test(text)) ? { exitCode: bash.exitCode } : {}),
+    ...(elapsed !== undefined && !running ? { durationMs: elapsed } : {}),
+  };
+  const fold = (ground: FoldGround, fade: boolean) => outputOverflows
+    ? <BodyOverflow body={outputBody} path={path ?? undefined} label="output" ground={ground} fade={fade} finishes={finishes} tool={context} />
+    : undefined;
+  const argsFold = argsOverflow
+    ? <BodyOverflow body={bodies?.args} path={path ?? undefined} label="request" ground="surface-2" fade finishes={finishes} tool={{ toolName, state }} />
+    : undefined;
+  // Rows whose body is not a plain output area keep the fold directly under
+  // the row, indented to its text, never as a box of its own.
+  const footerFolds = (
+    <>
+      {outputOverflows ? <BodyOverflow body={outputBody} path={path ?? undefined} label="output" ground="surface" fade={false} finishes={finishes} tool={context} className="ms-4" /> : null}
+      {argsOverflow ? <BodyOverflow body={bodies?.args} path={path ?? undefined} label="request" ground="surface" fade={false} finishes={finishes} tool={{ toolName, state }} className="ms-4" /> : null}
+    </>
+  );
   const footer = (
     <>
-      <BodyOverflow body={bodies?.result} path={path ?? undefined} label="output" />
-      <BodyOverflow body={bodies?.args} path={path ?? undefined} label="request" />
       {approval ? <RowApproval {...props} /> : null}
       {interrupt && isInterruptPayload(interrupt.payload) ? (
         <InterruptFooter payload={interrupt.payload} resume={props.resume} />
@@ -146,7 +174,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
         open={open}
         onOpenChange={rememberOpen}
         namerLabel={running ? namerLabel : undefined}
-        footer={footer}
+        footer={<>{footerFolds}{footer}</>}
       />
     );
   }
@@ -165,7 +193,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
         open={open}
         onOpenChange={rememberOpen}
         activeLabel={running && namerLabel ? namerLabel : undefined}
-        footer={footer}
+        footer={<>{footerFolds}{footer}</>}
       />
     );
   }
@@ -196,13 +224,13 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
         peek={failed && text ? <ToolError message={text} compact /> : undefined}
         footer={footer}
       >
-        <TextBody args={args} text={text} failed={failed} />
+        <TextBody args={args} text={text} failed={failed} overflow={fold("surface-2", text.length > 0)} argsOverflow={argsFold} />
       </ToolCall>
     );
   }
 
   const body = toolBody(kind);
-  const hasBody = body !== "text" || text.length > 0 || (args !== undefined && Object.keys(args as object).length > 0);
+  const hasBody = body !== "text" || text.length > 0 || (args !== undefined && Object.keys(args as object).length > 0) || outputOverflows || argsOverflow;
 
   return (
     <ToolCall
@@ -226,25 +254,28 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
       ) : null}
       {hasBody ? (
         body === "terminal" ? (
-          <BashBody args={args} text={text} running={running} isError={failed} />
+          <BashBody args={args} text={text} running={running} isError={failed} overflow={fold("terminal", text.length > 0)} />
         ) : body === "diff" ? (
-          <DiffBody view={diffView} args={args} text={text} failed={failed} />
+          <>
+            <DiffBody view={diffView} args={args} text={text} failed={failed} />
+            {footerFolds}
+          </>
         ) : kind === "read" ? (
-          <ReadBody args={args} text={text} failed={failed} />
+          <ReadBody args={args} text={text} failed={failed} overflow={fold("surface-2", text.length > 0)} argsOverflow={argsFold} />
         ) : (
-          <TextBody args={args} text={text} failed={failed} />
+          <TextBody args={args} text={text} failed={failed} overflow={fold("surface-2", text.length > 0)} argsOverflow={argsFold} />
         )
       ) : undefined}
     </ToolCall>
   );
 }
 
-function ReadBody({ args, text, failed }: { args: unknown; text: string; failed: boolean }) {
+function ReadBody({ args, text, failed, overflow, argsOverflow }: { args: unknown; text: string; failed: boolean; overflow?: ReactNode; argsOverflow?: ReactNode }) {
   const path = typeof (args as { path?: unknown })?.path === "string" ? (args as { path: string }).path : undefined;
   return (
     <>
-      <ToolFallbackArgs argsText={pretty(args)} />
-      {text ? (
+      <ToolFallbackArgs argsText={pretty(args)} overflow={argsOverflow} />
+      {overflow && !failed ? <ToolFallbackResult result={text} overflow={overflow} /> : text ? (
         failed ? (
           <ToolFallbackSection label="error">
             <ToolError message={text} />
@@ -259,6 +290,7 @@ function ReadBody({ args, text, failed }: { args: unknown; text: string; failed:
           </ToolFallbackSection>
         )
       ) : null}
+      {overflow && failed ? overflow : null}
     </>
   );
 }
@@ -407,10 +439,10 @@ function StartAgentRow({
 // Bodies
 // ---------------------------------------------------------------------------
 
-function BashBody({ args, text, running, isError }: { args: unknown; text: string; running: boolean; isError: boolean }) {
+function BashBody({ args, text, running, isError, overflow }: { args: unknown; text: string; running: boolean; isError: boolean; overflow?: ReactNode }) {
   const command = typeof (args as { command?: unknown })?.command === "string" ? (args as { command: string }).command : "";
   const { output, exitCode } = useMemo(() => parseBashOutput(text, isError), [text, isError]);
-  return <TerminalBlock command={command} output={output} exitCode={exitCode} running={running} isError={isError} />;
+  return <TerminalBlock command={command} output={output} exitCode={exitCode} running={running} isError={isError} overflow={overflow} />;
 }
 
 function DiffBody({
@@ -436,19 +468,16 @@ function DiffBody({
   );
 }
 
-function TextBody({ args, text, failed }: { args: unknown; text: string; failed: boolean }) {
+function TextBody({ args, text, failed, overflow, argsOverflow }: { args: unknown; text: string; failed: boolean; overflow?: ReactNode; argsOverflow?: ReactNode }) {
   return (
     <>
-      <ToolFallbackArgs argsText={pretty(args)} />
-      {text ? (
-        failed ? (
-          <ToolFallbackSection label="error">
-            <ToolError message={text} />
-          </ToolFallbackSection>
-        ) : (
-          <ToolFallbackResult result={text} />
-        )
+      <ToolFallbackArgs argsText={pretty(args)} overflow={argsOverflow} />
+      {failed && text ? (
+        <ToolFallbackSection label="error">
+          <ToolError message={text} />
+        </ToolFallbackSection>
       ) : null}
+      {failed ? overflow ?? null : text || overflow ? <ToolFallbackResult result={text} overflow={overflow} /> : null}
     </>
   );
 }

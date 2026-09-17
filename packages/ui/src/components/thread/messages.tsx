@@ -386,7 +386,7 @@ export function UserMessage() {
               path={path}
               onOpen={opener ? (file: { name: string; mediaType: string; ref: BodyRef }, trigger: HTMLElement) => void openRegionFile(file, trigger) : undefined}
             />
-            <BodyOverflow body={promptBodies?.text} path={path} label="message" />
+            <BodyOverflow body={promptBodies?.text} path={path} label="message" ground="surface-2" fade={Boolean(rest)} finishes="it is sent" className="-mx-1 self-stretch" />
           </UserBubble>
           </ExcerptedMessage>
         )}
@@ -513,7 +513,7 @@ function TurnOverflow() {
     return Array.isArray(bodies) ? bodies as readonly { label: string; body: BodyRef }[] : EMPTY_BODIES;
   });
   if (rows.length === 0) return null;
-  return <>{rows.map((row, index) => <BodyOverflow key={`${row.label}:${index}`} body={row.body} path={path} label={row.label} />)}</>;
+  return <>{rows.map((row, index) => <BodyOverflow key={`${row.label}:${index}`} body={row.body} path={path} label={row.label} ground="bg" fade={row.label === "reply"} finishes="the reply finishes" className="-ms-3" />)}</>;
 }
 
 const EMPTY_BODIES: readonly { label: string; body: BodyRef }[] = [];

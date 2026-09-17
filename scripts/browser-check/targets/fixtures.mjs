@@ -45,6 +45,8 @@ export function answer(request) {
     const paragraph = Array.from({ length: 40 }, (_, i) => `Streaming line ${i + 1}: the implementation follows the project boundaries.`).join('\n\n');
     return { text: paragraph, chunks: 120, chunkDelayMs: 40 };
   }
+  // Output past the transcript's per-body excerpt and under the shell tool's own cap.
+  if (last?.role === 'user' && prompt === 'Run fixture large output') return { toolCall: { name: 'bash', args: { command: "seq 1 1100 | awk '{printf \"ok  test %05d passed in the fixture suite\\n\", $1}'" } } };
   if (last?.role === 'user' && prompt === 'Run fixture tools') return { toolCall: { name: 'bash', args: { command: "printf 'fixture tool output\\n'" } } };
   const goal = /<goal_id>\s*([^\s<>]+)\s*<\/goal_id>/.exec(prompt)?.[1];
   if (last?.role === 'user' && goal && names.includes('goal_complete')) return { toolCall: { name: 'goal_complete', args: { goal_id: goal, summary: 'Verified the fixture implementation and its focused checks.' } } };

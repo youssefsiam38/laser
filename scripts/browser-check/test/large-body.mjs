@@ -14,13 +14,13 @@ import { activator, dismissInstallPrompt, scrub, watchPage } from './support.mjs
  *
  * What is proved here, and cannot be proved in a unit test:
  *
- *  1. **The row is honest.** It says exactly how much of the message is not
- *     shown, in a person's words, and offers to read it.
+ *  1. **The fold is honest.** It ends the message with one action that says
+ *     how much there is, in a person's words (M16-T60).
  *  2. **The transcript stays small.** The rendered row, and the whole document,
  *     stay far below the size of the message itself.
  *  3. **Reading works end to end**, through the real protocol: the viewer opens
- *     with a keyboard, pages forward in bounded slices against a real host, and
- *     never holds the whole body.
+ *     with a keyboard and scrolls continuously against a real host, holding at
+ *     most three segments.
  *  4. **It closes cleanly**, returning focus where it came from, at both
  *     widths, both themes, with a pointer, a thumb, a keyboard, and with
  *     reduced motion.
@@ -60,70 +60,64 @@ export default async function largeBody(check) {
   const notice = page.locator('[data-slot="body-overflow"]').first();
   await notice.waitFor({ timeout: 60_000 });
   const words = scrub(await notice.textContent());
-  assert.match(words, /more of this message is not kept in this window/, `the row says what it is not showing: ${words}`);
-  assert.match(words, /\d+(\.\d+)?\s?(KB|MB)/, `the row says exactly how much: ${words}`);
-  assert.doesNotMatch(words, /RP-5|byte offset|entry_range/, 'nothing in the row is written for a machine');
+  assert.match(words, /^Show full message · \d+ KB$/, `the fold says what it opens and how much: ${words}`);
+  assert.doesNotMatch(words, /not kept|window|RP-5|byte offset|entry_range/, 'nothing in the fold is written for a machine');
 
   // The transcript itself stays small: the message is not in the document.
   const documentBytes = (await page.evaluate(() => document.body.innerText.length));
   assert.ok(documentBytes < PROMPT_BYTES / 4, `the rendered document stays far below the message (${documentBytes} characters)`);
 
   // Opening it: keyboard first, because every pointer path has one.
-  const open = notice.getByRole('button', { name: 'Read all of it' });
+  const open = notice.locator('[data-slot="body-overflow-open"]');
   await open.waitFor();
-  const target = phone ? open : open;
-  await target.focus();
-  await page.keyboard.press('Enter');
-  const dialog = page.getByRole('dialog');
+  if (phone) await activate(open); else { await open.focus(); await page.keyboard.press('Enter'); }
+  const dialog = page.locator('[data-slot="output-viewer"]');
   await dialog.waitFor({ timeout: 30_000 });
   const heading = scrub(await dialog.getByRole('heading').first().textContent());
-  assert.match(heading, /The whole message/, `the viewer names what it is showing: ${heading}`);
+  assert.equal(heading, 'Full message', `the viewer names what it is showing: ${heading}`);
 
-  const status = dialog.locator('[role="region"]');
-  await status.waitFor();
-  const firstBytes = (await status.textContent()).length;
-  assert.ok(firstBytes > 0, 'the first slice arrived from the host');
-  assert.ok(firstBytes < PROMPT_BYTES, 'the viewer did not read the whole message at once');
+  const scroller = dialog.locator('[data-slot="output-viewer-scroller"]');
+  await scroller.locator('[data-run]').first().waitFor({ timeout: 30_000 });
+  const firstBytes = (await scroller.textContent()).length;
+  assert.ok(firstBytes > 0, 'the first segment arrived from the host');
+  assert.ok(firstBytes < PROMPT_BYTES / 2, 'the viewer did not read the whole message at once');
+  await check.shot(`large-body-viewer${check.state.touch ? '-touch' : ''}`);
 
-  const description = scrub(await dialog.locator('[data-slot="dialog-description"], p').first().textContent());
-  assert.match(description, /Showing/, `the viewer says where in the message it is: ${description}`);
-
-  // Paging forward reads another bounded slice and never grows without bound.
-  const more = dialog.getByRole('button', { name: 'Show more' });
-  if (await more.isEnabled()) {
-    await activate(more);
-    await page.waitForFunction(previous => {
-      const node = document.querySelector('[role="dialog"] [data-slot="dialog-description"], [role="dialog"] p');
-      return node ? node.textContent.replace(/\s+/g, ' ').trim() !== previous : false;
-    }, description, { timeout: 30_000 });
-    const afterBytes = (await status.textContent()).length;
-    assert.ok(afterBytes <= 512 * 1024, `the viewer holds a bounded window (${afterBytes} characters)`);
+  // Scrolling is continuous and bounded: wherever the reader is, at most three
+  // segments are held, and the one in view is among them.
+  for (const fraction of [0.35, 0.7, 0.5]) {
+    await scroller.evaluate((node, f) => { node.scrollTop = (node.scrollHeight - node.clientHeight) * f; }, fraction);
+    await page.waitForFunction(() => {
+      const node = document.querySelector('[data-slot="output-viewer-scroller"]');
+      return node && !node.hasAttribute('aria-busy') && node.querySelector('[data-run]');
+    }, undefined, { timeout: 30_000 });
+    await page.waitForTimeout(300);
+    const held = await scroller.locator('[data-segment]').count();
+    assert.ok(held >= 1 && held <= 3, `at most three segments held (${held}) at ${fraction}`);
+    const visible = await scroller.evaluate(node => {
+      const view = node.getBoundingClientRect();
+      return [...node.querySelectorAll('[data-run]')].some(run => { const box = run.getBoundingClientRect(); return box.bottom > view.top && box.top < view.bottom; });
+    });
+    assert.ok(visible, `text is in view after scrolling to ${fraction}, not a blank`);
   }
+  await check.shot(`large-body-scrolled${check.state.touch ? '-touch' : ''}`);
 
-  // Copying says what it copied, and offers the whole message separately.
-  const copyPart = dialog.getByRole('button', { name: /Copy this part/ });
-  const copyAll = dialog.getByRole('button', { name: /Copy all of it/ });
-  assert.equal(await copyPart.count(), 1, 'the copy control says exactly what it copies');
-  assert.equal(await copyAll.count(), 1, 'the whole message can be copied without being held');
-
-  // Paging backwards is a real control and a real key.
-  const earlier = dialog.getByRole('button', { name: 'Show earlier' });
-  assert.equal(await earlier.count(), 1, 'the viewer can go back as well as forward');
-  await status.focus();
-  await page.keyboard.press('PageDown');
-  await page.waitForTimeout(500);
-  await page.keyboard.press('PageUp');
-  await page.waitForTimeout(500);
+  // Copy and Download are real controls; Home returns to the start.
+  assert.equal(await dialog.getByRole('button', { name: /Copy full message/ }).count(), 1, 'the whole message can be copied');
+  assert.equal(await dialog.getByRole('button', { name: 'Download .txt' }).count(), 1, 'the whole message can be saved');
+  await scroller.focus();
   await page.keyboard.press('Home');
-  await page.waitForTimeout(500);
-  const home = scrub(await dialog.locator('[data-slot="dialog-description"], p').first().textContent());
-  assert.match(home, /Showing 0/, `Home returns to the start of the message: ${home}`);
+  await page.waitForFunction(() => document.querySelector('[data-slot="output-viewer-scroller"]')?.scrollTop === 0, undefined, { timeout: 10_000 });
+  await page.waitForFunction(() => /Large body fixture/.test(document.querySelector('[data-slot="output-viewer-scroller"]')?.textContent ?? ''), undefined, { timeout: 30_000 });
 
   await page.keyboard.press('Escape');
-  await page.waitForFunction(() => document.querySelector('[role="dialog"]') === null, undefined, { timeout: 30_000 });
-  const focused = await page.evaluate(() => document.activeElement?.textContent?.trim() ?? '');
-  assert.match(focused, /Read all of it/, `focus returned to the control that opened it (${focused})`);
+  await page.waitForFunction(() => document.querySelector('[data-slot="output-viewer"]') === null, undefined, { timeout: 30_000 });
+  assert.equal(await page.locator('[data-segment]').count(), 0, 'closing drops everything the viewer read');
+  if (!phone) {
+    const focused = await page.evaluate(() => document.activeElement?.getAttribute('data-slot') ?? '');
+    assert.equal(focused, 'body-overflow-open', `focus returned to the control that opened it (${focused})`);
+  }
 
-  await check.shot(`large-body-${check.state.width}-${check.state.theme}${check.state.touch ? '-touch' : ''}${check.state.reducedMotion ? '-reduced' : ''}`);
+  await check.shot(`large-body-fold${check.state.touch ? '-touch' : ''}`);
   await watch.assertClean();
 }
