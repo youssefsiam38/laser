@@ -1,18 +1,10 @@
-Laser 0.7.1
+Laser 0.7.2
 
-## Laser opens again
+## Every conversation opens again
 
-### Fixed in 0.7.1
+### Fixed in 0.7.2
 
-- Laser 0.7.0 would not open on any computer. It showed "laser cannot start its agent host" and asked you to try again or restore your previous data. Nothing was wrong with your data or your install: the check that makes sure the app's files are intact misread one of its own files. 0.7.1 fixes that check, and Laser opens normally.
-- Your conversations, projects, settings and agents were never touched and are all there when Laser opens.
-
-### How to get it
-
-- If you installed Laser from the APT or DNF repository, your system's normal update installs 0.7.1.
-- Otherwise, download and install 0.7.1 from this page. Laser 0.7.0 can't show its in-app update notice, so it won't tell you an update is available.
-- Quit Laser fully (including from the tray) before you open 0.7.1.
-
-### Everything in 0.7.0 is included
-
-All of 0.7.0's memory improvements are part of this release: conversations open instantly and stay light, the app protects itself under memory pressure, and you can see where memory goes.
+- Long conversations open again. Since 0.7.0, a conversation where an agent worked through hundreds of steps in one go, or a long-running goal, could show "This session didn't load". They now open at the latest message, and earlier parts load as you scroll up. Nothing in those conversations was lost.
+- MCP servers no longer show "Access changed. Sign in again" each time you open a conversation. That message now appears only when access really changed.
+- Removing a project after archiving all of its conversations now takes it off the list, instead of saying it stays because one of its conversations is open.
+- The green activity mark beside a conversation's name now means only that the agent is working. It no longer appears while a conversation is loading; the page itself shows that.
