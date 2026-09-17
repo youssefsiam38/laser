@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 
 import { NumberTicker } from "@/components/assistant-ui/elements/number-ticker";
 import { StatusDot } from "@/components/status";
@@ -6,6 +6,7 @@ import type { Status } from "@/components/status/status";
 import { duration, tokens } from "@/format";
 import { cn } from "@/lib/utils";
 import { useLaserState } from "@/runtime";
+import { chatSendWait } from "@/runtime/adapter";
 import { mainTab, sessionOpenPhase, visibleSessionPath } from "@/runtime/main-destination";
 import type { AppState } from "@/store";
 import { useSessionUpdates } from "./session-updates.js";
@@ -36,7 +37,7 @@ const wordsFor = (s: AppState): Words | undefined => {
   if (mainTab(s.destination) === "chat" && s.destination.phase === "resolving") {
     return { status: "idle", text: "opening the conversation · messages wait here", live: false };
   }
-  if (s.destination.phase === "ready-chat" && "kind" in s.destination && s.destination.kind === "chat-landing"
+  if (s.destination.phase === "ready-chat" && s.destination.chat.kind === "landing"
     && !s.agents.snapshot?.workspaces.chat) {
     return { status: "idle", text: "getting Chat ready · messages wait here", live: false };
   }
@@ -109,6 +110,10 @@ function useTurnStats(path: string | undefined, running: boolean): TurnStats {
  */
 export function StatusLine() {
   const words = useLaserState(wordsFor, sameWords);
+  const sendPending = useSyncExternalStore(chatSendWait.subscribe, chatSendWait.getSnapshot, chatSendWait.getSnapshot);
+  const visibleWords: Words | undefined = sendPending
+    ? { status: "idle", text: "Sending when Chat is ready…", live: false }
+    : words;
   const path = useLaserState(visibleSessionPath);
   const slots = useThreadSlots();
   const stats = useTurnStats(path, words?.live === true && words.status === "working");
@@ -117,7 +122,7 @@ export function StatusLine() {
   const elapsed = turnElapsed(stats);
   const hasTurn = stats.startedAt !== undefined;
 
-  if (!words && !slots.statusLine) return null;
+  if (!visibleWords && !slots.statusLine) return null;
 
   const usageTitle = hasTurn
     ? `This turn · ${tokens(stats.output)} output · ${tokens(stats.input)} input · ${tokens(stats.cacheRead)} cache read · ${tokens(stats.cacheWrite)} cache write`
@@ -133,11 +138,11 @@ export function StatusLine() {
             the token count, which re-render every second, so a screen reader
             read the whole line out again on every tick. The numbers stay
             visible and stay in the accessible name of their own labels. */}
-        {words ? (
+        {visibleWords ? (
           <span className="flex min-w-0 items-center gap-2" role="status" aria-live="polite" aria-atomic="true">
-            <StatusDot status={words.status} size="sm" label={words.text} />
-            <span className={cn("truncate", words.status === "waiting_for_input" && "font-medium text-attention", words.status === "error" && "text-danger")}>
-              {words.text}
+            <StatusDot status={visibleWords.status} size="sm" label={visibleWords.text} />
+            <span className={cn("truncate", visibleWords.status === "waiting_for_input" && "font-medium text-attention", visibleWords.status === "error" && "text-danger")}>
+              {visibleWords.text}
             </span>
           </span>
         ) : null}

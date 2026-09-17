@@ -185,7 +185,7 @@ function useNothingToSendTo(): string | undefined {
   if (destination?.phase === "unavailable") {
     return mainError(destination) ?? "This conversation is unavailable. Retry it or start a new one.";
   }
-  if (destination?.phase === "ready-chat" && "kind" in destination && destination.kind === "chat-landing") return undefined;
+  if (destination?.phase === "ready-chat" && destination.chat.kind === "landing") return undefined;
   if (view || (!destination ? currentProject !== undefined : mainTab(destination) === "code" && mainCodeProject(destination) !== undefined)) return undefined;
   return "Open a project first — the agent works inside a folder on this computer.";
 }

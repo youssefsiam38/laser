@@ -455,6 +455,28 @@ const attachmentAdapter = new ConversationAttachmentAdapter();
 export interface ThreadRuntimeExtras { readonly sendDisabled: boolean }
 const SEND_ALLOWED: ThreadRuntimeExtras = Object.freeze({ sendDisabled: false });
 const SEND_FENCED: ThreadRuntimeExtras = Object.freeze({ sendDisabled: true });
+
+let chatSendWaitCount = 0;
+const chatSendWaitListeners = new Set<() => void>();
+/** Process-local signal for the main status line while a Chat send waits for readiness. */
+export const chatSendWait = {
+  getSnapshot: () => chatSendWaitCount > 0,
+  subscribe(listener: () => void): () => void {
+    chatSendWaitListeners.add(listener);
+    return () => chatSendWaitListeners.delete(listener);
+  },
+  begin(): () => void {
+    chatSendWaitCount += 1;
+    for (const listener of chatSendWaitListeners) listener();
+    let ended = false;
+    return () => {
+      if (ended) return;
+      ended = true;
+      chatSendWaitCount = Math.max(0, chatSendWaitCount - 1);
+      for (const listener of chatSendWaitListeners) listener();
+    };
+  },
+};
 // assistant-ui invalidates its message cache when this callback changes.
 // Metadata-only adapter publications must retain unchanged message identities.
 const convertMessage = (message: ThreadMessageLike): ThreadMessageLike => message;
@@ -526,15 +548,17 @@ export function createThreadAdapter(deps: ThreadAdapterDeps): ExternalStoreAdapt
    * every verb below is the guarantee; this is the same question asked once, so
    * the composer and the surfaces around it can say so before a person tries.
    */
+  const canAct = (): boolean => {
+    try {
+      deps.assertCanAct?.();
+      return true;
+    } catch {
+      return false;
+    }
+  };
   const sendDisabled = deps.connection !== "open"
-    || (deps.openPhase?.phase === "failed" && !deps.openPhase.hasTranscript) || (deps.prepareSend ? false : (() => {
-      try {
-        deps.assertCanAct?.();
-        return false;
-      } catch {
-        return true;
-      }
-    })());
+    || (deps.openPhase?.phase === "failed" && !deps.openPhase.hasTranscript)
+    || !(canAct() || Boolean(deps.prepareSend));
 
   const { items, steerItems } = queueItemsOf(deps.view);
   /** Run `work` for the tray row `queueItemId`, or do nothing if it is not one. */

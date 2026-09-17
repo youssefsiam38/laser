@@ -89,7 +89,7 @@ describe("a pass over the real cache", () => {
   it("keeps the conversation on screen and the one holding a draft, and releases the rest", async () => {
     const h = harness({ drafts: [pathOf(2)] });
     for (let index = 1; index <= 8; index++) h.load(pathOf(index));
-    h.store.dispatch({ type: "destination", destination: { phase: "ready-chat", intent: 1, target: { kind: "session", path: pathOf(1), visibleTab: "chat" }, path: pathOf(1), rememberedCode: { kind: "no-project-landing" } } as AppState["destination"] });
+    h.store.dispatch({ type: "destination", destination: { phase: "ready-chat", intent: 1, chat: { kind: "session", path: pathOf(1) }, rememberedCode: { kind: "no-project-landing" } } as AppState["destination"] });
     expect(h.state().current).toBe(pathOf(1));
     await press(h, 1300);
 

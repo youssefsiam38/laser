@@ -152,7 +152,7 @@ describe("what is never released", () => {
   it("keeps every pinned view, and brings each inside the per-view bound instead of releasing one", () => {
     const h = harness({ limits: { views: 1, bytes: 4096, viewBytes: 1024 }, environment: { scoped: () => [pathOf(2)], hasDraft: () => false } });
     for (const index of [1, 2]) load(h, pathOf(index), { entries: 6, size: 200 });
-    h.store.dispatch({ type: "destination", destination: { phase: "ready-chat", intent: 1, target: { kind: "session", path: pathOf(1), visibleTab: "chat" }, path: pathOf(1), rememberedCode: { kind: "no-project-landing" } } as AppState["destination"] });
+    h.store.dispatch({ type: "destination", destination: { phase: "ready-chat", intent: 1, chat: { kind: "session", path: pathOf(1) }, rememberedCode: { kind: "no-project-landing" } } as AppState["destination"] });
 
     const outcome = h.cache.maintain();
 
@@ -379,7 +379,7 @@ describe("what it costs while an agent streams", () => {
     load(h, path, { entries: 4 });
     // Fifty light records beside it: a pass must not walk them to keep count.
     for (let index = 2; index <= 51; index++) h.store.dispatch({ type: "opened", state: sessionState(pathOf(index)) });
-    h.store.dispatch({ type: "destination", destination: { phase: "ready-chat", intent: 1, target: { kind: "session", path, visibleTab: "chat" }, path, rememberedCode: { kind: "no-project-landing" } } as AppState["destination"] });
+    h.store.dispatch({ type: "destination", destination: { phase: "ready-chat", intent: 1, chat: { kind: "session", path }, rememberedCode: { kind: "no-project-landing" } } as AppState["destination"] });
     h.runDeferred();
 
     const before = h.cache.counters().bytes;
@@ -589,7 +589,7 @@ describe("what each released record says about itself", () => {
     load(h, pathOf(1), { entries: 2, size: 16 });
     load(h, pathOf(2), { entries: 20, size: 800 });
     load(h, pathOf(3), { entries: 2, size: 16 });
-    h.store.dispatch({ type: "destination", destination: { phase: "ready-chat", intent: 1, target: { kind: "session", path: pathOf(3), visibleTab: "chat" }, path: pathOf(3), rememberedCode: { kind: "no-project-landing" } } as AppState["destination"] });
+    h.store.dispatch({ type: "destination", destination: { phase: "ready-chat", intent: 1, chat: { kind: "session", path: pathOf(3) }, rememberedCode: { kind: "no-project-landing" } } as AppState["destination"] });
 
     const outcome = h.cache.maintain();
 

@@ -6,6 +6,7 @@
  * `LaserProvider` over the fake host, the real workbench and the real map
  * state, so what is asserted is what the shell does — not a spy on a verb.
  */
+import { useAui, type Aui } from "@assistant-ui/react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -62,6 +63,7 @@ let probe: {
   fleetSheet: boolean;
   toasts: number;
   actions: ReturnType<typeof useLaserStable>["actions"];
+  aui: Aui;
   shell: ShellContextValue;
 };
 const closeSheets = vi.fn();
@@ -75,6 +77,7 @@ function Frame() {
     fleetSheet: useFleetSheetOpen(),
     toasts: useLaserState((s) => s.toasts.length),
     actions: useLaserStable().actions,
+    aui: useAui(),
     shell,
   };
   return (
@@ -211,6 +214,17 @@ describe("the logo: back to your chat, from anywhere", () => {
     await clickLogo();
     expect(probe.fleetSheet).toBe(false);
     expect(closeSheets).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a Chat landing draft when Back to your chat changes no destination", async () => {
+    await mount();
+    await act(async () => { await probe.actions.goTab("chat"); await settle(20); });
+    expect(probe.path).toBeUndefined();
+    await act(async () => probe.aui.composer.setText("keep this Chat draft"));
+
+    await clickLogo();
+    expect(probe.aui.composer.getState().text).toBe("keep this Chat draft");
+    expect(calls("session/new")).toBe(0);
   });
 
   it("with no current session lands on the remembered one and creates nothing", async () => {

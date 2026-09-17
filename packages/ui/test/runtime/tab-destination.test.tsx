@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { act, useSyncExternalStore } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { useAui, useAuiState, type Aui } from "@assistant-ui/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +17,7 @@ import {
   useLaserView,
   type LaserActions,
 } from "../../src/runtime/LaserProvider.js";
+import { chatSendWait } from "../../src/runtime/adapter.js";
 import { isMainReady, mainTab } from "../../src/runtime/main-destination.js";
 import { SESSIONS_TAB_STORAGE_KEY } from "../../src/runtime/session-tab-memory.js";
 import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../beam/fake-host.js";
@@ -38,18 +39,20 @@ type Controls = {
   phase: string;
   /** The runtime refuses to send: a fence, not a composer taken away (RP-11). */
   sendBlocked: boolean;
+  sendPending: boolean;
   canSend: boolean;
   composerPath: string | undefined;
   text: string;
   attachments: number;
   codeProject: string | undefined;
+  chatPath: string | undefined;
   dialogs: number;
   toasts: string[];
 };
 let controls: Controls;
 
 function Probe() {
-  const { actions, currentProject } = useLaserStable();
+  const { actions, currentProject, chatPath } = useLaserStable();
   const destination = useLaserState((state) => state.destination);
   const toasts = useLaserState((state) => state.toasts.map((toast) => toast.text));
   const view = useLaserView();
@@ -57,12 +60,13 @@ function Probe() {
   const sendBlocked = useAuiState((state) =>
     state.thread.isDisabled || (state.thread.extras as { sendDisabled?: boolean } | undefined)?.sendDisabled === true);
   const canSend = useAuiState((state) => state.composer.canSend);
+  const sendPending = useSyncExternalStore(chatSendWait.subscribe, chatSendWait.getSnapshot, chatSendWait.getSnapshot);
   const composerPath = useAuiState((state) => state.threadListItem.externalId ?? state.threadListItem.remoteId);
   const text = useAuiState((state) => state.composer.text);
   const attachments = useAuiState((state) => state.composer.attachments.length);
   const tab = mainTab(destination);
   const phase = isMainReady(destination) ? "ready" : destination.phase;
-  controls = { actions, aui, tab, path: view?.path, phase, sendBlocked, canSend, composerPath, text, attachments, codeProject: currentProject, dialogs: view?.dialogs.length ?? 0, toasts };
+  controls = { actions, aui, tab, path: view?.path, phase, sendBlocked, sendPending, canSend, composerPath, text, attachments, codeProject: currentProject, chatPath, dialogs: view?.dialogs.length ?? 0, toasts };
   return <output data-tab={tab} data-path={view?.path ?? ""} data-phase={phase} data-send-blocked={sendBlocked} />;
 }
 
@@ -156,6 +160,7 @@ describe("main destination isolation", () => {
     await act(async () => { controls.aui.composer.setText("wait for the workspace"); await settle(0); });
     expect(controls.canSend).toBe(true);
     await act(async () => { controls.aui.composer.send(); await settle(30); });
+    expect(controls.sendPending).toBe(true);
     expect(calls("session/new")).toHaveLength(0);
     expect(calls("session/prompt")).toHaveLength(0);
 
@@ -163,6 +168,40 @@ describe("main destination isolation", () => {
     expect(calls("session/new")).toHaveLength(1);
     expect(calls("session/prompt")).toHaveLength(1);
     expect(calls("session/prompt")[0]!.params).toMatchObject({ content: [{ type: "text", text: "wait for the workspace" }] });
+  });
+
+  it("times out Chat readiness and restores the unsent draft", async () => {
+    addSession(world, CODE, PROJECT_CWD);
+    seedProject(PROJECT_CWD);
+    const { chat: _missing, ...workspaces } = world.snapshot.workspaces;
+    world.snapshot = { ...world.snapshot, workspaces };
+    const nativeSetTimeout = globalThis.setTimeout;
+    const timeout = vi.spyOn(globalThis, "setTimeout").mockImplementation(((handler: TimerHandler, delay?: number, ...args: unknown[]) =>
+      nativeSetTimeout(handler, delay === 15_000 ? 0 : delay, ...args)) as typeof setTimeout);
+    try {
+      await mount();
+      await act(async () => { await controls.actions.goTab("chat"); await settle(20); });
+      await send("do not lose these words");
+      await act(async () => settle(30));
+      expect(controls).toMatchObject({ tab: "chat", path: undefined, text: "do not lose these words", sendPending: false });
+      expect(calls("session/new")).toHaveLength(0);
+      expect(calls("session/prompt")).toHaveLength(0);
+      expect(controls.toasts.at(-1)).toMatch(/taking longer than expected/i);
+    } finally {
+      timeout.mockRestore();
+    }
+  });
+
+  it("returns a closed Chat conversation to the Chat landing", async () => {
+    addSession(world, CHAT, "/state/chat", { agent: { agentName: "chat", kind: "chat" } });
+    seedProject(PROJECT_CWD);
+    world.overrides["pi/session/move"] = (() => ({ path: `${PROJECT_CWD}/moved-chat.jsonl` })) as never;
+    await mount();
+    await act(async () => { await controls.actions.openSession(CHAT); await settle(20); });
+    expect(controls).toMatchObject({ tab: "chat", path: CHAT, chatPath: CHAT });
+
+    await act(async () => { await controls.actions.moveSession(CHAT, PROJECT_CWD); await settle(30); });
+    expect(controls).toMatchObject({ tab: "chat", path: undefined, composerPath: undefined, phase: "ready", chatPath: undefined });
   });
 
   it("opens Beam in Code without poisoning the remembered project session", async () => {

@@ -28,6 +28,7 @@ import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle, type Worl
 import { OTHER_ENVIRONMENT_KEY, TEST_ENVIRONMENT_KEY, deviceKeyName, testDescriptor } from "./environment-fixture.js";
 
 const SESSION = `${PROJECT_CWD}/one.jsonl`;
+const CHAT = "/state/chat/one.jsonl";
 
 let world: World;
 let root: Root;
@@ -37,6 +38,7 @@ let probe: {
   open: number;
   current: string | undefined;
   environmentKey: string | undefined;
+  chatPath: string | undefined;
   error: string | undefined;
   cleared: string | undefined;
   openSession(path: string): Promise<void>;
@@ -58,7 +60,7 @@ function LocalStateScreen() {
 const localQuery = (): string => container.querySelector('[data-testid="local-query"]')?.textContent ?? "";
 
 function Probe() {
-  const { actions } = useLaserStable();
+  const { actions, chatPath } = useLaserStable();
   const sessions = useLaserState((state) => state.sessions.length);
   const open = useLaserState((state) => Object.keys(state.open).length);
   const current = useLaserState((state) => state.current);
@@ -66,9 +68,9 @@ function Probe() {
   const error = useLaserState((state) => state.environmentError);
   const cleared = useFleetClearedBefore();
   useEffect(() => {
-    probe = { sessions, open, current, environmentKey: environment?.environmentKey, error, cleared, openSession: actions.openSession };
+    probe = { sessions, open, current, environmentKey: environment?.environmentKey, chatPath, error, cleared, openSession: actions.openSession };
   });
-  probe = { sessions, open, current, environmentKey: environment?.environmentKey, error, cleared, openSession: actions.openSession };
+  probe = { sessions, open, current, environmentKey: environment?.environmentKey, chatPath, error, cleared, openSession: actions.openSession };
   return null;
 }
 
@@ -81,6 +83,7 @@ beforeEach(() => {
   resetFleetState();
   world = createWorld();
   addSession(world, SESSION, PROJECT_CWD);
+  addSession(world, CHAT, world.snapshot.workspaces.chat!, { agent: { agentName: "chat", kind: "chat" } });
   FakeHostClient.reset(world);
   container = document.createElement("div");
   document.body.append(container);
@@ -136,6 +139,18 @@ it("leaves nothing of one environment behind in the next", async () => {
   // And the first environment's own namespace is gone from the device.
   const namespaces = new Set(Object.keys(localStorage).map(namespaceOf).filter(Boolean));
   expect([...namespaces]).toEqual([OTHER_ENVIRONMENT_KEY]);
+});
+
+it("forgets the process-local Chat identity on an environment switch", async () => {
+  await mount();
+  await act(async () => { await probe.openSession(CHAT); await settle(20); });
+  expect(probe.chatPath).toBe(CHAT);
+
+  await act(async () => {
+    FakeHostClient.current.redescribe(testDescriptor({ environmentKey: OTHER_ENVIRONMENT_KEY }));
+    await settle(20);
+  });
+  expect(probe.chatPath).toBeUndefined();
 });
 
 it("finds each environment's own memory again when it comes back", async () => {

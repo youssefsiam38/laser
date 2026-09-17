@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button";
 import { shortCwd } from "@/format";
 import { mainTab, useLaserStable, useLaserState, useSessionMeta } from "@/runtime";
 
-const SUGGESTIONS: ReadonlyArray<{ title: string; prompt: string }> = [
+const CODE_SUGGESTIONS: ReadonlyArray<{ title: string; prompt: string }> = [
   {
     title: "Explain the architecture",
     prompt: "Walk me through this project's architecture: the packages, how they depend on each other, and where the entry points are.",
@@ -28,6 +28,21 @@ const SUGGESTIONS: ReadonlyArray<{ title: string; prompt: string }> = [
   {
     title: "Fix the failing tests",
     prompt: "Run the test suite, find the failing tests, and fix them. Explain each fix briefly.",
+  },
+];
+
+const CHAT_SUGGESTIONS: ReadonlyArray<{ title: string; prompt: string }> = [
+  {
+    title: "Think through a decision",
+    prompt: "Help me think through a decision. Ask what matters, compare the options, and help me choose.",
+  },
+  {
+    title: "Draft a message",
+    prompt: "Help me draft a clear, thoughtful message. Ask me who it is for and what I need to say.",
+  },
+  {
+    title: "Plan something",
+    prompt: "Help me turn an idea into a practical plan with clear next steps.",
   },
 ];
 
@@ -91,7 +106,7 @@ export function EmptyState() {
         </EmptyStateDescription>
       </div>
       <EmptyStateSuggestions>
-        {SUGGESTIONS.map((s, i) => (
+        {(tab === "chat" ? CHAT_SUGGESTIONS : CODE_SUGGESTIONS).map((s, i) => (
           <EmptyStateSuggestion key={s.title} index={i} title={s.title} prompt={s.prompt} disabled={disabled} />
         ))}
       </EmptyStateSuggestions>
