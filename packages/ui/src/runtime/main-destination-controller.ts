@@ -272,7 +272,7 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
     if (sessionKindTab(session, snapshot.agents.snapshot?.workspaces ?? {}) === "chat") {
       chatPathRef.current = path;
       setChatPath(path);
-      return transition({ phase: "ready-chat", intent, path, rememberedCode: previous });
+      return transition({ phase: "ready-chat", intent, chat: { kind: "session", path }, rememberedCode: previous });
     }
     return readyCode(intent, codeDestinationForSession(session, sessions, snapshot.agents.runs, previous));
   }, [fail, readyCode, transition]);
@@ -321,7 +321,7 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
     if (remembered) { await resolveSession(remembered, intent); return; }
     const current = depsRef.current.readState().destination;
     if (current.phase === "resolving" && current.intent === intent) {
-      transition({ phase: "ready-chat", kind: "chat-landing", intent, rememberedCode: current.rememberedCode });
+      transition({ phase: "ready-chat", chat: { kind: "landing" }, intent, rememberedCode: current.rememberedCode });
     }
   }, [fail, readyCode, resolveCode, resolveSession, transition]);
 
@@ -410,7 +410,7 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
       chatPathRef.current = undefined;
       setChatPath(undefined);
       const intent = begin({ kind: "chat-tab" });
-      transition({ phase: "ready-chat", kind: "chat-landing", intent, rememberedCode: rememberedCodeOf(current) });
+      transition({ phase: "ready-chat", chat: { kind: "landing" }, intent, rememberedCode: rememberedCodeOf(current) });
       return;
     }
     const code = projectReturnOf(rememberedCodeOf(current));
@@ -428,7 +428,7 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
     if (replacement && sessionKindTab(replacement, snapshot.agents.snapshot?.workspaces ?? {}) === "chat") {
       chatPathRef.current = session.path;
       setChatPath(session.path);
-      transition({ phase: "ready-chat", intent, path: session.path, rememberedCode: rememberedCodeOf(current) });
+      transition({ phase: "ready-chat", intent, chat: { kind: "session", path: session.path }, rememberedCode: rememberedCodeOf(current) });
       return;
     }
     if (chatPathRef.current === from) {
@@ -455,10 +455,10 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
     const current = depsRef.current.readState().destination;
     if (token.intent !== intentRef.current || current.intent !== token.intent) return;
     if (token.target.agentName === "chat") {
-      if (current.phase !== "ready-chat" || !("kind" in current) || current.kind !== "chat-landing") return;
+      if (current.phase !== "ready-chat" || current.chat.kind !== "landing") return;
       chatPathRef.current = path;
       setChatPath(path);
-      transition({ phase: "ready-chat", intent: token.intent, path, rememberedCode: current.rememberedCode });
+      transition({ phase: "ready-chat", intent: token.intent, chat: { kind: "session", path }, rememberedCode: current.rememberedCode });
       return;
     }
     if (current.phase !== "ready-code" || current.code.kind !== "project-landing" || current.code.project !== token.target.cwd) return;

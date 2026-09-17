@@ -10,7 +10,7 @@ import { ThreadList, ThreadListSearch } from "@/components/assistant-ui/elements
 // Beam: its one entry point, in the sheet footer on a phone (docs/agents.md "Beam").
 import { BeamSpark } from "@/components/beam/BeamSpark";
 import { matchesThread, rankSearchThreads, ThreadSearch, threadSearchKeys, type SearchableThread } from "@/components/assistant-ui/elements/thread-search";
-import { StatusDot, StatusRing } from "@/components/status";
+import { STATUS_LABEL, StatusDot, StatusRing } from "@/components/status";
 import { useAgentsSnapshot } from "@/agents";
 import { startBeamSession } from "@/components/beam";
 import { Button } from "@/components/ui/button";
@@ -83,17 +83,24 @@ function useTabActivity(path: string | undefined, visible: boolean): TabActivity
       : s.open[path]?.dialogs.length ? "waiting_for_input" : undefined;
     return attention === "finished_unread" || attention === "waiting_for_input" ? attention : undefined;
   }, [path]));
-  const previous = useRef<{ path: string | undefined; activity: TabActivity | undefined }>({ path: undefined, activity: undefined });
-  const generation = useRef(0);
-  if (previous.current.path !== path || previous.current.activity !== activity) {
-    previous.current = { path, activity };
-    if (activity) generation.current += 1;
-  }
-  const [seenGeneration, setSeenGeneration] = useState(0);
+  const [generation, setGeneration] = useState(() => ({ path, activity, seen: activity }));
   useEffect(() => {
-    if (visible && activity && seenGeneration !== generation.current) setSeenGeneration(generation.current);
-  }, [activity, seenGeneration, visible]);
-  return !visible && activity && generation.current > seenGeneration ? activity : undefined;
+    setGeneration((current) => {
+      // A newly represented conversation starts acknowledged; only later activity is new.
+      if (current.path !== path) return { path, activity, seen: activity };
+      if (visible) {
+        return current.activity === activity && current.seen === activity
+          ? current
+          : { path, activity, seen: activity };
+      }
+      return current.activity === activity
+        ? current
+        : { path, activity, seen: undefined };
+    });
+  }, [path, activity, visible]);
+  if (visible || generation.path !== path) return undefined;
+  if (generation.activity !== activity) return activity;
+  return generation.seen === activity ? undefined : activity;
 }
 
 function SessionsPanelBody({ variant }: SessionsPanelProps) {
@@ -401,19 +408,19 @@ function SessionsTabs({ tab, onChange, activity }: { tab: SessionsTab; onChange(
               id={`sessions-tab-${kind}`}
               data-tab={kind}
               aria-selected={selected}
-              aria-label={`${TAB_LABEL[kind]}${newActivity ? ", new activity" : ""}`}
+              aria-label={`${TAB_LABEL[kind]}${newActivity ? `, ${STATUS_LABEL[newActivity]}` : ""}`}
               aria-controls="sessions-tabpanel"
               tabIndex={selected ? 0 : -1}
               onClick={() => onChange(kind)}
               className={cn(
-                "h-7 rounded-md text-xs font-medium outline-none transition-[background-color,color,box-shadow] duration-(--motion-fast) motion-reduce:transition-none pointer-coarse:h-9",
+                "relative h-7 rounded-md text-xs font-medium outline-none transition-[background-color,color,box-shadow] duration-(--motion-fast) motion-reduce:transition-none pointer-coarse:h-9",
                 "focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live",
                 selected ? "bg-surface text-ink shadow-float-sm" : "text-ink-2 hover:text-ink active:bg-[color-mix(in_oklab,var(--surface)_60%,transparent)]",
               )}
             >
-              <span className="inline-flex items-center justify-center gap-1.5">
+              <span data-slot="sessions-tab-label" className="relative inline-flex items-center justify-center">
                 {TAB_LABEL[kind]}
-                {newActivity ? <StatusDot status={newActivity} aria-hidden="true" /> : null}
+                {newActivity ? <StatusDot status={newActivity} className="absolute start-full top-1/2 ms-1.5 -translate-y-1/2" /> : null}
               </span>
             </button>
           );

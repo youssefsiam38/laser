@@ -24,7 +24,7 @@ import { useCallback } from "react";
 import { mapUi } from "@/components/agents/map";
 import { useWorkbench } from "@/components/workbench";
 import { closeFleetSheet } from "@/fleet";
-import { isMainReady, mainPath, mainTab, useLaserStable, useLaserState } from "@/runtime";
+import { isMainReady, mainTab, useLaserStable, useLaserState } from "@/runtime";
 import { rememberedSessions } from "@/runtime/main-destination-controller";
 
 import { errorText } from "./shell-context.js";
@@ -68,7 +68,9 @@ export function useChatNavigation({ closeSheets }: { closeSheets(): void }): Cha
 
   const returnToChat = useCallback(() => {
     showChat();
-    if (isMainReady(destination) && mainPath(destination) !== undefined) return;
+    // A ready landing is already the exact destination. Re-entering the same
+    // tab would capture and reset its composer without changing the draft key.
+    if (isMainReady(destination)) return;
     actions.goTab(mainTab(destination)).catch((error: unknown) => actions.toast("error", errorText(error)));
   }, [actions, destination, showChat]);
 

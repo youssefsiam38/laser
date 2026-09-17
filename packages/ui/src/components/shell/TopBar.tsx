@@ -76,6 +76,7 @@ import { LAST_PROMPT_MESSAGES, lastPromptEntry, lastPromptMessage } from "@/comp
 import { sessionStateLabel, sessionStatus, workerChip } from "./model.js";
 import { errorText, useShell } from "./shell-context.js";
 import { requestMoveSession } from "./move-session.js";
+import { groupNameOf } from "./session-groups.js";
 import { SessionIdentity } from "./SessionIdentity.js";
 
 /**
@@ -128,6 +129,11 @@ export function TopBar() {
   // Agent map (M13-T7): shown in place of the thread while `open`.
   const mapOpen = useMapUi().open;
   const sessionAgent = useSessionAgent(view?.path);
+  const chatWorkspace = useLaserState((s) => s.agents.snapshot?.workspaces.chat);
+  const chatLanding = destination.phase === "ready-chat" && destination.chat.kind === "landing";
+  const landingWorkspaceName = chatLanding
+    ? chatWorkspace ? groupNameOf(chatWorkspace, "chat") : "Chat"
+    : undefined;
 
   const summary = useMemo(() => (view ? sessions.find((s) => s.path === view.path) : undefined), [sessions, view]);
   // Only the attribution persisted with this session is identity. In
@@ -150,7 +156,8 @@ export function TopBar() {
   const pendingSummary = pendingPath ? sessions.find(session => session.path === pendingPath) : undefined;
   const workerCwd = meta.session?.cwd ?? pendingSummary?.cwd;
   const chip = workerChip(meta.worker);
-  const title = pendingSummary ? sessionTitle(pendingSummary)
+  const title = chatLanding ? "New chat"
+    : pendingSummary ? sessionTitle(pendingSummary)
     : open.phase === "opening" || open.phase === "preparing" ? (open.path ? "Opening conversation" : "Preparing workspace")
     : open.phase === "failed" ? (open.path ? "Conversation unavailable" : "View unavailable")
     : view ? (summary ? sessionTitle(summary, view) : (view.state.name ?? view.title ?? firstUserLine(view) ?? "New session")) : "New session";
@@ -208,10 +215,12 @@ export function TopBar() {
       )}
 
       <div className="group flex min-w-0 flex-1 items-center gap-2 ps-1">
-        {view ? (
+        {chatLanding ? (
+          <span data-slot="topbar-workspace" className="eyebrow hidden sm:inline">{landingWorkspaceName}</span>
+        ) : view ? (
           <StatusDot status={status} size="md" label={stateLabel} />
         ) : (
-          currentProject && <span className="eyebrow hidden sm:inline">{shortCwd(currentProject)}</span>
+          currentProject && <span data-slot="topbar-workspace" className="eyebrow hidden sm:inline">{shortCwd(currentProject)}</span>
         )}
         <BeamSessionMark path={view?.path} />
 

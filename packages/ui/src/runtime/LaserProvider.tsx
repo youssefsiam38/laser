@@ -25,6 +25,7 @@ import {
   AssistantRuntimeProvider,
   AuiConfig,
   AuiProvider,
+  MessageNotSentError,
   useAui,
   useAuiState,
   useExternalStoreRuntime,
@@ -76,7 +77,7 @@ import {
   createRendererPressureSampler,
   type RendererPressureState,
 } from "./pressure/index.js";
-import { createThreadAdapter, sendToSession, type SendBehavior } from "./adapter.js";
+import { chatSendWait, createThreadAdapter, sendToSession, type SendBehavior } from "./adapter.js";
 import { firstTurnFromRunConfig, useDiscardFirstTurnOnLeave } from "./first-turn.js";
 import { createSessionLauncher, type NewSessionOptions } from "./new-session.js";
 import {
@@ -1913,34 +1914,26 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         allSessions: async () => (await client.request("pi/session/list", {})).sessions,
         views: () => readState().open,
         archive,
-        creationTarget: destination.creationTarget,
-        waitForCreationTarget: async () => {
+        creationTarget: async () => {
+          const immediate = destination.creationTarget();
+          if (immediate) return immediate;
           const initial = readState().destination;
-          if (initial.phase !== "ready-chat" || !("kind" in initial) || initial.kind !== "chat-landing") return;
-          await new Promise<void>((resolve, reject) => {
-            let unsubscribe = () => {};
-            const inspect = (): boolean => {
-              const current = readState().destination;
-              if (current.intent !== initial.intent || mainTab(current) !== "chat") {
-                reject(new Error("The destination changed before this conversation could be started."));
-                return true;
+          if (initial.phase !== "ready-chat" || initial.chat.kind !== "landing") return undefined;
+          try {
+            await awaitDestination(store, initial.intent, (current) => {
+              const next = current.destination;
+              if (next.phase === "ready-chat" && next.chat.kind !== "landing") {
+                throw new Error("The destination changed before this conversation could be started.");
               }
-              if (current.phase === "unavailable") {
-                reject(new Error(current.error));
-                return true;
-              }
-              if (destination.creationTarget()) {
-                resolve();
-                return true;
-              }
-              return false;
-            };
-            if (inspect()) return;
-            unsubscribe = store.subscribe(() => {
-              if (!inspect()) return;
-              unsubscribe();
+              return current.agents.snapshot?.workspaces.chat !== undefined;
             });
-          });
+          } catch (error) {
+            const notSent = new MessageNotSentError(error instanceof Error ? error.message : String(error));
+            notSent.cause = error;
+            onError(notSent);
+            throw notSent;
+          }
+          return destination.creationTarget();
         },
         // Quietly: the runtime is adopting this path into its "new" thread and
         // selects it through `onThreadIdChange` once that is done. Selecting
@@ -1996,7 +1989,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           destination.endInitialization(token);
         },
       }),
-    [archive, client, destination.beginInitialization, destination.creationTarget, destination.endInitialization, destination.finishInitialization, launchSession, openSession, readState, refreshSessions, store, transcriptMembership],
+    [archive, client, destination.beginInitialization, destination.creationTarget, destination.endInitialization, destination.finishInitialization, launchSession, onError, openSession, readState, refreshSessions, store, transcriptMembership],
   );
 
   // Stable so `useRemoteThreadListRuntime` does not re-publish the hook (and
@@ -2103,6 +2096,49 @@ function MainLandingDraftBridge({ destination, store }: { destination: MainDesti
   return null;
 }
 
+/** One bounded wait for Chat destination readiness, shared by creation and reopen sends. */
+function awaitDestination(
+  store: Pick<StateStore, "getSnapshot" | "subscribe">,
+  intent: number,
+  ready: (state: AppState) => boolean,
+): Promise<void> {
+  const endWait = chatSendWait.begin();
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let unsubscribe = () => {};
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const finish = (error?: Error): void => {
+      if (settled) return;
+      settled = true;
+      unsubscribe();
+      if (timeout !== undefined) clearTimeout(timeout);
+      if (error) reject(error);
+      else resolve();
+    };
+    const inspect = (): void => {
+      const current = store.getSnapshot();
+      const destination = current.destination;
+      if (destination.intent !== intent || mainTab(destination) !== "chat") {
+        finish(new Error("The destination changed before this message could be sent."));
+        return;
+      }
+      if (destination.phase === "unavailable") {
+        finish(new Error(destination.error));
+        return;
+      }
+      try {
+        if (ready(current)) finish();
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error(String(error)));
+      }
+    };
+    inspect();
+    if (settled) return;
+    unsubscribe = store.subscribe(inspect);
+    timeout = setTimeout(() => finish(new Error("Chat is taking longer than expected to get ready. Check the connection and try again.")), 15_000);
+  }).finally(endWait);
+}
+
 /**
  * `value`, except while `hold` is true, when it is the value from just before
  * the hold began. Decided during render (the "adjust state while rendering"
@@ -2173,48 +2209,19 @@ function useThreadRuntime(store: SnapshotStore<RuntimeSnapshot>): AssistantRunti
     return externalId ?? remoteId;
   }, [aui, snapshot.main, stateStore]);
 
-  const canWaitToSend = snapshot.main && (
-    (destination.phase === "ready-chat" && "kind" in destination && destination.kind === "chat-landing" && path === undefined)
-    || (destination.phase === "resolving" && destination.target.kind === "session"
-      && destination.target.visibleTab === "chat" && destination.target.path === path)
-  );
+  const canWaitToSend = snapshot.main && destination.phase === "resolving"
+    && destination.target.kind === "session" && destination.target.visibleTab === "chat"
+    && destination.target.path === path;
   const prepareSend = useCallback(async () => {
     if (!canWaitToSend) return;
     const intent = stateStore.getSnapshot().destination.intent;
-    await new Promise<void>((resolve, reject) => {
-      const inspect = (): boolean => {
-        const current = stateStore.getSnapshot();
-        const next = current.destination;
-        if (next.intent !== intent || mainTab(next) !== "chat") {
-          reject(new Error("The destination changed before this message could be sent."));
-          return true;
-        }
-        if (next.phase === "unavailable") {
-          reject(new Error(next.error));
-          return true;
-        }
-        if (next.phase !== "ready-chat") return false;
-        if ("kind" in next && next.kind === "chat-landing") {
-          if (path !== undefined) {
-            reject(new Error("The destination changed before this message could be sent."));
-            return true;
-          }
-          if (!current.agents.snapshot?.workspaces.chat) return false;
-          resolve();
-          return true;
-        }
-        if (path !== undefined && (!("path" in next) || next.path !== path)) {
-          reject(new Error("The destination changed before this message could be sent."));
-          return true;
-        }
-        resolve();
-        return true;
-      };
-      if (inspect()) return;
-      const unsubscribe = stateStore.subscribe(() => {
-        if (!inspect()) return;
-        unsubscribe();
-      });
+    await awaitDestination(stateStore, intent, (current) => {
+      const next = current.destination;
+      if (next.phase !== "ready-chat") return false;
+      if (next.chat.kind !== "session" || next.chat.path !== path) {
+        throw new Error("The destination changed before this message could be sent.");
+      }
+      return true;
     });
   }, [canWaitToSend, path, stateStore]);
 
@@ -2483,7 +2490,7 @@ export function LaserThreadScope({ path, onPathChange, filter, createIn, unavail
         allSessions: async () => (await client.request("pi/session/list", {})).sessions,
         views,
         archive,
-        creationTarget: () => createInRef.current(store.getSnapshot()),
+        creationTarget: async () => createInRef.current(store.getSnapshot()),
         createSession: async (requested) => {
           try {
             const target = createInRef.current(store.getSnapshot());

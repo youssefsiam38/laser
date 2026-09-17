@@ -185,6 +185,16 @@ describe("connected top-bar identity", () => {
     expect(crumb?.textContent).not.toContain("reviewer-third-pass");
   });
 
+  it("names the projectless Chat landing instead of the selected Code project", async () => {
+    stable.destination = { phase: "ready-chat", intent: 1, chat: { kind: "landing" }, rememberedCode: { kind: "project-landing", project: "/project" } };
+    const store = createStateStore({ ...seed(), current: undefined, open: {} });
+    await mountTopBar(store);
+    expect(container.querySelector('[data-slot="topbar-workspace"]')?.textContent).toBe("Chat");
+    expect(container.querySelector("h1")?.textContent).toBe("New chat");
+    expect(container.textContent).not.toContain("/project");
+    expect(container.textContent).not.toContain("New session");
+  });
+
   it("keeps the requested title while its view does not exist, never New session", async () => {
     stable.destination = { phase: "resolving", intent: 1, target: { kind: "session", path: B, visibleTab: "code" }, rememberedCode: { kind: "project-landing", project: "/project" } };
     const store = createStateStore({ ...seed(), current: undefined, open: {} });

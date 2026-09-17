@@ -335,7 +335,7 @@ describe("createThreadListAdapter", () => {
       sessions: () => [summary({ path: "/a.jsonl", id: "aaaabbbb", attention: "idle", firstMessage: "Start here" })],
       views: () => ({}),
       archive,
-      creationTarget: () => ({ cwd: "/proj", intent: 7 }),
+      creationTarget: async () => ({ cwd: "/proj", intent: 7 }),
       createSession: async (target) => {
         calls.push(`new:${target.cwd}:${target.intent}`);
         return "/created.jsonl";
@@ -376,25 +376,8 @@ describe("createThreadListAdapter", () => {
   });
 
   it("initialize refuses without a project", async () => {
-    const { adapter } = deps({ creationTarget: () => undefined });
+    const { adapter } = deps({ creationTarget: async () => undefined });
     await expect(adapter.initialize("local-1")).rejects.toThrow(/destination/i);
-  });
-
-  it("waits for a late creation target before creating exactly once", async () => {
-    let target: { cwd: string; agentName: string; intent: number } | undefined;
-    let release!: () => void;
-    const ready = new Promise<void>((resolve) => { release = resolve; });
-    const { adapter, calls } = deps({
-      creationTarget: () => target,
-      waitForCreationTarget: () => ready,
-    });
-    const initializing = adapter.initialize("local-1");
-    await Promise.resolve();
-    expect(calls).toEqual([]);
-    target = { cwd: "/chat", agentName: "chat", intent: 8 };
-    release();
-    await expect(initializing).resolves.toEqual({ remoteId: "/created.jsonl", externalId: "/created.jsonl" });
-    expect(calls).toEqual(["begin", "new:/chat:8"]);
   });
 
   it("initialize closes its bracket even when the session cannot be created", async () => {

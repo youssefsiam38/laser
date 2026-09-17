@@ -32,7 +32,7 @@ describe("main destination model", () => {
   });
 
   it("creates Chat only from its landing workspace and Code only from Code memory", () => {
-    const chat = { phase: "ready-chat" as const, kind: "chat-landing" as const, rememberedCode: { kind: "project-landing" as const, project: "/project" }, intent: 3 };
+    const chat = { phase: "ready-chat" as const, chat: { kind: "landing" as const }, rememberedCode: { kind: "project-landing" as const, project: "/project" }, intent: 3 };
     expect(creationTargetForDestination(chat, "/private/chat")).toEqual({ cwd: "/private/chat", agentName: "chat", intent: 3 });
     expect(creationTargetForDestination(chat, undefined)).toBeUndefined();
     const code = { phase: "ready-code" as const, code: { kind: "project-landing" as const, project: "/project" }, intent: 3 };

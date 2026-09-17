@@ -31,8 +31,7 @@ export type MainTarget =
 export type MainDestination =
   | { readonly phase: "resolving"; readonly intent: number; readonly target: MainTarget; readonly rememberedCode: CodeDestination }
   | { readonly phase: "ready-code"; readonly intent: number; readonly code: CodeDestination }
-  | { readonly phase: "ready-chat"; readonly intent: number; readonly kind: "chat-landing"; readonly rememberedCode: CodeDestination }
-  | { readonly phase: "ready-chat"; readonly intent: number; readonly path: string; readonly rememberedCode: CodeDestination }
+  | { readonly phase: "ready-chat"; readonly intent: number; readonly chat: { readonly kind: "landing" } | { readonly kind: "session"; readonly path: string }; readonly rememberedCode: CodeDestination }
   | { readonly phase: "unavailable"; readonly intent: number; readonly target: MainTarget; readonly rememberedCode: CodeDestination; readonly error: string };
 
 export const emptyCodeDestination: ProjectCodeDestination = { kind: "no-project-landing" };
@@ -61,7 +60,7 @@ export function mainTab(destination: MainDestination): MainTab {
 }
 
 export function mainPath(destination: MainDestination): string | undefined {
-  if (destination.phase === "ready-chat") return "path" in destination ? destination.path : undefined;
+  if (destination.phase === "ready-chat") return destination.chat.kind === "session" ? destination.chat.path : undefined;
   if (destination.phase !== "ready-code") return undefined;
   return destination.code.kind === "project-session" || destination.code.kind === "beam-session" ? destination.code.path : undefined;
 }
@@ -154,7 +153,7 @@ export function isMainReady(destination: MainDestination): boolean {
 }
 
 export function mainLandingKey(destination: MainDestination): string | undefined {
-  if (destination.phase === "ready-chat") return "kind" in destination && destination.kind === "chat-landing" ? "chat" : undefined;
+  if (destination.phase === "ready-chat") return destination.chat.kind === "landing" ? "chat" : undefined;
   if (destination.phase !== "ready-code") return undefined;
   if (destination.code.kind === "no-project-landing") return "code:";
   return destination.code.kind === "project-landing" ? `code:${destination.code.project}` : undefined;
@@ -250,7 +249,7 @@ export function creationTargetForDestination(
   chatWorkspace: string | undefined,
 ): MainCreationTarget | undefined {
   if (destination.phase === "ready-chat") {
-    return "kind" in destination && destination.kind === "chat-landing" && chatWorkspace
+    return destination.chat.kind === "landing" && chatWorkspace
       ? { cwd: chatWorkspace, agentName: "chat", intent: destination.intent }
       : undefined;
   }

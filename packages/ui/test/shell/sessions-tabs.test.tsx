@@ -147,7 +147,7 @@ const completeTab = async (next: "chat" | "code") => {
     : (rememberedCodeSession() ?? "/one/root.jsonl");
   const intent = store.getSnapshot().destination.intent + 1;
   store.dispatch({ type: "destination", destination: next === "chat"
-    ? { phase: "ready-chat", intent, path: target, rememberedCode: { kind: "project-session", project: "/one", path: ROOT } }
+    ? { phase: "ready-chat", intent, chat: { kind: "session", path: target }, rememberedCode: { kind: "project-session", project: "/one", path: ROOT } }
     : { phase: "ready-code", intent, code: { kind: "project-session", project: target.startsWith("/two/") ? "/two" : "/one", path: target } } });
   await stable.actions.openSession(target);
 };
@@ -188,7 +188,7 @@ describe("sessions panel tabs", () => {
     await act(async () => root.unmount());
     root = createRoot(container);
     sessionsList.reset();
-    store.dispatch({ type: "destination", destination: { phase: "ready-chat", path: "/state/chat/c1.jsonl", rememberedCode: { kind: "project-session", project: "/one", path: ROOT }, intent: store.getSnapshot().destination.intent + 1 } });
+    store.dispatch({ type: "destination", destination: { phase: "ready-chat", chat: { kind: "session", path: "/state/chat/c1.jsonl" }, rememberedCode: { kind: "project-session", project: "/one", path: ROOT }, intent: store.getSnapshot().destination.intent + 1 } });
     await mount();
     expect(tab("chat").getAttribute("aria-selected")).toBe("true");
 
@@ -216,8 +216,8 @@ describe("sessions panel tabs", () => {
     await mount();
     await act(async () => store.dispatch({ type: "sessions", sessions: store.getSnapshot().sessions.map((item) =>
       item.path === stable.chatPath ? { ...item, attention: "finished_unread" as const } : item) }));
-    expect(tab("chat").getAttribute("aria-label")).toBe("Chat, new activity");
-    expect(tab("chat").querySelector('[data-status="finished_unread"]')).not.toBeNull();
+    expect(tab("chat").getAttribute("aria-label")).toBe("Chat, Finished, unread");
+    expect(tab("chat").querySelector('[data-status="finished_unread"]')?.getAttribute("aria-hidden")).toBeNull();
     expect(tab("code").getAttribute("aria-label")).toBe("Code");
 
     await act(async () => { tab("chat").click(); await completeTab("chat"); });
@@ -226,13 +226,28 @@ describe("sessions panel tabs", () => {
 
     await act(async () => store.dispatch({ type: "sessions", sessions: store.getSnapshot().sessions.map((item) =>
       item.path === ROOT ? { ...item, attention: "waiting_for_input" as const } : item) }));
-    expect(tab("code").getAttribute("aria-label")).toBe("Code, new activity");
+    expect(tab("code").getAttribute("aria-label")).toBe("Code, Waiting for you");
     expect(tab("code").querySelector('[data-status="waiting_for_input"]')).not.toBeNull();
     expect(tab("chat").querySelector('[data-slot="status-dot"]')).toBeNull();
 
     await act(async () => { tab("code").click(); await completeTab("code"); });
     expect(tab("code").getAttribute("aria-label")).toBe("Code");
     expect(tab("code").querySelector('[data-slot="status-dot"]')).toBeNull();
+  });
+
+  it("treats attention present at launch as seen, then marks a later hidden transition", async () => {
+    stable.chatPath = "/state/chat/c1.jsonl";
+    store = createStateStore({ ...seed(), sessions: seed().sessions.map((item) =>
+      item.path === stable.chatPath ? { ...item, attention: "finished_unread" as const } : item) });
+    await mount();
+    expect(tab("chat").getAttribute("aria-label")).toBe("Chat");
+    expect(tab("chat").querySelector('[data-slot="status-dot"]')).toBeNull();
+
+    await act(async () => store.dispatch({ type: "sessions", sessions: store.getSnapshot().sessions.map((item) =>
+      item.path === stable.chatPath ? { ...item, attention: "idle" as const } : item) }));
+    await act(async () => store.dispatch({ type: "sessions", sessions: store.getSnapshot().sessions.map((item) =>
+      item.path === stable.chatPath ? { ...item, attention: "waiting_for_input" as const } : item) }));
+    expect(tab("chat").getAttribute("aria-label")).toBe("Chat, Waiting for you");
   });
 
   it("starts a new chat with the Chat agent in the Chat workspace", async () => {
