@@ -1,6 +1,6 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-17T03:02:54+03:00 · orchestrator `01a0a030` · HEAD: 419403dd
+**Last updated:** 2026-09-17T03:02:54+03:00 · orchestrator `01a0a030` · HEAD: a39deafc
 **Current focus:** `docs/resource-and-loading-plan.md` is implemented: M18 (resource containment, instant conversations, repeat baseline) and M19 (launch identity, generation activation, migration recovery) are done and audited; next work is whatever the person chooses.
 
 | Milestone | State |
