@@ -88,7 +88,7 @@ it.each(['a]b.md', 'a\nb.md', ':file[a].md'])('never renders a shorter preview i
   const text = mentionFormatter.serialize(item);
   await act(async () => root.render(<Fixture text={text} directive />));
   expect(container.querySelector('[data-slot="file-chip"]')).toBeNull();
-  expect(JSON.parse(container.textContent ?? '')).toBe(name);
+  expect(JSON.parse(container.textContent ?? '')).toBe('/project/' + name);
   expect(transport.request).not.toHaveBeenCalled();
 });
 it("retains Open in editor as a second explicit action", async () => {

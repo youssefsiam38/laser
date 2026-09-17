@@ -1,35 +1,25 @@
 import type { Unstable_TriggerMatcher } from "@assistant-ui/react";
 
 export type ProjectPath = { ok: true; directory: string; prefix: string; head: string } | { ok: false; error: string };
-const absolute = (path: string) => path.startsWith("/") || /^[a-z]:\//iu.test(path);
+const HOME_TOKENS = /^(?:~|%USERPROFILE%)(?:\/)?$/iu;
+const DRIVE_RELATIVE = /^[a-z]:(?!\/)/iu;
 
-/** Renderer-safe path arithmetic. The host still owns IO and permissions. */
-function normalized(path: string): string {
-  const anchor = /^[a-z]:\//iu.exec(path)?.[0] ?? /^\/\/[^/]+\/[^/]+\//u.exec(path)?.[0] ?? "/";
-  const parts: string[] = [];
-  for (const part of path.slice(anchor.length).split("/")) {
-    if (!part || part === ".") continue;
-    if (part === "..") parts.pop(); else parts.push(part);
-  }
-  return anchor + parts.join("/");
-}
-
-/** Absolute paths are machine paths; relative paths use the session directory.
- * Backslashes are typed separators, not escapes. Home expansion is deliberately
- * unsupported rather than guessing the host's home in the renderer.
+/**
+ * Split a person's path spelling without resolving it. Filesystem semantics,
+ * home expansion and the final canonical path belong to the host.
  */
-export function resolveProjectPath(text: string, cwd: string): ProjectPath {
+export function resolveProjectPath(text: string, _cwd: string): ProjectPath {
   let query = (text.startsWith("@") ? text.slice(1) : text).replaceAll("\\", "/");
-  cwd = normalized(cwd.replaceAll("\\", "/") || "/");
   if (/\s$/u.test(query) || /[\n\r\t\0]/u.test(query)) return { ok: false, error: "Finish the path before adding a space." };
-  if (query.startsWith("~")) return { ok: false, error: "Home shortcuts aren’t supported here. Type an absolute path instead." };
-  if (/^[a-z]:(?!\/)/iu.test(query)) return { ok: false, error: "Use an absolute drive path, such as C:/." };
+  if (DRIVE_RELATIVE.test(query)) return { ok: false, error: "Use an absolute drive path, such as C:/." };
+  if (HOME_TOKENS.test(query)) query = query.replace(/\/?$/u, "/");
   // Dot segments name directories even before their following separator.
   if (/(?:^|\/)\.{1,2}$/u.test(query)) query += "/";
   const slash = query.lastIndexOf("/");
   const head = query.slice(0, slash + 1);
   const prefix = query.slice(slash + 1);
-  return { ok: true, directory: normalized(absolute(head) ? head : cwd + (cwd.endsWith("/") ? "" : "/") + head), prefix, head };
+  const directory = /^[a-z]:\/$/iu.test(head) ? head : head ? head.replace(/\/$/u, "") || "/" : ".";
+  return { ok: true, directory, prefix, head };
 }
 
 export const matchProjectMention: Unstable_TriggerMatcher = (text, char, caret) => {
@@ -48,18 +38,14 @@ export function replaceProjectQuery(text: string, caret: number, query: string) 
   return { text: before + text.slice(caret), caret: before.length };
 }
 
-export function parentProjectQuery(query: string, cwd = "/"): string | null {
+/** The parent spelling for Backspace after a separator, preserving its anchor. */
+export function parentProjectQuery(query: string, _cwd = "/"): string | null {
   query = query.replaceAll("\\", "/");
   if (!query.endsWith("/")) return null;
-  const current = resolveProjectPath(query, cwd);
-  if (!current.ok) return null;
-  const parent = normalized(current.directory + "/..");
-  if (parent === current.directory) return null;
-  if (absolute(query)) return parent.endsWith("/") ? parent : parent + "/";
-  const base = normalized(cwd.replaceAll("\\", "/")).split("/");
-  const target = parent.split("/");
-  let shared = 0;
-  while (shared < base.length && shared < target.length && base[shared] === target[shared]) shared++;
-  const path = [...base.slice(shared).filter(Boolean).map(() => ".."), ...target.slice(shared).filter(Boolean)].join("/");
-  return (query.startsWith("./") ? "./" : "") + (path ? path + "/" : "");
+  if (query === "/" || /^[a-z]:\/$/iu.test(query) || /^\/\/[^/]+\/[^/]+\/$/u.test(query) || query === "~/" || /^%USERPROFILE%\/$/iu.test(query)) return null;
+  const withoutSlash = query.slice(0, -1);
+  if (withoutSlash === ".." || withoutSlash.endsWith("/..")) return `${query}../`;
+  const slash = withoutSlash.lastIndexOf("/");
+  if (slash < 0) return "";
+  return withoutSlash.slice(0, slash + 1);
 }
