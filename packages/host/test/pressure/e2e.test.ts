@@ -246,10 +246,50 @@ describe("which sockets count as a window", () => {
   });
 });
 
-describe("what a window is told, and what a paired device is not", () => {
-  it("publishes the summary to a local socket and to nothing else", async () => {
+describe("what a window is told, and what tooling and a paired device are not", () => {
+  it("publishes one cycle only to browser and verified-desktop window sockets", async () => {
+    const url = (await host.listen()).url;
+    await expect.poll(() => host.memoryPressure.counters().publications).toBeGreaterThan(0);
+
+    const cli = new Client();
+    const page = new Client();
+    const desktop = new Client();
+    await cli.connect(url);
+    await page.connect(url, url);
+    await desktop.connect(url);
+    const relay: JsonRpcNotification[] = [];
+    (host as unknown as { notificationListeners: Set<(n: JsonRpcNotification) => void> }).notificationListeners.add((n) => relay.push(n));
+    try {
+      await desktop.request("resource/snapshot", {});
+      const creationTime = Date.now() - process.uptime() * 1_000;
+      const report = await desktop.request<{ accepted: number; verified: boolean }>("resource/report", {
+        at: new Date().toISOString(),
+        main: { pid: process.pid, creationTime },
+        processes: [{ pid: process.pid, creationTime, type: "Browser", workingSetBytes: process.memoryUsage().rss }],
+      });
+      expect(report).toMatchObject({ accepted: 1, verified: true });
+
+      const before = host.memoryPressure.counters().publications;
+      await host.memoryPressure.probeNow();
+      await expect.poll(() => page.notifications("resource/pressure").length, { timeout: 6_000 }).toBe(1);
+      expect(desktop.notifications("resource/pressure")).toHaveLength(1);
+      expect(cli.notifications("resource/pressure")).toHaveLength(0);
+      expect(relay.some((notification) => notification.method === "resource/pressure")).toBe(false);
+      expect(host.memoryPressure.counters().publications).toBe(before + 1);
+
+      const renderer = host.memoryPressure.summary().roles.find((row) => row.role === "desktop_renderer")!;
+      expect(renderer).toMatchObject({ level: "unknown", coverage: { expected: 1, answered: 0 } });
+    } finally {
+      cli.close();
+      page.close();
+      desktop.close();
+    }
+  }, 10_000);
+
+  it("publishes the summary to a window socket and to nothing else", async () => {
     const client = new Client();
-    await client.connect((await host.listen()).url);
+    const url = (await host.listen()).url;
+    await client.connect(url, url);
     // Where a paired device's relay client subscribes (RP-13): the same set
     // `broadcast` writes to, reached through the established test seam.
     const relay: JsonRpcNotification[] = [];

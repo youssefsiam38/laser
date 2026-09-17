@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-17T09:06:36+03:00 · merge-0-6-5-reentry · HEAD: 53607138
-**Current focus:** 0.6.5 is integrated with the completed resource/loading plan; re-entry opens at latest while same-visit authoritative replacement preserves reading intent (D-271/D-272).
+**Last updated:** 2026-09-17T10:18:00+03:00 · pressure-publish-window-only · HEAD: e283dee8
+**Current focus:** The M18-T8 release-CI correction is implemented and validated: host pressure publications reach direct local windows only, never tooling or relay clients.
 
 | Milestone | State |
 | --- | --- |
@@ -29,7 +29,7 @@
 | MX Cross-cutting | in-progress |
 
 **Blockers:** none.
-**Next up:** no resource-plan task remains; M17 and the open rows in M2/M3/M5/M7/M8/M10/M11/M13/M16/MX are candidates.
-**Recently done:** M19 audit gaps (`419403dd`); M19-T3 migration recovery (`2b9962db`); M19-T2 generation activation (`d59f74e8`); M18-T15 repeat baseline (`7bfce5e8`); M19-T1 (`23787c27`).
+**Next up:** M17 and the open rows in M2/M3/M5/M7/M8/M10/M11/M13/M16/MX.
+**Recently done:** M18-T8 release-CI correction (host 899 + strict E2E 3×12); M19 audit gaps (`419403dd`); M19-T3 migration recovery (`2b9962db`); M19-T2 generation activation (`d59f74e8`); M18-T15 repeat baseline (`7bfce5e8`).
 
 Ownership and evidence: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`.
