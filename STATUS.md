@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-18T12:00:00+03:00 · ui-load-more-01a0b045 · HEAD: d555ed5d
-**Current focus:** M16-T61..T63 continue; M16-T64 session paging is complete: one click loads once and names its exact next batch.
+**Last updated:** 2026-09-18T18:00:00+03:00 · orchestrator-2026-09-18 · HEAD: 5aff8cb6
+**Current focus:** 0.9.0 ready to release: agents label their own activity, the Chat tab never waits, trimmed history always reads back, the @ picker takes folders and familiar paths, Load more says how many.
 
 | Milestone | State |
 | --- | --- |
@@ -29,7 +29,7 @@
 | MX Cross-cutting | in-progress |
 
 **Blockers:** none.
-**Next up:** M16-T61 Chat tab landing; M16-T62 trimmed conversation reads; M16-T63 path-aware folder picker.
-**Recently done:** M16-T64 session paging (`/tmp/browser-check/run-eHuvcA`); M13-T122 Markdown agent files (`517a7a08`); M13-T123 core instructions (`d404434a`); M13-T124 Agents page scope/core controls (`5c45a17e`); M16-T60 v0.7.3.
+**Next up:** publish 0.9.0; live large tool requests readable without reopen; M17 and open rows in M2/M3/M5/M7/M8/M10/M11/M13/M16/MX.
+**Recently done:** M13-T125/T126 activity labels (`eb5d1c9f`); M16-T61 chat landing (`6eddb17d`); M16-T62 history/auto-follow (`bc410b7c`); M16-T63 @ paths (`2b797b34`); M16-T64 load more (`e1be8cc2`); v0.8.0 published.
 
 Ownership and evidence: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`.

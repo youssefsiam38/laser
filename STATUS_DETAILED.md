@@ -1270,8 +1270,8 @@ lane T's own if both were written.
 | M13-T122 | Agent definitions are Markdown files | done | orchestrator-2026-09-18 | `500d1ca5`, `517a7a08`; `packages/host/test/agents/{agent-file,agent-files-store}.test.ts`; real `agents.json` migrated on a copy (5 files, v2, `.v1.bak`) | see notes; added by D-276 |
 | M13-T123 | Laser's core instructions prepend every custom agent | done | orchestrator-2026-09-18 | `bee1829e`, `fbf308f1`, `d404434a`; `packages/worker/test/agents/{core-instructions,template-provenance,definitions}.test.ts`, `stable-sdk.agent.test.ts` | see notes; added by D-276 |
 | M13-T124 | Agents page: scope, file and core-instructions controls | done | orchestrator-2026-09-18 | `6b52d096`, `8c6bd722`, `5c45a17e`; `packages/ui/test/agents/page/screen.test.tsx`, `test/thread/agent-selector.test.tsx`; browser `/tmp/browser-check/run-fnpZR7` | see notes; added by D-276 |
-| M13-T125 | The agent labels its own activity | in-progress | orchestrator-2026-09-18 | — | see notes; added by D-277 |
-| M13-T126 | Activity rows read the agent's label | in-progress | orchestrator-2026-09-18 | — | see notes; added by D-277 |
+| M13-T125 | The agent labels its own activity | done | orchestrator-2026-09-18 | `2380ac1b`, `eb5d1c9f`; `packages/worker/test/agents/activity-label*`, `stable-sdk.agent.test.ts`; collision fallback `activity_label_2` | see notes; added by D-277 |
+| M13-T126 | Activity rows read the agent's label | done | orchestrator-2026-09-18 | `d824db9c`, `eb5d1c9f`; `packages/ui/test/thread/*label*`; browser `/tmp/browser-check/run-u2rwZt` | see notes; added by D-277 |
 | M13-T65 | A fork is a top-level session, never nested under its origin | done | claude-2026-09-09-agents | `pnpm -F @lasercode/host test -- test/catalog.test.ts`; `pnpm -F @lasercode/ui test -- test/shell/session-groups-fork.test.ts` | requested by the user; D-166 |
 | M13-T64 | Namer labels every call of a top-level session, none of a child's | done | claude-2026-09-09-agents | `pnpm -F @lasercode/worker test` (`agents/namer.test.ts` "labels every call in a burst at once"; `agents/server-agents.test.ts` "a child agent's tool calls are never labelled") | requested by the user; D-165 |
 | M13-T63 | Restoring an unsent draft puts the person in the field | done | claude-2026-09-09-agents | `pnpm -F @lasercode/ui test -- test/thread/draft-restore-focus.test.tsx` | requested by the user; see notes |
@@ -1401,9 +1401,11 @@ lane T's own if both were written.
 
 
 #### M13-T126 notes
+- 2026-09-18 done: rows read the agent label (no clipping), label hidden from args disclosures and search, `start_agent` keeps its full identity wording.
 - 2026-09-18 claimed: UI lane; protocol helpers `toolCallLabel`/`withoutToolLabel` landed with the contract commit.
 
 #### M13-T125 notes
+- 2026-09-18 done: injected parameter is `activity_label`, with per-tool collision fallback (`activity_label_2`…) published on `SessionState.toolLabelParams`; Namer names sessions only; invalid Namer overrides are preserved, not deleted.
 - 2026-09-18 claimed: worker lane; contract in `packages/protocol/src/tool-label.ts`; Namer template fields reduced to `sourceText`; host nulls an override that no longer renders.
 
 #### M13-T124 notes
@@ -2367,9 +2369,9 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 | M16-T58 | Agents never stop without an owner | done | orchestrator | harness 102/102; host 316/316; desktop 156/1 skipped | see notes |
 | M16-T59 | A reopened conversation starts at its latest message | done | orchestrator-01a09ea5 | v0.6.5 candidate `a9839b3`; CI 34858465171; release 34859087774; 12 assets | see notes; D-271 |
 | M16-T60 | Large outputs read like output | done | claude-2026-09-17-a | `dafff953`, `b38f177c`, `cd1cbe99`, `5364c185`, `b3d13270`; verify 127 s green; browser `/tmp/browser-check/run-jFI462`; released v0.7.3 from `5313e3a5` (release run 35213482499) | see notes; added by D-275 |
-| M16-T61 | The Chat tab never waits | in-progress | orchestrator-2026-09-18 | — | see notes; added by D-278 |
-| M16-T62 | A trimmed conversation always reads back | in-progress | orchestrator-2026-09-18 | — | see notes; added by D-279 |
-| M16-T63 | The @ picker selects folders and understands people's paths | in-progress | orchestrator-2026-09-18 | — | see notes; added by D-279 |
+| M16-T61 | The Chat tab never waits | done | orchestrator-2026-09-18 | `d749ee02`, `6eddb17d`; `test/runtime/tab-destination.test.tsx`, `test/shell/sessions-tabs`; browser `/tmp/browser-check/run-TX1NZQ` (+touch `run-TAlJZy`) | see notes; added by D-278 |
+| M16-T62 | A trimmed conversation always reads back | done | orchestrator-2026-09-18 | `cd1e2d1b`, `2ba50530`, `bc410b7c`; `test/thread/trim-interaction.test.tsx`, `test/thread/transcript-viewport.test.ts`, `test/store.test.ts`; browser `/tmp/browser-check/run-lEFrjc` | see notes; added by D-279 |
+| M16-T63 | The @ picker selects folders and understands people's paths | done | orchestrator-2026-09-18 | `2b1e91fd`, `2b797b34`, `bc410b7c`; `packages/host/test/directory-explorer.test.ts`, UI explorer tests; browser `/tmp/browser-check/run-4yvkLt` (+touch `run-nHTUDf`) | see notes; added by D-279 |
 | M16-T64 | Load more loads, and says how many | done | ui-load-more-01a0b045 | UI 2311 passed/1 skipped; host catalog/router 49; protocol 333; browser `/tmp/browser-check/run-eHuvcA` | see notes; added by D-279 |
 | M16-T50 | Release 0.6.3 | done | orchestrator | v0.6.3 public: candidate `960330f` from source `8abd0bb`; source CI 34813034026; release run 34813529150; 12 assets; checkpoint `verified`; https://github.com/youssefsiam38/laser/releases/tag/v0.6.3 | gates on final bytes: verify, packaged clean-machine, matrices long/huge-repeat/huge-blank/flicker/log-store; review D-247 |
 | M16-T27 | The session the app just created is the session it shows | done | worker catalog-arrival-race | merged `961aeb8` (`9d4488e`); test-only: the assertion ran before the deliberate adoption timer (`LaserProvider.tsx:1376`, `threadList.ts:452`, deferred to let assistant-ui adopt the remote id and avoid the orphan-row crash). Product unchanged; captured failure state in `/tmp/catalog-arrival-race-report.md`; 30 relevant-suite runs and 5 parallel full-runtime runs clean | `packages/ui/test/runtime/catalog-arrival.test.tsx:203` fails intermittently: prompt routing succeeds but `data-current` stays empty; seen independently by the orchestrator and by the MCP worker on unrelated branches |
@@ -2959,17 +2961,21 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 - 2026-09-17 released v0.7.2 from `ceb71b30`: candidate CI 35204991035 attempt 1 failed a host timing assertion (`session-index` cold-scan ratio 92.5 < 78.4 ms; fixture has no goal records, same code green twice), attempt 2 green; release run 35205573838, 12 assets. Done.
 
 #### M16-T64 notes
+- 2026-09-18 done: root cause was a global epoch shared between `more()` and refresh plus no per-cwd dedupe; control now reads "Load N more" from a host `remaining` counted in prospective roots.
 - 2026-09-18 claimed by ui-load-more-01a0b045: UI lane (thread-list + catalog loader), may touch host session list paging for a remaining count.
 - 2026-09-18 checkpoint: reproduced duplicate page requests plus refresh invalidation (new loader regression failed with four requests instead of two); loader now deduplicates per cwd and serializes refresh/page writes. Focused UI 19/19, host catalog/router 49/49, protocol 333/333 green; browser matrix next.
 - 2026-09-18 done: host reports exact unseen `remaining`; both controls name the next batch; an exhausted page becomes Show fewer; rapid clicks fetch once. Full UI 2311 passed/1 skipped, final browser matrix `/tmp/browser-check/run-eHuvcA` (1360/390, dark/light).
 
 #### M16-T63 notes
+- 2026-09-18 done: folders insert `:directory[…]` mentions; `~`, `%USERPROFILE%`, `./`, `../`, absolute, Windows spellings resolve on the host; browse bounded to project area ∪ home, realpath-checked, never widening above home.
 - 2026-09-18 claimed: UI + host directory-explorer lane.
 
 #### M16-T62 notes
+- 2026-09-18 done: dead-end copy gone; user `message_end` now lands across intervening tool blocks (parent messages visible in child chats); auto-follow survives batched appends and `running:false`; review fixes: no host poll per scroll, cursor minted from the retained anchor.
 - 2026-09-18 claimed: UI runtime/history lane; RECONCILE_MAX_READS cap removed in favour of on-demand cursor recovery.
 
 #### M16-T61 notes
+- 2026-09-18 done: `ready-chat` carries `chat: landing | session`; one bounded `awaitDestination`; header reads CHAT · New chat; 15 s send wait with draft restore; tab dots without layout shift.
 - 2026-09-18 claimed: UI lane in a worktree off main; chat landing + in-memory chat memory + tab unread dots.
 
 #### M16-T60 notes
@@ -5182,3 +5188,8 @@ Supersedes: none; refines D-271 and RP-11.
 **Decision.** Adds M16-T62 (no "not loaded here" dead end: a trimmed view always has a working path to earlier messages, superseding the two-read cap of RP-5b §7 in its user-facing form), M16-T63 (`@` picker selects folders and accepts `~`, relative, absolute and Windows path spellings), M16-T64 ("Load more" never a silent no-op and names the count it will load). All ship in 0.9.0 with D-277/D-278.
 **Why.** Each is a place the person hit a wall the product built.
 **Consequences.** RP-5b's memory bound is kept by re-minting the cursor from the authority, not by refusing reads; the host explorer gains `~` resolution; the session list needs a remaining count from the catalog.
+
+### D-280 · 2026-09-18 · 0.9.0 integration
+**Decision.** M13-T125/T126, M16-T61..T64 are done and integrated at `5aff8cb6` with `pnpm verify` green (99 s). Two review rounds were run (D-277 labels; the 0.9.0 repairs) and every blocker fixed before integration.
+**Why.** The release gathers the agent-authored activity labels and four repairs the person named.
+**Consequences.** Namer's activity labelling and the `runningTools`/`tool_labeling` vocabulary are gone; `SessionState.toolLabelParams` and `pi/session/list`'s `remaining` are new; `DestinationMemory` is v3 without `chat`.
