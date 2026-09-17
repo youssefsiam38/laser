@@ -1267,6 +1267,9 @@ lane T's own if both were written.
 | M13-T119 | Chat + opens the session it creates | done | claude-2026-09-11-trust | 111bf56; packages/ui/test/runtime/chat-new-session.test.tsx; full UI 1112 green | see notes |
 | M13-T120 | Reopen a child whose worktree was removed | done | claude-2026-09-11-trust | 6d82130; `pnpm -F @lasercode/worker test -- session-config stable-sdk.agent server-agents` 40/40 | see notes; D-220 |
 | M13-T121 | Release T118–T120 as 0.3.10 | done | claude-2026-09-11-trust | v0.3.10 public, 12 assets; candidate 8ad8dca; CI 34631345414; release 34631650985; checkpoint verified 2026-09-11T18:19Z | see notes |
+| M13-T122 | Agent definitions are Markdown files | in-progress | orchestrator-2026-09-18 | — | see notes; added by D-276 |
+| M13-T123 | Laser's core instructions prepend every custom agent | in-progress | orchestrator-2026-09-18 | — | see notes; added by D-276 |
+| M13-T124 | Agents page: scope, file and core-instructions controls | in-progress | orchestrator-2026-09-18 | — | see notes; added by D-276 |
 | M13-T65 | A fork is a top-level session, never nested under its origin | done | claude-2026-09-09-agents | `pnpm -F @lasercode/host test -- test/catalog.test.ts`; `pnpm -F @lasercode/ui test -- test/shell/session-groups-fork.test.ts` | requested by the user; D-166 |
 | M13-T64 | Namer labels every call of a top-level session, none of a child's | done | claude-2026-09-09-agents | `pnpm -F @lasercode/worker test` (`agents/namer.test.ts` "labels every call in a burst at once"; `agents/server-agents.test.ts` "a child agent's tool calls are never labelled") | requested by the user; D-165 |
 | M13-T63 | Restoring an unsent draft puts the person in the field | done | claude-2026-09-09-agents | `pnpm -F @lasercode/ui test -- test/thread/draft-restore-focus.test.tsx` | requested by the user; see notes |
@@ -1394,6 +1397,15 @@ lane T's own if both were written.
 - 2026-09-11 user authorizes finishing the changes and then releasing everything in the current batch. Release scope is T102/T104/T105/T106/T108/T109/T110/T111/T112 atop immutable v0.3.7; no unrelated backlog additions. Prep starts only after T110/T111 integrate and final source is frozen; no installed app/host update or restart.
 - Ownership ledger: release0.3.8 · orchestrator-release · pending complete-batch freeze and isolated release preparation · version/generated metadata, release notes and gates; planning parent-only · final sourcef9a5195 plus freeze ledger · T111 done, T110 dropped · version-only prep active with01a08fdb-f2fe-7754-a665-f1c78349c067/run_e3aa492a · next: single metadata review, exact source CI before tag, verified assets before publication.
 
+
+#### M13-T124 notes
+- 2026-09-18 claimed: UI lane in a worktree off `5703c7bf`; contract in `packages/protocol/src/agents.ts` (`scope`, `projectCwd`, `path`, `excludeCoreInstructions`).
+
+#### M13-T123 notes
+- 2026-09-18 claimed: worker lane in a worktree off `5703c7bf`; core prompt file is `packages/worker/src/agents/core-instructions.md` (the person edits it before release).
+
+#### M13-T122 notes
+- 2026-09-18 claimed: host lane in a worktree off `5703c7bf`; protocol fields landed in `5703c7bf`.
 
 #### M13-T121 notes
 - 2026-09-11 done on the person's "go": `release.mjs 0.3.10 --publish --source 3e212ae1fb81826dd8eae128121efc170b75c9ba --notes <notes file>` ran end to end in about 15 minutes — candidate 8ad8dca pushed to main, exact-source CI 34631345414, tag v0.3.10 whose annotation body is the notes (checked with `git tag -l --format='%(contents:body)'`), release workflow 34631650985, public non-prerelease at 18:18:57Z with 12 assets, release page body = the notes (checked through `gh release view`), API-only inventory check, checkpoint verified 18:19:36Z. No asset download. Local main fast-forwarded to 8ad8dca.
@@ -5121,3 +5133,8 @@ Supersedes: none; refines D-271 and RP-11.
 **Decision.** A new addressable body component `tool_output` carries a tool result's decoded text (its text parts, joined) independent of `details`; the full-output viewer reads it, never `tool_result`'s structured record. An overflow is part of its tool block, and a live body becomes readable as soon as its entry is persisted. The viewer scrolls continuously over byte-addressed slices, holding at most the visible slice and its neighbours, releasing them on scroll-away, close and memory pressure; copy and download stream slices.
 **Why.** The separate "not kept in this window" row, the unreadable live state and a JSON record viewer made large outputs look broken, while the memory bound they protect is unchanged by any of this.
 **Consequences.** `tool_result` remains for excerpts/digests; readers of whole output use `tool_output`. Protocol method inventory and schema samples cover the new component.
+
+### D-276 · 2026-09-18 · Agent definitions become Markdown files; a core prompt leads every custom agent
+**Decision.** Custom agent definitions are one Markdown file each — YAML frontmatter with the protocol's own field names (`description`, `model` as `provider/id`, `thinkingLevel`, `supportsSubagents`, `allowedAgents`, `scopedSkills`, `skills`, `engineInstructions`, `excludeCoreInstructions`) and the instructions template as the body — under `<stateDir>/agents/` (global) and `<project>/.laser/agents/` (project, trusted projects only). The host watches both directories, so a hand edit is as good as a save from the Agents page; the page writes the same files. A project agent is offered only to that project's sessions and shadows a global agent of the same name there; the default agent is always global. `agents.json` keeps everything that is not a definition (default pointer, policy, built-in overrides, namer/beam/chat, rename aliases). Every custom agent's system prompt begins with `packages/worker/src/agents/core-instructions.md`, rendered with the agent template fields, unless the agent's `excludeCoreInstructions` is on; built-ins never get it. Adds M13-T122/T123/T124.
+**Why.** The person asked for the Claude Code shape (a folder of readable, hand-editable agent files, project-scoped ones beside global ones) and for a Laser-owned mandatory prompt the person can opt one agent out of.
+**Consequences.** One-time migration of `agents.json` v1 with a backup kept; `{{agentDefinitionsFile}}` becomes the global agents directory; `AgentWarningField` gains `file`; Beam's skill and `docs/agents.md` §1/§8 describe the files.
