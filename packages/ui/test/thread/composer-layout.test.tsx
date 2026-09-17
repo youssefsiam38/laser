@@ -186,6 +186,20 @@ afterEach(async () => {
 });
 
 describe("the production composer layout", () => {
+  it("leaves prose spelling, context menu and undo to the native textarea", async () => {
+    expect(input().getAttribute("spellcheck")).not.toBe("false");
+    expect(input().dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }))).toBe(true);
+    expect(input().dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true, cancelable: true }))).toBe(true);
+
+    mocks.mobile = true;
+    mocks.touch = true;
+    await render();
+    expect(input().getAttribute("spellcheck")).toBe("true");
+    expect(input().getAttribute("autocorrect")).toBe("on");
+    expect(input().getAttribute("autocapitalize")).toBe("sentences");
+    expect(input().dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }))).toBe(true);
+  });
+
   it("keeps DOM, focus, recording ownership and draft order aligned through every phase", async () => {
     expect(labels()).toEqual(["Message", "Attachments unavailable", "Dictate a message", "Agent: Default agent", "Model: Test model", "Thinking: off", "Context: empty", "Send"]);
     const toolbar = container.querySelector<HTMLElement>('[data-slot="composer-toolbar"]')!;
