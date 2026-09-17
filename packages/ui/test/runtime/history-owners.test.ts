@@ -54,6 +54,22 @@ describe("owner-local transcript windows", () => {
     expect(f.view(f.main).blocks).toHaveLength(80);
   });
 
+  it("lets one surface recover a trimmed window without changing its peer", () => {
+    const f = fixture();
+    f.store.dispatch({ type: "views/trim", paths: [state.path], keepBytes: 1, at: "2026-09-18T00:00:00.000Z" });
+    expect(f.view(f.main).trimmed).toBeDefined();
+    expect(f.view(f.beam).trimmed).toBeDefined();
+
+    const tail = historyWindow(source, { tail: 40 }, scope);
+    f.beam.dispatch({ type: "historyBegin", path: state.path, token: "beam-recovery" });
+    f.beam.dispatch({ type: "historySnapshot", path: state.path, token: "beam-recovery", ...tail, window: tail.window!, replaceWindow: true });
+
+    expect(f.view(f.beam).trimmed).toBeUndefined();
+    expect(f.view(f.beam).history?.before).toBe(tail.window?.before);
+    expect(f.view(f.main).trimmed).toBeDefined();
+    expect(f.view(f.main).history?.before).toBeUndefined();
+  });
+
   it("leaves a peer's expanded window alone when the canonical surface re-enters at the tail", () => {
     const f = fixture();
     const page = historyWindow(source, { all: true }, scope);

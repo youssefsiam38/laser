@@ -1169,10 +1169,9 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
    *
    * The first read happens as soon as the current view carries a new trim
    * stamp. If its page did not contain what the surface was standing on, the
-   * view keeps what it has and waits: the second — and last — read is spent at
-   * the first safe moment, which is the transcript reaching the live edge, a
-   * person coming back to this conversation, or a person asking for it. Losing
-   * focus and ordinary scrolling are not safe moments and do nothing.
+   * view keeps what it has and retries at safe moments: the transcript reaching
+   * the live edge, a person coming back to this conversation, or a person
+   * asking for it. Losing focus and ordinary scrolling do nothing.
    */
   const currentPath = mainPath(state.destination);
   const trimmedStamp = currentPath ? state.open[currentPath]?.trimmed?.at : undefined;
@@ -1191,7 +1190,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     firstRead.current.set(currentPath, trimmedStamp);
     void reconcileNow(currentPath);
   }, [currentPath, reconcileNow, trimmedStamp]);
-  // The second, at the first safe moment: the live edge, or coming back here.
+  // Another attempt at a safe moment: the live edge, or coming back here.
   useEffect(() => {
     if (!currentPath || deferredStamp === undefined) return;
     if (atLiveEdge(currentPath)) { void reconcileNow(currentPath); return; }
@@ -1694,9 +1693,8 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         return history.all(path, () => !moving.current.has(path) && openEpochs.current.get(path) === epoch);
       }).then(Boolean),
       /**
-       * RP-5b §7: read this conversation's recent history again, to replace
-       * what a trim released. A person asking for it is the safest moment
-       * there is, so this spends a read even when the stamp already has one.
+       * RP-5b §7: make another bounded attempt to replace what a trim released.
+       * Reconciliation has no retry cap and skips rebuilding an unchanged tail.
        */
       reloadRecentHistory: () => guard(async () => {
         const path = requireCurrent();

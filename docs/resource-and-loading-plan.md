@@ -286,6 +286,8 @@ Re-entry uses RP-10's local tail and then reconciles. Eviction must not delete c
 
 The same hard bounds apply inside every hydrated view, including current, Beam, waiting and running views. A pin prevents eviction of work; it does not permit an unbounded message, tool body, image or rendered DOM tree. Oversized live and settled bodies retain explicit bounded excerpts plus canonical source identity, exact omitted-byte evidence and a revision fence. Additional content is read in bounded ranges from the live owning worker or worker-free host projection without restoring the whole body to renderer state. Actions, entry ordinals, drafts, focus, scroll, approvals, search destinations and active work survive trimming.
 
+A view whose older rows were released always keeps the same **Load earlier messages** path. When its producer-owned cursor is gone, that one gesture reads the bounded recent tail from the authority to mint a fresh cursor and then pages upward; it has no retry cap. Reconciliation compares revision, generation and leaf, skips rebuilding an identical refused tail, and retains no candidate page, while the normal pressure pass may release rows again to preserve the per-view bound.
+
 Done when unchanged full large-content and multi-agent fixtures keep every view within 1.5 MiB and the renderer within its warning/ceiling, with no silent omission or second transcript authority.
 
 ## RP-6 · Bound task and transcript-delivery lifetime

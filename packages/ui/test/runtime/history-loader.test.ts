@@ -14,7 +14,7 @@ function fixture(request: (params: Params) => Promise<Result>) {
   let app = reduce(initialState, { type: "opened", state });
   const dispatch = (action: Action) => { app = reduce(app, action); };
   const adoptEpoch = vi.fn(); const track = vi.fn();
-  const replace = (request: (params: Params) => Promise<Result>) => createHistoryLoader({ get: path => app.open[path], request, dispatch, adoptEpoch, track });
+  const replace = (request: (params: Params) => Promise<Result>) => createHistoryLoader({ get: path => app.open[path], isCurrent: path => path === state.path, request, dispatch, adoptEpoch, track });
   const loader = replace(request);
   return { loader, replace, dispatch, adoptEpoch, track, view: () => app.open[state.path]! };
 }
@@ -39,6 +39,49 @@ describe("history request ownership", () => {
     expect(f.view().entries).toEqual(entries);
     expect(new Set(f.view().blocks.map(block => block.id)).size).toBe(80);
     expect(f.view().historyRevision).toBe(revision);
+  });
+
+  it("turns one earlier request on a trimmed view into cursor recovery and an older page", async () => {
+    const request = vi.fn(async (params: Params) => historyWindow(source, params.window!, scope));
+    const f = fixture(request);
+    await f.loader.read(state.path);
+    f.dispatch({ type: "views/trim", paths: [state.path], keepBytes: 1, at: "2026-09-18T00:00:00.000Z" });
+    expect(f.view().trimmed).toBeDefined();
+    expect(f.view().history?.before).toBeUndefined();
+
+    expect(await f.loader.earlier(state.path, () => true)).toBe(true);
+
+    expect(request.mock.calls.map(([params]) => params.window)).toEqual([
+      { tail: 40 },
+      { tail: 40 },
+      { before: historyWindow(source, { tail: 40 }, scope).window!.before, limit: 40 },
+    ]);
+    expect(f.view().trimmed).toBeUndefined();
+    expect(f.view().entries).toEqual(entries);
+    expect(f.view().history?.before).toBeUndefined();
+  });
+
+  it("drops an older page when a trim overtakes it, then the same control path still works", async () => {
+    const pending = deferred<Result>();
+    let holdOlder = false;
+    const request = vi.fn(async (params: Params) => holdOlder && params.window && "before" in params.window
+      ? pending.promise : historyWindow(source, params.window!, scope));
+    const f = fixture(request);
+    await f.loader.read(state.path);
+    holdOlder = true;
+    const stale = f.loader.earlier(state.path, () => true);
+    await Promise.resolve();
+    f.dispatch({ type: "views/trim", paths: [state.path], keepBytes: 1, at: "2026-09-18T00:00:00.000Z" });
+    const held = f.view().entries;
+    expect(f.view().trimmed).toBeDefined();
+    pending.resolve(historyWindow(source, { before: historyWindow(source, { tail: 40 }, scope).window!.before! }, scope));
+    expect(await stale).toBe(false);
+    expect(f.view().entries).toBe(held);
+
+    holdOlder = false;
+    expect(await f.loader.earlier(state.path, () => true)).toBe(true);
+    expect(f.view().trimmed).toBeUndefined();
+    expect(f.view().entries).toEqual(entries);
   });
 
   it("keeps the loaded transcript on screen until the recent one replaces it, and replays what arrives meanwhile", async () => {

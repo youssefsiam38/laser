@@ -297,8 +297,6 @@ let nextToken = 0;
 export type HistoryReads = ReturnType<typeof createHistoryLoader>;
 
 /** One request owner for tail/all reads, generation adoption and cursor recovery. */
-/** How many reads one trim stamp may ever spend (RP-5b §7). */
-export const RECONCILE_MAX_READS = 2;
 /** The window a reconciliation asks for: the conversation's recent tail. */
 const HISTORY_TAIL = 40;
 
@@ -306,6 +304,12 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
   const reads = new Map<string, Promise<void>>();
   /** The stamp a reconciliation is in flight for, per path. */
   const reconciling = new Map<string, string>();
+  /**
+   * The last authoritative state a refused reconciliation observed. Re-reading
+   * is always allowed, but the same bounded tail is not projected into blocks
+   * again when revision, generation and leaf are all unchanged.
+   */
+  const reconciled = new Map<string, { at: string; revision: string; epoch: string; leafId?: string | null | undefined }>();
   const generations = new Map<string, number>();
   const fence = (path: string, accepting: () => boolean) => {
     const generation = generations.get(path) ?? 0;
@@ -403,9 +407,20 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     return active() && hasCompleteTree(deps.get(path));
   };
   const earlier = async (path: string, accepting: () => boolean): Promise<boolean> => {
+    if (!accepting()) return false;
+    let view = deps.get(path);
+    // A trim releases the producer-owned cursor along with the older rows. The
+    // person's one request first asks the authority for a fresh tail (without
+    // a delta, because a delta cannot mint that cursor), then immediately uses
+    // the returned cursor for the page they asked for.
+    if (!view?.history?.before && view?.trimmed) {
+      await read(path, false, accepting, undefined, "recent", false);
+      if (!accepting()) return false;
+      view = deps.get(path);
+    }
     const active = fence(path, accepting);
-    const before = deps.get(path)?.history?.before;
-    const revision = deps.get(path)?.historyRevision;
+    const before = view?.history?.before;
+    const revision = view?.historyRevision;
     if (!before || !active()) return false;
     const result = await deps.request({ path, window: { before, limit: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES }).catch(async error => {
       if (!active()) return undefined;
@@ -413,8 +428,10 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
       await read(path, false, active); return undefined;
     });
     if (!result || !active() || !result.window) return false;
+    const current = deps.get(path);
+    if (current?.history?.before !== before || current.historyRevision !== revision) return false;
     deps.dispatch({ type: "historyPrepend", path, before, revision, entries: result.entries, window: result.window });
-    return deps.get(path)?.history?.before !== before;
+    return deps.get(path) !== current && deps.get(path)?.history?.before !== before;
   };
   const metadata = async (path: string, accepting: () => boolean): Promise<void> => {
     const active = fence(path, accepting);
@@ -443,10 +460,9 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
    * Replace what a trim released, if the replacement really contains what the
    * surface is standing on (RP-5b §7).
    *
-   * One read per trim stamp, and one more at the first safe moment if the
-   * first did not contain them — never a third for the same stamp. The page is
-   * committed in one transaction or discarded entirely; nothing of a refused
-   * page is kept beside a view that is already at its bound.
+   * There is no read budget. Every safe attempt may ask the authority again;
+   * an unchanged revision/generation/leaf is ended without rebuilding the
+   * transcript, and a refused page is retained nowhere.
    */
   const reconcile = async (path: string, accepting: () => boolean = () => true): Promise<void> => {
     // Only the conversation on screen. One that is not rehydrates when a
@@ -455,10 +471,8 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     const eligible = (): string | undefined => {
       const stamp = deps.get(path)?.trimmed;
       if (!stamp) return undefined;
-      // Two reads for one stamp, and that is all: the one at the trim, and one
-      // at the first safe moment after it. A person asking is one of the two,
-      // not an exception to them.
-      if ((stamp.reads ?? 0) >= RECONCILE_MAX_READS) return undefined;
+      const previous = reconciled.get(path);
+      if (previous && previous.at !== stamp.at) reconciled.delete(path);
       if (reconciling.get(path) === stamp.at) return undefined;
       return stamp.at;
     };
@@ -466,9 +480,8 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     // One at a time, and never beside another history read.
     const pending = reads.get(path);
     if (pending) await pending.catch(() => {});
-    // That read may have replaced the trim, or spent the stamp, or left this
-    // surface somewhere else entirely: everything is asked again before a
-    // request of our own goes out (RP-5b B2).
+    // That read may have replaced the trim or left this surface somewhere else
+    // entirely: everything is asked again before a request of our own goes out.
     if (!deps.isCurrent(path)) return;
     const at = eligible();
     if (at === undefined) return;
@@ -480,7 +493,7 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     deps.dispatch({ type: "historyBegin", path, token });
     try {
       const result = await deps.request({ path, window: { tail: HISTORY_TAIL }, bodyLimit: BODY_EXCERPT_MAX_BYTES });
-      if (!active() || deps.get(path)?.trimmed?.at !== at) {
+      if (!active() || deps.get(path)?.trimmed?.at !== at || deps.get(path)?.historyPending?.token !== token) {
         deps.dispatch({ type: "historyEnd", path, token });
         return;
       }
@@ -488,7 +501,18 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
         deps.dispatch({ type: "views/reconcileFailed", path, at, token });
         return;
       }
+      const previous = reconciled.get(path);
+      if (previous?.at === at && previous.revision === result.window.revision
+        && previous.epoch === result.window.epoch && previous.leafId === result.leafId) {
+        deps.dispatch({ type: "historyEnd", path, token });
+        return;
+      }
       deps.dispatch({ type: "views/reconcile", path, at, token, entries: result.entries, leafId: result.leafId, window: result.window });
+      if (deps.get(path)?.trimmed?.at === at) {
+        reconciled.set(path, { at, revision: result.window.revision, epoch: result.window.epoch, leafId: result.leafId });
+      } else {
+        reconciled.delete(path);
+      }
     } catch {
       if (active() && deps.get(path)?.trimmed?.at === at) deps.dispatch({ type: "views/reconcileFailed", path, at, token });
       else deps.dispatch({ type: "historyEnd", path, token });

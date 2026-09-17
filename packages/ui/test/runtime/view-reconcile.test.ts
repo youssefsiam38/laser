@@ -2,8 +2,9 @@
  * RP-5b §7: replacing what a trim released, and refusing to replace it with
  * something that does not contain what the surface is standing on.
  */
+import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import { createHistoryLoader, RECONCILE_MAX_READS } from "../../src/runtime/history-loader.js";
+import { createHistoryLoader } from "../../src/runtime/history-loader.js";
 import { measureView } from "../../src/runtime/view-measure.js";
 import { initialState, reduce, type AppState, type SessionView } from "../../src/store.js";
 import { sessionState } from "../agents/fixtures.js";
@@ -52,6 +53,22 @@ function loader(state: { current: AppState }, reply: () => Promise<unknown>, cur
   });
   return { history, request, dispatch };
 }
+
+function sourceText(root = new URL("../../src/", import.meta.url)): string {
+  return readdirSync(root, { withFileTypes: true }).map(entry => {
+    const target = new URL(entry.name + (entry.isDirectory() ? "/" : ""), root);
+    if (entry.isDirectory()) return sourceText(target);
+    return /\.tsx?$/.test(entry.name) ? readFileSync(target, "utf8") : "";
+  }).join("\n");
+}
+
+describe("trimmed-history copy", () => {
+  it("has no reopen dead end or retired read-cap vocabulary", () => {
+    const source = sourceText();
+    expect(source).not.toContain("Earlier messages are not loaded here");
+    expect(source).not.toContain("RECONCILE_MAX_READS");
+  });
+});
 
 describe("what a production trim records", () => {
   it("puts the rows the transcript is standing on into the stamp, through the cache's own pass", async () => {
@@ -126,33 +143,31 @@ describe("reconciling a trimmed view", () => {
     const view = state.current.open[PATH]!;
     // Nothing of the refused page is anywhere.
     expect(view.trimmed?.deferred).toBe(true);
-    expect(view.trimmed?.reads).toBe(1);
     expect(view.blocks.length).toBe(blocks);
     expect(measureView(view).bytes).toBe(before);
     expect(request).toHaveBeenCalledTimes(1);
   });
 
-  it("spends two reads for one stamp and never a third, however it is asked", async () => {
+  it("allows five reads on one stamp and projects an unchanged refused tail only once", async () => {
     const state = { current: trimmed("u10") };
-    const { history, request } = loader(state, async () => ({ entries: [entry("u58", "u57", "tail")], leafId: "u59", window: window() }));
+    const before = state.current.open[PATH]!;
+    const { history, request, dispatch } = loader(state, async () => ({ entries: [entry("u58", "u57", "tail")], leafId: "u59", window: window() }));
     for (let attempt = 0; attempt < 5; attempt++) await history.reconcile(PATH);
-    expect(request).toHaveBeenCalledTimes(RECONCILE_MAX_READS);
-    expect(state.current.open[PATH]!.trimmed?.reads).toBe(RECONCILE_MAX_READS);
-    // A person asking is one of the two, not an exception to them: the budget
-    // is spent, so nothing more is read for this stamp.
-    const asked = loader(state, async () => ({ entries: [entry("u10", "u9", "kept")], leafId: "u59", window: window() }));
-    await asked.history.reconcile(PATH);
-    expect(asked.request).not.toHaveBeenCalled();
-    expect(state.current.open[PATH]!.trimmed?.reads).toBe(RECONCILE_MAX_READS);
+    expect(request).toHaveBeenCalledTimes(5);
+    expect(dispatch.mock.calls.flatMap(([action]) => (action as { type: string }).type === "views/reconcile" ? [action] : [])).toHaveLength(1);
+    const after = state.current.open[PATH]!;
+    expect(after.trimmed?.deferred).toBe(true);
+    expect(after.blocks).toBe(before.blocks);
+    expect(after.entries).toBe(before.entries);
+    expect(measureView(after).bytes).toBe(measureView(before).bytes);
 
-    // A genuinely new trim starts a new budget, and a page that contains what
-    // the surface stands on is committed with its cursor.
-    state.current = trimmed("u58");
-    const fresh = loader(state, async () => ({ entries: [entry("u58", "u57", "kept"), entry("u59", "u58", "tail")], leafId: "u59", window: window() }));
-    await fresh.history.reconcile(PATH);
-    expect(fresh.request).toHaveBeenCalledTimes(1);
+    // The same stamp remains usable when the authority finally returns a tail
+    // containing the row this surface stands on.
+    const asked = loader(state, async () => ({ entries: [entry("u10", "u9", "kept"), entry("u59", "u10", "tail")], leafId: "u59", window: window({ before: "cursor" }) }));
+    await asked.history.reconcile(PATH);
+    expect(asked.request).toHaveBeenCalledTimes(1);
     expect(state.current.open[PATH]!.trimmed).toBeUndefined();
-    expect(state.current.open[PATH]!.history).toBeDefined();
+    expect(state.current.open[PATH]!.history?.before).toBe("cursor");
   });
 
   it("reads nothing at all for a conversation that is not on screen", async () => {
@@ -165,7 +180,6 @@ describe("reconciling a trimmed view", () => {
     expect(request).not.toHaveBeenCalled();
     const background = state.current.open[OTHER]!;
     expect(background.trimmed).toEqual(state.current.open[OTHER]!.trimmed);
-    expect(background.trimmed?.reads).toBeUndefined();
     expect(background.trimmed?.deferred).toBeUndefined();
     expect(measureView(background).bytes).toBe(before);
 
@@ -184,11 +198,10 @@ describe("reconciling a trimmed view", () => {
     expect(request).toHaveBeenCalledTimes(1);
     const view = state.current.open[PATH]!;
     expect(view.trimmed?.deferred).toBe(true);
-    expect(view.trimmed?.reads).toBe(1);
     expect(measureView(view).bytes).toBe(before);
   });
 
-  it("stays bounded through many trims, spending at most two reads each", async () => {
+  it("stays bounded through many trims and repeated reads", async () => {
     let state = { current: trimmed("u10") };
     let reads = 0;
     for (let round = 0; round < 6; round++) {
@@ -196,14 +209,12 @@ describe("reconciling a trimmed view", () => {
       state.current = reduce(state.current, { type: "views/trim", paths: [PATH], keepBytes: 32 * 1024, at: stamp,
         standing: { anchorEntryId: "u10" } });
       const { history, request } = loader(state, async () => ({ entries: [entry("u58", "u57", "tail")], leafId: "u59", window: window() }));
-      await history.reconcile(PATH);
-      await history.reconcile(PATH);
-      await history.reconcile(PATH);
+      for (let attempt = 0; attempt < 5; attempt++) await history.reconcile(PATH);
       reads += request.mock.calls.length;
-      expect(request.mock.calls.length).toBeLessThanOrEqual(RECONCILE_MAX_READS);
+      expect(request).toHaveBeenCalledTimes(5);
       expect(measureView(state.current.open[PATH]!).bytes).toBeLessThanOrEqual(32 * 1024 + 4096);
     }
-    expect(reads).toBeLessThanOrEqual(RECONCILE_MAX_READS * 6);
+    expect(reads).toBe(30);
   });
 
   it("keeps a streaming turn, a running tool and an unsent prompt that arrived while it was reading", async () => {

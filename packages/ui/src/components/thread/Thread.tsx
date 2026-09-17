@@ -1,6 +1,5 @@
 import { AuiConfig, AuiIf, AuiProvider, Suggestions, ThreadPrimitive, useAui } from "@assistant-ui/react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { RECONCILE_MAX_READS } from "@/runtime/history-loader";
 
 import { ConversationMapAui } from "@/components/assistant-ui/elements/conversation-map.aui";
 import { ThreadFollowupSuggestions } from "@/components/assistant-ui/elements/follow-up-suggestions.aui";
@@ -258,24 +257,7 @@ export function HistoryControls() {
   const interacted = useRef(false);
   const [loading, setLoading] = useState<"earlier" | "all" | null>(null);
   const [announcement, setAnnouncement] = useState("");
-  const path = useLaserState(s => s.current);
-  const stamp = useLaserState(s => (s.current ? s.open[s.current]?.trimmed : undefined));
-  const deferred = stamp !== undefined;
-  // Two reads for one stamp, and no more: after that the control says what is
-  // true rather than pretending another press would do something.
-  const spent = (stamp?.reads ?? 0) >= RECONCILE_MAX_READS;
-  const [reloading, setReloading] = useState(false);
-  const reload = useCallback(async () => {
-    if (!path || reloading) return;
-    setReloading(true);
-    controller.capture();
-    try {
-      await actions.reloadRecentHistory();
-      setAnnouncement("Recent history reloaded.");
-    } finally {
-      setReloading(false);
-    }
-  }, [actions, controller, path, reloading]);
+  const deferred = useLaserState(s => Boolean(s.current && s.open[s.current]?.trimmed));
   const load = useCallback(async (all = false) => {
     if (busy.current || (history?.complete && (!all || !history.branchesUnloaded))) return;
     busy.current = true;
@@ -302,7 +284,7 @@ export function HistoryControls() {
   }, [controller, history?.anchor, history?.complete]);
   useEffect(() => {
     const viewport = root.current?.closest<HTMLElement>("[data-slot=thread-viewport]");
-    if (!viewport || !history?.before) return;
+    if (!viewport || (!history?.before && !deferred)) return;
     let lastTop = viewport.scrollTop;
     const note = () => { interacted.current = true; };
     const scroll = () => {
@@ -339,30 +321,17 @@ export function HistoryControls() {
       viewport.removeEventListener("keydown", keydown);
       viewport.removeEventListener("scroll", scroll);
     };
-  }, [history?.before, load]);
-  // RP-5b §7: a view whose older turns were released has no cursor — only the
-  // authority can mint one — so it never offers to load earlier messages as if
-  // it could. It offers to read the conversation's recent history again, which
-  // is the thing that restores the cursor.
-  if (deferred) {
-    return <div ref={root} className="flex flex-wrap items-center justify-center gap-2 py-2 text-sm text-ink-2" aria-busy={reloading}>
-      {spent
-        ? <span data-slot="reload-exhausted">Earlier messages are not loaded here. Open this conversation again to read them.</span>
-        : <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" aria-disabled={reloading} onClick={() => void reload()}>
-            {reloading ? "Reading recent history…" : "Reload recent history"}
-          </Button>}
-      <span role="status" className="sr-only">{announcement}</span>
-    </div>;
-  }
-  if (!history || (history.complete && !requestedHistory.current)) return null;
+  }, [deferred, history?.before, load]);
+  if (!history && !deferred) return null;
+  if (!deferred && history?.complete && !requestedHistory.current) return null;
   return <div ref={root} className="flex flex-wrap items-center justify-center gap-2 py-2 text-sm text-ink-2" aria-busy={loading !== null}>
-    {history.before && <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" aria-disabled={loading !== null} onClick={() => void load()}>
+    {(deferred || history?.before) && <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" aria-disabled={loading !== null} onClick={() => void load()}>
       {loading === "earlier" ? "Loading earlier messages…" : "Load earlier messages"}
     </Button>}
     {/* Earlier messages arrive by scrolling up (and through the button above,
         which is the same thing for a keyboard). Only other versions of a prompt
         need asking for: no amount of scrolling reaches a branch. */}
-    {history.branchesUnloaded && (wholeTranscript.paused
+    {history?.branchesUnloaded && (wholeTranscript.paused
       ? <span data-slot="versions-paused">{wholeTranscript.explanation}</span>
       : <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" aria-disabled={loading !== null} onClick={() => void load(true)}>
           {loading === "all" ? "Loading other versions…" : "Load other versions"}
