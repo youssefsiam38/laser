@@ -4,8 +4,8 @@
  * The regression: qualification only ever ran from a `pi/providers/login/event`
  * of type `done`, so an installation whose providers were already connected —
  * credentials on disk, or connected under an earlier host process — never
- * qualified, `namer.model` stayed null, and nothing was ever named or
- * labelled. Any worker coming up is now enough.
+ * qualified, `namer.model` stayed null, and nothing was ever named. Any
+ * worker coming up is now enough.
  *
  * Against a fake worker (a real child process speaking the fd-3 protocol), so
  * the spawn, the priming and the request are the real ones and no engine is

@@ -56,7 +56,7 @@ export interface SessionSafetySnapshot {
    * model arrives and the naming actually starts.
    */
   naming: boolean;
-  /** Tool calls still running, whose labels are still being produced. */
+  /** Legacy protocol slot. D-277 removed worker-side tool-label work, so production supplies zero. */
   runningTools: number;
   /**
    * There is a durable record to reopen from. False means releasing the runtime

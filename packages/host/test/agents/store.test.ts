@@ -60,7 +60,9 @@ describe("AgentStore · seeding", () => {
     expect(beam.instructions).toContain(instructionTemplateToken("sessionHistoryDirectory"));
     expect(beam.instructions).toContain(instructionTemplateToken("availableSkills"));
     expect(snapshot.agents.find((a) => a.name === "chat")).toMatchObject({ supportsSubagents: false });
-    expect(snapshot.agents.find((a) => a.name === "namer")?.instructions).toContain("name sessions");
+    const namer = snapshot.agents.find((a) => a.name === "namer")!;
+    expect(namer.instructions).toContain("name sessions");
+    expect(`${namer.description} ${namer.instructions}`).not.toMatch(/running action|tool call/i);
     expect(snapshot.policy).toEqual({ maxDepth: 3, foregroundCommandSeconds: 120 });
     expect(snapshot.beam).toEqual({ model: null, suggested: null, needsChoice: true });
     expect(snapshot.namer).toEqual({ status: "unqualified", model: null, candidates: [] });

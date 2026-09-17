@@ -6,7 +6,18 @@
  */
 import { coreInstructions } from "../../src/agents/core-instructions.js";
 import { type InlineExtension, type SessionManager } from "@earendil-works/pi-coding-agent";
-import { PRODUCT_DISPLAY_NAME, PRODUCT_NAME, SESSION_AGENT_ENTRY_TYPE, SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE, type AgentDefinition, type JsonRpcMessage, type SessionState } from "@lasercode/protocol";
+import {
+  PRODUCT_DISPLAY_NAME,
+  PRODUCT_NAME,
+  SESSION_AGENT_ENTRY_TYPE,
+  SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE,
+  TOOL_LABEL_DESCRIPTION,
+  TOOL_LABEL_MAX,
+  isToolLabelExempt,
+  type AgentDefinition,
+  type JsonRpcMessage,
+  type SessionState,
+} from "@lasercode/protocol";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,16 +27,18 @@ import { ENGINE_BUILTIN_TOOLS, readSessionAgentRecord, rootRecord, rootRole } fr
 import { StableSdkDriver } from "../../src/drivers/stable-sdk.js";
 import { WorkerServer } from "../../src/server.js";
 import type { DriverAgentOptions, DriverEvent } from "../../src/driver.js";
-import { startStubProvider, systemTextOf, toolNamesOf, writeStubModels, type StubProvider } from "./stub-provider.js";
+import { startStubProvider, systemTextOf, toolNamesOf, writeStubModels, type StubAnswer, type StubProvider, type StubRequest } from "./stub-provider.js";
 
 let base: string;
 let stub: StubProvider;
+let answer: (request: StubRequest, index: number) => StubAnswer;
 const drivers: StableSdkDriver[] = [];
 
 beforeEach(async () => {
   base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-agent-config-`));
   mkdirSync(join(base, "project"), { recursive: true });
-  stub = await startStubProvider(() => ({ text: "ok" }));
+  answer = () => ({ text: "ok" });
+  stub = await startStubProvider((request, index) => answer(request, index));
   writeStubModels(join(base, "agent"), stub.url);
 });
 
@@ -40,8 +53,29 @@ function writeSkill(root: string, name: string): void {
   writeFileSync(join(root, name, "SKILL.md"), `---\nname: ${name}\ndescription: ${name} test skill\n---\n\nUse ${name}.\n`);
 }
 
-function agentOptions(definition: AgentDefinition, name = definition.name): DriverAgentOptions {
-  return { definition, role: rootRole(name), record: rootRecord(name), policy: fallbackPolicy() };
+function agentOptions(
+  definition: AgentDefinition,
+  name = definition.name,
+  extra: Partial<Pick<DriverAgentOptions, "bridge" | "backgroundWork">> = {},
+): DriverAgentOptions {
+  return { definition, role: rootRole(name), record: rootRecord(name), policy: fallbackPolicy(), ...extra };
+}
+
+function rootBridge(): NonNullable<DriverAgentOptions["bridge"]> {
+  const role = rootRole("default");
+  return {
+    role: () => role,
+    canDelegate: () => true,
+    catalog: () => [{ name: "default", description: "The default test agent." }],
+    onEvent: () => () => {},
+    onRoleChange: () => () => {},
+  } as unknown as NonNullable<DriverAgentOptions["bridge"]>;
+}
+
+function toolSchema(request: StubRequest, name: string): Record<string, unknown> {
+  const schema = request.tools?.find((tool) => tool.function.name === name)?.function.parameters;
+  if (!schema) throw new Error(`Missing schema for ${name}`);
+  return schema;
 }
 
 function deferred(): { promise: Promise<void>; resolve(): void } {
@@ -131,6 +165,124 @@ describe("StableSdkDriver with an agent definition", () => {
     expect(toolNamesOf(request)).toEqual(expect.arrayContaining([...ENGINE_BUILTIN_TOOLS]));
     // Web search is an extension tool and follows its feature, which this session does not enable.
     expect(toolNamesOf(request)).not.toContain("web_search");
+  }, 60_000);
+
+  it("adds an optional activity label to every offered tool family except the three exemptions", async () => {
+    const custom: InlineExtension = (pi) => {
+      pi.registerTool({
+        name: "fixture_lookup",
+        label: "Fixture lookup",
+        description: "A direct extension tool used to verify the common tool seam.",
+        parameters: { type: "object", properties: { value: { type: "string" } }, required: ["value"] } as never,
+        execute: async () => ({ content: [{ type: "text", text: "ok" }], details: undefined }),
+      });
+      // A root gets the real start_agent and inspect_fleet tools. Register the
+      // child-only exemption too so one provider request covers all three.
+      pi.registerTool({
+        name: "complete_agent_run",
+        label: "Complete run fixture",
+        description: "The child-only exemption in this root-session fixture.",
+        parameters: { type: "object", properties: {} } as never,
+        execute: async () => ({ content: [{ type: "text", text: "ok" }], details: undefined }),
+      });
+    };
+    const driver = new StableSdkDriver([custom]);
+    drivers.push(driver);
+    const settled = new Promise<void>((resolve) => driver.subscribe((event) => {
+      if (event.type === "update" && event.update.kind === "agent_settled") resolve();
+    }));
+    const definition: AgentDefinition = { ...fallbackDefaultAgent(), model: { provider: "stub", id: "stub-1" } };
+    await driver.open({
+      cwd: join(base, "project"),
+      agentDir: join(base, "agent"),
+      sessionDir: join(base, "sessions"),
+      projectTrusted: true,
+      features: ["subagents", "goals", "web-search"],
+      agent: agentOptions(definition, definition.name, {
+        bridge: rootBridge(),
+        backgroundWork: { cwd: join(base, "project"), foregroundCommandSeconds: 120 },
+      }),
+    });
+    await driver.prompt([{ type: "text", text: "hello" }]);
+    await settled;
+
+    const request = stub.requests[0]!;
+    expect(toolNamesOf(request)).toEqual(expect.arrayContaining([
+      ...ENGINE_BUILTIN_TOOLS,
+      "send_agent_message",
+      "task_output",
+      "fixture_lookup",
+      "web_search",
+      "start_agent",
+      "complete_agent_run",
+      "inspect_fleet",
+    ]));
+    for (const name of toolNamesOf(request)) {
+      const schema = toolSchema(request, name);
+      const label = (schema.properties as Record<string, unknown> | undefined)?.label;
+      if (isToolLabelExempt(name)) {
+        expect(label, name).toBeUndefined();
+      } else {
+        expect(label, name).toEqual({ type: "string", description: TOOL_LABEL_DESCRIPTION, maxLength: TOOL_LABEL_MAX });
+        expect(schema.required, name).not.toEqual(expect.arrayContaining(["label"]));
+      }
+    }
+  }, 60_000);
+
+  it("keeps raw labels, accepts long labels, and preserves tool preparation and context while stripping execution labels", async () => {
+    const executed: unknown[] = [];
+    const executionContexts: unknown[] = [];
+    const custom: InlineExtension = (pi) => {
+      pi.registerTool({
+        name: "capture_arguments",
+        label: "Capture arguments",
+        description: "Records exactly what its execute function receives.",
+        parameters: { type: "object", properties: { value: { type: "string" } }, required: ["value"] } as never,
+        prepareArguments: (args) => ({ ...(args as Record<string, unknown>), value: "prepared" }) as never,
+        execute: async (_id, params, _signal, _onUpdate, context) => {
+          executed.push(params);
+          executionContexts.push(context);
+          return { content: [{ type: "text", text: "captured" }], details: undefined };
+        },
+      });
+    };
+    const longLabel = "Running a deliberately overlong activity label";
+    answer = (_request, index) => index === 0
+      ? { toolCall: { name: "bash", args: { command: "printf label-ok", label: longLabel }, id: "call-bash" } }
+      : index === 1
+        ? { toolCall: { name: "capture_arguments", args: { value: "kept", label: "Capturing arguments" }, id: "call-capture" } }
+        : { text: "done" };
+    const driver = new StableSdkDriver([custom]);
+    drivers.push(driver);
+    const starts: Array<{ toolName: string; args: unknown }> = [];
+    const settled = new Promise<void>((resolve) => driver.subscribe((event) => {
+      if (event.type !== "update") return;
+      if (event.update.kind === "tool_execution_start") starts.push({ toolName: event.update.toolName, args: event.update.args });
+      if (event.update.kind === "agent_settled") resolve();
+    }));
+    const definition: AgentDefinition = { ...fallbackDefaultAgent(), model: { provider: "stub", id: "stub-1" } };
+    const state = await driver.open({
+      cwd: join(base, "project"),
+      agentDir: join(base, "agent"),
+      sessionDir: join(base, "sessions"),
+      projectTrusted: true,
+      agent: agentOptions(definition, definition.name, {
+        backgroundWork: { cwd: join(base, "project"), foregroundCommandSeconds: 120 },
+      }),
+    });
+    await driver.prompt([{ type: "text", text: "run both tools" }]);
+    await settled;
+
+    expect(starts).toEqual([
+      { toolName: "bash", args: { command: "printf label-ok", label: longLabel } },
+      { toolName: "capture_arguments", args: { value: "kept", label: "Capturing arguments" } },
+    ]);
+    expect(JSON.stringify(stub.requests[1])).toContain("label-ok");
+    expect(executed).toEqual([{ value: "prepared" }]);
+    expect(executionContexts[0]).toEqual(expect.objectContaining({ cwd: join(base, "project") }));
+    const stored = readFileSync(state.path, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as unknown);
+    expect(JSON.stringify(stored)).toContain(longLabel);
+    expect(JSON.stringify(stored)).toContain("Capturing arguments");
   }, 60_000);
 
   it("lists only the models of a connected provider, so a picker cannot offer one that would be refused", async () => {

@@ -9,7 +9,6 @@ export interface FirstTurnAdmission {
   dialogCount: number;
   hasGoal: boolean;
   hasLiveWork: boolean;
-  runningToolCount: number;
 }
 
 const ALLOWED_ENTRY_TYPES = new Set(["model_change", "thinking_level_change", "session_info"]);
@@ -32,7 +31,6 @@ export function assertFirstTurnAdmission(input: FirstTurnAdmission): void {
     && input.dialogCount === 0
     && !input.hasGoal
     && !input.hasLiveWork
-    && input.runningToolCount === 0
     && !hasHistory;
   if (!pristine) {
     throw new ProtocolError(

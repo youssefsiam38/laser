@@ -310,8 +310,6 @@ export class WorkerServer {
    * closed (or rekeyed and started again) cannot clear a successor's record.
    */
   private readonly namingInFlight = new Map<string, symbol>();
-  /** Tool calls currently running, by session path: a label for a finished call is never shown. */
-  private readonly runningTools = new Map<string, Set<string>>();
   /** Held only through prompt preflight; prevents runtime replacement races. */
   private readonly firstTurnLock = new FirstTurnLock();
   /** This worker's own memory-pressure controller (RP-8). One per process. */
@@ -510,7 +508,6 @@ export class WorkerServer {
       await this.firstTurnLock.run(live.path, () => live.driver.dispose()).catch(() => {});
     }
     this.runtimes.clear();
-    this.runningTools.clear();
     this.unnamed.clear();
     // Every runtime this worker could have renamed is gone, so no attempt can
     // still be holding one. A completion that lands after this finds its
@@ -1881,7 +1878,9 @@ export class WorkerServer {
       // stay in `unnamed` regardless, so a model that appears later still
       // names the session; that is the moment this becomes a pin.
       naming: this.naming(live.path),
-      runningTools: this.runningTools.get(live.path)?.size ?? 0,
+      // Retained in the protocol snapshot until its vocabulary is revised;
+      // activity labels no longer create worker-side in-flight work (D-277).
+      runningTools: 0,
       hasRecord,
       ...(live.closeFailed ? { closeFailed: true } : {}),
     };
@@ -1901,12 +1900,6 @@ export class WorkerServer {
     };
   }
 
-  /**
-   * Per-session tables this worker keeps beside a runtime (RP-3/RP-4): the
-   * person's tray, tool labels in flight, first prompts waiting to be named and
-   * the one naming attempt a session may have running.
-   * Counts of records, never a claim about bytes of memory.
-   */
   /**
    * What this worker is holding, for the host's diagnostics (RP-3) and for its
    * own pressure reports (RP-8).
@@ -2049,7 +2042,6 @@ export class WorkerServer {
   private cacheRecords(): number {
     let records = this.unnamed.size + this.namingInFlight.size;
     for (const live of this.runtimes.values()) records += live.pending?.list().length ?? 0;
-    for (const ids of this.runningTools.values()) records += ids.size;
     return records;
   }
 
@@ -2173,7 +2165,6 @@ export class WorkerServer {
         dialogCount: pendingUi.length,
         hasGoal: goal !== null,
         hasLiveWork: this.harness.runs().some((run) => run.rootSessionPath === live.path || run.parent?.sessionPath === live.path),
-        runningToolCount: this.runningTools.get(live.path)?.size ?? 0,
       });
       hydration = {
         state,
@@ -2386,14 +2377,10 @@ export class WorkerServer {
         };
         live.buffer.push(params);
         this.notify("session/update", params);
-        if (update.kind === "tool_execution_start") {
-          this.running(live.path).add(update.toolCallId);
-          void this.labelTool(live, update.toolCallId, update.toolName, update.args);
-        } else if (update.kind === "tool_execution_end") this.running(live.path).delete(update.toolCallId);
         // The run is over: whatever the person wrote while it ran goes in now,
         // in the order they wrote it. Fire and forget — a delivery that fails
         // keeps its message and its reason in the tray, and says so there.
-        else if (update.kind === "agent_settled" && live.pending) void live.pending.drain();
+        if (update.kind === "agent_settled" && live.pending) void live.pending.drain();
         return;
       }
       case "ui_request": {
@@ -2452,7 +2439,6 @@ export class WorkerServer {
         // to a session that is open. A closed session leaves none behind, so
         // nothing can serve its bytes afterwards and nothing keeps its memory.
         this.bodyRanges.forget();
-        this.runningTools.delete(live.path);
         this.unnamed.delete(live.path);
         // The runtime a naming attempt would have renamed is gone, so the
         // attempt can no longer finish its work: its entry goes with the
@@ -2460,7 +2446,6 @@ export class WorkerServer {
         // Its own `finally` then finds the entry no longer its own and removes
         // nothing.
         this.namingInFlight.delete(live.path);
-        this.namer.forget(live.path);
         return;
     }
   }
@@ -2503,12 +2488,6 @@ export class WorkerServer {
     this.tasks.rekeySession(oldPath, newPath);
     this.mcpService?.rekeySession(oldPath, newPath);
     this.gitService?.rekey(oldPath, newPath);
-    this.namer.rekey(oldPath, newPath);
-    const tools = this.runningTools.get(oldPath);
-    if (tools) {
-      this.runningTools.delete(oldPath);
-      this.runningTools.set(newPath, tools);
-    }
     const waiting = this.unnamed.get(oldPath);
     if (waiting !== undefined) {
       this.unnamed.delete(oldPath);
@@ -2523,35 +2502,6 @@ export class WorkerServer {
       this.namingInFlight.delete(oldPath);
       this.namingInFlight.set(newPath, naming);
     }
-  }
-
-  /** Tool calls running in one session; the set is dropped when the session closes. */
-  private running(path: string): Set<string> {
-    let ids = this.runningTools.get(path);
-    if (!ids) {
-      ids = new Set();
-      this.runningTools.set(path, ids);
-    }
-    return ids;
-  }
-
-  /**
-   * Namer labels a tool call the moment it starts, so the aggregate row says
-   * what is happening without being opened. Every call in a burst is labelled
-   * at once; one that ends before its label arrives is dropped rather than
-   * shown late. Only a top-level session's calls are labelled: a child agent's
-   * rows are read by its parent and, rarely, by a person who opened its chat,
-   * and a label per call across a fleet of children is spend nobody is
-   * looking at.
-   */
-  private async labelTool(live: Live, toolCallId: string, toolName: string, args: unknown): Promise<void> {
-    if (!this.namer.enabled()) return;
-    if (this.harness.sessionInfo(live.path)?.kind === "child") return;
-    const label = await this.namer.labelTool(live.path, toolCallId, toolName, args, {
-      stillRunning: () => this.runningTools.get(live.path)?.has(toolCallId) === true,
-    });
-    if (!label || !this.runtimes.has(live.path)) return;
-    this.notify("pi/extension/message", { path: live.path, message: { type: "lasercode/namer/label", toolCallId, label } });
   }
 
   /** Re-send accepted updates after `fromSeq`, then any dialogs still waiting. */

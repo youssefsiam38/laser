@@ -26,7 +26,6 @@ const admission = (over: Partial<FirstTurnAdmission> = {}): FirstTurnAdmission =
   dialogCount: 0,
   hasGoal: false,
   hasLiveWork: false,
-  runningToolCount: 0,
   ...over,
 });
 
@@ -51,7 +50,6 @@ describe("first-turn admission", () => {
     { label: "dialog", over: { dialogCount: 1 } },
     { label: "goal", over: { hasGoal: true } },
     { label: "child work", over: { hasLiveWork: true } },
-    { label: "tool", over: { runningToolCount: 1 } },
     { label: "custom history", over: { entries: [{ type: "custom", customType: "other" }] } },
     { label: "message history", over: { entries: [{ type: "message" }] } },
     { label: "child role", over: { roleKind: "child" as const } },

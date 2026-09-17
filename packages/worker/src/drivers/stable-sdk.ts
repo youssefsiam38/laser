@@ -46,7 +46,22 @@ import {
 import { goalExtensionPath, goalStateFromEntries } from "@lasercode/pi-goal";
 import { createCommandBus, createLaserExtension, createPromptProvenanceObserver, toSessionGoal, type LaserExtensionOptions } from "@lasercode/pi-extension";
 import { createHash } from "node:crypto";
-import { entryBodyIdentities, ErrorCodes, modelKey, ProtocolError, PRODUCT_NAME, PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE, SESSION_FALLBACK_ENTRY_TYPE, SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE } from "@lasercode/protocol";
+import {
+  entryBodyIdentities,
+  ErrorCodes,
+  isToolLabelExempt,
+  modelKey,
+  ProtocolError,
+  PRODUCT_NAME,
+  PROJECT_DIR_NAME,
+  SESSION_AGENT_ENTRY_TYPE,
+  SESSION_FALLBACK_ENTRY_TYPE,
+  SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE,
+  TOOL_LABEL_DESCRIPTION,
+  TOOL_LABEL_MAX,
+  TOOL_LABEL_PARAM,
+  withoutToolLabel,
+} from "@lasercode/protocol";
 import type {
   CommandInfo,
   ContentBlock,
@@ -428,6 +443,10 @@ export class StableSdkDriver implements SessionDriver {
         ...(selected ? { model: selected } : {}),
         ...(selectedThinking ? { thinkingLevel: selectedThinking } : {}),
       });
+      // One live-state seam covers built-ins and every extension tool, now and
+      // after a registry refresh. The raw call remains in the transcript and
+      // event stream; only the arguments handed to execute lose `label`.
+      installToolLabels(created.session);
       // The definition's built-ins beyond the engine's default four (grep,
       // find, ls) are switched on here, not through a `defaultTools` setting:
       // that setting names built-ins only, and D-144 gives every agent every
@@ -1744,6 +1763,76 @@ function activateGoalTools(session: AgentSession): void {
   } catch {
     // No goal engine in this session: nothing to switch on.
   }
+}
+
+const TOOL_LABEL_STATE = Symbol("lasercode.tool-label-state");
+const TOOL_LABEL_WRAPPED = Symbol("lasercode.tool-label-wrapped");
+
+type LiveAgentTool = AgentSession["agent"]["state"]["tools"][number];
+type LiveAgentState = AgentSession["agent"]["state"] & { [TOOL_LABEL_STATE]?: true };
+type LabelledTool = LiveAgentTool & { [TOOL_LABEL_WRAPPED]?: true };
+
+function preparedLabelArguments(tool: LiveAgentTool, args: unknown): unknown {
+  const prepared = tool.prepareArguments ? tool.prepareArguments(args) : args;
+  if (prepared === null || typeof prepared !== "object" || Array.isArray(prepared)) return prepared;
+  const label = (prepared as Record<string, unknown>)[TOOL_LABEL_PARAM];
+  if (typeof label !== "string" || label.length <= TOOL_LABEL_MAX) return prepared;
+  // The raw model call is already stored and emitted. This bounded execution
+  // copy only keeps schema validation from refusing an over-long display label.
+  return { ...(prepared as Record<string, unknown>), [TOOL_LABEL_PARAM]: label.slice(0, TOOL_LABEL_MAX) };
+}
+
+function withToolLabel(tool: LiveAgentTool): LiveAgentTool {
+  if (isToolLabelExempt(tool.name) || (tool as LabelledTool)[TOOL_LABEL_WRAPPED]) return tool;
+  const schema = tool.parameters as unknown as Record<PropertyKey, unknown>;
+  const currentProperties = schema["properties"];
+  const properties = currentProperties !== null && typeof currentProperties === "object" && !Array.isArray(currentProperties)
+    ? currentProperties as Record<PropertyKey, unknown>
+    : {};
+  // The live AgentTool type exposes four arguments, while extension-backed
+  // implementations also receive their bound context at runtime. Forward every
+  // trailing argument so neither shape loses information.
+  const execute = tool.execute.bind(tool) as (...args: unknown[]) => ReturnType<LiveAgentTool["execute"]>;
+  const wrapped: LabelledTool = {
+    ...tool,
+    parameters: {
+      ...schema,
+      properties: {
+        ...properties,
+        [TOOL_LABEL_PARAM]: {
+          type: "string",
+          description: TOOL_LABEL_DESCRIPTION,
+          maxLength: TOOL_LABEL_MAX,
+        },
+      },
+    } as LiveAgentTool["parameters"],
+    prepareArguments: (args: unknown) => preparedLabelArguments(tool, args) as never,
+    execute: (toolCallId, params, signal, onUpdate, ...rest: unknown[]) => execute(toolCallId, withoutToolLabel(params), signal, onUpdate, ...rest),
+  };
+  Object.defineProperty(wrapped, TOOL_LABEL_WRAPPED, { value: true });
+  return wrapped;
+}
+
+/**
+ * Intercept the public active-tool state once. Pi rebuilds its private registry
+ * on extension reload and `setActiveToolsByName()` then assigns a fresh array
+ * here, so this one accessor covers built-ins, harness/background/goal tools,
+ * web search, MCP and later extension tools without patching each producer.
+ */
+export function installToolLabels(session: AgentSession): void {
+  const state = session.agent.state as LiveAgentState;
+  if (state[TOOL_LABEL_STATE]) return;
+  const descriptor = Object.getOwnPropertyDescriptor(state, "tools");
+  if (!descriptor?.get || !descriptor.set || descriptor.configurable !== true) {
+    throw new Error("The engine's public active-tool state cannot be decorated.");
+  }
+  Object.defineProperty(state, TOOL_LABEL_STATE, { value: true });
+  Object.defineProperty(state, "tools", {
+    ...descriptor,
+    get: () => descriptor.get!.call(state) as LiveAgentTool[],
+    set: (tools: LiveAgentTool[]) => descriptor.set!.call(state, tools.map(withToolLabel)),
+  });
+  state.tools = state.tools;
 }
 
 /**
