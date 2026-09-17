@@ -117,6 +117,31 @@ describe("live, while the child is open", () => {
     expect(userBlocks(state.open[CHILD]!.blocks)[0]).toMatchObject({ text: TASK, sentBy: { parentPath: PARENT, runId: "r1" } });
   });
 
+  it("renders a parent message received after opening a child mid-run, even when a tool event intervenes", () => {
+    let state = started(open());
+    const update = (seq: number, value: unknown) => {
+      state = reduce(state, { type: "notification", method: "session/update", params: { sessionPath: CHILD, seq, at: "2026-09-08T10:00:01.000Z", update: value } } as never);
+    };
+    update(1, { kind: "tool_execution_start", toolCallId: "existing", toolName: "bash", args: { command: "find ." } });
+    update(2, { kind: "message_start", role: "user" });
+    update(3, { kind: "tool_execution_start", toolCallId: "intervening", toolName: "read", args: { path: "README.md" } });
+    update(4, { kind: "message_end", message: { role: "user", content: [{ type: "text", text: TASK }] }, entry: { id: "u1", parentId: null } });
+    expect(state.open[CHILD]!.blocks.map(block => block.kind)).toEqual(["tool", "user", "tool"]);
+    expect(userBlocks(state.open[CHILD]!.blocks)[0]).toMatchObject({ id: "entry:u1", text: TASK, sentBy: { parentPath: PARENT, runId: "r1" } });
+  });
+
+  it("reconciles an existing optimistic child message across an intervening tool event", () => {
+    let state = reduce(open(), { type: "optimisticUser", path: CHILD, text: "Mine.", images: [], id: "opt" });
+    const update = (seq: number, value: unknown) => {
+      state = reduce(state, { type: "notification", method: "session/update", params: { sessionPath: CHILD, seq, at: "2026-09-08T10:00:01.000Z", update: value } } as never);
+    };
+    update(1, { kind: "message_start", role: "user" });
+    update(2, { kind: "tool_execution_start", toolCallId: "intervening", toolName: "read", args: { path: "README.md" } });
+    update(3, { kind: "message_end", message: { role: "user", content: [{ type: "text", text: "Mine." }] }, entry: { id: "u1", parentId: null } });
+    expect(state.open[CHILD]!.blocks.map(block => block.kind)).toEqual(["user", "tool"]);
+    expect(userBlocks(state.open[CHILD]!.blocks)).toEqual([expect.objectContaining({ id: "entry:u1", text: "Mine.", optimistic: false })]);
+  });
+
   it("arms once: the run's own activity updates never attribute a second message", () => {
     let state = started(open());
     state = prompt(state, 1, TASK);

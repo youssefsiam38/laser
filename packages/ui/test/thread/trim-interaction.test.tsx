@@ -188,6 +188,16 @@ function cacheFor(store: ReturnType<typeof createStateStore>, viewBytes: number)
 }
 
 describe("a trim while somebody is reading", () => {
+  it("offers the next earlier page immediately whenever the window has a cursor", async () => {
+    const store = createStateStore(opened());
+    hydrateThrough(store, undefined);
+    await mount(store, store.presentation);
+    const button = [...container.querySelectorAll("button")].find(node => node.textContent?.trim() === "Load earlier messages");
+    expect(button).toBeDefined();
+    await act(async () => { button!.click(); await Promise.resolve(); });
+    expect(stable.actions.loadEarlierEntries).toHaveBeenCalledOnce();
+  });
+
   it("keeps focus, place, draft and action identity, and never shows an empty transcript", async () => {
     const store = createStateStore(opened());
     const presentation = store.presentation;

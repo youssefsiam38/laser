@@ -250,7 +250,7 @@ export function HistoryControls() {
   const [announcement, setAnnouncement] = useState("");
   const deferred = useLaserState(s => Boolean(s.current && s.open[s.current]?.trimmed));
   const load = useCallback(async (all = false) => {
-    if (busy.current || (history?.complete && (!all || !history.branchesUnloaded))) return;
+    if (busy.current || (history?.complete && !history.before && (!all || !history.branchesUnloaded))) return;
     busy.current = true;
     requestedHistory.current = true;
     setLoading(all ? "all" : "earlier");
@@ -314,7 +314,7 @@ export function HistoryControls() {
     };
   }, [deferred, history?.before, load]);
   if (!history && !deferred) return null;
-  if (!deferred && history?.complete && !requestedHistory.current) return null;
+  if (!deferred && history?.complete && !history.before && !requestedHistory.current) return null;
   return <div ref={root} className="flex flex-wrap items-center justify-center gap-2 py-2 text-sm text-ink-2" aria-busy={loading !== null}>
     {(deferred || history?.before) && <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" aria-disabled={loading !== null} onClick={() => void load()}>
       {loading === "earlier" ? "Loading earlier messages…" : "Load earlier messages"}

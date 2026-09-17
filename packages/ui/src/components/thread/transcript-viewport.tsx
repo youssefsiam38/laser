@@ -57,6 +57,8 @@ export class TranscriptViewport {
   private ownsLocation = false;
   private tail: (() => void) | undefined;
   private expectedTop: number | undefined;
+  /** Appended rows or row growth whose native scroll events belong to following. */
+  private followingGrowth = false;
   /** Movement of the anchor caused by a list change that has rendered but not painted. */
   private structuralShift: number | undefined;
   /** The person is moving the viewport right now; layout may shift it, never re-place it. */
@@ -109,6 +111,8 @@ export class TranscriptViewport {
     const leftRevision = this.loaded;
     this.loaded = loaded;
     this.running = false;
+    this.expectedTop = undefined;
+    this.followingGrowth = false;
     this.cancel();
     if (this.path) {
       this.places.set(this.path, { ...this.place, revision: leftRevision });
@@ -145,6 +149,7 @@ export class TranscriptViewport {
   setIds(ids: readonly string[]) {
     if (this.ids === ids || (this.ids.length === ids.length && this.ids.every((id, i) => ids[i] === id))) return;
     const previous = this.ids;
+    if (this.place.following && previous.length > 0 && ids.length > previous.length && previous.every((id, index) => ids[index] === id)) this.followingGrowth = true;
     // Where the person's anchor sits before the list changes under it. Rows
     // inserted above it (an earlier page) move it by their estimated height;
     // the viewport must move by exactly that before the next paint, or the
@@ -228,8 +233,13 @@ export class TranscriptViewport {
     const viewport = this.viewport;
     if (!viewport || this.target) return;
     if (this.place.following) {
-      if (Math.abs(viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop) <= 0.5) this.arriving = false;
-      else {
+      if (Math.abs(viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop) <= 0.5) {
+        this.arriving = false;
+        // Keep ownership through every native scroll caused by one layout
+        // batch. The first event clears expectedTop; the measured bottom then
+        // proves that batch has settled.
+        if (this.followingGrowth && this.expectedTop === undefined) this.followingGrowth = false;
+      } else {
         // The primitive's tail event also focuses its composer. Passive layout
         // correction must not steal an active find field, menu, or question.
         const focused = document.activeElement;
@@ -434,7 +444,13 @@ export class TranscriptViewport {
   };
   attach(viewport: HTMLElement, tail: () => void) {
     this.disposed = false; this.viewport = viewport; this.tail = tail;
-    this.observer = new ResizeObserver(this.schedule);
+    this.observer = new ResizeObserver(entries => {
+      // A settled message can grow after `isRunning` became false (batched
+      // blocks, markdown, an image). It is still output, not reader intent.
+      // Resizing the viewport itself is not transcript growth.
+      if (this.place.following && entries.some(entry => entry.target !== this.viewport)) this.followingGrowth = true;
+      this.schedule();
+    });
     this.observer.observe(viewport);
     for (const node of this.nodes.values()) this.observer.observe(node);
     const markReading = () => {
@@ -442,7 +458,7 @@ export class TranscriptViewport {
       this.reading = setTimeout(() => { this.reading = undefined; this.schedule(); }, 400);
     };
     const scroll = () => {
-      if (this.place.following && (this.running || this.expectedTop !== undefined)) {
+      if (this.place.following && (this.running || this.expectedTop !== undefined || this.followingGrowth)) {
         // scrollToBottom can emit more than one delayed scroll while a streamed
         // row grows. Explicit wheel/touch/key/scrollbar input clears following
         // first; without that input, every scroll during the followed run is
@@ -471,7 +487,7 @@ export class TranscriptViewport {
       this.capture(); this.publish(); this.schedule();
     };
     const user = () => {
-      this.cancel(); this.arriving = false; this.place.following = false; this.expectedTop = undefined;
+      this.cancel(); this.arriving = false; this.place.following = false; this.expectedTop = undefined; this.followingGrowth = false;
       markReading();
     };
     const selection = () => {

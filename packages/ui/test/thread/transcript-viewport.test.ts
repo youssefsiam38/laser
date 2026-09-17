@@ -334,6 +334,42 @@ describe("scoped transcript destinations", () => {
     } finally { detach(); }
   });
 
+  it("keeps following when two transcript blocks append in one tick", () => {
+    const controller = new TranscriptViewport(), viewport = document.createElement("div");
+    let total = 2_000;
+    Object.defineProperties(viewport, { clientHeight: { value: 600 }, scrollHeight: { get: () => total } });
+    viewport.scrollTop = 1_400;
+    controller.configure("/batched-blocks"); controller.setIds(["old"]);
+    const detach = controller.attach(viewport, () => { viewport.scrollTop = total - viewport.clientHeight; });
+    try {
+      controller.followRun(true);
+      controller.setIds(["old", "first", "second"]); total = 2_200;
+      // The browser can report layout/clamp scroll before React's layout
+      // effect pins the followed transcript to its new end.
+      viewport.dispatchEvent(new Event("scroll"));
+      controller.committed();
+      expect(controller.capture().following).toBe(true);
+      expect(viewport.scrollTop).toBe(1_600);
+    } finally { detach(); }
+  });
+
+  it("keeps following when a transcript block appends after running becomes false", () => {
+    const controller = new TranscriptViewport(), viewport = document.createElement("div");
+    let total = 2_000;
+    Object.defineProperties(viewport, { clientHeight: { value: 600 }, scrollHeight: { get: () => total } });
+    viewport.scrollTop = 1_400;
+    controller.configure("/settled-append"); controller.setIds(["old"]);
+    const detach = controller.attach(viewport, () => { viewport.scrollTop = total - viewport.clientHeight; });
+    try {
+      controller.followRun(false);
+      controller.setIds(["old", "late"]); total = 2_100;
+      viewport.dispatchEvent(new Event("scroll"));
+      controller.committed();
+      expect(controller.capture().following).toBe(true);
+      expect(viewport.scrollTop).toBe(1_500);
+    } finally { detach(); }
+  });
+
   it("does not stop following when the person clicks empty transcript gutter, only the scrollbar", () => {
     const controller = new TranscriptViewport(), viewport = document.createElement("div");
     Object.defineProperties(viewport, { clientHeight: { value: 600 }, clientWidth: { value: 600 }, scrollHeight: { value: 2000 } });

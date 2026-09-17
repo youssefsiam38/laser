@@ -135,6 +135,37 @@ describe("applyUpdate", () => {
     expect(v.blocks[0]).toMatchObject({ kind: "user", files: [], text: "hi", optimistic: false });
   });
 
+  it("settles a live user message in place when a tool event lands before its end", () => {
+    const v = run(view(), [
+      { kind: "message_start", role: "user" },
+      { kind: "tool_execution_start", toolCallId: "still-running", toolName: "bash", args: { command: "find ." } },
+      { kind: "message_end", message: { role: "user", content: [{ type: "text", text: "A note from the parent" }] }, entry: { id: "u1", parentId: null } },
+    ]);
+    expect(v.blocks.map(block => block.kind)).toEqual(["user", "tool"]);
+    expect(v.blocks[0]).toMatchObject({ id: "entry:u1", text: "A note from the parent", optimistic: false, entryId: "u1" });
+    expect(v.blocks[0]).not.toHaveProperty("pending");
+  });
+
+  it("settles an optimistic user message in place across an intervening tool event", () => {
+    let v = reduce({ ...initialState, open: { "/s.jsonl": view() } }, { type: "optimisticUser", path: "/s.jsonl", text: "Keep going", images: [] }).open["/s.jsonl"]!;
+    v = run(v, [
+      { kind: "message_start", role: "user" },
+      { kind: "tool_execution_start", toolCallId: "still-running", toolName: "bash", args: { command: "find ." } },
+      { kind: "message_end", message: { role: "user", content: [{ type: "text", text: "Keep going" }] }, entry: { id: "u1", parentId: null } },
+    ]);
+    expect(v.blocks.map(block => block.kind)).toEqual(["user", "tool"]);
+    expect(v.blocks[0]).toMatchObject({ id: "entry:u1", text: "Keep going", optimistic: false });
+  });
+
+  it("inserts a user message end received after its start was missed", () => {
+    const v = run(view(), [
+      { kind: "tool_execution_start", toolCallId: "already-running", toolName: "bash", args: { command: "find ." } },
+      { kind: "message_end", message: { role: "user", content: [{ type: "text", text: "Arrived while opening" }] }, entry: { id: "u1", parentId: null } },
+    ]);
+    expect(v.blocks.map(block => block.kind)).toEqual(["tool", "user"]);
+    expect(v.blocks[1]).toMatchObject({ id: "entry:u1", text: "Arrived while opening", optimistic: false });
+  });
+
   it("stamps a prompt's entry on its block the moment the engine writes it, and lends it to the tree", () => {
     const opened = { ...view(), entries: [{ type: "message", id: "u1", parentId: null, message: { role: "user", content: [] } }, { type: "message", id: "a1", parentId: "u1", message: { role: "assistant", content: [] } }], leafId: "a1" };
     let v = reduce({ ...initialState, open: { "/s.jsonl": opened } }, { type: "optimisticUser", path: "/s.jsonl", text: "next", images: [] }).open["/s.jsonl"]!;

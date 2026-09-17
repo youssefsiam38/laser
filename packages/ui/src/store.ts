@@ -101,6 +101,8 @@ export type Block =
       /** Attachments this prompt has beyond the chips on its row (RP-5b §2). */
       fileOverflow?: FileOverflow;
       optimistic?: boolean;
+      /** A live `message_start` waiting for its canonical `message_end`. */
+      pending?: true;
       sentBy?: SentByParent;
       /**
        * Pi's entry for this prompt, stamped when it was persisted (its own
@@ -1208,6 +1210,15 @@ function lastOptimisticUserIndex(blocks: Block[]): number {
   return -1;
 }
 
+/** The newest user row opened by `message_start`, even when tool events followed it. */
+function lastPendingUserIndex(blocks: Block[]): number {
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const b = blocks[i]!;
+    if (b.kind === "user" && b.pending === true) return i;
+  }
+  return -1;
+}
+
 function displayQueuedText(raw: string): string {
   const { text, files } = splitAttachedFiles(raw);
   return text || files.map(file => file.name).join(", ");
@@ -1249,7 +1260,7 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
         return {
           ...v,
           pendingSentBy: undefined,
-          blocks: [...v.blocks, { kind: "user", id: nextBlockId(), text: "", files: [], images: [], ...(sentBy ? { sentBy } : {}) }],
+          blocks: [...v.blocks, { kind: "user", id: nextBlockId(), text: "", files: [], images: [], pending: true, ...(sentBy ? { sentBy } : {}) }],
         };
       }
       if (u.role === "assistant") {
@@ -1311,16 +1322,38 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
       const msg = u.message as { role?: string; content?: unknown } | undefined;
       if (msg?.role === "user") {
         const text = textOf(msg.content);
+        const entryIndex = u.entry ? v.blocks.findIndex(block => block.kind === "user" && block.entryId === u.entry!.id) : -1;
         const optimistic = lastOptimisticUserIndex(v.blocks);
-        const index = optimistic !== -1 ? optimistic : v.blocks.at(-1)?.kind === "user" ? v.blocks.length - 1 : -1;
-        if (index === -1) return v;
-        const block = v.blocks[index] as Extract<Block, { kind: "user" }>;
+        const pending = lastPendingUserIndex(v.blocks);
+        const standIn = optimistic !== -1 ? optimistic : pending;
+        const index = entryIndex !== -1 ? entryIndex : standIn;
+        const sentBy = index === -1 ? v.pendingSentBy : undefined;
         // The prompt as it was persisted, bounded the same way a read one is:
         // the person's own unsent copy is replaced by the canonical record.
         const bounded = boundUserContent(splitAttached(text), imagesOfContent(msg.content), { entryId: u.entry?.id });
-        const { bodies: _previous, ...restBlock } = block;
-        const blocks = replaceAt(v.blocks, index, { ...restBlock, text: bounded.text, files: bounded.files, images: bounded.images,
-          ...(bounded.bodies ? { bodies: bounded.bodies } : {}), optimistic: false, ...(u.entry ? { id: `entry:${u.entry.id}`, entryId: u.entry.id } : {}) });
+        const canonical: Extract<Block, { kind: "user" }> = {
+          kind: "user", id: u.entry ? `entry:${u.entry.id}` : index !== -1 ? v.blocks[index]!.id : nextBlockId(), text: bounded.text, files: bounded.files, images: bounded.images,
+          ...(bounded.bodies ? { bodies: bounded.bodies } : {}), optimistic: false, ...(u.entry ? { entryId: u.entry.id } : {}),
+          ...(sentBy ? { sentBy } : {}),
+        };
+        let blocks: Block[];
+        if (index === -1) {
+          // A surface can subscribe between start and end. The durable end is
+          // still a complete transcript row; never wait for a reload to show it.
+          blocks = [...v.blocks, canonical];
+        } else {
+          const block = v.blocks[index] as Extract<Block, { kind: "user" }>;
+          const { bodies: _previous, pending: _pending, ...restBlock } = block;
+          blocks = replaceAt(v.blocks, index, { ...restBlock, ...canonical, id: canonical.id, ...(block.sentBy ? { sentBy: block.sentBy } : {}) });
+          // A hydration that overtook the event may already contain the exact
+          // entry beside its optimistic/live stand-in. Keep the canonical row
+          // in its authoritative position and remove only that stand-in.
+          const duplicate = standIn === -1 ? undefined : v.blocks[standIn];
+          if (entryIndex !== -1 && standIn !== entryIndex && duplicate?.kind === "user"
+            && (duplicate.pending === true || (duplicate.optimistic === true && duplicate.text === bounded.text))) {
+            blocks = blocks.filter((_candidate, candidateIndex) => candidateIndex !== standIn);
+          }
+        }
         // The prompt's place in the tree arrives with it, so its actions (fork,
         // jump, edit, versions, the request it produced) work while the turn
         // runs. The tree holds a copy until the next full read: the entry is
@@ -1328,11 +1361,11 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
         // where the last read put it — the entries between are not here, and
         // a path that cannot be walked would strip every older prompt of its id.
         if (!u.entry || v.entries.some((raw) => (raw as { id?: string } | null)?.id === u.entry!.id)
-          || (v.stubs ?? []).some((stub) => stub.id === u.entry!.id)) return { ...v, blocks };
+          || (v.stubs ?? []).some((stub) => stub.id === u.entry!.id)) return { ...v, pendingSentBy: undefined, blocks };
         // The record itself is retained only when it fits; a large prompt is
         // pointed at, never rewritten to fit (RP-5b).
         const retained = retainEntries([{ type: "message", id: u.entry.id, parentId: u.entry.parentId, message: msg }]);
-        return { ...v, blocks, entries: [...v.entries, ...retained.entries],
+        return { ...v, pendingSentBy: undefined, blocks, entries: [...v.entries, ...retained.entries],
           ...(retained.stubs.length > 0 ? { stubs: [...(v.stubs ?? []), ...retained.stubs] } : {}) };
       }
       // A custom message the transcript renders (an agent event, a task exit)
