@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-17T14:10:00+03:00 · claude-2026-09-17-a · HEAD: b3d13270
-**Current focus:** M16-T60 → 0.7.3: large outputs fold into their tool block and open in a tool-shaped, continuously scrolling, memory-bounded viewer.
+**Last updated:** 2026-09-17T14:40:00+03:00 · claude-2026-09-17-a · HEAD: 5313e3a5
+**Current focus:** 0.7.3 is published (M16-T60): large outputs fold into their tool block and open in a tool-shaped, memory-bounded viewer.
 
 | Milestone | State |
 | --- | --- |
@@ -29,7 +29,7 @@
 | MX Cross-cutting | in-progress |
 
 **Blockers:** none.
-**Next up:** release 0.7.3 (M16-T60); live large tool requests readable without reopen; M17 and open rows in M2/M3/M5/M7/M8/M10/M11/M13/M16/MX; flaky MCP cache-contract and host timing tests.
-**Recently done:** M19-T5 v0.7.2 (release run 35205573838); M19-T4 v0.7.1 Electron preflight (`78b3760d`); M18-T8 release-CI correction; M19 audit gaps (`419403dd`); M19-T3 migration recovery (`2b9962db`).
+**Next up:** live large tool requests readable without reopen; M17 and open rows in M2/M3/M5/M7/M8/M10/M11/M13/M16/MX; flaky MCP cache-contract and host timing tests.
+**Recently done:** M16-T60 v0.7.3 (release run 35213482499); M19-T5 v0.7.2; M19-T4 v0.7.1 Electron preflight; M18-T8 release-CI correction; M19 audit gaps (`419403dd`).
 
 Ownership and evidence: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`.
