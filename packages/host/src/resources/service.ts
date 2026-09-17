@@ -377,17 +377,6 @@ export class ResourceService {
     return { accepted: 0, rejected: report.processes.length, verified: false };
   }
 
-  /**
-   * Has the desktop shell proved its own metrics to this host?
-   *
-   * Used to tell a window from the command line (RP-8): a shell whose report
-   * this host verified against its own process table is a window on this
-   * machine, even while that window's socket is still coming up.
-   */
-  get desktopVerified(): boolean {
-    return this.report !== undefined;
-  }
-
   /** RP-6 / RP-7 publish background-command and helper pids here. */
   observeProcessRegistrations(projectCwd: string | undefined, registrations: readonly unknown[]): number {
     return this.ownership.observeProcessRegistrations(projectCwd, registrations);

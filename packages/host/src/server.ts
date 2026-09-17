@@ -337,6 +337,8 @@ export class HostServer {
   private readonly clients = new Set<WebSocket>();
   /** What the boundary proved about each local socket (RP-13). */
   private readonly actors = new Map<WebSocket, ActorIdentity>();
+  /** Native sockets whose desktop report this host verified (RP-8). */
+  private readonly verifiedDesktopReporters = new Set<WebSocket>();
   /** What each direct socket costs this host right now (RP-7). */
   private readonly pressure = new Map<WebSocket, OutboundPressure>();
   /** Session paths each client is following, for the retirement guard. */
@@ -1505,6 +1507,25 @@ export class HostServer {
   // ------------------------------------------------------------- sockets
 
   /**
+   * Is this direct socket a *window* looking at this host right now (RP-8)?
+   *
+   * Not "is anything connected": the command line and scripts are direct
+   * sockets too. A browser proves itself with the Origin-derived actor; the
+   * native shell proves itself by sending a desktop report this host verifies.
+   * This one predicate owns both renderer-presence accounting and publication,
+   * so tooling can never count as a window without also being a recipient.
+   */
+  private isWindowSocket(ws: WebSocket): boolean {
+    if (ws.readyState !== ws.OPEN) return false;
+    return this.actors.get(ws)?.class === "local_browser" || this.verifiedDesktopReporters.has(ws);
+  }
+
+  private hasWindowSocket(): boolean {
+    for (const ws of this.clients) if (this.isWindowSocket(ws)) return true;
+    return false;
+  }
+
+  /**
    * The pressure summary, to the windows on this machine and nothing else (RP-8).
    *
    * Deliberately not `broadcast`: that writes to the relay listeners too, and a
@@ -1515,28 +1536,12 @@ export class HostServer {
    * pressure, which may shed this one because `resource/snapshot` carries the
    * same summary).
    */
-  /**
-   * Is a *window* looking at this host right now (RP-8)?
-   *
-   * Not "is anything connected": the command line, a script and the desktop
-   * shell's own process are direct sockets too, and none of them is a renderer
-   * with a heap to answer for. The boundary already tells them apart — a page
-   * always sends `Origin`, which is what makes an actor `local_browser`
-   * (`access.ts`) — and a shell that has proved its own metrics is a window as
-   * well, even while its renderer's socket is still coming up. A paired device
-   * never enters `clients` at all, so a phone is never mistaken for a window.
-   */
-  private hasWindowSocket(): boolean {
-    for (const [ws, actor] of this.actors) {
-      if (ws.readyState === ws.OPEN && actor.class === "local_browser") return true;
-    }
-    return this.resources.desktopVerified;
-  }
-
   private publishPressure(publication: MemoryPressurePublish): void {
     const notification: JsonRpcNotification = { jsonrpc: "2.0", method: "resource/pressure", params: publication };
     let line: string | undefined;
-    for (const ws of this.clients) this.emit(ws, notification, () => (line ??= JSON.stringify(notification)));
+    for (const ws of this.clients) {
+      if (this.isWindowSocket(ws)) this.emit(ws, notification, () => (line ??= JSON.stringify(notification)));
+    }
   }
 
   private broadcast(notification: JsonRpcNotification): void {
@@ -1684,6 +1689,10 @@ export class HostServer {
       try {
         const response = await this.router.handle(raw, { actor, searches });
         transcriptResponse = response;
+        if (!response.error && request?.method === "resource/report") {
+          const result = response.result as { verified?: unknown } | undefined;
+          if (result?.verified === true) this.verifiedDesktopReporters.add(ws);
+        }
         // The one thing a reply still tells this layer: a dialog was answered
         // from a client, so the worker's UI bridge stays silent. What a client
         // is *following* is membership's, per connection and per scope, and
@@ -1733,6 +1742,7 @@ export class HostServer {
   private dropClient(ws: WebSocket): void {
     this.clients.delete(ws);
     this.actors.delete(ws);
+    this.verifiedDesktopReporters.delete(ws);
     this.pressure.get(ws)?.reset();
     this.pressure.delete(ws);
     this.transcripts.delete(ws);
