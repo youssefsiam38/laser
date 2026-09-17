@@ -714,6 +714,7 @@ Goal: what a person attaches and what the model produces sit inside the bubble t
 | M16-T12 | Release 0.5.3 | M16-T8, T9, T10, T11 merged and reviewed; the routine release orchestrator |
 | M16-T7 | Release 0.5.2 | M16-T5, M16-T6 and the request-inspector effort-marker fix merged; the routine release orchestrator |
 | M16-T4 | Release 0.5.1 | M14-T8, M14-T9, M16-T1–T3 merged and live-reviewed; the routine release orchestrator |
+| M16-T60 | Large outputs read like output | A tool output longer than the transcript keeps folds inside its tool block with a quiet "Show full output"; an output that arrived live is readable once persisted without reopening; the viewer shows the tool (name, command, status) and its decoded text, never the stored record's JSON; it scrolls continuously holding a bounded set of slices, releases them on close or pressure, and copies/downloads by streaming slices (D-275). |
 
 ## M15 · After the MCP release: artifacts, dictation language, model fallback chains, two sidebar and composer fixes
 
