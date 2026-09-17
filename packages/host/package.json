@@ -29,7 +29,8 @@
     "@lasercode/protocol": "workspace:*",
     "@lasercode/ui": "workspace:*",
     "@lasercode/worker": "workspace:*",
-    "ws": "8.18.3"
+    "ws": "8.18.3",
+    "yaml": "2.9.0"
   },
   "devDependencies": {
     "@types/ws": "8.18.1"

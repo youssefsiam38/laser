@@ -22,17 +22,17 @@ function agent(name: string, patch: Partial<AgentDefinition>): AgentDefinition {
   return {
     name,
     kind: "custom",
+    scope: "global",
     description: "",
     instructions: "x",
     engineInstructions: false,
+    excludeCoreInstructions: false,
     model: null,
     thinkingLevel: null,
-    tools: [],
     supportsSubagents: false,
     allowedAgents: [],
     scopedSkills: false,
     skills: [],
-    runTimeoutMinutes: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     ...patch,
@@ -99,17 +99,17 @@ describe("SkillsCheck", () => {
     const store = new AgentStore({ agentDir: join(dir, "agent"), workspaces: { beam: "/b", chat: "/c" } });
     store.save({
       name: "reviewer",
+      scope: "global",
       description: "",
       instructions: "x",
       engineInstructions: false,
+      excludeCoreInstructions: false,
       model: null,
       thinkingLevel: null,
-      tools: [],
       supportsSubagents: false,
       allowedAgents: [],
       scopedSkills: true,
       skills: [{ name: "review", path: join(dir, "nowhere", "SKILL.md"), scope: "project" }],
-      runTimeoutMinutes: null,
     });
     let calls = 0;
     const check = new SkillsCheck({

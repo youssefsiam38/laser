@@ -17,14 +17,19 @@ import {
   type AgentDefinitionInput,
   type AgentIssue,
 } from "@lasercode/protocol";
+import { canonical } from "../trust.js";
 
 export interface ValidationContext {
   /** Every agent the store knows, custom and built-in. */
   existing: readonly AgentDefinition[];
-  /** The definition being edited; null means this is a new definition. */
+  /** The exact definition being edited; absent means this is a new definition. */
+  original?: AgentDefinition;
+  /** The old name still controls global rename-alias validation. */
   originalName: string | null;
   /** Historical aliases remain reserved while old sessions refer to them. */
   renamedAgents: Readonly<Record<string, string>>;
+  /** Canonical project roots whose local definitions may be read and written. */
+  trustedProjectCwds: ReadonlySet<string>;
 }
 
 /** The agents another agent may start: custom ones, never Beam, Chat or Namer. */
@@ -46,11 +51,26 @@ export function validateAgentInput(input: AgentDefinitionInput, context: Validat
     );
   } else if (isBuiltinAgentName(input.name)) {
     push("name", `"${input.name}" is a built-in agent. Choose another name.`);
-  } else if (
-    context.existing.some((agent) => agent.name === input.name && agent.name !== context.originalName) ||
-    (input.name !== context.originalName && context.renamedAgents[input.name] !== undefined)
-  ) {
-    push("name", `An agent named "${input.name}" already exists.`);
+  } else {
+    const collision = context.existing.some((agent) => {
+      if (agent === context.original || sameDefinition(agent, context.original)) return false;
+      if (agent.name !== input.name) return false;
+      if (agent.kind === "builtin") return true;
+      if (agent.scope !== input.scope) return false;
+      return agent.scope === "global" || canonical(agent.projectCwd ?? "") === canonical(input.projectCwd ?? "");
+    });
+    const aliasCollision = input.scope === "global" && input.name !== context.originalName && context.renamedAgents[input.name] !== undefined;
+    if (collision || aliasCollision) push("name", `An agent named "${input.name}" already exists.`);
+  }
+
+  // ---- scope
+  if (input.scope === "project") {
+    if (!input.projectCwd) push("projectCwd", "Choose the trusted project this agent belongs to.");
+    else if (!context.trustedProjectCwds.has(canonical(input.projectCwd))) {
+      push("projectCwd", "This agent's project must be open and trusted before its definition can be saved.");
+    }
+  } else if (input.projectCwd !== undefined) {
+    push("projectCwd", "A global agent does not belong to a project. Remove its project folder.");
   }
 
   // ---- description
@@ -74,7 +94,12 @@ export function validateAgentInput(input: AgentDefinitionInput, context: Validat
       push("allowedAgents", "This agent does not start other agents, so it cannot list any.");
     }
   } else {
-    const startable = new Set(context.existing.filter(isStartableChild).map((agent) => agent.name));
+    const startable = new Set(
+      context.existing
+        .filter(isStartableChild)
+        .filter((agent) => canReference(input, agent))
+        .map((agent) => agent.name),
+    );
     // A definition may start more instances of itself, so the name being saved
     // counts as existing even before its first save.
     if (input.name && !isBuiltinAgentName(input.name)) startable.add(input.name);
@@ -115,6 +140,17 @@ export function validateAgentInput(input: AgentDefinitionInput, context: Validat
   }
 
   return issues;
+}
+
+function canReference(input: AgentDefinitionInput, candidate: AgentDefinition): boolean {
+  if (candidate.kind !== "custom") return false;
+  if (candidate.scope === "global") return true;
+  return input.scope === "project" && canonical(candidate.projectCwd ?? "") === canonical(input.projectCwd ?? "");
+}
+
+function sameDefinition(left: AgentDefinition, right: AgentDefinition | undefined): boolean {
+  if (!right || left.name !== right.name || left.scope !== right.scope) return false;
+  return left.scope === "global" || canonical(left.projectCwd ?? "") === canonical(right.projectCwd ?? "");
 }
 
 /** True for the one seeded agent that may be edited but never created twice. */

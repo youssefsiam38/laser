@@ -5,7 +5,7 @@
  */
 import { PRODUCT_DISPLAY_NAME, PRODUCT_NAME, instructionTemplateToken, type AgentDefinitionInput, type AgentsSnapshot } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentStore } from "../../src/agents/store.js";
@@ -22,9 +22,11 @@ function store(options: Partial<ConstructorParameters<typeof AgentStore>[0]> = {
 function custom(name: string, patch: Partial<AgentDefinitionInput> = {}): AgentDefinitionInput {
   return {
     name,
+    scope: "global",
     description: `${name} does one thing`,
     instructions: `You are ${name}.`,
     engineInstructions: false,
+    excludeCoreInstructions: false,
     model: null,
     thinkingLevel: null,
     supportsSubagents: false,
@@ -51,7 +53,7 @@ describe("AgentStore · seeding", () => {
     expect(snapshot.agents.map((a) => `${a.name}:${a.kind}`)).toEqual(["default:custom", "beam:builtin", "chat:builtin", "namer:builtin"]);
     expect(snapshot.defaultAgent).toBe("default");
     const def = snapshot.agents[0]!;
-    expect(def).toMatchObject({ engineInstructions: true, instructions: "", supportsSubagents: true, allowedAgents: ["default"] });
+    expect(def).toMatchObject({ scope: "global", engineInstructions: true, excludeCoreInstructions: false, instructions: "", supportsSubagents: true, allowedAgents: ["default"] });
     const beam = snapshot.agents.find((a) => a.name === "beam")!;
     expect(beam.scopedSkills).toBe(false);
     expect(beam.skills).toEqual([]);
@@ -261,16 +263,18 @@ describe("AgentStore · persistence", () => {
     first.setBuiltinInstructions("namer", "Prefer concrete nouns.");
     first.close();
 
-    const stored = JSON.parse(readFileSync(file, "utf8")) as { version: number; revision: number; agents: Array<{ name: string }>; defaultAgent: string };
-    expect(stored.version).toBe(1);
-    expect(stored.agents.map((a) => a.name)).toEqual(["default", "reviewer", "lead"]);
+    const stored = JSON.parse(readFileSync(file, "utf8")) as { version: number; revision: number; defaultAgent: string; agents?: unknown };
+    expect(stored.version).toBe(2);
+    expect(stored.agents).toBeUndefined();
     expect(stored.defaultAgent).toBe("lead");
+    expect(readdirSync(join(dir, "state", "agents")).sort()).toEqual(["default.md", "lead.md", "reviewer.md"]);
+    expect(readFileSync(join(dir, "state", "agents", "reviewer.md"), "utf8")).toContain("You are reviewer.");
     expect(JSON.stringify(stored)).not.toContain('"name": "beam"');
 
     const second = store({ storePath: file });
     const snapshot = second.snapshot();
     expect(snapshot.revision).toBe(stored.revision);
-    expect(snapshot.agents.map((a) => a.name)).toEqual(["default", "reviewer", "lead", "beam", "chat", "namer"]);
+    expect(snapshot.agents.map((a) => a.name)).toEqual(["default", "lead", "reviewer", "beam", "chat", "namer"]);
     expect(snapshot.defaultAgent).toBe("lead");
     expect(snapshot.policy.maxDepth).toBe(2);
     expect(snapshot.beam).toEqual({ model: { provider: "openai", id: "gpt-5-mini" }, suggested: null, needsChoice: false });
@@ -339,7 +343,8 @@ describe("AgentStore · persistence", () => {
     expect(s.snapshot().agents.map((a) => a.name)).toEqual(["default", "beam", "chat", "namer"]);
     s.save(custom("reviewer"));
     s.close();
-    expect(JSON.parse(readFileSync(file, "utf8")).agents.map((a: { name: string }) => a.name)).toEqual(["default", "reviewer"]);
+    expect(JSON.parse(readFileSync(file, "utf8"))).toMatchObject({ version: 2 });
+    expect(readdirSync(join(dir, "agents")).sort()).toEqual(["default.md", "reviewer.md"]);
   });
 });
 
