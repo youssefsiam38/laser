@@ -54,6 +54,20 @@ const ID = /^[a-f0-9]{64}$/;
 const EPOCH = /^[a-f0-9-]{36}$/;
 const MAX_BYTES = 512;
 const READ_MS = 100;
+// A live guard that cannot observe the record retries before answering
+// "unknown". Both the budget and the attempt floor must be spent, so a read
+// starved by a busy event loop (a cold worker loading its engine) cannot
+// exhaust the budget on its own; each attempt also gets a longer deadline.
+const CHECK_BUDGET_MS = 2_000;
+const CHECK_MIN_ATTEMPTS = 4;
+const CHECK_MAX_READ_MS = 1_000;
+
+/**
+ * current: the record carries this snapshot's generation.
+ * stale: a real revocation (missing, corrupt or a different generation).
+ * unknown: the record could not be observed (timed out, locked, transient I/O).
+ */
+export type McpAuthorizationCheck = "current" | "stale" | "unknown";
 
 function valid(value: unknown, identity: string): value is McpAuthorizationGeneration {
   if (!value || typeof value !== "object") return false;
@@ -133,7 +147,7 @@ export class McpAuthorizationRegistry {
     return result.kind === "present" ? result.snapshot : undefined;
   }
 
-  private async readBounded(identity: string, fenceOnLock: boolean): Promise<AuthorizationRead> {
+  private async readBounded(identity: string, fenceOnLock: boolean, deadlineMs = READ_MS): Promise<AuthorizationRead> {
     const path = this.path(identity);
     const lockState = async (): Promise<AuthorizationRead | undefined> => {
       if (!fenceOnLock) return undefined;
@@ -179,7 +193,7 @@ export class McpAuthorizationRegistry {
           } finally { await handle.close(); }
         })().catch((): AuthorizationRead => ({ kind: "unavailable" })),
         new Promise<AuthorizationRead>(done => {
-          timer = setTimeout(() => { controller.abort(); done({ kind: "unavailable" }); }, READ_MS);
+          timer = setTimeout(() => { controller.abort(); done({ kind: "unavailable" }); }, deadlineMs);
         }),
       ]);
     } finally { if (timer) clearTimeout(timer); }
@@ -190,6 +204,26 @@ export class McpAuthorizationRegistry {
     const current = now !== undefined && now.generation.epoch === snapshot.generation.epoch
       && now.generation.counter === snapshot.generation.counter;
     return current;
+  }
+
+  /**
+   * Three-valued guard for a live runtime. Only an observed record answers
+   * current or stale; an unobservable one is retried with backoff and then
+   * reported as unknown, never as a revocation.
+   */
+  async check(snapshot: McpAuthorizationGeneration): Promise<McpAuthorizationCheck> {
+    const started = Date.now();
+    for (let attempt = 1, delay = 25; ; attempt++) {
+      const read = await this.readBounded(snapshot.identity, true, Math.min(READ_MS * 2 ** (attempt - 1), CHECK_MAX_READ_MS));
+      if (read.kind === "present") {
+        return read.snapshot.generation.epoch === snapshot.generation.epoch
+          && read.snapshot.generation.counter === snapshot.generation.counter ? "current" : "stale";
+      }
+      if (read.kind === "missing" || read.kind === "corrupt") return "stale";
+      if (attempt >= CHECK_MIN_ATTEMPTS && Date.now() - started >= CHECK_BUDGET_MS) return "unknown";
+      await new Promise(done => setTimeout(done, delay));
+      delay = Math.min(delay * 2, 400);
+    }
   }
 
   /**

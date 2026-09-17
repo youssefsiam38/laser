@@ -624,3 +624,55 @@ describe("MCP authorization identities and durable generations", () => {
     expect(await registry.current(await registry.bump(id))).toBe(true);
   });
 });
+
+describe("the live guard's three answers", () => {
+  const blockEventLoop = (ms: number) => { const until = Date.now() + ms; while (Date.now() < until) { /* a cold worker loading its engine */ } };
+
+  it("answers current when a read is starved past its deadline by a blocked event loop", async () => {
+    const registry = new McpAuthorizationRegistry(root);
+    const id = await mcpAuthorizationIdentity("global", root, server);
+    const snapshot = await registry.establish(id);
+    const path = join(registry.directory, `${id}.json`);
+    const open = fs.open;
+    let blocked = 0;
+    const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      if (args[0] === path && args[1] === "r" && blocked++ === 0) blockEventLoop(150);
+      return open(...args);
+    });
+    try {
+      expect(await registry.check(snapshot)).toBe("current");
+    } finally { spy.mockRestore(); }
+    expect(blocked).toBeGreaterThanOrEqual(2);
+  });
+
+  it("answers unknown, never stale, when the record stays unreadable, and retries for about two seconds", async () => {
+    const registry = new McpAuthorizationRegistry(root);
+    const id = await mcpAuthorizationIdentity("global", root, server);
+    const snapshot = await registry.establish(id);
+    const path = join(registry.directory, `${id}.json`);
+    const open = fs.open;
+    let reads = 0;
+    const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      if (args[0] === path && args[1] === "r") { reads++; throw Object.assign(new Error("synthetic"), { code: "EIO" }); }
+      return open(...args);
+    });
+    const started = Date.now();
+    try {
+      expect(await registry.check(snapshot)).toBe("unknown");
+    } finally { spy.mockRestore(); }
+    expect(Date.now() - started).toBeGreaterThanOrEqual(2_000);
+    expect(reads).toBeGreaterThanOrEqual(4);
+    expect(await registry.check(snapshot)).toBe("current");
+  });
+
+  it("answers stale only for a real revocation: a new generation or a missing record", async () => {
+    const registry = new McpAuthorizationRegistry(root);
+    const id = await mcpAuthorizationIdentity("global", root, server);
+    const snapshot = await registry.establish(id);
+    const next = await registry.bump(id);
+    expect(await registry.check(snapshot)).toBe("stale");
+    expect(await registry.check(next)).toBe("current");
+    await rm(join(registry.directory, `${id}.json`));
+    expect(await registry.check(next)).toBe("stale");
+  });
+});

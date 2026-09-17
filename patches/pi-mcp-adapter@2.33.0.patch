@@ -481,7 +481,7 @@ index f655b4f..178c63c 100644
        ...(factoryConfig !== undefined ? { config: cloneMcpConfig(factoryConfig) } : {}),
      });
 diff --git a/init.ts b/init.ts
-index 6766d0e..7a7e4c2 100644
+index 6766d0e0d145d68af88b12d79a041b8b9e868691..d3c446180f1ef31e3c9c3ccb89bcaf5a31139e00 100644
 --- a/init.ts
 +++ b/init.ts
 @@ -142,15 +142,19 @@ export async function initializeMcp(
@@ -520,7 +520,7 @@ index 6766d0e..7a7e4c2 100644
  
      const cachedEntry = cache?.servers?.[name];
 -    if (cachedEntry && isServerCacheValid(cachedEntry, definition)) {
-+    if (cachedEntry && isServerCacheValid(cachedEntry, definition) && !await options.authorization?.(name)) {
++    if (cachedEntry && isServerCacheValid(cachedEntry, definition) && !await options.authorization?.(name).catch(() => "unverified")) {
        const hasToolFilters =
          (Array.isArray(definition.includeTools) && definition.includeTools.length > 0) ||
          (Array.isArray(definition.excludeTools) && definition.excludeTools.length > 0);
@@ -551,7 +551,26 @@ index 6766d0e..7a7e4c2 100644
        });
  
    if (ui && startupServers.length > 0) {
-@@ -551,6 +563,11 @@ export function updateServerMetadata(state: McpExtensionState, serverName: strin
+@@ -337,9 +349,17 @@ export async function initializeMcp(
+     ui.setStatus("mcp", status);
+   }
+ 
++  // An authorization record the embedding could not read is not a refusal:
++  // retry that connect once before telling the person anything.
++  const isTransientAuthorization = (error: unknown) => ["MCP_AUTHORIZATION_UNAVAILABLE", "MCP_AUTHORIZATION_UPDATING"]
++    .includes((error as { code?: unknown } | undefined)?.code as string);
+   const results = await parallelLimit(startupServers, 10, async ([name, definition]) => {
+     try {
+-      const connection = await manager.connect(name, definition, runtimeSignal);
++      const connection = await manager.connect(name, definition, runtimeSignal).catch(error => {
++        if (!isTransientAuthorization(error) || runtimeSignal?.aborted) throw error;
++        logger.debug(`MCP: startup authorization check for ${name} was inconclusive; retrying once`);
++        return manager.connect(name, definition, runtimeSignal);
++      });
+       if (connection.status === "needs-auth") {
+         return { name, definition, connection: null, error: `OAuth authentication required. Run /mcp-auth ${name}.`, transient: false };
+       }
+@@ -551,6 +571,11 @@ export function updateServerMetadata(state: McpExtensionState, serverName: strin
  
    const { metadata } = buildToolMetadata(connection.tools, connection.resources, definition, serverName, prefix, state.config.mcpServers, state.toolMetadata);
    state.toolMetadata.set(serverName, metadata);
@@ -563,7 +582,7 @@ index 6766d0e..7a7e4c2 100644
    state.resourceCounts?.set(serverName, connection.resources.length);
    if (!connection.promptDiscoveryFailed) {
      state.promptMetadata?.set(serverName, reconstructPromptMetadata(serverName, connection.prompts ?? [], prefix, definition));
-@@ -595,15 +612,16 @@ export function updateMetadataCache(
+@@ -595,15 +620,16 @@ export function updateMetadataCache(
      resources = existingEntry.resources;
    }
  
@@ -582,7 +601,7 @@ index 6766d0e..7a7e4c2 100644
    };
  
    saveMetadataCache({ version: 1, servers: { [serverName]: entry } });
-@@ -675,12 +693,23 @@ export function updateStatusBar(state: McpExtensionState): void {
+@@ -675,12 +701,23 @@ export function updateStatusBar(state: McpExtensionState): void {
  export async function lazyConnect(state: McpExtensionState, serverName: string, signal?: AbortSignal): Promise<boolean> {
    const ownedSignal = combineAbortSignals(state.owner?.signal, signal);
    throwIfAborted(ownedSignal);
@@ -606,7 +625,7 @@ index 6766d0e..7a7e4c2 100644
      updateServerMetadata(state, serverName);
      markKeepAliveAfterConnect(state, serverName);
      return true;
-@@ -698,6 +727,7 @@ export async function lazyConnect(state: McpExtensionState, serverName: string,
+@@ -698,6 +735,7 @@ export async function lazyConnect(state: McpExtensionState, serverName: string,
        state.ui.setStatus("mcp", status);
      }
      const newConnection = await state.manager.connect(serverName, definition, ownedSignal);

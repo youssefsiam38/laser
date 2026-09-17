@@ -209,6 +209,96 @@ it("keeps MCP on concurrent first opens with target aliases and while another pr
   }
 }, 60_000);
 
+/**
+ * Injects faults into the authorization record reads of the live guard only:
+ * armed once the session has established its generations, and never on a
+ * read taken under the registry's own lock.
+ */
+function faultGuardReads(agentDir: string, fault: (path: string) => void | Promise<void>) {
+  const directory = new McpAuthorizationRegistry(agentDir).directory;
+  const establish = McpAuthorizationRegistry.prototype.establish;
+  let pending = 0;
+  let armed = false;
+  const establishing = vi.spyOn(McpAuthorizationRegistry.prototype, "establish").mockImplementation(async function (this: McpAuthorizationRegistry, identity: string) {
+    pending++;
+    try { return await establish.call(this, identity); } finally { if (--pending === 0) armed = true; }
+  });
+  const open = fs.open;
+  const opening = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+    const path = String(args[0]);
+    if (armed && args[1] === "r" && path.startsWith(directory) && path.endsWith(".json")
+      && !await fs.lstat(`${path}.lock`).then(() => true, () => false)) await fault(path);
+    return open(...args);
+  });
+  return () => { establishing.mockRestore(); opening.mockRestore(); };
+}
+
+function mcpFailures(logged: { mock: { calls: unknown[][] } }): string[] {
+  const notices = events.filter((event): event is Extract<DriverEvent, { type: "ui_event" }> => event.type === "ui_event")
+    .map(event => event.event).filter(event => event.method === "notify").map(event => JSON.stringify(event));
+  const logs = logged.mock.calls.map(call => call.map(String).join(" ")).filter(line => line.includes("MCP"));
+  return [...notices, ...logs].filter(line => /MCP|changed|could not be checked/.test(line));
+}
+
+describe("the MCP guard on a cold worker", () => {
+  it("does not claim access changed when a blocked event loop starves the record read at connect, and still refuses a real revocation", async () => {
+    const config = fixtureServer(); writeServers([config]);
+    const agentDir = join(base, "agent");
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    let blocked = 0;
+    const restore = faultGuardReads(agentDir, () => {
+      if (blocked++ >= 2) return;
+      const until = Date.now() + 150; while (Date.now() < until) { /* engine loading */ }
+    });
+    let driver: StableSdkDriver;
+    try {
+      driver = await openSession([{ toolCall: { name: "fixture_echo", args: { text: "cold" } } }, { text: "done" }, { toolCall: { name: "fixture_echo", args: { text: "revoked" } } }, { text: "stopped" }], { features: ["mcp"] });
+      await promptAndSettle(driver);
+    } finally { restore(); }
+    expect(blocked).toBeGreaterThan(0);
+    expect(toolNamesOf(stub.requests[0]!)).toContain("fixture_echo");
+    expect(mcpFailures(logged)).toEqual([]);
+    expect(JSON.stringify(stub.requests[1]!)).toContain("cold");
+    expect(JSON.stringify(stub.requests[1]!)).not.toMatch(/Access to fixture changed|could not be checked/);
+
+    const registry = new McpAuthorizationRegistry(agentDir);
+    await registry.bump(await mcpAuthorizationIdentity("global", join(base, "project"), config as Parameters<typeof mcpAuthorizationIdentity>[2]));
+    await promptAndSettle(driver, "again");
+    expect(JSON.stringify(stub.requests.at(-1))).toContain("Access to fixture changed. Sign in again in Settings → MCP servers.");
+  }, 60_000);
+
+  it("retries a transient startup failure once and connects without telling the person", async () => {
+    writeServers([fixtureServer()]);
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    let windowEnds: number | undefined;
+    let faults = 0;
+    // Longer than one guard's whole retry budget: the first connect fails as
+    // transient, and the startup retry finds the record readable again.
+    const restore = faultGuardReads(join(base, "agent"), () => {
+      windowEnds ??= Date.now() + 3_000;
+      if (Date.now() >= windowEnds) return;
+      faults++;
+      throw Object.assign(new Error("synthetic transient read failure"), { code: "EIO" });
+    });
+    const answers: string[] = [];
+    const check = McpAuthorizationRegistry.prototype.check;
+    const checking = vi.spyOn(McpAuthorizationRegistry.prototype, "check").mockImplementation(async function (this: McpAuthorizationRegistry, snapshot) {
+      const answer = await check.call(this, snapshot); answers.push(answer); return answer;
+    });
+    try {
+      const driver = await openSession([{ text: "done" }], { features: ["mcp"] });
+      await promptAndSettle(driver);
+    } finally { restore(); checking.mockRestore(); }
+    expect(faults).toBeGreaterThan(0);
+    // The first connect really was inconclusive, and the retry really connected.
+    expect(answers).toContain("unknown");
+    expect(answers).not.toContain("stale");
+    expect(answers.at(-1)).toBe("current");
+    expect(toolNamesOf(stub.requests[0]!)).toContain("fixture_echo");
+    expect(mcpFailures(logged)).toEqual([]);
+  }, 60_000);
+});
+
 function snapshots(): McpRuntimeSnapshot[] {
   return events
     .filter((event): event is Extract<DriverEvent, { type: "extension" }> => event.type === "extension")

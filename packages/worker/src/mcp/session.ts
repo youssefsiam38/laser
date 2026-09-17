@@ -22,7 +22,7 @@ import { McpPromptFreeze } from "./prompt-freeze.js";
 import { loadMcpEngine, type McpConfig } from "./engine.js";
 import { McpStore } from "./store.js";
 import { mcpClientIdentity } from "./identity.js";
-import { McpAuthorizationRegistry, mcpAuthorizationAccount, mcpAuthorizationPartition, mcpAuthorizationIdentities, mcpAuthorizationRevision } from "./authorization.js";
+import { McpAuthorizationError, McpAuthorizationRegistry, mcpAuthorizationAccount, mcpAuthorizationPartition, mcpAuthorizationIdentities, mcpAuthorizationRevision } from "./authorization.js";
 
 export interface McpSessionOptions {
   cwd: string;
@@ -98,8 +98,14 @@ export async function mcpSessionSetup(options: McpSessionOptions): Promise<McpSe
   }
   const authorization = async (name: string): Promise<string | undefined> => {
     const snapshots = generations.get(name);
-    if (snapshots?.length && (await Promise.all(snapshots.map(snapshot => registry.current(snapshot)))).every(Boolean)) return undefined;
+    const checks = snapshots?.length ? await Promise.all(snapshots.map(snapshot => registry.check(snapshot))) : [];
+    if (checks.length && checks.every(check => check === "current")) return undefined;
     const label = servers.find(server => server.config.name === name)?.config.label ?? name;
+    // Only an observed revocation refuses. A record that could not be read is
+    // no evidence that access changed: fail this attempt as transient instead.
+    if (checks.length && !checks.includes("stale")) {
+      throw new McpAuthorizationError("unavailable", `Sign-in information for ${label} could not be checked. Try again.`);
+    }
     return `Access to ${label} changed. Sign in again in Settings → MCP servers.`;
   };
   const commitCredentials = async (name: string, save: () => void): Promise<string> => {
