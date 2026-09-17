@@ -123,10 +123,13 @@ export class FallbackController {
    * turn. Runtime preparation can replace the model that `open()` saw, so its
    * provisional activation must follow the accepted runtime's actual model.
    *
-   * A restored traversal already stands on the model at its saved position and
-   * wins unchanged. This boundary is never called for a fallback-caused switch.
+   * A traversal that has already moved is never re-resolved here, and the rule
+   * is enforced in this method rather than left to the caller: the driver only
+   * reaches this boundary on a pristine session today, but a restored
+   * traversal must survive whatever a future caller believes about that.
    */
   activateForAcceptedSelection(): void {
+    if (this.state.failover || (this.state.activation?.position ?? 0) > 0) return;
     const selected = this.engine.selectedModel();
     const activation = this.state.activation;
     const active = activation?.models[activation.position];
