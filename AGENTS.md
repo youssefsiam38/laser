@@ -347,14 +347,16 @@ Read `docs/architecture.md` for the layer diagram and the driver seam.
 
 ```bash
 pnpm install                      # workspace install
+pnpm verify                       # full gate: build, then typecheck + all tests in parallel
 pnpm -r build                     # build all packages
-pnpm -r test                      # test all packages
-pnpm -F @lasercode/worker test      # one package
+pnpm -F @lasercode/worker test      # one package while iterating
 pnpm -F @lasercode/worker dev       # run one package in watch mode
 ```
 
 Conventions: TypeScript strict, ESM everywhere, relative imports use `.js`
 specifiers (Pi loads extensions this way and we match it), Node 24, pnpm.
+
+Run the full suite with `pnpm verify` (parallel by default), not `pnpm -r test`.
 
 ## 5a. Release and packaging failure rules
 

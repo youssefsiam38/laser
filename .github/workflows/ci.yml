@@ -9,12 +9,49 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# The suite runs as parallel jobs: each installs and builds (about a minute),
+# then runs one slice. The UI suite alone takes three minutes on one runner,
+# so vitest shards it. A run succeeds only when every job does, which is what
+# the release orchestrator reads.
 jobs:
-  build-test:
+  test:
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: checks
+            run: >-
+              pnpm -r typecheck &&
+              pnpm -F @lasercode/ui test:types &&
+              bash scripts/release/verify-install.sh &&
+              pnpm test:release
+          - name: host
+            run: pnpm -F @lasercode/host test
+          - name: worker
+            run: pnpm -F @lasercode/worker test
+          - name: ui 1/3
+            run: pnpm -F @lasercode/ui exec vitest run --shard=1/3
+          - name: ui 2/3
+            run: pnpm -F @lasercode/ui exec vitest run --shard=2/3
+          - name: ui 3/3
+            run: pnpm -F @lasercode/ui exec vitest run --shard=3/3
+          - name: packages
+            run: >-
+              pnpm -r --no-sort
+              --filter '!@lasercode/host' --filter '!@lasercode/worker'
+              --filter '!@lasercode/ui' --filter '!@lasercode/desktop'
+              test
+          # Desktop tests open one hidden real Electron window, exercise the
+          # Linux launcher and run code inside the real Electron binary (its
+          # asar-aware fs broke 0.7.0), so this job alone downloads Electron.
+          # A hosted runner has no graphical session of its own.
+          - name: desktop
+            electron: true
+            run: xvfb-run -a pnpm -F @lasercode/desktop test
     env:
-      # The desktop package pins Electron for its build config; CI never launches
-      # it, and the binary download is ~120 MB per run.
+      # The binary is ~120 MB per job; only the desktop job fetches it below.
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -29,17 +66,10 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - if: matrix.electron
+        run: env -u ELECTRON_SKIP_BINARY_DOWNLOAD node packages/desktop/node_modules/electron/install.js &&
+          test -x packages/desktop/node_modules/electron/dist/electron
+
       - run: pnpm -r build
 
-      - run: pnpm -r typecheck
-
-      # Desktop tests open one hidden real Electron window and exercise the
-      # Linux launcher. A hosted runner has no graphical session of its own.
-      - run: xvfb-run -a pnpm -r test
-
-      # The installer's own test: fixture-based, no network, ~2 seconds. It is
-      # the only thing that checks the path a person on a clean machine takes,
-      # and it is cheap enough to run on every change.
-      - run: bash scripts/release/verify-install.sh
-
-      - run: node --test scripts/release/test/*.test.mjs
+      - run: ${{ matrix.run }}

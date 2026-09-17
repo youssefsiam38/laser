@@ -17,7 +17,7 @@
     "identity:check": "node scripts/identity/check.mjs",
     "sandbox": "node scripts/sandbox.mjs",
     "direction:check": "node --test scripts/check-direction.test.mjs && node scripts/check-direction.mjs",
-    "verify": "pnpm direction:check && pnpm -r build && pnpm -r typecheck && pnpm -r test && pnpm test:release && pnpm test:browser-check",
+    "verify": "node scripts/verify.mjs",
     "test:release": "node --test scripts/release/test/*.test.mjs",
     "test:browser-check": "node --test scripts/browser-check/test/*.test.mjs",
     "verify:install": "bash scripts/release/verify-install.sh",
