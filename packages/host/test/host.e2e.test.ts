@@ -33,7 +33,8 @@ function stubProvider(): Promise<{ server: Server; url: string; requests: Record
     req.on("end", () => {
       const request = JSON.parse(body) as Record<string, unknown>;
       requests.push(request);
-      const reply = body.includes("present-progressive") ? ["Searching ", "auth ", "handlers"] : REPLY;
+      // Namer no longer labels tools (D-277); every request is the conversation's.
+      const reply = REPLY;
       res.writeHead(200, { "content-type": "text/event-stream" });
       const base = { id: "c", object: "chat.completion.chunk", created: 1, model: "stub-1" };
       res.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }] })}\n\n`);

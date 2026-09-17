@@ -122,7 +122,6 @@ test('the worker projection names fields the worker source really has', async ()
   assert.doesNotMatch(server, /private readonly sessions\b/, 'the removed `sessions` map must not come back unnoticed');
   assert.match(server, /buffer: ReplayBuffer/, 'a Live row carries its replay buffer as `buffer`');
   assert.match(server, /private readonly tasks = new TaskIndex\(\)/);
-  assert.match(server, /private readonly runningTools = new Map/);
   const table = await read('packages/worker/src/session-runtimes.ts');
   for (const member of [/values\(\): IterableIterator<Live>/, /get size\(\): number/, /openPaths\(\): string\[\]/, /releasingPaths\(\): string\[\]/, /get fenced\(\): boolean/, /get retiring\(\): boolean/]) {
     assert.match(table, member, `SessionRuntimes must still expose ${member}`);
