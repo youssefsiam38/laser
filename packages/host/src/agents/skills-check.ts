@@ -14,8 +14,7 @@
  * flashing a fresh timestamp every half minute.
  */
 import { statSync } from "node:fs";
-import type { AgentDefinition, AgentWarning } from "@lasercode/protocol";
-import { canonical } from "../trust.js";
+import { effectiveAgents, type AgentDefinition, type AgentWarning } from "@lasercode/protocol";
 
 export interface SkillsCheckOptions {
   /** The current definitions, custom and built-in. */
@@ -67,7 +66,6 @@ export class SkillsCheck {
 
   private check(): AgentWarning[] {
     const agents = this.options.agents();
-    const globalNames = new Set(agents.filter((agent) => agent.kind === "custom" && agent.scope === "global").map((agent) => agent.name));
     const exists = this.options.exists ?? fileExists;
     const warnings: AgentWarning[] = [];
     const live = new Set<string>();
@@ -75,22 +73,24 @@ export class SkillsCheck {
     for (const agent of agents) {
       // Built-ins are not editable, so a warning that links to their edit page
       // would lead nowhere; their bundled skill is the worker's to write.
-      if (agent.kind !== "custom") continue;
+      if (agent.kind !== "custom" || !agent.path) continue;
       if (agent.scopedSkills) {
         for (const skill of agent.skills) {
           if (exists(skill.path)) continue;
           warnings.push(
-            this.warning(live, agent.name, "skills", skill.name, `Skill "${skill.name}" is no longer at ${skill.path}. Choose it again or remove it from this agent.`),
+            this.warning(live, agent.path, agent.name, "skills", skill.name, `Skill "${skill.name}" is no longer at ${skill.path}. Choose it again or remove it from this agent.`),
           );
         }
       }
+      const sameProject = new Set(
+        effectiveAgents(agents, agent.scope === "project" ? agent.projectCwd : undefined)
+          .filter((candidate) => candidate.kind === "custom")
+          .map((candidate) => candidate.name),
+      );
       for (const child of agent.allowedAgents) {
-        const sameProject = agent.scope === "project" && agents.some(
-          (candidate) => candidate.kind === "custom" && candidate.scope === "project" && candidate.name === child && canonical(candidate.projectCwd ?? "") === canonical(agent.projectCwd ?? ""),
-        );
-        if (globalNames.has(child) || sameProject) continue;
+        if (sameProject.has(child)) continue;
         warnings.push(
-          this.warning(live, agent.name, "allowedAgents", child, `"${child}" no longer exists, so this agent cannot start it. Remove it from the agents it may start.`),
+          this.warning(live, agent.path, agent.name, "allowedAgents", child, `"${child}" no longer exists, so this agent cannot start it. Remove it from the agents it may start.`),
         );
       }
     }
@@ -98,15 +98,15 @@ export class SkillsCheck {
     return warnings;
   }
 
-  private warning(live: Set<string>, agentName: string, field: AgentWarning["field"], target: string, message: string): AgentWarning {
-    const key = `${agentName}\u0000${field}\u0000${target}`;
+  private warning(live: Set<string>, path: string, agentName: string, field: AgentWarning["field"], target: string, message: string): AgentWarning {
+    const key = `${path}\u0000${field}\u0000${target}`;
     live.add(key);
     let since = this.since.get(key);
     if (!since) {
       since = (this.options.now ?? (() => new Date()))().toISOString();
       this.since.set(key, since);
     }
-    return { agentName, field, target, message, since };
+    return { agentName, field, path, target, message, since };
   }
 }
 

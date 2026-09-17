@@ -175,6 +175,36 @@ export interface AgentDefinition {
 
 export type AgentDefinitionInput = Omit<AgentDefinition, "kind" | "path" | "createdAt" | "updatedAt">;
 
+/**
+ * Definitions visible in one scope. Project definitions shadow same-named
+ * globals; built-ins remain visible. Callers canonicalise `projectCwd` before
+ * storing it — this helper deliberately performs string comparison only.
+ */
+export function effectiveAgents(agents: readonly AgentDefinition[], projectCwd?: string): AgentDefinition[] {
+  const projectNames = new Set(
+    projectCwd === undefined
+      ? []
+      : agents
+          .filter((agent) => agent.kind === "custom" && agent.scope === "project" && agent.projectCwd === projectCwd)
+          .map((agent) => agent.name),
+  );
+  return agents.filter((agent) => {
+    if (agent.kind === "builtin") return true;
+    if (agent.scope === "project") return projectCwd !== undefined && agent.projectCwd === projectCwd;
+    return !projectNames.has(agent.name);
+  });
+}
+
+/** Whether `owner` may name `candidate` in its allowed-agents list. */
+export function canReferenceAgent(
+  owner: Pick<AgentDefinition, "scope" | "projectCwd">,
+  candidate: AgentDefinition,
+): boolean {
+  if (candidate.kind === "builtin") return false;
+  if (owner.scope === "global") return candidate.scope === "global";
+  return candidate.scope === "global" || (candidate.scope === "project" && candidate.projectCwd === owner.projectCwd);
+}
+
 /** A validation problem tied to a form field (`skills[2]`, `allowedAgents`, `name`…). */
 export interface AgentIssue {
   field: string;

@@ -7,16 +7,11 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  readdirSync,
   renameSync,
   rmSync,
-  statSync,
   unlinkSync,
-  watch,
   writeFileSync,
-  type FSWatcher,
 } from "node:fs";
-import { createHash } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
 import {
   AGENT_MAX_DEPTH_DEFAULT,
@@ -31,6 +26,7 @@ import {
   GLOBAL_AGENTS_DIR_NAME,
   PROJECT_AGENTS_DIR,
   ProtocolError,
+  effectiveAgents,
   instructionTemplateIssue,
   isBuiltinAgentName,
   type AgentDefinition,
@@ -46,7 +42,12 @@ import {
   type ChatState,
   type NamerState,
 } from "@lasercode/protocol";
-import { parseAgentFile, serializeAgentFile } from "./agent-file.js";
+import { serializeAgentFile } from "./agent-file.js";
+import {
+  AgentFilesWatch,
+  agentFileDigest,
+  type AgentFileLocation,
+} from "./agent-files-watch.js";
 import { builtinAgents, seedDefaultAgent } from "./builtins.js";
 import { validateAgentInput } from "./validate.js";
 import { canonical } from "../trust.js";
@@ -63,6 +64,9 @@ export interface AgentStoreOptions {
   log?: (line: string) => void;
   now?: () => Date;
   watchDebounceMs?: number;
+  watchPollMs?: number;
+  /** Injectable write primitive for failure-path tests. */
+  writeFile?: (path: string, text: string) => void;
 }
 
 interface StoredV1 {
@@ -83,7 +87,7 @@ interface StoredV2 extends Omit<StoredV1, "version" | "agents"> {
 }
 
 type Stored = Partial<Omit<StoredV1, "version"> & { version: 1 | 2 }>;
-type Location = { scope: "global" } | { scope: "project"; projectCwd: string };
+type Location = AgentFileLocation;
 
 const DELETE_DEFAULT_MESSAGE = "This agent starts new sessions. Choose another default first.";
 const BUILTIN_STAMP = "1970-01-01T00:00:00.000Z";
@@ -100,25 +104,39 @@ export class AgentStore {
   private skillWarnings: AgentWarning[] = [];
   private readonly fileWarnings = new Map<string, AgentWarning>();
   private readonly digests = new Map<string, string>();
-  private readonly watchers = new Map<string, FSWatcher>();
-  private readonly watchedRoots = new Map<string, string>();
-  private readonly pendingPaths = new Set<string>();
-  private readonly pendingScans = new Set<string>();
-  private readonly failedWatchDirectories = new Set<string>();
   private trustedProjects = new Set<string>();
   private revision = 0;
   private writeTimer: ReturnType<typeof setTimeout> | undefined;
-  private watchTimer: ReturnType<typeof setTimeout> | undefined;
-  private pollTimer: ReturnType<typeof setInterval> | undefined;
   private readonly now: () => Date;
   private migrationBlocked = false;
   private tmpCounter = 0;
+  private readonly files: AgentFilesWatch;
 
   constructor(private readonly options: AgentStoreOptions) {
     this.now = options.now ?? (() => new Date());
     this.trustedProjects = new Set((options.trustedProjects?.() ?? []).map(canonical));
+    this.files = new AgentFilesWatch({
+      globalDirectory: () => this.globalAgentsDir(),
+      projectDirectory: (projectCwd) => this.projectAgentsDir(projectCwd),
+      trustedProjects: () => this.trustedProjects,
+      globalReconciliationBlocked: () => this.migrationBlocked,
+      definitions: () => this.custom.values(),
+      definition: (location, name) => this.custom.get(keyOf(location, name)),
+      replaceDefinition: (location, definition) => this.custom.set(keyOf(location, definition.name), definition),
+      removeDefinition: (definition) => this.removeDefinition(definition, true),
+      digest: (path) => this.digests.get(path),
+      setDigest: (path, digest) => digest === undefined ? this.digests.delete(path) : void this.digests.set(path, digest),
+      warning: (path) => this.fileWarnings.get(path),
+      warningPaths: () => this.fileWarnings.keys(),
+      setWarning: (path, warning) => warning === undefined ? this.fileWarnings.delete(path) : void this.fileWarnings.set(path, warning),
+      commit: () => this.commit(),
+      now: () => this.now(),
+      log: (line) => this.log(line),
+      ...(options.watchDebounceMs !== undefined ? { debounceMs: options.watchDebounceMs } : {}),
+      ...(options.watchPollMs !== undefined ? { pollMs: options.watchPollMs } : {}),
+    });
     this.load();
-    if (options.storePath) this.rebuildWatchers();
+    if (options.storePath) this.files.start();
   }
 
   get currentRevision(): number {
@@ -215,9 +233,16 @@ export class AgentStore {
       }
     }
 
-    this.writeDefinition(agent);
-    for (const other of changedOthers.values()) this.writeDefinition(other);
-    if (renaming && existing?.path && existing.path !== path) this.unlinkDefinition(existing.path, true);
+    const written = [agent, ...changedOthers.values()];
+    const touchedPaths = written.map((definition) => definition.path ?? this.definitionPath(locationOf(definition), definition.name));
+    try {
+      this.writeDefinitions(written);
+      if (renaming && existing?.path && existing.path !== path) this.unlinkDefinition(existing.path, true);
+    } catch (error) {
+      for (const touched of touchedPaths) this.digests.delete(touched);
+      if (existing?.path) this.digests.delete(existing.path);
+      throw error;
+    }
 
     if (originalKey) this.custom.delete(originalKey);
     for (const [key, other] of changedOthers) this.custom.set(key, other);
@@ -347,31 +372,27 @@ export class AgentStore {
   /** Reconcile project files after the registry list or a trust decision changes. */
   setTrustedProjects(projects: readonly string[]): void {
     const next = new Set(projects.map(canonical));
-    if (sameSet(next, this.trustedProjects)) return;
+    const locationsChanged = !sameSet(next, this.trustedProjects);
     this.trustedProjects = next;
     let changed = false;
-    for (const [key, agent] of [...this.custom]) {
-      if (agent.scope !== "project" || next.has(agent.projectCwd!)) continue;
-      this.custom.delete(key);
-      if (agent.path) {
-        this.digests.delete(agent.path);
-        this.fileWarnings.delete(agent.path);
+    if (locationsChanged) {
+      for (const [key, agent] of [...this.custom]) {
+        if (agent.scope !== "project" || next.has(agent.projectCwd!)) continue;
+        this.custom.delete(key);
+        if (agent.path) {
+          this.digests.delete(agent.path);
+          this.fileWarnings.delete(agent.path);
+        }
+        changed = true;
       }
-      changed = true;
     }
-    for (const projectCwd of next) changed = this.scanDirectory(this.projectAgentsDir(projectCwd), { scope: "project", projectCwd }, false) || changed;
-    this.rebuildWatchers();
+    for (const projectCwd of next) changed = this.files.reconcile({ scope: "project", projectCwd }, false) || changed;
+    this.files.locationsChanged();
     if (changed) this.commit();
   }
 
   close(): void {
-    if (this.watchTimer) clearTimeout(this.watchTimer);
-    this.watchTimer = undefined;
-    if (this.pollTimer) clearInterval(this.pollTimer);
-    this.pollTimer = undefined;
-    for (const watcher of this.watchers.values()) watcher.close();
-    this.watchers.clear();
-    this.watchedRoots.clear();
+    this.files.close();
     if (this.writeTimer) {
       clearTimeout(this.writeTimer);
       this.writeTimer = undefined;
@@ -422,8 +443,8 @@ export class AgentStore {
       const path = this.definitionPath({ scope: "global" }, agent.name);
       this.custom.set(keyOf({ scope: "global" }, agent.name), { ...agent, scope: "global", path });
     }
-    this.scanDirectory(this.globalAgentsDir(), { scope: "global" }, false, !this.migrationBlocked);
-    for (const projectCwd of this.trustedProjects) this.scanDirectory(this.projectAgentsDir(projectCwd), { scope: "project", projectCwd }, false);
+    this.files.reconcile({ scope: "global" }, false);
+    for (const projectCwd of this.trustedProjects) this.files.reconcile({ scope: "project", projectCwd }, false);
 
     if (![...this.custom.values()].some((agent) => agent.scope === "global")) {
       const seeded = { ...seedDefaultAgent(this.now().toISOString()), path: this.definitionPath({ scope: "global" }, DEFAULT_AGENT_NAME) };
@@ -468,7 +489,7 @@ export class AgentStore {
         if (existsSync(path)) continue;
         this.writeFileAtomic(path, serializeAgentFile({ ...agent, scope: "global", path }));
       }
-      copyFileSync(file, `${file}.v1.bak`);
+      copyFileSync(file, nextMigrationBackupPath(file));
       const v2: StoredV2 = {
         version: 2,
         revision: typeof parsed.revision === "number" ? parsed.revision : 0,
@@ -515,173 +536,35 @@ export class AgentStore {
     }
   }
 
-  private scanDirectory(directory: string, location: Location, notify: boolean, reconcileMissing = true): boolean {
-    let names: string[] = [];
-    try {
-      names = readdirSync(directory).filter((name) => name.endsWith(".md")).sort();
-    } catch {
-      names = [];
-    }
-    const paths = new Set(names.map((name) => join(directory, name)));
-    let changed = false;
-    for (const path of paths) changed = this.readDefinitionPath(path, location, false) || changed;
-    if (reconcileMissing) for (const agent of [...this.custom.values()]) {
-      if (!sameLocation(locationOf(agent), location) || !agent.path || paths.has(agent.path)) continue;
-      this.removeDefinition(agent, true);
-      changed = true;
-    }
-    for (const path of [...this.fileWarnings.keys()]) {
-      if (dirname(path) !== directory || paths.has(path)) continue;
-      this.fileWarnings.delete(path);
-      this.digests.delete(path);
-      changed = true;
-    }
-    if (changed && notify) this.commit();
-    return changed;
-  }
-
-  private readDefinitionPath(path: string, location: Location, notify: boolean): boolean {
-    let text: string;
-    try {
-      text = readFileSync(path, "utf8");
-    } catch {
-      const current = this.custom.get(keyOf(location, basename(path, ".md")));
-      let changed = false;
-      if (current?.path === path) {
-        this.removeDefinition(current, true);
-        changed = true;
-      }
-      if (this.fileWarnings.delete(path)) changed = true;
-      this.digests.delete(path);
-      if (changed && notify) this.commit();
-      return changed;
-    }
-    const digest = digestOf(text);
-    if (this.digests.get(path) === digest) return false;
-    this.digests.set(path, digest);
-    const name = basename(path, ".md");
-    const parsed = parseAgentFile(text, name);
-    if (parsed.issues) {
-      const previous = this.fileWarnings.get(path);
-      this.fileWarnings.set(path, {
-        agentName: name,
-        field: "file",
-        target: path,
-        message: `${parsed.issues.join(" ")} Fix ${path} and save it again; the last valid definition is still in use.`,
-        since: previous?.since ?? this.now().toISOString(),
-      });
-      if (notify) this.commit();
-      return true;
-    }
-    const definition: AgentDefinition = {
-      ...parsed.definition,
-      scope: location.scope,
-      ...(location.scope === "project" ? { projectCwd: location.projectCwd } : {}),
-      path,
-    };
-    this.custom.set(keyOf(location, name), definition);
-    this.fileWarnings.delete(path);
-    if (notify) this.commit();
-    return true;
-  }
-
-  private rebuildWatchers(): void {
-    const wanted = new Map<string, Location>();
-    wanted.set(this.globalAgentsDir(), { scope: "global" });
-    for (const projectCwd of this.trustedProjects) wanted.set(this.projectAgentsDir(projectCwd), { scope: "project", projectCwd });
-    for (const [directory, watcher] of this.watchers) {
-      if (wanted.has(directory)) continue;
-      watcher.close();
-      this.watchers.delete(directory);
-      this.watchedRoots.delete(directory);
-      this.failedWatchDirectories.delete(directory);
-    }
-    for (const directory of wanted.keys()) {
-      const root = closestExistingDirectory(directory);
-      if (!root) continue;
-      if (this.watchers.has(directory) && this.watchedRoots.get(directory) === root) continue;
-      this.watchers.get(directory)?.close();
-      try {
-        const watcher = watch(root, (_event, filename) => {
-          const text = filename?.toString();
-          if (root === directory && text?.endsWith(".md")) this.pendingPaths.add(join(directory, text));
-          else this.pendingScans.add(directory);
-          this.scheduleWatchFlush();
-        });
-        watcher.on("error", () => {
-          watcher.close();
-          this.watchers.delete(directory);
-          this.watchedRoots.delete(directory);
-          this.failedWatchDirectories.add(directory);
-          this.ensureWatchFallback();
-        });
-        this.watchers.set(directory, watcher);
-        this.watchedRoots.set(directory, root);
-        this.failedWatchDirectories.delete(directory);
-      } catch {
-        // inotify can be exhausted by unrelated processes. Poll only the
-        // affected location until a real watcher can be established again.
-        this.failedWatchDirectories.add(directory);
-        this.ensureWatchFallback();
-      }
-    }
-    if (this.failedWatchDirectories.size === 0 && this.pollTimer) {
-      clearInterval(this.pollTimer);
-      this.pollTimer = undefined;
-    }
-  }
-
-  private ensureWatchFallback(): void {
-    if (this.pollTimer) return;
-    this.pollTimer = setInterval(() => {
-      for (const directory of [...this.failedWatchDirectories]) {
-        const location = this.locationForDirectory(directory);
-        if (!location) {
-          this.failedWatchDirectories.delete(directory);
-          continue;
-        }
-        this.scanDirectory(directory, location, true);
-      }
-      this.rebuildWatchers();
-    }, this.options.watchDebounceMs ?? 250);
-    this.pollTimer.unref?.();
-  }
-
-  private scheduleWatchFlush(): void {
-    if (this.watchTimer) return;
-    this.watchTimer = setTimeout(() => {
-      this.watchTimer = undefined;
-      const scans = [...this.pendingScans];
-      const paths = [...this.pendingPaths];
-      this.pendingScans.clear();
-      this.pendingPaths.clear();
-      for (const directory of scans) {
-        const location = this.locationForDirectory(directory);
-        if (location) this.scanDirectory(directory, location, true);
-      }
-      for (const path of paths) {
-        if (scans.includes(dirname(path))) continue;
-        const location = this.locationForDirectory(dirname(path));
-        if (location) this.readDefinitionPath(path, location, true);
-      }
-      this.rebuildWatchers();
-    }, this.options.watchDebounceMs ?? 250);
-    this.watchTimer.unref?.();
-  }
-
-  private locationForDirectory(directory: string): Location | undefined {
-    if (directory === this.globalAgentsDir()) return { scope: "global" };
-    for (const projectCwd of this.trustedProjects) if (directory === this.projectAgentsDir(projectCwd)) return { scope: "project", projectCwd };
-    return undefined;
-  }
-
   private writeDefinition(agent: AgentDefinition): void {
-    if (!this.options.storePath) return;
-    const path = agent.path ?? this.definitionPath(locationOf(agent), agent.name);
-    const text = serializeAgentFile(agent);
-    this.writeFileAtomic(path, text);
-    this.digests.set(path, digestOf(text));
-    this.fileWarnings.delete(path);
+    this.writeDefinitions([agent]);
+  }
+
+  private writeDefinitions(agents: readonly AgentDefinition[]): void {
+    if (!this.options.storePath || agents.length === 0) return;
+    const entries = agents.map((agent) => {
+      const path = agent.path ?? this.definitionPath(locationOf(agent), agent.name);
+      const text = serializeAgentFile(agent);
+      return { path, text, digest: agentFileDigest(text), tmp: "" };
+    });
+    try {
+      for (const entry of entries) {
+        mkdirSync(dirname(entry.path), { recursive: true });
+        entry.tmp = join(dirname(entry.path), `.${basename(entry.path)}.${process.pid}.${++this.tmpCounter}.tmp`);
+        (this.options.writeFile ?? writeFileSync)(entry.tmp, entry.text);
+      }
+      for (const entry of entries) renameSync(entry.tmp, entry.path);
+    } catch (error) {
+      for (const entry of entries) {
+        if (entry.tmp) rmSync(entry.tmp, { force: true });
+        this.digests.delete(entry.path);
+      }
+      throw error;
+    }
+    for (const entry of entries) {
+      this.digests.set(entry.path, entry.digest);
+      this.fileWarnings.delete(entry.path);
+    }
   }
 
   private unlinkDefinition(path: string, missingOkay: boolean): void {
@@ -699,7 +582,7 @@ export class AgentStore {
     mkdirSync(dirname(path), { recursive: true });
     const tmp = join(dirname(path), `.${basename(path)}.${process.pid}.${++this.tmpCounter}.tmp`);
     try {
-      writeFileSync(tmp, text);
+      (this.options.writeFile ?? writeFileSync)(tmp, text);
       renameSync(tmp, path);
     } catch (error) {
       rmSync(tmp, { force: true });
@@ -777,41 +660,27 @@ function normalizeInput(input: AgentDefinitionInput): AgentDefinitionInput {
 }
 
 function locationOfInput(input: AgentDefinitionInput): Location {
-  return input.scope === "project" ? { scope: "project", projectCwd: canonical(input.projectCwd ?? "") } : { scope: "global" };
+  return input.scope === "project" ? { scope: "project", projectCwd: input.projectCwd ?? "" } : { scope: "global" };
 }
 
 function locationOf(agent: AgentDefinition): Location {
-  return agent.scope === "project" ? { scope: "project", projectCwd: canonical(agent.projectCwd ?? "") } : { scope: "global" };
+  return agent.scope === "project" ? { scope: "project", projectCwd: agent.projectCwd ?? "" } : { scope: "global" };
 }
 
 function keyOf(location: Location, name: string): string {
-  return location.scope === "global" ? `global\0${name}` : `project\0${canonical(location.projectCwd)}\0${name}`;
-}
-
-function sameLocation(left: Location, right: Location): boolean {
-  return left.scope === right.scope && (left.scope === "global" || (right.scope === "project" && canonical(left.projectCwd) === canonical(right.projectCwd)));
+  return location.scope === "global" ? `global\0${name}` : `project\0${location.projectCwd}\0${name}`;
 }
 
 function referenceTargets(parent: AgentDefinition, target: AgentDefinition, definitions: ReadonlyMap<string, AgentDefinition>): boolean {
-  if (target.scope === "project") return parent.scope === "project" && canonical(parent.projectCwd ?? "") === canonical(target.projectCwd ?? "");
-  if (parent.scope === "global") return true;
-  return !definitions.has(keyOf({ scope: "project", projectCwd: canonical(parent.projectCwd ?? "") }, target.name));
+  return effectiveAgents([...definitions.values(), target], parent.scope === "project" ? parent.projectCwd : undefined).includes(target);
 }
 
-function digestOf(text: string): string {
-  return createHash("sha256").update(text).digest("hex");
-}
-
-function closestExistingDirectory(path: string): string | undefined {
-  let cursor = path;
-  while (true) {
-    try {
-      if (statSync(cursor).isDirectory()) return cursor;
-    } catch { /* move to the parent */ }
-    const parent = dirname(cursor);
-    if (parent === cursor) return undefined;
-    cursor = parent;
-  }
+function nextMigrationBackupPath(file: string): string {
+  const base = `${file}.v1.bak`;
+  if (!existsSync(base)) return base;
+  let suffix = 1;
+  while (existsSync(`${base}.${suffix}`)) suffix += 1;
+  return `${base}.${suffix}`;
 }
 
 function sameSet(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {

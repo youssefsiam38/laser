@@ -1,0 +1,72 @@
+import { describe, expect, it } from "vitest";
+import {
+  PROJECT_DIR_NAME,
+  canReferenceAgent,
+  effectiveAgents,
+  type AgentDefinition,
+} from "../src/index.js";
+
+function agent(name: string, patch: Partial<AgentDefinition> = {}): AgentDefinition {
+  return {
+    name,
+    kind: "custom",
+    scope: "global",
+    description: "",
+    instructions: "Do it.",
+    engineInstructions: false,
+    excludeCoreInstructions: false,
+    model: null,
+    thinkingLevel: null,
+    supportsSubagents: false,
+    allowedAgents: [],
+    scopedSkills: false,
+    skills: [],
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    ...patch,
+  };
+}
+
+describe("agent scope helpers", () => {
+  const global = agent("reviewer", { path: "/state/agents/reviewer.md" });
+  const localPath = `/one/${PROJECT_DIR_NAME}/agents/reviewer.md`;
+  const otherPath = `/two/${PROJECT_DIR_NAME}/agents/other.md`;
+  const local = agent("reviewer", {
+    scope: "project",
+    projectCwd: "/one",
+    path: localPath,
+  });
+  const other = agent("other", {
+    scope: "project",
+    projectCwd: "/two",
+    path: otherPath,
+  });
+  const builtin = agent("beam", { kind: "builtin" });
+  const agents = [global, local, other, builtin];
+
+  it("selects globals and built-ins, with a same-named project definition shadowing global", () => {
+    expect(effectiveAgents(agents).map((candidate) => candidate.path ?? candidate.name)).toEqual([
+      "/state/agents/reviewer.md",
+      "beam",
+    ]);
+    expect(effectiveAgents(agents, "/one").map((candidate) => candidate.path ?? candidate.name)).toEqual([
+      localPath,
+      "beam",
+    ]);
+    expect(effectiveAgents(agents, "/two").map((candidate) => candidate.path ?? candidate.name)).toEqual([
+      "/state/agents/reviewer.md",
+      otherPath,
+      "beam",
+    ]);
+  });
+
+  it("applies reference boundaries with string-only project comparison", () => {
+    expect(canReferenceAgent(global, global)).toBe(true);
+    expect(canReferenceAgent(global, local)).toBe(false);
+    expect(canReferenceAgent(local, global)).toBe(true);
+    expect(canReferenceAgent(local, local)).toBe(true);
+    expect(canReferenceAgent(local, other)).toBe(false);
+    expect(canReferenceAgent(local, builtin)).toBe(false);
+    expect(canReferenceAgent({ scope: "project", projectCwd: "/one/." }, local)).toBe(false);
+  });
+});

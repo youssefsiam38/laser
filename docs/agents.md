@@ -82,7 +82,7 @@ still loads the renamed one. Deleting that definition retires its aliases.
 Periodic validation (`packages/host/src/agents/skills-check.ts`) stats every
 scoped skill of every custom agent every 30 s and right after a save, and
 flags a child list that names an agent that no longer exists. A problem
-becomes an `AgentWarning { agentName, field, target, message, since }` on the
+becomes an `AgentWarning { agentName, path, field, target, message, since }` on the
 snapshot; the Agents page shows a gentle yellow warning and deep-links to the
 exact field. `since` is when the problem was first seen and does not move
 between ticks.

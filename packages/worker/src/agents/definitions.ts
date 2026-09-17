@@ -1,9 +1,10 @@
 /**
  * The worker's copy of the agent definitions.
  *
- * The host is the source of truth (`<stateDir>/agents.json`) and pushes
- * `agents/sync { snapshot }` right after `pi/worker/status: ready` and on
- * every change. Until the first sync arrives this cache answers with built-in
+ * The host is the source of truth (`<stateDir>/agents/*.md` plus definition
+ * metadata in `<stateDir>/agents.json`) and pushes `agents/sync { snapshot }`
+ * right after `pi/worker/status: ready` and on every change. Until the first
+ * sync arrives this cache answers with built-in
  * fallbacks for `default`, `beam`, `chat` and `namer`, shaped exactly like the
  * host's seeds, so a session opened in the first milliseconds still runs as an
  * agent rather than as nothing.
