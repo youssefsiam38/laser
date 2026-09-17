@@ -1,11 +1,23 @@
-Laser 0.8.0
+Laser 0.9.0
 
-## Agents are files you can read and edit
+## The agent tells you what it is doing
 
-### New in 0.8.0
+### New in 0.9.0
 
-- Every custom agent is now one Markdown file: a short header with its description, model, thinking level, skills and the agents it may start, then its instructions as the body. Your existing agents are converted the first time this version starts; the old `agents.json` is kept beside them as a backup.
-- Global agents live in the app's `agents` folder and follow you into every project. Project agents live in `.laser/agents/` inside a project and appear only there — commit them with the code and everyone who opens the project gets them. A project agent with the same name as a global one takes its place in that project.
-- Edit the file or edit in the Agents page, it is the same thing: the app watches the folders and picks up a change within a second. A file it cannot read shows a warning that says what to fix, and the last good version keeps working.
-- Every custom agent now starts from Laser's core instructions — the rules that hold for all of them — before its own. An agent that should not have them has an "Exclude Laser's Core Instructions Prompt" switch in its settings. Beam, Chat and Namer are unaffected.
-- The Agents page shows where each agent lives and lets you choose Global or This project when creating one. The new-session agent picker offers only the agents this project can run.
+- Every running action now carries a short line written by the agent itself — "Reading build config", "Running unit tests" — instead of a label guessed afterwards by another model. It appears the moment the action starts, on the action's own row and on the folded group above it.
+- It costs no extra model call, and it works for tools from MCP servers too. A server that already uses that field keeps its own; nothing of yours is overwritten.
+- Naming now does one job: giving new conversations their title.
+
+## Chat opens instantly
+
+- The Chat tab no longer says "Preparing Chat…". It opens on an empty composer you can type into straight away; your first message starts the conversation.
+- Each time you launch the app, Chat starts fresh. Earlier chats stay in the list, one click away.
+- While you are in Code, a quiet dot on the Chat tab tells you a reply arrived there — and the other way round.
+
+## Fixes
+
+- A long conversation whose older messages were set aside can always be read back. The dead end that said "Open this conversation again to read them" is gone; scrolling up reaches the first message.
+- A message sent to an agent from its parent now appears in that agent's conversation as it arrives, instead of only after reopening it.
+- The view keeps following the conversation when several things arrive at once, and stops following only when you scroll away yourself.
+- The `@` picker selects folders, not just files, and understands the paths you are used to: `~`, `~/project`, `./`, `../`, absolute paths, and Windows spellings with drive letters or backslashes.
+- "Load more" in the conversation list now loads on the first click, every time, and says how many it will load: "Load 7 more".
