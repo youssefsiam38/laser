@@ -141,7 +141,7 @@ vi.mock("@/runtime", async (importActual) => ({
   useLaserStable: () => ({ client, actions: { send: vi.fn(), openSession: vi.fn() } }),
 }));
 vi.mock("@/dialogs", () => ({ ToolRowDialog: () => null, useRegisterToolRow: () => {}, DialogBody: () => null, dialogFormOf: () => ({}), uiResponseFor: () => ({}) }));
-vi.mock("@/agents/hooks", () => ({ useNamerLabel: () => undefined, useSessionMcpServers: () => [] }));
+vi.mock("@/agents/hooks", () => ({ useSessionMcpServers: () => [] }));
 vi.mock("@assistant-ui/react", async (original) => ({ ...(await original<typeof import("@assistant-ui/react")>()), useToolCallElapsed: () => undefined }));
 
 describe("a large output in its tool block", () => {

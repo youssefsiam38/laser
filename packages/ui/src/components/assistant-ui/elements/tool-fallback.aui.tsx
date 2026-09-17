@@ -46,7 +46,7 @@ import { BodyOverflow } from "@/components/thread/BodyOverflow";
 import { JsonViewer, parseJsonText } from "./json-viewer.js";
 import type { BlockBodies } from "@/store";
 import { omittedBytes } from "@/runtime/body-excerpt";
-import { toolOutputText } from "@lasercode/protocol";
+import { toolCallLabel, toolOutputText, withoutToolLabel } from "@lasercode/protocol";
 
 import { activityRow, activityTrigger, collapsePanel, mono, pressable } from "./surfaces.js";
 
@@ -695,7 +695,6 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
   toolCallId,
   toolName,
   args,
-  argsText,
   result: finalResult,
   artifact,
   status,
@@ -708,6 +707,10 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
 }) => {
   const result = toolDisplayResult({ result: finalResult, artifact });
   const state = toolRowState(status, isError);
+  const visibleArgs = withoutToolLabel(args);
+  const visibleArgsText = visibleArgs === undefined ? "" : JSON.stringify(visibleArgs);
+  const argsHaveLabel = visibleArgs !== args;
+  const agentLabel = state === "running" ? toolCallLabel(toolName, args) : undefined;
   const isRequiresAction = status?.type === "requires-action";
   const shouldRenderApproval = isRequiresAction && offersInterruptAction(status, approval, interrupt);
   const path = useLaserState((laser) => laser.current);
@@ -721,14 +724,17 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
   // draws here, so it says the same thing `ToolRow` does.
   const bodies = (artifact as { bodies?: BlockBodies } | undefined)?.bodies;
   const outputBody = bodies?.result ?? (state === "running" ? bodies?.partial : undefined);
-  const context = { toolName, command: argsText, state };
+  const context = { toolName, command: visibleArgsText, state };
   const resultFold = omittedBytes(outputBody) > 0
     ? <BodyOverflow body={outputBody} path={path ?? undefined} label="output" ground="surface-2" finishes="the tool finishes" tool={context} fade={Boolean(result)} />
     : undefined;
-  const argsFold = omittedBytes(bodies?.args) > 0
-    ? <BodyOverflow body={bodies?.args} path={path ?? undefined} label="request" ground="surface-2" finishes="the tool finishes" tool={{ toolName, state }} fade={Boolean(argsText)} />
+  // A whole-body request reader would expose the stored transport field. A
+  // labelled call therefore keeps only the already-sanitised args disclosure;
+  // unlabelled legacy calls retain their full-request fold.
+  const argsFold = omittedBytes(bodies?.args) > 0 && !argsHaveLabel
+    ? <BodyOverflow body={bodies?.args} path={path ?? undefined} label="request" ground="surface-2" finishes="the tool finishes" tool={{ toolName, state }} fade={Boolean(visibleArgsText)} />
     : undefined;
-  const hasBody = Boolean(argsText) || result !== undefined || status?.type === "incomplete" || Boolean(resultFold) || Boolean(argsFold);
+  const hasBody = Boolean(visibleArgsText) || result !== undefined || status?.type === "incomplete" || Boolean(resultFold) || Boolean(argsFold);
   const tone = state === "failed" ? "danger" : state === "awaiting" ? "attention" : undefined;
 
   return (
@@ -739,11 +745,11 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
       data-tool={toolName}
       data-status={status?.type}
     >
-      <ToolFallbackTrigger verb={toolName} activeLabel={activeToolLabel({ toolName, args })} state={state} expandable={hasBody} />
+      <ToolFallbackTrigger verb={toolName} activeLabel={agentLabel ?? activeToolLabel({ toolName, args })} state={state} expandable={hasBody} />
       {hasBody ? (
         <ToolFallbackContent>
           <ToolFallbackError status={status} />
-          <ToolFallbackArgs argsText={argsText} overflow={argsFold} className={cn(state === "cancelled" && "opacity-60")} />
+          <ToolFallbackArgs argsText={visibleArgsText} overflow={argsFold} className={cn(state === "cancelled" && "opacity-60")} />
           {state !== "cancelled" ? <ToolFallbackResult result={result} overflow={resultFold} /> : null}
         </ToolFallbackContent>
       ) : null}

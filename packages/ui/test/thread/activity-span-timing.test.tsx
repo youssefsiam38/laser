@@ -24,7 +24,7 @@ vi.mock("@/runtime", async () => ({
   useActivityDetailLevel: () => preferences.level,
   useLaserState: (select: (state: unknown) => unknown) => select({
     current: preferences.path,
-    open: { [preferences.path]: { entries: [], leafId: null, namerLabels: {}, state: { model: null } } },
+    open: { [preferences.path]: { entries: [], leafId: null, state: { model: null } } },
   }),
   useLaserStable: () => ({ actions: { answerDialog: vi.fn(), send: vi.fn(async () => {}) } }),
   useLaserView: () => ({ dialogs: [] }),
@@ -33,7 +33,7 @@ vi.mock("@assistant-ui/react", async (original) => ({
   ...await original<typeof import("@assistant-ui/react")>(),
   useToolCallElapsed: () => undefined,
 }));
-vi.mock("@/agents/hooks", () => ({ useNamerLabel: () => undefined, useSessionMcpServers: () => [] }));
+vi.mock("@/agents/hooks", () => ({ useSessionMcpServers: () => [] }));
 
 type Part = Exclude<ThreadMessageLike["content"], string>[number];
 type MessageStatus = NonNullable<ThreadMessageLike["status"]>;

@@ -33,7 +33,6 @@ vi.mock("@/runtime", async () => ({
   useLaserView: () => ({ dialogs: [] }),
 }));
 vi.mock("@/agents/hooks", () => ({
-  useNamerLabel: () => undefined,
   useSessionMcpServers: () => preferences.mcpServers,
 }));
 vi.mock("@assistant-ui/react", async (original) => ({
@@ -229,7 +228,7 @@ describe("the session's MCP servers in the store", () => {
     const named = notify(opened, ["playwright", "chrome-devtools"]);
     expect(named.open[PATH]?.mcpServers).toEqual(["playwright", "chrome-devtools"]);
 
-    // The same list leaves the view identity alone, like the Namer labels.
+    // The same list leaves the view identity alone.
     expect(notify(named, ["playwright", "chrome-devtools"]).open[PATH]).toBe(named.open[PATH]);
 
     // The session shutting down reports an empty snapshot; a transcript being
@@ -296,7 +295,7 @@ describe("a direct MCP tool row", () => {
     // Partial output rides the UI-only artifact channel; `result` stays absent
     // until the call ends (AGENTS.md, live activity regression guards).
     const props = {
-      ...toolProps("p1", "playwright_browser_snapshot", {}),
+      ...toolProps("p1", "playwright_browser_snapshot", { selector: "main", label: "Capturing current page" }),
       status: { type: "running" as const },
       artifact: { partialOutput: "### Page\n- Page Title: Example" },
     } as unknown as React.ComponentProps<typeof ToolRow>;
@@ -305,13 +304,17 @@ describe("a direct MCP tool row", () => {
     const row = container.querySelector<HTMLElement>('[data-slot="tool-call"]')!;
 
     expect(row.getAttribute("data-state-row")).toBe("running");
-    expect(trigger.getAttribute("aria-label")).toBe("Using Playwright · browser snapshot");
+    expect(trigger.getAttribute("aria-label")).toBe("Capturing current page");
 
     await expand(trigger);
     // While it runs the section says output, not result — and the output is
     // there, drawn by the same renderer.
     expect(container.querySelector('[data-slot="tool-fallback-content"]')?.textContent).toContain("output");
     expect(container.querySelector('[data-slot="mcp-text"]')?.textContent).toContain("Page Title: Example");
+    const args = container.querySelector<HTMLElement>('[data-slot="tool-fallback-args"]')!;
+    expect(args.textContent).toContain("main");
+    expect(args.textContent).not.toContain("Capturing current page");
+    expect(args.textContent).not.toContain("label");
     expect(row.getAttribute("data-state-row")).toBe("running");
   });
 

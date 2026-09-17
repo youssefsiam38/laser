@@ -162,11 +162,6 @@ function sameAgentInfo(a: SessionAgentInfo | undefined, b: SessionAgentInfo | un
   );
 }
 
-/** Namer's early label for a tool call still running, or `undefined` until it lands. */
-export function useNamerLabel(path: string | undefined, toolCallId: string | undefined): string | undefined {
-  return useLaserState((s) => (path === undefined || toolCallId === undefined ? undefined : s.open[path]?.namerLabels[toolCallId]));
-}
-
 /**
  * The MCP servers this session started with (`lasercode/mcp/status`), in
  * snapshot order. A tool row asks this to recognise `<server>_<tool>` as a

@@ -6,7 +6,6 @@ import {
   useAgentEvents,
   useAgentTree,
   useAgentWarnings,
-  useNamerLabel,
   useRunsForRoot,
   useSessionAgent,
 } from "../../src/agents/index.js";
@@ -128,19 +127,17 @@ describe("agent hooks", () => {
     expect(seen.at(-1)).toBeUndefined();
   });
 
-  it("reads Namer labels and warnings", async () => {
+  it("reads agent warnings", async () => {
     const seen: unknown[] = [];
     function Probe() {
-      seen.push([useNamerLabel(ROOT, "t1"), useAgentWarnings()]);
+      seen.push(useAgentWarnings());
       return null;
     }
     await dispatch({ type: "opened", state: sessionState({ path: ROOT }) });
     await mount(<Probe />);
-    expect(seen.at(-1)).toEqual([undefined, []]);
-    await dispatch({ type: "notification", method: "pi/extension/message", params: { path: ROOT, message: { type: "lasercode/namer/label", toolCallId: "t1", label: "Reading tests" } } });
-    expect((seen.at(-1) as unknown[])[0]).toBe("Reading tests");
+    expect(seen.at(-1)).toEqual([]);
     const warning = { agentName: "reviewer", field: "skills" as const, message: "Skill file moved.", since: "2026-09-08T10:00:00.000Z" };
     await dispatch({ type: "notification", method: "agents/updated", params: snapshot({ revision: 2, warnings: [warning] }) });
-    expect((seen.at(-1) as unknown[])[1]).toEqual([warning]);
+    expect(seen.at(-1)).toEqual([warning]);
   });
 });

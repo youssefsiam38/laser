@@ -2,8 +2,8 @@
 /**
  * The agents leap in the transcript: a child's `complete_agent_run` becomes
  * its final message block, a parent's `lasercode/agent-event` becomes the
- * handoff card, a `lasercode/task-event` becomes a quiet notice, and Namer's
- * label names a running call until it ends.
+ * handoff card, a `lasercode/task-event` becomes a quiet notice, and the
+ * agent's own label names a running call until it ends.
  */
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -258,13 +258,28 @@ describe("rendering", () => {
     expect(where()).toBeNull();
   });
 
-  it("names a running call with Namer's label in its row and in the aggregate, then falls back to the summary", async () => {
-    const running = { toolCallId: "bash-1", toolName: "bash", args: { command: "pnpm test" }, argsText: '{"command":"pnpm test"}', status: { type: "running" as const }, addResult: vi.fn(), resume: vi.fn(), respondToApproval: vi.fn(async () => {}) };
-    await act(async () => store.dispatch({ type: "notification", method: "pi/extension/message", params: { path: PATH, message: { type: "lasercode/namer/label", toolCallId: "bash-1", label: "Checking the test suite" } } as never }));
+  it("shows a running tool's own label in its row and aggregate, including partial output, then keeps the finished summary", async () => {
+    const running = {
+      toolCallId: "bash-1",
+      toolName: "bash",
+      args: { command: "pnpm test", label: "Checking the test suite" },
+      argsText: '{"command":"pnpm test","label":"Checking the test suite"}',
+      status: { type: "running" as const },
+      artifact: { partialOutput: "Tests are still running" },
+      addResult: vi.fn(),
+      resume: vi.fn(),
+      respondToApproval: vi.fn(async () => {}),
+    };
     await mount(<ToolRow {...running} type="tool-call" />);
     const trigger = () => container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
     expect(trigger().textContent).toContain("Checking the test suite");
     expect(trigger().getAttribute("aria-label")).toBe("Checking the test suite");
+
+    // A UI-only partial result is not terminal: a resultless streaming call
+    // keeps its live label rather than dropping back to neutral copy.
+    await mount(<ToolRow {...running} type="tool-call" artifact={{ partialOutput: "One test passed\nTwo tests running" }} />);
+    expect(trigger().textContent).toContain("Checking the test suite");
+
     await mount(<ToolRow {...running} type="tool-call" status={{ type: "complete", reason: "stop" }} result="ok" />);
     expect(trigger().textContent).not.toContain("Checking the test suite");
     expect(trigger().textContent).toContain("Run");
@@ -273,13 +288,13 @@ describe("rendering", () => {
     function Aggregate({ done }: { done: boolean }) {
       const blocks: Block[] = [
         { kind: "assistant", id: "a", text: "", thinking: "Think", streaming: false },
-        { kind: "tool", id: "bash-1", name: "bash", args: { command: "pnpm test" }, done, ...(done ? { result: "ok" } : {}) },
+        { kind: "tool", id: "bash-1", name: "bash", args: running.args, done, ...(!done ? { partial: "Tests are still running" } : { result: "ok" }) },
       ];
       const projected = projectMessages({ blocks, running: !done, dialogs: [] });
       const runtime = useExternalStoreRuntime({ messages: projected.messages, isRunning: !done, onNew: async () => {} });
       return <AssistantRuntimeProvider runtime={runtime}><ThreadPrimitive.Root><ThreadPrimitive.Messages>{() =>
         <MessagePrimitive.Root><MessagePrimitive.GroupedParts groupBy={() => ["group-activity"]} indicator="empty">{({ part, children }) => {
-          if (part.type === "group-activity") return <ToolGroup part={part} timingKey="namer-test">{children}</ToolGroup>;
+          if (part.type === "group-activity") return <ToolGroup part={part} timingKey="agent-label-test">{children}</ToolGroup>;
           return null;
         }}</MessagePrimitive.GroupedParts></MessagePrimitive.Root>
       }</ThreadPrimitive.Messages></ThreadPrimitive.Root></AssistantRuntimeProvider>;
@@ -290,5 +305,40 @@ describe("rendering", () => {
     await mount(<Aggregate done />);
     expect(aggregate().textContent).not.toContain("Checking the test suite");
     expect(aggregate().textContent).toContain("Completed 2 steps");
+  });
+
+  it("uses neutral copy without a label, clamps long labels, and honors the exempt tool labels", async () => {
+    const call = (toolName: string, args: Record<string, unknown>) => ({
+      type: "tool-call" as const,
+      toolCallId: `${toolName}-1`,
+      toolName,
+      args,
+      argsText: JSON.stringify(args),
+      status: { type: "running" as const },
+      addResult: vi.fn(),
+      resume: vi.fn(),
+      respondToApproval: vi.fn(async () => {}),
+    });
+    const trigger = () => container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
+
+    await mount(<ToolRow {...call("bash", { command: "pnpm test" })} />);
+    expect(trigger().textContent).toContain("Running pnpm test");
+
+    await mount(<ToolRow {...call("bash", { command: "pnpm test", label: "Reading the very long build configuration file" })} />);
+    expect(trigger().textContent).toContain("Reading the very long…");
+    expect(trigger().textContent).not.toContain("configuration file");
+
+    await mount(<ToolRow {...call("start_agent", { agent_name: "reviewer", subagent_name: "host-fixes", label: "Ignored label" })} />);
+    expect(trigger().textContent).toContain("host-fixes");
+    expect(trigger().textContent).not.toContain("Ignored label");
+
+    await mount(<ToolRow {...call("inspect_fleet", { scope: "current", label: "Leaking label" })} />);
+    expect(trigger().textContent).toContain("Using inspect_fleet");
+    expect(trigger().textContent).not.toContain("Leaking label");
+    await act(async () => trigger().click());
+    const args = container.querySelector<HTMLElement>('[data-slot="tool-fallback-args"]')!;
+    expect(args.textContent).toContain("current");
+    expect(args.textContent).not.toContain("label");
+    expect(args.textContent).not.toContain("Leaking label");
   });
 });

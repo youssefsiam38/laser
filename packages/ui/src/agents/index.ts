@@ -73,7 +73,6 @@ export {
   useAgentsStatus,
   useBeamChoice,
   useLatestRun,
-  useNamerLabel,
   useRunsForRoot,
   useSessionAgent,
   type AgentsStatus,

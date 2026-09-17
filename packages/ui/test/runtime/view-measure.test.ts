@@ -28,7 +28,6 @@ const view = (over: Partial<SessionView> = {}): SessionView => ({
   entries: [],
   capabilities: [],
   goal: null,
-  namerLabels: {},
   ...over,
 });
 
