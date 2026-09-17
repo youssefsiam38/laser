@@ -19,7 +19,7 @@ it("round-trips escaped content, names, multiple and empty files without touchin
   for (const invalid of [wrapFileAttachment(file).replace('size="', 'size="9'), wrapFileAttachment(file).slice(0, -5), '<attached-file name="x">Hello</attached-file>']) expect(splitAttachedFiles(invalid)).toEqual({ text: invalid, files: [] });
 });
 it("keeps a folder mention as an agent-readable path reference, never file contents", () => {
-  const mention = "@server/";
+  const mention = "@./server/";
   expect(splitAttachedFiles(mention)).toEqual({ text: mention, files: [] });
 });
 it("retains images and canonical files on optimistic, message_end and hydration paths", () => {

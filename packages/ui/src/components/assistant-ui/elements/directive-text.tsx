@@ -1,8 +1,8 @@
 "use client";
 /**
  * Directive text (`directive-text`, the framework-neutral half): renders a
- * string whose `@file` / `@handle` directives become inline chips, everything
- * else as text. Never HTML (AGENTS.md inv. 9): the formatter parses, the
+ * string whose anchored path tokens and saved directives become inline chips;
+ * handles and ordinary prose stay text. Never HTML (AGENTS.md inv. 9): the formatter parses, the
  * component renders segments.
  *
  * Divergences from the registry copy: the chip is our `Badge` in its default

@@ -6,7 +6,6 @@
  */
 import { type TextMessagePartComponent, type Unstable_DirectiveFormatter } from "@assistant-ui/react";
 import { AtSign, FileText, Folder } from "lucide-react";
-import { memo } from "react";
 
 import { projectMentionFormatter } from "../../thread/project-path.js";
 import { createDirectiveText as createDirectiveTextBase, type CreateDirectiveTextOptions } from "./directive-text.js";
@@ -14,7 +13,7 @@ import { createDirectiveText as createDirectiveTextBase, type CreateDirectiveTex
 export type { CreateDirectiveTextOptions, DirectiveTextFormatter, DirectiveTextSegment } from "./directive-text.js";
 
 const ICONS: CreateDirectiveTextOptions = {
-  iconMap: { file: FileText, directory: Folder, handle: AtSign },
+  iconMap: { file: FileText, directory: Folder },
   fallbackIcon: AtSign,
 };
 
@@ -23,8 +22,5 @@ export function createDirectiveText(formatter: Unstable_DirectiveFormatter, opti
   return createDirectiveTextBase(formatter, options);
 }
 
-/** `Text` message part component that renders directive syntax as inline chips. */
-export const DirectiveText: TextMessagePartComponent = memo(createDirectiveTextBase(projectMentionFormatter, ICONS));
-
-/** The same renderer for a plain string outside a message part (a notice). */
+/** Renders a plain transcript or notice string with path mentions. */
 export const DirectiveString = createDirectiveTextBase(projectMentionFormatter, ICONS);

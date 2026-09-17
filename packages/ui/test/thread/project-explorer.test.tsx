@@ -5,8 +5,8 @@ import { AssistantRuntimeProvider, ComposerPrimitive, useExternalStoreRuntime } 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ComposerTriggerPopover } from "../../src/components/assistant-ui/elements/composer-trigger-popover.aui.js";
 import { useDirectoryPage } from "../../src/components/thread/use-directory-page.js";
-import { matchProjectMention } from "../../src/components/thread/project-path.js";
-import { explorerItems, explorerNavigation, explorerPageItem, mentionFormatter } from "../../src/components/thread/project-explorer-model.js";
+import { matchProjectMention, projectMentionFormatter } from "../../src/components/thread/project-path.js";
+import { explorerItems, explorerNavigation, explorerPageItem } from "../../src/components/thread/project-explorer-model.js";
 
 // The listing validator is a lazy chunk (M16-T31) and these tests run on fake
 // timers, which cannot advance a module load: load it once, here.
@@ -26,7 +26,7 @@ function Picker() {
   ] }), [page.entries, page.navigation.next, page.navigation.previous]);
   return <ComposerPrimitive.Unstable_TriggerPopoverRoot><ComposerPrimitive.Root>
     <ComposerPrimitive.Input />
-    <ComposerTriggerPopover char="@" matcher={matchProjectMention} adapter={adapter} directive={{ onInserted: inserted, formatter: mentionFormatter }} navigation={explorerNavigation(page.navigation)} onQueryChange={setQuery} onOpenChange={setOpen} isLoading={page.loading} unavailableLabel={page.issue ? 'Update or retry this path.' : undefined} notice={<>{page.issue?.message}{page.retry && <button type="button" onClick={page.retry}>Try again</button>}</>} />
+    <ComposerTriggerPopover char="@" matcher={matchProjectMention} adapter={adapter} directive={{ onInserted: inserted, formatter: projectMentionFormatter }} navigation={explorerNavigation(page.navigation)} onQueryChange={setQuery} onOpenChange={setOpen} isLoading={page.loading} unavailableLabel={page.issue ? 'Update or retry this path.' : undefined} notice={<>{page.issue?.message}{page.retry && <button type="button" onClick={page.retry}>Try again</button>}</>} />
   </ComposerPrimitive.Root></ComposerPrimitive.Unstable_TriggerPopoverRoot>;
 }
 function Fixture() {
@@ -63,12 +63,12 @@ it.each([['@/', '/', ''], ['@..', '..', ''], ['@../', '..', ''], ['@/outside/ind
 });
 it('Enter and click insert readable paths while slash still descends', async () => {
   await type('@ser'); await tick(); await key('Enter');
-  expect(input().value).toBe('@server/ '); expect(inserted).toHaveBeenCalledOnce(); expect(sent).not.toHaveBeenCalled();
+  expect(input().value).toBe('@./server/ '); expect(inserted).toHaveBeenCalledOnce(); expect(sent).not.toHaveBeenCalled();
   await type('@ser'); await tick(); await act(async () => options()[0]!.click());
-  expect(input().value).toBe('@server/ '); expect(inserted).toHaveBeenCalledTimes(2);
+  expect(input().value).toBe('@./server/ '); expect(inserted).toHaveBeenCalledTimes(2);
   await type('@ser'); await tick(); await key('/'); expect(input().value).toBe('@server/');
   await tick(); expect(options()[0]?.textContent).toContain('index.ts');
-  await key('Enter'); expect(input().value).toBe('@server/index.ts ');
+  await key('Enter'); expect(input().value).toBe('@./server/index.ts ');
   await type('@server/'); await tick(); await key('Backspace'); expect(input().value).toBe('@');
 });
 it('Tab completes the common prefix without choosing a folder', async () => {
@@ -112,8 +112,8 @@ it('a host boundary refusal has no retry or no-match advice; a read failure reco
 it.each(['a]b.md', 'a\nb.md', ':file[a].md', 'my folder.md', 'quote"name.md'])('selects awkward names as a readable reversible quoted path without sending: %j', async name => {
   request.mockResolvedValueOnce({ path: '/project', home: '/home/test', entries: [{ name, path: '/project/' + name, kind: 'file', project: false }], truncated: false, commonPrefix: name });
   await type('@'); await tick(); await key('Enter');
-  expect(JSON.parse(input().value.trim().slice(1))).toBe(name);
-  expect(mentionFormatter.parse(input().value)[0]).toEqual({ kind: 'mention', type: 'file', id: name, label: name });
+  expect(JSON.parse(input().value.trim().slice(1))).toBe(`./${name}`);
+  expect(projectMentionFormatter.parse(input().value)[0]).toEqual({ kind: 'mention', type: 'file', id: name, label: name });
   expect(sent).not.toHaveBeenCalled(); expect(inserted).toHaveBeenCalledOnce();
 });
 it('root Backspace is not prevented, while folder-up still is', async () => {
@@ -143,7 +143,7 @@ it('literal pagination and sentinel-like filenames keep unique React/DOM identit
     expect(new Set(options().map(row => row.id)).size).toBe(options().length);
     expect(options()[0]?.textContent).toContain('Previous entries');
     expect(container.textContent).toContain('4 results');
-    await key('ArrowDown'); await key('Enter'); expect(input().value).toBe('@next ');
+    await key('ArrowDown'); await key('Enter'); expect(input().value).toBe('@./next ');
     expect(sent).not.toHaveBeenCalled();
     expect(errors.mock.calls.flat().join(' ')).not.toMatch(/same key|unique.*key/u);
   } finally { errors.mockRestore(); }

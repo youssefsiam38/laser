@@ -398,7 +398,7 @@ describe("completing an @ mention", () => {
 
     await type("@src/app");
     await key("Enter");
-    expect(input().value).toContain("src/app.ts");
+    expect(input().value).toBe("@./src/app.ts ");
     expect(mocks.sent).not.toHaveBeenCalled();
   });
 });

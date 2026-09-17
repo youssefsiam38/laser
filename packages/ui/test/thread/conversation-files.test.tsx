@@ -8,7 +8,8 @@ import { AssistantRuntimeProvider, TextMessagePartProvider, useExternalStoreRunt
 import type { ProjectFileContent } from "@lasercode/protocol";
 import { MarkdownText } from "../../src/components/assistant-ui/elements/markdown-text.js";
 import { DirectiveString } from "../../src/components/assistant-ui/elements/directive-text.aui.js";
-import { explorerItems, mentionFormatter } from "../../src/components/thread/project-explorer-model.js";
+import { explorerItems } from "../../src/components/thread/project-explorer-model.js";
+import { projectMentionFormatter } from "../../src/components/thread/project-path.js";
 import { FileLinkDirectory } from "../../src/components/ui/source-file-link.js";
 import { looksLikeFilePath, projectDirectivePath, projectReferencePath } from "../../src/components/ui/project-file-link.js";
 import { findTextRanges } from "../../src/components/thread/use-conversation-find.js";
@@ -71,7 +72,7 @@ it("opens an outside Markdown link in the viewer and labels its absolute host pa
 });
 it.each(["/outside/guide.md", "/project/link.md"])("opens an explorer-created readable mention for %s through the existing safe viewer", async path => {
   const item = explorerItems([{ name: "guide.md", path, kind: "file", project: false }], "/project")[0]!;
-  const text = mentionFormatter.serialize(item);
+  const text = projectMentionFormatter.serialize(item);
   transport.request.mockResolvedValue({ ...file, path: "/outside/guide.md" });
   const openSourceFile = vi.fn(); vi.stubGlobal("desktop", { openSourceFile });
   await act(async () => root.render(<Fixture text={text} directive />));
@@ -83,22 +84,26 @@ it.each(["/outside/guide.md", "/project/link.md"])("opens an explorer-created re
   expect(document.querySelector('[role="dialog"] h1')?.textContent).toBe("The guide");
   expect(openSourceFile).not.toHaveBeenCalled();
 });
-it("renders new readable paths and saved legacy directives, but not arbitrary at-sign prose", async () => {
-  await act(async () => root.render(<Fixture text="Read @server/index.ts" directive />));
+it("renders anchored paths and saved legacy directives, but not handles or package prose", async () => {
+  await act(async () => root.render(<Fixture text="Read @./server/index.ts" directive />));
   expect(container.querySelector('[data-slot="file-chip"]')?.textContent).toBe("server/index.ts");
-  await act(async () => root.render(<Fixture text=":file[old.ts]{name=/project/old.ts}" directive />));
-  expect(container.querySelector('[data-slot="file-chip"]')?.textContent).toBe("old.ts");
-  await act(async () => root.render(<Fixture text="Ask @sam or email sam@example.com" directive />));
+  await act(async () => root.render(<Fixture text=":file[a @b.ts]{name=/p/a @b.ts}" directive />));
+  expect(container.querySelector('[data-slot="file-chip"]')?.textContent).toBe("a @b.ts");
+  expect(container.textContent).not.toContain("{name=");
+  const prose = "Use @lasercode/protocol, then ask @audit";
+  await act(async () => root.render(<Fixture text={prose} directive />));
   expect(container.querySelector('[data-slot="file-chip"]')).toBeNull();
   expect(container.querySelector('[data-slot="directive-text-chip"]')).toBeNull();
+  expect(container.textContent).toBe(prose);
+  expect(findTextRanges(container, "@lasercode").map(range => range.toString())).toEqual(["@lasercode"]);
 });
 it.each(['a]b.md', 'a\nb.md', ':file[a].md', 'my folder.md', 'quote"name.md'])('renders the exact quoted explorer path for an awkward name: %j', async name => {
   const item = explorerItems([{ name, path: '/project/' + name, kind: 'file', project: false }], '/project')[0]!;
-  const text = mentionFormatter.serialize(item);
+  const text = projectMentionFormatter.serialize(item);
   await act(async () => root.render(<Fixture text={text} directive />));
   expect(container.querySelector('[data-slot="file-chip"]')?.textContent).toBe(name);
   expect(text.startsWith('@"')).toBe(true);
-  expect(JSON.parse(text.slice(1))).toBe(name);
+  expect(JSON.parse(text.slice(1))).toBe(`./${name}`);
   expect(transport.request).not.toHaveBeenCalled();
 });
 it("retains Open in editor as a second explicit action", async () => {

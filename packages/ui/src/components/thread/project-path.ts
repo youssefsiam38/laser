@@ -6,8 +6,14 @@ import {
 } from "@assistant-ui/react";
 
 export type ProjectPath = { ok: true; directory: string; prefix: string; head: string } | { ok: false; error: string };
+type Segment = ReturnType<Unstable_DirectiveFormatter["parse"]>[number];
+
 const HOME_TOKENS = /^(?:~|%USERPROFILE%)(?:\/)?$/iu;
 const DRIVE_RELATIVE = /^[a-z]:(?!\/)/iu;
+const WINDOWS_ABSOLUTE = /^[a-z]:[\\/]/iu;
+const BARE_MENTION_PATH = /^[^\s@\]"'\\\u0000-\u001f\u007f]+$/u;
+const BARE_WINDOWS_PATH = /^[a-z]:[\\/][^\s@\]"'\u0000-\u001f\u007f]+$/iu;
+const TRAILING_SENTENCE_PUNCTUATION = /[.,;:!?)\]}]/u;
 
 /**
  * Split a person's path spelling without resolving it. Filesystem semantics,
@@ -27,21 +33,31 @@ export function resolveProjectPath(text: string): ProjectPath {
   return { ok: true, directory, prefix, head };
 }
 
-const BARE_MENTION_PATH = /^[^\s@\]"'\\\u0000-\u001f\u007f]+$/u;
-const ACTIVE_MENTION_QUERY = /^[^\s@"\u0000-\u001f\u007f]+$/u;
-
-/** A picker path may stay bare only when the matcher will read it back unchanged. */
+/** A picker path may stay bare only when the readable scanner can recover it. */
 export function isBareProjectMentionPath(path: string): boolean {
-  return BARE_MENTION_PATH.test(path);
+  return BARE_MENTION_PATH.test(path) || BARE_WINDOWS_PATH.test(path);
 }
 
-/** JSON quoting keeps unusual paths reversible without exposing directive syntax. */
+function hasPathAnchor(path: string): boolean {
+  return path.startsWith("./") || path.startsWith("../") || path.startsWith("/") || path.startsWith("~/") || WINDOWS_ABSOLUTE.test(path);
+}
+
+/** Add a quiet marker to in-session identities; external identities keep their anchor. */
+function anchoredProjectMentionPath(path: string): string {
+  if (path.startsWith("../") || path.startsWith("/") || path.startsWith("~/") || WINDOWS_ABSOLUTE.test(path)) return path;
+  return `./${path}`;
+}
+
+/** JSON quoting keeps unusual anchored paths reversible without directive syntax. */
 export function quotedProjectMentionPath(path: string): string {
-  return `@${JSON.stringify(path)}`;
+  return `@${JSON.stringify(anchoredProjectMentionPath(path)).replaceAll(":", "\\u003a")}`;
 }
 
 function readableProjectMentionPath(path: string): string {
-  return isBareProjectMentionPath(path) ? `@${path}` : quotedProjectMentionPath(path);
+  const anchored = anchoredProjectMentionPath(path);
+  return isBareProjectMentionPath(anchored) && !TRAILING_SENTENCE_PUNCTUATION.test(anchored.at(-1) ?? "")
+    ? `@${anchored}`
+    : quotedProjectMentionPath(path);
 }
 
 function parseQuotedPath(raw: string): string | undefined {
@@ -56,42 +72,33 @@ function parseQuotedPath(raw: string): string | undefined {
 
 export const matchProjectMention: Unstable_TriggerMatcher = (text, char, caret) => {
   const before = text.slice(0, caret);
-  for (let offset = before.lastIndexOf(char); offset >= 0; offset = before.lastIndexOf(char, offset - 1)) {
-    if (offset > 0 && !/\s/u.test(before[offset - 1]!)) continue;
-    const raw = before.slice(offset + char.length);
-    if (raw.startsWith('"')) {
-      const query = parseQuotedPath(raw);
-      return query === undefined ? null : { query, offset, endOffset: caret };
-    }
-    if (!ACTIVE_MENTION_QUERY.test(raw) && raw !== "") return null;
-    return { query: raw, offset, endOffset: caret };
-  }
-  return null;
+  const offset = before.lastIndexOf(char);
+  if (offset < 0 || (offset > 0 && !/\s/u.test(before[offset - 1]!))) return null;
+  const query = before.slice(offset + char.length);
+  // Quoting is a completed insertion form, never an in-flight picker query.
+  if (query.startsWith('"') || /\s$/u.test(query) || /[\n\r\t\0\u007f]/u.test(query)) return null;
+  return { query, offset, endOffset: caret };
 };
 
 export function replaceProjectQuery(text: string, caret: number, query: string) {
   const match = matchProjectMention(text, "@", caret);
   if (!match) return null;
-  const token = query === "" ? "@" : readableProjectMentionPath(query);
-  const before = text.slice(0, match.offset) + token;
+  const before = text.slice(0, match.offset) + "@" + query;
   return { text: before + text.slice(caret), caret: before.length };
 }
 
-function isPathShaped(path: string): boolean {
-  if (/^[a-z][a-z\d+.-]*:\/\//iu.test(path)) return false;
-  return path.includes("/") || /^\.[^./]/u.test(path) || /(?:^|\/)[^/]+\.[^/]+$/u.test(path);
+function projectMentionIdentity(path: string): string {
+  return path.startsWith("./") ? path.slice(2) : path;
 }
 
-function parseReadableProjectMentions(text: string): ReturnType<Unstable_DirectiveFormatter["parse"]> {
-  const segments: ReturnType<Unstable_DirectiveFormatter["parse"]>[number][] = [];
+function parseReadableProjectMentions(text: string): Segment[] {
+  const segments: Segment[] = [];
   let textStart = 0;
   for (let index = 0; index < text.length; index += 1) {
     if (text[index] !== "@" || (index > 0 && !/\s/u.test(text[index - 1]!))) continue;
     let end = index + 1;
     let path: string | undefined;
-    let quoted = false;
     if (text[end] === '"') {
-      quoted = true;
       let escaped = false;
       for (end += 1; end < text.length; end += 1) {
         const char = text[end]!;
@@ -99,16 +106,19 @@ function parseReadableProjectMentions(text: string): ReturnType<Unstable_Directi
         if (!escaped && char === "\\") escaped = true;
         else escaped = false;
       }
-      if (end > text.length || text[end - 1] !== '"' || (end < text.length && !/\s/u.test(text[end]!))) continue;
+      if (text[end - 1] !== '"' || (end < text.length && !/\s/u.test(text[end]!) && !TRAILING_SENTENCE_PUNCTUATION.test(text[end]!))) continue;
       path = parseQuotedPath(text.slice(index + 1, end));
     } else {
       while (end < text.length && !/\s/u.test(text[end]!)) end += 1;
+      while (end > index + 1 && TRAILING_SENTENCE_PUNCTUATION.test(text[end - 1]!)) end -= 1;
       const candidate = text.slice(index + 1, end);
       if (isBareProjectMentionPath(candidate)) path = candidate;
     }
-    if (path === undefined || path === "" || (!quoted && !isPathShaped(path))) continue;
+    if (path === undefined || !hasPathAnchor(path)) continue;
+    const identity = projectMentionIdentity(path);
+    if (!identity) continue;
     if (textStart < index) segments.push({ kind: "text", text: text.slice(textStart, index) });
-    segments.push({ kind: "mention", type: path.endsWith("/") ? "directory" : "file", id: path, label: path });
+    segments.push({ kind: "mention", type: identity.endsWith("/") ? "directory" : "file", id: identity, label: identity });
     textStart = end;
     index = end - 1;
   }
@@ -116,15 +126,15 @@ function parseReadableProjectMentions(text: string): ReturnType<Unstable_Directi
   return segments.length ? segments : [{ kind: "text", text }];
 }
 
-/** Readable picker tokens plus the legacy directive grammar for saved sessions. */
+/** Read saved directives first, then readable picker tokens only inside text. */
 export const projectMentionFormatter: Unstable_DirectiveFormatter = {
   serialize: (item: Unstable_TriggerItem) => {
     if (item.type === "file" || item.type === "directory") return readableProjectMentionPath(item.label);
-    if (item.type === "agent" && isBareProjectMentionPath(item.label)) return `@${item.label}`;
+    if (item.type === "agent") return isBareProjectMentionPath(item.label) ? `@${item.label}` : `@${JSON.stringify(item.label).replaceAll(":", "\\u003a")}`;
     return unstable_defaultDirectiveFormatter.serialize(item);
   },
-  parse: (text) => parseReadableProjectMentions(text).flatMap((part) =>
-    part.kind === "text" ? unstable_defaultDirectiveFormatter.parse(part.text) : [part],
+  parse: (text) => unstable_defaultDirectiveFormatter.parse(text).flatMap((part) =>
+    part.kind === "text" ? parseReadableProjectMentions(part.text) : [part],
   ),
 };
 

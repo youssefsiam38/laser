@@ -2,7 +2,7 @@ import type { ExplorerEntry } from "@lasercode/protocol";
 import type { Unstable_TriggerItem } from "@assistant-ui/react";
 import type { PickerNavigation } from "../assistant-ui/elements/composer-trigger-popover.aui.js";
 import type { ExplorerNavigationState } from "./use-directory-page.js";
-import { matchProjectMention, parentProjectQuery, projectMentionFormatter, quotedProjectMentionPath, replaceProjectQuery } from "./project-path.js";
+import { matchProjectMention, parentProjectQuery, projectMentionFormatter, replaceProjectQuery } from "./project-path.js";
 
 /**
  * Explorer choices are path references, not uploaded contents. A selected
@@ -33,8 +33,7 @@ export function explorerPageItem(direction: "next" | "previous"): Unstable_Trigg
     metadata: { countable: false, icon: direction, direction } };
 }
 
-/** Kept as the explorer's public formatter names for focused tests/callers. */
-export const quotedMentionPath = quotedProjectMentionPath;
+/** Compatibility export for Composer.tsx, which is outside this correction's ownership. */
 export const mentionFormatter = projectMentionFormatter;
 
 export function explorerNavigation(options: ExplorerNavigationState): PickerNavigation {
@@ -44,7 +43,7 @@ export function explorerNavigation(options: ExplorerNavigationState): PickerNavi
       else if (item.metadata.direction === "previous") options.previous?.();
       return { text, caret };
     }
-    return null; // formatter owns file, folder and agent insertion, including plain-path fallback
+    return null; // formatter anchors picked paths and leaves agent handles readable
   };
   return { select, key: (key, items, selected, text, caret) => {
     const match = matchProjectMention(text, "@", caret);
