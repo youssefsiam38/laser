@@ -30,8 +30,8 @@ export function wrapFileAttachment(file: AttachedFile): string {
 
 /**
  * Recognise only complete canonical file wrappers separated from prose by blank
- * lines. Directory mentions (`:directory[…/]`) deliberately stay in `text`:
- * they are path references the agent can inspect, never file-content uploads.
+ * lines. Readable directory mentions (`@./server/`) deliberately stay in
+ * `text`: they are path references the agent can inspect, never uploads.
  */
 export function splitAttachedFiles(text: string): { text: string; files: AttachedFile[] } {
   const files: AttachedFile[] = [];

@@ -1,20 +1,19 @@
 "use client";
 /**
  * Directive text (`directive-text`, runtime-bound): the `Text` part renderer
- * for prompts and notices, using assistant-ui's default directive formatter
- * so `@file` mentions render as chips. Registry copy, unchanged apart from the
- * icon map for the mention types the composer produces.
+ * for prompts and notices. Readable picker `@path` tokens and saved legacy
+ * directives become chips; ordinary prose containing `@` stays text.
  */
-import { unstable_defaultDirectiveFormatter, type TextMessagePartComponent, type Unstable_DirectiveFormatter } from "@assistant-ui/react";
+import { type TextMessagePartComponent, type Unstable_DirectiveFormatter } from "@assistant-ui/react";
 import { AtSign, FileText, Folder } from "lucide-react";
-import { memo } from "react";
 
+import { projectMentionFormatter } from "../../thread/project-path.js";
 import { createDirectiveText as createDirectiveTextBase, type CreateDirectiveTextOptions } from "./directive-text.js";
 
 export type { CreateDirectiveTextOptions, DirectiveTextFormatter, DirectiveTextSegment } from "./directive-text.js";
 
 const ICONS: CreateDirectiveTextOptions = {
-  iconMap: { file: FileText, directory: Folder, handle: AtSign },
+  iconMap: { file: FileText, directory: Folder },
   fallbackIcon: AtSign,
 };
 
@@ -23,8 +22,5 @@ export function createDirectiveText(formatter: Unstable_DirectiveFormatter, opti
   return createDirectiveTextBase(formatter, options);
 }
 
-/** `Text` message part component that renders directive syntax as inline chips. */
-export const DirectiveText: TextMessagePartComponent = memo(createDirectiveTextBase(unstable_defaultDirectiveFormatter, ICONS));
-
-/** The same renderer for a plain string outside a message part (a notice). */
-export const DirectiveString = createDirectiveTextBase(unstable_defaultDirectiveFormatter, ICONS);
+/** Renders a plain transcript or notice string with path mentions. */
+export const DirectiveString = createDirectiveTextBase(projectMentionFormatter, ICONS);

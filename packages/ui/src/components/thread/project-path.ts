@@ -1,8 +1,19 @@
-import type { Unstable_TriggerMatcher } from "@assistant-ui/react";
+import {
+  unstable_defaultDirectiveFormatter,
+  type Unstable_DirectiveFormatter,
+  type Unstable_TriggerItem,
+  type Unstable_TriggerMatcher,
+} from "@assistant-ui/react";
 
 export type ProjectPath = { ok: true; directory: string; prefix: string; head: string } | { ok: false; error: string };
+type Segment = ReturnType<Unstable_DirectiveFormatter["parse"]>[number];
+
 const HOME_TOKENS = /^(?:~|%USERPROFILE%)(?:\/)?$/iu;
 const DRIVE_RELATIVE = /^[a-z]:(?!\/)/iu;
+const WINDOWS_ABSOLUTE = /^[a-z]:[\\/]/iu;
+const BARE_MENTION_PATH = /^[^\s@\]"'\\\u0000-\u001f\u007f]+$/u;
+const BARE_WINDOWS_PATH = /^[a-z]:[\\/][^\s@\]"'\u0000-\u001f\u007f]+$/iu;
+const TRAILING_SENTENCE_PUNCTUATION = /[.,;:!?)\]}]/u;
 
 /**
  * Split a person's path spelling without resolving it. Filesystem semantics,
@@ -22,12 +33,50 @@ export function resolveProjectPath(text: string): ProjectPath {
   return { ok: true, directory, prefix, head };
 }
 
+/** A picker path may stay bare only when the readable scanner can recover it. */
+export function isBareProjectMentionPath(path: string): boolean {
+  return BARE_MENTION_PATH.test(path) || BARE_WINDOWS_PATH.test(path);
+}
+
+function hasPathAnchor(path: string): boolean {
+  return path.startsWith("./") || path.startsWith("../") || path.startsWith("/") || path.startsWith("~/") || WINDOWS_ABSOLUTE.test(path);
+}
+
+/** Add a quiet marker to in-session identities; external identities keep their anchor. */
+function anchoredProjectMentionPath(path: string): string {
+  if (path.startsWith("../") || path.startsWith("/") || path.startsWith("~/") || WINDOWS_ABSOLUTE.test(path)) return path;
+  return `./${path}`;
+}
+
+/** JSON quoting keeps unusual anchored paths reversible without directive syntax. */
+export function quotedProjectMentionPath(path: string): string {
+  return `@${JSON.stringify(anchoredProjectMentionPath(path)).replaceAll(":", "\\u003a")}`;
+}
+
+function readableProjectMentionPath(path: string): string {
+  const anchored = anchoredProjectMentionPath(path);
+  return isBareProjectMentionPath(anchored) && !TRAILING_SENTENCE_PUNCTUATION.test(anchored.at(-1) ?? "")
+    ? `@${anchored}`
+    : quotedProjectMentionPath(path);
+}
+
+function parseQuotedPath(raw: string): string | undefined {
+  if (!raw.startsWith('"') || !raw.endsWith('"')) return undefined;
+  try {
+    const value: unknown = JSON.parse(raw);
+    return typeof value === "string" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export const matchProjectMention: Unstable_TriggerMatcher = (text, char, caret) => {
   const before = text.slice(0, caret);
   const offset = before.lastIndexOf(char);
   if (offset < 0 || (offset > 0 && !/\s/u.test(before[offset - 1]!))) return null;
-  const query = before.slice(offset + 1);
-  if (/\s$/u.test(query) || /[\n\r\t]/u.test(query)) return null;
+  const query = before.slice(offset + char.length);
+  // Quoting is a completed insertion form, never an in-flight picker query.
+  if (query.startsWith('"') || /\s$/u.test(query) || /[\n\r\t\0\u007f]/u.test(query)) return null;
   return { query, offset, endOffset: caret };
 };
 
@@ -37,6 +86,57 @@ export function replaceProjectQuery(text: string, caret: number, query: string) 
   const before = text.slice(0, match.offset) + "@" + query;
   return { text: before + text.slice(caret), caret: before.length };
 }
+
+function projectMentionIdentity(path: string): string {
+  return path.startsWith("./") ? path.slice(2) : path;
+}
+
+function parseReadableProjectMentions(text: string): Segment[] {
+  const segments: Segment[] = [];
+  let textStart = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] !== "@" || (index > 0 && !/\s/u.test(text[index - 1]!))) continue;
+    let end = index + 1;
+    let path: string | undefined;
+    if (text[end] === '"') {
+      let escaped = false;
+      for (end += 1; end < text.length; end += 1) {
+        const char = text[end]!;
+        if (!escaped && char === '"') { end += 1; break; }
+        if (!escaped && char === "\\") escaped = true;
+        else escaped = false;
+      }
+      if (text[end - 1] !== '"' || (end < text.length && !/\s/u.test(text[end]!) && !TRAILING_SENTENCE_PUNCTUATION.test(text[end]!))) continue;
+      path = parseQuotedPath(text.slice(index + 1, end));
+    } else {
+      while (end < text.length && !/\s/u.test(text[end]!)) end += 1;
+      while (end > index + 1 && TRAILING_SENTENCE_PUNCTUATION.test(text[end - 1]!)) end -= 1;
+      const candidate = text.slice(index + 1, end);
+      if (isBareProjectMentionPath(candidate)) path = candidate;
+    }
+    if (path === undefined || !hasPathAnchor(path)) continue;
+    const identity = projectMentionIdentity(path);
+    if (!identity) continue;
+    if (textStart < index) segments.push({ kind: "text", text: text.slice(textStart, index) });
+    segments.push({ kind: "mention", type: identity.endsWith("/") ? "directory" : "file", id: identity, label: identity });
+    textStart = end;
+    index = end - 1;
+  }
+  if (textStart < text.length) segments.push({ kind: "text", text: text.slice(textStart) });
+  return segments.length ? segments : [{ kind: "text", text }];
+}
+
+/** Read saved directives first, then readable picker tokens only inside text. */
+export const projectMentionFormatter: Unstable_DirectiveFormatter = {
+  serialize: (item: Unstable_TriggerItem) => {
+    if (item.type === "file" || item.type === "directory") return readableProjectMentionPath(item.label);
+    if (item.type === "agent") return isBareProjectMentionPath(item.label) ? `@${item.label}` : `@${JSON.stringify(item.label).replaceAll(":", "\\u003a")}`;
+    return unstable_defaultDirectiveFormatter.serialize(item);
+  },
+  parse: (text) => unstable_defaultDirectiveFormatter.parse(text).flatMap((part) =>
+    part.kind === "text" ? parseReadableProjectMentions(part.text) : [part],
+  ),
+};
 
 /** The parent spelling for Backspace after a separator, preserving its anchor. */
 export function parentProjectQuery(query: string): string | null {

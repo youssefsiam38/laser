@@ -1,13 +1,13 @@
 import type { ExplorerEntry } from "@lasercode/protocol";
-import { unstable_defaultDirectiveFormatter, type Unstable_DirectiveFormatter, type Unstable_TriggerItem } from "@assistant-ui/react";
+import type { Unstable_TriggerItem } from "@assistant-ui/react";
 import type { PickerNavigation } from "../assistant-ui/elements/composer-trigger-popover.aui.js";
 import type { ExplorerNavigationState } from "./use-directory-page.js";
-import { matchProjectMention, parentProjectQuery, replaceProjectQuery } from "./project-path.js";
+import { matchProjectMention, parentProjectQuery, projectMentionFormatter, replaceProjectQuery } from "./project-path.js";
 
 /**
  * Explorer choices are path references, not uploaded contents. A selected
- * folder keeps a trailing `/` in its directory directive; attachments.ts only
- * unwraps `<attached-file>` payloads, so the agent receives this path intact
+ * folder keeps a trailing `/` in its readable `@path` token; attachments.ts
+ * only unwraps `<attached-file>` payloads, so the agent receives it intact
  * and can inspect it with `ls` instead of Laser reading a directory as a file.
  */
 
@@ -33,21 +33,8 @@ export function explorerPageItem(direction: "next" | "previous"): Unstable_Trigg
     metadata: { countable: false, icon: direction, direction } };
 }
 
-/** Keep UI keys separate from the existing wire/display directive identities. */
-function directive(item: Unstable_TriggerItem): string | undefined {
-  const identity = item.metadata?.identity;
-  if (typeof identity !== "string" || /[\r\n]/u.test(identity)) return undefined;
-  const serialized = unstable_defaultDirectiveFormatter.serialize({ ...item, id: identity });
-  const parts = unstable_defaultDirectiveFormatter.parse(serialized);
-  const part = parts[0];
-  return parts.length === 1 && part?.kind === "mention" && part.id === identity && part.label === item.label && part.type === item.type ? serialized : undefined;
-}
-/** A quoted, reversible plain path. Escaped colons prevent embedded directive syntax. */
-export const quotedMentionPath = (identity: string): string => JSON.stringify(identity).replaceAll(":", "\\u003a");
-export const mentionFormatter: Unstable_DirectiveFormatter = {
-  parse: unstable_defaultDirectiveFormatter.parse,
-  serialize: (item) => directive(item) ?? quotedMentionPath(typeof item.metadata?.identity === "string" ? item.metadata.identity : item.label),
-};
+/** Compatibility export for Composer.tsx, which is outside this correction's ownership. */
+export const mentionFormatter = projectMentionFormatter;
 
 export function explorerNavigation(options: ExplorerNavigationState): PickerNavigation {
   const select: PickerNavigation["select"] = (item, text, caret) => {
@@ -56,7 +43,7 @@ export function explorerNavigation(options: ExplorerNavigationState): PickerNavi
       else if (item.metadata.direction === "previous") options.previous?.();
       return { text, caret };
     }
-    return null; // formatter owns file, folder and agent insertion, including plain-path fallback
+    return null; // formatter anchors picked paths and leaves agent handles readable
   };
   return { select, key: (key, items, selected, text, caret) => {
     const match = matchProjectMention(text, "@", caret);
