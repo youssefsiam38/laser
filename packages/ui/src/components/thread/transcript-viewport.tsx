@@ -66,7 +66,7 @@ export class TranscriptViewport {
   /** The person is moving the viewport right now; layout may shift it, never re-place it. */
   private reading: ReturnType<typeof setTimeout> | undefined;
   /** Disclosure anchoring starts at animationstart, after the open state committed. */
-  private disclosureDepth = 0;
+  private disclosureTargets = new Set<Element>();
   private disclosureFrame = 0;
   private disclosureFollowing = false;
   private disposed = false;
@@ -210,6 +210,13 @@ export class TranscriptViewport {
     else this.nodes.delete(id);
     this.schedule();
   }
+  setContent(node: HTMLElement | null) {
+    if (this.content === node) return;
+    this.content = node ?? undefined;
+    if (!this.mutation) return;
+    this.mutation.disconnect();
+    if (node) this.mutation.observe(node, { subtree: true, childList: true, characterData: true });
+  }
   private edgeGap() {
     const viewport = this.viewport;
     return viewport ? viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop : Number.POSITIVE_INFINITY;
@@ -218,12 +225,13 @@ export class TranscriptViewport {
   private canMove(direction: "up" | "down") {
     const viewport = this.viewport;
     if (!viewport) return false;
-    return direction === "up" ? viewport.scrollTop > 0.5 : this.edgeGap() > 2;
+    return direction === "up" ? viewport.scrollTop > 0 : this.edgeGap() > 2;
   }
   private scroll(top: number) {
     if (!this.viewport) return;
+    const before = this.viewport.scrollTop;
     this.viewport.scrollTop = top;
-    this.expectedTop = this.viewport.scrollTop;
+    if (Math.abs(this.viewport.scrollTop - before) >= 0.5) this.expectedTop = this.viewport.scrollTop;
   }
   capture = (): Place => {
     const viewport = this.viewport;
@@ -428,37 +436,38 @@ export class TranscriptViewport {
   latest = () => {
     this.cancel(); this.place.following = true; this.publish();
     if (this.viewport) this.scroll(Math.max(0, this.viewport.scrollHeight - this.viewport.clientHeight));
-    // The first streamed delta can grow the row before the native event for
-    // this placement arrives. Keep that event owned even if its scrollTop is
-    // already a few pixels behind the new scrollHeight.
-    this.expectedTop = this.viewport?.scrollTop;
+    // `scroll()` owns an event only when this placement actually moved.
+    // Follow geometry handles later growth when latest was already in place.
     this.schedule();
   };
   private disclosureTick = () => {
     this.disclosureFrame = 0;
     if (this.disposed) return;
+    for (const target of this.disclosureTargets) if (!target.isConnected || !this.viewport?.contains(target)) this.disclosureTargets.delete(target);
     if (this.disclosureFollowing ? this.place.following : !this.place.following && !this.reading) this.restore();
-    if (this.disclosureDepth > 0) this.disclosureFrame = requestAnimationFrame(this.disclosureTick);
+    if (this.disclosureTargets.size > 0) this.disclosureFrame = requestAnimationFrame(this.disclosureTick);
   };
-  private startDisclosureHold() {
-    if (this.disclosureDepth++ > 0) return;
+  private startDisclosureHold(target: Element) {
+    const first = this.disclosureTargets.size === 0;
+    this.disclosureTargets.add(target);
+    if (!first) return;
     // animationstart is dispatched only after the disclosure's open state has
     // committed. Capture the away anchor here, not in its click handler.
     this.disclosureFollowing = this.place.following;
     if (!this.disclosureFollowing) this.capture();
     if (!this.disclosureFrame) this.disclosureFrame = requestAnimationFrame(this.disclosureTick);
   }
-  private endDisclosureHold() {
-    this.disclosureDepth = Math.max(0, this.disclosureDepth - 1);
+  private endDisclosureHold(target: Element) {
+    if (!this.disclosureTargets.delete(target)) return;
     // One post-animation correction settles the final keyframe.
-    if (this.disclosureDepth === 0 && !this.disclosureFrame) this.disclosureFrame = requestAnimationFrame(this.disclosureTick);
+    if (this.disclosureTargets.size === 0 && !this.disclosureFrame) this.disclosureFrame = requestAnimationFrame(this.disclosureTick);
   }
   private stopDisclosureHold() {
-    this.disclosureDepth = 0;
+    this.disclosureTargets.clear();
     if (this.disclosureFrame) cancelAnimationFrame(this.disclosureFrame);
     this.disclosureFrame = 0;
   }
-  attach(viewport: HTMLElement, _tail?: () => void) {
+  attach(viewport: HTMLElement) {
     this.disposed = false; this.viewport = viewport;
     this.lastTop = viewport.scrollTop;
     this.lastHeight = viewport.scrollHeight;
@@ -474,16 +483,18 @@ export class TranscriptViewport {
     for (const node of this.nodes.values()) this.observer.observe(node);
     this.mutation = new MutationObserver(() => {
       // Text/child commits can paint before a descendant ResizeObserver is
-      // delivered. Read the new geometry in the mutation microtask and keep
-      // the same single controller write before that paint.
-      if (this.place.following) this.restore();
+      // delivered. Only the followed transcript needs this earlier correction;
+      // ResizeObserver and commits maintain an away reader's measured anchor.
+      if (!this.place.following) return;
+      this.restore();
       this.schedule();
     });
-    this.mutation.observe(viewport, { subtree: true, childList: true, characterData: true });
+    if (this.content) this.mutation.observe(this.content, { subtree: true, childList: true, characterData: true });
     const markReading = () => {
       if (this.reading) clearTimeout(this.reading);
       this.reading = setTimeout(() => { this.reading = undefined; this.schedule(); }, 400);
     };
+    let scrollbarDrag = false;
     const scroll = () => {
       const top = viewport.scrollTop;
       const height = viewport.scrollHeight;
@@ -491,6 +502,8 @@ export class TranscriptViewport {
       const previousHeight = this.lastHeight;
       const moved = Math.abs(top - previousTop) >= 0.5;
       const geometryChanged = Math.abs(height - previousHeight) >= 0.5;
+      const dragged = scrollbarDrag && moved;
+      if (dragged) scrollbarDrag = false;
       this.lastTop = top;
       this.lastHeight = height;
       // Every write through `scroll()` is ours. Input that can move clears this
@@ -502,6 +515,9 @@ export class TranscriptViewport {
         this.schedule();
         return;
       }
+      // A thumb drag is measured user movement even if streamed growth changed
+      // scrollHeight in the same frame. It also supersedes any destination.
+      if (dragged) { this.cancel(); this.arriving = false; }
       if (this.arriving) { this.place.following = true; this.windowDirty = true; this.schedule(); return; }
       if (this.ownsLocation) {
         // Only wheel/touch/pointer/keyboard or another explicit destination can
@@ -527,15 +543,16 @@ export class TranscriptViewport {
       }
       // Release only for a measured position change that was not one of our
       // writes. Resize/mutation scroll events with a stationary top stay owned
-      // by the existing follow intent.
-      if (this.place.following && (!moved || geometryChanged)) { this.windowDirty = true; this.schedule(); return; }
+      // by the existing follow intent. A measured thumb drag wins even while
+      // streaming changes the geometry in the same frame.
+      if (this.place.following && (!moved || (geometryChanged && !dragged))) { this.windowDirty = true; this.schedule(); return; }
       markReading();
       this.place.following = false;
       this.capture(); this.publish(); this.schedule();
     };
     const user = (direction?: "up" | "down") => {
-      this.cancel(); this.arriving = false; this.expectedTop = undefined;
       if (direction === undefined || !this.canMove(direction)) return false;
+      this.cancel(); this.arriving = false; this.expectedTop = undefined;
       this.place.following = false;
       this.stopDisclosureHold();
       markReading();
@@ -626,15 +643,15 @@ export class TranscriptViewport {
       const rtl = viewport.dir === "rtl" || getComputedStyle(viewport).direction === "rtl";
       const overScrollbar = event.offsetX < 0 || event.offsetX > viewport.clientWidth || (rtl ? event.offsetX <= overlayEdge : event.offsetX >= viewport.clientWidth - overlayEdge);
       if (event.target === viewport && viewport.scrollHeight > viewport.clientHeight && overScrollbar) {
-        // A thumb click has no direction. Cancel destinations now; the first
-        // measured drag movement releases follow.
-        user(); this.expectedTop = undefined; markReading();
+        // A thumb click has no direction and is not intent by itself. Its first
+        // measured movement releases follow, even while content is growing.
+        scrollbarDrag = true; this.expectedTop = undefined; markReading();
       } else this.cancel();
     };
+    const pointerEnd = () => { scrollbarDrag = false; };
     const wheel = (event: WheelEvent) => {
       if (event.deltaY < 0) user("up");
       else if (event.deltaY > 0) user("down");
-      else this.cancel();
     };
     let touchY: number | undefined;
     const touchstart = (event: TouchEvent) => {
@@ -653,14 +670,15 @@ export class TranscriptViewport {
     const disclosure = (event: AnimationEvent) => {
       const target = event.target;
       if (!(target instanceof Element) || !target.matches('[data-slot="tool-group-content"], [data-slot="reasoning-content"]')) return;
-      if (event.type === "animationstart") this.startDisclosureHold();
-      else this.endDisclosureHold();
+      if (event.type === "animationstart") this.startDisclosureHold(target);
+      else this.endDisclosureHold(target);
     };
     viewport.addEventListener("scroll", scroll, { passive: true });
     viewport.addEventListener("wheel", wheel, { passive: true });
     viewport.addEventListener("touchstart", touchstart, { passive: true }); viewport.addEventListener("touchmove", touchmove, { passive: true }); viewport.addEventListener("touchend", touchend, { passive: true }); viewport.addEventListener("touchcancel", touchend, { passive: true });
     viewport.addEventListener("animationstart", disclosure); viewport.addEventListener("animationend", disclosure); viewport.addEventListener("animationcancel", disclosure);
     viewport.addEventListener("pointerdown", pointer, { passive: true });
+    document.addEventListener("pointerup", pointerEnd, { passive: true }); document.addEventListener("pointercancel", pointerEnd, { passive: true });
     viewport.addEventListener("focusin", focus); viewport.addEventListener("focusout", focus); viewport.addEventListener("keydown", key);
     document.addEventListener("selectionchange", selection);
     const theme = new MutationObserver(this.schedule); theme.observe(document.documentElement, { attributes: true, attributeFilter: ["style", "class", "data-theme"] });
@@ -672,6 +690,7 @@ export class TranscriptViewport {
       viewport.removeEventListener("scroll", scroll); viewport.removeEventListener("wheel", wheel); viewport.removeEventListener("touchstart", touchstart); viewport.removeEventListener("touchmove", touchmove); viewport.removeEventListener("touchend", touchend); viewport.removeEventListener("touchcancel", touchend);
       viewport.removeEventListener("animationstart", disclosure); viewport.removeEventListener("animationend", disclosure); viewport.removeEventListener("animationcancel", disclosure);
       viewport.removeEventListener("pointerdown", pointer);
+      document.removeEventListener("pointerup", pointerEnd); document.removeEventListener("pointercancel", pointerEnd);
       viewport.removeEventListener("focusin", focus); viewport.removeEventListener("focusout", focus); viewport.removeEventListener("keydown", key);
       document.removeEventListener("selectionchange", selection); document.fonts?.removeEventListener("loadingdone", this.schedule);
       this.viewport = undefined;
@@ -727,7 +746,7 @@ export function WindowedMessages() {
   const ranges = controller.ranges();
   useLayoutEffect(() => { controller.committed(); });
   let cursor = 0;
-  return <div ref={node => { controller.content = node ?? undefined; }} data-slot="thread-messages" className="flex flex-col pt-5 empty:hidden" style={{ overflowAnchor: "none" }}>
+  return <div ref={node => { controller.setContent(node); }} data-slot="thread-messages" className="flex flex-col pt-5 empty:hidden" style={{ overflowAnchor: "none" }}>
     {ranges.flatMap(range => {
       const gap = controller.heights.offset(range.start) - controller.heights.offset(cursor); cursor = range.end;
       return [

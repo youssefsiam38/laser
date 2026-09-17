@@ -32,7 +32,7 @@ describe("scoped transcript destinations", () => {
     content.style.fontSize = "14px"; content.style.lineHeight = "21px";
     viewport.append(content); document.body.append(viewport); controller.content = content;
     controller.configure("/one", undefined, "first-window"); controller.setIds(ids);
-    const detach = controller.attach(viewport, () => { viewport.scrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight); });
+    const detach = controller.attach(viewport);
     try {
       await step();
       expect(viewport.scrollTop).toBeGreaterThan(0);
@@ -98,7 +98,7 @@ describe("scoped transcript destinations", () => {
     const controller = new TranscriptViewport(), viewport = document.createElement("div");
     Object.defineProperties(viewport, { clientHeight: { value: 600 }, scrollHeight: { value: 2_000 } });
     controller.configure("/one", undefined, "first-window"); controller.setIds(["target"]);
-    const detach = controller.attach(viewport, () => {});
+    const detach = controller.attach(viewport);
     try {
       controller.configure("", undefined, undefined); controller.setIds([]);
       controller.configure("/one", undefined, "replacement-window"); controller.setIds(["target"]);
@@ -121,7 +121,7 @@ describe("scoped transcript destinations", () => {
     const controller = new TranscriptViewport(), viewport = document.createElement("div"), row = document.createElement("div");
     Object.defineProperties(viewport, { clientHeight: { value: 600 }, scrollHeight: { value: 2_000 } });
     controller.configure("/settled");
-    const detach = controller.attach(viewport, () => {});
+    const detach = controller.attach(viewport);
     try {
       resized([{ target: row } as ResizeObserverEntry], {} as ResizeObserver);
       viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
@@ -144,7 +144,7 @@ describe("scoped transcript destinations", () => {
     Object.defineProperties(viewport, { clientHeight: { value: 600 }, scrollHeight: { get: () => total } });
     viewport.scrollTop = 1_400;
     controller.configure("/no-op-bottom");
-    const detach = controller.attach(viewport, () => { viewport.scrollTop = total - viewport.clientHeight; });
+    const detach = controller.attach(viewport);
     try {
       gesture(viewport);
       expect(viewport.scrollTop).toBe(1_400);
@@ -156,13 +156,51 @@ describe("scoped transcript destinations", () => {
     } finally { detach(); }
   });
 
+  it("does not cancel a destination for a no-op wheel at the bottom", async () => {
+    const controller = new TranscriptViewport(), viewport = document.createElement("div");
+    Object.defineProperties(viewport, { clientHeight: { value: 600 }, scrollHeight: { value: 2_000 } });
+    viewport.scrollTop = 1_400;
+    controller.configure("/destination");
+    const detach = controller.attach(viewport);
+    try {
+      let settled = false;
+      const pending = controller.ensureVisible({ messageId: "missing" }, { reason: "find", locate: () => new Promise<void>(() => {}) })
+        .finally(() => { settled = true; });
+      viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: 300 }));
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -300 }));
+      expect(await pending).toBe("cancelled");
+    } finally { detach(); }
+  });
+
+  it("keeps the first scrollbar drag movement during streamed growth", () => {
+    const controller = new TranscriptViewport(), viewport = document.createElement("div");
+    let total = 2_000;
+    Object.defineProperties(viewport, { clientHeight: { value: 600 }, clientWidth: { value: 600 }, scrollHeight: { get: () => total } });
+    viewport.scrollTop = 1_400;
+    controller.configure("/scrollbar-stream");
+    const detach = controller.attach(viewport);
+    try {
+      const pointer = new MouseEvent("pointerdown", { bubbles: true });
+      Object.defineProperty(pointer, "offsetX", { value: 610 });
+      viewport.dispatchEvent(pointer);
+      total += 50;
+      viewport.scrollTop -= 150;
+      viewport.dispatchEvent(new Event("scroll"));
+      controller.committed();
+      expect(viewport.scrollTop).toBe(1_250);
+      expect(controller.capture().following).toBe(false);
+    } finally { detach(); }
+  });
+
   it("re-arms follow geometrically after the reader returns to the bottom", () => {
     const controller = new TranscriptViewport(), viewport = document.createElement("div");
     let total = 2_000;
     Object.defineProperties(viewport, { clientHeight: { value: 600 }, scrollHeight: { get: () => total } });
     viewport.scrollTop = 1_400;
     controller.configure("/return-bottom");
-    const detach = controller.attach(viewport, () => { viewport.scrollTop = total - viewport.clientHeight; });
+    const detach = controller.attach(viewport);
     try {
       viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -200 }));
       viewport.scrollTop = 1_000; viewport.dispatchEvent(new Event("scroll"));
@@ -197,7 +235,7 @@ describe("scoped transcript destinations", () => {
     await pending;
     expect(locate).not.toHaveBeenCalled();
   });
-  it.each(["wheel", "touchstart", "pointerdown", "keydown"])("keeps an explicit version detached through queued layout scrolls until %s intent", async intent => {
+  it.each(["wheel", "touchmove", "scrollbar drag", "keydown"])("keeps an explicit version detached through queued layout scrolls until %s intent", async intent => {
     const frames = new Map<number, FrameRequestCallback>(); let frameId = 0, now = 0;
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { frames.set(++frameId, callback); return frameId; });
     vi.stubGlobal("cancelAnimationFrame", (id: number) => { frames.delete(id); });
@@ -220,10 +258,9 @@ describe("scoped transcript destinations", () => {
     controller.configure("/versions", "old-leaf"); controller.setIds(ids);
     // Configure clears previous-scope nodes, just as the committed row refs rebind.
     for (const [id, row] of rows) controller.register(id, row);
-    const tail = vi.fn(() => { viewport.scrollTop = total - viewport.clientHeight; });
-    const detach = controller.attach(viewport, tail);
+    const detach = controller.attach(viewport);
     try {
-      await step(); viewport.dispatchEvent(new Event("scroll")); tail.mockClear();
+      await step(); viewport.dispatchEvent(new Event("scroll"));
       const locate = vi.spyOn(controller, "ensureVisible");
       let settled = false;
       const pending = controller.afterAction(controller.startAction(), { messageId: "row-10", leafId: "new-leaf" }).then(() => { settled = true; });
@@ -245,15 +282,17 @@ describe("scoped transcript destinations", () => {
       expect(controller.capture().following).toBe(false);
       expect(rows.get("row-10")!.getBoundingClientRect().top).toBe(before);
       expect(controller.ranges().some(range => range.start <= 10 && range.end > 10)).toBe(true);
-      expect(tail).not.toHaveBeenCalled();
       // Real scroll intent releases ownership, so reaching the bottom can follow.
       if (intent === "keydown") viewport.dispatchEvent(new KeyboardEvent("keydown", { key: "End" }));
       else if (intent === "wheel") viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: 300 }));
-      else if (intent === "touchstart") viewport.dispatchEvent(new Event("touchstart"));
-      else {
+      else if (intent === "touchmove") {
+        const start = new Event("touchstart"); Object.defineProperty(start, "touches", { value: [{ clientY: 200 }] }); viewport.dispatchEvent(start);
+        const move = new Event("touchmove"); Object.defineProperty(move, "touches", { value: [{ clientY: 100 }] }); viewport.dispatchEvent(move);
+      } else {
         const event = new MouseEvent("pointerdown", { bubbles: true });
         Object.defineProperty(event, "offsetX", { value: 610 });
         viewport.dispatchEvent(event);
+        viewport.scrollTop = 700; viewport.dispatchEvent(new Event("scroll"));
       }
       viewport.scrollTop = 9400; viewport.dispatchEvent(new Event("scroll"));
       expect(controller.capture().following).toBe(true);
@@ -287,7 +326,7 @@ describe("scoped transcript destinations", () => {
       content.append(row); controller.register(ids[index]!, row); return row;
     };
     for (let i = 190; i < 200; i++) mount(i);
-    const detach = controller.attach(viewport, () => { viewport.scrollTop = total - 600; });
+    const detach = controller.attach(viewport);
     try {
       viewport.scrollTop = total - 600; viewport.dispatchEvent(new Event("scroll")); await step();
       // The person wheels up a long way: the anchor is now an unmounted row.
@@ -341,7 +380,7 @@ describe("scoped transcript destinations", () => {
       row.getBoundingClientRect = () => new DOMRect(0, controller.heights.offset(index) - viewport.scrollTop, 600, 100);
       content.append(row); controller.register(id, row);
     }
-    const detach = controller.attach(viewport, () => {});
+    const detach = controller.attach(viewport);
     try {
       await step();
       viewport.scrollTop = 1400; viewport.dispatchEvent(new Event("scroll")); await step();
@@ -375,7 +414,7 @@ describe("scoped transcript destinations", () => {
       row.getBoundingClientRect = () => new DOMRect(0, index * 100 - viewport.scrollTop, 600, 100);
       content.append(row); controller.register(id, row);
     }
-    const detach = controller.attach(viewport, () => {});
+    const detach = controller.attach(viewport);
     try {
       viewport.scrollTop = 1400; viewport.dispatchEvent(new Event("scroll"));
       expect(controller.capture().anchor?.messageId).toBe("row-14");
@@ -394,9 +433,8 @@ describe("scoped transcript destinations", () => {
     let total = 2000;
     Object.defineProperties(viewport, { clientHeight: { value: 600 }, scrollHeight: { get: () => total } });
     viewport.scrollTop = 500;
-    const tail = vi.fn(() => { viewport.scrollTop = total - viewport.clientHeight; });
     controller.configure("/new-run");
-    const detach = controller.attach(viewport, tail);
+    const detach = controller.attach(viewport);
     try {
       viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
       viewport.dispatchEvent(new Event("scroll"));
@@ -436,7 +474,7 @@ describe("scoped transcript destinations", () => {
     Object.defineProperties(viewport, { clientHeight: { value: 600 }, scrollHeight: { get: () => total } });
     viewport.scrollTop = 1_400;
     controller.configure("/batched-blocks"); controller.setIds(["old"]);
-    const detach = controller.attach(viewport, () => { viewport.scrollTop = total - viewport.clientHeight; });
+    const detach = controller.attach(viewport);
     try {
       controller.setIds(["old", "first", "second"]); total = 2_200;
       // The browser can report layout/clamp scroll before React's layout
@@ -454,7 +492,7 @@ describe("scoped transcript destinations", () => {
     Object.defineProperties(viewport, { clientHeight: { value: 600 }, scrollHeight: { get: () => total } });
     viewport.scrollTop = 1_400;
     controller.configure("/settled-append"); controller.setIds(["old"]);
-    const detach = controller.attach(viewport, () => { viewport.scrollTop = total - viewport.clientHeight; });
+    const detach = controller.attach(viewport);
     try {
       controller.setIds(["old", "late"]); total = 2_100;
       viewport.dispatchEvent(new Event("scroll"));
@@ -469,7 +507,7 @@ describe("scoped transcript destinations", () => {
     Object.defineProperties(viewport, { clientHeight: { value: 600 }, clientWidth: { value: 600 }, scrollHeight: { value: 2000 } });
     viewport.scrollTop = 1400;
     controller.configure("/pointer-stream");
-    const detach = controller.attach(viewport, () => {});
+    const detach = controller.attach(viewport);
     const pointer = (offsetX: number) => {
       const event = new MouseEvent("pointerdown", { bubbles: true });
       Object.defineProperty(event, "offsetX", { value: offsetX });
@@ -500,7 +538,7 @@ describe("scoped transcript destinations", () => {
     const button = document.createElement("button");
     viewport.append(button);
     controller.configure("/keyboard-stream");
-    const detach = controller.attach(viewport, () => {});
+    const detach = controller.attach(viewport);
     try {
       button.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
       viewport.scrollTop = 1000;
@@ -520,7 +558,7 @@ describe("scoped transcript destinations", () => {
     const send = document.createElement("button");
     composer.append(send); viewport.append(row, composer);
     controller.configure("/keyboard-stream");
-    const detach = controller.attach(viewport, () => {});
+    const detach = controller.attach(viewport);
     try {
       send.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
       expect(controller.capture().following).toBe(true);
@@ -533,9 +571,8 @@ describe("scoped transcript destinations", () => {
     const controller = new TranscriptViewport(), viewport = document.createElement("div");
     Object.defineProperties(viewport, { clientHeight: { value: 600 }, scrollHeight: { value: 2000 } });
     viewport.scrollTop = 500;
-    const tail = vi.fn();
     controller.configure("/one", undefined, "same-window");
-    const detach = controller.attach(viewport, tail);
+    const detach = controller.attach(viewport);
     try {
       viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
       viewport.scrollTop -= 100;
@@ -578,7 +615,7 @@ describe("scoped transcript destinations", () => {
       content.append(row); controller.register(id, row); rows.set(id, row); return row;
     };
     for (const id of ids) mount(id);
-    const detach = controller.attach(viewport, () => { viewport.scrollTop = scrollHeight() - 600; });
+    const detach = controller.attach(viewport);
     try {
       viewport.scrollTop = scrollHeight() - 600; viewport.dispatchEvent(new Event("scroll")); await step();
       // Read up to the very top, the way a wheel does, and ask for what came before.
@@ -616,7 +653,7 @@ describe("scoped transcript destinations", () => {
     viewport.getBoundingClientRect = () => new DOMRect(0, 0, 390, 844);
     content.getBoundingClientRect = () => new DOMRect(0, -viewport.scrollTop, 390, 10000);
     viewport.append(content); document.body.append(viewport);
-    const detach = controller.attach(viewport, () => {});
+    const detach = controller.attach(viewport);
     const commit = (ranges: ReturnType<TranscriptViewport["ranges"]>) => {
       const mounted = new Set(ranges.flatMap(range => ids.slice(range.start, range.end)));
       for (const [id, node] of nodes) if (!mounted.has(id)) { node.remove(); nodes.delete(id); controller.register(id, null); }
@@ -641,16 +678,26 @@ describe("scoped transcript destinations", () => {
       expect(nodes.has("row-50")).toBe(true);
     } finally { detach(); viewport.remove(); }
   });
-  it.each(["wheel", "touchstart", "pointerdown", "keydown", "path", "branch", "destination"])("cancels an active explicit destination on newer %s intent", async intent => {
+  it.each(["wheel", "touchmove", "scrollbar drag", "keydown", "path", "branch", "destination"])("cancels an active explicit destination on newer %s intent", async intent => {
     const controller = new TranscriptViewport(), viewport = document.createElement("div");
+    Object.defineProperties(viewport, { clientHeight: { value: 600 }, clientWidth: { value: 600 }, scrollHeight: { value: 2_000 } });
+    viewport.scrollTop = 1_000;
     controller.configure("/one", "leaf"); controller.setIds(["message"]);
-    const detach = controller.attach(viewport, () => {});
+    const detach = controller.attach(viewport);
     try {
       const pending = controller.ensureVisible({ messageId: "message", leafId: "leaf" }, { reason: "action" });
       if (intent === "path") controller.configure("/two");
       else if (intent === "branch") controller.setIds(["other"]);
       else if (intent === "destination") controller.latest();
-      else viewport.dispatchEvent(intent === "keydown" ? new KeyboardEvent("keydown", { key: "PageDown" }) : new Event(intent));
+      else if (intent === "keydown") viewport.dispatchEvent(new KeyboardEvent("keydown", { key: "PageDown" }));
+      else if (intent === "wheel") viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: 300 }));
+      else if (intent === "touchmove") {
+        const start = new Event("touchstart"); Object.defineProperty(start, "touches", { value: [{ clientY: 200 }] }); viewport.dispatchEvent(start);
+        const move = new Event("touchmove"); Object.defineProperty(move, "touches", { value: [{ clientY: 100 }] }); viewport.dispatchEvent(move);
+      } else {
+        const pointer = new MouseEvent("pointerdown", { bubbles: true }); Object.defineProperty(pointer, "offsetX", { value: 610 }); viewport.dispatchEvent(pointer);
+        viewport.scrollTop -= 100; viewport.dispatchEvent(new Event("scroll"));
+      }
       expect(await pending).toBe("cancelled");
     } finally { detach(); }
   });
@@ -678,7 +725,7 @@ describe("scoped transcript destinations", () => {
     };
     mount("first");
     const unsubscribe = controller.subscribe(() => { for (const range of controller.ranges()) for (let i = range.start; i < range.end; i++) mount(ids[i]!); });
-    const detach = controller.attach(viewport, () => {});
+    const detach = controller.attach(viewport);
     try {
       viewport.scrollTop = 9700;
       const first = content.querySelector("button")!; first.focus();

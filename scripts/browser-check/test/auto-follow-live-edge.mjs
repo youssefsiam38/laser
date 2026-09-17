@@ -4,6 +4,9 @@ import { join } from 'node:path';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const LIMIT = 2.01;
+// One placement can run in each synchronization phase: mutation microtask,
+// ResizeObserver delivery, and the controller's scheduled animation frame.
+const MAX_WRITES_PER_FRAME = 3;
 
 export default async function autoFollowLiveEdge(check) {
   const { page, fixture } = check;
@@ -63,12 +66,13 @@ export default async function autoFollowLiveEdge(check) {
 
   await page.evaluate(() => {
     const viewport = document.querySelector('[data-slot="thread-viewport"]');
-    if (!viewport || window.__autoFollowWriters) return;
+    const content = viewport?.querySelector('[data-slot="thread-messages"]');
+    if (!viewport || !content || window.__autoFollowScrollWrites) return;
     const records = [];
     let frame = 0;
     const tick = () => { frame += 1; requestAnimationFrame(tick); };
     requestAnimationFrame(tick);
-    const note = kind => records.push({ frame, kind, at: performance.now(), top: viewport.scrollTop });
+    const note = api => records.push({ frame, api, at: performance.now(), top: viewport.scrollTop });
     let owner = viewport;
     let descriptor;
     while (owner && !descriptor) { descriptor = Object.getOwnPropertyDescriptor(owner, 'scrollTop'); owner = Object.getPrototypeOf(owner); }
@@ -80,26 +84,26 @@ export default async function autoFollowLiveEdge(check) {
     });
     const nativeScrollTo = viewport.scrollTo.bind(viewport);
     viewport.scrollTo = (...args) => { note('scrollTo'); return nativeScrollTo(...args); };
-    window.__autoFollowWriters = {
+    window.__autoFollowScrollWrites = {
       reset() { records.length = 0; },
       read() {
-        const writers = new Map(), writes = new Map();
-        for (const record of records) {
-          if (!writers.has(record.frame)) writers.set(record.frame, new Set());
-          writers.get(record.frame).add(record.kind);
-          writes.set(record.frame, (writes.get(record.frame) ?? 0) + 1);
-        }
-        return {
-          writes: records.length,
-          maxPerFrame: Math.max(0, ...[...writers.values()].map(value => value.size)),
-          maxWritesPerFrame: Math.max(0, ...writes.values()),
-          records: records.slice(),
-        };
+        const writes = new Map();
+        for (const record of records) writes.set(record.frame, (writes.get(record.frame) ?? 0) + 1);
+        return { writes: records.length, maxWritesPerFrame: Math.max(0, ...writes.values()), records: records.slice() };
       },
     };
+    const mutationCounts = { viewportBatches: 0, contentBatches: 0 };
+    new MutationObserver(() => { mutationCounts.viewportBatches += 1; }).observe(viewport, { subtree: true, childList: true, characterData: true });
+    new MutationObserver(() => { mutationCounts.contentBatches += 1; }).observe(content, { subtree: true, childList: true, characterData: true });
+    window.__autoFollowMutations = {
+      reset() { mutationCounts.viewportBatches = 0; mutationCounts.contentBatches = 0; },
+      read() { return { ...mutationCounts }; },
+    };
   });
-  const resetWriters = () => page.evaluate(() => window.__autoFollowWriters.reset());
-  const writers = () => page.evaluate(() => window.__autoFollowWriters.read());
+  const resetWrites = () => page.evaluate(() => window.__autoFollowScrollWrites.reset());
+  const scrollWrites = () => page.evaluate(() => window.__autoFollowScrollWrites.read());
+  const resetMutations = () => page.evaluate(() => window.__autoFollowMutations.reset());
+  const mutations = () => page.evaluate(() => window.__autoFollowMutations.read());
 
   await frames(8);
   const fresh = await geometry('fresh-open');
@@ -124,13 +128,39 @@ export default async function autoFollowLiveEdge(check) {
     await gesture(); await sleep(80); await frames(2);
     const afterGesture = await geometry(`${name}-gesture`);
     assert.ok(Math.abs(afterGesture.scrollTop - before.scrollTop) <= LIMIT && Math.abs(afterGesture.gap) <= LIMIT, `${name} moved at the physical bottom`);
-    await resetWriters();
+    await resetWrites();
     const samples = await prompt(`checkpoint ${checkpoint++}`, `${name}-passive`);
-    noOpResults.push({ name, before, afterGesture, maxGap: Math.max(...samples.map(value => value.gap)), writers: await writers() });
+    noOpResults.push({ name, before, afterGesture, maxGap: Math.max(...samples.map(value => value.gap)), scrollWrites: await scrollWrites() });
   }
 
   const live = {};
-  await pin(); await resetWriters(); live.streaming = await prompt(`fixture-stream: live edge ${tag}`, 'streaming'); live.streamingWriters = await writers();
+  await pin(); await resetWrites(); live.streaming = await prompt(`fixture-stream: live edge ${tag}`, 'streaming'); live.streamingWrites = await scrollWrites();
+
+  await pin(); await resetWrites();
+  const dragRequest = check.rpc('session/prompt', { path: fixture.path, content: [{ type: 'text', text: `fixture-stream: scrollbar drag ${tag}` }] });
+  const streamDeadline = Date.now() + 20_000;
+  while (!(await check.rpc('session/load', { path: fixture.path })).state.isStreaming) {
+    if (Date.now() >= streamDeadline) throw new Error('scrollbar drag stream did not start');
+    await sleep(25);
+  }
+  await sleep(300);
+  const dragBefore = await geometry('scrollbar-drag-before');
+  await viewport.evaluate(element => {
+    const event = new MouseEvent('pointerdown', { bubbles: true });
+    Object.defineProperty(event, 'offsetX', { value: element.clientWidth + 2 });
+    element.dispatchEvent(event);
+    element.scrollTop -= 150;
+  });
+  await frames(2);
+  const dragFirst = await geometry('scrollbar-drag-first');
+  await viewport.evaluate(element => element.dispatchEvent(new MouseEvent('pointerup', { bubbles: true })));
+  assert.ok(dragBefore.scrollTop - dragFirst.scrollTop >= 100 && dragFirst.gap >= 100, `first scrollbar drag step was undone: ${JSON.stringify({ dragBefore, dragFirst })}`);
+  assert.equal((await dragRequest).accepted, true, 'scrollbar drag prompt was accepted');
+  await waitSettled(); await frames(3);
+  const dragSettled = await geometry('scrollbar-drag-settled');
+  assert.ok(dragSettled.scrollTop <= dragFirst.scrollTop + LIMIT && dragSettled.gap >= 100, `streaming pulled the scrollbar drag back: ${JSON.stringify({ dragFirst, dragSettled })}`);
+  live.scrollbarDrag = { before: dragBefore, first: dragFirst, settled: dragSettled, scrollWrites: await scrollWrites() };
+
   await pin(); live.reasoning = await prompt(`checkpoint ${checkpoint++} fixture reasoning`, 'reasoning');
   await pin(); live.markdown = await prompt('Render auto-follow markdown and code', 'markdown-code');
   await page.waitForFunction(() => [...document.querySelectorAll('pre code')].some(code => code.textContent?.includes('measuredLiveEdge') && code.querySelector('span[style]')), undefined, { timeout: 30_000 });
@@ -151,14 +181,14 @@ export default async function autoFollowLiveEdge(check) {
   assert.ok(live.delayedTool.every(value => Math.abs(value.gap) <= LIMIT), `delayed grouped result left ${Math.max(...live.delayedTool.map(value => value.gap))}px`);
 
   if ((await group.getAttribute('data-state')) === 'open') await group.click();
-  await frames(3); await pin(); await resetWriters();
+  await frames(3); await pin(); await resetWrites();
   const disclosure = [];
   await group.click();
   for (let index = 0; index < 24; index += 1) { await frames(); disclosure.push(await geometry('disclosure')); }
   assert.ok(disclosure.every(value => Math.abs(value.gap) <= LIMIT), `disclosure painted a ${Math.max(...disclosure.map(value => value.gap))}px gap`);
-  const disclosureWriters = await writers();
+  const disclosureWrites = await scrollWrites();
 
-  await pin(); await resetWriters();
+  await pin(); await resetWrites();
   const image = await viewport.evaluate(async element => {
     const row = element.querySelector('[data-window-message]:last-of-type') ?? element.querySelector('[data-window-message]');
     if (!row) throw new Error('no mounted row for image decode');
@@ -178,18 +208,19 @@ export default async function autoFollowLiveEdge(check) {
   const imageAfter = await geometry('image-decode');
   assert.deepEqual(image, { width: 48, height: 180 });
   assert.ok(Math.abs(imageAfter.gap) <= LIMIT, `image decode left ${imageAfter.gap}px`);
-  const imageWriters = await writers();
+  const imageWrites = await scrollWrites();
 
   await pin(); await viewport.hover(); await page.mouse.wheel(0, -800); await sleep(150); await frames(2);
   const awayBefore = await geometry('away-before');
   assert.ok(awayBefore.gap >= 500, `upward wheel did not leave the edge (${awayBefore.gap}px)`);
-  await resetWriters();
+  await resetWrites(); await resetMutations();
   const awayTop = awayBefore.scrollTop;
   await prompt(`fixture-stream: reader remains away ${tag}`, 'away-stream', false);
   await prompt('Render auto-follow markdown and code', 'away-markdown', false);
   const awayAfter = await geometry('away-after');
   assert.ok(Math.abs(awayAfter.scrollTop - awayTop) <= LIMIT, `passive growth moved the reader ${awayTop} -> ${awayAfter.scrollTop}`);
-  const awayWriters = await writers();
+  const awayWrites = await scrollWrites();
+  const awayMutations = await mutations();
 
   if (originalTouch || check.state.width === 390) {
     await pin();
@@ -229,26 +260,27 @@ export default async function autoFollowLiveEdge(check) {
   const fractionalAfter = await geometry('fractional-after');
   await page.evaluate(() => { document.documentElement.style.zoom = ''; }); await frames(3);
 
-  for (const result of noOpResults) assert.ok(result.writers.maxPerFrame <= 1, `${result.name} used ${result.writers.maxPerFrame} scrollTop writers in one frame`);
-  assert.ok(live.streamingWriters.maxPerFrame <= 1, `streaming used ${live.streamingWriters.maxPerFrame} scrollTop writers in one frame`);
-  assert.ok(disclosureWriters.maxPerFrame <= 1, `disclosure used ${disclosureWriters.maxPerFrame} scrollTop writers in one frame`);
-  assert.ok(imageWriters.maxPerFrame <= 1, `image decode used ${imageWriters.maxPerFrame} scrollTop writers in one frame`);
-  assert.ok(awayWriters.maxPerFrame <= 1, `scroll-away used ${awayWriters.maxPerFrame} scrollTop writers in one frame`);
+  for (const result of noOpResults) assert.ok(result.scrollWrites.maxWritesPerFrame <= MAX_WRITES_PER_FRAME, `${result.name} made ${result.scrollWrites.maxWritesPerFrame} scroll writes in one frame`);
+  assert.ok(live.streamingWrites.maxWritesPerFrame <= MAX_WRITES_PER_FRAME, `streaming made ${live.streamingWrites.maxWritesPerFrame} scroll writes in one frame`);
+  assert.ok(live.scrollbarDrag.scrollWrites.maxWritesPerFrame <= MAX_WRITES_PER_FRAME, `scrollbar drag made ${live.scrollbarDrag.scrollWrites.maxWritesPerFrame} scroll writes in one frame`);
+  assert.ok(disclosureWrites.maxWritesPerFrame <= MAX_WRITES_PER_FRAME, `disclosure made ${disclosureWrites.maxWritesPerFrame} scroll writes in one frame`);
+  assert.ok(imageWrites.maxWritesPerFrame <= MAX_WRITES_PER_FRAME, `image decode made ${imageWrites.maxWritesPerFrame} scroll writes in one frame`);
+  assert.ok(awayWrites.maxWritesPerFrame <= MAX_WRITES_PER_FRAME, `scroll-away made ${awayWrites.maxWritesPerFrame} scroll writes in one frame`);
 
   const result = {
-    tag, fresh, noOps: noOpResults.map(({ name, maxGap, writers }) => ({ name, maxGap, writes: writers.writes, maxWritersPerFrame: writers.maxPerFrame, maxWritesPerFrame: writers.maxWritesPerFrame })),
+    tag, fresh, noOps: noOpResults.map(({ name, maxGap, scrollWrites }) => ({ name, maxGap, writes: scrollWrites.writes, maxWritesPerFrame: scrollWrites.maxWritesPerFrame })),
     live: {
       streamingMaxGap: Math.max(...live.streaming.map(value => value.gap)),
+      scrollbarDrag: live.scrollbarDrag,
       reasoningMaxGap: Math.max(...live.reasoning.map(value => value.gap)),
       markdownMaxGap: Math.max(...live.markdown.map(value => value.gap)),
       toolMaxGap: Math.max(...live.tool.map(value => value.gap)),
       childMaxGap: Math.max(...live.child.map(value => value.gap)),
       delayedToolMaxGap: Math.max(...live.delayedTool.map(value => value.gap)),
       disclosureMaxGap: Math.max(...disclosure.map(value => value.gap)), imageAfter, image,
-      maxWritersPerFrame: Math.max(live.streamingWriters.maxPerFrame, disclosureWriters.maxPerFrame, imageWriters.maxPerFrame),
-      maxWritesPerFrame: Math.max(live.streamingWriters.maxWritesPerFrame, disclosureWriters.maxWritesPerFrame, imageWriters.maxWritesPerFrame),
+      maxWritesPerFrame: Math.max(live.streamingWrites.maxWritesPerFrame, live.scrollbarDrag.scrollWrites.maxWritesPerFrame, disclosureWrites.maxWritesPerFrame, imageWrites.maxWritesPerFrame),
     },
-    away: { before: awayBefore, after: awayAfter, writes: awayWriters.writes, maxWritersPerFrame: awayWriters.maxPerFrame, maxWritesPerFrame: awayWriters.maxWritesPerFrame },
+    away: { before: awayBefore, after: awayAfter, writes: awayWrites.writes, maxWritesPerFrame: awayWrites.maxWritesPerFrame, mutations: awayMutations },
     fractional: { before: fractionalBefore, after: fractionalAfter },
   };
   writeFileSync(join(check.root, `auto-follow-live-edge-${tag}.json`), JSON.stringify(result, null, 2));
