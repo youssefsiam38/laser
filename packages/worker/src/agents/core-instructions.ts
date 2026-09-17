@@ -1,7 +1,12 @@
 import { readFileSync } from "node:fs";
 import type { AgentDefinition } from "@lasercode/protocol";
 
-const CORE_INSTRUCTIONS = readFileSync(new URL("./core-instructions.md", import.meta.url), "utf8").trim();
+/** Editor notes at the top of the file (`<!-- … -->`) are for the person, never for the model. */
+function stripLeadingComments(text: string): string {
+  return text.replace(/^\s*(?:<!--[\s\S]*?-->\s*)*/, "").trim();
+}
+
+const CORE_INSTRUCTIONS = stripLeadingComments(readFileSync(new URL("./core-instructions.md", import.meta.url), "utf8"));
 
 /** Shared product-owned instructions prepended to custom agents by default. */
 export function coreInstructions(): string {

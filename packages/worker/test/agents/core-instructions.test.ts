@@ -18,7 +18,10 @@ import {
 describe("core instructions", () => {
   it("is a valid agent template and documents every allowed field without inserting extra blocks", () => {
     const source = readFileSync(new URL("../../src/agents/core-instructions.md", import.meta.url), "utf8");
-    expect(coreInstructions()).toBe(source.trim());
+    expect(source.startsWith("<!--")).toBe(true);
+    expect(coreInstructions()).not.toContain("<!--");
+    expect(coreInstructions()).toBe(source.replace(/^<!--[\s\S]*?-->/, "").trim());
+    expect(coreInstructions().startsWith("# Core instructions")).toBe(true);
     expect(instructionTemplateIssue(source, "agent")).toBeNull();
     for (const field of instructionTemplateFields("agent")) expect(source).toContain(field.key);
     expect(source).toContain("{{productName}}");
