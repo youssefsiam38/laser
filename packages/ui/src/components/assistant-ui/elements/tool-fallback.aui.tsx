@@ -240,7 +240,7 @@ function ToolFallbackTrigger({
         )}
       </span>
       {running && activeLabel ? <ThinkingIndicator label={activeLabel} dot={false}
-        className="min-w-0 flex-1 overflow-hidden [&_[data-slot=thinking-indicator-label]]:truncate" /> : <span
+        className="min-w-0 flex-initial overflow-hidden [&_[data-slot=thinking-indicator-label]]:truncate" /> : <span
         data-slot="tool-fallback-trigger-label"
         className={cn("min-w-0 truncate text-sm font-medium", cancelled ? "text-ink-3 line-through" : "text-ink-2", running && "shimmer-text")}
       >
@@ -695,6 +695,7 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
   toolCallId,
   toolName,
   args,
+  argsText,
   result: finalResult,
   artifact,
   status,
@@ -707,13 +708,14 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
 }) => {
   const result = toolDisplayResult({ result: finalResult, artifact });
   const state = toolRowState(status, isError);
-  const visibleArgs = withoutToolLabel(args);
-  const visibleArgsText = visibleArgs === undefined ? "" : JSON.stringify(visibleArgs);
+  const path = useLaserState((laser) => laser.current);
+  const toolLabelParams = useLaserState((laser) => path ? laser.open[path]?.state.toolLabelParams : undefined);
+  const visibleArgs = withoutToolLabel(args, toolName, toolLabelParams);
   const argsHaveLabel = visibleArgs !== args;
-  const agentLabel = state === "running" ? toolCallLabel(toolName, args) : undefined;
+  const visibleArgsText = argsHaveLabel ? JSON.stringify(visibleArgs) : argsText;
+  const agentLabel = state === "running" ? toolCallLabel(toolName, args, toolLabelParams) : undefined;
   const isRequiresAction = status?.type === "requires-action";
   const shouldRenderApproval = isRequiresAction && offersInterruptAction(status, approval, interrupt);
-  const path = useLaserState((laser) => laser.current);
   const activityLevel = useActivityDetailLevel(path);
   const [manualOpen, rememberOpen] = useActivityDisclosureOverride(path, `tool:${toolCallId}`);
   const open = manualOpen ?? toolDetailsDefaultOpen(activityLevel);
@@ -728,10 +730,7 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
   const resultFold = omittedBytes(outputBody) > 0
     ? <BodyOverflow body={outputBody} path={path ?? undefined} label="output" ground="surface-2" finishes="the tool finishes" tool={context} fade={Boolean(result)} />
     : undefined;
-  // A whole-body request reader would expose the stored transport field. A
-  // labelled call therefore keeps only the already-sanitised args disclosure;
-  // unlabelled legacy calls retain their full-request fold.
-  const argsFold = omittedBytes(bodies?.args) > 0 && !argsHaveLabel
+  const argsFold = omittedBytes(bodies?.args) > 0
     ? <BodyOverflow body={bodies?.args} path={path ?? undefined} label="request" ground="surface-2" finishes="the tool finishes" tool={{ toolName, state }} fade={Boolean(visibleArgsText)} />
     : undefined;
   const hasBody = Boolean(visibleArgsText) || result !== undefined || status?.type === "incomplete" || Boolean(resultFold) || Boolean(argsFold);

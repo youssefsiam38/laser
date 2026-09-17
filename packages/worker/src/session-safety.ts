@@ -56,8 +56,6 @@ export interface SessionSafetySnapshot {
    * model arrives and the naming actually starts.
    */
   naming: boolean;
-  /** Legacy protocol slot. D-277 removed worker-side tool-label work, so production supplies zero. */
-  runningTools: number;
   /**
    * There is a durable record to reopen from. False means releasing the runtime
    * would lose the conversation, so it is pinned however idle it is.
@@ -101,7 +99,6 @@ export function sessionPins(snapshot: SessionSafetySnapshot): SessionPin[] {
   if (snapshot.trayMessages > 0) pins.push(pin("pending_tray", `${snapshot.trayMessages} message(s) waiting in the tray`));
   if (snapshot.runningTasks > 0) pins.push(pin("task", `${snapshot.runningTasks} command(s) running`));
   if (snapshot.naming) pins.push(pin("naming", "this session is being named"));
-  if (snapshot.runningTools > 0) pins.push(pin("tool_labeling", `${snapshot.runningTools} tool call(s) running`));
   if (!snapshot.hasRecord) pins.push(pin("no_record", "there is no durable record to reopen from"));
   if (snapshot.closeFailed) pins.push(pin("close_failed", "this conversation's runtime would not close"));
   return pins;

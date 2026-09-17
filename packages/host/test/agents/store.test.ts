@@ -292,6 +292,23 @@ describe("AgentStore · persistence", () => {
     expect(second.get("namer")?.instructions).toBe("Prefer concrete nouns.");
   });
 
+  it("keeps a stored Namer override that uses removed template fields", () => {
+    const file = join(dir, "state", "agents.json");
+    const first = store({ storePath: file });
+    first.setBuiltinInstructions("namer", "Prefer concrete nouns.");
+    first.close();
+    const stored = JSON.parse(readFileSync(file, "utf8")) as { builtinInstructions: Record<string, string | null> };
+    stored.builtinInstructions.namer = "Name {{toolName}} from {{namingTask}}.";
+    writeFileSync(file, JSON.stringify(stored));
+
+    const second = store({ storePath: file });
+    expect(second.snapshot().builtinInstructions.namer).toBe("Name {{toolName}} from {{namingTask}}.");
+    expect(second.get("namer")?.instructions).toBe("Name {{toolName}} from {{namingTask}}.");
+    second.close();
+    expect((JSON.parse(readFileSync(file, "utf8")) as { builtinInstructions: Record<string, string | null> }).builtinInstructions.namer)
+      .toBe("Name {{toolName}} from {{namingTask}}.");
+  });
+
   it("persists rename aliases for sessions written under the old name", () => {
     const file = join(dir, "state", "agents.json");
     const first = store({ storePath: file });

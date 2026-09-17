@@ -71,7 +71,7 @@ const ToolSourceCode = lazy(() =>
  * "Questions"), so the row registers itself while it is on screen.
  */
 function ToolRowImpl(props: ToolCallMessagePartProps) {
-  const { toolCallId, toolName, args, isError, status, approval, interrupt, timing } = props;
+  const { toolCallId, toolName, args, argsText, isError, status, approval, interrupt, timing } = props;
   const result = toolDisplayResult(props);
   useRegisterToolRow(toolCallId);
 
@@ -86,10 +86,11 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
   const awaiting = state === "awaiting";
   const failed = state === "failed";
   const path = useLaserState((laser) => laser.current);
+  const toolLabelParams = useLaserState((laser) => path ? laser.open[path]?.state.toolLabelParams : undefined);
   const activityLevel = useActivityDetailLevel(path);
   // The agent's label names only live work. Settled rows keep the durable
   // computed summary that describes what actually ran (D-277).
-  const agentLabel = running ? toolCallLabel(toolName, args) : undefined;
+  const agentLabel = running ? toolCallLabel(toolName, args, toolLabelParams) : undefined;
   // Which MCP servers this session started with, so `playwright_browser_*` is
   // read as Playwright's own tool and not as a tool nobody recognises
   // (docs/mcp.md "In the transcript").
@@ -126,8 +127,10 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
   // while the row is open, so the fold never sits under an empty body.
   const preview = useOutputPreview(outputBody, path ?? undefined, open && outputOverflows && heldText.length === 0);
   const text = heldText || preview || "";
-  const argsHaveLabel = withoutToolLabel(args) !== args;
-  const argsOverflow = omittedBytes(bodies?.args) > 0 && !argsHaveLabel;
+  const visibleArgs = withoutToolLabel(args, toolName, toolLabelParams);
+  const argsHaveLabel = visibleArgs !== args;
+  const visibleArgsText = argsHaveLabel ? JSON.stringify(visibleArgs) : argsText;
+  const argsOverflow = omittedBytes(bodies?.args) > 0;
   const finishes = kind === "bash" ? "the command finishes" : "the tool finishes";
   const bash = kind === "bash" ? parseBashOutput(text, isError === true) : undefined;
   const context: OutputContext = {
@@ -170,7 +173,8 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
       <McpToolRow
         info={mcp}
         toolName={toolName}
-        args={args}
+        args={visibleArgs}
+        argsText={visibleArgsText}
         result={result}
         text={text}
         details={details}
@@ -179,6 +183,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
         open={open}
         onOpenChange={rememberOpen}
         footer={<>{footerFolds}{footer}</>}
+        activeLabel={agentLabel}
       />
     );
   }
@@ -228,7 +233,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
         peek={failed && text ? <ToolError message={text} compact /> : undefined}
         footer={footer}
       >
-        <TextBody args={args} text={text} failed={failed} overflow={fold("surface-2", text.length > 0)} argsOverflow={argsFold} />
+        <TextBody args={visibleArgs} argsText={visibleArgsText} text={text} failed={failed} overflow={fold("surface-2", text.length > 0)} argsOverflow={argsFold} />
       </ToolCall>
     );
   }
@@ -258,28 +263,28 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
       ) : null}
       {hasBody ? (
         body === "terminal" ? (
-          <BashBody args={args} text={text} running={running} isError={failed} overflow={fold("terminal", text.length > 0)} />
+          <BashBody args={visibleArgs} text={text} running={running} isError={failed} overflow={fold("terminal", text.length > 0)} />
         ) : body === "diff" ? (
           <>
-            <DiffBody view={diffView} args={args} text={text} failed={failed} />
+            <DiffBody view={diffView} args={visibleArgs} argsText={visibleArgsText} text={text} failed={failed} />
             {footerFolds}
           </>
         ) : kind === "read" ? (
-          <ReadBody args={args} text={text} failed={failed} overflow={fold("surface-2", text.length > 0)} argsOverflow={argsFold} />
+          <ReadBody args={visibleArgs} argsText={visibleArgsText} text={text} failed={failed} overflow={fold("surface-2", text.length > 0)} argsOverflow={argsFold} />
         ) : (
-          <TextBody args={args} text={text} failed={failed} overflow={fold("surface-2", text.length > 0)} argsOverflow={argsFold} />
+          <TextBody args={visibleArgs} argsText={visibleArgsText} text={text} failed={failed} overflow={fold("surface-2", text.length > 0)} argsOverflow={argsFold} />
         )
       ) : undefined}
     </ToolCall>
   );
 }
 
-function ReadBody({ args, text, failed, overflow, argsOverflow }: { args: unknown; text: string; failed: boolean; overflow?: ReactNode; argsOverflow?: ReactNode }) {
-  const visibleArgs = withoutToolLabel(args);
+function ReadBody({ args, argsText, text, failed, overflow, argsOverflow }: { args: unknown; argsText?: string; text: string; failed: boolean; overflow?: ReactNode; argsOverflow?: ReactNode }) {
+  const visibleArgs = args;
   const path = typeof (visibleArgs as { path?: unknown })?.path === "string" ? (visibleArgs as { path: string }).path : undefined;
   return (
     <>
-      <ToolFallbackArgs argsText={pretty(visibleArgs)} overflow={argsOverflow} />
+      <ToolFallbackArgs argsText={argsText ?? pretty(visibleArgs)} overflow={argsOverflow} />
       {overflow && !failed ? <ToolFallbackResult result={text} overflow={overflow} /> : text ? (
         failed ? (
           <ToolFallbackSection label="error">
@@ -445,7 +450,7 @@ function StartAgentRow({
 // ---------------------------------------------------------------------------
 
 function BashBody({ args, text, running, isError, overflow }: { args: unknown; text: string; running: boolean; isError: boolean; overflow?: ReactNode }) {
-  const visibleArgs = withoutToolLabel(args);
+  const visibleArgs = args;
   const command = typeof (visibleArgs as { command?: unknown })?.command === "string" ? (visibleArgs as { command: string }).command : "";
   const { output, exitCode } = useMemo(() => parseBashOutput(text, isError), [text, isError]);
   return <TerminalBlock command={command} output={output} exitCode={exitCode} running={running} isError={isError} overflow={overflow} />;
@@ -454,18 +459,20 @@ function BashBody({ args, text, running, isError, overflow }: { args: unknown; t
 function DiffBody({
   view,
   args,
+  argsText,
   text,
   failed,
 }: {
   view: ReturnType<typeof diffViewForTool>;
   args: unknown;
+  argsText?: string;
   text: string;
   failed: boolean;
 }) {
-  const visibleArgs = withoutToolLabel(args);
+  const visibleArgs = args;
   return (
     <>
-      {view ? <CodeDiff view={view} /> : <ToolFallbackArgs argsText={pretty(visibleArgs)} />}
+      {view ? <CodeDiff view={view} /> : <ToolFallbackArgs argsText={argsText ?? pretty(visibleArgs)} />}
       {failed && text ? (
         <ToolFallbackSection label="error">
           <ToolError message={text} />
@@ -475,11 +482,11 @@ function DiffBody({
   );
 }
 
-function TextBody({ args, text, failed, overflow, argsOverflow }: { args: unknown; text: string; failed: boolean; overflow?: ReactNode; argsOverflow?: ReactNode }) {
-  const visibleArgs = withoutToolLabel(args);
+function TextBody({ args, argsText, text, failed, overflow, argsOverflow }: { args: unknown; argsText?: string; text: string; failed: boolean; overflow?: ReactNode; argsOverflow?: ReactNode }) {
+  const visibleArgs = args;
   return (
     <>
-      <ToolFallbackArgs argsText={pretty(visibleArgs)} overflow={argsOverflow} />
+      <ToolFallbackArgs argsText={argsText ?? pretty(visibleArgs)} overflow={argsOverflow} />
       {failed && text ? (
         <ToolFallbackSection label="error">
           <ToolError message={text} />

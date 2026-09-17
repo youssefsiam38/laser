@@ -23,7 +23,6 @@ const CLEAR: SessionSafetySnapshot = {
   trayMessages: 0,
   runningTasks: 0,
   naming: false,
-  runningTools: 0,
   hasRecord: true,
 };
 
@@ -42,7 +41,6 @@ const SOURCES: Array<[SessionPinKind, Partial<SessionSafetySnapshot>]> = [
   ["pending_tray", { trayMessages: 1 }],
   ["task", { runningTasks: 1 }],
   ["naming", { naming: true }],
-  ["tool_labeling", { runningTools: 2 }],
   ["no_record", { hasRecord: false }],
   ["close_failed", { closeFailed: true }],
 ];
@@ -78,16 +76,16 @@ describe("sessionPins", () => {
 
   it("classifies work pins, which is what an explicit stop refuses on", () => {
     for (const kind of SESSION_WORK_PIN_KINDS) expect(isSessionWorkPin(kind), kind).toBe(true);
-    for (const kind of ["naming", "tool_labeling", "no_record"] as const) expect(isSessionWorkPin(kind), kind).toBe(false);
+    for (const kind of ["naming", "no_record"] as const) expect(isSessionWorkPin(kind), kind).toBe(false);
     // A runtime that could not be closed is still serving the conversation, so
     // an explicit stop refuses on it too.
     expect(isSessionWorkPin("close_failed")).toBe(true);
     // Automatic release refuses on *any* pin, so the work set is a subset and
     // never the whole vocabulary: the two lists must not drift into one. The
-    // advisory set is exactly the three named above, and this pins the count so
+    // advisory set is exactly the two named above, and this pins the count so
     // a new kind cannot quietly join them.
     expect(SESSION_WORK_PIN_KINDS.length).toBeLessThan(SESSION_PIN_KINDS.length);
     const advisory = SESSION_PIN_KINDS.filter((kind) => !isSessionWorkPin(kind));
-    expect(advisory).toEqual(["naming", "tool_labeling", "no_record"]);
+    expect(advisory).toEqual(["naming", "no_record"]);
   });
 });

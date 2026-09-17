@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConversationSearch } from "@/components/assistant-ui/elements/conversation-search";
 import { motionMs } from "@/motion";
 import { Button } from "@/components/ui/button";
-import { matchExcerpt, textMatches } from "./search-text.js";
+import { matchExcerpt, partSearchContent, textMatches } from "./search-text.js";
 import { createConversationSearch, createMessageRangeCache } from "./conversation-search-cache.js";
 import type { SearchSource } from "./search-state.js";
 import { useTranscriptViewport } from "./transcript-viewport.js";
@@ -60,7 +60,12 @@ export function findTextMatches(root: HTMLElement, query: string, mode: "convers
 
 const NO_MESSAGES: readonly ThreadMessage[] = [];
 
-export function useConversationFind({ partial = false, loadAll, refusal }: { partial?: boolean; loadAll?: () => Promise<boolean>; refusal?: string | undefined } = {}) {
+export function useConversationFind({ partial = false, loadAll, refusal, toolLabelParams }: {
+  partial?: boolean;
+  loadAll?: () => Promise<boolean>;
+  refusal?: string | undefined;
+  toolLabelParams?: Readonly<Record<string, string>> | undefined;
+} = {}) {
   const controller = useTranscriptViewport();
   const highlightScope = useMemo(() => Symbol("conversation-find"), []);
   const [open, setOpen] = useState(false);
@@ -99,7 +104,10 @@ export function useConversationFind({ partial = false, loadAll, refusal }: { par
   const root = useRef<HTMLDivElement>(null);
   const previousThread = useRef(threadId);
   const preferredSource = useRef<SearchSource | undefined>(undefined);
-  const search = useMemo(() => createConversationSearch(), []);
+  const search = useMemo(
+    () => createConversationSearch((part) => partSearchContent(part, toolLabelParams)),
+    [toolLabelParams],
+  );
   const hits = useMemo(() => open && !loadingAll ? search(messages, query) : [], [messages, query, open, loadingAll, search]);
   useEffect(() => {
     if (!preferredSource.current || !hits.length) return;

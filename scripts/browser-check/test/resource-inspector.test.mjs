@@ -72,7 +72,6 @@ test('worker counters read RP-4’s runtime table and report real sessions, entr
   const value = projectWorker.call({
     runtimes,
     tasks: { bySession: new Map([['/p/one.jsonl', new Map([['t', { status: 'running' }], ['u', { status: 'exited' }]])]]) },
-    runningTools: new Map([['/p/one.jsonl', new Set(['tool-1'])]]),
   });
   assert.equal(value.available, true, `projection unavailable against ${source}`);
   assert.equal(value.sessions, 2, `sessions must come from the runtime table (${source})`);
@@ -80,7 +79,7 @@ test('worker counters read RP-4’s runtime table and report real sessions, entr
   assert.equal(value.entriesUnreadable, 0);
   assert.equal(value.replayCount, 3);
   assert.ok(value.replayBytes > 0, 'replay bytes are the buffers’ own account, never a zero');
-  assert.deepEqual([value.tasks, value.runningTasks, value.runningTools], [2, 1, 1]);
+  assert.deepEqual([value.tasks, value.runningTasks], [2, 1]);
   assert.deepEqual([value.pendingQuestions, value.pendingApprovals], [1, 1]);
   assert.deepEqual([value.opening, value.releasing, value.fenced, value.retiring], [0, 0, false, false]);
   const text = JSON.stringify(value);
@@ -420,13 +419,13 @@ const unavailableWorkerRow = {
   kind: 'worker', available: false, reason: 'worker session runtime table unavailable',
   sessions: null, opening: null, releasing: null, retiring: null, fenced: null,
   entries: null, entriesKnown: null, entriesReadable: 0, entriesUnreadable: 0,
-  replayCount: null, replayBytes: null, tasks: null, runningTasks: null, runningTools: null,
+  replayCount: null, replayBytes: null, tasks: null, runningTasks: null,
   pendingQuestions: null, pendingApprovals: null,
 };
 const readableWorkerRow = {
   kind: 'worker', available: true, reason: null, sessions: 1, opening: 0, releasing: 0, retiring: false, fenced: false,
   entries: 3, entriesKnown: 3, entriesReadable: 1, entriesUnreadable: 0, replayCount: 0, replayBytes: 0,
-  tasks: 0, runningTasks: 0, runningTools: 0, pendingQuestions: 0, pendingApprovals: 0,
+  tasks: 0, runningTasks: 0, pendingQuestions: 0, pendingApprovals: 0,
 };
 
 test('a worker that answers "no evidence" is unreadable, in one place, for every consumer', () => {
@@ -441,14 +440,9 @@ test('a worker that answers "no evidence" is unreadable, in one place, for every
   assert.deepEqual([split.readable.length, split.unreadable.length], [1, 1]);
 
   const guards = retirementGuardSnapshot({ connections: 0 }, [unavailableWorkerRow]);
-  assert.deepEqual([guards.runningTasks, guards.pendingQuestions, guards.pendingApprovals, guards.runningTools], [null, null, null, null],
+  assert.deepEqual([guards.runningTasks, guards.pendingQuestions, guards.pendingApprovals], [null, null, null],
     'a worker that did not answer makes the totals unknown, never zero');
   assert.throws(() => assertNoLiveWork(guards), /unknown, not settled/);
-  assert.deepEqual(retirementGuardSnapshot({ connections: 0 }, [readableWorkerRow]).runningTools, 0);
-  const malformed = { ...readableWorkerRow };
-  delete malformed.runningTools;
-  assert.equal(retirementGuardSnapshot({ connections: 0 }, [malformed]).runningTools, null,
-    'a readable row missing a required guard is unknown, never zero');
   assert.equal(retirementGuardSnapshot({ connections: 0 }, [{ available: true }]).runningTasks, null,
     'an unrecognised available row is unknown, never zero');
 });
@@ -458,7 +452,6 @@ test('sampleRetirementGuards and proveNoLiveWork refuse a worker without evidenc
   const sampled = await refusing.sampleRetirementGuards();
   assert.equal(sampled.readable, 0, 'an all-null row must not count as a readable worker');
   assert.deepEqual(sampled.unreadable, ['worker session runtime table unavailable']);
-  assert.equal(sampled.guards.runningTools, null);
   await assert.rejects(
     proveNoLiveWork(() => refusing.sampleRetirementGuards(), { deadlineMs: 0, sleepFor: async () => {} }),
     error => {
@@ -471,7 +464,6 @@ test('sampleRetirementGuards and proveNoLiveWork refuse a worker without evidenc
   const proving = guardRun(readableWorkerRow).run;
   const proved = await proveNoLiveWork(() => proving.sampleRetirementGuards(), { deadlineMs: 0, sleepFor: async () => {} });
   assert.deepEqual([proved.readable, proved.unreadable.length], [1, 0]);
-  assert.equal(proved.guards.runningTools, 0);
 });
 
 test('a phase counts a no-evidence worker as unreadable, never as a row of zeros', async () => {

@@ -178,7 +178,7 @@ const BUILTIN_MODEL_COPY: Readonly<Record<BuiltinAgentName, { title: string; des
   namer: {
     title: "Namer’s model",
     description:
-      "Namer titles sessions and labels running work. It runs often on a tiny task, so the fastest inexpensive model is usually right. Qualification suggests one; this choice overrides it until you clear it.",
+      "Namer titles sessions. It runs once on a small task when a session begins, so the fastest inexpensive model is usually right. Qualification suggests one; this choice overrides it until you clear it.",
     clear: "Back to qualification",
   },
 };

@@ -222,7 +222,7 @@ function ToolGroupTrigger({
             <LeadIcon className={cn("size-3.5", attention ? "text-attention" : "text-ink-3")} />
           )}
         </span>
-        <span className={cn("flex min-w-0 flex-1", !active && breakdown?.length ? "flex-col items-start gap-1 py-1.5" : "items-center gap-2 overflow-hidden")}>
+        <span className={cn("flex min-w-0", active ? "flex-initial" : "flex-1", !active && breakdown?.length ? "flex-col items-start gap-1 py-1.5" : "items-center gap-2 overflow-hidden")}>
           {active && activeLabel ? (
             <ThinkingIndicator
               label={activeLabel}
@@ -252,6 +252,7 @@ function ToolGroupTrigger({
             <span className={cn(mono, "min-w-0 truncate", active || attention ? "text-ink-2" : "text-ink-3")}>{detail}</span>
           ) : null}
         </span>
+        {active ? <span aria-hidden="true" className="flex-1" /> : null}
         {changes ? <DiffStat added={changes.added} removed={changes.removed} /> : null}
         {elapsedMs !== undefined ? (
           <span className={cn(mono, "shrink-0 tnum", active ? "text-live" : "text-ink-3")}>{duration(elapsedMs)}</span>
@@ -407,11 +408,12 @@ function ToolGroupDetails({
 }: ToolGroupProps & { elapsedMs: number | undefined }) {
   const { members, reasoning } = useGroupActivity(part);
   const path = useLaserState((state) => state.current);
+  const toolLabelParams = useLaserState((state) => path ? state.open[path]?.state.toolLabelParams : undefined);
   const activityLevel = useActivityDetailLevel(path);
   // Only the member in flight can name the live aggregate. Once it settles,
   // the aggregate returns to its durable computed summary (D-277).
   const active = members.find((member) => member.running);
-  const agentLabel = active ? toolCallLabel(active.toolName, active.args) : undefined;
+  const agentLabel = active ? toolCallLabel(active.toolName, active.args, toolLabelParams) : undefined;
   return (
     <ToolGroupSummaryRow
       members={members}

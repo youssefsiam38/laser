@@ -8,7 +8,7 @@
  * received is the only honest way to know.
  */
 import { GOAL_TOOL_NAMES } from "@lasercode/pi-goal";
-import { PRODUCT_NAME, TOOL_LABEL_DESCRIPTION, TOOL_LABEL_MAX } from "@lasercode/protocol";
+import { PRODUCT_NAME, TOOL_LABEL_DESCRIPTION, TOOL_LABEL_MAX, TOOL_LABEL_PARAM } from "@lasercode/protocol";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -80,7 +80,7 @@ describe("the goal engine's tools", () => {
     expect(goalToolsIn(stub.requests.length - 1)).toEqual([...GOAL_TOOL_NAMES]);
     for (const name of GOAL_TOOL_NAMES) {
       const schema = goalRequest.tools?.find((tool) => tool.function.name === name)?.function.parameters;
-      expect((schema?.properties as Record<string, unknown> | undefined)?.label, name).toEqual({
+      expect((schema?.properties as Record<string, unknown> | undefined)?.[TOOL_LABEL_PARAM], name).toEqual({
         type: "string",
         description: TOOL_LABEL_DESCRIPTION,
         maxLength: TOOL_LABEL_MAX,
