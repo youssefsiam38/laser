@@ -18,8 +18,11 @@ const mocks = vi.hoisted(() => {
       defaultAgent: "default",
       workspaces: { beam: "/builtin/beam", chat: "/builtin/chat" },
       agents: [
-        { name: "default", kind: "custom", description: "General coding" },
-        { name: "researcher", kind: "custom", description: "Searches a large codebase" },
+        { name: "default", kind: "custom", scope: "global", description: "General coding" },
+        { name: "researcher", kind: "custom", scope: "global", description: "Searches a large codebase" },
+        // Shadows the global researcher inside /project only.
+        { name: "researcher", kind: "custom", scope: "project", projectCwd: "/project", description: "This repo's researcher" },
+        { name: "elsewhere", kind: "custom", scope: "project", projectCwd: "/other", description: "Another project's agent" },
         { name: "beam", kind: "builtin", description: "Built in" },
         { name: "chat", kind: "builtin", description: "Built in" },
         { name: "namer", kind: "builtin", description: "Built in" },
@@ -63,7 +66,8 @@ vi.mock("@assistant-ui/react", async (importActual) => ({
   }),
 }));
 
-vi.mock("@/agents", () => ({
+vi.mock("@/agents", async (importActual) => ({
+  ...(await importActual<typeof import("@/agents")>()),
   agentDisplayName: (name: string) => name === "default" ? "Default agent" : name,
   isBuiltinAgent: (agent: { kind: string }) => agent.kind === "builtin",
   isWorkspaceCwd: (cwd: string | undefined) => cwd === "/builtin/beam" ? "beam" : cwd === "/builtin/chat" ? "chat" : null,
@@ -143,10 +147,15 @@ it("selects the default and searches custom agents without exposing built-ins", 
 
   const text = document.body.textContent ?? "";
   expect(text).toContain("researcher");
-  expect(text).toContain("Searches a large codebase");
   expect(text).not.toContain("beam");
   expect(text).not.toContain("chat");
   expect(text).not.toContain("namer");
+  // Scope: the project's own researcher stands in for the global one, once;
+  // another project's agent is not offered here.
+  expect(text).toContain("Project · This repo's researcher");
+  expect(text).not.toContain("Searches a large codebase");
+  expect(text).not.toContain("elsewhere");
+  expect(document.querySelectorAll('[data-slot="model-selector-item"]').length).toBe(2);
 
   const search = document.querySelector<HTMLInputElement>('[aria-label="Search agents"]')!;
   expect(document.activeElement).toBe(search);

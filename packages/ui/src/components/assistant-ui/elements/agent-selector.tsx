@@ -15,7 +15,7 @@
 import { Bot } from "lucide-react";
 import { useMemo } from "react";
 
-import { agentDisplayName, isBuiltinAgent, useAgentsSnapshot, useAgentsStatus } from "@/agents";
+import { agentDisplayName, customAgentsForProject, useAgentsSnapshot, useAgentsStatus } from "@/agents";
 import { cn } from "@/lib/utils";
 import { isUnstartedSession, useLaserStable, useLaserState } from "@/runtime";
 import { useSessionPreparation } from "@/components/thread/session-preparation";
@@ -58,16 +58,16 @@ export function SessionAgentSelector({ className, allowProjectLanding = true }: 
   const selected = firstTurn?.agentName ?? session?.agent?.agentName ?? snapshot?.defaultAgent;
 
   const options = useMemo<ModelOption[]>(
-    () => (snapshot?.agents ?? [])
-      .filter((agent) => !isBuiltinAgent(agent))
-      .map((agent) => ({
-        id: agent.name,
-        name: agentDisplayName(agent.name),
-        description: agent.description,
-        icon: <Bot aria-hidden="true" />,
-        keywords: [agent.name, agent.description],
-      })),
-    [snapshot],
+    // Only what this project's sessions can run: globals plus the project's
+    // own agents, a project agent standing in for a global one of the same name.
+    () => customAgentsForProject(snapshot, cwd).map((agent) => ({
+      id: agent.name,
+      name: agentDisplayName(agent.name),
+      description: agent.scope === "project" ? `Project · ${agent.description}` : agent.description,
+      icon: <Bot aria-hidden="true" />,
+      keywords: [agent.name, agent.description],
+    })),
+    [snapshot, cwd],
   );
 
   if (!canChoose || !cwd) return null;
