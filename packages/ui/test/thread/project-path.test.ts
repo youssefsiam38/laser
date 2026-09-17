@@ -19,10 +19,13 @@ it.each([
 it.each(["@C:relative", "@server/ "])("refuses malformed %s deliberately", (query) => {
   expect(resolveProjectPath(query)).toMatchObject({ ok: false, error: expect.any(String) });
 });
-it("preserves surrounding text and closes at trailing whitespace", () => {
+it("preserves surrounding text, reads quoted paths, and closes at trailing whitespace", () => {
   expect(matchProjectMention("Read @server/ind then", "@", 16)).toMatchObject({ query: "server/ind" });
+  expect(matchProjectMention('@"my folder/"', "@", 13)).toMatchObject({ query: "my folder/" });
   expect(matchProjectMention("@server/ ", "@", 9)).toBeNull();
+  expect(matchProjectMention('@"my folder/" ', "@", 14)).toBeNull();
   expect(replaceProjectQuery("Read @ser then", 9, "server/")).toEqual({ text: "Read @server/ then", caret: 13 });
+  expect(replaceProjectQuery('@"my folder/sub/"', 17, "my folder/")).toEqual({ text: '@"my folder/"', caret: 13 });
 });
 it.each([
   ["a/b/", "a/"], ["server/", ""], ["./server/", "./"], ["../", "../../"],
@@ -41,7 +44,8 @@ it("projects canonical host paths and marks folders with a trailing slash", () =
     { name: "outside.txt", path: "C:\\Users\\me\\outside.txt", project: false, kind: "file" },
   ], "/project");
   expect(items.map((item) => [item.metadata?.identity, item.type])).toEqual([["/project/server/", "directory"], ["/project/a.txt", "file"], ["C:/Users/me/outside.txt", "file"]]);
-  expect(mentionFormatter.parse(mentionFormatter.serialize(items[0]!))).toEqual([{ kind: "mention", type: "directory", id: "/project/server/", label: "server/" }]);
+  expect(items.map(item => mentionFormatter.serialize(item))).toEqual(["@server/", "@a.txt", "@C:/Users/me/outside.txt"]);
+  expect(mentionFormatter.parse(mentionFormatter.serialize(items[0]!))).toEqual([{ kind: "mention", type: "directory", id: "server/", label: "server/" }]);
   const nav = explorerNavigation({ cwd: "/project", query: "ser", head: "", commonPrefix: "", loading: false, next: undefined, previous: undefined });
   expect(nav.select(items[0]!, "@ser", 4)).toBeNull(); // Enter/click belongs to the directive and inserts the folder.
   expect(nav.select(items[1]!, "@a", 2)).toBeNull();
@@ -59,16 +63,24 @@ it("separates all item kinds and arbitrary sentinel-like identities from UI keys
   expect(ids.every(id => !/\s/u.test(id))).toBe(true);
   expect(ids).toContain(explorerPageItem("next").id);
 });
-it.each(["a]b.md", "a\nb.md", ":file[a].md", "a".repeat(1025)])("never shortens a plain-path fallback into a different file chip: %j", name => {
+it.each(["a]b.md", "a]b", "a\nb.md", ":file[a].md", "my folder.md", 'quote"name.md', "quote'name.md", "control\u0001.md"])("quotes awkward paths readably and parses the exact file back: %j", name => {
   const path = "/project/" + name;
   const item = explorerItems([{ name, path, kind: "file", project: false }], "/project")[0]!;
   const serialized = mentionFormatter.serialize(item);
-  const parsed = mentionFormatter.parse(serialized);
-  if (name.includes("]") || name.includes("\n") || name.length > 1024) {
-    expect(serialized).toBe(quotedMentionPath(path));
-    expect(parsed).toEqual([{ kind: "text", text: serialized }]);
-    expect(JSON.parse(serialized)).toBe(path);
-  } else expect(parsed).toEqual([{ kind: "mention", type: "file", id: path, label: name }]);
+  expect(serialized).toBe(quotedMentionPath(name));
+  expect(serialized.startsWith('@"')).toBe(true);
+  expect(JSON.parse(serialized.slice(1))).toBe(name);
+  expect(mentionFormatter.parse(serialized)).toEqual([{ kind: "mention", type: "file", id: name, label: name }]);
+});
+it("keeps ordinary at-sign prose as text while parsing path-shaped tokens and legacy directives", () => {
+  expect(mentionFormatter.parse("Ask @sam or email sam@example.com")).toEqual([{ kind: "text", text: "Ask @sam or email sam@example.com" }]);
+  expect(mentionFormatter.parse("Read @server/index.ts and @server/")).toEqual([
+    { kind: "text", text: "Read " },
+    { kind: "mention", type: "file", id: "server/index.ts", label: "server/index.ts" },
+    { kind: "text", text: " and " },
+    { kind: "mention", type: "directory", id: "server/", label: "server/" },
+  ]);
+  expect(mentionFormatter.parse(":file[old.ts]{name=/project/old.ts}")).toEqual([{ kind: "mention", type: "file", id: "/project/old.ts", label: "old.ts" }]);
 });
 it("Tab completes the host-wide prefix, not the selected row", () => {
   const items = explorerItems([{ name: "node-one", path: "/project/node-one", project: false, kind: "directory" }], "/project");

@@ -69,7 +69,7 @@ it("opens an outside Markdown link in the viewer and labels its absolute host pa
   expect(document.querySelector('[role="dialog"]')?.textContent).toContain("/outside/guide.md");
   expect(document.querySelector('[role="dialog"] h1')?.textContent).toBe("The guide");
 });
-it.each(["/outside/guide.md", "/project/link.md"])("opens an explorer-created directive for %s through the existing safe viewer", async path => {
+it.each(["/outside/guide.md", "/project/link.md"])("opens an explorer-created readable mention for %s through the existing safe viewer", async path => {
   const item = explorerItems([{ name: "guide.md", path, kind: "file", project: false }], "/project")[0]!;
   const text = mentionFormatter.serialize(item);
   transport.request.mockResolvedValue({ ...file, path: "/outside/guide.md" });
@@ -83,12 +83,22 @@ it.each(["/outside/guide.md", "/project/link.md"])("opens an explorer-created di
   expect(document.querySelector('[role="dialog"] h1')?.textContent).toBe("The guide");
   expect(openSourceFile).not.toHaveBeenCalled();
 });
-it.each(['a]b.md', 'a\nb.md', ':file[a].md'])('never renders a shorter preview identity for an awkward explorer name: %j', async name => {
+it("renders new readable paths and saved legacy directives, but not arbitrary at-sign prose", async () => {
+  await act(async () => root.render(<Fixture text="Read @server/index.ts" directive />));
+  expect(container.querySelector('[data-slot="file-chip"]')?.textContent).toBe("server/index.ts");
+  await act(async () => root.render(<Fixture text=":file[old.ts]{name=/project/old.ts}" directive />));
+  expect(container.querySelector('[data-slot="file-chip"]')?.textContent).toBe("old.ts");
+  await act(async () => root.render(<Fixture text="Ask @sam or email sam@example.com" directive />));
+  expect(container.querySelector('[data-slot="file-chip"]')).toBeNull();
+  expect(container.querySelector('[data-slot="directive-text-chip"]')).toBeNull();
+});
+it.each(['a]b.md', 'a\nb.md', ':file[a].md', 'my folder.md', 'quote"name.md'])('renders the exact quoted explorer path for an awkward name: %j', async name => {
   const item = explorerItems([{ name, path: '/project/' + name, kind: 'file', project: false }], '/project')[0]!;
   const text = mentionFormatter.serialize(item);
   await act(async () => root.render(<Fixture text={text} directive />));
-  expect(container.querySelector('[data-slot="file-chip"]')).toBeNull();
-  expect(JSON.parse(container.textContent ?? '')).toBe('/project/' + name);
+  expect(container.querySelector('[data-slot="file-chip"]')?.textContent).toBe(name);
+  expect(text.startsWith('@"')).toBe(true);
+  expect(JSON.parse(text.slice(1))).toBe(name);
   expect(transport.request).not.toHaveBeenCalled();
 });
 it("retains Open in editor as a second explicit action", async () => {
