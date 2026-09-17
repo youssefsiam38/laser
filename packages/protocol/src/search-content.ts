@@ -1,4 +1,5 @@
 import { diffViewForTool } from "./tool-diff.js";
+import { withoutToolLabel } from "./tool-label.js";
 
 const record = (v: unknown): Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : {};
 
@@ -284,7 +285,9 @@ export const TOOL_SEARCH_PROJECTIONS: Readonly<Record<string, ToolSearchProjecti
 };
 
 export function toolSearchContent(tool: SearchableTool): string[] {
-  return projectionFor(tool)(tool);
+  // The activity label is not an argument (D-277): it is shown on the row, not searched as content.
+  const searched = { ...tool, args: withoutToolLabel(tool.args) };
+  return projectionFor(searched)(searched);
 }
 
 function projectionFor(tool: SearchableTool): ToolSearchProjection {

@@ -703,7 +703,11 @@ function readBuiltinInstructions(value: unknown): BuiltinInstructionOverrides {
   const record = value && typeof value === "object" ? (value as Partial<Record<BuiltinAgentName, unknown>>) : {};
   const read = (name: BuiltinAgentName): string | null => {
     const instructions = record[name];
-    return typeof instructions === "string" && instructions.trim().length > 0 && instructions.length <= AGENT_INSTRUCTIONS_MAX ? instructions : null;
+    if (typeof instructions !== "string" || instructions.trim().length === 0 || instructions.length > AGENT_INSTRUCTIONS_MAX) return null;
+    // An override written for a field this version no longer renders (Namer's
+    // activity-label fields, D-277) follows the shipped prompt again rather
+    // than failing every render.
+    return instructionTemplateIssue(instructions, name) === null ? instructions : null;
   };
   return { beam: read("beam"), chat: read("chat"), namer: read("namer") };
 }

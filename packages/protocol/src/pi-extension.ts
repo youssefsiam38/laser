@@ -170,8 +170,6 @@ export type PiExtensionMessage =
   /** The request happened and is recorded; its body was not kept, and why. */
   | ({ type: "lasercode/provider/request/omitted" } & ProviderCaptureMeta & { reason: ProviderCaptureOmission })
   | { type: "lasercode/account-usage/state"; state: AccountUsageState }
-  /** Namer's early label for a tool call still running (`lasercode/namer/label`). */
-  | { type: "lasercode/namer/label"; toolCallId: string; label: string }
   | { type: "lasercode/goal/state"; goal: SessionGoal | null }
   /** The `mcp` module: the engine's sanitized per-session server status (docs/mcp.md). */
   | { type: "lasercode/mcp/status"; snapshot: McpRuntimeSnapshot }

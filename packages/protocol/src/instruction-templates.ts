@@ -39,10 +39,7 @@ export const INSTRUCTION_TEMPLATE_FIELDS: readonly InstructionTemplateField[] = 
   { key: "preferencesFile", label: "Preferences file", description: `${product}'s saved device preferences.`, targets: ["beam"], placement: "inline" },
   { key: "projectsFile", label: "Projects file", description: `${product}'s saved project catalog.`, targets: ["beam"], placement: "inline" },
   { key: "logsFile", label: "Logs database", description: `${product}'s local diagnostics database.`, targets: ["beam"], placement: "inline" },
-  { key: "namingTask", label: "Naming task", description: "Whether Namer is creating a session title or an activity label.", targets: ["namer"], placement: "inline" },
-  { key: "sourceText", label: "Source text", description: "The message or action Namer is naming right now.", targets: ["namer"], placement: "block" },
-  { key: "toolName", label: "Tool name", description: "The tool being labelled; blank for a session title.", targets: ["namer"], placement: "inline" },
-  { key: "toolArguments", label: "Tool arguments", description: "The action details being labelled; blank for a session title.", targets: ["namer"], placement: "block" },
+  { key: "sourceText", label: "Source text", description: "The first message of the session Namer is naming.", targets: ["namer"], placement: "block" },
 ] as const;
 
 export function instructionTemplateFields(target: InstructionTemplateTarget): readonly InstructionTemplateField[] {

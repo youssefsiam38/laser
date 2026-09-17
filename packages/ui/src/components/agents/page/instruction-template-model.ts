@@ -65,14 +65,8 @@ function runtimeReason(key: string): string {
     case "projectsFile":
     case "logsFile":
       return "The exact local path comes from the running app’s worker configuration.";
-    case "namingTask":
-      return "A value exists only while Namer is handling a specific title or activity-label request.";
     case "sourceText":
-      return "A value exists only when Namer receives the message or action it must name.";
-    case "toolName":
-      return "A value exists only for an activity-label request; it is empty for a session title.";
-    case "toolArguments":
-      return "A value exists only for an activity-label request; it is empty for a session title.";
+      return "A value exists only when Namer receives the first message of the session it must name.";
     default:
       return "This value is resolved when the agent runs.";
   }
