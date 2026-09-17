@@ -34,7 +34,7 @@ import type {
 } from "@lasercode/protocol";
 
 import { activePathIds } from "./components/thread/entries.js";
-import { appendLive, BODY_EXCERPT_MAX_BYTES, excerptHead, excerptLiveTail, headBytes, LIVE_TAIL_MAX_BYTES, type BodyRef } from "./runtime/body-excerpt.js";
+import { appendLive, BODY_EXCERPT_MAX_BYTES, excerptHead, excerptLiveTail, headIndex, LIVE_TAIL_MAX_BYTES, type BodyRef } from "./runtime/body-excerpt.js";
 import { retainEntries, stubOfElided, retainedRows, type EntryStub } from "./runtime/retained-entries.js";
 import { boundedBodyText, sameBodyComponent, utf8ByteLength, type BodyComponent } from "@lasercode/protocol";
 import { blockBytes, entryBytes, imageMeasure, UNKNOWN_IMAGE_DECODED_BYTES } from "./runtime/view-measure.js";
@@ -1687,20 +1687,23 @@ function toolResultBody(result: unknown, source: { entryId?: string | undefined;
   // A result with no text at all (an image, a bare record) has no output to
   // read; its record is the only whole there is.
   if (totalBytes === 0) return { value: bounded.value, ref: { ...bounded.ref, ...(source.entryId === undefined ? { live: true as const } : {}) } };
+  // The held excerpt is always the head of the output itself, whatever
+  // details ride beside it: a record's JSON projection is nothing a tool row
+  // can show, so a large result with details used to show no output at all.
   let excerptBytes = 0;
-  if (typeof canonical === "string") {
-    // The held excerpt is the head of the output itself.
-    for (const part of parts) {
-      const room = BODY_EXCERPT_MAX_BYTES - excerptBytes;
-      if (room <= 0) break;
-      const size = utf8ByteLength(part);
-      if (size <= room) { excerptBytes += size; continue; }
-      excerptBytes += headBytes(part, room);
-      break;
-    }
+  let head = "";
+  for (const part of parts) {
+    const room = BODY_EXCERPT_MAX_BYTES - excerptBytes;
+    if (room <= 0) break;
+    const size = utf8ByteLength(part);
+    if (size <= room) { excerptBytes += size; head += part; continue; }
+    const cut = headIndex(part, room);
+    excerptBytes += cut.bytes;
+    head += part.slice(0, cut.index);
+    break;
   }
   return {
-    value: bounded.value,
+    value: head,
     ref: {
       ...(source.entryId !== undefined ? { entryId: source.entryId } : {}),
       component: { kind: "tool_output" },

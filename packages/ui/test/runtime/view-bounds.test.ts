@@ -361,6 +361,13 @@ describe("A2b · a settled body gains the identity its authority published", () 
       // Not written yet: it points at the output, says it is live, and names no entry.
       expect(live).toMatchObject({ component: { kind: "tool_output" }, totalBytes: bytesIn(OUTPUT), live: true });
       expect(live?.entryId).toBeUndefined();
+      // The row holds the head of the output itself, never the record's JSON,
+      // whatever details ride beside it, so the tool row can show its first lines.
+      const heldLive = (state.open[path]!.blocks.find(block => block.kind === "tool") as Extract<Block, { kind: "tool" }>).result;
+      expect(typeof heldLive).toBe("string");
+      expect(OUTPUT.startsWith(heldLive as string)).toBe(true);
+      expect(bytesIn(heldLive as string)).toBe(live?.excerpt.bytes);
+      expect((live?.excerpt.bytes ?? 0)).toBeGreaterThan(0);
 
       // The engine writes the entry the way it does (the message carries the
       // result's own content and details) and the worker names its bodies.
@@ -374,6 +381,8 @@ describe("A2b · a settled body gains the identity its authority published", () 
       expect(settled?.live).toBeUndefined();
       expect(isReadable(settled)).toBe(true);
       expect(omittedBytes(settled)).toBeGreaterThan(0);
+      expect(OUTPUT.startsWith(tool.result as string)).toBe(true);
+      expect(bytesIn(tool.result as string)).toBe(settled?.excerpt.bytes);
       expect(bytesOf(state)).toBeLessThanOrEqual(VIEW_CACHE_LIMITS.viewBytes);
     });
   }
@@ -385,6 +394,8 @@ describe("A2b · a settled body gains the identity its authority published", () 
     // Held (retained): the reference built from the record itself.
     const held = blocksFromEntries([call, stored], "r1").find(block => block.kind === "tool") as Extract<Block, { kind: "tool" }>;
     expect(held.bodies?.result).toMatchObject({ entryId: "r1", component: { kind: "tool_output" }, totalBytes: bytesIn(OUTPUT) });
+    expect(OUTPUT.startsWith(held.result as string)).toBe(true);
+    expect(bytesIn(held.result as string)).toBe(held.bodies?.result?.excerpt.bytes);
     // Pointed at (a stub): the authority's page named the output.
     const stub = { id: "r1", parentId: "a1", type: "message", role: "toolResult", toolCallId: "c1",
       bodies: [{ component: { kind: "tool_result" as const }, totalBytes: 999_999, contentDigest: "x" }, { component: { kind: "tool_output" as const }, totalBytes: bytesIn(OUTPUT), contentDigest: sha(OUTPUT) }] };

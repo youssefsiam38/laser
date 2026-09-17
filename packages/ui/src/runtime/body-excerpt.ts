@@ -87,7 +87,7 @@ export interface Excerpt {
 }
 
 /** Cut on a character boundary, never inside one; no encode, no allocation. */
-function headIndex(text: string, maxBytes: number): { index: number; bytes: number } {
+export function headIndex(text: string, maxBytes: number): { index: number; bytes: number } {
   let bytes = 0;
   for (let index = 0; index < text.length; ) {
     const code = text.charCodeAt(index);
