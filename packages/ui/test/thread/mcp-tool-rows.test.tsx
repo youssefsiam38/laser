@@ -304,7 +304,7 @@ describe("a direct MCP tool row", () => {
     const row = container.querySelector<HTMLElement>('[data-slot="tool-call"]')!;
 
     expect(row.getAttribute("data-state-row")).toBe("running");
-    expect(trigger.getAttribute("aria-label")).toBe("Capturing current page");
+    expect(trigger.getAttribute("aria-label")).toContain("Capturing current page. Playwright browser snapshot · main");
 
     await expand(trigger);
     // While it runs the section says output, not result — and the output is
@@ -316,6 +316,10 @@ describe("a direct MCP tool row", () => {
     expect(args.textContent).not.toContain("Capturing current page");
     expect(args.textContent).not.toContain("label");
     expect(row.getAttribute("data-state-row")).toBe("running");
+
+    await act(async () => root.render(<Fixture {...props} status={{ type: "complete" }} result={NAVIGATE_RESULT} artifact={undefined} />));
+    expect(trigger.querySelector('[data-slot="tool-fallback-trigger-label"]')?.textContent).toBe("Capturing current page");
+    expect(trigger.querySelector('[data-slot="tool-fallback-trigger-secondary"]')?.textContent).toContain("Playwrightbrowser navigate · main");
   });
 
   it("draws an audio block as a player and a resource block as a card", async () => {

@@ -258,7 +258,7 @@ describe("rendering", () => {
     expect(where()).toBeNull();
   });
 
-  it("shows a running tool's own label in its row and aggregate, including partial output, then keeps the finished summary", async () => {
+  it("keeps a tool's own label as its primary title after completion and its command as secondary content", async () => {
     const running = {
       toolCallId: "bash-1",
       toolName: "bash",
@@ -272,8 +272,9 @@ describe("rendering", () => {
     };
     await mount(<ToolRow {...running} type="tool-call" />);
     const trigger = () => container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
-    expect(trigger().textContent).toContain("Checking the test suite");
-    expect(trigger().getAttribute("aria-label")).toBe("Checking the test suite");
+    expect(trigger().querySelector('[data-slot="thinking-indicator-label"]')?.textContent).toBe("Checking the test suite");
+    expect(trigger().querySelector('[data-slot="tool-fallback-trigger-secondary"]')?.textContent).toContain("Runpnpm test");
+    expect(trigger().getAttribute("aria-label")).toContain("Checking the test suite. Run pnpm test");
 
     // A UI-only partial result is not terminal: a resultless streaming call
     // keeps its live label rather than dropping back to neutral copy.
@@ -281,30 +282,99 @@ describe("rendering", () => {
     expect(trigger().textContent).toContain("Checking the test suite");
 
     await mount(<ToolRow {...running} type="tool-call" status={{ type: "complete", reason: "stop" }} result="ok" />);
-    expect(trigger().textContent).not.toContain("Checking the test suite");
-    expect(trigger().textContent).toContain("Run");
-    expect(trigger().textContent).toContain("pnpm test");
+    expect(trigger().querySelector('[data-slot="tool-fallback-trigger-label"]')?.textContent).toBe("Checking the test suite");
+    expect(trigger().querySelector('[data-slot="tool-fallback-trigger-secondary"]')?.textContent).toContain("Runpnpm test");
+    expect(container.querySelectorAll('[data-search-content]')).toHaveLength(1);
+    expect(partSearchContent({ type: "tool-call", toolName: "bash", args: running.args, result: "ok" })).toEqual([
+      "Checking the test suite",
+      "pnpm test",
+      "ok",
+    ]);
+    await act(async () => trigger().click());
+    expect(container.querySelector('[data-slot="terminal-block"] [data-search-content]')?.textContent).toContain("pnpm test");
+  });
 
+  it("keeps the label primary while a tool awaits a decision or finishes with failure", async () => {
+    const base = {
+      type: "tool-call" as const,
+      toolCallId: "bash-lifecycle",
+      toolName: "bash",
+      args: { command: "pnpm test", activity_label: "Checking failure paths" },
+      argsText: '{"command":"pnpm test","activity_label":"Checking failure paths"}',
+      addResult: vi.fn(),
+      resume: vi.fn(),
+      respondToApproval: vi.fn(async () => {}),
+    };
+    for (const props of [
+      { status: { type: "requires-action" as const, reason: "tool-calls" as const } },
+      { status: { type: "complete" as const }, result: "failed", isError: true },
+    ]) {
+      await mount(<ToolRow {...base} {...props} />);
+      const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
+      expect(trigger.querySelector('[data-slot="tool-fallback-trigger-label"]')?.textContent).toBe("Checking failure paths");
+      expect(trigger.querySelector('[data-slot="tool-fallback-trigger-secondary"]')?.textContent).toContain("Runpnpm test");
+    }
+  });
+
+  it("shows every labelled child after pointer and keyboard expansion, while preserving manual collapse", async () => {
     function Aggregate({ done }: { done: boolean }) {
       const blocks: Block[] = [
-        { kind: "assistant", id: "a", text: "", thinking: "Think", streaming: false },
-        { kind: "tool", id: "bash-1", name: "bash", args: running.args, done, ...(!done ? { partial: "Tests are still running" } : { result: "ok" }) },
+        { kind: "assistant", id: "a", text: "", thinking: "", streaming: false },
+        {
+          kind: "tool",
+          id: "bash-1",
+          name: "bash",
+          args: { command: "grep activity_label packages/ui", activity_label: "Tracing activity labels" },
+          done: true,
+          result: "match",
+        },
+        {
+          kind: "tool",
+          id: "bash-2",
+          name: "bash",
+          args: { command: "pnpm test --filter ui", activity_label: "Checking the test suite" },
+          done,
+          ...(!done ? { partial: "Tests are still running" } : { result: "ok" }),
+        },
       ];
       const projected = projectMessages({ blocks, running: !done, dialogs: [] });
       const runtime = useExternalStoreRuntime({ messages: projected.messages, isRunning: !done, onNew: async () => {} });
       return <AssistantRuntimeProvider runtime={runtime}><ThreadPrimitive.Root><ThreadPrimitive.Messages>{() =>
         <MessagePrimitive.Root><MessagePrimitive.GroupedParts groupBy={() => ["group-activity"]} indicator="empty">{({ part, children }) => {
-          if (part.type === "group-activity") return <ToolGroup part={part} timingKey="agent-label-test">{children}</ToolGroup>;
+          if (part.type === "tool-call") return <ToolRow {...part} />;
+          if (part.type === "group-activity") return <ToolGroup part={part} timingKey="agent-label-group-test">{children}</ToolGroup>;
           return null;
         }}</MessagePrimitive.GroupedParts></MessagePrimitive.Root>
       }</ThreadPrimitive.Messages></ThreadPrimitive.Root></AssistantRuntimeProvider>;
     }
-    await mount(<Aggregate done={false} />);
     const aggregate = () => container.querySelector<HTMLButtonElement>('[data-slot="tool-group-trigger"]')!;
-    expect(aggregate().textContent).toContain("Checking the test suite");
+    const labels = () => [...container.querySelectorAll('[data-slot="tool-fallback-trigger-label"], [data-slot="thinking-indicator-label"]')].map((node) => node.textContent);
+    const pressEnter = async (button: HTMLButtonElement) => {
+      await act(async () => {
+        button.focus();
+        button.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 0 }));
+        button.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
+      });
+    };
+
+    await mount(<Aggregate done={false} />);
+    expect(aggregate().getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelectorAll('[data-slot="tool-fallback-trigger"]')).toHaveLength(0);
+    await act(async () => aggregate().click());
+    expect(labels()).toEqual(expect.arrayContaining(["Tracing activity labels", "Checking the test suite"]));
+    expect(container.querySelector('[data-state-row="running"]')).not.toBeNull();
+    await act(async () => aggregate().click());
+    expect(container.querySelectorAll('[data-slot="tool-fallback-trigger"]')).toHaveLength(0);
+
     await mount(<Aggregate done />);
-    expect(aggregate().textContent).not.toContain("Checking the test suite");
-    expect(aggregate().textContent).toContain("Completed 2 steps");
+    // The person's pointer collapse wins over the now-settled default.
+    expect(aggregate().getAttribute("aria-expanded")).toBe("false");
+    await pressEnter(aggregate());
+    expect(document.activeElement).toBe(aggregate());
+    expect(labels()).toEqual(expect.arrayContaining(["Tracing activity labels", "Checking the test suite"]));
+    expect(container.querySelectorAll('[data-state-row="done"]')).toHaveLength(2);
+    expect(aggregate().textContent).toContain("Ran 2 commands");
   });
 
   it("uses neutral copy without a label, clamps long labels, and honors the exempt tool labels", async () => {
@@ -323,6 +393,10 @@ describe("rendering", () => {
 
     await mount(<ToolRow {...call("bash", { command: "pnpm test" })} />);
     expect(trigger().textContent).toContain("Running pnpm test");
+    expect(trigger().querySelector('[data-slot="tool-fallback-trigger-copy"]')).toBeNull();
+    await mount(<ToolRow {...call("bash", { command: "pnpm test" })} status={{ type: "complete" }} result="ok" />);
+    expect(trigger().textContent).toContain("Runpnpm test");
+    expect(trigger().querySelector('[data-slot="tool-fallback-trigger-copy"]')).toBeNull();
 
     await mount(<ToolRow {...call("bash", { command: "pnpm test", activity_label: "Reading the very long build configuration file" })} />);
     expect(trigger().textContent).toContain("Reading the very long…");
@@ -360,7 +434,9 @@ describe("rendering", () => {
     expect(disclosure.textContent).toContain("semantic server value");
     expect(disclosure.textContent).toContain("release");
     expect(disclosure.textContent).not.toContain("Calling MCP safely");
-    expect(partSearchContent({ type: "tool-call", toolName: "fixture_mcp_tool", args }, { fixture_mcp_tool: "activity_label_2" })).toEqual(expect.arrayContaining(["semantic server value", "release"]));
+    const searched = partSearchContent({ type: "tool-call", toolName: "fixture_mcp_tool", args }, { fixture_mcp_tool: "activity_label_2" });
+    expect(searched).toEqual(expect.arrayContaining(["Calling MCP safely", "semantic server value", "release"]));
+    expect(searched.filter((value) => value === "Calling MCP safely")).toHaveLength(1);
   });
 
   it("renders retained argsText when oversized parsed arguments are projected to an empty object", async () => {
