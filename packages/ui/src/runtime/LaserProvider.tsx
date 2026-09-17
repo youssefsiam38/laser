@@ -201,8 +201,6 @@ export interface LaserActions {
   expandCatalog(): () => void;
   refreshEntries(options?: { tail?: boolean }): Promise<void>;
   loadEarlierEntries(): Promise<boolean>;
-  /** Replace what a trim released with the conversation's recent history. */
-  reloadRecentHistory(): Promise<boolean>;
   loadAllEntries(): Promise<boolean>;
   /** Refresh cross-app allowance for the session's account provider. */
   refreshAccountUsage(): Promise<void>;
@@ -1174,8 +1172,12 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
    * asking for it. Losing focus and ordinary scrolling do nothing.
    */
   const currentPath = mainPath(state.destination);
-  const trimmedStamp = currentPath ? state.open[currentPath]?.trimmed?.at : undefined;
-  const deferredStamp = currentPath && state.open[currentPath]?.trimmed?.deferred ? trimmedStamp : undefined;
+  const currentView = currentPath ? state.open[currentPath] : undefined;
+  const trimmedStamp = currentView?.trimmed?.at;
+  const deferredStamp = currentView?.trimmed?.deferred ? trimmedStamp : undefined;
+  const authoritySeq = currentView?.lastSeq;
+  const authorityLeaf = currentView?.leafId;
+  const authorityRevision = currentView?.validated?.revision;
   const firstRead = useRef(new Map<string, string>());
   /** Called by an action once the engine has accepted it, never before. */
   const reconcileAfterAction = useRef<(path: string) => void>(() => {});
@@ -1190,14 +1192,15 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     firstRead.current.set(currentPath, trimmedStamp);
     void reconcileNow(currentPath);
   }, [currentPath, reconcileNow, trimmedStamp]);
-  // Another attempt at a safe moment: the live edge, or coming back here.
+  // Another attempt after authority moves while this surface is at the live
+  // edge, or when the person newly reaches that edge.
   useEffect(() => {
     if (!currentPath || deferredStamp === undefined) return;
     if (atLiveEdge(currentPath)) { void reconcileNow(currentPath); return; }
     return onStanding(currentPath, () => {
       if (atLiveEdge(currentPath)) void reconcileNow(currentPath);
     });
-  }, [currentPath, deferredStamp, reconcileNow]);
+  }, [authorityLeaf, authorityRevision, authoritySeq, currentPath, deferredStamp, reconcileNow]);
   // Coming back to this conversation is the other safe moment.
   const previousPath = useRef<string | undefined>(undefined);
   useEffect(() => {
@@ -1691,16 +1694,6 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         const path = requireCurrent();
         const epoch = openEpochs.current.get(path);
         return history.all(path, () => !moving.current.has(path) && openEpochs.current.get(path) === epoch);
-      }).then(Boolean),
-      /**
-       * RP-5b §7: make another bounded attempt to replace what a trim released.
-       * Reconciliation has no retry cap and skips rebuilding an unchanged tail.
-       */
-      reloadRecentHistory: () => guard(async () => {
-        const path = requireCurrent();
-        const epoch = openEpochs.current.get(path);
-        await history.reconcile(path, () => !moving.current.has(path) && openEpochs.current.get(path) === epoch);
-        return true;
       }).then(Boolean),
       loadEarlierEntries: () => guard(async () => {
         const path = requireCurrent();

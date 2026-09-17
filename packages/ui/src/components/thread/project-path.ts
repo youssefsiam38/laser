@@ -8,7 +8,7 @@ const DRIVE_RELATIVE = /^[a-z]:(?!\/)/iu;
  * Split a person's path spelling without resolving it. Filesystem semantics,
  * home expansion and the final canonical path belong to the host.
  */
-export function resolveProjectPath(text: string, _cwd: string): ProjectPath {
+export function resolveProjectPath(text: string): ProjectPath {
   let query = (text.startsWith("@") ? text.slice(1) : text).replaceAll("\\", "/");
   if (/\s$/u.test(query) || /[\n\r\t\0]/u.test(query)) return { ok: false, error: "Finish the path before adding a space." };
   if (DRIVE_RELATIVE.test(query)) return { ok: false, error: "Use an absolute drive path, such as C:/." };
@@ -39,7 +39,7 @@ export function replaceProjectQuery(text: string, caret: number, query: string) 
 }
 
 /** The parent spelling for Backspace after a separator, preserving its anchor. */
-export function parentProjectQuery(query: string, _cwd = "/"): string | null {
+export function parentProjectQuery(query: string): string | null {
   query = query.replaceAll("\\", "/");
   if (!query.endsWith("/")) return null;
   if (query === "/" || /^[a-z]:\/$/iu.test(query) || /^\/\/[^/]+\/[^/]+\/$/u.test(query) || query === "~/" || /^%USERPROFILE%\/$/iu.test(query)) return null;

@@ -42,6 +42,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, s
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, join, resolve, sep } from "node:path";
 import { ENV, ErrorCodes, PRODUCT_NAME, ProtocolError, type ClientMethod, type ClientRequests, type DirectoryEntry, type DirectoryListing, type PackageCatalogEntry, type PackageEntry, type PackageRecord, type PackageRuntimeInfo, type PackageScope, type PackageUpdateInfo, type SetupState } from "@lasercode/protocol";
+import { expandHomePath } from "./home-path.js";
 
 // ---------------------------------------------------------------------------
 // npm sources
@@ -1214,7 +1215,7 @@ const PROJECT_MARKERS = [".git", ".pi", "package.json", "pyproject.toml", "Cargo
  * read.
  */
 export function browseDirectories(path?: string, home: string = homedir()): DirectoryListing {
-  const target = resolve(path && path.trim() !== "" ? expandHome(path.trim(), home) : home);
+  const target = resolve(path && path.trim() !== "" ? expandHomePath(path.trim(), home).replace(/[\\/]/gu, sep) : home);
   const parent = dirname(target);
   const base: Omit<DirectoryListing, "entries" | "truncated"> = {
     path: target,
@@ -1244,12 +1245,6 @@ export function browseDirectories(path?: string, home: string = homedir()): Dire
   }
   entries.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true }));
   return { ...base, entries: entries.slice(0, BROWSE_LIMIT), truncated: entries.length > BROWSE_LIMIT };
-}
-
-function expandHome(path: string, home: string): string {
-  if (path === "~") return home;
-  if (path.startsWith("~/") || path.startsWith("~\\")) return join(home, path.slice(2));
-  return path;
 }
 
 function describeBrowseFailure(error: unknown, target: string): string {

@@ -305,11 +305,11 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
   /** The stamp a reconciliation is in flight for, per path. */
   const reconciling = new Map<string, string>();
   /**
-   * The last authoritative state a refused reconciliation observed. Re-reading
-   * is always allowed, but the same bounded tail is not projected into blocks
-   * again when revision, generation and leaf are all unchanged.
+   * The loaded authority identity at the last refusal. Automatic retries do
+   * not poll again until sequence, revision or leaf moves; a person's explicit
+   * history request uses `earlier` and is never gated here.
    */
-  const reconciled = new Map<string, { at: string; revision: string; epoch: string; leafId?: string | null | undefined }>();
+  const reconciled = new Map<string, { at: string; lastSeq: number; leafId?: string | null | undefined; revision?: string | undefined }>();
   const generations = new Map<string, number>();
   const fence = (path: string, accepting: () => boolean) => {
     const generation = generations.get(path) ?? 0;
@@ -410,11 +410,11 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     if (!accepting()) return false;
     let view = deps.get(path);
     // A trim releases the producer-owned cursor along with the older rows. The
-    // person's one request first asks the authority for a fresh tail (without
-    // a delta, because a delta cannot mint that cursor), then immediately uses
-    // the returned cursor for the page they asked for.
+    // person's one request first asks from the retained anchor, so rows kept
+    // for focus/actions survive cursor minting. Only an invalid/retired anchor
+    // falls back to the bounded tail in `read`.
     if (!view?.history?.before && view?.trimmed) {
-      await read(path, false, accepting, undefined, "recent", false);
+      await read(path, false, accepting);
       if (!accepting()) return false;
       view = deps.get(path);
     }
@@ -460,20 +460,25 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
    * Replace what a trim released, if the replacement really contains what the
    * surface is standing on (RP-5b §7).
    *
-   * There is no read budget. Every safe attempt may ask the authority again;
-   * an unchanged revision/generation/leaf is ended without rebuilding the
-   * transcript, and a refused page is retained nowhere.
+   * There is no read budget. Safe attempts ask again only after the loaded
+   * authority identity moves; viewport/focus publication cannot poll the host.
+   * A refused page is retained nowhere.
    */
   const reconcile = async (path: string, accepting: () => boolean = () => true): Promise<void> => {
     // Only the conversation on screen. One that is not rehydrates when a
     // person comes back to it, through the ordinary re-entry read.
     if (!deps.isCurrent(path)) return;
     const eligible = (): string | undefined => {
-      const stamp = deps.get(path)?.trimmed;
-      if (!stamp) return undefined;
+      const view = deps.get(path);
+      const stamp = view?.trimmed;
+      if (!stamp) { reconciled.delete(path); return undefined; }
       const previous = reconciled.get(path);
       if (previous && previous.at !== stamp.at) reconciled.delete(path);
       if (reconciling.get(path) === stamp.at) return undefined;
+      // A refused tail cannot become acceptable until the loaded authority
+      // identity moves. Viewport publication is not such a change.
+      if (previous?.at === stamp.at && previous.lastSeq === view.lastSeq
+        && previous.leafId === view.leafId && previous.revision === view.validated?.revision) return undefined;
       return stamp.at;
     };
     if (eligible() === undefined) return;
@@ -501,15 +506,10 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
         deps.dispatch({ type: "views/reconcileFailed", path, at, token });
         return;
       }
-      const previous = reconciled.get(path);
-      if (previous?.at === at && previous.revision === result.window.revision
-        && previous.epoch === result.window.epoch && previous.leafId === result.leafId) {
-        deps.dispatch({ type: "historyEnd", path, token });
-        return;
-      }
       deps.dispatch({ type: "views/reconcile", path, at, token, entries: result.entries, leafId: result.leafId, window: result.window });
-      if (deps.get(path)?.trimmed?.at === at) {
-        reconciled.set(path, { at, revision: result.window.revision, epoch: result.window.epoch, leafId: result.leafId });
+      const refused = deps.get(path);
+      if (refused?.trimmed?.at === at) {
+        reconciled.set(path, { at, lastSeq: refused.lastSeq, leafId: refused.leafId, revision: refused.validated?.revision });
       } else {
         reconciled.delete(path);
       }

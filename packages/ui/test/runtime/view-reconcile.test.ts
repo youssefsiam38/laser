@@ -71,6 +71,20 @@ describe("trimmed-history copy", () => {
 });
 
 describe("what a production trim records", () => {
+  it("publishes standing rows only when their canonical identities change", async () => {
+    const { onStanding, resetAnchoredMessages, setStandingRows } = await import("../../src/runtime/anchored-messages.js");
+    resetAnchoredMessages();
+    const changed = vi.fn();
+    const stop = onStanding(PATH, changed);
+    setStandingRows(PATH, { anchor: "entry:u1", focused: "entry:u2", targets: ["entry:u3", "entry:u3"] });
+    setStandingRows(PATH, { anchor: "entry:u1", focused: "entry:u2", targets: ["entry:u3"] });
+    expect(changed).toHaveBeenCalledTimes(1);
+    setStandingRows(PATH, { anchor: "entry:u2", focused: "entry:u2", targets: ["entry:u3"] });
+    expect(changed).toHaveBeenCalledTimes(2);
+    stop();
+    resetAnchoredMessages();
+  });
+
   it("puts the rows the transcript is standing on into the stamp, through the cache's own pass", async () => {
     const { setStandingRows, resetAnchoredMessages } = await import("../../src/runtime/anchored-messages.js");
     const { createViewCache, VIEW_CACHE_LIMITS } = await import("../../src/runtime/view-cache.js");
@@ -148,12 +162,14 @@ describe("reconciling a trimmed view", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
-  it("allows five reads on one stamp and projects an unchanged refused tail only once", async () => {
+  it("does not poll an unchanged refusal on viewport publication, then retries once after sequence changes", async () => {
     const state = { current: trimmed("u10") };
     const before = state.current.open[PATH]!;
     const { history, request, dispatch } = loader(state, async () => ({ entries: [entry("u58", "u57", "tail")], leafId: "u59", window: window() }));
-    for (let attempt = 0; attempt < 5; attempt++) await history.reconcile(PATH);
-    expect(request).toHaveBeenCalledTimes(5);
+    await history.reconcile(PATH);
+    request.mockClear();
+    for (let scroll = 0; scroll < 50; scroll++) await history.reconcile(PATH);
+    expect(request).not.toHaveBeenCalled();
     expect(dispatch.mock.calls.flatMap(([action]) => (action as { type: string }).type === "views/reconcile" ? [action] : [])).toHaveLength(1);
     const after = state.current.open[PATH]!;
     expect(after.trimmed?.deferred).toBe(true);
@@ -161,13 +177,11 @@ describe("reconciling a trimmed view", () => {
     expect(after.entries).toBe(before.entries);
     expect(measureView(after).bytes).toBe(measureView(before).bytes);
 
-    // The same stamp remains usable when the authority finally returns a tail
-    // containing the row this surface stands on.
-    const asked = loader(state, async () => ({ entries: [entry("u10", "u9", "kept"), entry("u59", "u10", "tail")], leafId: "u59", window: window({ before: "cursor" }) }));
-    await asked.history.reconcile(PATH);
-    expect(asked.request).toHaveBeenCalledTimes(1);
-    expect(state.current.open[PATH]!.trimmed).toBeUndefined();
-    expect(state.current.open[PATH]!.history?.before).toBe("cursor");
+    state.current = reduce(state.current, { type: "notification", method: "session/update", params: {
+      sessionPath: PATH, epoch: "w1", seq: after.lastSeq + 1, at: "", update: { kind: "agent_start" },
+    } } as never);
+    await history.reconcile(PATH);
+    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it("reads nothing at all for a conversation that is not on screen", async () => {
@@ -211,10 +225,10 @@ describe("reconciling a trimmed view", () => {
       const { history, request } = loader(state, async () => ({ entries: [entry("u58", "u57", "tail")], leafId: "u59", window: window() }));
       for (let attempt = 0; attempt < 5; attempt++) await history.reconcile(PATH);
       reads += request.mock.calls.length;
-      expect(request).toHaveBeenCalledTimes(5);
+      expect(request).toHaveBeenCalledTimes(1);
       expect(measureView(state.current.open[PATH]!).bytes).toBeLessThanOrEqual(32 * 1024 + 4096);
     }
-    expect(reads).toBe(30);
+    expect(reads).toBe(6);
   });
 
   it("keeps a streaming turn, a running tool and an unsent prompt that arrived while it was reading", async () => {

@@ -1246,9 +1246,9 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
       // A retryable provider failure ends one engine attempt, not the run the
       // person started. Keep the session working through its quiet backoff.
       if (u.willRetry) return { ...v, running: true };
-      return { ...v, running: false, blocks: closeStreaming(v.blocks) };
+      return { ...v, running: false, blocks: clearPendingUsers(closeStreaming(v.blocks)) };
     case "agent_settled":
-      return { ...v, running: false, blocks: closeStreaming(v.blocks) };
+      return { ...v, running: false, blocks: clearPendingUsers(closeStreaming(v.blocks)) };
     case "state":
       return { ...v, state: u.state, running: u.state.isStreaming };
     case "message_start": {
@@ -1350,7 +1350,8 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
           // in its authoritative position and remove only that stand-in.
           const duplicate = standIn === -1 ? undefined : v.blocks[standIn];
           if (entryIndex !== -1 && standIn !== entryIndex && duplicate?.kind === "user"
-            && (duplicate.pending === true || (duplicate.optimistic === true && duplicate.text === bounded.text))) {
+            && (duplicate.pending === true || (duplicate.optimistic === true
+              && boundUserContent({ text: duplicate.text, files: duplicate.files }, duplicate.images, {}).text === bounded.text))) {
             blocks = blocks.filter((_candidate, candidateIndex) => candidateIndex !== standIn);
           }
         }
@@ -1495,6 +1496,13 @@ function customBlock(
 function closeStreaming(blocks: Block[]): Block[] {
   const a = lastAssistant(blocks);
   return a ? replaceLast(blocks, { ...a, streaming: false }) : blocks;
+}
+
+/** A cancelled turn never wrote this transient user placeholder. */
+function clearPendingUsers(blocks: Block[]): Block[] {
+  return blocks.some(block => block.kind === "user" && block.pending === true)
+    ? blocks.filter(block => block.kind !== "user" || block.pending !== true)
+    : blocks;
 }
 
 function notice(v: SessionView, level: "info" | "warning" | "error", text: string): SessionView {

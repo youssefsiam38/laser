@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import { setImmediate as yieldHost } from "node:timers/promises";
 import type { ExplorerEntry, DirectoryExplorerOptions, ExplorerListing } from "@lasercode/protocol";
+import { expandHomePath } from "./home-path.js";
 import { isWithinDirectory } from "./paths.js";
 
 const names = new Intl.Collator("en", { sensitivity: "base", numeric: true });
@@ -80,10 +81,15 @@ const nativeSeparators = (path: string): string => path.replace(/[\\/]/gu, sep);
 
 /** Resolve the spellings people paste into the picker; the renderer never guesses host paths. */
 export function resolveExplorerPath(path: string | undefined, cwd: string, home = homedir()): string {
-  let spelling = nativeSeparators(path ?? ".");
-  const homeToken = /^(?:~|%USERPROFILE%)(?=$|[\\/])/iu;
-  if (homeToken.test(path ?? ".")) spelling = nativeSeparators((path ?? ".").replace(homeToken, home));
+  const spelling = nativeSeparators(expandHomePath(path ?? ".", home));
   return resolve(nativeSeparators(cwd), spelling);
+}
+
+/** The project-side browse boundary, without widening a home/root ancestor. */
+export function explorerProjectArea(cwd: string, home: string): string {
+  if (isWithinDirectory(home, cwd)) return cwd;
+  const parent = resolve(cwd, "..");
+  return isWithinDirectory(cwd, home) && !isWithinDirectory(parent, home) ? home : parent;
 }
 
 /** Immediate metadata only: no recursive traversal, file reads, or worker. */
@@ -92,9 +98,9 @@ export async function browseExplorer(path: string | undefined, options: Director
   const home = resolve(nativeSeparators(accountHome));
   const target = resolveExplorerPath(path, cwd, home);
   // The picker has always supported `../`: keep the project's containing
-  // folder available alongside the project itself, without reopening the
-  // former account-wide filesystem browse.
-  const projectArea = resolve(cwd, "..");
+  // folder available alongside the project itself, but never widen a project
+  // at/above home to the account's parent (or root to the whole filesystem).
+  const projectArea = explorerProjectArea(cwd, home);
   const parent = resolve(target, "..");
   const base = { path: displayPath(target), home: displayPath(home), ...(target !== parent ? { parent: displayPath(parent) } : {}) };
   const failure = (error: string, errorKind?: "refusal"): ExplorerListing => ({ ...base, entries: [], commonPrefix: "", truncated: false, error, ...(errorKind ? { errorKind } : {}) });

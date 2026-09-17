@@ -46,6 +46,28 @@ describe("catalog loader", () => {
     await refresh;
     expect(h.state().sessions.map(r => r.id)).toEqual(["0", "1"]);
   });
+  it("settles a stale page that adds no rows even when the host changes its cursor", async () => {
+    const h = harness(); const opening = h.loader.refresh();
+    h.requests[0]!.resolve({ sessions: [row(0)], groups: [{ cwd: "/project", total: 2, cursor: "one", remaining: 1 }] }); await opening;
+    const more = h.loader.more("/project");
+    h.requests[1]!.resolve({ sessions: [row(0)], groups: [{ cwd: "/project", total: 2, cursor: "two", remaining: 1 }] });
+    await expect(more).resolves.toBe(true);
+    expect(h.state().groups?.[0]).toMatchObject({ remaining: 0 });
+    expect(h.state().groups?.[0]?.cursor).toBeUndefined();
+    expect(await h.loader.more("/project")).toBe(true);
+    expect(h.requests).toHaveLength(2);
+  });
+  it("refuses a page whose cursor was replaced while it was in flight", async () => {
+    const h = harness(); const opening = h.loader.refresh();
+    h.requests[0]!.resolve({ sessions: [row(0)], groups: [{ cwd: "/project", total: 3, cursor: "one" }] }); await opening;
+    const more = h.loader.more("/project");
+    // Simulate a catalog owner replacing the result outside this loader.
+    const current = h.state();
+    current.groups = [{ cwd: "/project", total: 3, cursor: "newer" }];
+    h.requests[1]!.resolve({ sessions: [row(1)], groups: [{ cwd: "/project", total: 3, cursor: "two" }] });
+    await expect(more).resolves.toBe(false);
+    expect(h.state().sessions.map(item => item.id)).toEqual(["0"]);
+  });
   it("keeps full-summary reads explicit", async () => {
     const h = harness(); const opening = h.loader.refresh();
     h.requests[0]!.resolve({ sessions: [row(0)] }); await opening;

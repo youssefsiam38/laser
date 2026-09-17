@@ -61,6 +61,9 @@ export function createCatalogLoader(deps: CatalogLoaderDeps) {
       if (!cursor) return true;
       const before = new Set(deps.current().sessions.map(row => row.path));
       const result = await deps.request({ cwd, page: { ...page(), sizes: {}, cursor } });
+      // A caller may replace the catalog while this page is in flight. Apply
+      // only to the exact cursor it extended.
+      if (deps.current().groups?.find(group => group.cwd === cwd)?.cursor !== cursor) return false;
       sizes[cwd] = (sizes[cwd] ?? 7) + 7;
       const current = deps.current();
       const rows = new Map<string, SessionSummary>(current.sessions.map(row => [row.path, row]));
@@ -69,7 +72,7 @@ export function createCatalogLoader(deps: CatalogLoaderDeps) {
       for (const group of result.groups ?? []) {
         // An exhausted/stale cursor must still settle the control. A page that
         // added nothing cannot honestly keep offering the same cursor forever.
-        if (result.sessions.every(row => before.has(row.path)) && group.cursor === cursor) {
+        if (result.sessions.every(row => before.has(row.path))) {
           const { cursor: _cursor, ...exhausted } = group;
           groups.set(group.cwd, { ...exhausted, remaining: 0 });
         } else groups.set(group.cwd, group);

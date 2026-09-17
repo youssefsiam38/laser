@@ -14,10 +14,10 @@ it.each([
   ["@~", "~", "", "~/"], ["@~/code", "~", "code", "~/"],
   ["@%USERPROFILE%", "%USERPROFILE%", "", "%USERPROFILE%/"], ["@%USERPROFILE%\\code", "%USERPROFILE%", "code", "%USERPROFILE%/"],
 ])("splits %s for host resolution", (query, directory, prefix, head) => {
-  expect(resolveProjectPath(query, "/project")).toEqual({ ok: true, directory, prefix, head });
+  expect(resolveProjectPath(query)).toEqual({ ok: true, directory, prefix, head });
 });
 it.each(["@C:relative", "@server/ "])("refuses malformed %s deliberately", (query) => {
-  expect(resolveProjectPath(query, "/project")).toMatchObject({ ok: false, error: expect.any(String) });
+  expect(resolveProjectPath(query)).toMatchObject({ ok: false, error: expect.any(String) });
 });
 it("preserves surrounding text and closes at trailing whitespace", () => {
   expect(matchProjectMention("Read @server/ind then", "@", 16)).toMatchObject({ query: "server/ind" });
@@ -28,9 +28,9 @@ it.each([
   ["a/b/", "a/"], ["server/", ""], ["./server/", "./"], ["../", "../../"],
   ["..\\sibling\\", "../"], ["~/server/", "~/"], ["%USERPROFILE%/server/", "%USERPROFILE%/"],
   ["/sibling/", "/"], ["C:\\code\\server\\", "C:/code/"],
-])("backs up from %s to %s", (query, parent) => expect(parentProjectQuery(query, "/home/project")).toBe(parent));
+])("backs up from %s to %s", (query, parent) => expect(parentProjectQuery(query)).toBe(parent));
 it.each(["/", "C:/", "//server/share/", "~/", "%USERPROFILE%/"])("leaves root deletion to the input at %s", query => {
-  expect(parentProjectQuery(query, "/project")).toBeNull();
+  expect(parentProjectQuery(query)).toBeNull();
   const nav = explorerNavigation({ cwd: "/project", query, head: query, commonPrefix: "", loading: false, next: undefined, previous: undefined });
   expect(nav.key("Backspace", [], undefined, "@" + query, query.length + 1)).toBeNull();
 });

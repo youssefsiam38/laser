@@ -355,8 +355,11 @@ describe("browseDirectories", () => {
     expect(listing).not.toHaveProperty("nextOffset");
     expect(listing.entries.every((entry) => Object.keys(entry).join(",") === "name,path,project")).toBe(true);
   });
-  it("expands ~ and explains a folder it cannot open without a stack trace", () => {
+  it("expands home tokens with either separator and explains a folder it cannot open without a stack trace", () => {
     expect(browseDirectories("~", base).path).toBe(base);
+    expect(browseDirectories("%USERPROFILE%", base).path).toBe(base);
+    expect(browseDirectories("~\\a-repo", base).path).toBe(join(base, "a-repo"));
+    expect(browseDirectories("%USERPROFILE%\\a-repo", base).path).toBe(join(base, "a-repo"));
     const missing = browseDirectories(join(base, "gone"));
     expect(missing.entries).toEqual([]);
     expect(missing.error).toBe('"gone" does not exist any more.');
