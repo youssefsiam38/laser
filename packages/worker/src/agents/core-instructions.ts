@@ -13,14 +13,22 @@ export function coreInstructions(): string {
   return CORE_INSTRUCTIONS;
 }
 
-/** The one prompt-selection rule used by resource loading and final rendering. */
-export function agentPromptTemplate(definition: AgentDefinition, engineCustomPrompt: string): string {
-  const ownTemplate = definition.engineInstructions ? engineCustomPrompt : definition.instructions;
-  if (definition.kind !== "custom" || definition.excludeCoreInstructions) return ownTemplate;
-  const prefixed = `${CORE_INSTRUCTIONS}\n\n`;
-  return ownTemplate.startsWith(prefixed) ? ownTemplate : `${prefixed}${ownTemplate}`;
+/**
+ * The system-prompt template of one agent, in its two parts. `core` is
+ * present only for a custom agent that has not opted out; built-ins never
+ * carry it. `template` is what is rendered, and `core.length` is where the
+ * agent's own text begins inside it — provenance reads the boundary from
+ * this same object, so the two can never disagree.
+ */
+export interface AgentPrompt {
+  core?: string;
+  own: string;
+  template: string;
 }
 
-export function coreInstructionsLength(definition: AgentDefinition): number | undefined {
-  return definition.kind === "custom" && !definition.excludeCoreInstructions ? CORE_INSTRUCTIONS.length : undefined;
+export function agentPrompt(definition: AgentDefinition, engineDefault: string): AgentPrompt {
+  const own = definition.engineInstructions ? engineDefault : definition.instructions;
+  if (definition.kind !== "custom" || definition.excludeCoreInstructions) return { own, template: own };
+  const core = `${CORE_INSTRUCTIONS}\n\n`;
+  return { core, own, template: `${core}${own}` };
 }

@@ -14,7 +14,7 @@ import {
 import { join, resolve } from "node:path";
 import type { DriverAgentOptions } from "../driver.js";
 import { recordInstructionWrite } from "@lasercode/pi-extension";
-import { agentPromptTemplate, coreInstructionsLength } from "./core-instructions.js";
+import { agentPrompt } from "./core-instructions.js";
 import { templateProvenance } from "./template-provenance.js";
 
 interface TemplateExtensionOptions {
@@ -109,7 +109,8 @@ export function createInstructionTemplateExtension(options: TemplateExtensionOpt
     factory: (pi) => {
       pi.on("before_agent_start", (event, context) => {
         const definition = options.agent.definition;
-        const template = agentPromptTemplate(definition, event.systemPromptOptions.customPrompt ?? "");
+        const prompt = agentPrompt(definition, event.systemPromptOptions.customPrompt ?? "");
+        const template = prompt.template;
         const target = targetOf(options.agent);
         const values = instructionTemplateValues(event.systemPromptOptions, context, options);
         const systemPrompt = renderInstructionTemplate(template, target, values);
@@ -121,7 +122,7 @@ export function createInstructionTemplateExtension(options: TemplateExtensionOpt
             systemPrompt,
             definition.name,
             event.systemPromptOptions,
-            coreInstructionsLength(definition),
+            prompt.core?.length,
             definition.path,
           ));
         } catch {

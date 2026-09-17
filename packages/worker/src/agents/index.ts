@@ -44,7 +44,7 @@ export {
   type NamerModelRuntime,
   type NamerServiceOptions,
 } from "./namer.js";
-export { agentPromptTemplate, coreInstructions } from "./core-instructions.js";
+export { agentPrompt, coreInstructions, type AgentPrompt } from "./core-instructions.js";
 export { defaultAgentInstructions, defaultToolSnippets } from "./engine-instructions.js";
 export {
   ENGINE_BUILTIN_TOOLS,
