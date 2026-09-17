@@ -17,6 +17,7 @@ import {
   DEFAULT_AGENT_NAME,
   FOREGROUND_COMMAND_SECONDS_DEFAULT,
   PRODUCT_DISPLAY_NAME,
+  effectiveAgents,
   instructionTemplateToken,
   isBuiltinAgentName,
   type AgentDefinition,
@@ -26,6 +27,18 @@ import {
 } from "@lasercode/protocol";
 
 const EPOCH = "1970-01-01T00:00:00.000Z";
+
+function canonicalProjectCwd(projectCwd: string): string {
+  const resolved = resolve(projectCwd);
+  try {
+    return realpathSync.native(resolved);
+  } catch {
+    // Synthetic workers and snapshots in protocol tests may name paths that
+    // have not been opened. The resolved spelling still compares consistently.
+    return resolved;
+  }
+}
+
 export const FALLBACK_NAMER_INSTRUCTIONS =
   "You name sessions from what the person wants done and label running actions by what they are doing. Keep every name concrete, brief and easy to scan.";
 
@@ -141,14 +154,7 @@ export class DefinitionsCache {
 
   constructor(projectCwd = process.cwd()) {
     this.current = fallbackSnapshot();
-    const resolved = resolve(projectCwd);
-    try {
-      this.projectCwd = realpathSync.native(resolved);
-    } catch {
-      // Synthetic workers in protocol tests may use a path without opening it.
-      // A real worker's project exists before startup.
-      this.projectCwd = resolved;
-    }
+    this.projectCwd = canonicalProjectCwd(projectCwd);
   }
 
   /** Whether a host snapshot has arrived yet. */
@@ -164,24 +170,15 @@ export class DefinitionsCache {
     // The host broadcasts every project's definitions. This worker retains
     // globals and only its own realpath-normalised project scope; a matching
     // project definition replaces the same-named global definition.
-    const selected = new Map<string, AgentDefinition>();
-    for (const agent of snapshot.agents) {
-      if (agent.kind === "builtin" || agent.scope === "global") selected.set(agent.name, agent);
-    }
-    for (const agent of snapshot.agents) {
-      if (agent.kind !== "custom" || agent.scope !== "project" || !agent.projectCwd || isBuiltinAgentName(agent.name)) continue;
-      let projectCwd: string;
-      try {
-        projectCwd = realpathSync.native(resolve(agent.projectCwd));
-      } catch {
-        continue;
-      }
-      if (projectCwd === this.projectCwd) selected.set(agent.name, agent);
-    }
+    const normalized = snapshot.agents.map((agent) => {
+      if (agent.scope !== "project" || !agent.projectCwd) return agent;
+      const projectCwd = canonicalProjectCwd(agent.projectCwd);
+      return projectCwd === agent.projectCwd ? agent : { ...agent, projectCwd };
+    });
+    const agents = effectiveAgents(normalized, this.projectCwd);
 
     // A host that has not seeded a built-in yet still gets the fallback for
     // it, so Beam and Chat never go missing between two host versions.
-    const agents = [...selected.values()];
     const names = new Set(agents.map((agent) => agent.name));
     for (const name of BUILTIN_AGENT_NAMES) {
       if (names.has(name)) continue;

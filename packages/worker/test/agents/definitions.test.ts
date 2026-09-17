@@ -44,7 +44,7 @@ describe("DefinitionsCache", () => {
 
       const base = fallbackSnapshot();
       const global = { ...base.agents[0]!, name: "reviewer", description: "global", scope: "global" as const };
-      const local = { ...global, description: "project", scope: "project" as const, projectCwd: project };
+      const local = { ...global, description: "project", scope: "project" as const, projectCwd: alias };
       const foreign = { ...global, name: "foreign", scope: "project" as const, projectCwd: other };
       const cache = new DefinitionsCache(alias);
       cache.sync({ ...base, agents: [...base.agents, global, foreign, local] });

@@ -77,7 +77,7 @@ export function templateProvenance(
       current = role;
     } else {
       field = match[2] === "start" ? keys[Number(match[1])] : undefined;
-      current = field ? (inCore ? core : sourceFor(field)) : (inCore ? core : role);
+      current = field ? sourceFor(field) : (inCore ? core : role);
     }
     cursor = match.index + match[0].length;
   }

@@ -29,7 +29,13 @@ it("attributes core instructions separately from the file-backed agent template"
   const spans = templateProvenance(template, "agent", values, text, "reviewer", { cwd: "/project" }, core.length, "/state/agents/reviewer.md");
   expect(spans.map(span => text.slice(span.start, span.end)).join("")).toBe(text);
   expect(spans.filter(span => span.source.label === "Core instructions").map(span => text.slice(span.start, span.end)).join(""))
-    .toBe("Core for Product.");
+    .toBe("Core for .");
+  expect(spans.find(span => text.slice(span.start, span.end) === values.productName)?.source).toMatchObject({
+    kind: "variable", origin: "variable", label: "Variable · Product name", fieldKey: "productName", agentName: "reviewer",
+  });
+  expect(spans.find(span => text.slice(span.start, span.end) === values.agentName)?.source).toMatchObject({
+    kind: "variable", origin: "variable", label: "Variable · Agent name", fieldKey: "agentName", agentName: "reviewer",
+  });
   const own = spans.filter(span => span.source.label === "Agent · reviewer");
   expect(own.length).toBeGreaterThan(0);
   expect(own.every(span => span.source.path === "/state/agents/reviewer.md" && !span.source.inline)).toBe(true);
