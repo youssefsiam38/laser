@@ -2368,6 +2368,9 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 | M16-T59 | A reopened conversation starts at its latest message | done | orchestrator-01a09ea5 | v0.6.5 candidate `a9839b3`; CI 34858465171; release 34859087774; 12 assets | see notes; D-271 |
 | M16-T60 | Large outputs read like output | done | claude-2026-09-17-a | `dafff953`, `b38f177c`, `cd1cbe99`, `5364c185`, `b3d13270`; verify 127 s green; browser `/tmp/browser-check/run-jFI462`; released v0.7.3 from `5313e3a5` (release run 35213482499) | see notes; added by D-275 |
 | M16-T61 | The Chat tab never waits | in-progress | orchestrator-2026-09-18 | — | see notes; added by D-278 |
+| M16-T62 | A trimmed conversation always reads back | in-progress | orchestrator-2026-09-18 | — | see notes; added by D-279 |
+| M16-T63 | The @ picker selects folders and understands people's paths | in-progress | orchestrator-2026-09-18 | — | see notes; added by D-279 |
+| M16-T64 | Load more loads, and says how many | in-progress | orchestrator-2026-09-18 | — | see notes; added by D-279 |
 | M16-T50 | Release 0.6.3 | done | orchestrator | v0.6.3 public: candidate `960330f` from source `8abd0bb`; source CI 34813034026; release run 34813529150; 12 assets; checkpoint `verified`; https://github.com/youssefsiam38/laser/releases/tag/v0.6.3 | gates on final bytes: verify, packaged clean-machine, matrices long/huge-repeat/huge-blank/flicker/log-store; review D-247 |
 | M16-T27 | The session the app just created is the session it shows | done | worker catalog-arrival-race | merged `961aeb8` (`9d4488e`); test-only: the assertion ran before the deliberate adoption timer (`LaserProvider.tsx:1376`, `threadList.ts:452`, deferred to let assistant-ui adopt the remote id and avoid the orphan-row crash). Product unchanged; captured failure state in `/tmp/catalog-arrival-race-report.md`; 30 relevant-suite runs and 5 parallel full-runtime runs clean | `packages/ui/test/runtime/catalog-arrival.test.tsx:203` fails intermittently: prompt routing succeeds but `data-current` stays empty; seen independently by the orchestrator and by the MCP worker on unrelated branches |
 | M16-T26 | The first click is not a cold start | done | worker session-readiness | merged `f8b0d34` (`00da6ba`, `e250c1d`); review `/tmp/review-readiness.md` blocked on a crashed-but-attached worker being marked warm → fixed; cold short open 729 → 176 ms, click-time admission 543 → 0.43 ms; host 270, UI 1412 | forensics `docs/session-open-forensics.md`: prestarting only the worker process took a short-session open 744 → 175 ms; engine file open is ~4.5 ms |
@@ -2954,6 +2957,15 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 - 2026-09-17 projects (lane, `a079fc9e`): `state.open` keeps a record for every session a window showed and archiving never removes it; removal and the rail now count only unarchived views the view cache pins (on screen, question, running/queued work, draft).
 - 2026-09-17 loading mark: the sessions row showed the working sweep ("Loading the conversation") and the status line a working dot while a conversation opened, reading as the agent running. The sweep now means a running agent only; loading is the transcript skeleton and neutral status-line words. Tests fail before, pass after.
 - 2026-09-17 released v0.7.2 from `ceb71b30`: candidate CI 35204991035 attempt 1 failed a host timing assertion (`session-index` cold-scan ratio 92.5 < 78.4 ms; fixture has no goal records, same code green twice), attempt 2 green; release run 35205573838, 12 assets. Done.
+
+#### M16-T64 notes
+- 2026-09-18 claimed: UI lane (thread-list + catalog loader), may touch host session list paging for a remaining count.
+
+#### M16-T63 notes
+- 2026-09-18 claimed: UI + host directory-explorer lane.
+
+#### M16-T62 notes
+- 2026-09-18 claimed: UI runtime/history lane; RECONCILE_MAX_READS cap removed in favour of on-demand cursor recovery.
 
 #### M16-T61 notes
 - 2026-09-18 claimed: UI lane in a worktree off main; chat landing + in-memory chat memory + tab unread dots.
@@ -5163,3 +5175,8 @@ Supersedes: none; refines D-271 and RP-11.
 **Decision.** The Chat tab opens on an unstarted composer immediately; the first send creates the chat session and delivers the message, the same path the Code tab's project landing uses. A remembered chat reopens behind a live composer whose send is queued until the runtime is ready — nothing blocks typing or sending. The open chat is remembered in memory for the app run only, never in device storage. Each main tab shows an attention dot when the other tab's current session receives a reply, question or approval while hidden. Adds M16-T61 for 0.9.0.
 **Why.** The person saw "Preparing Chat…" on every visit; waiting for a runtime before allowing a first word is the opposite of the product's bar.
 **Consequences.** `DestinationMemory.chat` is no longer written; the `resolving` chat placeholder copy goes away; the destination controller gains a chat-landing target.
+
+### D-279 · 2026-09-18 · Three 0.9.0 repairs the person named
+**Decision.** Adds M16-T62 (no "not loaded here" dead end: a trimmed view always has a working path to earlier messages, superseding the two-read cap of RP-5b §7 in its user-facing form), M16-T63 (`@` picker selects folders and accepts `~`, relative, absolute and Windows path spellings), M16-T64 ("Load more" never a silent no-op and names the count it will load). All ship in 0.9.0 with D-277/D-278.
+**Why.** Each is a place the person hit a wall the product built.
+**Consequences.** RP-5b's memory bound is kept by re-minting the cursor from the authority, not by refusing reads; the host explorer gains `~` resolution; the session list needs a remaining count from the catalog.
