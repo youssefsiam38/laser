@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-17T10:18:00+03:00 · pressure-publish-window-only · HEAD: e283dee8
-**Current focus:** The M18-T8 release-CI correction is implemented and validated: host pressure publications reach direct local windows only, never tooling or relay clients.
+**Last updated:** 2026-09-17T11:35:00+03:00 · claude-2026-09-17-a · HEAD: 68079c61
+**Current focus:** M19-T4 hotfix: 0.7.0 refused every launch (Electron preflight read `app.asar` as a directory). Fix `78b3760d` with Electron-run test and packaged gate; parallel CI/verify `68079c61`; releasing 0.7.1.
 
 | Milestone | State |
 | --- | --- |
@@ -25,11 +25,11 @@
 | M16 Conversation experience | in-progress |
 | M17 Coding experience | todo |
 | M18 Resource containment | done |
-| M19 Runtime recovery/update activation | done |
+| M19 Runtime recovery/update activation | in-progress |
 | MX Cross-cutting | in-progress |
 
 **Blockers:** none.
-**Next up:** M17 and the open rows in M2/M3/M5/M7/M8/M10/M11/M13/M16/MX.
+**Next up:** M19-T4 release 0.7.1; M17 and the open rows in M2/M3/M5/M7/M8/M10/M11/M13/M16/MX.
 **Recently done:** M18-T8 release-CI correction (host 899 + strict E2E 3×12); M19 audit gaps (`419403dd`); M19-T3 migration recovery (`2b9962db`); M19-T2 generation activation (`d59f74e8`); M18-T15 repeat baseline (`7bfce5e8`).
 
 Ownership and evidence: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`.
