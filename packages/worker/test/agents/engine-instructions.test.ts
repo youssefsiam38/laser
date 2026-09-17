@@ -11,8 +11,9 @@ describe("defaultAgentInstructions", () => {
     expect(text).toContain(instructionTemplateToken("projectInstructions"));
     expect(text).toContain(instructionTemplateToken("availableSkills"));
     expect(text).toContain(instructionTemplateToken("workingDirectory"));
-    expect(text).toContain("Guidelines:");
-    expect(text).toContain(`operating inside ${instructionTemplateToken("productName")}`);
+    expect(text).toContain("expert coding assistant");
+    expect(text).not.toContain(instructionTemplateToken("productName"));
+    expect(text).not.toContain("Operating rules");
     expect(text).not.toMatch(/\bpi\b/i);
     expect(text).not.toContain("documentation");
     expect(text).not.toContain("node_modules");

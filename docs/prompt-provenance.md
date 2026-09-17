@@ -34,9 +34,10 @@ file. Third-party writers use the loaded package base-directory name and path;
 local entry points use their owning directory (or the filename for a standalone
 file under `extensions`), never generic `src` or `extensions` labels.
 
-The worker's instruction-template writer records the actual named agent
-definition (`Agent · <name>`) separately from **Variables** selected in that
-definition (`Variable · Available tools`, `Variable · Tool guidance`, and so on).
+The worker's instruction-template writer records the product-owned prefix as
+**Core instructions**, the actual named agent definition (`Agent · <name>`),
+and **Variables** selected in that definition (`Variable · Available tools`,
+`Variable · Tool guidance`, and so on) as separate contributions.
 A resolved template field is not attributed to app maintainers merely because
 the app supplied its value: the saved definition chose to include it. Project
 file bodies and skill entries within those fields keep their own source
@@ -47,9 +48,8 @@ ranges are accepted. Markers never enter the real prompt. Whitespace controls,
 trimming, empty values and repeated fields are tested. If detailed template
 ranges cannot be recorded, the known agent definition is still named, with an
 explanation that its detailed variable ranges are unavailable, without inventing
-deeper attribution. Agent definitions have no individual source
-file in the current definition contract, so they are inline, with directions to
-the Agents editor rather than a fabricated file link. Pre-request handlers
+deeper attribution. A file-backed agent definition carries its captured Markdown path; the shared
+core remains inline rather than exposing a package-internal pseudo-path. Pre-request handlers
 are observed too, including in-place payload mutations. No-op handlers preserve
 the existing map. Tool-loop or direct overrides which bypass the observed prompt
 construction cannot inherit a previous turn's labels.

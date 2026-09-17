@@ -4,16 +4,33 @@ import { basename } from "node:path";
 import { INSTRUCTION_TEMPLATE_FIELDS, renderInstructionTemplate, type InstructionSource, type InstructionSourceSpan, type InstructionTemplateTarget } from "@lasercode/protocol";
 import { formatSkillsForPrompt, type BuildSystemPromptOptions } from "@earendil-works/pi-coding-agent";
 
-export function templateProvenance(template: string, target: InstructionTemplateTarget, values: Record<string, string>, text: string, name: string, options: BuildSystemPromptOptions): InstructionSourceSpan[] {
-  const role: InstructionSource = { kind: "agent", origin: "agent", label: `Agent · ${name}`, inline: true,
-    agentName: name };
+export function templateProvenance(
+  template: string,
+  target: InstructionTemplateTarget,
+  values: Record<string, string>,
+  text: string,
+  name: string,
+  options: BuildSystemPromptOptions,
+  coreLength?: number,
+  definitionPath?: string,
+): InstructionSourceSpan[] {
+  const role: InstructionSource = {
+    kind: "agent", origin: "agent", label: `Agent · ${name}`, agentName: name,
+    ...(definitionPath ? { path: definitionPath } : { inline: true as const }),
+  };
+  const core: InstructionSource = { kind: "agent", origin: "agent", label: "Core instructions", inline: true };
   const fallback: InstructionSource = { ...role, reason: "template-ranges-unavailable" };
   const marker = `\u0000${randomUUID()}:`;
+  const boundary = `__${randomUUID().replaceAll("-", "_")}_core_boundary__`;
   const keys = Object.keys(values);
   const tagged = Object.fromEntries(keys.map((key, i) => [key, `${marker}${i}:start\u0000${values[key]}${marker}${i}:end\u0000`]));
-  const rendered = renderInstructionTemplate(template, target, tagged);
-  const pattern = new RegExp(`${marker}(\\d+):(start|end)\\u0000`, "g");
-  let current: InstructionSource = role;
+  const diagnosticTemplate = coreLength === undefined
+    ? template
+    : `${template.slice(0, coreLength)}${boundary}${template.slice(coreLength)}`;
+  const rendered = renderInstructionTemplate(diagnosticTemplate, target, tagged);
+  const pattern = new RegExp(`${marker}(\\d+):(start|end)\\u0000|${boundary}`, "g");
+  let inCore = coreLength !== undefined;
+  let current: InstructionSource = inCore ? core : role;
   let field: string | undefined;
   let cursor = 0;
   let plain = "";
@@ -54,8 +71,14 @@ export function templateProvenance(template: string, target: InstructionTemplate
       }
       append(value.slice(at), current);
     } else append(value, current);
-    field = match[2] === "start" ? keys[Number(match[1])] : undefined;
-    current = field ? sourceFor(field) : role;
+    if (match[1] === undefined) {
+      inCore = false;
+      field = undefined;
+      current = role;
+    } else {
+      field = match[2] === "start" ? keys[Number(match[1])] : undefined;
+      current = field ? (inCore ? core : sourceFor(field)) : (inCore ? core : role);
+    }
     cursor = match.index + match[0].length;
   }
   append(rendered.slice(cursor), current);

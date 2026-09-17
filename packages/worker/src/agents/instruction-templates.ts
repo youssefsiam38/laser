@@ -14,6 +14,7 @@ import {
 import { join, resolve } from "node:path";
 import type { DriverAgentOptions } from "../driver.js";
 import { recordInstructionWrite } from "@lasercode/pi-extension";
+import { agentPromptTemplate, coreInstructionsLength } from "./core-instructions.js";
 import { templateProvenance } from "./template-provenance.js";
 
 interface TemplateExtensionOptions {
@@ -89,7 +90,7 @@ export function instructionTemplateValues(
     additionalInstructions: options.appendSystemPrompt?.trim() ?? "",
     availableAgents: availableAgentsBlock(agent),
     sessionHistoryDirectory: join(agentDir, "sessions"),
-    agentDefinitionsFile: join(stateDir, "agents.json"),
+    agentDefinitionsFile: join(stateDir, "agents"),
     agentRunsFile: join(stateDir, "agent-runs.json"),
     preferencesFile: join(stateDir, "prefs.json"),
     projectsFile: join(stateDir, "projects.json"),
@@ -107,14 +108,31 @@ export function createInstructionTemplateExtension(options: TemplateExtensionOpt
     name: `${WIRE_NAMESPACE}/instruction-template`,
     factory: (pi) => {
       pi.on("before_agent_start", (event, context) => {
-        const template = options.agent.definition.engineInstructions ? event.systemPromptOptions.customPrompt ?? "" : options.agent.definition.instructions;
+        const definition = options.agent.definition;
+        const template = agentPromptTemplate(definition, event.systemPromptOptions.customPrompt ?? "");
         const target = targetOf(options.agent);
         const values = instructionTemplateValues(event.systemPromptOptions, context, options);
         const systemPrompt = renderInstructionTemplate(template, target, values);
         try {
-          return recordInstructionWrite({ systemPrompt }, templateProvenance(template, target, values, systemPrompt, options.agent.definition.name, event.systemPromptOptions));
+          return recordInstructionWrite({ systemPrompt }, templateProvenance(
+            template,
+            target,
+            values,
+            systemPrompt,
+            definition.name,
+            event.systemPromptOptions,
+            coreInstructionsLength(definition),
+            definition.path,
+          ));
         } catch {
-          return recordInstructionWrite({ systemPrompt }, { kind: "agent", origin: "agent", inline: true, label: `Agent · ${options.agent.definition.name}`, agentName: options.agent.definition.name, reason: "template-ranges-unavailable" });
+          return recordInstructionWrite({ systemPrompt }, {
+            kind: "agent",
+            origin: "agent",
+            label: `Agent · ${definition.name}`,
+            agentName: definition.name,
+            reason: "template-ranges-unavailable",
+            ...(definition.path ? { path: definition.path } : { inline: true as const }),
+          });
         }
       });
     },

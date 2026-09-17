@@ -21,6 +21,21 @@ it("attributes the actual rendered agent definition, tools, loaded project files
   expect(spans.some(span => span.source.origin === INSTRUCTION_APP_ORIGIN)).toBe(false);
   expect(spans.some(span => span.source.kind === "unrecorded")).toBe(false);
 });
+it("attributes core instructions separately from the file-backed agent template", () => {
+  const core = "Core for {{productName}}.";
+  const template = `${core}\n\nAgent rule for {{agentName}}.`;
+  const values = { productName: "Product", agentName: "reviewer" };
+  const text = renderInstructionTemplate(template, "agent", values);
+  const spans = templateProvenance(template, "agent", values, text, "reviewer", { cwd: "/project" }, core.length, "/state/agents/reviewer.md");
+  expect(spans.map(span => text.slice(span.start, span.end)).join("")).toBe(text);
+  expect(spans.filter(span => span.source.label === "Core instructions").map(span => text.slice(span.start, span.end)).join(""))
+    .toBe("Core for Product.");
+  const own = spans.filter(span => span.source.label === "Agent · reviewer");
+  expect(own.length).toBeGreaterThan(0);
+  expect(own.every(span => span.source.path === "/state/agents/reviewer.md" && !span.source.inline)).toBe(true);
+  expect(Math.min(...own.map(span => span.start))).toBeGreaterThanOrEqual("Core for Product.".length);
+});
+
 it.each(["  {{agentName}}  ", "prefix {{~agentName~}} suffix", "{{agentName}}{{agentName}}", "{{availableTools}}\n{{agentName}}"])("does not change trim, whitespace controls or repeated substitutions: %s", template => {
   const values = { agentName: "reader", availableTools: "" };
   const text = renderInstructionTemplate(template, "agent", values);

@@ -36,7 +36,7 @@ characters. There is no separate agent id, type or profile name.
 | --- | --- | --- |
 | Name | `name` | Editable and unique; built-in names (`beam`, `chat`, `namer`), current names and historical rename aliases are refused |
 | Description | `description` | ≤ 300 chars. Answers "when should another agent start this one?" — it is the compact catalog text |
-| Instructions | `instructions`, `engineInstructions` | Answers "how should this agent work?" The shipped `default` agent starts with `engineInstructions: true`: Laser's own neutral coding prompt, readable through `agents/engine-instructions`; a person may replace it with their own text |
+| Instructions | `instructions`, `engineInstructions` | Answers "how should this agent work?" Every custom agent first gets the shared `packages/worker/src/agents/core-instructions.md` unless `excludeCoreInstructions` is on; built-ins never do. The shipped `default` agent starts with `engineInstructions: true`: Laser's own neutral coding prompt, readable through `agents/engine-instructions`; a person may replace it with their own text |
 | Model | `model` | `{ provider, id }` or `null` to follow the configured default model |
 | Thinking | `thinkingLevel` | `null` follows the default |
 | Supports subagents | `supportsSubagents` | When on, the agent gets `start_agent` and its siblings |

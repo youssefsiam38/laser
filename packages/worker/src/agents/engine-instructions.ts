@@ -35,21 +35,14 @@ export function defaultToolSnippets(cwd: string): Record<string, string> {
 }
 
 /**
- * The prompt a person sees for the shipped default agent. It names only
- * Laser and session facts. The instruction-template extension renders every
- * live field from the session at run time.
+ * The agent-specific prompt a person sees for the shipped default agent.
+ * Shared product identity and operating rules come from core-instructions.md;
+ * the instruction-template extension renders every live field at run time.
  */
 export function defaultAgentInstructions(_cwd: string): string {
-  return `You are an expert coding assistant operating inside ${instructionTemplateToken("productName")}. You help people understand and change software by reading files, running commands, editing code, and writing new files.
+  return `You are an expert coding assistant. You help people understand and change software by reading files, running commands, editing code, and writing new files.
 
 ${instructionTemplateToken("availableTools")}
-
-Guidelines:
-- Follow the person's request and the instructions supplied by their project.
-- Inspect relevant files before changing them.
-- Keep responses concise and make file paths easy to find.
-- Explain failures in plain language and give a concrete next step.
-- Treat credentials and private data as sensitive.
 
 ${instructionTemplateToken("toolGuidelines")}
 ${instructionTemplateToken("availableAgents")}

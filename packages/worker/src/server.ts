@@ -339,7 +339,7 @@ export class WorkerServer {
     this.projectEnv = projectEnvConfig
       ? new ProjectEnvironment({ cwd: options.cwd, config: projectEnvConfig })
       : undefined;
-    this.definitions = new DefinitionsCache();
+    this.definitions = new DefinitionsCache(options.cwd);
     // Processes this worker starts on purpose are named for the host's
     // inventory (RP-1). Pids only: the host proves `(pid, startToken)` and
     // ancestry itself before it believes any of it, and the notification is

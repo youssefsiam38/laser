@@ -34,7 +34,7 @@ export const INSTRUCTION_TEMPLATE_FIELDS: readonly InstructionTemplateField[] = 
   { key: "additionalInstructions", label: "Additional instructions", description: "Any appended system instructions loaded for this session.", targets: ["agent", "beam", "chat"], placement: "block" },
   { key: "availableAgents", label: "Agents it can start", description: "The live child-agent catalog this agent may delegate to.", targets: ["agent"], placement: "block" },
   { key: "sessionHistoryDirectory", label: "Session history folder", description: `Where ${product} keeps session transcripts on this device.`, targets: ["beam"], placement: "inline" },
-  { key: "agentDefinitionsFile", label: "Agent definitions file", description: `${product}'s saved agent definitions and choices.`, targets: ["beam"], placement: "inline" },
+  { key: "agentDefinitionsFile", label: "Agent definitions folder", description: `${product}'s folder of saved agent definitions.`, targets: ["beam"], placement: "inline" },
   { key: "agentRunsFile", label: "Agent runs file", description: `${product}'s durable record of agent work.`, targets: ["beam"], placement: "inline" },
   { key: "preferencesFile", label: "Preferences file", description: `${product}'s saved device preferences.`, targets: ["beam"], placement: "inline" },
   { key: "projectsFile", label: "Projects file", description: `${product}'s saved project catalog.`, targets: ["beam"], placement: "inline" },

@@ -54,6 +54,9 @@ files:
   # enabled. Read a package's `exports`, `files` and engine manifest before
   # excluding a file type from it (AGENTS.md §5a).
   - "!**/node_modules/**/*.{md,markdown,map,flow}"
+  # The worker reads this Markdown template at runtime; it is executable prompt
+  # source, not package documentation.
+  - "**/node_modules/@lasercode/worker/dist/agents/core-instructions.md"
   # MCP skills are executable instructions, not disposable package docs.
   # Its TypeScript, JS bridge, CJS keyring helper, MJS worker and native
   # prebuilds are preserved by the rules above. conformance/, examples/,

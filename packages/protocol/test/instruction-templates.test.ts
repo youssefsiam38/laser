@@ -12,6 +12,10 @@ describe("instruction templates", () => {
     expect(instructionTemplateFields("agent").map((field) => field.key)).toContain("availableTools");
     expect(instructionTemplateFields("agent").map((field) => field.key)).not.toContain("logsFile");
     expect(instructionTemplateFields("beam").map((field) => field.key)).toContain("logsFile");
+    expect(instructionTemplateFields("beam").find((field) => field.key === "agentDefinitionsFile")).toMatchObject({
+      label: "Agent definitions folder",
+      description: expect.stringContaining("folder"),
+    });
     expect(instructionTemplateFields("namer").map((field) => field.key)).toContain("sourceText");
     expect(instructionTemplateToken("workingDirectory")).toBe("{{workingDirectory}}");
   });

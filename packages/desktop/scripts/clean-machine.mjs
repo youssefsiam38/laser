@@ -382,6 +382,14 @@ record(
   "Declare the missing package as a dependency of a workspace package so the packager copies it, then rebuild.",
 );
 
+const coreInstructionsAsset = join(modules, "@lasercode", "worker", "dist", "agents", "core-instructions.md");
+record(
+  "the worker's shared agent instructions are packaged",
+  existsSync(coreInstructionsAsset),
+  existsSync(coreInstructionsAsset) ? coreInstructionsAsset : `missing: ${coreInstructionsAsset}`,
+  "Preserve the worker's executable Markdown prompt asset in electron-builder.yml, then rebuild.",
+);
+
 const legalFiles = ["LICENSE", "LICENSING.md", "COMMERCIAL.md", "TRADEMARKS.md"];
 const missingLegal = legalFiles.filter((name) => !existsSync(join(resources, "legal", name)));
 record(

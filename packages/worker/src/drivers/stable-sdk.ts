@@ -98,6 +98,7 @@ import { createUiBridge, type UiBridge } from "../ui-bridge.js";
 import { GOAL_TOOL_NAMES } from "@lasercode/pi-goal";
 import { isGoalCommand } from "@lasercode/pi-extension";
 import { ENGINE_BUILTIN_TOOLS, ensureWorkspaceSessionCwd, filterSkills, removedWorktreeCwd } from "../agents/session-config.js";
+import { agentPromptTemplate } from "../agents/core-instructions.js";
 import { defaultAgentInstructions } from "../agents/engine-instructions.js";
 import { createInstructionTemplateExtension } from "../agents/instruction-templates.js";
 import { modelUnavailableMessage } from "../agents/harness.js";
@@ -1719,7 +1720,7 @@ function agentResourceOptions(agent: DriverAgentOptions, cwd: string): {
 } {
   const { definition, role } = agent;
   return {
-    systemPromptOverride: () => (definition.engineInstructions ? defaultAgentInstructions(cwd) : definition.instructions),
+    systemPromptOverride: () => agentPromptTemplate(definition, defaultAgentInstructions(cwd)),
     skillsOverride: (base) => ({ ...base, skills: filterSkills(base.skills, { definition, role }) }),
   };
 }

@@ -20,3 +20,4 @@ await build({
   } }],
 });
 await copyFile(join(dirname(require.resolve("pi-web-access/package.json")), "LICENSE"), new URL("../dist/web-search-LICENSE.txt", import.meta.url));
+await copyFile(new URL("../src/agents/core-instructions.md", import.meta.url), new URL("../dist/agents/core-instructions.md", import.meta.url));

@@ -3,6 +3,9 @@
  * sync, the host's snapshot afterwards, missing built-ins re-seeded, listeners.
  */
 import { DEFAULT_AGENT_NAME, PRODUCT_DISPLAY_NAME } from "@lasercode/protocol";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { DefinitionsCache, fallbackSnapshot, isStartable } from "../../src/agents/definitions.js";
 
@@ -27,6 +30,32 @@ describe("DefinitionsCache", () => {
     expect(cache.definition("chat")?.model).toBeNull();
     for (const name of ["beam", "chat", "namer"]) expect(isStartable(cache.definition(name)!)).toBe(false);
     expect(isStartable(fallback)).toBe(true);
+  });
+
+  it("filters project scopes by real path and lets the local project shadow a global definition", () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-definitions-"));
+    try {
+      const project = join(root, "project");
+      const other = join(root, "other");
+      const alias = join(root, "project-alias");
+      mkdirSync(project);
+      mkdirSync(other);
+      symlinkSync(project, alias, "dir");
+
+      const base = fallbackSnapshot();
+      const global = { ...base.agents[0]!, name: "reviewer", description: "global", scope: "global" as const };
+      const local = { ...global, description: "project", scope: "project" as const, projectCwd: project };
+      const foreign = { ...global, name: "foreign", scope: "project" as const, projectCwd: other };
+      const cache = new DefinitionsCache(alias);
+      cache.sync({ ...base, agents: [...base.agents, global, foreign, local] });
+
+      expect(cache.definition("reviewer")).toMatchObject({ description: "project", scope: "project", projectCwd: project });
+      expect(cache.definition("foreign")).toBeUndefined();
+      expect(cache.snapshot().agents.filter(agent => agent.name === "reviewer")).toHaveLength(1);
+      expect(cache.definition("beam")).toMatchObject({ kind: "builtin" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("takes the host's snapshot, re-seeds missing built-ins and notifies listeners", () => {

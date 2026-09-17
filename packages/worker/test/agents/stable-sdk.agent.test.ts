@@ -77,6 +77,7 @@ describe("StableSdkDriver with an agent definition", () => {
     if (message.type !== "lasercode/provider/request") throw new Error("Missing capture");
     expect(message.payload).toEqual(stub.requests[0]);
     const spans = message.context!.instructionSources!.flatMap(map => map.spans);
+    expect(spans.some(span => span.source.label === "Core instructions")).toBe(true);
     expect(spans.some(span => span.source.label === "Agent · coordinator")).toBe(true);
     expect(spans.some(span => span.source.origin === "variable" && span.source.label === "Variable · Available tools")).toBe(true);
     expect(spans.some(span => span.source.path?.startsWith("<"))).toBe(false);
@@ -89,11 +90,28 @@ describe("StableSdkDriver with an agent definition", () => {
     const { driver } = await openAndPrompt(definition);
     expect(driver.state().model).toMatchObject({ provider: "stub", id: "stub-1" });
     const request = stub.requests[0]!;
-    expect(systemTextOf(request).startsWith("You are a careful reader who only inspects.")).toBe(true);
+    expect(systemTextOf(request)).toContain(`You are an agent running inside ${PRODUCT_DISPLAY_NAME}.`);
+    expect(systemTextOf(request).match(/# Core instructions/g)).toHaveLength(1);
+    expect(systemTextOf(request)).toContain("You are a careful reader who only inspects.");
     expect(systemTextOf(request)).not.toContain("expert coding assistant");
     expect(systemTextOf(request)).toContain(`Current working directory: ${join(base, "project")}`);
     // Every agent has every tool (D-144); what it is for is said in its instructions.
     expect(toolNamesOf(request)).toEqual(expect.arrayContaining([...ENGINE_BUILTIN_TOOLS]));
+  }, 60_000);
+
+  it("honours a custom agent's explicit core-instructions opt-out", async () => {
+    const definition: AgentDefinition = {
+      ...fallbackDefaultAgent(),
+      name: "specialist",
+      engineInstructions: false,
+      instructions: "Only the saved specialist instructions.",
+      excludeCoreInstructions: true,
+      model: { provider: "stub", id: "stub-1" },
+    };
+    await openAndPrompt(definition);
+    const system = systemTextOf(stub.requests[0]!);
+    expect(system.startsWith("Only the saved specialist instructions.")).toBe(true);
+    expect(system).not.toContain("# Core instructions");
   }, 60_000);
 
   it("uses the product's default instructions and every tool for the shipped default agent", async () => {
@@ -101,7 +119,9 @@ describe("StableSdkDriver with an agent definition", () => {
     await openAndPrompt(definition);
     const request = stub.requests[0]!;
     const productOwnedPrompt = systemTextOf(request).split("\n\nThe following skills")[0]!;
-    expect(productOwnedPrompt).toContain(`expert coding assistant operating inside ${PRODUCT_DISPLAY_NAME}`);
+    expect(productOwnedPrompt).toContain(`agent running inside ${PRODUCT_DISPLAY_NAME}`);
+    expect(productOwnedPrompt.match(/# Core instructions/g)).toHaveLength(1);
+    expect(productOwnedPrompt).toContain("expert coding assistant");
     expect(productOwnedPrompt).not.toMatch(/\bpi\b/i);
     expect(productOwnedPrompt).not.toContain("documentation");
     expect(productOwnedPrompt).not.toContain("node_modules");

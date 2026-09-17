@@ -8,6 +8,8 @@
  * host's seeds, so a session opened in the first milliseconds still runs as an
  * agent rather than as nothing.
  */
+import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   AGENT_MAX_DEPTH_DEFAULT,
   BUILTIN_AGENT_NAMES,
@@ -134,9 +136,18 @@ export class DefinitionsCache {
   private current: AgentsSnapshot;
   private synced = false;
   private readonly listeners = new Set<(snapshot: AgentsSnapshot) => void>();
+  private readonly projectCwd: string;
 
-  constructor() {
+  constructor(projectCwd = process.cwd()) {
     this.current = fallbackSnapshot();
+    const resolved = resolve(projectCwd);
+    try {
+      this.projectCwd = realpathSync.native(resolved);
+    } catch {
+      // Synthetic workers in protocol tests may use a path without opening it.
+      // A real worker's project exists before startup.
+      this.projectCwd = resolved;
+    }
   }
 
   /** Whether a host snapshot has arrived yet. */
@@ -149,10 +160,28 @@ export class DefinitionsCache {
   }
 
   sync(snapshot: AgentsSnapshot): void {
+    // The host broadcasts every project's definitions. This worker retains
+    // globals and only its own realpath-normalised project scope; a matching
+    // project definition replaces the same-named global definition.
+    const selected = new Map<string, AgentDefinition>();
+    for (const agent of snapshot.agents) {
+      if (agent.kind === "builtin" || agent.scope === "global") selected.set(agent.name, agent);
+    }
+    for (const agent of snapshot.agents) {
+      if (agent.kind !== "custom" || agent.scope !== "project" || !agent.projectCwd || isBuiltinAgentName(agent.name)) continue;
+      let projectCwd: string;
+      try {
+        projectCwd = realpathSync.native(resolve(agent.projectCwd));
+      } catch {
+        continue;
+      }
+      if (projectCwd === this.projectCwd) selected.set(agent.name, agent);
+    }
+
     // A host that has not seeded a built-in yet still gets the fallback for
     // it, so Beam and Chat never go missing between two host versions.
-    const names = new Set(snapshot.agents.map((agent) => agent.name));
-    const agents = [...snapshot.agents];
+    const agents = [...selected.values()];
+    const names = new Set(agents.map((agent) => agent.name));
     for (const name of BUILTIN_AGENT_NAMES) {
       if (names.has(name)) continue;
       if (name === "beam") agents.push(fallbackBeamAgent({ model: snapshot.beam.model }));
