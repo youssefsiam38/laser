@@ -22,11 +22,16 @@ import { reduce, type Action, type AppState, type SessionView } from "../store.j
  */
 const LOADED_BY_ONE_SURFACE = new Set<Action["type"]>([
   "historyBegin", "historyReset", "historyEnd", "historySnapshot", "historyPrepend", "historyMetadata", "hydrate", "entries",
+  "views/reconcile", "views/reconcileFailed",
 ]);
 
 /** What a surface loads for itself. Everything else comes from the canonical view. */
 function windowOf(canonical: SessionView, owned: SessionView): SessionView {
-  const { history: _h, historyPending: _p, historyRevision: _r, pendingSentBy: _s, ...rest } = canonical;
+  const {
+    history: _h, historyPending: _p, historyRevision: _r, pendingSentBy: _s,
+    stubs: _stubs, trimmed: _trimmed, validated: _validated, provisional: _provisional,
+    ...rest
+  } = canonical;
   return {
     ...rest,
     entries: owned.entries,
@@ -34,10 +39,14 @@ function windowOf(canonical: SessionView, owned: SessionView): SessionView {
     hydrated: owned.hydrated,
     lastSeq: owned.lastSeq,
     leafId: owned.leafId,
+    ...(owned.stubs ? { stubs: owned.stubs } : {}),
     ...(owned.history ? { history: owned.history } : {}),
     ...(owned.historyPending ? { historyPending: owned.historyPending } : {}),
     ...(owned.historyRevision ? { historyRevision: owned.historyRevision } : {}),
     ...(owned.pendingSentBy ? { pendingSentBy: owned.pendingSentBy } : {}),
+    ...(owned.trimmed ? { trimmed: owned.trimmed } : {}),
+    ...(owned.validated ? { validated: owned.validated } : {}),
+    ...(owned.provisional ? { provisional: owned.provisional } : {}),
   };
 }
 

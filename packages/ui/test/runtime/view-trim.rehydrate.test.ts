@@ -97,6 +97,7 @@ describe("releasing the older part of a conversation somebody is using", () => {
     const request = vi.fn(async () => ({ entries, leafId: "e19", window: window({ userOffset: 14, complete: false, before: "cursor-fresh" }) }));
     const loader = createHistoryLoader({
       get: (candidate) => store.open[candidate],
+      isCurrent: (candidate) => candidate === path,
       request: request as never,
       dispatch,
       adoptEpoch: () => {},

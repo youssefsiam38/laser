@@ -269,15 +269,13 @@ export interface SessionView {
    * an authoritative replacement has to contain before it may be committed.
    *
    * `deferred` says a replacement was read and did not contain them, so this
-   * view keeps what it has and offers to read again; `reads` is how many
-   * reconciliation reads this stamp has spent (at most two).
+   * view keeps what it has and continues to offer the same bounded read path.
    */
   trimmed?: {
     at: string;
     prompts: number;
     identities?: { anchorEntryId?: string; focusedEntryId?: string; actionTargetEntryIds?: readonly string[]; leafId?: string | null };
     deferred?: true;
-    reads?: number;
   } | undefined;
   /**
    * Set while the transcript has been released and not read again. Its
@@ -453,7 +451,7 @@ export type Action =
    * has, with its stamp marked deferred. Nothing of a refused page is retained.
    */
   | { type: "views/reconcile"; path: string; at: string; token: string; entries: unknown[]; leafId?: string | null | undefined; window: HistoryWindow }
-  /** A reconciliation read that failed or was refused; the stamp spent a read. */
+  /** A reconciliation read failed; the bounded view remains available to retry. */
   | { type: "views/reconcileFailed"; path: string; at: string; token: string }
   /**
    * Paint what this device last saw of a conversation, while the host is asked
@@ -688,41 +686,39 @@ export function reduce(state: AppState, action: Action): AppState {
     case "views/reconcile":
       return updateView(state, action.path, (v) => {
         const stamp = v.trimmed;
-        // Only the stamp this page was read for, and only a view still trimmed.
-        if (!stamp || stamp.at !== action.at) return reduceHistory(v, { type: "historyEnd", path: action.path, token: action.token }, historyFold);
-        const spent = (stamp.reads ?? 0) + 1;
-        // The candidate is built by the **canonical** snapshot fold: the live
-        // turn the answer carries, the updates that arrived while it was in
-        // flight, the person's unsent prompts, sequence and epoch, and the
-        // blocks it can share with what is on screen. There is no second,
-        // weaker fold here (RP-5b B2).
-        const candidate = reduceHistory(
-          v,
-          { type: "historySnapshot", path: action.path, token: action.token, entries: action.entries, window: action.window, replaceWindow: true,
-            ...(action.leafId !== undefined ? { leafId: action.leafId } : {}) },
-          historyFold,
-        );
-        // Nothing was applied (a stale token): leave the view as it is.
-        if (candidate === v) return reduceHistory(v, { type: "historyEnd", path: action.path, token: action.token }, historyFold);
+        // Only the read and stamp this page was requested for, while this view
+        // is still trimmed. A predecessor cannot mark a successor deferred.
+        if (v.historyPending?.token !== action.token || !stamp || stamp.at !== action.at) {
+          return reduceHistory(v, { type: "historyEnd", path: action.path, token: action.token }, historyFold);
+        }
         const wanted = new Set<string>([
           ...(stamp.identities?.anchorEntryId ? [stamp.identities.anchorEntryId] : []),
           ...(stamp.identities?.focusedEntryId ? [stamp.identities.focusedEntryId] : []),
           ...(stamp.identities?.actionTargetEntryIds ?? []),
         ]);
+        // Check the bounded answer before projecting it. A refused recent tail
+        // never builds another transcript beside the one already at the bound.
         const arriving = new Set<string>();
-        for (const entry of candidate.entries) {
+        for (const entry of action.entries) {
           const id = (entry as { id?: unknown } | null)?.id;
           if (typeof id === "string") arriving.add(id);
         }
-        for (const stub of candidate.stubs ?? []) arriving.add(stub.id);
+        for (const elided of action.window.elided ?? []) arriving.add(elided.id);
         if (![...wanted].every((id) => arriving.has(id))) {
-          // The page is dropped here, whole: a view already at its bound must
-          // not hold a replacement beside itself. What the view keeps is what
-          // it had, plus the updates that arrived meanwhile.
           const kept = reduceHistory(v, { type: "historyEnd", path: action.path, token: action.token }, historyFold);
-          return { ...kept, trimmed: { ...stamp, deferred: true as const, reads: spent } };
+          return stamp.deferred ? kept : { ...kept, trimmed: { ...stamp, deferred: true as const } };
         }
-        return candidate;
+        // The candidate is built by the **canonical** snapshot fold: the live
+        // turn the answer carries, the updates that arrived while it was in
+        // flight, the person's unsent prompts, sequence and epoch, and the
+        // blocks it can share with what is on screen. There is no second,
+        // weaker fold here (RP-5b B2).
+        return reduceHistory(
+          v,
+          { type: "historySnapshot", path: action.path, token: action.token, entries: action.entries, window: action.window, replaceWindow: true,
+            ...(action.leafId !== undefined ? { leafId: action.leafId } : {}) },
+          historyFold,
+        );
       });
     case "views/provisional": {
       // The navigation that asked for this paint is the only one it belongs to,
@@ -772,8 +768,8 @@ export function reduce(state: AppState, action: Action): AppState {
       return updateView(state, action.path, (v) => {
         const ended = reduceHistory(v, { type: "historyEnd", path: action.path, token: action.token }, historyFold);
         const stamp = ended.trimmed;
-        if (!stamp || stamp.at !== action.at) return ended;
-        return { ...ended, trimmed: { ...stamp, deferred: true as const, reads: (stamp.reads ?? 0) + 1 } };
+        if (!stamp || stamp.at !== action.at || stamp.deferred) return ended;
+        return { ...ended, trimmed: { ...stamp, deferred: true as const } };
       });
     case "hydrate":
       return updateView(state, action.path, (view) => {

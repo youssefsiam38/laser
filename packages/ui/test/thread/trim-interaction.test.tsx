@@ -39,7 +39,10 @@ const ROW = LINE * 4;
 
 const stable = vi.hoisted(() => ({
   client: { request: vi.fn(async () => ({})) },
-  actions: { listModels: vi.fn(async () => []), send: vi.fn(), openSession: vi.fn() },
+  actions: {
+    listModels: vi.fn(async () => []), send: vi.fn(), openSession: vi.fn(),
+    loadEarlierEntries: vi.fn(async () => true), loadAllEntries: vi.fn(async () => true),
+  },
 }));
 vi.mock("@/runtime", async original => ({
   ...await original<typeof import("../../src/runtime/index.js")>(),
@@ -151,10 +154,10 @@ async function mount(store: ReturnType<typeof createStateStore>, presentation: T
           <ThreadPrimitive.Root>
             <ThreadPrimitive.Viewport autoScroll={false} scrollToBottomOnRunStart={false} scrollToBottomOnInitialize={false} scrollToBottomOnThreadSwitch={false} data-slot="thread-viewport">
               <TranscriptViewportBinding />
+              <HistoryControls />
               <WindowedMessages />
             </ThreadPrimitive.Viewport>
           </ThreadPrimitive.Root>
-          <HistoryControls />
         </FileOpenerProvider>
       </AssistantRuntimeProvider>
     );
@@ -290,7 +293,7 @@ describe("a trim while somebody is reading", () => {
     cache.dispose();
   });
 
-  it("refuses a replacement that does not contain those rows, and offers to read recent history instead", async () => {
+  it("refuses an unsafe replacement and keeps every route to Load earlier messages working", async () => {
     const store = createStateStore(opened());
     const presentation = store.presentation;
     const cache = cacheFor(store, 12 * 1024);
@@ -333,8 +336,22 @@ describe("a trim while somebody is reading", () => {
     expect(rowIds()).toEqual(rowsAfterTrim);
     expect(rowOf(knownId)!.getBoundingClientRect().top).toBe(anchorTop);
     expect(document.activeElement).toBe(action);
-    expect(container.textContent).toContain("Reload recent history");
-    expect(container.textContent).not.toContain("Load earlier messages");
+    expect(container.textContent).toContain("Load earlier messages");
+    expect(container.textContent).not.toContain("Reload recent history");
+
+    const viewport = container.querySelector<HTMLElement>('[data-slot="thread-viewport"]')!;
+    Object.defineProperty(viewport, "scrollTop", { value: 0, configurable: true, writable: true });
+    const button = [...container.querySelectorAll("button")].find(node => node.textContent?.trim() === "Load earlier messages")!;
+    await act(async () => { button.dispatchEvent(new MouseEvent("click", { bubbles: true })); await Promise.resolve(); });
+    await act(async () => { viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true })); await Promise.resolve(); });
+    await act(async () => { viewport.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true })); await Promise.resolve(); });
+    const touch = (type: string, y: number) => {
+      const event = new Event(type, { bubbles: true });
+      Object.defineProperty(event, "touches", { value: [{ clientY: y }] });
+      viewport.dispatchEvent(event);
+    };
+    await act(async () => { touch("touchstart", 10); touch("touchmove", 30); await Promise.resolve(); });
+    expect(stable.actions.loadEarlierEntries).toHaveBeenCalledTimes(4);
 
     // A safe read that does contain them restores the conversation and its
     // cursor, and the row a person was on is still there.
@@ -348,7 +365,7 @@ describe("a trim while somebody is reading", () => {
     expect(restored.trimmed).toBeUndefined();
     expect(restored.history?.before).toBe("cursor-older");
     expect(rowIds()).toContain(knownId);
-    expect(container.textContent).not.toContain("Reload recent history");
+    expect(container.textContent).toContain("Load earlier messages");
 
     cache.dispose();
   });
