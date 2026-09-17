@@ -380,6 +380,23 @@ describe("createThreadListAdapter", () => {
     await expect(adapter.initialize("local-1")).rejects.toThrow(/destination/i);
   });
 
+  it("waits for a late creation target before creating exactly once", async () => {
+    let target: { cwd: string; agentName: string; intent: number } | undefined;
+    let release!: () => void;
+    const ready = new Promise<void>((resolve) => { release = resolve; });
+    const { adapter, calls } = deps({
+      creationTarget: () => target,
+      waitForCreationTarget: () => ready,
+    });
+    const initializing = adapter.initialize("local-1");
+    await Promise.resolve();
+    expect(calls).toEqual([]);
+    target = { cwd: "/chat", agentName: "chat", intent: 8 };
+    release();
+    await expect(initializing).resolves.toEqual({ remoteId: "/created.jsonl", externalId: "/created.jsonl" });
+    expect(calls).toEqual(["begin", "new:/chat:8"]);
+  });
+
   it("initialize closes its bracket even when the session cannot be created", async () => {
     const { adapter, calls } = deps({
       createSession: async () => {

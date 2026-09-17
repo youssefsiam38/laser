@@ -352,7 +352,7 @@ describe("WorkerServer agents", () => {
     const h = harness({ namerModels: async () => runtime });
     await h.call(1, "agents/sync", { snapshot: namedSnapshot() });
     await h.call(2, "session/new", { cwd: join(base, "project") });
-    h.drivers[0]!.emit({ type: "update", update: { kind: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: { command: "ls", label: "Listing files" } } });
+    h.drivers[0]!.emit({ type: "update", update: { kind: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: { command: "ls", activity_label: "Listing files" } } });
     await tick();
     expect(runtime.calls).toBe(0);
     expect(h.notifications("pi/extension/message").some((notification) =>

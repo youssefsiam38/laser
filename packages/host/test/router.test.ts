@@ -207,11 +207,13 @@ describe("Router · paged catalog", () => {
     try {
       const first = await h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/session/list", params: { page: {} } }, LOCAL_ACCESS);
       expect(first).toHaveProperty("result.sessions.length", 70);
-      const result = (first as { result: { sessions: SessionSummary[]; groups: Array<{ cwd: string; cursor: string }> } }).result;
+      const result = (first as { result: { sessions: SessionSummary[]; groups: Array<{ cwd: string; cursor: string; remaining: number }> } }).result;
       expect(result.groups).toHaveLength(10);
       const group = result.groups[0]!;
+      expect(group.remaining).toBe(8);
       const next = await h.router.handle({ jsonrpc: "2.0", id: 2, method: "pi/session/list", params: { cwd: group.cwd, page: { cursor: group.cursor } } }, LOCAL_ACCESS);
       expect(next).toHaveProperty("result.sessions.length", 7);
+      expect(next).toHaveProperty("result.groups.0.remaining", 1);
       const more = (next as { result: { sessions: SessionSummary[] } }).result.sessions;
       expect(more.every(row => !result.sessions.some(firstRow => firstRow.path === row.path))).toBe(true);
       const invalid = await h.router.handle({ jsonrpc: "2.0", id: 3, method: "pi/session/list", params: { cwd: "/another", page: { cursor: group.cursor } } }, LOCAL_ACCESS);
@@ -994,8 +996,10 @@ it("routes explorer opt-in without opening workers and keeps legacy browse shape
       path: root, explorer: { mode: "explorer", cwd: root, prefix: "node", limit: 1 },
     } }, LOCAL_ACCESS);
     expect(explorer).toMatchObject({ result: { entries: [{ name: "node.txt", kind: "file" }], commonPrefix: "node.txt", truncated: false } });
-    const relative = await rpc(h.router, 'pi/project/browse', { path: '.', explorer: { mode: 'explorer', cwd: root, prefix: '.hidden' } });
+    const relative = await rpc(h.router, 'pi/project/browse', { path: '.\\', explorer: { mode: 'explorer', cwd: root, prefix: '.hidden' } });
     expect(relative).toMatchObject({ result: { path: root, entries: [{ name: '.hidden.txt', path: join(root, '.hidden.txt'), kind: 'file' }] } });
+    const refused = await rpc(h.router, 'pi/project/browse', { path: join(root, '..', '..'), explorer: { mode: 'explorer', cwd: root, prefix: '' } });
+    expect(refused).toMatchObject({ result: { entries: [], errorKind: 'refusal', error: 'That path is outside this project and your home folder.' } });
     expect(h.workerRequests).toHaveLength(0);
   } finally { h.cleanup(); rmSync(root, { recursive: true, force: true }); }
 });

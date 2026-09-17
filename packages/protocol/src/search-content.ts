@@ -284,9 +284,9 @@ export const TOOL_SEARCH_PROJECTIONS: Readonly<Record<string, ToolSearchProjecti
   [MCP_SCRIPT_TOOL]: mcpScript,
 };
 
-export function toolSearchContent(tool: SearchableTool): string[] {
+export function toolSearchContent(tool: SearchableTool, labelParams?: Readonly<Record<string, string>>): string[] {
   // The activity label is not an argument (D-277): it is shown on the row, not searched as content.
-  const searched = { ...tool, args: withoutToolLabel(tool.args) };
+  const searched = { ...tool, args: withoutToolLabel(tool.args, tool.name, labelParams) };
   return projectionFor(searched)(searched);
 }
 

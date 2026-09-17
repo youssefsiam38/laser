@@ -1,8 +1,9 @@
 import { opendir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, resolve, sep } from "node:path";
 import { setImmediate as yieldHost } from "node:timers/promises";
 import type { ExplorerEntry, DirectoryExplorerOptions, ExplorerListing } from "@lasercode/protocol";
+import { isWithinDirectory } from "./paths.js";
 
 const names = new Intl.Collator("en", { sensitivity: "base", numeric: true });
 const ties = new Intl.Collator("en");
@@ -74,18 +75,40 @@ function scan(target: string, prefix: string): Promise<Scan> {
   return work;
 }
 
-/** OS-account metadata only: no recursive traversal, file reads, or worker. */
-export async function browseExplorer(path: string | undefined, options: DirectoryExplorerOptions): Promise<ExplorerListing> {
-  const target = resolve(options.cwd, path ?? ".");
+const displayPath = (path: string): string => path.replaceAll("\\", "/");
+const nativeSeparators = (path: string): string => path.replace(/[\\/]/gu, sep);
+
+/** Resolve the spellings people paste into the picker; the renderer never guesses host paths. */
+export function resolveExplorerPath(path: string | undefined, cwd: string, home = homedir()): string {
+  let spelling = nativeSeparators(path ?? ".");
+  const homeToken = /^(?:~|%USERPROFILE%)(?=$|[\\/])/iu;
+  if (homeToken.test(path ?? ".")) spelling = nativeSeparators((path ?? ".").replace(homeToken, home));
+  return resolve(nativeSeparators(cwd), spelling);
+}
+
+/** Immediate metadata only: no recursive traversal, file reads, or worker. */
+export async function browseExplorer(path: string | undefined, options: DirectoryExplorerOptions, accountHome = homedir()): Promise<ExplorerListing> {
+  const cwd = resolve(nativeSeparators(options.cwd));
+  const home = resolve(nativeSeparators(accountHome));
+  const target = resolveExplorerPath(path, cwd, home);
+  // The picker has always supported `../`: keep the project's containing
+  // folder available alongside the project itself, without reopening the
+  // former account-wide filesystem browse.
+  const projectArea = resolve(cwd, "..");
   const parent = resolve(target, "..");
-  const base = { path: target, home: homedir(), ...(target !== parent ? { parent } : {}) };
-  const failure = (error: string): ExplorerListing => ({ ...base, entries: [], commonPrefix: "", truncated: false, error });
+  const base = { path: displayPath(target), home: displayPath(home), ...(target !== parent ? { parent: displayPath(parent) } : {}) };
+  const failure = (error: string, errorKind?: "refusal"): ExplorerListing => ({ ...base, entries: [], commonPrefix: "", truncated: false, error, ...(errorKind ? { errorKind } : {}) });
   try {
-    if (!isAbsolute(options.cwd)) return failure("Choose a conversation directory before browsing.");
+    if (!isAbsolute(nativeSeparators(options.cwd))) return failure("Choose a conversation directory before browsing.");
+    // Resolution, including home tokens and symlinks, happens before the boundary check.
+    if (!isWithinDirectory(target, projectArea) && !isWithinDirectory(target, home)) {
+      return failure("That path is outside this project and your home folder.", "refusal");
+    }
     const { entries, commonPrefix } = await scan(target, options.prefix.toLocaleLowerCase());
     const start = options.offset ?? 0;
     const end = start + Math.max(1, Math.min(100, options.limit ?? 80));
-    return { ...base, entries: entries.slice(start, end), truncated: end < entries.length, commonPrefix,
+    const page = entries.slice(start, end).map(entry => ({ ...entry, path: displayPath(entry.path) }));
+    return { ...base, entries: page, truncated: end < entries.length, commonPrefix,
       ...(end < entries.length ? { nextOffset: end } : {}) };
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;

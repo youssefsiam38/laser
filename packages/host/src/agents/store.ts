@@ -704,10 +704,10 @@ function readBuiltinInstructions(value: unknown): BuiltinInstructionOverrides {
   const read = (name: BuiltinAgentName): string | null => {
     const instructions = record[name];
     if (typeof instructions !== "string" || instructions.trim().length === 0 || instructions.length > AGENT_INSTRUCTIONS_MAX) return null;
-    // An override written for a field this version no longer renders (Namer's
-    // activity-label fields, D-277) follows the shipped prompt again rather
-    // than failing every render.
-    return instructionTemplateIssue(instructions, name) === null ? instructions : null;
+    // Keep old overrides byte-for-byte. The editor explains fields that this
+    // version removed and offers Restore; the worker safely falls back for a
+    // turn rather than deleting the person's text during load/persist.
+    return instructions;
   };
   return { beam: read("beam"), chat: read("chat"), namer: read("namer") };
 }

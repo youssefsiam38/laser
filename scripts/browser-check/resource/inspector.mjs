@@ -233,7 +233,7 @@ export const WORKER_COUNTERS_FN = `function(){
     const unavailable=(reason)=>({ kind:'worker', available:false, reason, sessions:null, opening:null, releasing:null,
       retiring:null, fenced:null, entries:null, entriesKnown:null, entriesReadable:0, entriesUnreadable:0,
       entriesSource:'engine session manager', replayCount:null, replayBytes:null, replayReadable:0, replayUnreadable:0,
-      tasks:null, runningTasks:null, runningTools:null, pendingQuestions:null, pendingApprovals:null, memory });
+      tasks:null, runningTasks:null, pendingQuestions:null, pendingApprovals:null, memory });
     const table=server.runtimes;
     if(!table || typeof table.values!=='function' || typeof table.size!=='number') return unavailable('worker session runtime table unavailable');
     let live; try { live=Array.from(table.values()); } catch(error) { return unavailable('worker session runtimes unreadable'); }
@@ -264,8 +264,6 @@ export const WORKER_COUNTERS_FN = `function(){
     for(const value of (bySession && typeof bySession.values==='function' ? bySession.values() : [])) {
       for(const task of (value && typeof value.values==='function' ? value.values() : value)) taskRows.push(task);
     }
-    const runningTools=Array.from((server.runningTools && typeof server.runningTools.values==='function' ? server.runningTools.values() : []))
-      .reduce((n,set)=>n+((set && set.size)||0),0);
     return { kind:'worker', available:true,
       sessions:table.size,
       opening:typeof table.openPaths==='function' ? table.openPaths().length : null,
@@ -276,7 +274,7 @@ export const WORKER_COUNTERS_FN = `function(){
       entriesUnreadable:entryFold.unreadable, entriesSource:'engine session manager',
       replayCount:replayCountFold.value, replayBytes:replayBytesFold.value,
       replayReadable:replayCountFold.readable, replayUnreadable:replayCountFold.unreadable,
-      tasks:taskRows.length, runningTasks:taskRows.filter(task=>task && task.status==='running').length, runningTools,
+      tasks:taskRows.length, runningTasks:taskRows.filter(task=>task && task.status==='running').length,
       pendingQuestions:pending.filter(request=>!request.toolCallId).length,
       pendingApprovals:pending.filter(request=>Boolean(request.toolCallId)).length, memory };
   }`;

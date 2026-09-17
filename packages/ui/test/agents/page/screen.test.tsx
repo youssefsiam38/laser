@@ -791,6 +791,22 @@ describe("Agents page", () => {
     expect(mocks.agents.qualifyNamer).not.toHaveBeenCalled();
   });
 
+  it("keeps an invalid stored Namer override visible with removed-field guidance and Restore", async () => {
+    const invalid = "Name {{toolName}} from {{namingTask}}.";
+    const base = snapshot();
+    store = createStateStore(seed(snapshot({
+      builtinInstructions: { ...base.builtinInstructions, namer: invalid },
+      agents: base.agents.map((agent) => agent.name === "namer" ? { ...agent, instructions: invalid } : agent),
+    })));
+    mocks.state.store = store;
+    await mount();
+    await click(row("namer"));
+    expect(container.textContent).toContain("“toolName” is not available here");
+    expect(q<HTMLTextAreaElement>('textarea[aria-label="Namer system instructions"]').value).toBe(invalid);
+    expect(button("Restore built-in instructions")).toBeTruthy();
+    expect(button("Save instructions").hasAttribute("disabled")).toBe(true);
+  });
+
   it("edits and restores every built-in's system instructions", async () => {
     await mount();
     for (const name of ["beam", "chat", "namer"] as const) {

@@ -79,12 +79,12 @@ export function useDirectoryPage(cwd: string | undefined, query: string, active 
   const current = response?.key === key && response.offset === offset && response.attempt === attempt ? response : undefined;
   const failure = current?.result?.error ?? (current?.failed ? "Couldn’t read this folder. Try again." : undefined);
   const issue: DirectoryPageState["issue"] = !resolution.ok ? { kind: "refusal", message: resolution.error }
-    : failure ? { kind: "failure", message: failure } : undefined;
+    : failure ? { kind: current?.result?.errorKind === "refusal" ? "refusal" : "failure", message: failure } : undefined;
   const loading = active && !!cwd && !issue && !current;
   const nextOffset = current?.result?.nextOffset;
   return {
     entries: current?.result?.entries ?? EMPTY,
-    directory: cwd ? directory : undefined,
+    directory: cwd ? current?.result?.path ?? directory : undefined,
     loading, issue,
     retry: issue?.kind === "failure" ? () => setAttempt(value => value + 1) : undefined,
     navigation: {

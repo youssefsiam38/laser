@@ -5,6 +5,7 @@ import type { Action, AppState } from "../store.js";
 import type { NewSessionOptions, SessionLaunchOptions } from "./new-session.js";
 import {
   codeDestinationForSession,
+  creationTargetForDestination,
   destinationSessionForTab,
   emptyCodeDestination,
   isMainReady,
@@ -33,9 +34,8 @@ import { mergeSessions } from "./threadList.js";
  * app starts with no memory and adopts it at `restoreDestination`.
  */
 interface DestinationMemory {
-  v: 2;
+  v: 3;
   tab: MainTab;
-  chat?: string;
   code: CodeDestination;
   /** Derived from this namespace's older project/session pair, not from `destination`. */
   legacy?: boolean;
@@ -86,12 +86,13 @@ const codeDestination = (value: unknown): CodeDestination | undefined => {
 export function readDestinationMemory(): DestinationMemory {
   const stored = deviceStore.readJson(DEVICE_KEYS.destination, (value) =>
     value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined);
-  const code = stored?.["v"] === 2 ? codeDestination(stored["code"]) : undefined;
+  // v2 carried a Chat path. Keep its Code/tab memory while deliberately
+  // ignoring that path: Chat identity is process-local from v3 onward.
+  const code = stored?.["v"] === 3 || stored?.["v"] === 2 ? codeDestination(stored["code"]) : undefined;
   if (stored && code) {
     return {
-      v: 2,
+      v: 3,
       tab: stored["tab"] === "chat" ? "chat" : "code",
-      ...(typeof stored["chat"] === "string" ? { chat: stored["chat"] } : {}),
       code,
     };
   }
@@ -103,8 +104,7 @@ export function readDestinationMemory(): DestinationMemory {
   const older: CodeDestination = project
     ? remembered ? { kind: "project-session", project, path: remembered } : { kind: "project-landing", project }
     : emptyCodeDestination;
-  const chat = typeof stored?.["chat"] === "string" ? (stored["chat"] as string) : undefined;
-  return { v: 2, tab: rememberedSessionsTab(), ...(chat ? { chat } : {}), code: older, legacy: true };
+  return { v: 3, tab: rememberedSessionsTab(), code: older, legacy: true };
 }
 
 export function initialDestinationFromMemory(memory = readDestinationMemory()): MainDestination {
@@ -119,11 +119,9 @@ export function initialDestinationFromMemory(memory = readDestinationMemory()): 
 }
 
 function writeMemory(destination: MainDestination): void {
-  const previous = readDestinationMemory();
   const tab = mainTab(destination);
   const code = rememberedCodeOf(destination);
-  const chat = destination.phase === "ready-chat" ? destination.path : previous.chat;
-  deviceStore.writeJson(DEVICE_KEYS.destination, { v: 2, tab, ...(chat ? { chat } : {}), code } satisfies DestinationMemory);
+  deviceStore.writeJson(DEVICE_KEYS.destination, { v: 3, tab, code } satisfies DestinationMemory);
   // Which tab was last shown is an enum, not a place: it stays unscoped, so a
   // person who prefers Chat gets Chat in every environment.
   rememberSessionsTab(tab);
@@ -162,6 +160,8 @@ export interface MainDestinationControllerDeps {
 export interface MainDestinationController {
   startupRestoring: boolean;
   initializing: number;
+  /** The Chat conversation selected during this renderer process, never device storage. */
+  chatPath: string | undefined;
   controlledPath: string | undefined;
   goTab(tab: MainTab): Promise<void>;
   goProject(cwd: string): Promise<void>;
@@ -198,14 +198,14 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
   const explicitIntent = useRef(false);
   const [initializing, setInitializing] = useState(0);
   const initializationId = useRef(0);
+  const [chatPath, setChatPath] = useState<string | undefined>(undefined);
+  const chatPathRef = useRef<string | undefined>(undefined);
+  chatPathRef.current = chatPath;
+  const environmentKey = state.environment?.environmentKey;
+  const previousEnvironmentKey = useRef<string | undefined>(environmentKey);
   const initializingRef = useRef(0);
   const heldPath = useRef<string | undefined>(mainPath(state.destination));
   if (initializing === 0) heldPath.current = mainPath(state.destination);
-  // The intent of a Chat resolution that found no Chat workspace yet, so the
-  // late-workspace effect below re-resolves exactly that one — never a Chat
-  // intent another verb (a new session) is still driving.
-  const awaitingChatWorkspace = useRef<number | undefined>(undefined);
-
   const transition = useCallback((destination: MainDestination): boolean => {
     if (destination.intent !== intentRef.current) return false;
     depsRef.current.dispatch({ type: "destination", destination });
@@ -270,6 +270,8 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
     if (snapshot.destination.phase !== "resolving" || snapshot.destination.intent !== intent) return false;
     const previous = rememberedCodeOf(snapshot.destination);
     if (sessionKindTab(session, snapshot.agents.snapshot?.workspaces ?? {}) === "chat") {
+      chatPathRef.current = path;
+      setChatPath(path);
       return transition({ phase: "ready-chat", intent, path, rememberedCode: previous });
     }
     return readyCode(intent, codeDestinationForSession(session, sessions, snapshot.agents.runs, previous));
@@ -315,26 +317,11 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
       else readyCode(intent, emptyCodeDestination);
       return;
     }
-    const memory = readDestinationMemory();
-    const snapshot = depsRef.current.readState();
-    const source = { sessions: snapshot.sessions, views: snapshot.open, workspaces: snapshot.agents.snapshot?.workspaces ?? {}, archived: depsRef.current.archived };
-    const remembered = memory.chat;
-    const candidate = remembered
-      ? mergeSessions(snapshot.sessions, snapshot.open).find((item) => item.path === remembered)
-      : destinationSessionForTab("chat", undefined, source);
-    if (remembered || candidate) { await resolveSession(remembered ?? candidate!.path, intent); return; }
-    const cwd = snapshot.agents.snapshot?.workspaces.chat;
-    if (!cwd) { awaitingChatWorkspace.current = intent; return; }
-    try {
-      const path = await depsRef.current.launchSession(cwd, { agentName: "chat", select: false });
-      if (intent !== intentRef.current) return;
-      const current = depsRef.current.readState().destination;
-      if (current.phase === "resolving" && current.intent === intent) transition({ ...current, target: { kind: "session", path, visibleTab: "chat" } });
-      await resolveSession(path, intent);
-    } catch (error) {
-      if (intent !== intentRef.current) return;
-      fail(intent, error);
-      throw error;
+    const remembered = chatPathRef.current;
+    if (remembered) { await resolveSession(remembered, intent); return; }
+    const current = depsRef.current.readState().destination;
+    if (current.phase === "resolving" && current.intent === intent) {
+      transition({ phase: "ready-chat", kind: "chat-landing", intent, rememberedCode: current.rememberedCode });
     }
   }, [fail, readyCode, resolveCode, resolveSession, transition]);
 
@@ -419,10 +406,17 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
   const closeMainView = useCallback((path: string) => {
     const current = depsRef.current.readState().destination;
     if (mainPath(current) !== path) return;
+    if (chatPathRef.current === path) {
+      chatPathRef.current = undefined;
+      setChatPath(undefined);
+      const intent = begin({ kind: "chat-tab" });
+      transition({ phase: "ready-chat", kind: "chat-landing", intent, rememberedCode: rememberedCodeOf(current) });
+      return;
+    }
     const code = projectReturnOf(rememberedCodeOf(current));
     const intent = begin({ kind: "code-tab", code });
     readyCode(intent, code.kind === "project-session" ? { kind: "project-landing", project: code.project } : code);
-  }, [begin, readyCode]);
+  }, [begin, readyCode, transition]);
 
   const replaceMainSession = useCallback((from: string, session: SessionState) => {
     const snapshot = depsRef.current.readState();
@@ -432,8 +426,14 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
     const sessions = mergeSessions(snapshot.sessions, snapshot.open);
     const replacement = sessions.find((item) => item.path === session.path);
     if (replacement && sessionKindTab(replacement, snapshot.agents.snapshot?.workspaces ?? {}) === "chat") {
+      chatPathRef.current = session.path;
+      setChatPath(session.path);
       transition({ phase: "ready-chat", intent, path: session.path, rememberedCode: rememberedCodeOf(current) });
       return;
+    }
+    if (chatPathRef.current === from) {
+      chatPathRef.current = undefined;
+      setChatPath(undefined);
     }
     const code = replacement
       ? codeDestinationForSession(replacement, sessions, snapshot.agents.runs, rememberedCodeOf(current))
@@ -442,10 +442,8 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
   }, [transition]);
 
   const creationTarget = useCallback(() => {
-    const current = depsRef.current.readState().destination;
-    if (current.phase !== "ready-code") return undefined;
-    if (current.code.kind !== "project-landing") return undefined;
-    return { cwd: current.code.project, intent: current.intent };
+    const snapshot = depsRef.current.readState();
+    return creationTargetForDestination(snapshot.destination, snapshot.agents.snapshot?.workspaces.chat);
   }, []);
 
   const beginInitialization = useCallback((target: MainCreationTarget): MainInitializationToken => {
@@ -456,6 +454,13 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
   const finishInitialization = useCallback((token: MainInitializationToken, path: string) => {
     const current = depsRef.current.readState().destination;
     if (token.intent !== intentRef.current || current.intent !== token.intent) return;
+    if (token.target.agentName === "chat") {
+      if (current.phase !== "ready-chat" || !("kind" in current) || current.kind !== "chat-landing") return;
+      chatPathRef.current = path;
+      setChatPath(path);
+      transition({ phase: "ready-chat", intent: token.intent, path, rememberedCode: current.rememberedCode });
+      return;
+    }
     if (current.phase !== "ready-code" || current.code.kind !== "project-landing" || current.code.project !== token.target.cwd) return;
     transition({ phase: "ready-code", intent: token.intent, code: { kind: "project-session", project: token.target.cwd, path } });
   }, [transition]);
@@ -508,18 +513,14 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
     void resolveTarget(target, intent).catch(() => {}).finally(() => setStartupRestoring(false));
   }, [begin, openSession, resolveTarget, state.connection, state.sessionsLoaded]);
 
-  // A Chat opened before the host said where Chat lives resolves once it does.
-  // Only the intent that actually waited: a fresh `chat-tab` intent from
-  // `newSession` is still creating its session, and re-resolving it here
-  // would open the previous chat first and strand the new one (M13-T119).
   useEffect(() => {
-    const current = state.destination;
-    if (state.connection !== "open" || current.phase !== "resolving" || current.target.kind !== "chat-tab") return;
-    if (!state.agents.snapshot?.workspaces.chat) return;
-    if (awaitingChatWorkspace.current !== current.intent) return;
-    awaitingChatWorkspace.current = undefined;
-    void resolveTarget(current.target, current.intent).catch(() => {});
-  }, [resolveTarget, state.agents.snapshot?.workspaces.chat, state.connection, state.destination]);
+    if (environmentKey === undefined) return;
+    const previous = previousEnvironmentKey.current;
+    previousEnvironmentKey.current = environmentKey;
+    if (previous === undefined || previous === environmentKey) return;
+    chatPathRef.current = undefined;
+    setChatPath(undefined);
+  }, [environmentKey]);
 
   useEffect(() => {
     if (state.connection === "open" && (isMainReady(state.destination) || state.destination.phase === "unavailable")) setStartupRestoring(false);
@@ -528,6 +529,7 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
   return useMemo(() => ({
     startupRestoring,
     initializing,
+    chatPath,
     // While a navigation resolves, the thread stays bound to the row that was
     // chosen: letting it fall to an unbound thread is what used to put an empty
     // new-session frame between two conversations (RP-11).
@@ -547,5 +549,5 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
     finishInitialization,
     endInitialization,
     onAssistantThreadChange,
-  }), [beginInitialization, closeMainView, creationTarget, endInitialization, finishInitialization, goProject, goTab, initializing, leave, newSession, onAssistantThreadChange, openSession, replaceMainSession, retry, setCodeProject, setDefaultCodeProject, startupRestoring, state.destination]);
+  }), [beginInitialization, chatPath, closeMainView, creationTarget, endInitialization, finishInitialization, goProject, goTab, initializing, leave, newSession, onAssistantThreadChange, openSession, replaceMainSession, retry, setCodeProject, setDefaultCodeProject, startupRestoring, state.destination]);
 }

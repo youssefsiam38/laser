@@ -79,7 +79,7 @@ export default async function deviceTailCacheMemory(check) {
       const titles = await sessions.locator('[data-slot="aui_thread-list-item-trigger"]').evaluateAll(nodes => nodes.map(node => node.title));
       let next = titles.find(title => !visited.has(title));
       for (let expansion = 0; next === undefined && expansion < 8; expansion += 1) {
-        const more = (await openSidebar()).getByRole('button', { name: 'Load more', exact: true }).first();
+        const more = (await openSidebar()).getByRole('button', { name: /^Load(?: \d+)? more$/ }).first();
         if (await more.count() === 0) break;
         await activate(more);
         await page.waitForTimeout(400);

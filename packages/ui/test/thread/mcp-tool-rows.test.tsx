@@ -295,7 +295,7 @@ describe("a direct MCP tool row", () => {
     // Partial output rides the UI-only artifact channel; `result` stays absent
     // until the call ends (AGENTS.md, live activity regression guards).
     const props = {
-      ...toolProps("p1", "playwright_browser_snapshot", { selector: "main", label: "Capturing current page" }),
+      ...toolProps("p1", "playwright_browser_snapshot", { selector: "main", activity_label: "Capturing current page" }),
       status: { type: "running" as const },
       artifact: { partialOutput: "### Page\n- Page Title: Example" },
     } as unknown as React.ComponentProps<typeof ToolRow>;

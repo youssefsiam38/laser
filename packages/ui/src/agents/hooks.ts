@@ -1,9 +1,8 @@
 "use client";
 /**
- * Focused hooks over `state.agents` and the per-view Namer labels. Every one
- * subscribes to a slice through {@link useLaserState} with a structural
- * equality, so a streamed token in an unrelated session never re-renders an
- * agent card, a map node or a label.
+ * Focused hooks over `state.agents`. Every one subscribes to a slice through
+ * {@link useLaserState} with a structural equality, so a streamed token in an
+ * unrelated session never re-renders an agent card or map node.
  */
 import type { AgentEvent, AgentRun, AgentWarning, AgentsSnapshot, SessionAgentInfo } from "@lasercode/protocol";
 import { useEffect, useMemo, useState } from "react";

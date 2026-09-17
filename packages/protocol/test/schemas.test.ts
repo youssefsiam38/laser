@@ -154,7 +154,7 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/project/remove": { cwd: "/p" },
   "pi/project/trust": { cwd: "/p", trusted: true, remember: true },
   "pi/project/git": { cwd: "/p", path: "/s.jsonl" },
-  "pi/project/browse": { path: "/home/me/code", explorer: { mode: "explorer", cwd: "/home/me/code", prefix: "node", offset: 80, limit: 80 } },
+  "pi/project/browse": { path: "~\\code", explorer: { mode: "explorer", cwd: "/home/me/code", prefix: "node", offset: 80, limit: 80 } },
   "pi/project/env/status": { cwd: "/home/me/code/app" },
   "pi/project/env/set": {
     cwd: "/home/me/code/app",
@@ -606,6 +606,7 @@ describe("client request schemas", () => {
         autoCompactionEnabled: true,
         messageCount: 2,
         pendingMessageCount: 0,
+        toolLabelParams: { playwright_browser_navigate: "activity_label_2" },
       },
       replayFrom: 12,
       seq: 41,
@@ -657,6 +658,10 @@ describe("client request schemas", () => {
     expect(parseClientRequest(JSON.parse(JSON.stringify(request))).params).toEqual(params);
     for (const size of [0, -1, 1.5, 1001]) expect(() => parseClientRequest({ ...request, params: { page: { size } } })).toThrow();
     expect(() => parseClientRequest({ ...request, params: { page: { cursor: "x".repeat(8193) } } })).toThrow();
+    const result: ClientRequests["pi/session/list"]["result"] = {
+      sessions: [], groups: [{ cwd: "/project", total: 10, cursor: "opaque", remaining: 3 }],
+    };
+    expect(JSON.parse(JSON.stringify(result))).toEqual(result);
   });
 
   it("treats missing params as an empty object for methods that allow it", () => {
@@ -729,6 +734,7 @@ it('requires explorer kind and common-prefix metadata, without accepting a legac
   const explorer = { ...legacy, commonPrefix: 'folder', entries: [{ ...legacy.entries[0], kind: 'directory' }] };
   expect(explorerListingSchema.parse(JSON.parse(JSON.stringify(explorer)))).toEqual(explorer);
   expect(explorerListingSchema.safeParse({ ...explorer, entries: [{ ...explorer.entries[0], kind: 'socket' }] }).success).toBe(false);
+  expect(explorerListingSchema.parse({ ...explorer, entries: [], error: "That path is outside this project and your home folder.", errorKind: "refusal" }).errorKind).toBe("refusal");
 });
 
 it("browse remains strict and explorer requires explicit opt-in", () => {

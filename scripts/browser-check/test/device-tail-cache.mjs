@@ -267,7 +267,7 @@ export default async function deviceTailCache(check) {
     let candidates = await visibleRows();
     let next = candidates.find(row => !visited.has(row));
     for (let expansion = 0; next === undefined && expansion < 6; expansion += 1) {
-      const more = (await openSidebar()).getByRole('button', { name: 'Load more', exact: true }).first();
+      const more = (await openSidebar()).getByRole('button', { name: /^Load(?: \d+)? more$/ }).first();
       if (await more.count() === 0) break;
       await activate(more);
       await page.waitForTimeout(500);

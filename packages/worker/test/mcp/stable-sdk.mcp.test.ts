@@ -12,7 +12,7 @@
  * cold cache), so these tests are slow by construction, not flaky.
  */
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
-import { DATA_DIR_NAME, PRODUCT_NAME, TOOL_LABEL_DESCRIPTION, TOOL_LABEL_MAX, type FeatureId, type McpRuntimeSnapshot, type McpServerConfig } from "@lasercode/protocol";
+import { DATA_DIR_NAME, PRODUCT_NAME, TOOL_LABEL_DESCRIPTION, TOOL_LABEL_MAX, TOOL_LABEL_PARAM, type FeatureId, type McpRuntimeSnapshot, type McpServerConfig } from "@lasercode/protocol";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as fs from "node:fs/promises";
@@ -344,7 +344,7 @@ describe("a session with an MCP server", () => {
     expect(toolNamesOf(request)).toContain("fixture_echo");
     expect(toolNamesOf(request)).toContain("fixture_snapshot");
     const snapshotSchema = request.tools?.find((tool) => tool.function.name === "fixture_snapshot")?.function.parameters;
-    expect((snapshotSchema?.properties as Record<string, unknown> | undefined)?.label).toEqual({
+    expect((snapshotSchema?.properties as Record<string, unknown> | undefined)?.[TOOL_LABEL_PARAM]).toEqual({
       type: "string",
       description: TOOL_LABEL_DESCRIPTION,
       maxLength: TOOL_LABEL_MAX,

@@ -180,11 +180,12 @@ function useNothingToSendTo(): string | undefined {
   const view = useLaserState(s => Boolean(s.current && s.open[s.current]));
   if (workerCrashed) return "The agent is unavailable";
   if (destination?.phase === "resolving") {
-    return mainTab(destination) === "chat" ? "Preparing Chat…" : "Opening this conversation…";
+    return mainTab(destination) === "chat" ? undefined : "Opening this conversation…";
   }
   if (destination?.phase === "unavailable") {
     return mainError(destination) ?? "This conversation is unavailable. Retry it or start a new one.";
   }
+  if (destination?.phase === "ready-chat" && "kind" in destination && destination.kind === "chat-landing") return undefined;
   if (view || (!destination ? currentProject !== undefined : mainTab(destination) === "code" && mainCodeProject(destination) !== undefined)) return undefined;
   return "Open a project first — the agent works inside a folder on this computer.";
 }
@@ -211,8 +212,9 @@ function useSendBlockedReason(): string | undefined {
   const blocked = useNothingToSendTo();
   const connection = useLaserState(s => s.connection);
   const provisional = useLaserState(s => provisionalSessionPath(s) !== undefined);
+  const destination = useLaserState(s => s.destination);
   const { pending: preparingSession } = useSessionPreparation();
-  if (provisional) return "Checking with the host before sending…";
+  if (provisional && mainTab(destination) !== "chat") return "Checking with the host before sending…";
   if (blocked) return blocked;
   if (connection !== "open") return connection === "connecting" ? "Reconnecting to the host…" : "Disconnected from the host…";
   return preparingSession ? "Preparing this conversation…" : undefined;
@@ -523,8 +525,8 @@ function useSlashCommands() {
 }
 
 // ---------------------------------------------------------------------------
-// `@` — child handles first, then one host-sorted directory page. Folders
-// continue the path; only files and handles use the primitive's directive.
+// `@` — child handles first, then one host-sorted directory page. Enter or
+// click inserts files/folders; `/` alone descends into the highlighted folder.
 // ---------------------------------------------------------------------------
 
 const MENTION_ICONS = { agent: Bot, file: FileText, directory: FolderOpen, next: ChevronRight, previous: ChevronLeft } as const;

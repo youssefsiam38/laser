@@ -8,7 +8,7 @@ import { browseExplorer } from "../src/directory-explorer.js";
 let base: string, root: string;
 beforeEach(() => { base = mkdtempSync(join(tmpdir(), "directory-explorer-")); root = join(base, "home", "project"); mkdirSync(root, { recursive: true }); });
 afterEach(() => rmSync(base, { recursive: true, force: true }));
-const list = (path = root, prefix = "", offset = 0, limit = 80) => browseExplorer(path, { mode: "explorer", cwd: root, prefix, offset, limit });
+const list = (path = root, prefix = "", offset = 0, limit = 80) => browseExplorer(path, { mode: "explorer", cwd: root, prefix, offset, limit }, join(base, "home"));
 it("sorts immediate children before paging: directories, files, then hidden", async () => {
   for (const name of ["z-folder", "a-folder", ".hidden-folder"]) mkdirSync(join(root, name));
   for (const name of ["z.txt", "a.txt", ".hidden-file"]) writeFileSync(join(root, name), "");
@@ -55,7 +55,7 @@ it("includes git-ignored, generated and dot entries without recursive traversal"
   expect((await list(root, "node")).entries.map((entry) => entry.name)).toEqual(["node_modules"]);
   expect((await list("node_modules")).entries.map((entry) => entry.name)).toEqual(["nested.txt"]);
 });
-it("lists parent, sibling, absolute paths and outside symlinks with OS-account authority", async () => {
+it("lists relative and absolute paths within the project or home, including contained symlinks", async () => {
   const sibling = join(base, "home", "sibling"); mkdirSync(sibling);
   writeFileSync(join(sibling, "guide.md"), "safe fixture");
   symlinkSync(sibling, join(root, "outside-link"));
@@ -67,9 +67,23 @@ it("lists parent, sibling, absolute paths and outside symlinks with OS-account a
   }
   expect((await list()).entries.map((entry) => [entry.name, entry.kind])).toEqual([["outside-link", "directory"], ["outside-file", "file"]]);
   const filesystemRoot = await list(parse(root).root);
-  expect(filesystemRoot.path).toBe(parse(root).root);
-  expect(filesystemRoot.parent).toBeUndefined();
-  expect(filesystemRoot.entries.length).toBeLessThanOrEqual(80);
+  expect(filesystemRoot).toMatchObject({ entries: [], errorKind: "refusal", error: "That path is outside this project and your home folder." });
+});
+it("resolves home, env and backslash spellings on the host and returns canonical separators", async () => {
+  const home = join(base, "home");
+  const sibling = join(home, "sibling"); mkdirSync(sibling); writeFileSync(join(sibling, "guide.md"), "safe fixture");
+  for (const spelling of ["~", "~/sibling", "%USERPROFILE%", "%USERPROFILE%\\sibling", "..\\sibling", sibling]) {
+    const listing = await list(spelling);
+    const expected = spelling === "~" || spelling === "%USERPROFILE%" ? ["project", "sibling"] : ["guide.md"];
+    expect(listing.error).toBeUndefined();
+    expect(listing.entries.map(entry => entry.name)).toEqual(expected);
+    expect(listing.path).not.toContain("\\");
+    expect(listing.entries.every(entry => !entry.path.includes("\\"))).toBe(true);
+  }
+});
+it("refuses a resolved path outside both allowed roots with one sentence", async () => {
+  const outside = join(base, "outside"); mkdirSync(outside);
+  expect(await list(outside)).toMatchObject({ entries: [], errorKind: "refusal", error: "That path is outside this project and your home folder." });
 });
 it.skipIf(process.platform === "win32")("omits special files and symlinks to them without reading them", async () => {
   execFileSync("mkfifo", [join(root, "pipe")]);

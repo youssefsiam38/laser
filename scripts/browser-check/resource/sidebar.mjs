@@ -15,7 +15,7 @@ export function sidebarRowView(check, session) {
   const trigger = group.locator('[data-slot="aui_thread-list-item-trigger"]')
     .filter({ has: check.page.locator('[data-slot="aui_thread-list-item-title"]', { hasText: new RegExp(`^${escaped}$`) }) });
   const rows = group.locator('[data-slot="aui_thread-list-item-trigger"]');
-  const control = group.getByRole('button', { name: /^(Load more|Show fewer|Loading chats…)$/ });
+  const control = group.getByRole('button', { name: /^(Load(?: \d+)? more|Show fewer|Loading chats…)$/ });
   return {
     region, group, trigger,
     isRowVisible: () => trigger.first().isVisible().catch(() => false),

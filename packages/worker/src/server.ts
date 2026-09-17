@@ -1878,9 +1878,6 @@ export class WorkerServer {
       // stay in `unnamed` regardless, so a model that appears later still
       // names the session; that is the moment this becomes a pin.
       naming: this.naming(live.path),
-      // Retained in the protocol snapshot until its vocabulary is revised;
-      // activity labels no longer create worker-side in-flight work (D-277).
-      runningTools: 0,
       hasRecord,
       ...(live.closeFailed ? { closeFailed: true } : {}),
     };

@@ -99,7 +99,16 @@ function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
   const slots: ThreadSlots = statusSlot !== undefined ? { statusLine: statusSlot } : {};
   const aui = useAui();
   const wholeTranscript = useWholeTranscriptRefusal();
-  const find = useConversationFind({ partial: partialHistory, loadAll: actions.loadAllEntries, refusal: wholeTranscript.explanation });
+  const toolLabelParams = useLaserState(s => {
+    const target = visibleSessionPath(s);
+    return target ? s.open[target]?.state.toolLabelParams : undefined;
+  });
+  const find = useConversationFind({
+    partial: partialHistory,
+    loadAll: actions.loadAllEntries,
+    refusal: wholeTranscript.explanation,
+    toolLabelParams,
+  });
   return (
     <WholeTranscriptRefusalProvider value={wholeTranscript}>
     <SessionSeenBridge ready={connected && open.phase === "ready"} covered={page !== null} />

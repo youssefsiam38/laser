@@ -12,6 +12,7 @@
  */
 import {
   PRODUCT_DISPLAY_NAME,
+  PRODUCT_NAME,
   SESSION_NAME_MAX,
   SESSION_NAME_MIN,
   renderInstructionTemplate,
@@ -20,6 +21,7 @@ import {
   type NamerCandidate,
   type NamerState,
 } from "@lasercode/protocol";
+import { FALLBACK_NAMER_INSTRUCTIONS } from "./definitions.js";
 
 export const NAMER_TIMEOUT_MS = 8_000;
 export const NAMER_MAX_CANDIDATES = 6;
@@ -296,13 +298,19 @@ export class NamerService {
   private renderInstructions(choice: AgentModelChoice, sourceText: string): string | undefined {
     const template = this.options.instructions?.()?.trim();
     if (!template) return undefined;
-    return renderInstructionTemplate(template, "namer", {
+    const values = {
       productName: PRODUCT_DISPLAY_NAME,
       agentName: "Namer",
       agentDescription: "Names sessions with a fast, inexpensive model.",
       model: `${choice.provider}/${choice.id}`,
       sourceText,
-    });
+    };
+    try {
+      return renderInstructionTemplate(template, "namer", values);
+    } catch (error) {
+      console.error(`${PRODUCT_NAME} worker: Namer's saved instructions could not be rendered; using the shipped prompt for this turn:`, error instanceof Error ? error.message : error);
+      return renderInstructionTemplate(FALLBACK_NAMER_INSTRUCTIONS, "namer", values);
+    }
   }
 
   /** One bounded completion; null when the model is missing, times out or fails (unless `rethrow`). */

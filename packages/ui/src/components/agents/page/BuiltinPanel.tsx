@@ -106,7 +106,7 @@ function BuiltinInstructionsEditor({ name, definition, customized }: { name: Bui
       title="System instructions"
       description={
         name === "namer"
-          ? "How Namer approaches titles and activity labels. The short output format stays enforced for each request."
+          ? "How Namer approaches session titles. The short output format stays enforced for each request."
           : `How ${agentDisplayName(name)} answers and works. New conversations use the saved instructions.`
       }
       notices={<IssueNotice messages={error ? [error] : invalid ? ["Write instructions, or restore the built-in instructions."] : templateIssue ? [templateIssue] : []} />}

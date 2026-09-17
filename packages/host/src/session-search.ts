@@ -4,6 +4,9 @@ import { setImmediate as yieldToIO } from "node:timers/promises";
 import { goalPromptId, toolSearchContent, toolOutputText, type SearchableTool, type ClientRequests, type SessionSummary } from "@lasercode/protocol";
 
 type Source = "user" | "assistant" | "reasoning" | "tool";
+// Saved JSONL has tool calls but no SessionState snapshot, so host indexing can
+// hide only the default `activity_label`; live UI search also receives the
+// session's collision map and hides dynamically chosen names.
 export const sourceRank = (source: Source) => source === "user" ? 0 : source === "assistant" ? 1 : 2;
 /** Search only message content, never images, credentials or session metadata. */
 export function searchableMessage(entry: unknown, pending?: Map<string, SearchableTool>): Array<{ text: string; source: Source }> {

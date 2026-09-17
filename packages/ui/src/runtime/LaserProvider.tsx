@@ -257,6 +257,8 @@ export interface LaserContextValue {
   view: SessionView | undefined;
   /** Destination for this runtime context; scopes replace the main value. */
   destination: MainDestination;
+  /** Chat conversation selected during this renderer process; never persisted. */
+  chatPath: string | undefined;
   currentProject: string | undefined;
   /** The remembered startup destination is still connecting or hydrating. */
   startupRestoring: boolean;
@@ -802,7 +804,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       const code = memory.code;
       return [...new Set([...(readState().current ? [readState().current!] : []), ...scopedPaths.current.keys(), ...sessionsList.get().pinned,
         ...(pending ? [pending] : []), ...(beam ? [beam] : []),
-        ...(memory.chat ? [memory.chat] : []), ...("path" in code ? [code.path] : []),
+        ...("path" in code ? [code.path] : []),
         ...(code.kind === "beam-session" && "path" in code.returnTo ? [code.returnTo.path] : []),
       ])];
     },
@@ -1869,7 +1871,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   // half of the context.
   const projectsKey = useMemo(() => {
     const workspaces = state.agents.snapshot?.workspaces;
-    return visibleProjectCwds(projectList, state.sessions, state.open, archive, { exclude: workspaces ? [workspaces.beam, workspaces.chat] : [],
+    return visibleProjectCwds(projectList, state.sessions, state.open, archive, { exclude: workspaces ? [workspaces.beam, workspaces.chat].filter((cwd): cwd is string => typeof cwd === "string") : [],
       ...(state.catalogGroups ? { visibleCounts: Object.fromEntries(state.catalogGroups.map(group => [group.cwd, group.total])) } : {}),
       holdsProject: (path) => holdsProject(state, path),
     }).join("\n");
@@ -1910,6 +1912,34 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         views: () => readState().open,
         archive,
         creationTarget: destination.creationTarget,
+        waitForCreationTarget: async () => {
+          const initial = readState().destination;
+          if (initial.phase !== "ready-chat" || !("kind" in initial) || initial.kind !== "chat-landing") return;
+          await new Promise<void>((resolve, reject) => {
+            let unsubscribe = () => {};
+            const inspect = (): boolean => {
+              const current = readState().destination;
+              if (current.intent !== initial.intent || mainTab(current) !== "chat") {
+                reject(new Error("The destination changed before this conversation could be started."));
+                return true;
+              }
+              if (current.phase === "unavailable") {
+                reject(new Error(current.error));
+                return true;
+              }
+              if (destination.creationTarget()) {
+                resolve();
+                return true;
+              }
+              return false;
+            };
+            if (inspect()) return;
+            unsubscribe = store.subscribe(() => {
+              if (!inspect()) return;
+              unsubscribe();
+            });
+          });
+        },
         // Quietly: the runtime is adopting this path into its "new" thread and
         // selects it through `onThreadIdChange` once that is done. Selecting
         // here — in particular a listed, unstarted session the launcher reuses
@@ -1964,7 +1994,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           destination.endInitialization(token);
         },
       }),
-    [archive, client, destination.beginInitialization, destination.creationTarget, destination.endInitialization, destination.finishInitialization, launchSession, openSession, refreshSessions, transcriptMembership],
+    [archive, client, destination.beginInitialization, destination.creationTarget, destination.endInitialization, destination.finishInitialization, launchSession, openSession, readState, refreshSessions, store, transcriptMembership],
   );
 
   // Stable so `useRemoteThreadListRuntime` does not re-publish the hook (and
@@ -2009,6 +2039,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       dispatch,
       client,
       destination: state.destination,
+      chatPath: destination.chatPath,
       currentProject,
       startupRestoring,
       setCurrentProject,
@@ -2022,7 +2053,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       pressure: pressure.getSnapshot,
       subscribePressure: pressure.subscribe,
     }),
-    [actions, archive, client, currentProject, dispatch, pressure, projectInfo, projects, setCurrentProject, startupRestoring, state.destination, trustRequests, viewCache],
+    [actions, archive, client, currentProject, destination.chatPath, dispatch, pressure, projectInfo, projects, setCurrentProject, startupRestoring, state.destination, trustRequests, viewCache],
   );
 
   const internals = useMemo<LaserInternals>(
@@ -2140,6 +2171,51 @@ function useThreadRuntime(store: SnapshotStore<RuntimeSnapshot>): AssistantRunti
     return externalId ?? remoteId;
   }, [aui, snapshot.main, stateStore]);
 
+  const canWaitToSend = snapshot.main && (
+    (destination.phase === "ready-chat" && "kind" in destination && destination.kind === "chat-landing" && path === undefined)
+    || (destination.phase === "resolving" && destination.target.kind === "session"
+      && destination.target.visibleTab === "chat" && destination.target.path === path)
+  );
+  const prepareSend = useCallback(async () => {
+    if (!canWaitToSend) return;
+    const intent = stateStore.getSnapshot().destination.intent;
+    await new Promise<void>((resolve, reject) => {
+      const inspect = (): boolean => {
+        const current = stateStore.getSnapshot();
+        const next = current.destination;
+        if (next.intent !== intent || mainTab(next) !== "chat") {
+          reject(new Error("The destination changed before this message could be sent."));
+          return true;
+        }
+        if (next.phase === "unavailable") {
+          reject(new Error(next.error));
+          return true;
+        }
+        if (next.phase !== "ready-chat") return false;
+        if ("kind" in next && next.kind === "chat-landing") {
+          if (path !== undefined) {
+            reject(new Error("The destination changed before this message could be sent."));
+            return true;
+          }
+          if (!current.agents.snapshot?.workspaces.chat) return false;
+          resolve();
+          return true;
+        }
+        if (path !== undefined && (!("path" in next) || next.path !== path)) {
+          reject(new Error("The destination changed before this message could be sent."));
+          return true;
+        }
+        resolve();
+        return true;
+      };
+      if (inspect()) return;
+      const unsubscribe = stateStore.subscribe(() => {
+        if (!inspect()) return;
+        unsubscribe();
+      });
+    });
+  }, [canWaitToSend, path, stateStore]);
+
   const assertCanAct = useCallback((resolvedPath?: string) => {
     if (!snapshot.main) return;
     const currentDestination = stateStore.getSnapshot().destination;
@@ -2185,9 +2261,10 @@ function useThreadRuntime(store: SnapshotStore<RuntimeSnapshot>): AssistantRunti
         projection: { ...projection, messages: messages as ThreadMessageLike[] },
         composer: () => composerRef.current,
         assertCanAct,
+        ...(canWaitToSend ? { prepareSend } : {}),
         openPhase,
       }),
-    [assertCanAct, connection, destination, openPhase, messages, path, projection, resolvePath, snapshot, view],
+    [assertCanAct, canWaitToSend, connection, destination, openPhase, messages, path, prepareSend, projection, resolvePath, snapshot, view],
   );
 
   const runtime = useExternalStoreRuntime<ThreadMessageLike>(adapter);

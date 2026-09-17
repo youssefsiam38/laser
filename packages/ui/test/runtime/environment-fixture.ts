@@ -105,8 +105,8 @@ export function clearDeviceValue(key: DeviceKey, environmentKey = TEST_ENVIRONME
 }
 
 /** Seed the remembered destination the way the destination controller writes it. */
-export function seedDestination(memory: { tab?: "chat" | "code"; chat?: string; code: unknown }): void {
-  seedDeviceValue(DEVICE_KEYS.destination, JSON.stringify({ v: 2, tab: memory.tab ?? "code", ...(memory.chat ? { chat: memory.chat } : {}), code: memory.code }));
+export function seedDestination(memory: { tab?: "chat" | "code"; code: unknown }): void {
+  seedDeviceValue(DEVICE_KEYS.destination, JSON.stringify({ v: 3, tab: memory.tab ?? "code", code: memory.code }));
 }
 
 /** Seed "the last session opened in this project", as the controller records it. */

@@ -30,6 +30,7 @@ import { activateTestEnvironment, seedDeviceValue, testDescriptor } from "../../
 const stable = vi.hoisted(() => ({
   projects: ["/one", "/two"],
   currentProject: "/one",
+  chatPath: undefined as string | undefined,
   setCurrentProject: vi.fn(),
   dispatch: vi.fn(),
   actions: { toast: vi.fn(), removeProject: vi.fn(), newSession: vi.fn(async () => "/state/chat/new.jsonl"), openSession: vi.fn(async (_path?: string) => undefined), goTab: vi.fn(async () => undefined) },
@@ -107,6 +108,7 @@ beforeEach(() => {
   // per environment (RP-13): there is nothing to read without one.
   activateTestEnvironment();
   sessionsList.reset();
+  stable.chatPath = undefined;
   stable.actions.openSession.mockClear();
   stable.actions.goTab.mockClear();
   stable.actions.newSession.mockClear();
@@ -133,25 +135,16 @@ const mount = async (node: ReactNode = <Fixture store={store} />) => act(async (
  * not write it, so the test stands in for the controller rather than keeping a
  * second writer of the key beside it.
  */
-const rememberTabSession = (tab: "chat" | "code", path: string) => {
-  const memory = readDestinationMemory();
-  const chat = tab === "chat" ? path : memory.chat;
-  const code = tab === "code"
-    ? { kind: "project-session" as const, project: path.startsWith("/two/") ? "/two" : "/one", path }
-    : memory.code;
-  seedDeviceValue(DEVICE_KEYS.destination, JSON.stringify({ v: 2, tab: memory.tab, ...(chat ? { chat } : {}), code }));
-};
-const rememberedTabSession = (tab: "chat" | "code"): string | undefined => {
-  const memory = readDestinationMemory();
-  if (tab === "chat") return memory.chat;
-  return memory.code.kind === "project-session" || memory.code.kind === "beam-session" ? memory.code.path : undefined;
+const rememberedCodeSession = (): string | undefined => {
+  const code = readDestinationMemory().code;
+  return code.kind === "project-session" || code.kind === "beam-session" ? code.path : undefined;
 };
 
 const completeTab = async (next: "chat" | "code") => {
   rememberSessionsTab(next);
   const target = next === "chat"
-    ? (rememberedTabSession("chat") ?? "/state/chat/c1.jsonl")
-    : (rememberedTabSession("code") ?? "/one/root.jsonl");
+    ? (stable.chatPath ?? "/state/chat/c1.jsonl")
+    : (rememberedCodeSession() ?? "/one/root.jsonl");
   const intent = store.getSnapshot().destination.intent + 1;
   store.dispatch({ type: "destination", destination: next === "chat"
     ? { phase: "ready-chat", intent, path: target, rememberedCode: { kind: "project-session", project: "/one", path: ROOT } }
@@ -189,6 +182,7 @@ describe("sessions panel tabs", () => {
     expect(container.querySelector('[data-slot="new-chat"]')).not.toBeNull();
     expect(container.querySelector('input[type="search"]')?.getAttribute("placeholder")).toBe("Search chats");
     expect(stable.actions.openSession).toHaveBeenLastCalledWith("/state/chat/c1.jsonl");
+    stable.chatPath = "/state/chat/c1.jsonl";
 
     // The choice survives a remount.
     await act(async () => root.unmount());
@@ -207,15 +201,38 @@ describe("sessions panel tabs", () => {
     expect(stable.actions.openSession).toHaveBeenCalled();
   });
 
-  it("restores the last viewed session for each tab before falling back to newest", async () => {
-    rememberTabSession("chat", "/state/chat/c2.jsonl");
-    rememberTabSession("code", "/two/plain.jsonl");
+  it("keeps Chat identity process-local while restoring the last Code session", async () => {
+    seedDeviceValue(DEVICE_KEYS.destination, JSON.stringify({ v: 2, tab: "code", chat: "/state/chat/c2.jsonl", code: { kind: "project-session", project: "/two", path: "/two/plain.jsonl" } }));
     await mount();
     await act(async () => { tab("chat").click(); await completeTab("chat"); });
-    expect(stable.actions.openSession).toHaveBeenLastCalledWith("/state/chat/c2.jsonl");
+    expect(stable.actions.openSession).toHaveBeenLastCalledWith("/state/chat/c1.jsonl");
     await act(async () => { tab("code").click(); await completeTab("code"); });
     expect(stable.actions.openSession).toHaveBeenLastCalledWith("/two/plain.jsonl");
     expect(mainTab(store.getSnapshot().destination)).toBe("code");
+  });
+
+  it("marks only the hidden tab's current conversation and clears the mark when viewed", async () => {
+    stable.chatPath = "/state/chat/c1.jsonl";
+    await mount();
+    await act(async () => store.dispatch({ type: "sessions", sessions: store.getSnapshot().sessions.map((item) =>
+      item.path === stable.chatPath ? { ...item, attention: "finished_unread" as const } : item) }));
+    expect(tab("chat").getAttribute("aria-label")).toBe("Chat, new activity");
+    expect(tab("chat").querySelector('[data-status="finished_unread"]')).not.toBeNull();
+    expect(tab("code").getAttribute("aria-label")).toBe("Code");
+
+    await act(async () => { tab("chat").click(); await completeTab("chat"); });
+    expect(tab("chat").getAttribute("aria-label")).toBe("Chat");
+    expect(tab("chat").querySelector('[data-slot="status-dot"]')).toBeNull();
+
+    await act(async () => store.dispatch({ type: "sessions", sessions: store.getSnapshot().sessions.map((item) =>
+      item.path === ROOT ? { ...item, attention: "waiting_for_input" as const } : item) }));
+    expect(tab("code").getAttribute("aria-label")).toBe("Code, new activity");
+    expect(tab("code").querySelector('[data-status="waiting_for_input"]')).not.toBeNull();
+    expect(tab("chat").querySelector('[data-slot="status-dot"]')).toBeNull();
+
+    await act(async () => { tab("code").click(); await completeTab("code"); });
+    expect(tab("code").getAttribute("aria-label")).toBe("Code");
+    expect(tab("code").querySelector('[data-slot="status-dot"]')).toBeNull();
   });
 
   it("starts a new chat with the Chat agent in the Chat workspace", async () => {

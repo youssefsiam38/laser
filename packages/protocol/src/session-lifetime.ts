@@ -56,8 +56,6 @@ export type SessionPinKind =
   | "task"
   /** A first prompt is still waiting for a model to name its session. */
   | "naming"
-  /** Tool labels are being produced for calls that are still running. */
-  | "tool_labeling"
   /** There is no durable record to reopen from, so releasing would lose the session. */
   | "no_record"
   /** The runtime could not be closed down cleanly, so it is still serving. */
@@ -77,7 +75,6 @@ export const SESSION_PIN_KINDS: readonly SessionPinKind[] = [
   "pending_tray",
   "task",
   "naming",
-  "tool_labeling",
   "no_record",
   "close_failed",
 ] as const;
@@ -88,9 +85,9 @@ export const SESSION_PIN_KINDS: readonly SessionPinKind[] = [
  * Automatic release — the idle/over-cap unload sweep and automatic worker
  * retirement — refuses on **any** pin, so the two automatic paths are exactly
  * as careful as each other. A person's explicit "stop this worker" refuses on
- * these, the ones that would destroy work in flight; the three that are left
- * out (`naming`, `tool_labeling`, `no_record`) are moments, not work, and a
- * person who asked for a stop is not told to wait for a label.
+ * these, the ones that would destroy work in flight; the two that are left
+ * out (`naming`, `no_record`) are moments, not work, and a person who asked
+ * for a stop is not told to wait for them.
  */
 export const SESSION_WORK_PIN_KINDS: readonly SessionPinKind[] = [
   "opening",
@@ -158,7 +155,7 @@ export type SessionUnloadReason = "idle" | "budget" | "pressure";
  * `automatic` is the idle sweep and refuses on any pin at all. `explicit` is a
  * person stopping this project's worker (or a Feature toggle restarting it) and
  * refuses on {@link SESSION_WORK_PIN_KINDS}: the advisory pins are moments, not
- * work, and a person who asked for a stop is not told to wait for a tool label.
+ * work, and a person who asked for a stop is not told to wait for them.
  */
 export type WorkerRetireMode = "automatic" | "explicit";
 

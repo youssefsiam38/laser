@@ -224,8 +224,7 @@ export class WorkerLifetime<Live extends LifetimeSession> {
    * `automatic` (the idle sweep) refuses on any pin at all. `explicit` (a
    * person stopping this project's worker, or a Feature toggle restarting it)
    * refuses on the pins that name work in flight; advisory pins are moments,
-   * not work. The legacy tool-label advisory remains protocol vocabulary but
-   * D-277 no longer produces it.
+   * not work.
    */
   async retire(mode: WorkerRetireMode): Promise<WorkerRetireResult> {
     if (this.deps.runtimes.retiring) return { retiring: true };

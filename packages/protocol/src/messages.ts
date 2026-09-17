@@ -270,6 +270,12 @@ export interface SessionState {
   messageCount: number;
   pendingMessageCount: number;
   /**
+   * Tool names whose injected activity-label parameter could not use the
+   * default name because the tool already owns it. Missing entries use
+   * `activity_label`; only non-default choices are published.
+   */
+  toolLabelParams?: Readonly<Record<string, string>>;
+  /**
    * Active reviewed engine modules at the moment this snapshot was produced.
    * Included in the request result because startup notifications can arrive
    * before a client has created its local session view.
@@ -730,7 +736,7 @@ export interface ExplorerListing extends DirectoryListing {
 
 export interface DirectoryExplorerOptions {
   mode: "explorer";
-  /** Absolute session directory used to resolve relative paths; not a sandbox. */
+  /** Absolute session directory used to resolve relative paths on the host. */
   cwd: string;
   prefix: string;
   offset?: number;
@@ -742,6 +748,8 @@ export interface DirectoryListing {
   /** Absent at the filesystem root. */
   parent?: string;
   home: string;
+  /** A safe, person-facing boundary refusal rather than an IO failure. */
+  errorKind?: "refusal";
   entries: DirectoryEntry[];
   truncated: boolean;
   /** Explorer-only continuation and common name prefix across all matches. */
@@ -1244,7 +1252,7 @@ export interface ClientRequests {
 
   "pi/session/list": {
     params: { cwd?: string; page?: { cursor?: string; size?: number; sizes?: Record<string, number>; exclude?: string[]; include?: string[]; probe?: string[] } };
-    result: { sessions: SessionSummary[]; groups?: Array<{ cwd: string; total: number; cursor?: string }>; archivedCount?: number; presence?: Record<string, boolean> };
+    result: { sessions: SessionSummary[]; groups?: Array<{ cwd: string; total: number; cursor?: string; remaining?: number }>; archivedCount?: number; presence?: Record<string, boolean> };
   };
   /** Read-only search of saved conversations; no worker is opened. */
   "session/search": {

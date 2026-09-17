@@ -24,7 +24,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fallbackBeamAgent, fallbackDefaultAgent, fallbackPolicy, fallbackSnapshot } from "../../src/agents/definitions.js";
 import { ENGINE_BUILTIN_TOOLS, readSessionAgentRecord, rootRecord, rootRole } from "../../src/agents/session-config.js";
-import { StableSdkDriver } from "../../src/drivers/stable-sdk.js";
+import { installToolLabels, StableSdkDriver } from "../../src/drivers/stable-sdk.js";
 import { WorkerServer } from "../../src/server.js";
 import type { DriverAgentOptions, DriverEvent } from "../../src/driver.js";
 import { startStubProvider, systemTextOf, toolNamesOf, writeStubModels, type StubAnswer, type StubProvider, type StubRequest } from "./stub-provider.js";
@@ -167,13 +167,23 @@ describe("StableSdkDriver with an agent definition", () => {
     expect(toolNamesOf(request)).not.toContain("web_search");
   }, 60_000);
 
+  it("continues unlabelled when the engine tool-state seam is unavailable", () => {
+    const diagnostic = vi.spyOn(console, "error").mockImplementation(() => {});
+    const tools = [{ name: "fixture" }];
+    const session = { agent: { state: { tools } } };
+    expect(() => installToolLabels(session as never)).not.toThrow();
+    expect(session.agent.state.tools).toBe(tools);
+    expect(diagnostic).toHaveBeenCalledWith(expect.stringContaining("continuing without activity labels"));
+    diagnostic.mockRestore();
+  });
+
   it("adds an optional activity label to every offered tool family except the three exemptions", async () => {
     const custom: InlineExtension = (pi) => {
       pi.registerTool({
         name: "fixture_lookup",
         label: "Fixture lookup",
         description: "A direct extension tool used to verify the common tool seam.",
-        parameters: { type: "object", properties: { value: { type: "string" } }, required: ["value"] } as never,
+        parameters: { type: "object", properties: { value: { type: "string" }, label: { type: "string" } }, required: ["value"] } as never,
         execute: async () => ({ content: [{ type: "text", text: "ok" }], details: undefined }),
       });
       // A root gets the real start_agent and inspect_fleet tools. Register the
@@ -219,17 +229,18 @@ describe("StableSdkDriver with an agent definition", () => {
     ]));
     for (const name of toolNamesOf(request)) {
       const schema = toolSchema(request, name);
-      const label = (schema.properties as Record<string, unknown> | undefined)?.label;
+      const activityLabel = (schema.properties as Record<string, unknown> | undefined)?.activity_label;
       if (isToolLabelExempt(name)) {
-        expect(label, name).toBeUndefined();
+        expect(activityLabel, name).toBeUndefined();
       } else {
-        expect(label, name).toEqual({ type: "string", description: TOOL_LABEL_DESCRIPTION, maxLength: TOOL_LABEL_MAX });
-        expect(schema.required, name).not.toEqual(expect.arrayContaining(["label"]));
+        expect(activityLabel, name).toEqual({ type: "string", description: TOOL_LABEL_DESCRIPTION, maxLength: TOOL_LABEL_MAX });
+        expect(schema.required, name).not.toEqual(expect.arrayContaining(["activity_label"]));
       }
     }
+    expect((toolSchema(request, "fixture_lookup").properties as Record<string, unknown>).label).toEqual({ type: "string" });
   }, 60_000);
 
-  it("keeps raw labels, accepts long labels, and preserves tool preparation and context while stripping execution labels", async () => {
+  it("keeps raw activity labels and dynamically avoids tool-owned label parameters", async () => {
     const executed: unknown[] = [];
     const executionContexts: unknown[] = [];
     const custom: InlineExtension = (pi) => {
@@ -237,7 +248,7 @@ describe("StableSdkDriver with an agent definition", () => {
         name: "capture_arguments",
         label: "Capture arguments",
         description: "Records exactly what its execute function receives.",
-        parameters: { type: "object", properties: { value: { type: "string" } }, required: ["value"] } as never,
+        parameters: { type: "object", properties: { value: { type: "string" }, label: { type: "string" } }, required: ["value"] } as never,
         prepareArguments: (args) => ({ ...(args as Record<string, unknown>), value: "prepared" }) as never,
         execute: async (_id, params, _signal, _onUpdate, context) => {
           executed.push(params);
@@ -245,13 +256,25 @@ describe("StableSdkDriver with an agent definition", () => {
           return { content: [{ type: "text", text: "captured" }], details: undefined };
         },
       });
+      pi.registerTool({
+        name: "activity_label_collision",
+        label: "Activity label collision",
+        description: "Owns activity_label as a real argument.",
+        parameters: { type: "object", properties: { activity_label: { type: "string" } }, required: ["activity_label"] } as never,
+        execute: async (_id, params) => {
+          executed.push(params);
+          return { content: [{ type: "text", text: "collided" }], details: undefined };
+        },
+      });
     };
     const longLabel = "Running a deliberately overlong activity label";
     answer = (_request, index) => index === 0
-      ? { toolCall: { name: "bash", args: { command: "printf label-ok", label: longLabel }, id: "call-bash" } }
+      ? { toolCall: { name: "bash", args: { command: "printf label-ok", activity_label: longLabel }, id: "call-bash" } }
       : index === 1
-        ? { toolCall: { name: "capture_arguments", args: { value: "kept", label: "Capturing arguments" }, id: "call-capture" } }
-        : { text: "done" };
+        ? { toolCall: { name: "capture_arguments", args: { value: "kept", label: "semantic label", activity_label: "Capturing arguments" }, id: "call-capture" } }
+        : index === 2
+          ? { toolCall: { name: "activity_label_collision", args: { activity_label: "semantic value", activity_label_2: "Colliding safely" }, id: "call-collision" } }
+          : { text: "done" };
     const driver = new StableSdkDriver([custom]);
     drivers.push(driver);
     const starts: Array<{ toolName: string; args: unknown }> = [];
@@ -274,12 +297,21 @@ describe("StableSdkDriver with an agent definition", () => {
     await settled;
 
     expect(starts).toEqual([
-      { toolName: "bash", args: { command: "printf label-ok", label: longLabel } },
-      { toolName: "capture_arguments", args: { value: "kept", label: "Capturing arguments" } },
+      { toolName: "bash", args: { command: "printf label-ok", activity_label: longLabel } },
+      { toolName: "capture_arguments", args: { value: "kept", label: "semantic label", activity_label: "Capturing arguments" } },
+      { toolName: "activity_label_collision", args: { activity_label: "semantic value", activity_label_2: "Colliding safely" } },
     ]);
     expect(JSON.stringify(stub.requests[1])).toContain("label-ok");
-    expect(executed).toEqual([{ value: "prepared" }]);
+    expect(executed).toEqual([
+      { value: "prepared", label: "semantic label" },
+      { activity_label: "semantic value" },
+    ]);
     expect(executionContexts[0]).toEqual(expect.objectContaining({ cwd: join(base, "project") }));
+    expect(state.toolLabelParams).toEqual({ activity_label_collision: "activity_label_2" });
+    expect((toolSchema(stub.requests[0]!, "activity_label_collision").properties as Record<string, unknown>)).toMatchObject({
+      activity_label: { type: "string" },
+      activity_label_2: { type: "string", description: TOOL_LABEL_DESCRIPTION, maxLength: TOOL_LABEL_MAX },
+    });
     const stored = readFileSync(state.path, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as unknown);
     expect(JSON.stringify(stored)).toContain(longLabel);
     expect(JSON.stringify(stored)).toContain("Capturing arguments");

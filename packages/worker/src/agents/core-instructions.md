@@ -25,7 +25,7 @@ Five facts drive every rule below:
 
 ## Rules
 
-- Fill `label` on every tool call with what it is doing, in 25 characters or fewer, for example `Reading build config`.
+- Fill the activity-label field offered by each tool (`activity_label`, or its numbered form) with what the call is doing, in 25 characters or fewer, for example `Reading build config`.
 
 ### 1. Lead with the next action
 

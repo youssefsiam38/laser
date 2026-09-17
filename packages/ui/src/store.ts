@@ -365,7 +365,7 @@ export interface AppState {
   environmentError?: string;
   connection: "connecting" | "open" | "closed";
   sessions: SessionSummary[];
-  catalogGroups?: Array<{ cwd: string; total: number; cursor?: string }>;
+  catalogGroups?: Array<{ cwd: string; total: number; cursor?: string; remaining?: number }>;
   archivedSessionCount?: number;
   catalogPresence?: Record<string, boolean> | undefined;
   /** True once a `pi/session/list` has landed, so an empty list is real. */
@@ -417,7 +417,7 @@ export type Action =
    */
   | { type: "restoreDestination"; destination: MainDestination }
   | { type: "connection"; state: AppState["connection"] }
-  | { type: "sessions"; sessions: SessionSummary[]; groups?: Array<{ cwd: string; total: number; cursor?: string }>; archivedCount?: number; presence?: Record<string, boolean> }
+  | { type: "sessions"; sessions: SessionSummary[]; groups?: Array<{ cwd: string; total: number; cursor?: string; remaining?: number }>; archivedCount?: number; presence?: Record<string, boolean> }
   /** Loading/creation warms a view only; only the destination controller selects. */
   | { type: "opened"; state: SessionState }
   | { type: "sessionLoad"; path: string; phase: "opening" | "ready"; reason?: never }

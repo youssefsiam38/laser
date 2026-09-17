@@ -7,7 +7,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
   PRODUCT_DISPLAY_NAME,
+  PRODUCT_NAME,
   WIRE_NAMESPACE,
+  isBuiltinAgentName,
   renderInstructionTemplate,
   type InstructionTemplateTarget,
 } from "@lasercode/protocol";
@@ -15,6 +17,7 @@ import { join, resolve } from "node:path";
 import type { DriverAgentOptions } from "../driver.js";
 import { recordInstructionWrite } from "@lasercode/pi-extension";
 import { agentPrompt } from "./core-instructions.js";
+import { fallbackBeamAgent, fallbackChatAgent } from "./definitions.js";
 import { templateProvenance } from "./template-provenance.js";
 
 interface TemplateExtensionOptions {
@@ -109,11 +112,21 @@ export function createInstructionTemplateExtension(options: TemplateExtensionOpt
     factory: (pi) => {
       pi.on("before_agent_start", (event, context) => {
         const definition = options.agent.definition;
-        const prompt = agentPrompt(definition, event.systemPromptOptions.customPrompt ?? "");
-        const template = prompt.template;
+        let prompt = agentPrompt(definition, event.systemPromptOptions.customPrompt ?? "");
+        let template = prompt.template;
         const target = targetOf(options.agent);
         const values = instructionTemplateValues(event.systemPromptOptions, context, options);
-        const systemPrompt = renderInstructionTemplate(template, target, values);
+        let systemPrompt: string;
+        try {
+          systemPrompt = renderInstructionTemplate(template, target, values);
+        } catch (error) {
+          if (!isBuiltinAgentName(definition.name) || definition.name === "namer") throw error;
+          const shipped = definition.name === "beam" ? fallbackBeamAgent({ model: definition.model }) : fallbackChatAgent(definition.model);
+          prompt = agentPrompt(shipped, event.systemPromptOptions.customPrompt ?? "");
+          template = prompt.template;
+          console.error(`${PRODUCT_NAME} worker: ${definition.name}'s saved instructions could not be rendered; using the shipped prompt for this turn:`, error instanceof Error ? error.message : error);
+          systemPrompt = renderInstructionTemplate(template, target, values);
+        }
         try {
           return recordInstructionWrite({ systemPrompt }, templateProvenance(
             template,
