@@ -545,7 +545,7 @@ await import(${JSON.stringify(pathToFileURL(defaultWorkerMain()).href)});
 
       // A save is broadcast to every client and persisted for the next host.
       const saved = await client.request<{ agent: { name: string }; snapshot: { revision: number } }>("agents/save", {
-        agent: { name: "reviewer", description: "Reviews", instructions: "Review.", engineInstructions: false, model: null, thinkingLevel: null, supportsSubagents: false, allowedAgents: [], scopedSkills: false, skills: [] },
+        agent: { name: "reviewer", scope: "global", description: "Reviews", instructions: "Review.", engineInstructions: false, excludeCoreInstructions: false, model: null, thinkingLevel: null, supportsSubagents: false, allowedAgents: [], scopedSkills: false, skills: [] },
         originalName: null,
       });
       expect(saved.agent.name).toBe("reviewer");
@@ -563,7 +563,8 @@ await import(${JSON.stringify(pathToFileURL(defaultWorkerMain()).href)});
       await expect(client.request("session/new", { cwd: project, agentName: "namer" })).rejects.toThrow(/does not run a session/);
 
       host.agents.close(); // flush the debounced write, as shutdown does
-      expect(JSON.parse(readFileSync(join(base, "state", "agents.json"), "utf8")).agents.map((a: { name: string }) => a.name)).toEqual(["default", "reviewer"]);
+      expect(JSON.parse(readFileSync(join(base, "state", "agents.json"), "utf8"))).toMatchObject({ version: 2, defaultAgent: "default" });
+      expect(readFileSync(join(base, "state", "agents", "reviewer.md"), "utf8")).toContain("Review.");
       expect(existsSync(join(base, "state", "agent-runs.json"))).toBe(false); // nothing to persist yet
     } finally {
       client.close();

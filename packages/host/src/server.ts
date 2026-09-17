@@ -505,7 +505,12 @@ export class HostServer {
       // recorded it in a transcript header. Include relocated workspaces.
       exclude: [stateDir, agentDir, workspaces.beam, workspaces.chat],
       ...(options.trustTimeoutMs !== undefined ? { trustTimeoutMs: options.trustTimeoutMs } : {}),
-      onChange: (projects) => this.notify("pi/project/updated", { projects }),
+      onChange: (projects) => {
+        this.notify("pi/project/updated", { projects });
+        (this as { agents?: AgentStore }).agents?.setTrustedProjects(
+          projects.filter((project) => project.trust === "trusted").map((project) => project.cwd),
+        );
+      },
       onTrustRequest: (request) => {
         this.log(`project trust: asking about ${request.cwd} (${request.reasons.join(", ")})`);
         this.notify("pi/project/trust_request", request);
@@ -548,6 +553,8 @@ export class HostServer {
       agentDir,
       stateDir,
       workspaces,
+      trustedProjects: () => this.projects.list().filter((project) => project.trust === "trusted").map((project) => project.cwd),
+      log: (line) => this.log(line),
       onChange: (snapshot) => {
         this.notify("agents/updated", snapshot);
         void this.pool?.broadcastRequest("agents/sync", { snapshot }).then((results) => {

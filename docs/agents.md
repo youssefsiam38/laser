@@ -34,15 +34,25 @@ characters. There is no separate agent id, type or profile name.
 
 | Agents page field | Protocol field | Notes |
 | --- | --- | --- |
-| Name | `name` | Editable and unique; built-in names (`beam`, `chat`, `namer`), current names and historical rename aliases are refused |
+| Name | `name` | Comes from the Markdown filename; lower-case and unique within its scope. A project agent may shadow a global one of the same name. Built-in names (`beam`, `chat`, `namer`), current names and global historical rename aliases are refused |
+| Scope | `scope`, `projectCwd`, `path` | `global` lives under `<stateDir>/agents/`; `project` lives under a trusted project's `.laser/agents/`. `projectCwd` is canonical and present only for project agents; the host reports the absolute `path` |
 | Description | `description` | ≤ 300 chars. Answers "when should another agent start this one?" — it is the compact catalog text |
-| Instructions | `instructions`, `engineInstructions` | Answers "how should this agent work?" Every custom agent first gets the shared `packages/worker/src/agents/core-instructions.md` unless `excludeCoreInstructions` is on; built-ins never do. The shipped `default` agent starts with `engineInstructions: true`: Laser's own neutral coding prompt, readable through `agents/engine-instructions`; a person may replace it with their own text |
+| Instructions | `instructions`, `engineInstructions`, `excludeCoreInstructions` | The Markdown body, byte-preserved and interpreted as a Handlebars template, answers "how should this agent work?" Every custom agent first gets the shared `packages/worker/src/agents/core-instructions.md` unless `excludeCoreInstructions` is on; built-ins never do. The shipped `default` agent starts with `engineInstructions: true`: Laser's own neutral coding prompt, readable through `agents/engine-instructions`; a person may replace it with their own text |
 | Model | `model` | `{ provider, id }` or `null` to follow the configured default model |
 | Thinking | `thinkingLevel` | `null` follows the default |
 | Supports subagents | `supportsSubagents` | When on, the agent gets `start_agent` and its siblings |
 | Agents it can run | `allowedAgents` | Multi-select of custom agents, including another instance of the same definition; never a built-in. Meaningful only with `supportsSubagents` |
 | Scoped skills | `scopedSkills`, `skills` | Off by default: every discovered skill is offered. On: only the listed `AgentSkillRef`s (`name`, `path`, `scope`), chosen from what Laser discovers at definition time (`agents/skills`, listing `<agentDir>/skills` and `~/.agents/skills` as `global`, `<project>/.laser/skills` and `<project>/.agents/skills` as `project` when the project is trusted) |
 | Default | snapshot `defaultAgent` | "Default" only means the agent a new session opens with (the `i` mark beside the toggle says so). The current default cannot be deleted; pick another default first |
+
+Each custom definition is `<name>.md`: YAML frontmatter uses the protocol field
+names (`description`, `model` as `provider/id` or null, `thinkingLevel`,
+`supportsSubagents`, `allowedAgents`, `scopedSkills`, `skills`,
+`engineInstructions`, `excludeCoreInstructions`, `createdAt`, `updatedAt`) and
+the text after the closing `---` line is `instructions` verbatim. Omitted
+booleans are false and omitted lists are empty. The host watches global files
+and every currently trusted project's files; an invalid hand edit produces a
+`file` warning and leaves the last valid definition running until it is fixed.
 
 The ordinary new-session composer exposes custom definitions as a searchable
 selector immediately before the model, preselects `defaultAgent`, and removes
@@ -715,7 +725,9 @@ and a later worker retries it automatically. The result records
 
 | Where | What |
 | --- | --- |
-| `<stateDir>/agents.json` | custom agents (the seeded `default` among them), `defaultAgent`, policy, every built-in's instruction override and model choice, `revision`. Built-in identities and null-overridden prompts are rebuilt from `packages/host/src/agents/builtins.ts` on every load |
+| `<stateDir>/agents/<name>.md` | one global custom definition: YAML frontmatter plus the byte-preserved instructions body. The seeded `default` is global |
+| `<project>/.laser/agents/<name>.md` | one project custom definition, read and watched only while the registry lists that canonical project root as trusted; it shadows a same-named global definition for that project |
+| `<stateDir>/agents.json` | version 2 metadata only: `defaultAgent` (always global), policy, revision, durable global rename aliases, and every built-in's instruction override and model choice. On first load, version 1 definitions migrate to Markdown files after an exact `agents.json.v1.bak` is made; existing Markdown names win |
 | `<stateDir>/agent-runs.json` | every `AgentRun` the host has heard of, fed by `agents/run` notifications; terminal runs kept 30 days and at most 500 per project; non-terminal runs are failed on host load and on worker loss |
 | session custom entry `lasercode/agent` (`SESSION_AGENT_ENTRY_TYPE`) | the first custom entry of every agent-started or agent-defined session: `SessionAgentRecord { agentName, kind, subagentName, parentPath, parentSessionId, rootPath, runId, worktree? }` — `worktree` is absent for a child started with `worktree: false`, and that absence is what a reloaded session reads back — so a catalog that only reads files can attribute it |
 | session custom entry `lasercode/agent-run` (`SESSION_RUN_ENTRY_TYPE`) | run lifecycle moments in the child session (started, completed, blocked, failed, cancelled); a question is transient and is not written |

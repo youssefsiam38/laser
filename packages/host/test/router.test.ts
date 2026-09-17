@@ -644,7 +644,7 @@ describe("Router · agents (docs/agents-leap)", () => {
     try {
       const listed = (await rpc(h.router, "agents/list")) as { result: { agents: Array<{ name: string }>; defaultAgent: string } };
       expect(listed.result.agents.map((a) => a.name)).toEqual(["default", "beam", "chat", "namer"]);
-      const input = { name: "reviewer", description: "", instructions: "Review.", engineInstructions: false, model: null, thinkingLevel: null, supportsSubagents: false, allowedAgents: [], scopedSkills: false, skills: [] };
+      const input = { name: "reviewer", scope: "global" as const, description: "", instructions: "Review.", engineInstructions: false, excludeCoreInstructions: false, model: null, thinkingLevel: null, supportsSubagents: false, allowedAgents: [], scopedSkills: false, skills: [] };
       expect(await rpc(h.router, "agents/validate", { agent: { ...input, scopedSkills: true }, originalName: null })).toMatchObject({ result: { issues: [{ field: "skills" }] } });
       const saved = await rpc(h.router, "agents/save", { agent: input, originalName: null });
       expect(saved).toMatchObject({ result: { agent: { name: "reviewer", kind: "custom" }, snapshot: { revision: 1 } } });
