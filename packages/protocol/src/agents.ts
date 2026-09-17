@@ -188,6 +188,11 @@ export type AgentWarningField = "skills" | "model" | "allowedAgents" | "file";
 export interface AgentWarning {
   agentName: string;
   field: AgentWarningField;
+  /**
+   * The definition file the warning is about. Names repeat across scopes
+   * (a project agent shadows a global one), so this is the unambiguous key.
+   */
+  path?: string;
   /** The specific skill name, model id or agent name concerned. */
   target?: string;
   message: string;
