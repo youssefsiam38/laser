@@ -36,6 +36,8 @@ it("opens native paths on click and prevents browser navigation including middle
   expect(open).toHaveBeenCalledWith("/captured-project/src/main.ts");
   const middle = new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 });
   link.dispatchEvent(middle); expect(middle.defaultPrevented).toBe(true);
+  const context = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+  link.dispatchEvent(context); expect(context.defaultPrevented).toBe(true);
   expect(link.dataset.filePath).toBe("/captured-project/src/main.ts");
 });
 

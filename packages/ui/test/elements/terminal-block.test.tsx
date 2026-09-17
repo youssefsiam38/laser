@@ -130,6 +130,18 @@ describe("ansi", () => {
   });
 });
 
+describe("native selection", () => {
+  it("excludes only the decorative prompt while leaving command and output selectable", async () => {
+    await render({ running: false, exitCode: 0, output: "clean output" });
+    const prompt = block().querySelector<HTMLElement>('[aria-hidden="true"]')!;
+    expect(prompt.classList).toContain("select-none");
+    expect(prompt.textContent).toBe("$");
+    expect(block().querySelector('[data-search-content]')?.classList).not.toContain("select-none");
+    expect(pre().classList).not.toContain("select-none");
+    expect(pre().textContent).toBe("clean output");
+  });
+});
+
 describe("the header", () => {
   it("carries the command and the exit code, so nothing else has to", async () => {
     await render({ running: false, exitCode: 1, output: "1 failing" });

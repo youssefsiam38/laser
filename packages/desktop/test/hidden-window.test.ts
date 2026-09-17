@@ -14,6 +14,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({
+  app: { getLocale: () => "en-US" },
   BrowserWindow: class {},
   clipboard: {},
   dialog: {},

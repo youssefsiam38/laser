@@ -30,6 +30,7 @@ import type { ComponentProps, ReactNode } from "react";
 
 import { cn } from "@/lib/utils";
 
+import { ComposerQuotePreview } from "./quote.aui.js";
 import { field } from "./surfaces.js";
 
 export interface MobileComposerProps extends Omit<ComponentProps<"div">, "children"> {
@@ -50,6 +51,7 @@ export function MobileComposer({ above, leading, inline, trailing, placeholder, 
   return (
     <div data-slot="mobile-composer" className={cn("flex flex-col gap-2", className)} {...props}>
       {above && <div className="flex min-h-8 items-center gap-1 overflow-x-auto px-1 scrollbar-none">{above}</div>}
+      <ComposerQuotePreview className="mx-1 mt-0" />
       <div className="flex items-end gap-2">
       {leading}
       <div className={cn(field, "flex min-h-11 min-w-0 flex-1 items-end gap-1 rounded-full py-1.5 ps-4 pe-1.5")}>
@@ -59,6 +61,9 @@ export function MobileComposer({ above, leading, inline, trailing, placeholder, 
           maxRows={6}
           aria-label="Message"
           placeholder={placeholder ?? "Message"}
+          spellCheck
+          autoCorrect="on"
+          autoCapitalize="sentences"
           submitMode="enter"
           cancelOnEscape={false}
           unstable_insertNewlineOnTouchEnter

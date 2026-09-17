@@ -331,6 +331,20 @@ describe("collapsed diff summaries", () => {
     } as never] }]).stats).toEqual([]);
   });
 
+  it("keeps diff text selectable while excluding line-number and marker chrome", async () => {
+    const hunk = {
+      header: "@@ -1,1 +1,1 @@",
+      lines: [{ kind: "add" as const, text: "const selectable = true;", newNo: 1 }],
+    };
+    await act(async () => render(<CodeDiff view={{ hunks: [hunk], truncated: false }} />));
+    const row = container.querySelector<HTMLTableRowElement>('tr[data-kind="add"]')!;
+    expect([...row.querySelectorAll("td")].slice(0, 2).every(cell => cell.classList.contains("select-none"))).toBe(true);
+    expect(row.querySelector('[aria-hidden="true"]')?.classList).toContain("select-none");
+    const source = row.querySelector<HTMLElement>("[data-search-content]")!;
+    expect(source.classList).not.toContain("select-none");
+    expect(source.textContent).toBe("const selectable = true;");
+  });
+
   it("uses full-source stats and falls back for older handcrafted views", async () => {
     const hunk = {
       header: "@@ -1,1 +1,1 @@",

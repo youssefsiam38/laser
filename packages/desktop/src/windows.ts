@@ -24,7 +24,19 @@
  */
 import { DESKTOP_ARGUMENT_PREFIX, IPC } from "./api.js";
 import { PRODUCT_NAME } from "@lasercode/protocol";
-import { BrowserWindow, clipboard, dialog, nativeTheme, screen, shell, type BrowserWindowConstructorOptions } from "electron";
+import {
+  app,
+  BrowserWindow,
+  clipboard,
+  dialog,
+  Menu,
+  nativeTheme,
+  screen,
+  shell,
+  type BrowserWindowConstructorOptions,
+  type ContextMenuParams,
+  type MenuItemConstructorOptions,
+} from "electron";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -194,6 +206,126 @@ export function windowWebPreferences(bootstrap: WindowBootstrap): Electron.WebPr
   };
 }
 
+export interface NativeTextMenuActions {
+  replaceMisspelling(word: string): void;
+  addToDictionary(word: string): void;
+  lookupSelection?(): void;
+  openLink(url: string): void;
+  copyLinkAddress(url: string): void;
+  copyImageAt(x: number, y: number): void;
+  selectAllTranscript(): void;
+}
+
+type NativeTextMenuParams = Pick<
+  ContextMenuParams,
+  | "dictionarySuggestions"
+  | "editFlags"
+  | "isEditable"
+  | "linkURL"
+  | "mediaType"
+  | "misspelledWord"
+  | "selectionText"
+  | "spellcheckEnabled"
+  | "x"
+  | "y"
+>;
+
+/**
+ * Electron deliberately ships no page context menu. Build only the native text
+ * menu the renderer cannot supply: spelling replacements and the platform's
+ * editing commands for prose fields, Copy/Look Up for selected transcript
+ * text, and native link/image actions. Opening remains restricted to web URLs;
+ * file-backed product links keep their explicit editor bridge.
+ */
+export function nativeTextMenuTemplate(
+  params: NativeTextMenuParams,
+  actions: NativeTextMenuActions,
+  platform: NodeJS.Platform = process.platform,
+): MenuItemConstructorOptions[] {
+  const template: MenuItemConstructorOptions[] = [];
+  const separator = () => {
+    if (template.length > 0 && template.at(-1)?.type !== "separator") template.push({ type: "separator" });
+  };
+
+  const linkURL = params.linkURL.trim();
+  if (linkURL) {
+    let opensExternally = false;
+    try {
+      opensExternally = ["http:", "https:"].includes(new URL(linkURL).protocol);
+    } catch {
+      // An invalid URL remains copyable text but is never opened.
+    }
+    if (opensExternally) template.push({ label: "Open Link", click: () => actions.openLink(linkURL) });
+    template.push({ label: "Copy Link Address", click: () => actions.copyLinkAddress(linkURL) });
+    separator();
+  }
+
+  if (params.mediaType === "image") {
+    template.push({ label: "Copy Image", click: () => actions.copyImageAt(params.x, params.y) });
+    separator();
+  }
+
+  if (params.isEditable && params.spellcheckEnabled && params.misspelledWord) {
+    if (params.dictionarySuggestions.length > 0) {
+      for (const suggestion of params.dictionarySuggestions.slice(0, 5)) {
+        template.push({ label: suggestion, click: () => actions.replaceMisspelling(suggestion) });
+      }
+    } else {
+      template.push({ label: "No spelling suggestions", enabled: false });
+    }
+    template.push({ label: "Add to dictionary", click: () => actions.addToDictionary(params.misspelledWord) });
+    separator();
+  }
+
+  if (params.selectionText && actions.lookupSelection) {
+    const oneLine = params.selectionText.replace(/\s+/g, " ").trim();
+    const label = oneLine.length > 36 ? `${oneLine.slice(0, 35)}…` : oneLine;
+    const nativeLabel = platform === "darwin" ? label : label.replace(/&/g, "&&");
+    template.push({ label: `Look Up “${nativeLabel}”`, click: actions.lookupSelection });
+    separator();
+  }
+
+  if (params.isEditable) {
+    template.push(
+      { role: "undo", enabled: params.editFlags.canUndo },
+      { role: "redo", enabled: params.editFlags.canRedo },
+      { type: "separator" },
+      { role: "cut", enabled: params.editFlags.canCut },
+      { role: "copy", enabled: params.editFlags.canCopy },
+      { role: "paste", enabled: params.editFlags.canPaste },
+      { role: "delete", enabled: params.editFlags.canDelete },
+      { type: "separator" },
+      { role: "selectAll", enabled: params.editFlags.canSelectAll },
+    );
+  } else if (params.selectionText) {
+    template.push(
+      { role: "copy", enabled: params.editFlags.canCopy },
+      { type: "separator" },
+      { label: "Select All", enabled: params.editFlags.canSelectAll, click: actions.selectAllTranscript },
+    );
+  }
+
+  while (template.at(-1)?.type === "separator") template.pop();
+  return template;
+}
+
+/** Pick one installed dictionary for the app locale, then a supported English fallback. */
+export function spellCheckerLanguages(locale: string, available: readonly string[]): string[] {
+  if (available.length === 0) return [];
+  const normalized = locale.replace(/_/g, "-").toLowerCase();
+  const language = normalized.split("-")[0];
+  const exact = available.find(candidate => candidate.toLowerCase() === normalized);
+  const sameLanguage = available.find(candidate => {
+    const value = candidate.toLowerCase();
+    return value === language || value.startsWith(`${language}-`);
+  });
+  const english = available.find(candidate => candidate.toLowerCase() === "en-us")
+    ?? available.find(candidate => candidate.toLowerCase() === "en")
+    ?? available.find(candidate => candidate.toLowerCase().startsWith("en-"));
+  const chosen = exact ?? sameLanguage ?? english;
+  return chosen ? [chosen] : [];
+}
+
 /**
  * Two `data:` URLs both have an opaque origin, so this deliberately treats them
  * as the same place: the waiting screen must not reload itself every time the
@@ -216,6 +348,7 @@ export class WindowManager {
   private main: BrowserWindow | undefined;
   private readonly state: WindowState;
   private saveTimer: NodeJS.Timeout | undefined;
+  private spellcheckConfigured = false;
   /** Set while the app is really quitting, so `close` stops meaning `hide`. */
   private quitting = false;
 
@@ -263,7 +396,25 @@ export class WindowManager {
     this.main = window;
     if (stored?.maximized) window.maximize();
 
+    this.configureSpellcheck(window);
     this.harden(window);
+    window.webContents.on("context-menu", (_event, params) => {
+      const contents = window.webContents;
+      const template = nativeTextMenuTemplate(params, {
+        replaceMisspelling: (word) => contents.replaceMisspelling(word),
+        addToDictionary: (word) => contents.session.addWordToSpellCheckerDictionary(word),
+        ...(process.platform === "darwin" ? { lookupSelection: () => contents.showDefinitionForSelection() } : {}),
+        openLink: (url) => this.openInBrowser(window, url),
+        copyLinkAddress: (url) => clipboard.writeText(url),
+        copyImageAt: (x, y) => contents.copyImageAt(x, y),
+        selectAllTranscript: () => {
+          const modifiers: Array<"meta" | "control"> = [process.platform === "darwin" ? "meta" : "control"];
+          contents.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers });
+          contents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers });
+        },
+      });
+      if (template.length > 0) Menu.buildFromTemplate(template).popup({ window });
+    });
     this.options.log.milestone("window created");
     window.once("ready-to-show", () => {
       this.options.log.milestone("window ready to show");
@@ -369,6 +520,31 @@ export class WindowManager {
       };
     }
     return LINUX_WINDOW_FRAME;
+  }
+
+  /**
+   * Configure one real dictionary for Chromium platforms. Electron downloads a
+   * missing Hunspell dictionary itself; an offline failure is diagnostic only,
+   * so typing keeps working without an error surface that cannot fix the network.
+   * macOS uses the system spellchecker and ignores this API.
+   */
+  private configureSpellcheck(window: BrowserWindow): void {
+    if (this.spellcheckConfigured || process.platform === "darwin") return;
+    this.spellcheckConfigured = true;
+    const session = window.webContents.session;
+    const languages = spellCheckerLanguages(app.getLocale(), session.availableSpellCheckerLanguages);
+    if (languages.length === 0) {
+      this.options.log.line(`no installed spellcheck dictionary matches ${app.getLocale()}`);
+      return;
+    }
+    session.once("spellcheck-dictionary-download-failure", (_event, language) => {
+      this.options.log.line(`spellcheck dictionary ${language} is unavailable offline; native typing remains enabled`);
+    });
+    try {
+      session.setSpellCheckerLanguages(languages);
+    } catch (error) {
+      this.options.log.line(`could not configure spellcheck dictionary ${languages.join(", ")}: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   /**

@@ -22,8 +22,9 @@
  * the model-and-thinking menu can sit in the same row, and "more" is a real
  * menu with the session-tree actions rather than a bare callback.
  */
-import { Braces, Check, Copy, Ellipsis, GitFork, Link, Milestone, PencilLine, RefreshCw } from "lucide-react";
-import type { ComponentProps, ReactNode } from "react";
+import { useAui } from "@assistant-ui/react";
+import { Braces, Check, Copy, Ellipsis, GitFork, Link, Milestone, PencilLine, Quote, RefreshCw } from "lucide-react";
+import { useRef, useState, type ComponentProps, type ReactNode } from "react";
 
 import {
   DropdownMenu,
@@ -35,8 +36,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
+import { modKey } from "@/format";
 import { cn } from "@/lib/utils";
 
+import {
+  applyTranscriptQuote,
+  rememberedTranscriptSelection,
+  type TranscriptSelectionQuote,
+} from "./quote.aui.js";
 import { iconSwap, iconSwapIn, iconSwapOut } from "./surfaces.js";
 
 export interface MessageActionsProps extends Omit<ComponentProps<"div">, "children"> {
@@ -73,8 +80,24 @@ export interface MessageActionsProps extends Omit<ComponentProps<"div">, "childr
 const STOPS_REPLY = "stops the reply";
 
 export function MessageActions({ copied, onCopy, copyLabel, onEdit, onRegenerate, onRegenerateFork, onFork, onJump, onCopyPath, onViewRequest, onLoadHistory, loadHistoryRefusal, regenerate, busy = false, className, ...props }: MessageActionsProps) {
-  const hasMenu =
-    onFork !== undefined || onJump !== undefined || onCopyPath !== undefined || onViewRequest !== undefined || onRegenerateFork !== undefined || onLoadHistory !== undefined || loadHistoryRefusal !== undefined;
+  const aui = useAui();
+  const more = useRef<HTMLButtonElement>(null);
+  const quoteAtOpen = useRef<TranscriptSelectionQuote | undefined>(undefined);
+  const [capturedQuote, setCapturedQuote] = useState<TranscriptSelectionQuote | undefined>(undefined);
+  const captureQuote = (): TranscriptSelectionQuote | undefined => {
+    const message = more.current?.closest<HTMLElement>("[data-message-id]");
+    const thread = more.current?.closest<HTMLElement>('[data-slot="thread"]');
+    const quote = rememberedTranscriptSelection(thread ?? null, message?.dataset.messageId);
+    quoteAtOpen.current = quote;
+    setCapturedQuote(quote);
+    return quote;
+  };
+  const quoteSelection = (): void => {
+    const quote = quoteAtOpen.current;
+    const thread = more.current?.closest<HTMLElement>('[data-slot="thread"]');
+    if (!quote || !thread) return;
+    applyTranscriptQuote(thread, quote, (value) => aui.thread.composer().setQuote(value));
+  };
   return (
     <div data-slot="message-actions" className={cn("flex items-center", className)} {...props}>
       <TooltipIconButton tooltip={copyLabel ?? (copied ? "Copied" : "Copy")} size="icon-xs" onClick={onCopy} className={cn("grid place-items-center text-ink-3", copied && "text-ok hover:text-ok")}>
@@ -92,14 +115,26 @@ export function MessageActions({ copied, onCopy, copyLabel, onEdit, onRegenerate
         </TooltipIconButton>
       ) : null}
       {regenerate}
-      {hasMenu ? (
-        <DropdownMenu>
+      <DropdownMenu onOpenChange={(open) => {
+        if (open) {
+          const quote = quoteAtOpen.current ?? captureQuote();
+          setCapturedQuote(quote);
+        } else {
+          quoteAtOpen.current = undefined;
+          setCapturedQuote(undefined);
+        }
+      }}>
           <DropdownMenuTrigger asChild>
-            <TooltipIconButton tooltip="More" size="icon-xs" className="text-ink-3">
+            <TooltipIconButton ref={more} tooltip="More" size="icon-xs" className="text-ink-3" onPointerDownCapture={captureQuote}>
               <Ellipsis />
             </TooltipIconButton>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start">
+            <DropdownMenuItem disabled={!capturedQuote} onSelect={quoteSelection} className="pointer-coarse:min-h-11">
+              <Quote />
+              Quote selection
+              <DropdownMenuShortcut>{modKey()}+Shift+9</DropdownMenuShortcut>
+            </DropdownMenuItem>
             {onViewRequest && <DropdownMenuItem onSelect={onViewRequest}><Braces />View API request</DropdownMenuItem>}
             {onRegenerateFork ? (
               <DropdownMenuItem disabled={busy} onSelect={onRegenerateFork}>
@@ -140,7 +175,6 @@ export function MessageActions({ copied, onCopy, copyLabel, onEdit, onRegenerate
             ) : null}
           </DropdownMenuContent>
         </DropdownMenu>
-      ) : null}
     </div>
   );
 }
