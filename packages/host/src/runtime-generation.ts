@@ -1,5 +1,15 @@
 import { createHash } from "node:crypto";
-import {
+import * as nodeFs from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { ENV, type FeatureId, type WorkerMode } from "@lasercode/protocol";
+
+// Electron's patched fs presents `app.asar` as a directory, so an inventory
+// that lists the archive as a file always reads as drift. Verify raw bytes.
+const fs: typeof nodeFs = process.versions.electron
+  ? createRequire(import.meta.url)("original-fs") as typeof nodeFs
+  : nodeFs;
+const {
   chmodSync,
   closeSync,
   existsSync,
@@ -13,9 +23,7 @@ import {
   statSync,
   unlinkSync,
   writeFileSync,
-} from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { ENV, type FeatureId, type WorkerMode } from "@lasercode/protocol";
+} = fs;
 
 export const RUNTIME_MANIFEST_NAME = "runtime-manifest.json";
 export const RUNTIME_POINTER_NAME = "runtime-generation.json";

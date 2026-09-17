@@ -449,6 +449,47 @@ record(
   "The shipped binary is not a usable plain Node. Re-stage it: pnpm -F @lasercode/desktop runtime -- --current.",
 );
 
+// 5a ── the desktop's own launch preflight accepts its install ---------------
+//
+// The host verifies the runtime inventory under bundled Node, but the desktop
+// runs the same verification first, inside Electron, whose fs presents
+// `app.asar` as a directory. 0.7.0 shipped with that preflight refusing every
+// install ("runtime files changed"). This runs the packaged preflight module
+// in the packaged Electron, against scratch data, exactly as startup does.
+const electronBinary = process.platform === "darwin"
+  ? join(appDir, "MacOS", identity.displayName)
+  : process.platform === "win32"
+    ? join(appDir, `${identity.displayName}.exe`)
+    : join(appDir, identity.realBinary);
+const preflightProbe = join(sandbox, "preflight-probe.mjs");
+writeFileSync(preflightProbe, `
+import { pathToFileURL } from "node:url";
+const [resources, scratch] = process.argv.slice(2);
+const { prepareInstalledRuntimeOffMain } = await import(pathToFileURL(resources + "/app.asar/dist/migration-preflight.js").href);
+const paths = { agentDir: scratch + "/agent", sessionDir: scratch + "/sessions", stateDir: scratch + "/state",
+  hostFile: scratch + "/state/host.json", logFile: scratch + "/state/host.log", host: "127.0.0.1", port: 9 };
+try {
+  await prepareInstalledRuntimeOffMain(paths, ${JSON.stringify(join(modules, "@lasercode", "cli", "dist", "main.js"))});
+  console.log(JSON.stringify({ ok: true, electron: process.versions.electron }));
+} catch (error) {
+  console.log(JSON.stringify({ ok: false, electron: process.versions.electron, error: error instanceof Error ? error.message : String(error) }));
+}
+`);
+const preflightScratch = join(sandbox, "preflight");
+for (const name of ["agent", "sessions", "state"]) mkdirSync(join(preflightScratch, name), { recursive: true });
+const preflightRun = existsSync(electronBinary)
+  ? runBare(electronBinary, [preflightProbe, resources, preflightScratch], { ...bareEnv, ELECTRON_RUN_AS_NODE: "1" }, 120_000)
+  : { code: 1, stdout: "", stderr: `missing: ${electronBinary}` };
+const preflight = lastJsonLine(preflightRun.stdout);
+record(
+  "the desktop's launch preflight verifies this install inside Electron",
+  Boolean(preflight?.ok) && Boolean(preflight.electron),
+  preflight?.ok
+    ? `Electron ${preflight.electron} accepted runtime generation ${String(packagedRuntime.generationId).slice(0, 12)}…`
+    : preflight?.error ?? (preflightRun.stderr.trim() || "no answer"),
+  "Electron's asar-aware fs must not read the runtime inventory. Check packages/host/src/runtime-generation.ts uses original-fs under Electron.",
+);
+
 // 6 ── the agent resolves from inside the package, and all of it loads -------
 const resolver = join(modules, "@lasercode", "worker", "dist", "resolve-pi.js");
 const agentRun = runBare(nodeBinary, [resolver, "--check"], bareEnv);
