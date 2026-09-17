@@ -114,11 +114,24 @@ export class FallbackController {
    */
   activateIfUnset(): void {
     if (this.state.activation) return;
-    const activation = activate(this.engine.chains(), this.engine.selectedModel(), {
-      id: this.engine.newId(),
-      at: this.iso(),
-    });
+    const activation = this.activationForSelectedModel();
     if (activation) this.state = { ...this.state, activation };
+  }
+
+  /**
+   * A pristine session accepted the agent/model tuple prepared for its first
+   * turn. Runtime preparation can replace the model that `open()` saw, so its
+   * provisional activation must follow the accepted runtime's actual model.
+   *
+   * A restored traversal already stands on the model at its saved position and
+   * wins unchanged. This boundary is never called for a fallback-caused switch.
+   */
+  activateForAcceptedSelection(): void {
+    const selected = this.engine.selectedModel();
+    const activation = this.state.activation;
+    const active = activation?.models[activation.position];
+    if (sameModel(active, selected)) return;
+    this.state = { ...this.state, activation: this.activationForSelectedModel() };
   }
 
   /**
@@ -291,6 +304,13 @@ export class FallbackController {
   }
 
   // ------------------------------------------------------------------ internals
+
+  private activationForSelectedModel(): FallbackActivation | null {
+    return activate(this.engine.chains(), this.engine.selectedModel(), {
+      id: this.engine.newId(),
+      at: this.iso(),
+    });
+  }
 
   private stale(generation: number, abort: AbortController): boolean {
     return generation !== this.generation || abort.signal.aborted;

@@ -796,6 +796,10 @@ export class StableSdkDriver implements SessionDriver {
     const accepted = this.state();
     const attempt = this.firstTurn.takeForCommit();
     const { record, modelIntent, thinkingIntent } = attempt.prepared;
+    // `open()` activated against the pristine runtime. The accepted agent/model
+    // tuple may have replaced that runtime, so resolve from the model that will
+    // actually receive this turn before the provider request starts.
+    this.fallback?.activateForAcceptedSelection();
     // Acceptance is monotonic even if the atomic persistence attempt reports
     // an I/O error: retain the accepted tuple and suffix in this one manager.
     try {
