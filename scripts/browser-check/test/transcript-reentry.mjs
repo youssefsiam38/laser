@@ -89,14 +89,23 @@ export default async function reentry(check) {
   await openLong(names.second);
   entryReads.length = 0;
   await openLong(names.first);
-  await page.getByText('Checkpoint 120 is complete.', { exact: true }).waitFor({ state: 'visible' });
+  const newest = page.getByText('Checkpoint 120 is complete.', { exact: true });
+  await newest.waitFor({ state: 'visible' });
+  const placement = await viewport().evaluate(element => ({ gap: element.scrollHeight - element.clientHeight - element.scrollTop, top: element.getBoundingClientRect().top, bottom: element.getBoundingClientRect().bottom }));
+  const newestRect = await newest.boundingBox();
+  assert(placement.gap <= 4, `re-entry is ${placement.gap}px above latest`);
+  assert(newestRect && newestRect.y < placement.bottom && newestRect.y + newestRect.height > placement.top, 'the newest message is inside the returned viewport');
   const oldest = page.locator('[data-role=user]').filter({ hasText: 'Review checkpoint 1:' });
   assert.equal(await oldest.count(), 0, 'the old reading position is not restored');
-  assert.equal(await earlierControl().count(), 1, 'older messages remain one control away');
   const windows = entryReads.filter(params => params.path === seeded.path).map(params => params.window);
   assert.deepEqual(windows, [{ tail: 40 }], `one authoritative tail read per return, got ${JSON.stringify(windows)}`);
+  // An accepted same-revision delta may retain the already bounded older page;
+  // a replacement holds only the recent tail. Re-entry owns latest either way,
+  // and older history remains reachable either in place or one control away.
+  const earlier = await earlierControl().count();
   const returnedTop = await oldestLoaded();
-  assert.equal(returnedTop, '101', `re-entry loads the last 40 messages, not from checkpoint ${returnedTop}`);
+  assert.ok(returnedTop === '1' || returnedTop === '101', `re-entry exposed an unexpected oldest checkpoint ${returnedTop}`);
+  assert.equal(earlier, returnedTop === '101' ? 1 : 0, 'older history is neither retained nor one control away');
   const returnedDom = await page.locator('[data-window-message]').count();
   assert(returnedDom < 80, `the returned transcript stays bounded (${returnedDom} rows)`);
 
@@ -110,18 +119,22 @@ export default async function reentry(check) {
   await expand();
   await openLong(names.first);
   await openLong(names.second);
-  assert.equal(await oldestLoaded(), '101', 'the second conversation also returns to its recent tail');
+  const secondPlacement = await viewport().evaluate(element => element.scrollHeight - element.clientHeight - element.scrollTop);
+  assert(secondPlacement <= 4, `the second conversation re-entry is ${secondPlacement}px above latest`);
+  const secondTop = await oldestLoaded();
+  assert.ok(secondTop === '1' || secondTop === '101', `the second conversation exposed an unexpected oldest checkpoint ${secondTop}`);
 
   // A question this session is waiting on survives its own re-entry.
   await open(names.asking);
-  const allow = page.getByRole('button', { name: 'Allow once', exact: true });
+  const approvals = page.getByRole('button', { name: 'Allow once', exact: true });
+  const allow = approvals.first();
   await allow.waitFor();
   await openLong(names.first);
   await open(names.asking);
   // The question is still here, and still the one thing this session waits on.
   await allow.waitFor();
   await allow.click();
-  await allow.waitFor({ state: 'detached' });
+  await until(async () => await approvals.count() === 0, 'the re-entered approval to settle', 30_000);
   await until(async () => !(await check.rpc('session/load', { path: asking })).state.isStreaming, 'the approved tool call to finish', 30000);
   assert.equal(await page.getByText('Allow this?', { exact: true }).count(), 0, 'the answered question is gone');
   await asked;
@@ -139,6 +152,6 @@ export default async function reentry(check) {
   await find.press('Escape');
   assert.equal(await composer.inputValue(), 'an unsent draft', 'the draft survives re-entry and find');
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
-  writeFileSync(join(check.root, `reentry-${label}.json`), JSON.stringify({ returnedTop, expandedDom, returnedDom, windows, question: 'answerable after re-entry' }, null, 2));
+  writeFileSync(join(check.root, `reentry-${label}.json`), JSON.stringify({ returnedTop, secondTop, expandedDom, returnedDom, windows, placementGap: placement.gap, secondPlacementGap: secondPlacement, question: 'answerable after re-entry' }, null, 2));
   await check.snapshot(); await check.shot('reentry');
 }

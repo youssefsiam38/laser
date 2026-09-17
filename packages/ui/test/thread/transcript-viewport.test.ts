@@ -19,6 +19,68 @@ describe("scoped transcript destinations", () => {
     const pending = controller.ensureVisible({ messageId: "message" }, { reason: "focus", signal: abort.signal });
     abort.abort(); expect(await pending).toBe("cancelled");
   });
+  it("opens a replaced recent tail at its latest message after returning from an old reading place", async () => {
+    const frames = new Map<number, FrameRequestCallback>(); let frameId = 0;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { frames.set(++frameId, callback); return frameId; });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => { frames.delete(id); });
+    const step = async () => { const pending = [...frames.values()]; frames.clear(); for (const callback of pending) callback(0); await Promise.resolve(); };
+    const controller = new TranscriptViewport(), viewport = document.createElement("div"), content = document.createElement("div");
+    const ids = Array.from({ length: 120 }, (_, i) => `message-${i}`);
+    Object.defineProperties(viewport, { clientHeight: { value: 600 }, scrollHeight: { get: () => controller.heights.total } });
+    viewport.getBoundingClientRect = () => new DOMRect(0, 0, 600, 600);
+    content.getBoundingClientRect = () => new DOMRect(0, -viewport.scrollTop, 600, controller.heights.total);
+    content.style.fontSize = "14px"; content.style.lineHeight = "21px";
+    viewport.append(content); document.body.append(viewport); controller.content = content;
+    controller.configure("/one", undefined, "first-window"); controller.setIds(ids);
+    const detach = controller.attach(viewport, () => { viewport.scrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight); });
+    try {
+      await step();
+      expect(viewport.scrollTop).toBeGreaterThan(0);
+      // The person leaves from earlier history. Main navigation then clears the
+      // current path while it awaits the authoritative recent-tail read.
+      viewport.dispatchEvent(new Event("wheel"));
+      viewport.scrollTop = 1_000; viewport.dispatchEvent(new Event("scroll"));
+      expect(controller.capture().following).toBe(false);
+      controller.configure("", undefined, undefined); controller.setIds([]);
+      // The ready path and its already-accepted replacement revision arrive in
+      // one render, which used to restore the discarded window's old anchor.
+      viewport.scrollTop = 0;
+      controller.configure("/one", undefined, "replacement-window"); controller.setIds(ids.slice(-40));
+      await step();
+      expect(viewport.scrollTop).toBe(viewport.scrollHeight - viewport.clientHeight);
+      expect(controller.capture().following).toBe(true);
+      expect(controller.ranges().some(range => range.end === 40)).toBe(true);
+      // The stale reading state also prevented the agent's next output from
+      // following. Once re-entry owns latest, later growth stays there.
+      controller.setIds([...ids.slice(-40), "agent-output"]);
+      controller.followRun(true);
+      expect(viewport.scrollTop).toBe(viewport.scrollHeight - viewport.clientHeight);
+      expect(controller.capture().following).toBe(true);
+      // A scoped reload can replace the same path in place. Unchanged row count
+      // and typography still require an explicit bottom placement.
+      const thirdWindow = Array.from({ length: 41 }, (_, i) => `third-${i}`);
+      viewport.scrollTop = 0;
+      controller.configure("/one", undefined, "third-window"); controller.setIds(thirdWindow);
+      await step();
+      expect(viewport.scrollTop).toBe(viewport.scrollHeight - viewport.clientHeight);
+      expect(controller.capture().following).toBe(true);
+    } finally { detach(); viewport.remove(); vi.unstubAllGlobals(); }
+  });
+  it("lets an explicit destination supersede replacement-tail arrival", async () => {
+    const controller = new TranscriptViewport(), viewport = document.createElement("div");
+    Object.defineProperties(viewport, { clientHeight: { value: 600 }, scrollHeight: { value: 2_000 } });
+    controller.configure("/one", undefined, "first-window"); controller.setIds(["target"]);
+    const detach = controller.attach(viewport, () => {});
+    try {
+      controller.configure("", undefined, undefined); controller.setIds([]);
+      controller.configure("/one", undefined, "replacement-window"); controller.setIds(["target"]);
+      const pending = controller.ensureVisible({ messageId: "target" }, { reason: "find" });
+      viewport.scrollTop = 100; viewport.dispatchEvent(new Event("scroll"));
+      expect(controller.capture().following).toBe(false);
+      controller.cancel();
+      expect(await pending).toBe("cancelled");
+    } finally { detach(); }
+  });
   it("waits for the accepted branch commit before locating its version", async () => {
     const controller = new TranscriptViewport();
     controller.configure("/versions", "old-leaf");
@@ -338,12 +400,12 @@ describe("scoped transcript destinations", () => {
     } finally { detach(); }
   });
 
-  it("preserves a saved reading place when switching back to a session already running", () => {
+  it("opens at latest when switching back even if the accepted revision is unchanged", () => {
     const controller = new TranscriptViewport(), viewport = document.createElement("div");
     Object.defineProperties(viewport, { clientHeight: { value: 600 }, scrollHeight: { value: 2000 } });
     viewport.scrollTop = 500;
     const tail = vi.fn();
-    controller.configure("/one");
+    controller.configure("/one", undefined, "same-window");
     const detach = controller.attach(viewport, tail);
     try {
       controller.followRun(true);
@@ -353,9 +415,10 @@ describe("scoped transcript destinations", () => {
       expect(controller.capture().following).toBe(false);
       controller.configure("/two");
       controller.followRun(true);
-      controller.configure("/one");
+      controller.configure("/one", undefined, "same-window");
       controller.followRun(true);
-      expect(controller.capture().following).toBe(false);
+      expect(controller.capture().following).toBe(true);
+      expect(tail).toHaveBeenCalled();
     } finally { detach(); }
   });
 

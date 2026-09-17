@@ -16,7 +16,7 @@ export interface LocateOptions {
 }
 export type LocateResult = "visible" | "cancelled" | "missing";
 type Anchor = { messageId: string; landmark?: number; toolCallId?: string; offset: number; messageOffset: number };
-type Place = { anchor?: Anchor; following: boolean };
+type Place = { anchor?: Anchor; following: boolean; revision?: string | undefined };
 const LANDMARKS = ".md-body > *, [data-slot=collapsible-trigger]";
 const COMPONENTS = { Message: ThreadMessage };
 
@@ -106,24 +106,37 @@ export class TranscriptViewport {
       }
       return;
     }
+    const leftRevision = this.loaded;
     this.loaded = loaded;
-    this.arriving = false;
     this.running = false;
     this.cancel();
     if (this.path) {
-      this.places.set(this.path, this.place);
+      this.places.set(this.path, { ...this.place, revision: leftRevision });
       // The conversation this surface has left stands on nothing: its ids go
       // with it, so they neither protect its rows from a trim nor linger.
       clearAnchoredMessages(this.path);
     }
     this.path = path;
-    this.place = this.places.get(path) ?? { following: true };
+    const saved = this.places.get(path);
+    // The revision stamp proves whether a saved place belongs to this accepted
+    // history window. Leaving the path also ended the visit that captured it,
+    // so re-entry always chooses latest even when that revision is unchanged.
+    const replaced = saved !== undefined && saved.revision !== loaded;
+    if (saved) this.places.delete(path);
+    this.place = { following: true };
+    this.arriving = Boolean(path && (saved || replaced));
     this.ids = [];
     this.positions.clear();
     this.heights = new HeightIndex([]);
     this.pins.clear(); this.selected = undefined; this.focused = undefined;
     this.nodes.clear();
     this.publishAnchors();
+    // ThreadPrimitive can reset the shared native viewport to zero while this
+    // destination's recent rows commit. A same-size list does not change layout,
+    // so force the configured place to run on the next frame rather than leaving
+    // a returning session at the first row of its tail.
+    this.windowDirty = true;
+    this.schedule();
   }
   retain(paths: readonly string[]) {
     const open = new Set(paths);
@@ -364,6 +377,10 @@ export class TranscriptViewport {
       if (cancelled()) return "cancelled";
     }
     if (!this.positions.has(target.messageId)) return "missing";
+    // An explicit destination supersedes recent-tail arrival. Otherwise a
+    // native locate scroll could be mistaken for the replacement clamp and
+    // silently turn following back on before the target settles.
+    this.arriving = false;
     this.place.following = false;
     this.ownsLocation = true;
     this.target = target;

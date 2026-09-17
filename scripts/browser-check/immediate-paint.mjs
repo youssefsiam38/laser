@@ -424,8 +424,13 @@ export default async function immediatePaint(check) {
   // host knew about is there, at the live edge the person can go back to.
   await showLatest(check, fresh);
 
-  // 5. The keyboard opens a conversation exactly as the pointer does, and the
-  //    composer stays the person's there too.
+  // 5. Start the independent keyboard path from a fresh connected document.
+  //    The core proof above already recovered the offline replacement in place;
+  //    reloading here keeps a stale browser offline socket from leaking into the
+  //    next matrix case, without changing this device's cached conversation.
+  await check.page.reload({ waitUntil: 'domcontentloaded' });
+  await composer(check).waitFor({ timeout: 60_000 });
+  await waitForConnected(check, 120_000);
   await composer(check).fill('');
   await selectSession(check, sessions[2]);
   await ensureSidebar(check);
@@ -435,6 +440,11 @@ export default async function immediatePaint(check) {
   await check.page.keyboard.press('Enter');
   await waitForTranscript(check, target.marker, 30_000);
   assert.equal(await composer(check).isDisabled(), false, 'The composer was disabled after a keyboard navigation.');
+  // A reconnect may have left this newly selected cached view in its truthful
+  // retry state. Recover through the product's own action before requiring the
+  // authoritative Send fence to open.
+  const retry = check.page.getByRole('button', { name: 'Retry', exact: true }).first();
+  if (await retry.isVisible().catch(() => false)) await retry.click();
   await sendEnabled(check);
   await showLatest(check, fresh);
   await check.shot('immediate-paint-recovered');
