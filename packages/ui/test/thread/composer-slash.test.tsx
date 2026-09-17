@@ -382,11 +382,11 @@ describe("completing an @ mention", () => {
     expect(handles.map(row => row.getAttribute('aria-label'))).toEqual(['audit', 'auth-audit']);
     expect(new Set(rows().map(row => row.id)).size).toBe(rows().length);
     await key('ArrowDown'); await key('Enter');
-    expect(input().value).toBe(':agent[auth-audit] '); expect(mocks.sent).not.toHaveBeenCalled();
+    expect(input().value).toBe('@auth-audit '); expect(mocks.sent).not.toHaveBeenCalled();
   });
   it("still inserts a child agent handle without sending", async () => {
     await mount(); await type("@aud"); await key("Enter");
-    expect(input().value).toBe(":agent[audit] ");
+    expect(input().value).toBe("@audit ");
     expect(mocks.sent).not.toHaveBeenCalled();
   });
   it("Tab completes the path without a chip; Enter inserts the file and neither sends", async () => {

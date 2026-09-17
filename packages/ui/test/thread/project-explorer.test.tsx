@@ -61,14 +61,15 @@ it.each([['@/', '/', ''], ['@..', '..', ''], ['@../', '..', ''], ['@/outside/ind
   expect(request).toHaveBeenLastCalledWith('pi/project/browse', { path, explorer: { mode: 'explorer', cwd: '/project', prefix, offset: 0, limit: 80 } });
   expect(options().length).toBeGreaterThan(0); expect(document.activeElement).toBe(input());
 });
-it('Enter and click insert a folder mention while slash still descends', async () => {
+it('Enter and click insert readable paths while slash still descends', async () => {
   await type('@ser'); await tick(); await key('Enter');
-  expect(input().value).toBe(':directory[server/]{name=/project/server/} '); expect(inserted).toHaveBeenCalledOnce(); expect(sent).not.toHaveBeenCalled();
+  expect(input().value).toBe('@server/ '); expect(inserted).toHaveBeenCalledOnce(); expect(sent).not.toHaveBeenCalled();
   await type('@ser'); await tick(); await act(async () => options()[0]!.click());
-  expect(input().value).toBe(':directory[server/]{name=/project/server/} '); expect(inserted).toHaveBeenCalledTimes(2);
+  expect(input().value).toBe('@server/ '); expect(inserted).toHaveBeenCalledTimes(2);
   await type('@ser'); await tick(); await key('/'); expect(input().value).toBe('@server/');
   await tick(); expect(options()[0]?.textContent).toContain('index.ts');
-  await key('Backspace'); expect(input().value).toBe('@');
+  await key('Enter'); expect(input().value).toBe('@server/index.ts ');
+  await type('@server/'); await tick(); await key('Backspace'); expect(input().value).toBe('@');
 });
 it('Tab completes the common prefix without choosing a folder', async () => {
   await type('@node'); await tick(); await key('Tab'); expect(input().value).toBe('@node-'); expect(inserted).not.toHaveBeenCalled();
@@ -84,7 +85,7 @@ it('a slow read leaves typing and Escape responsive and never chooses stale resu
 it('continues an absolute directory and inserts an outside file with its absolute identity', async () => {
   request.mockResolvedValueOnce({ path: '/', home: '/home/test', entries: [{ name: 'outside', path: '/outside', kind: 'directory', project: false }], truncated: false, commonPrefix: 'outside' });
   await type('@/out'); await tick(); await key('Enter');
-  expect(input().value).toBe(':directory[/outside/] '); expect(sent).not.toHaveBeenCalled();
+  expect(input().value).toBe('@/outside/ '); expect(sent).not.toHaveBeenCalled();
 });
 it('does not hijack deletion or Tab traversal of a selected text range', async () => {
   await type('@server/'); await tick();
@@ -108,11 +109,11 @@ it('a host boundary refusal has no retry or no-match advice; a read failure reco
   expect(retry).toBeDefined(); await act(async () => retry!.click()); await tick();
   expect(options()[0]?.getAttribute('aria-label')).toBe('server/index.ts');
 });
-it.each(['a]b.md', 'a\nb.md', ':file[a].md'])('selects awkward names as a reversible plain path without a wrong chip or send: %j', async name => {
+it.each(['a]b.md', 'a\nb.md', ':file[a].md', 'my folder.md', 'quote"name.md'])('selects awkward names as a readable reversible quoted path without sending: %j', async name => {
   request.mockResolvedValueOnce({ path: '/project', home: '/home/test', entries: [{ name, path: '/project/' + name, kind: 'file', project: false }], truncated: false, commonPrefix: name });
   await type('@'); await tick(); await key('Enter');
-  expect(JSON.parse(input().value.trim())).toBe('/project/' + name);
-  expect(mentionFormatter.parse(input().value).every(part => part.kind === 'text')).toBe(true);
+  expect(JSON.parse(input().value.trim().slice(1))).toBe(name);
+  expect(mentionFormatter.parse(input().value)[0]).toEqual({ kind: 'mention', type: 'file', id: name, label: name });
   expect(sent).not.toHaveBeenCalled(); expect(inserted).toHaveBeenCalledOnce();
 });
 it('root Backspace is not prevented, while folder-up still is', async () => {
@@ -142,7 +143,7 @@ it('literal pagination and sentinel-like filenames keep unique React/DOM identit
     expect(new Set(options().map(row => row.id)).size).toBe(options().length);
     expect(options()[0]?.textContent).toContain('Previous entries');
     expect(container.textContent).toContain('4 results');
-    await key('ArrowDown'); await key('Enter'); expect(input().value).toBe(':file[next]{name=/project/next} ');
+    await key('ArrowDown'); await key('Enter'); expect(input().value).toBe('@next ');
     expect(sent).not.toHaveBeenCalled();
     expect(errors.mock.calls.flat().join(' ')).not.toMatch(/same key|unique.*key/u);
   } finally { errors.mockRestore(); }
