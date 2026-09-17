@@ -62,7 +62,7 @@ export function explorerNavigation(options: ExplorerNavigationState): PickerNavi
     const match = matchProjectMention(text, "@", caret);
     if (!match) return null;
     if (key === "Backspace") {
-      const parent = parentProjectQuery(match.query, options.cwd);
+      const parent = parentProjectQuery(match.query);
       return parent === null || parent === match.query ? null : replaceProjectQuery(text, caret, parent);
     }
     if (key === "/" && selected?.type === "directory" && match.query && !/(?:[\\/]$|(?:^|[\\/])\.{1,2}$)/u.test(match.query)) {

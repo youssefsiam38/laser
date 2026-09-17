@@ -21,6 +21,27 @@ describe("catalog pages", () => {
     expect(more.groups?.[0]).toMatchObject({ remaining: 0 });
     expect(more.groups?.[0]?.cursor).toBeUndefined();
   });
+  it("keeps cwd-scoped pages scoped even when another project has important rows", () => {
+    const rows = [
+      row(1, { cwd: "/A", path: "/A/1.jsonl" }),
+      row(2, { cwd: "/B", path: "/B/child.jsonl", parentPath: "/A/1.jsonl" }),
+      row(100, { cwd: "/B", path: "/B/100.jsonl", attention: "waiting_for_input" }),
+    ];
+    const page = pageCatalog(rows, { cwd: "/A", page: { size: 7 } }, groupOf);
+    expect(page.sessions.map(item => item.path)).toEqual(["/A/1.jsonl"]);
+    expect(page.groups?.map(group => group.cwd)).toEqual(["/A"]);
+  });
+  it("counts and pages prospective roots rather than collapsed child rows", () => {
+    const roots = Array.from({ length: 10 }, (_, index) => row(index, { path: `/sessions/root-${index}` }));
+    const children = roots.map((parent, index) => row(index + 100, { path: `/sessions/child-${index}`, parentPath: parent.path }));
+    const rows = roots.flatMap((root, index) => [root, children[index]!]);
+    const first = pageCatalog(rows, { page: { size: 4 } }, groupOf);
+    expect(first.sessions).toHaveLength(8);
+    expect(first.groups?.[0]).toMatchObject({ remaining: 6 });
+    const second = pageCatalog(rows, { cwd: "/project", page: { cursor: first.groups![0]!.cursor! } }, groupOf);
+    expect(second.sessions).toHaveLength(12);
+    expect(second.groups?.[0]).toMatchObject({ remaining: 0 });
+  });
   it("supports expanded refreshes, deterministic ties, and malformed cursor refusal", () => {
     const rows = Array.from({ length: 20 }, (_, i) => row(i)).reverse();
     const page = pageCatalog(rows, { page: { sizes: { "/project": 14 } } }, groupOf);

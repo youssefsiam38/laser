@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join, parse } from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import { browseExplorer } from "../src/directory-explorer.js";
+import { browseExplorer, explorerProjectArea, resolveExplorerPath } from "../src/directory-explorer.js";
 
 let base: string, root: string;
 beforeEach(() => { base = mkdtempSync(join(tmpdir(), "directory-explorer-")); root = join(base, "home", "project"); mkdirSync(root, { recursive: true }); });
@@ -71,6 +71,7 @@ it("lists relative and absolute paths within the project or home, including cont
 });
 it("resolves home, env and backslash spellings on the host and returns canonical separators", async () => {
   const home = join(base, "home");
+  expect(resolveExplorerPath("~\\folder", root, join(base, "$&-home"))).toBe(join(base, "$&-home", "folder"));
   const sibling = join(home, "sibling"); mkdirSync(sibling); writeFileSync(join(sibling, "guide.md"), "safe fixture");
   for (const spelling of ["~", "~/sibling", "%USERPROFILE%", "%USERPROFILE%\\sibling", "..\\sibling", sibling]) {
     const listing = await list(spelling);
@@ -80,6 +81,16 @@ it("resolves home, env and backslash spellings on the host and returns canonical
     expect(listing.path).not.toContain("\\");
     expect(listing.entries.every(entry => !entry.path.includes("\\"))).toBe(true);
   }
+});
+it("never widens a project at home or on home's parent chain", async () => {
+  const home = join(base, "home");
+  expect(explorerProjectArea(home, home)).toBe(home);
+  expect(explorerProjectArea(parse(home).root, home)).toBe(parse(home).root);
+  expect(explorerProjectArea(base, home)).toBe(base);
+  const aboveHome = await browseExplorer(join(home, ".."), { mode: "explorer", cwd: home, prefix: "", limit: 80 }, home);
+  expect(aboveHome).toMatchObject({ entries: [], errorKind: "refusal" });
+  const aboveAncestor = await browseExplorer(join(base, ".."), { mode: "explorer", cwd: base, prefix: "", limit: 80 }, home);
+  expect(aboveAncestor).toMatchObject({ entries: [], errorKind: "refusal" });
 });
 it("refuses a resolved path outside both allowed roots with one sentence", async () => {
   const outside = join(base, "outside"); mkdirSync(outside);

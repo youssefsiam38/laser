@@ -81,6 +81,28 @@ describe("scoped transcript destinations", () => {
       expect(await pending).toBe("cancelled");
     } finally { detach(); }
   });
+  it("lets explicit wheel input beat followed growth after the run has settled", () => {
+    let resized!: ResizeObserverCallback;
+    class Observer {
+      constructor(callback: ResizeObserverCallback) { resized = callback; }
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+    }
+    vi.stubGlobal("ResizeObserver", Observer);
+    const controller = new TranscriptViewport(), viewport = document.createElement("div"), row = document.createElement("div");
+    Object.defineProperties(viewport, { clientHeight: { value: 600 }, scrollHeight: { value: 2_000 } });
+    controller.configure("/settled");
+    const detach = controller.attach(viewport, () => {});
+    try {
+      resized([{ target: row } as ResizeObserverEntry], {} as ResizeObserver);
+      viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
+      viewport.scrollTop = 100;
+      viewport.dispatchEvent(new Event("scroll"));
+      expect(controller.capture().following).toBe(false);
+    } finally { detach(); vi.unstubAllGlobals(); }
+  });
+
   it("waits for the accepted branch commit before locating its version", async () => {
     const controller = new TranscriptViewport();
     controller.configure("/versions", "old-leaf");

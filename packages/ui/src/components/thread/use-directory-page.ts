@@ -48,7 +48,7 @@ export interface DirectoryPageState {
 /** A bounded, validated host page. A stale reply cannot become the current path. */
 export function useDirectoryPage(cwd: string | undefined, query: string, active = true): DirectoryPageState {
   const { client } = useLaserStable();
-  const resolution = resolveProjectPath(query, cwd ?? "");
+  const resolution = resolveProjectPath(query);
   const directory = resolution.ok ? resolution.directory : undefined;
   const prefix = resolution.ok ? resolution.prefix : undefined;
   const key = JSON.stringify([cwd, query]);

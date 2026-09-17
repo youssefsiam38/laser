@@ -122,7 +122,7 @@ function hydrateThrough(store: ReturnType<typeof createStateStore>, cache: Retur
   const actions = [
     { type: "historyBegin", path: SESSION, token: "t" },
     { type: "historySnapshot", path: SESSION, token: "t", entries, leafId: "e23", window: {
-      epoch: "w1", seq: 24, revision: "r1.env.24", environmentKey: "k", userOffset: 0, complete: true,
+      epoch: "w1", seq: 24, revision: "r1.env.24", environmentKey: "k", userOffset: 0, complete: false,
       branchesUnloaded: false, hasHistory: true, context: [], priorGoalIds: [], anchor: "e0", before: "cursor-older",
     } },
   ];

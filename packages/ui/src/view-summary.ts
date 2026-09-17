@@ -252,7 +252,7 @@ export function trimView(view: SessionView, options: TrimOptions, at: string): T
 }
 
 function isUnreleasable(block: Block, options: TrimOptions): boolean {
-  if (block.kind === "user" && block.optimistic === true) return true;
+  if (block.kind === "user" && (block.optimistic === true || block.pending === true)) return true;
   if (block.kind === "assistant" && block.streaming) return true;
   if (block.kind === "tool" && !block.done) return true;
   const id = entryIdOf(block);

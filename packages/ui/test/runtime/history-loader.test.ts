@@ -51,14 +51,31 @@ describe("history request ownership", () => {
 
     expect(await f.loader.earlier(state.path, () => true)).toBe(true);
 
+    const anchored = historyWindow(source, { from: "e79" }, scope);
     expect(request.mock.calls.map(([params]) => params.window)).toEqual([
       { tail: 40 },
-      { tail: 40 },
-      { before: historyWindow(source, { tail: 40 }, scope).window!.before, limit: 40 },
+      { from: "e79" },
+      { before: anchored.window!.before, limit: 40 },
     ]);
     expect(f.view().trimmed).toBeUndefined();
-    expect(f.view().entries).toEqual(entries);
-    expect(f.view().history?.before).toBeUndefined();
+    expect(f.view().entries.map(row => (row as { id?: string }).id)).toEqual(entries.slice(38).map(row => row.id));
+    expect(f.view().history?.before).toBeDefined();
+  });
+
+  it("mints a cursor from the retained anchor without dropping an older focused row", async () => {
+    const request = vi.fn(async (params: Params) => historyWindow(source, params.window!, scope));
+    const f = fixture(request);
+    await f.loader.read(state.path, true);
+    f.dispatch({ type: "views/trim", paths: [state.path], keepBytes: 1, at: "2026-09-18T00:00:00.000Z",
+      anchored: ["e10"], standing: { anchorEntryId: "e10", focusedEntryId: "e10" } });
+    expect(f.view().trimmed).toBeDefined();
+    expect(f.view().blocks.some(block => "entryId" in block && block.entryId === "e10")).toBe(true);
+
+    expect(await f.loader.earlier(state.path, () => true)).toBe(true);
+
+    expect(request.mock.calls[1]![0].window).toEqual({ from: "e10" });
+    expect(f.view().blocks.some(block => "entryId" in block && block.entryId === "e10")).toBe(true);
+    expect(f.view().entries.some(row => (row as { id?: string }).id === "e10")).toBe(true);
   });
 
   it("drops an older page when a trim overtakes it, then the same control path still works", async () => {
@@ -81,7 +98,7 @@ describe("history request ownership", () => {
     holdOlder = false;
     expect(await f.loader.earlier(state.path, () => true)).toBe(true);
     expect(f.view().trimmed).toBeUndefined();
-    expect(f.view().entries).toEqual(entries);
+    expect(f.view().entries.map(row => (row as { id?: string }).id)).toEqual(entries.slice(38).map(row => row.id));
   });
 
   it("keeps the loaded transcript on screen until the recent one replaces it, and replays what arrives meanwhile", async () => {

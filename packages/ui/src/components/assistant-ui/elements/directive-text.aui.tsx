@@ -6,7 +6,7 @@
  * icon map for the mention types the composer produces.
  */
 import { unstable_defaultDirectiveFormatter, type TextMessagePartComponent, type Unstable_DirectiveFormatter } from "@assistant-ui/react";
-import { AtSign, FileText } from "lucide-react";
+import { AtSign, FileText, Folder } from "lucide-react";
 import { memo } from "react";
 
 import { createDirectiveText as createDirectiveTextBase, type CreateDirectiveTextOptions } from "./directive-text.js";
@@ -14,7 +14,7 @@ import { createDirectiveText as createDirectiveTextBase, type CreateDirectiveTex
 export type { CreateDirectiveTextOptions, DirectiveTextFormatter, DirectiveTextSegment } from "./directive-text.js";
 
 const ICONS: CreateDirectiveTextOptions = {
-  iconMap: { file: FileText, handle: AtSign },
+  iconMap: { file: FileText, directory: Folder, handle: AtSign },
   fallbackIcon: AtSign,
 };
 

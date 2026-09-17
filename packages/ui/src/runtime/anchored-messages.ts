@@ -46,6 +46,10 @@ export function setStandingRows(path: string, rows: { anchor?: string | undefine
     ...(entryIdOfMessageId(rows.focused) ? { focusedEntryId: entryIdOfMessageId(rows.focused)! } : {}),
     ...(targets.length > 0 ? { actionTargetEntryIds: targets } : {}),
   };
+  const previous = standing.get(path);
+  const sameTargets = previous?.actionTargetEntryIds?.length === next.actionTargetEntryIds?.length
+    && (previous?.actionTargetEntryIds ?? []).every((id, index) => id === next.actionTargetEntryIds?.[index]);
+  if (previous?.anchorEntryId === next.anchorEntryId && previous?.focusedEntryId === next.focusedEntryId && sameTargets) return;
   if (Object.keys(next).length === 0) standing.delete(path);
   else standing.set(path, next);
   for (const listener of listeners.get(path) ?? []) listener();

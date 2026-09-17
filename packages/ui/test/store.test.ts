@@ -135,6 +135,28 @@ describe("applyUpdate", () => {
     expect(v.blocks[0]).toMatchObject({ kind: "user", files: [], text: "hi", optimistic: false });
   });
 
+  it("deduplicates an already-hydrated entry against the bounded form of a large optimistic prompt", () => {
+    const text = "x".repeat(20 * 1024);
+    const persisted: SessionUpdate = { kind: "message_end", message: { role: "user", content: [{ type: "text", text }] }, entry: { id: "u1", parentId: null } };
+    let v = applyUpdate(view(), persisted);
+    v = reduce({ ...initialState, open: { [v.path]: v } }, { type: "optimisticUser", path: v.path, text, images: [] }).open[v.path]!;
+    expect(v.blocks).toHaveLength(2);
+    v = applyUpdate(v, persisted);
+    expect(v.blocks).toHaveLength(1);
+    expect(v.blocks[0]).toMatchObject({ kind: "user", entryId: "u1", optimistic: false });
+    expect((v.blocks[0] as { text: string }).text.length).toBeLessThan(text.length);
+  });
+
+  it.each(["agent_end", "agent_settled"] as const)("keeps a pending user row through trimming and clears it on terminal %s", kind => {
+    const pendingView = applyUpdate(view(), { kind: "message_start", role: "user" });
+    const app = reduce({ ...initialState, open: { [pendingView.path]: pendingView } }, {
+      type: "views/trim", paths: [pendingView.path], keepBytes: 0, at: "2026-09-18T00:00:00.000Z",
+    });
+    expect(app.open[pendingView.path]?.blocks[0]).toMatchObject({ kind: "user", pending: true });
+    const cancelled = applyUpdate(app.open[pendingView.path]!, { kind });
+    expect(cancelled.blocks).toEqual([]);
+  });
+
   it("settles a live user message in place when a tool event lands before its end", () => {
     const v = run(view(), [
       { kind: "message_start", role: "user" },
