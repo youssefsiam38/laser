@@ -270,8 +270,11 @@ export function createArchiveStore(): ArchiveStore {
  * The host counts every transcript on disk, including client-local archived
  * ones. That is correct for storage, but not for navigation: after a person
  * unpins a project and archives its last chat, the archived files must not
- * make the project look active. Open work remains reachable even when its
- * transcript was archived.
+ * make the project look active. An open view keeps its project in the rail
+ * only while it is unarchived and `holdsProject` says the person still has it
+ * open (see the provider's `holdsProject`): archiving is the person putting
+ * that conversation away, and the view record a window keeps for every
+ * session it ever showed is a cache, not a session somebody has open.
  */
 /**
  * The project a directory belongs to: a child agent's worktree under
@@ -289,9 +292,15 @@ export function visibleProjectCwds(
   sessions: readonly SessionSummary[],
   open: Readonly<Record<string, SessionView | undefined>>,
   archive: ArchiveStore,
-  options: { /** Directories that are never projects: the Beam and Chat workspaces. */ exclude?: readonly string[]; visibleCounts?: Readonly<Record<string, number>> } = {},
+  options: {
+    /** Directories that are never projects: the Beam and Chat workspaces. */
+    exclude?: readonly string[];
+    visibleCounts?: Readonly<Record<string, number>>;
+    /** Whether an open, unarchived view still pins its project. Every view does when omitted. */
+    holdsProject?: (path: string) => boolean;
+  } = {},
 ): string[] {
-  const archived = archivedPaths(sessions, archive);
+  const archived = archivedPaths(mergeSessions(sessions, open), archive);
   const excluded = (options.exclude ?? []).map((cwd) => cwd.replace(/\\/g, "/").replace(/\/+$/, ""));
   const isExcluded = (cwd: string): boolean => {
     const path = cwd.replace(/\\/g, "/").replace(/\/+$/, "");
@@ -318,7 +327,11 @@ export function visibleProjectCwds(
   }
   const workspaceKind = (kind: string | undefined) => kind === "beam" || kind === "chat";
   for (const session of sessions) if (!archived(session.path) && !workspaceKind(session.agent?.kind)) append(session.cwd);
-  for (const view of Object.values(open)) if (view && !workspaceKind(view.state.agent?.kind)) append(view.state.cwd);
+  for (const [path, view] of Object.entries(open)) {
+    if (!view || workspaceKind(view.state.agent?.kind) || archived(path)) continue;
+    if (options.holdsProject && !options.holdsProject(path)) continue;
+    append(view.state.cwd);
+  }
   return visible;
 }
 

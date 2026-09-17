@@ -67,7 +67,7 @@ import { HostClient } from "../client.js";
 import { initialState, reduce, type Action, type AppState, type SessionView } from "../store.js";
 import { hydrationEpochOf, isDormantView } from "../view-summary.js";
 import { atLiveEdge, onStanding } from "./anchored-messages.js";
-import { createViewCache, type ActionReservation, type RendererViewCounters, type ViewCache, type ViewCacheEnvironment } from "./view-cache.js";
+import { createViewCache, pinReason, type ActionReservation, type RendererViewCounters, type ViewCache, type ViewCacheEnvironment } from "./view-cache.js";
 import { useTranscriptMembership, type TranscriptMembership } from "./transcript-membership.js";
 import {
   PRESSURE_REFUSAL_MESSAGES,
@@ -121,10 +121,12 @@ import { sessionKindTab } from "./session-tab-memory.js";
 import { useThemeSync } from "./prefs.js";
 import { projectSessionView, shareProjectedMessages, splitDialogs } from "./projection.js";
 import {
+  archivedPaths,
   createArchiveStore,
   createThreadListAdapter,
   mergeSessions,
   orderProjectInfos,
+  projectRootOfCwd,
   threadListSignature,
   visibleProjectCwds,
   type ArchiveStore,
@@ -623,6 +625,25 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     hasDraft: (path) => composerDrafts.current.has(path) || store.presentation.hasEditDraft(path),
     draftBytes: (path) => composerDrafts.current.get(path) ?? 0,
   }), [store]);
+  /**
+   * Whether an open view still keeps its project in the rail (and makes
+   * "Remove project" say so). `state.open` holds a light record for every
+   * session this window has ever shown, so membership alone would pin every
+   * project the person once glanced at, forever. What counts is what the view
+   * cache refuses to release — on screen, a scope, a question, running or
+   * queued work, words not yet sent — because losing the rail icon of exactly
+   * those is what could make a session go missing. An empty, unstarted view
+   * is not something to lose, and an archived one was put away on purpose.
+   */
+  const holdsProject = useCallback((state: AppState, path: string): boolean => {
+    const pin = pinReason(state, path, viewCacheEnvironment);
+    return pin !== undefined && pin !== "unstarted";
+  }, [viewCacheEnvironment]);
+  const projectHeldOpen = useCallback((state: AppState, cwd: string): boolean => {
+    const archived = archivedPaths(mergeSessions(state.sessions, state.open), archive);
+    return Object.entries(state.open).some(([path, view]) =>
+      view !== undefined && projectRootOfCwd(view.state.cwd) === cwd && !archived(path) && holdsProject(state, path));
+  }, [archive, holdsProject]);
   const transcriptMembershipBridge = useRef<TranscriptMembership | undefined>(undefined);
 
   /**
@@ -1752,7 +1773,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           // that stays put after "Remove" reads as a button that does not work,
           // so say which it is.
           const still = after.find((project) => project.cwd === cwd);
-          const openHere = Object.values(readState().open).some((view) => view.state.cwd === cwd);
+          const openHere = projectHeldOpen(readState(), cwd);
           const archivedCount = readState().sessions.filter(
             (session) => session.cwd === cwd && archive.has(session.path),
           ).length;
@@ -1818,6 +1839,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     readState,
     readHistory,
     historyLoader,
+    projectHeldOpen,
     refreshProjects,
     refreshSessions,
     transcriptMembership,
@@ -1851,8 +1873,9 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     const workspaces = state.agents.snapshot?.workspaces;
     return visibleProjectCwds(projectList, state.sessions, state.open, archive, { exclude: workspaces ? [workspaces.beam, workspaces.chat] : [],
       ...(state.catalogGroups ? { visibleCounts: Object.fromEntries(state.catalogGroups.map(group => [group.cwd, group.total])) } : {}),
+      holdsProject: (path) => holdsProject(state, path),
     }).join("\n");
-  }, [archive, archiveRevision, projectList, state.open, state.sessions, state.catalogGroups, state.agents.snapshot?.workspaces]);
+  }, [archive, archiveRevision, holdsProject, projectList, state]);
   const projects = useMemo(() => (projectsKey ? projectsKey.split("\n") : []), [projectsKey]);
   const projectInfo = useMemo(() => {
     const map: Record<string, ProjectInfo> = {};

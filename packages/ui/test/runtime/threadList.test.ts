@@ -246,21 +246,39 @@ describe("visibleProjectCwds", () => {
     ).toEqual(["/pinned"]);
   });
 
-  it("keeps unarchived and open projects reachable", () => {
+  it("keeps unarchived and held-open projects reachable", () => {
     const archive = createArchiveStore();
     archive.add("/open.jsonl");
     const open = view({ path: "/open.jsonl", state: sessionState({ path: "/open.jsonl", cwd: "/open" }) });
+    const held = view({ path: "/held.jsonl", state: sessionState({ path: "/held.jsonl", cwd: "/held" }) });
     expect(
       visibleProjectCwds(
-        [project("/active", false), project("/open", false)],
+        [project("/active", false), project("/open", false), { ...project("/held", false), sessionCount: 0 }],
         [
           summary({ path: "/active.jsonl", id: "active", cwd: "/active" }),
           summary({ path: "/open.jsonl", id: "open", cwd: "/open" }),
         ],
-        { "/open.jsonl": open },
+        { "/open.jsonl": open, "/held.jsonl": held },
         archive,
+        { holdsProject: () => true },
       ),
-    ).toEqual(["/active", "/open"]);
+    ).toEqual(["/active", "/held"]);
+  });
+
+  it("does not let an archived or merely cached view pin its project", () => {
+    const archive = createArchiveStore();
+    archive.add("/archived.jsonl");
+    const archived = view({ path: "/archived.jsonl", state: sessionState({ path: "/archived.jsonl", cwd: "/archived" }) });
+    const cached = view({ path: "/cached.jsonl", state: sessionState({ path: "/cached.jsonl", cwd: "/cached" }) });
+    expect(
+      visibleProjectCwds(
+        [],
+        [],
+        { "/archived.jsonl": archived, "/cached.jsonl": cached },
+        archive,
+        { holdsProject: (path) => path !== "/cached.jsonl" },
+      ),
+    ).toEqual([]);
   });
 
   it("keeps a discovered project visible until its complete catalog is archived", () => {
