@@ -44,12 +44,56 @@ describe("goal policy", () => {
     expect(goal.timeUsedSeconds).toBe(0);
     expect(goal.activeStartedAt).toBeUndefined();
   });
-  it("ignores historical budgets and accounting while preserving continuation safety", () => {
+  it("ignores historical budgets and pins unlimited autonomous work", () => {
     const saved = { ...engine.createGoal("Inspect", undefined, 0), status: "budget_limited", tokenBudget: 500, tokensUsed: 600, timeUsedSeconds: 90, baselineTokens: 10, automaticModelTurns: 25 };
     const loaded = engine.loadGoalStateFromSession({ sessionManager: { getBranch: () => [{ type: "custom", customType: "goal-state", data: { goal: saved } }] } }).goal;
     expect(loaded).toMatchObject({ text: "Inspect", status: "paused", tokensUsed: 0, timeUsedSeconds: 0, baselineTokens: 0, automaticModelTurns: 25 });
     expect(loaded.tokenBudget).toBeUndefined();
     expect(loaded.activeStartedAt).toBeUndefined();
+    expect(accounting.DEFAULT_GOAL_SETTINGS.continuationLimits).toEqual({ automaticTurns: null, noProgressTurns: null });
+  });
+  it("keeps counters advisory past 25 turns and repeated tool-free output", () => {
+    const entries: Array<{ customType: string; data: unknown }> = [];
+    const runtime = new engine.GoalRuntime({
+      events: { on: () => undefined },
+      appendEntry: (customType: string, data: unknown) => entries.push({ customType, data }),
+    });
+    runtime.activeGoal = engine.createGoal("Soak", undefined, 0);
+    runtime.agentRunGoalId = runtime.activeGoal.id;
+    runtime.agentRunOrigin = "automatic";
+    const ctx = { ui: { setStatus: () => undefined } };
+    for (let turn = 0; turn < 40; turn += 1) {
+      expect(runtime.recordAutomaticTurn(ctx, { role: "assistant", stopReason: "stop" })).toBe(false);
+    }
+    for (let repeat = 0; repeat < 10; repeat += 1) {
+      expect(runtime.recordAutomaticRunProgress(ctx, runtime.activeGoal.id, [{ role: "assistant", content: [{ type: "text", text: "Still checking" }] }], false)).toBe(false);
+    }
+    expect(runtime.activeGoal).toMatchObject({ status: "active", automaticModelTurns: 40, toolFreeRepeatCount: 10 });
+    expect(entries.some((entry) => (entry.data as { goal?: { status?: string } }).goal?.status === "paused")).toBe(false);
+  });
+  it("records an accepted explicit pause with provenance", () => {
+    const entries: Array<{ customType: string; data: unknown }> = [];
+    const runtime = new engine.GoalRuntime({
+      events: { on: () => undefined },
+      appendEntry: (customType: string, data: unknown) => entries.push({ customType, data }),
+    });
+    runtime.activeGoal = engine.createGoal("Pause me", undefined, 0);
+    runtime.stopActiveGoal({ abort: () => undefined, ui: { setStatus: () => undefined } }, {
+      kind: "explicit_pause",
+      expectedGoalId: runtime.activeGoal.id,
+      transition: { cause: "pause_action", initiator: "person" },
+    });
+    expect(runtime.activeGoal.status).toBe("paused");
+    expect(entries.at(-1)).toMatchObject({
+      customType: "goal-transition",
+      data: {
+        cause: "pause_action",
+        initiator: "person",
+        previousStatus: "active",
+        status: "paused",
+        invocationId: expect.stringMatching(/^goal:/u),
+      },
+    });
   });
   it("keeps completion terminating, without adding a final-answer instruction", () => {
     const source = readFileSync(goalExtensionPath(), "utf8");
