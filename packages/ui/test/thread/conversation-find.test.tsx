@@ -9,6 +9,7 @@ import { SearchMessageContext, openConversationFind } from "../../src/components
 import { ToolGroupRoot, ToolGroupTrigger, ToolGroupContent } from "../../src/components/assistant-ui/elements/tool-group.aui.js";
 import { JsonViewer } from "../../src/components/assistant-ui/elements/json-viewer.js";
 import { ToolFallbackResult } from "../../src/components/assistant-ui/elements/tool-fallback.aui.js";
+import { createConversationSearch } from "../../src/components/thread/conversation-search-cache.js";
 import { toolSearchContent } from "@lasercode/protocol";
 
 let root: Root;
@@ -126,6 +127,38 @@ it("highlights across markup boundaries without indexing hidden controls or chan
   const ranges = findTextRanges(container, "Apple");
   expect(ranges.map(r => r.toString())).toEqual(["Apple"]);
   expect(container.innerHTML).toBe(original);
+});
+it("keeps labelled-row index occurrences aligned with paintable DOM ranges", () => {
+  const message = {
+    id: "labelled", role: "assistant",
+    content: [
+      { type: "tool-call", toolName: "bash", toolCallId: "a", args: { command: "pnpm test packages/ui", activity_label: "Checking the test suite" }, result: "test run ok" },
+      { type: "tool-call", toolName: "bash", toolCallId: "b", args: { command: "pnpm test packages/host", activity_label: "Verifying another test" }, result: "host test ok" },
+    ],
+  } as never;
+  container.innerHTML = `
+    <div data-message-id="labelled" data-search-tool>
+      <button data-slot="tool-fallback-trigger">
+        <span data-search-content data-probe="label-a">Checking the test suite</span>
+      </button>
+      <pre data-search-content data-probe="command-a">pnpm test packages/ui</pre>
+      <pre data-search-content data-probe="output-a">test run ok</pre>
+      <button data-slot="tool-fallback-trigger">
+        <span data-search-content data-probe="label-b">Verifying another test</span>
+      </button>
+      <pre data-search-content data-probe="command-b">pnpm test packages/host</pre>
+      <pre data-search-content data-probe="output-b">host test ok</pre>
+    </div>`;
+
+  const hits = createConversationSearch()([message], "test");
+  const ranges = findTextRanges(container, "test");
+  expect(hits).toHaveLength(6);
+  expect(ranges).toHaveLength(hits.length);
+  expect(hits.map(hit => hit.occurrence)).toEqual([0, 1, 2, 3, 4, 5]);
+  expect(ranges.map(range => range.startContainer.parentElement?.dataset.probe)).toEqual([
+    "label-a", "command-a", "output-a", "label-b", "command-b", "output-b",
+  ]);
+  expect(findTextRanges(container, "Checking the test suite").map(range => range.toString())).toEqual(["Checking the test suite"]);
 });
 it("opens the excerpt's source instead of an earlier lower-priority mention", async () => {
   await act(async () => root.render(<Fixture data={[messages[1]!, messages[0]!]} />));

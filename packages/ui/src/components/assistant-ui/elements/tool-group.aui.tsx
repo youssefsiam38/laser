@@ -410,8 +410,9 @@ function ToolGroupDetails({
   const path = useLaserState((state) => state.current);
   const toolLabelParams = useLaserState((state) => path ? state.open[path]?.state.toolLabelParams : undefined);
   const activityLevel = useActivityDetailLevel(path);
-  // Only the member in flight can name the live aggregate. Once it settles,
-  // the aggregate returns to its durable computed summary (D-277).
+  // Only the member in flight can name the live aggregate. A settled aggregate
+  // keeps its computed group summary; D-282 applies the durable label to each
+  // child row instead.
   const active = members.find((member) => member.running);
   const agentLabel = active ? toolCallLabel(active.toolName, active.args, toolLabelParams) : undefined;
   return (

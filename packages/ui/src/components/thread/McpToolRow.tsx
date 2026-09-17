@@ -65,23 +65,24 @@ export interface McpToolRowProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   footer: ReactNode;
-  /** Computed once by ToolRow from the live model call. */
-  activeLabel: string | undefined;
+  /** Agent-written durable title, computed once by ToolRow. */
+  label: string | undefined;
 }
 
 function McpToolRowImpl(props: McpToolRowProps) {
-  const { info, toolName, args, argsText, result, text, details, state, elapsedMs, open, onOpenChange, footer, activeLabel: agentLabel } = props;
+  const { info, toolName, args, argsText, result, text, details, state, elapsedMs, open, onOpenChange, footer, label } = props;
   const failed = state === "failed";
   const running = state === "running";
 
   const row = useMemo(() => mcpRowSummary(info, toolName, args, details), [info, toolName, args, details]);
   const icon = info.kind === "script" ? Braces : info.kind === "gateway" ? Waypoints : Plug;
-  const activeLabel = agentLabel ?? mcpActiveLabel(info, toolName, args, details);
+  const activeLabel = running ? label ?? mcpActiveLabel(info, toolName, args, details) : undefined;
 
   return (
     <ToolCall
       icon={icon}
       verb={row.verb}
+      label={label}
       activeLabel={activeLabel}
       summary={row.summary}
       state={state}

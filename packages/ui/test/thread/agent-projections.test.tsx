@@ -294,7 +294,7 @@ describe("rendering", () => {
     expect(container.querySelector('[data-slot="terminal-block"] [data-search-content]')?.textContent).toContain("pnpm test");
   });
 
-  it("keeps the label primary while a tool awaits a decision or finishes with failure", async () => {
+  it("keeps the label primary while a tool awaits a decision, fails, or is cancelled", async () => {
     const base = {
       type: "tool-call" as const,
       toolCallId: "bash-lifecycle",
@@ -308,6 +308,7 @@ describe("rendering", () => {
     for (const props of [
       { status: { type: "requires-action" as const, reason: "tool-calls" as const } },
       { status: { type: "complete" as const }, result: "failed", isError: true },
+      { status: { type: "incomplete" as const, reason: "cancelled" as const } },
     ]) {
       await mount(<ToolRow {...base} {...props} />);
       const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;

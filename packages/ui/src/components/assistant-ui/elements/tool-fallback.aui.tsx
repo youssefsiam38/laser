@@ -29,7 +29,7 @@ import {
   type ToolCallMessagePartComponent,
 } from "@assistant-ui/react";
 import { ChevronRight, CircleAlert, Wrench } from "lucide-react";
-import { createContext, memo, useCallback, useContext, useRef, useState, type ComponentType, type ReactNode, type SVGProps } from "react";
+import { memo, useCallback, useRef, useState, type ComponentType, type ReactNode, type SVGProps } from "react";
 
 import { StatusDot } from "@/components/status";
 import { ActivityBeam, ThinkingIndicator } from "./thinking-indicator.js";
@@ -51,13 +51,6 @@ import { toolCallLabel, toolOutputText, withoutToolLabel } from "@lasercode/prot
 import { activityRow, activityTrigger, collapsePanel, mono, pressable } from "./surfaces.js";
 
 type Icon = ComponentType<SVGProps<SVGSVGElement>>;
-
-/** The agent-written title for one row, kept separate from the tool's durable summary. */
-const ToolActivityLabelContext = createContext<string | undefined>(undefined);
-
-export function ToolActivityLabel({ label, children }: { label: string | undefined; children: ReactNode }) {
-  return <ToolActivityLabelContext.Provider value={label}>{children}</ToolActivityLabelContext.Provider>;
-}
 
 // ---------------------------------------------------------------------------
 // Root
@@ -183,6 +176,9 @@ export type ToolFallbackTriggerProps = Omit<React.ComponentProps<typeof Collapsi
   showDuration?: boolean;
   /** Host Grotesk 500 verb: "Read", "Run", or the tool's name for an unknown tool. */
   verb: string;
+  /** Agent-written durable title, separate from the tool's computed summary. */
+  label?: string | undefined;
+  /** Computed live fallback when no agent-written label exists. */
   activeLabel?: string | undefined;
   /** Typed fragment: a path, a command, a pattern. */
   summary?: string | undefined;
@@ -198,8 +194,76 @@ export type ToolFallbackTriggerProps = Omit<React.ComponentProps<typeof Collapsi
   trailing?: ReactNode;
 };
 
+interface TriggerCopyProps {
+  verb: string;
+  summary: string | undefined;
+  detail: string | undefined;
+  running: boolean;
+  cancelled: boolean;
+  nonZero: boolean;
+}
+
+function TriggerCopyLabelled({ label, verb, summary, detail, running, cancelled, nonZero }: TriggerCopyProps & { label: string }) {
+  return (
+    <span data-slot="tool-fallback-trigger-copy" className="flex min-w-0 flex-1 flex-col items-start gap-0.5 overflow-hidden py-1">
+      {running ? (
+        <span data-search-content className="max-w-full min-w-0">
+          <ThinkingIndicator
+            label={label}
+            dot={false}
+            className="min-w-0 max-w-full overflow-hidden [&_[data-slot=thinking-indicator-label]]:truncate"
+          />
+        </span>
+      ) : (
+        <span
+          data-search-content
+          data-slot="tool-fallback-trigger-label"
+          className={cn("max-w-full min-w-0 break-words text-start text-sm font-medium", cancelled ? "text-ink-3 line-through" : "text-ink-2")}
+        >
+          {label}
+        </span>
+      )}
+      <span data-slot="tool-fallback-trigger-secondary" className={cn("flex max-w-full min-w-0 items-center gap-1.5 text-xs", cancelled ? "text-ink-3 line-through" : "text-ink-3")}>
+        <span className="shrink-0 font-medium">{verb}</span>
+        {summary ? (
+          <span className={cn(mono, "min-w-0 truncate", nonZero && "text-danger-quiet")} title={summary}>
+            {summary}
+          </span>
+        ) : null}
+        {detail ? <span className={cn(mono, "shrink-0")}>{detail}</span> : null}
+      </span>
+    </span>
+  );
+}
+
+function TriggerCopyPlain({ verb, activeLabel, summary, detail, running, cancelled, nonZero }: TriggerCopyProps & { activeLabel: string | undefined }) {
+  return (
+    <>
+      {running && activeLabel ? <ThinkingIndicator label={activeLabel} dot={false}
+        className="min-w-0 flex-initial overflow-hidden [&_[data-slot=thinking-indicator-label]]:truncate" /> : <span
+        data-slot="tool-fallback-trigger-label"
+        className={cn("min-w-0 truncate text-sm font-medium", cancelled ? "text-ink-3 line-through" : "text-ink-2", running && "shimmer-text")}
+      >
+        {verb}
+      </span>}
+      {summary && !(running && activeLabel) ? (
+        <span
+          data-slot="tool-fallback-trigger-summary"
+          className={cn(mono, "min-w-0 truncate", cancelled ? "text-ink-3" : nonZero ? "text-danger-quiet" : "text-ink-2")}
+          title={summary}
+        >
+          {summary}
+        </span>
+      ) : null}
+      {detail ? <span className={cn(mono, "shrink-0 text-ink-3")}>{detail}</span> : null}
+      <span aria-hidden="true" className="flex-1" />
+    </>
+  );
+}
+
 function ToolFallbackTrigger({
   verb,
+  label,
   activeLabel,
   summary,
   detail,
@@ -218,8 +282,8 @@ function ToolFallbackTrigger({
   const cancelled = state === "cancelled";
   const nonZero = state === "nonzero";
   const LeadIcon = icon ?? Wrench;
-  const activityLabel = useContext(ToolActivityLabelContext);
   const computedTitle = `${verb} ${summary ?? ""}`.trim();
+  const labelledOffset = "mt-1.5";
 
   return (
     <CollapsibleTrigger
@@ -228,20 +292,21 @@ function ToolFallbackTrigger({
       disabled={!expandable}
       // Quiet, not hidden: the row says nothing about the exit visually beyond
       // the colour of the command, so the accessible name says it in words.
-      aria-label={activityLabel
-        ? `${activityLabel}. ${computedTitle}${nonZero ? ", exited non-zero" : ""}`
+      aria-label={label
+        ? `${label}. ${computedTitle}${nonZero ? ", exited non-zero" : ""}`
         : running && activeLabel
           ? activeLabel
           : `${computedTitle}${nonZero ? ", exited non-zero" : ""}`}
       className={cn(
         activityTrigger,
+        label && "items-start",
         "disabled:cursor-default disabled:hover:bg-transparent disabled:active:bg-transparent",
         className,
       )}
       {...props}
     >
       {running && <ActivityBeam />}
-      <span className="flex size-4 shrink-0 items-center justify-center" aria-hidden="true">
+      <span className={cn("flex size-4 shrink-0 items-center justify-center", label && labelledOffset)} aria-hidden="true">
         {running ? (
           <StatusDot status="working" size="sm" aria-hidden="true" />
         ) : failed ? (
@@ -250,62 +315,16 @@ function ToolFallbackTrigger({
           <LeadIcon className={cn("size-3.5", awaiting ? "text-attention" : "text-ink-3")} />
         )}
       </span>
-      {activityLabel ? (
-        <span data-slot="tool-fallback-trigger-copy" className="flex min-w-0 flex-1 flex-col items-start gap-0.5 overflow-hidden py-1">
-          {running ? (
-            <span data-search-content className="max-w-full min-w-0">
-              <ThinkingIndicator
-                label={activityLabel}
-                dot={false}
-                className="min-w-0 max-w-full overflow-hidden [&_[data-slot=thinking-indicator-label]]:truncate"
-              />
-            </span>
-          ) : (
-            <span
-              data-search-content
-              data-slot="tool-fallback-trigger-label"
-              className={cn("max-w-full min-w-0 break-words text-start text-sm font-medium", cancelled ? "text-ink-3 line-through" : "text-ink-2")}
-            >
-              {activityLabel}
-            </span>
-          )}
-          <span data-slot="tool-fallback-trigger-secondary" className={cn("flex max-w-full min-w-0 items-center gap-1.5 text-xs", cancelled ? "text-ink-3 line-through" : "text-ink-3")}>
-            <span className="shrink-0 font-medium">{verb}</span>
-            {summary ? (
-              <span className={cn(mono, "min-w-0 truncate", nonZero && "text-danger-quiet")} title={summary}>
-                {summary}
-              </span>
-            ) : null}
-            {detail ? <span className={cn(mono, "shrink-0")}>{detail}</span> : null}
-          </span>
-        </span>
+      {label ? (
+        <TriggerCopyLabelled label={label} verb={verb} summary={summary} detail={detail} running={running} cancelled={cancelled} nonZero={nonZero} />
       ) : (
-        <>
-          {running && activeLabel ? <ThinkingIndicator label={activeLabel} dot={false}
-            className="min-w-0 flex-initial overflow-hidden [&_[data-slot=thinking-indicator-label]]:truncate" /> : <span
-            data-slot="tool-fallback-trigger-label"
-            className={cn("min-w-0 truncate text-sm font-medium", cancelled ? "text-ink-3 line-through" : "text-ink-2", running && "shimmer-text")}
-          >
-            {verb}
-          </span>}
-          {summary && !(running && activeLabel) ? (
-            <span
-              data-slot="tool-fallback-trigger-summary"
-              className={cn(mono, "min-w-0 truncate", cancelled ? "text-ink-3" : nonZero ? "text-danger-quiet" : "text-ink-2")}
-              title={summary}
-            >
-              {summary}
-            </span>
-          ) : null}
-          {detail ? <span className={cn(mono, "shrink-0 text-ink-3")}>{detail}</span> : null}
-          <span aria-hidden="true" className="flex-1" />
-        </>
+        <TriggerCopyPlain verb={verb} activeLabel={activeLabel} summary={summary} detail={detail} running={running} cancelled={cancelled} nonZero={nonZero} />
       )}
-      {trailing}
+      {label && trailing ? <span className={cn("shrink-0", labelledOffset)}>{trailing}</span> : trailing}
       {cancelled ? (
-        <span className={cn(mono, "shrink-0 text-ink-3")}>cancelled</span>
+        <span className={cn(mono, "shrink-0 text-ink-3", label && labelledOffset)}>cancelled</span>
       ) : (
-        showDuration ? <ToolFallbackDuration running={running} elapsedMs={elapsedMs} /> : null
+        showDuration ? <ToolFallbackDuration className={label ? labelledOffset : undefined} running={running} elapsedMs={elapsedMs} /> : null
       )}
       {expandable ? (
         <ChevronRight
@@ -314,10 +333,11 @@ function ToolFallbackTrigger({
           className={cn("rtl:-scale-x-100",
             "size-3.5 shrink-0 text-ink-3 transition-transform duration-(--motion-fast) ease-(--motion-ease) motion-reduce:transition-none",
             "group-data-[state=open]/trigger:rotate-90 group-data-[state=open]/trigger:rtl:-rotate-90",
+            label && labelledOffset,
           )}
         />
       ) : (
-        <span className="size-3.5 shrink-0" aria-hidden="true" />
+        <span className={cn("size-3.5 shrink-0", label && labelledOffset)} aria-hidden="true" />
       )}
     </CollapsibleTrigger>
   );
@@ -778,39 +798,38 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
   const tone = state === "failed" ? "danger" : state === "awaiting" ? "attention" : undefined;
 
   return (
-    <ToolActivityLabel label={agentLabel}>
-      <ToolFallbackRoot
-        open={open}
-        onOpenChange={rememberOpen}
-        tone={tone}
-        data-tool={toolName}
-        data-status={status?.type}
-      >
-        <ToolFallbackTrigger
-          verb={toolName}
-          activeLabel={state === "running" ? agentLabel ?? activeToolLabel({ toolName, args }) : undefined}
-          state={state}
-          expandable={hasBody}
+    <ToolFallbackRoot
+      open={open}
+      onOpenChange={rememberOpen}
+      tone={tone}
+      data-tool={toolName}
+      data-status={status?.type}
+    >
+      <ToolFallbackTrigger
+        verb={toolName}
+        label={agentLabel}
+        activeLabel={state === "running" ? agentLabel ?? activeToolLabel({ toolName, args }) : undefined}
+        state={state}
+        expandable={hasBody}
+      />
+      {hasBody ? (
+        <ToolFallbackContent>
+          <ToolFallbackError status={status} />
+          <ToolFallbackArgs argsText={visibleArgsText} overflow={argsFold} className={cn(state === "cancelled" && "opacity-60")} />
+          {state !== "cancelled" ? <ToolFallbackResult result={result} overflow={resultFold} /> : null}
+        </ToolFallbackContent>
+      ) : null}
+      {shouldRenderApproval ? (
+        <ToolFallbackApproval
+          addResult={addResult}
+          resume={resume}
+          interrupt={interrupt}
+          approval={approval}
+          respondToApproval={respondToApproval}
+          status={status}
         />
-        {hasBody ? (
-          <ToolFallbackContent>
-            <ToolFallbackError status={status} />
-            <ToolFallbackArgs argsText={visibleArgsText} overflow={argsFold} className={cn(state === "cancelled" && "opacity-60")} />
-            {state !== "cancelled" ? <ToolFallbackResult result={result} overflow={resultFold} /> : null}
-          </ToolFallbackContent>
-        ) : null}
-        {shouldRenderApproval ? (
-          <ToolFallbackApproval
-            addResult={addResult}
-            resume={resume}
-            interrupt={interrupt}
-            approval={approval}
-            respondToApproval={respondToApproval}
-            status={status}
-          />
-        ) : null}
-      </ToolFallbackRoot>
-    </ToolActivityLabel>
+      ) : null}
+    </ToolFallbackRoot>
   );
 };
 
