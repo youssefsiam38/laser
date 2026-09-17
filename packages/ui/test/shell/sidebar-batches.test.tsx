@@ -40,53 +40,81 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
 
-it("fetches the next host page on Load more and keeps focus across the delayed reply", async () => {
+it("fetches the exact promised project count and keeps focus across the delayed reply", async () => {
   let deliver!: (value: unknown) => void;
   const calls: Array<{ page?: { cursor?: string } }> = [];
   world.overrides["pi/session/list"] = ((params: { page?: { cursor?: string } }) => {
     calls.push(params);
     if (params.page?.cursor) return new Promise(resolve => { deliver = resolve; });
-    return { sessions: world.sessions.slice(0, 7), groups: [{ cwd: PROJECT_CWD, total: 8, cursor: "older" }] };
+    return { sessions: world.sessions.slice(0, 7), groups: [{ cwd: PROJECT_CWD, total: 8, cursor: "older", remaining: 1 }] };
   }) as never;
   await render();
   expect(row("Conversation 8")).toBeUndefined();
-  const more = button("Load more"); more.focus();
+  const more = button("Load 1 more"); more.focus();
   await act(async () => more.click());
   expect(calls.filter(call => call.page?.cursor === "older")).toHaveLength(1);
   expect(row("Conversation 8")).toBeUndefined();
   expect(button("Loading chats…").getAttribute("aria-disabled")).toBe("true");
-  await act(async () => { deliver({ sessions: [world.sessions[7]!], groups: [{ cwd: PROJECT_CWD, total: 8 }] }); await settle(60); });
+  await act(async () => { deliver({ sessions: [world.sessions[7]!], groups: [{ cwd: PROJECT_CWD, total: 8, remaining: 0 }] }); await settle(60); });
   expect(row("Conversation 8")).toBeDefined();
   expect(document.activeElement).toBe(button("Show fewer"));
   await act(async () => button("Show fewer").click());
   expect(row("Conversation 8")).toBeUndefined();
 });
 
-it("keeps Chat pagination focused through its final page and Show fewer", async () => {
+it("deduplicates two rapid clicks and reveals the fetched page once", async () => {
+  let deliver!: (value: unknown) => void;
+  const calls: Array<{ page?: { cursor?: string } }> = [];
+  world.overrides["pi/session/list"] = ((params: { page?: { cursor?: string } }) => {
+    calls.push(params);
+    if (params.page?.cursor) return new Promise(resolve => { deliver = resolve; });
+    return { sessions: world.sessions.slice(0, 7), groups: [{ cwd: PROJECT_CWD, total: 8, cursor: "older", remaining: 1 }] };
+  }) as never;
+  await render();
+  const more = button("Load 1 more");
+  await act(async () => { more.click(); more.click(); });
+  expect(calls.filter(call => call.page?.cursor === "older")).toHaveLength(1);
+  await act(async () => { deliver({ sessions: [world.sessions[7]!], groups: [{ cwd: PROJECT_CWD, total: 8, remaining: 0 }] }); await settle(60); });
+  expect(container.querySelectorAll('[data-slot="aui_thread-list-item"]')).toHaveLength(8);
+  expect(sessionsList.get().revealed.get(PROJECT_CWD)).toBe(14);
+});
+
+it("settles an empty next page as Show fewer instead of silently doing nothing", async () => {
+  world.overrides["pi/session/list"] = ((params: { page?: { cursor?: string } }) => params.page?.cursor
+    ? { sessions: [], groups: [{ cwd: PROJECT_CWD, total: 7, remaining: 0 }] }
+    : { sessions: world.sessions.slice(0, 7), groups: [{ cwd: PROJECT_CWD, total: 8, cursor: "consumed", remaining: 1 }] }) as never;
+  await render();
+  await act(async () => { button("Load 1 more").click(); await settle(60); });
+  expect(row("Conversation 8")).toBeUndefined();
+  expect(button("Show fewer")).toBeDefined();
+  expect(sessionsList.get().revealed.get(PROJECT_CWD)).toBe(14);
+});
+
+it("shows the exact promised Chat count and stays focused through Show fewer", async () => {
   const cwd = "/state/chat";
   const chats = Array.from({ length: 8 }, (_, index) => ({ ...world.sessions[index]!, cwd, path: `${cwd}/${index}.jsonl`, name: `Chat ${index}`, agent: { kind: "chat" as const, agentName: "chat" } }));
   let deliver!: (value: unknown) => void;
   world.overrides["pi/session/list"] = ((params: { page?: { cursor?: string } }) => params.page?.cursor
     ? new Promise(resolve => { deliver = resolve; })
-    : { sessions: chats.slice(0, 7), groups: [{ cwd, total: 8, cursor: "older-chat" }] }) as never;
+    : { sessions: chats.slice(0, 7), groups: [{ cwd, total: 8, cursor: "older-chat", remaining: 1 }] }) as never;
   await render("", "chat");
   expect(row("Chat 7")).toBeUndefined();
-  const more = button("Load more"); more.focus();
+  const more = button("Load 1 more"); more.focus();
   await act(async () => more.click());
   expect(button("Loading chats…").getAttribute("aria-disabled")).toBe("true");
-  await act(async () => { deliver({ sessions: [chats[7]!], groups: [{ cwd, total: 8 }] }); await settle(60); });
+  await act(async () => { deliver({ sessions: [chats[7]!], groups: [{ cwd, total: 8, remaining: 0 }] }); await settle(60); });
   expect(row("Chat 7")).toBeDefined();
   expect(document.activeElement).toBe(button("Show fewer"));
   await act(async () => button("Show fewer").click());
   expect(row("Chat 7")).toBeUndefined();
-  expect(document.activeElement).toBe(button("Load more"));
+  expect(document.activeElement).toBe(button("Load 1 more"));
 });
 
 it("shows seven, expands in place, retains focus and remembers the batch across remounts without persistence", async () => {
   await render();
   expect(container.querySelectorAll('[data-slot="aui_thread-list-item"]')).toHaveLength(7);
   expect(row("Conversation 8")).toBeUndefined();
-  const more = button("Load more");
+  const more = button("Load 1 more");
   expect(more.getAttribute("aria-expanded")).toBe("false");
   more.focus(); expect(document.activeElement).toBe(more);
   await act(async () => more.click());
@@ -119,7 +147,7 @@ it("surfaces an old row as soon as it needs attention, and does not fold search 
   expect(row("Conversation 8")).toBeDefined();
   await render("Conversation");
   expect(container.querySelectorAll('[data-slot="aui_thread-list-item"]')).toHaveLength(8);
-  expect(button("Load more")).toBeUndefined();
+  expect(button("Load 1 more")).toBeUndefined();
 });
 
 it("keeps a newly created empty session first while older chats are used, then returns it to recency after its first send", async () => {
@@ -155,7 +183,7 @@ it("never hides an empty root even when more than seven sessions are empty", asy
   world.sessions = world.sessions.map(session => ({ ...session, messageCount: 0 }));
   await render();
   expect(container.querySelectorAll('[data-slot="aui_thread-list-item"]')).toHaveLength(8);
-  expect(button("Load more")).toBeUndefined();
+  expect(button("Load 1 more")).toBeUndefined();
 });
 
 it("reveals successive batches of seven without losing the remaining rows", async () => {
@@ -165,9 +193,9 @@ it("reveals successive batches of seven without losing the remaining rows", asyn
   await render();
   const count = () => container.querySelectorAll('[data-slot="aui_thread-list-item"]').length;
   expect(count()).toBe(7);
-  await act(async () => button("Load more").click()); expect(count()).toBe(14);
-  expect(button("Load more").getAttribute("aria-expanded")).toBe("true");
-  await act(async () => button("Load more").click()); expect(count()).toBe(16);
+  await act(async () => button("Load 7 more").click()); expect(count()).toBe(14);
+  expect(button("Load 2 more").getAttribute("aria-expanded")).toBe("true");
+  await act(async () => button("Load 2 more").click()); expect(count()).toBe(16);
   await act(async () => button("Show fewer").click()); expect(count()).toBe(7);
 });
 
@@ -201,7 +229,7 @@ it.each(["deleted", "search"] as const)("places a child with a %s parent among o
   expect(row("Conversation child")?.querySelector('[data-slot="subagent-name"]')?.textContent).toBe("explorer");
   expect(visible()).toHaveLength(reason === "search" ? 8 : 7);
   if (reason !== "search") {
-    await act(async () => button("Load more").click());
+    await act(async () => button("Load 1 more").click());
     expect(visible()).toHaveLength(8);
     expect(row("Conversation 8")).toBeDefined();
   }

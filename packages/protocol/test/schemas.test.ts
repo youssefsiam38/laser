@@ -658,6 +658,10 @@ describe("client request schemas", () => {
     expect(parseClientRequest(JSON.parse(JSON.stringify(request))).params).toEqual(params);
     for (const size of [0, -1, 1.5, 1001]) expect(() => parseClientRequest({ ...request, params: { page: { size } } })).toThrow();
     expect(() => parseClientRequest({ ...request, params: { page: { cursor: "x".repeat(8193) } } })).toThrow();
+    const result: ClientRequests["pi/session/list"]["result"] = {
+      sessions: [], groups: [{ cwd: "/project", total: 10, cursor: "opaque", remaining: 3 }],
+    };
+    expect(JSON.parse(JSON.stringify(result))).toEqual(result);
   });
 
   it("treats missing params as an empty object for methods that allow it", () => {

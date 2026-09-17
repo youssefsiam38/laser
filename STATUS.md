@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-18T12:00:00+03:00 · orchestrator-2026-09-18 · HEAD: 284d0566
-**Current focus:** M13-T122..T124 done, unreleased: agent definitions are Markdown files (global + project), a Laser core prompt leads every custom agent. Next: agent-supplied activity labels, Namer names sessions only.
+**Last updated:** 2026-09-18T12:00:00+03:00 · ui-load-more-01a0b045 · HEAD: d555ed5d
+**Current focus:** M16-T61..T63 continue; M16-T64 session paging is complete: one click loads once and names its exact next batch.
 
 | Milestone | State |
 | --- | --- |
@@ -29,7 +29,7 @@
 | MX Cross-cutting | in-progress |
 
 **Blockers:** none.
-**Next up:** person edits `packages/worker/src/agents/core-instructions.md` before release; activity labels from the agent (`label` tool param, Namer sessions-only); live large tool requests readable without reopen; M17 and open rows in M2/M3/M5/M7/M8/M10/M11/M13/M16/MX; flaky MCP cache-contract and host timing tests.
-**Recently done:** M13-T122 Markdown agent files (`517a7a08`); M13-T123 core instructions (`d404434a`); M13-T124 Agents page scope/core controls (`5c45a17e`); M16-T60 v0.7.3; M19-T5 v0.7.2.
+**Next up:** M16-T61 Chat tab landing; M16-T62 trimmed conversation reads; M16-T63 path-aware folder picker.
+**Recently done:** M16-T64 session paging (`/tmp/browser-check/run-eHuvcA`); M13-T122 Markdown agent files (`517a7a08`); M13-T123 core instructions (`d404434a`); M13-T124 Agents page scope/core controls (`5c45a17e`); M16-T60 v0.7.3.
 
 Ownership and evidence: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`.

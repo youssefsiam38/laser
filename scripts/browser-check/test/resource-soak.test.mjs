@@ -580,7 +580,7 @@ test('the sidebar row view reads only the active tabpanel and the session’s ow
   assert.ok(view.trigger.path.startsWith(`${group} > [data-slot="aui_thread-list-item-trigger"]`));
   assert.equal(await view.loadMore(), null, 'an invisible control is not a control');
   assert.deepEqual(calls.filter(call => call.startsWith('isVisible:')), [
-    `isVisible:${group} > role=button[name=/^(Load more|Show fewer|Loading chats…)$/]`,
+    `isVisible:${group} > role=button[name=/^(Load(?: \\d+)? more|Show fewer|Loading chats…)$/]`,
   ]);
   assert.equal(await view.rowCount(), 0);
   assert.deepEqual(calls.filter(call => call.startsWith('count:')), [`count:${group} > [data-slot="aui_thread-list-item-trigger"]`]);

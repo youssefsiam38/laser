@@ -207,11 +207,13 @@ describe("Router · paged catalog", () => {
     try {
       const first = await h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/session/list", params: { page: {} } }, LOCAL_ACCESS);
       expect(first).toHaveProperty("result.sessions.length", 70);
-      const result = (first as { result: { sessions: SessionSummary[]; groups: Array<{ cwd: string; cursor: string }> } }).result;
+      const result = (first as { result: { sessions: SessionSummary[]; groups: Array<{ cwd: string; cursor: string; remaining: number }> } }).result;
       expect(result.groups).toHaveLength(10);
       const group = result.groups[0]!;
+      expect(group.remaining).toBe(8);
       const next = await h.router.handle({ jsonrpc: "2.0", id: 2, method: "pi/session/list", params: { cwd: group.cwd, page: { cursor: group.cursor } } }, LOCAL_ACCESS);
       expect(next).toHaveProperty("result.sessions.length", 7);
+      expect(next).toHaveProperty("result.groups.0.remaining", 1);
       const more = (next as { result: { sessions: SessionSummary[] } }).result.sessions;
       expect(more.every(row => !result.sessions.some(firstRow => firstRow.path === row.path))).toBe(true);
       const invalid = await h.router.handle({ jsonrpc: "2.0", id: 3, method: "pi/session/list", params: { cwd: "/another", page: { cursor: group.cursor } } }, LOCAL_ACCESS);
