@@ -297,9 +297,9 @@ function useComposerKeys(): (e: KeyboardEvent<HTMLTextAreaElement>) => void {
 }
 
 /**
- * Pi's prompt is plain text, so a quote set from the selection toolbar is
- * folded into the message as a markdown blockquote at send time; the sent
- * message renders it back as a quote (`quote-reply`).
+ * Pi's prompt is plain text, so a quote set from the message menu or keyboard
+ * action is folded into the message as a markdown blockquote at send time; the
+ * sent message renders it back as a quote (`quote-reply`).
  */
 function foldQuote(aui: ReturnType<typeof useAui>): void {
   const composer = aui.composer;

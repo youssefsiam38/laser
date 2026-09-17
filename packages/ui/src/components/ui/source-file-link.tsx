@@ -21,9 +21,27 @@ export async function openSourcePath(path: string): Promise<void> {
 export function SourceFileLink({ href = "", children, title: _title, ...props }: ComponentProps<"a">) {
   const cwd = useContext(FileLinkDirectory);
   const path = fileLinkPath(href, cwd);
-  if (path) return <a {...props} dir="ltr" href={href} data-file-path={path} onClick={event => {
-    event.preventDefault(); void openSourcePath(path);
-  }} onAuxClick={event => { event.preventDefault(); }} onContextMenu={event => event.preventDefault()}>{children}</a>;
+  if (path) return (
+    <a
+      {...props}
+      dir="ltr"
+      href={href}
+      data-file-path={path}
+      onClick={event => {
+        event.preventDefault();
+        void openSourcePath(path);
+      }}
+      onAuxClick={event => { event.preventDefault(); }}
+      onContextMenu={event => {
+        // A relative source href resolves to the host's HTTP origin in Electron.
+        // Its native link menu would therefore offer the wrong web URL. Keep
+        // file opening on the validated editor bridge and remote path copy.
+        event.preventDefault();
+      }}
+    >
+      {children}
+    </a>
+  );
   // Unresolved relative links must not silently become host HTTP routes.
   if (href && !href.startsWith("#") && !href.startsWith("//") && !/^[a-z][a-z\d+.-]*:/i.test(href)) {
     const explain = () => toast.error("This file’s project directory was not recorded. Open it from the project computer.");

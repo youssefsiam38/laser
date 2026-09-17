@@ -76,6 +76,7 @@ function groups(mod: string): BindingGroup[] {
         { keys: [["Alt", "O"]], what: "Open selected skill or prompt source", detail: "While suggestions are open. Desktop uses your default Markdown application; browser and phone copy the source path." },
         { keys: [["@"]], what: "Mention a file" },
         { keys: [[mod, "V"]], what: "Paste an image as an attachment" },
+        { keys: [[mod, "Shift", "9"]], what: "Quote selection", detail: "Select text in one message first. The message’s More menu offers the same action on touch." },
       ],
     },
     {

@@ -1,9 +1,9 @@
 "use client";
 /**
  * Quote (`quote`): quote deliberately selected transcript text into the
- * composer. Three pieces — a keyboard action that leaves native selection
- * alone until invoked, the preview inside the composer card, and `QuoteBlock`
- * for a quote carried on a sent message.
+ * composer. Three pieces — a remembered native selection shared by the
+ * message menu and keyboard action, the preview inside the composer card, and
+ * `QuoteBlock` for a quote carried on a sent message.
  *
  * Pi's prompt is plain text, so the composer folds the quote into the message
  * as a markdown blockquote when it sends (`Composer.tsx`); `quote-reply`
@@ -13,12 +13,14 @@
  * is deliberately not mounted. It listens to every mouseup/keyup/selection
  * collapse and covers ordinary browser selection with a custom popup. Native
  * word/paragraph/drag selection and the native context menu win instead.
- * Quoting remains available through Ctrl/Cmd+Shift+Q while one message owns
- * the selection. Dismiss is a `TooltipIconButton`; all styling uses tokens.
+ * Quoting remains available through the visible per-message menu and
+ * Ctrl/Cmd+Shift+9 while one message owns the selection. Dismiss is a
+ * `TooltipIconButton`; all styling uses tokens.
  */
 import { ComposerPrimitive, useAui, type QuoteMessagePartComponent } from "@assistant-ui/react";
 import { Quote as QuoteIcon, X } from "lucide-react";
 import { memo, useEffect, type ComponentProps, type FC, type RefObject } from "react";
+import { toast } from "sonner";
 
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { cn } from "@/lib/utils";
@@ -57,7 +59,7 @@ QuoteBlock.Icon = QuoteBlockIcon;
 QuoteBlock.Text = QuoteBlockText;
 
 // ---------------------------------------------------------------------------
-// TranscriptQuoteShortcut — deliberate quote without a selection popup
+// Native transcript selection — shared by the message menu and shortcut
 // ---------------------------------------------------------------------------
 
 export interface TranscriptSelectionQuote {
@@ -86,9 +88,50 @@ export function transcriptSelectionQuote(
   return text && messageId ? { text, messageId } : undefined;
 }
 
+/**
+ * Focusing a menu or textarea collapses Chromium's document selection. Keep the
+ * last valid same-message selection for this thread until another non-collapsed
+ * selection replaces it. The WeakMap cannot retain an unmounted thread.
+ */
+const rememberedSelections = new WeakMap<HTMLElement, TranscriptSelectionQuote>();
+
+export function rememberTranscriptSelection(
+  thread: HTMLElement | null,
+  selection: Selection | null = typeof window === "undefined" ? null : window.getSelection(),
+): TranscriptSelectionQuote | undefined {
+  if (!thread) return undefined;
+  const quote = transcriptSelectionQuote(selection, thread);
+  if (quote) rememberedSelections.set(thread, quote);
+  else if (selection && !selection.isCollapsed) rememberedSelections.delete(thread);
+  return quote ?? rememberedSelections.get(thread);
+}
+
+export function rememberedTranscriptSelection(
+  thread: HTMLElement | null,
+  messageId?: string,
+): TranscriptSelectionQuote | undefined {
+  if (!thread) return undefined;
+  const quote = rememberTranscriptSelection(thread);
+  return quote && (messageId === undefined || quote.messageId === messageId) ? quote : undefined;
+}
+
+export function applyTranscriptQuote(
+  thread: HTMLElement,
+  quote: TranscriptSelectionQuote,
+  setQuote: (quote: TranscriptSelectionQuote) => void,
+): void {
+  setQuote(quote);
+  rememberedSelections.delete(thread);
+  window.getSelection()?.removeAllRanges();
+  requestAnimationFrame(() => {
+    thread.querySelector<HTMLTextAreaElement>('[data-slot="composer"] textarea')?.focus({ preventScroll: true });
+  });
+}
+
 export function TranscriptQuoteShortcut({ thread }: { thread: RefObject<HTMLElement | null> }) {
   const aui = useAui();
   useEffect(() => {
+    const remember = () => rememberTranscriptSelection(thread.current);
     const onKeyDown = (event: KeyboardEvent) => {
       if (
         event.defaultPrevented ||
@@ -96,18 +139,26 @@ export function TranscriptQuoteShortcut({ thread }: { thread: RefObject<HTMLElem
         event.altKey ||
         !event.shiftKey ||
         (!event.ctrlKey && !event.metaKey) ||
-        event.key.toLowerCase() !== "q"
+        event.code !== "Digit9"
       ) return;
-      const selection = window.getSelection();
-      const quote = transcriptSelectionQuote(selection, thread.current);
-      if (!quote) return;
+      const root = thread.current;
+      if (!root) return;
+      const targetThread = event.target instanceof Element ? event.target.closest('[data-slot="thread"]') : null;
+      if (targetThread && targetThread !== root) return;
       event.preventDefault();
-      aui.thread.composer().setQuote(quote);
-      selection?.removeAllRanges();
-      thread.current?.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')?.focus({ preventScroll: true });
+      const quote = rememberedTranscriptSelection(root);
+      if (!quote) {
+        toast.info("Select text in one message to quote it.");
+        return;
+      }
+      applyTranscriptQuote(root, quote, (value) => aui.thread.composer().setQuote(value));
     };
+    document.addEventListener("selectionchange", remember);
     document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("selectionchange", remember);
+      document.removeEventListener("keydown", onKeyDown);
+    };
   }, [aui, thread]);
   return null;
 }

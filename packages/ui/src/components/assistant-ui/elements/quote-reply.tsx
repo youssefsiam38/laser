@@ -6,9 +6,10 @@
  * leading blockquote of a sent prompt back as a quote.
  *
  * Divergences from the registry copy: the registry is a demo of the whole
- * flow (highlighted selection, toolbar, quoted block). The toolbar is `quote`'s
- * `SelectionToolbar`; what survives here is the quoted block, plus the pure
- * `splitLeadingQuote` that recovers a quote from prompt text.
+ * flow (highlighted selection, toolbar, quoted block). The floating toolbar is
+ * deliberately not mounted: native selection stays unobstructed, while the
+ * message actions menu and keyboard chord own quoting. What survives here is
+ * the quoted block plus `splitLeadingQuote`, which recovers it from prompt text.
  */
 import type { ComponentProps } from "react";
 
