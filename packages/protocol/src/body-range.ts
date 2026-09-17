@@ -31,6 +31,13 @@ export const BODY_COMPONENT_KINDS = [
   "reasoning",
   "tool_args",
   "tool_result",
+  /**
+   * A tool result's output as a person reads it: its text parts, joined —
+   * always plain text, whatever `details` or non-text parts the result also
+   * carries. `tool_result` stays the structured record excerpts and digests
+   * are taken from; a reader of the whole output reads this (D-275).
+   */
+  "tool_output",
   "tool_partial",
   "custom_details",
   "image",
@@ -247,15 +254,24 @@ export function entryBodyIdentities(
   let omitted = 0;
   let truncated: true | undefined;
   let metadataBytes = 0;
+  // A text-only tool result is the same string as its output: hashed once.
+  let previous: { value: string; totalBytes: number; contentDigest: string } | undefined;
   for (const source of entryBodySources(entry)) {
     if (bodies.length >= maxItems) { omitted += 1; continue; }
-    const hasher = createHasher();
-    let bytes = 0;
-    const sink = (chunk: string): void => { hasher.update(chunk); bytes += utf8ByteLength(chunk); };
-    const complete = streamBodyText(source.value, sink);
-    // A body this projection cannot predict has no digest anyone could trust.
-    if (!complete) { omitted += 1; continue; }
-    const row = { component: source.component, totalBytes: bytes, contentDigest: hasher.digest() };
+    let measured: { totalBytes: number; contentDigest: string };
+    if (typeof source.value === "string" && previous !== undefined && previous.value === source.value) {
+      measured = { totalBytes: previous.totalBytes, contentDigest: previous.contentDigest };
+    } else {
+      const hasher = createHasher();
+      let bytes = 0;
+      const sink = (chunk: string): void => { hasher.update(chunk); bytes += utf8ByteLength(chunk); };
+      const complete = streamBodyText(source.value, sink);
+      // A body this projection cannot predict has no digest anyone could trust.
+      if (!complete) { omitted += 1; continue; }
+      measured = { totalBytes: bytes, contentDigest: hasher.digest() };
+      previous = typeof source.value === "string" ? { value: source.value, ...measured } : undefined;
+    }
+    const row = { component: source.component, ...measured };
     // `component` (kind plus optional index), size and a 64-character digest:
     // a little over a hundred bytes, counted exactly rather than estimated.
     const size = utf8ByteLength(JSON.stringify(row));
@@ -433,6 +449,11 @@ export function toolResultValue(message: unknown): unknown {
   return { content: Array.isArray(content) ? content : [{ type: "text", text: textPartsOf(content, "text", "text") }], ...(hasDetails ? { details } : {}) };
 }
 
+/** A tool result's output as text: its text parts, joined. Never structured. */
+export function toolOutputBody(message: unknown): string {
+  return textPartsOf(record(message).content, "text", "text");
+}
+
 export interface EntryBody {
   component: BodyComponent;
   text: string;
@@ -479,6 +500,7 @@ export function entryBodySources(entry: unknown): Array<{ component: BodyCompone
   }
   if (role === "toolResult") {
     rows.push({ component: { kind: "tool_result" }, value: toolResultValue(message) });
+    rows.push({ component: { kind: "tool_output" }, value: toolOutputBody(message) });
     return rows;
   }
   if (role === "custom") {
@@ -533,6 +555,7 @@ export function entryBodies(entry: unknown): EntryBody[] {
   }
   if (role === "toolResult") {
     bodies.push({ component: { kind: "tool_result" }, text: displayBodyText(toolResultValue(message)) });
+    bodies.push({ component: { kind: "tool_output" }, text: toolOutputBody(message) });
     return bodies;
   }
   if (role === "custom") {
@@ -615,6 +638,7 @@ export function entryBodyMetadata(entry: unknown, maxBytes = 0): Array<{ compone
     // A text-only result is its own text, counted where it already is.
     if (!hasDetails && !hasNonText) rows.push({ component: { kind: "tool_result" }, totalBytes: partsSize(content, "text", "text") });
     else structured({ kind: "tool_result" }, toolResultValue(message));
+    rows.push({ component: { kind: "tool_output" }, totalBytes: partsSize(content, "text", "text") });
     return rows;
   }
   if (role === "custom") {
@@ -626,7 +650,9 @@ export function entryBodyMetadata(entry: unknown, maxBytes = 0): Array<{ compone
 
 /** One named body of one entry, or `undefined` when the entry has no such body. */
 export function entryBody(entry: unknown, component: BodyComponent): string | undefined {
-  for (const body of entryBodies(entry)) if (sameBodyComponent(body.component, component)) return body.text;
+  // Only the body asked for is built: reading a tool's output never pays for
+  // the structured record beside it.
+  for (const source of entryBodySources(entry)) if (sameBodyComponent(source.component, component)) return displayBodyText(source.value);
   return undefined;
 }
 

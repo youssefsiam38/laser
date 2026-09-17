@@ -250,3 +250,67 @@ describe("reading one body from the stored conversation", () => {
     } finally { file.cleanup(); }
   });
 });
+
+describe("a tool's output, read from the stored conversation (D-275)", () => {
+  // Two text parts around an image, carrying details: the structured record is
+  // JSON, and the output a person reads is the text alone.
+  const partA = "first ✓ line\n".repeat(6000);
+  const partB = "😀 tail é\n".repeat(7000);
+  const output = partA + partB;
+  const result = { type: "message", id: "e2", parentId: "e1", timestamp: "2026-01-01T00:00:03.000Z", message: {
+    role: "toolResult", toolCallId: "c1", toolName: "bash",
+    content: [{ type: "text", text: partA }, { type: "image", mimeType: "image/png", data: "QUJD" }, { type: "text", text: partB }],
+    details: { exitCode: 0, truncation: { truncated: false } }, isError: false } };
+
+  function toolFixture() {
+    const dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-output-`));
+    const path = join(dir, "session.jsonl");
+    const call = { type: "message", id: "e1", parentId: "e0", timestamp: "2026-01-01T00:00:02.000Z", message: { role: "assistant",
+      content: [{ type: "toolCall", id: "c1", name: "bash", arguments: { command: "cat" } }], stopReason: "toolUse" } };
+    writeFileSync(path, [header, JSON.stringify(prompt), JSON.stringify(call), JSON.stringify(result)].join("\n") + "\n");
+    return { path, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  }
+
+  it("serves plain text with details present, reassembling across parts and multi-byte boundaries", async () => {
+    const file = toolFixture();
+    try {
+      const { range, revisions, index } = services();
+      const indexed = await index.read(file.path);
+      const revision = revisions.revisionOf(indexed.ok ? indexed.index : (undefined as never));
+      let offset = 0;
+      let out = "";
+      for (let step = 0; step < 200; step++) {
+        const answer = await range.read(file.path, params({ path: file.path, environmentKey: revisions.environmentKey, revision,
+          entryId: "e2", component: { kind: "tool_output" }, offset, limit: 4093 }));
+        expect(answer.kind).toBe("answer");
+        if (answer.kind !== "answer") return;
+        expect(answer.result.totalBytes).toBe(utf8ByteLength(output));
+        expect(answer.result.contentDigest).toBe(sha256Hex(output));
+        expect(answer.result.text.includes("�")).toBe(false);
+        out += answer.result.text;
+        if (answer.result.next === undefined) break;
+        offset = answer.result.next;
+      }
+      expect(out).toBe(output);
+      // The structured record is still there for the callers that read it.
+      const record = await range.read(file.path, params({ path: file.path, environmentKey: revisions.environmentKey, revision,
+        entryId: "e2", component: { kind: "tool_result" }, offset: 0, limit: 64 }));
+      expect(record.kind === "answer" && record.result.text.startsWith("{\n  \"content\"")).toBe(true);
+    } finally { file.cleanup(); }
+  });
+
+  it("names it on a durable page exactly as it serves it", async () => {
+    const file = toolFixture();
+    try {
+      const { index, revisions } = services();
+      const { SessionProjection } = await import("../src/session-projection.js");
+      const projection = new SessionProjection({ index, revisions });
+      const answer = await projection.read(file.path, { tail: 40 }, undefined, 16 * 1024);
+      expect(answer.kind).toBe("answer");
+      if (answer.kind !== "answer") return;
+      const elided = answer.result.window!.elided!.find(row => row.id === "e2")!;
+      expect(elided.bodies.find(row => row.component.kind === "tool_output"))
+        .toEqual({ component: { kind: "tool_output" }, totalBytes: utf8ByteLength(output), contentDigest: sha256Hex(output) });
+    } finally { file.cleanup(); }
+  });
+});

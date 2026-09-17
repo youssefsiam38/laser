@@ -30,7 +30,8 @@ const REPLY = "答".repeat(200_000); // 600 KB of UTF-8: an excerpt plus a refer
 beforeEach(async () => {
   base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-settled-`));
   mkdirSync(join(base, "project"), { recursive: true });
-  writeFileSync(join(base, "project", "README.md"), "hello\n");
+  // Multi-byte and longer than a read returns, so the result carries details.
+  writeFileSync(join(base, "project", "README.md"), Array.from({ length: 3000 }, (_, index) => `${index} héllo 😀 ✓`).join("\n") + "\n");
   mkdirSync(join(base, "sessions"), { recursive: true });
   stub = await startStubProvider((request: StubRequest) => {
     const sawToolResult = request.messages.some((message) => message.role === "tool");
@@ -141,6 +142,31 @@ it("persists an assistant reply and a tool result by the time their message_end 
     expect(slice.totalBytes).toBe(text!.totalBytes);
     expect(slice.contentDigest).toBe(text!.contentDigest);
     expect(REPLY.startsWith(slice.text)).toBe(true);
+
+    // D-275: the tool's output is addressable as plain text from the live
+    // authority, whatever details the result carries, and the settle names it
+    // with exactly the size and digest a reader reassembles.
+    const toolLive = updates().find(update => update.kind === "tool_execution_end") as unknown as { result: { content: Array<{ type: string; text?: string }>; details?: unknown } };
+    const output = toolLive.result.content.filter(part => part.type === "text").map(part => part.text ?? "").join("");
+    expect(output).toContain("héllo 😀");
+    expect(toolLive.result.details, "the read was truncated, so the result carries details").toBeDefined();
+    const named = toolEnd!.entry!.bodies!.find(body => body.component.kind === "tool_output");
+    expect(named).toEqual({ component: { kind: "tool_output" }, totalBytes: Buffer.byteLength(output, "utf8"), contentDigest: createHash("sha256").update(output, "utf8").digest("hex") });
+    let offset: number | undefined = 0;
+    let whole = "";
+    for (let id = 10; offset !== undefined && id < 200; id++) {
+      const part = await call(id, "session/entry_range", {
+        path, environmentKey: now.environmentKey, revision: now.revision,
+        entryId: toolEnd!.entry!.id, component: { kind: "tool_output" }, offset, limit: 4093,
+      });
+      expect(part.error?.message).toBeUndefined();
+      const got = part.result as { text: string; next?: number; contentDigest: string; authority: string };
+      expect(got.authority).toBe("live");
+      expect(got.contentDigest).toBe(named!.contentDigest);
+      whole += got.text;
+      offset = got.next;
+    }
+    expect(whole).toBe(output);
   } finally {
     await server.dispose();
   }

@@ -66,7 +66,7 @@ describe("the shared body projection", () => {
     expect(entryBodies(assistant).map(body => bodyComponentKey(body.component)))
       .toEqual(["assistant_text", "reasoning", "tool_args:0"]);
     expect(entryBodies(prompt).map(body => bodyComponentKey(body.component))).toEqual(["user_text", "image:0"]);
-    expect(entryBodies(toolResult).map(body => bodyComponentKey(body.component))).toEqual(["tool_result"]);
+    expect(entryBodies(toolResult).map(body => bodyComponentKey(body.component))).toEqual(["tool_result", "tool_output"]);
     expect(entryBody(assistant, { kind: "reasoning" })).toBe("because");
     expect(entryBody(assistant, { kind: "tool_result" })).toBeUndefined();
     expect(largestBodyBytes(prompt)).toBe(utf8ByteLength("QUJD"));
@@ -145,7 +145,10 @@ describe("leaving an oversized record out of a page", () => {
     expect(page.entries).toEqual([prompt, assistant]);
     expect(page.elided).toEqual([{
       id: "e3", parentId: "e2", type: "message", role: "toolResult", toolCallId: "c1",
-      bodies: [{ component: { kind: "tool_result" }, totalBytes: 50_000, contentDigest: "d50000" }],
+      bodies: [
+        { component: { kind: "tool_result" }, totalBytes: 50_000, contentDigest: "d50000" },
+        { component: { kind: "tool_output" }, totalBytes: 50_000, contentDigest: "d50000" },
+      ],
     }]);
   });
 
@@ -315,7 +318,7 @@ describe("the bounded canonical projection", () => {
       content: [{ type: "text", text: "z".repeat(200_000) }] } };
     resetBodyProjectionWork();
     const rows = entryBodyMetadata(entry);
-    expect(rows).toEqual([{ component: { kind: "tool_result" }, totalBytes: 200_000 }]);
+    expect(rows).toEqual([{ component: { kind: "tool_result" }, totalBytes: 200_000 }, { component: { kind: "tool_output" }, totalBytes: 200_000 }]);
     expect(bodyProjectionWork().emittedChars).toBeLessThan(1024);
 
     const unpredictable = { id: "e2", parentId: null, type: "message", message: { role: "assistant",
@@ -383,7 +386,8 @@ describe("the identity an authority publishes when a message settles", () => {
     const entry = { id: "e1", parentId: null, type: "message", message: { role: "toolResult", toolCallId: "c1",
       content: [], details: { at: new Date("2026-01-01T00:00:00Z") } } };
     const identity = entryBodyIdentities(entry, hasher);
-    expect(identity.bodies).toEqual([]);
+    // The structured record is refused; its output is plain text and still named.
+    expect(identity.bodies).toEqual([{ component: { kind: "tool_output" }, totalBytes: 0, contentDigest: sha256Of("") }]);
     expect(identity.omitted).toBe(1);
   });
 
@@ -711,6 +715,56 @@ describe("reading one attachment inside a prompt", () => {
     expect(body.regions!.items[0]!.name).toBe("notes.md");
     expect(body.regions!.items[0]!.contentDigest).toBe(digestOfText(content));
     expect(utf8ByteLength(JSON.stringify(body.regions))).toBeLessThanOrEqual(16 * 1024);
+  });
+});
+
+describe("a tool's output, read as output (D-275)", () => {
+  const withDetails = { id: "e5", parentId: "e4", type: "message", message: { role: "toolResult", toolCallId: "c1",
+    content: [{ type: "text", text: "line one\n" }, { type: "image", data: "QUJD", mimeType: "image/png" }, { type: "text", text: "héllo 😀\n" }],
+    details: { exitCode: 0, truncation: { lines: 2 } } } };
+  const output = "line one\nhéllo 😀\n";
+
+  it("is the text parts joined, plain, whatever details the result carries", () => {
+    expect(entryBody(withDetails, { kind: "tool_output" })).toBe(output);
+    // The structured record is unchanged for the callers that read it.
+    expect(entryBody(withDetails, { kind: "tool_result" })!.startsWith("{\n  \"content\"")).toBe(true);
+    const answer = bodyRangeSlice(withDetails, { entryId: "e5", component: { kind: "tool_output" }, offset: 0 }, "r1", "durable", digestOfText);
+    expect(answer.ok && answer.result).toMatchObject({ text: output, totalBytes: utf8ByteLength(output), truncated: false, contentDigest: digestOfText(output) });
+  });
+
+  it("is sized, named and elided exactly as a reader slices it", () => {
+    const meta = entryBodyMetadata(withDetails).find(row => row.component.kind === "tool_output");
+    expect(meta).toEqual({ component: { kind: "tool_output" }, totalBytes: utf8ByteLength(output) });
+    const hasher = () => { const chunks: string[] = []; return { update: (c: string) => { chunks.push(c); }, digest: () => sha256Of(chunks.join("")) }; };
+    const identity = entryBodyIdentities(withDetails, hasher).bodies.find(row => row.component.kind === "tool_output");
+    expect(identity).toEqual({ component: { kind: "tool_output" }, totalBytes: utf8ByteLength(output), contentDigest: sha256Of(output) });
+    const { elided } = elideOversizedEntries([withDetails], 8, digestOfText);
+    expect(elided[0]!.bodies.find(row => row.component.kind === "tool_output")).toEqual({ component: { kind: "tool_output" }, totalBytes: utf8ByteLength(output), contentDigest: digestOfText(output) });
+  });
+
+  it("slices on character boundaries and reassembles byte for byte", () => {
+    const big = "aé😀\n".repeat(40_000);
+    const entry = { id: "e6", parentId: null, type: "message", message: { role: "toolResult", toolCallId: "c2",
+      content: [{ type: "text", text: big.slice(0, 50_001) }, { type: "text", text: big.slice(50_001) }], details: { any: true } } };
+    const reader = createBodyRangeReader();
+    const key = { path: "/s.jsonl", revision: "r1", entryId: "e6", component: { kind: "tool_output" as const } };
+    let offset = 0;
+    let out = "";
+    for (let step = 0; step < 100; step++) {
+      const read = reader.read(key, () => entry, { entryId: "e6", component: key.component, offset, limit: 4099 }, "live", digestOfText);
+      expect(read.ok).toBe(true);
+      if (!read.ok) return;
+      expect(read.result.totalBytes).toBe(utf8ByteLength(big));
+      out += read.result.text;
+      if (read.result.next === undefined) break;
+      offset = read.result.next;
+    }
+    expect(out).toBe(big);
+  });
+
+  it("parses on the wire", () => {
+    const schema = clientParamsSchemas["session/entry_range"];
+    expect(schema.safeParse({ path: "/s.jsonl", environmentKey: "k", revision: "r", entryId: "e1", component: { kind: "tool_output" }, offset: 0 }).success).toBe(true);
   });
 });
 
