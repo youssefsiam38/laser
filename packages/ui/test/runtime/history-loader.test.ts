@@ -244,6 +244,22 @@ describe("history request ownership", () => {
     expect(f.view().historyPending).toBeUndefined();
   });
 
+  it("opens at the latest page when a from or all range is too large to send at once", async () => {
+    for (const all of [false, true]) {
+      const request = vi.fn(async (params: Params) => {
+        if (params.window && ("from" in params.window || "all" in params.window)) throw { code: ErrorCodes.RevisionUnavailable };
+        return historyWindow(source, params.window!, scope);
+      });
+      const f = fixture(request);
+      await f.loader.read(state.path);
+      await f.loader.read(state.path, all);
+      expect(request.mock.calls.map(([params]) => params.window)).toEqual([{ tail: 40 }, all ? { all: true } : { from: "e40" }, { tail: 40 }]);
+      expect(f.view().blocks).toHaveLength(40);
+      expect(f.view().historyPending).toBeUndefined();
+      expect(f.view().historyError).toBeUndefined();
+    }
+  });
+
   it("does not install a page after its caller changes intent", async () => {
     const pending = deferred<Result>();
     const request = vi.fn().mockResolvedValueOnce(historyWindow(source, { tail: 40 }, scope)).mockReturnValueOnce(pending.promise);

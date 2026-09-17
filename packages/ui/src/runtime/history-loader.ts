@@ -347,7 +347,13 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
       // that carry them — which is also what lets a page of a conversation with
       // one enormous turn still carry the turns around it.
       const result = await deps.request({ path, window, bodyLimit: BODY_EXCERPT_MAX_BYTES, ...(base ? { baseRevision: base } : {}) }).catch(error => {
-        if (!("from" in window) || (error as { code?: number }).code !== ErrorCodes.InvalidParams) throw error;
+        // `from` and `all` cannot be split into pages. A retained anchor that
+        // no longer exists, or a range too large to send at once, reads the
+        // latest page instead: the conversation opens, earlier pages load on
+        // scroll.
+        const code = (error as { code?: number }).code;
+        const indivisible = "from" in window || "all" in window;
+        if (!(("from" in window && code === ErrorCodes.InvalidParams) || (indivisible && code === ErrorCodes.RevisionUnavailable))) throw error;
         return deps.request({ path, window: { tail: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES });
       });
       const current = deps.get(path);
@@ -417,7 +423,8 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     const revision = deps.get(path)?.historyRevision;
     const result = await deps.request({ path, window: from ? { from } : { all: true }, bodyLimit: BODY_EXCERPT_MAX_BYTES }).catch(async error => {
       if (!active()) return undefined;
-      if ((error as { code?: number }).code !== ErrorCodes.InvalidParams) throw error;
+      const code = (error as { code?: number }).code;
+      if (code !== ErrorCodes.InvalidParams && code !== ErrorCodes.RevisionUnavailable) throw error;
       await read(path, false, active); return undefined;
     });
     if (!result || !active()) return;
