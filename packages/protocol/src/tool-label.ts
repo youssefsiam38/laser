@@ -3,10 +3,10 @@
  * the call itself: every tool the engine offers carries an optional
  * `activity_label`
  * parameter, a short present-progressive phrase ("Reading build config"),
- * and the activity row shows it while the call runs. The tool never sees the
- * parameter — the worker strips it before execution — and nothing else
- * treats it as an argument: the args disclosure hides it, search skips it,
- * provenance never records it.
+ * and the activity row uses it as the title in every lifecycle state. The
+ * tool never sees the parameter — the worker strips it before execution — and
+ * nothing else treats it as an argument: the args disclosure hides it, search
+ * indexes it once as visible row content, and provenance never records it.
  *
  * Three tools carry no label. `start_agent` already names its work
  * (`subagent_name`, which the row shows instead); `complete_agent_run` and

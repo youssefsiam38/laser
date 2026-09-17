@@ -12,8 +12,9 @@ Instructions also appearing in Full JSON do not create extra matches. Identical
 text in two distinct payload locations remains two genuine occurrences.
 
 Session find and saved-history search use `toolSearchContent` in
-`packages/protocol/src/search-content.ts`. This is a pure display contract,
-not a dump of a tool's schema. The UI and host must not independently stringify
+`packages/protocol/src/search-content.ts`, then prepend the visible agent-written
+activity label when a call carries one. This is a pure display contract, not a
+dump of a tool's schema. The UI and host must not independently stringify
 requests or result envelopes for indexing.
 
 | Surface | Search content | Excluded |
@@ -77,8 +78,9 @@ viewer displays; terminal strings stay untouched. Nothing decodes user escapes.
 6. Add tests proving a key-only miss, a visible-value hit, nested/partial output,
    and equality between projected occurrences and actual DOM highlight ranges.
 
-Host search pairs saved calls with their results and flushes unfinished calls at
-end of file. It flattens a stored result to the joined text of its text blocks
+Host search pairs saved calls with their results, indexes each call's visible
+activity label once, and flushes unfinished calls at end of file. It flattens a
+stored result to the joined text of its text blocks
 (`toolOutputText`) — no base64, no `details` — which is what the UI indexed for
 every tool until the transcript began keeping the stored envelope for a result
 that carries `details` or a non-text block (`storedToolResult`, `store.ts`).
