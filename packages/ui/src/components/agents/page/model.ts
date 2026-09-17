@@ -12,7 +12,7 @@ import {
   FOREGROUND_COMMAND_SECONDS_MAX,
   FOREGROUND_COMMAND_SECONDS_MIN,
   PRODUCT_DISPLAY_NAME,
-  PROJECT_AGENTS_DIR,
+  canReferenceAgent,
   isBuiltinAgentName,
   type AgentDefinition,
   type AgentDefinitionInput,
@@ -127,32 +127,48 @@ export function startableAgents(
   snapshot: AgentsSnapshot | null | undefined,
   owner?: Pick<AgentDefinitionInput, "scope" | "projectCwd">,
 ): AgentDefinition[] {
-  return orderAgents(snapshot, owner?.scope === "project" ? owner.projectCwd : undefined).custom;
+  return orderAgents(snapshot, owner?.scope === "project" ? owner.projectCwd : undefined).custom
+    .filter((candidate) => owner === undefined || canReferenceAgent(owner, candidate));
 }
 
 const normalizedPath = (path: string): string => path.replaceAll("\\", "/").replace(/\/+$/, "");
-const projectAgentsPrefix = (projectCwd: string): string => `${normalizedPath(projectCwd)}/${PROJECT_AGENTS_DIR}/`;
+const pathIsWithin = (path: string, directory: string): boolean => normalizedPath(path).startsWith(`${normalizedPath(directory)}/`);
 
 /** Folder name shown beside “This project”, without exposing the whole path. */
 export function projectFolderName(projectCwd: string): string {
   return normalizedPath(projectCwd).split("/").filter(Boolean).at(-1) ?? projectCwd;
 }
 
-/** Whether a file warning belongs in the current global/project view. */
-export function fileWarningIsVisible(warning: AgentWarning, projectCwd: string | undefined): boolean {
-  if (warning.field !== "file" || !warning.target) return warning.field === "file";
-  const target = normalizedPath(warning.target);
-  const marker = `/${PROJECT_AGENTS_DIR}/`;
-  if (!target.includes(marker)) return true;
-  return projectCwd !== undefined && target.startsWith(projectAgentsPrefix(projectCwd));
+/** Whether an unlinked file warning belongs in the current global/project view. */
+export function fileWarningIsVisible(
+  warning: AgentWarning,
+  projectCwd: string | undefined,
+  snapshot?: AgentsSnapshot | null,
+): boolean {
+  if (warning.field !== "file") return false;
+  if (!warning.path) return true;
+
+  const visible = orderAgents(snapshot, projectCwd);
+  if ([...visible.custom, ...visible.builtin].some((agent) => agent.path === warning.path)) return true;
+  // A known definition outside the effective catalog is shadowed or belongs
+  // to another project, so its warning must not attach to the visible twin.
+  if (snapshot?.agents.some((agent) => agent.path === warning.path)) return false;
+
+  // A broken file has no loaded definition. Infer only from the project roots
+  // the snapshot already carries, rather than guessing from a directory name.
+  if (projectCwd && pathIsWithin(warning.path, projectCwd)) return true;
+  const belongsToKnownProject = snapshot?.agents.some(
+    (agent) => agent.scope === "project" && agent.projectCwd !== undefined && pathIsWithin(warning.path!, agent.projectCwd),
+  ) ?? false;
+  return !belongsToKnownProject;
 }
 
 /** Warnings that can be acted on from the current catalog, including broken files with no definition. */
 export function visibleAgentWarnings(snapshot: AgentsSnapshot | null | undefined, projectCwd: string | undefined): AgentWarning[] {
   if (!snapshot) return [];
-  const names = new Set(orderAgents(snapshot, projectCwd).custom.map((agent) => agent.name));
   return snapshot.warnings.filter((warning) =>
-    warning.field === "file" ? fileWarningIsVisible(warning, projectCwd) : names.has(warning.agentName) || isBuiltinAgentName(warning.agentName),
+    agentForWarning(snapshot, warning, projectCwd) !== undefined
+      || (warning.field === "file" && fileWarningIsVisible(warning, projectCwd, snapshot)),
   );
 }
 
@@ -163,9 +179,10 @@ export function agentForWarning(
   projectCwd: string | undefined,
 ): AgentDefinition | undefined {
   if (!snapshot) return undefined;
-  const visible = orderAgents(snapshot, projectCwd).custom;
-  if (warning.field === "file" && warning.target) return visible.find((agent) => agent.path === warning.target);
-  return [...visible, ...orderAgents(snapshot, projectCwd).builtin].find((agent) => agent.name === warning.agentName);
+  const visible = orderAgents(snapshot, projectCwd);
+  const agents = [...visible.custom, ...visible.builtin];
+  if (warning.path) return agents.find((agent) => agent.path === warning.path);
+  return agents.find((agent) => agent.name === warning.agentName);
 }
 
 // ---------------------------------------------------------------------------

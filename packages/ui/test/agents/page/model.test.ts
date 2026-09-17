@@ -60,18 +60,23 @@ describe("agents page model", () => {
     expect(sectionOfField("something-else")).toBe("name");
   });
 
-  it("filters file warnings to the open project and resolves only a warning with a loaded definition", () => {
+  it("keys warnings by definition path and filters broken files to the open project", () => {
     const loaded = agent({ name: "reviewer", path: `/p/${PROJECT_AGENTS_DIR}/reviewer.md`, scope: "project", projectCwd: "/p" });
-    const projectWarning = { agentName: "reviewer", field: "file" as const, target: loaded.path, message: "Could not parse this file.", since: "2026-09-08T00:00:00.000Z" };
-    const broken = { agentName: "broken", field: "file" as const, target: `/p/${PROJECT_AGENTS_DIR}/broken.md`, message: "Could not parse this file.", since: "2026-09-08T00:00:00.000Z" };
-    const other = { ...broken, agentName: "other", target: `/q/${PROJECT_AGENTS_DIR}/other.md` };
-    const global = { ...broken, agentName: "global-broken", target: "/state/agents/global-broken.md" };
-    const snap = snapshot({ agents: [...snapshot().agents, loaded], warnings: [projectWarning, broken, other, global] });
-    expect(fileWarningIsVisible(projectWarning, "/p")).toBe(true);
-    expect(fileWarningIsVisible(other, "/p")).toBe(false);
+    const foreign = agent({ name: "other-project", path: `/q/${PROJECT_AGENTS_DIR}/other-project.md`, scope: "project", projectCwd: "/q" });
+    const projectWarning = { agentName: "reviewer", field: "file" as const, path: loaded.path, target: loaded.path, message: "Could not parse this file.", since: "2026-09-08T00:00:00.000Z" };
+    const broken = { agentName: "broken", field: "file" as const, path: `/p/${PROJECT_AGENTS_DIR}/broken.md`, target: `/p/${PROJECT_AGENTS_DIR}/broken.md`, message: "Could not parse this file.", since: "2026-09-08T00:00:00.000Z" };
+    const other = { ...broken, agentName: "other", path: `/q/${PROJECT_AGENTS_DIR}/other.md`, target: `/q/${PROJECT_AGENTS_DIR}/other.md` };
+    const global = { ...broken, agentName: "global-broken", path: "/state/agents/global-broken.md", target: "/state/agents/global-broken.md" };
+    const sameNameDifferentFile = { ...projectWarning, field: "model" as const, path: "/state/agents/reviewer.md", target: "missing-model" };
+    const legacyWithoutPath = { ...projectWarning, field: "model" as const, path: undefined, target: "missing-model" };
+    const snap = snapshot({ agents: [...snapshot().agents, loaded, foreign], warnings: [projectWarning, broken, other, global, sameNameDifferentFile] });
+    expect(fileWarningIsVisible(projectWarning, "/p", snap)).toBe(true);
+    expect(fileWarningIsVisible(other, "/p", snap)).toBe(false);
     expect(visibleAgentWarnings(snap, "/p")).toEqual([projectWarning, broken, global]);
     expect(visibleAgentWarnings(snap, undefined)).toEqual([global]);
     expect(agentForWarning(snap, projectWarning, "/p")).toBe(loaded);
+    expect(agentForWarning(snap, sameNameDifferentFile, "/p")).toBeUndefined();
+    expect(agentForWarning(snap, legacyWithoutPath, "/p")).toBe(loaded);
     expect(agentForWarning(snap, broken, "/p")).toBeUndefined();
   });
 

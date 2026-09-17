@@ -9,6 +9,7 @@
  */
 import {
   DEFAULT_AGENT_NAME,
+  effectiveAgents,
   isBuiltinAgentName,
   isTerminalRunStatus,
   type AgentDefinition,
@@ -208,14 +209,7 @@ export function agentByName(snapshot: AgentsSnapshot | null | undefined, name: s
  * belonging to every other project stay out of the catalog entirely.
  */
 export function customAgentsForProject(snapshot: AgentsSnapshot | null | undefined, projectCwd: string | undefined): AgentDefinition[] {
-  const custom = (snapshot?.agents ?? []).filter((agent) => !isBuiltinAgent(agent));
-  const effective = new Map(custom.filter((agent) => agent.scope === "global").map((agent) => [agent.name, agent]));
-  if (projectCwd) {
-    for (const agent of custom) {
-      if (agent.scope === "project" && agent.projectCwd === projectCwd) effective.set(agent.name, agent);
-    }
-  }
-  return [...effective.values()];
+  return effectiveAgents(snapshot?.agents ?? [], projectCwd).filter((agent) => !isBuiltinAgent(agent));
 }
 
 /** The effective definition named `name` in the current project view. */
@@ -224,8 +218,7 @@ export function agentByNameForProject(
   name: string,
   projectCwd: string | undefined,
 ): AgentDefinition | undefined {
-  const builtin = snapshot?.agents.find((agent) => agent.name === name && isBuiltinAgent(agent));
-  return builtin ?? customAgentsForProject(snapshot, projectCwd).find((agent) => agent.name === name);
+  return effectiveAgents(snapshot?.agents ?? [], projectCwd).find((agent) => agent.name === name);
 }
 
 const EMPTY_WARNINGS: readonly AgentWarning[] = Object.freeze([]);

@@ -401,8 +401,8 @@ describe("Agents page", () => {
     const projectReviewer = agent({ name: "reviewer", scope: "project", projectCwd: "/p", path: `/p/${PROJECT_AGENTS_DIR}/reviewer.md`, description: "Project reviewer" });
     const projectOnly = agent({ name: "project-only", scope: "project", projectCwd: "/p", path: `/p/${PROJECT_AGENTS_DIR}/project-only.md` });
     const otherProject = agent({ name: "other-project", scope: "project", projectCwd: "/q", path: `/q/${PROJECT_AGENTS_DIR}/other-project.md` });
-    const loadedWarning = { agentName: "reviewer", field: "file" as const, target: projectReviewer.path, message: "This file changed while it was open.", since: "2026-09-08T00:00:00.000Z" };
-    const brokenWarning = { agentName: "broken", field: "file" as const, target: `/p/${PROJECT_AGENTS_DIR}/broken.md`, message: "The frontmatter could not be read. Fix the file and save it again.", since: "2026-09-08T00:00:01.000Z" };
+    const loadedWarning = { agentName: "reviewer", field: "file" as const, path: projectReviewer.path, target: projectReviewer.path, message: "This file changed while it was open.", since: "2026-09-08T00:00:00.000Z" };
+    const brokenWarning = { agentName: "broken", field: "file" as const, path: `/p/${PROJECT_AGENTS_DIR}/broken.md`, target: `/p/${PROJECT_AGENTS_DIR}/broken.md`, message: "The frontmatter could not be read. Fix the file and save it again.", since: "2026-09-08T00:00:01.000Z" };
     store = createStateStore(seed(snapshot({ agents: [base.agents[0]!, globalReviewer, projectReviewer, projectOnly, otherProject, ...base.agents.slice(1, 4)], warnings: [loadedWarning, brokenWarning] })));
     mocks.state.store = store;
     await mount({ target: { agent: "reviewer", field: "file" } });

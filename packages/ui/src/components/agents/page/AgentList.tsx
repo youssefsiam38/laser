@@ -6,13 +6,13 @@
  */
 import type { AgentDefinition, AgentWarning, AgentsSnapshot } from "@lasercode/protocol";
 import { Bot, FileWarning, MessageSquare, SlidersHorizontal, Sparkles, Tag } from "lucide-react";
-import type { KeyboardEvent, ReactNode } from "react";
+import { useMemo, type KeyboardEvent, type ReactNode } from "react";
 
 import { agentDisplayName } from "@/agents";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
-import { agentForWarning, agentMark, orderAgents, sameSelection, type AgentMark, type AgentsSelection } from "./model.js";
+import { agentMark, orderAgents, sameSelection, type AgentMark, type AgentsSelection } from "./model.js";
 
 const MARK_ICON: Record<AgentMark, typeof Bot> = {
   default: Bot,
@@ -39,9 +39,21 @@ export interface AgentListProps {
 }
 
 export function AgentList({ snapshot, projectCwd, warnings, selection, onSelect, lead, className }: AgentListProps) {
-  const { custom, builtin } = orderAgents(snapshot, projectCwd);
-  const warningCount = (agent: AgentDefinition) => warnings.filter((warning) => agentForWarning(snapshot, warning, projectCwd) === agent).length;
-  const fileWarnings = warnings.filter((warning) => warning.field === "file" && agentForWarning(snapshot, warning, projectCwd) === undefined);
+  const { custom, builtin, warningCounts, fileWarnings } = useMemo(() => {
+    const ordered = orderAgents(snapshot, projectCwd);
+    const agents = [...ordered.custom, ...ordered.builtin];
+    const byPath = new Map(agents.flatMap((agent) => agent.path ? [[agent.path, agent] as const] : []));
+    const byName = new Map(agents.map((agent) => [agent.name, agent] as const));
+    const counts = new Map<AgentDefinition, number>();
+    const unlinked: AgentWarning[] = [];
+    for (const warning of warnings) {
+      const linked = warning.path ? byPath.get(warning.path) : byName.get(warning.agentName);
+      if (linked) counts.set(linked, (counts.get(linked) ?? 0) + 1);
+      else if (warning.field === "file") unlinked.push(warning);
+    }
+    return { ...ordered, warningCounts: counts, fileWarnings: unlinked };
+  }, [projectCwd, snapshot, warnings]);
+  const warningCount = (agent: AgentDefinition) => warningCounts.get(agent) ?? 0;
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const options = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="option"]')];
@@ -204,8 +216,8 @@ function FileWarningRow({ warning }: { warning: AgentWarning }) {
     <div
       role="note"
       data-slot="agent-file-warning-row"
-      data-path={warning.target}
-      aria-label={`${warning.message}${warning.target ? ` File: ${warning.target}` : ""}`}
+      data-path={warning.path}
+      aria-label={`${warning.message}${warning.path ? ` File: ${warning.path}` : ""}`}
       className="flex min-w-0 items-start gap-2.5 rounded-lg bg-[color-mix(in_oklab,var(--attention)_10%,transparent)] px-2 py-2 text-start"
     >
       <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-surface text-attention">
@@ -214,7 +226,7 @@ function FileWarningRow({ warning }: { warning: AgentWarning }) {
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="text-sm font-medium text-ink">Couldn’t load an agent file</span>
         <span className="text-xs leading-5 text-ink-2">{warning.message}</span>
-        {warning.target ? <span aria-hidden="true" dir="ltr" className="typed truncate text-start text-ink-3">{warning.target}</span> : null}
+        {warning.path ? <span aria-hidden="true" dir="ltr" className="typed truncate text-start text-ink-3">{warning.path}</span> : null}
       </span>
     </div>
   );
