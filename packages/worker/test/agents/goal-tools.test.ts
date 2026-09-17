@@ -23,8 +23,15 @@ let driver: StableSdkDriver;
 beforeEach(async () => {
   base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-goal-tools-`));
   for (const name of ["project", "agent", "sessions", "state"]) mkdirSync(join(base, name), { recursive: true });
-  // Plain text every time: what is asserted is the request, not the reply.
-  stub = await startStubProvider(() => ({ text: "Noted." }));
+  // A goal turn waits instead of relying on the old 25-turn safety pause to
+  // become idle. Ordinary turns remain plain text; what is asserted is the
+  // request's tool surface, not the reply.
+  stub = await startStubProvider((request, index) => {
+    const goalId = /<goal_id>\s*([^\s<>]+)\s*<\/goal_id>/u.exec(userTextOf(request))?.[1];
+    return index === 1 && goalId
+      ? { toolCall: { name: "goal_wait", args: { goal_id: goalId, reason: "Waiting for the test to clear the goal", activity_label: "Waiting for clear" } } }
+      : { text: "Noted." };
+  });
   writeStubModels(join(base, "agent"), stub.url);
   driver = new StableSdkDriver();
 });
@@ -96,6 +103,18 @@ describe("the goal engine's tools", () => {
     // assert on the request that actually carries the words sent below.
     await vi.waitFor(() => expect(driver.state().isStreaming).toBe(false), { timeout: 20_000, interval: 25 });
     await driver.goalAction?.({ action: "clear" });
+    const clearTransition = (await driver.entries()).entries.findLast(
+      (entry) => entry.type === "custom" && entry.customType === "goal-transition",
+    );
+    expect(clearTransition).toMatchObject({
+      data: {
+        cause: "clear_action",
+        initiator: "person",
+        previousStatus: "active",
+        status: "cleared",
+        invocationId: expect.stringMatching(/^goal:/u),
+      },
+    });
     await driver.prompt([{ type: "text", text: "And again." }]);
     const cleared = await vi.waitFor(
       () => {

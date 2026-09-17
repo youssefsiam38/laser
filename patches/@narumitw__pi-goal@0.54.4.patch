@@ -1,5 +1,5 @@
 diff --git a/dist/chunks/chunk-QWIUWKRW.js b/dist/chunks/chunk-QWIUWKRW.js
-index 337f7dc01226f5d5a760a1a8ee1e75e0af44c9e6..6539d5cb809751469009211d590fe06fd9ca40c7 100644
+index 337f7dc01226f5d5a760a1a8ee1e75e0af44c9e6..c851ddaedaca569e312bc667e6b4aea889fb1d49 100644
 --- a/dist/chunks/chunk-QWIUWKRW.js
 +++ b/dist/chunks/chunk-QWIUWKRW.js
 @@ -27,73 +27,35 @@ var REMOVED_QUEUE_COMMANDS = /* @__PURE__ */ new Set([
@@ -115,7 +115,61 @@ index 337f7dc01226f5d5a760a1a8ee1e75e0af44c9e6..6539d5cb809751469009211d590fe06f
      automaticModelTurns: normalizeSafetyCounter(goal.automaticModelTurns),
      toolFreeRepeatCount: normalizeSafetyCounter(goal.toolFreeRepeatCount),
      lastToolFreeOutputFingerprint: normalizeOutputFingerprint(goal.lastToolFreeOutputFingerprint),
-@@ -1265,12 +1228,12 @@ var GoalRuntime = class {
+@@ -717,6 +680,7 @@ var WorkflowMutex = class {
+ // src/runtime.ts
+ var STATUS_KEY = "goal";
+ var GOAL_STATE_ENTRY_TYPE2 = "goal-state";
++var GOAL_TRANSITION_ENTRY_TYPE = "goal-transition";
+ var MAX_GOAL_ID_LENGTH = 128;
+ function isTerminalGoalStatus(status) {
+   return status !== "active" && status !== "queued";
+@@ -1047,6 +1011,20 @@ var GoalRuntime = class {
+       formatStatus(goal, this.settings.continuationLimits.automaticTurns)
+     );
+   }
++  recordGoalTransition(goal, transition) {
++    this.pi.appendEntry(GOAL_TRANSITION_ENTRY_TYPE, {
++      goalId: goal.id,
++      at: Date.now(),
++      cause: transition.cause,
++      initiator: transition.initiator,
++      previousStatus: transition.previousStatus,
++      status: transition.status,
++      ...transition.reason ? { reason: transition.reason } : {},
++      ...transition.abortReason ? { abortReason: transition.abortReason } : {},
++      invocationId: transition.invocationId ?? `goal:${goal.id}:${goal.iteration}`,
++      ...transition.runId ? { runId: transition.runId } : {}
++    });
++  }
+   stopActiveGoal(ctx, request) {
+     const currentGoal = this.activeGoal;
+     if (!currentGoal || currentGoal.id !== request.expectedGoalId) return void 0;
+@@ -1135,6 +1113,24 @@ var GoalRuntime = class {
+     if (terminalReason !== void 0) this.setTerminalReason(this.activeGoal.id, terminalReason);
+     const stoppedGoal = this.activeGoal;
+     this.persistGoal(stoppedGoal);
++    if (request.kind !== "blocker_report") {
++      const defaults = {
++        explicit_pause: { cause: "pause_action", initiator: "person" },
++        budget_limit: { cause: "budget_limit", initiator: "engine" },
++        safety_pause: { cause: request.cause, initiator: "engine" },
++        retry_exhausted: { cause: "provider_retry_exhausted", initiator: "failure" },
++        tools_unavailable: { cause: "goal_tools_unavailable", initiator: "engine" },
++        agent_interruption: { cause: "provider_failure", initiator: "failure" },
++        activation_rollback: { cause: "activation_rollback", initiator: "engine" }
++      };
++      this.recordGoalTransition(stoppedGoal, {
++        ...defaults[request.kind],
++        ...request.transition,
++        previousStatus: currentGoal.status,
++        status: stoppedGoal.status,
++        reason: request.transition?.reason ?? terminalReason
++      });
++    }
+     if (request.kind !== "blocker_report") this.ensureInactiveGoalContextContract(ctx);
+     if (this.activeGoal?.id === stoppedGoal.id && this.activeGoal.status === stoppedGoal.status) {
+       this.updateStatus(ctx, stoppedGoal);
+@@ -1265,12 +1261,12 @@ var GoalRuntime = class {
        expectedGoalId: goal.id,
        cause,
        abortTurn,
@@ -130,7 +184,43 @@ index 337f7dc01226f5d5a760a1a8ee1e75e0af44c9e6..6539d5cb809751469009211d590fe06f
        "warning"
      );
      return true;
-@@ -1705,11 +1668,11 @@ function createGoal(text, tokenBudget, baselineTokens) {
+@@ -1556,14 +1552,18 @@ var GoalRuntime = class {
+     this.clearTerminalDetails();
+     clearLegacyPersistedGoal(cwd);
+   }
+-  clearActiveGoal(ctx, reason = "goal cleared", releaseWorkflow = true) {
+-    this.clearActiveGoalState(ctx, reason, releaseWorkflow);
++  clearActiveGoal(ctx, reason = "goal cleared", releaseWorkflow = true, transition = {
++    cause: "clear_action",
++    initiator: "person",
++    status: "cleared"
++  }) {
++    this.clearActiveGoalState(ctx, reason, releaseWorkflow, transition);
+     this.ensureInactiveGoalContextContract(ctx);
+   }
+   clearCompletedGoal(ctx) {
+     this.clearActiveGoalState(ctx, "goal cleared", true);
+   }
+-  clearActiveGoalState(ctx, reason, releaseWorkflow) {
++  clearActiveGoalState(ctx, reason, releaseWorkflow, transition) {
+     const clearedGoal = this.activeGoal;
+     this.clearGoalWaitTimer();
+     this.cancelContinuationWork();
+@@ -1573,6 +1573,13 @@ var GoalRuntime = class {
+     this.activeGoal = void 0;
+     this.legacyQueueState = void 0;
+     this.clearPersistedGoal(ctx.cwd, clearedGoal, reason);
++    if (clearedGoal && transition) {
++      this.recordGoalTransition(clearedGoal, {
++        ...transition,
++        previousStatus: clearedGoal.status,
++        reason
++      });
++    }
+     ctx.ui.setStatus(STATUS_KEY, void 0);
+     if (releaseWorkflow) this.releaseWorkflow();
+   }
+@@ -1705,11 +1712,11 @@ function createGoal(text, tokenBudget, baselineTokens) {
      startedAt: now,
      updatedAt: now,
      iteration: 0,
@@ -145,7 +235,7 @@ index 337f7dc01226f5d5a760a1a8ee1e75e0af44c9e6..6539d5cb809751469009211d590fe06f
      automaticModelTurns: 0,
      toolFreeRepeatCount: 0
    };
-@@ -1758,7 +1721,7 @@ function formatStatus(goal, automaticTurnLimit = DEFAULT_GOAL_SETTINGS.continuat
+@@ -1758,7 +1765,7 @@ function formatStatus(goal, automaticTurnLimit = DEFAULT_GOAL_SETTINGS.continuat
    if (goal.status === "usage_limited") return `usage \xB7 ${automatic}`;
    if (goal.status === "budget_limited") return `budget ${formatBudget2(goal)} \xB7 ${automatic}`;
    if (goal.tokenBudget !== void 0) return `active ${formatBudget2(goal)} \xB7 ${automatic}`;
@@ -154,7 +244,7 @@ index 337f7dc01226f5d5a760a1a8ee1e75e0af44c9e6..6539d5cb809751469009211d590fe06f
  }
  function formatBudget2(goal) {
    return `${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget ?? 0)}`;
-@@ -1773,8 +1736,7 @@ function goalSummary(goal, automaticTurnLimit = DEFAULT_GOAL_SETTINGS.continuati
+@@ -1773,8 +1780,7 @@ function goalSummary(goal, automaticTurnLimit = DEFAULT_GOAL_SETTINGS.continuati
      ] : [],
      `Iteration: ${goal.iteration}`,
      automaticTurnLimit === null ? `Automatic work: ${goal.automaticModelTurns} responses \xB7 Unlimited` : `Automatic work: ${goal.automaticModelTurns} of ${automaticTurnLimit} responses`,
@@ -165,7 +255,7 @@ index 337f7dc01226f5d5a760a1a8ee1e75e0af44c9e6..6539d5cb809751469009211d590fe06f
    if (goal.safetyPauseCause) {
      summary.push(
 diff --git a/dist/chunks/chunk-UQRRW4CY.js b/dist/chunks/chunk-UQRRW4CY.js
-index d3dccf8005f4552dd6d7994381245b74f0faeba3..1ef4c6af97512f102126639284d260701ed50e58 100644
+index d3dccf8005f4552dd6d7994381245b74f0faeba3..ba67fdea9c643791717b606c4582534fccc6cfaf 100644
 --- a/dist/chunks/chunk-UQRRW4CY.js
 +++ b/dist/chunks/chunk-UQRRW4CY.js
 @@ -3,22 +3,13 @@
@@ -206,8 +296,20 @@ index d3dccf8005f4552dd6d7994381245b74f0faeba3..1ef4c6af97512f102126639284d26070
  }
  
  // src/errors.ts
+@@ -203,7 +193,10 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
+ var GOAL_SETTINGS_FILE = "pi-goal.json";
+ var DEFAULT_GOAL_SETTINGS = {
+   rpc: { enabled: false },
+-  continuationLimits: { automaticTurns: 25, noProgressTurns: 3 }
++  // The patched runtime never stops autonomous work because a counter expired.
++  // The counters remain persisted as diagnostics, and an explicit pi-goal
++  // settings file can still opt into an upstream limit.
++  continuationLimits: { automaticTurns: null, noProgressTurns: null }
+ };
+ function normalizeGoalSettings(value) {
+   if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
 diff --git a/dist/index.ts b/dist/index.ts
-index 88023ea7e232329a3cf4b26b23dd2078b837fb5d..2d0f524aa755d2fd9109b90c584eb01c0cd6eaf2 100644
+index 88023ea7e232329a3cf4b26b23dd2078b837fb5d..00cc4aecfe39b5b15ed240c8d221e0c3e7db8fb8 100644
 --- a/dist/index.ts
 +++ b/dist/index.ts
 @@ -69,7 +69,7 @@ function registerGoalCommand(pi, runtime, commands, options = {}) {
@@ -255,3 +357,147 @@ index 88023ea7e232329a3cf4b26b23dd2078b837fb5d..2d0f524aa755d2fd9109b90c584eb01c
        switch (result.kind) {
          case "show":
            commands.showGoal(ctx);
+@@ -273,7 +244,11 @@ New goal: ${safeGoalMenuText(objective, 4e3)}`
+           this.runtime.clearStaleGoalToolCallBlock();
+           ctx.ui.setStatus(STATUS_KEY, void 0);
+         } else {
+-          this.runtime.clearActiveGoal(ctx, "goal activation rolled back", false);
++          this.runtime.clearActiveGoal(ctx, "goal activation rolled back", false, {
++            cause: "activation_rollback",
++            initiator: "engine",
++            status: "cleared"
++          });
+         }
+       }
+       if (rolledBackStartedGoal) {
+@@ -286,6 +261,15 @@ New goal: ${safeGoalMenuText(objective, 4e3)}`
+     if (this.runtime.activeGoal?.id !== startedGoal.id || !this.runtime.ownsWorkflow(this.runtime.activeGoal)) {
+       return;
+     }
++    if (existingGoal) {
++      this.runtime.recordGoalTransition(existingGoal, {
++        cause: "replace_action",
++        initiator: "person",
++        previousStatus: existingGoal.status,
++        status: "replaced",
++        reason: "Goal replaced by a new objective"
++      });
++    }
+     const automaticLimit = this.runtime.settings.continuationLimits.automaticTurns;
+     notifyTerminal(
+       ctx.ui,
+@@ -293,7 +277,7 @@ New goal: ${safeGoalMenuText(objective, 4e3)}`
+       automaticLimit === null ? "warning" : "info"
+     );
+   }
+-  pauseGoal(ctx) {
++  pauseGoal(ctx, transition) {
+     if (!this.runtime.activeGoal) {
+       notifyTerminal(ctx.ui, "No active goal.", "info");
+       return;
+@@ -308,7 +292,8 @@ New goal: ${safeGoalMenuText(objective, 4e3)}`
+     }
+     const stoppedGoal = this.runtime.stopActiveGoal(ctx, {
+       kind: "explicit_pause",
+-      expectedGoalId: this.runtime.activeGoal.id
++      expectedGoalId: this.runtime.activeGoal.id,
++      transition
+     });
+     if (stoppedGoal) notifyTerminal(ctx.ui, `Goal paused: ${stoppedGoal.text}`, "info");
+   }
+@@ -641,6 +626,13 @@ function registerGoalLifecycle(pi, runtime, runController, options = {}) {
+       if (!runtime.acquireWorkflow()) {
+         runtime.activeGoal = transitionGoal(loaded.goal, "paused");
+         runtime.persistGoal(runtime.activeGoal);
++        runtime.recordGoalTransition(runtime.activeGoal, {
++          cause: "workflow_contention",
++          initiator: "engine",
++          previousStatus: "active",
++          status: "paused",
++          reason: "Another workflow was active while the goal was restored"
++        });
+         runtime.ensureInactiveGoalContextContract(ctx);
+         runtime.updateStatus(ctx, runtime.activeGoal);
+         notifyTerminal(
+@@ -973,7 +965,26 @@ function registerGoalLifecycle(pi, runtime, runController, options = {}) {
+     runtime.recordGoalUsage(runtime.activeGoal, ctx);
+     if (finalAssistant?.stopReason === "aborted") {
+       runtime.clearGoalRecoveryForGoal(goalId);
+-      stopGoalAfterAgentEnd(ctx, runtime.activeGoal, finalAssistant, "paused");
++      runtime.cancelContinuationWork();
++      const { waiting: _waiting, ...interruptedGoal } = runtime.activeGoal;
++      runtime.activeGoal = { ...interruptedGoal, updatedAt: Date.now() };
++      const abort = goalAbortContext(ctx, runtime.activeGoal, finalAssistant);
++      runtime.persistGoal(runtime.activeGoal);
++      runtime.recordGoalTransition(runtime.activeGoal, {
++        cause: abort.cause,
++        initiator: abort.initiator,
++        previousStatus: "active",
++        status: "active",
++        abortReason: abort.abortReason,
++        invocationId: abort.invocationId,
++        runId: abort.runId
++      });
++      runtime.updateStatus(ctx, runtime.activeGoal);
++      notifyTerminal(
++        ctx.ui,
++        "Goal work was interrupted. The goal remains active and will continue on the next wake or message.",
++        "warning"
++      );
+       return;
+     }
+     if (finalAssistant?.stopReason === "error") {
+@@ -1048,6 +1059,38 @@ function registerGoalLifecycle(pi, runtime, runController, options = {}) {
+     runtime.beginAgentRun(activeGoalId ?? null, activeGoalId ? "manual" : void 0);
+     if (resetSafetyEpoch && activeGoalId) runtime.resetActiveSafetyEpoch(ctx);
+   }
++  function goalAbortContext(ctx, goal2, assistant) {
++    const entries = ctx.sessionManager?.getBranch?.() ?? ctx.sessionManager?.getEntries?.() ?? [];
++    let latestTransition = -1;
++    for (let index = entries.length - 1; index >= 0; index -= 1) {
++      const entry = entries[index];
++      if (entry?.type !== "custom" || !entry.data || typeof entry.data !== "object") continue;
++      if (entry.customType === "goal-transition" && entry.data.goalId === goal2.id) {
++        latestTransition = index;
++        break;
++      }
++    }
++    for (let index = entries.length - 1; index > latestTransition; index -= 1) {
++      const entry = entries[index];
++      const data = entry?.type === "custom" && entry.customType === "goal-abort-context" && entry.data && typeof entry.data === "object" ? entry.data : void 0;
++      if (!data || data.goalId !== goal2.id) continue;
++      const initiator = ["person", "agent", "engine", "worker", "host", "ui", "failure"].includes(data.initiator) ? data.initiator : "worker";
++      return {
++        cause: typeof data.cause === "string" && data.cause ? data.cause : "worker_abort",
++        initiator,
++        abortReason: typeof data.abortReason === "string" && data.abortReason ? data.abortReason : assistant.errorMessage ?? "Request aborted",
++        invocationId: typeof data.invocationId === "string" && data.invocationId ? data.invocationId : `goal:${goal2.id}:${goal2.iteration}`,
++        runId: typeof data.runId === "string" && data.runId ? data.runId : void 0
++      };
++    }
++    return {
++      cause: "provider_abort",
++      initiator: "failure",
++      abortReason: assistant.errorMessage ?? "Request aborted",
++      invocationId: `goal:${goal2.id}:${goal2.iteration}`,
++      runId: void 0
++    };
++  }
+   function stopGoalAfterAgentEnd(ctx, goal2, assistant, status) {
+     const stoppedGoal = runtime.stopActiveGoal(ctx, {
+       kind: "agent_interruption",
+@@ -1300,7 +1343,13 @@ var GoalRunController = class {
+       return;
+     }
+     this.runtime.setTerminalReason(goal2.id, reason ?? "goal cancelled by managed run");
+-    this.commands.pauseGoal(session.ctx);
++    this.commands.pauseGoal(session.ctx, {
++      cause: "managed_cancel",
++      initiator: "host",
++      reason: reason ?? "goal cancelled by managed run",
++      invocationId: `managed:${run.runId}`,
++      runId: run.runId
++    });
+   }
+   handleGoalState(snapshot) {
+     const run = this.run;

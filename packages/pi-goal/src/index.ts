@@ -3,6 +3,21 @@ import { dirname, join } from "node:path";
 
 const require = createRequire(import.meta.url);
 
+export type GoalTransitionInitiator = "person" | "agent" | "engine" | "worker" | "host" | "ui" | "failure";
+
+export interface GoalTransition {
+  goalId: string;
+  at: number;
+  cause: string;
+  initiator: GoalTransitionInitiator;
+  previousStatus: string;
+  status: string;
+  reason?: string;
+  abortReason?: string;
+  invocationId?: string;
+  runId?: string;
+}
+
 export interface GoalSnapshot {
   id: string;
   objective: string;
@@ -13,6 +28,7 @@ export interface GoalSnapshot {
   automaticTurns: number;
   latestReason?: string;
   waitingUntil?: number;
+  transition?: GoalTransition;
 }
 
 /**
@@ -40,7 +56,12 @@ export function goalStateFromEntries(entries: readonly unknown[]): GoalSnapshot 
     if (entry?.type !== "custom" || entry.customType !== "goal-state") continue;
     const data = asRecord(entry.data);
     if (!data || data.goal === null) return null;
-    return normalizeGoal(data.goal);
+    const goal = normalizeGoal(data.goal);
+    if (!goal) return null;
+    const transition = latestTransition(entries.slice(index + 1), goal.id, goal.status);
+    return transition
+      ? { ...goal, latestReason: transitionReason(transition), transition }
+      : goal;
   }
   return null;
 }
@@ -93,4 +114,47 @@ function reasonForSafety(value: unknown): string | undefined {
   if (value === "continuation_limit") return "Paused after reaching the automatic continuation limit.";
   if (value === "no_progress") return "Paused because consecutive turns made no measurable progress.";
   return undefined;
+}
+
+function latestTransition(entries: readonly unknown[], goalId: string, status: string): GoalTransition | undefined {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index] as { type?: unknown; customType?: unknown; data?: unknown } | undefined;
+    if (entry?.type !== "custom" || entry.customType !== "goal-transition") continue;
+    const data = asRecord(entry.data);
+    if (!data || data.goalId !== goalId || data.status !== status) continue;
+    const initiator = transitionInitiator(data.initiator);
+    const at = finite(data.at);
+    const cause = string(data.cause);
+    const previousStatus = string(data.previousStatus);
+    if (!initiator || at === undefined || !cause || !previousStatus) return undefined;
+    const reason = string(data.reason);
+    const abortReason = string(data.abortReason);
+    const invocationId = string(data.invocationId);
+    const runId = string(data.runId);
+    return {
+      goalId,
+      at,
+      cause,
+      initiator,
+      previousStatus,
+      status,
+      ...(reason ? { reason } : {}),
+      ...(abortReason ? { abortReason } : {}),
+      ...(invocationId ? { invocationId } : {}),
+      ...(runId ? { runId } : {}),
+    };
+  }
+  return undefined;
+}
+
+function transitionInitiator(value: unknown): GoalTransitionInitiator | undefined {
+  return value === "person" || value === "agent" || value === "engine" || value === "worker" || value === "host" || value === "ui" || value === "failure"
+    ? value
+    : undefined;
+}
+
+function transitionReason(transition: GoalTransition): string {
+  if (transition.abortReason) return `Interrupted by ${transition.initiator}: ${transition.abortReason}`;
+  if (transition.reason) return transition.reason;
+  return `${transition.status === "paused" ? "Paused" : "Stopped"} by ${transition.initiator} (${transition.cause}).`;
 }

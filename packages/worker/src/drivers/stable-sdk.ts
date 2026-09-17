@@ -179,6 +179,8 @@ export class StableSdkDriver implements SessionDriver {
   private settingsReloadWanted = false;
   /** This session's fallback chain, when the product has any (M15-T3). */
   private fallback: FallbackController | undefined;
+  /** The model invocation currently able to be aborted, retained outside AsyncLocalStorage. */
+  private activeInvocation: { ref: DriverInvocationRef; origin: "agent" | "user" } | undefined;
   /** The last assistant message's failure, cleared by a response that worked. */
   private assistantFailure: { stopReason?: string; errorMessage?: string } | undefined;
   /** The provider response of the attempt in flight; a request clears it. */
@@ -598,6 +600,7 @@ export class StableSdkDriver implements SessionDriver {
         message: `lifecycle abort-request initiator=extension source=engine-handler at=${new Date().toISOString()}`,
       },
     });
+    this.recordGoalAbortContext("extension_abort", "engine", "An engine extension stopped the current request.", session);
     void Promise.resolve()
       .then(() => session.abort())
       .catch((error: unknown) => {
@@ -1180,15 +1183,57 @@ export class StableSdkDriver implements SessionDriver {
   }
 
   async abort(): Promise<void> {
-    // A person's stop ends the failover too, and the release below lets the
-    // turn settle in the transcript rather than staying open forever.
+    const agentOwned = this.activeInvocation?.origin === "agent";
+    await this.abortWithGoalContext(
+      agentOwned ? "parent_control" : "user_cancel",
+      agentOwned ? "agent" : "person",
+      agentOwned ? "A parent agent interrupted or stopped this request." : "The person cancelled this request.",
+    );
+  }
+
+  private async abortWithGoalContext(
+    cause: string,
+    initiator: "person" | "agent" | "engine" | "worker" | "host" | "ui" | "failure",
+    abortReason: string,
+  ): Promise<void> {
+    // A stop ends failover too, and the release below lets the turn settle in
+    // the transcript rather than staying open forever.
     this.fallback?.cancel();
     if (this.firstTurn.active) {
       this.retirePreparedFirstTurnDialogs();
-      await this.runtime?.session.abort();
+      const session = this.runtime?.session;
+      if (session) this.recordGoalAbortContext(cause, initiator, abortReason, session);
+      await session?.abort();
       return;
     }
-    await this.session().abort();
+    const session = this.session();
+    this.recordGoalAbortContext(cause, initiator, abortReason, session);
+    await session.abort();
+  }
+
+  private recordGoalAbortContext(
+    cause: string,
+    initiator: "person" | "agent" | "engine" | "worker" | "host" | "ui" | "failure",
+    abortReason: string,
+    session: AgentSession = this.session(),
+  ): void {
+    // Engine abort-handler unit doubles predate session persistence. Real SDK
+    // sessions always carry a manager, but provenance must never make stopping
+    // the current request fail when an adapter supplies a minimal session.
+    const manager = session.sessionManager;
+    if (!manager) return;
+    const goal = goalStateFromEntries(manager.getBranch());
+    if (goal?.status !== "active") return;
+    const invocation = this.activeInvocation?.ref;
+    manager.appendCustomEntry("goal-abort-context", {
+      goalId: goal.id,
+      at: Date.now(),
+      cause,
+      initiator,
+      abortReason,
+      ...(invocation?.id ? { invocationId: invocation.id } : {}),
+      ...(invocation?.runId ? { runId: invocation.runId } : {}),
+    });
   }
 
   // -------------------------------------------------------------------- model
@@ -1295,7 +1340,9 @@ export class StableSdkDriver implements SessionDriver {
     entryId: string,
     options?: { summarize?: boolean; label?: string; stopFirst?: boolean },
   ): Promise<{ editorText?: string; cancelled: boolean }> {
-    if (options?.stopFirst) await this.abort();
+    if (options?.stopFirst) {
+      await this.abortWithGoalContext("navigation", "ui", "The person stopped this request to navigate the conversation.");
+    }
     try {
       const result = await this.session().navigateTree(entryId, {
         ...(options?.summarize !== undefined ? { summarize: options.summarize } : {}),
@@ -1326,7 +1373,9 @@ export class StableSdkDriver implements SessionDriver {
    */
   async fork(entryId: string, options?: { stopFirst?: boolean }): Promise<{ state: SessionState; editorText?: string }> {
     if (!this.runtime) throw new DriverUnavailableError(this.kind, "no open session");
-    if (options?.stopFirst) await this.abort();
+    if (options?.stopFirst) {
+      await this.abortWithGoalContext("fork", "ui", "The person stopped this request to fork the conversation.");
+    }
     const { cancelled, selectedText } = await this.runtime.fork(entryId);
     if (cancelled) throw new DriverUnavailableError(this.kind, "fork was cancelled by an extension");
     // Runtime replacement swapped `runtime.session`; re-bind and re-subscribe.
@@ -1529,7 +1578,10 @@ export class StableSdkDriver implements SessionDriver {
 
   private onSessionEvent(event: AgentSessionEvent, generation: number): void {
     const invocation = this.extensionAdmission.eventInvocation(generation);
-    if (event.type === "agent_start" && invocation) invocation.started = true;
+    if (event.type === "agent_start") {
+      if (invocation) invocation.started = true;
+      this.activeInvocation = invocation ? { ref: invocation.ref, origin: invocation.origin } : undefined;
+    }
     this.toolCalls.note(event);
     this.noteFallbackEvent(event);
     this.flushHeldUserEnd();
@@ -1574,6 +1626,7 @@ export class StableSdkDriver implements SessionDriver {
       // stale true. Only deferred settings work needs to wait here.
       queueMicrotask(() => this.runDeferredSettingsReload());
     } else if (event.type === "agent_settled") this.runDeferredSettingsReload();
+    if (event.type === "agent_settled") this.activeInvocation = undefined;
   }
 
   // ------------------------------------------------------------- fallback
