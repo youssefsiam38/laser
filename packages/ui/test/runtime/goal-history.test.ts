@@ -51,3 +51,33 @@ describe("durable goal presentation", () => {
     expect(goalRecords([], [])).toEqual([]);
   });
 });
+
+describe("goal context before a history page", () => {
+  // A long goal writes a record per step; the page carries only the first and
+  // last of each run of identical moments, and goal history must not change.
+  it("compacts repeated goal records without changing the goal history", async () => {
+    const { historyWindow } = await import("@lasercode/protocol");
+    const rows: Record<string, unknown>[] = [];
+    let parent: string | null = null;
+    const push = (row: Record<string, unknown>) => { const id = `r${rows.length}`; rows.push({ ...row, id, parentId: parent, timestamp: new Date(1_000 + rows.length).toISOString() }); parent = id; };
+    let updatedAt = 10;
+    for (const [goalId, startedAt] of [["g1", 5], ["g2", 5], ["g3", 900]] as const) {
+      for (let run = 0; run < 12; run++) {
+        const waiting = run % 3 === 1 ? { reason: "Waiting for your answer." } : undefined;
+        for (let step = 0; step < 25; step++) {
+          push({ type: "custom", customType: "goal-state", data: { goal: { id: goalId, text: `Objective ${startedAt}`, status: run === 11 && goalId === "g3" ? "complete" : "active", startedAt, updatedAt: updatedAt++, iteration: run * 25 + step, ...(waiting ? { waiting } : {}) } } });
+          push({ type: "message", message: { role: "assistant", content: `step ${step}` } });
+        }
+      }
+      if (goalId === "g2") push({ type: "custom", customType: "goal-state", data: { goal: null } });
+    }
+    push({ type: "message", message: { role: "user", content: "Latest" } });
+    push({ type: "message", message: { role: "assistant", content: "Reply" } });
+
+    const scope = { sessionId: "11111111-2222-3333-4444-555555555555", epoch: "w", seq: 0, revision: "r1.AAAAAAAA.BBBBBBBBBBBBBBBBBBBBBBBBBBB", environmentKey: "e1.CCCCCCCCCCCCCCCCCCCCCC" };
+    const page = historyWindow({ entries: rows, leafId: parent }, { tail: 2 }, scope);
+    const full = rows.slice(0, rows.length - page.entries.length).filter(row => row.customType === "goal-state");
+    expect(page.window.context.length).toBeLessThan(full.length / 5);
+    expect(goalRecords([...page.window.context, ...page.entries], [])).toEqual(goalRecords([...full, ...page.entries], []));
+  });
+});

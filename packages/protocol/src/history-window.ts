@@ -18,7 +18,11 @@ export interface HistoryWindowNode {
   parentId: string | null;
   isMessage: boolean;
   isUser: boolean;
+  /** A tool result is never the first row of a page: it belongs to the call before it. */
+  isToolResult?: boolean;
   isGoalState: boolean;
+  /** What a goal-state record changes; identical neighbours carry the same value. */
+  goalSignature?: string | undefined;
   goalPromptId?: string | undefined;
 }
 
@@ -48,11 +52,46 @@ export interface HistoryWindowPlan {
   window: Omit<HistoryWindow, "context">;
 }
 
+/**
+ * The fields goal history reads to tell one goal moment from the next (see the
+ * UI's goalRecords). FNV-1a keeps the host's body-free index small.
+ */
+function goalSignature(data: unknown): string {
+  const goal = record(data).goal;
+  if (goal === null) return "null";
+  const value = record(goal);
+  const text = JSON.stringify([value.id, value.text, value.startedAt, value.status, record(value.waiting).reason, value.safetyPauseCause]);
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index++) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return `${text.length.toString(36)}.${hash.toString(36)}`;
+}
+
+/**
+ * Goal context before a page: the first and last record of each run of
+ * identical goal moments. Goal history reads status changes from the first
+ * and the latest iteration from the last, so the runs between add nothing but
+ * bytes — a long goal writes thousands of them.
+ */
+function goalContext(nodes: readonly HistoryWindowNode[], prefix: readonly number[]): number[] {
+  const goals = prefix.filter(index => nodes[index]!.isGoalState);
+  return goals.filter((index, at) => {
+    const signature = nodes[index]!.goalSignature;
+    return at === 0 || at === goals.length - 1
+      || nodes[goals[at - 1]!]!.goalSignature !== signature
+      || nodes[goals[at + 1]!]!.goalSignature !== signature;
+  });
+}
+
 export function historyWindowNode(entry: unknown): HistoryWindowNode {
   const value = record(entry);
   const type = String(value.type);
   const isMessage = type === "message" || type === "custom_message";
-  const isUser = type === "message" && record(value.message).role === "user";
+  const role = type === "message" ? record(value.message).role : undefined;
+  const isGoalState = type === "custom" && value.customType === "goal-state";
+  const isUser = role === "user";
   let promptId: string | undefined;
   if (isUser) {
     const content = record(value.message).content;
@@ -68,7 +107,9 @@ export function historyWindowNode(entry: unknown): HistoryWindowNode {
     parentId: typeof value.parentId === "string" ? value.parentId : null,
     isMessage,
     isUser,
-    isGoalState: type === "custom" && value.customType === "goal-state",
+    ...(role === "toolResult" ? { isToolResult: true } : {}),
+    isGoalState,
+    ...(isGoalState ? { goalSignature: goalSignature(value.data) } : {}),
     ...(promptId ? { goalPromptId: promptId } : {}),
   };
 }
@@ -122,6 +163,8 @@ export function historyWindowPlan(
   leafId: string | null,
   request: HistoryWindowRequest,
   scope: HistoryWindowScope,
+  /** Allow the page to start inside a turn, for a turn no page can hold whole. */
+  splitTurns = false,
 ): HistoryWindowPlan {
   const byId = new Map<string, number>();
   nodes.forEach((node, index) => { if (node.id !== undefined) byId.set(node.id, index); });
@@ -167,7 +210,10 @@ export function historyWindowPlan(
     while (start > 0 && messages < limit) if (nodes[branch[--start]!]!.isMessage) messages++;
     // A tool result cannot be separated from its call, or an assistant action
     // from its prompt. A single unusually long turn may exceed the row target.
-    while (start > 0 && !nodes[branch[start]!]!.isUser) start--;
+    // A turn too large for any page (a long agent run) splits between an
+    // assistant action and the next, never between a call and its result.
+    if (splitTurns) while (start > 0 && start < end && nodes[branch[start]!]!.isToolResult) start--;
+    else while (start > 0 && !nodes[branch[start]!]!.isUser) start--;
     // Attribution and other turn-local custom markers precede the prompt.
     while (start > 0 && !nodes[branch[start - 1]!]!.isMessage) start--;
   }
@@ -179,7 +225,7 @@ export function historyWindowPlan(
   const anchor = entryIndices.length > 0 ? nodes[entryIndices[0]!]!.id : undefined;
   // Delta consumers retain the cached page and its context; retransmitting old
   // context would duplicate bodies and make an empty current delta nonempty.
-  const contextIndices = scope.selection?.kind === "delta" ? [] : prefix.filter(index => nodes[index]!.isGoalState);
+  const contextIndices = scope.selection?.kind === "delta" ? [] : goalContext(nodes, prefix);
   const priorGoalIds = new Set<string>();
   for (const index of prefix) {
     const goal = nodes[index]!.goalPromptId;
@@ -213,8 +259,9 @@ export function historyWindowPlan(
 
 /**
  * Keep an exact request shape while fitting tail/before pages at complete-turn
- * boundaries. `all` and `from` are indivisible: callers must refuse them when
- * their exact projection is too large. The search is logarithmic, never one
+ * boundaries, splitting inside a turn only when no complete turn fits. `all`
+ * and `from` are indivisible: callers must refuse them when their exact
+ * projection is too large. The search is logarithmic, never one
  * full branch replan per possible message count.
  */
 export function fitHistoryWindowPlan(
@@ -239,6 +286,28 @@ export function fitHistoryWindowPlan(
       leafId,
       "before" in request ? { before: request.before, limit } : { tail: limit },
       scope,
+    );
+    if (fits(candidate)) {
+      best = candidate;
+      low = limit + 1;
+    } else {
+      high = limit - 1;
+    }
+  }
+  if (best) return best;
+
+  // Not even the newest complete turn fits: page inside it rather than leave
+  // the conversation unreadable. Older pages continue from the cursor.
+  low = 1;
+  high = maximum;
+  while (low <= high) {
+    const limit = low + Math.floor((high - low) / 2);
+    const candidate = historyWindowPlan(
+      nodes,
+      leafId,
+      "before" in request ? { before: request.before, limit } : { tail: limit },
+      scope,
+      true,
     );
     if (fits(candidate)) {
       best = candidate;
@@ -282,8 +351,8 @@ export function historyWindowFits(
   snapshot: { entries: unknown[] },
   plan: HistoryWindowPlan,
 ): boolean {
-  const unique = new Set([...plan.entryIndices, ...plan.contextIndices]);
-  if (unique.size > HISTORY_PAGE_ENTRY_LIMIT) return false;
+  // The row limit bounds what a page shows; goal context is bounded by bytes.
+  if (plan.entryIndices.length > HISTORY_PAGE_ENTRY_LIMIT) return false;
   const entries = plan.entryIndices.map(index => snapshot.entries[index]);
   const context = plan.contextIndices.map(index => snapshot.entries[index]);
   return historyContentSerializedBytes(entries, context) <= HISTORY_PAGE_BYTE_LIMIT;
@@ -310,7 +379,7 @@ export function boundedHistoryWindow(
     if (!bodies) return historyWindowFits(snapshot, candidate);
     const page = elideOversizedEntries(candidate.entryIndices.map(index => snapshot.entries[index]), bodies.limit, bodies.digest);
     const context = elideOversizedEntries(candidate.contextIndices.map(index => snapshot.entries[index]), bodies.limit, bodies.digest);
-    if (page.entries.length + context.entries.length + page.elided.length + context.elided.length > HISTORY_PAGE_ENTRY_LIMIT) return false;
+    if (page.entries.length + page.elided.length > HISTORY_PAGE_ENTRY_LIMIT) return false;
     return historyContentSerializedBytes(page.entries, context.entries)
       + historyContentSerializedBytes(page.elided, context.elided) <= HISTORY_PAGE_BYTE_LIMIT;
   };

@@ -752,7 +752,7 @@ export class WorkerServer {
             if (replacement) return replacement;
             throw new ProtocolError(
               ErrorCodes.RevisionUnavailable,
-              "The requested history range cannot be transferred without splitting a complete turn. Ask for a smaller page.",
+              "Part of this conversation is too large to show.",
             );
           }
         }

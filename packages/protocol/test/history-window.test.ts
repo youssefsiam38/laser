@@ -99,7 +99,7 @@ describe("history windows", () => {
     expect(() => JSON.parse(delta.window.before!)).toThrow();
   });
 
-  it("bounds tail pages with logarithmic complete-turn replans and refuses one unrepresentable turn", () => {
+  it("bounds tail pages with logarithmic complete-turn replans and refuses one unrepresentable record", () => {
     const entries = history(400);
     const nodes = entries.map(historyWindowNode);
     let plans = 0;
@@ -112,9 +112,65 @@ describe("history windows", () => {
 
     const huge = [
       { type: "message", id: "u", parentId: null, message: { role: "user", content: "x".repeat(600_000) } },
-      { type: "message", id: "a", parentId: "u", message: { role: "assistant", content: "y".repeat(600_000) } },
+      { type: "message", id: "a", parentId: "u", message: { role: "assistant", content: "y".repeat(1_200_000) } },
     ];
     expect(boundedHistoryWindow({ entries: huge, leafId: "a" }, { tail: 1 }, { ...scope, selection: { kind: "replace" } })).toBeUndefined();
+  });
+
+  // 0.7.x: a long agent run is one turn of hundreds of tool steps. Refusing
+  // any page that could not hold the whole turn left such conversations
+  // unopenable ("cannot be transferred without splitting a complete turn").
+  it("pages inside a turn no page can hold, never separating a tool result from its call", () => {
+    const entries: unknown[] = [
+      { type: "message", id: "u0", parentId: null, message: { role: "user", content: "Earlier" } },
+      { type: "message", id: "a0", parentId: "u0", message: { role: "assistant", content: "Done" } },
+      { type: "message", id: "u1", parentId: "a0", message: { role: "user", content: "Run the fleet" } },
+    ];
+    let parent = "u1";
+    for (let step = 0; step < 400; step++) {
+      entries.push({ type: "message", id: `a${step + 1}`, parentId: parent, message: { role: "assistant", content: [{ type: "toolCall", id: `c${step}a` }, { type: "toolCall", id: `c${step}b` }] } });
+      entries.push({ type: "message", id: `r${step}a`, parentId: `a${step + 1}`, message: { role: "toolResult", toolCallId: `c${step}a`, content: "x".repeat(2_000) } });
+      entries.push({ type: "message", id: `r${step}b`, parentId: `r${step}a`, message: { role: "toolResult", toolCallId: `c${step}b`, content: "y".repeat(2_000) } });
+      parent = `r${step}b`;
+    }
+    const snapshot = { entries, leafId: parent };
+    const replace = { ...scope, selection: { kind: "replace" as const } };
+    const ids = (page: { entries: unknown[] }) => page.entries.map(entry => (entry as { id: string }).id);
+
+    let page = boundedHistoryWindow(snapshot, { tail: 40 }, replace);
+    expect(page).toBeDefined();
+    const seen: string[] = [];
+    for (let guard = 0; page && guard < 100; guard++) {
+      const rows = ids(page);
+      expect(rows.length).toBeGreaterThan(0);
+      expect(rows.length).toBeLessThanOrEqual(200);
+      expect((page.entries[0] as { message: { role: string } }).message.role).not.toBe("toolResult");
+      seen.unshift(...rows);
+      if (!page.window.before) break;
+      page = boundedHistoryWindow(snapshot, { before: page.window.before }, replace);
+      expect(page).toBeDefined();
+    }
+    // Every row of the branch, once, in order.
+    expect(seen).toEqual(entries.map(entry => (entry as { id: string }).id));
+
+    // Goal context before the page is bounded by bytes, not by the page's row
+    // limit: a goal that flips between states hundreds of times still pages.
+    const flips: unknown[] = [];
+    let prior: string | null = null;
+    for (let index = 0; index < 600; index++) {
+      const id = `g${index}`;
+      flips.push({ type: "custom", customType: "goal-state", id, parentId: prior, data: { goal: { id: "goal", text: "Ship", status: index % 2 ? "active" : "paused", startedAt: 1, updatedAt: index } } });
+      flips.push({ type: "message", id: `m${index}`, parentId: id, message: { role: "assistant", content: "Working" } });
+      prior = `m${index}`;
+    }
+    flips.push({ type: "message", id: "last-u", parentId: prior, message: { role: "user", content: "Now" } });
+    const flipped = boundedHistoryWindow({ entries: flips, leafId: "last-u" }, { tail: 40 }, replace);
+    expect(flipped?.window.context).toHaveLength(600);
+    expect(ids(flipped!)).toEqual(["last-u"]);
+
+    // Turns that fit keep their complete-turn boundary.
+    const small = boundedHistoryWindow({ entries: entries.slice(0, 5), leafId: "r0a" }, { tail: 1 }, replace);
+    expect(ids(small!)).toEqual(["u1", "a1", "r0a"]);
   });
 
   it("round-trips every request variant, authority and base revision, and refuses invalid values", () => {

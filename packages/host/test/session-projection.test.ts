@@ -269,7 +269,7 @@ describe("worker-free session projection", () => {
     }
   });
 
-  it("refuses all/from and one oversized last turn instead of substituting or splitting it", async () => {
+  it("refuses oversized all/from, and pages inside a last turn no page can hold whole", async () => {
     const ordinary = messages(20_000);
     const huge = [
       { type: "message", id: "huge-u", parentId: "e19999", message: { role: "user", content: "x".repeat(600_000) } },
@@ -282,10 +282,16 @@ describe("worker-free session projection", () => {
       const started = performance.now();
       const tail = await projection.read(f.path, { tail: 200 });
       const tailElapsedMs = performance.now() - started;
-      expect(tail.kind).toBe("refuse");
-      if (tail.kind !== "refuse") throw new Error("expected refusal");
-      expect(tail.error.code).toBe(ErrorCodes.RevisionUnavailable);
+      // The turn is split between prompt and reply, never refused.
+      expect(tail.kind).toBe("answer");
+      if (tail.kind !== "answer") throw new Error("expected a page");
+      expect(tail.result.entries.map(entry => (entry as { id: string }).id)).toEqual(["huge-a"]);
+      expect(tail.result.window?.before).toBeTruthy();
       console.info(`RP-12 pathological 20k/tail:200: ${tailElapsedMs.toFixed(2)} ms`);
+      const older = await projection.read(f.path, { before: tail.result.window!.before! });
+      if (older.kind !== "answer") throw new Error("expected the prompt page");
+      expect(older.result.entries.map(entry => (entry as { id: string }).id).at(-1)).toBe("huge-u");
+      reads.mockClear();
       for (const request of [{ from: "e0" }, { all: true }] as const) {
         const answer = await projection.read(f.path, request);
         expect(answer.kind).toBe("refuse");

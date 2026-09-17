@@ -400,7 +400,7 @@ describe("WorkerServer", () => {
     } finally { await h.server.dispose(); }
   });
 
-  it("applies replacement byte/row bounds to live pages without splitting an oversized turn or context", async () => {
+  it("applies replacement byte/row bounds to live pages, splitting an oversized turn but never oversized context", async () => {
     const h = harness();
     await h.call(1, "session/new", { cwd: "/tmp/fake" });
     const driver = h.drivers[0]!;
@@ -427,8 +427,9 @@ describe("WorkerServer", () => {
         { type: "message", id: "u", parentId: null, message: { role: "user", content: "x".repeat(600_000) } },
         { type: "message", id: "a", parentId: "u", message: { role: "assistant", content: "y".repeat(600_000) } },
       ], leafId: "a" };
-      const turn = await h.call(4, "pi/session/entries", { path: "/tmp/fake/s1.jsonl", window: { tail: 1 } });
-      expect(turn.error?.code).toBe(ErrorCodes.RevisionUnavailable);
+      const turn = (await h.call(4, "pi/session/entries", { path: "/tmp/fake/s1.jsonl", window: { tail: 1 } })).result as { entries: Array<{ id: string }>; window: { before?: string } };
+      expect(turn.entries.map(entry => entry.id)).toEqual(["a"]);
+      expect(turn.window.before).toBeTruthy();
     } finally { await h.server.dispose(); }
   });
 

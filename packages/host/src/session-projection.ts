@@ -124,8 +124,8 @@ export class SessionProjection {
 const ELIDED_ROW_ESTIMATE = 1024;
 
 function withinPlannedBounds(entries: readonly IndexedEntry[], selected: readonly number[], context: readonly number[], bodyLimit?: number): boolean {
-  const unique = new Set([...selected, ...context]);
-  if (unique.size > HISTORY_PAGE_ENTRY_LIMIT) return false;
+  // The row limit bounds what a page shows; goal context is bounded by bytes.
+  if (selected.length > HISTORY_PAGE_ENTRY_LIMIT) return false;
   // Two JSON arrays contribute four brackets and their own commas. The index
   // retained each row's exact parse/stringify UTF-8 length, so this is the same
   // body accounting used after materialization and by the live authority.
