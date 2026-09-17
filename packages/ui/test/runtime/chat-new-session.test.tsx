@@ -70,6 +70,8 @@ async function mount(): Promise<void> {
 describe("the Chat tab's + button", () => {
   it("opens the conversation it just created instead of staying on the previous chat", async () => {
     await mount();
+    expect(probe).toMatchObject({ tab: "chat", path: undefined, phase: "ready" });
+    await act(async () => { await probe.actions.openSession(CHAT); await settle(20); });
     expect(probe).toMatchObject({ tab: "chat", path: CHAT, phase: "ready" });
 
     await act(async () => {
@@ -82,7 +84,7 @@ describe("the Chat tab's + button", () => {
     expect(probe).toMatchObject({ tab: "chat", path: `${world.snapshot.workspaces.chat}/fresh.jsonl`, phase: "ready" });
   });
 
-  it("still opens a Chat whose workspace the host reports only after the sessions loaded", async () => {
+  it("stays on a ready landing while the Chat workspace arrives", async () => {
     // A cold start with nothing remembered and no chat yet: the tab can only
     // create one, and the host has not yet said where Chat lives because the
     // agents snapshot is still on its way. The late-workspace effect exists
@@ -94,8 +96,7 @@ describe("the Chat tab's + button", () => {
     const late = new Promise<typeof world.snapshot>((resolve) => { deliverSnapshot = () => resolve(world.snapshot); });
     world.overrides["agents/list"] = (() => late) as never;
     await mount();
-    expect(probe.tab).toBe("chat");
-    expect(probe.phase).toBe("resolving");
+    expect(probe).toMatchObject({ tab: "chat", path: undefined, phase: "ready" });
     expect(world.calls.filter((call) => call.method === "session/new")).toHaveLength(0);
 
     await act(async () => {
@@ -103,7 +104,8 @@ describe("the Chat tab's + button", () => {
       await settle(40);
     });
 
-    expect(world.calls.filter((call) => call.method === "session/new")).toHaveLength(1);
-    expect(probe).toMatchObject({ tab: "chat", path: `${chatCwd}/fresh.jsonl`, phase: "ready" });
+    expect(world.calls.filter((call) => call.method === "session/new")).toHaveLength(0);
+    expect(probe).toMatchObject({ tab: "chat", path: undefined, phase: "ready" });
+    expect(chatCwd).toBe("/state/chat");
   });
 });

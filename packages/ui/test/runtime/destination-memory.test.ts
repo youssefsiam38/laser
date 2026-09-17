@@ -27,9 +27,17 @@ afterEach(() => deviceStore.deactivate());
 it("reads its own shape back, tab and code destination intact", () => {
   activateTestEnvironment();
   const code = { kind: "project-session", project: "/one", path: "/one/root.jsonl" } as const;
-  seedDestination({ tab: "code", chat: "/state/chat/c1.jsonl", code });
-  expect(readDestinationMemory()).toEqual({ v: 2, tab: "code", chat: "/state/chat/c1.jsonl", code });
+  seedDestination({ tab: "code", code });
+  expect(readDestinationMemory()).toEqual({ v: 3, tab: "code", code });
   expect(initialDestinationFromMemory()).toMatchObject({ phase: "resolving", target: { kind: "code-tab", code } });
+});
+
+it("migrates v2 without adopting its persisted Chat path", () => {
+  activateTestEnvironment();
+  const code = { kind: "project-session", project: "/one", path: "/one/root.jsonl" } as const;
+  localStorage.setItem(deviceKeyName(DEVICE_KEYS.destination), JSON.stringify({ v: 2, tab: "chat", chat: "/state/chat/old.jsonl", code }));
+  expect(readDestinationMemory()).toEqual({ v: 3, tab: "chat", code });
+  expect(initialDestinationFromMemory()).toMatchObject({ target: { kind: "chat-tab" } });
 });
 
 it("remembers nothing until an environment is established", () => {
@@ -38,7 +46,7 @@ it("remembers nothing until an environment is established", () => {
   // the descriptor has not landed, so the app does not know whose sessions
   // these are.
   seedDestination({ tab: "code", code: { kind: "project-session", project: "/one", path: "/one/root.jsonl" } });
-  expect(readDestinationMemory()).toMatchObject({ v: 2, tab: "code", code: { kind: "no-project-landing" } });
+  expect(readDestinationMemory()).toMatchObject({ v: 3, tab: "code", code: { kind: "no-project-landing" } });
   activateTestEnvironment();
   expect(readDestinationMemory()).toMatchObject({ code: { kind: "project-session", project: "/one" } });
 });
@@ -49,7 +57,7 @@ it("does not adopt the pre-environment keys, however tempting they look", () => 
   localStorage.setItem(legacy[1]!, JSON.stringify({ "/one": "/one/root.jsonl" }));
   localStorage.setItem(legacy[2]!, JSON.stringify({ chat: "/state/chat/c2.jsonl", code: "/two/plain.jsonl" }));
   activateTestEnvironment();
-  expect(readDestinationMemory()).toMatchObject({ v: 2, code: { kind: "no-project-landing" } });
+  expect(readDestinationMemory()).toMatchObject({ v: 3, code: { kind: "no-project-landing" } });
   // And they are gone, rather than waiting for the next environment to claim.
   for (const key of legacy) expect(localStorage.getItem(key), key).toBeNull();
 });
@@ -64,8 +72,8 @@ it("keeps the tab preference unscoped: an enum is not a place", () => {
 it("ignores a value of any other shape rather than throwing", () => {
   seedFingerprint();
   activateTestEnvironment();
-  for (const stored of ["not json", "[]", "null", JSON.stringify({ v: 2, tab: "code" }), JSON.stringify({ v: 2, code: { kind: "nonsense" } })]) {
+  for (const stored of ["not json", "[]", "null", JSON.stringify({ v: 3, tab: "code" }), JSON.stringify({ v: 3, code: { kind: "nonsense" } })]) {
     localStorage.setItem(deviceKeyName(DEVICE_KEYS.destination), stored);
-    expect(readDestinationMemory()).toMatchObject({ v: 2, code: { kind: "no-project-landing" } });
+    expect(readDestinationMemory()).toMatchObject({ v: 3, code: { kind: "no-project-landing" } });
   }
 });

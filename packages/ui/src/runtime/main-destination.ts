@@ -31,6 +31,7 @@ export type MainTarget =
 export type MainDestination =
   | { readonly phase: "resolving"; readonly intent: number; readonly target: MainTarget; readonly rememberedCode: CodeDestination }
   | { readonly phase: "ready-code"; readonly intent: number; readonly code: CodeDestination }
+  | { readonly phase: "ready-chat"; readonly intent: number; readonly kind: "chat-landing"; readonly rememberedCode: CodeDestination }
   | { readonly phase: "ready-chat"; readonly intent: number; readonly path: string; readonly rememberedCode: CodeDestination }
   | { readonly phase: "unavailable"; readonly intent: number; readonly target: MainTarget; readonly rememberedCode: CodeDestination; readonly error: string };
 
@@ -60,7 +61,7 @@ export function mainTab(destination: MainDestination): MainTab {
 }
 
 export function mainPath(destination: MainDestination): string | undefined {
-  if (destination.phase === "ready-chat") return destination.path;
+  if (destination.phase === "ready-chat") return "path" in destination ? destination.path : undefined;
   if (destination.phase !== "ready-code") return undefined;
   return destination.code.kind === "project-session" || destination.code.kind === "beam-session" ? destination.code.path : undefined;
 }
@@ -152,10 +153,17 @@ export function isMainReady(destination: MainDestination): boolean {
   return destination.phase === "ready-code" || destination.phase === "ready-chat";
 }
 
-export function codeLandingKey(destination: MainDestination): string | undefined {
+export function mainLandingKey(destination: MainDestination): string | undefined {
+  if (destination.phase === "ready-chat") return "kind" in destination && destination.kind === "chat-landing" ? "chat" : undefined;
   if (destination.phase !== "ready-code") return undefined;
   if (destination.code.kind === "no-project-landing") return "code:";
   return destination.code.kind === "project-landing" ? `code:${destination.code.project}` : undefined;
+}
+
+/** Kept for callers that specifically care about a Code landing. */
+export function codeLandingKey(destination: MainDestination): string | undefined {
+  const key = mainLandingKey(destination);
+  return key?.startsWith("code:") ? key : undefined;
 }
 
 export interface DestinationSessionSource {
@@ -241,7 +249,11 @@ export function creationTargetForDestination(
   destination: MainDestination,
   chatWorkspace: string | undefined,
 ): MainCreationTarget | undefined {
-  if (destination.phase === "ready-chat") return undefined;
+  if (destination.phase === "ready-chat") {
+    return "kind" in destination && destination.kind === "chat-landing" && chatWorkspace
+      ? { cwd: chatWorkspace, agentName: "chat", intent: destination.intent }
+      : undefined;
+  }
   if (destination.phase !== "ready-code") return undefined;
   if (destination.code.kind === "no-project-landing") return undefined;
   return destination.code.kind === "project-landing"

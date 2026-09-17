@@ -169,7 +169,7 @@ describe("scope isolation", () => {
     await act(async () => root.render(<Harness />));
     await act(async () => settle(20));
     let switching!: Promise<void>;
-    await act(async () => { switching = handles.main!.actions.goTab("chat"); await settle(0); });
+    await act(async () => { switching = handles.main!.actions.openSession(chat); await settle(0); });
     expect(handles.beam!.aui.thread.getState().isDisabled).toBe(false);
     expect(container.querySelector('[data-slot="probe-beam"]')?.getAttribute("data-path")).toBe(BEAM);
 

@@ -10,7 +10,7 @@ import { ThreadList, ThreadListSearch } from "@/components/assistant-ui/elements
 // Beam: its one entry point, in the sheet footer on a phone (docs/agents.md "Beam").
 import { BeamSpark } from "@/components/beam/BeamSpark";
 import { matchesThread, rankSearchThreads, ThreadSearch, threadSearchKeys, type SearchableThread } from "@/components/assistant-ui/elements/thread-search";
-import { StatusRing } from "@/components/status";
+import { StatusDot, StatusRing } from "@/components/status";
 import { useAgentsSnapshot } from "@/agents";
 import { startBeamSession } from "@/components/beam";
 import { Button } from "@/components/ui/button";
@@ -20,7 +20,7 @@ import { useWorkbench } from "@/components/workbench";
 import { shortCwd, shortcutLabel } from "@/format";
 import { useTheme } from "@/hooks";
 import { cn } from "@/lib/utils";
-import { mainTab, useCapability, useLaserStable, useLaserState } from "@/runtime";
+import { mainTab, rememberedCodeOf, sessionAttention, useCapability, useLaserStable, useLaserState } from "@/runtime";
 import { onVisible } from "@/runtime/visible-poll";
 import type { AppState } from "@/store";
 
@@ -72,15 +72,44 @@ export function SessionsPanel({ variant }: SessionsPanelProps) {
 }
 
 const TAB_LABEL: Record<SessionsTab, string> = { chat: "Chat", code: "Code" };
+type TabActivity = "finished_unread" | "waiting_for_input";
+
+/** One acknowledgement per actual attention transition, local to this window. */
+function useTabActivity(path: string | undefined, visible: boolean): TabActivity | undefined {
+  const activity = useLaserState(useCallback((s: AppState) => {
+    if (!path) return undefined;
+    const summary = s.sessions.find((item) => item.path === path);
+    const attention = summary ? sessionAttention(summary, s.open[path])
+      : s.open[path]?.dialogs.length ? "waiting_for_input" : undefined;
+    return attention === "finished_unread" || attention === "waiting_for_input" ? attention : undefined;
+  }, [path]));
+  const previous = useRef<{ path: string | undefined; activity: TabActivity | undefined }>({ path: undefined, activity: undefined });
+  const generation = useRef(0);
+  if (previous.current.path !== path || previous.current.activity !== activity) {
+    previous.current = { path, activity };
+    if (activity) generation.current += 1;
+  }
+  const [seenGeneration, setSeenGeneration] = useState(0);
+  useEffect(() => {
+    if (visible && activity && seenGeneration !== generation.current) setSeenGeneration(generation.current);
+  }, [activity, seenGeneration, visible]);
+  return !visible && activity && generation.current > seenGeneration ? activity : undefined;
+}
 
 function SessionsPanelBody({ variant }: SessionsPanelProps) {
-  const { projects, currentProject, actions } = useLaserStable();
+  const { projects, currentProject, chatPath, actions } = useLaserStable();
   const shell = useShell();
   const list = useSessionsList();
   const addProject = useCapability("pi/project/add");
   const createSession = useCapability("session/new");
   const searchSessions = useCapability("session/search");
   const tab = useLaserState((s) => mainTab(s.destination));
+  const codePath = useLaserState((s) => {
+    const code = rememberedCodeOf(s.destination);
+    return code.kind === "project-session" || code.kind === "beam-session" ? code.path : undefined;
+  });
+  const hiddenChatActivity = useTabActivity(chatPath, tab === "chat");
+  const hiddenCodeActivity = useTabActivity(codePath, tab === "code");
   useClock();
 
   const groups = useLaserState(
@@ -236,7 +265,7 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
         )}
       </header>
 
-      <SessionsTabs tab={tab} onChange={changeTab} />
+      <SessionsTabs tab={tab} onChange={changeTab} activity={{ chat: hiddenChatActivity, code: hiddenCodeActivity }} />
 
       {variant === "sheet" && createSession.state === "available" && (
         <div className="flex shrink-0 items-center px-3 py-2 hairline-b">
@@ -338,7 +367,7 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
  * A two-segment control, a real tablist: arrows move between the segments,
  * the active one is `aria-selected`, and the panel below is what it controls.
  */
-function SessionsTabs({ tab, onChange }: { tab: SessionsTab; onChange(tab: SessionsTab): void }) {
+function SessionsTabs({ tab, onChange, activity }: { tab: SessionsTab; onChange(tab: SessionsTab): void; activity: Record<SessionsTab, TabActivity | undefined> }) {
   const logicalKey = useLogicalArrowKeys();
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "Home" && event.key !== "End") return;
@@ -363,6 +392,7 @@ function SessionsTabs({ tab, onChange }: { tab: SessionsTab; onChange(tab: Sessi
       >
         {SESSIONS_TABS.map((kind) => {
           const selected = kind === tab;
+          const newActivity = activity[kind];
           return (
             <button
               key={kind}
@@ -371,6 +401,7 @@ function SessionsTabs({ tab, onChange }: { tab: SessionsTab; onChange(tab: Sessi
               id={`sessions-tab-${kind}`}
               data-tab={kind}
               aria-selected={selected}
+              aria-label={`${TAB_LABEL[kind]}${newActivity ? ", new activity" : ""}`}
               aria-controls="sessions-tabpanel"
               tabIndex={selected ? 0 : -1}
               onClick={() => onChange(kind)}
@@ -380,7 +411,10 @@ function SessionsTabs({ tab, onChange }: { tab: SessionsTab; onChange(tab: Sessi
                 selected ? "bg-surface text-ink shadow-float-sm" : "text-ink-2 hover:text-ink active:bg-[color-mix(in_oklab,var(--surface)_60%,transparent)]",
               )}
             >
-              {TAB_LABEL[kind]}
+              <span className="inline-flex items-center justify-center gap-1.5">
+                {TAB_LABEL[kind]}
+                {newActivity ? <StatusDot status={newActivity} aria-hidden="true" /> : null}
+              </span>
             </button>
           );
         })}
