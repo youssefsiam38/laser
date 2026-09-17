@@ -34,7 +34,7 @@ import type {
 } from "@lasercode/protocol";
 
 import { activePathIds } from "./components/thread/entries.js";
-import { appendLive, BODY_EXCERPT_MAX_BYTES, excerptHead, excerptLiveTail, LIVE_TAIL_MAX_BYTES, type BodyRef } from "./runtime/body-excerpt.js";
+import { appendLive, BODY_EXCERPT_MAX_BYTES, excerptHead, excerptLiveTail, headBytes, LIVE_TAIL_MAX_BYTES, type BodyRef } from "./runtime/body-excerpt.js";
 import { retainEntries, stubOfElided, retainedRows, type EntryStub } from "./runtime/retained-entries.js";
 import { boundedBodyText, sameBodyComponent, utf8ByteLength, type BodyComponent } from "@lasercode/protocol";
 import { blockBytes, entryBytes, imageMeasure, UNKNOWN_IMAGE_DECODED_BYTES } from "./runtime/view-measure.js";
@@ -1422,7 +1422,9 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
         ...v,
         blocks: v.blocks.map((b) => {
           if (b.kind !== "tool" || b.id !== u.toolCallId) return b;
-          const result = boundValue(u.result, { entryId: b.entryId, component: { kind: "tool_result" } });
+          // The result's entry is written just after this (its `message_end`),
+          // which is where the reference is settled and becomes readable.
+          const result = toolResultBody(u.result, { entryId: b.entryId });
           const bodies = blockBodies({ ...b.bodies, result: result.ref });
           const { bodies: _previous, ...rest } = b;
           return { ...rest, result: result.value, isError: u.isError, done: true, ...(bodies ? { bodies } : {}) };
@@ -1647,6 +1649,71 @@ function boundValue(value: unknown, source: { entryId?: string | undefined; comp
 }
 
 /**
+ * A tool result, bounded, with the reference a reader of its **output** uses
+ * (D-275).
+ *
+ * A result that fits is held exactly as it came. One that does not is excerpted
+ * from its canonical form — the value the authority stores and serves for
+ * `tool_result` (`storedToolResult`), not the live envelope, whose extra fields
+ * would give it another size — and referenced as `tool_output`: the text parts
+ * joined, always plain text, whatever details ride beside them. That is what
+ * the whole-output viewer reads, and what the settle matches against the
+ * persisted entry's identity, so a result that arrived live becomes readable
+ * the moment its entry is written.
+ *
+ * `excerpt.bytes` is how much of the output this view holds as text: the head
+ * of a text-only result, nothing for a structured one, whose held excerpt is
+ * the record's own projection rather than the output.
+ */
+function toolResultBody(result: unknown, source: { entryId?: string | undefined; revision?: string | undefined }): { value: unknown; ref?: BodyRef } {
+  // Only a result envelope has a canonical form; anything else is its own.
+  const envelope = !!result && typeof result === "object" && !Array.isArray(result) && ("content" in result || "details" in result);
+  if (envelope) {
+    // Counted, not written: a result that fits is held exactly as it came.
+    const size = boundedBodyText(result, 0).totalBytes;
+    if (size !== undefined && size <= BODY_EXCERPT_MAX_BYTES) return { value: result };
+  }
+  const canonical = envelope ? storedToolResult(result as { content?: unknown; details?: unknown }) : result;
+  const bounded = boundValue(canonical, { ...source, component: { kind: "tool_result" } });
+  // Only the live envelope's own fields made it too large: nothing is left out.
+  if (!bounded.ref) return bounded;
+  const content = typeof result === "string" ? result : envelope ? (result as { content?: unknown }).content : undefined;
+  const parts = typeof content === "string" ? [content]
+    : Array.isArray(content) ? content.flatMap((part) => part && typeof part === "object" && (part as { type?: unknown }).type === "text"
+      ? [String((part as { text?: unknown }).text ?? "")] : [])
+    : [];
+  let totalBytes = 0;
+  for (const part of parts) totalBytes += utf8ByteLength(part);
+  // A result with no text at all (an image, a bare record) has no output to
+  // read; its record is the only whole there is.
+  if (totalBytes === 0) return { value: bounded.value, ref: { ...bounded.ref, ...(source.entryId === undefined ? { live: true as const } : {}) } };
+  let excerptBytes = 0;
+  if (typeof canonical === "string") {
+    // The held excerpt is the head of the output itself.
+    for (const part of parts) {
+      const room = BODY_EXCERPT_MAX_BYTES - excerptBytes;
+      if (room <= 0) break;
+      const size = utf8ByteLength(part);
+      if (size <= room) { excerptBytes += size; continue; }
+      excerptBytes += headBytes(part, room);
+      break;
+    }
+  }
+  return {
+    value: bounded.value,
+    ref: {
+      ...(source.entryId !== undefined ? { entryId: source.entryId } : {}),
+      component: { kind: "tool_output" },
+      totalBytes,
+      ...(source.revision !== undefined ? { revision: source.revision } : {}),
+      excerpt: { offset: 0, bytes: Math.min(excerptBytes, totalBytes) },
+      // Not written yet: readable once its entry is (the settle on `message_end`).
+      ...(source.entryId === undefined ? { live: true as const } : {}),
+    },
+  };
+}
+
+/**
  * Live partial output, bounded. A string keeps its newest bytes — what a
  * person watching a command is reading — and anything structured is projected
  * head-first without ever building all of it (RP-5b §3.2).
@@ -1774,7 +1841,9 @@ function stubBlocks(stub: EntryStub, revision: string | undefined): { blocks: Bl
   // A result belongs to the call that is already a row: it becomes a reference
   // on that row, exactly as a delivered result would have become its body.
   if (stub.role === "toolResult" && stub.toolCallId !== undefined) {
-    return { blocks: [], toolResult: { toolCallId: stub.toolCallId, ref: refOf({ kind: "tool_result" }) } };
+    // The whole output is read as output (D-275); a page from an authority that
+    // does not name `tool_output` still points at the structured record.
+    return { blocks: [], toolResult: { toolCallId: stub.toolCallId, ref: refOf({ kind: "tool_output" }) ?? refOf({ kind: "tool_result" }) } };
   }
   const details = refOf({ kind: "custom_details", index: 1 }) ?? refOf({ kind: "custom_details" });
   const bodies = blockBodies({ details });
@@ -1942,7 +2011,7 @@ export function blocksFromEntries(entries: unknown[], leafId?: string | null, na
     } else if (m.role === "toolResult" && m.toolCallId) {
       const i = toolIndex.get(m.toolCallId);
       const entryId = typeof e.id === "string" ? e.id : undefined;
-      const result = boundValue(storedToolResult(m), { entryId, component: { kind: "tool_result" }, revision });
+      const result = toolResultBody(storedToolResult(m), { entryId, revision });
       if (i !== undefined) {
         const b = blocks[i] as Extract<Block, { kind: "tool" }>;
         const bodies = blockBodies({ ...b.bodies, result: result.ref });

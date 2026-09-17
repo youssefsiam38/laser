@@ -250,6 +250,11 @@ export function tailOfParts(parts: readonly string[], source: ExcerptSource, max
   return { text: kept.join(""), ref: reference(source, total, total - bytes, bytes) };
 }
 
+/** Bytes of the head of `text` that fit `maxBytes`, cut on a character boundary. */
+export function headBytes(text: string, maxBytes: number): number {
+  return headIndex(text, maxBytes).bytes;
+}
+
 /** Bytes of a body this view is not holding. Zero when it holds all of it. */
 export function omittedBytes(ref: BodyRef | undefined): number {
   return ref ? Math.max(0, ref.totalBytes - ref.excerpt.bytes) : 0;

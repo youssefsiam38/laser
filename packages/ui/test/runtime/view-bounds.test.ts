@@ -13,10 +13,11 @@ import type { SessionState } from "@lasercode/protocol";
 
 import { createStateStore } from "../../src/runtime/LaserProvider.js";
 import { createViewCache, VIEW_CACHE_LIMITS, type ViewCacheEnvironment } from "../../src/runtime/view-cache.js";
-import { initialState, isDormantView, reduce, type AppState, type Block } from "../../src/store.js";
-import { BODY_EXCERPT_MAX_BYTES, LIVE_TAIL_MAX_BYTES, omittedBytes } from "../../src/runtime/body-excerpt.js";
+import { blocksFromEntries, initialState, isDormantView, reduce, type AppState, type Block } from "../../src/store.js";
+import { BODY_EXCERPT_MAX_BYTES, isReadable, LIVE_TAIL_MAX_BYTES, omittedBytes } from "../../src/runtime/body-excerpt.js";
 import { measureView, measurementWork, resetMeasurementWork } from "../../src/runtime/view-measure.js";
-import { bodyProjectionWork, resetBodyProjectionWork, TASK_EVENT_MESSAGE_TYPE } from "@lasercode/protocol";
+import { bodyProjectionWork, entryBodyIdentities, resetBodyProjectionWork, TASK_EVENT_MESSAGE_TYPE } from "@lasercode/protocol";
+import { createHash } from "node:crypto";
 
 const CWD = "/p";
 const path = `${CWD}/heavy.jsonl`;
@@ -329,6 +330,7 @@ describe("A2b · a settled body gains the identity its authority published", () 
       message: { role: "toolResult", toolCallId: "t2", content: [{ type: "text", text: HUGE }] },
       entry: { id: "r2", parentId: "a1", revision: "r8.env.9", bodies: [
         { component: { kind: "tool_result" }, totalBytes: bytesIn(HUGE), contentDigest: digestOf(HUGE) },
+        { component: { kind: "tool_output" }, totalBytes: bytesIn(HUGE), contentDigest: digestOf(HUGE) },
       ] } });
     const rows = state.open[path]!.blocks.filter(block => block.kind === "tool") as Array<Extract<Block, { kind: "tool" }>>;
     const answered = rows.find(row => row.id === "t2")!;
@@ -338,6 +340,56 @@ describe("A2b · a settled body gains the identity its authority published", () 
     expect(answered.entryId).toBe("r2");
     expect(untouched.entryId).toBeUndefined();
     expect(untouched.bodies?.args?.entryId).toBeUndefined();
+  });
+
+  // D-275: what the engine actually delivers is an envelope, not a string, and
+  // the identity is what the worker publishes for the entry it wrote.
+  const sha = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
+  const hasher = () => { const hash = createHash("sha256"); return { update: (chunk: string) => { hash.update(chunk, "utf8"); }, digest: () => hash.digest("hex") }; };
+  const OUTPUT = "line ✓ é 😀\n".repeat(20_000);
+  const envelopes: Array<{ name: string; result: { content: unknown[]; details?: unknown } }> = [
+    { name: "text only, no details", result: { content: [{ type: "text", text: OUTPUT }] } },
+    { name: "details present", result: { content: [{ type: "text", text: OUTPUT }], details: { exitCode: 0, truncation: { lines: 20_000 } } } },
+    { name: "several parts", result: { content: [{ type: "text", text: OUTPUT.slice(0, 1001) }, { type: "text", text: OUTPUT.slice(1001) }], details: { exitCode: 2 } } },
+  ];
+  for (const { name, result } of envelopes) {
+    it(`a live tool result becomes readable output once its entry is written (${name})`, () => {
+      let state = reduce({ ...initialState, connection: "open" }, { type: "opened", state: sessionState({ isStreaming: true }) });
+      state = update(state, 1, { kind: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: { command: "cat" } });
+      state = update(state, 2, { kind: "tool_execution_end", toolCallId: "t1", result, isError: false });
+      const live = (state.open[path]!.blocks.find(block => block.kind === "tool") as Extract<Block, { kind: "tool" }>).bodies?.result;
+      // Not written yet: it points at the output, says it is live, and names no entry.
+      expect(live).toMatchObject({ component: { kind: "tool_output" }, totalBytes: bytesIn(OUTPUT), live: true });
+      expect(live?.entryId).toBeUndefined();
+
+      // The engine writes the entry the way it does (the message carries the
+      // result's own content and details) and the worker names its bodies.
+      const message = { role: "toolResult", toolCallId: "t1", toolName: "bash", content: result.content, details: result.details, isError: false };
+      const identity = entryBodyIdentities({ type: "message", id: "r1", parentId: "a1", message }, hasher);
+      state = update(state, 3, { kind: "message_end", role: "toolResult", message, entry: { id: "r1", parentId: "a1", revision: "r9.env.1", bodies: identity.bodies } });
+
+      const tool = state.open[path]!.blocks.find(block => block.kind === "tool") as Extract<Block, { kind: "tool" }>;
+      const settled = tool.bodies?.result;
+      expect(settled).toMatchObject({ entryId: "r1", component: { kind: "tool_output" }, totalBytes: bytesIn(OUTPUT), contentDigest: sha(OUTPUT) });
+      expect(settled?.live).toBeUndefined();
+      expect(isReadable(settled)).toBe(true);
+      expect(omittedBytes(settled)).toBeGreaterThan(0);
+      expect(bytesOf(state)).toBeLessThanOrEqual(VIEW_CACHE_LIMITS.viewBytes);
+    });
+  }
+
+  it("addresses the output of a stored result, and of one the view only points at", () => {
+    const message = { role: "toolResult", toolCallId: "c1", content: [{ type: "text", text: OUTPUT }], details: { exitCode: 0 } };
+    const call = { id: "a1", parentId: null, type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "c1", name: "bash", arguments: {} }] } };
+    const stored = { id: "r1", parentId: "a1", type: "message", message };
+    // Held (retained): the reference built from the record itself.
+    const held = blocksFromEntries([call, stored], "r1").find(block => block.kind === "tool") as Extract<Block, { kind: "tool" }>;
+    expect(held.bodies?.result).toMatchObject({ entryId: "r1", component: { kind: "tool_output" }, totalBytes: bytesIn(OUTPUT) });
+    // Pointed at (a stub): the authority's page named the output.
+    const stub = { id: "r1", parentId: "a1", type: "message", role: "toolResult", toolCallId: "c1",
+      bodies: [{ component: { kind: "tool_result" as const }, totalBytes: 999_999, contentDigest: "x" }, { component: { kind: "tool_output" as const }, totalBytes: bytesIn(OUTPUT), contentDigest: sha(OUTPUT) }] };
+    const pointed = blocksFromEntries([call], "r1", undefined, { stubs: [stub], revision: "r1.env.2" }).find(block => block.kind === "tool") as Extract<Block, { kind: "tool" }>;
+    expect(pointed.bodies?.result).toMatchObject({ entryId: "r1", component: { kind: "tool_output" }, totalBytes: bytesIn(OUTPUT), contentDigest: sha(OUTPUT) });
   });
 });
 
