@@ -27,6 +27,7 @@ import { toolDetailsDefaultOpen, toolDisplayResult, useActivityDetailLevel, useC
 import { BodyOverflow, type FoldGround } from "./BodyOverflow.js";
 import type { OutputContext } from "./LargeBodyViewer.js";
 import { omittedBytes } from "@/runtime/body-excerpt";
+import { useOutputPreview } from "./output-preview.js";
 import type { BlockBodies } from "@/store";
 import { useActivityDisclosureOverride } from "@/runtime/sessionPreferences";
 import { FileCard } from "./FileCard.js";
@@ -76,11 +77,11 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
 
   const summary = useMemo(() => summarizeTool(toolName, args), [toolName, args]);
   const kind = summary.kind;
-  const text = useMemo(() => resultText(result), [result]);
+  const heldText = useMemo(() => resultText(result), [result]);
   // A shell command that ran and came back non-zero is a result, not a failure
   // of the app: the row stays ordinary and only the command turns
   // (`isNonZeroExit`, tool-summary.ts).
-  const state = toolRowState(status, isError, isNonZeroExit(toolName, isError === true, text));
+  const state = toolRowState(status, isError, isNonZeroExit(toolName, isError === true, heldText));
   const running = state === "running";
   const awaiting = state === "awaiting";
   const failed = state === "failed";
@@ -122,6 +123,10 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
   const bodies = (props.artifact as { bodies?: BlockBodies } | undefined)?.bodies;
   const outputBody = bodies?.result ?? (running ? bodies?.partial : undefined);
   const outputOverflows = omittedBytes(outputBody) > 0;
+  // A page that left this output out holds none of it: read its first lines
+  // while the row is open, so the fold never sits under an empty body.
+  const preview = useOutputPreview(outputBody, path ?? undefined, open && outputOverflows && heldText.length === 0);
+  const text = heldText || preview || "";
   const argsOverflow = omittedBytes(bodies?.args) > 0;
   const finishes = kind === "bash" ? "the command finishes" : "the tool finishes";
   const bash = kind === "bash" ? parseBashOutput(text, isError === true) : undefined;

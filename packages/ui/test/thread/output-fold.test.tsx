@@ -229,6 +229,24 @@ describe("a large output in its tool block", () => {
     expect(document.activeElement).toBe(container.querySelector('[data-slot="body-overflow-open"]'));
   });
 
+  it("shows the first lines of an output the page left out, only while the row is open", async () => {
+    // A page that elided the record: a reference, and no held text at all.
+    const { result: _held, ...elided } = call({ ...outputRef(output), excerpt: { offset: 0, bytes: 0 } });
+    await mount(<ToolRow {...elided} type="tool-call" />);
+    const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
+    if (trigger.getAttribute("aria-expanded") === "true") await act(async () => trigger.click());
+    await flush();
+    const ranges = () => client.request.mock.calls.filter(([method]) => method === "session/entry_range").length;
+    expect(ranges()).toBe(0);
+    await openRow();
+    await flush();
+    const block = container.querySelector<HTMLElement>('[data-slot="terminal-block"]')!;
+    expect(block.textContent).toContain("test 0 passed");
+    expect(block.textContent).not.toContain("test 8999 passed");
+    expect(block.querySelector('[data-slot="body-overflow-open"]')).not.toBeNull();
+    expect(ranges()).toBe(1);
+  });
+
   it("opens from the keyboard and jumps to the end with End", async () => {
     await mount(<ToolRow {...call(outputRef(output))} type="tool-call" />);
     await openRow();
