@@ -14,7 +14,7 @@ import type { AgentDefinition } from "@lasercode/protocol";
 import { ChevronLeft, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
-import { agentByName, agentDisplayName, isBuiltinAgent, isWorkspaceCwd, useAgentWarnings, useAgentsActions, useAgentsSnapshot, useAgentsStatus, warningsFor } from "@/agents";
+import { agentByNameForProject, agentDisplayName, isBuiltinAgent, isWorkspaceCwd, useAgentsActions, useAgentsSnapshot, useAgentsStatus } from "@/agents";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import { CapabilityNotice } from "@/components/capability-gate";
 import { Button } from "@/components/ui/button";
@@ -32,7 +32,7 @@ import { BuiltinPanel } from "./BuiltinPanel.js";
 import { HarnessPanel } from "./HarnessPanel.js";
 import { AgentsOverview } from "./Overview.js";
 import { DiscardChangesDialog } from "./dialogs.js";
-import { isFirstRun, sameSelection, type AgentsSelection } from "./model.js";
+import { agentForWarning, isFirstRun, orderAgents, sameSelection, visibleAgentWarnings, type AgentsSelection } from "./model.js";
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
@@ -45,7 +45,6 @@ export interface AgentsScreenProps {
 export function AgentsScreen({ cwd, target }: AgentsScreenProps) {
   const snapshot = useAgentsSnapshot();
   const status = useAgentsStatus();
-  const warnings = useAgentWarnings();
   const agents = useAgentsActions();
   const { actions } = useLaserStable();
   const workbench = useWorkbench();
@@ -110,8 +109,15 @@ export function AgentsScreen({ cwd, target }: AgentsScreenProps) {
 
   const projectCwd = cwd && !isWorkspaceCwd(cwd, snapshot) ? cwd : undefined;
   const routeCwd = cwd ?? snapshot?.workspaces.beam;
-  const selectedAgent = useMemo(() => (selection?.kind === "agent" ? agentByName(snapshot, selection.name) : undefined), [snapshot, selection]);
-  const selectedWarnings = useMemo(() => (selectedAgent ? warningsFor(snapshot, selectedAgent.name) : []), [snapshot, selectedAgent]);
+  const warnings = useMemo(() => visibleAgentWarnings(snapshot, projectCwd), [snapshot, projectCwd]);
+  const selectedAgent = useMemo(
+    () => (selection?.kind === "agent" ? agentByNameForProject(snapshot, selection.name, projectCwd) : undefined),
+    [projectCwd, snapshot, selection],
+  );
+  const selectedWarnings = useMemo(
+    () => (selectedAgent ? warnings.filter((warning) => agentForWarning(snapshot, warning, projectCwd) === selectedAgent) : []),
+    [projectCwd, selectedAgent, snapshot, warnings],
+  );
 
   const onSaved = useCallback(
     (saved: AgentDefinition) => {
@@ -159,7 +165,7 @@ export function AgentsScreen({ cwd, target }: AgentsScreenProps) {
   const showList = !mobile || !editing;
   const showEditor = !mobile || editing;
   const editorKey = selection === null ? "overview" : selection.kind === "new" ? `new:${newCount}` : selection.kind === "harness" ? "harness" : `agent:${selection.name}`;
-  const customCount = snapshot.agents.filter((agent) => !isBuiltinAgent(agent)).length;
+  const customCount = orderAgents(snapshot, projectCwd).custom.length;
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-slot="agents-screen" data-state="ready" onKeyDown={onKeyDown}>
@@ -178,10 +184,11 @@ export function AgentsScreen({ cwd, target }: AgentsScreenProps) {
           <ScrollArea className={cn("min-h-0 shrink-0", mobile ? "w-full" : "w-72 hairline-e")}>
             <AgentList
               snapshot={snapshot}
+              projectCwd={projectCwd}
               warnings={warnings}
               selection={selection}
               onSelect={(next) => select(next)}
-              lead={mobile && isFirstRun(snapshot) ? <AgentsOverview compact snapshot={snapshot} warnings={warnings} onNew={() => select({ kind: "new" })} onOpen={(next, field) => select(next, field)} /> : undefined}
+              lead={mobile && isFirstRun(snapshot, projectCwd) ? <AgentsOverview compact snapshot={snapshot} projectCwd={projectCwd} warnings={warnings} onNew={() => select({ kind: "new" })} onOpen={(next, field) => select(next, field)} /> : undefined}
             />
           </ScrollArea>
         ) : null}
@@ -196,7 +203,7 @@ export function AgentsScreen({ cwd, target }: AgentsScreenProps) {
           >
             {write.state === "explained" ? <div className="px-4 pt-4 md:px-6"><CapabilityNotice explanation={write.explanation} /></div> : null}
             {selection === null ? (
-              <AgentsOverview snapshot={snapshot} warnings={warnings} onNew={() => select({ kind: "new" })} onOpen={(next, field) => select(next, field)} />
+              <AgentsOverview snapshot={snapshot} projectCwd={projectCwd} warnings={warnings} onNew={() => select({ kind: "new" })} onOpen={(next, field) => select(next, field)} />
             ) : selection.kind === "harness" ? (
               <HarnessPanel snapshot={snapshot} writable={writable} />
             ) : selection.kind === "new" ? (

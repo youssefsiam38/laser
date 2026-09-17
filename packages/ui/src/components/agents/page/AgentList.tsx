@@ -5,14 +5,14 @@
  * move between rows, Enter or Space (or a click) selects one.
  */
 import type { AgentDefinition, AgentWarning, AgentsSnapshot } from "@lasercode/protocol";
-import { Bot, MessageSquare, SlidersHorizontal, Sparkles, Tag } from "lucide-react";
+import { Bot, FileWarning, MessageSquare, SlidersHorizontal, Sparkles, Tag } from "lucide-react";
 import type { KeyboardEvent, ReactNode } from "react";
 
 import { agentDisplayName } from "@/agents";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
-import { agentMark, orderAgents, sameSelection, type AgentMark, type AgentsSelection } from "./model.js";
+import { agentForWarning, agentMark, orderAgents, sameSelection, type AgentMark, type AgentsSelection } from "./model.js";
 
 const MARK_ICON: Record<AgentMark, typeof Bot> = {
   default: Bot,
@@ -29,6 +29,7 @@ export function AgentMarkIcon({ mark, className }: { mark: AgentMark; className?
 
 export interface AgentListProps {
   snapshot: AgentsSnapshot;
+  projectCwd?: string | undefined;
   warnings: readonly AgentWarning[];
   selection: AgentsSelection;
   onSelect(selection: AgentsSelection): void;
@@ -37,9 +38,10 @@ export interface AgentListProps {
   className?: string | undefined;
 }
 
-export function AgentList({ snapshot, warnings, selection, onSelect, lead, className }: AgentListProps) {
-  const { custom, builtin } = orderAgents(snapshot);
-  const warningCount = (name: string) => warnings.filter((warning) => warning.agentName === name).length;
+export function AgentList({ snapshot, projectCwd, warnings, selection, onSelect, lead, className }: AgentListProps) {
+  const { custom, builtin } = orderAgents(snapshot, projectCwd);
+  const warningCount = (agent: AgentDefinition) => warnings.filter((warning) => agentForWarning(snapshot, warning, projectCwd) === agent).length;
+  const fileWarnings = warnings.filter((warning) => warning.field === "file" && agentForWarning(snapshot, warning, projectCwd) === undefined);
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const options = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="option"]')];
@@ -73,11 +75,15 @@ export function AgentList({ snapshot, warnings, selection, onSelect, lead, class
             key={agent.name}
             agent={agent}
             isDefault={agent.name === snapshot.defaultAgent}
-            warnings={warningCount(agent.name)}
+            warnings={warningCount(agent)}
+            shadowsGlobal={agent.scope === "project" && snapshot.agents.some((candidate) => candidate.scope === "global" && candidate.name === agent.name)}
             selected={sameSelection(selection, { kind: "agent", name: agent.name })}
             tabIndex={focusable({ kind: "agent", name: agent.name }, i === 0)}
             onSelect={() => onSelect({ kind: "agent", name: agent.name })}
           />
+        ))}
+        {fileWarnings.map((warning) => (
+          <FileWarningRow key={`${warning.agentName}:${warning.target ?? warning.since}`} warning={warning} />
         ))}
         {selection?.kind === "new" ? (
           <Row
@@ -98,7 +104,8 @@ export function AgentList({ snapshot, warnings, selection, onSelect, lead, class
             key={agent.name}
             agent={agent}
             isDefault={false}
-            warnings={warningCount(agent.name)}
+            warnings={warningCount(agent)}
+            shadowsGlobal={false}
             selected={sameSelection(selection, { kind: "agent", name: agent.name })}
             tabIndex={focusable({ kind: "agent", name: agent.name }, false)}
             quiet
@@ -135,6 +142,7 @@ function AgentRow({
   agent,
   isDefault,
   warnings,
+  shadowsGlobal,
   selected,
   tabIndex,
   quiet = false,
@@ -143,6 +151,7 @@ function AgentRow({
   agent: AgentDefinition;
   isDefault: boolean;
   warnings: number;
+  shadowsGlobal: boolean;
   selected: boolean;
   tabIndex: number;
   quiet?: boolean;
@@ -154,7 +163,7 @@ function AgentRow({
     <Row
       icon={<AgentMarkIcon mark={mark} />}
       title={name}
-      label={`${name}${isDefault ? ", default for new sessions" : ""}${warnings > 0 ? `, ${warnings} warning${warnings === 1 ? "" : "s"}` : ""}`}
+      label={`${name}${agent.scope === "project" ? shadowsGlobal ? ", project agent that replaces the global agent in this project" : ", project agent" : ""}${isDefault ? ", default for new sessions" : ""}${warnings > 0 ? `, ${warnings} warning${warnings === 1 ? "" : "s"}` : ""}`}
       detail={agent.description || (mark === "custom" ? "No description yet" : undefined)}
       selected={selected}
       tabIndex={tabIndex}
@@ -164,6 +173,15 @@ function AgentRow({
       data-warnings={warnings > 0 ? warnings : undefined}
       badges={
         <>
+          {agent.scope === "project" ? (
+            <Badge
+              variant="outline"
+              data-slot="agent-project-badge"
+              aria-label={shadowsGlobal ? "Project agent; replaces the global agent with this name in this project" : "Project agent"}
+            >
+              Project
+            </Badge>
+          ) : null}
           {isDefault ? (
             <Badge variant="live" data-slot="agent-default-badge">
               Default
@@ -178,6 +196,27 @@ function AgentRow({
       }
       onSelect={onSelect}
     />
+  );
+}
+
+function FileWarningRow({ warning }: { warning: AgentWarning }) {
+  return (
+    <div
+      role="note"
+      data-slot="agent-file-warning-row"
+      data-path={warning.target}
+      aria-label={`${warning.message}${warning.target ? ` File: ${warning.target}` : ""}`}
+      className="flex min-w-0 items-start gap-2.5 rounded-lg bg-[color-mix(in_oklab,var(--attention)_10%,transparent)] px-2 py-2 text-start"
+    >
+      <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-surface text-attention">
+        <FileWarning aria-hidden="true" className="size-4" />
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="text-sm font-medium text-ink">Couldn’t load an agent file</span>
+        <span className="text-xs leading-5 text-ink-2">{warning.message}</span>
+        {warning.target ? <span aria-hidden="true" dir="ltr" className="typed truncate text-start text-ink-3">{warning.target}</span> : null}
+      </span>
+    </div>
   );
 }
 

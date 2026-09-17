@@ -3,9 +3,11 @@ import type { SessionView } from "../../src/store.js";
 
 export const agent = (over: Partial<AgentDefinition> & Pick<AgentDefinition, "name">): AgentDefinition => ({
   kind: "custom",
+  scope: "global",
   description: "",
   instructions: "",
   engineInstructions: false,
+  excludeCoreInstructions: false,
   model: null,
   thinkingLevel: null,
   supportsSubagents: false,
