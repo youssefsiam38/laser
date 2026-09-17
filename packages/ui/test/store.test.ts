@@ -8,7 +8,7 @@ const state: SessionState = {
 };
 
 function view(): SessionView {
-  return { path: "/s.jsonl", state, blocks: [], lastSeq: 0, running: false, queue: { steering: [], followUp: [] }, pending: [], capabilities: [], goal: null, namerLabels: {}, dialogs: [], statuses: {}, widgets: {}, openedAt: "2026-09-05T00:00:00.000Z", hydrated: true, entries: [] };
+  return { path: "/s.jsonl", state, blocks: [], lastSeq: 0, running: false, queue: { steering: [], followUp: [] }, pending: [], capabilities: [], goal: null, dialogs: [], statuses: {}, widgets: {}, openedAt: "2026-09-05T00:00:00.000Z", hydrated: true, entries: [] };
 }
 
 function run(v: SessionView, updates: SessionUpdate[]): SessionView {

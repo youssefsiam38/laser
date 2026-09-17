@@ -1,10 +1,10 @@
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 import { useAuiState } from "@assistant-ui/react";
-import type { UiDialogRequest } from "@lasercode/protocol";
+import { toolCallLabel, withoutToolLabel, type UiDialogRequest } from "@lasercode/protocol";
 import { Bot, FolderOpen, GitBranch, MessageSquare } from "lucide-react";
 import { lazy, memo, Suspense, useCallback, useMemo, type ReactNode } from "react";
 
-import { useNamerLabel, useSessionMcpServers } from "@/agents/hooks";
+import { useSessionMcpServers } from "@/agents/hooks";
 import { CodeDiff, DiffStat, diffStatDescription } from "@/components/assistant-ui/elements/code-diff";
 import { TerminalBlock } from "@/components/assistant-ui/elements/terminal-block";
 import { ToolCall } from "@/components/assistant-ui/elements/tool-call";
@@ -87,10 +87,9 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
   const failed = state === "failed";
   const path = useLaserState((laser) => laser.current);
   const activityLevel = useActivityDetailLevel(path);
-  // Namer's early name for this call, while it runs: "Checking the test
-  // suite" instead of "Running pnpm test". Once the call ends the computed
-  // summary is the truth again (docs/agents.md §7, Namer).
-  const namerLabel = useNamerLabel(path, toolCallId);
+  // The agent's label names only live work. Settled rows keep the durable
+  // computed summary that describes what actually ran (D-277).
+  const agentLabel = running ? toolCallLabel(toolName, args) : undefined;
   // Which MCP servers this session started with, so `playwright_browser_*` is
   // read as Playwright's own tool and not as a tool nobody recognises
   // (docs/mcp.md "In the transcript").
@@ -127,7 +126,8 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
   // while the row is open, so the fold never sits under an empty body.
   const preview = useOutputPreview(outputBody, path ?? undefined, open && outputOverflows && heldText.length === 0);
   const text = heldText || preview || "";
-  const argsOverflow = omittedBytes(bodies?.args) > 0;
+  const argsHaveLabel = withoutToolLabel(args) !== args;
+  const argsOverflow = omittedBytes(bodies?.args) > 0 && !argsHaveLabel;
   const finishes = kind === "bash" ? "the command finishes" : "the tool finishes";
   const bash = kind === "bash" ? parseBashOutput(text, isError === true) : undefined;
   const context: OutputContext = {
@@ -161,7 +161,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
       <ToolRowDialog toolCallId={toolCallId} />
     </>
   );
-  const activeLabel = running && namerLabel ? namerLabel : activeToolLabel({ toolName, args });
+  const activeLabel = agentLabel ?? activeToolLabel({ toolName, args });
 
   // An MCP call: the server's own tool, the gateway, or a script. Its row is
   // composed from the same parts, with the server's content as its body.
@@ -178,7 +178,6 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
         elapsedMs={elapsed}
         open={open}
         onOpenChange={rememberOpen}
-        namerLabel={running ? namerLabel : undefined}
         footer={<>{footerFolds}{footer}</>}
       />
     );
@@ -197,7 +196,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
         elapsed={elapsed}
         open={open}
         onOpenChange={rememberOpen}
-        activeLabel={running && namerLabel ? namerLabel : undefined}
+        activeLabel={agentLabel}
         footer={<>{footerFolds}{footer}</>}
       />
     );
@@ -205,10 +204,10 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
 
   // A tool Pi does not ship normally draws as the catalog's fallback row.
   // Decisions route through our composed footer so authenticated capability
-  // policy applies to both approvals and extension questions. Once Namer has
-  // named the call, the same composed row also keeps that name while it runs.
+  // policy applies to both approvals and extension questions. The fallback
+  // reads the agent's label itself when it owns the whole row.
   if (kind === "other") {
-    if (namerLabel === undefined && !approval && !interrupt) {
+    if (!approval && !interrupt) {
       return (
         <>
           <ToolFallback {...props} />
@@ -276,10 +275,11 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
 }
 
 function ReadBody({ args, text, failed, overflow, argsOverflow }: { args: unknown; text: string; failed: boolean; overflow?: ReactNode; argsOverflow?: ReactNode }) {
-  const path = typeof (args as { path?: unknown })?.path === "string" ? (args as { path: string }).path : undefined;
+  const visibleArgs = withoutToolLabel(args);
+  const path = typeof (visibleArgs as { path?: unknown })?.path === "string" ? (visibleArgs as { path: string }).path : undefined;
   return (
     <>
-      <ToolFallbackArgs argsText={pretty(args)} overflow={argsOverflow} />
+      <ToolFallbackArgs argsText={pretty(visibleArgs)} overflow={argsOverflow} />
       {overflow && !failed ? <ToolFallbackResult result={text} overflow={overflow} /> : text ? (
         failed ? (
           <ToolFallbackSection label="error">
@@ -445,7 +445,8 @@ function StartAgentRow({
 // ---------------------------------------------------------------------------
 
 function BashBody({ args, text, running, isError, overflow }: { args: unknown; text: string; running: boolean; isError: boolean; overflow?: ReactNode }) {
-  const command = typeof (args as { command?: unknown })?.command === "string" ? (args as { command: string }).command : "";
+  const visibleArgs = withoutToolLabel(args);
+  const command = typeof (visibleArgs as { command?: unknown })?.command === "string" ? (visibleArgs as { command: string }).command : "";
   const { output, exitCode } = useMemo(() => parseBashOutput(text, isError), [text, isError]);
   return <TerminalBlock command={command} output={output} exitCode={exitCode} running={running} isError={isError} overflow={overflow} />;
 }
@@ -461,9 +462,10 @@ function DiffBody({
   text: string;
   failed: boolean;
 }) {
+  const visibleArgs = withoutToolLabel(args);
   return (
     <>
-      {view ? <CodeDiff view={view} /> : <ToolFallbackArgs argsText={pretty(args)} />}
+      {view ? <CodeDiff view={view} /> : <ToolFallbackArgs argsText={pretty(visibleArgs)} />}
       {failed && text ? (
         <ToolFallbackSection label="error">
           <ToolError message={text} />
@@ -474,9 +476,10 @@ function DiffBody({
 }
 
 function TextBody({ args, text, failed, overflow, argsOverflow }: { args: unknown; text: string; failed: boolean; overflow?: ReactNode; argsOverflow?: ReactNode }) {
+  const visibleArgs = withoutToolLabel(args);
   return (
     <>
-      <ToolFallbackArgs argsText={pretty(args)} overflow={argsOverflow} />
+      <ToolFallbackArgs argsText={pretty(visibleArgs)} overflow={argsOverflow} />
       {failed && text ? (
         <ToolFallbackSection label="error">
           <ToolError message={text} />

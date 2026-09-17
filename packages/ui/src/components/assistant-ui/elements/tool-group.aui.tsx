@@ -21,6 +21,7 @@ import { useSearchRevealDisclosure } from "@/components/thread/search-state";
  */
 import { useAui, useAuiState, useScrollLock, type MessagePrimitive } from "@assistant-ui/react";
 import { ChevronRight, FilePen, FilePlus, FileText, FolderOpen, FolderSearch, ScanText, Search, SquareTerminal, Wrench } from "lucide-react";
+import { toolCallLabel } from "@lasercode/protocol";
 import {
   memo,
   useCallback,
@@ -407,12 +408,10 @@ function ToolGroupDetails({
   const { members, reasoning } = useGroupActivity(part);
   const path = useLaserState((state) => state.current);
   const activityLevel = useActivityDetailLevel(path);
-  // Namer's early name for the call in flight (agents leap): the aggregate
-  // says "Checking the test suite" while it runs and drops back to the
-  // computed summary when the call ends. The store keeps the label per call
-  // id, so only the running member's is read.
-  const activeId = members.find((member) => member.running)?.toolCallId;
-  const namerLabel = useLaserState((state) => (path !== undefined && activeId !== undefined ? state.open[path]?.namerLabels[activeId] : undefined));
+  // Only the member in flight can name the live aggregate. Once it settles,
+  // the aggregate returns to its durable computed summary (D-277).
+  const active = members.find((member) => member.running);
+  const agentLabel = active ? toolCallLabel(active.toolName, active.args) : undefined;
   return (
     <ToolGroupSummaryRow
       members={members}
@@ -421,7 +420,7 @@ function ToolGroupDetails({
       timingKey={timingKey}
       groupStatus={part.status}
       elapsedMs={elapsedMs}
-      activeLabel={namerLabel}
+      activeLabel={agentLabel}
     >
       {children}
     </ToolGroupSummaryRow>
@@ -445,7 +444,7 @@ export function ToolGroupSummaryRow({
   groupStatus: GroupPart["status"];
   /** Full wall-clock span supplied by the runtime-connected group. */
   elapsedMs?: number | undefined;
-  /** A name for the call in flight that beats the computed one (Namer). */
+  /** The agent's name for the call in flight, ahead of neutral copy. */
   activeLabel?: string | undefined;
   children: ReactNode;
 }) {

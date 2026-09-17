@@ -16,7 +16,7 @@ const view = (over: Partial<SessionView> = {}): SessionView => ({
   path: "/p/a.jsonl",
   state: { path: "/p/a.jsonl", cwd: "/p", messageCount: 2, pendingMessageCount: 0, isStreaming: false, isCompacting: false } as SessionState,
   blocks: [], lastSeq: 12, running: false, queue: { steering: [], followUp: [] }, pending: [], dialogs: [],
-  statuses: {}, widgets: {}, openedAt: AT, hydrated: true, entries: [], capabilities: [], goal: null, namerLabels: {},
+  statuses: {}, widgets: {}, openedAt: AT, hydrated: true, entries: [], capabilities: [], goal: null,
   leafId: "e3", validated,
   ...over,
 });

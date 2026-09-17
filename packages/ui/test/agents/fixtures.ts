@@ -103,6 +103,5 @@ export const view = (over: Partial<SessionView> & Pick<SessionView, "path">): Se
   entries: [],
   capabilities: [],
   goal: null,
-  namerLabels: {},
   ...over,
 });

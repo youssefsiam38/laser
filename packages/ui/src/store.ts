@@ -220,12 +220,6 @@ export interface SessionView {
   /** Durable objective for this session, or null when Goal mode is inactive. */
   goal: SessionGoal | null;
   /**
-   * Namer's early labels for tool calls still running, by tool call id
-   * (`lasercode/namer/label`). A label that does not change leaves the view
-   * identity alone, like `capabilities`.
-   */
-  namerLabels: Record<string, string>;
-  /**
    * The MCP servers this session started with, in snapshot order
    * (`lasercode/mcp/status`, docs/mcp.md). A transcript reads it to know that
    * `playwright_browser_navigate` is Playwright's own tool rather than a tool
@@ -617,7 +611,6 @@ export function reduce(state: AppState, action: Action): AppState {
             entries: [],
             capabilities,
             goal: null,
-            namerLabels: {},
           };
       return { ...state, open: { ...state.open, [view.path]: view } };
     }
@@ -628,7 +621,7 @@ export function reduce(state: AppState, action: Action): AppState {
       const prepared = state.open[action.state.path];
       const view: SessionView = prepared?.hydrated ? { ...prepared, state: action.state } : old
         ? { ...old, path: action.state.path, state: action.state, lastSeq: 0, hydrated: false, entries: [], history: undefined, historyPending: undefined, goal: null, validated: undefined, summary: undefined }
-        : { path: action.state.path, state: action.state, blocks: [], lastSeq: 0, running: false, queue: { steering: [], followUp: [] }, pending: [], dialogs: [], statuses: {}, widgets: {}, openedAt: new Date().toISOString(), hydrated: false, entries: [], capabilities: [], goal: null, namerLabels: {} };
+        : { path: action.state.path, state: action.state, blocks: [], lastSeq: 0, running: false, queue: { steering: [], followUp: [] }, pending: [], dialogs: [], statuses: {}, widgets: {}, openedAt: new Date().toISOString(), hydrated: false, entries: [], capabilities: [], goal: null };
       return { ...state, open: { ...rest, [view.path]: view } };
     }
     case "destination":
@@ -758,7 +751,6 @@ export function reduce(state: AppState, action: Action): AppState {
         entries: [],
         capabilities: [],
         goal: null,
-        namerLabels: {},
       };
       const view: SessionView = {
         ...base,
@@ -1081,12 +1073,6 @@ function applyNotification(state: AppState, method: HostNotificationMethod, para
           v.mcpServers !== undefined && v.mcpServers.length === names.length && names.every((n, i) => v.mcpServers![i] === n)
             ? v
             : { ...v, mcpServers: names },
-        );
-      }
-      if (p.message.type === "lasercode/namer/label") {
-        const { toolCallId, label } = p.message;
-        return updateView(state, p.path, (v) =>
-          v.namerLabels[toolCallId] === label ? v : { ...v, namerLabels: { ...v.namerLabels, [toolCallId]: label } },
         );
       }
       return state;

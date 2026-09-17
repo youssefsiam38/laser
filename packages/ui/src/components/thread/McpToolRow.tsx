@@ -22,7 +22,7 @@
  * without `rehype-raw` (invariant 9) and every other value is text.
  */
 import { TextMessagePartProvider } from "@assistant-ui/react";
-import { mcpContentBlocks, mcpResultContent, type McpContentBlock } from "@lasercode/protocol";
+import { mcpContentBlocks, mcpResultContent, toolCallLabel, withoutToolLabel, type McpContentBlock } from "@lasercode/protocol";
 import { Braces, FileText, Plug, Waypoints } from "lucide-react";
 import { memo, useMemo, type ReactNode } from "react";
 
@@ -62,19 +62,17 @@ export interface McpToolRowProps {
   elapsedMs: number | undefined;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Namer's name for this call while it runs, when it has one. */
-  namerLabel?: string | undefined;
   footer: ReactNode;
 }
 
 function McpToolRowImpl(props: McpToolRowProps) {
-  const { info, toolName, args, result, text, details, state, elapsedMs, open, onOpenChange, namerLabel, footer } = props;
+  const { info, toolName, args, result, text, details, state, elapsedMs, open, onOpenChange, footer } = props;
   const failed = state === "failed";
   const running = state === "running";
 
   const row = useMemo(() => mcpRowSummary(info, toolName, args, details), [info, toolName, args, details]);
   const icon = info.kind === "script" ? Braces : info.kind === "gateway" ? Waypoints : Plug;
-  const activeLabel = namerLabel ?? mcpActiveLabel(info, toolName, args, details);
+  const activeLabel = (running ? toolCallLabel(toolName, args) : undefined) ?? mcpActiveLabel(info, toolName, args, details);
 
   return (
     <ToolCall
@@ -132,12 +130,13 @@ function McpBody({
   failed: boolean;
   running: boolean;
 }) {
+  const visibleArgs = withoutToolLabel(args);
   if (info.kind === "script") {
-    const code = typeof (args as { code?: unknown })?.code === "string" ? (args as { code: string }).code : "";
+    const code = typeof (visibleArgs as { code?: unknown })?.code === "string" ? (visibleArgs as { code: string }).code : "";
     const calls = mcpScriptCalls(details);
     return (
       <>
-        <ToolFallbackArgs argsText={pretty(args)} />
+        <ToolFallbackArgs argsText={pretty(visibleArgs)} />
         {code ? (
           <ToolFallbackSection label="script">
             <McpMarkdown text={`\`\`\`js\n${code}\n\`\`\``} />
@@ -162,7 +161,7 @@ function McpBody({
     );
   }
 
-  const gateway = info.kind === "gateway" ? mcpGatewayView(args, details) : undefined;
+  const gateway = info.kind === "gateway" ? mcpGatewayView(visibleArgs, details) : undefined;
   const matches = gateway?.mode === "search" ? mcpSearchMatches(details) : [];
   const statusRows = gateway?.mode === "status" ? mcpStatusRows(details) : [];
   // A gateway call carries the called tool's own result; when it was too large
@@ -171,7 +170,7 @@ function McpBody({
 
   return (
     <>
-      <ToolFallbackArgs argsText={pretty(args)} />
+      <ToolFallbackArgs argsText={pretty(visibleArgs)} />
       {info.kind === "direct" ? (
         // The name the model actually called, which the humanised row hides.
         <ToolFallbackSection label="tool">

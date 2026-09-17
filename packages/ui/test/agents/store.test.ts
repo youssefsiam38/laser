@@ -96,22 +96,4 @@ describe("agents slice", () => {
     expect(reduce(cleared, { type: "agents/choose-beam-model/clear" })).toBe(cleared);
   });
 
-  it("keeps Namer labels per view and the view identity when a label is unchanged", () => {
-    const path = "/p/a.jsonl";
-    const opened = reduce(initialState, { type: "opened", state: sessionState({ path }) });
-    expect(opened.open[path]?.namerLabels).toEqual({});
-    const label = (state: AppState, toolCallId: string, text: string) =>
-      reduce(state, { type: "notification", method: "pi/extension/message", params: { path, message: { type: "lasercode/namer/label", toolCallId, label: text } } });
-    const one = label(opened, "t1", "Reading the config");
-    expect(one.open[path]?.namerLabels).toEqual({ t1: "Reading the config" });
-    expect(label(one, "t1", "Reading the config")).toBe(one);
-    const two = label(one, "t2", "Running tests");
-    expect(two.open[path]?.namerLabels).toEqual({ t1: "Reading the config", t2: "Running tests" });
-    expect(two.open[path]).not.toBe(one.open[path]);
-    // A label for a session we do not hold is dropped, not crashed on.
-    expect(reduce(two, { type: "notification", method: "pi/extension/message", params: { path: "/p/other.jsonl", message: { type: "lasercode/namer/label", toolCallId: "t9", label: "x" } } })).toBe(two);
-    // Forking carries the labels with the transcript.
-    const forked = reduce(two, { type: "forked", from: path, state: sessionState({ path: "/p/fork.jsonl" }) });
-    expect(forked.open["/p/fork.jsonl"]?.namerLabels).toEqual({ t1: "Reading the config", t2: "Running tests" });
-  });
 });
