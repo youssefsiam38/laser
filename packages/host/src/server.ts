@@ -497,6 +497,7 @@ export class HostServer {
       onSeen: (path) => this.notify("pi/session/seen", { path }),
     });
 
+    let agentStore: AgentStore | undefined;
     this.projects = new ProjectRegistry({
       catalog: this.catalog,
       agentDir,
@@ -507,7 +508,7 @@ export class HostServer {
       ...(options.trustTimeoutMs !== undefined ? { trustTimeoutMs: options.trustTimeoutMs } : {}),
       onChange: (projects) => {
         this.notify("pi/project/updated", { projects });
-        (this as { agents?: AgentStore }).agents?.setTrustedProjects(
+        agentStore?.setTrustedProjects(
           projects.filter((project) => project.trust === "trusted").map((project) => project.cwd),
         );
       },
@@ -553,7 +554,6 @@ export class HostServer {
       agentDir,
       stateDir,
       workspaces,
-      trustedProjects: () => this.projects.list().filter((project) => project.trust === "trusted").map((project) => project.cwd),
       log: (line) => this.log(line),
       onChange: (snapshot) => {
         this.notify("agents/updated", snapshot);
@@ -564,6 +564,10 @@ export class HostServer {
         });
       },
     });
+    agentStore = this.agents;
+    agentStore.setTrustedProjects(
+      this.projects.list().filter((project) => project.trust === "trusted").map((project) => project.cwd),
+    );
     this.runs = new AgentRunRegistry({
       storePath: join(stateDir, "agent-runs.json"),
       onRun: (run) => {

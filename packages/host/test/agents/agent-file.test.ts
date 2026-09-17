@@ -38,6 +38,17 @@ describe("agent definition Markdown files", () => {
     },
   );
 
+  it("loads a hand-written file without timestamps", () => {
+    const parsed = parseAgentFile("---\ndescription: x\n---\nbody\n", "minimal", "2026-02-03T04:05:06.000Z");
+    expect(parsed.issues).toBeUndefined();
+    expect(parsed.definition).toMatchObject({
+      description: "x",
+      instructions: "body\n",
+      createdAt: "2026-02-03T04:05:06.000Z",
+      updatedAt: "2026-02-03T04:05:06.000Z",
+    });
+  });
+
   it("defaults omitted booleans and lists, and absent or null model to the configured default", () => {
     const base = `---\ndescription: Minimal\nmodel: null\ncreatedAt: 2026-01-01T00:00:00.000Z\nupdatedAt: 2026-01-01T00:00:00.000Z\n---\nDo it.\n`;
     expect(parseAgentFile(base, "minimal").definition).toMatchObject({

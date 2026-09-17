@@ -28,7 +28,7 @@ const FRONTMATTER_KEYS = new Set([
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 /** Parse one definition file. Its identity always comes from `name`, the filename stem. */
-export function parseAgentFile(text: string, name: string): AgentFileParseResult {
+export function parseAgentFile(text: string, name: string, fallbackTimestamp = new Date().toISOString()): AgentFileParseResult {
   const issues: string[] = [];
   if (!AGENT_NAME_PATTERN.test(name)) {
     return { issues: [`Rename the file so its name is lower case, starts with a letter, and uses only letters, digits and hyphens.`] };
@@ -66,8 +66,8 @@ export function parseAgentFile(text: string, name: string): AgentFileParseResult
   const skills = readSkills(value.skills, issues);
   const engineInstructions = readBoolean(value, "engineInstructions", issues);
   const excludeCoreInstructions = readBoolean(value, "excludeCoreInstructions", issues);
-  const createdAt = readTimestamp(value.createdAt, "createdAt", issues);
-  const updatedAt = readTimestamp(value.updatedAt, "updatedAt", issues);
+  const createdAt = readTimestamp(value.createdAt, "createdAt", issues, fallbackTimestamp);
+  const updatedAt = readTimestamp(value.updatedAt, "updatedAt", issues, fallbackTimestamp);
 
   if (split.body.length > AGENT_INSTRUCTIONS_MAX) {
     issues.push(`Shorten the instructions body to at most ${Math.round(AGENT_INSTRUCTIONS_MAX / 1024)} KB.`);
@@ -219,10 +219,11 @@ function readSkills(value: unknown, issues: string[]): AgentSkillRef[] {
   return skills;
 }
 
-function readTimestamp(value: unknown, field: string, issues: string[]): string {
+function readTimestamp(value: unknown, field: string, issues: string[], fallback: string): string {
+  if (value === undefined) return fallback;
   if (typeof value === "string" && Number.isFinite(Date.parse(value))) return value;
   issues.push(`Make ${field} an ISO date-time string.`);
-  return "1970-01-01T00:00:00.000Z";
+  return fallback;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

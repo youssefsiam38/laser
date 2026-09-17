@@ -11,6 +11,7 @@ import {
   AGENT_NAME_PATTERN,
   DEFAULT_AGENT_NAME,
   PRODUCT_DISPLAY_NAME,
+  canReferenceAgent,
   instructionTemplateIssue,
   isBuiltinAgentName,
   type AgentDefinition,
@@ -143,9 +144,7 @@ export function validateAgentInput(input: AgentDefinitionInput, context: Validat
 }
 
 function canReference(input: AgentDefinitionInput, candidate: AgentDefinition): boolean {
-  if (candidate.kind !== "custom") return false;
-  if (candidate.scope === "global") return true;
-  return input.scope === "project" && canonical(candidate.projectCwd ?? "") === canonical(input.projectCwd ?? "");
+  return canReferenceAgent(input, candidate);
 }
 
 function sameDefinition(left: AgentDefinition, right: AgentDefinition | undefined): boolean {

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -34,6 +34,7 @@ function createStore(patch: Partial<ConstructorParameters<typeof AgentStore>[0]>
     agentDir: join(dir, "engine"),
     workspaces,
     watchDebounceMs: 25,
+    watchPollMs: 25,
     ...patch,
   });
   stores.push(store);
@@ -107,7 +108,7 @@ describe("AgentStore Markdown files", () => {
     const goodRevision = store.currentRevision;
     writeFileSync(saved.path!, "---\nmodel: [broken\n---\nNope\n");
     await eventually(() => expect(store.warnings()).toEqual([
-      expect.objectContaining({ agentName: "reviewer", field: "file", target: saved.path, message: expect.stringContaining("Fix the YAML frontmatter") }),
+      expect.objectContaining({ agentName: "reviewer", field: "file", path: saved.path, target: saved.path, message: expect.stringContaining("Fix the YAML frontmatter") }),
     ]));
     expect(store.get("reviewer")?.description).toBe("hand edited");
     expect(store.currentRevision).toBeGreaterThan(goodRevision);
@@ -173,7 +174,24 @@ describe("AgentStore Markdown files", () => {
     expect(reopened.snapshot()).toMatchObject({ revision: 7, defaultAgent: "reviewer" });
   });
 
-  it("leaves version 1 metadata untouched and logs when a definition cannot be migrated", () => {
+  it("does not overwrite an existing migration backup", () => {
+    const stateDir = join(dir, "state");
+    const path = join(stateDir, "agents.json");
+    mkdirSync(stateDir, { recursive: true });
+    const legacy = JSON.stringify({
+      version: 1,
+      revision: 1,
+      agents: [fileDefinition("default", { instructions: "", engineInstructions: true })],
+      defaultAgent: "default",
+    });
+    writeFileSync(path, legacy);
+    writeFileSync(`${path}.v1.bak`, "older backup");
+    createStore();
+    expect(readFileSync(`${path}.v1.bak`, "utf8")).toBe("older backup");
+    expect(readFileSync(`${path}.v1.bak.1`, "utf8")).toBe(legacy);
+  });
+
+  it("leaves version 1 metadata untouched and never reconciles global files when migration is blocked", async () => {
     const stateDir = join(dir, "state");
     const path = join(stateDir, "agents.json");
     mkdirSync(stateDir, { recursive: true });
@@ -190,9 +208,16 @@ describe("AgentStore Markdown files", () => {
     expect(readFileSync(path, "utf8")).toBe(legacy);
     expect(logs).toEqual([expect.stringContaining("migration left agents.json unchanged")]);
     expect(store.get("default")).toMatchObject({ kind: "custom", scope: "global" });
+
+    rmSync(join(stateDir, GLOBAL_AGENTS_DIR_NAME), { force: true });
+    mkdirSync(join(stateDir, GLOBAL_AGENTS_DIR_NAME), { recursive: true });
+    writeFileSync(join(stateDir, GLOBAL_AGENTS_DIR_NAME, "other.md"), serializeAgentFile(fileDefinition("other")));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(store.get("default")).toMatchObject({ kind: "custom", scope: "global" });
+    expect(store.get("other")).toBeUndefined();
   });
 
-  it("loads only trusted project directories, including one created after watching starts", async () => {
+  it("does not watch a project root while its configuration directory is absent and rescans on the next trust tick", async () => {
     const project = join(dir, "project");
     mkdirSync(project, { recursive: true });
     const store = createStore();
@@ -200,7 +225,10 @@ describe("AgentStore Markdown files", () => {
     const projectPath = join(project, PROJECT_AGENTS_DIR, "reviewer.md");
     mkdirSync(dirname(projectPath), { recursive: true });
     writeFileSync(projectPath, serializeAgentFile(fileDefinition("reviewer", { scope: "project", projectCwd: project })));
-    await eventually(() => expect(store.get("reviewer", project)).toMatchObject({ scope: "project", projectCwd: project, path: projectPath }));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(store.get("reviewer", project)).toBeUndefined();
+    store.setTrustedProjects([project]);
+    expect(store.get("reviewer", project)).toMatchObject({ scope: "project", projectCwd: project, path: projectPath });
     expect(store.get("reviewer")).toBeUndefined();
 
     store.setTrustedProjects([]);
@@ -234,6 +262,64 @@ describe("AgentStore Markdown files", () => {
       { field: "allowedAgents[0]", message: 'There is no agent named "local-only".' },
     ]);
     expect(() => store.setDefault("local-only")).toThrow("A project agent cannot be the default. Choose a global agent instead.");
+  });
+
+  it("keeps project definitions and files untouched when the directory listing is not authoritative", () => {
+    const project = join(dir, "project");
+    const agentsDir = join(project, PROJECT_AGENTS_DIR);
+    mkdirSync(agentsDir, { recursive: true });
+    const reviewerPath = join(agentsDir, "reviewer.md");
+    const leadPath = join(agentsDir, "lead.md");
+    writeFileSync(reviewerPath, serializeAgentFile(fileDefinition("reviewer", { scope: "project", projectCwd: project })));
+    writeFileSync(leadPath, serializeAgentFile(fileDefinition("lead", {
+      scope: "project",
+      projectCwd: project,
+      supportsSubagents: true,
+      allowedAgents: ["reviewer"],
+    })));
+    const reviewerBefore = readFileSync(reviewerPath, "utf8");
+    const leadBefore = readFileSync(leadPath, "utf8");
+    const logs: string[] = [];
+    const store = createStore({ trustedProjects: () => [project], log: (line) => logs.push(line), watchPollMs: 25 });
+
+    chmodSync(agentsDir, 0o000);
+    try {
+      expect(() => store.setTrustedProjects([project])).not.toThrow();
+      expect(store.get("reviewer", project)).toBeDefined();
+      expect(store.get("lead", project)?.allowedAgents).toEqual(["reviewer"]);
+    } finally {
+      chmodSync(agentsDir, 0o700);
+    }
+    expect(readFileSync(reviewerPath, "utf8")).toBe(reviewerBefore);
+    expect(readFileSync(leadPath, "utf8")).toBe(leadBefore);
+    if (process.getuid?.() !== 0) expect(logs).toEqual([expect.stringContaining("keeping the last known definitions")]);
+  });
+
+  it("stages every file in a rename before changing memory and re-reads touched paths after a write failure", async () => {
+    let writes = 0;
+    let failAt = Number.POSITIVE_INFINITY;
+    const store = createStore({
+      writeFile: (path, text) => {
+        writes += 1;
+        if (writes === failAt) throw new Error("injected second write failure");
+        writeFileSync(path, text);
+      },
+    });
+    const reviewer = store.save(input("reviewer"));
+    const lead = store.save(input("lead", { supportsSubagents: true, allowedAgents: ["reviewer"] }));
+    failAt = writes + 2;
+
+    expect(() => store.save(input("critic"), "reviewer")).toThrow("injected second write failure");
+    expect(store.get("reviewer")).toBeDefined();
+    expect(store.get("critic")).toBeUndefined();
+    expect(store.get("lead")?.allowedAgents).toEqual(["reviewer"]);
+    expect(existsSync(reviewer.path!)).toBe(true);
+    expect(existsSync(join(dirname(reviewer.path!), "critic.md"))).toBe(false);
+    expect(readFileSync(lead.path!, "utf8")).toContain("- reviewer");
+
+    failAt = Number.POSITIVE_INFINITY;
+    writeFileSync(lead.path!, readFileSync(lead.path!, "utf8").replace("lead description", "read after failure"));
+    await eventually(() => expect(store.get("lead")?.description).toBe("read after failure"));
   });
 
   it("requires a canonical trusted root exactly for project definitions", () => {

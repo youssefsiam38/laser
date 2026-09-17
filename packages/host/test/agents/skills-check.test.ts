@@ -23,6 +23,7 @@ function agent(name: string, patch: Partial<AgentDefinition>): AgentDefinition {
     name,
     kind: "custom",
     scope: "global",
+    path: `/agents/${name}.md`,
     description: "",
     instructions: "x",
     engineInstructions: false,
@@ -63,6 +64,7 @@ describe("SkillsCheck", () => {
       {
         agentName: "reviewer",
         field: "skills",
+        path: "/agents/reviewer.md",
         target: "review",
         message: `Skill "review" is no longer at ${skillPath}. Choose it again or remove it from this agent.`,
         since: "2026-01-01T00:00:00.000Z",
@@ -90,7 +92,7 @@ describe("SkillsCheck", () => {
     const reports: AgentWarning[][] = [];
     new SkillsCheck({ agents: () => agents, report: (warnings) => reports.push(warnings) }).run();
     expect(reports[0]).toEqual([
-      expect.objectContaining({ agentName: "lead", field: "allowedAgents", target: "ghost" }),
+      expect.objectContaining({ agentName: "lead", field: "allowedAgents", path: "/agents/lead.md", target: "ghost" }),
     ]);
   });
 

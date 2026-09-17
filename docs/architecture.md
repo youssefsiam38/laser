@@ -11,7 +11,7 @@
 ┌───────────────┴────────────────────────────────────────────┐
 │  packages/host — supervisor (imports no Pi)                 │
 │  worker pool (1 per cwd) · session catalog · local WS      │
-│  agent store + run registry (agents.json, agent-runs.json) │
+│  agent store + run registry (agents/*.md, agent-runs.json) │
 │  relay client (outbound only) · log store (SQLite)         │
 └───────────────▲────────────────────────────────────────────┘
                 │ protocol over stdio/socket, one worker per project
@@ -190,8 +190,11 @@ in-memory engine overrides.
 
 - Host SQLite: provider round-trips, tool events, session index cache, attention
   state, device list, relay channel state.
-- `<Laser data>/state/agents.json`: agent definitions, the default agent,
-  durable rename aliases, the policy and each built-in agent's instruction/model choices. `<Laser data>/state/agent-runs.json`:
+- `<Laser data>/state/agents/*.md`: global custom agent definitions; project
+  definitions live in `<project>/.laser/agents/*.md`.
+  `<Laser data>/state/agents.json` keeps the default agent, durable rename
+  aliases, the policy and each built-in agent's instruction/model choices.
+  `<Laser data>/state/agent-runs.json`:
   every agent run the host has heard of, fed by worker `agents/run`
   notifications ([`agents.md`](agents.md) §8).
 - `<Laser data>/state/workspaces/beam` and `.../chat`: containers whose opaque,
