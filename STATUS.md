@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-17T13:00:00+03:00 · claude-2026-09-17-a · HEAD: 459c9717
-**Current focus:** M19-T5 → 0.7.2: oversized turns and goal histories page instead of refusing, MCP guard stops false "Access changed", archived views stop pinning removed projects, loading no longer wears the working sweep.
+**Last updated:** 2026-09-17T13:30:00+03:00 · claude-2026-09-17-a · HEAD: ceb71b30
+**Current focus:** 0.7.2 is published (M19-T5): long conversations open, MCP guard quiet, removed projects leave, loading no longer looks like work.
 
 | Milestone | State |
 | --- | --- |
@@ -25,11 +25,11 @@
 | M16 Conversation experience | in-progress |
 | M17 Coding experience | todo |
 | M18 Resource containment | done |
-| M19 Runtime recovery/update activation | in-progress |
+| M19 Runtime recovery/update activation | done |
 | MX Cross-cutting | in-progress |
 
 **Blockers:** none.
-**Next up:** release 0.7.2 (M19-T5); M17 and the open rows in M2/M3/M5/M7/M8/M10/M11/M13/M16/MX; flaky worker MCP cache-contract epoch test.
-**Recently done:** M19-T4 Electron preflight hotfix, v0.7.1 (`78b3760d`, release run 35200780236); M18-T8 release-CI correction (host 899 + strict E2E 3×12); M19 audit gaps (`419403dd`); M19-T3 migration recovery (`2b9962db`); M19-T2 generation activation (`d59f74e8`).
+**Next up:** M17 and the open rows in M2/M3/M5/M7/M8/M10/M11/M13/M16/MX; flaky worker MCP cache-contract epoch test; host session-index timing assertion flaked once in CI.
+**Recently done:** M19-T5 v0.7.2 (release run 35205573838); M19-T4 v0.7.1 Electron preflight (`78b3760d`); M18-T8 release-CI correction; M19 audit gaps (`419403dd`); M19-T3 migration recovery (`2b9962db`).
 
 Ownership and evidence: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`.
