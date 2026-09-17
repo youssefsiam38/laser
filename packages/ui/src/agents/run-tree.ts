@@ -11,6 +11,7 @@
  */
 import {
   DEFAULT_AGENT_NAME,
+  humanizeLabel,
   isTerminalRunStatus,
   type AgentRun,
   type AgentRunStatus,
@@ -258,7 +259,8 @@ export function buildAgentTree(input: AgentTreeInput): AgentTree {
     }
     if (!ended) active += 1;
     const agentName = info?.agentName ?? run?.agentName ?? input.defaultAgent ?? DEFAULT_AGENT_NAME;
-    const subagentName = info?.subagentName ?? run?.subagentName;
+    const storedSubagentName = info?.subagentName ?? run?.subagentName;
+    const subagentName = storedSubagentName === undefined ? undefined : humanizeLabel(storedSubagentName);
     const title = summary ? sessionTitle(summary, view) : view ? sessionTitle(summaryOfView(view), view) : subagentName ?? agentDisplayName(agentName);
     const sessionId = summary?.id ?? view?.state.id ?? run?.sessionId;
     return {

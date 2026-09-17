@@ -33,7 +33,7 @@ describe("a node paused on a question", () => {
     expect(nodeStatusLabel(node.status)).toBe("Asking");
     expect(node.tone).toBe("attention");
     expect(nodeAction(node)).toBe("Which token store?");
-    expect(nodeAriaLabel(node, NOW)).toBe("reviewer, reviewer-1, Asking, 5 minutes");
+    expect(nodeAriaLabel(node, NOW)).toBe("reviewer, Reviewer 1, Asking, 5 minutes");
   });
 
   it("counts only a live question as needing you", () => {

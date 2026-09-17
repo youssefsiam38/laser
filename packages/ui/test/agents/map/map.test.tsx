@@ -51,7 +51,7 @@ describe("the live map", () => {
     expect(nodes(container).map((n) => n.getAttribute("data-id"))).toEqual([ROOT, "/p/a.jsonl", "/p/c.jsonl"]);
     expect([...container.querySelectorAll(".react-flow__edge")].map((e) => e.getAttribute("data-id"))).toEqual([`${ROOT}>/p/a.jsonl`, "/p/a.jsonl>/p/c.jsonl"]);
     const a = nodeAt(container, "/p/a.jsonl")!;
-    expect(a.getAttribute("aria-label")).toBe("reviewer, reviewer-1, Working, 5 minutes");
+    expect(a.getAttribute("aria-label")).toBe("reviewer, Reviewer 1, Working, 5 minutes");
     expect(a.querySelector('[data-slot="agent-map-status"]')?.textContent).toContain("Working");
     expect(a.querySelector('[data-slot="status-dot"]')?.getAttribute("data-status")).toBe("working");
     expect(a.querySelector('[data-slot="agent-map-elapsed"]')).not.toBeNull();

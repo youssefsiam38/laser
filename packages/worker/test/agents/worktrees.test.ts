@@ -32,6 +32,11 @@ describe("worktreeSlug", () => {
     expect(long.endsWith("-deadbeef")).toBe(true);
     expect(worktreeSlug("!!!", "run_1234abcd")).toBe("agent-1234abcd");
   });
+
+  it("keeps the same identity slug after a legacy dashed name is humanised", () => {
+    expect(worktreeSlug("Mention format", "run_0cc65673")).toBe(worktreeSlug("mention-format", "run_0cc65673"));
+    expect(worktreeSlug("Mention format", "run_0cc65673")).toBe("mention-format-0cc65673");
+  });
 });
 
 describe("assertSafeWorktreePath", () => {

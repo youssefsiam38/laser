@@ -6,7 +6,7 @@
  * `runStatusTone` (`packages/ui/src/agents/model.ts`); a session without a
  * run of its own speaks the tree's own `working` / `idle`.
  */
-import type { AgentEventKind, AgentRun } from "@lasercode/protocol";
+import { humanizeLabel, type AgentEventKind, type AgentRun } from "@lasercode/protocol";
 import { ArrowDownLeft, ArrowUpRight, Ban, CircleAlert, CircleCheck, CircleHelp, Hand, OctagonX, Play, type LucideIcon } from "lucide-react";
 
 import { agentDisplayName, runStatusLabel, type AgentStatusTone, type AgentTreeNode, type AgentTreeStatus } from "@/agents";
@@ -55,7 +55,7 @@ export function agentMark(agentName: string): string {
 
 /** The line a node is named by: the instance for a child, the session title for the root. */
 export function nodeName(node: AgentTreeNode): string {
-  return node.depth === 0 ? node.title : (node.subagentName ?? node.title);
+  return node.depth === 0 ? node.title : humanizeLabel(node.subagentName ?? node.title);
 }
 
 /** The line under the name: which definition runs it. */

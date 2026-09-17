@@ -16,7 +16,7 @@
  * Pure: runs, a task lookup and a clock in — rows out. Nothing here reads a
  * file or an engine.
  */
-import { AGENT_FLEET_ROWS_MAX, isTerminalRunStatus, type AgentRun, type BackgroundTask } from "@lasercode/protocol";
+import { AGENT_FLEET_ROWS_MAX, humanizeLabel, isTerminalRunStatus, type AgentRun, type BackgroundTask } from "@lasercode/protocol";
 import type { FleetAgentRow, FleetCommandRow, FleetRow, FleetRowState, InspectFleetResult } from "./bridge.js";
 
 /**
@@ -155,13 +155,14 @@ function agentRow(run: AgentRun, depth: number, now: number): FleetAgentRow {
   const state: FleetRowState = run.status;
   const line = live ? (activityOfRun(run) ?? oneLine(run.task)) : (endingOfRun(run) ?? oneLine(run.task));
   const when = elapsed(run.startedAt, run.endedAt, live, now);
+  const subagentName = humanizeLabel(run.subagentName);
   return {
     kind: "agent",
     agentName: run.agentName,
-    subagentName: run.subagentName,
+    subagentName,
     sessionId: run.sessionId,
     runId: run.runId,
-    title: run.subagentName,
+    title: subagentName,
     ...(run.worktree?.setup ? { setup: run.worktree.setup } : {}),
     state,
     status: FLEET_STATUS_WORD[state],

@@ -269,7 +269,7 @@ describe("Beam and children in the Code tab", () => {
     const rootRow = rowTitled("Ship the release")!;
     await act(async () => rootRow.querySelector<HTMLElement>('[data-slot="aui_thread-list-item-trigger"]')!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
     expect(rootRow.querySelector("input")).toBeNull();
-    let menu = await openMenu("Actions for explorer");
+    let menu = await openMenu("Actions for Explorer");
     expect(menu?.textContent).not.toMatch(/Rename|Delete|Move|End agent/);
     await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     menu = await openMenu("Actions for Ship the release");
@@ -319,7 +319,7 @@ describe("Beam and children in the Code tab", () => {
     const rail = branch.querySelector('[data-slot="session-children"]')!;
     expect(rail.className).toContain("border-s");
     const child = rail.querySelector<HTMLElement>('[data-slot="aui_thread-list-item"][data-child]')!;
-    expect(child.querySelector('[data-slot="subagent-name"]')?.textContent).toBe("explorer");
+    expect(child.querySelector('[data-slot="subagent-name"]')?.textContent).toBe("Explorer");
     expect(child.textContent).toContain("Counting files");
     expect(child.querySelector('[data-slot="run-dot"]')?.getAttribute("data-run-status")).toBe("running");
     expect(child.querySelector('[data-slot="run-dot"]')?.getAttribute("aria-label")).toBe("Working");
@@ -337,7 +337,7 @@ describe("Beam and children in the Code tab", () => {
     await act(async () => finished.click());
     const innerRail = childBranch.querySelector('[data-slot="session-children"]')!;
     const grandchild = innerRail.querySelector('[data-slot="aui_thread-list-item"][data-child]')!;
-    expect(grandchild.querySelector('[data-slot="subagent-name"]')?.textContent).toBe("digger");
+    expect(grandchild.querySelector('[data-slot="subagent-name"]')?.textContent).toBe("Digger");
     expect(grandchild.querySelector('[data-slot="run-state"]')).toBeNull();
     // No width-taking tag, and no descendant state on the parent: its child is
     // working, the parent is not, and only a hidden question would speak for
@@ -350,9 +350,9 @@ describe("Beam and children in the Code tab", () => {
     // A missing parent leaves an ordinary project row, retaining child identity.
     const project = container.querySelector('[data-cwd="/one"]')!;
     const projectRows = [...project.querySelectorAll('[data-depth="0"] > div > [data-slot="aui_thread-list-item"]')];
-    expect(projectRows.map(row => row.textContent)).toEqual(["Ship the release", "orphanOrphan", "Older work"]);
+    expect(projectRows.map(row => row.textContent)).toEqual(["Ship the release", "Orphan", "Older work"]);
     const orphan = rowTitled("Orphan")!;
-    expect(orphan.querySelector('[data-slot="subagent-name"]')?.textContent).toBe("orphan");
+    expect(orphan.querySelector('[data-slot="subagent-name"]')?.textContent).toBe("Orphan");
     expect(orphan.querySelector('[data-slot="run-dot"]')?.getAttribute("aria-label")).toBe("Waiting");
     expect(rows().filter(row => row.textContent?.includes("Orphan"))).toHaveLength(1);
     // The worktree directories never become groups of their own.
@@ -361,7 +361,7 @@ describe("Beam and children in the Code tab", () => {
 
   it("offers End agent only while the child's run is going, and asks the shared dialog with the run id", async () => {
     await mount();
-    let menu = await openMenu("Actions for explorer");
+    let menu = await openMenu("Actions for Explorer");
     expect(menu?.textContent).toContain("Open");
     const end = menu?.querySelector<HTMLElement>('[data-slot="end-agent-item"]');
     expect(end).not.toBeNull();
@@ -378,7 +378,7 @@ describe("Beam and children in the Code tab", () => {
     expect(rowTitled("Counting files")).toBeUndefined();
     await act(async () => branch.querySelector<HTMLButtonElement>('[data-slot="finished-fold"]')!.click());
     expect(rowTitled("Counting files")?.querySelector('[data-slot="run-state"]')).toBeNull();
-    menu = await openMenu("Actions for explorer");
+    menu = await openMenu("Actions for Explorer");
     expect(menu?.querySelector('[data-slot="end-agent-item"]')).toBeNull();
     expect(menu?.textContent).toContain("Copy path");
     expect(menu?.textContent).not.toContain("Pin chat");

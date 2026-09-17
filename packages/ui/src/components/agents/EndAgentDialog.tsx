@@ -14,7 +14,7 @@
  * ends on its own while the question is open says so instead of offering to
  * end something that is already over.
  */
-import { isTerminalRunStatus, type AgentRun } from "@lasercode/protocol";
+import { humanizeLabel, isTerminalRunStatus, type AgentRun } from "@lasercode/protocol";
 import { LoaderCircle } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 
@@ -49,7 +49,7 @@ function EndAgentBody({ runId, run }: { runId: string; run: AgentRun | undefined
   const [error, setError] = useState<string | undefined>(undefined);
   const keepRef = useRef<HTMLButtonElement>(null);
 
-  const name = run?.subagentName ?? "this agent";
+  const name = run ? humanizeLabel(run.subagentName) : "this agent";
   // The run ended while the question was open: the harness, the parent or a
   // timeout got there first. Nothing is left to end.
   const finished = run !== undefined && isTerminalRunStatus(run.status);

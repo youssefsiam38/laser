@@ -11,7 +11,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { BackgroundTask } from "@lasercode/protocol";
+import { humanizeLabel, type BackgroundTask } from "@lasercode/protocol";
 
 import { FleetPanel } from "../../src/components/fleet/FleetPanel.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
@@ -102,11 +102,11 @@ const render = async (): Promise<void> => {
   await act(async () => root.render(<LaserStoreProvider store={store}><TooltipProvider><FleetPanel variant="panel" /></TooltipProvider></LaserStoreProvider>));
 };
 const rows = (): HTMLElement[] => [...container.querySelectorAll<HTMLElement>('[data-slot="fleet-row"]')];
-const rowFor = (title: string): HTMLElement => rows().find((row) => row.textContent?.includes(title))!;
+const rowFor = (title: string): HTMLElement => rows().find((row) => row.textContent?.includes(humanizeLabel(title)))!;
 const section = (name: "active" | "finished", within: ParentNode = container): HTMLElement =>
   within.querySelector<HTMLElement>(`[data-slot="fleet-group"][data-section="${name}"]`)!;
 const rowIn = (within: ParentNode, title: string): HTMLElement =>
-  [...within.querySelectorAll<HTMLElement>('[data-slot="fleet-row"]')].find((row) => row.textContent?.includes(title))!;
+  [...within.querySelectorAll<HTMLElement>('[data-slot="fleet-row"]')].find((row) => row.textContent?.includes(humanizeLabel(title)))!;
 const terminalBlock = (title: string): HTMLElement => rowFor(title).querySelector<HTMLElement>('[data-slot="terminal-block"]')!;
 /** Work that has ended is folded away; open the fold to read it. */
 const openFinished = async (): Promise<void> => {
@@ -119,7 +119,7 @@ describe("the fleet column", () => {
     fixture.state.agents.runs = { r1: child };
     fixture.state.tasks.tasks = { t1: task({ id: "t1", sessionPath: ROOT }) };
     await render();
-    expect(container.textContent).toContain("explorer");
+    expect(container.textContent).toContain("Explorer");
     expect(container.textContent).toContain("pnpm vite dev");
     for (const row of rows()) await act(async () => row.querySelector<HTMLButtonElement>("button")?.click());
     const text = container.textContent ?? "";
@@ -278,7 +278,7 @@ describe("the fleet column", () => {
     const remove = [...rowFor("explorer").querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.includes("Remove worktree"))!;
     expect(remove).toBeDefined();
     await act(async () => remove.click());
-    expect(fixture.removeWorktree).toHaveBeenCalledWith(CHILD, "explorer");
+    expect(fixture.removeWorktree).toHaveBeenCalledWith(CHILD, "Explorer");
   });
 
   // M16-T48 / review #49: what these two buttons do not say in their own
@@ -470,7 +470,7 @@ describe("the fleet column", () => {
     // these", not a destructive control.
     expect(container.textContent).not.toContain("pnpm build");
     expect(container.textContent).toContain("pnpm vite dev");
-    expect(container.textContent).toContain("explorer");
+    expect(container.textContent).toContain("Explorer");
     expect(clear()).toBeUndefined();
   });
 
@@ -485,7 +485,7 @@ describe("the fleet column", () => {
     await act(async () => oldContext.querySelector("button")!.click());
     expect(oldContext.getAttribute("data-expanded")).toBe("true");
     await act(async () => container.querySelector<HTMLButtonElement>('[data-slot="fleet-clear-finished"]')!.click());
-    expect(container.textContent).toContain("explorer");
+    expect(container.textContent).toContain("Explorer");
     expect(container.textContent).not.toContain("pnpm old");
     expect(container.querySelector('[data-slot="fleet-clear-finished"]')).toBeNull();
     expect(container.querySelector('[data-slot="fleet-row"][data-expanded="true"]')).toBeNull();
@@ -669,8 +669,8 @@ describe("the fleet is one session's tree (M13-T51)", () => {
     await render();
     expect(container.querySelector("h4")?.textContent).toBe("Root session");
     expect(rows().map((row) => row.textContent)).toHaveLength(1);
-    expect(container.textContent).toContain("explorer");
-    expect(container.textContent).not.toContain("reviewer");
+    expect(container.textContent).toContain("Explorer");
+    expect(container.textContent).not.toContain("Reviewer");
     expect(container.textContent).not.toContain("pnpm vite dev");
     // The header counts this session, not the project.
     expect(summaryLine()).toBe("1 going");
@@ -680,9 +680,9 @@ describe("the fleet is one session's tree (M13-T51)", () => {
     fixture.state.current = OTHER;
     await render();
     expect(container.querySelector("h4")?.textContent).toBe("Other session");
-    expect(container.textContent).toContain("reviewer");
+    expect(container.textContent).toContain("Reviewer");
     expect(container.textContent).toContain("pnpm vite dev");
-    expect(container.textContent).not.toContain("explorer");
+    expect(container.textContent).not.toContain("Explorer");
     expect(summaryLine()).toBe("2 going");
   });
 
@@ -707,9 +707,9 @@ describe("the fleet is one session's tree (M13-T51)", () => {
     expect(container.querySelector("h4")?.textContent).toBe("Root session");
     const here = container.querySelector<HTMLElement>('[data-slot="fleet-row"][data-current="true"]');
     expect(here).not.toBeNull();
-    expect(here!.textContent).toContain("explorer");
+    expect(here!.textContent).toContain("Explorer");
     expect(here!.textContent).toContain("reading");
-    expect(container.textContent).not.toContain("reviewer");
+    expect(container.textContent).not.toContain("Reviewer");
     await act(async () => here!.querySelector("button")!.click());
     const labels = [...here!.querySelectorAll("button")].map((b) => b.textContent ?? "");
     expect(labels.some((text) => text.includes("Open chat"))).toBe(false);
@@ -879,7 +879,7 @@ describe("the fleet is one session's tree (M13-T51)", () => {
       expect(strays()).toBeNull();
       const group = container.querySelector('[data-slot="fleet-group"]');
       expect(group?.getAttribute("data-deleted")).toBe("true");
-      expect(container.querySelector('[data-slot="fleet-row"][data-current="true"]')?.textContent).toContain("stray");
+      expect(container.querySelector('[data-slot="fleet-row"][data-current="true"]')?.textContent).toContain("Stray");
     });
 
     it("is put away by Clear once it has finished, and offers its own Clear when the tree has none", async () => {
@@ -895,7 +895,7 @@ describe("the fleet is one session's tree (M13-T51)", () => {
       await act(async () => clear.click());
       expect(strays()).toBeNull();
       // The tree's live work is untouched.
-      expect(container.textContent).toContain("explorer");
+      expect(container.textContent).toContain("Explorer");
     });
   });
 });

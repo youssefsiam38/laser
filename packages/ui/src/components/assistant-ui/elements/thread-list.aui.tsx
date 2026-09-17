@@ -67,7 +67,7 @@ import {
   useAuiState,
   type AssistantState,
 } from "@assistant-ui/react";
-import type { AgentRun, AgentRunStatus, SessionSummary } from "@lasercode/protocol";
+import { humanizeLabel, type AgentRun, type AgentRunStatus, type SessionSummary } from "@lasercode/protocol";
 import {
   Archive,
   ArchiveRestore,
@@ -284,7 +284,7 @@ export function useThreadListGroups(
         title,
         // A child answers to the instance name its parent gave it; that is
         // what its row leads with, so that is what its disclosure is called.
-        label: str(custom["subagentName"]) ?? (title !== "" ? title : (path.split("/").pop() ?? path)),
+        label: humanizeLabel(str(custom["subagentName"]) ?? (title !== "" ? title : (path.split("/").pop() ?? path))),
         parentPath,
         child: custom["agentKind"] === "child" || parentPath !== undefined,
         workspaceKind: custom["agentKind"] === "beam" || custom["agentKind"] === "chat" ? custom["agentKind"] : undefined,
@@ -1194,7 +1194,7 @@ function useRowModel(path: string | undefined): RowModel {
           messageCount: summary.messageCount,
           child: info?.kind === "child" || summary.parentPath !== undefined,
           workspaceKind: info?.kind === "beam" || info?.kind === "chat" ? info.kind : undefined,
-          subagentName: info?.subagentName,
+          subagentName: info?.subagentName === undefined ? undefined : humanizeLabel(info.subagentName),
           runId: run?.runId ?? info?.runId,
           runStatus: run?.status ?? info?.runStatus,
         };

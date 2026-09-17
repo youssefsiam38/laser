@@ -172,7 +172,7 @@ describe("rendering", () => {
     await mount(<Fixture />);
     const card = container.querySelector<HTMLElement>('[data-slot="agent-event-card"]')!;
     expect(card.getAttribute("data-kind")).toBe("agent.cancelled");
-    expect(card.textContent).toContain("explorer");
+    expect(card.textContent).toContain("Explorer");
     expect(card.querySelector('[data-slot="agent-event-sentence"]')?.textContent).toBe("was ended by you");
     expect(card.querySelector('[data-search-content="reason"]')?.textContent).toBe("Wrong direction");
     expect(card.querySelector('[data-search-content="message"]')?.textContent).toContain("Nothing was committed.");

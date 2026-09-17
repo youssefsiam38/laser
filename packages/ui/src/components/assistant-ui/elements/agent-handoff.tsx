@@ -17,6 +17,7 @@
  *     the one Markdown renderer there is.
  *   - Colours are the live token and the inks; the fixed `max-w-sm` is gone.
  */
+import { humanizeLabel } from "@lasercode/protocol";
 import { Bot, MessageSquare } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
 
@@ -108,9 +109,10 @@ export function AgentEventCard({
   ...props
 }: AgentEventCardProps) {
   const tone = agentEventTone(kind);
+  const displayName = humanizeLabel(subagentName);
   // The run is still going for a message and for a question; only an ending settles.
   const settled = kind !== "agent.message" && kind !== "agent.needs_input";
-  const sentence = agentEventSentence(subagentName, kind, initiator);
+  const sentence = agentEventSentence(displayName, kind, initiator);
   return (
     <div
       data-slot="agent-event-card"
@@ -128,13 +130,13 @@ export function AgentEventCard({
             "flex min-w-0 max-w-full items-center gap-1.5 rounded-full px-2 py-0.5 text-xs leading-xs",
             settled ? cn(field, "text-ink") : "bg-[color-mix(in_oklab,var(--live)_12%,transparent)] text-live",
           )}
-          title={`${subagentName} · ${agentName}`}
+          title={`${displayName} · ${agentName}`}
         >
           <Bot className="size-3 shrink-0" aria-hidden="true" />
-          <span className="truncate">{subagentName}</span>
+          <span className="truncate">{displayName}</span>
         </span>
         <span data-slot="agent-event-sentence" className={cn("min-w-0 text-sm font-medium", tone === "danger" ? "text-danger" : tone === "attention" ? "text-attention" : "text-ink")}>
-          {sentence.slice(subagentName.length).trim()}
+          {sentence.slice(displayName.length).trim()}
         </span>
         <span className={cn(mono, "text-ink-3")} title={`Agent: ${agentName}`}>{agentName}</span>
         <span className="ms-auto flex shrink-0 items-center gap-1.5">

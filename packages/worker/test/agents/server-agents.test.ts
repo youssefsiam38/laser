@@ -277,7 +277,7 @@ describe("WorkerServer agents", () => {
 
     // The parent still sees the child, and the child's command under it.
     const fleet = await parent.inspectFleet();
-    expect(fleet.rows.map((row) => row.title)).toEqual(["forked"]);
+    expect(fleet.rows.map((row) => row.title)).toEqual(["Forked"]);
     expect(fleet.rows[0]!.children.map((row) => row.title)).toEqual(["pnpm vite dev"]);
     expect(fleet.rows[0]!.children[0]).toMatchObject({ kind: "command", taskId: "t-dev", status: "Working" });
 

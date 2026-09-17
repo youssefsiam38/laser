@@ -62,11 +62,17 @@ describe("buildFleet", () => {
     expect(group.path).toBe(ROOT);
     expect(group.title).toBe("Root session");
     // The root session is the header, never an item of its own.
-    expect(group.items.map((item) => item.title)).toEqual(["explorer"]);
-    expect(group.items[0]!.children.map((item) => item.title)).toEqual(["reader"]);
+    expect(group.items.map((item) => item.title)).toEqual(["Explorer"]);
+    expect(group.items[0]!.children.map((item) => item.title)).toEqual(["Reader"]);
     expect(group.items[0]!.depth).toBe(0);
     expect(group.items[0]!.children[0]!.depth).toBe(1);
     expect(flattenFleet(group.items)).toHaveLength(2);
+  });
+
+  it("humanises a dashed name from a run recorded before the naming contract", () => {
+    const legacy = run({ runId: "r-legacy", sessionPath: "/p/legacy.jsonl", subagentName: "mention-format" });
+    const groups = build({ sessions: [summary({ path: ROOT })], runs: byId([legacy], "runId") });
+    expect(groups[0]!.items[0]).toMatchObject({ title: "Mention format", run: { subagentName: "mention-format" } });
   });
 
   it("hangs a background command off the session that started it, not off the group", () => {
@@ -79,7 +85,7 @@ describe("buildFleet", () => {
     const group = groups[0]!;
     // The root's command is a top-level item; the child's belongs to the child.
     expect(group.items.map((item) => [item.kind, item.title])).toEqual([
-      ["agent", "explorer"],
+      ["agent", "Explorer"],
       ["task", "vite dev"],
     ]);
     expect(group.items[0]!.children.map((item) => [item.kind, item.title])).toEqual([["task", "pnpm -r test"]]);
@@ -382,10 +388,10 @@ describe("scopeFleet", () => {
     expect(groups).toHaveLength(3);
     const here = scopeFleet(groups, ROOT);
     expect(here.tree?.path).toBe(ROOT);
-    expect(flattenFleet(here.tree!.items).map((item) => item.title)).toEqual(["mine"]);
+    expect(flattenFleet(here.tree!.items).map((item) => item.title)).toEqual(["Mine"]);
     const there = scopeFleet(groups, OTHER);
     expect(there.tree?.path).toBe(OTHER);
-    expect(flattenFleet(there.tree!.items).map((item) => item.title)).toEqual(["theirs", "pnpm -r test"]);
+    expect(flattenFleet(there.tree!.items).map((item) => item.title)).toEqual(["Theirs", "pnpm -r test"]);
     // Another session's work is that session's fleet, not this one's.
     expect(fleetSummary([here.tree!])).toMatchObject({ running: 1 });
     expect(fleetSummary([there.tree!])).toMatchObject({ running: 2 });

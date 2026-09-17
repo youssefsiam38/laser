@@ -171,7 +171,7 @@ describe.skipIf(!harnessModulePresent || !haveGit)("golden path: start_agent →
         updates: out.filter((m) => "method" in m && m.method === "session/update").map((m) => { const u = (m as { params: { update: { kind: string; message?: unknown; errorMessage?: string } } }).params.update; return u.kind === "message_end" ? `${u.kind}:${JSON.stringify(u.message).slice(0, 300)}` : u.kind + (u.errorMessage ? `:${u.errorMessage}` : ""); }),
       }, null, 1);
       expect(completed, diagnostics()).toBeDefined();
-      expect(completed).toMatchObject({ agentName: "worker", subagentName: "touch-nothing", depth: 1, origin: "agent", result: { status: "completed", message: "done: touched nothing" }, parent: { sessionPath: parentPath } });
+      expect(completed).toMatchObject({ agentName: "worker", subagentName: "Touch nothing", depth: 1, origin: "agent", result: { status: "completed", message: "done: touched nothing" }, parent: { sessionPath: parentPath } });
       expect(completed!.worktree?.path).toContain(join(base, "project", WORKTREES_DIR_NAME));
       expect(existsSync(completed!.worktree!.path)).toBe(true);
 
@@ -181,7 +181,7 @@ describe.skipIf(!harnessModulePresent || !haveGit)("golden path: start_agent →
       expect(completed!.sessionPath.startsWith(join(base, "sessions"))).toBe(true);
       const childLines = readFileSync(completed!.sessionPath, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { type: string; customType?: string; cwd?: string; data?: { kind?: string } });
       expect(childLines[0]?.cwd).toContain(WORKTREES_DIR_NAME);
-      expect(childLines.find((line) => line.customType === SESSION_AGENT_ENTRY_TYPE)?.data).toMatchObject({ kind: "child", agentName: "worker", subagentName: "touch-nothing", parentPath });
+      expect(childLines.find((line) => line.customType === SESSION_AGENT_ENTRY_TYPE)?.data).toMatchObject({ kind: "child", agentName: "worker", subagentName: "Touch nothing", parentPath });
 
       // The parent received exactly one agent event carrying the child's message —
       // without waiting for it: no waiting tool exists, the parent's turn ended
@@ -197,7 +197,7 @@ describe.skipIf(!harnessModulePresent || !haveGit)("golden path: start_agent →
       const parentTools = stub.requests.filter((r) => toolNamesOf(r).includes("start_agent")).flatMap(toolNamesOf);
       expect(parentTools).toContain("inspect_agent");
       expect(parentTools).not.toContain("wait_for_agents");
-      expect(readFileSync(parentPath, "utf8")).toContain("Do not wait for touch-nothing.");
+      expect(readFileSync(parentPath, "utf8")).toContain("Do not wait for Touch nothing.");
     } finally {
       await server.dispose();
     }
@@ -241,7 +241,7 @@ describe.skipIf(!harnessModulePresent || !haveGit)("golden path: start_agent →
       while (Date.now() < deadline && !runs().some((run) => run.status === "completed")) await new Promise((r) => setTimeout(r, 100));
       const completed = runs().find((run) => run.status === "completed");
       expect(completed, JSON.stringify(runs().map((r) => [r.runId, r.status, r.error]))).toBeDefined();
-      expect(completed!.subagentName).toBe("read-only-look");
+      expect(completed!.subagentName).toBe("Read only look");
       expect(completed!.worktree).toBeNull();
       expect(completed!.cwd).toBe(project);
       // Nothing was created under `.worktrees/`, and nothing in the project was touched.
@@ -253,7 +253,7 @@ describe.skipIf(!harnessModulePresent || !haveGit)("golden path: start_agent →
       const childLines = readFileSync(completed!.sessionPath, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { customType?: string; cwd?: string; data?: Record<string, unknown> });
       expect(childLines[0]?.cwd).toBe(project);
       const record = childLines.find((line) => line.customType === SESSION_AGENT_ENTRY_TYPE)?.data;
-      expect(record).toMatchObject({ kind: "child", subagentName: "read-only-look", parentPath });
+      expect(record).toMatchObject({ kind: "child", subagentName: "Read only look", parentPath });
       expect(record).not.toHaveProperty("worktree");
 
       // The parent's transcript carries where the child works, with no branch.

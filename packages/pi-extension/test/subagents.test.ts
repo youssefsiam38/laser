@@ -211,6 +211,12 @@ describe("subagents module: tool registration", () => {
     expect(start.description).toContain("removing the worktree with remove_agent_worktree are yours, not the agent's");
     expect(start.parameters.required).toEqual(["agent_name", "subagent_name", "task"]);
     expect(Object.keys(start.parameters.properties)).toEqual(["agent_name", "subagent_name", "task", "worktree"]);
+    expect(start.parameters.properties["subagent_name"]).toMatchObject({
+      description: expect.stringContaining('sentence case with spaces. Never use a slug, dash- or underscore-separated words, or camelCase. Example: "Review login flow".'),
+    });
+    expect(start.promptGuidelines).toEqual(expect.arrayContaining([
+      expect.stringContaining('For start_agent, write subagent_name as a short human-readable name of two to five words in sentence case with spaces'),
+    ]));
     for (const tool of h.tools.values()) {
       for (const guideline of tool.promptGuidelines ?? []) expect(guideline).toContain(tool.name);
     }
@@ -372,7 +378,7 @@ describe("subagents module: tool registration", () => {
     const view = JSON.parse(result.content[0]!.text) as Record<string, unknown>;
     expect(view).toMatchObject({
       agent_name: "reviewer",
-      subagent_name: "review-auth-refresh",
+      subagent_name: "Review auth refresh",
       sessionId: "session_42",
       runId: "run_7",
       status: "needs_input",
@@ -383,11 +389,11 @@ describe("subagents module: tool registration", () => {
       activity: { turns: 3, tools: 5, currentTool: "bash" },
       question: { kind: "select", title: "Which token store?", options: ["cookie", "header"] },
       messages: [{ text: "Checked the refresh path." }],
-      agents: [{ agent_name: "reviewer", subagent_name: "grandchild", runId: "run_9", status: "running" }],
+      agents: [{ agent_name: "reviewer", subagent_name: "Grandchild", runId: "run_9", status: "running" }],
     });
     expect(view).not.toHaveProperty("agentName");
     expect(view["what_it_needs"]).toBe(
-      'review-auth-refresh is paused on a question and cannot continue until it is answered. Answer it with send_agent_message with its sessionId and mode "answer" and one of the choices, exactly, as the message. The person can also answer it in review-auth-refresh\'s own chat.',
+      'Review auth refresh is paused on a question and cannot continue until it is answered. Answer it with send_agent_message with its sessionId and mode "answer" and one of the choices, exactly, as the message. The person can also answer it in Review auth refresh\'s own chat.',
     );
     expect(result.details).toBe(inspected);
 

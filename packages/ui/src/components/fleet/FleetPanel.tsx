@@ -25,6 +25,7 @@
  *     show it and nothing can navigate to it. It is one line at the bottom of
  *     every fleet, named and counted, until it ends or is stopped from there.
  */
+import { humanizeLabel } from "@lasercode/protocol";
 import { Radio, PanelRightClose, Square, FolderX, MessageSquare, MessagesSquare, RotateCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -367,7 +368,7 @@ function AgentDetail({ item, contextOnly }: { item: FleetItem; contextOnly: bool
   // never got to it leaves the directory for ever, so a person can clear it
   // from here — but only once the run is over, and never while it is the
   // agent's own working directory.
-  const label = run?.subagentName ?? item.title;
+  const label = humanizeLabel(run?.subagentName ?? item.title);
   const removable = run?.worktree && !run.worktree.removedAt && target === undefined ? run : undefined;
   const removeWorktree = removable && removeCapability.state === "available" ? () => requestRemoveWorktree(removable.sessionPath, label) : undefined;
   return (

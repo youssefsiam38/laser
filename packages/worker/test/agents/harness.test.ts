@@ -17,7 +17,7 @@ import { DefinitionsCache, fallbackDefaultAgent, fallbackSnapshot } from "../../
 import { AgentHarness, MAX_RETAINED_RUNS, NUDGE_TEXT, RECOVERY_ENTRY_SCAN_MAX, type SessionHost, type WorktreeProvider } from "../../src/agents/harness.js";
 import { HarnessError } from "../../src/agents/errors.js";
 import { rootRecord, rootRole } from "../../src/agents/session-config.js";
-import { WorktreeManager, type CreateWorktreeInput, type Worktree, type WorktreeFacts } from "../../src/agents/worktrees.js";
+import { WorktreeManager, worktreeSlug, type CreateWorktreeInput, type Worktree, type WorktreeFacts } from "../../src/agents/worktrees.js";
 import { projectBashPrefix } from "../../src/project-env.js";
 import type { IndexedTask } from "../../src/agents/tasks.js";
 import { AGENT_EVENT_MESSAGE_TYPE, PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE, SESSION_RUN_ENTRY_TYPE, type AgentDefinition, type AgentRun, type AgentsSnapshot, type ContentBlock, type SessionState, type UiDialogRequest, type UiDialogResponse } from "@lasercode/protocol";
@@ -204,8 +204,9 @@ function makeWorld(projectCwd = "/repo", projectTrusted = true) {
     async create(input) {
       if (refuseWorktrees !== undefined) throw new HarnessError(refuseWorktrees);
       this.created.push(input);
-      const path = `/repo/.worktrees/${input.subagentName}-${input.runId.slice(4)}`;
-      const worktree: Worktree = { path, branch: `agents/${input.subagentName}`, baseCommit: "abc123", cwd: path, root: "/repo" };
+      const slug = worktreeSlug(input.subagentName, input.runId);
+      const path = `/repo/.worktrees/${slug}`;
+      const worktree: Worktree = { path, branch: `agents/${slug}`, baseCommit: "abc123", cwd: path, root: "/repo" };
       return worktree;
     },
     async runSetup() { return { status: "not-present" }; },
@@ -290,7 +291,7 @@ describe("AgentHarness", () => {
     expect(world.runsNotified()).toEqual([]);
     world.setAdmitNewWork(true);
     await expect(root.handle.bridge.startAgent({ agentName: "worker", subagentName: "later", task: "work" }))
-      .resolves.toMatchObject({ agentName: "worker", subagentName: "later" });
+      .resolves.toMatchObject({ agentName: "worker", subagentName: "Later" });
   });
 
   it("reads one bounded parent tail for a recovery batch and deduplicates its persisted event", async () => {
@@ -430,32 +431,49 @@ describe("AgentHarness", () => {
     expect(world.worktrees.created).toHaveLength(0);
   });
 
+  it("humanises a legacy slug once while preserving its worktree identity", async () => {
+    const root = world.openRoot("lead");
+    const result = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "mention-format", task: "Review mention formatting." });
+    const suffix = result.runId.replace(/^run_/, "");
+    expect(result).toMatchObject({
+      agentName: "worker",
+      subagentName: "Mention format",
+      branch: `agents/mention-format-${suffix}`,
+      cwd: `/repo/.worktrees/mention-format-${suffix}`,
+    });
+    expect(world.worktrees.created[0]).toMatchObject({ subagentName: "Mention format", runId: result.runId });
+    expect(world.opened[0]!.agent.record).toMatchObject({ subagentName: "Mention format", worktree: { branch: `agents/mention-format-${suffix}` } });
+    expect(world.runsNotified().at(-1)).toMatchObject({ subagentName: "Mention format", worktree: { branch: `agents/mention-format-${suffix}` } });
+    expect((await root.handle.bridge.inspectFleet()).rows[0]).toMatchObject({ subagentName: "Mention format", title: "Mention format" });
+  });
+
   it("starts a child in a worktree, returns identities at once, and completes through the bridge", async () => {
     const root = world.openRoot("lead");
     root.driver.goal = { id: "g1", objective: "Ship the login fix" };
     const received: AgentModelEvent[] = [];
     root.handle.bridge.onEvent((event) => received.push(event));
 
-    const result = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "fix-login", task: "Fix the login form." });
-    expect(result).toEqual({
+    const result = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "Fix login", task: "Fix the login form." });
+    const suffix = result.runId.replace(/^run_/, "");
+    expect(result).toMatchObject({
       agentName: "worker",
-      subagentName: "fix-login",
+      subagentName: "Fix login",
       sessionId: "child-1",
       runId: expect.stringMatching(/^run_[0-9a-f]{8}$/),
       status: "running",
-      cwd: expect.stringMatching(/^\/repo\/\.worktrees\/fix-login-/),
-      branch: "agents/fix-login",
+      cwd: `/repo/.worktrees/fix-login-${suffix}`,
+      branch: `agents/fix-login-${suffix}`,
     });
 
     // The child session opened in the worktree with the child's definition and role.
-    expect(world.worktrees.created[0]).toMatchObject({ projectCwd: "/repo", baseCwd: "/repo", subagentName: "fix-login", runId: result.runId });
+    expect(world.worktrees.created[0]).toMatchObject({ projectCwd: "/repo", baseCwd: "/repo", subagentName: "Fix login", runId: result.runId });
     const open = world.opened[0]!;
-    expect(open.cwd).toMatch(/^\/repo\/\.worktrees\/fix-login-/);
+    expect(open.cwd).toBe(`/repo/.worktrees/fix-login-${suffix}`);
     expect(open.parentSessionPath).toBe(root.path);
     expect(open.agent.definition.name).toBe("worker");
-    expect(open.agent.record).toMatchObject({ agentName: "worker", kind: "child", subagentName: "fix-login", parentPath: root.path, parentSessionId: "root-1", rootPath: root.path, runId: result.runId, worktree: { branch: "agents/fix-login", baseCommit: "abc123" } });
+    expect(open.agent.record).toMatchObject({ agentName: "worker", kind: "child", subagentName: "Fix login", parentPath: root.path, parentSessionId: "root-1", rootPath: root.path, runId: result.runId, worktree: { branch: `agents/fix-login-${suffix}`, baseCommit: "abc123" } });
     const role: HarnessSessionRole = open.agent.role;
-    expect(role).toMatchObject({ agentName: "worker", kind: "child", subagentName: "fix-login", depth: 1, isolated: true, parent: { sessionPath: root.path, sessionId: "root-1", agentName: "lead" }, runId: result.runId, goal: { id: "g1", objective: "Ship the login fix" }, task: "Fix the login form." });
+    expect(role).toMatchObject({ agentName: "worker", kind: "child", subagentName: "Fix login", depth: 1, isolated: true, parent: { sessionPath: root.path, sessionId: "root-1", agentName: "lead" }, runId: result.runId, goal: { id: "g1", objective: "Ship the login fix" }, task: "Fix the login form." });
     expect(open.agent.backgroundWork).toMatchObject({ cwd: open.cwd, foregroundCommandSeconds: 120 });
     // Bound to the child, so its `task_output` can read a command of an agent under it (D-163).
     expect(typeof open.agent.backgroundWork?.readTask).toBe("function");
@@ -463,16 +481,16 @@ describe("AgentHarness", () => {
     // The task was prompted verbatim, without waiting, and the child was named.
     const child = world.drivers.get("/sessions/child-1.jsonl")!;
     expect(child.prompted).toEqual([{ text: "Fix the login form.", content: [{ type: "text", text: "Fix the login form." }], options: { expandPromptTemplates: false } }]);
-    expect(child.names).toEqual(["fix-login"]);
+    expect(child.names).toEqual(["Fix login"]);
     expect(child.custom[0]).toMatchObject({ type: SESSION_RUN_ENTRY_TYPE, data: { runId: result.runId, moment: "started", task: "Fix the login form." } });
 
     // Notifications: the run, and the two started/message_sent moments.
     const running = world.runsNotified().at(-1)!;
-    expect(running).toMatchObject({ agentName: "worker", subagentName: "fix-login", sessionId: "child-1", runId: result.runId, sessionPath: "/sessions/child-1.jsonl", status: "running", origin: "agent", depth: 1, parent: { sessionPath: root.path, sessionId: "root-1" }, goal: { id: "g1" }, projectCwd: "/repo", rootSessionPath: root.path, cwd: open.cwd });
+    expect(running).toMatchObject({ agentName: "worker", subagentName: "Fix login", sessionId: "child-1", runId: result.runId, sessionPath: "/sessions/child-1.jsonl", status: "running", origin: "agent", depth: 1, parent: { sessionPath: root.path, sessionId: "root-1" }, goal: { id: "g1" }, projectCwd: "/repo", rootSessionPath: root.path, cwd: open.cwd });
     // No deadline: nothing ends a run for taking long (D-144).
     expect(running).not.toHaveProperty("timeoutAt");
     expect(world.events().map((e) => `${e.kind}@${e.sessionPath}`)).toEqual(["started@/sessions/child-1.jsonl", "message_sent@/sessions/root.jsonl"]);
-    expect(world.harness.sessionInfo("/sessions/child-1.jsonl")).toEqual({ agentName: "worker", kind: "child", subagentName: "fix-login", parentPath: root.path, rootPath: root.path, runId: result.runId, runStatus: "running" });
+    expect(world.harness.sessionInfo("/sessions/child-1.jsonl")).toEqual({ agentName: "worker", kind: "child", subagentName: "Fix login", parentPath: root.path, rootPath: root.path, runId: result.runId, runStatus: "running" });
 
     // The child completes through its own bridge.
     const childBridge = world.harness.bridgeOf("/sessions/child-1.jsonl")!;
@@ -485,7 +503,7 @@ describe("AgentHarness", () => {
     expect(finished).toMatchObject({ runId: result.runId, status: "completed", result: { status: "completed", message: "done: touched nothing" } });
     expect(finished.endedAt).toBeDefined();
     expect(received).toHaveLength(1);
-    expect(received[0]).toMatchObject({ type: "agent.completed", agentName: "worker", subagentName: "fix-login", sessionId: "child-1", runId: result.runId, message: "done: touched nothing", run: { status: "completed" } });
+    expect(received[0]).toMatchObject({ type: "agent.completed", agentName: "worker", subagentName: "Fix login", sessionId: "child-1", runId: result.runId, message: "done: touched nothing", run: { status: "completed" } });
     expect(childBridge.role().runId).toBeUndefined();
     expect(child.custom.at(-1)).toMatchObject({ type: SESSION_RUN_ENTRY_TYPE, data: { moment: "completed", result: { message: "done: touched nothing" } } });
     expect(world.events().map((e) => e.kind)).toEqual(["started", "message_sent", "completed", "message_received"]);
@@ -497,7 +515,7 @@ describe("AgentHarness", () => {
     // The fleet the parent reads: one row, ended, carrying its final message.
     const fleet = await root.handle.bridge.inspectFleet();
     expect(fleet).toMatchObject({ working: 0, needsYou: 0, finished: 1, total: 1, omitted: 0 });
-    expect(fleet.rows).toEqual([expect.objectContaining({ kind: "agent", subagentName: "fix-login", runId: result.runId, state: "completed", status: "Done", line: "done: touched nothing", depth: 0, children: [] })]);
+    expect(fleet.rows).toEqual([expect.objectContaining({ kind: "agent", subagentName: "Fix login", runId: result.runId, state: "completed", status: "Done", line: "done: touched nothing", depth: 0, children: [] })]);
   });
 
   it("reports blocked the same way, with the child's message", async () => {
@@ -810,13 +828,13 @@ describe("AgentHarness", () => {
       expect((await root.handle.bridge.inspectFleet()).rows[0]).toMatchObject({ runId, state: "needs_input", status: "Asking", line: "Which database?" });
       // Told once, with the question and how to answer it — and that the person may answer instead.
       expect(received).toHaveLength(1);
-      expect(received[0]).toMatchObject({ type: "agent.needs_input", agentName: "worker", subagentName: "migrate", sessionId, runId, run: { status: "needs_input" } });
-      expect(received[0]!.message).toContain("migrate is paused on a question");
+      expect(received[0]).toMatchObject({ type: "agent.needs_input", agentName: "worker", subagentName: "Migrate", sessionId, runId, run: { status: "needs_input" } });
+      expect(received[0]!.message).toContain("Migrate is paused on a question");
       expect(received[0]!.message).toContain("raised by its ask_person tool");
       expect(received[0]!.message).toContain("Question (select): Which database?");
       expect(received[0]!.message).toContain('Choices: "staging", "production"');
       expect(received[0]!.message).toContain('send_agent_message with its sessionId and mode "answer" and one of the choices');
-      expect(received[0]!.message).toContain("the person can answer it in migrate's own chat");
+      expect(received[0]!.message).toContain("the person can answer it in Migrate's own chat");
       expect(received[0]!.message).toContain(`inspect_agent with runId ${runId}`);
       expect(world.events().map((e) => `${e.kind}@${e.sessionPath}`)).toEqual(["started@/sessions/child-1.jsonl", "message_sent@/sessions/root.jsonl", "needs_input@/sessions/child-1.jsonl", "message_received@/sessions/root.jsonl"]);
       expect(world.events().at(-2)!.summary).toBe("Asked: Which database?");
@@ -859,7 +877,7 @@ describe("AgentHarness", () => {
       expect(child.followUps).toEqual([]);
       expect(world.harness.run(runId)).toMatchObject({ status: "running" });
       expect(world.harness.run(runId)).not.toHaveProperty("question");
-      expect(world.events().slice(-2).map((e) => `${e.kind}:${e.summary}`)).toEqual(["message_sent:Answered migrate's question", "message_received:Answer from lead"]);
+      expect(world.events().slice(-2).map((e) => `${e.kind}:${e.summary}`)).toEqual(["message_sent:Answered Migrate's question", "message_received:Answer from lead"]);
 
       child.ask({ method: "select", id: "ui-2", title: "Which one?", options: ["a", "b", "c"] });
       expect((await root.handle.bridge.sendAgentMessage({ sessionId, message: "2", mode: "answer" })).delivery).toBe("answered");
@@ -1082,7 +1100,7 @@ describe("AgentHarness", () => {
       const seen = await root.handle.bridge.inspectAgent({ runId });
       expect(seen).toMatchObject({
         agentName: "worker",
-        subagentName: "fix-login",
+        subagentName: "Fix login",
         sessionId,
         runId,
         status: "needs_input",
@@ -1091,12 +1109,12 @@ describe("AgentHarness", () => {
         model: "stub/stub-1",
         task,
         cwd: expect.stringMatching(/^\/repo\/\.worktrees\/fix-login-/),
-        branch: "agents/fix-login",
-        worktree: { path: expect.stringMatching(/fix-login/), branch: "agents/fix-login", exists: true, unmergedCommits: 1, uncommittedFiles: 2 },
+        branch: expect.stringMatching(/^agents\/fix-login-[0-9a-f]{8}$/),
+        worktree: { path: expect.stringMatching(/fix-login/), branch: expect.stringMatching(/^agents\/fix-login-[0-9a-f]{8}$/), exists: true, unmergedCommits: 1, uncommittedFiles: 2 },
         activity: { turns: 1, tools: 1, currentTool: "bash", lastAt: expect.any(String) },
         question: { id: "ui-1", kind: "confirm", title: "Run the migration?", toolCallId: "c1", toolName: "bash" },
         messages: [{ at: "2026-09-09T10:00:09.000Z", text: "Found the bug in validate()." }],
-        agents: [expect.objectContaining({ runId: grand.runId, subagentName: "check-tests", status: "running" })],
+        agents: [expect.objectContaining({ runId: grand.runId, subagentName: "Check tests", status: "running" })],
       });
       // The run record still carries only the excerpt; the whole task is inspect's alone.
       expect(world.harness.run(runId)!.task.length).toBeLessThan(task.length);
@@ -1137,7 +1155,7 @@ describe("AgentHarness", () => {
       const grand = await childBridge.startAgent({ agentName: "worker", subagentName: "w2", task: "t2" });
       world.setWorktreeFacts({ exists: true, unmergedCommits: 2, uncommittedFiles: 0 });
       const seen = await root.handle.bridge.inspectAgent({ runId: grand.runId });
-      expect(seen).toMatchObject({ runId: grand.runId, subagentName: "w2", depth: 2, status: "running", worktree: { exists: true, unmergedCommits: 2 } });
+      expect(seen).toMatchObject({ runId: grand.runId, subagentName: "W2", depth: 2, status: "running", worktree: { exists: true, unmergedCommits: 2 } });
       expect((await root.handle.bridge.inspectAgent({ sessionId: grand.sessionId })).runId).toBe(grand.runId);
       // The child reads its own child; the grandchild reads nobody above or beside it.
       expect((await childBridge.inspectAgent({ runId: grand.runId })).runId).toBe(grand.runId);
@@ -1158,7 +1176,7 @@ describe("AgentHarness", () => {
       await world.harness.bridgeOf("/sessions/child-1.jsonl")!.completeRun({ status: "completed", message: "done" });
       await root.handle.bridge.removeAgentWorktree({ runId });
       const seen = await root.handle.bridge.inspectAgent({ runId });
-      expect(seen.worktree).toEqual({ path: expect.stringMatching(/iso/), branch: "agents/iso", exists: false, unmergedCommits: null, uncommittedFiles: null, removedAt: expect.any(String) });
+      expect(seen.worktree).toEqual({ path: expect.stringMatching(/iso/), branch: expect.stringMatching(/^agents\/iso-[0-9a-f]{8}$/), exists: false, unmergedCommits: null, uncommittedFiles: null, removedAt: expect.any(String) });
       expect(seen).not.toHaveProperty("branch");
     });
   });
@@ -1194,12 +1212,12 @@ describe("AgentHarness", () => {
       const fleet = await root.handle.bridge.inspectFleet();
       expect(fleet).toMatchObject({ working: 4, needsYou: 0, finished: 1, total: 5, omitted: 0 });
       // Creation order, never attention order; the root's own command last.
-      expect(fleet.rows.map((r) => r.title)).toEqual(["w1", "r", "run t-root"]);
+      expect(fleet.rows.map((r) => r.title)).toEqual(["W1", "R", "run t-root"]);
       const [w1, r, own] = fleet.rows;
-      expect(w1).toMatchObject({ kind: "agent", agentName: "worker", subagentName: "w1", sessionId: child.sessionId, runId: child.runId, state: "running", status: "Working", line: "Fix the login form.", depth: 0 });
+      expect(w1).toMatchObject({ kind: "agent", agentName: "worker", subagentName: "W1", sessionId: child.sessionId, runId: child.runId, state: "running", status: "Working", line: "Fix the login form.", depth: 0 });
       expect(w1!.elapsed).toMatch(/^\d+s$/);
       // The child's own child, then the child's command.
-      expect(w1!.children.map((c) => c.title)).toEqual(["w2", "run t-child"]);
+      expect(w1!.children.map((c) => c.title)).toEqual(["W2", "run t-child"]);
       expect(w1!.children[0]).toMatchObject({ kind: "agent", runId: grand.runId, sessionId: grand.sessionId, status: "Working", line: "Running bash", depth: 1, children: [] });
       expect(w1!.children[1]).toMatchObject({ kind: "command", taskId: "t-child", state: "failed", status: "Failed", line: "exit code 1", exitCode: 1, depth: 1 });
       expect(r).toMatchObject({ kind: "agent", runId: sibling.runId, status: "Working", children: [] });
@@ -1208,7 +1226,7 @@ describe("AgentHarness", () => {
 
       // The child sees its own subtree only: its child, its command; never its sibling or the root's command.
       const childFleet = await childBridge.inspectFleet();
-      expect(childFleet.rows.map((r) => r.title)).toEqual(["w2", "run t-child"]);
+      expect(childFleet.rows.map((r) => r.title)).toEqual(["W2", "run t-child"]);
       expect(childFleet.rows[0]).toMatchObject({ runId: grand.runId, depth: 0 });
       expect(childFleet).toMatchObject({ working: 1, finished: 1, total: 2 });
       // The grandchild sees nothing: it started nothing and ran nothing.
@@ -1236,11 +1254,11 @@ describe("AgentHarness", () => {
       const fleet = await root.handle.bridge.inspectFleet();
       expect(fleet).toMatchObject({ working: 1, needsYou: 1, finished: 6, total: 7 });
       const byTitle = new Map(fleet.rows.map((row) => [row.title, row]));
-      expect(byTitle.get("asking")).toMatchObject({ runId: asking.runId, state: "needs_input", status: "Asking", line: "Drop the table?" });
-      expect(byTitle.get("blocked")).toMatchObject({ runId: blocked.runId, state: "blocked", status: "Blocked", line: "Which config is canonical?" });
-      expect(byTitle.get("ended")).toMatchObject({ state: "cancelled", status: "Ended", line: "the person ended it" });
-      expect(byTitle.get("reasoned")).toMatchObject({ state: "cancelled", status: "Ended", line: "no longer needed" });
-      expect(byTitle.get("failed")).toMatchObject({ runId: failed.runId, state: "failed", status: "Failed", line: "The agent's session closed before it finished." });
+      expect(byTitle.get("Asking")).toMatchObject({ runId: asking.runId, state: "needs_input", status: "Asking", line: "Drop the table?" });
+      expect(byTitle.get("Blocked")).toMatchObject({ runId: blocked.runId, state: "blocked", status: "Blocked", line: "Which config is canonical?" });
+      expect(byTitle.get("Ended")).toMatchObject({ state: "cancelled", status: "Ended", line: "the person ended it" });
+      expect(byTitle.get("Reasoned")).toMatchObject({ state: "cancelled", status: "Ended", line: "no longer needed" });
+      expect(byTitle.get("Failed")).toMatchObject({ runId: failed.runId, state: "failed", status: "Failed", line: "The agent's session closed before it finished." });
       // A command's ending is the person's word with the pronoun turned round, or its exit code.
       expect(byTitle.get("run t-stopped")).toMatchObject({ kind: "command", state: "cancelled", status: "Ended", line: "the person stopped it", exitCode: null });
       expect(byTitle.get("run t-done")).toMatchObject({ kind: "command", state: "completed", status: "Done", line: "exit code 0", exitCode: 0 });
@@ -1261,7 +1279,7 @@ describe("AgentHarness", () => {
       const kept = fleet.rows.flatMap((row) => [row, ...row.children]);
       expect(kept).toHaveLength(50);
       // The deepest rows go first, newest first among them: g2 and g1 are gone, g0 stays.
-      expect(fleet.rows.slice(0, 3).map((row) => row.children.map((c) => c.title))).toEqual([["g0"], [], []]);
+      expect(fleet.rows.slice(0, 3).map((row) => row.children.map((c) => c.title))).toEqual([["G0"], [], []]);
       expect(fleet.rows.filter((row) => row.kind === "command")).toHaveLength(46);
     });
 
@@ -1300,13 +1318,13 @@ describe("AgentHarness", () => {
       const readTask = world.opened[0]!.agent.backgroundWork!.readTask!;
       // The child's options read its own child's command; the root's read the grandchild's too.
       const read = await readTask("t-grand", 2);
-      expect(read).toEqual({ task: expect.objectContaining({ id: "t-grand", status: "completed", exitCode: 0 }), owner: { agentName: "worker", subagentName: "w2", sessionId: grand.sessionId }, text: "two\nthree" });
+      expect(read).toEqual({ task: expect.objectContaining({ id: "t-grand", status: "completed", exitCode: 0 }), owner: { agentName: "worker", subagentName: "W2", sessionId: grand.sessionId }, text: "two\nthree" });
       expect(read.task).not.toHaveProperty("logPath");
       expect(read.task).not.toHaveProperty("sessionPath");
       const rootRead = await root.handle.backgroundWork("/repo")!.readTask!("t-grand", 10);
       expect(rootRead.text).toBe("one\ntwo\nthree");
       // No log file: the record comes back and the text is absent, never an empty pane pretending to be output.
-      expect(await readTask("t-quiet", 5)).toEqual({ task: expect.objectContaining({ id: "t-quiet", activity: "still going" }), owner: expect.objectContaining({ subagentName: "w2" }) });
+      expect(await readTask("t-quiet", 5)).toEqual({ task: expect.objectContaining({ id: "t-quiet", activity: "still going" }), owner: expect.objectContaining({ subagentName: "W2" }) });
       // Outside the tree, or nowhere: refused with the sentence that names the way in.
       await expect(readTask("t-other", 5)).rejects.toThrow(/"t-other" is not in the tree under this session.*inspect_fleet/s);
       await expect(readTask("t-nope", 5)).rejects.toThrow(/is not in the tree under this session/);
@@ -1731,7 +1749,7 @@ describe("AgentHarness", () => {
     expect(child.role().depth).toBe(1);
     expect(child.canDelegate()).toBe(true);
     const grand = await child.startAgent({ agentName: "worker", subagentName: "w2", task: "t2" });
-    expect(world.worktrees.created[1]).toMatchObject({ projectCwd: "/repo", baseCwd: expect.stringMatching(/^\/repo\/\.worktrees\/w1-/), subagentName: "w2" });
+    expect(world.worktrees.created[1]).toMatchObject({ projectCwd: "/repo", baseCwd: expect.stringMatching(/^\/repo\/\.worktrees\/w1-/), subagentName: "W2" });
     expect(world.harness.run(grand.runId)).toMatchObject({ depth: 2, parent: { sessionPath: "/sessions/child-1.jsonl", sessionId: "child-1" }, rootSessionPath: root.path, projectCwd: "/repo" });
     const grandBridge = world.harness.bridgeOf("/sessions/child-2.jsonl")!;
     expect(grandBridge.canDelegate()).toBe(false);
@@ -1755,7 +1773,7 @@ describe("AgentHarness", () => {
     // second copy to drift.
     expect(world.runsNotified().at(-1)).toMatchObject({
       runId,
-      subagentName: "fix-login",
+      subagentName: "Fix login",
       status: "running",
       sessionPath: "/sessions/child-1.jsonl",
       parent: { sessionPath: root.path },
@@ -1792,7 +1810,7 @@ describe("AgentHarness", () => {
   it("runs a child started with worktree false in the parent's own checkout, with no worktree and no branch", async () => {
     const root = world.openRoot("lead");
     const result = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "review", task: "Review the auth changes.", worktree: false });
-    expect(result).toMatchObject({ subagentName: "review", sessionId: "child-1", status: "running", cwd: "/repo" });
+    expect(result).toMatchObject({ subagentName: "Review", sessionId: "child-1", status: "running", cwd: "/repo" });
     expect(result).not.toHaveProperty("branch");
     expect(world.worktrees.created).toHaveLength(0);
     const open = world.opened[0]!;
@@ -1811,10 +1829,10 @@ describe("AgentHarness", () => {
   it("still gives a worktree when the flag is absent or true, and refuses anything that is not a boolean", async () => {
     const root = world.openRoot("lead");
     const absent = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "a", task: "t" });
-    expect(absent.branch).toBe("agents/a");
-    expect(world.harness.run(absent.runId)!.worktree).toMatchObject({ branch: "agents/a" });
+    expect(absent.branch).toBe(`agents/a-${absent.runId.slice(4)}`);
+    expect(world.harness.run(absent.runId)!.worktree).toMatchObject({ branch: `agents/a-${absent.runId.slice(4)}` });
     const asked = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "b", task: "t", worktree: true });
-    expect(asked.branch).toBe("agents/b");
+    expect(asked.branch).toBe(`agents/b-${asked.runId.slice(4)}`);
     expect(world.worktrees.created).toHaveLength(2);
     await expect(root.handle.bridge.startAgent({ agentName: "worker", subagentName: "c", task: "t", worktree: "false" as unknown as boolean })).rejects.toThrow(/worktree must be true or false/);
     expect(world.worktrees.created).toHaveLength(2);
@@ -2546,10 +2564,10 @@ describe("AgentHarness", () => {
       const { parent, started } = await finishedChild();
       const result = await parent.handle.bridge.removeAgentWorktree({ sessionId: started.sessionId });
       // The bridge speaks the harness's camel case; the module renames it for the model.
-      expect(result).toMatchObject({ removed: true, branch: "agents/iso", agentName: "worker", subagentName: "iso", sessionId: started.sessionId });
-      expect(world.worktrees.removedWith).toEqual([{ root: "/repo", path: result.path, branch: "agents/iso" }]);
+      expect(result).toMatchObject({ removed: true, branch: started.branch, agentName: "worker", subagentName: "Iso", sessionId: started.sessionId });
+      expect(world.worktrees.removedWith).toEqual([{ root: "/repo", path: result.path, branch: started.branch }]);
       // Nothing may keep offering a path that is no longer on disk.
-      expect(world.harness.run(started.runId)!.worktree).toMatchObject({ branch: "agents/iso", removedAt: expect.any(String) });
+      expect(world.harness.run(started.runId)!.worktree).toMatchObject({ branch: started.branch, removedAt: expect.any(String) });
       expect(world.runsNotified().at(-1)!.worktree?.removedAt).toBeTruthy();
       // Twice is a refusal, not a second `git worktree remove`.
       await expect(parent.handle.bridge.removeAgentWorktree({ runId: started.runId })).rejects.toThrow(/already been removed/);

@@ -60,7 +60,7 @@ describe("composition by measured size", () => {
     const { container, host } = mounted;
     const card = container.querySelector<HTMLElement>('[data-slot="agent-map-card"][data-path="/p/a.jsonl"]')!;
     const select = card.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
-    expect(select.getAttribute("aria-label")).toBe("reviewer, reviewer-1, Working, 5 minutes");
+    expect(select.getAttribute("aria-label")).toBe("reviewer, Reviewer 1, Working, 5 minutes");
     await act(async () => select.click());
     expect(card.getAttribute("data-selected")).toBe("true");
     expect(card.querySelector('[data-slot="agent-map-inspector"]')?.getAttribute("data-path")).toBe("/p/a.jsonl");
