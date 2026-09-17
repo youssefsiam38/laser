@@ -525,8 +525,8 @@ function useSlashCommands() {
 }
 
 // ---------------------------------------------------------------------------
-// `@` — child handles first, then one host-sorted directory page. Folders
-// continue the path; only files and handles use the primitive's directive.
+// `@` — child handles first, then one host-sorted directory page. Enter or
+// click inserts files/folders; `/` alone descends into the highlighted folder.
 // ---------------------------------------------------------------------------
 
 const MENTION_ICONS = { agent: Bot, file: FileText, directory: FolderOpen, next: ChevronRight, previous: ChevronLeft } as const;

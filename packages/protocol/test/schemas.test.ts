@@ -154,7 +154,7 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/project/remove": { cwd: "/p" },
   "pi/project/trust": { cwd: "/p", trusted: true, remember: true },
   "pi/project/git": { cwd: "/p", path: "/s.jsonl" },
-  "pi/project/browse": { path: "/home/me/code", explorer: { mode: "explorer", cwd: "/home/me/code", prefix: "node", offset: 80, limit: 80 } },
+  "pi/project/browse": { path: "~\\code", explorer: { mode: "explorer", cwd: "/home/me/code", prefix: "node", offset: 80, limit: 80 } },
   "pi/project/env/status": { cwd: "/home/me/code/app" },
   "pi/project/env/set": {
     cwd: "/home/me/code/app",
@@ -730,6 +730,7 @@ it('requires explorer kind and common-prefix metadata, without accepting a legac
   const explorer = { ...legacy, commonPrefix: 'folder', entries: [{ ...legacy.entries[0], kind: 'directory' }] };
   expect(explorerListingSchema.parse(JSON.parse(JSON.stringify(explorer)))).toEqual(explorer);
   expect(explorerListingSchema.safeParse({ ...explorer, entries: [{ ...explorer.entries[0], kind: 'socket' }] }).success).toBe(false);
+  expect(explorerListingSchema.parse({ ...explorer, entries: [], error: "That path is outside this project and your home folder.", errorKind: "refusal" }).errorKind).toBe("refusal");
 });
 
 it("browse remains strict and explorer requires explicit opt-in", () => {

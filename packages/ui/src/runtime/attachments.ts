@@ -28,7 +28,11 @@ export function wrapFileAttachment(file: AttachedFile): string {
   return `<attached-file name="${escapeAttribute(file.name)}" type="${escapeAttribute(file.mediaType)}" size="${file.size}">\n${escape(file.content)}\n</attached-file>`;
 }
 
-/** Recognise only complete canonical wrappers separated from prose by blank lines. */
+/**
+ * Recognise only complete canonical file wrappers separated from prose by blank
+ * lines. Directory mentions (`:directory[…/]`) deliberately stay in `text`:
+ * they are path references the agent can inspect, never file-content uploads.
+ */
 export function splitAttachedFiles(text: string): { text: string; files: AttachedFile[] } {
   const files: AttachedFile[] = [];
   const pattern = /(^|\n\n)(<attached-file name="([^"\n]*)" type="([^"\n]*)" size="(\d+)">\n([\s\S]*?)\n<\/attached-file>)(?=\n\n|$)/g;

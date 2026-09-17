@@ -35,9 +35,13 @@ function Fixture() {
 }
 beforeEach(async () => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true; vi.useFakeTimers(); request.mockReset(); inserted.mockReset(); sent.mockReset();
-  request.mockImplementation(async (_method, params) => ({ path: params.path, home: '/home/test', entries: (params.path === '/project' ? [
-    { name: 'node-one', kind: 'directory' }, { name: 'node-two', kind: 'directory' }, { name: 'server', kind: 'directory' },
-  ] : [{ name: 'index.ts', kind: 'file' }]).filter(entry => entry.name.startsWith(params.explorer.prefix)).map(entry => ({ ...entry, path: params.path + '/' + entry.name, project: false })), truncated: false, commonPrefix: params.explorer.prefix === 'node' ? 'node-' : '' }));
+  request.mockImplementation(async (_method, params) => {
+    const canonical = params.path === '.' ? '/project' : params.path === '~' || params.path === '%USERPROFILE%' ? '/home/test' : params.path === '..' ? '/home' : params.path.startsWith('/') ? params.path : `/project/${params.path}`;
+    const entries = canonical === '/project' ? [
+      { name: 'node-one', kind: 'directory' }, { name: 'node-two', kind: 'directory' }, { name: 'server', kind: 'directory' },
+    ] : [{ name: 'index.ts', kind: 'file' }];
+    return { path: canonical, home: '/home/test', parent: canonical.slice(0, canonical.lastIndexOf('/')) || '/', entries: entries.filter(entry => entry.name.startsWith(params.explorer.prefix)).map(entry => ({ ...entry, path: `${canonical}/${entry.name}`.replace('//', '/'), project: false })), truncated: false, commonPrefix: params.explorer.prefix === 'node' ? 'node-' : '' };
+  });
   container = document.createElement('div'); document.body.append(container); root = createRoot(container);
   await act(async () => root.render(<Fixture />));
 });
@@ -52,24 +56,22 @@ async function type(text: string) {
 }
 async function tick() { await act(async () => { await vi.advanceTimersByTimeAsync(150); }); }
 async function key(key: string) { await act(async () => { input().dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })); }); }
-it.each([['@/', '/', ''], ['@..', '/', ''], ['@../', '/', ''], ['@/outside/ind', '/outside', 'ind'], ['@node', '/project', 'node'], ['@./node', '/project', 'node'], ['@server/', '/project/server', ''], ['@server/ind', '/project/server', 'ind']])('typing %s reads the correct directory and prefix', async (text, path, prefix) => {
+it.each([['@/', '/', ''], ['@..', '..', ''], ['@../', '..', ''], ['@/outside/ind', '/outside', 'ind'], ['@node', '.', 'node'], ['@./node', '.', 'node'], ['@server/', 'server', ''], ['@server/ind', 'server', 'ind'], ['@~', '~', ''], ['@~/ind', '~', 'ind'], ['@%USERPROFILE%\\ind', '%USERPROFILE%', 'ind'], ['@C:\\Users\\me\\ind', 'C:/Users/me', 'ind']])('typing %s sends the host the person’s spelling and prefix', async (text, path, prefix) => {
   await type(text); await tick();
   expect(request).toHaveBeenLastCalledWith('pi/project/browse', { path, explorer: { mode: 'explorer', cwd: '/project', prefix, offset: 0, limit: 80 } });
   expect(options().length).toBeGreaterThan(0); expect(document.activeElement).toBe(input());
 });
-it('Enter on a folder continues, Backspace goes up, a file inserts the existing directive', async () => {
+it('Enter and click insert a folder mention while slash still descends', async () => {
   await type('@ser'); await tick(); await key('Enter');
-  expect(input().value).toBe('@server/'); expect(inserted).not.toHaveBeenCalled();
+  expect(input().value).toBe(':directory[server/]{name=/project/server/} '); expect(inserted).toHaveBeenCalledOnce(); expect(sent).not.toHaveBeenCalled();
+  await type('@ser'); await tick(); await act(async () => options()[0]!.click());
+  expect(input().value).toBe(':directory[server/]{name=/project/server/} '); expect(inserted).toHaveBeenCalledTimes(2);
+  await type('@ser'); await tick(); await key('/'); expect(input().value).toBe('@server/');
   await tick(); expect(options()[0]?.textContent).toContain('index.ts');
   await key('Backspace'); expect(input().value).toBe('@');
-  await type('@server/ind'); await tick(); await key('Enter');
-  expect(input().value).toBe(':file[server/index.ts] '); expect(inserted).toHaveBeenCalledOnce(); expect(sent).not.toHaveBeenCalled();
 });
-it('pointer and slash descend; Tab completes the common prefix without choosing a folder', async () => {
+it('Tab completes the common prefix without choosing a folder', async () => {
   await type('@node'); await tick(); await key('Tab'); expect(input().value).toBe('@node-'); expect(inserted).not.toHaveBeenCalled();
-  await type('@ser'); await tick(); await key('/'); expect(input().value).toBe('@server/');
-  await type('@ser'); await tick(); await act(async () => options()[0]!.click()); expect(input().value).toBe('@server/');
-  expect(document.activeElement).toBe(input());
 });
 it('a slow read leaves typing and Escape responsive and never chooses stale results', async () => {
   let settle!: (value: unknown) => void;
@@ -82,8 +84,7 @@ it('a slow read leaves typing and Escape responsive and never chooses stale resu
 it('continues an absolute directory and inserts an outside file with its absolute identity', async () => {
   request.mockResolvedValueOnce({ path: '/', home: '/home/test', entries: [{ name: 'outside', path: '/outside', kind: 'directory', project: false }], truncated: false, commonPrefix: 'outside' });
   await type('@/out'); await tick(); await key('Enter');
-  expect(input().value).toBe('@/outside/'); await tick(); await key('Enter');
-  expect(input().value).toBe(':file[/outside/index.ts] '); expect(sent).not.toHaveBeenCalled();
+  expect(input().value).toBe(':directory[/outside/] '); expect(sent).not.toHaveBeenCalled();
 });
 it('does not hijack deletion or Tab traversal of a selected text range', async () => {
   await type('@server/'); await tick();
@@ -95,11 +96,11 @@ it('does not hijack deletion or Tab traversal of a selected text range', async (
   await act(async () => { input().dispatchEvent(tab); });
   expect(tab.defaultPrevented).toBe(false); expect(inserted).not.toHaveBeenCalled();
 });
-it('a refusal has no retry or no-match advice; a read failure recovers through retry', async () => {
-  await type('@~'); await tick();
-  expect(container.textContent).toContain('Home shortcuts'); expect(container.textContent).not.toContain('No matches');
+it('a host boundary refusal has no retry or no-match advice; a read failure recovers through retry', async () => {
+  request.mockResolvedValueOnce({ path: '/outside', home: '/home/test', entries: [], truncated: false, commonPrefix: '', error: 'That path is outside this project and your home folder.', errorKind: 'refusal' });
+  await type('@/outside/'); await tick();
+  expect(container.textContent).toContain('outside this project'); expect(container.textContent).not.toContain('No matches');
   expect([...container.querySelectorAll('button')].some(button => button.textContent === 'Try again')).toBe(false);
-  expect(request).not.toHaveBeenCalled();
   request.mockRejectedValueOnce(new Error('transport'));
   await type('@server/'); await tick();
   expect(container.textContent).toContain('Couldn’t read this folder.'); expect(container.textContent).not.toContain('No matches');
@@ -110,7 +111,7 @@ it('a refusal has no retry or no-match advice; a read failure recovers through r
 it.each(['a]b.md', 'a\nb.md', ':file[a].md'])('selects awkward names as a reversible plain path without a wrong chip or send: %j', async name => {
   request.mockResolvedValueOnce({ path: '/project', home: '/home/test', entries: [{ name, path: '/project/' + name, kind: 'file', project: false }], truncated: false, commonPrefix: name });
   await type('@'); await tick(); await key('Enter');
-  expect(JSON.parse(input().value.trim())).toBe(name);
+  expect(JSON.parse(input().value.trim())).toBe('/project/' + name);
   expect(mentionFormatter.parse(input().value).every(part => part.kind === 'text')).toBe(true);
   expect(sent).not.toHaveBeenCalled(); expect(inserted).toHaveBeenCalledOnce();
 });
@@ -141,7 +142,7 @@ it('literal pagination and sentinel-like filenames keep unique React/DOM identit
     expect(new Set(options().map(row => row.id)).size).toBe(options().length);
     expect(options()[0]?.textContent).toContain('Previous entries');
     expect(container.textContent).toContain('4 results');
-    await key('ArrowDown'); await key('Enter'); expect(input().value).toBe(':file[next] ');
+    await key('ArrowDown'); await key('Enter'); expect(input().value).toBe(':file[next]{name=/project/next} ');
     expect(sent).not.toHaveBeenCalled();
     expect(errors.mock.calls.flat().join(' ')).not.toMatch(/same key|unique.*key/u);
   } finally { errors.mockRestore(); }

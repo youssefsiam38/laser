@@ -4,6 +4,13 @@ import type { PickerNavigation } from "../assistant-ui/elements/composer-trigger
 import type { ExplorerNavigationState } from "./use-directory-page.js";
 import { matchProjectMention, parentProjectQuery, replaceProjectQuery } from "./project-path.js";
 
+/**
+ * Explorer choices are path references, not uploaded contents. A selected
+ * folder keeps a trailing `/` in its directory directive; attachments.ts only
+ * unwraps `<attached-file>` payloads, so the agent receives this path intact
+ * and can inspect it with `ls` instead of Laser reading a directory as a file.
+ */
+
 /** Injective typed UI identity, including arbitrary UTF-16 names; no whitespace in DOM IDs. */
 export function mentionItemId(type: "file" | "directory" | "agent" | "action", identity: string): string {
   let encoded = "";
@@ -11,11 +18,13 @@ export function mentionItemId(type: "file" | "directory" | "agent" | "action", i
   return `${type}:${encoded}`;
 }
 export function explorerItems(entries: readonly ExplorerEntry[], cwd: string): Unstable_TriggerItem[] {
-  const base = cwd.replaceAll("\\", "/").replace(/\/$/, "") + "/";
+  const base = cwd.replaceAll("\\", "/").replace(/\/$/u, "") + "/";
   return entries.map((entry) => {
     const absolute = entry.path.replaceAll("\\", "/");
-    const identity = absolute.startsWith(base) ? absolute.slice(base.length) : absolute;
-    return { id: mentionItemId(entry.kind, identity), type: entry.kind, label: identity,
+    const identity = entry.kind === "directory" && !absolute.endsWith("/") ? `${absolute}/` : absolute;
+    const relative = absolute.startsWith(base) ? absolute.slice(base.length) : absolute;
+    const label = entry.kind === "directory" && !relative.endsWith("/") ? `${relative}/` : relative;
+    return { id: mentionItemId(entry.kind, identity), type: entry.kind, label,
       metadata: { icon: entry.kind, name: entry.name, identity } };
   });
 }
@@ -47,10 +56,7 @@ export function explorerNavigation(options: ExplorerNavigationState): PickerNavi
       else if (item.metadata.direction === "previous") options.previous?.();
       return { text, caret };
     }
-    if (item.type !== "directory") return null; // formatter owns safe file/agent insertion, including plain-path fallback
-    const name = item.metadata?.name;
-    if (typeof name !== "string" || !name || /[\r\n\0/]/u.test(name)) return { text, caret };
-    return replaceProjectQuery(text, caret, options.head + name + "/");
+    return null; // formatter owns file, folder and agent insertion, including plain-path fallback
   };
   return { select, key: (key, items, selected, text, caret) => {
     const match = matchProjectMention(text, "@", caret);
@@ -59,7 +65,11 @@ export function explorerNavigation(options: ExplorerNavigationState): PickerNavi
       const parent = parentProjectQuery(match.query, options.cwd);
       return parent === null || parent === match.query ? null : replaceProjectQuery(text, caret, parent);
     }
-    if (key === "/" && selected?.type === "directory" && match.query && !/(?:[\\/]$|(?:^|[\\/])\.{1,2}$)/u.test(match.query)) return select(selected, text, caret);
+    if (key === "/" && selected?.type === "directory" && match.query && !/(?:[\\/]$|(?:^|[\\/])\.{1,2}$)/u.test(match.query)) {
+      const name = selected.metadata?.name;
+      if (typeof name !== "string" || !name || /[\r\n\0/]/u.test(name)) return { text, caret };
+      return replaceProjectQuery(text, caret, options.head + name + "/");
+    }
     if (key !== "Tab") return null;
     if (options.loading || options.query !== match.query) return { text, caret };
     let prefix = options.commonPrefix;

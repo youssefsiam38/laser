@@ -24,7 +24,7 @@ const result = (path: string) => ({ path: '/project', home: '/home/test', entrie
 const render = async (query: string, cwd = '/project') => { await act(async () => root.render(<Harness query={query} cwd={cwd} />)); };
 const tick = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(150); }); };
 
-it.each(['~', 'C:relative', 'server/ '])('reports a local refusal without a dead retry or request: %s', async query => {
+it.each(['C:relative', 'server/ '])('reports a local refusal without a dead retry or request: %s', async query => {
   await render(query); await tick();
   expect(container.textContent).toBe('refusal'); expect(request).not.toHaveBeenCalled(); expect(container.querySelector('button')).toBeNull();
 });
@@ -45,7 +45,7 @@ it('refuses untyped legacy entries at the explorer response boundary, then permi
 it('sends the debounced directory and prefix to host browse', async () => {
   request.mockResolvedValue(result('deep/file-9999.ts'));
   await render('d'); await render('deep'); expect(request).not.toHaveBeenCalled();
-  await tick(); expect(request).toHaveBeenCalledExactlyOnceWith('pi/project/browse', { path: '/project', explorer: { mode: 'explorer', cwd: '/project', prefix: 'deep', offset: 0, limit: 80 } });
+  await tick(); expect(request).toHaveBeenCalledExactlyOnceWith('pi/project/browse', { path: '.', explorer: { mode: 'explorer', cwd: '/project', prefix: 'deep', offset: 0, limit: 80 } });
   expect(container.textContent).toContain('deep/file-9999.ts');
 });
 it('ignores stale replies after query and project changes and never shows the old files as current', async () => {
@@ -56,6 +56,13 @@ it('ignores stale replies after query and project changes and never shows the ol
   await render('new', '/other'); expect(container.textContent).toContain('Loading'); await tick();
   await act(async () => old(result('old.ts')));
   expect(container.textContent).toContain('new.ts'); expect(container.textContent).not.toContain('old.ts');
+});
+it('accepts home and env spellings for host-side resolution', async () => {
+  request.mockResolvedValue(result('/home/test/ready.ts'));
+  for (const query of ['~', '~/', '%USERPROFILE%', '%USERPROFILE%\\']) {
+    request.mockClear(); await render(query); await tick();
+    expect(request.mock.calls[0]?.[1].path).toMatch(/^(~|%USERPROFILE%)$/u);
+  }
 });
 it('reports a transport failure and supports successful retry', async () => {
   request.mockRejectedValueOnce(new Error('private path and stack'));
