@@ -37,9 +37,10 @@ jobs:
             run: pnpm -F @lasercode/ui exec vitest run --shard=2/3
           - name: ui 3/3
             run: pnpm -F @lasercode/ui exec vitest run --shard=3/3
+          # One package at a time: concurrent suites on a two-core runner time out.
           - name: packages
             run: >-
-              pnpm -r --no-sort
+              pnpm -r --workspace-concurrency=1
               --filter '!@lasercode/host' --filter '!@lasercode/worker'
               --filter '!@lasercode/ui' --filter '!@lasercode/desktop'
               test
