@@ -14,10 +14,11 @@ import { AgentCard } from "@/components/assistant-ui/elements/agent-card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-import { isFirstRun, orderAgents, type AgentsSelection } from "./model.js";
+import { agentForWarning, isFirstRun, orderAgents, type AgentsSelection } from "./model.js";
 
 export interface AgentsOverviewProps {
   snapshot: AgentsSnapshot;
+  projectCwd?: string | undefined;
   warnings: readonly AgentWarning[];
   onNew(): void;
   onOpen(selection: AgentsSelection, field?: string): void;
@@ -26,9 +27,10 @@ export interface AgentsOverviewProps {
   className?: string | undefined;
 }
 
-export function AgentsOverview({ snapshot, warnings, onNew, onOpen, compact = false, className }: AgentsOverviewProps) {
-  const firstRun = isFirstRun(snapshot);
-  const { custom } = orderAgents(snapshot);
+export function AgentsOverview({ snapshot, projectCwd, warnings, onNew, onOpen, compact = false, className }: AgentsOverviewProps) {
+  const firstRun = isFirstRun(snapshot, projectCwd);
+  const { custom } = orderAgents(snapshot, projectCwd);
+  const linkedWarnings = warnings.filter((warning) => agentForWarning(snapshot, warning, projectCwd) !== undefined);
   const own = custom.filter((agent) => agent.name !== "default");
   return (
     <div data-slot="agents-overview" data-first-run={firstRun || undefined} className={cn("flex w-full flex-col gap-4", compact ? "" : "mx-auto max-w-180 px-4 py-5 md:px-6", className)}>
@@ -73,7 +75,7 @@ export function AgentsOverview({ snapshot, warnings, onNew, onOpen, compact = fa
               New sessions start with <span className="font-medium text-ink">{agentDisplayName(snapshot.defaultAgent)}</span>
             </span>
           </Line>
-          {warnings.map((warning) => (
+          {linkedWarnings.map((warning) => (
             <Line
               key={`${warning.agentName}:${warning.field}:${warning.target ?? ""}`}
               tone="attention"

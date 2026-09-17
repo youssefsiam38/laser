@@ -101,7 +101,15 @@ export function WarningNotice({
       <div className="min-w-0 flex-1">
         {warnings.map((warning, i) => (
           <p key={i}>
-            {warning.target ? <span className="typed me-1.5 rounded-sm bg-surface px-1 text-ink">{warning.target}</span> : null}
+            {warning.target ? (
+              <span
+                dir={warning.field === "file" ? "ltr" : undefined}
+                aria-label={warning.field === "file" ? `File: ${warning.target}` : warning.target}
+                className="typed me-1.5 inline-block max-w-full truncate rounded-sm bg-surface px-1 align-bottom text-ink"
+              >
+                <span aria-hidden="true">{warning.target}</span>
+              </span>
+            ) : null}
             {warning.message}
           </p>
         ))}

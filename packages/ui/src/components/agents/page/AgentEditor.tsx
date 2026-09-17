@@ -1,5 +1,4 @@
 "use client";
-import { useLogicalArrowKeys } from "@/hooks/use-direction";
 /**
  * The agent editor: one definition, every field, validated by the host as
  * the person types and again on save. The `default` agent edits like any
@@ -25,7 +24,7 @@ import {
   type ThinkingLevel,
   instructionTemplateIssue,
 } from "@lasercode/protocol";
-import { Bot, Info, MessageSquarePlus, RotateCw, Save, Trash2, Undo2 } from "lucide-react";
+import { Bot, Check, Clipboard, Info, MessageSquarePlus, RotateCw, Save, Trash2, Undo2 } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 
 import { agentDefinitionInputOf, agentDisplayName, agentIssuesByField, defaultAgentDefinitionInput, useAgentsActions } from "@/agents";
@@ -41,6 +40,8 @@ import { Popover, PopoverContent, PopoverDescription, PopoverHeader, PopoverTitl
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
+import { useCopy } from "@/hooks/use-copy";
+import { useLogicalArrowKeys } from "@/hooks/use-direction";
 import { cn } from "@/lib/utils";
 import { prefersReducedMotion } from "@/motion";
 
@@ -59,6 +60,7 @@ import {
   missingSkills,
   modelChoiceId,
   parseModelChoice,
+  projectFolderName,
   sameDefinitionInput,
   sectionDomId,
   sectionOfField,
@@ -115,7 +117,7 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
   const [draft, setDraft] = useState<AgentDefinitionInput>(base);
   const [issues, setIssues] = useState<AgentIssue[]>([]);
   const [saving, setSaving] = useState(false);
-  const [serverError, setServerError] = useState<string>();
+  const [serverError, setServerError] = useState<{ message: string; action: "save" | "default" }>();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [settingDefault, setSettingDefault] = useState(false);
@@ -142,6 +144,15 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
     setServerError(undefined);
     setDraft((current) => ({ ...current, ...changes }));
   }, []);
+  const patchScope = useCallback((scope: AgentDefinitionInput["scope"]) => {
+    setServerError(undefined);
+    setDraft((current) => {
+      if (scope === "project" && projectCwd) return { ...current, scope, projectCwd };
+      const globalNames = new Set(startableAgents(snapshot, { scope: "global" }).map((candidate) => candidate.name));
+      const { projectCwd: _projectCwd, ...global } = current;
+      return { ...global, scope: "global", allowedAgents: global.allowedAgents.filter((name) => globalNames.has(name)) };
+    });
+  }, [projectCwd, snapshot]);
 
   // --- validation -----------------------------------------------------------
   const validateSeq = useRef(0);
@@ -191,7 +202,7 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
         // The transport keeps only the message; ask once more so a field-level
         // refusal still lands at its field rather than as a sentence.
         const again = await validate(draft);
-        if (!again || again.length === 0) setServerError(messageOf(error));
+        if (!again || again.length === 0) setServerError({ message: messageOf(error), action: "save" });
       }
     } finally {
       setSaving(false);
@@ -233,7 +244,7 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
   const catalog = useModelCatalog(routeCwd);
   const models = catalog.data ?? [];
   const webSearch = useWebSearchFeature(routeCwd);
-  const startable = useMemo(() => startableAgents(snapshot), [snapshot]);
+  const startable = useMemo(() => startableAgents(snapshot, draft), [draft.projectCwd, draft.scope, snapshot]);
   const isDefault = agent !== undefined && snapshot.defaultAgent === agent.name;
   const deletable = agent ? deletability(agent, snapshot) : { ok: false, reason: "Save the agent first." };
   const sectionWarnings = (section: EditorSection) => warningsInSection(warnings, section);
@@ -241,6 +252,7 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
 
   // --- header card -------------------------------------------------------------
   const facts: AgentCardFact[] = [
+    { label: "scope", value: draft.scope === "project" ? `Project · ${projectFolderName(draft.projectCwd ?? projectCwd ?? "Project")}` : "Global" },
     { label: "model", value: describeModel(draft.model, models), typed: draft.model !== null, title: draft.model ? modelChoiceId(draft.model) : undefined },
     { label: "thinking", value: describeThinking(draft.thinkingLevel) },
     { label: "starts", value: describeStarts(draft), tone: sectionWarnings("allowedAgents").length > 0 ? "attention" : undefined },
@@ -252,6 +264,8 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
     setSettingDefault(true);
     try {
       await agents.setDefault(agent.name);
+    } catch (error) {
+      setServerError({ message: messageOf(error), action: "default" });
     } finally {
       setSettingDefault(false);
     }
@@ -292,6 +306,7 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
           facts={facts}
           badges={
             <>
+              {draft.scope === "project" ? <Badge variant="outline">Project</Badge> : null}
               {isDefault ? <Badge variant="live">Default</Badge> : null}
               {warnings.length > 0 ? (
                 <Badge variant="attention" data-slot="agent-warning-badge">
@@ -301,6 +316,29 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
             </>
           }
         />
+
+        {/* Definition file and immutable scope */}
+        <Section
+          id="file"
+          title="Where it lives"
+          description={isNew ? "Choose who can use this agent. Its location is fixed after you create it." : "Scope is fixed after creation."}
+          notices={
+            <>
+              <WarningNotice warnings={sectionWarnings("file")} />
+              <IssueNotice messages={[...(byField.root.file ?? []), ...(byField.root.scope ?? []), ...(byField.root.projectCwd ?? [])]} />
+            </>
+          }
+        >
+          {isNew ? (
+            <ScopeField
+              scope={draft.scope}
+              projectCwd={projectCwd}
+              onChange={patchScope}
+            />
+          ) : (
+            <DefinitionLocation agent={agent} />
+          )}
+        </Section>
 
         {/* Name */}
         <Section
@@ -349,7 +387,7 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
           id="instructions"
           title="Instructions"
           description="How should this agent perform its work? Loaded only for this agent."
-          notices={<IssueNotice messages={[...(localTemplateIssue ? [localTemplateIssue] : []), ...(byField.root.instructions ?? []), ...(byField.root.engineInstructions ?? [])]} />}
+          notices={<IssueNotice messages={[...(localTemplateIssue ? [localTemplateIssue] : []), ...(byField.root.instructions ?? []), ...(byField.root.engineInstructions ?? []), ...(byField.root.excludeCoreInstructions ?? [])]} />}
         >
           {draft.engineInstructions ? (
             <EngineInstructions draft={draft} cwd={routeCwd} onCustomize={(text) => patch({ engineInstructions: false, instructions: text })} />
@@ -380,6 +418,13 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
               ) : null}
             </>
           )}
+          <CheckRow
+            name="excludeCoreInstructions"
+            checked={draft.excludeCoreInstructions}
+            label={`Exclude ${PRODUCT_DISPLAY_NAME}'s Core Instructions Prompt`}
+            detail={`${PRODUCT_DISPLAY_NAME}'s rules normally lead every custom agent's instructions.`}
+            onChange={(event) => patch({ excludeCoreInstructions: event.target.checked })}
+          />
         </Section>
 
         {/* Model */}
@@ -490,9 +535,9 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
               id={`${ids}-default`}
               className="min-w-0 flex-1"
               label="Default for new sessions"
-              detail={isNew ? "Save the agent first, then you can make it the default." : isDefault ? "New sessions start with this agent." : "Make this the agent new sessions start with."}
+              detail={isNew ? "Save the agent first, then you can make it the default." : draft.scope === "project" ? "Project agents cannot be the default for every new session." : isDefault ? "New sessions start with this agent." : "Make this the agent new sessions start with."}
               checked={isDefault}
-              disabled={isNew || isDefault || settingDefault}
+              disabled={isNew || draft.scope === "project" || isDefault || settingDefault}
               onCheckedChange={(on) => {
                 if (on) void setDefault();
               }}
@@ -518,7 +563,12 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
       {writable ? <div data-slot="agent-editor-footer" className="sticky bottom-0 z-10 mt-auto bg-bg hairline-t">
         {serverError ? (
           <div className="px-4 pt-3 md:px-6">
-            <ErrorState title="Couldn’t save the agent" detail={serverError} onRetry={() => void save()} retryLabel="Try again" />
+            <ErrorState
+              title={serverError.action === "default" ? "Couldn’t make this the default agent" : "Couldn’t save the agent"}
+              detail={serverError.message}
+              onRetry={() => void (serverError.action === "default" ? setDefault() : save())}
+              retryLabel="Try again"
+            />
           </div>
         ) : null}
         <div className="mx-auto flex w-full max-w-180 flex-wrap items-center gap-2 px-4 py-3 md:px-6">
@@ -592,6 +642,114 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
         />
       ) : null}
     </form>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Scope and definition file
+// ---------------------------------------------------------------------------
+
+function ScopeField({
+  scope,
+  projectCwd,
+  onChange,
+}: {
+  scope: AgentDefinitionInput["scope"];
+  projectCwd: string | undefined;
+  onChange(scope: AgentDefinitionInput["scope"]): void;
+}) {
+  const labelId = useId();
+  const option = (value: AgentDefinitionInput["scope"], label: string, detail: string, disabled = false) => {
+    const checked = scope === value;
+    return (
+      <label
+        key={value}
+        data-slot="agent-scope-option"
+        data-scope={value}
+        data-selected={checked || undefined}
+        className={cn(
+          "flex min-h-11 min-w-0 flex-1 cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 outline-none",
+          "transition-[background-color,border-color] duration-(--motion-instant) has-focus-visible:outline-solid has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-live",
+          checked ? "border-live bg-[color-mix(in_oklab,var(--live)_10%,transparent)]" : "border-line hover:bg-surface-2",
+          disabled && "cursor-not-allowed opacity-60",
+        )}
+      >
+        <input
+          type="radio"
+          name="scope"
+          value={value}
+          checked={checked}
+          disabled={disabled}
+          className="mt-1 size-3.5 shrink-0 accent-live outline-none"
+          onChange={() => onChange(value)}
+        />
+        <span className="min-w-0">
+          <span className="block min-w-0 truncate text-sm font-medium text-ink">{label}</span>
+          <span className="block text-xs leading-5 text-ink-3">{detail}</span>
+        </span>
+      </label>
+    );
+  };
+
+  return (
+    <div>
+      <div id={labelId} className="sr-only">Where this agent lives</div>
+      <div role="radiogroup" aria-labelledby={labelId} data-slot="agent-scope-control" className="flex flex-col gap-2 sm:flex-row">
+        {option("global", "Global", "Available in every project.")}
+        {option(
+          "project",
+          projectCwd ? `This project · ${projectFolderName(projectCwd)}` : "This project",
+          projectCwd ? "Available only while this project is open." : "Open a project to create an agent there.",
+          projectCwd === undefined,
+        )}
+      </div>
+    </div>
+  );
+}
+
+function splitDefinitionPath(path: string): { start: string; end: string } {
+  const tailLength = 22;
+  if (path.length <= tailLength) return { start: "", end: path };
+  return { start: path.slice(0, -tailLength), end: path.slice(-tailLength) };
+}
+
+function DefinitionLocation({ agent }: { agent: AgentDefinition }) {
+  const { copied, copy } = useCopy();
+  const path = agent.path;
+  const parts = path ? splitDefinitionPath(path) : undefined;
+  return (
+    <div data-slot="agent-definition-location" className="flex min-w-0 flex-col gap-2">
+      <div className="flex items-center justify-between gap-3 rounded-lg border border-line bg-surface px-3 py-2">
+        <span className="min-w-0">
+          <span className="block min-w-0 truncate text-sm font-medium text-ink">{agent.scope === "project" ? `This project · ${projectFolderName(agent.projectCwd ?? "Project")}` : "Global"}</span>
+          <span className="block text-xs leading-5 text-ink-3">{agent.scope === "project" ? "Only this project can use it." : "Every project can use it."}</span>
+        </span>
+        <Badge variant="outline" className="shrink-0">Read only</Badge>
+      </div>
+      {path && parts ? (
+        <div data-slot="agent-definition-path" className="flex min-w-0 items-center gap-2 rounded-lg bg-surface-2 px-3 py-2">
+          <code
+            dir="ltr"
+            aria-label={`Definition file: ${path}`}
+            className="typed flex min-w-0 flex-1 items-baseline overflow-hidden text-start text-ink-2 tnum"
+          >
+            {parts.start ? <span aria-hidden="true" className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{parts.start}</span> : null}
+            <span aria-hidden="true" className="shrink-0 whitespace-nowrap">{parts.end}</span>
+          </code>
+          <TooltipIconButton
+            type="button"
+            tooltip={copied ? "Definition path copied" : "Copy definition path"}
+            size="icon-sm"
+            onClick={() => void copy(path)}
+          >
+            {copied ? <Check /> : <Clipboard />}
+          </TooltipIconButton>
+        </div>
+      ) : (
+        <Hint>The definition file path is not available from this host yet.</Hint>
+      )}
+      <Hint>Editing the Markdown file is the same as saving changes here.</Hint>
+    </div>
   );
 }
 

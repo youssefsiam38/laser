@@ -12,6 +12,7 @@ import {
   FOREGROUND_COMMAND_SECONDS_MAX,
   FOREGROUND_COMMAND_SECONDS_MIN,
   PRODUCT_DISPLAY_NAME,
+  PROJECT_AGENTS_DIR,
   isBuiltinAgentName,
   type AgentDefinition,
   type AgentDefinitionInput,
@@ -27,7 +28,7 @@ import {
   type ThinkingLevel,
 } from "@lasercode/protocol";
 
-import { agentIssueRoot, isBuiltinAgent } from "@/agents";
+import { agentIssueRoot, customAgentsForProject, isBuiltinAgent } from "@/agents";
 
 // ---------------------------------------------------------------------------
 // Selection and routing
@@ -44,6 +45,7 @@ export const sameSelection = (a: AgentsSelection, b: AgentsSelection): boolean =
 
 /** The form sections, in the order the editor draws them. */
 export const EDITOR_SECTIONS = [
+  "file",
   "name",
   "description",
   "instructions",
@@ -61,16 +63,22 @@ export const sectionDomId = (section: string): string => `agent-field-${section}
 /**
  * The section an issue, warning or deep link lands in. `skills[1]` and
  * `scopedSkills` both belong to the skills section; `supportsSubagents` to the
- * allowed-agents one; `engineInstructions` to instructions.
+ * allowed-agents one; instruction flags to instructions; scope and file
+ * problems to the immutable definition-file metadata.
  */
 export function sectionOfField(field: string): EditorSection {
   const root = agentIssueRoot(field);
   switch (root) {
+    case "file":
+    case "scope":
+    case "projectCwd":
+      return "file";
     case "scopedSkills":
       return "skills";
     case "supportsSubagents":
       return "allowedAgents";
     case "engineInstructions":
+    case "excludeCoreInstructions":
       return "instructions";
     case "thinking":
       return "thinkingLevel";
@@ -90,11 +98,10 @@ export function agentMark(agent: Pick<AgentDefinition, "name" | "kind">): AgentM
   return agent.name === DEFAULT_AGENT_NAME ? "default" : "custom";
 }
 
-/** The rows of the list: your agents (the default first, then by name) and the built-ins in their fixed order. */
-export function orderAgents(snapshot: AgentsSnapshot | null | undefined): { custom: AgentDefinition[]; builtin: AgentDefinition[] } {
+/** The rows of the list: effective agents for this project, then the built-ins in their fixed order. */
+export function orderAgents(snapshot: AgentsSnapshot | null | undefined, projectCwd?: string): { custom: AgentDefinition[]; builtin: AgentDefinition[] } {
   const all = snapshot?.agents ?? [];
-  const custom = all
-    .filter((agent) => !isBuiltinAgent(agent))
+  const custom = customAgentsForProject(snapshot, projectCwd)
     .sort((a, b) => {
       if (a.name === snapshot?.defaultAgent) return -1;
       if (b.name === snapshot?.defaultAgent) return 1;
@@ -107,13 +114,58 @@ export function orderAgents(snapshot: AgentsSnapshot | null | undefined): { cust
 }
 
 /** True when the person has not made an agent of their own yet. */
-export function isFirstRun(snapshot: AgentsSnapshot | null | undefined): boolean {
-  return orderAgents(snapshot).custom.every((agent) => agent.name === DEFAULT_AGENT_NAME);
+export function isFirstRun(snapshot: AgentsSnapshot | null | undefined, projectCwd?: string): boolean {
+  return orderAgents(snapshot, projectCwd).custom.every((agent) => agent.name === DEFAULT_AGENT_NAME);
 }
 
-/** Definitions an agent may start: every custom definition, including another instance of itself. */
-export function startableAgents(snapshot: AgentsSnapshot | null | undefined): AgentDefinition[] {
-  return orderAgents(snapshot).custom;
+/**
+ * Definitions an agent may start: globals for a global agent; effective globals
+ * plus this project's definitions for a project agent. Another instance of the
+ * same definition remains a valid choice.
+ */
+export function startableAgents(
+  snapshot: AgentsSnapshot | null | undefined,
+  owner?: Pick<AgentDefinitionInput, "scope" | "projectCwd">,
+): AgentDefinition[] {
+  return orderAgents(snapshot, owner?.scope === "project" ? owner.projectCwd : undefined).custom;
+}
+
+const normalizedPath = (path: string): string => path.replaceAll("\\", "/").replace(/\/+$/, "");
+const projectAgentsPrefix = (projectCwd: string): string => `${normalizedPath(projectCwd)}/${PROJECT_AGENTS_DIR}/`;
+
+/** Folder name shown beside “This project”, without exposing the whole path. */
+export function projectFolderName(projectCwd: string): string {
+  return normalizedPath(projectCwd).split("/").filter(Boolean).at(-1) ?? projectCwd;
+}
+
+/** Whether a file warning belongs in the current global/project view. */
+export function fileWarningIsVisible(warning: AgentWarning, projectCwd: string | undefined): boolean {
+  if (warning.field !== "file" || !warning.target) return warning.field === "file";
+  const target = normalizedPath(warning.target);
+  const marker = `/${PROJECT_AGENTS_DIR}/`;
+  if (!target.includes(marker)) return true;
+  return projectCwd !== undefined && target.startsWith(projectAgentsPrefix(projectCwd));
+}
+
+/** Warnings that can be acted on from the current catalog, including broken files with no definition. */
+export function visibleAgentWarnings(snapshot: AgentsSnapshot | null | undefined, projectCwd: string | undefined): AgentWarning[] {
+  if (!snapshot) return [];
+  const names = new Set(orderAgents(snapshot, projectCwd).custom.map((agent) => agent.name));
+  return snapshot.warnings.filter((warning) =>
+    warning.field === "file" ? fileWarningIsVisible(warning, projectCwd) : names.has(warning.agentName) || isBuiltinAgentName(warning.agentName),
+  );
+}
+
+/** The loaded definition a warning belongs to, if there is one in this view. */
+export function agentForWarning(
+  snapshot: AgentsSnapshot | null | undefined,
+  warning: AgentWarning,
+  projectCwd: string | undefined,
+): AgentDefinition | undefined {
+  if (!snapshot) return undefined;
+  const visible = orderAgents(snapshot, projectCwd).custom;
+  if (warning.field === "file" && warning.target) return visible.find((agent) => agent.path === warning.target);
+  return [...visible, ...orderAgents(snapshot, projectCwd).builtin].find((agent) => agent.name === warning.agentName);
 }
 
 // ---------------------------------------------------------------------------
@@ -257,9 +309,12 @@ const sameSkills = (a: readonly AgentSkillRef[], b: readonly AgentSkillRef[]): b
 export function sameDefinitionInput(a: AgentDefinitionInput, b: AgentDefinitionInput): boolean {
   return (
     a.name === b.name &&
+    a.scope === b.scope &&
+    a.projectCwd === b.projectCwd &&
     a.description === b.description &&
     a.instructions === b.instructions &&
     a.engineInstructions === b.engineInstructions &&
+    a.excludeCoreInstructions === b.excludeCoreInstructions &&
     (a.model?.provider ?? null) === (b.model?.provider ?? null) &&
     (a.model?.id ?? null) === (b.model?.id ?? null) &&
     a.thinkingLevel === b.thinkingLevel &&

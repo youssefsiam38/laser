@@ -1,4 +1,4 @@
-import { AGENT_RUN_STATUSES } from "@lasercode/protocol";
+import { AGENT_RUN_STATUSES, PROJECT_AGENTS_DIR } from "@lasercode/protocol";
 import { describe, expect, it } from "vitest";
 import {
   agentDefinitionInputOf,
@@ -7,6 +7,7 @@ import {
   agentIssuesByField,
   agentKindOf,
   compareRunsNewestFirst,
+  customAgentsForProject,
   defaultAgentDefinitionInput,
   isActiveRun,
   isBuiltinAgent,
@@ -199,9 +200,11 @@ describe("definitions, warnings and issues", () => {
     const input = defaultAgentDefinitionInput(snapshot());
     expect(input).toEqual({
       name: "",
+      scope: "global",
       description: "",
       instructions: "",
       engineInstructions: false,
+      excludeCoreInstructions: false,
       model: null,
       thinkingLevel: null,
       supportsSubagents: false,
@@ -217,9 +220,20 @@ describe("definitions, warnings and issues", () => {
     const definition = agent({ name: "reviewer", skills: [{ name: "review", path: "/skills/review/SKILL.md", scope: "project" }] });
     const input = agentDefinitionInputOf(definition);
     expect(input).not.toHaveProperty("kind");
+    expect(input).not.toHaveProperty("path");
     expect(input).not.toHaveProperty("createdAt");
     expect(input.skills).toEqual(definition.skills);
     expect(input.skills).not.toBe(definition.skills);
+  });
+
+  it("shows globals plus this project's definitions and lets a project definition shadow its global twin", () => {
+    const globalReviewer = agent({ name: "reviewer", scope: "global", path: "/state/agents/reviewer.md", description: "Global" });
+    const projectReviewer = agent({ name: "reviewer", scope: "project", projectCwd: "/p", path: `/p/${PROJECT_AGENTS_DIR}/reviewer.md`, description: "Project" });
+    const otherProject = agent({ name: "other", scope: "project", projectCwd: "/q", path: `/q/${PROJECT_AGENTS_DIR}/other.md` });
+    const snap = snapshot({ agents: [agent({ name: "default" }), globalReviewer, projectReviewer, otherProject] });
+    expect(customAgentsForProject(snap, undefined).map((item) => item.description)).toEqual(["", "Global"]);
+    expect(customAgentsForProject(snap, "/p").find((item) => item.name === "reviewer")).toBe(projectReviewer);
+    expect(customAgentsForProject(snap, "/p").some((item) => item.name === "other")).toBe(false);
   });
 
   it("lists a definition's warnings oldest first and shares one empty list", () => {

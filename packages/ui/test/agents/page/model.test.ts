@@ -1,9 +1,12 @@
+import { PROJECT_AGENTS_DIR } from "@lasercode/protocol";
 import { describe, expect, it } from "vitest";
 
 import {
+  agentForWarning,
   checkRange,
   deletability,
   describeStarts,
+  fileWarningIsVisible,
   isFirstRun,
   missingSkills,
   namerSummary,
@@ -14,6 +17,7 @@ import {
   shapeAgentName,
   startableAgents,
   thinkingLevelsFor,
+  visibleAgentWarnings,
 } from "../../../src/components/agents/page/model.js";
 import { agentDefinitionInputOf } from "../../../src/agents/index.js";
 import { agent, snapshot } from "../fixtures.js";
@@ -29,8 +33,16 @@ describe("agents page model", () => {
     expect(isFirstRun(snap)).toBe(false);
   });
 
-  it("offers every custom definition, including the agent itself, and never a built-in", () => {
-    expect(startableAgents(snapshot()).map((a) => a.name)).toEqual(["default", "reviewer"]);
+  it("offers definitions from the owner's scope, including itself, and never another project", () => {
+    const snap = snapshot({
+      agents: [
+        ...snapshot().agents,
+        agent({ name: "project-reviewer", scope: "project", projectCwd: "/p" }),
+        agent({ name: "other-project", scope: "project", projectCwd: "/q" }),
+      ],
+    });
+    expect(startableAgents(snap, { scope: "global" }).map((a) => a.name)).toEqual(["default", "reviewer"]);
+    expect(startableAgents(snap, { scope: "project", projectCwd: "/p" }).map((a) => a.name)).toEqual(["default", "project-reviewer", "reviewer"]);
   });
 
   it("routes issue and warning fields to their editor section", () => {
@@ -39,9 +51,28 @@ describe("agents page model", () => {
     expect(sectionOfField("allowedAgents")).toBe("allowedAgents");
     expect(sectionOfField("supportsSubagents")).toBe("allowedAgents");
     expect(sectionOfField("engineInstructions")).toBe("instructions");
+    expect(sectionOfField("excludeCoreInstructions")).toBe("instructions");
+    expect(sectionOfField("file")).toBe("file");
+    expect(sectionOfField("scope")).toBe("file");
+    expect(sectionOfField("projectCwd")).toBe("file");
     expect(sectionOfField("model")).toBe("model");
     expect(sectionOfField("name")).toBe("name");
     expect(sectionOfField("something-else")).toBe("name");
+  });
+
+  it("filters file warnings to the open project and resolves only a warning with a loaded definition", () => {
+    const loaded = agent({ name: "reviewer", path: `/p/${PROJECT_AGENTS_DIR}/reviewer.md`, scope: "project", projectCwd: "/p" });
+    const projectWarning = { agentName: "reviewer", field: "file" as const, target: loaded.path, message: "Could not parse this file.", since: "2026-09-08T00:00:00.000Z" };
+    const broken = { agentName: "broken", field: "file" as const, target: `/p/${PROJECT_AGENTS_DIR}/broken.md`, message: "Could not parse this file.", since: "2026-09-08T00:00:00.000Z" };
+    const other = { ...broken, agentName: "other", target: `/q/${PROJECT_AGENTS_DIR}/other.md` };
+    const global = { ...broken, agentName: "global-broken", target: "/state/agents/global-broken.md" };
+    const snap = snapshot({ agents: [...snapshot().agents, loaded], warnings: [projectWarning, broken, other, global] });
+    expect(fileWarningIsVisible(projectWarning, "/p")).toBe(true);
+    expect(fileWarningIsVisible(other, "/p")).toBe(false);
+    expect(visibleAgentWarnings(snap, "/p")).toEqual([projectWarning, broken, global]);
+    expect(visibleAgentWarnings(snap, undefined)).toEqual([global]);
+    expect(agentForWarning(snap, projectWarning, "/p")).toBe(loaded);
+    expect(agentForWarning(snap, broken, "/p")).toBeUndefined();
   });
 
   it("refuses to delete the default agent and built-ins, with the reason", () => {
@@ -91,6 +122,8 @@ describe("agents page model", () => {
     const a = agentDefinitionInputOf(agent({ name: "x", description: "Reviews a diff" }));
     expect(sameDefinitionInput(a, agentDefinitionInputOf(agent({ name: "x", description: "Reviews a diff" })))).toBe(true);
     expect(sameDefinitionInput(a, { ...a, description: "Something else" })).toBe(false);
+    expect(sameDefinitionInput(a, { ...a, excludeCoreInstructions: true })).toBe(false);
+    expect(sameDefinitionInput(a, { ...a, scope: "project", projectCwd: "/p" })).toBe(false);
     expect(describeStarts({ supportsSubagents: true, allowedAgents: ["a", "b"] })).toBe("May start a, b");
   });
 
