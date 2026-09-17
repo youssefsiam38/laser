@@ -347,65 +347,17 @@ describe("WorkerServer agents", () => {
     expect(runtime.calls).toBe(1);
   });
 
-  it("labels a burst of tool calls and drops a label whose call already ended", async () => {
-    const pending: Array<(value: string) => void> = [];
-    const runtime = fakeNamerRuntime(() => new Promise<string>((resolve) => pending.push(resolve)));
+  it("does not ask Namer for a model completion when a tool starts", async () => {
+    const runtime = fakeNamerRuntime(() => "This must not be requested");
     const h = harness({ namerModels: async () => runtime });
     await h.call(1, "agents/sync", { snapshot: namedSnapshot() });
-    const created = await h.call(2, "session/new", { cwd: join(base, "project") });
-    const path = (created.result as { state: SessionState }).state.path;
-    const driver = h.drivers[0]!;
-    for (const toolCallId of ["t1", "t2", "t3"]) {
-      driver.emit({ type: "update", update: { kind: "tool_execution_start", toolCallId, toolName: "bash", args: { command: "ls" } } });
-    }
-    await tick();
-    expect(pending).toHaveLength(3);
-    // t2 ends while its label is still being written: nobody would see it.
-    driver.emit({ type: "update", update: { kind: "tool_execution_end", toolCallId: "t2", result: {}, isError: false } });
-    pending[0]!("searching auth handlers");
-    pending[1]!("reading the build config");
-    pending[2]!("listing files");
-    await tick();
-    const labels = h.notifications("pi/extension/message")
-      .map((n) => n.params as { path: string; message: { type: string; toolCallId?: string; label?: string } })
-      .filter((n) => n.message.type === "lasercode/namer/label");
-    expect(labels.map((l) => `${l.message.toolCallId}:${l.message.label}`)).toEqual(["t1:Searching auth handlers", "t3:Listing files"]);
-    expect(labels.every((l) => l.path === path)).toBe(true);
-    // The same call is never labelled twice, however often the event repeats.
-    driver.emit({ type: "update", update: { kind: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: { command: "ls" } } });
-    await tick();
-    expect(pending).toHaveLength(3);
-  });
-
-  it("labels a top-level session's calls only: a child agent's tool calls are never labelled", async () => {
-    const runtime = fakeNamerRuntime(() => "listing files");
-    const h = harness({ namerModels: async () => runtime });
-    await h.call(1, "agents/sync", { snapshot: namedSnapshot() });
-    const parentPath = join(base, "sessions", "parent.jsonl");
-    const childPath = join(base, "sessions", "child.jsonl");
-    writeFileSync(parentPath, `${JSON.stringify({ type: "session", id: "p" })}\n${JSON.stringify({ type: "custom", customType: SESSION_AGENT_ENTRY_TYPE, data: { agentName: "default", kind: "root" } })}\n`);
-    writeFileSync(childPath, `${JSON.stringify({ type: "session", id: "c" })}\n${JSON.stringify({ type: "custom", customType: SESSION_AGENT_ENTRY_TYPE, data: { agentName: "default", kind: "child", subagentName: "fixer", parentPath, parentSessionId: "p", rootPath: parentPath, runId: "run_old" } })}\n`);
-    await h.call(2, "session/load", { path: childPath });
-    h.drivers[0]!.emit({ type: "update", update: { kind: "tool_execution_start", toolCallId: "c1", toolName: "bash", args: { command: "ls" } } });
+    await h.call(2, "session/new", { cwd: join(base, "project") });
+    h.drivers[0]!.emit({ type: "update", update: { kind: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: { command: "ls", label: "Listing files" } } });
     await tick();
     expect(runtime.calls).toBe(0);
-    // The parent, a top-level session, is labelled as before.
-    await h.call(3, "session/load", { path: parentPath });
-    h.drivers[1]!.emit({ type: "update", update: { kind: "tool_execution_start", toolCallId: "p1", toolName: "bash", args: { command: "ls" } } });
-    await tick();
-    expect(runtime.calls).toBe(1);
-    const labels = h.notifications("pi/extension/message").map((n) => n.params as { path: string; message: { type: string } }).filter((n) => n.message.type === "lasercode/namer/label");
-    expect(labels.map((l) => l.path)).toEqual([parentPath]);
-  });
-
-  it("labels nothing while Namer has no model", async () => {
-    const runtime = fakeNamerRuntime(() => "listing files");
-    const h = harness({ namerModels: async () => runtime });
-    await h.call(1, "session/new", { cwd: join(base, "project") });
-    h.drivers[0]!.emit({ type: "update", update: { kind: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: { command: "ls" } } });
-    await tick();
-    expect(runtime.calls).toBe(0);
-    expect(h.notifications("pi/extension/message").filter((n) => (n.params as { message: { type: string } }).message.type === "lasercode/namer/label")).toHaveLength(0);
+    expect(h.notifications("pi/extension/message").some((notification) =>
+      (notification.params as { message: { type: string } }).message.type.includes("namer/label"),
+    )).toBe(false);
   });
 
   // D-163: a background command going past the worker is indexed there, so

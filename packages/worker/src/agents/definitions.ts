@@ -40,7 +40,7 @@ function canonicalProjectCwd(projectCwd: string): string {
 }
 
 export const FALLBACK_NAMER_INSTRUCTIONS =
-  "You name sessions from what the person wants done and label running actions by what they are doing. Keep every name concrete, brief and easy to scan.";
+  "You name sessions from what the person wants done. Keep every title concrete, brief and easy to scan.";
 
 function base(name: string, kind: AgentDefinition["kind"], partial: Partial<AgentDefinition>): AgentDefinition {
   return {
@@ -110,7 +110,7 @@ export function fallbackChatAgent(model: AgentModelChoice | null = null): AgentD
 /** Namer is a service, never a session: never startable. */
 export function fallbackNamerAgent(model: AgentModelChoice | null): AgentDefinition {
   return base("namer", "builtin", {
-    description: "Names sessions and labels running tool calls. Not a session agent.",
+    description: "Names sessions with a fast, inexpensive model. Not a session agent.",
     instructions: FALLBACK_NAMER_INSTRUCTIONS,
     model,
   });

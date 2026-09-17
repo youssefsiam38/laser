@@ -25,6 +25,8 @@ Five facts drive every rule below:
 
 ## Rules
 
+- Fill `label` on every tool call with what it is doing, in 25 characters or fewer, for example `Reading build config`.
+
 ### 1. Lead with the next action
 
 The first line is something the reader can do. Not context. Not a plan. The action.

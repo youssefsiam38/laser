@@ -73,7 +73,7 @@ const CHAT_INSTRUCTIONS =
   `current facts.\n\n${instructionTemplateToken("availableTools")}\n\n${instructionTemplateToken("toolGuidelines")}\n${instructionTemplateToken("availableSkills")}`;
 
 const NAMER_INSTRUCTIONS =
-  "You name sessions from what the person wants done and label running actions by what they are doing. Keep every name concrete, brief and easy to scan.";
+  "You name sessions from what the person wants done. Keep every title concrete, brief and easy to scan.";
 
 const BUILTIN_DEFAULT_INSTRUCTIONS: Readonly<Record<"chat" | "namer", string>> = {
   chat: CHAT_INSTRUCTIONS,
@@ -124,7 +124,7 @@ export function builtinAgents(context: BuiltinContext): AgentDefinition[] {
       name: "namer",
       kind: "builtin",
       scope: "global",
-      description: "Names sessions and running actions with a fast, inexpensive model.",
+      description: "Names sessions with a fast, inexpensive model.",
       instructions: context.instructions.namer ?? BUILTIN_DEFAULT_INSTRUCTIONS.namer,
       engineInstructions: false,
       excludeCoreInstructions: false,
