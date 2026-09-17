@@ -1,26 +1,27 @@
 "use client";
 /**
- * Quote (`quote`): select transcript text, quote it into the composer. Three
- * pieces — the floating selection toolbar over the thread, the preview inside
- * the composer card, and `QuoteBlock` for a quote carried on a sent message.
+ * Quote (`quote`): quote deliberately selected transcript text into the
+ * composer. Three pieces — a keyboard action that leaves native selection
+ * alone until invoked, the preview inside the composer card, and `QuoteBlock`
+ * for a quote carried on a sent message.
  *
  * Pi's prompt is plain text, so the composer folds the quote into the message
  * as a markdown blockquote when it sends (`Composer.tsx`); `quote-reply`
  * renders that blockquote back on the sent message.
  *
- * Divergences from the registry copy: tokens only (`floating`, `--ink-3`,
- * `--surface-2`), the toolbar button is a `Button`, dismiss is a
- * `TooltipIconButton`, motion reads the tokens.
+ * Divergences from the registry copy: the floating `SelectionToolbarPrimitive`
+ * is deliberately not mounted. It listens to every mouseup/keyup/selection
+ * collapse and covers ordinary browser selection with a custom popup. Native
+ * word/paragraph/drag selection and the native context menu win instead.
+ * Quoting remains available through Ctrl/Cmd+Shift+Q while one message owns
+ * the selection. Dismiss is a `TooltipIconButton`; all styling uses tokens.
  */
-import { ComposerPrimitive, SelectionToolbarPrimitive, type QuoteMessagePartComponent } from "@assistant-ui/react";
+import { ComposerPrimitive, useAui, type QuoteMessagePartComponent } from "@assistant-ui/react";
 import { Quote as QuoteIcon, X } from "lucide-react";
-import { memo, type ComponentProps, type FC } from "react";
+import { memo, useEffect, type ComponentProps, type FC, type RefObject } from "react";
 
-import { Button } from "@/components/ui/button";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { cn } from "@/lib/utils";
-
-import { floating } from "./surfaces.js";
 
 // ---------------------------------------------------------------------------
 // QuoteBlock — a quote on a sent message
@@ -56,52 +57,60 @@ QuoteBlock.Icon = QuoteBlockIcon;
 QuoteBlock.Text = QuoteBlockText;
 
 // ---------------------------------------------------------------------------
-// SelectionToolbar — appears over selected transcript text
+// TranscriptQuoteShortcut — deliberate quote without a selection popup
 // ---------------------------------------------------------------------------
 
-function SelectionToolbarRoot({ className, ...props }: ComponentProps<typeof SelectionToolbarPrimitive.Root>) {
-  return (
-    <SelectionToolbarPrimitive.Root
-      data-slot="selection-toolbar"
-      className={cn(
-        floating,
-        "z-50 flex items-center gap-0.5 rounded-lg p-1",
-        "animate-in fade-in-0 zoom-in-95 duration-(--motion-fast) motion-reduce:animate-none",
-        className,
-      )}
-      {...props}
-    />
-  );
+export interface TranscriptSelectionQuote {
+  text: string;
+  messageId: string;
 }
 
-function SelectionToolbarQuote({ className, children, ...props }: ComponentProps<typeof SelectionToolbarPrimitive.Quote>) {
-  return (
-    <SelectionToolbarPrimitive.Quote asChild {...props}>
-      <Button variant="ghost" size="sm" className={cn("gap-1.5", className)}>
-        {children ?? (
-          <>
-            <QuoteIcon />
-            Quote
-          </>
-        )}
-      </Button>
-    </SelectionToolbarPrimitive.Quote>
-  );
+const nodeElement = (node: Node | null): Element | null =>
+  node instanceof Element ? node : node?.parentElement ?? null;
+
+/**
+ * Returns a quote only when both ends of the browser selection belong to the
+ * same message in this thread. A cross-message selection stays ordinary page
+ * text and never becomes a misleading single-message quote.
+ */
+export function transcriptSelectionQuote(
+  selection: Selection | null,
+  thread: HTMLElement | null,
+): TranscriptSelectionQuote | undefined {
+  if (!selection || selection.isCollapsed || !thread) return undefined;
+  const anchor = nodeElement(selection.anchorNode)?.closest<HTMLElement>("[data-message-id]");
+  const focus = nodeElement(selection.focusNode)?.closest<HTMLElement>("[data-message-id]");
+  if (!anchor || anchor !== focus || !thread.contains(anchor)) return undefined;
+  const text = selection.toString().trim();
+  const messageId = anchor.dataset.messageId;
+  return text && messageId ? { text, messageId } : undefined;
 }
 
-const SelectionToolbarImpl: FC<ComponentProps<typeof SelectionToolbarRoot>> = ({ className, ...props }) => (
-  <SelectionToolbarRoot className={className} {...props}>
-    <SelectionToolbarQuote />
-  </SelectionToolbarRoot>
-);
-
-const SelectionToolbar = memo(SelectionToolbarImpl) as unknown as typeof SelectionToolbarImpl & {
-  Root: typeof SelectionToolbarRoot;
-  Quote: typeof SelectionToolbarQuote;
-};
-SelectionToolbar.displayName = "SelectionToolbar";
-SelectionToolbar.Root = SelectionToolbarRoot;
-SelectionToolbar.Quote = SelectionToolbarQuote;
+export function TranscriptQuoteShortcut({ thread }: { thread: RefObject<HTMLElement | null> }) {
+  const aui = useAui();
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.isComposing ||
+        event.altKey ||
+        !event.shiftKey ||
+        (!event.ctrlKey && !event.metaKey) ||
+        event.key.toLowerCase() !== "q"
+      ) return;
+      const selection = window.getSelection();
+      const quote = transcriptSelectionQuote(selection, thread.current);
+      if (!quote) return;
+      event.preventDefault();
+      aui.thread.composer().setQuote(quote);
+      selection?.removeAllRanges();
+      thread.current?.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')?.focus({ preventScroll: true });
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [aui, thread]);
+  return null;
+}
 
 // ---------------------------------------------------------------------------
 // ComposerQuotePreview — inside the composer card, only while a quote is set
@@ -169,9 +178,6 @@ export {
   QuoteBlockRoot,
   QuoteBlockIcon,
   QuoteBlockText,
-  SelectionToolbar,
-  SelectionToolbarRoot,
-  SelectionToolbarQuote,
   ComposerQuotePreview,
   ComposerQuotePreviewRoot,
   ComposerQuotePreviewIcon,

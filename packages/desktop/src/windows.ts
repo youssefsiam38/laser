@@ -24,7 +24,18 @@
  */
 import { DESKTOP_ARGUMENT_PREFIX, IPC } from "./api.js";
 import { PRODUCT_NAME } from "@lasercode/protocol";
-import { BrowserWindow, clipboard, dialog, nativeTheme, screen, shell, type BrowserWindowConstructorOptions } from "electron";
+import {
+  BrowserWindow,
+  clipboard,
+  dialog,
+  Menu,
+  nativeTheme,
+  screen,
+  shell,
+  type BrowserWindowConstructorOptions,
+  type ContextMenuParams,
+  type MenuItemConstructorOptions,
+} from "electron";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -194,6 +205,75 @@ export function windowWebPreferences(bootstrap: WindowBootstrap): Electron.WebPr
   };
 }
 
+export interface NativeTextMenuActions {
+  replaceMisspelling(word: string): void;
+  addToDictionary(word: string): void;
+  lookupSelection?(): void;
+}
+
+type NativeTextMenuParams = Pick<
+  ContextMenuParams,
+  "dictionarySuggestions" | "editFlags" | "isEditable" | "misspelledWord" | "selectionText" | "spellcheckEnabled"
+>;
+
+/**
+ * Electron deliberately ships no page context menu. Build only the native text
+ * menu the renderer cannot supply: spelling replacements and the platform's
+ * editing commands for prose fields, or Copy/Look Up for selected transcript
+ * text. Links and application controls keep their own product interactions.
+ */
+export function nativeTextMenuTemplate(
+  params: NativeTextMenuParams,
+  actions: NativeTextMenuActions,
+): MenuItemConstructorOptions[] {
+  const template: MenuItemConstructorOptions[] = [];
+  const separator = () => {
+    if (template.length > 0 && template.at(-1)?.type !== "separator") template.push({ type: "separator" });
+  };
+
+  if (params.isEditable && params.spellcheckEnabled && params.misspelledWord) {
+    if (params.dictionarySuggestions.length > 0) {
+      for (const suggestion of params.dictionarySuggestions.slice(0, 5)) {
+        template.push({ label: suggestion, click: () => actions.replaceMisspelling(suggestion) });
+      }
+    } else {
+      template.push({ label: "No spelling suggestions", enabled: false });
+    }
+    template.push({ label: "Add to dictionary", click: () => actions.addToDictionary(params.misspelledWord) });
+    separator();
+  }
+
+  if (params.selectionText && actions.lookupSelection) {
+    const oneLine = params.selectionText.replace(/\s+/g, " ").trim();
+    const label = oneLine.length > 36 ? `${oneLine.slice(0, 35)}…` : oneLine;
+    template.push({ label: `Look Up “${label}”`, click: actions.lookupSelection });
+    separator();
+  }
+
+  if (params.isEditable) {
+    template.push(
+      { role: "undo", enabled: params.editFlags.canUndo },
+      { role: "redo", enabled: params.editFlags.canRedo },
+      { type: "separator" },
+      { role: "cut", enabled: params.editFlags.canCut },
+      { role: "copy", enabled: params.editFlags.canCopy },
+      { role: "paste", enabled: params.editFlags.canPaste },
+      { role: "delete", enabled: params.editFlags.canDelete },
+      { type: "separator" },
+      { role: "selectAll", enabled: params.editFlags.canSelectAll },
+    );
+  } else if (params.selectionText) {
+    template.push(
+      { role: "copy", enabled: params.editFlags.canCopy },
+      { type: "separator" },
+      { role: "selectAll", enabled: params.editFlags.canSelectAll },
+    );
+  }
+
+  while (template.at(-1)?.type === "separator") template.pop();
+  return template;
+}
+
 /**
  * Two `data:` URLs both have an opaque origin, so this deliberately treats them
  * as the same place: the waiting screen must not reload itself every time the
@@ -264,6 +344,15 @@ export class WindowManager {
     if (stored?.maximized) window.maximize();
 
     this.harden(window);
+    window.webContents.on("context-menu", (_event, params) => {
+      const contents = window.webContents;
+      const template = nativeTextMenuTemplate(params, {
+        replaceMisspelling: (word) => contents.replaceMisspelling(word),
+        addToDictionary: (word) => contents.session.addWordToSpellCheckerDictionary(word),
+        ...(process.platform === "darwin" ? { lookupSelection: () => contents.showDefinitionForSelection() } : {}),
+      });
+      if (template.length > 0) Menu.buildFromTemplate(template).popup({ window });
+    });
     this.options.log.milestone("window created");
     window.once("ready-to-show", () => {
       this.options.log.milestone("window ready to show");

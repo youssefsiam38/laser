@@ -6,7 +6,7 @@ import { ThreadFollowupSuggestions } from "@/components/assistant-ui/elements/fo
 import { GuardrailNotice } from "@/components/assistant-ui/elements/guardrail-notice";
 import { ConversationLoadingGate } from "@/components/assistant-ui/elements/loading-state";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
-import { SelectionToolbar } from "@/components/assistant-ui/elements/quote.aui";
+import { TranscriptQuoteShortcut } from "@/components/assistant-ui/elements/quote.aui";
 import { ScrollAnchor } from "@/components/assistant-ui/elements/scroll-anchor";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
@@ -174,8 +174,9 @@ function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
                 </ThreadPrimitive.ViewportFooter>
               </div>
             </ThreadPrimitive.Viewport>
-            {/* Select transcript text: quote it into the composer. */}
-            <SelectionToolbar />
+            {/* Native selection stays untouched. Quoting is the deliberate
+                Ctrl/Cmd+Shift+Q action scoped to this thread. */}
+            <TranscriptQuoteShortcut thread={find.root} />
             <EntriesRefresh />
           </ThreadPrimitive.Root>
           </FileOpenerProvider>
