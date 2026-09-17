@@ -1,13 +1,18 @@
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 import { setImmediate as yieldToIO } from "node:timers/promises";
-import { goalPromptId, toolSearchContent, toolOutputText, type SearchableTool, type ClientRequests, type SessionSummary } from "@lasercode/protocol";
+import { goalPromptId, toolCallLabel, toolSearchContent, toolOutputText, type SearchableTool, type ClientRequests, type SessionSummary } from "@lasercode/protocol";
 
 type Source = "user" | "assistant" | "reasoning" | "tool";
 // Saved JSONL has tool calls but no SessionState snapshot, so host indexing can
 // hide only the default `activity_label`; live UI search also receives the
 // session's collision map and hides dynamically chosen names.
 export const sourceRank = (source: Source) => source === "user" ? 0 : source === "assistant" ? 1 : 2;
+const searchableTool = (call: SearchableTool): string[] => {
+  const label = toolCallLabel(call.name, call.args);
+  const content = toolSearchContent(call);
+  return label ? [label, ...content] : content;
+};
 /** Search only message content, never images, credentials or session metadata. */
 export function searchableMessage(entry: unknown, pending?: Map<string, SearchableTool>): Array<{ text: string; source: Source }> {
   const e = entry as { type?: string; message?: { role?: string; content?: unknown; toolCallId?: string; toolName?: string; isError?: boolean } } | null;
@@ -19,7 +24,7 @@ export function searchableMessage(entry: unknown, pending?: Map<string, Searchab
     if (pending && !call) return []; // Hydration does not render orphan results.
     pending?.delete(id);
     // Saved-session hydration displays text content, not the live result envelope.
-    return toolSearchContent({ ...call, name: call?.name ?? e.message.toolName ?? "", result: toolOutputText(e.message), isError: e.message.isError }).map(text => ({ text, source: "tool" }));
+    return searchableTool({ ...call, name: call?.name ?? e.message.toolName ?? "", result: toolOutputText(e.message), isError: e.message.isError }).map(text => ({ text, source: "tool" }));
   }
   const source: Source = e.message?.role === "user" ? "user" : e.message?.role === "assistant" ? "assistant" : "tool";
   if (typeof content === "string") return [{ text: content, source }];
@@ -33,7 +38,7 @@ export function searchableMessage(entry: unknown, pending?: Map<string, Searchab
       // (e.g. successful edits hide the confirmation text). Unfinished calls flush
       // at EOF; neither their content nor completed results are counted twice.
       if (pending && p.id) { pending.set(p.id, call); return []; }
-      return toolSearchContent(call).map(text => ({ text, source: "tool" }));
+      return searchableTool(call).map(text => ({ text, source: "tool" }));
     }
     return [];
   });
@@ -111,7 +116,7 @@ export async function searchSessions(sessions: readonly SessionSummary[], query:
       result.unreadable++;
     } finally { lines.close(); input.destroy(); }
     signal?.throwIfAborted();
-    for (const call of pending.values()) collect(toolSearchContent(call).map(text => ({ text, source: "tool" })));
+    for (const call of pending.values()) collect(searchableTool(call).map(text => ({ text, source: "tool" })));
     if (count) {
       result.hits.push({ path: session.path, count, excerpt, source });
     }

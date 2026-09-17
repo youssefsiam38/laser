@@ -88,9 +88,9 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
   const path = useLaserState((laser) => laser.current);
   const toolLabelParams = useLaserState((laser) => path ? laser.open[path]?.state.toolLabelParams : undefined);
   const activityLevel = useActivityDetailLevel(path);
-  // The agent's label names only live work. Settled rows keep the durable
-  // computed summary that describes what actually ran (D-277).
-  const agentLabel = running ? toolCallLabel(toolName, args, toolLabelParams) : undefined;
+  // The agent's label is the row's durable primary title. The computed tool
+  // summary stays visible beneath it, in every lifecycle state (D-282).
+  const agentLabel = toolCallLabel(toolName, args, toolLabelParams);
   // Which MCP servers this session started with, so `playwright_browser_*` is
   // read as Playwright's own tool and not as a tool nobody recognises
   // (docs/mcp.md "In the transcript").
@@ -164,7 +164,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
       <ToolRowDialog toolCallId={toolCallId} />
     </>
   );
-  const activeLabel = agentLabel ?? activeToolLabel({ toolName, args });
+  const activeLabel = running ? agentLabel ?? activeToolLabel({ toolName, args }) : undefined;
 
   // An MCP call: the server's own tool, the gateway, or a script. Its row is
   // composed from the same parts, with the server's content as its body.
@@ -183,7 +183,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
         open={open}
         onOpenChange={rememberOpen}
         footer={<>{footerFolds}{footer}</>}
-        activeLabel={agentLabel}
+        label={agentLabel}
       />
     );
   }
@@ -224,6 +224,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
       <ToolCall
         icon={TOOL_ICONS.other}
         verb={toolName}
+        label={agentLabel}
         activeLabel={activeLabel}
         state={state}
         elapsedMs={elapsed}
@@ -245,6 +246,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
     <ToolCall
       icon={TOOL_ICONS[kind]}
       verb={summary.verb}
+      label={agentLabel}
       activeLabel={activeLabel}
       summary={summary.summary}
       detail={summary.detail}

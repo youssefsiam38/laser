@@ -25,6 +25,14 @@ describe("conversation search semantics", () => {
     expect(partSearchContent(part)).toEqual(["echo hello"]);
     expect(partSearchContent({ ...part, args: { command: "command -v node" }, artifact: { partialOutput: "command found" } })).toEqual(["command -v node", "command found"]);
   });
+  it("searches the visible activity label once without treating it as an argument", () => {
+    expect(partSearchContent({
+      type: "tool-call",
+      toolName: "bash",
+      args: { command: "pnpm test", activity_label: "Tracing activity labels" },
+      result: "passed",
+    })).toEqual(["Tracing activity labels", "pnpm test", "passed"]);
+  });
   it("ranks user messages ahead of replies, then reasoning/tools; newest breaks ties", () => {
     const row = (id: string, source?: SearchableThread["matchSource"], modifiedAt = "2026-09-01"): SearchableThread => ({ id, title: id, preview: "", group: "", status: "idle", matchSource: source, modifiedAt });
     expect([row("tool", "tool"), row("new-user", "user", "2026-09-07"), row("assistant", "assistant"), row("old-user", "user"), row("title")].sort(rankSearchThreads).map(r => r.id)).toEqual(["new-user", "old-user", "assistant", "tool", "title"]);
