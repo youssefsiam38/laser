@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
 import { ErrorCodes, PRODUCT_NAME, type JsonRpcMessage, type SessionState, type SessionUpdateParams } from "@lasercode/protocol";
+import { named } from "../session-naming.js";
 import { HostServer, defaultWorkerMain } from "../../src/index.js";
 
 const MiB = 1024 * 1024;
@@ -99,25 +100,6 @@ afterEach(async () => {
   rmSync(base, { recursive: true, force: true });
 });
 
-/**
- * Naming is work of its own: it appends one durable `session_info` record
- * after the turn has settled. A revision taken before that append and entries
- * read after it describe two different files, so wait for the record itself.
- */
-async function named(path: string): Promise<void> {
-  for (let attempt = 0; attempt < 250; attempt++) {
-    const lines = readFileSync(path, "utf8").split("\n").filter(Boolean);
-    if (lines.some((line) => {
-      try {
-        return (JSON.parse(line) as { type?: string }).type === "session_info";
-      } catch {
-        return false;
-      }
-    })) return;
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  throw new Error(`session ${path} was never named`);
-}
 
 describe.skipIf(!existsSync(defaultWorkerMain()))("the host pressure pass, end to end", () => {
   it("journals a real worker directive, unloads one idle runtime, and leaves an active turn untouched", async () => {

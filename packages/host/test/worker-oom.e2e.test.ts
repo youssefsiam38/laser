@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { AGENT_EVENT_MESSAGE_TYPE, PRODUCT_NAME, type AgentRun, type ClientRequests, type JsonRpcMessage, type SessionState } from "@lasercode/protocol";
+import { named } from "./session-naming.js";
 import { HostServer, defaultWorkerMain } from "../src/index.js";
 
 function fakeProvider(): Promise<{ server: Server; url: string }> {
@@ -123,6 +124,10 @@ const timer = setInterval(() => {
       && (message.params as { sessionPath?: string; update?: { kind?: string } }).sessionPath === created.state.path
       && (message.params as { update?: { kind?: string } }).update?.kind === "agent_settled");
 
+    // The Namer appends its durable record independently of the turn, so a
+    // revision taken before that append never matches one taken after it
+    // (M16-T71).
+    await named(created.state.path);
     const beforeRevision = await client.request<{ revision: string }>("session/revision", { path: created.state.path });
     const beforeEntries = await client.request<ClientRequests["pi/session/entries"]["result"]>("pi/session/entries", { path: created.state.path });
     writeFileSync(trigger, "go");

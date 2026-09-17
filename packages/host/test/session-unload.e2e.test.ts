@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
 import type { JsonRpcMessage } from "@lasercode/protocol";
+import { named } from "./session-naming.js";
 import { HostServer, defaultWorkerMain } from "../src/index.js";
 
 function stubProvider(): Promise<{ server: Server; url: string; requests: number }> {
@@ -178,20 +179,6 @@ async function settled(url: string, path: string): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   throw new Error(`session ${path} never settled`);
-}
-
-/** Naming is separate work from the turn and appends one durable record. */
-async function named(path: string): Promise<void> {
-  await until(() => readFileSync(path, "utf8")
-    .split("\n")
-    .filter(Boolean)
-    .some((line) => {
-      try {
-        return (JSON.parse(line) as { type?: string }).type === "session_info";
-      } catch {
-        return false;
-      }
-    }), "the session name to become durable");
 }
 
 beforeEach(async () => {
