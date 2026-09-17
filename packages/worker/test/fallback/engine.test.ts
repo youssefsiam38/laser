@@ -22,7 +22,7 @@ import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import { fallbackDefaultAgent, fallbackPolicy } from "../../src/agents/definitions.js";
 import { rootRecord, rootRole } from "../../src/agents/session-config.js";
 import { StableSdkDriver } from "../../src/drivers/stable-sdk.js";
-import type { DriverEvent } from "../../src/driver.js";
+import type { DriverAgentOptions, DriverEvent } from "../../src/driver.js";
 import { startStubProvider, type StubAnswer, type StubProvider, type StubRequest } from "../agents/stub-provider.js";
 
 type Which = "a" | "b" | "c";
@@ -77,7 +77,11 @@ afterEach(async () => {
   rmSync(base, { recursive: true, force: true });
 });
 
-function writeStubs(chain: Array<{ provider: string; id: string }> = [MODEL.a, MODEL.b, MODEL.c], extraChains: Array<{ models: Array<{ provider: string; id: string }> }> = []): void {
+function writeStubs(
+  chain: Array<{ provider: string; id: string }> = [MODEL.a, MODEL.b, MODEL.c],
+  extraChains: Array<{ models: Array<{ provider: string; id: string }> }> = [],
+  defaultModel: { provider: string; id: string } = MODEL.a,
+): void {
   mkdirSync(agentDir, { recursive: true });
   writeFileSync(
     join(agentDir, "models.json"),
@@ -92,8 +96,8 @@ function writeStubs(chain: Array<{ provider: string; id: string }> = [MODEL.a, M
   writeFileSync(
     join(agentDir, "settings.json"),
     JSON.stringify({
-      defaultProvider: "stub",
-      defaultModel: "stub-1",
+      defaultProvider: defaultModel.provider,
+      defaultModel: defaultModel.id,
       // The engine's own retry policy, kept short so a test spends
       // milliseconds where production spends seconds. It is still the engine's
       // loop: `maxRetries` attempts after the first, exponential backoff.
@@ -138,7 +142,7 @@ async function woken(updates: SessionUpdate[], text: string): Promise<void> {
   await wait(50);
 }
 
-async function open(sessionPath?: string): Promise<Opened> {
+async function open(sessionPath?: string, agent?: DriverAgentOptions): Promise<Opened> {
   const driver = new StableSdkDriver([waker]);
   drivers.push(driver);
   const updates: SessionUpdate[] = [];
@@ -152,6 +156,7 @@ async function open(sessionPath?: string): Promise<Opened> {
     projectTrusted: true,
     features: [],
     ...(sessionPath ? { sessionPath } : {}),
+    ...(agent ? { agent } : {}),
   });
   return { driver, updates, path: state.path };
 }
@@ -415,11 +420,52 @@ it("has no chain at all, and behaves exactly as before, when nothing matches", a
   expect(idOf(driver)).toBe("stub-1");
 });
 
+it("activates the chain for an agent model accepted with the first turn", async () => {
+  // The session opens on the unrelated global default. Selecting this agent
+  // replaces that pristine runtime before the first prompt; the chain must
+  // follow the model the accepted runtime is actually on.
+  writeStubs([MODEL.a, MODEL.b], [], MODEL.c);
+  script.a = () => down();
+  script.b = () => ok("continued on b");
+  const original = { ...fallbackDefaultAgent(), model: null };
+  const originalOptions = {
+    definition: original,
+    role: rootRole(original.name),
+    record: rootRecord(original.name),
+    policy: fallbackPolicy(),
+  };
+  const seeded = await open(undefined, originalOptions);
+  const path = seeded.path;
+  await seeded.driver.dispose();
+
+  const { driver, updates } = await open(path, originalOptions);
+  expect(idOf(driver)).toBe("stub-c-1");
+  expect(driver.state().fallback).toBeUndefined();
+
+  const definition = { ...fallbackDefaultAgent(), name: "reviewer", model: MODEL.a };
+  await driver.prepareFirstTurn({
+    agent: {
+      definition,
+      role: rootRole(definition.name),
+      record: rootRecord(definition.name),
+      policy: fallbackPolicy(),
+    },
+  });
+  await driver.prompt([{ type: "text", text: "review this" }]);
+
+  expect(requests("a")).toBe(2);
+  expect(requests("b")).toBe(1);
+  expect(idOf(driver)).toBe("stub-b-1");
+  expect(driver.state().fallback).toMatchObject({ position: 1 });
+  expect(fallbacks(updates).at(-1)).toMatchObject({ phase: "switched", to: { id: "stub-b-1" } });
+});
+
 it("does the same for a child agent's session, which is a session like any other", async () => {
   // The chain lives in the driver, and a child agent run is a session with its
   // own driver (docs/agents.md), so a child gets the behaviour with no harness
-  // code at all. What matters for a run is that its settle is not reported
-  // until the chain has finished: the harness ends a run on that update.
+  // code at all. Use an unrelated global default to prove the definition —
+  // not the default — selected the chain's first model.
+  writeStubs([MODEL.a, MODEL.b], [], MODEL.c);
   script.a = () => down();
   script.b = () => ok("from b");
   const definition = { ...fallbackDefaultAgent(), model: MODEL.a };
