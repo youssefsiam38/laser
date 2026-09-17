@@ -11,6 +11,7 @@ import { ToolCall } from "@/components/assistant-ui/elements/tool-call";
 import { ToolError } from "@/components/assistant-ui/elements/tool-error";
 import {
   ToolFallback,
+  ToolActivityLabel,
   ToolFallbackApproval,
   ToolFallbackArgs,
   ToolFallbackResult,
@@ -88,9 +89,9 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
   const path = useLaserState((laser) => laser.current);
   const toolLabelParams = useLaserState((laser) => path ? laser.open[path]?.state.toolLabelParams : undefined);
   const activityLevel = useActivityDetailLevel(path);
-  // The agent's label names only live work. Settled rows keep the durable
-  // computed summary that describes what actually ran (D-277).
-  const agentLabel = running ? toolCallLabel(toolName, args, toolLabelParams) : undefined;
+  // The agent's label is the row's durable primary title. The computed tool
+  // summary stays visible beneath it, in every lifecycle state (D-282).
+  const agentLabel = toolCallLabel(toolName, args, toolLabelParams);
   // Which MCP servers this session started with, so `playwright_browser_*` is
   // read as Playwright's own tool and not as a tool nobody recognises
   // (docs/mcp.md "In the transcript").
@@ -164,27 +165,29 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
       <ToolRowDialog toolCallId={toolCallId} />
     </>
   );
-  const activeLabel = agentLabel ?? activeToolLabel({ toolName, args });
+  const activeLabel = running ? agentLabel ?? activeToolLabel({ toolName, args }) : undefined;
 
   // An MCP call: the server's own tool, the gateway, or a script. Its row is
   // composed from the same parts, with the server's content as its body.
   if (mcp) {
     return (
-      <McpToolRow
-        info={mcp}
-        toolName={toolName}
-        args={visibleArgs}
-        argsText={visibleArgsText}
-        result={result}
-        text={text}
-        details={details}
-        state={state}
-        elapsedMs={elapsed}
-        open={open}
-        onOpenChange={rememberOpen}
-        footer={<>{footerFolds}{footer}</>}
-        activeLabel={agentLabel}
-      />
+      <ToolActivityLabel label={agentLabel}>
+        <McpToolRow
+          info={mcp}
+          toolName={toolName}
+          args={visibleArgs}
+          argsText={visibleArgsText}
+          result={result}
+          text={text}
+          details={details}
+          state={state}
+          elapsedMs={elapsed}
+          open={open}
+          onOpenChange={rememberOpen}
+          footer={<>{footerFolds}{footer}</>}
+          activeLabel={agentLabel}
+        />
+      </ToolActivityLabel>
     );
   }
 
@@ -221,20 +224,22 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
       );
     }
     return (
-      <ToolCall
-        icon={TOOL_ICONS.other}
-        verb={toolName}
-        activeLabel={activeLabel}
-        state={state}
-        elapsedMs={elapsed}
-        open={open}
-        onOpenChange={rememberOpen}
-        toolName={toolName}
-        peek={failed && text ? <ToolError message={text} compact /> : undefined}
-        footer={footer}
-      >
-        <TextBody args={visibleArgs} argsText={visibleArgsText} text={text} failed={failed} overflow={fold("surface-2", text.length > 0)} argsOverflow={argsFold} />
-      </ToolCall>
+      <ToolActivityLabel label={agentLabel}>
+        <ToolCall
+          icon={TOOL_ICONS.other}
+          verb={toolName}
+          activeLabel={activeLabel}
+          state={state}
+          elapsedMs={elapsed}
+          open={open}
+          onOpenChange={rememberOpen}
+          toolName={toolName}
+          peek={failed && text ? <ToolError message={text} compact /> : undefined}
+          footer={footer}
+        >
+          <TextBody args={visibleArgs} argsText={visibleArgsText} text={text} failed={failed} overflow={fold("surface-2", text.length > 0)} argsOverflow={argsFold} />
+        </ToolCall>
+      </ToolActivityLabel>
     );
   }
 
@@ -242,40 +247,42 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
   const hasBody = body !== "text" || text.length > 0 || (args !== undefined && Object.keys(args as object).length > 0) || outputOverflows || argsOverflow;
 
   return (
-    <ToolCall
-      icon={TOOL_ICONS[kind]}
-      verb={summary.verb}
-      activeLabel={activeLabel}
-      summary={summary.summary}
-      detail={summary.detail}
-      state={state}
-      elapsedMs={elapsed}
-      open={open}
-      onOpenChange={rememberOpen}
-      toolName={toolName}
-      trailing={appliedDiffStats ? <DiffStat added={appliedDiffStats.added} removed={appliedDiffStats.removed} /> : undefined}
-      accessibleDescription={diffDescription}
-      peek={failed && text ? <ToolError message={text} compact /> : undefined}
-      footer={footer}
-    >
-      {(kind === "write" || kind === "edit") && state === "done" && status?.type === "complete" && diffView?.path ? (
-        <FileCard path={diffView.path} lines={kind === "write" ? appliedDiffStats?.added : undefined} />
-      ) : null}
-      {hasBody ? (
-        body === "terminal" ? (
-          <BashBody args={visibleArgs} text={text} running={running} isError={failed} overflow={fold("terminal", text.length > 0)} />
-        ) : body === "diff" ? (
-          <>
-            <DiffBody view={diffView} args={visibleArgs} argsText={visibleArgsText} text={text} failed={failed} />
-            {footerFolds}
-          </>
-        ) : kind === "read" ? (
-          <ReadBody args={visibleArgs} argsText={visibleArgsText} text={text} failed={failed} overflow={fold("surface-2", text.length > 0)} argsOverflow={argsFold} />
-        ) : (
-          <TextBody args={visibleArgs} argsText={visibleArgsText} text={text} failed={failed} overflow={fold("surface-2", text.length > 0)} argsOverflow={argsFold} />
-        )
-      ) : undefined}
-    </ToolCall>
+    <ToolActivityLabel label={agentLabel}>
+      <ToolCall
+        icon={TOOL_ICONS[kind]}
+        verb={summary.verb}
+        activeLabel={activeLabel}
+        summary={summary.summary}
+        detail={summary.detail}
+        state={state}
+        elapsedMs={elapsed}
+        open={open}
+        onOpenChange={rememberOpen}
+        toolName={toolName}
+        trailing={appliedDiffStats ? <DiffStat added={appliedDiffStats.added} removed={appliedDiffStats.removed} /> : undefined}
+        accessibleDescription={diffDescription}
+        peek={failed && text ? <ToolError message={text} compact /> : undefined}
+        footer={footer}
+      >
+        {(kind === "write" || kind === "edit") && state === "done" && status?.type === "complete" && diffView?.path ? (
+          <FileCard path={diffView.path} lines={kind === "write" ? appliedDiffStats?.added : undefined} />
+        ) : null}
+        {hasBody ? (
+          body === "terminal" ? (
+            <BashBody args={visibleArgs} text={text} running={running} isError={failed} overflow={fold("terminal", text.length > 0)} />
+          ) : body === "diff" ? (
+            <>
+              <DiffBody view={diffView} args={visibleArgs} argsText={visibleArgsText} text={text} failed={failed} />
+              {footerFolds}
+            </>
+          ) : kind === "read" ? (
+            <ReadBody args={visibleArgs} argsText={visibleArgsText} text={text} failed={failed} overflow={fold("surface-2", text.length > 0)} argsOverflow={argsFold} />
+          ) : (
+            <TextBody args={visibleArgs} argsText={visibleArgsText} text={text} failed={failed} overflow={fold("surface-2", text.length > 0)} argsOverflow={argsFold} />
+          )
+        ) : undefined}
+      </ToolCall>
+    </ToolActivityLabel>
   );
 }
 
