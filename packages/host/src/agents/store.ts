@@ -503,9 +503,11 @@ function readAgent(raw: unknown): AgentDefinition | undefined {
   return {
     name: value.name,
     kind: "custom",
+    scope: "global",
     description: isString(value.description) ? value.description : "",
     instructions: isString(value.instructions) ? value.instructions : "",
     engineInstructions: value.engineInstructions === true,
+    excludeCoreInstructions: value.excludeCoreInstructions === true,
     model: readModel(value.model),
     thinkingLevel,
     supportsSubagents: value.supportsSubagents === true,

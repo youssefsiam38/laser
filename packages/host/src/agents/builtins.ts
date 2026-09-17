@@ -22,9 +22,11 @@ export function seedDefaultAgent(at: string): AgentDefinition {
   return {
     name: DEFAULT_AGENT_NAME,
     kind: "custom",
+    scope: "global",
     description: `${PRODUCT_DISPLAY_NAME}'s standard coding agent with its default instructions.`,
     instructions: "",
     engineInstructions: true,
+    excludeCoreInstructions: false,
     model: null,
     thinkingLevel: null,
     supportsSubagents: true,
@@ -85,11 +87,13 @@ export function builtinAgents(context: BuiltinContext): AgentDefinition[] {
     {
       name: "beam",
       kind: "builtin",
+      scope: "global",
       description:
         `Your fast assistant for ${PRODUCT_DISPLAY_NAME}: it reads your sessions, logs, agents and settings and explains ` +
         `how to get things done here.`,
       instructions: context.instructions.beam ?? beamInstructions(context),
       engineInstructions: false,
+      excludeCoreInstructions: false,
       model: context.beamModel,
       thinkingLevel: null,
       supportsSubagents: false,
@@ -102,9 +106,11 @@ export function builtinAgents(context: BuiltinContext): AgentDefinition[] {
     {
       name: "chat",
       kind: "builtin",
+      scope: "global",
       description: "A general assistant for conversations that are not about a project.",
       instructions: context.instructions.chat ?? BUILTIN_DEFAULT_INSTRUCTIONS.chat,
       engineInstructions: false,
+      excludeCoreInstructions: false,
       model: context.chatModel,
       thinkingLevel: null,
       supportsSubagents: false,
@@ -117,9 +123,11 @@ export function builtinAgents(context: BuiltinContext): AgentDefinition[] {
     {
       name: "namer",
       kind: "builtin",
+      scope: "global",
       description: "Names sessions and running actions with a fast, inexpensive model.",
       instructions: context.instructions.namer ?? BUILTIN_DEFAULT_INSTRUCTIONS.namer,
       engineInstructions: false,
+      excludeCoreInstructions: false,
       model: context.namerModel,
       thinkingLevel: null,
       supportsSubagents: false,

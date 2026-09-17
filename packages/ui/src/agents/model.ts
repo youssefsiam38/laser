@@ -221,9 +221,11 @@ export function warningsFor(snapshot: AgentsSnapshot | null | undefined, agentNa
 export function defaultAgentDefinitionInput(_snapshot?: AgentsSnapshot | null): AgentDefinitionInput {
   return {
     name: "",
+    scope: "global",
     description: "",
     instructions: "",
     engineInstructions: false,
+    excludeCoreInstructions: false,
     model: null,
     thinkingLevel: null,
     // An agent that starts nothing lists nothing: the pair has to agree or the

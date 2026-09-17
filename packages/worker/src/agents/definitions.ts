@@ -30,9 +30,11 @@ function base(name: string, kind: AgentDefinition["kind"], partial: Partial<Agen
   return {
     name,
     kind,
+    scope: "global",
     description: "",
     instructions: "",
     engineInstructions: false,
+    excludeCoreInstructions: false,
     model: null,
     thinkingLevel: null,
     supportsSubagents: false,

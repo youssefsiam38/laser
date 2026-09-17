@@ -11,6 +11,7 @@
  * Engine-neutral on purpose: nothing here names the engine, its tools by
  * implementation, or its files. The worker maps this onto the engine.
  */
+import { PROJECT_DIR_NAME } from "./identity.js";
 import type { ModelRef, ThinkingLevel } from "./messages.js";
 
 // ---------- names and limits ----------
@@ -120,10 +121,29 @@ export interface AgentSkillRef {
 
 export type AgentKind = "custom" | "builtin";
 
+/**
+ * Where a custom definition lives (D-230). `global` is one Markdown file per
+ * agent under `<stateDir>/agents/<name>.md`; `project` is
+ * `<project>/.laser/agents/<name>.md`, read only while that project is
+ * trusted. A project agent is offered only to sessions of that project, and
+ * shadows a global agent of the same name there. Built-ins are code-defined
+ * and carry `global`.
+ */
+export type AgentScope = "global" | "project";
+/** The directory, under the project root, project-scoped agent files live in. */
+export const PROJECT_AGENTS_DIR = `${PROJECT_DIR_NAME}/agents`;
+/** The directory, under the host state dir, global agent files live in. */
+export const GLOBAL_AGENTS_DIR_NAME = "agents";
+
 export interface AgentDefinition {
   /** `agent_name`: unique name and id of the reusable definition. */
   name: string;
   kind: AgentKind;
+  scope: AgentScope;
+  /** Project root of a `project`-scoped agent; absent for `global`. */
+  projectCwd?: string;
+  /** The Markdown file this definition was read from; host-set, absent for built-ins. */
+  path?: string;
   /** Answers "when should another agent start this one?" Shown in the compact catalog. */
   description: string;
   /** Answers "how should this agent perform its work?" Loaded only for this agent. */
@@ -133,6 +153,13 @@ export interface AgentDefinition {
    * instructions run instead (the shipped `default` agent starts this way).
    */
   engineInstructions: boolean;
+  /**
+   * Every custom agent's system prompt begins with Laser's core instructions
+   * (`packages/worker/src/agents/core-instructions.md`), ahead of
+   * `instructions` or the shipped default prompt. True leaves them out. Never
+   * applies to a built-in.
+   */
+  excludeCoreInstructions: boolean;
   /** `null` follows the configured default model. */
   model: AgentModelChoice | null;
   thinkingLevel: ThinkingLevel | null;
@@ -146,7 +173,7 @@ export interface AgentDefinition {
   updatedAt: string;
 }
 
-export type AgentDefinitionInput = Omit<AgentDefinition, "kind" | "createdAt" | "updatedAt">;
+export type AgentDefinitionInput = Omit<AgentDefinition, "kind" | "path" | "createdAt" | "updatedAt">;
 
 /** A validation problem tied to a form field (`skills[2]`, `allowedAgents`, `name`…). */
 export interface AgentIssue {
@@ -154,7 +181,8 @@ export interface AgentIssue {
   message: string;
 }
 
-export type AgentWarningField = "skills" | "model" | "allowedAgents";
+/** `file` names a Markdown definition file the host could not read or parse. */
+export type AgentWarningField = "skills" | "model" | "allowedAgents" | "file";
 
 /** Periodic validation found something a person should look at. */
 export interface AgentWarning {

@@ -33,9 +33,11 @@ import {
  *  guarantees the map is complete; this table guarantees each schema accepts a real shape. */
 const agentSample = {
   name: "reviewer",
+  scope: "global",
   description: "Independent verification of a change",
   instructions: "You are an independent reviewer. Verify claims and report evidence.",
   engineInstructions: false,
+  excludeCoreInstructions: false,
   model: { provider: "anthropic", id: "claude-sonnet-5" },
   thinkingLevel: "medium",
   supportsSubagents: false,

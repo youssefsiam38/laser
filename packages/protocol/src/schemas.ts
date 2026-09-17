@@ -482,9 +482,12 @@ export const agentSkillRefSchema = z
 export const agentDefinitionInputSchema = z
   .object({
     name: agentNameSchema,
+    scope: z.enum(["global", "project"]),
+    projectCwd: z.string().min(1).max(4096).optional(),
     description: z.string().max(AGENT_DESCRIPTION_MAX),
     instructions: z.string().max(AGENT_INSTRUCTIONS_MAX),
     engineInstructions: z.boolean(),
+    excludeCoreInstructions: z.boolean(),
     model: agentModelChoiceSchema.nullable(),
     thinkingLevel: thinkingLevelSchema.nullable(),
     supportsSubagents: z.boolean(),
