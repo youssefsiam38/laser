@@ -1,4 +1,4 @@
-import { ThreadPrimitive, useAuiState, useThreadViewport, unstable_useThreadMessageIds } from "@assistant-ui/react";
+import { ThreadPrimitive, useThreadViewport, unstable_useThreadMessageIds } from "@assistant-ui/react";
 import { createContext, memo, useContext, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useLaserState, visibleSessionPath } from "@/runtime";
 import { activityDetailLevel } from "@/runtime/sessionPreferences";
@@ -42,6 +42,7 @@ export class TranscriptViewport {
   private windowDirty = false;
   private listeners = new Set<() => void>();
   private observer: ResizeObserver | undefined;
+  private mutation: MutationObserver | undefined;
   private intent = 0;
   private controlIntent = 0;
   private leafId: string | null | undefined;
@@ -55,15 +56,19 @@ export class TranscriptViewport {
   // A measured destination owns its anchor until a new navigation intent.
   // Native layout/clamp scrolls can arrive even after the target settles.
   private ownsLocation = false;
-  private tail: (() => void) | undefined;
   private expectedTop: number | undefined;
-  /** Appended rows or row growth whose native scroll events belong to following. */
-  private followingGrowth = false;
+  private lastTop = 0;
+  private lastHeight = 0;
+  /** A same-path accepted tail replacement gets one placement after its commit. */
+  private pendingTailPlacement = false;
   /** Movement of the anchor caused by a list change that has rendered but not painted. */
   private structuralShift: number | undefined;
   /** The person is moving the viewport right now; layout may shift it, never re-place it. */
   private reading: ReturnType<typeof setTimeout> | undefined;
-  private running = false;
+  /** Disclosure anchoring starts at animationstart, after the open state committed. */
+  private disclosureDepth = 0;
+  private disclosureFrame = 0;
+  private disclosureFollowing = false;
   private disposed = false;
   getSnapshot = () => this.revision;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
@@ -103,16 +108,18 @@ export class TranscriptViewport {
         this.cancel();
         this.loaded = loaded;
         this.windowDirty = true;
-        if (this.place.following) this.arriving = true;
+        if (this.place.following) {
+          this.arriving = true;
+          this.pendingTailPlacement = true;
+        }
         this.schedule();
       }
       return;
     }
     const leftRevision = this.loaded;
     this.loaded = loaded;
-    this.running = false;
     this.expectedTop = undefined;
-    this.followingGrowth = false;
+    this.pendingTailPlacement = false;
     this.cancel();
     if (this.path) {
       this.places.set(this.path, { ...this.place, revision: leftRevision });
@@ -149,7 +156,6 @@ export class TranscriptViewport {
   setIds(ids: readonly string[]) {
     if (this.ids === ids || (this.ids.length === ids.length && this.ids.every((id, i) => ids[i] === id))) return;
     const previous = this.ids;
-    if (this.place.following && previous.length > 0 && ids.length > previous.length && previous.every((id, index) => ids[index] === id)) this.followingGrowth = true;
     // Where the person's anchor sits before the list changes under it. Rows
     // inserted above it (an earlier page) move it by their estimated height;
     // the viewport must move by exactly that before the next paint, or the
@@ -204,6 +210,16 @@ export class TranscriptViewport {
     else this.nodes.delete(id);
     this.schedule();
   }
+  private edgeGap() {
+    const viewport = this.viewport;
+    return viewport ? viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop : Number.POSITIVE_INFINITY;
+  }
+  /** Raw input may leave follow only when the viewport can move that way. */
+  private canMove(direction: "up" | "down") {
+    const viewport = this.viewport;
+    if (!viewport) return false;
+    return direction === "up" ? viewport.scrollTop > 0.5 : this.edgeGap() > 2;
+  }
   private scroll(top: number) {
     if (!this.viewport) return;
     this.viewport.scrollTop = top;
@@ -233,23 +249,10 @@ export class TranscriptViewport {
     const viewport = this.viewport;
     if (!viewport || this.target) return;
     if (this.place.following) {
-      if (Math.abs(viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop) <= 0.5) {
-        this.arriving = false;
-        // Keep ownership through every native scroll caused by one layout
-        // batch. The first event clears expectedTop; the measured bottom then
-        // proves that batch has settled.
-        if (this.followingGrowth && this.expectedTop === undefined) this.followingGrowth = false;
-      } else {
-        // The primitive's tail event also focuses its composer. Passive layout
-        // correction must not steal an active find field, menu, or question.
-        const focused = document.activeElement;
-        this.tail?.();
-        // assistant-ui's action may decline when its own sticky-state snapshot
-        // still says the reader is in history. This controller has already
-        // accepted latest as the destination, so place the native viewport too.
-        this.scroll(Math.max(0, viewport.scrollHeight - viewport.clientHeight));
-        if (focused instanceof HTMLElement && focused !== document.body && focused.isConnected && document.activeElement !== focused) focused.focus({ preventScroll: true });
-      }
+      const placeTail = this.pendingTailPlacement || this.edgeGap() > 2;
+      this.pendingTailPlacement = false;
+      if (!placeTail) this.arriving = false;
+      else this.scroll(Math.max(0, viewport.scrollHeight - viewport.clientHeight));
       return;
     }
     const anchor = this.place.anchor;
@@ -268,14 +271,14 @@ export class TranscriptViewport {
       // is the honest answer; the top of an arbitrary window is not.
       this.place = { following: true };
       this.arriving = true;
-      this.tail?.();
-      this.expectedTop = viewport.scrollTop;
+      this.scroll(Math.max(0, viewport.scrollHeight - viewport.clientHeight));
       return;
     }
     const mark = anchor.toolCallId ? row.querySelector<HTMLElement>(`[data-tool-call="${CSS.escape(anchor.toolCallId)}"] ${LANDMARKS.split(",").at(-1)!.trim()}`)
       : anchor.landmark === undefined ? undefined : row.querySelectorAll<HTMLElement>(LANDMARKS)[anchor.landmark];
     const live = mark && mark.getBoundingClientRect().height > 0 ? mark : row;
-    this.scroll(viewport.scrollTop + live.getBoundingClientRect().top - viewport.getBoundingClientRect().top - (live === row ? anchor.messageOffset : anchor.offset));
+    const delta = live.getBoundingClientRect().top - viewport.getBoundingClientRect().top - (live === row ? anchor.messageOffset : anchor.offset);
+    if (Math.abs(delta) >= 0.5) this.scroll(viewport.scrollTop + delta);
   }
   private layout() {
     if (!this.content) return false;
@@ -422,54 +425,81 @@ export class TranscriptViewport {
     }
     } finally { options.signal?.removeEventListener("abort", abort); }
   }
-  followRun(running: boolean) {
-    this.running = running;
-    // Starting elsewhere is output, not this reader's navigation intent. The
-    // local composer's submit calls `latest()`; once chosen, streamed growth
-    // follows until explicit input changes `following` to false.
-    if (running && this.place.following) {
-      this.windowDirty = true;
-      this.restore();
-      this.schedule();
-    }
-  }
   latest = () => {
-    this.cancel(); this.place.following = true; this.publish(); this.tail?.();
+    this.cancel(); this.place.following = true; this.publish();
     if (this.viewport) this.scroll(Math.max(0, this.viewport.scrollHeight - this.viewport.clientHeight));
     // The first streamed delta can grow the row before the native event for
-    // this tail scroll arrives. Keep that event owned even if its scrollTop is
+    // this placement arrives. Keep that event owned even if its scrollTop is
     // already a few pixels behind the new scrollHeight.
     this.expectedTop = this.viewport?.scrollTop;
     this.schedule();
   };
-  attach(viewport: HTMLElement, tail: () => void) {
-    this.disposed = false; this.viewport = viewport; this.tail = tail;
-    this.observer = new ResizeObserver(entries => {
-      // A settled message can grow after `isRunning` became false (batched
-      // blocks, markdown, an image). It is still output, not reader intent.
-      // Resizing the viewport itself is not transcript growth.
-      if (this.place.following && entries.some(entry => entry.target !== this.viewport)) this.followingGrowth = true;
+  private disclosureTick = () => {
+    this.disclosureFrame = 0;
+    if (this.disposed) return;
+    if (this.disclosureFollowing ? this.place.following : !this.place.following && !this.reading) this.restore();
+    if (this.disclosureDepth > 0) this.disclosureFrame = requestAnimationFrame(this.disclosureTick);
+  };
+  private startDisclosureHold() {
+    if (this.disclosureDepth++ > 0) return;
+    // animationstart is dispatched only after the disclosure's open state has
+    // committed. Capture the away anchor here, not in its click handler.
+    this.disclosureFollowing = this.place.following;
+    if (!this.disclosureFollowing) this.capture();
+    if (!this.disclosureFrame) this.disclosureFrame = requestAnimationFrame(this.disclosureTick);
+  }
+  private endDisclosureHold() {
+    this.disclosureDepth = Math.max(0, this.disclosureDepth - 1);
+    // One post-animation correction settles the final keyframe.
+    if (this.disclosureDepth === 0 && !this.disclosureFrame) this.disclosureFrame = requestAnimationFrame(this.disclosureTick);
+  }
+  private stopDisclosureHold() {
+    this.disclosureDepth = 0;
+    if (this.disclosureFrame) cancelAnimationFrame(this.disclosureFrame);
+    this.disclosureFrame = 0;
+  }
+  attach(viewport: HTMLElement, _tail?: () => void) {
+    this.disposed = false; this.viewport = viewport;
+    this.lastTop = viewport.scrollTop;
+    this.lastHeight = viewport.scrollHeight;
+    this.observer = new ResizeObserver(() => {
+      // ResizeObserver runs after layout and before paint. Pin here, rather
+      // than one rAF later, so a batched row expansion never paints a gap.
+      // Every growth class takes this path: streamed text, a late block in an
+      // existing row, image decode, highlighting and viewport reflow.
+      if (this.place.following) this.restore();
       this.schedule();
     });
     this.observer.observe(viewport);
     for (const node of this.nodes.values()) this.observer.observe(node);
+    this.mutation = new MutationObserver(() => {
+      // Text/child commits can paint before a descendant ResizeObserver is
+      // delivered. Read the new geometry in the mutation microtask and keep
+      // the same single controller write before that paint.
+      if (this.place.following) this.restore();
+      this.schedule();
+    });
+    this.mutation.observe(viewport, { subtree: true, childList: true, characterData: true });
     const markReading = () => {
       if (this.reading) clearTimeout(this.reading);
       this.reading = setTimeout(() => { this.reading = undefined; this.schedule(); }, 400);
     };
     const scroll = () => {
-      if (this.place.following && (this.running || this.expectedTop !== undefined || this.followingGrowth)) {
-        // scrollToBottom can emit more than one delayed scroll while a streamed
-        // row grows. Explicit wheel/touch/key/scrollbar input clears following
-        // first; without that input, every scroll during the followed run is
-        // still ours even after an earlier event consumed expectedTop.
+      const top = viewport.scrollTop;
+      const height = viewport.scrollHeight;
+      const previousTop = this.lastTop;
+      const previousHeight = this.lastHeight;
+      const moved = Math.abs(top - previousTop) >= 0.5;
+      const geometryChanged = Math.abs(height - previousHeight) >= 0.5;
+      this.lastTop = top;
+      this.lastHeight = height;
+      // Every write through `scroll()` is ours. Input that can move clears this
+      // expectation synchronously, so a person's next movement cannot be
+      // consumed as a delayed correction.
+      if (this.expectedTop !== undefined) {
         this.expectedTop = undefined;
         this.windowDirty = true;
         this.schedule();
-        return;
-      }
-      if (this.expectedTop !== undefined && Math.abs(viewport.scrollTop - this.expectedTop) < 0.5) {
-        this.expectedTop = undefined;
         return;
       }
       if (this.arriving) { this.place.following = true; this.windowDirty = true; this.schedule(); return; }
@@ -478,17 +508,39 @@ export class TranscriptViewport {
         // relinquish this anchor. A scroll event itself is not user intent.
         this.windowDirty = true; this.schedule(); return;
       }
-      // Native scrolls also carry touch momentum, scrollbar drags, Space and
-      // keys focused inside a row. Programmatic corrections returned above via
-      // expectedTop; keep every other scroll authoritative through its next
-      // default-scroll → scroll-event gap.
+      // Geometry at the edge always re-arms follow, including a reader who
+      // scrolls back without sending. Growth alone changes scrollHeight, not
+      // scrollTop, so it never masquerades as departure.
+      if (this.edgeGap() <= 2) {
+        this.place.following = true;
+        this.capture(); this.publish(); this.schedule();
+        return;
+      }
+      // A downward input can reach the physical end just before mounting the
+      // tail refines the virtual spacer. Re-arm against the geometry the input
+      // actually reached, then place the newly measured end once.
+      if (!this.place.following && moved && top > previousTop && Math.abs(previousHeight - viewport.clientHeight - top) <= 2) {
+        this.place.following = true;
+        this.windowDirty = true;
+        this.restore(); this.capture(); this.publish(); this.schedule();
+        return;
+      }
+      // Release only for a measured position change that was not one of our
+      // writes. Resize/mutation scroll events with a stationary top stay owned
+      // by the existing follow intent.
+      if (this.place.following && (!moved || geometryChanged)) { this.windowDirty = true; this.schedule(); return; }
       markReading();
-      this.place.following = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop <= 2;
+      this.place.following = false;
       this.capture(); this.publish(); this.schedule();
     };
-    const user = () => {
-      this.cancel(); this.arriving = false; this.place.following = false; this.expectedTop = undefined; this.followingGrowth = false;
+    const user = (direction?: "up" | "down") => {
+      this.cancel(); this.arriving = false; this.expectedTop = undefined;
+      if (direction === undefined || !this.canMove(direction)) return false;
+      this.place.following = false;
+      this.stopDisclosureHold();
       markReading();
+      this.publish();
+      return true;
     };
     const selection = () => {
       const selected = document.getSelection();
@@ -518,11 +570,16 @@ export class TranscriptViewport {
       this.publish();
     };
     const key = (event: KeyboardEvent) => {
-      this.cancel();
       const target = event.target;
       const editsText = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || (target instanceof HTMLElement && target.isContentEditable);
       const inComposer = target instanceof Element && target.closest('[data-slot="composer"]') !== null;
-      if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " ", "Spacebar"].includes(event.key) && !editsText && !inComposer) user();
+      const direction = event.key === "ArrowUp" || event.key === "PageUp" || event.key === "Home" || ((event.key === " " || event.key === "Spacebar") && event.shiftKey)
+        ? "up"
+        : event.key === "ArrowDown" || event.key === "PageDown" || event.key === "End" || event.key === " " || event.key === "Spacebar"
+          ? "down"
+          : undefined;
+      if (direction && !editsText && !inComposer) user(direction);
+      else this.cancel();
       if (event.key === "Tab" && event.target instanceof HTMLElement) {
         const row = event.target.closest<HTMLElement>("[data-window-message]");
         const id = row?.dataset.windowMessage;
@@ -568,11 +625,41 @@ export class TranscriptViewport {
       const overlayEdge = Number.isFinite(unit) ? unit * 3 : 0;
       const rtl = viewport.dir === "rtl" || getComputedStyle(viewport).direction === "rtl";
       const overScrollbar = event.offsetX < 0 || event.offsetX > viewport.clientWidth || (rtl ? event.offsetX <= overlayEdge : event.offsetX >= viewport.clientWidth - overlayEdge);
-      if (event.target === viewport && viewport.scrollHeight > viewport.clientHeight && overScrollbar) user();
+      if (event.target === viewport && viewport.scrollHeight > viewport.clientHeight && overScrollbar) {
+        // A thumb click has no direction. Cancel destinations now; the first
+        // measured drag movement releases follow.
+        user(); this.expectedTop = undefined; markReading();
+      } else this.cancel();
+    };
+    const wheel = (event: WheelEvent) => {
+      if (event.deltaY < 0) user("up");
+      else if (event.deltaY > 0) user("down");
       else this.cancel();
     };
+    let touchY: number | undefined;
+    const touchstart = (event: TouchEvent) => {
+      user();
+      touchY = event.touches?.[0]?.clientY;
+    };
+    const touchmove = (event: TouchEvent) => {
+      const next = event.touches?.[0]?.clientY;
+      if (next === undefined || touchY === undefined) return;
+      const delta = next - touchY;
+      touchY = next;
+      if (Math.abs(delta) < 0.5) return;
+      user(delta > 0 ? "up" : "down");
+    };
+    const touchend = () => { touchY = undefined; };
+    const disclosure = (event: AnimationEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element) || !target.matches('[data-slot="tool-group-content"], [data-slot="reasoning-content"]')) return;
+      if (event.type === "animationstart") this.startDisclosureHold();
+      else this.endDisclosureHold();
+    };
     viewport.addEventListener("scroll", scroll, { passive: true });
-    viewport.addEventListener("wheel", user, { passive: true }); viewport.addEventListener("touchstart", user, { passive: true });
+    viewport.addEventListener("wheel", wheel, { passive: true });
+    viewport.addEventListener("touchstart", touchstart, { passive: true }); viewport.addEventListener("touchmove", touchmove, { passive: true }); viewport.addEventListener("touchend", touchend, { passive: true }); viewport.addEventListener("touchcancel", touchend, { passive: true });
+    viewport.addEventListener("animationstart", disclosure); viewport.addEventListener("animationend", disclosure); viewport.addEventListener("animationcancel", disclosure);
     viewport.addEventListener("pointerdown", pointer, { passive: true });
     viewport.addEventListener("focusin", focus); viewport.addEventListener("focusout", focus); viewport.addEventListener("keydown", key);
     document.addEventListener("selectionchange", selection);
@@ -580,13 +667,14 @@ export class TranscriptViewport {
     document.fonts?.addEventListener("loadingdone", this.schedule);
     this.schedule();
     return () => {
-      this.cancel(); this.disposed = true; clearAnchoredMessages(this.path); cancelAnimationFrame(this.frame); this.frame = 0; if (this.reading) { clearTimeout(this.reading); this.reading = undefined; }
-      this.observer?.disconnect(); this.observer = undefined; theme.disconnect();
-      viewport.removeEventListener("scroll", scroll); viewport.removeEventListener("wheel", user); viewport.removeEventListener("touchstart", user);
+      this.cancel(); this.disposed = true; clearAnchoredMessages(this.path); cancelAnimationFrame(this.frame); this.frame = 0; this.stopDisclosureHold(); if (this.reading) { clearTimeout(this.reading); this.reading = undefined; }
+      this.observer?.disconnect(); this.observer = undefined; this.mutation?.disconnect(); this.mutation = undefined; theme.disconnect();
+      viewport.removeEventListener("scroll", scroll); viewport.removeEventListener("wheel", wheel); viewport.removeEventListener("touchstart", touchstart); viewport.removeEventListener("touchmove", touchmove); viewport.removeEventListener("touchend", touchend); viewport.removeEventListener("touchcancel", touchend);
+      viewport.removeEventListener("animationstart", disclosure); viewport.removeEventListener("animationend", disclosure); viewport.removeEventListener("animationcancel", disclosure);
       viewport.removeEventListener("pointerdown", pointer);
       viewport.removeEventListener("focusin", focus); viewport.removeEventListener("focusout", focus); viewport.removeEventListener("keydown", key);
       document.removeEventListener("selectionchange", selection); document.fonts?.removeEventListener("loadingdone", this.schedule);
-      this.viewport = undefined; this.tail = undefined;
+      this.viewport = undefined;
     };
   }
 }
@@ -628,18 +716,15 @@ export function TranscriptViewportProvider({ children }: { children: ReactNode }
 export function TranscriptViewportBinding() {
   const controller = useTranscriptViewport();
   const viewport = useThreadViewport(s => s.element.viewport);
-  const tail = useThreadViewport(s => s.scrollToBottom);
-  useLayoutEffect(() => viewport && controller ? controller.attach(viewport, () => tail({ behavior: "auto" })) : undefined, [controller, viewport, tail]);
+  useLayoutEffect(() => viewport && controller ? controller.attach(viewport) : undefined, [controller, viewport]);
   return null;
 }
 export function WindowedMessages() {
   const controller = useTranscriptViewport();
   const ids = unstable_useThreadMessageIds();
-  const running = useAuiState(s => s.thread.isRunning);
   controller.setIds(ids);
   useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   const ranges = controller.ranges();
-  useLayoutEffect(() => { controller.followRun(running); }, [controller, running, controller.path]);
   useLayoutEffect(() => { controller.committed(); });
   let cursor = 0;
   return <div ref={node => { controller.content = node ?? undefined; }} data-slot="thread-messages" className="flex flex-col pt-5 empty:hidden" style={{ overflowAnchor: "none" }}>
