@@ -9,7 +9,7 @@
  * branch leaf and the entries all come back equal, the release cost the person
  * nothing but a reload.
  */
-import { ErrorCodes, PRODUCT_NAME, isSessionRevision, type SessionState, type SessionUpdateParams } from "@lasercode/protocol";
+import { ErrorCodes, PRODUCT_NAME, isSessionRevision, isSessionWorkPin, type SessionState, type SessionUpdateParams } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
@@ -180,6 +180,20 @@ async function settled(url: string, path: string): Promise<void> {
   throw new Error(`session ${path} never settled`);
 }
 
+/** Naming is separate work from the turn and appends one durable record. */
+async function named(path: string): Promise<void> {
+  await until(() => readFileSync(path, "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .some((line) => {
+      try {
+        return (JSON.parse(line) as { type?: string }).type === "session_info";
+      } catch {
+        return false;
+      }
+    }), "the session name to become durable");
+}
+
 beforeEach(async () => {
   base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-unload-`));
   for (const dir of ["project", "agent"]) mkdirSync(join(base, dir), { recursive: true });
@@ -217,6 +231,10 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("releasing a session's runtime
       await client.request("session/prompt", { path: state.path, content: [{ type: "text", text: "hello" }] });
       await client.waitFor((message) => "method" in message && message.method === "session/update"
         && (message as { params: SessionUpdateParams }).params.update.kind === "agent_settled");
+      // The Namer is independent of the turn: agent_settled does not mean its
+      // session_info append is done. Take the revision only after that intended
+      // durable change, so release/reopen compares one canonical state.
+      await named(state.path);
 
       const before = await client.request<{ revision: string; environmentKey: string; authority: string }>("session/revision", { path: state.path });
       expect(isSessionRevision(before.revision)).toBe(true);
@@ -413,6 +431,9 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("routing a mutation while a ru
       await client.request("session/prompt", { path: state.path, content: [{ type: "text", text: "hello" }] });
       await client.waitFor((message) => "method" in message && message.method === "session/update"
         && (message as { params: SessionUpdateParams }).params.update.kind === "agent_settled");
+      // `agent_settled` covers the answer, not the independent Namer append.
+      // Every revision assertion after this helper needs both durable writes.
+      await named(state.path);
       await client.request("pi/session/detach", { path: state.path });
       expect(host.sessionMembership().holders(state.path)).toBe(0);
       return state;
@@ -434,10 +455,21 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("routing a mutation while a ru
       content: [{ type: "text", text: "while releasing" }],
     });
     expect(accepted.accepted).toBe(true);
-    expect((await release).unloaded).toBe(true);
+    const outcome = await release;
+    if (outcome.unloaded) {
+      // The release won: the routed prompt reopened the durable session.
+      expect(outcome.pins).toEqual([]);
+    } else {
+      // The prompt reached the worker first: unload correctly refused work in
+      // flight rather than tearing its runtime away. This is the other valid
+      // ordering of the race, not a failed release.
+      expect(outcome.pins.some((pin) => isSessionWorkPin(pin.kind))).toBe(true);
+    }
     await settled(url, state.path);
+    expect(host.pool.openSessions(cwd)).toContain(state.path);
 
-    // Delivered once: not lost to a worker that had let go, and not resent.
+    // Both orderings deliver once: not lost to a worker that had let go, and
+    // not resent after a refusal.
     expect(userMessages(state.path)).toBe(before + 1);
     expect(readFileSync(state.path, "utf8")).toContain("while releasing");
   }, 120_000);
