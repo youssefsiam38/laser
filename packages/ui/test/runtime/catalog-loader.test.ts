@@ -31,18 +31,29 @@ describe("catalog loader", () => {
     expect(h.state().sessions.map(r => r.id)).toEqual(["7"]);
     expect(await h.loader.more("/project")).toBe(true); expect(h.requests).toHaveLength(3);
   });
-  it("refuses a late page after refresh and keeps full-summary reads explicit", async () => {
+  it("deduplicates a rapid second page request and lets the page settle before refresh", async () => {
     const h = harness(); const opening = h.loader.refresh();
     h.requests[0]!.resolve({ sessions: [row(0)], groups: [{ cwd: "/project", total: 20, cursor: "one" }] }); await opening;
-    const more = h.loader.more("/project"); const refresh = h.loader.refresh();
-    h.requests[2]!.resolve({ sessions: [row(2)], groups: [{ cwd: "/project", total: 1 }] }); await refresh;
-    h.requests[1]!.resolve({ sessions: [row(1)], groups: [{ cwd: "/project", total: 20 }] });
-    expect(await more).toBe(false); expect(h.state().sessions.map(r => r.id)).toEqual(["2"]);
-    const release = h.loader.expand(); const expanded = h.loader.refresh(); expect(h.requests[3]!.params).toEqual({});
-    h.requests[3]!.resolve({ sessions: [row(0), row(1)] }); await expanded; release();
-    const collapsed = h.loader.refresh(); expect(h.requests[4]!.params.page?.size).toBe(7);
-    h.requests[4]!.resolve({ sessions: [] }); await collapsed;
-    const all = h.loader.all(); expect(h.requests[5]!.params).toEqual({}); h.requests[5]!.resolve({ sessions: [row(9)] });
+    const first = h.loader.more("/project");
+    const second = h.loader.more("/project");
+    const refresh = h.loader.refresh();
+    expect(h.requests).toHaveLength(2);
+    h.requests[1]!.resolve({ sessions: [row(1)], groups: [{ cwd: "/project", total: 20, cursor: "two" }] });
+    await expect(Promise.all([first, second])).resolves.toEqual([true, true]);
+    expect(h.requests).toHaveLength(3);
+    expect(h.requests[2]!.params.page?.sizes).toEqual({ "/project": 14 });
+    h.requests[2]!.resolve({ sessions: [row(0), row(1)], groups: [{ cwd: "/project", total: 20, cursor: "two" }] });
+    await refresh;
+    expect(h.state().sessions.map(r => r.id)).toEqual(["0", "1"]);
+  });
+  it("keeps full-summary reads explicit", async () => {
+    const h = harness(); const opening = h.loader.refresh();
+    h.requests[0]!.resolve({ sessions: [row(0)] }); await opening;
+    const release = h.loader.expand(); const expanded = h.loader.refresh(); expect(h.requests[1]!.params).toEqual({});
+    h.requests[1]!.resolve({ sessions: [row(0), row(1)] }); await expanded; release();
+    const collapsed = h.loader.refresh(); expect(h.requests[2]!.params.page?.size).toBe(7);
+    h.requests[2]!.resolve({ sessions: [] }); await collapsed;
+    const all = h.loader.all(); expect(h.requests[3]!.params).toEqual({}); h.requests[3]!.resolve({ sessions: [row(9)] });
     expect(await all).toEqual([row(9)]); expect(h.state().sessions).toEqual([]);
   });
 });

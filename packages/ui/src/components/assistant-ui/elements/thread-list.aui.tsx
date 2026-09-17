@@ -730,6 +730,9 @@ const ProjectGroup = memo(function ProjectGroup({ group, collapsed, isCurrent, s
   const shownRoots = group.roots.filter(node => searching || node.empty || protectedSet.has(node.path) || ordinaryRoots++ < limit || lineageTo([node], openPath).length > 0);
   const locallyHidden = shownRoots.length < group.roots.length;
   const hasMore = locallyHidden || !!catalogPage?.cursor;
+  const remaining = locallyHidden
+    ? Math.min(7, group.roots.length - shownRoots.length)
+    : catalogPage?.remaining === undefined ? undefined : Math.min(7, catalogPage.remaining);
   const id = groupDomId(group.cwd);
   const listId = `${id}-list`;
   const beam = group.kind === "beam";
@@ -844,7 +847,9 @@ const ProjectGroup = memo(function ProjectGroup({ group, collapsed, isCurrent, s
                 }}
                 className="flex h-8 w-full cursor-pointer items-center rounded-md ps-9 pe-2 text-xs text-ink-3 outline-none hover:bg-surface-2 hover:text-ink active:bg-surface-2 focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live pointer-coarse:h-11"
               >
-                {loadingMore ? "Loading chats…" : hasMore ? "Load more" : "Show fewer"}
+                <span className="inline-block min-w-24 tnum">
+                  {loadingMore ? "Loading chats…" : hasMore ? remaining === undefined ? "Load more" : `Load ${remaining} more` : "Show fewer"}
+                </span>
               </button>
             )}
           </div>
@@ -856,7 +861,7 @@ const ProjectGroup = memo(function ProjectGroup({ group, collapsed, isCurrent, s
 /** The Chat tab: no folder, no header — the conversations themselves, newest first. */
 function ChatGroup({ group, searching, openPath, editing, onEdit, onOpen }: { group: ThreadListGroup; searching: boolean; openPath: string; editing: string | undefined; onEdit(id: string | undefined): void; onOpen?: (() => void) | undefined }) {
   const { actions } = useLaserStable();
-  const cursor = useLaserState(state => state.catalogGroups?.find(page => page.cwd === group.cwd)?.cursor);
+  const catalogPage = useLaserState(state => state.catalogGroups?.find(page => page.cwd === group.cwd));
   const { revealed } = useSessionsList();
   const limit = revealed.get(group.cwd) ?? 7;
   const protectedPaths = useLaserState(state => {
@@ -875,7 +880,10 @@ function ChatGroup({ group, searching, openPath, editing, onEdit, onOpen }: { gr
   let ordinaryRoots = 0;
   const shownRoots = group.roots.filter(node => searching || protectedSet.has(node.path) || ordinaryRoots++ < limit || lineageTo([node], openPath).length > 0);
   const locallyHidden = shownRoots.length < group.roots.length;
-  const hasMore = locallyHidden || !!cursor;
+  const hasMore = locallyHidden || !!catalogPage?.cursor;
+  const remaining = locallyHidden
+    ? Math.min(7, group.roots.length - shownRoots.length)
+    : catalogPage?.remaining === undefined ? undefined : Math.min(7, catalogPage.remaining);
   const [loading, setLoading] = useState(false);
   const listId = `${groupDomId(group.cwd)}-chats`;
   const layout = useContext(LayoutContext);
@@ -898,7 +906,9 @@ function ChatGroup({ group, searching, openPath, editing, onEdit, onOpen }: { gr
               .catch(() => actions.toast("error", "Couldn’t load earlier chats. Try again."))
               .finally(() => setLoading(false));
           }}>
-          {loading ? "Loading chats…" : hasMore ? "Load more" : "Show fewer"}
+          <span className="inline-block min-w-24 tnum">
+            {loading ? "Loading chats…" : hasMore ? remaining === undefined ? "Load more" : `Load ${remaining} more` : "Show fewer"}
+          </span>
         </button>}
       </div>
       </LayoutContext>

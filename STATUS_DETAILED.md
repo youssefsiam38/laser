@@ -2370,7 +2370,7 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 | M16-T61 | The Chat tab never waits | in-progress | orchestrator-2026-09-18 | — | see notes; added by D-278 |
 | M16-T62 | A trimmed conversation always reads back | in-progress | orchestrator-2026-09-18 | — | see notes; added by D-279 |
 | M16-T63 | The @ picker selects folders and understands people's paths | in-progress | orchestrator-2026-09-18 | — | see notes; added by D-279 |
-| M16-T64 | Load more loads, and says how many | in-progress | orchestrator-2026-09-18 | — | see notes; added by D-279 |
+| M16-T64 | Load more loads, and says how many | done | ui-load-more-01a0b045 | UI 2311 passed/1 skipped; host catalog/router 49; protocol 333; browser `/tmp/browser-check/run-eHuvcA` | see notes; added by D-279 |
 | M16-T50 | Release 0.6.3 | done | orchestrator | v0.6.3 public: candidate `960330f` from source `8abd0bb`; source CI 34813034026; release run 34813529150; 12 assets; checkpoint `verified`; https://github.com/youssefsiam38/laser/releases/tag/v0.6.3 | gates on final bytes: verify, packaged clean-machine, matrices long/huge-repeat/huge-blank/flicker/log-store; review D-247 |
 | M16-T27 | The session the app just created is the session it shows | done | worker catalog-arrival-race | merged `961aeb8` (`9d4488e`); test-only: the assertion ran before the deliberate adoption timer (`LaserProvider.tsx:1376`, `threadList.ts:452`, deferred to let assistant-ui adopt the remote id and avoid the orphan-row crash). Product unchanged; captured failure state in `/tmp/catalog-arrival-race-report.md`; 30 relevant-suite runs and 5 parallel full-runtime runs clean | `packages/ui/test/runtime/catalog-arrival.test.tsx:203` fails intermittently: prompt routing succeeds but `data-current` stays empty; seen independently by the orchestrator and by the MCP worker on unrelated branches |
 | M16-T26 | The first click is not a cold start | done | worker session-readiness | merged `f8b0d34` (`00da6ba`, `e250c1d`); review `/tmp/review-readiness.md` blocked on a crashed-but-attached worker being marked warm → fixed; cold short open 729 → 176 ms, click-time admission 543 → 0.43 ms; host 270, UI 1412 | forensics `docs/session-open-forensics.md`: prestarting only the worker process took a short-session open 744 → 175 ms; engine file open is ~4.5 ms |
@@ -2959,7 +2959,9 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 - 2026-09-17 released v0.7.2 from `ceb71b30`: candidate CI 35204991035 attempt 1 failed a host timing assertion (`session-index` cold-scan ratio 92.5 < 78.4 ms; fixture has no goal records, same code green twice), attempt 2 green; release run 35205573838, 12 assets. Done.
 
 #### M16-T64 notes
-- 2026-09-18 claimed: UI lane (thread-list + catalog loader), may touch host session list paging for a remaining count.
+- 2026-09-18 claimed by ui-load-more-01a0b045: UI lane (thread-list + catalog loader), may touch host session list paging for a remaining count.
+- 2026-09-18 checkpoint: reproduced duplicate page requests plus refresh invalidation (new loader regression failed with four requests instead of two); loader now deduplicates per cwd and serializes refresh/page writes. Focused UI 19/19, host catalog/router 49/49, protocol 333/333 green; browser matrix next.
+- 2026-09-18 done: host reports exact unseen `remaining`; both controls name the next batch; an exhausted page becomes Show fewer; rapid clicks fetch once. Full UI 2311 passed/1 skipped, final browser matrix `/tmp/browser-check/run-eHuvcA` (1360/390, dark/light).
 
 #### M16-T63 notes
 - 2026-09-18 claimed: UI + host directory-explorer lane.

@@ -1244,7 +1244,7 @@ export interface ClientRequests {
 
   "pi/session/list": {
     params: { cwd?: string; page?: { cursor?: string; size?: number; sizes?: Record<string, number>; exclude?: string[]; include?: string[]; probe?: string[] } };
-    result: { sessions: SessionSummary[]; groups?: Array<{ cwd: string; total: number; cursor?: string }>; archivedCount?: number; presence?: Record<string, boolean> };
+    result: { sessions: SessionSummary[]; groups?: Array<{ cwd: string; total: number; cursor?: string; remaining?: number }>; archivedCount?: number; presence?: Record<string, boolean> };
   };
   /** Read-only search of saved conversations; no worker is opened. */
   "session/search": {

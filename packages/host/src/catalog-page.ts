@@ -32,25 +32,6 @@ export function pageCatalog(rows: readonly SessionSummary[], request: Request, g
       cursor = { cwd: item["cwd"], at: item["at"], path: item["path"] };
     } catch { throw new ProtocolError(ErrorCodes.InvalidParams, "This session page is no longer available. Refresh the list and try again."); }
   }
-  const selected = new Set<string>();
-  const result: Result = { sessions: [], groups: [], archivedCount: rows.filter(row => excluded.has(row.path)).length,
-    presence: Object.fromEntries([...new Set([...(page.include ?? []), ...(page.probe ?? [])])].map(path => [path, byPath.has(path)])),
-  };
-  for (const [cwd, members] of groups) {
-    if ((request.cwd && cwd !== request.cwd) || (cursor && cursor.cwd !== cwd)) continue;
-    members.sort(order);
-    // Empty/live rows are exceptions, not consumers of the recent-row quota.
-    const ordinary = members.filter(row => !important(row));
-    const remaining = cursor ? ordinary.filter(row => order(row, { modifiedAt: cursor.at, path: cursor.path } as SessionSummary) > 0) : ordinary;
-    const size = page.sizes?.[cwd] ?? page.size ?? 7;
-    const batch = remaining.slice(0, size);
-    for (const row of members) if (important(row) || included.has(row.path)) selected.add(row.path);
-    for (const row of batch) selected.add(row.path);
-    const last = batch.at(-1);
-    result.groups!.push({ cwd, total: members.length, ...(last && remaining.length > batch.length
-      ? { cursor: Buffer.from(JSON.stringify({ cwd, at: last.modifiedAt, path: last.path })).toString("base64url") } : {}) });
-  }
-  // Explicitly included parents (pinned/open) retain their navigable branch.
   const children = new Map<string, SessionSummary[]>();
   for (const row of rows) {
     const parent = parentOf(row);
@@ -60,6 +41,47 @@ export function pageCatalog(rows: readonly SessionSummary[], request: Request, g
       children.set(parent, siblings);
     }
   }
+  // Rows already shown outside the quota must not consume a later page or its
+  // promised count. This includes the navigable branch of an included row and
+  // the ancestors needed to place every included/live row in the tree.
+  const selected = new Set(rows.filter(row => !excluded.has(row.path) && (important(row) || included.has(row.path))).map(row => row.path));
+  const descendants = [...included].filter(path => selected.has(path));
+  while (descendants.length) {
+    const path = descendants.pop()!;
+    for (const child of children.get(path) ?? []) if (!excluded.has(child.path) && !selected.has(child.path)) {
+      selected.add(child.path); descendants.push(child.path);
+    }
+  }
+  for (const path of [...selected]) {
+    const visited = new Set<string>();
+    let row = byPath.get(path);
+    while (row && !visited.has(row.path)) {
+      visited.add(row.path);
+      const parent = parentOf(row);
+      row = parent ? byPath.get(parent) : undefined;
+      if (row && !excluded.has(row.path)) selected.add(row.path);
+    }
+  }
+  const alwaysSelected = new Set(selected);
+  const result: Result = { sessions: [], groups: [], archivedCount: rows.filter(row => excluded.has(row.path)).length,
+    presence: Object.fromEntries([...new Set([...(page.include ?? []), ...(page.probe ?? [])])].map(path => [path, byPath.has(path)])),
+  };
+  for (const [cwd, members] of groups) {
+    if ((request.cwd && cwd !== request.cwd) || (cursor && cursor.cwd !== cwd)) continue;
+    members.sort(order);
+    // Empty/live rows are exceptions, not consumers of the recent-row quota.
+    const ordinary = members.filter(row => !alwaysSelected.has(row.path));
+    const remaining = cursor ? ordinary.filter(row => order(row, { modifiedAt: cursor.at, path: cursor.path } as SessionSummary) > 0) : ordinary;
+    const size = page.sizes?.[cwd] ?? page.size ?? 7;
+    const batch = remaining.slice(0, size);
+    for (const row of members) if (important(row) || included.has(row.path)) selected.add(row.path);
+    for (const row of batch) selected.add(row.path);
+    const last = batch.at(-1);
+    const left = remaining.length - batch.length;
+    result.groups!.push({ cwd, total: members.length, remaining: left, ...(last && left > 0
+      ? { cursor: Buffer.from(JSON.stringify({ cwd, at: last.modifiedAt, path: last.path })).toString("base64url") } : {}) });
+  }
+  // Explicitly included parents (pinned/open) retain their navigable branch.
   const pending = [...included].filter(path => selected.has(path));
   const visited = new Set<string>();
   while (pending.length) {
