@@ -2,7 +2,7 @@ import { useAui, useAuiState, type CreateAttachment, type ThreadComposerRuntime 
 import { useEffect, useLayoutEffect, useRef } from "react";
 
 import { deviceStore } from "./device-storage.js";
-import { codeLandingKey, type MainDestination } from "./main-destination.js";
+import { mainLandingKey, type MainDestination } from "./main-destination.js";
 
 type ComposerState = ReturnType<ThreadComposerRuntime["getState"]>;
 
@@ -65,7 +65,7 @@ export function createMainLandingDraftStore(): MainLandingDraftStore {
     composer: undefined,
     drafts: new Map(),
     captureBeforeTransition(destination) {
-      const key = codeLandingKey(destination);
+      const key = mainLandingKey(destination);
       if (!key || !this.composer) return;
       const draft = capture(this.composer);
       this.drafts.set(key, draft);
@@ -75,10 +75,15 @@ export function createMainLandingDraftStore(): MainLandingDraftStore {
   };
 }
 
-/** Bind the assistant-ui local composer to project-keyed, ephemeral landing drafts. */
+/** Bind the assistant-ui local composer to destination-keyed landing drafts. */
 export function useMainLandingDrafts(destination: MainDestination, store: MainLandingDraftStore): void {
   const aui = useAui();
-  const key = codeLandingKey(destination);
+  const destinationKey = mainLandingKey(destination);
+  const physicalPath = useAuiState((s) => s.threadListItem.externalId ?? s.threadListItem.remoteId);
+  // The destination commits before assistant-ui's controlled selection. Never
+  // reset the session composer that is still physically mounted underneath a
+  // landing; bind only after the runtime has adopted its local new thread.
+  const key = physicalPath === undefined ? destinationKey : undefined;
   const previousKey = useRef<string | undefined>(undefined);
   useLayoutEffect(() => {
     const composer = aui.composer as unknown as ThreadComposerRuntime;

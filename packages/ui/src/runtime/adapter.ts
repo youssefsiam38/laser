@@ -441,6 +441,8 @@ export interface ThreadAdapterDeps {
   composer?: (() => UnsentMessageComposer | undefined) | undefined;
   /** Lazy main-destination fence. Scoped runtimes omit it. */
   assertCanAct?: ((resolvedPath?: string) => void) | undefined;
+  /** Chat may wait behind destination/workspace readiness without rejecting the draft. */
+  prepareSend?: (() => Promise<void>) | undefined;
 }
 
 const attachmentAdapter = new ConversationAttachmentAdapter();
@@ -477,6 +479,7 @@ export function createThreadAdapter(deps: ThreadAdapterDeps): ExternalStoreAdapt
     // never the one on screen.
     const origin = deps.composer?.();
     try {
+      if (deps.prepareSend) await deps.prepareSend();
       deps.assertCanAct?.();
       const path = await resolvePath();
       deps.assertCanAct?.(path);
@@ -524,14 +527,14 @@ export function createThreadAdapter(deps: ThreadAdapterDeps): ExternalStoreAdapt
    * the composer and the surfaces around it can say so before a person tries.
    */
   const sendDisabled = deps.connection !== "open"
-    || (deps.openPhase?.phase === "failed" && !deps.openPhase.hasTranscript) || (() => {
+    || (deps.openPhase?.phase === "failed" && !deps.openPhase.hasTranscript) || (deps.prepareSend ? false : (() => {
       try {
         deps.assertCanAct?.();
         return false;
       } catch {
         return true;
       }
-    })();
+    })());
 
   const { items, steerItems } = queueItemsOf(deps.view);
   /** Run `work` for the tray row `queueItemId`, or do nothing if it is not one. */

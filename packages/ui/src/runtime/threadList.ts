@@ -367,6 +367,8 @@ export interface ThreadListDeps {
   archive: ArchiveStore;
   /** Explicit destination-owned target for a brand-new session. Never guessed from an open view. */
   creationTarget(): { cwd: string; agentName?: string | undefined; intent?: number | undefined } | undefined;
+  /** Wait for a destination whose creation cwd has not arrived yet. */
+  waitForCreationTarget?(): Promise<void>;
   /**
    * Reuse an unstarted session for this exact target, or create one; returns
    * its path. Must not make it current: the runtime adopts it first.
@@ -503,7 +505,11 @@ export function createThreadListAdapter(deps: ThreadListDeps): RemoteThreadListA
     },
 
     initialize: async () => {
-      const target = deps.creationTarget();
+      let target = deps.creationTarget();
+      if (!target && deps.waitForCreationTarget) {
+        await deps.waitForCreationTarget();
+        target = deps.creationTarget();
+      }
       if (!target) throw new Error("This destination is not ready to start a conversation.");
       deps.beginInitialize?.(target);
       try {

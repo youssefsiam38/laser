@@ -31,9 +31,10 @@ describe("main destination model", () => {
     expect(destinationSessionForTab("chat", undefined, { ...source, archived: (path: string) => path === CHAT.path })).toBeUndefined();
   });
 
-  it("creates Chat only from its workspace and Code only from Code memory", () => {
-    const chat = { phase: "ready-chat" as const, path: "/chat/one", rememberedCode: { kind: "project-landing" as const, project: "/project" }, intent: 3 };
-    expect(creationTargetForDestination(chat, "/private/chat")).toBeUndefined();
+  it("creates Chat only from its landing workspace and Code only from Code memory", () => {
+    const chat = { phase: "ready-chat" as const, kind: "chat-landing" as const, rememberedCode: { kind: "project-landing" as const, project: "/project" }, intent: 3 };
+    expect(creationTargetForDestination(chat, "/private/chat")).toEqual({ cwd: "/private/chat", agentName: "chat", intent: 3 });
+    expect(creationTargetForDestination(chat, undefined)).toBeUndefined();
     const code = { phase: "ready-code" as const, code: { kind: "project-landing" as const, project: "/project" }, intent: 3 };
     expect(creationTargetForDestination(code, "/private/chat")).toEqual({ cwd: "/project", intent: 3 });
     expect(creationTargetForDestination({ ...code, code: { kind: "no-project-landing" as const } }, "/private/chat")).toBeUndefined();

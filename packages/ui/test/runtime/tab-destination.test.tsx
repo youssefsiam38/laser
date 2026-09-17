@@ -38,6 +38,8 @@ type Controls = {
   phase: string;
   /** The runtime refuses to send: a fence, not a composer taken away (RP-11). */
   sendBlocked: boolean;
+  canSend: boolean;
+  composerPath: string | undefined;
   text: string;
   attachments: number;
   codeProject: string | undefined;
@@ -54,11 +56,13 @@ function Probe() {
   const aui = useAui();
   const sendBlocked = useAuiState((state) =>
     state.thread.isDisabled || (state.thread.extras as { sendDisabled?: boolean } | undefined)?.sendDisabled === true);
+  const canSend = useAuiState((state) => state.composer.canSend);
+  const composerPath = useAuiState((state) => state.threadListItem.externalId ?? state.threadListItem.remoteId);
   const text = useAuiState((state) => state.composer.text);
   const attachments = useAuiState((state) => state.composer.attachments.length);
   const tab = mainTab(destination);
   const phase = isMainReady(destination) ? "ready" : destination.phase;
-  controls = { actions, aui, tab, path: view?.path, phase, sendBlocked, text, attachments, codeProject: currentProject, dialogs: view?.dialogs.length ?? 0, toasts };
+  controls = { actions, aui, tab, path: view?.path, phase, sendBlocked, canSend, composerPath, text, attachments, codeProject: currentProject, dialogs: view?.dialogs.length ?? 0, toasts };
   return <output data-tab={tab} data-path={view?.path ?? ""} data-phase={phase} data-send-blocked={sendBlocked} />;
 }
 
@@ -124,17 +128,41 @@ describe("main destination isolation", () => {
       await settle(30);
     });
 
+    expect(calls("session/new")).toHaveLength(0);
+    expect(calls("session/load").filter((call) => (call.params as { path: string }).path !== CODE)).toHaveLength(0);
+    expect(controls).toMatchObject({ tab: "chat", path: undefined, phase: "ready", sendBlocked: false, codeProject: PROJECT_CWD });
+
+    await send("hi");
     const created = calls("session/new");
     expect(created).toHaveLength(1);
     expect(created[0]!.params).toMatchObject({ cwd: world.snapshot.workspaces.chat, agentName: "chat" });
-    expect(controls).toMatchObject({ tab: "chat", phase: "ready", sendBlocked: false, codeProject: PROJECT_CWD });
-    expect(controls.path).not.toBe(CODE);
-
-    await send("hi");
     expect(calls("session/prompt")).toHaveLength(1);
     expect(promptPath(calls("session/prompt")[0]!)).toBe(controls.path);
     expect(history[controls.path!]?.[0]).toEqual([{ type: "text", text: "hi" }]);
     expect(history[CODE]).toEqual([[{ type: "text", text: "original code history" }]]);
+    expect(JSON.parse(readDeviceValue(DEVICE_KEYS.destination)!)).not.toHaveProperty("chat");
+  });
+
+  it("queues the first send until the Chat workspace arrives and delivers it once", async () => {
+    addSession(world, CODE, PROJECT_CWD);
+    seedProject(PROJECT_CWD);
+    const readySnapshot = world.snapshot;
+    const { chat: _lateChat, ...workspacesWithoutChat } = readySnapshot.workspaces;
+    world.snapshot = { ...readySnapshot, workspaces: workspacesWithoutChat };
+    await mount();
+    await act(async () => { await controls.actions.goTab("chat"); await settle(40); });
+    expect(controls).toMatchObject({ tab: "chat", path: undefined, composerPath: undefined, phase: "ready", sendBlocked: false });
+
+    await act(async () => { controls.aui.composer.setText("wait for the workspace"); await settle(0); });
+    expect(controls.canSend).toBe(true);
+    await act(async () => { controls.aui.composer.send(); await settle(30); });
+    expect(calls("session/new")).toHaveLength(0);
+    expect(calls("session/prompt")).toHaveLength(0);
+
+    await act(async () => { FakeHostClient.current.notify("agents/updated", readySnapshot); await settle(100); });
+    expect(calls("session/new")).toHaveLength(1);
+    expect(calls("session/prompt")).toHaveLength(1);
+    expect(calls("session/prompt")[0]!.params).toMatchObject({ content: [{ type: "text", text: "wait for the workspace" }] });
   });
 
   it("opens Beam in Code without poisoning the remembered project session", async () => {
@@ -181,10 +209,11 @@ describe("main destination isolation", () => {
       controls.aui.composer.send();
       await settle(10);
     });
-    expect(controls).toMatchObject({ tab: "chat", phase: "resolving", sendBlocked: true });
+    expect(controls).toMatchObject({ tab: "chat", phase: "ready", sendBlocked: false });
     expect(calls("session/prompt")).toHaveLength(0);
 
-    await act(async () => { releaseNew(); await switching; await settle(25); });
+    releaseNew();
+    await act(async () => { await switching; await settle(25); });
     expect(controls).toMatchObject({ tab: "chat", phase: "ready", text: "", attachments: 0 });
     await act(async () => { await controls.actions.goTab("code"); await settle(20); });
     expect(controls).toMatchObject({ tab: "code", path: CODE, text: "stay with Code", attachments: 1 });
@@ -209,7 +238,7 @@ describe("main destination isolation", () => {
       await switching;
       await settle(20);
     });
-    expect(controls).toMatchObject({ tab: "chat", path: CHAT, dialogs: 0 });
+    expect(controls).toMatchObject({ tab: "chat", path: undefined, dialogs: 0 });
     expect(calls("pi/ui/response")).toHaveLength(0);
 
     await act(async () => { await controls.actions.goTab("code"); await settle(20); });
@@ -327,7 +356,9 @@ describe("main destination isolation", () => {
     addSession(world, CHAT, "/state/chat", { agent: { agentName: "chat", kind: "chat" } });
     localStorage.setItem(SESSIONS_TAB_STORAGE_KEY, "chat");
     await mount();
-    expect(controls).toMatchObject({ tab: "chat", path: CHAT, phase: "ready", sendBlocked: false });
+    expect(controls).toMatchObject({ tab: "chat", path: undefined, phase: "ready", sendBlocked: false });
+    await act(async () => { await controls.actions.openSession(CHAT); await settle(20); });
+    expect(controls).toMatchObject({ path: CHAT, phase: "ready" });
     const missing = "/state/chat/missing.jsonl";
 
     await act(async () => { await controls.actions.openSession(missing); await settle(20); });
@@ -355,45 +386,40 @@ describe("main destination isolation", () => {
     expect(controls).toMatchObject({ text: "code draft", attachments: 1 });
 
     await act(async () => { await controls.actions.goTab("chat"); await settle(20); });
-    expect(controls).toMatchObject({ tab: "chat", path: CHAT, text: "", attachments: 0 });
+    expect(controls).toMatchObject({ tab: "chat", path: undefined, text: "", attachments: 0 });
     await act(async () => { await controls.actions.goTab("code"); await settle(20); });
     expect(controls).toMatchObject({ tab: "code", path: CODE, text: "code draft", attachments: 1 });
     expect(controls.aui.composer.getState().runConfig.custom).toMatchObject({ agentName: "reviewer", thinkingLevel: "high" });
     expect(calls("session/prompt")).toHaveLength(0);
   });
 
-  it("keeps a stale saved Chat identity unavailable on retry instead of recreating or resending", async () => {
+  it("ignores a stale saved Chat identity and opens a fresh landing", async () => {
     addSession(world, CODE, PROJECT_CWD);
     addSession(world, CHAT, "/state/chat", { agent: { agentName: "chat", kind: "chat" } });
     delete world.states[CHAT];
     seedProject(PROJECT_CWD);
     localStorage.setItem(SESSIONS_TAB_STORAGE_KEY, "chat");
     await mount();
-    expect(controls).toMatchObject({ tab: "chat", path: undefined, phase: "unavailable", sendBlocked: true });
+    expect(controls).toMatchObject({ tab: "chat", path: undefined, phase: "ready", sendBlocked: false });
     expect(calls("session/new")).toHaveLength(0);
     expect(calls("session/prompt")).toHaveLength(0);
-    expect(calls("session/load").map((call) => (call.params as { path: string }).path)).toContain(CHAT);
-
-    await act(async () => { await controls.actions.retryDestination(); await settle(20); });
-    expect(controls).toMatchObject({ tab: "chat", path: undefined, phase: "unavailable", sendBlocked: true });
-    expect(calls("session/new")).toHaveLength(0);
-    expect(calls("session/prompt")).toHaveLength(0);
-    expect(calls("session/load").filter((call) => (call.params as { path: string }).path === CHAT)).toHaveLength(2);
+    expect(calls("session/load").map((call) => (call.params as { path: string }).path)).not.toContain(CHAT);
   });
 
   it("restores the saved tab and lets an explicit deep link override it", async () => {
     addSession(world, CODE, PROJECT_CWD);
+    addSession(world, CHAT, "/state/chat", { agent: { agentName: "chat", kind: "chat" } });
     seedProject(PROJECT_CWD);
     localStorage.setItem(SESSIONS_TAB_STORAGE_KEY, "chat");
     await mount();
-    expect(controls).toMatchObject({ tab: "chat", phase: "ready" });
-    expect(calls("session/new")[0]?.params).toMatchObject({ cwd: world.snapshot.workspaces.chat, agentName: "chat" });
+    expect(controls).toMatchObject({ tab: "chat", path: undefined, phase: "ready" });
+    expect(calls("session/new")).toHaveLength(0);
 
     await act(async () => root.unmount());
     root = createRoot(container);
     FakeHostClient.reset(world);
     localStorage.setItem(SESSIONS_TAB_STORAGE_KEY, "code");
-    globalThis.history.replaceState(null, "", `/#/session/${encodeURIComponent(controls.path!)}`);
+    globalThis.history.replaceState(null, "", `/#/session/${encodeURIComponent(CHAT)}`);
     await mount();
     expect(controls).toMatchObject({ tab: "chat", phase: "ready" });
     expect(controls.path).not.toBe(CODE);
@@ -443,28 +469,27 @@ describe("main destination isolation", () => {
     expect(controls).toMatchObject({ tab: "code", codeProject: PROJECT_CWD, path: undefined });
   });
 
-  it("retries the exact created Chat identity after hydration fails without recreating it", async () => {
+  it("keeps a remembered Chat composer live and delivers one queued send after opening", async () => {
+    addSession(world, CHAT, "/state/chat", { agent: { agentName: "chat", kind: "chat" } });
     seedProject(PROJECT_CWD);
-    let failedPath: string | undefined;
-    world.overrides["session/load"] = async (params: { path: string }) => {
-      if (params.path.includes("/state/chat/") && failedPath === undefined) {
-        failedPath = params.path;
-        throw new Error("hydrate failed");
-      }
-      const state = world.states[params.path];
-      if (!state) throw new Error("missing session");
-      return { state, replayFrom: 0, seq: 0 };
-    };
     await mount();
-    await act(async () => { await controls.actions.goTab("chat"); await settle(20); });
-    expect(controls).toMatchObject({ tab: "chat", path: undefined, phase: "unavailable", sendBlocked: true });
-    expect(calls("session/new")).toHaveLength(1);
-    expect(failedPath).toBeTruthy();
 
-    await act(async () => { await controls.actions.retryDestination(); await settle(20); });
-    expect(controls).toMatchObject({ tab: "chat", path: failedPath, phase: "ready", sendBlocked: false });
-    expect(calls("session/new")).toHaveLength(1);
-    expect(calls("session/load").filter((call) => (call.params as { path: string }).path === failedPath)).toHaveLength(2);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    world.overrides["session/load"] = async (params: { path: string }) => {
+      if (params.path === CHAT) await held;
+      return { state: world.states[params.path]!, replayFrom: 0, seq: 0 };
+    };
+    let opening!: Promise<void>;
+    await act(async () => { opening = controls.actions.openSession(CHAT); await settle(5); });
+    expect(controls).toMatchObject({ tab: "chat", phase: "resolving", sendBlocked: false });
+    await send("queued while opening");
+    expect(calls("session/prompt")).toHaveLength(0);
+
+    await act(async () => { release(); await opening; await settle(30); });
+    expect(controls).toMatchObject({ tab: "chat", path: CHAT, phase: "ready", sendBlocked: false });
+    expect(calls("session/prompt")).toHaveLength(1);
+    expect(promptPath(calls("session/prompt")[0]!)).toBe(CHAT);
   });
 
   it("keeps a fork of Chat in Chat and preserves its remembered Code destination", async () => {
@@ -480,6 +505,7 @@ describe("main destination isolation", () => {
       return { state };
     };
     await mount();
+    await act(async () => { await controls.actions.openSession(CHAT); await settle(20); });
     await act(async () => { await controls.actions.fork("entry"); await settle(20); });
     expect(controls).toMatchObject({ tab: "chat", path: CHAT_FORK, codeProject: PROJECT_CWD, phase: "ready" });
   });
@@ -537,6 +563,7 @@ describe("main destination isolation", () => {
       return { state, replayFrom: 0, seq: 0 };
     };
     await mount();
+    await act(async () => { await controls.actions.openSession(CHAT); await settle(20); });
     expect(controls).toMatchObject({ tab: "chat", path: undefined, phase: "unavailable" });
     addSession(world, newerChat, "/state/chat", { modifiedAt: "2026-09-11T00:00:00.000Z", agent: { agentName: "chat", kind: "chat" } });
     await act(async () => { await controls.actions.retryDestination(); await settle(20); });

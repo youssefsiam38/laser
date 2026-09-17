@@ -6,7 +6,7 @@ import type { Status } from "@/components/status/status";
 import { duration, tokens } from "@/format";
 import { cn } from "@/lib/utils";
 import { useLaserState } from "@/runtime";
-import { sessionOpenPhase, visibleSessionPath } from "@/runtime/main-destination";
+import { mainTab, sessionOpenPhase, visibleSessionPath } from "@/runtime/main-destination";
 import type { AppState } from "@/store";
 import { useSessionUpdates } from "./session-updates.js";
 import { useThreadSlots } from "./thread-slots.js";
@@ -33,6 +33,13 @@ const wordsFor = (s: AppState): Words | undefined => {
   // Provisional content is content: it is never described as loading, and it
   // never claims to be a confirmed live connection.
   if (open.provisional) return { status: "idle", text: "showing your last view · checking with the host", live: false };
+  if (mainTab(s.destination) === "chat" && s.destination.phase === "resolving") {
+    return { status: "idle", text: "opening the conversation · messages wait here", live: false };
+  }
+  if (s.destination.phase === "ready-chat" && "kind" in s.destination && s.destination.kind === "chat-landing"
+    && !s.agents.snapshot?.workspaces.chat) {
+    return { status: "idle", text: "getting Chat ready · messages wait here", live: false };
+  }
   // Loading is not work: the green sweep belongs to a running agent only.
   if (open.phase === "opening") {
     return { status: "idle", text: open.hasTranscript ? "refreshing the conversation" : "loading the conversation", live: false };
