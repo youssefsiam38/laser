@@ -44,6 +44,7 @@ import {
   AGENT_TASK_MAX,
   SUBAGENT_NAME_MAX,
   agentQuestionAnswerHint,
+  humanizeLabel,
 } from "@lasercode/protocol";
 import { Type } from "typebox";
 import type {
@@ -276,7 +277,7 @@ export function startedResponsibility(result: Pick<StartAgentResult, "cwd" | "br
 /** The reference's vocabulary for the model: `agent_name` / `subagent_name`, never camel case. */
 function modelView(summary: AgentRunSummary | (Omit<AgentRunSummary, "startedAt"> & { startedAt?: string })): Record<string, unknown> {
   const { agentName, subagentName, ...rest } = summary;
-  return { agent_name: agentName, subagent_name: subagentName, ...rest };
+  return { agent_name: agentName, subagent_name: humanizeLabel(subagentName), ...rest };
 }
 
 /**
@@ -292,11 +293,12 @@ export function inspectedView(result: InspectAgentResult): Record<string, unknow
 
 /** What a stalled child needs from its parent, or nothing for a child that is working or done. */
 export function whatItNeeds(result: Pick<InspectAgentResult, "status" | "subagentName" | "question" | "result">): string | undefined {
+  const name = humanizeLabel(result.subagentName);
   if (result.status === "needs_input" && result.question) {
-    return `${result.subagentName} is paused on a question and cannot continue until it is answered. ${agentQuestionAnswerHint(result.question)} The person can also answer it in ${result.subagentName}'s own chat.`;
+    return `${name} is paused on a question and cannot continue until it is answered. ${agentQuestionAnswerHint(result.question)} The person can also answer it in ${name}'s own chat.`;
   }
   if (result.status === "blocked") {
-    return `${result.subagentName} ended without finishing; its final message says what it could not do or is asking you. Answer with send_agent_message: that starts a new run in the same session, with its history intact.`;
+    return `${name} ended without finishing; its final message says what it could not do or is asking you. Answer with send_agent_message: that starts a new run in the same session, with its history intact.`;
   }
   return undefined;
 }
@@ -318,12 +320,13 @@ function registerStartAgent(pi: ExtensionAPI, bridge: AgentHarnessBridge, catalo
     promptGuidelines: [
       "Use start_agent for independent work another agent can do in parallel; it returns immediately with sessionId and runId. Do not wait for it and do not poll: its result is delivered to you as a message when it ends, and inspect_agent shows one agent in depth meanwhile.",
       "Give start_agent a self-contained task: the new agent sees none of this conversation.",
+      'For start_agent, write subagent_name as a short human-readable name of two to five words in sentence case with spaces—never a slug, dash- or underscore-separated words, or camelCase. Example: "Review login flow".',
       "Leave start_agent's worktree alone for work that changes files, and pass worktree false only for a task that just reads, such as a review or a search.",
       "A worktree start_agent created is yours afterwards: review the branch, merge it yourself with git, then call remove_agent_worktree. The child never merges or removes its own work.",
     ],
     parameters: Type.Object({
       agent_name: Type.String({ minLength: 1, maxLength: AGENT_NAME_MAX, description: "The unique name of the reusable agent to start." }),
-      subagent_name: Type.String({ minLength: 1, maxLength: SUBAGENT_NAME_MAX, description: "A short name for this running instance and its task." }),
+      subagent_name: Type.String({ minLength: 1, maxLength: SUBAGENT_NAME_MAX, description: 'A short human-readable name of two to five words for this running instance and its task, in sentence case with spaces. Never use a slug, dash- or underscore-separated words, or camelCase. Example: "Review login flow".' }),
       task: Type.String({ minLength: 1, maxLength: AGENT_TASK_MAX, description: "The complete task and all context the new agent needs." }),
       worktree: Type.Optional(
         Type.Boolean({

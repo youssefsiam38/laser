@@ -6,7 +6,7 @@ import {
 } from "@lasercode/protocol";
 import { describe, expect, it } from "vitest";
 import { agentPrompt, coreInstructions } from "../../src/agents/core-instructions.js";
-import { instructionTemplateValues } from "../../src/agents/instruction-templates.js";
+import { ACTIVITY_LABEL_GUIDANCE, instructionTemplateValues } from "../../src/agents/instruction-templates.js";
 import type { DriverAgentOptions } from "../../src/driver.js";
 import {
   fallbackBeamAgent,
@@ -47,6 +47,18 @@ describe("core instructions", () => {
     ["namer", fallbackNamerAgent(null)],
   ])("never prepends the core block to the %s built-in", (_name, definition) => {
     expect(agentPrompt({ ...definition, excludeCoreInstructions: false }, "ENGINE")).toEqual({ own: definition.instructions, template: definition.instructions });
+  });
+
+  it("tells every model to write activity labels as human sentence-case phrases", () => {
+    const values = instructionTemplateValues(
+      { cwd: "/project" },
+      {},
+      { agent: { definition: fallbackDefaultAgent() } as DriverAgentOptions, agentDir: "/agent", session: () => undefined },
+    );
+    expect(values.toolGuidelines).toContain(ACTIVITY_LABEL_GUIDANCE);
+    expect(values.toolGuidelines).toContain("sentence case with spaces");
+    expect(values.toolGuidelines).toContain("never a slug, dash- or underscore-separated words, or camelCase");
+    expect(values.toolGuidelines).toContain('Example: "Reading build config".');
   });
 
   it("points Beam's definition field at the global definitions folder", () => {

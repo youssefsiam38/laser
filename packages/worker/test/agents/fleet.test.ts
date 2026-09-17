@@ -78,10 +78,10 @@ describe("buildFleetTree", () => {
   it("nests as the tree nests, orders by creation, and says each row in the fleet's words", () => {
     const fleet = buildFleetTree({ callerPath: ROOT, runs, tasksOf, now: NOW });
     expect(fleet).toMatchObject({ working: 5, needsYou: 1, finished: 5, total: 10, omitted: 0 });
-    expect(fleet.rows.map((row) => row.title)).toEqual(["migrate", "review", "ended", "done", "pending", "between", "pnpm vite dev", "pnpm -r build"]);
+    expect(fleet.rows.map((row) => row.title)).toEqual(["Migrate", "Review", "Ended", "Done", "Pending", "Between", "pnpm vite dev", "pnpm -r build"]);
     const [migrate, review, ended, done, pending, between, dev, build] = fleet.rows;
-    expect(migrate).toMatchObject({ kind: "agent", agentName: "worker", subagentName: "migrate", sessionId: "id-/sessions/c1.jsonl", runId: "run_1", state: "needs_input", status: "Asking", line: "Which database?", elapsed: "10m 00s", depth: 0 });
-    expect(migrate!.children.map((row) => row.title)).toEqual(["check-tests", "pnpm test"]);
+    expect(migrate).toMatchObject({ kind: "agent", agentName: "worker", subagentName: "Migrate", sessionId: "id-/sessions/c1.jsonl", runId: "run_1", state: "needs_input", status: "Asking", line: "Which database?", elapsed: "10m 00s", depth: 0 });
+    expect(migrate!.children.map((row) => row.title)).toEqual(["Check tests", "pnpm test"]);
     expect(migrate!.children[0]).toMatchObject({ kind: "agent", runId: "run_3", status: "Working", line: "Reading packages/ui/src/store.ts", elapsed: "8m 00s", depth: 1, children: [] });
     expect(migrate!.children[1]).toMatchObject({ kind: "command", taskId: "t-test", state: "failed", status: "Failed", line: "exit code 1", exitCode: 1, elapsed: "1m 00s", depth: 1 });
     expect(review).toMatchObject({ kind: "agent", runId: "run_2", state: "blocked", status: "Blocked", line: "Which config is canonical?", elapsed: "3m 00s", endedAt: "2026-09-09T10:04:00.000Z" });
@@ -99,7 +99,7 @@ describe("buildFleetTree", () => {
 
   it("scopes to the caller: a child sees its subtree, a leaf sees nothing, a stranger sees nothing", () => {
     const child = buildFleetTree({ callerPath: "/sessions/c1.jsonl", runs, tasksOf, now: NOW });
-    expect(child.rows.map((row) => row.title)).toEqual(["check-tests", "pnpm test"]);
+    expect(child.rows.map((row) => row.title)).toEqual(["Check tests", "pnpm test"]);
     expect(child.rows[0]).toMatchObject({ depth: 0, runId: "run_3" });
     expect(child).toMatchObject({ working: 1, needsYou: 0, finished: 1, total: 2 });
     expect(buildFleetTree({ callerPath: "/sessions/g1.jsonl", runs, tasksOf, now: NOW })).toEqual({ rows: [], working: 0, needsYou: 0, finished: 0, total: 0, omitted: 0 });
@@ -109,11 +109,11 @@ describe("buildFleetTree", () => {
   it("stands each session on its newest run, and falls back to the task when a live run has said nothing", () => {
     const again = run({ runId: "run_9", sessionPath: "/sessions/c4.jsonl", subagentName: "done", startedAt: "2026-09-09T10:09:00.000Z", task: "One more thing." });
     const fleet = buildFleetTree({ callerPath: ROOT, runs: [...runs, again], tasksOf: () => [], now: NOW });
-    const row = fleet.rows.find((candidate) => candidate.title === "done")!;
+    const row = fleet.rows.find((candidate) => candidate.title === "Done")!;
     expect(row).toMatchObject({ kind: "agent", runId: "run_9", state: "running", status: "Working", line: "One more thing.", elapsed: "1m 00s" });
     // Its place in the order is still where its first run put it.
-    expect(fleet.rows.map((candidate) => candidate.title)).toEqual(["migrate", "review", "ended", "done", "pending", "between"]);
-    expect(fleet.rows.filter((candidate) => candidate.title === "done")).toHaveLength(1);
+    expect(fleet.rows.map((candidate) => candidate.title)).toEqual(["Migrate", "Review", "Ended", "Done", "Pending", "Between"]);
+    expect(fleet.rows.filter((candidate) => candidate.title === "Done")).toHaveLength(1);
   });
 
   it("keeps siblings in the order their first runs started while one of them is terminal-pending, on both sides", () => {
@@ -134,8 +134,8 @@ describe("buildFleetTree", () => {
       const ours = buildFleetTree({ callerPath: ROOT, runs: candidates, tasksOf: () => [], now: NOW }).rows.map((row) => row.title);
       const groups = buildFleet({ sessions: [], runs: Object.fromEntries(candidates.map((candidate) => [candidate.runId, candidate])), tasks: {}, views: {}, currentPath: ROOT, sessionsLoaded: false, now: NOW });
       const theirs = scopeFleet(groups, ROOT).tree!.items.map((item) => item.title);
-      expect(ours, name).toEqual(["a", "b"]);
-      expect(theirs, name).toEqual(["a", "b"]);
+      expect(ours, name).toEqual(["A", "B"]);
+      expect(theirs, name).toEqual(["A", "B"]);
     }
     // The row still stands on the run that can act — the head the order must not key on.
     expect(buildFleetTree({ callerPath: ROOT, runs: states["during"]!, tasksOf: () => [], now: NOW }).rows[0]).toMatchObject({ runId: "run_a1", status: "Working" });
@@ -193,16 +193,16 @@ describe("buildFleetTree", () => {
     expect(flattenFleetRows(fleet.rows)).toHaveLength(7);
     // Every top-level row stays; the grandchildren go newest first.
     expect(fleet.rows.map((row) => [row.title, row.children.map((child) => child.title)])).toEqual([
-      ["c0", ["g00", "g01", "g02"]],
-      ["c1", ["g10"]],
-      ["c2", []],
+      ["C0", ["G00", "G01", "G02"]],
+      ["C1", ["G10"]],
+      ["C2", []],
     ]);
     // Cutting reaches the top level only once everything below it is gone.
     const flat = buildFleetTree({ callerPath: ROOT, runs: deep, tasksOf: () => [], now: NOW, maxRows: 2 });
     expect(flat).toMatchObject({ omitted: 10 });
     expect(flat.rows.map((row) => [row.title, row.children.length])).toEqual([
-      ["c0", 0],
-      ["c1", 0],
+      ["C0", 0],
+      ["C1", 0],
     ]);
     expect(buildFleetTree({ callerPath: ROOT, runs: deep, tasksOf: () => [], now: NOW, maxRows: 12 }).omitted).toBe(0);
   });
@@ -248,7 +248,7 @@ describe("the agent's fleet agrees with the person's", () => {
     expect(ours).toEqual(theirs);
     expect(ours).toHaveLength(10);
     // The terminal-pending session stands on its executing run on both sides.
-    expect(ours.find((row) => row.title === "pending")).toEqual({ kind: "agent", title: "pending", status: "Working", depth: 0, id: "run_old" });
+    expect(ours.find((row) => row.title === "Pending")).toEqual({ kind: "agent", title: "Pending", status: "Working", depth: 0, id: "run_old" });
     // And the counts the header says.
     const tree = scopeFleet(groups, ROOT).tree!;
     const fleet = buildFleetTree({ callerPath: ROOT, runs, tasksOf, now: NOW });

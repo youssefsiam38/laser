@@ -64,9 +64,9 @@ describe("buildAgentTree", () => {
     const { runs, sessions } = family();
     const tree = buildAgentTree({ rootPath: ROOT, sessions, runs, defaultAgent: "default" });
     expect(tree.root).toMatchObject({ title: "Ship the feature", agentName: "default", status: "working", tone: "live", ended: false, runs: [] });
-    expect(tree.byPath.get("/p/a.jsonl")).toMatchObject({ title: "reviewer-1", agentName: "reviewer", subagentName: "reviewer-1", status: "running", tone: "live", ended: false });
+    expect(tree.byPath.get("/p/a.jsonl")).toMatchObject({ title: "Reviewer 1", agentName: "reviewer", subagentName: "Reviewer 1", status: "running", tone: "live", ended: false });
     expect(tree.byPath.get("/p/b.jsonl")).toMatchObject({ title: "Run the suite", agentName: "tester", status: "completed", tone: "muted", ended: true });
-    expect(tree.byPath.get("/p/c.jsonl")).toMatchObject({ title: "reader-1", agentName: "reader", subagentName: "reader-1", sessionId: "/p/c.jsonl", status: "running", ended: false });
+    expect(tree.byPath.get("/p/c.jsonl")).toMatchObject({ title: "Reader 1", agentName: "reader", subagentName: "Reader 1", sessionId: "/p/c.jsonl", status: "running", ended: false });
     expect(tree.byPath.get("/p/a.jsonl")?.run?.runId).toBe("r-a");
     expect(tree.active).toBe(3);
   });
@@ -174,7 +174,7 @@ describe("buildAgentTree", () => {
     ];
     const tree = buildAgentTree({ rootPath: ROOT, sessions, runs: [] });
     expect(tree.nodes.map((n) => n.id)).toEqual([ROOT, "/p/lost.jsonl", "/p/quiet.jsonl", "/p/busy.jsonl"]);
-    expect(tree.byPath.get("/p/lost.jsonl")).toMatchObject({ status: "failed", ended: true, title: "reviewer-9" });
+    expect(tree.byPath.get("/p/lost.jsonl")).toMatchObject({ status: "failed", ended: true, title: "Reviewer 9" });
     expect(tree.byPath.get("/p/quiet.jsonl")).toMatchObject({ status: "idle", ended: true });
     expect(tree.byPath.get("/p/busy.jsonl")).toMatchObject({ status: "working", ended: false });
     expect(tree.active).toBe(2);

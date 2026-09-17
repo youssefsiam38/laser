@@ -21,7 +21,7 @@
  * one the person is shown — the open session's tree — plus work whose root
  * session was deleted, which no session can show (M13-T51).
  */
-import { highestAttention, isTerminalRunStatus, type AgentRun, type Attention, type BackgroundTask, type SessionSummary } from "@lasercode/protocol";
+import { highestAttention, humanizeLabel, isTerminalRunStatus, type AgentRun, type Attention, type BackgroundTask, type SessionSummary } from "@lasercode/protocol";
 import { buildAgentTree, createAncestryIndex, type AgentTreeNode } from "../agents/run-tree.js";
 import { runStatusTone, type AgentStatusTone } from "../agents/model.js";
 import { sessionTitle } from "../runtime/threadList.js";
@@ -214,7 +214,7 @@ function agentItem(node: AgentTreeNode, tasksOf: (path: string) => BackgroundTas
   return {
     key: `agent:${node.sessionPath}`,
     kind: "agent",
-    title: node.subagentName ?? node.title,
+    title: humanizeLabel(node.subagentName ?? node.title),
     subtitle: run?.task,
     state,
     tone: node.status === "idle" ? "muted" : node.status === "working" ? "live" : runStatusTone(node.status),

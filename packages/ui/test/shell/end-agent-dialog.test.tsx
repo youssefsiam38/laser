@@ -52,7 +52,7 @@ describe("EndAgentDialog", () => {
     expect(dialog()).toBeNull();
     await act(async () => requestEndAgent("r1"));
     await settle();
-    expect(dialog()?.textContent).toContain("End explorer?");
+    expect(dialog()?.textContent).toContain("End Explorer?");
     expect(dialog()?.textContent).toContain("its parent is told you ended it");
     expect(document.activeElement).toBe(button("Keep running"));
     const chip = [...document.querySelectorAll<HTMLButtonElement>('[data-slot="end-agent-reason"]')].find((c) => c.textContent === "Wrong direction")!;
@@ -84,7 +84,7 @@ describe("EndAgentDialog", () => {
     await act(async () => button("End agent")!.click());
     await settle();
     expect(stable.actions.agents.stopRun).toHaveBeenCalledWith("r1", "I'll take over from here");
-    expect(stable.actions.toast).toHaveBeenCalledWith("info", "Ended explorer");
+    expect(stable.actions.toast).toHaveBeenCalledWith("info", "Ended Explorer");
     expect(request).toBeUndefined();
     expect(dialog()).toBeNull();
   });

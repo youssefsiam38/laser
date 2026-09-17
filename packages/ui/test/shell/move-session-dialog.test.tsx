@@ -168,7 +168,7 @@ describe("the row menu", () => {
     expect(menuItems(await openMenu("Actions for Recipe ideas"))).toEqual(["Pin chat", "Rename", "Move to a project…", "Copy path", "Archive"]);
     await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     // The child an agent started under the chat moves with its parent's tree, never on its own.
-    expect(menuItems(await openMenu("Actions for explorer"))).not.toContain("Move to a project…");
+    expect(menuItems(await openMenu("Actions for Explorer"))).not.toContain("Move to a project…");
   });
 });
 

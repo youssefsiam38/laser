@@ -477,7 +477,7 @@ describe("sub-sessions fold", () => {
     // `ThreadList`'s own query path (docs: a match that hides under a
     // non-matching parent is a match you cannot see).
     await mount(<ThreadList projects={["/one"]} query="charlie" />);
-    expect(names()).toEqual(["charlie"]);
+    expect(names()).toEqual(["Charliecharlie"]);
     expect(container.querySelector('[data-slot="session-fold"]')).toBeNull();
     expect(container.querySelector('[data-slot="finished-fold"]')).toBeNull();
   });

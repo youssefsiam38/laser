@@ -226,7 +226,7 @@ it.each(["deleted", "search"] as const)("places a child with a %s parent among o
   expect(visible()[1]?.textContent).toBe("Conversation 2");
   expect(visible().filter(el => el.textContent?.includes("Conversation child"))).toHaveLength(1);
   expect(row("Conversation child")?.closest("section")?.getAttribute("data-cwd")).toBe(PROJECT_CWD);
-  expect(row("Conversation child")?.querySelector('[data-slot="subagent-name"]')?.textContent).toBe("explorer");
+  expect(row("Conversation child")?.querySelector('[data-slot="subagent-name"]')?.textContent).toBe("Explorer");
   expect(visible()).toHaveLength(reason === "search" ? 8 : 7);
   if (reason !== "search") {
     await act(async () => button("Load 1 more").click());

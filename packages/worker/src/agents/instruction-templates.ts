@@ -43,9 +43,12 @@ function toolsBlock(options: BuildSystemPromptOptions, session: AgentSession | u
   return `Available tools:\n${lines.join("\n")}`;
 }
 
+export const ACTIVITY_LABEL_GUIDANCE =
+  'Write every activity_label as a short human-readable present-progressive phrase in sentence case with spaces—never a slug, dash- or underscore-separated words, or camelCase. Example: "Reading build config".';
+
 function toolGuidelinesBlock(options: BuildSystemPromptOptions): string {
-  const guidelines = [...new Set((options.promptGuidelines ?? []).map((line) => line.trim()).filter(Boolean))];
-  return guidelines.length > 0 ? `Tool guidance:\n${guidelines.map((line) => `- ${line}`).join("\n")}` : "";
+  const guidelines = [...new Set([ACTIVITY_LABEL_GUIDANCE, ...(options.promptGuidelines ?? []).map((line) => line.trim()).filter(Boolean)])];
+  return `Tool guidance:\n${guidelines.map((line) => `- ${line}`).join("\n")}`;
 }
 
 function projectInstructionsBlock(options: BuildSystemPromptOptions): string {

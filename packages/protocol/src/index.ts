@@ -38,6 +38,7 @@ export * from "./schemas.js";
 export * from "./utf8.js";
 export * from "./search-content.js";
 export * from "./tool-label.js";
+export * from "./human-label.js";
 export * from "./goal-presentation.js";
 export * from "./history-window.js";
 export * from "./body-range.js";

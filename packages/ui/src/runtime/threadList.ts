@@ -13,7 +13,7 @@
  *
  * The builders below are pure and tested in test/runtime/threadList.test.ts.
  */
-import { WORKTREES_DIR_NAME } from "@lasercode/protocol";
+import { humanizeLabel, WORKTREES_DIR_NAME } from "@lasercode/protocol";
 import { DEVICE_KEYS, deviceStore } from "./device-storage.js";
 import type { RemoteThreadListAdapter } from "@assistant-ui/react";
 import type { ProjectInfo, SessionAttention, SessionSummary } from "@lasercode/protocol";
@@ -80,7 +80,7 @@ export function sessionTitle(summary: SessionSummary, view?: SessionView | undef
   const first = viewFirstUserText(view) ?? summary.firstMessage?.trim();
   if (first) return clipToTitle(first);
   const subagent = summary.agent?.subagentName ?? view?.state.agent?.subagentName;
-  return subagent ? clipToTitle(subagent) : "New session";
+  return subagent ? clipToTitle(humanizeLabel(subagent)) : "New session";
 }
 
 
@@ -181,7 +181,7 @@ export function toThreadMetadata(
       // Agent attribution (agents leap): the sessions panel nests a child
       // under its parent and labels it with the instance name.
       ...(summary.agent !== undefined ? { agentKind: summary.agent.kind, agentName: summary.agent.agentName } : {}),
-      ...(summary.agent?.subagentName !== undefined ? { subagentName: summary.agent.subagentName } : {}),
+      ...(summary.agent?.subagentName !== undefined ? { subagentName: humanizeLabel(summary.agent.subagentName) } : {}),
       ...(summary.agent?.runId !== undefined ? { runId: summary.agent.runId } : {}),
     },
   };

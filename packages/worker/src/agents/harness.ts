@@ -42,6 +42,7 @@ import {
   type WorktreeSetup,
   SUBAGENT_NAME_MAX,
   agentQuestionAnswerHint,
+  humanizeLabel,
   isTerminalRunStatus,
   type AgentDefinition,
   type AgentEvent,
@@ -1151,10 +1152,11 @@ export class AgentHarness {
     }
     if (!parent.path || !parent.sessionId) throw new HarnessError("This session is not ready to start agents yet.");
     const agentName = (input.agentName ?? "").trim();
-    const subagentName = (input.subagentName ?? "").trim();
+    const suppliedSubagentName = (input.subagentName ?? "").trim();
+    const subagentName = humanizeLabel(suppliedSubagentName);
     const task = (input.task ?? "").trim();
     if (agentName === "") throw new HarnessError("agent_name is required: the name of the agent to start.");
-    if (subagentName === "") throw new HarnessError("subagent_name is required: a short name for this running instance and its task.");
+    if (subagentName === "") throw new HarnessError("subagent_name is required: a short human-readable name in sentence case with spaces.");
     if (subagentName.length > SUBAGENT_NAME_MAX) throw new HarnessError(`subagent_name must be at most ${SUBAGENT_NAME_MAX} characters.`);
     if (task === "") throw new HarnessError("task is required: the complete task and all context the new agent needs.");
     if (task.length > AGENT_TASK_MAX) throw new HarnessError(`task must be at most ${AGENT_TASK_MAX} characters.`);
@@ -2588,12 +2590,13 @@ export class AgentHarness {
       summary: `Asked: ${excerpt(question.title, QUESTION_SUMMARY_EXCERPT)}`,
     });
     if (!run.parent) return;
+    const displayName = humanizeLabel(run.subagentName);
     this.event({
       kind: "message_received",
       sessionPath: run.parent.sessionPath,
       runId: run.runId,
-      counterpart: { sessionPath: run.sessionPath, label: run.subagentName },
-      summary: `${run.subagentName} asked a question`,
+      counterpart: { sessionPath: run.sessionPath, label: displayName },
+      summary: `${displayName} asked a question`,
     });
     this.deliverToParent(run, {
       type: "agent.needs_input",
@@ -2641,12 +2644,13 @@ export class AgentHarness {
   private notifyParent(run: AgentRun, context: string | undefined): void {
     if (!run.parent || !isTerminalRunStatus(run.status)) return;
     const message = modelMessage(run, context);
+    const displayName = humanizeLabel(run.subagentName);
     this.event({
       kind: "message_received",
       sessionPath: run.parent.sessionPath,
       runId: run.runId,
-      counterpart: { sessionPath: run.sessionPath, label: run.subagentName },
-      summary: `${run.subagentName} ${statusWord(run.status)}`,
+      counterpart: { sessionPath: run.sessionPath, label: displayName },
+      summary: `${displayName} ${statusWord(run.status)}`,
     });
     this.deliverToParent(run, {
       type: MODEL_EVENT_TYPE[run.status],

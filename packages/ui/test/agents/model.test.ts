@@ -110,12 +110,12 @@ describe("sessions and kinds", () => {
 
   it("titles an unnamed, empty child session by the name its parent gave it", () => {
     const child = summary({ path: "/p/c", agent: { agentName: "reviewer", kind: "child", subagentName: "reviewer-1" } });
-    expect(sessionTitle(child)).toBe("reviewer-1");
+    expect(sessionTitle(child)).toBe("Reviewer 1");
     expect(sessionTitle({ ...child, name: "Review the diff" })).toBe("Review the diff");
     expect(sessionTitle({ ...child, firstMessage: "Look at packages/ui" })).toBe("Look at packages/ui");
     // The open view carries the attribution before the catalog has scanned the file.
     const v = view({ path: "/p/c", state: sessionState({ path: "/p/c", agent: { agentName: "reviewer", kind: "child", subagentName: "tester-2" } }) });
-    expect(sessionTitle(summary({ path: "/p/c" }), v)).toBe("tester-2");
+    expect(sessionTitle(summary({ path: "/p/c" }), v)).toBe("Tester 2");
     expect(sessionTitle(summary({ path: "/p/d" }))).toBe("New session");
   });
 });
