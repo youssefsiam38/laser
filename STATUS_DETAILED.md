@@ -1267,9 +1267,9 @@ lane T's own if both were written.
 | M13-T119 | Chat + opens the session it creates | done | claude-2026-09-11-trust | 111bf56; packages/ui/test/runtime/chat-new-session.test.tsx; full UI 1112 green | see notes |
 | M13-T120 | Reopen a child whose worktree was removed | done | claude-2026-09-11-trust | 6d82130; `pnpm -F @lasercode/worker test -- session-config stable-sdk.agent server-agents` 40/40 | see notes; D-220 |
 | M13-T121 | Release T118–T120 as 0.3.10 | done | claude-2026-09-11-trust | v0.3.10 public, 12 assets; candidate 8ad8dca; CI 34631345414; release 34631650985; checkpoint verified 2026-09-11T18:19Z | see notes |
-| M13-T122 | Agent definitions are Markdown files | in-progress | orchestrator-2026-09-18 | — | see notes; added by D-276 |
-| M13-T123 | Laser's core instructions prepend every custom agent | in-progress | orchestrator-2026-09-18 | — | see notes; added by D-276 |
-| M13-T124 | Agents page: scope, file and core-instructions controls | in-progress | orchestrator-2026-09-18 | — | see notes; added by D-276 |
+| M13-T122 | Agent definitions are Markdown files | done | orchestrator-2026-09-18 | `500d1ca5`, `517a7a08`; `packages/host/test/agents/{agent-file,agent-files-store}.test.ts`; real `agents.json` migrated on a copy (5 files, v2, `.v1.bak`) | see notes; added by D-276 |
+| M13-T123 | Laser's core instructions prepend every custom agent | done | orchestrator-2026-09-18 | `bee1829e`, `fbf308f1`, `d404434a`; `packages/worker/test/agents/{core-instructions,template-provenance,definitions}.test.ts`, `stable-sdk.agent.test.ts` | see notes; added by D-276 |
+| M13-T124 | Agents page: scope, file and core-instructions controls | done | orchestrator-2026-09-18 | `6b52d096`, `8c6bd722`, `5c45a17e`; `packages/ui/test/agents/page/screen.test.tsx`, `test/thread/agent-selector.test.tsx`; browser `/tmp/browser-check/run-fnpZR7` | see notes; added by D-276 |
 | M13-T65 | A fork is a top-level session, never nested under its origin | done | claude-2026-09-09-agents | `pnpm -F @lasercode/host test -- test/catalog.test.ts`; `pnpm -F @lasercode/ui test -- test/shell/session-groups-fork.test.ts` | requested by the user; D-166 |
 | M13-T64 | Namer labels every call of a top-level session, none of a child's | done | claude-2026-09-09-agents | `pnpm -F @lasercode/worker test` (`agents/namer.test.ts` "labels every call in a burst at once"; `agents/server-agents.test.ts` "a child agent's tool calls are never labelled") | requested by the user; D-165 |
 | M13-T63 | Restoring an unsent draft puts the person in the field | done | claude-2026-09-09-agents | `pnpm -F @lasercode/ui test -- test/thread/draft-restore-focus.test.tsx` | requested by the user; see notes |
@@ -1399,12 +1399,15 @@ lane T's own if both were written.
 
 
 #### M13-T124 notes
+- 2026-09-18 done after one review round: composer agent picker now scope-filtered (`8c6bd722`); warnings keyed by `AgentWarning.path`; scope logic shared via protocol `effectiveAgents`/`canReferenceAgent`; `DefinitionFileSection.tsx` extracted.
 - 2026-09-18 claimed: UI lane in a worktree off `5703c7bf`; contract in `packages/protocol/src/agents.ts` (`scope`, `projectCwd`, `path`, `excludeCoreInstructions`).
 
 #### M13-T123 notes
+- 2026-09-18 done: `agentPrompt()` returns `{core, own, template}` so provenance reads the boundary from the same object; leading HTML comments in the .md are stripped before the model sees it. Person edits `packages/worker/src/agents/core-instructions.md` before release.
 - 2026-09-18 claimed: worker lane in a worktree off `5703c7bf`; core prompt file is `packages/worker/src/agents/core-instructions.md` (the person edits it before release).
 
 #### M13-T122 notes
+- 2026-09-18 done after review: non-ENOENT readdir never reconciles; transactional multi-file saves; 5 s poll fallback; watch stops at `<project>/.laser`; migration-blocked mode never reconciles global; watcher split into `agent-files-watch.ts`. Known gap: `agents/delete` carries `{name}` only, host refuses an ambiguous cross-project delete. Installed Beam skill (`~/.local/share/lasercode/agent/skills/laser-beam/SKILL.md`) still says `agents.json`; no repo source, needs a shipped update.
 - 2026-09-18 claimed: host lane in a worktree off `5703c7bf`; protocol fields landed in `5703c7bf`.
 
 #### M13-T121 notes

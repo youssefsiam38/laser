@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-17T14:40:00+03:00 · claude-2026-09-17-a · HEAD: 5313e3a5
-**Current focus:** 0.7.3 is published (M16-T60): large outputs fold into their tool block and open in a tool-shaped, memory-bounded viewer.
+**Last updated:** 2026-09-18T12:00:00+03:00 · orchestrator-2026-09-18 · HEAD: 284d0566
+**Current focus:** M13-T122..T124 done, unreleased: agent definitions are Markdown files (global + project), a Laser core prompt leads every custom agent. Next: agent-supplied activity labels, Namer names sessions only.
 
 | Milestone | State |
 | --- | --- |
@@ -29,7 +29,7 @@
 | MX Cross-cutting | in-progress |
 
 **Blockers:** none.
-**Next up:** live large tool requests readable without reopen; M17 and open rows in M2/M3/M5/M7/M8/M10/M11/M13/M16/MX; flaky MCP cache-contract and host timing tests.
-**Recently done:** M16-T60 v0.7.3 (release run 35213482499); M19-T5 v0.7.2; M19-T4 v0.7.1 Electron preflight; M18-T8 release-CI correction; M19 audit gaps (`419403dd`).
+**Next up:** person edits `packages/worker/src/agents/core-instructions.md` before release; activity labels from the agent (`label` tool param, Namer sessions-only); live large tool requests readable without reopen; M17 and open rows in M2/M3/M5/M7/M8/M10/M11/M13/M16/MX; flaky MCP cache-contract and host timing tests.
+**Recently done:** M13-T122 Markdown agent files (`517a7a08`); M13-T123 core instructions (`d404434a`); M13-T124 Agents page scope/core controls (`5c45a17e`); M16-T60 v0.7.3; M19-T5 v0.7.2.
 
 Ownership and evidence: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`.
