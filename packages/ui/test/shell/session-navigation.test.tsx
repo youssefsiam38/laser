@@ -86,6 +86,22 @@ describe("compact session navigation", () => {
     expect(row.querySelector('[aria-label="Loading the conversation"]')).toBeNull();
     expect(row.querySelector('[data-status="finished_unread"]')).not.toBeNull();
   });
+  it("never marks a loading conversation as working", async () => {
+    const idle = fixture.state.sessions[1]!;
+    const attention = idle.attention;
+    idle.attention = "idle";
+    try {
+      fixture.state.destination = { phase: "resolving", intent: 1, target: { kind: "session", path: idle.path, visibleTab: "code" }, rememberedCode: { kind: "project-landing", project: idle.cwd } } satisfies MainDestination;
+      fixture.state.sessionLoads = { [idle.path]: { phase: "opening" } };
+      await act(async () => root.render(<Fixture />));
+      const row = rows().find(row => row.getAttribute("data-active") === "true")!;
+      expect(row).toBeDefined();
+      expect(row.querySelector('[data-status]')).toBeNull();
+    } finally {
+      idle.attention = attention;
+      fixture.state.sessionLoads = {};
+    }
+  });
   it("pins each chat once, preserves project filtering, and persists pin order", async () => {
     await act(async () => root.render(<Fixture />));
     await act(async () => { sessionsList.togglePinned("/two/waiting.jsonl"); sessionsList.togglePinned("/one/working.jsonl"); });

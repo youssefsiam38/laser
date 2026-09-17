@@ -122,7 +122,7 @@ import { dateTime, shortCwd } from "@/format";
 import { useCopy } from "@/hooks";
 import { cn } from "@/lib/utils";
 import { mergeSessions, useCapability, useLaserStable, useLaserState } from "@/runtime";
-import { mainPath, pendingSessionPath, sessionOpenPhase } from "@/runtime/main-destination";
+import { mainPath, pendingSessionPath } from "@/runtime/main-destination";
 import { sessionSubtreePaths } from "@/runtime/threadList";
 import type { AppState } from "@/store";
 
@@ -1215,7 +1215,6 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
     if (path && path !== committed) void openSession(path);
     onOpen?.();
   }, [path, committed, openSession, onOpen]);
-  const opening = useLaserState((s) => !!path && sessionOpenPhase(s, path).phase === "opening");
   const row = useRowModel(path);
   const { pinned } = useSessionsList();
   const workspaces = useContext(WorkspacesContext);
@@ -1259,8 +1258,10 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
       <RunDot status={row.runStatus} tone={errored ? "muted" : stateTone} {...(errored ? { label: ERRORED_RUN_LABEL, hollow: true } : {})} />
     ) : null;
   const runSpeaks = runMark !== null && (activeRun || (errored && !archived));
-  const activity = runSpeaks ? runMark : rowStatus !== "idle" ? <SessionActivity status={rowStatus} />
-    : opening ? <SessionActivity status="working" label="Loading the conversation" /> : runMark;
+  // The working sweep means the agent is running, nothing else. A conversation
+  // that is still loading says so with the skeleton in the transcript, never
+  // with this mark: loading here read as "the AI is working".
+  const activity = runSpeaks ? runMark : rowStatus !== "idle" ? <SessionActivity status={rowStatus} /> : runMark;
   // Inside the finished fold the row quiets down — but a failure keeps its ink
   // and its dot, and so does the session you are reading right now.
   const dimmed = layout.dimmed && row.runStatus !== "failed" && !active;

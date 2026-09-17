@@ -66,11 +66,13 @@ afterEach(async () => {
 const render = () => act(async () => root.render(<StatusLine />));
 const words = () => container.querySelector('[role="status"]')?.textContent?.trim();
 
-it("never calls an opening session idle, including before its view exists", async () => {
+it("says an opening session is loading, without the working sweep, including before its view exists", async () => {
   setSession(session());
   app.state.sessionLoads = { "/s.jsonl": { phase: "opening" } };
   await render();
   expect(words()).toBe("loading the conversation");
+  // Loading is not the running agent: no working sweep beside these words.
+  expect(container.querySelector('[data-status="working"]')).toBeNull();
   app.state.current = undefined;
   app.state.destination = { ...initialState.destination, phase: "resolving", target: { kind: "session", path: "/s.jsonl", visibleTab: "code" } };
   await render();

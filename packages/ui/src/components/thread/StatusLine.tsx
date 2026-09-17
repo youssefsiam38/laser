@@ -33,8 +33,9 @@ const wordsFor = (s: AppState): Words | undefined => {
   // Provisional content is content: it is never described as loading, and it
   // never claims to be a confirmed live connection.
   if (open.provisional) return { status: "idle", text: "showing your last view · checking with the host", live: false };
+  // Loading is not work: the green sweep belongs to a running agent only.
   if (open.phase === "opening") {
-    return { status: "working", text: open.hasTranscript ? "refreshing the conversation" : "loading the conversation", live: false };
+    return { status: "idle", text: open.hasTranscript ? "refreshing the conversation" : "loading the conversation", live: false };
   }
   if (open.phase === "preparing") return { status: "idle", text: "preparing the workspace", live: false };
   if (open.phase === "failed") {
