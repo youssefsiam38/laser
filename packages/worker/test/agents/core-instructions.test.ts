@@ -24,7 +24,6 @@ describe("core instructions", () => {
     expect(coreInstructions().startsWith("# Core instructions")).toBe(true);
     expect(instructionTemplateIssue(source, "agent")).toBeNull();
     for (const field of instructionTemplateFields("agent")) expect(source).toContain(field.key);
-    expect(source).toContain("{{productName}}");
     expect(source).not.toContain("{{availableAgents}}");
     expect(source).not.toContain(PRODUCT_DISPLAY_NAME);
   });

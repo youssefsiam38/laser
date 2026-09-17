@@ -4,6 +4,7 @@
  * the model refusal, and the agent record written
  * on a new session and recovered on load.
  */
+import { coreInstructions } from "../../src/agents/core-instructions.js";
 import { type InlineExtension, type SessionManager } from "@earendil-works/pi-coding-agent";
 import { PRODUCT_DISPLAY_NAME, PRODUCT_NAME, SESSION_AGENT_ENTRY_TYPE, SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE, type AgentDefinition, type JsonRpcMessage, type SessionState } from "@lasercode/protocol";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -90,7 +91,7 @@ describe("StableSdkDriver with an agent definition", () => {
     const { driver } = await openAndPrompt(definition);
     expect(driver.state().model).toMatchObject({ provider: "stub", id: "stub-1" });
     const request = stub.requests[0]!;
-    expect(systemTextOf(request)).toContain(`You are an agent running inside ${PRODUCT_DISPLAY_NAME}.`);
+    expect(systemTextOf(request).startsWith(coreInstructions())).toBe(true);
     expect(systemTextOf(request).match(/# Core instructions/g)).toHaveLength(1);
     expect(systemTextOf(request)).toContain("You are a careful reader who only inspects.");
     expect(systemTextOf(request)).not.toContain("expert coding assistant");
@@ -119,7 +120,7 @@ describe("StableSdkDriver with an agent definition", () => {
     await openAndPrompt(definition);
     const request = stub.requests[0]!;
     const productOwnedPrompt = systemTextOf(request).split("\n\nThe following skills")[0]!;
-    expect(productOwnedPrompt).toContain(`agent running inside ${PRODUCT_DISPLAY_NAME}`);
+    expect(productOwnedPrompt.startsWith(coreInstructions())).toBe(true);
     expect(productOwnedPrompt.match(/# Core instructions/g)).toHaveLength(1);
     expect(productOwnedPrompt).toContain("expert coding assistant");
     expect(productOwnedPrompt).not.toMatch(/\bpi\b/i);
