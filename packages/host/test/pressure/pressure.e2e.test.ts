@@ -172,6 +172,9 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("the host pressure pass, end t
     await client.waitFor((message) => "method" in message && message.method === "session/update"
       && (message as { params: SessionUpdateParams }).params.sessionPath === state.path
       && (message as { params: SessionUpdateParams }).params.update.kind === "agent_settled");
+    // The Namer runs independently of the turn. Settle its legitimate durable
+    // append before proving that the refused admission itself changes no bytes.
+    await named(state.path);
 
     const initial = await client.request<{ entries: Array<{ id?: string; type?: string; message?: { role?: string } }>; leafId: string | null }>(
       "pi/session/entries",
