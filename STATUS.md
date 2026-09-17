@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-17T13:30:00+03:00 · claude-2026-09-17-a · HEAD: ceb71b30
-**Current focus:** 0.7.2 is published (M19-T5): long conversations open, MCP guard quiet, removed projects leave, loading no longer looks like work.
+**Last updated:** 2026-09-17T14:10:00+03:00 · claude-2026-09-17-a · HEAD: b3d13270
+**Current focus:** M16-T60 → 0.7.3: large outputs fold into their tool block and open in a tool-shaped, continuously scrolling, memory-bounded viewer.
 
 | Milestone | State |
 | --- | --- |
@@ -29,7 +29,7 @@
 | MX Cross-cutting | in-progress |
 
 **Blockers:** none.
-**Next up:** M17 and the open rows in M2/M3/M5/M7/M8/M10/M11/M13/M16/MX; flaky worker MCP cache-contract epoch test; host session-index timing assertion flaked once in CI.
+**Next up:** release 0.7.3 (M16-T60); live large tool requests readable without reopen; M17 and open rows in M2/M3/M5/M7/M8/M10/M11/M13/M16/MX; flaky MCP cache-contract and host timing tests.
 **Recently done:** M19-T5 v0.7.2 (release run 35205573838); M19-T4 v0.7.1 Electron preflight (`78b3760d`); M18-T8 release-CI correction; M19 audit gaps (`419403dd`); M19-T3 migration recovery (`2b9962db`).
 
 Ownership and evidence: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`.
