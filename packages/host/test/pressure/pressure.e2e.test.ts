@@ -99,12 +99,33 @@ afterEach(async () => {
   rmSync(base, { recursive: true, force: true });
 });
 
+/**
+ * Naming is work of its own: it appends one durable `session_info` record
+ * after the turn has settled. A revision taken before that append and entries
+ * read after it describe two different files, so wait for the record itself.
+ */
+async function named(path: string): Promise<void> {
+  for (let attempt = 0; attempt < 250; attempt++) {
+    const lines = readFileSync(path, "utf8").split("\n").filter(Boolean);
+    if (lines.some((line) => {
+      try {
+        return (JSON.parse(line) as { type?: string }).type === "session_info";
+      } catch {
+        return false;
+      }
+    })) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`session ${path} was never named`);
+}
+
 describe.skipIf(!existsSync(defaultWorkerMain()))("the host pressure pass, end to end", () => {
   it("journals a real worker directive, unloads one idle runtime, and leaves an active turn untouched", async () => {
     const cwd = join(base, "project");
     const dormant = await client.request<{ state: SessionState }>("session/new", { cwd });
     await client.request("session/prompt", { path: dormant.state.path, content: [{ type: "text", text: "finish this" }] });
     await client.waitFor((message) => "method" in message && message.method === "session/update" && (message as { params: SessionUpdateParams }).params.sessionPath === dormant.state.path && (message as { params: SessionUpdateParams }).params.update.kind === "agent_settled");
+    await named(dormant.state.path);
     const revision = await client.request<{ revision: string }>("session/revision", { path: dormant.state.path });
     // The UI's bounded ensure shape remains a live-worker operation even at
     // critical pressure; only the worker-free durable all-window path refuses.
