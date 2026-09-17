@@ -994,8 +994,10 @@ it("routes explorer opt-in without opening workers and keeps legacy browse shape
       path: root, explorer: { mode: "explorer", cwd: root, prefix: "node", limit: 1 },
     } }, LOCAL_ACCESS);
     expect(explorer).toMatchObject({ result: { entries: [{ name: "node.txt", kind: "file" }], commonPrefix: "node.txt", truncated: false } });
-    const relative = await rpc(h.router, 'pi/project/browse', { path: '.', explorer: { mode: 'explorer', cwd: root, prefix: '.hidden' } });
+    const relative = await rpc(h.router, 'pi/project/browse', { path: '.\\', explorer: { mode: 'explorer', cwd: root, prefix: '.hidden' } });
     expect(relative).toMatchObject({ result: { path: root, entries: [{ name: '.hidden.txt', path: join(root, '.hidden.txt'), kind: 'file' }] } });
+    const refused = await rpc(h.router, 'pi/project/browse', { path: join(root, '..', '..'), explorer: { mode: 'explorer', cwd: root, prefix: '' } });
+    expect(refused).toMatchObject({ result: { entries: [], errorKind: 'refusal', error: 'That path is outside this project and your home folder.' } });
     expect(h.workerRequests).toHaveLength(0);
   } finally { h.cleanup(); rmSync(root, { recursive: true, force: true }); }
 });

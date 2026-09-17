@@ -730,7 +730,7 @@ export interface ExplorerListing extends DirectoryListing {
 
 export interface DirectoryExplorerOptions {
   mode: "explorer";
-  /** Absolute session directory used to resolve relative paths; not a sandbox. */
+  /** Absolute session directory used to resolve relative paths on the host. */
   cwd: string;
   prefix: string;
   offset?: number;
@@ -742,6 +742,8 @@ export interface DirectoryListing {
   /** Absent at the filesystem root. */
   parent?: string;
   home: string;
+  /** A safe, person-facing boundary refusal rather than an IO failure. */
+  errorKind?: "refusal";
   entries: DirectoryEntry[];
   truncated: boolean;
   /** Explorer-only continuation and common name prefix across all matches. */
