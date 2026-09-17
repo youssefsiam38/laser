@@ -84,6 +84,10 @@ history.
 
 Three nouns, and the CLI uses the same words.
 
+## Activity labels
+
+A running tool call may carry a model-supplied activity label: a present-progressive phrase clamped to 25 characters. The worker injects `activity_label`, or the first free `activity_label_2`, `_3`, and so on when a tool owns that name, and removes exactly the injected parameter before execution; the tool's own arguments remain visible. Argument disclosures and live conversation search use the session's parameter map to omit only that injected field (saved-history host search can omit the default name because JSONL does not retain the live session state). `start_agent` is exempt because its row keeps the full `Starting <subagent_name> (<agent_name>)` identity, while `complete_agent_run` and `inspect_fleet` remain unlabelled. The label appears only while work is live, on the individual activity row, MCP row and aggregate row; settled work returns to its durable computed summary.
+
 ## Session goals
 
 A goal is the one durable objective governing the current session. It is not a

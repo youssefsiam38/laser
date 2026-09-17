@@ -270,6 +270,12 @@ export interface SessionState {
   messageCount: number;
   pendingMessageCount: number;
   /**
+   * Tool names whose injected activity-label parameter could not use the
+   * default name because the tool already owns it. Missing entries use
+   * `activity_label`; only non-default choices are published.
+   */
+  toolLabelParams?: Readonly<Record<string, string>>;
+  /**
    * Active reviewed engine modules at the moment this snapshot was produced.
    * Included in the request result because startup notifications can arrive
    * before a client has created its local session view.

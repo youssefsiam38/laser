@@ -6,26 +6,31 @@ describe("activity labels (D-277)", () => {
     expect(clampToolLabel("Reading build config")).toBe("Reading build config");
     expect(clampToolLabel("  Reading   the build config.  ")).toBe("Reading the build config");
     const long = clampToolLabel("Reading the very long build configuration file");
-    expect(long!.length).toBeLessThanOrEqual(TOOL_LABEL_MAX + 1);
+    expect(long!.length).toBeLessThanOrEqual(TOOL_LABEL_MAX);
     expect(long).toMatch(/…$/);
     expect(clampToolLabel("   ")).toBeUndefined();
     expect(clampToolLabel(42)).toBeUndefined();
   });
 
-  it("reads the label from args, subagent_name for start_agent, nothing for exempt tools", () => {
-    expect(toolCallLabel("bash", { command: "ls", label: "Listing files" })).toBe("Listing files");
+  it("reads activity_label and leaves start_agent's full identity to its row", () => {
+    expect(toolCallLabel("bash", { command: "ls", activity_label: "Listing files" })).toBe("Listing files");
     expect(toolCallLabel("bash", { command: "ls" })).toBeUndefined();
-    expect(toolCallLabel("start_agent", { subagent_name: "host-fixes", label: "ignored" })).toBe("host-fixes");
-    expect(toolCallLabel("inspect_fleet", { label: "Looking" })).toBeUndefined();
-    expect(toolCallLabel("complete_agent_run", { label: "Done" })).toBeUndefined();
+    expect(toolCallLabel("start_agent", { subagent_name: "a-very-long-subagent-identity", agent_name: "worker" })).toBeUndefined();
+    expect(toolCallLabel("inspect_fleet", { activity_label: "Looking" })).toBeUndefined();
+    expect(toolCallLabel("complete_agent_run", { activity_label: "Done" })).toBeUndefined();
   });
 
-  it("strips the label from args and keeps it out of search content", () => {
-    expect(withoutToolLabel({ command: "ls", label: "Listing" })).toEqual({ command: "ls" });
+  it("strips only the injected activity label and keeps it out of search content", () => {
+    expect(withoutToolLabel({ command: "ls", activity_label: "Listing" })).toEqual({ command: "ls" });
     const same = { command: "ls" };
     expect(withoutToolLabel(same)).toBe(same);
-    const content = toolSearchContent({ name: "bash", args: { command: "ls -la", label: "Listing files" }, result: "ok" });
-    expect(content.join("\n")).not.toContain("Listing files");
-    expect(content.join("\n")).toContain("ls -la");
+    const params = { mcp_tool: "activity_label_2" };
+    const colliding = { activity_label: "tool-owned", activity_label_2: "Calling server", query: "kept" };
+    expect(toolCallLabel("mcp_tool", colliding, params)).toBe("Calling server");
+    expect(withoutToolLabel(colliding, "mcp_tool", params)).toEqual({ activity_label: "tool-owned", query: "kept" });
+    const content = toolSearchContent({ name: "mcp_tool", args: colliding, result: "ok" }, params);
+    expect(content.join("\n")).not.toContain("Calling server");
+    expect(content.join("\n")).toContain("tool-owned");
+    expect(content.join("\n")).toContain("kept");
   });
 });

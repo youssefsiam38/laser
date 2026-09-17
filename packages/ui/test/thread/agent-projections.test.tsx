@@ -262,8 +262,8 @@ describe("rendering", () => {
     const running = {
       toolCallId: "bash-1",
       toolName: "bash",
-      args: { command: "pnpm test", label: "Checking the test suite" },
-      argsText: '{"command":"pnpm test","label":"Checking the test suite"}',
+      args: { command: "pnpm test", activity_label: "Checking the test suite" },
+      argsText: '{"command":"pnpm test","activity_label":"Checking the test suite"}',
       status: { type: "running" as const },
       artifact: { partialOutput: "Tests are still running" },
       addResult: vi.fn(),
@@ -324,21 +324,61 @@ describe("rendering", () => {
     await mount(<ToolRow {...call("bash", { command: "pnpm test" })} />);
     expect(trigger().textContent).toContain("Running pnpm test");
 
-    await mount(<ToolRow {...call("bash", { command: "pnpm test", label: "Reading the very long build configuration file" })} />);
+    await mount(<ToolRow {...call("bash", { command: "pnpm test", activity_label: "Reading the very long build configuration file" })} />);
     expect(trigger().textContent).toContain("Reading the very long…");
     expect(trigger().textContent).not.toContain("configuration file");
 
-    await mount(<ToolRow {...call("start_agent", { agent_name: "reviewer", subagent_name: "host-fixes", label: "Ignored label" })} />);
-    expect(trigger().textContent).toContain("host-fixes");
-    expect(trigger().textContent).not.toContain("Ignored label");
+    const longIdentity = "host-fixes-with-a-full-unclamped-subagent-identity-1234567890";
+    await mount(<ToolRow {...call("start_agent", { agent_name: "reviewer", subagent_name: longIdentity })} />);
+    expect(trigger().textContent).toContain(`Starting ${longIdentity} (reviewer)`);
 
-    await mount(<ToolRow {...call("inspect_fleet", { scope: "current", label: "Leaking label" })} />);
+    await mount(<ToolRow {...call("inspect_fleet", { scope: "current" })} />);
     expect(trigger().textContent).toContain("Using inspect_fleet");
-    expect(trigger().textContent).not.toContain("Leaking label");
     await act(async () => trigger().click());
     const args = container.querySelector<HTMLElement>('[data-slot="tool-fallback-args"]')!;
     expect(args.textContent).toContain("current");
-    expect(args.textContent).not.toContain("label");
-    expect(args.textContent).not.toContain("Leaking label");
+  });
+
+  it("uses a collision override for the row while preserving the tool-owned activity_label argument", async () => {
+    await act(async () => store.dispatch({ type: "opened", state: sessionState({ path: PATH, toolLabelParams: { fixture_mcp_tool: "activity_label_2" } }) }));
+    const args = { activity_label: "semantic server value", activity_label_2: "Calling MCP safely", query: "release" };
+    await mount(<ToolRow
+      type="tool-call"
+      toolCallId="collision-1"
+      toolName="fixture_mcp_tool"
+      args={args}
+      argsText={JSON.stringify(args)}
+      status={{ type: "running" }}
+      addResult={vi.fn()}
+      resume={vi.fn()}
+      respondToApproval={vi.fn(async () => {})}
+    />);
+    const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
+    expect(trigger.textContent).toContain("Calling MCP safely");
+    await act(async () => trigger.click());
+    const disclosure = container.querySelector<HTMLElement>('[data-slot="tool-fallback-args"]')!;
+    expect(disclosure.textContent).toContain("semantic server value");
+    expect(disclosure.textContent).toContain("release");
+    expect(disclosure.textContent).not.toContain("Calling MCP safely");
+    expect(partSearchContent({ type: "tool-call", toolName: "fixture_mcp_tool", args }, { fixture_mcp_tool: "activity_label_2" })).toEqual(expect.arrayContaining(["semantic server value", "release"]));
+  });
+
+  it("renders retained argsText when oversized parsed arguments are projected to an empty object", async () => {
+    const retained = "retained oversized request value";
+    const argsText = JSON.stringify({ payload: "x".repeat(17_000), marker: retained });
+    await mount(<ToolRow
+      type="tool-call"
+      toolCallId="oversized-1"
+      toolName="fixture_oversized_tool"
+      args={{}}
+      argsText={argsText}
+      status={{ type: "running" }}
+      addResult={vi.fn()}
+      resume={vi.fn()}
+      respondToApproval={vi.fn(async () => {})}
+    />);
+    const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
+    await act(async () => trigger.click());
+    expect(container.querySelector('[data-slot="tool-fallback-args"]')?.textContent).toContain(retained);
   });
 });

@@ -606,6 +606,7 @@ describe("client request schemas", () => {
         autoCompactionEnabled: true,
         messageCount: 2,
         pendingMessageCount: 0,
+        toolLabelParams: { playwright_browser_navigate: "activity_label_2" },
       },
       replayFrom: 12,
       seq: 41,

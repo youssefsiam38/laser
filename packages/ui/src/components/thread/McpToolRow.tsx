@@ -22,7 +22,7 @@
  * without `rehype-raw` (invariant 9) and every other value is text.
  */
 import { TextMessagePartProvider } from "@assistant-ui/react";
-import { mcpContentBlocks, mcpResultContent, toolCallLabel, withoutToolLabel, type McpContentBlock } from "@lasercode/protocol";
+import { mcpContentBlocks, mcpResultContent, type McpContentBlock } from "@lasercode/protocol";
 import { Braces, FileText, Plug, Waypoints } from "lucide-react";
 import { memo, useMemo, type ReactNode } from "react";
 
@@ -53,6 +53,8 @@ export interface McpToolRowProps {
   info: McpToolInfo;
   toolName: string;
   args: unknown;
+  /** Raw visible arguments, retained when parsed args were projected away. */
+  argsText: string | undefined;
   /** The result as the row shows it: the final one, or live partial output. */
   result: unknown;
   /** Joined text of the result, for the error path. */
@@ -63,16 +65,18 @@ export interface McpToolRowProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   footer: ReactNode;
+  /** Computed once by ToolRow from the live model call. */
+  activeLabel: string | undefined;
 }
 
 function McpToolRowImpl(props: McpToolRowProps) {
-  const { info, toolName, args, result, text, details, state, elapsedMs, open, onOpenChange, footer } = props;
+  const { info, toolName, args, argsText, result, text, details, state, elapsedMs, open, onOpenChange, footer, activeLabel: agentLabel } = props;
   const failed = state === "failed";
   const running = state === "running";
 
   const row = useMemo(() => mcpRowSummary(info, toolName, args, details), [info, toolName, args, details]);
   const icon = info.kind === "script" ? Braces : info.kind === "gateway" ? Waypoints : Plug;
-  const activeLabel = (running ? toolCallLabel(toolName, args) : undefined) ?? mcpActiveLabel(info, toolName, args, details);
+  const activeLabel = agentLabel ?? mcpActiveLabel(info, toolName, args, details);
 
   return (
     <ToolCall
@@ -95,6 +99,7 @@ function McpToolRowImpl(props: McpToolRowProps) {
         info={info}
         toolName={row.exact ?? toolName}
         args={args}
+        argsText={argsText}
         result={result}
         text={text}
         details={details}
@@ -115,6 +120,7 @@ function McpBody({
   info,
   toolName,
   args,
+  argsText,
   result,
   text,
   details,
@@ -124,19 +130,20 @@ function McpBody({
   info: McpToolInfo;
   toolName: string;
   args: unknown;
+  argsText: string | undefined;
   result: unknown;
   text: string;
   details: Record<string, unknown> | undefined;
   failed: boolean;
   running: boolean;
 }) {
-  const visibleArgs = withoutToolLabel(args);
+  const visibleArgs = args;
   if (info.kind === "script") {
     const code = typeof (visibleArgs as { code?: unknown })?.code === "string" ? (visibleArgs as { code: string }).code : "";
     const calls = mcpScriptCalls(details);
     return (
       <>
-        <ToolFallbackArgs argsText={pretty(visibleArgs)} />
+        <ToolFallbackArgs argsText={argsText ?? pretty(visibleArgs)} />
         {code ? (
           <ToolFallbackSection label="script">
             <McpMarkdown text={`\`\`\`js\n${code}\n\`\`\``} />
@@ -170,7 +177,7 @@ function McpBody({
 
   return (
     <>
-      <ToolFallbackArgs argsText={pretty(visibleArgs)} />
+      <ToolFallbackArgs argsText={argsText ?? pretty(visibleArgs)} />
       {info.kind === "direct" ? (
         // The name the model actually called, which the humanised row hides.
         <ToolFallbackSection label="tool">

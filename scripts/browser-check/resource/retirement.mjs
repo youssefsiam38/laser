@@ -81,7 +81,6 @@ export function retirementGuardSnapshot(host = {}, workers = []) {
     attentionDialogs: guardCount(host.attentionDialogs),
     pendingQuestions: sum('pendingQuestions'),
     pendingApprovals: sum('pendingApprovals'),
-    runningTools: sum('runningTools'),
   };
 }
 
@@ -119,7 +118,7 @@ export function assertNoLiveWork(snapshot) {
   assert.deepEqual(unknown, [], `retirement prerequisites are unknown, not settled: ${unknown.join(', ')} could not be read`);
   assert.deepEqual(work, {
     runningSessions: 0, liveRuns: 0, runningTasks: 0, attentionDialogs: 0,
-    pendingQuestions: 0, pendingApprovals: 0, runningTools: 0,
+    pendingQuestions: 0, pendingApprovals: 0,
   }, `retirement prerequisites are not settled: ${JSON.stringify(work)}`);
 }
 

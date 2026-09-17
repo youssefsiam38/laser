@@ -3,7 +3,7 @@
  * and the session-title qualification benchmark against a fake runtime.
  */
 import { SESSION_NAME_MAX, type ModelCatalogEntry } from "@lasercode/protocol";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { NamerService, QUALIFY_SAMPLE, cleanSessionName, normalizeSessionName, selectNamerCandidates, type NamerModelRuntime } from "../../src/agents/namer.js";
 
 function entry(provider: string, id: string, cost?: { input?: number; output?: number }): ModelCatalogEntry {
@@ -107,6 +107,25 @@ describe("NamerService", () => {
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toContain("Prefer concrete nouns from the person's request.");
     expect(prompts[0]).toContain("session title");
+  });
+
+  it("uses the shipped prompt for a turn when a stored override names removed fields", async () => {
+    const prompts: string[] = [];
+    const diagnostic = vi.spyOn(console, "error").mockImplementation(() => {});
+    const runtime = fakeRuntime((context) => {
+      prompts.push(context.systemPrompt ?? "");
+      return "Review auth redirects";
+    });
+    const namer = new NamerService({
+      models: async () => runtime,
+      model: () => ({ provider: "stub", id: "stub-1" }),
+      instructions: () => "Name {{toolName}} for {{namingTask}}.",
+    });
+    expect(await namer.nameSession("Review the auth redirects")).toBe("Review auth redirects");
+    expect(prompts[0]).toContain("You name sessions from what the person wants done.");
+    expect(prompts[0]).not.toContain("toolName");
+    expect(diagnostic).toHaveBeenCalledWith(expect.stringContaining("using the shipped prompt for this turn"), expect.stringContaining("toolName"));
+    diagnostic.mockRestore();
   });
 
   it("swallows failures and unknown models", async () => {

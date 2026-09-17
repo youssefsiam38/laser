@@ -173,6 +173,8 @@ export class StableSdkDriver implements SessionDriver {
   private captureLink: ProviderCaptureLink | undefined;
   /** The MCP servers this runtime started with; absent when the engine is not loaded. */
   private mcpServers: Array<{ name: string; label?: string }> | undefined;
+  /** Non-default injected activity-label parameter names, keyed by tool. */
+  private toolLabelParams: Readonly<Record<string, string>> = {};
   /** A settings reload asked for mid-turn, owed once the session is idle (M13-T55). */
   private settingsReloadWanted = false;
   /** This session's fallback chain, when the product has any (M15-T3). */
@@ -445,8 +447,8 @@ export class StableSdkDriver implements SessionDriver {
       });
       // One live-state seam covers built-ins and every extension tool, now and
       // after a registry refresh. The raw call remains in the transcript and
-      // event stream; only the arguments handed to execute lose `label`.
-      installToolLabels(created.session);
+      // event stream; only the injected argument handed to execute is removed.
+      installToolLabels(created.session, (params) => { this.toolLabelParams = params; });
       // The definition's built-ins beyond the engine's default four (grep,
       // find, ls) are switched on here, not through a `defaultTools` setting:
       // that setting names built-ins only, and D-144 gives every agent every
@@ -885,6 +887,7 @@ export class StableSdkDriver implements SessionDriver {
       autoCompactionEnabled: session.autoCompactionEnabled,
       messageCount: session.messages.length,
       pendingMessageCount: session.pendingMessageCount,
+      ...(Object.keys(this.toolLabelParams).length > 0 ? { toolLabelParams: this.toolLabelParams } : {}),
       ...(usage
         ? {
             contextUsage: {
@@ -1770,16 +1773,27 @@ const TOOL_LABEL_WRAPPED = Symbol("lasercode.tool-label-wrapped");
 
 type LiveAgentTool = AgentSession["agent"]["state"]["tools"][number];
 type LiveAgentState = AgentSession["agent"]["state"] & { [TOOL_LABEL_STATE]?: true };
-type LabelledTool = LiveAgentTool & { [TOOL_LABEL_WRAPPED]?: true };
+type LabelledTool = LiveAgentTool & { [TOOL_LABEL_WRAPPED]?: string };
 
-function preparedLabelArguments(tool: LiveAgentTool, args: unknown): unknown {
+function freeToolLabelParam(properties: Record<PropertyKey, unknown>): string {
+  if (!Object.hasOwn(properties, TOOL_LABEL_PARAM)) return TOOL_LABEL_PARAM;
+  for (let suffix = 2; ; suffix += 1) {
+    const candidate = `${TOOL_LABEL_PARAM}_${suffix}`;
+    if (!Object.hasOwn(properties, candidate)) return candidate;
+  }
+}
+
+function preparedLabelArguments(tool: LiveAgentTool, args: unknown, param: string): unknown {
+  // The original preparer intentionally sees the injected parameter. The
+  // model's raw call is retained, preparation may validate it, and only
+  // execution loses exactly this dynamically chosen name.
   const prepared = tool.prepareArguments ? tool.prepareArguments(args) : args;
   if (prepared === null || typeof prepared !== "object" || Array.isArray(prepared)) return prepared;
-  const label = (prepared as Record<string, unknown>)[TOOL_LABEL_PARAM];
+  const label = (prepared as Record<string, unknown>)[param];
   if (typeof label !== "string" || label.length <= TOOL_LABEL_MAX) return prepared;
   // The raw model call is already stored and emitted. This bounded execution
   // copy only keeps schema validation from refusing an over-long display label.
-  return { ...(prepared as Record<string, unknown>), [TOOL_LABEL_PARAM]: label.slice(0, TOOL_LABEL_MAX) };
+  return { ...(prepared as Record<string, unknown>), [param]: label.slice(0, TOOL_LABEL_MAX) };
 }
 
 function withToolLabel(tool: LiveAgentTool): LiveAgentTool {
@@ -1789,9 +1803,9 @@ function withToolLabel(tool: LiveAgentTool): LiveAgentTool {
   const properties = currentProperties !== null && typeof currentProperties === "object" && !Array.isArray(currentProperties)
     ? currentProperties as Record<PropertyKey, unknown>
     : {};
-  // The live AgentTool type exposes four arguments, while extension-backed
-  // implementations also receive their bound context at runtime. Forward every
-  // trailing argument so neither shape loses information.
+  const param = freeToolLabelParam(properties);
+  // AgentTool declares four execute arguments. Extension-backed tools receive
+  // a fifth bound context at runtime, so forward every trailing argument.
   const execute = tool.execute.bind(tool) as (...args: unknown[]) => ReturnType<LiveAgentTool["execute"]>;
   const wrapped: LabelledTool = {
     ...tool,
@@ -1799,17 +1813,23 @@ function withToolLabel(tool: LiveAgentTool): LiveAgentTool {
       ...schema,
       properties: {
         ...properties,
-        [TOOL_LABEL_PARAM]: {
+        [param]: {
           type: "string",
           description: TOOL_LABEL_DESCRIPTION,
           maxLength: TOOL_LABEL_MAX,
         },
       },
     } as LiveAgentTool["parameters"],
-    prepareArguments: (args: unknown) => preparedLabelArguments(tool, args) as never,
-    execute: (toolCallId, params, signal, onUpdate, ...rest: unknown[]) => execute(toolCallId, withoutToolLabel(params), signal, onUpdate, ...rest),
+    prepareArguments: (args: unknown) => preparedLabelArguments(tool, args, param) as never,
+    execute: (toolCallId, params, signal, onUpdate, ...rest: unknown[]) => execute(
+      toolCallId,
+      withoutToolLabel(params, tool.name, param === TOOL_LABEL_PARAM ? undefined : { [tool.name]: param }),
+      signal,
+      onUpdate,
+      ...rest,
+    ),
   };
-  Object.defineProperty(wrapped, TOOL_LABEL_WRAPPED, { value: true });
+  Object.defineProperty(wrapped, TOOL_LABEL_WRAPPED, { value: param });
   return wrapped;
 }
 
@@ -1819,18 +1839,35 @@ function withToolLabel(tool: LiveAgentTool): LiveAgentTool {
  * here, so this one accessor covers built-ins, harness/background/goal tools,
  * web search, MCP and later extension tools without patching each producer.
  */
-export function installToolLabels(session: AgentSession): void {
+export function installToolLabels(
+  session: AgentSession,
+  onParams: (params: Readonly<Record<string, string>>) => void = () => {},
+): void {
   const state = session.agent.state as LiveAgentState;
   if (state[TOOL_LABEL_STATE]) return;
   const descriptor = Object.getOwnPropertyDescriptor(state, "tools");
   if (!descriptor?.get || !descriptor.set || descriptor.configurable !== true) {
-    throw new Error("The engine's public active-tool state cannot be decorated.");
+    console.error(`${PRODUCT_NAME} worker: the engine's public active-tool state cannot be decorated; continuing without activity labels.`);
+    onParams({});
+    return;
   }
+  const params: Record<string, string> = {};
   Object.defineProperty(state, TOOL_LABEL_STATE, { value: true });
   Object.defineProperty(state, "tools", {
     ...descriptor,
     get: () => descriptor.get!.call(state) as LiveAgentTool[],
-    set: (tools: LiveAgentTool[]) => descriptor.set!.call(state, tools.map(withToolLabel)),
+    set: (tools: LiveAgentTool[]) => {
+      const labelled = tools.map(withToolLabel);
+      for (const tool of labelled) {
+        const param = (tool as LabelledTool)[TOOL_LABEL_WRAPPED];
+        if (param && param !== TOOL_LABEL_PARAM) params[tool.name] = param;
+        else delete params[tool.name];
+      }
+      // Retain mappings for temporarily inactive tools: their earlier rows
+      // still need to distinguish the tool-owned field from the injected one.
+      onParams({ ...params });
+      descriptor.set!.call(state, labelled);
+    },
   });
   state.tools = state.tools;
 }

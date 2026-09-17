@@ -19,7 +19,10 @@ export function matchExcerpt(text: string, match: TextMatch) {
 }
 
 /** Explicit textual channels; never index images or arbitrary provider metadata. */
-export function partSearchContent(part: { type: string; [key: string]: unknown }): string[] {
+export function partSearchContent(
+  part: { type: string; [key: string]: unknown },
+  toolLabelParams?: Readonly<Record<string, string>>,
+): string[] {
   if (part.type === "data" && part.name === GOAL_DATA_PART) {
     const goal = part.data as GoalRecord;
     return [goal.moments[0]?.objective ?? goal.objective, goal.summary ?? "", ...goal.moments.flatMap((moment, index) => [index > 0 && moment.objective !== goal.moments[index - 1]?.objective ? moment.objective : "", moment.reason ?? ""])].filter(Boolean);
@@ -42,5 +45,5 @@ export function partSearchContent(part: { type: string; [key: string]: unknown }
   if (part.type === "text" || part.type === "reasoning") return typeof part.text === "string" ? [part.text] : [];
   if (part.type !== "tool-call") return [];
   const result = part.result ?? (part.artifact as { partialOutput?: unknown } | undefined)?.partialOutput;
-  return toolSearchContent({ name: typeof part.toolName === "string" ? part.toolName : "", args: part.args, result, isError: part.isError === true });
+  return toolSearchContent({ name: typeof part.toolName === "string" ? part.toolName : "", args: part.args, result, isError: part.isError === true }, toolLabelParams);
 }

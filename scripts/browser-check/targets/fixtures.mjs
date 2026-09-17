@@ -47,6 +47,7 @@ export function answer(request) {
   }
   // Output past the transcript's per-body excerpt and under the shell tool's own cap.
   if (last?.role === 'user' && prompt === 'Run fixture large output') return { toolCall: { name: 'bash', args: { command: "seq 1 1100 | awk '{printf \"ok  test %05d passed in the fixture suite\\n\", $1}'" } } };
+  if (last?.role === 'user' && prompt === 'Run labelled fixture tool') return { toolCall: { name: 'bash', args: { command: "sleep 45; printf 'labelled fixture complete\\n'", activity_label: 'Checking layout balance' } } };
   if (last?.role === 'user' && prompt === 'Run fixture tools') return { toolCall: { name: 'bash', args: { command: "printf 'fixture tool output\\n'" } } };
   const goal = /<goal_id>\s*([^\s<>]+)\s*<\/goal_id>/.exec(prompt)?.[1];
   if (last?.role === 'user' && goal && names.includes('goal_complete')) return { toolCall: { name: 'goal_complete', args: { goal_id: goal, summary: 'Verified the fixture implementation and its focused checks.' } } };

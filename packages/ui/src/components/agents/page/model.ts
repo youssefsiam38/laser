@@ -286,7 +286,7 @@ export function namerSummary(state: NamerState): NamerSummary {
     case "unqualified":
       return { status: state.status, title: "Not qualified yet", detail: state.reason ?? "Run the check once a provider is connected; it takes a few seconds." };
     case "qualifying":
-      return { status: state.status, title: "Qualifying…", detail: "Testing connected models on session titles and activity labels." };
+      return { status: state.status, title: "Qualifying…", detail: "Testing connected models on session titles." };
     case "ready": {
       const chosen = state.candidates.find((candidate) => state.model && candidate.model.provider === state.model.provider && candidate.model.id === state.model.id);
       const latency = chosen?.latencyMs;
