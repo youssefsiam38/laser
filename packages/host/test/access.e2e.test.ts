@@ -145,7 +145,9 @@ describe("the boundary over a real socket", () => {
     const host = new HostServer({ stateDir, logFile: false, log: () => {} });
     cleanup.push(() => host.close());
     expect(host.access.policy.remote.scopes).toEqual(["handshake", "read"]);
-  });
+    // Three synchronous host constructions; under a parallel full suite this
+    // has exceeded the 5 s default while passing alone in about 2 s.
+  }, 30_000);
 
   it("refuses the upgrade for a peer that is not on this machine, in both families", async () => {
     const dir = base();
