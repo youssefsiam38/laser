@@ -52,23 +52,47 @@ beforeEach(() => {
 });
 
 describe("the native text context menu", () => {
-  it("offers spell replacements and native editing roles in the composer", () => {
+  it("offers Chromium's spelling results even when Electron contradicts them", () => {
+    // Electron 44 on Linux measured this exact combination in the real
+    // composer: the red squiggle was visible and Chromium supplied both the
+    // word and suggestions, but spellcheckEnabled was false.
     const menu = nativeTextMenuTemplate({
       ...nativeParams,
-      dictionarySuggestions: ["correct", "correction"],
+      dictionarySuggestions: ["environment", "environs"],
       editFlags,
       isEditable: true,
-      misspelledWord: "corect",
-      selectionText: "corect",
-      spellcheckEnabled: true,
+      misspelledWord: "enviroment",
+      selectionText: "enviroment",
+      spellcheckEnabled: false,
     }, actions);
 
-    expect(menu.slice(0, 3).map(item => item.label)).toEqual(["correct", "correction", "Add to dictionary"]);
+    expect(menu.slice(0, 3).map(item => item.label)).toEqual(["environment", "environs", "Add to dictionary"]);
     expect(menu.map(item => item.role).filter(Boolean)).toEqual(["undo", "redo", "cut", "copy", "paste", "delete", "selectAll"]);
     menu[0]!.click?.({} as never, undefined, {} as never);
     menu[2]!.click?.({} as never, undefined, {} as never);
-    expect(actions.replaceMisspelling).toHaveBeenCalledWith("correct");
-    expect(actions.addToDictionary).toHaveBeenCalledWith("corect");
+    expect(actions.replaceMisspelling).toHaveBeenCalledWith("environment");
+    expect(actions.addToDictionary).toHaveBeenCalledWith("enviroment");
+  });
+
+  it("explains a dictionary that cannot provide suggestions", () => {
+    const params = {
+      ...nativeParams,
+      dictionarySuggestions: [],
+      editFlags,
+      isEditable: true,
+      misspelledWord: "",
+      selectionText: "",
+      spellcheckEnabled: false,
+    };
+
+    const downloading = nativeTextMenuTemplate(params, actions, "linux", { status: "downloading" });
+    expect(downloading[0]).toMatchObject({ label: "Spelling dictionary is downloading", enabled: false });
+
+    const offline = nativeTextMenuTemplate(params, actions, "linux", { status: "unavailable", reason: "offline" });
+    expect(offline[0]).toMatchObject({
+      label: "Spelling dictionary unavailable — connect to download",
+      enabled: false,
+    });
   });
 
   it("keeps Copy, Select All and platform lookup for selected transcript text", () => {
