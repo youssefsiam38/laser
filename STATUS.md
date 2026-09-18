@@ -1,6 +1,6 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-18T10:18:44+03:00 · orchestrator-2026-09-18 · HEAD: 64d255f2
+**Last updated:** 2026-09-18T10:35:36+03:00 · orchestrator-2026-09-18 · HEAD: c73dc11a
 **Current focus:** M16 — finish every agreed repair before publishing 0.9.2; 0.9.1 is public and verified.
 
 | Milestone | State |
@@ -29,7 +29,7 @@
 | MX Cross-cutting | in-progress |
 
 **Blockers:** worker-session resumption is unreliable; explicit checkpoint transfers preserve progress. No external release blocker.
-**In flight:** T75 corrected service-scope candidate7242b2f5 in its single independent review; full current browser/package acceptance pending. Agents/location-safe mutations follows. Other repairs integrated; T76 final poisoned gate pending.
+**In flight:** T75 service-scope review found five blockers; one owner holds the complete correction batch and final interaction evidence. Plan approval precedes edits. Agents follows; T76 final poisoned gate pending.
 **Next up:** T75 Agents/location-safe edits after remaining services; T79 complete-batch verification and 0.9.2 publication.
 **Recently done:** T78 pristine agent choice (`107e5ecc`, worker1089 + real route tests); T70 selectable activity (`e7ad7c34`, UI2472 + matrix); T74 image/text recovery (`b703f3bf`, UI2436 + matrix); T77 goal-tool recovery (`a0a698ee`, 54 focused + real engine); T73 packaged spelling (`d0bbc680`).
 
