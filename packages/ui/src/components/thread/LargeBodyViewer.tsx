@@ -6,11 +6,14 @@
  * arguments it ran with, how it ended and how long it took, and then the
  * decoded text on the terminal ground, with ANSI colour through the shared
  * `elements/ansi-text` decoder and real line breaks. Never the stored record's
- * JSON. A reply, reasoning or a prompt opens the same way on the document
- * ground.
+ * JSON. A reply, reasoning or a prompt opens on the document ground and, when
+ * the whole of it fits one reader's budget, formatted the way the transcript
+ * draws it (`MarkdownBodyReader`, M16-T84) with Plain text one control away.
  *
- * It scrolls as one document, but the window holds at most three segments of
- * it — the one in view and its neighbours (`OutputPager`). The rest of the
+ * The paged reader below is what a terminal body, and any body too large to
+ * format as one document, is read with. It scrolls as one document, but the
+ * window holds at most three segments of it — the one in view and its
+ * neighbours (`OutputPager`). The rest of the
  * scroll height is estimated from the bytes and corrected as segments are
  * measured, holding the reader's place while it does. Copy and Download stream
  * the whole body from its authority and keep none of it afterwards; closing
@@ -19,22 +22,23 @@
  * Full-screen on a phone, a large dialog on a desktop; Esc closes and focus
  * returns to the control that opened it.
  */
-import { ArrowDownToLine, ArrowUpToLine, Check, Copy, Download, Search, WrapText } from "lucide-react";
+import { Check, Copy } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from "react";
 
 import { ansiSpanStyle } from "@/components/assistant-ui/elements/ansi-text";
-import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { duration as formatDuration, formatBytes } from "@/format";
 import { useCopy } from "@/hooks/use-copy";
 import { parseAnsi, type AnsiStyle } from "@/lib/ansi";
 import { cn } from "@/lib/utils";
 import { useLaserStable, useLaserState } from "@/runtime";
-import { bodyReadMessage, type RangeRequest } from "@/runtime/body-reader";
+import { type RangeRequest } from "@/runtime/body-reader";
 import { isReadable, type BodyRef } from "@/runtime/body-excerpt";
 import { registerEphemeralCache } from "@/runtime/pressure";
+import { ViewerFooter, type BodyFind, type ReaderControls } from "./body-viewer-footer.js";
+import { fitsMarkdownReader, MarkdownBodyReader } from "./MarkdownBodyReader.js";
 import { charIndexAtByte, OUTPUT_SEGMENT_BYTES, OutputPager, type OutputSegment } from "./output-pager.js";
-import { copyWhole, downloadWhole, outputFileName } from "./output-transfer.js";
+import type { copyWhole } from "./output-transfer.js";
 
 /** What the viewer knows about the tool a body came from. Every field is optional. */
 export interface OutputContext {
@@ -95,13 +99,32 @@ function ViewerContents({ ref_, path, label, tool, tone, initialQuery }: {
 }) {
   const { client } = useLaserStable();
   const environmentKey = useLaserState(s => s.environment?.environmentKey) ?? "";
-  const readable = isReadable(ref_);
+  const body = isReadable(ref_) ? ref_ : undefined;
+  const readable = body !== undefined;
   const revisionOf = useCallback(async (candidate: string) => (await client.request("session/revision", { path: candidate })).revision, [client]);
   const request = useCallback<RangeRequest>((params) => client.request("session/entry_range", params), [client]);
   const pager = useMemo(
-    () => (readable ? new OutputPager(request, path, ref_, environmentKey, revisionOf) : undefined),
-    [readable, request, path, ref_, environmentKey, revisionOf],
+    () => (body ? new OutputPager(request, path, body, environmentKey, revisionOf) : undefined),
+    [body, request, path, environmentKey, revisionOf],
   );
+  const transfer = useMemo<Parameters<typeof copyWhole>[0] | undefined>(
+    () => (body ? { request, path, ref: body, environmentKey, revisionOf } : undefined),
+    [body, request, path, environmentKey, revisionOf],
+  );
+  // A body written as prose is read formatted, unless it is larger than one
+  // document may hold or the person asked for its characters. Both choices
+  // last as long as the viewer is open, exactly like Wrap lines.
+  //
+  // What decides is the body itself, never the ground it was folded on: a
+  // tool's arguments and a tool's output are machine payloads whatever surface
+  // they sit on, and reading `-` as a bullet or `_a_` as emphasis would be a
+  // lie about what the model sent (PLAN.md M16-T84).
+  const prose = PROSE.has(ref_.component.kind);
+  const formattable = prose && readable && fitsMarkdownReader(ref_.totalBytes);
+  const [formatted, setFormatted] = useState(true);
+  const [wrap, setWrap] = useState(true);
+  const toggleWrap = useCallback(() => setWrap(value => !value), []);
+  const [controls, setControls] = useState<ReaderControls>();
   // Closing drops everything it read; memory pressure takes the neighbours.
   useEffect(() => {
     if (!pager) return;
@@ -111,6 +134,7 @@ function ViewerContents({ ref_, path, label, tool, tone, initialQuery }: {
 
   const status = toolStatus(tool);
   const title = `Full ${label}`;
+  const fileBase = tool?.toolName ? `${tool.toolName} ${label}` : label;
   const { copy: copyCommand, copied: commandCopied } = useCopy();
 
   return <>
@@ -139,27 +163,51 @@ function ViewerContents({ ref_, path, label, tool, tone, initialQuery }: {
         </div>
       ) : null}
     </DialogHeader>
-    {pager && readable
-      ? <OutputReader pager={pager} tone={tone} label={label} fileBase={tool?.toolName ? `${tool.toolName} ${label}` : label} initialQuery={initialQuery}
-          transfer={{ request, path, ref: ref_, environmentKey, revisionOf }} />
+    {pager && transfer
+      ? <>
+          {formattable && formatted
+            ? <MarkdownBodyReader source={transfer} label={label} publish={setControls} />
+            : <OutputReader pager={pager} tone={tone} label={label} publish={setControls}
+                wrap={wrap} onWrap={toggleWrap} />}
+          {/* One footer for the opening, above whichever reader is showing: the
+              phrase being looked for, the match it is on and the focused
+              control belong to the person, not to the reading area. */}
+          {controls ? <ViewerFooter
+            label={label}
+            controls={controls}
+            {...(formattable ? { format: { formatted, onChange: (value: boolean) => setFormatted(value) } } : {})}
+            {...(prose && !formattable ? { note: `This ${label} is too long to format; showing plain text.` } : {})}
+            initialQuery={initialQuery}
+            fileBase={fileBase}
+            transfer={transfer}
+          /> : null}
+        </>
       : <div className="flex min-h-0 flex-1 items-center justify-center p-6">
           <p className="typed text-ink-2">Full {label} available once it is saved.</p>
         </div>}
   </>;
 }
 
+/**
+ * The bodies that are written for a person to read, from `body-range.ts`'s own
+ * vocabulary: what an assistant said, what it thought, what a person wrote.
+ * Everything else — a tool's arguments, its result, its output, a custom
+ * record's details — is a machine payload and keeps the plain reader.
+ */
+const PROSE: ReadonlySet<BodyRef["component"]["kind"]> = new Set(["assistant_text", "reasoning", "user_text"]);
+
 interface Anchor { segment: number; within: number }
 
-function OutputReader({ pager, tone, label, fileBase, initialQuery, transfer }: {
+function OutputReader({ pager, tone, label, publish, wrap, onWrap }: {
   pager: OutputPager;
   tone: "terminal" | "document";
   label: string;
-  fileBase: string;
-  initialQuery: string | undefined;
-  transfer: Parameters<typeof copyWhole>[0];
+  /** Hand the viewer's footer this reader's find, its reading keys and its state. */
+  publish(controls: ReaderControls): void;
+  wrap: boolean;
+  onWrap(): void;
 }) {
   const state = useSyncExternalStore(pager.subscribe, pager.getSnapshot, pager.getSnapshot);
-  const [wrap, setWrap] = useState(true);
   const scroller = useRef<HTMLDivElement>(null);
   const heights = useRef(new Map<number, number>());
   const metrics = useRef({ lineHeight: 16, charWidth: 7, padTop: 12, width: 600 });
@@ -331,6 +379,30 @@ function OutputReader({ pager, tone, label, fileBase, initialQuery, transfer }: 
     pager.show(index);
     setHit({ offset, length });
   }, [pager, place]);
+  const reveal = useRef(revealHit);
+  reveal.current = revealHit;
+
+  // Looking through a body this reader does not hold: the authority is asked
+  // for the next match from where the last one was, a slice at a time. Nothing
+  // counts the matches, because counting them means reading all of it.
+  const lastHit = useRef<{ query: string; offset: number } | undefined>(undefined);
+  const find = useMemo<BodyFind>(() => ({
+    reset() { lastHit.current = undefined; },
+    async run(query, _direction, signal) {
+      const from = lastHit.current?.query === query ? lastHit.current.offset + 1 : 0;
+      let at = await pager.find(query, from, signal);
+      // Past the last match, start again from the top once.
+      if (at === undefined && from > 0 && !signal.aborted) at = await pager.find(query, 0, signal);
+      if (signal.aborted) return { found: true };
+      if (at === undefined) {
+        lastHit.current = undefined;
+        return { found: false, notice: `“${query}” is not in this ${label}.` };
+      }
+      lastHit.current = { query, offset: at };
+      reveal.current(at, query.length);
+      return { found: true };
+    },
+  }), [label, pager]);
 
   const held = [...state.segments.values()].sort((a, b) => a.index - b.index);
   const hitSegment = hit ? held.find(segment => hit.offset >= segment.start && hit.offset < segment.end) : undefined;
@@ -373,6 +445,12 @@ function OutputReader({ pager, tone, label, fileBase, initialQuery, transfer }: 
     if (event.key === "Home" && !event.shiftKey) { event.preventDefault(); toStart(); }
     else if (event.key === "End" && !event.shiftKey) { event.preventDefault(); toEnd(); }
   };
+
+  const controls = useMemo<ReaderControls>(
+    () => ({ find, onStart: toStart, onEnd: toEnd, error: state.error, onRetry: () => pager.retry(), wrap: { wrap, onWrap } }),
+    [find, toStart, toEnd, state.error, pager, wrap, onWrap],
+  );
+  useEffect(() => publish(controls), [publish, controls]);
 
   const empty = state.totalBytes === 0;
 
@@ -418,20 +496,6 @@ function OutputReader({ pager, tone, label, fileBase, initialQuery, transfer }: 
         </div>
       )}
     </div>
-    <ViewerFooter
-      label={label}
-      error={state.error}
-      onRetry={() => pager.retry()}
-      wrap={wrap}
-      onWrap={() => setWrap(value => !value)}
-      onStart={toStart}
-      onEnd={toEnd}
-      pager={pager}
-      initialQuery={initialQuery}
-      onHit={revealHit}
-      fileBase={fileBase}
-      transfer={transfer}
-    />
   </>;
 }
 
@@ -475,138 +539,6 @@ function rangeAt(root: Node, at: number, length: number): Range | undefined {
     seen += size;
   }
   return undefined;
-}
-
-function ViewerFooter({ label, error, onRetry, wrap, onWrap, onStart, onEnd, pager, initialQuery, onHit, fileBase, transfer }: {
-  label: string;
-  error: string | undefined;
-  onRetry(): void;
-  wrap: boolean;
-  onWrap(): void;
-  onStart(): void;
-  onEnd(): void;
-  pager: OutputPager;
-  initialQuery: string | undefined;
-  onHit(offset: number, length: number): void;
-  fileBase: string;
-  transfer: Parameters<typeof copyWhole>[0];
-}) {
-  const { copy, copied, markCopied } = useCopy();
-  const [busy, setBusy] = useState<"copy" | "download" | "find" | undefined>();
-  const [notice, setNotice] = useState<string>();
-  const [query, setQuery] = useState(initialQuery ?? "");
-  const lastHit = useRef<{ query: string; offset: number } | undefined>(undefined);
-  const findAbort = useRef<{ aborted: boolean } | undefined>(undefined);
-  const field = useRef<HTMLInputElement>(null);
-
-  const find = useCallback(async (value: string) => {
-    const needle = value.trim();
-    if (!needle) return;
-    findAbort.current && (findAbort.current.aborted = true);
-    const signal = { aborted: false };
-    findAbort.current = signal;
-    const from = lastHit.current?.query === needle ? lastHit.current.offset + 1 : 0;
-    setBusy("find");
-    setNotice(undefined);
-    try {
-      let at = await pager.find(needle, from, signal);
-      // Past the last match, start again from the top once.
-      if (at === undefined && from > 0 && !signal.aborted) at = await pager.find(needle, 0, signal);
-      if (signal.aborted) return;
-      if (at === undefined) { lastHit.current = undefined; setNotice(`“${needle}” is not in this ${label}.`); return; }
-      lastHit.current = { query: needle, offset: at };
-      onHit(at, needle.length);
-    } catch (failure) {
-      if (!signal.aborted) setNotice(bodyReadMessage(failure));
-    } finally {
-      if (!signal.aborted) setBusy(undefined);
-    }
-  }, [label, onHit, pager]);
-
-  useEffect(() => {
-    if (initialQuery) void find(initialQuery);
-    return () => { if (findAbort.current) findAbort.current.aborted = true; };
-    // Only on open: later searches are the person's own.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const copyAll = async () => {
-    setBusy("copy");
-    setNotice(undefined);
-    try {
-      const outcome = await copyWhole(transfer, copy);
-      if (outcome.ok) markCopied();
-      else if ("message" in outcome) setNotice(outcome.message);
-    } catch (failure) {
-      setNotice(bodyReadMessage(failure));
-    } finally {
-      setBusy(undefined);
-    }
-  };
-  const download = async () => {
-    setBusy("download");
-    setNotice(undefined);
-    try {
-      const outcome = await downloadWhole(transfer, outputFileName(fileBase));
-      if (!outcome.ok && "message" in outcome) setNotice(outcome.message);
-    } catch (failure) {
-      setNotice(bodyReadMessage(failure));
-    } finally {
-      setBusy(undefined);
-    }
-  };
-
-  const control = "pointer-coarse:min-h-11";
-  return <footer data-slot="output-viewer-footer" className="flex flex-col gap-2 border-t border-line bg-surface px-3 py-2 pb-[max(var(--space-unit)*2,env(safe-area-inset-bottom))]">
-    {error || notice ? (
-      <div className="flex min-w-0 flex-wrap items-center gap-2 px-1">
-        <p role={error ? "alert" : "status"} className="min-w-0 flex-1 text-sm text-ink">{error ?? notice}</p>
-        {error ? <Button variant="outline" size="sm" className={control} onClick={onRetry}>Try again</Button> : null}
-      </div>
-    ) : null}
-    <div className="flex min-w-0 flex-wrap items-center gap-2">
-      <form
-        role="search"
-        className="flex min-w-0 flex-1 basis-56 items-center gap-1"
-        onSubmit={event => { event.preventDefault(); void find(query); }}
-      >
-        <label className="relative flex min-w-0 flex-1 items-center">
-          <span className="sr-only">Find in {label}</span>
-          <Search aria-hidden="true" className="pointer-events-none absolute start-2.5 size-3.5 text-ink-3" />
-          <input
-            ref={field}
-            type="search"
-            value={query}
-            maxLength={1024}
-            onChange={event => { setQuery(event.target.value); lastHit.current = undefined; }}
-            placeholder={`Find in ${label}`}
-            className="h-8 w-full min-w-0 rounded-lg border border-line bg-surface ps-8 pe-2.5 text-sm text-ink outline-none transition-[border-color] duration-(--motion-instant) placeholder:text-ink-3 focus-visible:border-live focus-visible:ring-2 focus-visible:ring-live/25 pointer-coarse:h-11"
-          />
-        </label>
-        <Button type="submit" variant="ghost" size="sm" className={control} disabled={!query.trim() || busy === "find"}>
-          {busy === "find" ? "Finding…" : lastHit.current ? "Next" : "Find"}
-        </Button>
-      </form>
-      <div className="flex flex-wrap items-center gap-1 max-sm:w-full max-sm:justify-between">
-        <Button variant="ghost" size="sm" aria-pressed={wrap} aria-label="Wrap lines" className={cn(control, wrap && "bg-surface-2 text-ink")} onClick={onWrap}>
-          <WrapText aria-hidden="true" />
-          <span>Wrap lines</span>
-        </Button>
-        <Button variant="ghost" size="icon-sm" aria-label="Go to start" className={cn(control, "pointer-coarse:size-11")} onClick={onStart}><ArrowUpToLine aria-hidden="true" /></Button>
-        <Button variant="ghost" size="icon-sm" aria-label="Go to end" className={cn(control, "pointer-coarse:size-11")} onClick={onEnd}><ArrowDownToLine aria-hidden="true" /></Button>
-        <Button variant="ghost" size="sm" className={control} disabled={busy === "copy"} onClick={() => void copyAll()}
-          aria-label={busy === "copy" ? `Copying the full ${label}` : copied ? "Copied" : `Copy full ${label}`}>
-          {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
-          <span className="max-sm:sr-only">{busy === "copy" ? "Copying…" : copied ? "Copied" : "Copy"}</span>
-        </Button>
-        <Button variant="outline" size="sm" className={control} disabled={busy === "download"} onClick={() => void download()}
-          aria-label={busy === "download" ? `Saving the full ${label}` : "Download .txt"}>
-          <Download aria-hidden="true" />
-          <span className="max-sm:sr-only">{busy === "download" ? "Saving…" : "Download .txt"}</span>
-        </Button>
-      </div>
-    </div>
-  </footer>;
 }
 
 /**

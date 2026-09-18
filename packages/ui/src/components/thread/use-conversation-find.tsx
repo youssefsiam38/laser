@@ -3,7 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConversationSearch } from "@/components/assistant-ui/elements/conversation-search";
 import { motionMs } from "@/motion";
 import { Button } from "@/components/ui/button";
-import { matchExcerpt, partSearchContent, textMatches } from "./search-text.js";
+import { partSearchContent } from "./search-text.js";
+import { findTextMatches, findTextRanges } from "./find-ranges.js";
 import { createConversationSearch, createMessageRangeCache } from "./conversation-search-cache.js";
 import type { SearchSource } from "./search-state.js";
 import { useTranscriptViewport } from "./transcript-viewport.js";
@@ -16,47 +17,10 @@ function publishHighlights() {
   CSS.highlights.set("conversation-current", new Highlight(...[...highlightScopes.values()].flatMap(scope => scope.current)));
 }
 
-/** Build ranges across markup boundaries without changing React-owned DOM. */
-export function findTextRanges(root: HTMLElement, query: string): Range[] {
-  return findTextMatches(root, query).map(match => match.range);
-}
-
-/** Diagnostics opt into literal JSON; chat keeps its value-only display policy. */
-export function findTextMatches(root: HTMLElement, query: string, mode: "conversation" | "literal" = "conversation") {
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  type TextRun = { text: string; nodes: Array<{ node: Text; start: number; end: number }> };
-  const runs: TextRun[] = [];
-  let region: Element | null = null;
-  let run: TextRun | undefined;
-  let next: Node | null;
-  while ((next = walker.nextNode())) {
-    const parent = next.parentElement;
-    const content = mode === "conversation" ? parent?.closest("[data-search-content]") ?? null : null;
-    // Tool bodies are opt-in. JSON keys, status labels, gutters and transport
-    // wrappers must never consume the occurrence assigned to a real value.
-    const button = parent?.closest("button");
-    const authoredFileLabel = mode === "conversation" && content && button?.matches('[data-slot="file-chip"]');
-    if (!parent || (button && !authoredFileLabel) || parent.closest("[hidden], [aria-hidden=true], [data-search-exclude], textarea, script, style") ||
-      (mode === "conversation" && parent.closest('[data-search-tool], [data-slot="json-viewer"]') && !content)) {
-      run = undefined;
-      continue;
-    }
-    const nextRegion = content ?? root;
-    if (!run || region !== nextRegion) { run = { text: "", nodes: [] }; runs.push(run); region = nextRegion; }
-    const value = next.textContent ?? "";
-    run.nodes.push({ node: next as Text, start: run.text.length, end: run.text.length + value.length });
-    run.text += value;
-  }
-  return runs.flatMap(({ text, nodes }) => textMatches(text, query).flatMap(m => {
-    const first = nodes.find(n => n.end > m.start);
-    const last = nodes.find(n => n.end >= m.end);
-    if (!first || !last) return [];
-    const range = document.createRange();
-    range.setStart(first.node, m.start - first.start);
-    range.setEnd(last.node, m.end - last.start);
-    return [{ range, ...matchExcerpt(text, m) }];
-  }));
-}
+// The walker itself lives in `find-ranges.ts`, a leaf module the full-body
+// reader can import without reaching the transcript viewport (M16-T84 S1).
+// Re-exported here because this is where every caller already looks for it.
+export { findTextMatches, findTextRanges } from "./find-ranges.js";
 
 const NO_MESSAGES: readonly ThreadMessage[] = [];
 
