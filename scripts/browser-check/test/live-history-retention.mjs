@@ -258,7 +258,7 @@ export default async function liveHistoryRetention(check) {
         const marker = /Checkpoint 10\d+ is complete\./.exec(node.innerText)?.[0];
         if (marker) return { top: box.top, text: marker, scrollTop: element.scrollTop };
       }
-      return { scrollTop: element.scrollTop, inReserve: Boolean(document.querySelector('[data-slot="history-reserve"]')) };
+      return { scrollTop: element.scrollTop, scrollHeight: element.scrollHeight, inReserve: Boolean(document.querySelector('[data-slot="history-reserve"]')) };
     });
     concurrentMarker = concurrentAnchor.text ? page.locator('[data-window-message]').filter({ hasText: concurrentAnchor.text }).first() : undefined;
   });
@@ -272,9 +272,13 @@ export default async function liveHistoryRetention(check) {
     assert(Math.abs(concurrentAnchorDelta) <= 1, `concurrent prepend moved the row being read: ${concurrentAnchorDelta}px`);
   } else {
     assert(concurrentAnchor.inReserve, 'with no row on screen the reader is inside the estimated range');
-    const after = await viewport.evaluate(element => ({ scrollTop: element.scrollTop, gap: element.scrollHeight - element.clientHeight - element.scrollTop }));
-    concurrentAnchorDelta = after.scrollTop - concurrentAnchor.scrollTop;
-    assert(Math.abs(concurrentAnchorDelta) <= 1, `a page arriving inside the estimated range moved the viewport: ${concurrentAnchorDelta}px`);
+    // The page takes the estimate's place; only what it needs beyond the
+    // estimate is inserted above the reader, and that is exactly how much the
+    // range grew, so the reader's pixels are unchanged.
+    const after = await viewport.evaluate(element => ({ scrollTop: element.scrollTop, scrollHeight: element.scrollHeight, gap: element.scrollHeight - element.clientHeight - element.scrollTop }));
+    const surplus = after.scrollHeight - concurrentAnchor.scrollHeight;
+    concurrentAnchorDelta = after.scrollTop - concurrentAnchor.scrollTop - Math.max(0, surplus);
+    assert(Math.abs(concurrentAnchorDelta) <= 1, `a page arriving inside the estimated range moved the reader: ${concurrentAnchorDelta}px (viewport ${after.scrollTop - concurrentAnchor.scrollTop}px, range ${surplus}px)`);
     assert(after.gap > 2, 'a page arriving inside the estimated range did not throw the reader to the live edge');
   }
   assert.equal((await check.rpc('session/load', { path })).state.isStreaming, true, 'the anchored prepend completes while output still appends');
