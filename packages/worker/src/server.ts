@@ -734,7 +734,7 @@ export class WorkerServer {
             // current state or a byte-identical prefix; cursor/entry identity
             // alone cannot detect a same-id rewrite or compaction barrier.
             if (("before" in req.params.window || "beforeEntry" in req.params.window)
-              && (resolved?.base === "stale" || !resolved?.state)) {
+              && !resolved?.state) {
               throw new ProtocolError(
                 ErrorCodes.RevisionUnavailable,
                 "This conversation changed since that page was read. Reload it and try again.",

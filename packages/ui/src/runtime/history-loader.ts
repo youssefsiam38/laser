@@ -1,5 +1,5 @@
 import { ErrorCodes, type ClientRequests, type HistoryWindow, type HistoryWindowRequest, type SessionUpdateParams } from "@lasercode/protocol";
-import type { applyUpdate, blocksFromEntries, modelNamesOf, stampNewBlocks, textOf, Action, Block, SessionView, ValidatedRevision } from "../store.js";
+import type { applyUpdate, blocksFromEntries, modelNamesOf, stampNewBlocks, textOf, Action, Block, HistoryViewState, SessionView, ValidatedRevision } from "../store.js";
 import { awake } from "../view-summary.js";
 import { retainEntries, stubOfElided, mergeStubs, type EntryStub } from "./retained-entries.js";
 import { BODY_EXCERPT_MAX_BYTES, tailOfParts, type BodyRef } from "./body-excerpt.js";
@@ -22,39 +22,23 @@ export type HistoryAction =
   | { type: "historyPrepend"; path: string; before: string; anchor: string; baseRevision: string; entries: unknown[]; window: HistoryWindow; ownerRevision?: string | undefined }
   /** Bounded recovery before a retained anchor; it extends and never replaces. */
   | { type: "historyRecover"; path: string; anchor: string; baseRevision: string; expectedBefore?: string | undefined; trimAt?: string | undefined; entries: unknown[]; window: HistoryWindow; ownerRevision?: string | undefined }
-  | { type: "historyMetadata"; path: string; from?: string | null | undefined; entries: unknown[]; leafId?: string | null | undefined; window: HistoryWindow; revision?: string | undefined };
-
-/**
- * What a dormant view keeps of an accepted window (RP-5/RP-9): the durable
- * revision it was valid at, the environment that revision belongs to, and
- * whether the session has any history at all.
- */
-/**
- * Take the window's identity for a merged read, or take none.
- *
- * A page read and what this view already held describe one state when they
- * came from the same durable revision. When they did not, the merge is a set
- * no single revision names, and a record released from it would claim to be
- * something it is not.
- */
-function adopt(next: SessionView, previous: SessionView, window: Omit<HistoryWindow, "live">): SessionView {
-  if (previous.validated === undefined || previous.validated.revision !== window.revision) {
-    const { validated: _stale, ...rest } = next;
-    return rest as SessionView;
-  }
-  return { ...next, validated: validatedOf(window, next) };
-}
+  | { type: "historyPageRefused"; path: string; cause: "stale-base"; message: string };
 
 /** Adopt a newer revision only after the producer proved the held base prefix. */
 function adoptProvedPage(next: SessionView, previous: SessionView, window: Omit<HistoryWindow, "live">, baseRevision: string): SessionView {
-  if (previous.validated === undefined || previous.validated.revision !== baseRevision) {
+  const covered = previous.validated ?? (previous.history?.revision === baseRevision ? validatedOf(previous.history, previous) : undefined);
+  if (coveredBaselineOf(previous) !== baseRevision || !covered) {
     const { validated: _stale, ...rest } = next;
     return rest as SessionView;
   }
   // Prefix proof says the rows covered by the held baseline are unchanged; an
   // older page at a newer producer revision does not carry that revision's
   // unseen suffix. Keep the covered baseline until a delta acquires it.
-  return { ...next, validated: window.revision === baseRevision ? validatedOf(window, next) : previous.validated };
+  return { ...next, validated: window.revision === baseRevision ? validatedOf(window, next) : covered };
+}
+
+function coveredBaselineOf(view: SessionView | undefined): string | undefined {
+  return view?.validated?.revision ?? view?.history?.revision;
 }
 
 function validatedOf(window: Omit<HistoryWindow, "live">, view: SessionView): ValidatedRevision {
@@ -142,8 +126,10 @@ function insertBefore<T>(held: readonly T[], incoming: readonly T[], boundary: s
   return [...held.slice(0, at), ...incoming, ...held.slice(at)];
 }
 
-/** First missing parent on the loaded active ancestry, nearest the live edge. */
-function activeGapBoundary(view: Pick<SessionView, "entries" | "stubs" | "leafId">): string | undefined {
+type ActiveAncestry = { kind: "complete" } | { kind: "gap"; before: string } | { kind: "unknown" };
+
+/** Prove the active ancestry whole, or name its first missing parent. */
+function activeAncestry(view: Pick<SessionView, "entries" | "stubs" | "leafId">): ActiveAncestry {
   const records = new Map<string, { parentId: string | null }>();
   for (const entry of view.entries) {
     const value = entry as { id?: unknown; parentId?: unknown } | null;
@@ -153,17 +139,27 @@ function activeGapBoundary(view: Pick<SessionView, "entries" | "stubs" | "leafId
   // Only the producer-owned leaf proves active ancestry. Never infer a gap
   // from the last locally appended/live-only row.
   let id = view.leafId;
+  if (typeof id !== "string") return id === null ? { kind: "complete" } : { kind: "unknown" };
   const visited = new Set<string>();
   while (typeof id === "string") {
-    if (visited.has(id)) return undefined;
+    if (visited.has(id)) return { kind: "unknown" };
     visited.add(id);
     const record = records.get(id);
-    if (!record) return undefined;
-    if (record.parentId === null) return undefined;
-    if (!records.has(record.parentId)) return id;
+    if (!record) return { kind: "unknown" };
+    if (record.parentId === null) return { kind: "complete" };
+    if (!records.has(record.parentId)) return { kind: "gap", before: id };
     id = record.parentId;
   }
-  return undefined;
+  return { kind: "unknown" };
+}
+
+function acceptsPage(view: SessionView, action: Extract<HistoryAction, { type: "historyPrepend" | "historyRecover" }>): boolean {
+  const held = view.history;
+  if (!held || view.historyRevision !== action.ownerRevision || coveredBaselineOf(view) !== action.baseRevision
+    || (held.anchor !== action.anchor && held.gapBefore !== action.anchor) || held.epoch !== action.window.epoch
+    || held.environmentKey !== action.window.environmentKey) return false;
+  if (action.type === "historyPrepend") return held.before === action.before;
+  return held.before === action.expectedBefore && (action.trimAt === undefined || view.trimmed?.at === action.trimAt);
 }
 
 /** Keep lower-sequence new-generation events until a snapshot can adopt them. */
@@ -299,37 +295,19 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
         ...(action.leafId !== undefined ? { leafId: action.leafId } : {}),
       }, { applyUpdate, blocksFromEntries, modelNamesOf, stampNewBlocks, textOf });
     }
-    case "historyMetadata": {
-      if (v.historyRevision !== action.revision || (v.history && v.history.epoch !== action.window.epoch)) return v;
-      const index = action.from ? v.entries.findIndex(e => (e as { id?: string }).id === action.from) : -1;
-      if (action.from && index < 0) return v;
-      // Entries are an append-only tree, not a contiguous active branch.
-      // Splicing a new continuation at its parent would put it before older
-      // siblings abandoned by an edit, reversing their version numbers.
-      // Replace known records in place and append only newly persisted ids.
-      const incoming = retainEntries(action.entries);
-      const entries = [...new Map([...v.entries, ...incoming.entries].map(entry => [(entry as { id: string }).id, entry])).values()];
-      const stubs = mergeStubs(v.stubs ?? [], [...incoming.stubs, ...(action.window.elided ?? []).map(stubOfElided)]);
-      const { live: _live, before: _before, ...history } = action.window;
-      const merged = v.history ? { ...v.history, seq: history.seq, hasHistory: v.history.hasHistory || history.hasHistory } : { ...history, userOffset: 0, context: [], priorGoalIds: [], complete: true };
-      // The merged set spans this read and what was already held. That is one
-      // describable state only when both came from the same durable revision;
-      // across revisions the tuple would name entries it does not cover.
-      return adopt({ ...v, entries, stubs, leafId: action.leafId, history: merged }, v, action.window);
+    case "historyPageRefused": {
+      if (!v.history) return v;
+      return { ...v, history: { ...v.history, refusal: { cause: action.cause, message: action.message } } };
     }
     case "historyPrepend":
     case "historyRecover": {
       const held = v.history;
-      if (!held || v.historyRevision !== action.ownerRevision || held.revision !== action.baseRevision
-        || held.anchor !== action.anchor || held.epoch !== action.window.epoch
-        || held.environmentKey !== action.window.environmentKey) return v;
-      if (action.type === "historyPrepend" && held.before !== action.before) return v;
-      if (action.type === "historyRecover" && (held.before !== action.expectedBefore
-        || (action.trimAt !== undefined && v.trimmed?.at !== action.trimAt))) return v;
+      if (!held || !acceptsPage(v, action)) return v;
       const ids = new Set([...v.entries.map(entryId), ...(v.stubs ?? []).map(stub => stub.id)]);
       const retained = retainEntries(action.entries.filter(entry => !ids.has(entryId(entry))));
       const wireStubs = (action.window.elided ?? []).map(stubOfElided).filter(stub => !ids.has(stub.id));
       const incomingStubs = mergeStubs(retained.stubs, wireStubs);
+      if (retained.entries.length === 0 && incomingStubs.length === 0) return v;
       const entries = insertBefore(v.entries, retained.entries, action.anchor, entryId);
       if (!entries) return v;
       const pageBlocks = blocksFromEntries(retained.entries, undefined, modelNamesOf(v.state), { stubs: incomingStubs, revision: action.window.revision });
@@ -337,29 +315,44 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
       if (pageBlocks.length > 0) {
         // An invisible custom record or a tool result folded into its call can
         // be the entry boundary without owning a block. Insert before the first
-        // rendered block at or after that boundary, not only an exact block id.
+        // rendered block at or after that boundary; when the retained suffix is
+        // entirely invisible, its visible predecessor belongs at the end.
         const boundary = v.entries.findIndex(entry => entryId(entry) === action.anchor);
+        if (boundary < 0) return v;
         const suffix = new Set(v.entries.slice(boundary).map(entryId));
-        const at = v.blocks.findIndex(block => "entryId" in block && suffix.has(block.entryId));
-        if (boundary < 0 || at < 0) return v;
+        const found = v.blocks.findIndex(block => "entryId" in block && suffix.has(block.entryId));
+        const at = found < 0 ? v.blocks.length : found;
         blocks = [...v.blocks.slice(0, at), ...pageBlocks, ...v.blocks.slice(at)];
       }
       const stubs = mergeStubs(incomingStubs, v.stubs ?? []);
       const { live: _live, ...answered } = action.window;
-      let history: HistoryWindow = {
+      const { before: _pageBefore, anchor: _pageAnchor, ...pageMetadata } = answered;
+      const atHead = held.gapBefore === undefined && held.anchor === action.anchor;
+      let history: HistoryViewState = atHead ? {
         ...answered,
-        complete: answered.before === undefined,
+        branchesUnloaded: held.branchesUnloaded || answered.branchesUnloaded,
+        hasHistory: held.hasHistory || answered.hasHistory,
+      } : {
+        ...pageMetadata,
+        ...(held.before !== undefined ? { before: held.before } : {}),
+        ...(held.anchor !== undefined ? { anchor: held.anchor } : {}),
+        userOffset: held.userOffset,
+        context: held.context,
+        priorGoalIds: held.priorGoalIds,
         branchesUnloaded: held.branchesUnloaded || answered.branchesUnloaded,
         hasHistory: held.hasHistory || answered.hasHistory,
       };
-      let trimmed = v.trimmed;
       const candidate = { ...v, entries, stubs, blocks };
-      if (answered.before === undefined) {
-        const gap = activeGapBoundary(candidate);
-        if (gap) history = { ...history, anchor: gap, complete: false };
-        else { history = { ...history, complete: true }; if (trimmed) trimmed = undefined; }
+      const ancestry = activeAncestry(candidate);
+      if (ancestry.kind === "gap" && history.before === undefined) history = { ...history, gapBefore: ancestry.before, complete: false };
+      else if (ancestry.kind === "gap") history = { ...history, complete: false };
+      else if (ancestry.kind === "complete") {
+        const { gapBefore: _gap, ...whole } = history;
+        history = { ...whole, complete: history.before === undefined };
+      } else {
+        history = { ...history, ...(held.gapBefore ? { gapBefore: held.gapBefore } : {}), complete: false };
       }
-      return adoptProvedPage({ ...v, ...(trimmed ? { trimmed } : { trimmed: undefined }), history, entries, stubs, blocks }, v, action.window, action.baseRevision);
+      return adoptProvedPage({ ...v, trimmed: undefined, history, entries, stubs, blocks }, v, action.window, action.baseRevision);
     }
   }
 }
@@ -383,6 +376,7 @@ export type HistoryReads = ReturnType<typeof createHistoryLoader>;
 /** One request owner for tail/all reads, generation adoption and cursor recovery. */
 /** The window a reconciliation asks for: the conversation's recent tail. */
 const HISTORY_TAIL = 40;
+const STALE_BASE_MESSAGE = "This conversation changed since that page was read. Re-read recent messages to continue.";
 
 export function createHistoryLoader(deps: HistoryLoaderDeps) {
   const reads = new Map<string, Promise<void>>();
@@ -404,11 +398,11 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     return () => accepting() && (generations.get(path) ?? 0) === generation && deps.get(path)?.historyRevision === revision
       && (deps.get(path)?.hydrationEpoch ?? 0) === hydration;
   };
-  const read = async (path: string, all = false, accepting: () => boolean = () => true, legacySeq?: number, policy?: "recent", allowDelta = true): Promise<void> => {
+  const read = async (path: string, all = false, accepting: () => boolean = () => true, legacySeq?: number, policy?: "recent" | "reread" | "refresh", allowDelta = true): Promise<void> => {
     if (!accepting()) return;
-    if (policy === "recent") generations.set(path, (generations.get(path) ?? 0) + 1);
+    if (policy === "recent" || policy === "reread") generations.set(path, (generations.get(path) ?? 0) + 1);
     const active = fence(path, accepting);
-    const pending = policy === "recent" ? undefined : reads.get(path);
+    const pending = policy === "recent" || policy === "reread" ? undefined : reads.get(path);
     if (pending) {
       await pending;
       if (!active() || !all || hasCompleteTree(deps.get(path))) return;
@@ -423,29 +417,17 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     /** A proved suffix the fold refused: the same read is spent again, once. */
     let refusedDelta = false;
     const work = (async () => {
-      const anchor = policy === "recent" ? undefined : deps.get(path)?.history?.anchor;
-      const window: HistoryWindowRequest = policy === "recent" ? { tail: 40 } : all ? { all: true } : anchor ? { from: anchor } : { tail: 40 };
+      const window: HistoryWindowRequest = all ? { all: true } : { tail: HISTORY_TAIL };
       // The durable revision this view still holds, when it holds one whole
       // (RP-9): the host may then answer the tail as a proved suffix instead of
       // a replacement. A cache-painted view holds no window, so it asks for a
       // replacement and gets one.
-      const base = allowDelta && policy === "recent" ? deltaBaseOf(deps.get(path)) : undefined;
+      const base = allowDelta && !all ? deltaBaseOf(deps.get(path)) : undefined;
       // RP-5b: this surface cannot hold a body larger than its excerpt bound,
       // so every page it asks for leaves those bodies out and lists the records
       // that carry them — which is also what lets a page of a conversation with
       // one enormous turn still carry the turns around it.
-      const result = await deps.request({ path, window, bodyLimit: BODY_EXCERPT_MAX_BYTES, ...(base ? { baseRevision: base } : {}) }).catch(error => {
-        // `from` and `all` are indivisible. An unopened/released view can still
-        // fall back to its bounded opening tail. A hydrated conversation on
-        // screen keeps its logical window instead: refresh failure is honest,
-        // while a tail replacement would erase what the person is reading.
-        const code = (error as { code?: number }).code;
-        const indivisible = "from" in window || "all" in window;
-        if (!(("from" in window && code === ErrorCodes.InvalidParams) || (indivisible && code === ErrorCodes.RevisionUnavailable))) throw error;
-        const held = deps.get(path);
-        if (deps.isCurrent(path) && held?.hydrated && (held.entries.length > 0 || held.blocks.length > 0)) throw error;
-        return deps.request({ path, window: { tail: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES });
-      });
+      const result = await deps.request({ path, window, bodyLimit: BODY_EXCERPT_MAX_BYTES, ...(base ? { baseRevision: base } : {}) });
       const current = deps.get(path);
       if (!active() || !current || current.historyPending?.token !== token) return;
 
@@ -453,10 +435,11 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
       if (result.window && epoch && epoch !== result.window.epoch) deps.adoptEpoch(path, result.window.seq);
       if (result.window && base !== undefined && result.window.mode === "delta") {
         deps.dispatch({ type: "historyDelta", path, token, baseRevision: base, entries: result.entries, window: result.window, ...(result.leafId !== undefined ? { leafId: result.leafId } : {}) });
-        // The fold refuses a suffix whose base moved while it was in flight. A
-        // refused page is kept by nobody: the conversation is read again, once,
-        // as an atomic replacement.
-        if (deps.get(path)?.historyRevision !== token) { refusedDelta = true; return; }
+        // Only a person's explicit re-read may replace a suffix whose base
+        // moved while it was in flight. Background refresh leaves the window.
+        if (deps.get(path)?.historyRevision !== token && (policy === "recent" || policy === "reread")) { refusedDelta = true; return; }
+      } else if (result.window && base !== undefined && policy !== "recent" && policy !== "reread") {
+        deps.dispatch({ type: "historyPageRefused", path, cause: "stale-base", message: STALE_BASE_MESSAGE });
       } else if (result.window) {
         deps.dispatch({ type: "historySnapshot", path, token, ...result, window: result.window, ...(policy === "recent" ? { replaceWindow: true } : {}) });
       } else {
@@ -469,7 +452,7 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
       deps.dispatch({ type: "historyEnd", path, token });
       if (reads.get(path) === work) reads.delete(path);
     }
-    if (refusedDelta) await read(path, false, accepting, legacySeq, "recent", false);
+    if (refusedDelta) await read(path, false, accepting, legacySeq, policy === "reread" ? "reread" : "recent", false);
   };
 
   /**
@@ -480,9 +463,10 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
    * baseline and asks the producer for precisely that missing delta.
    */
   const deltaBaseOf = (view: SessionView | undefined): string | undefined => {
-    if (!view?.validated || !view.history || view.history.environmentKey !== view.validated.environmentKey
+    const base = coveredBaselineOf(view);
+    if (!base || !view?.history || (view.validated && view.history.environmentKey !== view.validated.environmentKey)
       || !view.hydrated || view.provisional !== undefined) return undefined;
-    return view.validated.revision;
+    return base;
   };
   const all = async (path: string, accepting: () => boolean): Promise<boolean> => {
     const active = fence(path, accepting);
@@ -496,33 +480,40 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
    * This is the only recovery for a lost or stale cursor: it extends the view
    * in place and never exchanges the person's old window for a recent tail.
    */
+  const pageAddsRecords = (view: SessionView, result: ClientRequests["pi/session/entries"]["result"]): boolean => {
+    const known = new Set([...view.entries.map(entryId), ...(view.stubs ?? []).map(stub => stub.id)]);
+    return result.entries.some(entry => !known.has(entryId(entry))) || (result.window?.elided ?? []).some(stub => !known.has(stub.id));
+  };
+  const refuseStaleBase = (path: string, error: unknown): void => {
+    const value = error as { message?: unknown } | null;
+    const message = typeof value?.message === "string" && value.message ? value.message : STALE_BASE_MESSAGE;
+    deps.dispatch({ type: "historyPageRefused", path, cause: "stale-base", message });
+  };
   const recoverEarlier = async (path: string, accepting: () => boolean): Promise<boolean> => {
     const view = deps.get(path);
     const history = view?.history;
-    const anchor = history?.anchor;
-    if (!view || !history || !anchor || view.trimmed?.earlierExhausted) return false;
+    const anchor = history?.gapBefore ?? history?.anchor;
+    if (!view || !history || !anchor) return false;
     const expectedBefore = history.before;
     const trimAt = view.trimmed?.at;
     const ownerRevision = view.historyRevision;
-    const baseRevision = history.revision;
-    const epoch = history.epoch;
+    const baseRevision = coveredBaselineOf(view);
     const active = fence(path, accepting);
-    if (!active()) return false;
+    if (!baseRevision || !active()) return false;
     const result = await deps.request({ path, window: { beforeEntry: anchor, limit: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES, baseRevision }).catch(error => {
       if (!active()) return undefined;
       const code = (error as { code?: number }).code;
-      if (code === ErrorCodes.InvalidParams || code === ErrorCodes.RevisionUnavailable) return undefined;
+      if (code === ErrorCodes.InvalidParams) return undefined;
+      if (code === ErrorCodes.RevisionUnavailable) { refuseStaleBase(path, error); return undefined; }
       throw error;
     });
     if (!result?.window || !active()) return false;
     const current = deps.get(path);
-    if (!current || current.historyRevision !== ownerRevision || current.history?.revision !== baseRevision
-      || current.history.anchor !== anchor || current.history.before !== expectedBefore || current.history.epoch !== epoch
-      || current.history.environmentKey !== result.window.environmentKey
-      || (trimAt !== undefined && current.trimmed?.at !== trimAt)) return false;
+    if (!current) return false;
+    const added = pageAddsRecords(current, result);
     deps.dispatch({ type: "historyRecover", path, anchor, baseRevision, ownerRevision, entries: result.entries, window: result.window,
       ...(expectedBefore !== undefined ? { expectedBefore } : {}), ...(trimAt !== undefined ? { trimAt } : {}) });
-    return deps.get(path) !== current;
+    return added && deps.get(path) !== current;
   };
   const earlier = async (path: string, accepting: () => boolean): Promise<boolean> => {
     if (!accepting()) return false;
@@ -530,12 +521,12 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     // A trim releases the producer-owned cursor with the older rows. Recover
     // directly before the retained anchor; asking for its suffix can exceed a
     // page and a tail replacement would delete the window being read.
-    if (!view?.history?.before && (view?.trimmed || view?.history?.complete === false)) return recoverEarlier(path, accepting);
+    if (!view?.history?.before && (view?.trimmed || view?.history?.gapBefore || view?.history?.complete === false)) return recoverEarlier(path, accepting);
     const active = fence(path, accepting);
     const before = view?.history?.before;
     const anchor = view?.history?.anchor;
     const ownerRevision = view?.historyRevision;
-    const baseRevision = view?.history?.revision;
+    const baseRevision = coveredBaselineOf(view);
     if (!before || !anchor || !baseRevision || !active()) return false;
     let result: ClientRequests["pi/session/entries"]["result"] | undefined;
     try {
@@ -543,39 +534,26 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     } catch (error) {
       if (!active()) return false;
       const code = (error as { code?: number }).code;
-      if (code !== ErrorCodes.InvalidParams && code !== ErrorCodes.RevisionUnavailable) throw error;
-      return recoverEarlier(path, active);
+      if (code === ErrorCodes.InvalidParams) return false;
+      if (code === ErrorCodes.RevisionUnavailable) { refuseStaleBase(path, error); return false; }
+      throw error;
     }
     if (!result.window || !active()) return false;
     const current = deps.get(path);
-    if (current?.history?.before !== before || current.history.anchor !== anchor
-      || current.history.revision !== baseRevision || current.historyRevision !== ownerRevision) return false;
+    if (!current) return false;
+    const added = pageAddsRecords(current, result);
     deps.dispatch({ type: "historyPrepend", path, before, anchor, baseRevision, ownerRevision, entries: result.entries, window: result.window });
-    return deps.get(path) !== current;
+    return added && deps.get(path) !== current;
   };
-  const metadata = async (path: string, accepting: () => boolean): Promise<void> => {
-    const active = fence(path, accepting);
-    if (!active()) return;
-    const from = deps.get(path)?.leafId;
-    const revision = deps.get(path)?.historyRevision;
-    const result = await deps.request({ path, window: from ? { from } : { all: true }, bodyLimit: BODY_EXCERPT_MAX_BYTES }).catch(async error => {
-      if (!active()) return undefined;
-      const code = (error as { code?: number }).code;
-      if (code !== ErrorCodes.InvalidParams && code !== ErrorCodes.RevisionUnavailable) throw error;
-      await read(path, false, active); return undefined;
-    });
-    if (!result || !active()) return;
-    const previousEpoch = deps.get(path)?.history?.epoch ?? deps.get(path)?.updateEpoch;
-    if (result.window && previousEpoch && previousEpoch !== result.window.epoch) { await read(path, false, active); return; }
-    if (result.window) deps.dispatch({ type: "historyMetadata", path, from, revision, ...result, window: result.window });
-    else deps.dispatch({ type: "entries", path, entries: result.entries, leafId: result.leafId });
-  };
+  const metadata = (path: string, accepting: () => boolean): Promise<void> =>
+    deps.get(path)?.hydrated ? read(path, false, accepting, undefined, "refresh") : Promise.resolve();
   const ensure = async (path: string, entryId: string, accepting: () => boolean): Promise<void> => {
     const view = deps.get(path);
     if (view?.entries.some(entry => (entry as { id?: string }).id === entryId) || !view?.history || hasCompleteTree(view)) return;
     await read(path, true, accepting);
   };
   const recent = (path: string, accepting: () => boolean, legacySeq?: number) => read(path, false, accepting, legacySeq, "recent");
+  const reread = (path: string, accepting: () => boolean) => read(path, false, accepting, undefined, "reread");
   /**
    * Replace what a trim released, if the replacement really contains what the
    * surface is standing on (RP-5b §7).
@@ -641,5 +619,5 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     }
   };
 
-  return { read, recent, all, earlier, metadata, ensure, reconcile };
+  return { read, recent, reread, all, earlier, metadata, ensure, reconcile };
 }

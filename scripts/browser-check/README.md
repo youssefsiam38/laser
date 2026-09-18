@@ -155,7 +155,7 @@ shipped seam, and clean it up before the next matrix case opens the app.
 | `empty` | One disposable project, no sessions. |
 | `short` | One session, 4 messages. |
 | `long` | One session, 240 messages. |
-| `history` | One session, 240 messages with deterministic body-rich prompts for live paging/retention acceptance. |
+| `history` | No prebuilt sessions; the live-history script creates one tool-heavy session for paging/retention acceptance. |
 | `huge` | One session, 2,000 messages; real RPC turns, so slower than copying files. |
 | `tools` | Reasoning, a real shell tool, a completed goal. |
 | `agents` | Parent with a provider-failed child and a child paused on an MCP approval. |

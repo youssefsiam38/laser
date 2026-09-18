@@ -238,12 +238,16 @@ export default async function liveHistoryRetention(check) {
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y: y + 32 }] });
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     await cdp.detach();
-    await settleScroll();
+  } else {
+    await viewport.hover();
+    await page.mouse.wheel(0, -32);
   }
+  await settleScroll();
   const compactAnchorBefore = await middleOutput.evaluate(node => ({ top: node.getBoundingClientRect().top, text: node.textContent }));
 
-  // A real compaction refuses the old page base. Reload is an explicit re-entry
-  // that accepts the new bounded tail; paging then reaches the root again.
+  // A real compaction keeps the active reading position. A deliberate session
+  // re-entry (not a page reload) accepts the bounded current tail; paging then
+  // reaches the root against the post-compaction revision.
   await check.rpc('pi/session/compact', { path, instructions: 'Summarize the tool-heavy fixture without dropping canonical history.' });
   await settled(check, path);
   await settleRender();
@@ -253,7 +257,14 @@ export default async function liveHistoryRetention(check) {
   const compactionAnchorDelta = compactAnchorAfter.top - compactAnchorBefore.top;
   assert.equal(compactAnchorAfter.text, compactAnchorBefore.text, 'compaction preserves the open intermediate output');
   assert(Math.abs(compactionAnchorDelta) <= 8, `compaction moved the active reading anchor ${compactionAnchorDelta}px before reload`);
-  await page.reload({ waitUntil: 'domcontentloaded' });
+  const holding = await check.rpc('session/new', { cwd: fixture.project });
+  const holdingTitle = `History re-read ${check.state.width} ${check.state.theme}`;
+  await check.rpc('pi/model/set', { path: holding.state.path, model: { provider: 'stub', id: 'stub-1' } });
+  const holdingPrompt = await check.rpc('session/prompt', { path: holding.state.path, content: [{ type: 'text', text: 'Keep this session available for an explicit history re-read' }] });
+  assert.equal(holdingPrompt.accepted, true, 'the re-read destination is accepted');
+  await settled(check, holding.state.path);
+  await check.rpc('pi/session/rename', { path: holding.state.path, name: holdingTitle });
+  await selectSession(holdingTitle);
   await selectSession(title);
   await page.getByText('Streaming line 40:', { exact: false }).first().waitFor();
   await viewport.evaluate(element => { element.scrollTop = 0; });
@@ -295,6 +306,7 @@ export default async function liveHistoryRetention(check) {
     renderedOutputs: [1, 45, 90],
     compactionAnchorDelta,
     compactionPreserved: true,
+    postCompactionWithoutReload: true,
     retainedBytes,
     cacheText,
     viewport: check.state.width,

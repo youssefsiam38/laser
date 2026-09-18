@@ -878,7 +878,7 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
         case "historySnapshot":
         case "historyPrepend":
         case "historyRecover":
-        case "historyMetadata":
+        case "historyPageRefused":
         case "historyReset":
         case "historyBegin":
         case "historyEnd":

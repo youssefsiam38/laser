@@ -129,7 +129,7 @@ export async function fixture(target, runtime, name) {
       }
       const { entries } = await target.rpc('pi/session/entries', { path });
       const messages = entries.filter(entry => entry.type === 'message').map(entry => entry.message);
-      const expected = name === 'history' ? 182 : session.prompts.length * 2;
+      const expected = session.prompts.length * 2;
       if (!['tools', 'agents'].includes(name) && messages.length !== expected) throw new Error(`Fixture ${name}: expected ${expected} persisted messages, got ${messages.length}.`);
       if (name === 'tools') {
         const reasoning = messages.some(message => message.content?.some(part => part.type === 'thinking'));

@@ -59,7 +59,7 @@ export class SessionProjection {
       // An older page is merged into a client-held window. Its base must still
       // be this exact state or a cryptographically proved canonical prefix;
       // an anchor/cursor alone cannot detect rewritten content with reused ids.
-      if (("before" in request || "beforeEntry" in request) && (base?.base === "stale" || !base?.state)) {
+      if (("before" in request || "beforeEntry" in request) && !base?.state) {
         return { kind: "refuse", error: unavailable("This conversation changed since that page was read. Reload it and try again.") };
       }
       const common = {

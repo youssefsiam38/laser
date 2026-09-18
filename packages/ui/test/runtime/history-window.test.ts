@@ -154,14 +154,16 @@ describe("partial history integration", () => {
     expect(users[0]?.content).toEqual([{ type: "text", text: "Original objective" }]);
   });
 
-  it("adds settlement records without rebuilding the completed transcript or advancing live seq", () => {
+  it("adds settlement records through a bounded delta without advancing live seq", () => {
     const app = hydrate(begin(opened()));
     const next = { type: "message", id: "next", parentId: "e79", message: { role: "user", content: "Next prompt" } };
-    const page = historyWindow({ entries: [...entries, next], leafId: "next" }, { from: "e79" }, { ...scope, seq: 99 });
-    const updated = reduce(app, { type: "historyMetadata", path: session.path, from: "e79", ...page });
-    expect(updated.open[session.path]!.blocks).toBe(app.open[session.path]!.blocks);
-    expect(updated.open[session.path]!.entries).toEqual([...entries.slice(40), next]);
-    expect(updated.open[session.path]!.history?.userOffset).toBe(20);
-    expect(updated.open[session.path]!.lastSeq).toBe(5);
+    const page = historyWindow({ entries: [...entries, next], leafId: "next" }, { tail: 40 },
+      { ...scope, seq: 99, revision: "r1.test.next", selection: { kind: "delta", after: "e79" } });
+    const updated = reduce(begin(app), { type: "historyDelta", path: session.path, token: "read", baseRevision: scope.revision, ...page });
+    const before = app.open[session.path]!; const after = updated.open[session.path]!;
+    after.blocks.slice(0, before.blocks.length).forEach((block, index) => expect(block).toBe(before.blocks[index]));
+    expect(after.entries).toEqual([...entries.slice(40), next]);
+    expect(after.history?.userOffset).toBe(20);
+    expect(after.lastSeq).toBe(99);
   });
 });

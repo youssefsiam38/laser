@@ -102,7 +102,7 @@ it("keeps known versions through Previous and Next, without a full-history read"
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
   await click(button("Send", row(prompt)));
-  await act(async () => actions.refreshEntries({ tail: true })); await flush();
+  await act(async () => actions.rereadHistory()); await flush();
   expect(hasCompleteTree(view)).toBe(true);
   await click(button("Previous version", row(edited)));
   expect(hasCompleteTree(view)).toBe(true);
@@ -128,7 +128,7 @@ it("numbers three versions in persisted tree order after earlier pages, metadata
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await click(button("Send", row(previous)));
-    await act(async () => actions.refreshEntries({ tail: true })); await flush();
+    await act(async () => actions.rereadHistory()); await flush();
   };
   await edit(prompt, "Second version");
   await edit("Second version", "Third version");

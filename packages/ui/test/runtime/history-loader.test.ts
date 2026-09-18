@@ -55,9 +55,13 @@ describe("history request ownership", () => {
       { tail: 40 },
       { beforeEntry: "e79", limit: 40 },
     ]);
-    expect(f.view().trimmed).toBeDefined();
+    expect(f.view().trimmed).toBeUndefined();
     expect(f.view().entries.map(row => (row as { id?: string }).id)).toEqual(entries.slice(38).map(row => row.id));
     expect(f.view().history?.before).toBeDefined();
+    const recovered = f.view();
+    await f.loader.reconcile(state.path);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(f.view()).toBe(recovered);
   });
 
   it("mints a cursor from the retained anchor without dropping an older focused row", async () => {
@@ -74,10 +78,10 @@ describe("history request ownership", () => {
     expect(request.mock.calls[1]![0]).toMatchObject({ window: { beforeEntry: "e10", limit: 40 }, baseRevision: scope.revision });
     expect(f.view().blocks.some(block => "entryId" in block && block.entryId === "e10")).toBe(true);
     expect(f.view().entries.some(row => (row as { id?: string }).id === "e10")).toBe(true);
-    expect(f.view().history).toMatchObject({ anchor: "e79", complete: false });
+    expect(f.view().history).toMatchObject({ anchor: "e0", gapBefore: "e79", complete: false });
     // The root page and retained latest suffix are disjoint. The same bounded
     // control walks the missing middle instead of declaring false exhaustion.
-    while (f.view().trimmed) expect(await f.loader.earlier(state.path, () => true)).toBe(true);
+    while (f.view().history?.gapBefore) expect(await f.loader.earlier(state.path, () => true)).toBe(true);
     expect(f.view().entries.map(row => (row as { id?: string }).id)).toEqual(entries.map(row => row.id));
     expect(f.view().history).toMatchObject({ anchor: "e0", complete: true });
   });
@@ -92,12 +96,36 @@ describe("history request ownership", () => {
       baseRevision: scope.revision, ownerRevision: held.historyRevision, entries: root.entries,
       window: { ...root.window, complete: false } });
 
-    expect(f.view().history).toMatchObject({ anchor: "e40", complete: false });
+    expect(f.view().history).toMatchObject({ anchor: "e0", gapBefore: "e40", complete: false });
     expect(f.view().history?.before).toBeUndefined();
     expect(await f.loader.earlier(state.path, () => true)).toBe(true);
     expect(request).toHaveBeenLastCalledWith(expect.objectContaining({ window: { beforeEntry: "e40", limit: 40 }, baseRevision: scope.revision }));
     expect(f.view().entries.map(row => (row as { id?: string }).id)).toEqual(entries.map(row => row.id));
     expect(f.view().history?.complete).toBe(true);
+  });
+
+  it("walks a multi-page middle gap without repointing the oldest anchor or page metadata", async () => {
+    const many = Array.from({ length: 160 }, (_, i) => ({ type: "message", id: `g${i}`, parentId: i ? `g${i - 1}` : null,
+      message: { role: i % 2 ? "assistant" : "user", content: `gap ${i}` } }));
+    const gapSource = { entries: many, leafId: "g159" };
+    const request = vi.fn(async (params: Params) => historyWindow(gapSource, params.window!, scope));
+    const f = fixture(request);
+    await f.loader.read(state.path);
+    const held = f.view();
+    const root = historyWindow({ entries: many.slice(0, 10), leafId: "g9" }, { all: true }, scope);
+    f.dispatch({ type: "historyPrepend", path: state.path, before: held.history!.before!, anchor: held.history!.anchor!,
+      baseRevision: scope.revision, ownerRevision: held.historyRevision, entries: root.entries,
+      window: { ...root.window, complete: false, priorGoalIds: ["held-goal"] } });
+    expect(f.view().history).toMatchObject({ anchor: "g0", gapBefore: "g120", userOffset: 0, priorGoalIds: ["held-goal"] });
+
+    expect(await f.loader.earlier(state.path, () => true)).toBe(true);
+    expect(f.view().history).toMatchObject({ anchor: "g0", gapBefore: "g80", userOffset: 0, priorGoalIds: ["held-goal"] });
+    expect(await f.loader.earlier(state.path, () => true)).toBe(true);
+    expect(f.view().history).toMatchObject({ anchor: "g0", gapBefore: "g40", userOffset: 0, priorGoalIds: ["held-goal"] });
+    expect(await f.loader.earlier(state.path, () => true)).toBe(true);
+    expect(f.view().history).toMatchObject({ anchor: "g0", complete: true, userOffset: 0, priorGoalIds: ["held-goal"] });
+    expect(f.view().history?.gapBefore).toBeUndefined();
+    expect(f.view().entries.map(entry => (entry as { id: string }).id)).toEqual(many.map(entry => entry.id));
   });
 
   it("keeps a body-heavy retained window when its old anchor-to-live suffix exceeds the page ceiling", async () => {
@@ -141,25 +169,22 @@ describe("history request ownership", () => {
     expect(f.view().blocks.find(block => block.kind === "assistant" && block.streaming)).toBe(streaming);
   });
 
-  it("recovers a stale opaque cursor by prepending before the retained anchor", async () => {
+  it("keeps an invalid opaque cursor as a silent no-op", async () => {
     const request = vi.fn(async (params: Params) => {
       if (params.window && "before" in params.window) throw { code: ErrorCodes.InvalidParams };
       return historyWindow(source, params.window!, scope);
     });
     const f = fixture(request);
     await f.loader.read(state.path);
-    const retained = f.view().entries;
+    const retained = f.view();
 
-    expect(await f.loader.earlier(state.path, () => true)).toBe(true);
+    expect(await f.loader.earlier(state.path, () => true)).toBe(false);
 
     expect(request.mock.calls.map(([params]) => params.window)).toEqual([
       { tail: 40 },
       { before: expect.any(String), limit: 40 },
-      { beforeEntry: "e40", limit: 40 },
     ]);
-    expect(f.view().entries.slice(-retained.length)).toEqual(retained);
-    expect(f.view().entries).toEqual(entries);
-    expect(f.view().history).toMatchObject({ complete: true, userOffset: 0 });
+    expect(f.view()).toBe(retained);
   });
 
   it("keeps the retained window when both its cursor and anchor are stale", async () => {
@@ -176,7 +201,6 @@ describe("history request ownership", () => {
     expect(request.mock.calls.map(([params]) => params.window)).toEqual([
       { tail: 40 },
       { before: expect.any(String), limit: 40 },
-      { beforeEntry: "e40", limit: 40 },
     ]);
     expect(f.view().entries).toBe(retained.entries);
     expect(f.view().blocks).toBe(retained.blocks);
@@ -217,31 +241,70 @@ describe("history request ownership", () => {
     recovering = true;
 
     expect(await f.loader.earlier(state.path, () => true)).toBe(false);
-    expect(f.view()).toBe(held);
+    expect(f.view().entries).toBe(held.entries);
+    expect(f.view().history?.refusal).toEqual({ cause: "stale-base", message: "This conversation changed since that page was read. Re-read recent messages to continue." });
   });
 
-  it("keeps the covered baseline until a recent delta acquires an append unseen by the older page", async () => {
-    const appended = [
-      { type: "message", id: "e80", parentId: "e79", message: { role: "user", content: "new prompt" } },
-      { type: "message", id: "e81", parentId: "e80", message: { role: "assistant", content: "new answer" } },
+  it("surfaces a compaction refusal and rereads the bounded current tail without reload", async () => {
+    const compacted = { ...scope, revision: "r1.test.compacted" };
+    let phase: "initial" | "refused" | "reread" = "initial";
+    const request = vi.fn(async (params: Params) => {
+      if (phase === "initial") return historyWindow(source, params.window!, scope);
+      if (phase === "refused") throw { code: ErrorCodes.RevisionUnavailable, message: "This conversation changed since that page was read. Reload it and try again." };
+      return historyWindow(source, params.window!, compacted);
+    });
+    const f = fixture(request);
+    await f.loader.read(state.path);
+    const held = f.view();
+    phase = "refused";
+
+    expect(await f.loader.earlier(state.path, () => true)).toBe(false);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(f.view().entries).toBe(held.entries);
+    expect(f.view().history?.refusal).toEqual({ cause: "stale-base", message: "This conversation changed since that page was read. Reload it and try again." });
+
+    phase = "reread";
+    await f.loader.reread(state.path, () => true);
+    expect(request.mock.calls[2]![0]).toMatchObject({ window: { tail: 40 }, baseRevision: scope.revision });
+    expect(f.view().history).toMatchObject({ revision: compacted.revision });
+    expect(f.view().history?.refusal).toBeUndefined();
+  });
+
+  it("keeps one covered baseline through two moved pages, then acquires both appends as a delta", async () => {
+    const baseEntries = Array.from({ length: 120 }, (_, i) => ({ type: "message", id: `p${i}`, parentId: i ? `p${i - 1}` : null,
+      message: { role: i % 2 ? "assistant" : "user", content: `page ${i}` } }));
+    const appendOne = [
+      { type: "message", id: "p120", parentId: "p119", message: { role: "user", content: "first append" } },
+      { type: "message", id: "p121", parentId: "p120", message: { role: "assistant", content: "first answer" } },
     ];
-    const evolvedSource = { entries: [...entries, ...appended], leafId: "e81" };
-    const evolved = { ...scope, revision: "r1.test.appended" };
-    let phase: "initial" | "page" | "recent" = "initial";
+    const appendTwo = [
+      { type: "message", id: "p122", parentId: "p121", message: { role: "user", content: "second append" } },
+      { type: "message", id: "p123", parentId: "p122", message: { role: "assistant", content: "second answer" } },
+    ];
+    const baseSource = { entries: baseEntries, leafId: "p119" };
+    const once = { entries: [...baseEntries, ...appendOne], leafId: "p121" };
+    const twice = { entries: [...once.entries, ...appendTwo], leafId: "p123" };
+    const pageOne = { ...scope, revision: "r1.test.page-one" };
+    const pageTwo = { ...scope, revision: "r1.test.page-two" };
+    let phase: "initial" | "page-one" | "page-two" | "recent" = "initial";
     const request = vi.fn(async (params: Params) => phase === "initial"
-      ? historyWindow(source, params.window!, scope)
-      : phase === "page"
-        ? historyWindow(evolvedSource, params.window!, evolved)
-        : historyWindow(evolvedSource, params.window!, { ...evolved, selection: { kind: "delta", after: "e79" } }));
+      ? historyWindow(baseSource, params.window!, scope)
+      : phase === "page-one"
+        ? historyWindow(once, params.window!, pageOne)
+        : phase === "page-two"
+          ? historyWindow(twice, params.window!, pageTwo)
+          : historyWindow(twice, params.window!, { ...pageTwo, selection: { kind: "delta", after: "p119" } }));
     const f = fixture(request);
     await f.loader.read(state.path);
     const ownerRevision = f.view().historyRevision;
-    phase = "page";
 
+    phase = "page-one";
+    expect(await f.loader.earlier(state.path, () => true)).toBe(true);
+    phase = "page-two";
     expect(await f.loader.earlier(state.path, () => true)).toBe(true);
     expect(request.mock.calls[1]![0]).toMatchObject({ baseRevision: scope.revision });
-    expect(f.view().entries).toEqual(entries);
-    expect(f.view().history).toMatchObject({ revision: evolved.revision, complete: true });
+    expect(request.mock.calls[2]![0]).toMatchObject({ baseRevision: scope.revision });
+    expect(f.view().entries).toEqual(baseEntries);
     expect(f.view().validated?.revision).toBe(scope.revision);
     expect(f.view().historyRevision).toBe(ownerRevision);
 
@@ -249,11 +312,12 @@ describe("history request ownership", () => {
     phase = "recent";
     await f.loader.recent(state.path, () => true);
 
-    expect(request.mock.calls[2]![0]).toMatchObject({ window: { tail: 40 }, baseRevision: scope.revision });
-    expect(f.view().entries).toEqual(evolvedSource.entries);
-    expect(f.view().leafId).toBe("e81");
-    expect(f.view().validated?.revision).toBe(evolved.revision);
+    expect(request.mock.calls[3]![0]).toMatchObject({ window: { tail: 40 }, baseRevision: scope.revision });
+    expect(f.view().entries).toEqual(twice.entries);
+    expect(f.view().validated?.revision).toBe(pageTwo.revision);
     expect(f.view().blocks.some(block => block.kind === "user" && block.optimistic && block.text === "unsent local prompt")).toBe(true);
+    f.dispatch({ type: "views/evict", paths: [state.path], reason: "count", at: "2026-09-18T00:00:10.000Z" });
+    expect(f.view().validated?.revision).toBe(pageTwo.revision);
   });
 
   it("drops an older page when a trim overtakes it, then the same control path still works", async () => {
@@ -275,7 +339,7 @@ describe("history request ownership", () => {
 
     holdOlder = false;
     expect(await f.loader.earlier(state.path, () => true)).toBe(true);
-    expect(f.view().trimmed).toBeDefined();
+    expect(f.view().trimmed).toBeUndefined();
     expect(f.view().entries.map(row => (row as { id?: string }).id)).toEqual(entries.slice(38).map(row => row.id));
   });
 
@@ -448,60 +512,86 @@ describe("history request ownership", () => {
     await f.loader.read(state.path);
     expect(f.view().history).toMatchObject({ complete: true, branchesUnloaded: false });
     expect(f.view().entries).toHaveLength(81);
-    expect(request).toHaveBeenLastCalledWith({ path: state.path, window: { from: "e0" }, bodyLimit: BODY_EXCERPT_MAX_BYTES });
+    expect(request).toHaveBeenLastCalledWith({ path: state.path, window: { tail: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES, baseRevision: scope.revision });
   });
 
-  it("keeps an active known tree after an invalid refresh anchor; an explicit recent read can replace it", async () => {
+  it("keeps an active tree when a bounded refresh cannot prove its base, then explicit reread replaces it", async () => {
     let snapshot: { entries: unknown[]; leafId: string } = source;
     let epoch = scope.epoch;
     const request = vi.fn(async (params: Params) => historyWindow(snapshot, params.window!, { ...scope, epoch }));
     const f = fixture(request);
     await f.loader.read(state.path, true);
     const held = f.view();
-    // A sibling before the old root makes that root an invalid active anchor.
     const other = { type: "message", id: "root-sibling", parentId: null, message: { role: "user", content: "Other root" } };
     snapshot = { entries: [...entries, other], leafId: other.id };
-    await expect(f.loader.read(state.path)).rejects.toMatchObject({ code: ErrorCodes.InvalidParams });
-    expect(request.mock.calls.slice(1).map(([params]) => params.window)).toEqual([{ from: "e0" }]);
+
+    await f.loader.read(state.path);
+
+    expect(request.mock.calls[1]![0]).toMatchObject({ window: { tail: 40 }, baseRevision: scope.revision });
     expect(f.view().entries).toBe(held.entries);
     expect(f.view().blocks).toBe(held.blocks);
+    expect(f.view().history?.refusal?.cause).toBe("stale-base");
     epoch = "replacement";
     await f.loader.recent(state.path, () => true);
     expect(f.view().entries).toEqual([other]);
     expect(f.view().history).toMatchObject({ epoch, complete: true, branchesUnloaded: true });
+    expect(f.view().history?.refusal).toBeUndefined();
   });
 
-  it("keeps an active window when its refresh anchor is invalid", async () => {
+  it("refreshes a large active window with one bounded proved delta", async () => {
+    let first = true;
     const request = vi.fn(async (params: Params) => {
-      if (params.window && "from" in params.window) throw { code: ErrorCodes.InvalidParams };
+      if (first) { first = false; return historyWindow(source, params.window!, scope); }
+      return historyWindow(source, params.window!, { ...scope, selection: { kind: "delta", after: "e79" } });
+    });
+    const f = fixture(request);
+    await f.loader.read(state.path);
+    const held = f.view().entries;
+
+    await f.loader.read(state.path);
+
+    expect(request.mock.calls.map(([params]) => params)).toEqual([
+      { path: state.path, window: { tail: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES },
+      { path: state.path, window: { tail: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES, baseRevision: scope.revision },
+    ]);
+    expect(f.view().entries).toEqual(held);
+    expect(f.view().history?.refusal).toBeUndefined();
+  });
+
+  it("keeps an active window when an explicit all range is too large", async () => {
+    const request = vi.fn(async (params: Params) => {
+      if (params.window && "all" in params.window) throw { code: ErrorCodes.RevisionUnavailable };
       return historyWindow(source, params.window!, scope);
     });
     const f = fixture(request);
     await f.loader.read(state.path);
     const held = f.view();
-    await expect(f.loader.read(state.path)).rejects.toMatchObject({ code: ErrorCodes.InvalidParams });
-    expect(request.mock.calls.map(([params]) => params.window)).toEqual([{ tail: 40 }, { from: "e40" }]);
+    await expect(f.loader.read(state.path, true)).rejects.toMatchObject({ code: ErrorCodes.RevisionUnavailable });
+    expect(request.mock.calls.map(([params]) => params.window)).toEqual([{ tail: 40 }, { all: true }]);
     expect(f.view().entries).toBe(held.entries);
     expect(f.view().blocks).toBe(held.blocks);
     expect(f.view().historyPending).toBeUndefined();
   });
 
-  it("keeps an active window when a from or all range is too large to send at once", async () => {
-    for (const all of [false, true]) {
-      const request = vi.fn(async (params: Params) => {
-        if (params.window && ("from" in params.window || "all" in params.window)) throw { code: ErrorCodes.RevisionUnavailable };
-        return historyWindow(source, params.window!, scope);
-      });
-      const f = fixture(request);
-      await f.loader.read(state.path);
-      const held = f.view();
-      await expect(f.loader.read(state.path, all)).rejects.toMatchObject({ code: ErrorCodes.RevisionUnavailable });
-      expect(request.mock.calls.map(([params]) => params.window)).toEqual([{ tail: 40 }, all ? { all: true } : { from: "e40" }]);
-      expect(f.view().entries).toBe(held.entries);
-      expect(f.view().blocks).toBe(held.blocks);
-      expect(f.view().historyPending).toBeUndefined();
-      expect(f.view().historyError).toBeUndefined();
-    }
+  it("does not announce an accepted page that contains no new records", async () => {
+    const f = fixture(async params => historyWindow(source, params.window!, scope));
+    await f.loader.read(state.path);
+    const held = f.view();
+    const duplicate = historyWindow(source, { tail: 40 }, scope);
+    f.dispatch({ type: "historyPrepend", path: state.path, before: held.history!.before!, anchor: held.history!.anchor!,
+      baseRevision: scope.revision, ownerRevision: held.historyRevision, entries: duplicate.entries, window: duplicate.window });
+    expect(f.view()).toBe(held);
+  });
+
+  it("does not claim complete ancestry when the producer leaf is unavailable", async () => {
+    const f = fixture(async params => historyWindow(source, params.window!, scope));
+    await f.loader.read(state.path);
+    const held = f.view();
+    f.dispatch({ type: "entries", path: state.path, entries: held.entries, leafId: "missing-leaf" });
+    const older = historyWindow(source, { before: held.history!.before! }, scope);
+    f.dispatch({ type: "historyPrepend", path: state.path, before: held.history!.before!, anchor: held.history!.anchor!,
+      baseRevision: scope.revision, ownerRevision: held.historyRevision, entries: older.entries, window: older.window });
+    expect(f.view().history?.complete).toBe(false);
   });
 
   it("does not install a page after its caller changes intent", async () => {
@@ -523,7 +613,7 @@ describe("history request ownership", () => {
     const request = vi.fn().mockResolvedValueOnce(historyWindow(source, { tail: 40 }, { ...scope, seq: 500 })).mockReturnValueOnce(pending.promise);
     const f = fixture(request);
     await f.loader.read(state.path);
-    const loading = f.loader.read(state.path);
+    const loading = f.loader.recent(state.path, () => true);
     f.dispatch({ type: "notification", method: "session/update", params: { sessionPath: state.path, epoch: "two", seq: 2, at: "2026-01-01T00:00:00Z", update: { kind: "text_delta", delta: " after", contentIndex: 0 } } });
     pending.resolve(historyWindow(source, { tail: 40 }, { ...scope, epoch: "two", seq: 1, live: { running: true, tools: [], message: { id: "live", value: { content: [{ type: "text", text: "before" }] } } } }));
     await loading;
