@@ -37,8 +37,39 @@ export default async function scrollUpRepeat(check) {
   await page.getByRole('main').getByRole('heading', { name, exact: true }).waitFor();
   if (real) await page.waitForTimeout(1500); else await page.getByText('Checkpoint 1000 is complete.', { exact: true }).waitFor();
   const viewport = page.locator('[data-slot=thread-viewport]');
+  const initialGeometry = await viewport.evaluate(el => ({
+    height: el.scrollHeight,
+    gap: el.scrollHeight - el.clientHeight - el.scrollTop,
+  }));
+  assert.ok(initialGeometry.gap <= 2, `recent tail opened ${initialGeometry.gap}px from the bottom`);
+  // Loading may settle between Playwright polls, so observe the semantic state
+  // in the page for the whole upward journey.
+  await page.evaluate(() => {
+    window.__earlierHistoryStatusSeen = false;
+    const observe = () => {
+      if (document.querySelector('[data-slot="history-reserve"] [role="status"][aria-busy="true"]')) window.__earlierHistoryStatusSeen = true;
+    };
+    observe();
+    new MutationObserver(observe).observe(document.body, { subtree: true, childList: true, attributes: true });
+  });
   const box = await viewport.boundingBox();
+  assert.ok(box, 'the transcript viewport is on screen');
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  const input = process.env.SCROLL_INPUT ?? (touch ? 'touch' : 'wheel');
+  const upward = async (amount) => {
+    if (input === 'keyboard') {
+      await viewport.focus();
+      await page.keyboard.press(amount < 600 ? 'ArrowUp' : 'PageUp');
+    } else if (input === 'touch') {
+      await viewport.evaluate((el, distance) => {
+        const at = clientY => new Touch({ identifier: 1, target: el, clientX: el.clientWidth / 2, clientY });
+        el.dispatchEvent(new TouchEvent('touchstart', { touches: [at(160)], bubbles: true }));
+        el.dispatchEvent(new TouchEvent('touchmove', { touches: [at(160 + Math.min(distance, 600))], bubbles: true }));
+        el.scrollTop -= distance;
+        el.dispatchEvent(new TouchEvent('touchend', { touches: [], bubbles: true }));
+      }, amount);
+    } else await page.mouse.wheel(0, -amount);
+  };
   // Every mounted message, in DOM order: its id, and for the synthetic fixture its checkpoint number.
   const rows = async () => page.locator('[data-window-message]').evaluateAll(els => els.map(el => ({
     id: el.getAttribute('data-window-message'),
@@ -63,12 +94,12 @@ export default async function scrollUpRepeat(check) {
   for (let round = 0; round < (slow ? 400 : 120) && !pageErrors.length; round++) {
     if (slow) {
       const before = await viewport.evaluate(el => [el.scrollTop, el.scrollHeight]);
-      await page.mouse.wheel(0, -500);
+      await upward(500);
       const samples = [];
       for (const wait of [60, 150, 250, 200]) { await page.waitForTimeout(wait); samples.push(await viewport.evaluate(el => `${Math.round(el.scrollTop)}/${el.scrollHeight}`)); }
       if (process.env.TRACE) console.log(`wheel ${round}: before ${before.join('/')} → ${samples.join(' → ')} · top row ${await visible()}`);
     }
-    else { for (let step = 0; step < 12; step++) { await page.mouse.wheel(0, -900); await page.waitForTimeout(30); } await page.waitForTimeout(250); }
+    else { for (let step = 0; step < 12; step++) { await upward(900); await page.waitForTimeout(30); } await page.waitForTimeout(250); }
     const mounted = await rows();
     const ids = mounted.map(r => r.id);
     const dupIds = ids.filter((v, i) => ids.indexOf(v) !== i);
@@ -92,10 +123,28 @@ export default async function scrollUpRepeat(check) {
     if (real && top && !await page.getByRole('main').getByRole('button', { name: 'Load earlier messages', exact: true }).count()) break;
     if (!real && oldest === '1' && top) break;
   }
+  const finalGeometry = await viewport.evaluate(el => ({
+    height: el.scrollHeight,
+    top: el.scrollTop,
+    statusSeen: window.__earlierHistoryStatusSeen === true,
+    reserve: document.querySelectorAll('[data-slot="history-reserve"]').length,
+  }));
+  const earlierRemaining = await page.getByRole('main').getByRole('button', { name: 'Load earlier messages', exact: true }).count();
   await check.shot(`scroll-repeat-${label}`);
   assert.equal(pageErrors.length, 0, pageErrors.join('\n'));
   assert.deepEqual(problems, [], problems.join('\n'));
-  if (!real && !slow) assert.equal(oldest, '1');
+  if (real) {
+    assert.equal(finalGeometry.top, 0, 'the real conversation did not reach its beginning');
+    assert.equal(earlierRemaining, 0, 'the real conversation still has an earlier page to load');
+  }
+  if (!real && !slow) {
+    assert.equal(oldest, '1');
+    assert.equal(finalGeometry.top, 0, 'the scrollbar reaches the real beginning');
+    assert.equal(finalGeometry.reserve, 0, 'no unloaded range remains at the real beginning');
+    assert.equal(finalGeometry.statusSeen, true, 'earlier-page loading exposed an accessible busy status');
+    assert.ok(initialGeometry.height > finalGeometry.height * 0.75, `initial thumb range ${initialGeometry.height}px did not represent ${finalGeometry.height}px of history`);
+    assert.ok(initialGeometry.height < finalGeometry.height * 1.35, `initial thumb range ${initialGeometry.height}px overstated ${finalGeometry.height}px of history`);
+  }
   if (slow) assert.ok(trail.length > 100 && Number(trail.at(-1)) < 500, `paced reading covered ${trail.length} notches down to checkpoint ${trail.at(-1)}`);
   console.log('scroll-up trail:', trail.join(','));
   return { ok: true };
