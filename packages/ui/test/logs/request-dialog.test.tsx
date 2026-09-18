@@ -69,6 +69,17 @@ it("loads exact message-linked requests and exposes tools, parameters, full JSON
   await act(async()=>document.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!.click());expect(close).toHaveBeenCalledOnce();
 });
 
+it("keeps request-field disclosures focusable and independently toggleable", async () => {
+  await mount(<ApiRequestDialog target={{ kind: "log", entry }} onClose={() => {}} />);
+  const trigger = document.querySelector<HTMLButtonElement>('[data-slot="request-field-trigger"]')!;
+  expect(trigger.getAttribute("aria-expanded")).toBe("true");
+  await act(async () => trigger.click());
+  expect(trigger.getAttribute("aria-expanded")).toBe("false");
+  await act(async () => { trigger.focus(); trigger.click(); });
+  expect(document.activeElement).toBe(trigger);
+  expect(trigger.getAttribute("aria-expanded")).toBe("true");
+});
+
 it("shows source markers with keyboard/touch details without duplicating instruction search or changing Markdown",async()=>{
   vi.stubGlobal("crypto",webcrypto);
   const instructions="Project **quartz** rule.";

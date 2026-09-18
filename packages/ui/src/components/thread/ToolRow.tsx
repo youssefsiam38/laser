@@ -1,6 +1,6 @@
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 import { useAuiState } from "@assistant-ui/react";
-import { toolCallLabel, withoutToolLabel, type UiDialogRequest } from "@lasercode/protocol";
+import { toolDisplayLabel, withoutToolLabel, type UiDialogRequest } from "@lasercode/protocol";
 import { Bot, FolderOpen, GitBranch, MessageSquare } from "lucide-react";
 import { lazy, memo, Suspense, useCallback, useMemo, type ReactNode } from "react";
 
@@ -28,6 +28,7 @@ import { BodyOverflow, type FoldGround } from "./BodyOverflow.js";
 import type { OutputContext } from "./LargeBodyViewer.js";
 import { omittedBytes } from "@/runtime/body-excerpt";
 import { useOutputPreview } from "./output-preview.js";
+import { partBodySearchContent } from "./search-text.js";
 import type { BlockBodies } from "@/store";
 import { useActivityDisclosureOverride } from "@/runtime/sessionPreferences";
 import { FileCard } from "./FileCard.js";
@@ -90,7 +91,11 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
   const activityLevel = useActivityDetailLevel(path);
   // The agent's label is the row's durable primary title. The computed tool
   // summary stays visible beneath it, in every lifecycle state (D-282).
-  const agentLabel = toolCallLabel(toolName, args, toolLabelParams);
+  const agentLabel = toolDisplayLabel({ name: toolName, args }, toolLabelParams);
+  const bodySearchText = useCallback(
+    () => partBodySearchContent({ toolName, args, result: props.result, artifact: props.artifact, isError: props.isError }, toolLabelParams),
+    [toolName, args, props.result, props.artifact, props.isError, toolLabelParams],
+  );
   // Which MCP servers this session started with, so `playwright_browser_*` is
   // read as Playwright's own tool and not as a tool nobody recognises
   // (docs/mcp.md "In the transcript").
@@ -184,6 +189,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
         onOpenChange={rememberOpen}
         footer={<>{footerFolds}{footer}</>}
         label={agentLabel}
+        bodySearchText={bodySearchText}
       />
     );
   }
@@ -231,6 +237,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
         open={open}
         onOpenChange={rememberOpen}
         toolName={toolName}
+        bodySearchText={bodySearchText}
         peek={failed && text ? <ToolError message={text} compact /> : undefined}
         footer={footer}
       >
@@ -255,6 +262,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
       open={open}
       onOpenChange={rememberOpen}
       toolName={toolName}
+      bodySearchText={bodySearchText}
       trailing={appliedDiffStats ? <DiffStat added={appliedDiffStats.added} removed={appliedDiffStats.removed} /> : undefined}
       accessibleDescription={diffDescription}
       peek={failed && text ? <ToolError message={text} compact /> : undefined}

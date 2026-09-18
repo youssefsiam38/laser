@@ -13,8 +13,10 @@ import { ToolGroup } from "../../src/components/assistant-ui/elements/tool-group
 import { ReasoningContent, ReasoningRoot, ReasoningTrigger } from "../../src/components/assistant-ui/elements/reasoning.js";
 import { projectMessages } from "../../src/runtime/projection.js";
 import type { Block } from "../../src/store.js";
-import { activityRow, activityTrigger } from "../../src/components/assistant-ui/elements/surfaces.js";
-import { SearchMessageContext } from "../../src/components/thread/search-state.js";
+import { activityDisclosure, activityRow, activityRowLayout, activityTrigger } from "../../src/components/assistant-ui/elements/surfaces.js";
+import { FindQueryContext, SearchMessageContext } from "../../src/components/thread/search-state.js";
+import { createConversationSearch } from "../../src/components/thread/conversation-search-cache.js";
+import { findTextRanges } from "../../src/components/thread/use-conversation-find.js";
 import { ToolRow } from "../../src/components/thread/ToolRow.js";
 import { activateTestEnvironment } from "../../test/runtime/environment-fixture.js";
 
@@ -58,10 +60,28 @@ afterEach(async () => {
 });
 
 describe("activity disclosures", () => {
-  it("pads the trigger contents, not the outer row, so the beam reaches both edges", () => {
+  it("keeps row layout passive and puts pointer affordances on the disclosure button", () => {
     expect(activityRow).not.toMatch(/\bp[xslr]-/);
-    expect(activityTrigger).toContain("px-2");
-    expect(activityTrigger).toContain("w-full");
+    expect(activityRowLayout).toContain("px-2");
+    expect(activityRowLayout).toContain("w-full");
+    expect(activityRowLayout).not.toContain("cursor-pointer");
+    expect(activityRowLayout).not.toContain("active:bg-");
+    expect(activityTrigger).toContain("group/trigger");
+    expect(activityTrigger).toContain("focus-visible:outline-live");
+    expect(activityDisclosure).toContain("cursor-pointer");
+    expect(activityDisclosure).toContain("pointer-coarse:size-11");
+    expect(activityDisclosure).toContain("focus-visible:outline-live");
+  });
+  it("does not reserve a touch-sized invisible disclosure on a non-expandable row", async () => {
+    await act(async () => render(
+      <ToolFallbackRoot>
+        <ToolFallbackTrigger verb="Finished" expandable={false} />
+      </ToolFallbackRoot>,
+    ));
+    const row = container.querySelector<HTMLElement>('[data-slot="tool-fallback-trigger-row"]')!;
+    expect(row.textContent).toContain("Finished");
+    expect(row.querySelector('[data-slot="tool-fallback-trigger"]')).toBeNull();
+    expect(row.querySelector('[aria-hidden="true"].pointer-coarse\\:size-11')).toBeNull();
   });
   it("does not synthesize thinking after a tool call in the real transcript", () => {
     const source = readFileSync(new NodeURL("../../src/components/thread/messages.tsx", import.meta.url), "utf8");
@@ -146,10 +166,12 @@ describe("activity disclosures", () => {
     ] as const;
     await act(async () => render(<ToolGroupRoot><ToolGroupTrigger label="Completed 40 steps" breakdown={breakdown} /><ToolGroupContent>All 40 steps</ToolGroupContent></ToolGroupRoot>));
     const trigger = container.querySelector('button')!;
-    expect(trigger.textContent).toContain('Completed 40 steps');
+    const row = trigger.closest<HTMLElement>('[data-slot="tool-group-trigger-row"]')!;
+    expect(row.textContent).toContain('Completed 40 steps');
     expect(container.querySelectorAll('[data-slot="tool-group-breakdown-item"]')).toHaveLength(2);
     expect(container.querySelector('[data-slot="tool-group-breakdown-more"]')?.textContent).toBe('+2 types');
     expect(trigger.getAttribute('aria-label')).toContain('Edited 8 files, Ran 5 commands');
+    expect(row.querySelector('[data-slot="tool-group-trigger-label"]')?.closest('button')).toBeNull();
     expect(container.querySelector('[data-slot="tool-group-trigger-label"]')?.classList.contains('truncate')).toBe(false);
     await act(async () => trigger.click()); expect(container.textContent).toContain('All 40 steps');
     await act(async () => trigger.click()); expect(container.textContent).not.toContain('All 40 steps');
@@ -387,6 +409,127 @@ describe("activity disclosures", () => {
     // And a second reveal starts from the reveal again, not from that fold.
     await act(async () => render(fixture(true)));
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("keeps a body folded when find matches the already-visible humanised label", async () => {
+    const fixture = (reveal: boolean, query = "Reading build config") => (
+      <FindQueryContext value={query}>
+        <SearchMessageContext value={reveal}>
+          <ToolFallbackRoot visibleSearchText="Reading build config" bodySearchText={() => ["Unrelated hidden request and output"]}>
+            <ToolFallbackTrigger verb="Read" label="Reading build config" summary="build.config.ts" />
+            <ToolFallbackContent>Unrelated hidden request and output</ToolFallbackContent>
+          </ToolFallbackRoot>
+        </SearchMessageContext>
+      </FindQueryContext>
+    );
+    await act(async () => render(fixture(false)));
+    const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => render(fixture(true)));
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(container.textContent).not.toContain("Unrelated hidden request and output");
+    await act(async () => trigger.click());
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => render(fixture(true, "Reading")));
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => render(fixture(false, "Reading")));
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("reveals a folded body when the query matches both its humanised label and output", async () => {
+    const fixture = (reveal: boolean) => (
+      <FindQueryContext value="build config">
+        <SearchMessageContext value={reveal}>
+          <ToolFallback toolCallId="mixed-find" toolName="read"
+            args={{ path: "build.config.ts", activity_label: "reading-build-config" }}
+            argsText='{"path":"build.config.ts","activity_label":"reading-build-config"}'
+            status={{ type: "complete" }} result="build config output" />
+        </SearchMessageContext>
+      </FindQueryContext>
+    );
+    await act(async () => render(fixture(false)));
+    const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => render(fixture(true)));
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(container.textContent).toContain("build config output");
+  });
+
+  it("uses the canonical Unicode matcher when deciding whether a hidden body must mount", async () => {
+    const fixture = (reveal: boolean) => (
+      <FindQueryContext value="source">
+        <SearchMessageContext value={reveal}>
+          <ToolFallbackRoot visibleSearchText="source label" bodySearchText={() => ["ſource body"]}>
+            <ToolFallbackTrigger verb="Read" summary="unicode.txt" />
+            <ToolFallbackContent><span data-search-content>ſource body</span></ToolFallbackContent>
+          </ToolFallbackRoot>
+        </SearchMessageContext>
+      </FindQueryContext>
+    );
+    await act(async () => render(fixture(false)));
+    const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => render(fixture(true)));
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(findTextRanges(container, "source").map((range) => range.toString())).toEqual(["ſource"]);
+  });
+
+  it("resets transient aggregate and reasoning folds when the Find query changes", async () => {
+    const fixture = (query: string) => (
+      <FindQueryContext value={query}>
+        <SearchMessageContext value>
+          <ToolGroupRoot>
+            <ToolGroupTrigger label="Aggregate" />
+            <ToolGroupContent>Aggregate body</ToolGroupContent>
+          </ToolGroupRoot>
+          <ReasoningRoot>
+            <ReasoningTrigger />
+            <ReasoningContent>Reasoning body</ReasoningContent>
+          </ReasoningRoot>
+        </SearchMessageContext>
+      </FindQueryContext>
+    );
+    await act(async () => render(fixture("query A")));
+    const aggregate = container.querySelector<HTMLButtonElement>('[data-slot="tool-group-trigger"]')!;
+    const reasoning = container.querySelector<HTMLButtonElement>('[data-slot="reasoning-trigger"]')!;
+    await act(async () => { aggregate.click(); reasoning.click(); });
+    expect(aggregate.getAttribute("aria-expanded")).toBe("false");
+    expect(reasoning.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => render(fixture("query B")));
+    expect(aggregate.getAttribute("aria-expanded")).toBe("true");
+    expect(reasoning.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("excludes real aggregate and reasoning chrome so indexed ordinals reach the real child bodies", async () => {
+    preferences.level = "everything";
+    const message = {
+      id: "activity-search", role: "assistant",
+      content: [
+        { type: "reasoning", text: "shared match thought" },
+        { type: "tool-call", toolName: "bash", toolCallId: "search-command", args: { command: "shared match" }, result: "shared match output" },
+      ],
+    } as never;
+    await act(async () => render(
+      <div data-message-id="activity-search">
+        <ToolGroupRoot defaultOpen>
+          <ToolGroupTrigger label="Ran one command" detail="shared match" />
+          <ToolGroupContent>
+            <ActivityReasoning disclosureId="search-reasoning">shared match thought</ActivityReasoning>
+            <ToolRow toolName="bash" toolCallId="search-command" args={{ command: "shared match" }} argsText='{"command":"shared match"}'
+              result="shared match output" status={{ type: "complete" }} addResult={vi.fn()} resume={vi.fn()} respondToApproval={vi.fn()} />
+          </ToolGroupContent>
+        </ToolGroupRoot>
+      </div>,
+    ));
+    const hits = createConversationSearch()([message], "shared match");
+    const ranges = findTextRanges(container, "shared match");
+    expect(hits.map((hit) => hit.occurrence)).toEqual([0, 1, 2]);
+    expect(ranges).toHaveLength(hits.length);
+    expect(ranges.every((range) => !range.startContainer.parentElement?.closest('[data-slot="tool-group-trigger-row"], [data-slot="reasoning-trigger-row"]'))).toBe(true);
+    expect(ranges[0]?.startContainer.parentElement?.closest('[data-slot="activity-reasoning"]')).not.toBeNull();
+    expect(ranges.slice(1).every((range) => range.startContainer.parentElement?.closest('[data-tool="bash"]'))).toBe(true);
+    expect(createConversationSearch()([message], "Reasoning")).toHaveLength(0);
+    expect(findTextRanges(container, "Reasoning")).toHaveLength(0);
   });
 
   // The row a person actually clicks in a find pass is a tool row, and it goes

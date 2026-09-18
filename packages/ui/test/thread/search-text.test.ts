@@ -9,6 +9,10 @@ describe("conversation search semantics", () => {
     expect(textMatches("a.*b aaab", "a.*b")).toEqual([{ start: 0, end: 4 }]);
     expect(textMatches(String.raw`a\nb`, String.raw`\n`)).toEqual([{ start: 1, end: 3 }]);
     expect(textMatches("تفاح تفاح", "تفاح")).toHaveLength(2);
+    // Unicode-aware regex folding treats the long s as an ordinary s. A
+    // locale-lowercase includes check does not, and would leave this indexed
+    // body folded with no paintable destination.
+    expect(textMatches("ſource body", "source")).toEqual([{ start: 0, end: 6 }]);
     expect(textMatches("anything", " ")).toEqual([]);
   });
   it("retains exact matching text in a bounded excerpt", () => {
@@ -29,7 +33,7 @@ describe("conversation search semantics", () => {
     expect(partSearchContent({
       type: "tool-call",
       toolName: "bash",
-      args: { command: "pnpm test", activity_label: "Tracing activity labels" },
+      args: { command: "pnpm test", activity_label: "tracing-activity-labels" },
       result: "passed",
     })).toEqual(["Tracing activity labels", "pnpm test", "passed"]);
   });

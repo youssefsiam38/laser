@@ -278,8 +278,8 @@ function RequestFieldCard({field,expanded,markdown,reveal,sources}:{field:Reques
   const markdownBody=text!==undefined&&<TextMessagePartProvider text={text} isRunning={false}><MarkdownText dir="ltr" /></TextMessagePartProvider>;
   const preview = text ?? (field.value === null || typeof field.value === "number" || typeof field.value === "boolean" ? JSON.stringify(field.value) : undefined);
   return <Collapsible open={reveal||open} onOpenChange={setOpen} className={cn(activityRow,"border border-line")}>
-    <CollapsibleTrigger className={cn(activityTrigger,"py-2")}>
-      <ChevronRight className="rtl:-scale-x-100 size-4 shrink-0 transition-transform group-data-[state=open]/trigger:rotate-90 group-data-[state=open]/trigger:rtl:-rotate-90" />
+    <CollapsibleTrigger data-slot="request-field-trigger" className={cn(activityTrigger,"py-2")}>
+      <ChevronRight data-slot="request-field-chevron" className="rtl:-scale-x-100 size-4 shrink-0 transition-transform duration-(--motion-fast) ease-(--motion-ease) group-data-[state=open]/trigger:rotate-90 group-data-[state=open]/trigger:rtl:-rotate-90 motion-reduce:transition-none" />
       <span className="min-w-0 truncate font-medium">{requestFieldLabel(field)}</span>
       {preview !== undefined && <span className="min-w-0 flex-1 truncate text-xs text-ink-3">{preview}</span>}
       <code dir="ltr" className="ms-auto min-w-0 truncate text-xs text-ink-3">{field.path}</code>

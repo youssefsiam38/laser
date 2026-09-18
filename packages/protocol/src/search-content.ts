@@ -1,5 +1,6 @@
+import { humanizeLabel } from "./human-label.js";
 import { diffViewForTool } from "./tool-diff.js";
-import { withoutToolLabel } from "./tool-label.js";
+import { toolCallLabel, withoutToolLabel } from "./tool-label.js";
 
 const record = (v: unknown): Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : {};
 
@@ -212,6 +213,20 @@ export interface SearchableTool {
   result?: unknown;
   isError?: boolean | undefined;
 }
+
+/**
+ * The agent-written label as both the transcript and search present it.
+ * Stored arguments stay byte-for-byte unchanged; legacy slug labels are
+ * humanised only at this shared display/search projection boundary.
+ */
+export function toolDisplayLabel(
+  tool: Pick<SearchableTool, "name" | "args">,
+  labelParams?: Readonly<Record<string, string>>,
+): string | undefined {
+  const label = toolCallLabel(tool.name, tool.args, labelParams);
+  return label === undefined ? undefined : humanizeLabel(label);
+}
+
 type ToolSearchProjection = (tool: SearchableTool) => string[];
 
 const jsonBody: ToolSearchProjection = ({ args, result }) => [

@@ -262,8 +262,8 @@ describe("rendering", () => {
     const running = {
       toolCallId: "bash-1",
       toolName: "bash",
-      args: { command: "pnpm test", activity_label: "Checking the test suite" },
-      argsText: '{"command":"pnpm test","activity_label":"Checking the test suite"}',
+      args: { command: "pnpm test", activity_label: "checking-the-test-suite" },
+      argsText: '{"command":"pnpm test","activity_label":"checking-the-test-suite"}',
       status: { type: "running" as const },
       artifact: { partialOutput: "Tests are still running" },
       addResult: vi.fn(),
@@ -272,18 +272,19 @@ describe("rendering", () => {
     };
     await mount(<ToolRow {...running} type="tool-call" />);
     const trigger = () => container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
-    expect(trigger().querySelector('[data-slot="thinking-indicator-label"]')?.textContent).toBe("Checking the test suite");
-    expect(trigger().querySelector('[data-slot="tool-fallback-trigger-secondary"]')?.textContent).toContain("Runpnpm test");
+    const row = () => trigger().closest<HTMLElement>('[data-slot="tool-fallback-trigger-row"]')!;
+    expect(row().querySelector('[data-slot="thinking-indicator-label"]')?.textContent).toBe("Checking the test suite");
+    expect(row().querySelector('[data-slot="tool-fallback-trigger-secondary"]')?.textContent).toContain("Runpnpm test");
     expect(trigger().getAttribute("aria-label")).toContain("Checking the test suite. Run pnpm test");
 
     // A UI-only partial result is not terminal: a resultless streaming call
     // keeps its live label rather than dropping back to neutral copy.
     await mount(<ToolRow {...running} type="tool-call" artifact={{ partialOutput: "One test passed\nTwo tests running" }} />);
-    expect(trigger().textContent).toContain("Checking the test suite");
+    expect(row().textContent).toContain("Checking the test suite");
 
     await mount(<ToolRow {...running} type="tool-call" status={{ type: "complete", reason: "stop" }} result="ok" />);
-    expect(trigger().querySelector('[data-slot="tool-fallback-trigger-label"]')?.textContent).toBe("Checking the test suite");
-    expect(trigger().querySelector('[data-slot="tool-fallback-trigger-secondary"]')?.textContent).toContain("Runpnpm test");
+    expect(row().querySelector('[data-slot="tool-fallback-trigger-label"]')?.textContent).toBe("Checking the test suite");
+    expect(row().querySelector('[data-slot="tool-fallback-trigger-secondary"]')?.textContent).toContain("Runpnpm test");
     expect(container.querySelectorAll('[data-search-content]')).toHaveLength(1);
     expect(partSearchContent({ type: "tool-call", toolName: "bash", args: running.args, result: "ok" })).toEqual([
       "Checking the test suite",
@@ -299,8 +300,8 @@ describe("rendering", () => {
       type: "tool-call" as const,
       toolCallId: "bash-lifecycle",
       toolName: "bash",
-      args: { command: "pnpm test", activity_label: "Checking failure paths" },
-      argsText: '{"command":"pnpm test","activity_label":"Checking failure paths"}',
+      args: { command: "pnpm test", activity_label: "checking_failure_paths" },
+      argsText: '{"command":"pnpm test","activity_label":"checking_failure_paths"}',
       addResult: vi.fn(),
       resume: vi.fn(),
       respondToApproval: vi.fn(async () => {}),
@@ -312,8 +313,10 @@ describe("rendering", () => {
     ]) {
       await mount(<ToolRow {...base} {...props} />);
       const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
-      expect(trigger.querySelector('[data-slot="tool-fallback-trigger-label"]')?.textContent).toBe("Checking failure paths");
-      expect(trigger.querySelector('[data-slot="tool-fallback-trigger-secondary"]')?.textContent).toContain("Runpnpm test");
+      const row = trigger.closest<HTMLElement>('[data-slot="tool-fallback-trigger-row"]')!;
+      expect(row.querySelector('[data-slot="tool-fallback-trigger-label"]')?.textContent).toBe("Checking failure paths");
+      expect(row.querySelector('[data-slot="tool-fallback-trigger-secondary"]')?.textContent).toContain("Runpnpm test");
+      expect(trigger.getAttribute("aria-label")).toContain("Checking failure paths");
     }
   });
 
@@ -375,7 +378,7 @@ describe("rendering", () => {
     expect(document.activeElement).toBe(aggregate());
     expect(labels()).toEqual(expect.arrayContaining(["Tracing activity labels", "Checking the test suite"]));
     expect(container.querySelectorAll('[data-state-row="done"]')).toHaveLength(2);
-    expect(aggregate().textContent).toContain("Ran 2 commands");
+    expect(aggregate().closest('[data-slot="tool-group-trigger-row"]')?.textContent).toContain("Ran 2 commands");
   });
 
   it("uses neutral copy without a label, clamps long labels, and honors the exempt tool labels", async () => {
@@ -391,24 +394,25 @@ describe("rendering", () => {
       respondToApproval: vi.fn(async () => {}),
     });
     const trigger = () => container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
+    const row = () => trigger().closest<HTMLElement>('[data-slot="tool-fallback-trigger-row"]')!;
 
     await mount(<ToolRow {...call("bash", { command: "pnpm test" })} />);
-    expect(trigger().textContent).toContain("Running pnpm test");
-    expect(trigger().querySelector('[data-slot="tool-fallback-trigger-copy"]')).toBeNull();
+    expect(row().textContent).toContain("Running pnpm test");
+    expect(row().querySelector('[data-slot="tool-fallback-trigger-copy"]')).toBeNull();
     await mount(<ToolRow {...call("bash", { command: "pnpm test" })} status={{ type: "complete" }} result="ok" />);
-    expect(trigger().textContent).toContain("Runpnpm test");
-    expect(trigger().querySelector('[data-slot="tool-fallback-trigger-copy"]')).toBeNull();
+    expect(row().textContent).toContain("Runpnpm test");
+    expect(row().querySelector('[data-slot="tool-fallback-trigger-copy"]')).toBeNull();
 
     await mount(<ToolRow {...call("bash", { command: "pnpm test", activity_label: "Reading the very long build configuration file" })} />);
-    expect(trigger().textContent).toContain("Reading the very long…");
-    expect(trigger().textContent).not.toContain("configuration file");
+    expect(row().textContent).toContain("Reading the very long…");
+    expect(row().textContent).not.toContain("configuration file");
 
     const longIdentity = "host-fixes-with-a-full-unclamped-subagent-identity-1234567890";
     await mount(<ToolRow {...call("start_agent", { agent_name: "reviewer", subagent_name: longIdentity })} />);
-    expect(trigger().textContent).toContain(`Starting ${longIdentity} (reviewer)`);
+    expect(row().textContent).toContain(`Starting ${longIdentity} (reviewer)`);
 
     await mount(<ToolRow {...call("inspect_fleet", { scope: "current" })} />);
-    expect(trigger().textContent).toContain("Using inspect_fleet");
+    expect(row().textContent).toContain("Using inspect_fleet");
     await act(async () => trigger().click());
     const args = container.querySelector<HTMLElement>('[data-slot="tool-fallback-args"]')!;
     expect(args.textContent).toContain("current");
@@ -429,7 +433,7 @@ describe("rendering", () => {
       respondToApproval={vi.fn(async () => {})}
     />);
     const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
-    expect(trigger.textContent).toContain("Calling MCP safely");
+    expect(trigger.closest('[data-slot="tool-fallback-trigger-row"]')?.textContent).toContain("Calling MCP safely");
     await act(async () => trigger.click());
     const disclosure = container.querySelector<HTMLElement>('[data-slot="tool-fallback-args"]')!;
     expect(disclosure.textContent).toContain("semantic server value");

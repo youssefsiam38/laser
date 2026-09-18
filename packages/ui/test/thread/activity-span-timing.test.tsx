@@ -109,7 +109,7 @@ function aggregate(): HTMLElement {
 }
 
 function elapsedText(): string | undefined {
-  const visible = aggregate().querySelector<HTMLButtonElement>(":scope > button")?.textContent ?? "";
+  const visible = aggregate().querySelector<HTMLElement>(':scope > [data-slot="tool-group-trigger-row"]')?.textContent ?? "";
   return [...visible.matchAll(/\d+(?:\.\d)?s\b/g)].at(-1)?.[0];
 }
 
@@ -155,6 +155,7 @@ describe("activity aggregate wall-clock timing", () => {
     await advance(12_000);
     await renderParts([reasoning(), tool("first", true)], running, true);
     expect(elapsedText()).toBe("12s");
+    expect(aggregate().querySelector('[data-slot="tool-group-trigger"]')?.getAttribute("aria-label")).toBe("Running first. Expand details.");
 
     // A completed child is not the boundary. Idle time before the next step is
     // part of the same wall-clock span.
