@@ -1,6 +1,6 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-18T08:35:00+03:00 · orchestrator-2026-09-18 · HEAD: 0ca84b64
+**Last updated:** 2026-09-18T08:41:12+03:00 · orchestrator-2026-09-18 · HEAD: b703f3bf
 **Current focus:** M16 — finish every agreed repair before publishing 0.9.2; 0.9.1 is public and verified.
 
 | Milestone | State |
@@ -28,9 +28,9 @@
 | M19 Runtime recovery/update activation | done |
 | MX Cross-cutting | in-progress |
 
-**Blockers:** none confirmed; release awaits measured interaction evidence and independent review, not configuration assertions.
-**In flight:** T76 reviewed/integrated (full gate pending); T74 image/body accounting review corrections; T75 scope-foundation review corrections; T70 review corrections (full-UI/search/header/focus regressions); T77 tool recovery/ordinary-turn corrections (speculative contention dropped, D-290). Ownership and exact write boundaries: `STATUS_DETAILED.md`.
-**Next up:** T78 pristine agent selection after model choice (same driver owner after T77); remaining T75 routed services and Agents. T79 release waits for the complete batch.
-**Recently done:** T73 packaged native spelling (`d0bbc680`, pointer replacement + dictionary after-state proof); T72 history paging gate (`015d2ff3`); T71 deterministic naming gate (`f7113316`); T69 geometric auto-follow (`73eec455`); T68 autonomous goal policy (`bc5531a2`).
+**Blockers:** worker-session resumption is unreliable; explicit checkpoint transfers preserve progress. No external release blocker.
+**In flight:** T70 activity review corrections; T75 remaining Settings service plan (foundation integrated); T78 pristine agent selection plan. T76 final poisoned gate pending. Ownership: `STATUS_DETAILED.md`.
+**Next up:** T75 Agents/location-safe edits after remaining services; T79 complete-batch verification and 0.9.2 publication.
+**Recently done:** T74 image/text and bounded read recovery (`b703f3bf`, fullUI2436 + final matrix); T77 goal-tool recovery (`a0a698ee`, 54 focused + real engine); T73 packaged spelling (`d0bbc680`); T72 history gate (`015d2ff3`); T71 naming gate (`f7113316`).
 
 **Published:** v0.9.1 (`8183fd04`), `.git/lasercode-release/v0.9.1.json` verified. User authorized autonomous completion, commits, push and next release; no live app restart is authorized by the release itself.
