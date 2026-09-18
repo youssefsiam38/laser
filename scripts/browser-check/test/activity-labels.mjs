@@ -109,6 +109,77 @@ async function mixedLabelBodyFindEvidence(check, caseLabel) {
   assert.equal(await button.getAttribute('aria-expanded'), 'false', 'closing find restores the folded preference');
 }
 
+async function requestInspectorDisclosureEvidence(check, promptText) {
+  const userRow = check.page.locator('[data-role="user"]').filter({ hasText: promptText }).last();
+  await userRow.evaluate(element => element.scrollIntoView({ block: 'center' }));
+  const more = userRow.getByRole('button', { name: 'More', exact: true });
+  await more.waitFor();
+  if (check.state.touch) await more.tap(); else await more.click();
+  await check.page.getByRole('menuitem', { name: 'View API request', exact: true }).click();
+  const dialog = check.page.getByRole('dialog', { name: 'API request', exact: true });
+  await dialog.locator('[data-slot="request-viewport"]').waitFor({ timeout: 30000 });
+  const button = dialog.locator('[data-slot="request-field-trigger"]').first();
+  const chevron = button.locator('[data-slot="request-field-chevron"]');
+  await button.waitFor();
+  if (await button.getAttribute('aria-expanded') === 'true') {
+    if (check.state.touch) await tapDisclosure(button); else await button.click();
+  }
+  const closedRotation = await chevron.evaluate(element => getComputedStyle(element).rotate);
+
+  await dialog.getByRole('button', { name: 'Copy JSON', exact: true }).focus();
+  await check.page.keyboard.press('Tab');
+  assert.equal(await button.evaluate(element => element === document.activeElement), true, 'keyboard Tab reaches the request-field disclosure');
+  const focus = await button.evaluate(element => ({
+    visible: element.matches(':focus-visible'),
+    style: getComputedStyle(element).outlineStyle,
+    width: Number.parseFloat(getComputedStyle(element).outlineWidth),
+  }));
+  assert.equal(focus.visible, true, 'request-field disclosure receives keyboard focus visibly');
+  assert.notEqual(focus.style, 'none', 'request-field disclosure paints a focus outline');
+  assert.ok(focus.width >= 2, `request-field focus outline is at least 2px (${focus.width})`);
+
+  if (!check.state.touch) {
+    const box = await button.boundingBox();
+    assert.ok(box, 'request-field disclosure has pointer geometry');
+    await check.page.mouse.move(box.x - 8, box.y - 8);
+    const idle = await button.evaluate(element => ({ background: getComputedStyle(element).backgroundColor, color: getComputedStyle(element).color }));
+    await button.hover();
+    const hovered = await button.evaluate(element => ({
+      background: getComputedStyle(element).backgroundColor,
+      color: getComputedStyle(element).color,
+      matches: element.matches(':hover'),
+      supportsHover: matchMedia('(hover: hover)').matches,
+    }));
+    assert.equal(hovered.matches, true, 'pointer reaches the request-field hover state');
+    // The shared browser context stays touch-capable so phone cases can call
+    // touchscreen.tap(); Chromium therefore suppresses (hover: hover) even
+    // after desktop touch emulation is disabled. Pin the built hover token in
+    // that context, and compare computed paint whenever the media query exists.
+    if (hovered.supportsHover) {
+      assert.notEqual(hovered.background, idle.background, `request-field disclosure paints hover feedback (${JSON.stringify({ idle, hovered })})`);
+    } else {
+      assert.equal(await button.evaluate(element => element.classList.contains('hover:bg-surface-2')), true,
+        'request-field disclosure carries the hover feedback token');
+    }
+    await toggleOnce(check.page, button, async () => {
+      await check.page.mouse.down();
+      assert.equal(await button.evaluate(element => element.matches(':active')), true,
+        'request-field disclosure enters the pressed state');
+      await check.page.mouse.up();
+    }, 'request-field-pointer-toggle');
+    const openRotation = await chevron.evaluate(element => getComputedStyle(element).rotate);
+    assert.notEqual(openRotation, closedRotation, 'request-field chevron rotates after pointer press');
+    await toggleOnce(check.page, button, () => button.press('Enter'), 'request-field-keyboard-toggle');
+  } else {
+    const target = await button.boundingBox();
+    assert.ok(target && target.height >= 44, `request-field touch target is at least 44px (${JSON.stringify(target)})`);
+    await toggleOnce(check.page, button, () => tapDisclosure(button), 'request-field-touch-toggle');
+    const openRotation = await chevron.evaluate(element => getComputedStyle(element).rotate);
+    assert.notEqual(openRotation, closedRotation, 'request-field chevron rotates after touch press');
+  }
+  await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+}
+
 async function humanisedFindEvidence(check, row, button, displayLabel, storedLabel) {
   assert.equal(await button.getAttribute('aria-expanded'), 'false', 'labelled row starts folded before find');
   await check.page.keyboard.press('Control+f');
@@ -142,6 +213,10 @@ async function humanisedFindEvidence(check, row, button, displayLabel, storedLab
 export default async function activityLabels(check) {
   const requestedWidth = check.state.width;
   if (check.state.touch && requestedWidth > 600) await check.viewport(390);
+  if (!check.state.touch && requestedWidth === 390) await check.touch(true);
+  await check.reducedMotion(false);
+  assert.equal(await check.page.evaluate(() => matchMedia('(prefers-reduced-motion: reduce)').matches), false,
+    'normal-motion activity cases run with motion enabled');
   await check.page.addLocatorHandler(check.page.getByRole('button', { name: 'Got it', exact: true }), button => button.click());
   const caseLabel = `${requestedWidth}-${check.state.theme}`;
   const storedLabel = `checking-${caseLabel}-row`;
@@ -241,6 +316,7 @@ export default async function activityLabels(check) {
   if (await button.getAttribute('aria-expanded') === 'true') await button.click();
   await humanisedFindEvidence(check, row, button, displayLabel, storedLabel);
   await mixedLabelBodyFindEvidence(check, caseLabel);
+  await requestInspectorDisclosureEvidence(check, `Run mixed labelled fixture ${caseLabel}`);
 
   await check.reducedMotion(true);
   assert.equal(await check.page.evaluate(() => matchMedia('(prefers-reduced-motion: reduce)').matches), true,

@@ -155,11 +155,12 @@ beforeEach(() => {
     await act(async () => render(group([nonZeroMember(), call({ toolCallId: "b" })])));
     const rootEl = container.querySelector('[data-slot="tool-group-root"]')!;
     const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-group-trigger"]')!;
+    const triggerRow = trigger.closest<HTMLElement>('[data-slot="tool-group-trigger-row"]')!;
     expect(rootEl.getAttribute("data-tone")).toBeNull();
     expect(rootEl.className).not.toContain("bg-danger");
-    expect(trigger.textContent).toContain("Ran 2 commands");
-    expect(trigger.textContent).not.toContain("failed");
-    expect(trigger.querySelector(".text-danger")).toBeNull();
+    expect(triggerRow.textContent).toContain("Ran 2 commands");
+    expect(triggerRow.textContent).not.toContain("failed");
+    expect(triggerRow.querySelector(".text-danger")).toBeNull();
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
   });
 
@@ -172,8 +173,9 @@ beforeEach(() => {
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
     expect(rootEl.getAttribute("data-tone")).toBeNull();
     expect(rootEl.className).not.toContain("bg-danger");
-    expect(trigger.querySelector(".text-danger")).toBeNull();
-    expect(trigger.textContent).not.toContain("failed");
+    const triggerRow = trigger.closest<HTMLElement>('[data-slot="tool-group-trigger-row"]')!;
+    expect(triggerRow.querySelector(".text-danger")).toBeNull();
+    expect(triggerRow.textContent).not.toContain("failed");
     // Quiet is not hidden: the name still says it out loud.
     expect(trigger.getAttribute("aria-label")).toContain("Something in it failed");
   });
@@ -184,9 +186,10 @@ beforeEach(() => {
     );
     const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-group-trigger"]')!;
     await act(async () => trigger.click());
-    expect(trigger.textContent).not.toContain("failed");
-    expect(trigger.textContent).not.toContain("1 failed");
-    expect(trigger.textContent).not.toContain("3 failed");
+    const triggerRow = trigger.closest<HTMLElement>('[data-slot="tool-group-trigger-row"]')!;
+    expect(triggerRow.textContent).not.toContain("failed");
+    expect(triggerRow.textContent).not.toContain("1 failed");
+    expect(triggerRow.textContent).not.toContain("3 failed");
   });
 
   it("leaves the person's own toggle in charge", async () => {

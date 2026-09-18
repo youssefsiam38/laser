@@ -8,7 +8,7 @@ import { useConversationFind, findTextRanges } from "../../src/components/thread
 import { SearchMessageContext, openConversationFind } from "../../src/components/thread/search-state.js";
 import { ToolGroupRoot, ToolGroupTrigger, ToolGroupContent } from "../../src/components/assistant-ui/elements/tool-group.aui.js";
 import { JsonViewer } from "../../src/components/assistant-ui/elements/json-viewer.js";
-import { ToolFallbackResult } from "../../src/components/assistant-ui/elements/tool-fallback.aui.js";
+import { ToolFallbackContent, ToolFallbackResult, ToolFallbackRoot, ToolFallbackTrigger } from "../../src/components/assistant-ui/elements/tool-fallback.aui.js";
 import { createConversationSearch } from "../../src/components/thread/conversation-search-cache.js";
 import { toolSearchContent } from "@lasercode/protocol";
 
@@ -128,7 +128,7 @@ it("highlights across markup boundaries without indexing hidden controls or chan
   expect(ranges.map(r => r.toString())).toEqual(["Apple"]);
   expect(container.innerHTML).toBe(original);
 });
-it("keeps labelled-row index occurrences aligned with paintable DOM ranges", () => {
+it("keeps real labelled-row index occurrences aligned with paintable DOM ranges", async () => {
   const message = {
     id: "labelled", role: "assistant",
     content: [
@@ -136,27 +136,34 @@ it("keeps labelled-row index occurrences aligned with paintable DOM ranges", () 
       { type: "tool-call", toolName: "bash", toolCallId: "b", args: { command: "pnpm test packages/host", activity_label: "verifying_another_test" }, result: "host test ok" },
     ],
   } as never;
-  container.innerHTML = `
-    <div data-message-id="labelled" data-search-tool>
-      <button data-slot="tool-fallback-trigger">
-        <span data-search-content data-probe="label-a">Checking the test suite</span>
-      </button>
-      <pre data-search-content data-probe="command-a">pnpm test packages/ui</pre>
-      <pre data-search-content data-probe="output-a">test run ok</pre>
-      <button data-slot="tool-fallback-trigger">
-        <span data-search-content data-probe="label-b">Verifying another test</span>
-      </button>
-      <pre data-search-content data-probe="command-b">pnpm test packages/host</pre>
-      <pre data-search-content data-probe="output-b">host test ok</pre>
-    </div>`;
+  await act(async () => root.render(
+    <TooltipProvider>
+      <div data-message-id="labelled">
+        <ToolFallbackRoot defaultOpen>
+          <ToolFallbackTrigger verb="Run" label="Checking the test suite" />
+          <ToolFallbackContent>
+            <pre data-search-content data-probe="command-a">pnpm test packages/ui</pre>
+            <pre data-search-content data-probe="output-a">test run ok</pre>
+          </ToolFallbackContent>
+        </ToolFallbackRoot>
+        <ToolFallbackRoot defaultOpen>
+          <ToolFallbackTrigger verb="Run" label="Verifying another test" />
+          <ToolFallbackContent>
+            <pre data-search-content data-probe="command-b">pnpm test packages/host</pre>
+            <pre data-search-content data-probe="output-b">host test ok</pre>
+          </ToolFallbackContent>
+        </ToolFallbackRoot>
+      </div>
+    </TooltipProvider>,
+  ));
 
   const hits = createConversationSearch()([message], "test");
   const ranges = findTextRanges(container, "test");
   expect(hits).toHaveLength(6);
   expect(ranges).toHaveLength(hits.length);
   expect(hits.map(hit => hit.occurrence)).toEqual([0, 1, 2, 3, 4, 5]);
-  expect(ranges.map(range => range.startContainer.parentElement?.dataset.probe)).toEqual([
-    "label-a", "command-a", "output-a", "label-b", "command-b", "output-b",
+  expect(ranges.map(range => range.startContainer.parentElement?.dataset.probe ?? range.startContainer.parentElement?.dataset.slot)).toEqual([
+    "tool-fallback-trigger-label", "command-a", "output-a", "tool-fallback-trigger-label", "command-b", "output-b",
   ]);
   expect(findTextRanges(container, "Checking the test suite").map(range => range.toString())).toEqual(["Checking the test suite"]);
   expect(createConversationSearch()([message], "Checking the test suite")).toHaveLength(1);

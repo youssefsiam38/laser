@@ -1,5 +1,6 @@
 "use client";
-import { useFindQuery, useSearchReveal } from "@/components/thread/search-state";
+import { useSearchRevealDisclosure } from "@/components/thread/search-state";
+import { partBodySearchContent } from "@/components/thread/search-text";
 /**
  * `tool-fallback` (assistant-ui registry), restyled to DESIGN.md.
  *
@@ -29,7 +30,7 @@ import {
   type ToolCallMessagePartComponent,
 } from "@assistant-ui/react";
 import { ChevronRight, CircleAlert, Wrench } from "lucide-react";
-import { memo, useCallback, useEffect, useRef, useState, type ComponentType, type ReactNode, type SVGProps } from "react";
+import { memo, useCallback, useRef, useState, type ComponentType, type ReactNode, type SVGProps } from "react";
 
 import { StatusDot } from "@/components/status";
 import { ActivityBeam, ThinkingIndicator } from "./thinking-indicator.js";
@@ -46,9 +47,9 @@ import { BodyOverflow } from "@/components/thread/BodyOverflow";
 import { JsonViewer, parseJsonText } from "./json-viewer.js";
 import type { BlockBodies } from "@/store";
 import { omittedBytes } from "@/runtime/body-excerpt";
-import { toolDisplayLabel, toolOutputText, toolSearchContent, withoutToolLabel } from "@lasercode/protocol";
+import { toolDisplayLabel, toolOutputText, withoutToolLabel } from "@lasercode/protocol";
 
-import { activityDisclosure, activityRow, activityTrigger, collapsePanel, mono, pressable } from "./surfaces.js";
+import { activityDisclosure, activityRow, activityRowLayout, collapsePanel, mono, pressable } from "./surfaces.js";
 
 type Icon = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -86,23 +87,7 @@ function ToolFallbackRoot({
 
   const isControlled = controlledOpen !== undefined;
   const baseOpen = isControlled ? controlledOpen : uncontrolledOpen;
-  const query = useFindQuery().trim();
-  const revealing = useSearchReveal();
-  const queryMatches = useCallback(
-    (text: string) => query !== "" && text.toLocaleLowerCase().includes(query.toLocaleLowerCase()),
-    [query],
-  );
-  const visibleMatch = visibleSearchText !== undefined && queryMatches(visibleSearchText);
-  const bodyMatch = revealing && query !== "" ? bodySearchText?.().some(queryMatches) ?? false : false;
-  // Only a header-only match stays folded. If the shared body projection also
-  // matches, the body must mount so every indexed occurrence has a DOM range.
-  const headerOnlyMatch = revealing && visibleMatch && bodySearchText !== undefined && !bodyMatch;
-  const [transientOverride, setTransientOverride] = useState<{ query: string; open: boolean } | null>(null);
-  useEffect(() => { if (!revealing) setTransientOverride(null); }, [revealing]);
-  // Keying the override by query prevents a manual toggle for the previous
-  // query leaking through the render before effects run.
-  const revealedOpen = transientOverride?.query === query ? transientOverride.open : undefined;
-  const isOpen = revealing ? (revealedOpen ?? (headerOnlyMatch ? baseOpen : true)) : baseOpen;
+  const { revealing, open: isOpen, fold } = useSearchRevealDisclosure({ baseOpen, visibleSearchText, bodySearchText });
 
   const handleOpenChange = useCallback(
     (next: boolean) => {
@@ -110,13 +95,13 @@ function ToolFallbackRoot({
       // A choice while find is revealing this row belongs to that query alone;
       // it never writes the person's remembered disclosure preference.
       if (revealing) {
-        setTransientOverride({ query, open: next });
+        fold(next);
         return;
       }
       if (!isControlled) setUncontrolledOpen(next);
       controlledOnOpenChange?.(next);
     },
-    [lockScroll, revealing, query, isControlled, controlledOnOpenChange],
+    [lockScroll, revealing, fold, isControlled, controlledOnOpenChange],
   );
 
   return (
@@ -316,7 +301,7 @@ function ToolFallbackTrigger({
     <div
       data-slot="tool-fallback-trigger-row"
       data-active={running || undefined}
-      className={cn(activityTrigger, label && "items-start", className)}
+      className={cn(activityRowLayout, label && "items-start", className)}
     >
       {running && <ActivityBeam />}
       <span className={cn("flex size-4 shrink-0 items-center justify-center", label && labelledOffset)} aria-hidden="true">
@@ -358,9 +343,7 @@ function ToolFallbackTrigger({
             )}
           />
         </CollapsibleTrigger>
-      ) : (
-        <span className={cn("size-8 pointer-coarse:size-11 shrink-0", label && labelledOffset)} aria-hidden="true" />
-      )}
+      ) : null}
     </div>
   );
 }
@@ -825,12 +808,7 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
       onOpenChange={rememberOpen}
       tone={tone}
       visibleSearchText={agentLabel}
-      bodySearchText={() => toolSearchContent({
-        name: toolName,
-        args,
-        result: finalResult ?? (artifact as { partialOutput?: unknown } | undefined)?.partialOutput,
-        isError: isError === true,
-      }, toolLabelParams)}
+      bodySearchText={() => partBodySearchContent({ toolName, args, result: finalResult, artifact, isError }, toolLabelParams)}
       data-tool={toolName}
       data-status={status?.type}
     >

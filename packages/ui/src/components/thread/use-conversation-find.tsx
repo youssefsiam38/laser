@@ -36,8 +36,7 @@ export function findTextMatches(root: HTMLElement, query: string, mode: "convers
     // wrappers must never consume the occurrence assigned to a real value.
     const button = parent?.closest("button");
     const authoredFileLabel = mode === "conversation" && content && button?.matches('[data-slot="file-chip"]');
-    const activityLabel = mode === "conversation" && content && button?.matches('[data-slot="tool-fallback-trigger"]');
-    if (!parent || (button && !authoredFileLabel && !activityLabel) || parent.closest("[hidden], [aria-hidden=true], [data-search-exclude], textarea, script, style") ||
+    if (!parent || (button && !authoredFileLabel) || parent.closest("[hidden], [aria-hidden=true], [data-search-exclude], textarea, script, style") ||
       (mode === "conversation" && parent.closest('[data-search-tool], [data-slot="json-viewer"]') && !content)) {
       run = undefined;
       continue;

@@ -35,8 +35,10 @@ export const field = "bg-surface-2";
 /** One quiet, recognizable row for reasoning, tools and their aggregate. */
 export const activityRow = "relative w-full min-w-0 rounded-md bg-surface text-ink-2";
 /** Selectable row layout. Interactive affordances belong only on the sibling disclosure button. */
-export const activityTrigger =
+export const activityRowLayout =
   "relative isolate flex min-h-8 pointer-coarse:min-h-11 w-full min-w-0 items-center gap-2 rounded-md px-2 text-start text-sm text-ink-2";
+/** A whole-row disclosure, used where the row itself is the native button. */
+export const activityTrigger = `${activityRowLayout} group/trigger cursor-pointer outline-none transition-colors duration-(--motion-instant) hover:bg-surface-2 active:bg-surface-2 active:text-ink focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live motion-reduce:transition-none`;
 /** The native Radix disclosure button: compact for a pointer, 44px for touch. */
 export const activityDisclosure =
   "group/disclosure relative flex size-8 pointer-coarse:size-11 shrink-0 cursor-pointer items-center justify-center rounded-md text-ink-3 outline-none transition-colors duration-(--motion-instant) hover:bg-surface-2 hover:text-ink-2 active:bg-surface-2 active:text-ink focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live disabled:cursor-default disabled:hover:bg-transparent disabled:active:bg-transparent motion-reduce:transition-none";

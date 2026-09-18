@@ -18,7 +18,9 @@ const goal = { id: "goal", ids: ["goal"], objective: "Compare the stacks", statu
 it("starts collapsed, expands the actual summary and preserves manual choice", async () => {
   await act(async () => root.render(<GoalRecord goal={goal} />));
   const trigger = container.querySelector<HTMLButtonElement>("button")!;
-  expect(trigger.textContent).toContain("Goal completed");
+  const triggerRow = trigger.closest<HTMLElement>('[data-slot="tool-fallback-trigger-row"]')!;
+  expect(triggerRow.textContent).toContain("Goal completed");
+  expect(trigger.getAttribute("aria-label")).toBe("Goal completed");
   expect(trigger.getAttribute("aria-expanded")).toBe("false");
   await act(async () => trigger.click());
   expect(trigger.getAttribute("aria-expanded")).toBe("true");

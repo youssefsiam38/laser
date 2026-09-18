@@ -60,7 +60,7 @@ import { useActivityDisclosureOverride } from "@/runtime/sessionPreferences";
 
 import { DiffStat, diffStatDescription } from "./code-diff.js";
 import { ReasoningText } from "./reasoning.js";
-import { activityDisclosure, activityRow, activityTrigger, collapsePanel, mono } from "./surfaces.js";
+import { activityDisclosure, activityRow, activityRowLayout, collapsePanel, mono } from "./surfaces.js";
 
 type Icon = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -103,8 +103,8 @@ function ToolGroupRoot({
   // values"; `@/motion`).
   const lockScroll = useScrollLock(collapsibleRef, motionMs("--motion-fast"));
   const isControlled = controlledOpen !== undefined;
-  const { revealing, open: revealOpen, fold } = useSearchRevealDisclosure();
-  const isOpen = revealing ? revealOpen : isControlled ? controlledOpen : uncontrolledOpen;
+  const baseOpen = isControlled ? controlledOpen : uncontrolledOpen;
+  const { revealing, open: isOpen, fold } = useSearchRevealDisclosure({ baseOpen });
 
   const handleOpenChange = useCallback(
     (next: boolean) => {
@@ -199,8 +199,9 @@ function ToolGroupTrigger({
   return (
     <div
       data-slot="tool-group-trigger-row"
+      data-search-exclude
       data-active={active || undefined}
-      className={cn(activityTrigger, className)}
+      className={cn(activityRowLayout, className)}
     >
       {active && <ActivityBeam />}
       <span className="flex size-4 shrink-0 items-center justify-center" aria-hidden="true">

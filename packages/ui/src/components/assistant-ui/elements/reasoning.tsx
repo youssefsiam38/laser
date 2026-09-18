@@ -34,7 +34,7 @@ import { motionMs } from "@/motion";
 import { useActivityDisclosureOverride } from "@/runtime/sessionPreferences";
 
 import { ThinkingIndicator } from "./thinking-indicator.js";
-import { activityDisclosure, activityTrigger } from "./surfaces.js";
+import { activityDisclosure, activityRowLayout } from "./surfaces.js";
 
 /** How long the disclosure takes, from the token, at call time. */
 export function reasoningAnimationMs(): number {
@@ -76,8 +76,8 @@ function ReasoningRoot({
   if (manualOpen === null || manualOpen === undefined) initialOpenRef.current = defaultOpen;
 
   const isControlled = controlledOpen !== undefined;
-  const { revealing, open: revealOpen, fold } = useSearchRevealDisclosure();
-  const isOpen = revealing ? revealOpen : isControlled ? controlledOpen : (manualOpen ?? initialOpenRef.current);
+  const baseOpen = isControlled ? controlledOpen : (manualOpen ?? initialOpenRef.current);
+  const { revealing, open: isOpen, fold } = useSearchRevealDisclosure({ baseOpen });
   const isPreview = streaming === true && isOpen;
 
   const handleOpenChange = useCallback(
@@ -147,7 +147,7 @@ function ReasoningTrigger({
 }: ReasoningTriggerProps) {
   const elapsed = durationMs !== undefined ? formatDuration(durationMs) : undefined;
   return (
-    <div data-slot="reasoning-trigger-row" className={cn(activityTrigger, "-mx-2 max-w-full", className)}>
+    <div data-slot="reasoning-trigger-row" data-search-exclude className={cn(activityRowLayout, "-mx-2 max-w-full", className)}>
       <CollapsibleTrigger
         data-slot="reasoning-trigger"
         aria-label={ariaLabel ?? `${label}${elapsed === undefined ? "" : `, ${elapsed}`}`}

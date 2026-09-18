@@ -101,6 +101,7 @@ const render = async (props: Parameters<typeof toolProps> extends never ? never 
   await act(async () => root.render(<Fixture {...props} />));
   return container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
 };
+const triggerRow = (trigger: HTMLButtonElement): HTMLElement => trigger.closest('[data-slot="tool-fallback-trigger-row"]')!;
 
 /**
  * Activate a row from the keyboard. The trigger is a native button, so a
@@ -247,8 +248,8 @@ describe("the session's MCP servers in the store", () => {
 describe("a direct MCP tool row", () => {
   it("is the server speaking, with the tool and its most telling argument", async () => {
     const trigger = await render(toolProps("c1", "playwright_browser_navigate", { url: "https://example.com" }, NAVIGATE_RESULT));
-    expect(trigger.textContent).toContain("Playwright");
-    expect(trigger.textContent).toContain("browser navigate · https://example.com");
+    expect(triggerRow(trigger).textContent).toContain("Playwright");
+    expect(triggerRow(trigger).textContent).toContain("browser navigate · https://example.com");
     expect(trigger.getAttribute("aria-label")).toBe("Playwright browser navigate · https://example.com");
 
     // Collapsed: the body is really hidden, not merely transparent.
@@ -271,8 +272,8 @@ describe("a direct MCP tool row", () => {
 
   it("classifies from the session's servers when a stored result has no details left", async () => {
     const trigger = await render(toolProps("c2", "playwright_browser_snapshot", {}, "### Page\n- Page Title: Example Domain"));
-    expect(trigger.textContent).toContain("Playwright");
-    expect(trigger.textContent).toContain("browser snapshot");
+    expect(triggerRow(trigger).textContent).toContain("Playwright");
+    expect(triggerRow(trigger).textContent).toContain("browser snapshot");
     await expand(trigger);
     expect(container.querySelector('[data-slot="mcp-text"]')?.textContent).toContain("Page Title: Example Domain");
   });
@@ -318,8 +319,8 @@ describe("a direct MCP tool row", () => {
     expect(row.getAttribute("data-state-row")).toBe("running");
 
     await act(async () => root.render(<Fixture {...props} status={{ type: "complete" }} result={NAVIGATE_RESULT} artifact={undefined} />));
-    expect(trigger.querySelector('[data-slot="tool-fallback-trigger-label"]')?.textContent).toBe("Capturing current page");
-    expect(trigger.querySelector('[data-slot="tool-fallback-trigger-secondary"]')?.textContent).toContain("Playwrightbrowser navigate · main");
+    expect(triggerRow(trigger).querySelector('[data-slot="tool-fallback-trigger-label"]')?.textContent).toBe("Capturing current page");
+    expect(triggerRow(trigger).querySelector('[data-slot="tool-fallback-trigger-secondary"]')?.textContent).toContain("Playwrightbrowser navigate · main");
   });
 
   it("draws an audio block as a player and a resource block as a card", async () => {
@@ -352,7 +353,7 @@ describe("a direct MCP tool row", () => {
   it("shows a failure through the error path, collapsed and expanded", async () => {
     const result = { content: [{ type: "text", text: "Error: Browser is already in use" }], details: { error: "tool_error", server: "playwright" } };
     const trigger = await render(toolProps("c4", "playwright_browser_navigate", { url: "https://example.com" }, result, true));
-    expect(trigger.textContent).toContain("Playwright");
+    expect(triggerRow(trigger).textContent).toContain("Playwright");
     expect(container.textContent).toContain("Browser is already in use");
     await expand(trigger);
     const error = container.querySelector<HTMLElement>('[data-slot="tool-fallback-content"] [data-slot="tool-error"]');
@@ -376,8 +377,8 @@ describe("a gateway row", () => {
       },
     };
     const trigger = await render(toolProps("g1", "mcp", { search: "navigate" }, result));
-    expect(trigger.textContent).toContain("MCP");
-    expect(trigger.textContent).toContain("Find tools · navigate");
+    expect(triggerRow(trigger).textContent).toContain("MCP");
+    expect(triggerRow(trigger).textContent).toContain("Find tools · navigate");
 
     await expand(trigger);
     const matches = [...container.querySelectorAll('[data-slot="tool-fallback-content"] li')].map((li) => li.textContent);
@@ -392,7 +393,7 @@ describe("a gateway row", () => {
       details: { mode: "call", server: "playwright", tool: "browser_take_screenshot", mcpResult: { content: SCREENSHOT_RESULT.content } },
     };
     const trigger = await render(toolProps("g2", "mcp__playwright", { tool: "playwright_browser_take_screenshot", args: {} }, result));
-    expect(trigger.textContent).toContain("Call playwright · browser_take_screenshot");
+    expect(triggerRow(trigger).textContent).toContain("Call playwright · browser_take_screenshot");
     await expand(trigger);
     expect(container.querySelector<HTMLImageElement>('[data-slot="mcp-image"] img')?.getAttribute("src")).toBe(
       `data:image/png;base64,${SCREENSHOT_BASE64}`,
@@ -408,7 +409,7 @@ describe("a gateway row", () => {
       details: { mode: "status", servers: [{ name: "playwright", status: "connected", toolCount: 24, listenState: "legacy" }] },
     };
     const trigger = await render(toolProps("g3", "mcp", {}, result));
-    expect(trigger.textContent).toContain("Status");
+    expect(triggerRow(trigger).textContent).toContain("Status");
     await expand(trigger);
     const row = container.querySelector<HTMLElement>('[data-slot="tool-fallback-content"] li')!;
     expect(row.textContent).toBe("playwrightconnected24 tools");
@@ -425,10 +426,10 @@ describe("an mcpScript row", () => {
     };
     const trigger = await render(toolProps("s1", "mcpScript", { code }, result));
     // The verb keeps its words; the first line of the code gives way instead.
-    expect(trigger.textContent).toContain("MCP script");
-    expect(trigger.textContent).toContain("const page = await playwright");
-    expect(trigger.textContent).toContain("…");
-    expect(trigger.textContent).not.toContain("https://example.com' });");
+    expect(triggerRow(trigger).textContent).toContain("MCP script");
+    expect(triggerRow(trigger).textContent).toContain("const page = await playwright");
+    expect(triggerRow(trigger).textContent).toContain("…");
+    expect(triggerRow(trigger).textContent).not.toContain("https://example.com' });");
 
     await expand(trigger);
     const [script] = [...container.querySelectorAll('[data-slot="mcp-text"]')];
@@ -510,8 +511,8 @@ describe("a session read back from its file", () => {
 
     await act(async () => root.render(<Fixture {...({ ...(part as object), addResult: vi.fn(), resume: vi.fn(), respondToApproval: vi.fn(async () => {}) } as unknown as React.ComponentProps<typeof ToolRow>)} />));
     const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
-    expect(trigger.textContent).toContain("Playwright");
-    expect(trigger.textContent).toContain("browser take screenshot");
+    expect(triggerRow(trigger).textContent).toContain("Playwright");
+    expect(triggerRow(trigger).textContent).toContain("browser take screenshot");
 
     await expand(trigger);
     expect(container.querySelector<HTMLImageElement>('[data-slot="mcp-image"] img')?.getAttribute("src")).toBe(

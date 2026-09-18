@@ -18,6 +18,25 @@ export function matchExcerpt(text: string, match: TextMatch) {
   return { before: `${start ? "…" : ""}${text.slice(start, match.start)}`, match: text.slice(match.start, match.end), after: `${text.slice(match.end, end)}${end < text.length ? "…" : ""}` };
 }
 
+interface SearchableToolPart {
+  [key: string]: unknown;
+  toolName?: unknown;
+  args?: unknown;
+  result?: unknown;
+  artifact?: unknown;
+  isError?: unknown;
+}
+
+/** The value-only tool body shared by indexing and lazy disclosure reveal. */
+export function partBodySearchContent(
+  part: SearchableToolPart,
+  toolLabelParams?: Readonly<Record<string, string>>,
+): string[] {
+  const result = part.result ?? (part.artifact as { partialOutput?: unknown } | undefined)?.partialOutput;
+  const name = typeof part.toolName === "string" ? part.toolName : "";
+  return toolSearchContent({ name, args: part.args, result, isError: part.isError === true }, toolLabelParams);
+}
+
 /** Explicit textual channels; never index images or arbitrary provider metadata. */
 export function partSearchContent(
   part: { type: string; [key: string]: unknown },
@@ -44,10 +63,9 @@ export function partSearchContent(
   }
   if (part.type === "text" || part.type === "reasoning") return typeof part.text === "string" ? [part.text] : [];
   if (part.type !== "tool-call") return [];
-  const result = part.result ?? (part.artifact as { partialOutput?: unknown } | undefined)?.partialOutput;
   const name = typeof part.toolName === "string" ? part.toolName : "";
   const label = toolDisplayLabel({ name, args: part.args }, toolLabelParams);
-  const content = toolSearchContent({ name, args: part.args, result, isError: part.isError === true }, toolLabelParams);
+  const content = partBodySearchContent(part, toolLabelParams);
   // The injected label is visible row content, but not an argument. Index it
   // once beside the projection whose args already omit it.
   return label ? [label, ...content] : content;

@@ -1,25 +1,9 @@
 import { createContext, useContext, useEffect, useState } from "react";
+import { textMatches } from "./search-text.js";
 
 /** Transient find state only: never changes the person's disclosure preference. */
 export const SearchMessageContext = createContext(false);
 export const useSearchReveal = () => useContext(SearchMessageContext);
-
-/**
- * A disclosure while find is revealing it. The reveal opens the row; the
- * person can still fold it with its own chevron, and that fold belongs to
- * this reveal alone — nothing is written to their remembered choice, and
- * closing find hands the row straight back to the preference it had
- * (AGENTS.md "Search disclosure is transient"). The next reveal starts open
- * again, because a match nobody can see is not a match.
- */
-export function useSearchRevealDisclosure(): { revealing: boolean; open: boolean; fold: (open: boolean) => void } {
-  const revealing = useSearchReveal();
-  const [open, fold] = useState(true);
-  useEffect(() => {
-    if (!revealing) fold(true);
-  }, [revealing]);
-  return { revealing, open, fold };
-}
 export const FindSelectionContext = createContext<string | undefined>(undefined);
 /**
  * What find is looking for right now, so a row holding only an excerpt can
@@ -28,6 +12,38 @@ export const FindSelectionContext = createContext<string | undefined>(undefined)
  */
 export const FindQueryContext = createContext<string>("");
 export const useFindQuery = (): string => useContext(FindQueryContext);
+
+/**
+ * The one transient reveal policy for tools, aggregates and reasoning.
+ * Header-only matches preserve the person's fold; a body match mounts the
+ * body. Manual choices are keyed to the current query and never reach the
+ * remembered preference. Body projection stays lazy while Find is closed.
+ */
+export function useSearchRevealDisclosure({
+  baseOpen,
+  visibleSearchText,
+  bodySearchText,
+}: {
+  baseOpen: boolean;
+  visibleSearchText?: string | undefined;
+  bodySearchText?: (() => readonly string[]) | undefined;
+}): { revealing: boolean; open: boolean; fold: (open: boolean) => void } {
+  const revealing = useSearchReveal();
+  const query = useFindQuery().trim();
+  const visibleMatch = query !== "" && visibleSearchText !== undefined && textMatches(visibleSearchText, query).length > 0;
+  const bodyMatch = revealing && query !== "" && (bodySearchText?.().some((text) => textMatches(text, query).length > 0) ?? false);
+  const headerOnlyMatch = revealing && visibleMatch && bodySearchText !== undefined && !bodyMatch;
+  const [transientOverride, setTransientOverride] = useState<{ query: string; open: boolean } | null>(null);
+  useEffect(() => {
+    if (!revealing) setTransientOverride(null);
+  }, [revealing]);
+  const revealedOpen = transientOverride?.query === query ? transientOverride.open : undefined;
+  return {
+    revealing,
+    open: revealing ? (revealedOpen ?? (headerOnlyMatch ? baseOpen : true)) : baseOpen,
+    fold: (open) => setTransientOverride({ query, open }),
+  };
+}
 export type SearchSource = "user" | "assistant" | "reasoning" | "tool";
 export function openConversationFind(query?: string, source?: SearchSource) {
   window.dispatchEvent(new CustomEvent("conversation-find", { detail: { query, source } }));

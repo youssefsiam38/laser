@@ -37,6 +37,8 @@ let root: Root;
  * app's tooltip (the shell mounts one provider; this is that provider).
  */
 const render = (node: React.ReactNode) => root.render(<TooltipProvider>{node}</TooltipProvider>);
+const toolTriggerRow = (trigger: HTMLButtonElement): HTMLElement => trigger.closest('[data-slot="tool-fallback-trigger-row"]')!;
+const groupTriggerRow = (trigger: HTMLButtonElement): HTMLElement => trigger.closest('[data-slot="tool-group-trigger-row"]')!;
 
 beforeEach(async () => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -94,8 +96,8 @@ describe("collapsed diff summaries", () => {
     const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
     const content = container.querySelector<HTMLElement>('[data-slot="tool-fallback-content"]')!;
 
-    expect(trigger.textContent).toContain("+12 −3");
-    expect(trigger.textContent).toContain("1.3s");
+    expect(toolTriggerRow(trigger).textContent).toContain("+12 −3");
+    expect(toolTriggerRow(trigger).textContent).toContain("1.3s");
     expect(trigger.getAttribute("aria-label")).toBe("Edited src/a/very/long/path/to/the/file/being/changed.ts");
     expect(trigger.getAttribute("aria-description")).toBe("12 lines added, 3 lines removed");
     expect(content.hasAttribute("hidden")).toBe(true);
@@ -105,7 +107,7 @@ describe("collapsed diff summaries", () => {
     await act(async () => trigger.click());
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
     expect(container.textContent).toContain("Expanded diff body");
-    expect(trigger.textContent).toContain("+12 −3");
+    expect(toolTriggerRow(trigger).textContent).toContain("+12 −3");
 
     await act(async () => trigger.click());
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
@@ -189,7 +191,7 @@ describe("collapsed diff summaries", () => {
     await act(async () => render(<Fixture />));
     const groupTrigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-group-trigger"]')!;
     expect(groupTrigger.getAttribute("aria-expanded")).toBe("false");
-    expect(groupTrigger.textContent).toContain("+8 −2");
+    expect(groupTriggerRow(groupTrigger).textContent).toContain("+8 −2");
     expect(groupTrigger.getAttribute("aria-label")).toContain("8 lines added, 2 lines removed");
     expect(container.querySelector('[data-tool="edit"]')).toBeNull();
 
@@ -198,8 +200,8 @@ describe("collapsed diff summaries", () => {
     const write = container.querySelector<HTMLElement>('[data-tool="write"]')!;
     const editTrigger = edit.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
     const writeTrigger = write.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
-    expect(editTrigger.textContent).toContain("+5 −2");
-    expect(writeTrigger.textContent).toContain("+3");
+    expect(toolTriggerRow(editTrigger).textContent).toContain("+5 −2");
+    expect(toolTriggerRow(writeTrigger).textContent).toContain("+3");
     expect(editTrigger.getAttribute("aria-expanded")).toBe("false");
     expect(writeTrigger.getAttribute("aria-expanded")).toBe("false");
     expect(edit.querySelector('[data-slot="tool-fallback-content"]')?.hasAttribute("hidden")).toBe(true);
@@ -217,7 +219,7 @@ describe("collapsed diff summaries", () => {
     let trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
     let body = container.querySelector<HTMLElement>('[data-slot="tool-fallback-content"]')!;
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
-    expect(trigger.textContent).toContain("+2 −1");
+    expect(toolTriggerRow(trigger).textContent).toContain("+2 −1");
     expect(trigger.getAttribute("aria-label")).toBe("Edit to/stats/file.ts");
     expect(trigger.getAttribute("aria-description")).toBe("2 lines added, 1 line removed");
     expect(body.hasAttribute("hidden")).toBe(true);
@@ -228,8 +230,8 @@ describe("collapsed diff summaries", () => {
     ));
     trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
     body = container.querySelector<HTMLElement>('[data-slot="tool-fallback-content"]')!;
-    expect(trigger.textContent).toContain("+3");
-    expect(trigger.textContent).not.toContain("−");
+    expect(toolTriggerRow(trigger).textContent).toContain("+3");
+    expect(toolTriggerRow(trigger).textContent).not.toContain("−");
     expect(trigger.getAttribute("aria-description")).toBe("3 lines added");
     expect(body.hasAttribute("hidden")).toBe(true);
   });
@@ -243,8 +245,8 @@ describe("collapsed diff summaries", () => {
       <ToolRowFixture {...toolProps(`edit-${label}`, "edit", args)} status={status} isError={isError} result={isError ? "Could not edit" : undefined} />,
     ));
     const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
-    expect(trigger.textContent).not.toContain("+1");
-    expect(trigger.textContent).not.toContain("−1");
+    expect(toolTriggerRow(trigger).textContent).not.toContain("+1");
+    expect(toolTriggerRow(trigger).textContent).not.toContain("−1");
     expect(trigger.hasAttribute("aria-description")).toBe(false);
   });
 
@@ -254,7 +256,7 @@ describe("collapsed diff summaries", () => {
         status={{ type: "complete", reason: "stop" }} result="Wrote" />,
     ));
     let trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
-    expect(trigger.querySelector(".text-ok, .text-danger")).toBeNull();
+    expect(toolTriggerRow(trigger).querySelector(".text-ok, .text-danger")).toBeNull();
     expect(trigger.hasAttribute("aria-description")).toBe(false);
 
     await act(async () => render(
@@ -262,7 +264,7 @@ describe("collapsed diff summaries", () => {
         status={{ type: "complete", reason: "stop" }} result="Edited" />,
     ));
     trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
-    expect(trigger.querySelector(".text-ok, .text-danger")).toBeNull();
+    expect(toolTriggerRow(trigger).querySelector(".text-ok, .text-danger")).toBeNull();
   });
 
   it("shows full counts on a successful truncated ToolRow preview", async () => {
@@ -274,7 +276,7 @@ describe("collapsed diff summaries", () => {
         status={{ type: "complete", reason: "stop" }} result={result} />,
     ));
     const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
-    expect(trigger.textContent).toContain(`+${added.length}`);
+    expect(toolTriggerRow(trigger).textContent).toContain(`+${added.length}`);
     expect(trigger.getAttribute("aria-description")).toBe(`${added.length} lines added`);
     expect(container.querySelector('[data-slot="tool-fallback-content"]')?.hasAttribute("hidden")).toBe(true);
 
@@ -302,7 +304,7 @@ describe("collapsed diff summaries", () => {
         status={{ type: "complete", reason: "stop" }} result={stored.result} />,
     ));
     const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
-    expect(trigger.textContent).toContain("+3 −1");
+    expect(toolTriggerRow(trigger).textContent).toContain("+3 −1");
     expect(trigger.getAttribute("aria-description")).toBe("3 lines added, 1 line removed");
 
     await act(async () => trigger.click());
