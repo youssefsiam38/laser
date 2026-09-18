@@ -220,29 +220,40 @@ describe("history request ownership", () => {
     expect(f.view()).toBe(held);
   });
 
-  it("adopts a proved append revision while preserving the owner and retained rows", async () => {
+  it("keeps the covered baseline until a recent delta acquires an append unseen by the older page", async () => {
     const appended = [
       { type: "message", id: "e80", parentId: "e79", message: { role: "user", content: "new prompt" } },
       { type: "message", id: "e81", parentId: "e80", message: { role: "assistant", content: "new answer" } },
     ];
+    const evolvedSource = { entries: [...entries, ...appended], leafId: "e81" };
     const evolved = { ...scope, revision: "r1.test.appended" };
-    let page = false;
-    const request = vi.fn(async (params: Params) => historyWindow(
-      page ? { entries: [...entries, ...appended], leafId: "e81" } : source,
-      params.window!, page ? evolved : scope,
-    ));
+    let phase: "initial" | "page" | "recent" = "initial";
+    const request = vi.fn(async (params: Params) => phase === "initial"
+      ? historyWindow(source, params.window!, scope)
+      : phase === "page"
+        ? historyWindow(evolvedSource, params.window!, evolved)
+        : historyWindow(evolvedSource, params.window!, { ...evolved, selection: { kind: "delta", after: "e79" } }));
     const f = fixture(request);
     await f.loader.read(state.path);
     const ownerRevision = f.view().historyRevision;
-    page = true;
+    phase = "page";
 
     expect(await f.loader.earlier(state.path, () => true)).toBe(true);
-
     expect(request.mock.calls[1]![0]).toMatchObject({ baseRevision: scope.revision });
     expect(f.view().entries).toEqual(entries);
     expect(f.view().history).toMatchObject({ revision: evolved.revision, complete: true });
-    expect(f.view().validated?.revision).toBe(evolved.revision);
+    expect(f.view().validated?.revision).toBe(scope.revision);
     expect(f.view().historyRevision).toBe(ownerRevision);
+
+    f.dispatch({ type: "optimisticUser", path: state.path, text: "unsent local prompt", images: [] });
+    phase = "recent";
+    await f.loader.recent(state.path, () => true);
+
+    expect(request.mock.calls[2]![0]).toMatchObject({ window: { tail: 40 }, baseRevision: scope.revision });
+    expect(f.view().entries).toEqual(evolvedSource.entries);
+    expect(f.view().leafId).toBe("e81");
+    expect(f.view().validated?.revision).toBe(evolved.revision);
+    expect(f.view().blocks.some(block => block.kind === "user" && block.optimistic && block.text === "unsent local prompt")).toBe(true);
   });
 
   it("drops an older page when a trim overtakes it, then the same control path still works", async () => {

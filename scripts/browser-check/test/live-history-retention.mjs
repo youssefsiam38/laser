@@ -10,7 +10,7 @@ const messageText = entry => typeof entry?.message?.content === 'string'
 
 async function settled(check, path) {
   const deadline = Date.now() + 120_000;
-  while ((await check.rpc('session/load', { path })).state.isStreaming) {
+  while (((await check.rpc('session/load', { path })).state.isStreaming) || (await check.rpc('session/load', { path })).state.isCompacting) {
     assert(Date.now() < deadline, 'the live history turn settles');
     await sleep(25);
   }
@@ -83,13 +83,25 @@ export default async function liveHistoryRetention(check) {
   const earlier = () => page.getByRole('main').getByRole('button', { name: 'Load earlier messages', exact: true });
   const loadingEarlier = () => page.getByRole('main').getByRole('button', { name: 'Loading earlier messages…', exact: true });
   const settleRender = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-  const activateEarlier = async (mode) => {
+  const settleScroll = () => viewport.evaluate(element => new Promise(resolve => {
+    let previous = element.scrollTop; let stable = 0;
+    const frame = () => {
+      const current = element.scrollTop;
+      stable = Math.abs(current - previous) < 0.5 ? stable + 1 : 0;
+      previous = current;
+      if (stable >= 3) resolve(current); else requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+  }));
+  const activateEarlier = async (mode, ready) => {
     const control = earlier();
     const handle = await control.elementHandle();
     assert(handle, `the ${mode} earlier control is mounted`);
-    await control.scrollIntoViewIfNeeded();
+    if (mode !== 'programmatic') await control.scrollIntoViewIfNeeded();
     await settleRender();
-    if (mode === 'tap') await control.tap();
+    if (ready) await ready();
+    if (mode === 'programmatic') await handle.evaluate(element => element.click());
+    else if (mode === 'tap') await control.tap();
     else if (mode === 'keyboard') { await control.focus(); await control.press('Enter'); }
     else if (mode === 'wheel') { await viewport.hover(); await page.mouse.wheel(0, -1200); }
     else await control.click();
@@ -164,16 +176,27 @@ export default async function liveHistoryRetention(check) {
     assert(Date.now() < streamDeadline, 'the append enters its streaming phase');
     await sleep(25);
   }
-  await activateEarlier(activation);
+  let concurrentAnchor;
+  let concurrentMarker;
+  await activateEarlier(activation, async () => {
+    concurrentMarker = page.getByText('Tool-heavy history turn complete.', { exact: false }).first();
+    await concurrentMarker.waitFor();
+    concurrentAnchor = await concurrentMarker.evaluate(node => ({ top: node.getBoundingClientRect().top, text: node.textContent }));
+  });
   pages += 1;
-  assert.equal((await check.rpc('session/load', { path })).state.isStreaming, true, 'a bounded older page lands while output still appends');
+  await concurrentMarker.waitFor();
+  const concurrentAfter = await concurrentMarker.evaluate(node => ({ top: node.getBoundingClientRect().top, text: node.textContent }));
+  const concurrentAnchorDelta = concurrentAfter.top - concurrentAnchor.top;
+  assert.equal(concurrentAfter.text, concurrentAnchor.text, 'concurrent prepend preserves the anchored visible content');
+  assert(Math.abs(concurrentAnchorDelta) <= 48, `concurrent prepend moved the visible anchor more than one control row: ${concurrentAnchorDelta}px`);
+  assert.equal((await check.rpc('session/load', { path })).state.isStreaming, true, 'the anchored prepend completes while output still appends');
   const live = await liveRequest;
   assert.equal(live.accepted, true, 'the live append is accepted');
   await settled(check, path);
 
-  // Keyboard traversal continues through any producer-split middle gaps, then
-  // scrolls the virtualized transcript before asserting the canonical root.
-  await pageToRoot('keyboard');
+  // Continue through producer-split gaps with keyboard or real touch, then
+  // scroll the virtualized transcript before asserting the canonical root.
+  await pageToRoot(touch ? 'tap' : 'keyboard');
   const wheelUsed = activation === 'wheel';
 
   // Root, intermediate and latest calls are visible and interactive in the
@@ -184,13 +207,52 @@ export default async function liveHistoryRetention(check) {
   assert.match(await page.evaluate(() => navigator.clipboard.readText()), /Run one tool-heavy history turn/, 'the oldest message action still targets the right row');
   const aggregate = page.getByRole('button', { name: /Ran 90 commands/ });
   await aggregate.waitFor();
-  await aggregate.click();
-  for (const number of [1, 45, 90]) await page.getByRole('main').getByText(action(number), { exact: false }).first().waitFor();
+  if (await aggregate.getAttribute('aria-expanded') !== 'true') {
+    if (touch) await aggregate.tap(); else await aggregate.click();
+  }
+  const outputMarkers = new Map();
+  for (const number of [1, 45, 90]) {
+    const row = page.locator('[data-slot="tool-call"]').filter({ hasText: action(number) }).first();
+    await row.scrollIntoViewIfNeeded();
+    await row.waitFor();
+    const trigger = row.locator('[data-slot="tool-fallback-trigger"]');
+    if (await trigger.getAttribute('aria-expanded') !== 'true') {
+      if (touch) await trigger.tap(); else await trigger.click();
+    }
+    const marker = row.getByText(`${action(number)} output line 120 stays reachable after paging.`, { exact: false }).first();
+    await marker.waitFor();
+    outputMarkers.set(number, marker);
+  }
+
+  // Preserve the person's open intermediate output through compaction before
+  // reload is allowed to prove recovery from the newly accepted revision.
+  const middleOutput = outputMarkers.get(45);
+  await middleOutput.scrollIntoViewIfNeeded();
+  if (touch) {
+    const box = await viewport.boundingBox();
+    assert(box, 'the touch viewport has bounds before compaction');
+    const cdp = await page.context().newCDPSession(page);
+    const x = Math.round(box.x + box.width / 2);
+    const y = Math.round(box.y + box.height / 2);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y: y + 32 }] });
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await cdp.detach();
+    await settleScroll();
+  }
+  const compactAnchorBefore = await middleOutput.evaluate(node => ({ top: node.getBoundingClientRect().top, text: node.textContent }));
 
   // A real compaction refuses the old page base. Reload is an explicit re-entry
   // that accepts the new bounded tail; paging then reaches the root again.
   await check.rpc('pi/session/compact', { path, instructions: 'Summarize the tool-heavy fixture without dropping canonical history.' });
   await settled(check, path);
+  await settleRender();
+  await settleScroll();
+  await middleOutput.waitFor();
+  const compactAnchorAfter = await middleOutput.evaluate(node => ({ top: node.getBoundingClientRect().top, text: node.textContent }));
+  const compactionAnchorDelta = compactAnchorAfter.top - compactAnchorBefore.top;
+  assert.equal(compactAnchorAfter.text, compactAnchorBefore.text, 'compaction preserves the open intermediate output');
+  assert(Math.abs(compactionAnchorDelta) <= 8, `compaction moved the active reading anchor ${compactionAnchorDelta}px before reload`);
   await page.reload({ waitUntil: 'domcontentloaded' });
   await selectSession(title);
   await page.getByText('Streaming line 40:', { exact: false }).first().waitFor();
@@ -199,7 +261,7 @@ export default async function liveHistoryRetention(check) {
   await earlier().waitFor();
   await activateEarlier(activation);
   pages += 1;
-  await pageToRoot('keyboard');
+  await pageToRoot(touch ? 'tap' : 'keyboard');
   assert.equal(await earlier().count() + await loadingEarlier().count(), 0, `all canonical history is reachable after compaction (${pages})`);
 
   const after = await check.rpc('pi/session/entries', { path });
@@ -229,6 +291,10 @@ export default async function liveHistoryRetention(check) {
     recoveredRows: pageBefore.entries.length,
     boundary,
     activation,
+    concurrentAnchorDelta,
+    renderedOutputs: [1, 45, 90],
+    compactionAnchorDelta,
+    compactionPreserved: true,
     retainedBytes,
     cacheText,
     viewport: check.state.width,

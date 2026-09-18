@@ -51,7 +51,10 @@ function adoptProvedPage(next: SessionView, previous: SessionView, window: Omit<
     const { validated: _stale, ...rest } = next;
     return rest as SessionView;
   }
-  return { ...next, validated: validatedOf(window, next) };
+  // Prefix proof says the rows covered by the held baseline are unchanged; an
+  // older page at a newer producer revision does not carry that revision's
+  // unseen suffix. Keep the covered baseline until a delta acquires it.
+  return { ...next, validated: window.revision === baseRevision ? validatedOf(window, next) : previous.validated };
 }
 
 function validatedOf(window: Omit<HistoryWindow, "live">, view: SessionView): ValidatedRevision {
@@ -261,8 +264,10 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
       // Every fence, and all of them: this view must still hold the exact
       // authoritative window the host proved the suffix against, in this
       // environment and this worker generation. Anything else is replaced.
-      if (!base || !held || base.revision !== action.baseRevision || held.revision !== action.baseRevision
-        || base.environmentKey !== action.window.environmentKey || held.epoch !== action.window.epoch) return v;
+      if (!base || !held || base.revision !== action.baseRevision
+        || (held.revision !== action.baseRevision && held.revision !== action.window.revision)
+        || base.environmentKey !== action.window.environmentKey || held.environmentKey !== action.window.environmentKey
+        || held.epoch !== action.window.epoch) return v;
       const known = new Set<string>();
       for (const entry of v.entries) {
         const id = (entry as { id?: unknown } | null)?.id;
@@ -470,15 +475,14 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
   /**
    * The revision a delta may be proved against, or nothing.
    *
-   * Only a view that holds one whole authoritative window qualifies: the same
-   * durable revision on the light record and on the loaded window. A view
-   * painted from this device's cache (RP-11) holds a captured revision and no
-   * window, so it asks for — and receives — a replacement.
+   * A proved older page can know a newer producer revision without covering
+   * its suffix. In that case the validated record remains the older covered
+   * baseline and asks the producer for precisely that missing delta.
    */
   const deltaBaseOf = (view: SessionView | undefined): string | undefined => {
-    const revision = view?.validated?.revision;
-    return revision !== undefined && view?.history?.revision === revision && view.hydrated && view.provisional === undefined
-      ? revision : undefined;
+    if (!view?.validated || !view.history || view.history.environmentKey !== view.validated.environmentKey
+      || !view.hydrated || view.provisional !== undefined) return undefined;
+    return view.validated.revision;
   };
   const all = async (path: string, accepting: () => boolean): Promise<boolean> => {
     const active = fence(path, accepting);
