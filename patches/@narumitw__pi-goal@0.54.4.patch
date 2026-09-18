@@ -1,5 +1,5 @@
 diff --git a/dist/chunks/chunk-QWIUWKRW.js b/dist/chunks/chunk-QWIUWKRW.js
-index 337f7dc01226f5d5a760a1a8ee1e75e0af44c9e6..c851ddaedaca569e312bc667e6b4aea889fb1d49 100644
+index 337f7dc01226f5d5a760a1a8ee1e75e0af44c9e6..af41e232b5d85bb0ef12421dd03ce95bc2e74c5e 100644
 --- a/dist/chunks/chunk-QWIUWKRW.js
 +++ b/dist/chunks/chunk-QWIUWKRW.js
 @@ -27,73 +27,35 @@ var REMOVED_QUEUE_COMMANDS = /* @__PURE__ */ new Set([
@@ -115,7 +115,61 @@ index 337f7dc01226f5d5a760a1a8ee1e75e0af44c9e6..c851ddaedaca569e312bc667e6b4aea8
      automaticModelTurns: normalizeSafetyCounter(goal.automaticModelTurns),
      toolFreeRepeatCount: normalizeSafetyCounter(goal.toolFreeRepeatCount),
      lastToolFreeOutputFingerprint: normalizeOutputFingerprint(goal.lastToolFreeOutputFingerprint),
-@@ -717,6 +680,7 @@ var WorkflowMutex = class {
+@@ -639,18 +602,43 @@ function isRecord3(value) {
+ var GOAL_COMPLETE_TOOL = "goal_complete";
+ var GOAL_BLOCKED_TOOL = "goal_blocked";
+ var GOAL_WAIT_TOOL = "goal_wait";
+-var REQUIRED_GOAL_TOOL_NAMES = [GOAL_COMPLETE_TOOL, GOAL_BLOCKED_TOOL];
+-function goalToolsAvailable(pi) {
+-  const active = new Set(pi.getActiveTools());
+-  return REQUIRED_GOAL_TOOL_NAMES.every((name) => active.has(name));
++var REQUIRED_GOAL_TOOL_NAMES = [GOAL_COMPLETE_TOOL, GOAL_BLOCKED_TOOL, GOAL_WAIT_TOOL];
++// This published dist is the executable source loaded by Pi. Keep this
++// mechanical activation policy aligned with @lasercode/pi-goal; importing that
++// wrapper here would create a dependency cycle.
++function ensureRequiredToolsActive(pi) {
++  let registered;
++  let active;
++  try {
++    registered = new Set(pi.getAllTools().map((tool) => tool.name));
++    active = new Set(pi.getActiveTools());
++  } catch {
++    return activationRefused();
++  }
++  if (REQUIRED_GOAL_TOOL_NAMES.some((name) => !registered.has(name))) {
++    return {
++      ok: false,
++      reason: "missing_registration",
++      message: "Goal tools did not load. Automatic goal work is waiting, but ordinary messages still work. Run /goal pause to stop the goal, or reload this conversation."
++    };
++  }
++  const missing = REQUIRED_GOAL_TOOL_NAMES.filter((name) => !active.has(name));
++  if (missing.length === 0) return { ok: true };
++  try {
++    pi.setActiveTools([...active, ...missing]);
++    const repaired = new Set(pi.getActiveTools());
++    if (REQUIRED_GOAL_TOOL_NAMES.every((name) => repaired.has(name))) return { ok: true };
++  } catch {
++  }
++  return activationRefused();
+ }
+-function assertGoalToolsAvailable(pi) {
+-  if (goalToolsAvailable(pi)) return;
+-  throw new Error(
+-    "goal_complete and goal_blocked are unavailable; include them in the active tool allowlist or leave the restrictive tool mode first."
+-  );
++function activationRefused() {
++  return {
++    ok: false,
++    reason: "activation_refused",
++    message: "Goal tools could not be activated. Automatic goal work is waiting, but ordinary messages still work. Run /goal pause to stop the goal, or reload this conversation."
++  };
+ }
+-
+ // src/workflow-mutex.ts
+ var WORKFLOW_MUTEX_CHANNEL = "workflow:mutex:v1";
+ var AGENT_WORKFLOW_GROUP = "agent-workflow";
+@@ -717,6 +705,7 @@ var WorkflowMutex = class {
  // src/runtime.ts
  var STATUS_KEY = "goal";
  var GOAL_STATE_ENTRY_TYPE2 = "goal-state";
@@ -123,7 +177,62 @@ index 337f7dc01226f5d5a760a1a8ee1e75e0af44c9e6..c851ddaedaca569e312bc667e6b4aea8
  var MAX_GOAL_ID_LENGTH = 128;
  function isTerminalGoalStatus(status) {
    return status !== "active" && status !== "queued";
-@@ -1047,6 +1011,20 @@ var GoalRuntime = class {
+@@ -765,6 +754,7 @@ var GoalRuntime = class {
+   workflowMutex;
+   workflowOwner;
+   workflowSession;
++  lastGoalToolFailure;
+   pendingGoalPromptMarkers = /* @__PURE__ */ new Map();
+   claimedGoalPromptMarkers = /* @__PURE__ */ new Map();
+   cancelledGoalPromptMarkers = /* @__PURE__ */ new Map();
+@@ -778,13 +768,33 @@ var GoalRuntime = class {
+     this.pi = pi;
+     this.workflowMutex = new WorkflowMutex(pi);
+   }
+-  goalToolsAvailable() {
+-    return goalToolsAvailable(this.pi);
++  ensureGoalToolsActive(ctx) {
++    const result = ensureRequiredToolsActive(this.pi);
++    if (result.ok) {
++      this.lastGoalToolFailure = void 0;
++      return true;
++    }
++    this.cancelContinuationWork();
++    this.clearGoalRecovery();
++    if (this.lastGoalToolFailure !== result.reason) {
++      notifyTerminal(ctx.ui, result.message, "error");
++    }
++    this.lastGoalToolFailure = result.reason;
++    return false;
+   }
+   assertGoalToolsAvailable() {
+-    assertGoalToolsAvailable(this.pi);
++    const result = ensureRequiredToolsActive(this.pi);
++    if (result.ok) {
++      this.lastGoalToolFailure = void 0;
++      return;
++    }
++    this.cancelContinuationWork();
++    this.clearGoalRecovery();
++    this.lastGoalToolFailure = result.reason;
++    throw new Error(result.message);
+   }
+   bindWorkflowSession(session) {
++    this.lastGoalToolFailure = void 0;
+     this.workflowSession = session;
+     this.workflowOwner = void 0;
+     this.workflowMutex.bindSession(session);
+@@ -901,8 +911,7 @@ var GoalRuntime = class {
+       return false;
+     }
+     if (!intent) return false;
+-    if (this.activeGoal?.status === "active" && !this.goalToolsAvailable()) {
+-      this.pauseGoalForUnavailableTools(ctx);
++    if (this.activeGoal?.status === "active" && !this.ensureGoalToolsActive(ctx)) {
+       return false;
+     }
+     if (!this.activeGoal || this.activeGoal.id !== intent.goalId || this.activeGoal.status !== "active" || this.activeGoal.waiting) {
+@@ -1047,6 +1056,20 @@ var GoalRuntime = class {
        formatStatus(goal, this.settings.continuationLimits.automaticTurns)
      );
    }
@@ -144,7 +253,7 @@ index 337f7dc01226f5d5a760a1a8ee1e75e0af44c9e6..c851ddaedaca569e312bc667e6b4aea8
    stopActiveGoal(ctx, request) {
      const currentGoal = this.activeGoal;
      if (!currentGoal || currentGoal.id !== request.expectedGoalId) return void 0;
-@@ -1135,6 +1113,24 @@ var GoalRuntime = class {
+@@ -1135,6 +1158,24 @@ var GoalRuntime = class {
      if (terminalReason !== void 0) this.setTerminalReason(this.activeGoal.id, terminalReason);
      const stoppedGoal = this.activeGoal;
      this.persistGoal(stoppedGoal);
@@ -169,7 +278,7 @@ index 337f7dc01226f5d5a760a1a8ee1e75e0af44c9e6..c851ddaedaca569e312bc667e6b4aea8
      if (request.kind !== "blocker_report") this.ensureInactiveGoalContextContract(ctx);
      if (this.activeGoal?.id === stoppedGoal.id && this.activeGoal.status === stoppedGoal.status) {
        this.updateStatus(ctx, stoppedGoal);
-@@ -1265,12 +1261,12 @@ var GoalRuntime = class {
+@@ -1265,12 +1306,12 @@ var GoalRuntime = class {
        expectedGoalId: goal.id,
        cause,
        abortTurn,
@@ -184,7 +293,21 @@ index 337f7dc01226f5d5a760a1a8ee1e75e0af44c9e6..c851ddaedaca569e312bc667e6b4aea8
        "warning"
      );
      return true;
-@@ -1556,14 +1552,18 @@ var GoalRuntime = class {
+@@ -1354,11 +1395,12 @@ var GoalRuntime = class {
+     const contract = this.goalContextContractForPrompt(ctx);
+     if (contract) this.pi.sendMessage(contract, { triggerTurn: false });
+   }
+-  goalContextContractForPrompt(ctx, goal) {
++  goalContextContractForPrompt(ctx, goal, forceInactive = false) {
+     const { contextEntries, historyEntries } = goalContractEntries(ctx);
+     if (goal) {
+       return hasGoalContextContract(contextEntries, goal) ? void 0 : createGoalContextContract(goal);
+     }
++    if (forceInactive) return createInactiveGoalContextContract();
+     const hasHistory = hasGoalContextContractHistory(contextEntries) || hasGoalContextContractHistory(historyEntries);
+     if (!hasHistory || hasInactiveGoalContextContract(contextEntries)) return void 0;
+     return createInactiveGoalContextContract();
+@@ -1556,14 +1598,18 @@ var GoalRuntime = class {
      this.clearTerminalDetails();
      clearLegacyPersistedGoal(cwd);
    }
@@ -206,7 +329,7 @@ index 337f7dc01226f5d5a760a1a8ee1e75e0af44c9e6..c851ddaedaca569e312bc667e6b4aea8
      const clearedGoal = this.activeGoal;
      this.clearGoalWaitTimer();
      this.cancelContinuationWork();
-@@ -1573,6 +1573,13 @@ var GoalRuntime = class {
+@@ -1573,6 +1619,13 @@ var GoalRuntime = class {
      this.activeGoal = void 0;
      this.legacyQueueState = void 0;
      this.clearPersistedGoal(ctx.cwd, clearedGoal, reason);
@@ -220,7 +343,31 @@ index 337f7dc01226f5d5a760a1a8ee1e75e0af44c9e6..c851ddaedaca569e312bc667e6b4aea8
      ctx.ui.setStatus(STATUS_KEY, void 0);
      if (releaseWorkflow) this.releaseWorkflow();
    }
-@@ -1705,11 +1712,11 @@ function createGoal(text, tokenBudget, baselineTokens) {
+@@ -1609,23 +1662,6 @@ var GoalRuntime = class {
+     this.cancelledContinuationMarkers = new Map(snapshot.cancelledContinuationMarkers);
+     this.terminalDetails = snapshot.terminalDetails ? structuredClone(snapshot.terminalDetails) : void 0;
+   }
+-  pauseGoalForUnavailableTools(ctx, abortTurn = true, recordUsage = true) {
+-    const goal = this.activeGoal;
+-    if (goal?.status !== "active") return false;
+-    const stoppedGoal = this.stopActiveGoal(ctx, {
+-      kind: "tools_unavailable",
+-      expectedGoalId: goal.id,
+-      abortTurn,
+-      recordUsage
+-    });
+-    if (!stoppedGoal) return false;
+-    notifyTerminal(
+-      ctx.ui,
+-      "Goal tools are unavailable, so the active goal was paused. Restore the tools and run /goal resume.",
+-      "warning"
+-    );
+-    return true;
+-  }
+   showCompletionStatus(ctx) {
+     this.clearCompletionStatusTimer();
+     ctx.ui.setStatus(STATUS_KEY, "complete");
+@@ -1705,11 +1741,11 @@ function createGoal(text, tokenBudget, baselineTokens) {
      startedAt: now,
      updatedAt: now,
      iteration: 0,
@@ -235,7 +382,7 @@ index 337f7dc01226f5d5a760a1a8ee1e75e0af44c9e6..c851ddaedaca569e312bc667e6b4aea8
      automaticModelTurns: 0,
      toolFreeRepeatCount: 0
    };
-@@ -1758,7 +1765,7 @@ function formatStatus(goal, automaticTurnLimit = DEFAULT_GOAL_SETTINGS.continuat
+@@ -1758,7 +1794,7 @@ function formatStatus(goal, automaticTurnLimit = DEFAULT_GOAL_SETTINGS.continuat
    if (goal.status === "usage_limited") return `usage \xB7 ${automatic}`;
    if (goal.status === "budget_limited") return `budget ${formatBudget2(goal)} \xB7 ${automatic}`;
    if (goal.tokenBudget !== void 0) return `active ${formatBudget2(goal)} \xB7 ${automatic}`;
@@ -244,7 +391,7 @@ index 337f7dc01226f5d5a760a1a8ee1e75e0af44c9e6..c851ddaedaca569e312bc667e6b4aea8
  }
  function formatBudget2(goal) {
    return `${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget ?? 0)}`;
-@@ -1773,8 +1780,7 @@ function goalSummary(goal, automaticTurnLimit = DEFAULT_GOAL_SETTINGS.continuati
+@@ -1773,8 +1809,7 @@ function goalSummary(goal, automaticTurnLimit = DEFAULT_GOAL_SETTINGS.continuati
      ] : [],
      `Iteration: ${goal.iteration}`,
      automaticTurnLimit === null ? `Automatic work: ${goal.automaticModelTurns} responses \xB7 Unlimited` : `Automatic work: ${goal.automaticModelTurns} of ${automaticTurnLimit} responses`,
@@ -309,7 +456,7 @@ index d3dccf8005f4552dd6d7994381245b74f0faeba3..ba67fdea9c643791717b606c4582534f
  function normalizeGoalSettings(value) {
    if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
 diff --git a/dist/index.ts b/dist/index.ts
-index 88023ea7e232329a3cf4b26b23dd2078b837fb5d..00cc4aecfe39b5b15ed240c8d221e0c3e7db8fb8 100644
+index 88023ea7e232329a3cf4b26b23dd2078b837fb5d..06d6421cf0ddb34de0424eff154f199f82cc791d 100644
 --- a/dist/index.ts
 +++ b/dist/index.ts
 @@ -69,7 +69,7 @@ function registerGoalCommand(pi, runtime, commands, options = {}) {
@@ -357,7 +504,17 @@ index 88023ea7e232329a3cf4b26b23dd2078b837fb5d..00cc4aecfe39b5b15ed240c8d221e0c3
        switch (result.kind) {
          case "show":
            commands.showGoal(ctx);
-@@ -273,7 +244,11 @@ New goal: ${safeGoalMenuText(objective, 4e3)}`
+@@ -205,8 +176,7 @@ New goal: ${safeGoalMenuText(objective, 4e3)}`
+       this.runtime.assertGoalToolsAvailable();
+     } catch (error) {
+       notifyTerminal(ctx.ui, `Cannot start /goal: ${formatError(error)}`, "error");
+-      if (existingGoal?.status === "active") this.runtime.pauseGoalForUnavailableTools(ctx);
+-      else if (acquiredForRequest) this.runtime.releaseWorkflow();
++      if (acquiredForRequest) this.runtime.releaseWorkflow();
+       return;
+     }
+     this.runtime.clearGoalWaitTimer();
+@@ -273,7 +243,11 @@ New goal: ${safeGoalMenuText(objective, 4e3)}`
            this.runtime.clearStaleGoalToolCallBlock();
            ctx.ui.setStatus(STATUS_KEY, void 0);
          } else {
@@ -370,7 +527,7 @@ index 88023ea7e232329a3cf4b26b23dd2078b837fb5d..00cc4aecfe39b5b15ed240c8d221e0c3
          }
        }
        if (rolledBackStartedGoal) {
-@@ -286,6 +261,15 @@ New goal: ${safeGoalMenuText(objective, 4e3)}`
+@@ -286,6 +260,15 @@ New goal: ${safeGoalMenuText(objective, 4e3)}`
      if (this.runtime.activeGoal?.id !== startedGoal.id || !this.runtime.ownsWorkflow(this.runtime.activeGoal)) {
        return;
      }
@@ -386,7 +543,7 @@ index 88023ea7e232329a3cf4b26b23dd2078b837fb5d..00cc4aecfe39b5b15ed240c8d221e0c3
      const automaticLimit = this.runtime.settings.continuationLimits.automaticTurns;
      notifyTerminal(
        ctx.ui,
-@@ -293,7 +277,7 @@ New goal: ${safeGoalMenuText(objective, 4e3)}`
+@@ -293,7 +276,7 @@ New goal: ${safeGoalMenuText(objective, 4e3)}`
        automaticLimit === null ? "warning" : "info"
      );
    }
@@ -395,7 +552,7 @@ index 88023ea7e232329a3cf4b26b23dd2078b837fb5d..00cc4aecfe39b5b15ed240c8d221e0c3
      if (!this.runtime.activeGoal) {
        notifyTerminal(ctx.ui, "No active goal.", "info");
        return;
-@@ -308,7 +292,8 @@ New goal: ${safeGoalMenuText(objective, 4e3)}`
+@@ -308,7 +291,8 @@ New goal: ${safeGoalMenuText(objective, 4e3)}`
      }
      const stoppedGoal = this.runtime.stopActiveGoal(ctx, {
        kind: "explicit_pause",
@@ -405,7 +562,17 @@ index 88023ea7e232329a3cf4b26b23dd2078b837fb5d..00cc4aecfe39b5b15ed240c8d221e0c3
      });
      if (stoppedGoal) notifyTerminal(ctx.ui, `Goal paused: ${stoppedGoal.text}`, "info");
    }
-@@ -641,6 +626,13 @@ function registerGoalLifecycle(pi, runtime, runController, options = {}) {
+@@ -483,8 +467,7 @@ New goal: ${safeGoalMenuText(objective, 4e3)}`
+         this.runtime.assertGoalToolsAvailable();
+       } catch (error) {
+         notifyTerminal(ctx.ui, `Cannot reactivate /goal: ${formatError(error)}`, "error");
+-        if (currentGoal.status === "active") this.runtime.pauseGoalForUnavailableTools(ctx);
+-        else if (acquiredForEdit) this.runtime.releaseWorkflow();
++        if (acquiredForEdit) this.runtime.releaseWorkflow();
+         return;
+       }
+     }
+@@ -641,6 +624,13 @@ function registerGoalLifecycle(pi, runtime, runController, options = {}) {
        if (!runtime.acquireWorkflow()) {
          runtime.activeGoal = transitionGoal(loaded.goal, "paused");
          runtime.persistGoal(runtime.activeGoal);
@@ -419,7 +586,57 @@ index 88023ea7e232329a3cf4b26b23dd2078b837fb5d..00cc4aecfe39b5b15ed240c8d221e0c3
          runtime.ensureInactiveGoalContextContract(ctx);
          runtime.updateStatus(ctx, runtime.activeGoal);
          notifyTerminal(
-@@ -973,7 +965,26 @@ function registerGoalLifecycle(pi, runtime, runController, options = {}) {
+@@ -659,8 +649,10 @@ function registerGoalLifecycle(pi, runtime, runController, options = {}) {
+       if (runtime.enforceAutomaticTurnLimit(ctx, false) || runtime.enforceNoProgressLimit(ctx)) {
+         return;
+       }
+-      if (!runtime.goalToolsAvailable()) {
+-        runtime.pauseGoalForUnavailableTools(ctx, false);
++      if (!runtime.ensureGoalToolsActive(ctx)) {
++        runtime.persistGoal(runtime.activeGoal);
++        runtime.ensureInactiveGoalContextContract(ctx);
++        runtime.updateStatus(ctx, runtime.activeGoal);
+         return;
+       }
+       runtime.persistGoal(runtime.activeGoal);
+@@ -875,7 +867,7 @@ function registerGoalLifecycle(pi, runtime, runController, options = {}) {
+     runtime.persistGoal(runtime.activeGoal);
+     runtime.updateStatus(ctx, runtime.activeGoal);
+     if (runtime.limitActiveGoalForBudget(ctx, true)) return;
+-    if (!runtime.goalToolsAvailable()) runtime.pauseGoalForUnavailableTools(ctx);
++    runtime.ensureGoalToolsActive(ctx);
+   });
+   pi.on("before_agent_start", (event, ctx) => {
+     runtime.clearAgentRun();
+@@ -910,20 +902,19 @@ function registerGoalLifecycle(pi, runtime, runController, options = {}) {
+       return goalContractBoundaryResult(ctx);
+     }
+     if (ownedPromptGoalId && ownedPromptGoalId !== runtime.activeGoal?.id) {
+-      runtime.beginAgentRun(ownedPromptGoalId, runOrigin);
+-      if (runtime.activeGoal?.status === "active" && !runtime.goalToolsAvailable()) {
+-        runtime.pauseGoalForUnavailableTools(ctx, false);
+-      }
++      runtime.beginAgentRun(null, void 0);
++      if (runtime.activeGoal?.status === "active") runtime.ensureGoalToolsActive(ctx);
+       abortCurrentTurn(ctx);
+-      return;
++      return goalContractBoundaryResult(ctx, void 0, true);
+     }
+     if (runtime.activeGoal?.status !== "active" || !runtime.ownsWorkflow(runtime.activeGoal)) {
+       return goalContractBoundaryResult(ctx);
+     }
+     runtime.beginAgentRun(runtime.activeGoal.id, runOrigin);
+-    if (!runtime.goalToolsAvailable()) {
+-      runtime.pauseGoalForUnavailableTools(ctx, ownedPromptGoalId !== void 0);
+-      return goalContractBoundaryResult(ctx);
++    if (!runtime.ensureGoalToolsActive(ctx)) {
++      runtime.beginAgentRun(null, void 0);
++      if (ownedPromptGoalId !== void 0) abortCurrentTurn(ctx);
++      return goalContractBoundaryResult(ctx, void 0, true);
+     }
+     if (goalPrompt?.resetSafetyEpoch && goalPromptGoalId === runtime.activeGoal.id) {
+       runtime.activeGoal = resetGoalSafetyEpoch(runtime.activeGoal);
+@@ -973,17 +964,33 @@ function registerGoalLifecycle(pi, runtime, runController, options = {}) {
      runtime.recordGoalUsage(runtime.activeGoal, ctx);
      if (finalAssistant?.stopReason === "aborted") {
        runtime.clearGoalRecoveryForGoal(goalId);
@@ -447,7 +664,41 @@ index 88023ea7e232329a3cf4b26b23dd2078b837fb5d..00cc4aecfe39b5b15ed240c8d221e0c3
        return;
      }
      if (finalAssistant?.stopReason === "error") {
-@@ -1048,6 +1059,38 @@ function registerGoalLifecycle(pi, runtime, runController, options = {}) {
+       if (isRetryableGoalInterruption(finalAssistant)) {
+         if (run.origin === "automatic" && runtime.enforceAutomaticTurnLimit(ctx, true)) return;
+         if (runtime.limitActiveGoalForBudget(ctx, false)) return;
+-        if (!runtime.goalToolsAvailable()) {
+-          runtime.pauseGoalForUnavailableTools(ctx);
+-          return;
+-        }
++        if (!runtime.ensureGoalToolsActive(ctx)) return;
+         runtime.goalRecovery = {
+           goalId,
+           kind: isGoalContextOverflow(finalAssistant) ? "compaction_retry" : "provider_retry",
+@@ -1006,10 +1013,7 @@ function registerGoalLifecycle(pi, runtime, runController, options = {}) {
+     }
+     runtime.clearGoalRecoveryForGoal(goalId);
+     if (runtime.limitActiveGoalForBudget(ctx, false)) return;
+-    if (!runtime.goalToolsAvailable()) {
+-      runtime.pauseGoalForUnavailableTools(ctx);
+-      return;
+-    }
++    if (!runtime.ensureGoalToolsActive(ctx)) return;
+     if (run.origin === "automatic" && runtime.recordAutomaticRunProgress(
+       ctx,
+       goalId,
+@@ -1036,8 +1040,8 @@ function registerGoalLifecycle(pi, runtime, runController, options = {}) {
+     if (!resumedWait) runtime.dispatchContinuationIfSettled(ctx);
+     runtime.clearSettledSafetyTracking();
+   });
+-  function goalContractBoundaryResult(ctx, goal2) {
+-    const message = runtime.goalContextContractForPrompt(ctx, goal2);
++  function goalContractBoundaryResult(ctx, goal2, forceInactive = false) {
++    const message = runtime.goalContextContractForPrompt(ctx, goal2, forceInactive);
+     return message ? { message } : void 0;
+   }
+   function beginNonGoalFollowUp(ctx, resetSafetyEpoch) {
+@@ -1048,6 +1052,38 @@ function registerGoalLifecycle(pi, runtime, runController, options = {}) {
      runtime.beginAgentRun(activeGoalId ?? null, activeGoalId ? "manual" : void 0);
      if (resetSafetyEpoch && activeGoalId) runtime.resetActiveSafetyEpoch(ctx);
    }
@@ -486,7 +737,7 @@ index 88023ea7e232329a3cf4b26b23dd2078b837fb5d..00cc4aecfe39b5b15ed240c8d221e0c3
    function stopGoalAfterAgentEnd(ctx, goal2, assistant, status) {
      const stoppedGoal = runtime.stopActiveGoal(ctx, {
        kind: "agent_interruption",
-@@ -1300,7 +1343,13 @@ var GoalRunController = class {
+@@ -1300,7 +1336,13 @@ var GoalRunController = class {
        return;
      }
      this.runtime.setTerminalReason(goal2.id, reason ?? "goal cancelled by managed run");

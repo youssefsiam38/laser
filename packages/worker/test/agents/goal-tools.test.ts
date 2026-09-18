@@ -27,8 +27,9 @@ beforeEach(async () => {
   // become idle. Ordinary turns remain plain text; what is asserted is the
   // request's tool surface, not the reply.
   stub = await startStubProvider((request, index) => {
-    const goalId = /<goal_id>\s*([^\s<>]+)\s*<\/goal_id>/u.exec(userTextOf(request))?.[1];
-    return index === 1 && goalId
+    const text = userTextOf(request);
+    const goalId = /<goal_id>\s*([^\s<>]+)\s*<\/goal_id>/u.exec(text)?.[1];
+    return goalId && (index === 1 || text.includes("Continue after"))
       ? { toolCall: { name: "goal_wait", args: { goal_id: goalId, reason: "Waiting for the test to clear the goal", activity_label: "Waiting for clear" } } }
       : { text: "Noted." };
   });
@@ -42,13 +43,14 @@ afterEach(async () => {
   rmSync(base, { recursive: true, force: true });
 });
 
-const open = () =>
+const open = (sessionPath?: string) =>
   driver.open({
     cwd: join(base, "project"),
     agentDir: join(base, "agent"),
     sessionDir: join(base, "sessions"),
     projectTrusted: true,
     features: ["goals"],
+    ...(sessionPath ? { sessionPath } : {}),
   });
 
 const goalToolsIn = (index: number): string[] => toolNamesOf(stub.requests[index]!).filter((name) => GOAL_TOOL_NAMES.includes(name));
@@ -67,6 +69,45 @@ const userTextOf = (request: { messages: Array<{ role: string; content: unknown 
     .join(" ");
 
 describe("the goal engine's tools", () => {
+  it("repairs registered goal tools removed from the active allowlist before the next goal-owned request", async () => {
+    await open();
+    await driver.setModel({ provider: "stub", id: "stub-1" });
+    await driver.prompt([{ type: "text", text: "Prime the recovery fixture." }]);
+    await driver.goalAction?.({ action: "start", objective: "Keep recovering" });
+    await vi.waitFor(() => expect(driver.state().isStreaming).toBe(false), { timeout: 20_000, interval: 25 });
+
+    const session = (driver as unknown as { session(): { getActiveToolNames(): string[]; setActiveToolsByName(names: string[]): void } }).session();
+    session.setActiveToolsByName(session.getActiveToolNames().filter((name) => !GOAL_TOOL_NAMES.includes(name)));
+
+    await driver.prompt([{ type: "text", text: "Continue after the goal tools disappeared." }]);
+    const requestAt = stub.requests.findLastIndex((request) => userTextOf(request).includes("Continue after the goal tools disappeared."));
+    expect(requestAt).toBeGreaterThan(-1);
+    expect(goalToolsIn(requestAt)).toEqual([...GOAL_TOOL_NAMES]);
+    expect(await driver.goalState?.()).toMatchObject({ status: "active" });
+    expect((await driver.entries()).entries.some(
+      (entry) => entry.type === "custom" && entry.customType === "goal-state" && (entry.data as { goal?: { status?: string } }).goal?.status === "paused",
+    )).toBe(false);
+  }, 120_000);
+
+  it("restores a waiting active goal after reload without exposing tools to an ordinary session", async () => {
+    await open();
+    await driver.setModel({ provider: "stub", id: "stub-1" });
+    await driver.prompt([{ type: "text", text: "Prime the reload fixture." }]);
+    await driver.goalAction?.({ action: "start", objective: "Survive reload" });
+    await vi.waitFor(() => expect(driver.state().isStreaming).toBe(false), { timeout: 20_000, interval: 25 });
+    const path = driver.state().path;
+
+    await driver.dispose();
+    driver = new StableSdkDriver();
+    await open(path);
+    await driver.prompt([{ type: "text", text: "Continue after reload." }]);
+
+    const requestAt = stub.requests.findLastIndex((request) => userTextOf(request).includes("Continue after reload."));
+    expect(requestAt).toBeGreaterThan(-1);
+    expect(goalToolsIn(requestAt)).toEqual([...GOAL_TOOL_NAMES]);
+    expect(await driver.goalState?.()).toMatchObject({ status: "active" });
+  }, 120_000);
+
   it("are absent from an ordinary session, present from the first goal turn, and gone once the goal is cleared", async () => {
     await open();
     await driver.setModel({ provider: "stub", id: "stub-1" });

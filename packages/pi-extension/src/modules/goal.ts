@@ -1,4 +1,10 @@
-import { GOAL_TOOL_NAMES, goalStateFromEntries, type GoalSnapshot } from "@lasercode/pi-goal";
+import {
+  ensureGoalToolsActive,
+  GOAL_TOOL_NAMES,
+  goalStateFromEntries,
+  type GoalSnapshot,
+  type GoalToolActivationResult,
+} from "@lasercode/pi-goal";
 import type { SessionGoal } from "@lasercode/protocol";
 import type { LaserModule, ModuleContext } from "./index.js";
 
@@ -24,10 +30,30 @@ export const goalModule: LaserModule = {
         // Nothing left to tell: the goal bar simply keeps its last state.
       }
     };
+    let lastToolFailure: string | undefined;
+    const syncTools = (goalActive: boolean) => {
+      const result = syncGoalTools(ctx, goalActive);
+      if (result.ok) {
+        lastToolFailure = undefined;
+        return;
+      }
+      if (result.message === lastToolFailure) return;
+      lastToolFailure = result.message;
+      try {
+        ctx.send({
+          type: "lasercode/module/log",
+          module: "goal",
+          level: "error",
+          message: result.message,
+        });
+      } catch {
+        // The worker is already gone; canonical goal state remains untouched.
+      }
+    };
     const sync = () => {
       try {
         const goal = readGoal(ctx);
-        syncGoalTools(ctx, goal !== null);
+        syncTools(goal !== null && goal.status === "active");
         ctx.send({ type: "lasercode/goal/state", goal });
       } catch (error) {
         report(error);
@@ -38,7 +64,8 @@ export const goalModule: LaserModule = {
     // them by the time the model sees the request.
     ctx.pi.on("before_agent_start", () => {
       try {
-        syncGoalTools(ctx, readGoal(ctx) !== null);
+        const goal = readGoal(ctx);
+        syncTools(goal !== null && goal.status === "active");
       } catch (error) {
         report(error);
       }
@@ -84,27 +111,32 @@ export function isGoalCommand(text: string): boolean {
  * Never throws: a session where the goal engine did not load has no such tools
  * to move, and a refused `setActiveTools` must not take the turn down with it.
  */
-export function syncGoalTools(ctx: ModuleContext, goalActive: boolean): void {
+export type GoalToolSyncResult = GoalToolActivationResult;
+
+export function syncGoalTools(ctx: ModuleContext, goalActive: boolean): GoalToolSyncResult {
   const pi = ctx.pi;
-  try {
-    const known = new Set(pi.getAllTools().map((tool) => tool.name));
-    const gated = GOAL_TOOL_NAMES.filter((name) => known.has(name));
-    if (gated.length === 0) return;
-    const active = new Set(pi.getActiveTools());
-    let changed = false;
-    for (const name of gated) {
-      if (goalActive && !active.has(name)) {
-        active.add(name);
-        changed = true;
-      } else if (!goalActive && active.has(name)) {
-        active.delete(name);
-        changed = true;
-      }
-    }
-    if (changed) pi.setActiveTools([...active]);
-  } catch {
-    // The tools stay as they are; a goal still runs, it is only wider.
+  if (goalActive) {
+    return ensureGoalToolsActive({
+      getRegisteredToolNames: () => pi.getAllTools().map((tool) => tool.name),
+      getActiveToolNames: () => pi.getActiveTools(),
+      setActiveToolNames: (names) => pi.setActiveTools(names),
+    });
   }
+  try {
+    const registered = new Set(pi.getAllTools().map((tool) => tool.name));
+    const active = pi.getActiveTools();
+    const next = active.filter((name) => !GOAL_TOOL_NAMES.includes(name) || !registered.has(name));
+    if (next.length === active.length) return { ok: true };
+    try {
+      pi.setActiveTools(next);
+    } catch {
+      // A session with no active goal stays quiet; there is no goal recovery
+      // to diagnose, and the engine owns the eventual allowlist reset.
+    }
+  } catch {
+    // No active goal means there is no recovery failure to surface.
+  }
+  return { ok: true };
 }
 
 function readGoal(ctx: ModuleContext): SessionGoal | null {

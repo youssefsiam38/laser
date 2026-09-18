@@ -49,16 +49,23 @@ describe("the goal tool gate", () => {
     expect(running.setActiveTools).not.toHaveBeenCalled();
   });
 
-  it("does nothing at all in a session without the goal engine", () => {
-    // Goals turned off: there is no tool of that name to move, and asking for
-    // one by name would be asking the engine to enable something it never had.
+  it("does nothing in a no-goal session without the goal engine", () => {
     const { ctx, setActiveTools } = fakeCtx([...ORDINARY], [...ORDINARY]);
-    syncGoalTools(ctx, true);
-    syncGoalTools(ctx, false);
+    expect(syncGoalTools(ctx, false)).toEqual({ ok: true });
     expect(setActiveTools).not.toHaveBeenCalled();
   });
 
-  it("survives an engine that refuses the change", () => {
+  it("distinguishes missing registration from inactive registered tools", () => {
+    const missing = fakeCtx([...ORDINARY], [...ORDINARY]);
+    expect(syncGoalTools(missing.ctx, true)).toMatchObject({ ok: false, reason: "missing_registration" });
+    expect(missing.setActiveTools).not.toHaveBeenCalled();
+
+    const inactive = fakeCtx([...ORDINARY], [...WITH_GOAL]);
+    expect(syncGoalTools(inactive.ctx, true)).toEqual({ ok: true });
+    expect(inactive.active()).toEqual(WITH_GOAL);
+  });
+
+  it("keeps a no-goal session quiet when deactivation is refused", () => {
     const ctx = {
       pi: {
         getAllTools: () => GOAL_TOOL_NAMES.map((name) => ({ name })),
@@ -68,8 +75,51 @@ describe("the goal tool gate", () => {
         },
       },
     } as unknown as ModuleContext;
-    // A wider tool list is a cost; a turn that dies for it is a fault.
-    expect(() => syncGoalTools(ctx, false)).not.toThrow();
+    expect(syncGoalTools(ctx, false)).toEqual({ ok: true });
+  });
+
+  it("classifies an active goal whose tool activation is refused", () => {
+    const ctx = {
+      pi: {
+        getAllTools: () => GOAL_TOOL_NAMES.map((name) => ({ name })),
+        getActiveTools: () => [],
+        setActiveTools: () => {
+          throw new Error("no");
+        },
+      },
+    } as unknown as ModuleContext;
+    expect(syncGoalTools(ctx, true)).toMatchObject({ ok: false, reason: "activation_refused" });
+  });
+
+  it("emits one durable actionable diagnostic for an active goal whose registration is absent", () => {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    const sent: OutboundMessage[] = [];
+    const ctx = {
+      pi: {
+        on: (name: string, handler: (...args: unknown[]) => unknown) => handlers.set(name, handler),
+        getAllTools: () => ORDINARY.map((name) => ({ name })),
+        getActiveTools: () => [...ORDINARY],
+        setActiveTools: () => {},
+      } as unknown as ExtensionAPI,
+      send: (message: OutboundMessage) => sent.push(message),
+      session: {
+        sessionManager: {
+          getBranch: () => [{
+            type: "custom",
+            customType: "goal-state",
+            data: { goal: { id: "g1", text: "Recover", status: "active", startedAt: 1, updatedAt: 1, iteration: 0 } },
+          }],
+        },
+      } as unknown as ExtensionContext,
+    } as ModuleContext;
+
+    goalModule.activate(ctx);
+    handlers.get("before_agent_start")!({}, ctx.session);
+
+    const errors = sent.filter((message) => message.type === "lasercode/module/log" && message.level === "error");
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({ module: "goal", message: expect.stringMatching(/ordinary messages still work.*\/goal pause/i) });
+    expect(sent).toContainEqual(expect.objectContaining({ type: "lasercode/goal/state", goal: expect.objectContaining({ status: "active" }) }));
   });
 
   it("reports a session it cannot read instead of taking the turn down with it", () => {

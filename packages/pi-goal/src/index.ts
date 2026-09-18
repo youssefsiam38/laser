@@ -40,6 +40,59 @@ export interface GoalSnapshot {
  */
 export const GOAL_TOOL_NAMES: readonly string[] = ["goal_complete", "goal_blocked", "goal_wait"];
 
+export type GoalToolActivationResult =
+  | { ok: true }
+  | { ok: false; reason: "missing_registration" | "activation_refused"; message: string };
+
+export interface GoalToolActivationAccess {
+  getRegisteredToolNames(): readonly string[];
+  getActiveToolNames(): readonly string[];
+  setActiveToolNames(names: string[]): void;
+}
+
+/**
+ * Repair the active allowlist without dropping unrelated tools.
+ *
+ * This wrapper stays SDK-neutral so both the worker command preflight and the
+ * companion extension use one policy. The patched upstream executable carries
+ * a mechanical copy because it cannot import the wrapper that depends on it.
+ */
+export function ensureGoalToolsActive(access: GoalToolActivationAccess): GoalToolActivationResult {
+  let registered: Set<string>;
+  let active: Set<string>;
+  try {
+    registered = new Set(access.getRegisteredToolNames());
+    active = new Set(access.getActiveToolNames());
+  } catch {
+    return activationRefused();
+  }
+  if (GOAL_TOOL_NAMES.some((name) => !registered.has(name))) {
+    return {
+      ok: false,
+      reason: "missing_registration",
+      message: "Goal tools did not load. Automatic goal work is waiting, but ordinary messages still work. Run /goal pause to stop the goal, or reload this conversation.",
+    };
+  }
+  const missing = GOAL_TOOL_NAMES.filter((name) => !active.has(name));
+  if (missing.length === 0) return { ok: true };
+  try {
+    access.setActiveToolNames([...active, ...missing]);
+    const repaired = new Set(access.getActiveToolNames());
+    if (GOAL_TOOL_NAMES.every((name) => repaired.has(name))) return { ok: true };
+  } catch {
+    // Return the stable public classification below; never leak SDK internals.
+  }
+  return activationRefused();
+}
+
+function activationRefused(): GoalToolActivationResult {
+  return {
+    ok: false,
+    reason: "activation_refused",
+    message: "Goal tools could not be activated. Automatic goal work is waiting, but ordinary messages still work. Run /goal pause to stop the goal, or reload this conversation.",
+  };
+}
+
 /** Absolute entrypoint for Pi's own extension loader (which transpiles `.ts`). */
 export function goalExtensionPath(): string {
   const packageRoot = dirname(require.resolve("@narumitw/pi-goal/package.json"));

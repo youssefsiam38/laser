@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { GOAL_TOOL_NAMES, goalExtensionPath } from "../src/index.js";
+import { ensureGoalToolsActive, GOAL_TOOL_NAMES, goalExtensionPath } from "../src/index.js";
 
 const root = dirname(goalExtensionPath());
 // Deliberately exercise the exact patched dependency, not a copy of its parser.
@@ -19,6 +19,45 @@ describe("goal tool names", () => {
     const registered = [...source.matchAll(/pi\.registerTool\(([A-Za-z0-9_]+)\)/g)].map((match) => match[1]);
     expect(registered).toEqual(["goalCompleteTool", "goalBlockedTool", "goalWaitTool"]);
     expect(GOAL_TOOL_NAMES).toHaveLength(registered.length);
+  });
+});
+
+describe("goal tool activation", () => {
+  const access = (options: { registered?: string[]; active?: string[]; refuse?: boolean } = {}) => {
+    let active = options.active ?? ["read"];
+    return {
+      value: () => active,
+      api: {
+        getRegisteredToolNames: () => options.registered ?? [...GOAL_TOOL_NAMES],
+        getActiveToolNames: () => [...active],
+        setActiveToolNames: (names: string[]) => {
+          if (options.refuse) throw new Error("locked");
+          active = [...names];
+        },
+      },
+    };
+  };
+
+  it("repairs every registered goal tool and preserves unrelated tools", () => {
+    const fixture = access({ active: ["read", "goal_wait"] });
+    expect(ensureGoalToolsActive(fixture.api)).toEqual({ ok: true });
+    expect(fixture.value()).toEqual(["read", "goal_wait", "goal_complete", "goal_blocked"]);
+  });
+
+  it("distinguishes missing registration from refused activation", () => {
+    const missing = access({ registered: ["read"], active: ["read"] });
+    expect(ensureGoalToolsActive(missing.api)).toMatchObject({ ok: false, reason: "missing_registration" });
+    const refused = access({ active: ["read"], refuse: true });
+    expect(ensureGoalToolsActive(refused.api)).toMatchObject({ ok: false, reason: "activation_refused" });
+  });
+
+  it("verifies that the setter actually activated the tools", () => {
+    const result = ensureGoalToolsActive({
+      getRegisteredToolNames: () => [...GOAL_TOOL_NAMES],
+      getActiveToolNames: () => ["read"],
+      setActiveToolNames: () => undefined,
+    });
+    expect(result).toMatchObject({ ok: false, reason: "activation_refused" });
   });
 });
 
