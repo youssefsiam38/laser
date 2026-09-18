@@ -243,28 +243,40 @@ export default async function liveHistoryRetention(check) {
   let concurrentAnchor;
   let concurrentMarker;
   await activateEarlier(activation, async () => {
-    // The row the reader is on: the topmost checkpoint on screen. The newest
-    // checkpoint is pages below a reader at the top and virtualises out as the
-    // page arrives, and "whichever row is last" compares two different rows.
+    // What the reader is looking at when the page is asked for. At the top of
+    // the window that is usually the estimated range above the loaded rows,
+    // where the page must appear in place of the loading state with the
+    // viewport unmoved (M16-T83 invariant 2); when a row is on screen it is the
+    // topmost one, and that row must hold its place. The newest checkpoint is
+    // pages below either and virtualises out as the page arrives, so it is not
+    // a measure of anything.
     concurrentAnchor = await viewport.evaluate(element => {
       const top = element.getBoundingClientRect().top, bottom = element.getBoundingClientRect().bottom;
       for (const node of element.querySelectorAll('[data-window-message]')) {
         const box = node.getBoundingClientRect();
         if (box.bottom <= top || box.top >= bottom) continue;
         const marker = /Checkpoint 10\d+ is complete\./.exec(node.innerText)?.[0];
-        if (marker) return { top: box.top, text: marker };
+        if (marker) return { top: box.top, text: marker, scrollTop: element.scrollTop };
       }
-      return undefined;
+      return { scrollTop: element.scrollTop, inReserve: Boolean(document.querySelector('[data-slot="history-reserve"]')) };
     });
-    assert(concurrentAnchor, 'a checkpoint row is on screen before the concurrent page');
-    concurrentMarker = page.locator('[data-window-message]').filter({ hasText: concurrentAnchor.text }).first();
+    concurrentMarker = concurrentAnchor.text ? page.locator('[data-window-message]').filter({ hasText: concurrentAnchor.text }).first() : undefined;
   });
   pages += 1;
-  await concurrentMarker.waitFor({ state: 'attached' });
-  const concurrentAfter = await concurrentMarker.evaluate(node => ({ top: node.getBoundingClientRect().top, text: /Checkpoint 10\d+ is complete\./.exec(node.innerText)?.[0] }));
-  const concurrentAnchorDelta = concurrentAfter.top - concurrentAnchor.top;
-  assert.equal(concurrentAfter.text, concurrentAnchor.text, 'concurrent prepend preserves the anchored visible content');
-  assert(Math.abs(concurrentAnchorDelta) <= 48, `concurrent prepend moved the visible anchor more than one control row: ${concurrentAnchorDelta}px`);
+  let concurrentAnchorDelta;
+  if (concurrentMarker) {
+    await concurrentMarker.waitFor({ state: 'attached' });
+    const concurrentAfter = await concurrentMarker.evaluate(node => ({ top: node.getBoundingClientRect().top, text: /Checkpoint 10\d+ is complete\./.exec(node.innerText)?.[0] }));
+    concurrentAnchorDelta = concurrentAfter.top - concurrentAnchor.top;
+    assert.equal(concurrentAfter.text, concurrentAnchor.text, 'concurrent prepend preserves the anchored visible content');
+    assert(Math.abs(concurrentAnchorDelta) <= 1, `concurrent prepend moved the row being read: ${concurrentAnchorDelta}px`);
+  } else {
+    assert(concurrentAnchor.inReserve, 'with no row on screen the reader is inside the estimated range');
+    const after = await viewport.evaluate(element => ({ scrollTop: element.scrollTop, gap: element.scrollHeight - element.clientHeight - element.scrollTop }));
+    concurrentAnchorDelta = after.scrollTop - concurrentAnchor.scrollTop;
+    assert(Math.abs(concurrentAnchorDelta) <= 1, `a page arriving inside the estimated range moved the viewport: ${concurrentAnchorDelta}px`);
+    assert(after.gap > 2, 'a page arriving inside the estimated range did not throw the reader to the live edge');
+  }
   assert.equal((await check.rpc('session/load', { path })).state.isStreaming, true, 'the anchored prepend completes while output still appends');
   const live = await liveRequest;
   assert.equal(live.accepted, true, 'the live append is accepted');
