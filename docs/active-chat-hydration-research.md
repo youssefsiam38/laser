@@ -41,6 +41,8 @@ Before T81/T82, parent-owned browser tests sent synthetic images through the rea
 
 Artifacts: `/tmp/parent-chat-single-image-uat/run-Rmit4r`, `/tmp/parent-chat-25-image-uat/run-gpUUzz`; scenario `/tmp/parent-chat-image-settled-uat.mjs`.
 
+Follow-up on the unintegrated T81 candidate `8f003578`: the same 25-image scenario now displays 24 immediately after actual settlement; image 25 remains visibly disabled, and reload stays at 24. Artifact `/tmp/parent-images-with-active-retention/run-KVysVo`, no surviving fixture processes. A 24-image boundary control on the same candidate passes settlement, reload, and opening the requested image (`/tmp/parent-image-admission-control/run-PWskRR`); screenshots were visually inspected. This is measured improvement with the history/retention changes, not proof that a particular subchange alone caused it or that T81/T82 are fully accepted.
+
 ## Five techniques, in implementation order
 
 ### 1. Retain active logical history independently of cache eviction
