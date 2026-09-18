@@ -217,7 +217,7 @@ export function WebSearchTab(props: WebSearchTabProps) {
     if (!lease) return;
     const operation = Symbol("web-search-feature");
     featureOperation.current = operation;
-    const routeCwd = view === "project" ? (projectCwd ?? neutralRouteCwd) : neutralRouteCwd;
+    const routeCwd = view === "project" ? props.projectCwd : neutralRouteCwd;
     const name = WEB_SEARCH_PROVIDERS.find((provider) => provider.id === status?.selectedProvider)?.name ?? "search provider";
     setPending({
       target: "availability",
