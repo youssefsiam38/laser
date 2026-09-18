@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-19T03:10:00+03:00 · orchestrator-2026-09-18 · HEAD: f973da9a
-**Current focus:** 0.9.1, a repair release: the live edge follows again, goals stop only when the agent decides to, mentions read like paths, the transcript and composer behave natively, action rows carry the agent's own words, and agent names read like sentences.
+**Last updated:** 2026-09-18T07:05:00+03:00 · orchestrator-2026-09-18 · HEAD: 8183fd04
+**Current focus:** M16 — finish every agreed repair before publishing 0.9.2; 0.9.1 is public and verified.
 
 | Milestone | State |
 | --- | --- |
@@ -28,11 +28,9 @@
 | M19 Runtime recovery/update activation | done |
 | MX Cross-cutting | in-progress |
 
-**Blockers:** none. Nine rows merged; clean-env `pnpm verify` green in 101.8 s at `f973da9a`.
-**In flight:** publishing 0.9.1 (`RELEASE_NOTES.md`, reviewed source `f973da9a`).
-**Next up:** M16-T70 text inside a button is unselectable; humanise tool-label display (deferred out of M13-T128); the two goal-pause paths the forensics left open (repair missing goal tools instead of pausing; retryable restore-mutex contention); M17 and open rows in M2/M3/M5/M7/M8/M10/M11/M13/M16/MX.
-**Recently done:** M16-T69 live edge follows (`73eec455`, D-287 after a two-sided debate); M16-T68 goals stop only by decision (`bc5531a2`, D-283); M16-T65 readable mentions (`fa317c92`, D-284); M16-T66 native text and spellcheck (`047176f5`, D-286); M13-T127 labels title every row (`5bf9854a`, D-282); M13-T128 friendly agent names (`406ea2f9`, D-285); M15-T7 fallback for an agent-chosen model (`215a8689`); M16-T71/T72 two gates made honest (`f7113316`, `015d2ff3`); M16-T67 goal-pause forensics (`8c44b20e`).
+**Blockers:** none confirmed; release awaits measured interaction evidence and independent review, not configuration assertions.
+**In flight:** T73 packaged spellcheck; T74 image-prompt text/body reads; T75 explicit settings scope audit; T76 gate environment isolation; T70 selectable, humanised activity text. Ownership and exact write boundaries: `STATUS_DETAILED.md`.
+**Next up:** T77 missing-goal-tools/restore-contention recovery; T78 pristine agent selection after model choice. T79 release becomes ready only after all agreed repairs pass.
+**Recently done:** T72 history paging gate (`015d2ff3`); T71 deterministic naming gate (`f7113316`); T69 geometric auto-follow (`73eec455`); T68 autonomous goal policy (`bc5531a2`); T65 readable mentions (`fa317c92`).
 
-**Known unproven at release:** installed-Electron spellcheck underlines, OS suggestions and macOS Look Up are covered by configuration and menu-action tests only — nobody has watched a red squiggle in the packaged app.
-
-Ownership and evidence: `STATUS_DETAILED.md`. Durable recovery reports/WIP backup: `.git/coordination-recovery/`.
+**Published:** v0.9.1 (`8183fd04`), `.git/lasercode-release/v0.9.1.json` verified. User authorized autonomous completion, commits, push and next release; no live app restart is authorized by the release itself.

@@ -725,6 +725,21 @@ Goal: what a person attaches and what the model produces sit inside the bubble t
 | M16-T4 | Release 0.5.1 | M14-T8, M14-T9, M16-T1–T3 merged and live-reviewed; the routine release orchestrator |
 | M16-T60 | Large outputs read like output | A tool output longer than the transcript keeps folds inside its tool block with a quiet "Show full output"; an output that arrived live is readable once persisted without reopening; the viewer shows the tool (name, command, status) and its decoded text, never the stored record's JSON; it scrolls continuously holding a bounded set of slices, releases them on close or pressure, and copies/downloads by streaming slices (D-275). |
 
+### Agreed repair follow-through (D-288)
+
+Dependencies: released M16-T65–T69 and M15-T7. Independent repairs integrate before T79.
+
+| Task | Title | Acceptance |
+| --- | --- | --- |
+| M16-T70 | Selectable, readable activity summaries | Drag-selection does not toggle disclosure; pointer/keyboard/touch toggles remain accessible. Shared humanisation makes legacy tool labels readable with display/search parity. Browser matrix and interaction regressions pass. |
+| M16-T73 | Native spelling suggestions work | Real dev and packaged Electron context-menu events yield suggestions; choosing one replaces the misspelling and Add to dictionary works. Packaged interaction evidence, not only template tests. |
+| M16-T74 | Image prompts keep their words | Measured image-plus-short-text failure fixed without bypassing resource limits; text visible live and on reload. Stale body reads recover safely against canonical identity or retain usable content; browser matrix and accounting/read tests pass. |
+| M16-T75 | One explicit settings scope | Global default and deliberate project picker shared across relevant settings/Agents surfaces; no ambient session/first-project write target. Effective read-only; global/device-only capabilities honest; dirty drafts never silently retarget; two-project interaction matrix and request-target tests. |
+| M16-T76 | Gate launch environment isolation | Shared identity-derived environment scrub for verify/release children; poisoned-environment regressions pass without weakening runtime identity checks or stripping explicit test configuration. |
+| M16-T77 | Autonomous goal recovery | Missing goal tools repaired safely and restore contention retryable, without pause/spin, duplicate continuation or weakening explicit cancellation. Pinned policy regressions and real-engine evidence pass. |
+| M16-T78 | Pristine agent choice survives model selection | Fallback metadata does not make an otherwise pristine session started; real user work still fences agent changes; model/agent acceptance and fallback regression tests pass. |
+| M16-T79 | Publish the agreed repairs | Depends on T70 and T73–T78. Independent reviews resolved, staged identity/full verification green, exact-source CI and routine release transaction complete; public asset inventory, digests, provenance, notes and Latest verified. |
+
 ## M15 · After the MCP release: artifacts, dictation language, model fallback chains, two sidebar and composer fixes
 
 Goal: the batch the person queued behind M14. It starts only after M14 ships
