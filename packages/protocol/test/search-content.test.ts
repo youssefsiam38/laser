@@ -1,8 +1,21 @@
 import { expect, it } from "vitest";
-import { toolSearchContent, jsonSearchValues, mcpContentBlocks, mcpDisplayText } from "../src/search-content.js";
+import { toolDisplayLabel, toolSearchContent, jsonSearchValues, mcpContentBlocks, mcpDisplayText } from "../src/search-content.js";
 
 /** The screenshot block of a real Playwright result, shortened. */
 const SCREENSHOT = { type: "image", data: "iVBORw0KGgoAAAANSUhEUg", mimeType: "image/png" };
+
+it("humanises legacy activity labels only at the display/search boundary", () => {
+  const args = { command: "pnpm test", activity_label: "reading-build-config" };
+  expect(toolDisplayLabel({ name: "bash", args })).toBe("Reading build config");
+  expect(args.activity_label).toBe("reading-build-config");
+  expect(toolDisplayLabel({ name: "bash", args: { activity_label: "Checking CI/CD config" } })).toBe("Checking CI/CD config");
+  expect(toolDisplayLabel({ name: "fixture", args: { activity_label: "Read MCP config" } })).toBe("Read MCP config");
+  expect(toolDisplayLabel({ name: "fixture", args: { activity_label: "activityLabel" } })).toBe("activityLabel");
+  expect(toolDisplayLabel(
+    { name: "fixture", args: { activity_label: "tool-owned", activity_label_2: "checking-proper-names" } },
+    { fixture: "activity_label_2" },
+  )).toBe("Checking proper names");
+});
 
 it("uses visible terminal content, never command keys, tool names or hidden parameters", () => {
   expect(toolSearchContent({ name: "bash", args: { command: "echo hello", timeout: 12345, secret: "hidden" }, result: { content: [{ type: "text", text: "world" }, { type: "image", data: "private" }], details: { secret: "hidden" } } })).toEqual(["echo hello", "world"]);

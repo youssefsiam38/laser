@@ -67,10 +67,12 @@ export interface McpToolRowProps {
   footer: ReactNode;
   /** Agent-written durable title, computed once by ToolRow. */
   label: string | undefined;
+  /** Shared value-only body projection, evaluated only while Find is open. */
+  bodySearchText?: (() => readonly string[]) | undefined;
 }
 
 function McpToolRowImpl(props: McpToolRowProps) {
-  const { info, toolName, args, argsText, result, text, details, state, elapsedMs, open, onOpenChange, footer, label } = props;
+  const { info, toolName, args, argsText, result, text, details, state, elapsedMs, open, onOpenChange, footer, label, bodySearchText } = props;
   const failed = state === "failed";
   const running = state === "running";
 
@@ -83,6 +85,7 @@ function McpToolRowImpl(props: McpToolRowProps) {
       icon={icon}
       verb={row.verb}
       label={label}
+      bodySearchText={bodySearchText}
       activeLabel={activeLabel}
       summary={row.summary}
       state={state}

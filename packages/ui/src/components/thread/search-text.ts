@@ -1,4 +1,4 @@
-import { toolCallLabel, toolSearchContent } from "@lasercode/protocol";
+import { toolDisplayLabel, toolSearchContent } from "@lasercode/protocol";
 import { AGENT_COMPLETION_DATA_PART, AGENT_EVENT_DATA_PART, GOAL_DATA_PART, TASK_EVENT_DATA_PART, type AgentCompletionData, type AgentEventData, type TaskEventData } from "@/runtime/projection";
 import type { GoalRecord } from "@/runtime/goal-history";
 
@@ -46,7 +46,7 @@ export function partSearchContent(
   if (part.type !== "tool-call") return [];
   const result = part.result ?? (part.artifact as { partialOutput?: unknown } | undefined)?.partialOutput;
   const name = typeof part.toolName === "string" ? part.toolName : "";
-  const label = toolCallLabel(name, part.args, toolLabelParams);
+  const label = toolDisplayLabel({ name, args: part.args }, toolLabelParams);
   const content = toolSearchContent({ name, args: part.args, result, isError: part.isError === true }, toolLabelParams);
   // The injected label is visible row content, but not an argument. Index it
   // once beside the projection whose args already omit it.

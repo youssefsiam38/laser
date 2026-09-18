@@ -1,5 +1,5 @@
 "use client";
-import { useSearchRevealDisclosure } from "@/components/thread/search-state";
+import { useFindQuery, useSearchReveal } from "@/components/thread/search-state";
 /**
  * `tool-fallback` (assistant-ui registry), restyled to DESIGN.md.
  *
@@ -29,7 +29,7 @@ import {
   type ToolCallMessagePartComponent,
 } from "@assistant-ui/react";
 import { ChevronRight, CircleAlert, Wrench } from "lucide-react";
-import { memo, useCallback, useRef, useState, type ComponentType, type ReactNode, type SVGProps } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type ComponentType, type ReactNode, type SVGProps } from "react";
 
 import { StatusDot } from "@/components/status";
 import { ActivityBeam, ThinkingIndicator } from "./thinking-indicator.js";
@@ -46,9 +46,9 @@ import { BodyOverflow } from "@/components/thread/BodyOverflow";
 import { JsonViewer, parseJsonText } from "./json-viewer.js";
 import type { BlockBodies } from "@/store";
 import { omittedBytes } from "@/runtime/body-excerpt";
-import { toolCallLabel, toolOutputText, withoutToolLabel } from "@lasercode/protocol";
+import { toolDisplayLabel, toolOutputText, toolSearchContent, withoutToolLabel } from "@lasercode/protocol";
 
-import { activityRow, activityTrigger, collapsePanel, mono, pressable } from "./surfaces.js";
+import { activityDisclosure, activityRow, activityTrigger, collapsePanel, mono, pressable } from "./surfaces.js";
 
 type Icon = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -62,6 +62,10 @@ export type ToolFallbackRootProps = Omit<React.ComponentProps<typeof Collapsible
   defaultOpen?: boolean | undefined;
   /** Danger (an error) or attention (a decision) hairline on the start edge. */
   tone?: "danger" | "attention" | undefined;
+  /** Visible trigger text that find can highlight without opening the body. */
+  visibleSearchText?: string | undefined;
+  /** Lazily reads the body's shared search projection, excluding the visible trigger label. */
+  bodySearchText?: (() => readonly string[]) | undefined;
 };
 
 function ToolFallbackRoot({
@@ -70,6 +74,8 @@ function ToolFallbackRoot({
   onOpenChange: controlledOnOpenChange,
   defaultOpen = false,
   tone,
+  visibleSearchText,
+  bodySearchText,
   children,
   ...props
 }: ToolFallbackRootProps) {
@@ -79,23 +85,38 @@ function ToolFallbackRoot({
   const lockScroll = useScrollLock(collapsibleRef, motionMs("--motion-fast"));
 
   const isControlled = controlledOpen !== undefined;
-  const { revealing, open: revealOpen, fold } = useSearchRevealDisclosure();
-  const isOpen = revealing ? revealOpen : isControlled ? controlledOpen : uncontrolledOpen;
+  const baseOpen = isControlled ? controlledOpen : uncontrolledOpen;
+  const query = useFindQuery().trim();
+  const revealing = useSearchReveal();
+  const queryMatches = useCallback(
+    (text: string) => query !== "" && text.toLocaleLowerCase().includes(query.toLocaleLowerCase()),
+    [query],
+  );
+  const visibleMatch = visibleSearchText !== undefined && queryMatches(visibleSearchText);
+  const bodyMatch = revealing && query !== "" ? bodySearchText?.().some(queryMatches) ?? false : false;
+  // Only a header-only match stays folded. If the shared body projection also
+  // matches, the body must mount so every indexed occurrence has a DOM range.
+  const headerOnlyMatch = revealing && visibleMatch && bodySearchText !== undefined && !bodyMatch;
+  const [transientOverride, setTransientOverride] = useState<{ query: string; open: boolean } | null>(null);
+  useEffect(() => { if (!revealing) setTransientOverride(null); }, [revealing]);
+  // Keying the override by query prevents a manual toggle for the previous
+  // query leaking through the render before effects run.
+  const revealedOpen = transientOverride?.query === query ? transientOverride.open : undefined;
+  const isOpen = revealing ? (revealedOpen ?? (headerOnlyMatch ? baseOpen : true)) : baseOpen;
 
   const handleOpenChange = useCallback(
     (next: boolean) => {
       lockScroll();
-      // Folding a row that find is holding open belongs to that reveal, not to
-      // the person's remembered choice (AGENTS.md "Search disclosure is
-      // transient"; the same rule as `tool-group.aui.tsx`).
+      // A choice while find is revealing this row belongs to that query alone;
+      // it never writes the person's remembered disclosure preference.
       if (revealing) {
-        fold(next);
+        setTransientOverride({ query, open: next });
         return;
       }
       if (!isControlled) setUncontrolledOpen(next);
       controlledOnOpenChange?.(next);
     },
-    [lockScroll, revealing, fold, isControlled, controlledOnOpenChange],
+    [lockScroll, revealing, query, isControlled, controlledOnOpenChange],
   );
 
   return (
@@ -285,25 +306,17 @@ function ToolFallbackTrigger({
   const computedTitle = `${verb} ${summary ?? ""}`.trim();
   const labelledOffset = "mt-1.5";
 
+  const accessibleLabel = label
+    ? `${label}. ${computedTitle}${nonZero ? ", exited non-zero" : ""}`
+    : running && activeLabel
+      ? activeLabel
+      : `${computedTitle}${nonZero ? ", exited non-zero" : ""}`;
+
   return (
-    <CollapsibleTrigger
-      data-slot="tool-fallback-trigger"
+    <div
+      data-slot="tool-fallback-trigger-row"
       data-active={running || undefined}
-      disabled={!expandable}
-      // Quiet, not hidden: the row says nothing about the exit visually beyond
-      // the colour of the command, so the accessible name says it in words.
-      aria-label={label
-        ? `${label}. ${computedTitle}${nonZero ? ", exited non-zero" : ""}`
-        : running && activeLabel
-          ? activeLabel
-          : `${computedTitle}${nonZero ? ", exited non-zero" : ""}`}
-      className={cn(
-        activityTrigger,
-        label && "items-start",
-        "disabled:cursor-default disabled:hover:bg-transparent disabled:active:bg-transparent",
-        className,
-      )}
-      {...props}
+      className={cn(activityTrigger, label && "items-start", className)}
     >
       {running && <ActivityBeam />}
       <span className={cn("flex size-4 shrink-0 items-center justify-center", label && labelledOffset)} aria-hidden="true">
@@ -327,19 +340,28 @@ function ToolFallbackTrigger({
         showDuration ? <ToolFallbackDuration className={label ? labelledOffset : undefined} running={running} elapsedMs={elapsedMs} /> : null
       )}
       {expandable ? (
-        <ChevronRight
-          data-slot="tool-fallback-trigger-chevron"
-          aria-hidden="true"
-          className={cn("rtl:-scale-x-100",
-            "size-3.5 shrink-0 text-ink-3 transition-transform duration-(--motion-fast) ease-(--motion-ease) motion-reduce:transition-none",
-            "group-data-[state=open]/trigger:rotate-90 group-data-[state=open]/trigger:rtl:-rotate-90",
-            label && labelledOffset,
-          )}
-        />
+        <CollapsibleTrigger
+          data-slot="tool-fallback-trigger"
+          data-active={running || undefined}
+          // Quiet, not hidden: the row says nothing about the exit visually beyond
+          // the colour of the command, so the accessible name says it in words.
+          aria-label={accessibleLabel}
+          className={cn(activityDisclosure, label && labelledOffset)}
+          {...props}
+        >
+          <ChevronRight
+            data-slot="tool-fallback-trigger-chevron"
+            aria-hidden="true"
+            className={cn("rtl:-scale-x-100",
+              "size-3.5 shrink-0 transition-transform duration-(--motion-fast) ease-(--motion-ease) motion-reduce:transition-none",
+              "group-data-[state=open]/disclosure:rotate-90 group-data-[state=open]/disclosure:rtl:-rotate-90",
+            )}
+          />
+        </CollapsibleTrigger>
       ) : (
-        <span className={cn("size-3.5 shrink-0", label && labelledOffset)} aria-hidden="true" />
+        <span className={cn("size-8 pointer-coarse:size-11 shrink-0", label && labelledOffset)} aria-hidden="true" />
       )}
-    </CollapsibleTrigger>
+    </div>
   );
 }
 
@@ -774,7 +796,7 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
   const visibleArgs = withoutToolLabel(args, toolName, toolLabelParams);
   const argsHaveLabel = visibleArgs !== args;
   const visibleArgsText = argsHaveLabel ? JSON.stringify(visibleArgs) : argsText;
-  const agentLabel = toolCallLabel(toolName, args, toolLabelParams);
+  const agentLabel = toolDisplayLabel({ name: toolName, args }, toolLabelParams);
   const isRequiresAction = status?.type === "requires-action";
   const shouldRenderApproval = isRequiresAction && offersInterruptAction(status, approval, interrupt);
   const activityLevel = useActivityDetailLevel(path);
@@ -802,6 +824,13 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
       open={open}
       onOpenChange={rememberOpen}
       tone={tone}
+      visibleSearchText={agentLabel}
+      bodySearchText={() => toolSearchContent({
+        name: toolName,
+        args,
+        result: finalResult ?? (artifact as { partialOutput?: unknown } | undefined)?.partialOutput,
+        isError: isError === true,
+      }, toolLabelParams)}
       data-tool={toolName}
       data-status={status?.type}
     >

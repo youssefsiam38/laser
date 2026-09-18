@@ -21,7 +21,7 @@ import { useSearchRevealDisclosure } from "@/components/thread/search-state";
  */
 import { useAui, useAuiState, useScrollLock, type MessagePrimitive } from "@assistant-ui/react";
 import { ChevronRight, FilePen, FilePlus, FileText, FolderOpen, FolderSearch, ScanText, Search, SquareTerminal, Wrench } from "lucide-react";
-import { toolCallLabel } from "@lasercode/protocol";
+import { toolDisplayLabel } from "@lasercode/protocol";
 import {
   memo,
   useCallback,
@@ -60,7 +60,7 @@ import { useActivityDisclosureOverride } from "@/runtime/sessionPreferences";
 
 import { DiffStat, diffStatDescription } from "./code-diff.js";
 import { ReasoningText } from "./reasoning.js";
-import { activityRow, activityTrigger, collapsePanel, mono } from "./surfaces.js";
+import { activityDisclosure, activityRow, activityTrigger, collapsePanel, mono } from "./surfaces.js";
 
 type Icon = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -197,76 +197,77 @@ function ToolGroupTrigger({
         : `${label}${detail ? ` · ${detail}` : ""}`;
   const changeDescription = changes ? diffStatDescription(changes) : undefined;
   return (
-    // The app's tooltip carries what ran, in place of the browser's `title`:
-    // that one never opened for the keyboard or for a finger, and it drew
-    // system chrome in the middle of the transcript. Long runs are cut here
-    // rather than covering the conversation — opening the row shows them all.
-    <ControlHint hint={hintLines(lines)}>
-      <CollapsibleTrigger
-        data-slot="tool-group-trigger"
-        data-active={active || undefined}
-        // Nothing here goes red for a failure, so the accessible name is where
-        // a failure is still said out loud.
-        aria-label={`${accessibleSummary}${changeDescription ? `, ${changeDescription}` : ""}.${failed ? " Something in it failed." : ""} ${open ? "Collapse" : "Expand"} details.`}
-        className={cn(
-          activityTrigger,
-          className,
+    <div
+      data-slot="tool-group-trigger-row"
+      data-active={active || undefined}
+      className={cn(activityTrigger, className)}
+    >
+      {active && <ActivityBeam />}
+      <span className="flex size-4 shrink-0 items-center justify-center" aria-hidden="true">
+        {active ? (
+          <StatusDot status="working" size="sm" aria-hidden="true" />
+        ) : (
+          <LeadIcon className={cn("size-3.5", attention ? "text-attention" : "text-ink-3")} />
         )}
-        {...props}
-      >
-        {active && <ActivityBeam />}
-        <span className="flex size-4 shrink-0 items-center justify-center" aria-hidden="true">
-          {active ? (
-            <StatusDot status="working" size="sm" aria-hidden="true" />
-          ) : (
-            <LeadIcon className={cn("size-3.5", attention ? "text-attention" : "text-ink-3")} />
-          )}
-        </span>
-        <span className={cn("flex min-w-0", active ? "flex-initial" : "flex-1", !active && breakdown?.length ? "flex-col items-start gap-1 py-1.5" : "items-center gap-2 overflow-hidden")}>
-          {active && activeLabel ? (
-            <ThinkingIndicator
-              label={activeLabel}
-              dot={false}
-              className="min-w-0 overflow-hidden [&_[data-slot=thinking-indicator-label]]:max-w-full [&_[data-slot=thinking-indicator-label]]:truncate"
-            />
-          ) : (
-            <span data-slot="tool-group-trigger-label" className="min-w-0 break-words text-sm font-medium text-ink-2">
-              {label}
-            </span>
-          )}
-          {!active && !!breakdown?.length && (
-            <span data-slot="tool-group-breakdown" aria-hidden="true" className="flex max-w-full flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-3">
-              {breakdown.slice(0, 2).map((item) => {
-                const BreakdownIcon = TOOL_ICONS[item.iconKind];
-                return (
-                  <span key={item.family} data-slot="tool-group-breakdown-item" className="inline-flex max-w-full items-center gap-1.5">
-                    <BreakdownIcon className="size-3 shrink-0" />
-                    <span className="break-words">{item.label}</span>
-                  </span>
-                );
-              })}
-              {breakdown.length > 2 && <span data-slot="tool-group-breakdown-more" className="whitespace-nowrap">+{breakdown.length - 2} types</span>}
-            </span>
-          )}
-          {!active && !breakdown?.length && detail ? (
-            <span className={cn(mono, "min-w-0 truncate", active || attention ? "text-ink-2" : "text-ink-3")}>{detail}</span>
-          ) : null}
-        </span>
-        {active ? <span aria-hidden="true" className="flex-1" /> : null}
-        {changes ? <DiffStat added={changes.added} removed={changes.removed} /> : null}
-        {elapsedMs !== undefined ? (
-          <span className={cn(mono, "shrink-0 tnum", active ? "text-live" : "text-ink-3")}>{duration(elapsedMs)}</span>
+      </span>
+      <span className={cn("flex min-w-0", active ? "flex-initial" : "flex-1", !active && breakdown?.length ? "flex-col items-start gap-1 py-1.5" : "items-center gap-2 overflow-hidden")}>
+        {active && activeLabel ? (
+          <ThinkingIndicator
+            label={activeLabel}
+            dot={false}
+            className="min-w-0 overflow-hidden [&_[data-slot=thinking-indicator-label]]:max-w-full [&_[data-slot=thinking-indicator-label]]:truncate"
+          />
+        ) : (
+          <span data-slot="tool-group-trigger-label" className="min-w-0 break-words text-sm font-medium text-ink-2">
+            {label}
+          </span>
+        )}
+        {!active && !!breakdown?.length && (
+          <span data-slot="tool-group-breakdown" aria-hidden="true" className="flex max-w-full flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-3">
+            {breakdown.slice(0, 2).map((item) => {
+              const BreakdownIcon = TOOL_ICONS[item.iconKind];
+              return (
+                <span key={item.family} data-slot="tool-group-breakdown-item" className="inline-flex max-w-full items-center gap-1.5">
+                  <BreakdownIcon className="size-3 shrink-0" />
+                  <span className="break-words">{item.label}</span>
+                </span>
+              );
+            })}
+            {breakdown.length > 2 && <span data-slot="tool-group-breakdown-more" className="whitespace-nowrap">+{breakdown.length - 2} types</span>}
+          </span>
+        )}
+        {!active && !breakdown?.length && detail ? (
+          <span className={cn(mono, "min-w-0 truncate", active || attention ? "text-ink-2" : "text-ink-3")}>{detail}</span>
         ) : null}
-        <ChevronRight
-          data-slot="tool-group-trigger-chevron"
-          aria-hidden="true"
-          className={cn("rtl:-scale-x-100",
-            "size-3.5 shrink-0 text-ink-3 transition-transform duration-(--motion-fast) ease-(--motion-ease) motion-reduce:transition-none",
-            "group-data-[state=open]/trigger:rotate-90 group-data-[state=open]/trigger:rtl:-rotate-90",
-          )}
-        />
-      </CollapsibleTrigger>
-    </ControlHint>
+      </span>
+      {active ? <span aria-hidden="true" className="flex-1" /> : null}
+      {changes ? <DiffStat added={changes.added} removed={changes.removed} /> : null}
+      {elapsedMs !== undefined ? (
+        <span className={cn(mono, "shrink-0 tnum", active ? "text-live" : "text-ink-3")}>{duration(elapsedMs)}</span>
+      ) : null}
+      {/* The app's tooltip carries what ran, in place of the browser's title.
+          It follows the explicit disclosure control for pointer, keyboard and touch. */}
+      <ControlHint hint={hintLines(lines)}>
+        <CollapsibleTrigger
+          data-slot="tool-group-trigger"
+          data-active={active || undefined}
+          // Nothing here goes red for a failure, so the accessible name is where
+          // a failure is still said out loud.
+          aria-label={`${accessibleSummary}${changeDescription ? `, ${changeDescription}` : ""}.${failed ? " Something in it failed." : ""} ${open ? "Collapse" : "Expand"} details.`}
+          className={activityDisclosure}
+          {...props}
+        >
+          <ChevronRight
+            data-slot="tool-group-trigger-chevron"
+            aria-hidden="true"
+            className={cn("rtl:-scale-x-100",
+              "size-3.5 shrink-0 transition-transform duration-(--motion-fast) ease-(--motion-ease) motion-reduce:transition-none",
+              "group-data-[state=open]/disclosure:rotate-90 group-data-[state=open]/disclosure:rtl:-rotate-90",
+            )}
+          />
+        </CollapsibleTrigger>
+      </ControlHint>
+    </div>
   );
 }
 
@@ -414,7 +415,7 @@ function ToolGroupDetails({
   // keeps its computed group summary; D-282 applies the durable label to each
   // child row instead.
   const active = members.find((member) => member.running);
-  const agentLabel = active ? toolCallLabel(active.toolName, active.args, toolLabelParams) : undefined;
+  const agentLabel = active ? toolDisplayLabel({ name: active.toolName, args: active.args }, toolLabelParams) : undefined;
   return (
     <ToolGroupSummaryRow
       members={members}

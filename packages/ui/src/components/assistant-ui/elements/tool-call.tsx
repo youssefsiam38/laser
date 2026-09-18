@@ -48,6 +48,8 @@ export interface ToolCallProps {
   /** Approval, interrupt or decision — always visible, never inside the fold. */
   footer?: ReactNode;
   toolName?: string | undefined;
+  /** Lazily reads the shared value-only projection inside the collapsed body. */
+  bodySearchText?: (() => readonly string[]) | undefined;
   className?: string | undefined;
 }
 
@@ -68,6 +70,7 @@ export function ToolCall({
   children,
   footer,
   toolName,
+  bodySearchText,
   className,
 }: ToolCallProps) {
   const expandable = children !== undefined && children !== null && children !== false;
@@ -85,6 +88,8 @@ export function ToolCall({
       open={open}
       onOpenChange={onOpenChange}
       tone={tone}
+      visibleSearchText={label}
+      bodySearchText={bodySearchText}
       className={cn(className)}
     >
       <ToolFallbackTrigger

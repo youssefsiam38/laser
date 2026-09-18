@@ -34,6 +34,7 @@ import { motionMs } from "@/motion";
 import { useActivityDisclosureOverride } from "@/runtime/sessionPreferences";
 
 import { ThinkingIndicator } from "./thinking-indicator.js";
+import { activityDisclosure, activityTrigger } from "./surfaces.js";
 
 /** How long the disclosure takes, from the token, at call time. */
 export function reasoningAnimationMs(): number {
@@ -135,26 +136,32 @@ export interface ReasoningTriggerProps extends ComponentProps<typeof Collapsible
   label?: string;
 }
 
-function ReasoningTrigger({ active = false, durationMs, label = "Reasoning", className, children, ...props }: ReasoningTriggerProps) {
+function ReasoningTrigger({
+  active = false,
+  durationMs,
+  label = "Reasoning",
+  className,
+  children,
+  "aria-label": ariaLabel,
+  ...props
+}: ReasoningTriggerProps) {
   const elapsed = durationMs !== undefined ? formatDuration(durationMs) : undefined;
   return (
-    <CollapsibleTrigger
-      data-slot="reasoning-trigger"
-      className={cn(
-        "group/trigger -mx-2 flex h-7 max-w-full items-center gap-2 rounded-md px-2 text-start text-sm outline-none",
-        "transition-colors duration-(--motion-instant) hover:bg-surface-2 active:bg-[color-mix(in_oklab,var(--surface-2)_80%,var(--ink))]",
-        "focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live",
-        className,
-      )}
-      {...props}
-    >
-      <ChevronRight
-        aria-hidden="true"
-        className={cn("rtl:-scale-x-100",
-          "size-3.5 shrink-0 text-ink-3 transition-transform duration-(--motion-fast) ease-morph motion-reduce:transition-none",
-          "group-data-[state=open]/trigger:rotate-90 group-data-[state=open]/trigger:rtl:-rotate-90",
-        )}
-      />
+    <div data-slot="reasoning-trigger-row" className={cn(activityTrigger, "-mx-2 max-w-full", className)}>
+      <CollapsibleTrigger
+        data-slot="reasoning-trigger"
+        aria-label={ariaLabel ?? `${label}${elapsed === undefined ? "" : `, ${elapsed}`}`}
+        className={activityDisclosure}
+        {...props}
+      >
+        <ChevronRight
+          aria-hidden="true"
+          className={cn("rtl:-scale-x-100",
+            "size-3.5 shrink-0 transition-transform duration-(--motion-fast) ease-morph motion-reduce:transition-none",
+            "group-data-[state=open]/disclosure:rotate-90 group-data-[state=open]/disclosure:rtl:-rotate-90",
+          )}
+        />
+      </CollapsibleTrigger>
       {children ??
         (active ? (
           <ThinkingIndicator label={label} elapsed={elapsed} dot={false} />
@@ -169,7 +176,7 @@ function ReasoningTrigger({ active = false, durationMs, label = "Reasoning", cla
             ) : null}
           </>
         ))}
-    </CollapsibleTrigger>
+    </div>
   );
 }
 
