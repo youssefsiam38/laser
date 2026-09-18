@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-18T11:43:08+03:00 · orchestrator-2026-09-18 · HEAD: 1920e760
-**Current focus:** M16 — finish every agreed repair before publishing 0.9.2; 0.9.1 is public and verified.
+**Last updated:** 2026-09-18T12:07:27+03:00 · orchestrator-2026-09-18 · HEAD: 300fbf06
+**Current focus:** M16 — user acceptance and active-chat continuity first; finish agreed repairs before 0.9.2. 0.9.1 is public.
 
 | Milestone | State |
 | --- | --- |
@@ -29,8 +29,8 @@
 | MX Cross-cutting | in-progress |
 
 **Blockers:** worker-session resumption is unreliable; explicit checkpoint transfers preserve progress. No external release blocker.
-**In flight:** T81 urgent live earlier-history loss investigation (records intact); disjoint T75 Settings corrections/package/browser evidence continue. Agents follows; T76 final poisoned gate pending.
-**Next up:** T81 causal regression/fix; T75 Agents/location-safe edits after services; T79 complete-batch verification and 0.9.2 publication.
+**In flight:** T81 bounded paging + active-window retention approved; T82 parent UAT reproduced 24/25 image admission failure. T75 Settings corrections ready5b920569 for parent verification; Agents still follows.
+**Next up:** T81 causal repair/UAT; T82 image accessibility + existing disk-cache assessment; T75 Agents after service integration. Then T76 poisoned full gate and T79 publication.
 **Recently done:** T78 pristine agent choice (`107e5ecc`, worker1089 + real route tests); T70 selectable activity (`e7ad7c34`, UI2472 + matrix); T74 image/text recovery (`b703f3bf`, UI2436 + matrix); T77 goal-tool recovery (`a0a698ee`, 54 focused + real engine); T73 packaged spelling (`d0bbc680`).
 
-**Published:** v0.9.1 (`8183fd04`), `.git/lasercode-release/v0.9.1.json` verified. User authorized autonomous completion, commits, push and next release; no live app restart is authorized by the release itself.
+**Published:** v0.9.1 (`8183fd04`), `.git/lasercode-release/v0.9.1.json` verified. Autonomous completion/commits/push/release authorized; no live app restart. Active logical history outranks ordinary cache targets (D-295); preserve real safety and privacy boundaries.
