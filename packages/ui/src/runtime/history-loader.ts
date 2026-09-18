@@ -304,13 +304,18 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
       const held = v.history;
       if (!held || !acceptsPage(v, action)) return v;
       const ids = new Set([...v.entries.map(entryId), ...(v.stubs ?? []).map(stub => stub.id)]);
+      const projected = retainEntries(action.entries);
       const retained = retainEntries(action.entries.filter(entry => !ids.has(entryId(entry))));
-      const wireStubs = (action.window.elided ?? []).map(stubOfElided).filter(stub => !ids.has(stub.id));
+      const allWireStubs = (action.window.elided ?? []).map(stubOfElided);
+      const wireStubs = allWireStubs.filter(stub => !ids.has(stub.id));
       const incomingStubs = mergeStubs(retained.stubs, wireStubs);
-      if (retained.entries.length === 0 && incomingStubs.length === 0) return v;
       const entries = insertBefore(v.entries, retained.entries, action.anchor, entryId);
       if (!entries) return v;
-      const pageBlocks = blocksFromEntries(retained.entries, undefined, modelNamesOf(v.state), { stubs: incomingStubs, revision: action.window.revision });
+      const projectedStubs = mergeStubs(projected.stubs, allWireStubs);
+      const blockIds = new Set(v.blocks.map(block => block.id));
+      const pageBlocks = blocksFromEntries(projected.entries, undefined, modelNamesOf(v.state), { stubs: projectedStubs, revision: action.window.revision })
+        .filter(block => !blockIds.has(block.id));
+      if (retained.entries.length === 0 && incomingStubs.length === 0 && pageBlocks.length === 0) return v;
       let blocks = v.blocks;
       if (pageBlocks.length > 0) {
         // An invisible custom record or a tool result folded into its call can

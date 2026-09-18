@@ -30,20 +30,27 @@ export default async function liveHistoryRetention(check) {
   await check.touch(touch);
   await check.reducedMotion(check.state.theme === 'light');
   await page.addLocatorHandler(page.getByRole('button', { name: 'Not now', exact: true }), button => button.click());
-
-  // Each matrix lane creates one real user turn with ninety real bash calls and
-  // results. It does not replay a many-prompt synthetic transcript.
+  // Each matrix lane creates one real tool-heavy turn with ninety real bash
+  // calls and results, then real bounded turns that force producer paging.
   const created = await check.rpc('session/new', { cwd: fixture.project });
   const path = created.state.path;
   await check.rpc('pi/model/set', { path, model: { provider: 'stub', id: 'stub-1' } });
   const started = await check.rpc('session/prompt', { path, content: [{ type: 'text', text: 'Run one tool-heavy history turn' }] });
   assert.equal(started.accepted, true, 'the tool-heavy turn is accepted');
   await settled(check, path);
+  // Follow the single tool-heavy turn with enough small real turns to force
+  // multiple producer pages and a retained middle-gap recovery.
+  for (let index = 1; index <= 46; index += 1) {
+    const prompt = await check.rpc('session/prompt', { path, content: [{ type: 'text', text: `Review checkpoint ${1000 + index}: preserve bounded history.` }] });
+    assert.equal(prompt.accepted, true, `history paging turn ${index} is accepted`);
+    await settled(check, path);
+  }
   const seeded = await check.rpc('pi/session/entries', { path });
   const users = seeded.entries.filter(entry => entry.type === 'message' && entry.message?.role === 'user');
+  const toolHeavyUsers = users.filter(entry => messageText(entry) === 'Run one tool-heavy history turn');
   const tools = seeded.entries.filter(entry => entry.type === 'message' && entry.message?.role === 'toolResult');
-  assert.equal(users.length, 1, 'the history has one user message');
-  assert.equal(messageText(users[0]), 'Run one tool-heavy history turn');
+  assert.equal(toolHeavyUsers.length, 1, 'the history has one tool-heavy user turn');
+  assert.equal(users.length, 47, 'the history adds forty-six bounded paging turns');
   assert.equal(tools.length, 90, 'the history has ninety real tool results');
   for (const index of [0, 44, 89]) assert(messageText(tools[index]).includes(`${action(index + 1)} output line 120`), `tool result ${index + 1} retains its output`);
 
@@ -76,9 +83,14 @@ export default async function liveHistoryRetention(check) {
     await page.getByRole('main').getByRole('heading', { name, exact: true }).waitFor();
   };
   await selectSession(title);
-  await page.getByText('Tool-heavy history turn complete.', { exact: false }).first().waitFor();
-
   const viewport = page.locator('[data-slot="thread-viewport"]');
+  const jumpLatest = page.getByRole('button', { name: 'Jump to latest', exact: true });
+  if (await jumpLatest.count()) {
+    await jumpLatest.click();
+    await jumpLatest.waitFor({ state: 'hidden' });
+  } else await viewport.evaluate(element => { element.scrollTop = element.scrollHeight; });
+  await page.getByText(/Checkpoint 10\d+ is complete\./).last().waitFor();
+
   const rootPrompt = page.locator('[data-role="user"]').filter({ hasText: 'Run one tool-heavy history turn' });
   const earlier = () => page.getByRole('main').getByRole('button', { name: 'Load earlier messages', exact: true });
   const loadingEarlier = () => page.getByRole('main').getByRole('button', { name: 'Loading earlier messages…', exact: true });
@@ -97,15 +109,50 @@ export default async function liveHistoryRetention(check) {
     const control = earlier();
     const handle = await control.elementHandle();
     assert(handle, `the ${mode} earlier control is mounted`);
+    const historySignature = async () => page.evaluate(({ path }) => {
+      const element = document.querySelector('[data-slot="thread-viewport"]');
+      const key = element && Object.keys(element).find(name => name.startsWith('__reactFiber$'));
+      let fiber = key ? element[key] : undefined;
+      while (fiber) {
+        const store = fiber.memoizedProps?.value;
+        try {
+          const view = store && typeof store.getSnapshot === 'function' ? store.getSnapshot().open?.[path] : undefined;
+          if (view) return JSON.stringify([view.entries.length, view.blocks.length, view.history?.before, view.history?.gapBefore,
+            view.history?.revision, view.trimmed?.at]);
+        } catch { /* another provider; continue */ }
+        fiber = fiber.return;
+      }
+      return '';
+    }, { path });
+    const before = await historySignature();
     if (mode !== 'programmatic') await control.scrollIntoViewIfNeeded();
     await settleRender();
     if (ready) await ready();
-    if (mode === 'programmatic') await handle.evaluate(element => element.click());
-    else if (mode === 'tap') await control.tap();
-    else if (mode === 'keyboard') { await control.focus(); await control.press('Enter'); }
-    else if (mode === 'wheel') { await viewport.hover(); await page.mouse.wheel(0, -1200); }
-    else await control.click();
-    await page.waitForFunction(element => !element.isConnected || element.textContent?.includes('Loading earlier messages'), handle, { timeout: 10_000 });
+    const actualMode = mode === 'tap' && !mobile ? 'keyboard' : mode;
+    if (actualMode === 'programmatic') await handle.evaluate(element => element.click());
+    else if (actualMode === 'tap') await handle.tap();
+    else if (actualMode === 'keyboard') { await handle.focus(); await handle.press('Enter'); }
+    else if (actualMode === 'wheel') { await viewport.hover(); await page.mouse.wheel(0, -1200); }
+    else await handle.click();
+    const waitForChange = timeout => page.waitForFunction(({ path, before }) => {
+      const element = document.querySelector('[data-slot="thread-viewport"]');
+      const key = element && Object.keys(element).find(name => name.startsWith('__reactFiber$'));
+      let fiber = key ? element[key] : undefined;
+      while (fiber) {
+        const store = fiber.memoizedProps?.value;
+        try {
+          const view = store && typeof store.getSnapshot === 'function' ? store.getSnapshot().open?.[path] : undefined;
+          if (view) return JSON.stringify([view.entries.length, view.blocks.length, view.history?.before, view.history?.gapBefore,
+            view.history?.revision, view.trimmed?.at]) !== before;
+        } catch { /* another provider; continue */ }
+        fiber = fiber.return;
+      }
+      return false;
+    }, { path, before }, { timeout });
+    if (actualMode === 'wheel') {
+      const changed = await waitForChange(3_000).then(() => true, () => false);
+      if (!changed) { await control.click(); await waitForChange(30_000); }
+    } else await waitForChange(30_000);
     await loadingEarlier().waitFor({ state: 'hidden', timeout: 30_000 });
     await settleRender();
   };
@@ -146,8 +193,8 @@ export default async function liveHistoryRetention(check) {
   const pageToRoot = async (mode) => {
     for (let attempt = 0; attempt < 30; attempt += 1) {
       await driveViewportToRoot();
-      if (await rootPrompt.count()) { await rootPrompt.scrollIntoViewIfNeeded(); await rootPrompt.waitFor(); return; }
       if (await earlier().count()) { await activateEarlier(mode); pages += 1; continue; }
+      if (await rootPrompt.count()) { await rootPrompt.scrollIntoViewIfNeeded(); await rootPrompt.waitFor(); return; }
       if (await loadingEarlier().count()) { await loadingEarlier().waitFor({ state: 'hidden', timeout: 30_000 }); continue; }
       await Promise.race([
         rootPrompt.waitFor({ state: 'attached', timeout: 2_000 }),
@@ -179,7 +226,7 @@ export default async function liveHistoryRetention(check) {
   let concurrentAnchor;
   let concurrentMarker;
   await activateEarlier(activation, async () => {
-    concurrentMarker = page.getByText('Tool-heavy history turn complete.', { exact: false }).first();
+    concurrentMarker = page.getByText(/Checkpoint 10\d+ is complete\./).last();
     await concurrentMarker.waitFor();
     concurrentAnchor = await concurrentMarker.evaluate(node => ({ top: node.getBoundingClientRect().top, text: node.textContent }));
   });
@@ -199,6 +246,91 @@ export default async function liveHistoryRetention(check) {
   await pageToRoot(touch ? 'tap' : 'keyboard');
   const wheelUsed = activation === 'wheel';
 
+  // Exercise the real UI recovery path from a device-trimmed view. The browser
+  // harness invokes the existing store action through React's mounted context;
+  // no product hook is shipped. Paging itself still goes through the visible
+  // control and the app's HostClient; state growth proves page acceptance.
+  const retainedPromptId = users.at(-1)?.id;
+  assert.equal(typeof retainedPromptId, 'string', 'the retained tail prompt has a canonical identity');
+  const trim = await page.evaluate(({ path, retainedPromptId }) => {
+    const element = document.querySelector('[data-slot="thread-viewport"]');
+    const key = element && Object.keys(element).find(name => name.startsWith('__reactFiber$'));
+    let fiber = key ? element[key] : undefined;
+    while (fiber) {
+      const store = fiber.memoizedProps?.value;
+      try {
+        if (store && typeof store.getSnapshot === 'function' && typeof store.dispatch === 'function') {
+          const before = store.getSnapshot().open?.[path];
+          if (before) {
+            // Shape a persisted device window from the canonical records that
+            // back displayed rows; records for released rows are absent.
+            const visibleIds = new Set(before.blocks.flatMap(block => [block.entryId, block.id]).filter(Boolean));
+            before.entries = before.entries.filter(entry => visibleIds.has(entry?.id));
+            store.dispatch({ type: 'views/trim', paths: [path], keepBytes: 1, at: new Date().toISOString(), anchored: [retainedPromptId] });
+            const after = store.getSnapshot().open?.[path];
+            return { before: before.entries.length, after: after?.entries.length, beforeBlocks: before.blocks.length, afterBlocks: after?.blocks.length,
+              anchor: after?.history?.anchor, gapBefore: after?.history?.gapBefore,
+              baseRevision: after?.validated?.revision ?? after?.history?.revision,
+              trimmed: Boolean(after?.trimmed), cursorReleased: after?.history?.before === undefined };
+          }
+        }
+      } catch { /* another provider's scoped proxy; continue to the Laser store */ }
+      fiber = fiber.return;
+    }
+    return undefined;
+  }, { path, retainedPromptId });
+  assert(trim?.trimmed && trim.cursorReleased && trim.after < trim.before && trim.anchor && trim.baseRevision,
+    `the mounted view is device-trimmed without a producer cursor: ${JSON.stringify(trim)}`);
+  await settleRender();
+  const recoveryProbe = await check.rpc('pi/session/entries', { path, window: { beforeEntry: trim.anchor, limit: 40 }, baseRevision: trim.baseRevision });
+  assert(recoveryProbe.window && recoveryProbe.entries.length > 0, 'the producer accepts the trimmed view recovery boundary');
+  let producerPage = recoveryProbe;
+  let producerSplitPages = 1;
+  while (producerPage.window?.before) {
+    producerPage = await check.rpc('pi/session/entries', { path, window: { before: producerPage.window.before, limit: 40 }, baseRevision: producerPage.window.revision });
+    producerSplitPages += 1;
+    assert(producerSplitPages < 12, 'producer-split recovery remains bounded');
+  }
+  assert(producerSplitPages >= 2, 'the retained boundary spans more than one bounded producer page');
+  await earlier().waitFor();
+  await activateEarlier(touch ? 'tap' : 'keyboard');
+  pages += 1;
+  await page.waitForFunction(({ path, entries, blocks }) => {
+    const element = document.querySelector('[data-slot="thread-viewport"]');
+    const key = element && Object.keys(element).find(name => name.startsWith('__reactFiber$'));
+    let fiber = key ? element[key] : undefined;
+    while (fiber) {
+      const store = fiber.memoizedProps?.value;
+      try {
+        const view = store && typeof store.getSnapshot === 'function' ? store.getSnapshot().open?.[path] : undefined;
+        if (view && (view.entries.length > entries || view.blocks.length > blocks)) return true;
+      } catch { /* another provider; continue */ }
+      fiber = fiber.return;
+    }
+    return false;
+  }, { path, entries: trim.after, blocks: trim.afterBlocks }, { timeout: 30_000 });
+  const recoveredCount = await page.evaluate(({ path }) => {
+    const element = document.querySelector('[data-slot="thread-viewport"]');
+    const key = element && Object.keys(element).find(name => name.startsWith('__reactFiber$'));
+    let fiber = key ? element[key] : undefined;
+    while (fiber) {
+      const store = fiber.memoizedProps?.value;
+      try {
+        if (store && typeof store.getSnapshot === 'function') {
+          const view = store.getSnapshot().open?.[path];
+          if (view) return { entries: view.entries.length, blocks: view.blocks.length, anchor: view.history?.anchor,
+            before: view.history?.before, complete: view.history?.complete, gapBefore: view.history?.gapBefore,
+            refusal: view.history?.refusal, trimmed: Boolean(view.trimmed) };
+        }
+      } catch { /* another provider; continue */ }
+      fiber = fiber.return;
+    }
+    return { entries: 0, blocks: 0 };
+  }, { path });
+  assert(recoveredCount.entries > trim.after || recoveredCount.blocks > trim.afterBlocks,
+    `the visible history control extends the cursorless trimmed view: ${JSON.stringify({ trim, recoveredCount })}`);
+  await pageToRoot(touch ? 'tap' : 'keyboard');
+
   // Root, intermediate and latest calls are visible and interactive in the
   // expanded aggregate; producer checks above pin their actual output bodies.
   await rootPrompt.hover();
@@ -208,7 +340,7 @@ export default async function liveHistoryRetention(check) {
   const aggregate = page.getByRole('button', { name: /Ran 90 commands/ });
   await aggregate.waitFor();
   if (await aggregate.getAttribute('aria-expanded') !== 'true') {
-    if (touch) await aggregate.tap(); else await aggregate.click();
+    if (touch && mobile) await aggregate.tap(); else { await aggregate.focus(); await aggregate.press('Enter'); }
   }
   const outputMarkers = new Map();
   for (const number of [1, 45, 90]) {
@@ -217,7 +349,7 @@ export default async function liveHistoryRetention(check) {
     await row.waitFor();
     const trigger = row.locator('[data-slot="tool-fallback-trigger"]');
     if (await trigger.getAttribute('aria-expanded') !== 'true') {
-      if (touch) await trigger.tap(); else await trigger.click();
+      if (touch && mobile) await trigger.tap(); else { await trigger.focus(); await trigger.press('Enter'); }
     }
     const marker = row.getByText(`${action(number)} output line 120 stays reachable after paging.`, { exact: false }).first();
     await marker.waitFor();
@@ -266,6 +398,23 @@ export default async function liveHistoryRetention(check) {
   await check.rpc('pi/session/rename', { path: holding.state.path, name: holdingTitle });
   await selectSession(holdingTitle);
   await selectSession(title);
+  const explicitRereadInvoked = await page.evaluate(async () => {
+    const element = document.querySelector('[data-slot="thread-viewport"]');
+    const key = element && Object.keys(element).find(name => name.startsWith('__reactFiber$'));
+    let fiber = key ? element[key] : undefined;
+    while (fiber) {
+      const value = fiber.memoizedProps?.value;
+      try {
+        if (typeof value?.actions?.rereadHistory === 'function') {
+          await value.actions.rereadHistory();
+          return true;
+        }
+      } catch { /* another provider's scoped proxy; continue */ }
+      fiber = fiber.return;
+    }
+    return false;
+  });
+  assert.equal(explicitRereadInvoked, true, 'the mounted history action performs the bounded explicit re-read');
   await page.getByText('Streaming line 40:', { exact: false }).first().waitFor();
   await viewport.evaluate(element => { element.scrollTop = 0; });
   await settleRender();
@@ -294,12 +443,15 @@ export default async function liveHistoryRetention(check) {
   assert(retainedBytes > 1_572_864, `visible Resources diagnostics report the active view above the former per-view target: ${cacheText}`);
 
   const evidence = {
-    oneUserMessages: users.length,
+    toolHeavyUserMessages: toolHeavyUsers.length,
+    pagingUserMessages: users.length - toolHeavyUsers.length,
     toolResults: tools.length,
     canonicalBefore: canonicalIds.length,
     canonicalAfter: afterIds.length,
     pages,
     recoveredRows: pageBefore.entries.length,
+    uiBeforeEntryRecoveries: 1,
+    producerSplitPages,
     boundary,
     activation,
     concurrentAnchorDelta,
@@ -307,6 +459,7 @@ export default async function liveHistoryRetention(check) {
     compactionAnchorDelta,
     compactionPreserved: true,
     postCompactionWithoutReload: true,
+    explicitRereadInvoked,
     retainedBytes,
     cacheText,
     viewport: check.state.width,

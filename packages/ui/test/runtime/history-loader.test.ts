@@ -583,6 +583,18 @@ describe("history request ownership", () => {
     expect(f.view()).toBe(held);
   });
 
+  it("reprojects a released visible block even when its canonical record is still retained", async () => {
+    const f = fixture(async params => historyWindow(source, params.window!, scope));
+    await f.loader.read(state.path);
+    const held = f.view();
+    const released = held.blocks.at(-1)!;
+    held.blocks = held.blocks.slice(0, -1);
+    const duplicate = historyWindow(source, { tail: 40 }, scope);
+    f.dispatch({ type: "historyPrepend", path: state.path, before: held.history!.before!, anchor: held.history!.anchor!,
+      baseRevision: scope.revision, ownerRevision: held.historyRevision, entries: duplicate.entries, window: duplicate.window });
+    expect(f.view().blocks.some(block => block.id === released.id)).toBe(true);
+  });
+
   it("does not claim complete ancestry when the producer leaf is unavailable", async () => {
     const f = fixture(async params => historyWindow(source, params.window!, scope));
     await f.loader.read(state.path);
