@@ -31,6 +31,7 @@ import { createViewCache, VIEW_CACHE_LIMITS } from "../../src/runtime/view-cache
 import { resetAnchoredMessages, standingRows } from "../../src/runtime/anchored-messages.js";
 import { MessageEditPresentation, TranscriptPresentation } from "../../src/runtime/transcript-presentation.js";
 import { sessionState } from "../agents/fixtures.js";
+import { motionMs } from "../../src/motion.js";
 
 const SESSION = "/project/session.jsonl";
 /** One line of the transcript, for the geometry seam below. */
@@ -193,30 +194,54 @@ describe("a trim while somebody is reading", () => {
     const store = createStateStore(opened());
     hydrateThrough(store, undefined);
     await mount(store, store.presentation);
-    const guidance = [...container.querySelectorAll("span")].find(node => node.textContent?.trim() === "Earlier messages load as you scroll");
-    expect(guidance).toBeDefined();
-    expect(guidance!.closest('[aria-hidden="true"]')).toBeNull();
+    // The unloaded range is placeholder rows and nothing else: no words, no
+    // card, no promise to read. Only the explicit control carries copy.
+    const reserve = container.querySelector('[data-slot="history-reserve"]');
+    expect(reserve).not.toBeNull();
+    expect(reserve!.textContent?.trim()).toBe("");
+    expect(reserve!.getAttribute("aria-hidden")).toBe("true");
+    expect(reserve!.querySelectorAll('[data-slot="history-reserve-turn"]').length).toBeGreaterThan(0);
     const button = [...container.querySelectorAll("button")].find(node => node.textContent?.trim() === "Load earlier messages");
     expect(button).toBeDefined();
     await act(async () => { button!.click(); await Promise.resolve(); });
     expect(stable.actions.loadEarlierEntries).toHaveBeenCalledOnce();
   });
 
-  it("exposes one accessible busy status while an earlier page is pending", async () => {
-    const store = createStateStore(opened());
-    hydrateThrough(store, undefined);
-    let settle!: (loaded: boolean) => void;
-    stable.actions.loadEarlierEntries.mockImplementationOnce(() => new Promise<boolean>(resolve => { settle = resolve; }));
-    await mount(store, store.presentation);
-    const button = [...container.querySelectorAll("button")].find(node => node.textContent?.trim() === "Load earlier messages")!;
+  it("says a page is in flight once, for screen readers only, and marks the region busy", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = createStateStore(opened());
+      hydrateThrough(store, undefined);
+      let settle!: (loaded: boolean) => void;
+      stable.actions.loadEarlierEntries.mockImplementationOnce(() => new Promise<boolean>(resolve => { settle = resolve; }));
+      const controller = await mount(store, store.presentation);
+      const button = [...container.querySelectorAll("button")].find(node => node.textContent?.trim() === "Load earlier messages")!;
 
-    await act(async () => { button.click(); await Promise.resolve(); });
-    const card = container.querySelector('[data-slot="history-reserve-loading"]')!;
-    expect(card).not.toBeNull();
-    const exposed = [...card.querySelectorAll('[role="status"]')].filter(node => !node.closest('[aria-hidden="true"]'));
-    expect(exposed).toHaveLength(1);
-    expect(exposed[0]!.textContent).toContain("Loading earlier messages…");
-    await act(async () => { settle(false); await Promise.resolve(); await Promise.resolve(); });
+      await act(async () => { button.click(); await Promise.resolve(); });
+      // One exposed status, and it is not on screen.
+      const exposed = [...container.querySelectorAll('[role="status"]')].filter(node => !node.closest('[aria-hidden="true"]'));
+      expect(exposed).toHaveLength(1);
+      expect(exposed[0]!.textContent).toBe("Loading earlier messages");
+      expect(exposed[0]!.classList.contains("sr-only")).toBe(true);
+      expect(container.querySelector('[data-slot="thread-messages"]')!.getAttribute("aria-busy")).toBe("true");
+      // Nothing visible says so: no card, no copy in the transcript region.
+      expect(container.querySelector('[data-slot="history-reserve-loading"]')).toBeNull();
+      const visibleCopy = [...container.querySelectorAll('[data-slot="thread-messages"] *')]
+        .filter(node => node.childElementCount === 0 && /loading/i.test(node.textContent ?? "") && !node.closest(".sr-only"));
+      expect(visibleCopy).toHaveLength(0);
+      // The overdue mark appears only past one slow motion step, only while
+      // the person is inside the estimated range, and goes on arrival.
+      vi.spyOn(controller, "isReadingHistoryReserve").mockReturnValue(true);
+      expect(container.querySelector('[data-slot="history-reserve-indicator"]')).toBeNull();
+      await act(async () => { vi.advanceTimersByTime(motionMs("--motion-slow") + 1); });
+      const indicator = container.querySelector('[data-slot="history-reserve-indicator"]');
+      expect(indicator).not.toBeNull();
+      expect(indicator!.getAttribute("aria-hidden")).toBe("true");
+      expect(indicator!.textContent?.trim()).toBe("");
+      await act(async () => { settle(false); await Promise.resolve(); await Promise.resolve(); });
+      expect(container.querySelector('[data-slot="history-reserve-indicator"]')).toBeNull();
+      expect(container.querySelector('[data-slot="thread-messages"]')!.getAttribute("aria-busy")).toBeNull();
+    } finally { vi.useRealTimers(); }
   });
 
   it("releases failed and rejected earlier-page requests so the person can retry", async () => {
@@ -353,9 +378,6 @@ describe("a trim while somebody is reading", () => {
 
     expect(container.textContent).toContain(message);
     expect(container.textContent).not.toContain("Load earlier messages");
-    // The range still describes the history that is there, but nothing promises
-    // that scrolling into it loads anything until the re-read happens.
-    expect(container.textContent).not.toContain("Earlier messages load as you scroll");
     const actions = [...container.querySelectorAll("button")].filter(node => /reload recent messages/i.test(node.textContent ?? ""));
     expect(actions).toHaveLength(1);
 

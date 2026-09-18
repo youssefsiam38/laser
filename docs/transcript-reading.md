@@ -50,6 +50,20 @@ are what acceptance measures.
   structural shift and the reserve exchange for the same pixels, clamped at 0,
   and kept the reading place from being re-taken after a merged head.
 
+## What the person sees
+
+Nothing. The unloaded range is drawn as conversation-shaped placeholder rows
+in normal flow — no words, no card, no border, nothing sticky — and a page
+replaces those pixels with real rows where they were, so arriving history is
+not work the person watches. The only visible sign is a page that is late:
+longer than one `--motion-slow` step while the person is inside the range shows
+the loader's matrix at the viewport's top edge, without copy, until it arrives.
+A screen reader hears one `sr-only` status from the history controls, and the
+transcript region is `aria-busy` while a page is in flight. The refusal state
+is the one case with text and a button, because the person has to act; it is
+inline, styled like the history controls. The explicit "Load earlier messages"
+control remains for keyboard and assistive access.
+
 ## What the scrollbar means
 
 A virtual reserve above the loaded rows represents history that still has a

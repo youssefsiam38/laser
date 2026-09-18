@@ -1,5 +1,5 @@
 import { ThreadPrimitive, useThreadViewport, unstable_useThreadMessageIds } from "@assistant-ui/react";
-import { createContext, memo, useContext, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { createContext, memo, useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useLaserState, visibleSessionPath } from "@/runtime";
 import { activityDetailLevel } from "@/runtime/sessionPreferences";
 import { motionMs } from "@/motion";
@@ -82,9 +82,6 @@ export class TranscriptViewport {
   private earlierPage: EarlierPageTransaction | undefined;
   private earlierFallbackFrame = 0;
   private earlierFallbacks = 0;
-  /** Keep a completed busy state legible for one motion token; geometry is free. */
-  private earlierLoadingVisible = false;
-  private earlierLoadingTimer: ReturnType<typeof setTimeout> | undefined;
   /** Only this arrived prefix may exchange later first-frame measurements. */
   private arrivedPage: { ids: readonly string[]; removedHeight: number; exchangedHeight: number; refine: boolean } | undefined;
   /** The last id change kept no part of the previous window: a replacement, not a page. */
@@ -550,22 +547,10 @@ export class TranscriptViewport {
       cancelAnimationFrame(this.earlierFallbackFrame);
       this.earlierFallbackFrame = 0;
     }
-    if (result.released) {
-      if (this.earlierLoadingTimer) clearTimeout(this.earlierLoadingTimer);
-      this.earlierLoadingTimer = setTimeout(() => {
-        this.earlierLoadingTimer = undefined;
-        if (!this.earlierLoadingVisible) return;
-        this.earlierLoadingVisible = false;
-        if (!this.disposed) this.publish();
-      }, motionMs("--motion-fast"));
-    }
     return result.released;
   }
   private releaseEarlierPage(_reason: "cancel" | "path" | "unmount" | "fallback") {
     const released = this.applyEarlierTransition({ type: "cancel" });
-    if (this.earlierLoadingTimer) clearTimeout(this.earlierLoadingTimer);
-    this.earlierLoadingTimer = undefined;
-    this.earlierLoadingVisible = false;
     if (this.earlierFallbackFrame) cancelAnimationFrame(this.earlierFallbackFrame);
     this.earlierFallbackFrame = 0;
     this.arrivedPage = undefined;
@@ -573,9 +558,6 @@ export class TranscriptViewport {
   }
   beginEarlierPage() {
     this.capture();
-    if (this.earlierLoadingTimer) clearTimeout(this.earlierLoadingTimer);
-    this.earlierLoadingTimer = undefined;
-    this.earlierLoadingVisible = true;
     this.reserve.startReading();
     this.applyEarlierTransition({ type: "begin", before: this.historyBefore });
     this.arrivedPage = undefined;
@@ -604,7 +586,6 @@ export class TranscriptViewport {
     return Boolean(this.viewport && this.reserve.height > 0 && this.loadedTop() < 0);
   }
   get loadingEarlier() { return this.earlierPage !== undefined; }
-  get showEarlierLoading() { return this.earlierPage !== undefined || this.earlierLoadingVisible; }
   get earlierPageFallbackCount() { return this.earlierFallbacks; }
   committed() {
     if (this.layout()) this.windowDirty = true;
@@ -1024,19 +1005,25 @@ export function WindowedMessages() {
   const userOffset = useLaserState(s => { const path = visibleSessionPath(s); return path ? s.open[path]?.history?.userOffset ?? 0 : 0; });
   const before = useLaserState(s => { const path = visibleSessionPath(s); return path ? s.open[path]?.history?.before : undefined; });
   const loadedUserTurns = useLaserState(s => { const path = visibleSessionPath(s); return path ? s.open[path]?.blocks.filter(block => block.kind === "user" && !block.optimistic).length ?? 0 : 0; });
-  // While the producer refuses this window's base, scrolling up loads nothing:
-  // the range still describes the history that is there, but the card must not
-  // promise a thing that cannot happen. The history controls say what can.
-  const refused = useLaserState(s => { const path = visibleSessionPath(s); return Boolean(path && s.open[path]?.history?.refusal); });
   // Ids/heights must exist before unloaded-history geometry can become ready.
   controller.setIds(ids);
   controller.setHistoryWindow(userOffset, loadedUserTurns, before);
   useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   const ranges = controller.ranges();
   useLayoutEffect(() => { controller.committed(); });
+  // Arriving history is not something the person should have to watch. The
+  // one visible sign is a page that is late — longer than a slow motion step
+  // — while they are inside the estimated range, and it goes on arrival.
+  const loading = controller.loadingEarlier;
+  const [overdue, setOverdue] = useState(false);
+  useEffect(() => {
+    if (!loading) { setOverdue(false); return; }
+    const timer = setTimeout(() => { if (controller.isReadingHistoryReserve()) setOverdue(true); }, motionMs("--motion-slow"));
+    return () => clearTimeout(timer);
+  }, [controller, loading]);
   let cursor = 0;
-  return <div ref={node => { controller.setContent(node); }} data-slot="thread-messages" className="flex flex-col pt-5 empty:hidden" style={{ overflowAnchor: "none" }}>
-    <HistoryReserve height={controller.reserveHeight} loading={controller.showEarlierLoading} guidance={!refused} />
+  return <div ref={node => { controller.setContent(node); }} data-slot="thread-messages" aria-busy={loading || undefined} className="flex flex-col pt-5 empty:hidden" style={{ overflowAnchor: "none" }}>
+    <HistoryReserve height={controller.reserveHeight} overdue={overdue} />
     {ranges.flatMap(range => {
       const gap = controller.heights.offset(range.start) - controller.heights.offset(cursor); cursor = range.end;
       return [

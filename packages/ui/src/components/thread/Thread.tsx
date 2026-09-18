@@ -386,6 +386,8 @@ export function HistoryControls() {
       : <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" aria-disabled={loading !== null} onClick={() => void load(true)}>
           {loading === "all" ? "Loading other versions…" : "Load other versions"}
         </Button>)}
-    <span role="status" className="sr-only">{announcement}</span>
+    {/* The one thing a screen reader hears about paging; sighted readers see
+        the rows arrive where the placeholder was, and nothing else. */}
+    <span role="status" className="sr-only">{loading === "earlier" ? "Loading earlier messages" : rereading ? "Reloading recent messages" : announcement}</span>
   </div>;
 }

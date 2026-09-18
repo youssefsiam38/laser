@@ -37,6 +37,12 @@ export interface GenerationLoaderProps extends Omit<ComponentProps<"div">, "chil
   variant?: GenerationLoaderVariant;
   /** `inline` fits a row (a menu, a table cell); `block` stands alone. */
   layout?: "inline" | "block";
+  /**
+   * The matrix alone, with no words and no status of its own: for a surface
+   * whose one announcement is made elsewhere, where a second live region
+   * would say the same thing twice (the history reserve's overdue mark).
+   */
+  quiet?: boolean;
 }
 
 const CELL_SHAPES: Record<GenerationLoaderVariant, string> = {
@@ -45,7 +51,7 @@ const CELL_SHAPES: Record<GenerationLoaderVariant, string> = {
   rounded: "rounded-xs",
 };
 
-export function GenerationLoader({ label, tick, variant = "dots", layout = "block", className, ...props }: GenerationLoaderProps) {
+export function GenerationLoader({ label, tick, variant = "dots", layout = "block", quiet = false, className, ...props }: GenerationLoaderProps) {
   const step = motionMs("--motion-fast");
   const own = useTick(tick === undefined && step > 0, Math.max(step, 50) * 2);
   const frame = tick ?? own;
@@ -54,9 +60,7 @@ export function GenerationLoader({ label, tick, variant = "dots", layout = "bloc
   return (
     <div
       data-slot="generation-loader"
-      role="status"
-      aria-busy="true"
-      aria-label={label}
+      {...(quiet ? { "aria-hidden": true } : { role: "status", "aria-busy": true, "aria-label": label })}
       className={cn(layout === "block" ? "flex flex-col items-start gap-3" : "flex items-center gap-2.5", className)}
       {...props}
     >
@@ -76,7 +80,7 @@ export function GenerationLoader({ label, tick, variant = "dots", layout = "bloc
           );
         })}
       </div>
-      <ShimmerLabel className="relative inline-block text-sm">{label}</ShimmerLabel>
+      {!quiet && <ShimmerLabel className="relative inline-block text-sm">{label}</ShimmerLabel>}
     </div>
   );
 }
