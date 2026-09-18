@@ -42,6 +42,7 @@ export * from "./human-label.js";
 export * from "./goal-presentation.js";
 export * from "./history-window.js";
 export * from "./body-range.js";
+export * from "./reasoning-segments.js";
 // Pure and browser-safe. The Node hash lives behind `./revision-node`, so the
 // UI bundle never reaches `node:crypto` through this barrel.
 export * from "./session-revision.js";

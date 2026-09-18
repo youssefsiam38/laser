@@ -25,6 +25,8 @@ import {
   displayBodyText,
   entryBodies,
   entryBodyIdentities,
+  joinReasoningSegments,
+  REASONING_SEGMENT_SEPARATOR,
   entryRegionsPage,
   type BodyRegion,
   PERSISTED_IDENTITY_MAX_BYTES,
@@ -836,5 +838,79 @@ describe("the body memo answers whether it was holding anything (RP-8)", () => {
     expect(reader.forget()).toBe(false);
     // And a reader that never read anything has nothing to give either.
     expect(createBodyRangeReader().forget()).toBe(false);
+  });
+});
+
+describe("a reasoning summary written in separate segments", () => {
+  // Two titled segments, as a provider emits them: each is its own `thinking`
+  // part, and one of them carries multi-byte characters so the separator's
+  // bytes are counted in a body whose length is not its character count.
+  const first = "**Handling loading state** — the skeleton stays honest.";
+  const second = "**Implementing safe fallback** — 答えは「はい」です。";
+  const entry = { id: "e1", parentId: "e0", type: "message", message: { role: "assistant", content: [
+    { type: "text", text: "Here" }, { type: "text", text: " it is." },
+    { type: "thinking", thinking: first },
+    { type: "thinking", thinking: second },
+  ] } };
+  const joined = `${first}\n\n${second}`;
+
+  it("reads as separate paragraphs, and prose is still one stream", () => {
+    expect(REASONING_SEGMENT_SEPARATOR).toBe("\n\n");
+    expect(joinReasoningSegments([first, second])).toBe(joined);
+    expect(entryBody(entry, { kind: "reasoning" })).toBe(joined);
+    expect(entryBodies(entry).find(body => body.component.kind === "reasoning")!.text).toBe(joined);
+    // A reply's tokens are not paragraphs: their join is untouched.
+    expect(entryBody(entry, { kind: "assistant_text" })).toBe("Here it is.");
+  });
+
+  it("publishes the size of the body it serves, separators included", () => {
+    const meta = entryBodyMetadata(entry).find(row => row.component.kind === "reasoning")!;
+    expect(meta.totalBytes).toBe(utf8ByteLength(joined));
+    expect(meta.totalBytes).toBe(utf8ByteLength(first) + 2 + utf8ByteLength(second));
+    // The published size and the served body are one walk over the same parts.
+    expect(meta.totalBytes).toBe(utf8ByteLength(entryBody(entry, { kind: "reasoning" })!));
+    const answer = bodyRangeSlice(entry, { component: { kind: "reasoning" }, offset: 0 }, "r1", "durable", digestOfText);
+    expect(answer.ok && answer.result.totalBytes).toBe(meta.totalBytes);
+    expect(answer.ok && answer.result.text).toBe(joined);
+  });
+
+  it("is addressable across the blank line, and digests over what it serves", () => {
+    const identity = entryBodyIdentities(entry, () => {
+      const chunks: string[] = [];
+      return { update: (chunk: string) => { chunks.push(chunk); }, digest: () => sha256Of(chunks.join("")) };
+    });
+    const reasoning = identity.bodies.find(body => body.component.kind === "reasoning")!;
+    expect(reasoning).toEqual({ component: { kind: "reasoning" }, totalBytes: utf8ByteLength(joined), contentDigest: sha256Of(joined) });
+    // Every slice of it reassembles the body byte for byte, including the two
+    // bytes of the boundary itself.
+    let offset = 0;
+    let out = "";
+    for (let step = 0; step < 200; step++) {
+      const slice = bodyRangeSlice(entry, { component: { kind: "reasoning" }, offset, limit: 8 }, "r1", "durable", digestOfText);
+      expect(slice.ok).toBe(true);
+      if (!slice.ok) break;
+      out += slice.result.text;
+      if (slice.result.next === undefined) break;
+      offset = slice.result.next;
+    }
+    expect(out).toBe(joined);
+    const boundary = utf8ByteLength(first);
+    const across = bodyRangeSlice(entry, { component: { kind: "reasoning" }, offset: boundary, limit: 8 }, "r1", "durable", digestOfText);
+    expect(across.ok && across.result.text.startsWith("\n\n")).toBe(true);
+  });
+
+  it("spends no separator on a segment that carries nothing", () => {
+    const sparse = { id: "e2", parentId: null, type: "message", message: { role: "assistant", content: [
+      { type: "thinking", thinking: "only this" },
+      { type: "thinking", thinking: "" },
+    ] } };
+    expect(entryBody(sparse, { kind: "reasoning" })).toBe("only this");
+    expect(entryBodyMetadata(sparse).find(row => row.component.kind === "reasoning")!.totalBytes).toBe(utf8ByteLength("only this"));
+    // One segment is a body with no boundary in it at all.
+    const single = { id: "e3", parentId: null, type: "message", message: { role: "assistant", content: [
+      { type: "thinking", thinking: "alone" },
+    ] } };
+    expect(entryBody(single, { kind: "reasoning" })).toBe("alone");
+    expect(entryBodyMetadata(single).find(row => row.component.kind === "reasoning")!.totalBytes).toBe(5);
   });
 });

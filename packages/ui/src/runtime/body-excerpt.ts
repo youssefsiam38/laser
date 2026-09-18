@@ -26,7 +26,7 @@
  * Pure: no React, no DOM, no network, and no allocation proportional to the
  * body it measures.
  */
-import { utf8ByteLength, type BodyComponent, type BodyRegion } from "@lasercode/protocol";
+import { bodyComponentSeparator, meaningfulSegments, utf8ByteLength, type BodyComponent, type BodyRegion } from "@lasercode/protocol";
 
 /** Bytes of one body this view keeps. */
 export const BODY_EXCERPT_MAX_BYTES = 16 * 1024;
@@ -231,19 +231,34 @@ function reference(source: ExcerptSource, totalBytes: number, offset: number, by
  * The tail of a body that arrives as parts — a live message's text or its
  * reasoning — without joining them first. The parts are walked from the end
  * until the cap is reached; everything before that is counted, never built.
+ *
+ * Reasoning arrives as separate summary segments and reads as separate
+ * paragraphs, so the blank line between two of them is part of the body: it is
+ * written where the authority writes it and counted where the authority counts
+ * it, or this view would mint a reference two bytes short of the body the host
+ * serves and every read of it would be refused.
  */
 export function tailOfParts(parts: readonly string[], source: ExcerptSource, maxBytes = LIVE_TAIL_MAX_BYTES): Excerpt {
+  const separator = bodyComponentSeparator(source.component.kind);
+  // The body as the authority writes it: its segments, and the separators
+  // between them, in order. Nothing is copied — each chunk is a string that
+  // already exists — and only the tail of it is ever joined.
+  const chunks: string[] = [];
+  for (const segment of meaningfulSegments(parts)) {
+    if (chunks.length > 0 && separator !== "") chunks.push(separator);
+    chunks.push(segment);
+  }
   let total = 0;
-  for (const part of parts) total += utf8ByteLength(part);
-  if (total <= maxBytes) return { text: parts.join("") };
+  for (const chunk of chunks) total += utf8ByteLength(chunk);
+  if (total <= maxBytes) return { text: chunks.join("") };
   const kept: string[] = [];
   let bytes = 0;
-  for (let index = parts.length - 1; index >= 0 && bytes < maxBytes; index--) {
-    const part = parts[index]!;
-    const size = utf8ByteLength(part);
-    if (bytes + size <= maxBytes) { kept.unshift(part); bytes += size; continue; }
-    const tail = tailIndex(part, maxBytes - bytes);
-    kept.unshift(part.slice(tail.index));
+  for (let index = chunks.length - 1; index >= 0 && bytes < maxBytes; index--) {
+    const chunk = chunks[index]!;
+    const size = utf8ByteLength(chunk);
+    if (bytes + size <= maxBytes) { kept.unshift(chunk); bytes += size; continue; }
+    const tail = tailIndex(chunk, maxBytes - bytes);
+    kept.unshift(chunk.slice(tail.index));
     bytes += tail.bytes;
     break;
   }

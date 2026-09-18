@@ -19,6 +19,7 @@
  */
 
 import { safeOffset, sliceUtf8Range, sliceUtf8RangeFrom, utf8ByteLength, type CursoredSlice, type Utf8Cursor, type Utf8Slice } from "./body-utf8.js";
+import { bodyPartSeparator, meaningfulSegments } from "./reasoning-segments.js";
 import { attachmentRegions, type AttachmentRegion, type AttachmentRegions } from "./body-attachments.js";
 
 export * from "./body-utf8.js";
@@ -422,14 +423,34 @@ export function displayBodyText(value: unknown): string {
   }
 }
 
-const textPartsOf = (content: unknown, type: string, field: string): string => {
-  if (typeof content === "string") return type === "text" ? content : "";
-  if (!Array.isArray(content)) return "";
-  return content
+/**
+ * The parts of one body, in order, as the strings they are. One walk, so the
+ * text a body is served as and the size published for it are read from the
+ * same segments and cannot describe different bodies.
+ */
+function bodyParts(content: unknown, type: string, field: string): string[] {
+  if (typeof content === "string") return type === "text" ? meaningfulSegments([content]) : [];
+  if (!Array.isArray(content)) return [];
+  return meaningfulSegments(content
     .filter((part) => !!part && typeof part === "object" && (part as { type?: unknown }).type === type)
-    .map((part) => String((part as Record<string, unknown>)[field] ?? ""))
-    .join("");
-};
+    .map((part) => String((part as Record<string, unknown>)[field] ?? "")));
+}
+
+const textPartsOf = (content: unknown, type: string, field: string): string =>
+  bodyParts(content, type, field).join(bodyPartSeparator(type));
+
+/**
+ * The exact size of that same body **without building it** (RP-5b §3.2): each
+ * part is measured where it already is, and every separator `textPartsOf`
+ * would write is counted.
+ */
+function partsSize(content: unknown, kind: string, field: string): number {
+  const parts = bodyParts(content, kind, field);
+  if (parts.length === 0) return 0;
+  let bytes = utf8ByteLength(bodyPartSeparator(kind)) * (parts.length - 1);
+  for (const part of parts) bytes += utf8ByteLength(part);
+  return bytes;
+}
 
 const record = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" ? (value as Record<string, unknown>) : {};
@@ -605,16 +626,6 @@ export function entryBodyMetadata(entry: unknown, options: EntryBodyMetadataOpti
     rows.push(bounded.totalBytes === undefined
       ? { component, totalBytes: Number.MAX_SAFE_INTEGER, unknown: true }
       : { component, totalBytes: bounded.totalBytes });
-  };
-  const partsSize = (content: unknown, kind: string, field: string): number => {
-    if (typeof content === "string") return kind === "text" ? utf8ByteLength(content) : 0;
-    if (!Array.isArray(content)) return 0;
-    let bytes = 0;
-    for (const part of content) {
-      const row = record(part);
-      if (row.type === kind) bytes += utf8ByteLength(String(row[field] ?? ""));
-    }
-    return bytes;
   };
   if (type === "custom_message") {
     const text = partsSize(value.content, "text", "text");
