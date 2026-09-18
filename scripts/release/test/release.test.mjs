@@ -2,8 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { delimiter, join } from "node:path";
 import { constants as osConstants, tmpdir } from "node:os";
 import {
   ReleaseError,
@@ -27,7 +28,8 @@ import {
   verifyPublicRelease,
   waitForWorkflow,
 } from "../release.mjs";
-import { identity } from "../../identity/identity.mjs";
+import { identity, repoRoot } from "../../identity/identity.mjs";
+import { APP_LAUNCH_ENVIRONMENT_NAMES } from "../../launch-environment.mjs";
 
 const SHA = "a".repeat(40);
 const MAIN = "b".repeat(40);
@@ -70,6 +72,68 @@ function dryRunExec({ apiError = false } = {}) {
   };
   return { calls, exec };
 }
+
+test("verification and release children drop only the installed app launch environment", () => {
+  assert.deepEqual(APP_LAUNCH_ENVIRONMENT_NAMES, [
+    identity.env.runtimeGenerationId,
+    identity.env.runtimeInstallRoot,
+    identity.env.runtimeManifestDigest,
+    identity.env.featureGenerationId,
+    identity.env.hostLaunchId,
+    identity.env.workerFd,
+    identity.env.features,
+    identity.env.npmCli,
+    identity.env.npmCommand,
+    identity.env.taskLogRoot,
+    identity.env.agentDir,
+    identity.env.stateDir,
+  ]);
+
+  const bin = temp("verify-environment");
+  const capture = join(bin, "children");
+  mkdirSync(capture);
+  const probe = join(bin, "probe.mjs");
+  writeFileSync(probe, `import { writeFileSync } from "node:fs";\nimport { join } from "node:path";\nwriteFileSync(join(process.env.VERIFY_ENV_CAPTURE, process.pid + ".json"), JSON.stringify(process.env));\n`);
+  if (process.platform === "win32") {
+    writeFileSync(join(bin, "pnpm.cmd"), `@"${process.execPath}" "${probe}" %*\r\n`);
+  } else {
+    const command = join(bin, "pnpm");
+    writeFileSync(command, `#!/bin/sh\nexec "${process.execPath}" "${probe}" "$@"\n`);
+    chmodSync(command, 0o755);
+  }
+
+  const poisoned = {
+    ...process.env,
+    ...Object.fromEntries(APP_LAUNCH_ENVIRONMENT_NAMES.map((name) => [name, `poison:${name}`])),
+    [identity.env.mcpLive]: "1",
+    VERIFY_ENV_CAPTURE: capture,
+    PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
+  };
+  const verified = spawnSync(process.execPath, ["scripts/verify.mjs"], {
+    cwd: repoRoot,
+    env: poisoned,
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  assert.equal(verified.status, 0, verified.stderr || verified.stdout);
+  assert.match(verified.stdout, new RegExp(`^verify: removed inherited app launch environment: ${APP_LAUNCH_ENVIRONMENT_NAMES.join(", ")}\\n`));
+  const children = readdirSync(capture).map((name) => JSON.parse(readFileSync(join(capture, name), "utf8")));
+  assert.equal(children.length, 6);
+  for (const env of children) {
+    for (const name of APP_LAUNCH_ENVIRONMENT_NAMES) assert.equal(env[name], undefined, name);
+    assert.equal(env[identity.env.mcpLive], "1");
+  }
+
+  const releaseChild = systemExec(process.execPath, ["-e", "process.stdout.write(JSON.stringify(process.env))"], {
+    env: { ...poisoned, GIT_INDEX_FILE: "/tmp/wrong-index" },
+  });
+  const releaseEnv = JSON.parse(releaseChild.stdout);
+  for (const name of APP_LAUNCH_ENVIRONMENT_NAMES) assert.equal(releaseEnv[name], undefined, name);
+  assert.equal(releaseEnv[identity.env.mcpLive], "1");
+  assert.equal(releaseEnv.GIT_INDEX_FILE, undefined);
+  assert.equal(releaseEnv.GIT_OPTIONAL_LOCKS, "0");
+  rmSync(bin, { recursive: true, force: true });
+});
 
 test("argument contract keeps dry-run read-only and publish explicit", () => {
   assert.equal(parseArgs(["--help"]).help, true);

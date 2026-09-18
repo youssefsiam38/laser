@@ -20,6 +20,7 @@ import { dirname, join, resolve } from "node:path";
 import { constants as osConstants, tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { identity } from "../identity/identity.mjs";
+import { appLaunchEnvironmentScrubMessage, scrubAppLaunchEnvironment } from "../launch-environment.mjs";
 import { inspectReleaseByTag, isExplicitMissingRelease, releaseInventory, verifyInventory } from "./publish-github.mjs";
 
 const MAIN_REF = "refs/heads/main";
@@ -102,10 +103,17 @@ function commandText(command, args) {
   return [command, ...args].map((part) => JSON.stringify(String(part))).join(" ");
 }
 
+let reportedLaunchEnvironmentScrub = false;
+
 export function systemExec(command, args, options = {}) {
+  const sanitized = releaseEnvironment(options.env ?? process.env);
+  if (sanitized.removed.length > 0 && !reportedLaunchEnvironmentScrub) {
+    process.stderr.write(appLaunchEnvironmentScrubMessage("release", sanitized.removed));
+    reportedLaunchEnvironmentScrub = true;
+  }
   const result = spawnSync(command, args, {
     cwd: options.cwd,
-    env: sanitizedEnvironment(options.env ?? process.env),
+    env: sanitized.env,
     timeout: options.timeoutMs ?? (command === "pnpm" || args.includes("download") ? 30 * 60_000 : 5 * 60_000),
     maxBuffer: 16 * 1024 * 1024,
     encoding: "utf8",
@@ -383,8 +391,9 @@ function assertCleanStatus(exec, cwd) {
   if (status) fail(`Isolated release worktree is not clean:\n${status}`);
 }
 
-export function sanitizedEnvironment(input = process.env) {
-  const env = { ...input };
+function releaseEnvironment(input = process.env) {
+  const scrubbed = scrubAppLaunchEnvironment(input);
+  const env = scrubbed.env;
   // Repository/index/config selection must not escape into linked worktrees or
   // the temporary repositories created by verification tests.
   for (const key of Object.keys(env)) {
@@ -392,7 +401,11 @@ export function sanitizedEnvironment(input = process.env) {
   }
   env.GIT_TERMINAL_PROMPT = "0";
   env.GIT_OPTIONAL_LOCKS = "0";
-  return env;
+  return { env, removed: scrubbed.removed };
+}
+
+export function sanitizedEnvironment(input = process.env) {
+  return releaseEnvironment(input).env;
 }
 
 function withoutAlternateIndex() { return sanitizedEnvironment(); }
