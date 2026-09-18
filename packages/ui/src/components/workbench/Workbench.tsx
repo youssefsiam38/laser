@@ -68,7 +68,7 @@ export function Workbench() {
             </Button>
           ))}
         </nav>
-        {shownPage !== "settings" && cwd && (
+        {shownPage === "logs" && cwd && (
           <span className="ms-2 min-w-0 truncate font-mono text-xs text-ink-3" title={cwd}>
             {shortCwd(cwd)}
           </span>
@@ -89,7 +89,7 @@ export function Workbench() {
           {shownPage === "settings" ? (
             <SettingsScreen initialTab={settingsTab} />
           ) : shownPage === "agents" ? (
-            <AgentsScreen cwd={cwd} target={agentsTarget} />
+            <AgentsScreen target={agentsTarget} />
           ) : (
             <LogsScreen cwd={cwd} />
           )}

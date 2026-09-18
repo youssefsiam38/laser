@@ -954,12 +954,32 @@ export class Router {
         return { issues: this.agents().validate(req.params.agent, req.params.originalName) };
       case "agents/save": {
         const store = this.agents();
+        let authoredTrustCwd: string | undefined;
+        if (req.params.agent.scope === "project") {
+          const projectCwd = canonical(req.params.agent.projectCwd ?? "");
+          const registered = this.deps.projects.list().some((project) => project.cwd === projectCwd);
+          const trust = registered ? this.deps.projects.trustOf(projectCwd).trust : undefined;
+          if (trust === "not_required") {
+            authoredTrustCwd = projectCwd;
+          } else if (trust !== "trusted") {
+            throw new ProtocolError(
+              ErrorCodes.ProjectUntrusted,
+              "Choose Trust in Settings before saving an agent in this project.",
+              { cwd: projectCwd },
+            );
+          }
+        }
         const agent = store.save(req.params.agent, req.params.originalName);
+        if (authoredTrustCwd) {
+          // A successful product write is the person's trust decision (D-298).
+          // Invalid drafts never persist trust.
+          this.deps.projects.setTrust(authoredTrustCwd, true, true);
+        }
         return { agent, snapshot: store.snapshot() };
       }
       case "agents/delete": {
         const store = this.agents();
-        store.delete(req.params.name);
+        store.delete(req.params.name, req.params.location);
         return { snapshot: store.snapshot() };
       }
       case "agents/set-default": {

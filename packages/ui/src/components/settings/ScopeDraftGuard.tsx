@@ -19,13 +19,22 @@ export interface ScopeDraft {
   save?: (() => boolean | Promise<boolean>) | undefined;
 }
 
+export type ScopeDraftNavigationGuard = () => Promise<boolean>;
+
 interface PendingNavigation {
   drafts: ScopeDraft[];
   resolve: (allow: boolean) => void;
 }
 
-/** One aggregate Settings navigation guard for every dirty child owned by a tab. */
-export function ScopeDraftGuard({ drafts }: { drafts: ScopeDraft[] }) {
+/** One aggregate Settings/Agents navigation guard for every dirty child owned by a screen. */
+export function ScopeDraftGuard({
+  drafts,
+  onGuardChange,
+}: {
+  drafts: ScopeDraft[];
+  /** Narrow imperative seam for navigation owned inside the same screen. */
+  onGuardChange?: ((guard: ScopeDraftNavigationGuard | undefined) => void) | undefined;
+}) {
   const draftsRef = useRef(drafts);
   const pendingRef = useRef<PendingNavigation | undefined>(undefined);
   const [pending, setPending] = useState<PendingNavigation | undefined>(undefined);
@@ -55,7 +64,12 @@ export function ScopeDraftGuard({ drafts }: { drafts: ScopeDraft[] }) {
     setPending(next);
   }), [settle]);
 
-  useSettingsScopeNavigationGuard(drafts.length > 0 ? guard : undefined);
+  const activeGuard = drafts.length > 0 ? guard : undefined;
+  useSettingsScopeNavigationGuard(activeGuard);
+  useLayoutEffect(() => {
+    onGuardChange?.(activeGuard);
+    return () => onGuardChange?.(undefined);
+  }, [activeGuard, onGuardChange]);
 
   useEffect(() => {
     let environment = deviceStore.status().environmentKey;
@@ -67,10 +81,11 @@ export function ScopeDraftGuard({ drafts }: { drafts: ScopeDraft[] }) {
       }
       if (next === environment) return;
       environment = next;
+      // Environment activation never means “discard”. Refuse an in-flight
+      // navigation decision, but preserve draft state for the owning screen to
+      // present or restore explicitly.
       const request = pendingRef.current;
       if (request) settle(request, false);
-      const abandoned = [...draftsRef.current];
-      if (abandoned.length > 0) void Promise.allSettled(abandoned.map((draft) => draft.discard()));
     });
   }, [settle]);
 

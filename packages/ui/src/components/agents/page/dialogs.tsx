@@ -20,12 +20,14 @@ export function DeleteAgentDialog({
   name,
   open,
   busy = false,
+  error,
   onOpenChange,
   onConfirm,
 }: {
   name: string;
   open: boolean;
   busy?: boolean | undefined;
+  error?: string | undefined;
   onOpenChange(open: boolean): void;
   onConfirm(): void;
 }) {
@@ -38,6 +40,7 @@ export function DeleteAgentDialog({
             Sessions that used it keep their history. Agents allowed to start it will not be able to any more, and their settings will say so.
           </DialogDescription>
         </DialogHeader>
+        {error ? <ErrorState title="Couldn’t delete this agent" detail={error} /> : null}
         <DialogFooter>
           <Button type="button" variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>
             Keep it
@@ -45,27 +48,6 @@ export function DeleteAgentDialog({
           <Button type="button" variant="destructive" disabled={busy} aria-busy={busy || undefined} onClick={onConfirm}>
             {busy ? <RotateCw className="motion-safe:animate-busy" /> : <Trash2 />}
             {busy ? "Deleting…" : "Delete"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-export function DiscardChangesDialog({ open, onKeep, onDiscard }: { open: boolean; onKeep(): void; onDiscard(): void }) {
-  return (
-    <Dialog open={open} onOpenChange={(next) => !next && onKeep()}>
-      <DialogContent data-slot="discard-changes-dialog">
-        <DialogHeader>
-          <DialogTitle>Discard changes?</DialogTitle>
-          <DialogDescription>This agent has edits that are not saved. Leaving now loses them.</DialogDescription>
-        </DialogHeader>
-        <DialogFooter>
-          <Button type="button" variant="outline" onClick={onKeep} autoFocus>
-            Keep editing
-          </Button>
-          <Button type="button" variant="destructive" onClick={onDiscard}>
-            Discard
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -100,7 +82,7 @@ export function BuiltinModelDialog({
   /** Back to the default model (for Namer, to the next qualification). */
   onClear?: (() => void) | undefined;
 }) {
-  const catalog = useModelCatalog(cwd, open);
+  const catalog = useModelCatalog(cwd, "global", open);
   const [choice, setChoice] = useState<AgentModelChoice | null>(current);
   const [portalContainer, setPortalContainer] = useState<HTMLDivElement | null>(null);
   useEffect(() => {

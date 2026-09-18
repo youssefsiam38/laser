@@ -262,7 +262,7 @@ const samples: Record<ClientMethod, unknown> = {
   "agents/list": {},
   "agents/validate": { agent: agentSample, originalName: null },
   "agents/save": { agent: agentSample, originalName: null },
-  "agents/delete": { name: "reviewer" },
+  "agents/delete": { name: "reviewer", location: { scope: "global" } },
   "agents/set-default": { name: "reviewer" },
   "agents/set-policy": { policy: { maxDepth: 2, foregroundCommandSeconds: 90 } },
   "agents/skills": { cwd: "/p" },
@@ -453,12 +453,22 @@ describe("client request schemas", () => {
   });
 
   it("refuses agent names that are not lower-case identifiers and unknown policy keys", () => {
-    expect(clientParamsSchemas["agents/delete"].safeParse({ name: "Reviewer" }).success).toBe(false);
-    expect(clientParamsSchemas["agents/delete"].safeParse({ name: "-review" }).success).toBe(false);
+    expect(clientParamsSchemas["agents/delete"].safeParse({ name: "Reviewer", location: { scope: "global" } }).success).toBe(false);
+    expect(clientParamsSchemas["agents/delete"].safeParse({ name: "-review", location: { scope: "global" } }).success).toBe(false);
     expect(clientParamsSchemas["agents/save"].safeParse({ agent: { ...agentSample, name: "a".repeat(41) }, originalName: null }).success).toBe(false);
     expect(clientParamsSchemas["agents/set-policy"].safeParse({ policy: { maxDepth: 0 } }).success).toBe(false);
     expect(clientParamsSchemas["agents/set-policy"].safeParse({ policy: { budget: 3 } }).success).toBe(false);
     expect(clientParamsSchemas["session/new"].safeParse({ cwd: "/p", agentName: "beam" }).success).toBe(true);
+  });
+
+  it("requires an exact strict location for agent deletion", () => {
+    const remove = clientParamsSchemas["agents/delete"];
+    expect(remove.safeParse({ name: "reviewer" }).success).toBe(false);
+    expect(remove.safeParse({ name: "reviewer", location: { scope: "project" } }).success).toBe(false);
+    expect(remove.safeParse({ name: "reviewer", location: { scope: "global", projectCwd: "/repo" } }).success).toBe(false);
+    expect(remove.safeParse({ name: "reviewer", location: { scope: "project", projectCwd: "/repo", extra: true } }).success).toBe(false);
+    expect(remove.safeParse({ name: "reviewer", location: { scope: "project", projectCwd: "x".repeat(4097) } }).success).toBe(false);
+    expect(remove.safeParse({ name: "reviewer", location: { scope: "project", projectCwd: "/repo" } }).success).toBe(true);
   });
 
   it("accepts only user and project skill scopes", () => {

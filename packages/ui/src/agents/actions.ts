@@ -5,11 +5,11 @@
  *
  * Two failure styles, on purpose:
  * - Methods that *answer* something a surface is waiting on (`validate`,
- *   `save`, `skills`, `engineInstructions`, `stopRun`, `qualifyNamer`) reject.
+ *   `save`, `remove`, `skills`, `engineInstructions`, `stopRun`, `qualifyNamer`) reject.
  *   The form, dialog or sheet that asked shows the message where the person
  *   is looking; a toast over a form is the wrong place.
- * - Methods that only *settle* (`remove`, `setDefault`, `setPolicy`,
- *   `setBuiltinModel`) toast on failure and resolve; the
+ * - Methods that only *settle* (`setDefault`, `setPolicy`, `setBuiltinModel`)
+ *   toast on failure and resolve; the
  *   snapshot only moves on success, so a toggle that failed snaps back.
  * - `refresh` and `runs` record failure in `state.agents.error`, where the
  *   Agents page draws its error state with a retry.
@@ -18,6 +18,7 @@ import type {
   AgentDefinition,
   AgentDefinitionInput,
   AgentIssue,
+  AgentLocation,
   AgentModelChoice,
   AgentPolicy,
   AgentRun,
@@ -37,8 +38,8 @@ export interface AgentsActions {
   validate(agent: AgentDefinitionInput, originalName: string | null): Promise<AgentIssue[]>;
   /** `agents/save`; the snapshot in the result updates the store. Rejects on failure. */
   save(agent: AgentDefinitionInput, originalName: string | null): Promise<AgentDefinition>;
-  /** `agents/delete`. Toasts on failure. */
-  remove(name: string): Promise<void>;
+  /** `agents/delete` at one exact storage location. Rejects so the editor stays open on refusal. */
+  remove(name: string, location: AgentLocation): Promise<void>;
   /** `agents/set-default`. Toasts on failure. */
   setDefault(name: string): Promise<void>;
   /** `agents/set-policy`. Toasts on failure. */
@@ -116,11 +117,10 @@ export function createAgentsActions({ client, dispatch, guard, authority = OPEN_
       dispatch({ type: "agents/updated", snapshot });
       return saved;
     },
-    remove: (name) =>
-      settle(async () => {
-        const { snapshot } = await client.request("agents/delete", { name });
-        dispatch({ type: "agents/updated", snapshot });
-      }),
+    remove: async (name, location) => {
+      const { snapshot } = await client.request("agents/delete", { name, location });
+      dispatch({ type: "agents/updated", snapshot });
+    },
     setDefault: (name) =>
       settle(async () => {
         const { snapshot } = await client.request("agents/set-default", { name });

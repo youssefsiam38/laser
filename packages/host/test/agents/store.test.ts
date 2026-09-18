@@ -160,9 +160,9 @@ describe("AgentStore · save and validate", () => {
 describe("AgentStore · delete and default", () => {
   it("refuses to delete the default with the exact message, and the built-ins", () => {
     const s = store();
-    expect(() => s.delete("default")).toThrow("This agent starts new sessions. Choose another default first.");
-    expect(() => s.delete("beam")).toThrow('"beam" is a built-in agent and cannot be deleted.');
-    expect(() => s.delete("nobody")).toThrow('There is no agent named "nobody".');
+    expect(() => s.delete("default", { scope: "global" })).toThrow("This agent starts new sessions. Choose another default first.");
+    expect(() => s.delete("beam", { scope: "global" })).toThrow('"beam" is a built-in agent and cannot be deleted.');
+    expect(() => s.delete("nobody", { scope: "global" })).toThrow('There is no agent named "nobody" in this scope.');
     expect(s.snapshot().agents).toHaveLength(4);
   });
 
@@ -171,11 +171,64 @@ describe("AgentStore · delete and default", () => {
     s.save(custom("lead", { supportsSubagents: true, allowedAgents: ["default", "lead"] }));
     s.setDefault("lead");
     expect(s.snapshot().defaultAgent).toBe("lead");
-    s.delete("default");
+    s.delete("default", { scope: "global" });
     const lead = s.get("lead")!;
     expect(lead.allowedAgents).toEqual(["lead"]);
     expect(s.snapshot().agents.map((a) => a.name)).toEqual(["lead", "beam", "chat", "namer"]);
-    expect(() => s.delete("lead")).toThrow("This agent starts new sessions. Choose another default first.");
+    expect(() => s.delete("lead", { scope: "global" })).toThrow("This agent starts new sessions. Choose another default first.");
+  });
+
+  it("deletes only the exact source when Global and Project names collide", () => {
+    const projectCwd = join(dir, "project");
+    mkdirSync(projectCwd, { recursive: true });
+    const s = store({ trustedProjects: () => [projectCwd] });
+    s.save(custom("reviewer"));
+    s.save(custom("reviewer", { scope: "project", projectCwd, description: "project reviewer" }));
+
+    s.delete("reviewer", { scope: "global" });
+    expect(s.snapshot().agents.filter((agent) => agent.name === "reviewer")).toEqual([
+      expect.objectContaining({ scope: "project", projectCwd, description: "project reviewer" }),
+    ]);
+    expect(() => s.delete("reviewer", { scope: "global" })).toThrow('There is no agent named "reviewer" in this scope.');
+
+    s.delete("reviewer", { scope: "project", projectCwd });
+    expect(s.snapshot().agents.some((agent) => agent.name === "reviewer")).toBe(false);
+  });
+
+  it("prunes references only when the deleted exact source has no remaining effective target", () => {
+    const projectCwd = join(dir, "project");
+    mkdirSync(projectCwd, { recursive: true });
+    let writes = 0;
+    const s = store({
+      storePath: join(dir, "state", "agents.json"),
+      trustedProjects: () => [projectCwd],
+      writeFile: (path, text) => {
+        writes += 1;
+        writeFileSync(path, text, "utf8");
+      },
+    });
+    s.save(custom("reviewer"));
+    s.save(custom("reviewer", { scope: "project", projectCwd, description: "Project shadow" }));
+    s.save(custom("global-lead", { supportsSubagents: true, allowedAgents: ["reviewer"] }));
+    s.save(custom("project-lead", {
+      scope: "project",
+      projectCwd,
+      supportsSubagents: true,
+      allowedAgents: ["reviewer"],
+    }));
+
+    writes = 0;
+    s.delete("reviewer", { scope: "project", projectCwd });
+    expect(s.get("global-lead")?.allowedAgents).toEqual(["reviewer"]);
+    expect(s.get("project-lead", projectCwd)?.allowedAgents).toEqual(["reviewer"]);
+    expect(writes).toBe(0);
+
+    s.save(custom("reviewer", { scope: "project", projectCwd, description: "Project shadow" }));
+    writes = 0;
+    s.delete("reviewer", { scope: "global" });
+    expect(s.get("global-lead")?.allowedAgents).toEqual([]);
+    expect(s.get("project-lead", projectCwd)?.allowedAgents).toEqual(["reviewer"]);
+    expect(writes).toBe(1);
   });
 
   it("only a custom agent can be the default", () => {
@@ -323,7 +376,7 @@ describe("AgentStore · persistence", () => {
     const first = store({ storePath: file });
     first.save(custom("lead"));
     first.setDefault("lead");
-    first.delete("default");
+    first.delete("default", { scope: "global" });
     first.close();
     const second = store({ storePath: file });
     expect(second.snapshot().agents.map((a) => a.name)).toEqual(["lead", "beam", "chat", "namer"]);

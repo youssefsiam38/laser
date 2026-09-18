@@ -75,8 +75,8 @@ export function IssueNotice({ id, messages, className }: { id?: string | undefin
 
 /**
  * A periodic-validation warning, anchored at the field it concerns. Focusable
- * (`tabIndex={-1}`) so `workbench.open("agents", { agent, field })` can put the
- * person exactly here.
+ * (`tabIndex={-1}`) so a source-aware Agents target can put the person exactly
+ * here without resolving a same-name definition by ambient project.
  */
 export function WarningNotice({
   warnings,

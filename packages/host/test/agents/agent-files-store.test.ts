@@ -328,7 +328,7 @@ describe("AgentStore Markdown files", () => {
     const store = createStore({ trustedProjects: () => [project] });
     expect(store.save(input("local", { scope: "project", projectCwd: join(project, ".", "nested", "..") }))).toMatchObject({ projectCwd: project });
     expect(store.validate(input("bad", { scope: "project", projectCwd: join(dir, "other") }))).toEqual([
-      { field: "projectCwd", message: "This agent's project must be open and trusted before its definition can be saved." },
+      { field: "projectCwd", message: "Choose Trust in Settings before saving an agent in this project." },
     ]);
     expect(store.validate(input("bad", { scope: "global", projectCwd: project }))).toEqual([
       { field: "projectCwd", message: "A global agent does not belong to a project. Remove its project folder." },

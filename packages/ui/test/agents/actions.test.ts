@@ -61,23 +61,24 @@ describe("agents actions", () => {
     expect(broken.toasts).toEqual([]);
   });
 
-  it("settles remove, set-default and policy through the toast guard", async () => {
+  it("rejects delete refusals, while default and policy settle through the toast guard", async () => {
     const h = harness({
       "agents/delete": ({ name }: { name: string }) => ({ snapshot: snapshot({ revision: 3, agents: snapshot().agents.filter((a) => a.name !== name) }) }),
       "agents/set-default": ({ name }: { name: string }) => ({ snapshot: snapshot({ revision: 4, defaultAgent: name }) }),
       "agents/set-policy": ({ policy }: { policy: { maxDepth?: number } }) => ({ snapshot: snapshot({ revision: 5, policy: { maxDepth: policy.maxDepth ?? 3, foregroundCommandSeconds: 120 } }) }),
     });
-    await h.actions.remove("reviewer");
+    await h.actions.remove("reviewer", { scope: "project", projectCwd: "/p" });
+    expect(h.request).toHaveBeenLastCalledWith("agents/delete", { name: "reviewer", location: { scope: "project", projectCwd: "/p" } });
     expect(h.state.agents.snapshot?.agents.some((a) => a.name === "reviewer")).toBe(false);
     await h.actions.setDefault("beam");
     expect(h.state.agents.snapshot?.defaultAgent).toBe("beam");
     await h.actions.setPolicy({ maxDepth: 2 });
     expect(h.state.agents.snapshot?.policy.maxDepth).toBe(2);
     const broken = harness({});
-    await expect(broken.actions.remove("reviewer")).resolves.toBeUndefined();
+    await expect(broken.actions.remove("reviewer", { scope: "global" })).rejects.toThrow("unknown method agents/delete");
     await broken.actions.setDefault("beam");
     await broken.actions.setPolicy({ maxDepth: 1 });
-    expect(broken.toasts).toEqual(["unknown method agents/delete", "unknown method agents/set-default", "unknown method agents/set-policy"]);
+    expect(broken.toasts).toEqual(["unknown method agents/set-default", "unknown method agents/set-policy"]);
     expect(broken.state.agents.snapshot).toBeNull();
   });
 

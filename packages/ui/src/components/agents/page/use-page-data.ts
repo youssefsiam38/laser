@@ -7,11 +7,12 @@
  * ignores an answer that lands after its inputs changed.
  */
 import type { AgentSkillsListing, ModelCatalogEntry } from "@lasercode/protocol";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { useAgentsActions } from "@/agents";
 import { narrowToConnected } from "@/components/assistant-ui/elements/connected-models";
 import { useLaserStable } from "@/runtime";
+import { deviceStore } from "@/runtime/device-storage";
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
@@ -26,7 +27,14 @@ interface Loaded<T> {
  * One request keyed by `key`, re-run when the key changes or `reload` is
  * called; `enabled: false` asks nothing and reports nothing loading.
  */
-function useRequest<T>(key: string | undefined, enabled: boolean, fetcher: (key: string, fresh: boolean) => Promise<T>): Loaded<T> {
+export function useRequest<T>(
+  key: string | undefined,
+  enabled: boolean,
+  fetcher: (key: string, fresh: boolean, environmentKey: string) => Promise<T>,
+): Loaded<T> {
+  const environment = useSyncExternalStore(deviceStore.subscribe, deviceStore.status, deviceStore.status);
+  const environmentKey = environment.active ? environment.environmentKey : undefined;
+  const stateKey = key !== undefined && environmentKey !== undefined ? `${environmentKey}\0${key}` : undefined;
   const [state, setState] = useState<{ key: string | undefined; data: T | undefined; loading: boolean; error: string | undefined }>({
     key: undefined,
     data: undefined,
@@ -38,24 +46,29 @@ function useRequest<T>(key: string | undefined, enabled: boolean, fetcher: (key:
   fetcherRef.current = fetcher;
 
   useEffect(() => {
-    if (!enabled || key === undefined) return undefined;
+    if (!enabled || key === undefined || stateKey === undefined || environmentKey === undefined) return undefined;
     let live = true;
-    setState((current) => ({ key, data: current.key === key ? current.data : undefined, loading: true, error: undefined }));
+    setState((current) => ({
+      key: stateKey,
+      data: current.key === stateKey ? current.data : undefined,
+      loading: true,
+      error: undefined,
+    }));
     fetcherRef
-      .current(key, attempt > 0)
+      .current(key, attempt > 0, environmentKey)
       .then((data) => {
-        if (live) setState({ key, data, loading: false, error: undefined });
+        if (live) setState({ key: stateKey, data, loading: false, error: undefined });
       })
       .catch((error: unknown) => {
-        if (live) setState({ key, data: undefined, loading: false, error: messageOf(error) });
+        if (live) setState({ key: stateKey, data: undefined, loading: false, error: messageOf(error) });
       });
     return () => {
       live = false;
     };
-  }, [key, enabled, attempt]);
+  }, [key, stateKey, environmentKey, enabled, attempt]);
 
   const reload = useCallback(() => setAttempt((n) => n + 1), []);
-  const current = enabled && state.key === key;
+  const current = enabled && state.key === stateKey;
   return {
     data: current ? state.data : undefined,
     loading: current ? state.loading : false,
@@ -64,44 +77,33 @@ function useRequest<T>(key: string | undefined, enabled: boolean, fetcher: (key:
   };
 }
 
-/** The catalog is over a thousand rows; one fetch per directory for the life of the page. `reload` asks again. */
+/** The catalog is over a thousand rows; one fetch per explicit Settings target for the life of the page. `reload` asks again. */
 const catalogCache = new Map<string, Promise<ModelCatalogEntry[]>>();
 
-/** Enabled models of the catalog routed through `cwd`. */
-export function useModelCatalog(cwd: string | undefined, enabled = true): Loaded<ModelCatalogEntry[]> {
+/** Enabled models of the catalog routed through the explicit Settings target. */
+export function useModelCatalog(
+  cwd: string | undefined,
+  settingsView: "global" | "effective",
+  enabled = true,
+): Loaded<ModelCatalogEntry[]> {
   const { client } = useLaserStable();
-  return useRequest(cwd, enabled, (key, fresh) => {
-    if (fresh) catalogCache.delete(key);
-    let pending = catalogCache.get(key);
-    if (!pending) {
+  const requestKey = cwd === undefined ? undefined : `${settingsView}\0${cwd}`;
+  return useRequest(requestKey, enabled, (key, fresh, environmentKey) => {
+    const cacheKey = `${environmentKey}\0${key}`;
+    if (fresh) catalogCache.delete(cacheKey);
+    let pending = catalogCache.get(cacheKey);
+    if (!pending && cwd !== undefined) {
       // Only providers the person has connected (D-145): an agent set to a
       // model nobody can call is a refusal waiting to happen.
       pending = Promise.all([
-        client.request("pi/models/catalog", { cwd: key, settingsView: "effective" }),
-        client.request("pi/providers/list", { cwd: key }).then(({ providers }) => providers, () => undefined),
+        client.request("pi/models/catalog", { cwd, settingsView }),
+        client.request("pi/providers/list", { cwd }).then(({ providers }) => providers, () => undefined),
       ]).then(([catalog, providers]) => narrowToConnected(catalog.models, providers).models);
-      pending.catch(() => catalogCache.delete(key));
-      catalogCache.set(key, pending);
+      pending.catch(() => catalogCache.delete(cacheKey));
+      catalogCache.set(cacheKey, pending);
     }
-    return pending;
+    return pending!;
   });
-}
-
-export interface WebSearchAvailability {
-  /** False when the feature list could not be read; the tool is then offered without gating. */
-  known: boolean;
-  enabled: boolean;
-}
-
-/** Whether the Web search feature is on for `cwd`, so `web_search` can say when it is not. */
-export function useWebSearchFeature(cwd: string | undefined): WebSearchAvailability {
-  const { client } = useLaserStable();
-  const result = useRequest(cwd ?? "", true, async (key) => {
-    const { features } = await client.request("feature/list", key ? { cwd: key } : {});
-    return features.find((feature) => feature.manifest.id === "web-search")?.enabled ?? false;
-  });
-  if (result.loading || result.error !== undefined || result.data === undefined) return { known: false, enabled: true };
-  return { known: true, enabled: result.data };
 }
 
 /** Every skill Laser discovers for `cwd`, asked only while the picker is open. */
