@@ -67,6 +67,14 @@ export async function clickElement(element: HTMLElement): Promise<void> {
   await act(async () => element.click());
 }
 
+/** Radix restores focus at the end of its close lifecycle, after content leaves. */
+export async function expectFocus(element: HTMLElement): Promise<void> {
+  for (let attempt = 0; attempt < 20 && document.activeElement !== element; attempt++) {
+    await act(async () => { await new Promise<void>((resolve) => setTimeout(resolve, 0)); });
+  }
+  expect(document.activeElement).toBe(element);
+}
+
 export function field(label: string): HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement {
   const byAria = document.body.querySelector<HTMLInputElement>(`[aria-label="${label}"]`);
   if (byAria) return byAria;

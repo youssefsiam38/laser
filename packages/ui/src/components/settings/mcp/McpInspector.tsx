@@ -55,7 +55,7 @@ export interface McpInspectorProps {
   state: McpServerState | undefined;
   onOpenChange: (open: boolean) => void;
   onServers: (servers: McpServerState[]) => void;
-  onEdit: (target: { mode: "edit" | "override"; scope: McpScope; config: McpServerConfig }) => void;
+  onEdit: (target: { mode: "edit" | "override"; scope: McpScope; config: McpServerConfig }, trigger: HTMLButtonElement) => void;
   onSignIn: () => void;
   onSignOut: () => void;
   onError: (message: string) => void;
@@ -351,8 +351,8 @@ export function McpInspector({
                       onSignOut={onSignOut}
                       onToggleDisabled={() => void save({ disabled: !state.config.disabled })}
                       onTurnOnHere={() => void turnOnHere()}
-                      onEdit={() => onEdit({ mode: "edit", scope: state.scope, config: state.config })}
-                      onOverride={() => onEdit({ mode: "override", scope: "project", config: state.config })}
+                      onEdit={(trigger) => onEdit({ mode: "edit", scope: state.scope, config: state.config }, trigger)}
+                      onOverride={(trigger) => onEdit({ mode: "override", scope: "project", config: state.config }, trigger)}
                       onRemove={() => setConfirmRemove(true)}
                     />
                   )}
@@ -448,8 +448,8 @@ function Overview({
   onSignOut: () => void;
   onToggleDisabled: () => void;
   onTurnOnHere: () => void;
-  onEdit: () => void;
-  onOverride: () => void;
+  onEdit: (trigger: HTMLButtonElement) => void;
+  onOverride: (trigger: HTMLButtonElement) => void;
   onRemove: () => void;
 }) {
   const transport = transportSummary(state.config.transport);
@@ -526,7 +526,7 @@ function Overview({
               </>
             )}
             {allowProjectOverride ? (
-              <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={onOverride}>
+              <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={(event) => onOverride(event.currentTarget)}>
                 <Pencil aria-hidden="true" /> Override for this project
               </Button>
             ) : null}
@@ -535,7 +535,7 @@ function Overview({
                 <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={onToggleDisabled}>
                   <Power aria-hidden="true" /> {state.config.disabled ? "Turn on" : "Turn off"}
                 </Button>
-                <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={onEdit}>
+                <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={(event) => onEdit(event.currentTarget)}>
                   <Pencil aria-hidden="true" /> Edit
                 </Button>
                 <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={onRemove}>

@@ -18,7 +18,7 @@ vi.mock("../../../src/runtime/index.js", () => {
 import { McpServersTab } from "../../../src/components/settings/mcp/McpServersTab.js";
 import { TooltipProvider } from "../../../src/components/ui/tooltip.js";
 import { useWorkbench, type Workbench } from "../../../src/components/workbench/workbench-context.js";
-import { click, field, findButton, inspection, manyTools, renderInWorkbench as render, text, tool, type as typeInto } from "./harness.js";
+import { click, expectFocus, field, findButton, inspection, manyTools, renderInWorkbench as render, text, tool, type as typeInto } from "./harness.js";
 
 let root: Root;
 let servers: McpServerState[];
@@ -67,6 +67,42 @@ async function mount(view: "global" | "project" = "global") {
     </TooltipProvider>,
   ));
 }
+
+it("returns focus to the Add trigger after Cancel, Escape, and a successful save", async () => {
+  await mount();
+  const trigger = findButton("Add a server")!;
+  const reload = findButton("Reload servers")!;
+
+  reload.focus();
+  await click("Add a server");
+  await click("Cancel");
+  await expectFocus(trigger);
+
+  reload.focus();
+  await click("Add a server");
+  await act(async () => {
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    await Promise.resolve();
+  });
+  expect(findButton("Cancel")).toBeUndefined();
+  await expectFocus(trigger);
+
+  reload.focus();
+  await click("Add a server");
+  await typeInto("Name it", "Docs");
+  await typeInto("Command", "docs-server");
+  await click("Add");
+  await expectFocus(trigger);
+});
+
+it("returns focus to the gallery card that opened its dialog", async () => {
+  await mount();
+  const trigger = findButton("Add Playwright")!;
+  findButton("Reload servers")!.focus();
+  await click("Add Playwright");
+  await click("Cancel");
+  await expectFocus(trigger);
+});
 
 it("lets a blank real dialog switch without a guard, then guards a meaningful draft", async () => {
   ({ root } = await render(

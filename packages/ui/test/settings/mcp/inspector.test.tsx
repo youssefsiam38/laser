@@ -19,7 +19,7 @@ vi.mock("../../../src/runtime/index.js", () => {
 
 import { McpServersTab } from "../../../src/components/settings/mcp/McpServersTab.js";
 import { TooltipProvider } from "../../../src/components/ui/tooltip.js";
-import { click, clickElement, field, findButton, inspection, renderInWorkbench as render, serverState, text, tool } from "./harness.js";
+import { click, clickElement, expectFocus, field, findButton, inspection, renderInWorkbench as render, serverState, text, tool } from "./harness.js";
 
 let root: Root;
 let servers: McpServerState[];
@@ -276,6 +276,23 @@ it("shows only the explicitly selected conversation's actual tools and discoveri
   expect(section.textContent).toContain("4,500 tokens");
   expect(section.textContent).not.toContain("Turn off");
   expect(saved).toHaveLength(0);
+});
+
+it("returns focus to the inspector action that opened Edit or Override", async () => {
+  await open();
+  const edit = findButton("Edit")!;
+  findButton("Ping")!.focus();
+  await click("Edit");
+  await click("Cancel");
+  await expectFocus(edit);
+
+  await act(async () => root.unmount());
+  await open("project");
+  const override = findButton("Override for this project")!;
+  findButton("Ping")!.focus();
+  await click("Override for this project");
+  await click("Cancel");
+  await expectFocus(override);
 });
 
 it("preloads only through the Advanced override while preserving exclusions and approvals", async () => {

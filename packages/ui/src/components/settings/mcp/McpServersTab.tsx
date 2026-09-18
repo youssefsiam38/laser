@@ -26,14 +26,16 @@ import { McpImportBanner, McpImportDialog } from "./McpImportDialog.js";
 import { McpInspector } from "./McpInspector.js";
 import { McpServerList } from "./McpServerList.js";
 import { McpSignInDialog, McpSignOutDialog } from "./McpSignIn.js";
+import { createMcpDialogFocusTarget, type McpDialogFocusTarget } from "./dialog-focus.js";
 import { rowKey, serverTitle } from "./model.js";
 import { ScopeDraftGuard, type ScopeDraft } from "../ScopeDraftGuard.js";
 import { useCommittedTargetLifetime } from "../useCommittedTargetLifetime.js";
 
-type McpAddTarget =
+type McpAddIntent =
   | { mode: "new" }
   | { mode: "gallery"; entry: McpCatalogEntry }
   | { mode: "edit" | "override"; edit: { scope: McpScope; config: McpServerConfig } };
+type McpAddTarget = McpAddIntent & { focusReturn: McpDialogFocusTarget };
 
 export function McpServersTab({ routeCwd, view, decision }: {
   routeCwd: string;
@@ -53,7 +55,7 @@ export function McpServersTab({ routeCwd, view, decision }: {
   const [error, setError] = useState<string>();
   const [selectedId, setSelectedId] = useState<string>();
   const [adding, setAdding] = useState<McpAddTarget>();
-  const [importing, setImporting] = useState(false);
+  const [importing, setImporting] = useState<McpDialogFocusTarget>();
   const [signIn, setSignIn] = useState<{ scope: McpScope; name: string; title: string }>();
   const [signOut, setSignOut] = useState<{ scope: McpScope; name: string; title: string }>();
   const [drafts, setDrafts] = useState<Record<string, ScopeDraft>>({});
@@ -74,6 +76,18 @@ export function McpServersTab({ routeCwd, view, decision }: {
   const activeDrafts = useMemo(() => Object.values(drafts), [drafts]);
   const targetKey = `${view}:${routeCwd}`;
   const target = useCommittedTargetLifetime(targetKey);
+  const focusTarget = useCallback((element: HTMLButtonElement) => {
+    const lease = target.capture();
+    return lease ? createMcpDialogFocusTarget(element, () => target.isCurrent(lease)) : undefined;
+  }, [target]);
+  const openAdd = useCallback((intent: McpAddIntent, trigger: HTMLButtonElement) => {
+    const focusReturn = focusTarget(trigger);
+    if (focusReturn) setAdding({ ...intent, focusReturn } as McpAddTarget);
+  }, [focusTarget]);
+  const openImport = useCallback((trigger: HTMLButtonElement) => {
+    const focusReturn = focusTarget(trigger);
+    if (focusReturn) setImporting(focusReturn);
+  }, [focusTarget]);
   const reportCurrentAddDraft = useCallback((draft: ScopeDraft | undefined) => {
     if (target.capture()) reportAddDraft(draft);
   }, [reportAddDraft, target]);
@@ -134,7 +148,7 @@ export function McpServersTab({ routeCwd, view, decision }: {
     setSources([]);
     setDetectFailed(false);
     setAdding(undefined);
-    setImporting(false);
+    setImporting(undefined);
     setSignIn(undefined);
     setSignOut(undefined);
     void load();
@@ -198,7 +212,7 @@ export function McpServersTab({ routeCwd, view, decision }: {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {writable ? <Button type="button" size="sm" onClick={() => setAdding({ mode: "new" })}>
+            {writable ? <Button type="button" size="sm" onClick={(event) => openAdd({ mode: "new" }, event.currentTarget)}>
               <Plus aria-hidden="true" /> Add a server
             </Button> : null}
             <Button type="button" variant="ghost" size="sm" aria-label="Reload servers" onClick={() => void load()}>
@@ -224,7 +238,7 @@ export function McpServersTab({ routeCwd, view, decision }: {
           </p>
         )}
 
-        {writable ? <McpImportBanner sources={sources} onOpen={() => setImporting(true)} /> : null}
+        {writable ? <McpImportBanner sources={sources} onOpen={openImport} /> : null}
 
         {servers.length === 0 && writable ? (
           <section className="flex flex-col gap-4">
@@ -234,7 +248,7 @@ export function McpServersTab({ routeCwd, view, decision }: {
                 Each one is a tested definition. Pick it, test it, and it is yours; or set one up yourself.
               </p>
             </div>
-            <McpGallery onChoose={(entry) => setAdding({ mode: "gallery", entry })} />
+            <McpGallery onChoose={(entry, trigger) => openAdd({ mode: "gallery", entry }, trigger)} />
           </section>
         ) : shown.length === 0 ? (
           <p className="text-sm leading-6 text-ink-2">
@@ -252,7 +266,7 @@ export function McpServersTab({ routeCwd, view, decision }: {
               Add another from the gallery
             </CollapsibleTrigger>
             <CollapsibleContent className="pt-4">
-              <McpGallery onChoose={(entry) => setAdding({ mode: "gallery", entry })} />
+              <McpGallery onChoose={(entry, trigger) => openAdd({ mode: "gallery", entry }, trigger)} />
             </CollapsibleContent>
           </Collapsible>
         )}
@@ -268,6 +282,7 @@ export function McpServersTab({ routeCwd, view, decision }: {
         {...(adding?.mode === "gallery" ? { entry: adding.entry } : {})}
         {...(adding?.mode === "edit" || adding?.mode === "override" ? { edit: adding.edit } : {})}
         scope={defaultScope}
+        focusReturn={adding?.focusReturn}
         onDraftChange={reportCurrentAddDraft}
         onSaved={(next, saved) => {
           if (!target.capture()) return;
@@ -277,6 +292,7 @@ export function McpServersTab({ routeCwd, view, decision }: {
           if (saved.needsAuth) {
             const state = next.find((entry) => entry.scope === saved.scope && entry.config.name === saved.name);
             if (state?.config.auth?.kind === "oauth") {
+              adding?.focusReturn.invalidate();
               setSignIn({ scope: saved.scope, name: saved.name, title: serverTitle(state.config) });
             }
           }
@@ -285,16 +301,17 @@ export function McpServersTab({ routeCwd, view, decision }: {
 
       {writable ? <McpImportDialog
         cwd={routeCwd}
-        open={importing}
+        open={Boolean(importing)}
         onOpenChange={(open) => {
-          if (target.capture()) setImporting(open);
+          if (target.capture() && !open) setImporting(undefined);
         }}
         sources={sources}
         scope={defaultScope}
+        focusReturn={importing}
         onDraftChange={reportCurrentImportDraft}
         onImported={(_next, imported) => {
           if (!target.capture()) return;
-          setImporting(false);
+          setImporting(undefined);
           actions.toast("info", imported.length ? `Imported ${imported.join(", ")}.` : "Nothing was imported.");
           reloadProjected();
         }}
@@ -316,9 +333,8 @@ export function McpServersTab({ routeCwd, view, decision }: {
         onNotice={(message) => {
           if (target.capture()) actions.toast("info", message);
         }}
-        onEdit={(edit) => {
-          if (!target.capture()) return;
-          setAdding({ mode: edit.mode, edit });
+        onEdit={(edit, trigger) => {
+          openAdd({ mode: edit.mode, edit }, trigger);
         }}
         onSignIn={() => {
           if (!target.capture()) return;

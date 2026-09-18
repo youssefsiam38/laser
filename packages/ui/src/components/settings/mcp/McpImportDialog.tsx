@@ -18,6 +18,7 @@ import { useLaserStable } from "@/runtime";
 import type { ScopeDraft } from "../ScopeDraftGuard.js";
 import { useCommittedTargetLifetime } from "../useCommittedTargetLifetime.js";
 
+import { useMcpDialogFocusReturn, type McpDialogFocusTarget } from "./dialog-focus.js";
 import { scopeLabel, transportSummary } from "./model.js";
 
 /** Translate the import wire's field paths without exposing its vocabulary. */
@@ -39,7 +40,7 @@ export function importSummary(sources: readonly McpImportSource[]): string | und
   return `Found ${count} ${count === 1 ? "server" : "servers"} configured for ${list}.`;
 }
 
-export function McpImportBanner({ sources, onOpen }: { sources: readonly McpImportSource[]; onOpen: () => void }) {
+export function McpImportBanner({ sources, onOpen }: { sources: readonly McpImportSource[]; onOpen: (trigger: HTMLButtonElement) => void }) {
   const summary = importSummary(sources);
   if (!summary) return null;
   return (
@@ -51,7 +52,7 @@ export function McpImportBanner({ sources, onOpen }: { sources: readonly McpImpo
         <FolderInput aria-hidden="true" className="size-4 shrink-0 text-ink-3" />
         {summary}
       </p>
-      <Button type="button" size="sm" variant="secondary" onClick={onOpen}>
+      <Button type="button" size="sm" variant="secondary" onClick={(event) => onOpen(event.currentTarget)}>
         Import
       </Button>
     </section>
@@ -65,6 +66,7 @@ export function McpImportDialog({
   sources,
   scope,
   onDraftChange,
+  focusReturn,
   onImported,
 }: {
   cwd: string;
@@ -73,9 +75,11 @@ export function McpImportDialog({
   sources: readonly McpImportSource[];
   scope: McpScope;
   onDraftChange?: ((draft: ScopeDraft | undefined) => void) | undefined;
+  focusReturn?: McpDialogFocusTarget | undefined;
   onImported: (servers: McpServerState[], imported: string[]) => void;
 }) {
   const { client } = useLaserStable();
+  const restoreFocus = useMcpDialogFocusReturn(open, focusReturn);
   const available = useMemo(() => sources.filter((source) => source.servers.length > 0), [sources]);
   const [sourceId, setSourceId] = useState<string>();
   const [chosen, setChosen] = useState<Set<string>>(() => new Set());
@@ -148,7 +152,7 @@ export function McpImportDialog({
       {/* One bounded, scrolling body: the source picker, the list, the scope
           and the replace switch all live inside it, so nothing is stranded
           above the fold on a short screen. */}
-      <DialogContent data-slot="mcp-import-dialog" className="flex max-h-[90dvh] min-h-0 flex-col sm:max-w-160">
+      <DialogContent data-slot="mcp-import-dialog" className="flex max-h-[90dvh] min-h-0 flex-col sm:max-w-160" onCloseAutoFocus={restoreFocus}>
         <DialogHeader className="shrink-0">
           <DialogTitle>Import servers</DialogTitle>
           <DialogDescription>

@@ -26,7 +26,7 @@ vi.mock("../../../src/runtime/index.js", () => {
 import { McpServersTab } from "../../../src/components/settings/mcp/McpServersTab.js";
 import { TooltipProvider } from "../../../src/components/ui/tooltip.js";
 import { WorkbenchProvider } from "../../../src/components/workbench/workbench-context.js";
-import { click, clickElement, field, findButton, renderInWorkbench as render, serverState, text } from "./harness.js";
+import { click, clickElement, expectFocus, field, findButton, renderInWorkbench as render, serverState, text } from "./harness.js";
 
 let root: Root;
 let servers: McpServerState[];
@@ -103,6 +103,23 @@ async function mount(view: "global" | "project" = "global") {
     </TooltipProvider>,
   ));
 }
+
+it("returns focus to Import after Cancel and a successful import", async () => {
+  await mount();
+  const trigger = findButton("Import")!;
+  const reload = findButton("Reload servers")!;
+
+  reload.focus();
+  await click("Import");
+  await click("Cancel");
+  await expectFocus(trigger);
+
+  reload.focus();
+  await click("Import");
+  await clickElement(document.querySelector<HTMLInputElement>('[aria-label="Import memory"]')!);
+  await click("Import 1 server");
+  await expectFocus(trigger);
+});
 
 it("imports the servers a person chose into the visible Project scope", async () => {
   sources[0]!.servers[0]!.conflicts = ["project"];

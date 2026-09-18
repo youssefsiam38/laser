@@ -34,6 +34,7 @@ import type { ScopeDraft } from "../ScopeDraftGuard.js";
 import { useCommittedTargetLifetime } from "../useCommittedTargetLifetime.js";
 
 import { McpServerForm } from "./McpServerForm.js";
+import { useMcpDialogFocusReturn, type McpDialogFocusTarget } from "./dialog-focus.js";
 import {
   catalogForm,
   catalogOptionReason,
@@ -61,6 +62,7 @@ export interface McpAddDialogProps {
   /** Source definition for edit and Project-override modes. */
   edit?: { scope: McpScope; config: McpServerConfig } | undefined;
   onDraftChange?: ((draft: ScopeDraft | undefined) => void) | undefined;
+  focusReturn?: McpDialogFocusTarget | undefined;
   onSaved: (servers: McpServerState[], saved: { scope: McpScope; name: string; needsAuth: boolean }) => void;
 }
 
@@ -72,8 +74,9 @@ function formSignature(form: ServerForm): string {
   });
 }
 
-export function McpAddDialog({ cwd, open, onOpenChange, mode, scope, entry, edit, onDraftChange, onSaved }: McpAddDialogProps) {
+export function McpAddDialog({ cwd, open, onOpenChange, mode, scope, entry, edit, onDraftChange, focusReturn, onSaved }: McpAddDialogProps) {
   const { client } = useLaserStable();
+  const restoreFocus = useMcpDialogFocusReturn(open, focusReturn);
   const [form, setForm] = useState<ServerForm>(() => emptyForm());
   const [baseline, setBaseline] = useState(() => formSignature(emptyForm()));
   const [options, setOptions] = useState<Set<string>>(() => new Set());
@@ -199,7 +202,7 @@ export function McpAddDialog({ cwd, open, onOpenChange, mode, scope, entry, edit
     <Dialog open={open} onOpenChange={onOpenChange}>
       {/* The dialog itself is bounded and scrolls inside: on a short phone the
           header must not be pushed off the top where nothing can reach it. */}
-      <DialogContent data-slot="mcp-add-dialog" className="flex max-h-[90dvh] min-h-0 flex-col sm:max-w-160">
+      <DialogContent data-slot="mcp-add-dialog" className="flex max-h-[90dvh] min-h-0 flex-col sm:max-w-160" onCloseAutoFocus={restoreFocus}>
         <DialogHeader className="shrink-0">
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
