@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 
+import { syntheticPng } from '../resource/fixtures.mjs';
+import { until } from '../lifecycle.mjs';
 import { activator, dismissInstallPrompt, scrub, watchPage } from './support.mjs';
 
 /**
@@ -67,7 +69,29 @@ export default async function largeBody(check) {
   const documentBytes = (await page.evaluate(() => document.body.innerText.length));
   assert.ok(documentBytes < PROMPT_BYTES / 4, `the rendered document stays far below the message (${documentBytes} characters)`);
 
-  // Opening it: keyboard first, because every pointer path has one.
+  // Move the conversation while this old fold remains on screen. This is the
+  // revision race that used to leave an empty viewer. The new prompt also
+  // carries an oversized real PNG: its 28-byte text must stay inline both
+  // while the reply streams and after the turn settles.
+  const imagePrompt = 'fixture-stream: image prompt';
+  assert.equal(Buffer.byteLength(imagePrompt), 28, 'the regression prompt stays the reported 28 bytes');
+  const image = syntheticPng(768, 3);
+  assert.ok(image.toString('base64').length > 16 * 1024, 'the image exceeds the transcript body bound');
+  await composer.fill(imagePrompt);
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: 'Attach file', exact: true }).click();
+  await (await chooser).setFiles({ name: 'image-prompt.png', mimeType: 'image/png', buffer: image });
+  await page.getByRole('main').getByRole('button', { name: 'Send', exact: true }).click();
+  await until(async () => (await check.rpc('session/load', { path })).state.isStreaming, 'the image turn to start', 20_000);
+  const promptText = page.getByText(imagePrompt, { exact: true });
+  await page.waitForFunction(text => document.body.textContent?.includes(text), imagePrompt, { timeout: 30_000 });
+  assert.equal(await promptText.count(), 1, 'the image prompt text is retained once while streaming');
+  await promptText.scrollIntoViewIfNeeded();
+  await promptText.waitFor({ state: 'visible' });
+  assert.equal(await page.getByText('Show full message · 28 B', { exact: true }).count(), 0, 'the image did not fold its fitting prompt text');
+
+  // Opening it: keyboard first, because every pointer path has one. The pager
+  // refreshes the stale revision once and still verifies the body's digest.
   const open = notice.locator('[data-slot="body-overflow-open"]');
   await open.waitFor();
   if (phone) await activate(open); else { await open.focus(); await page.keyboard.press('Enter'); }
@@ -113,6 +137,13 @@ export default async function largeBody(check) {
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => document.querySelector('[data-slot="output-viewer"]') === null, undefined, { timeout: 30_000 });
   assert.equal(await page.locator('[data-segment]').count(), 0, 'closing drops everything the viewer read');
+  await until(async () => !(await check.rpc('session/load', { path })).state.isStreaming, 'the image turn to settle', 90_000);
+  const lastReply = page.locator('[data-role="assistant"]').last();
+  await lastReply.evaluate(node => node.scrollIntoView({ block: 'start' }));
+  await page.locator('[data-slot="thread-viewport"]').evaluate(node => { node.scrollTop = Math.max(0, node.scrollTop - node.clientHeight / 2); });
+  await page.waitForFunction(text => document.body.textContent?.includes(text), imagePrompt, { timeout: 30_000 });
+  assert.equal(await page.getByText(imagePrompt, { exact: true }).count(), 1, 'the fitting prompt text stays inline once after settlement');
+  assert.equal(await page.getByText('Show full message · 28 B', { exact: true }).count(), 0, 'the fitting prompt text stays inline after settlement');
   if (!phone) {
     const focused = await page.evaluate(() => document.activeElement?.getAttribute('data-slot') ?? '');
     assert.equal(focused, 'body-overflow-open', `focus returned to the control that opened it (${focused})`);

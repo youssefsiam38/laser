@@ -495,6 +495,18 @@ describe("A5 · identity, ordinals and actions are untouched", () => {
 });
 
 describe("A12 · images are references, never bytes", () => {
+  it("keeps fitting prompt text inline when its image is oversized", () => {
+    const view = heavyView().open[path]!;
+    const prompt = view.blocks.find(block => block.kind === "user" && block.images.length > 0) as Extract<Block, { kind: "user" }>;
+    expect(prompt.text).toBe("look");
+    expect(prompt.bodies?.text?.totalBytes).toBe(4);
+    expect(prompt.bodies?.text?.excerpt.bytes).toBe(4);
+    expect(omittedBytes(prompt.bodies?.text)).toBe(0);
+    const measured = measureView(view);
+    expect(measured.bytes).toBeGreaterThanOrEqual(4);
+    expect(measured.bytes).toBeLessThanOrEqual(VIEW_CACHE_LIMITS.viewBytes);
+  });
+
   it("charges nothing for a referenced image and says how large it is", () => {
     const view = heavyView().open[path]!;
     const prompt = view.blocks.find(block => block.kind === "user" && block.images.length > 0) as Extract<Block, { kind: "user" }>;
