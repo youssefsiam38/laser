@@ -14,12 +14,41 @@ export function fixturePlan(name) {
   }));
 }
 const textOf = message => typeof message?.content === 'string' ? message.content : (message?.content ?? []).map(part => part.text ?? '').join('\n');
+
+/**
+ * A reply written the way a model writes one — headings, emphasis, lists,
+ * fenced code, a table, a link — and far past the transcript's per-body
+ * excerpt bound, so the whole of it is read in the full-body viewer (M16-T84).
+ */
+export function markdownReply(sections = 120) {
+  return Array.from({ length: sections }, (_, i) => [
+    `## Section ${i + 1}: what changed`,
+    '',
+    `**Designing FeatureScopeProps lifecycle and draft management (${i + 1})**`,
+    '',
+    'The draft is held until the person saves it, and `useFeatureScope` reads it.',
+    '',
+    `- first consideration for section ${i + 1}`,
+    `- second consideration for section ${i + 1}`,
+    '',
+    '```ts',
+    `export const section${i + 1} = { scope: "project" };`,
+    '```',
+    '',
+    '| Field | Meaning |',
+    '| --- | --- |',
+    '| scope | who reads it |',
+    '',
+    `Read [the notes](https://example.invalid/notes) before changing section ${i + 1}.`,
+  ].join('\n')).join('\n\n');
+}
 export function answer(request) {
   const last = request.messages.at(-1);
   const user = request.messages.findLast(message => message.role === 'user');
   const prompt = textOf(user);
   const system = textOf(request.messages.find(message => message.role === 'system' || message.role === 'developer'));
   const names = (request.tools ?? []).map(tool => tool.function.name);
+  if (prompt.startsWith('Show fixture markdown')) return { text: markdownReply() };
   if (prompt === 'Discover fixture tools') {
     const turn = request.messages.slice(request.messages.findLastIndex(message => message.role === 'user') + 1);
     const step = turn.filter(message => message.role === 'tool').length;
