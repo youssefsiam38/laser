@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-18T15:14:50+03:00 · orchestrator-2026-09-18 · HEAD: fe2f9a80
-**Current focus:** M16 — finish active-history acceptance, exact Agents scope and image accessibility before 0.9.2.
+**Last updated:** 2026-09-19T00:40:00+03:00 · orchestrator-2026-09-18 · HEAD: dc7a8979
+**Current focus:** M16 — 0.9.2 published; image accessibility (T82) in correction for 0.9.3.
 
 | Milestone | State |
 | --- | --- |
@@ -28,10 +28,10 @@
 | M19 Runtime recovery/update activation | done |
 | MX Cross-cutting | in-progress |
 
-**Blockers:** terminal worker-session resumption is unreliable; explicit clean transfers preserve progress. No external release blocker.
-**In flight:** T81 owner ab179630 preserves prefix/gap fixes and corrects repeated virtualized-root test failures without dropping touch acceptance; single review still pending. T75 Agents owner cab71ab9 implements approved D-297 location/scope/draft contracts, independently of history.
-**Accepted integration:** Settings services4293a91e + portable UATfe2f9a80. Postmerge UI2518+1skip, host15, protocol41, worker32, build/types/identity pass. Loaded-content pointer/touch matrices8/8 pass, including actual Effective inspector; six merged predecessor trees removed.
-**Next up:** review/integrate T81, then T82 images; finish/review Agents. The 24-image control passes on T81, but image25 stays disabled. Then parent T76 final poisoned gate and T79 publication.
-**Recently done:** T78 pristine agent choice (`107e5ecc`); T70 selectable activity (`e7ad7c34`); T74 image/text recovery (`b703f3bf`); T77 goal-tool recovery (`a0a698ee`); T73 packaged spelling (`d0bbc680`). Evidence in detailed ledger.
+**Blockers:** none. Terminal worker-session resumption stays unreliable; explicit clean transfers preserve progress.
+**In flight:** T82 images — reviewed `9b41858a` (4 blockers: pool residue unreclaimable, permanent `asked` rank, unbudgeted `open()` read, cap bounding total not residue); correction run_d6adcf03.
+**Published:** v0.9.2 from `dc7a8979` — CI 35396133026, release 35396492469, 12 assets, Latest, checkpoint `verified`. Two attempts abandoned first on load-only test flakes (host access.e2e timeout, UI image macrotask wait), both now wait for state.
+**Next up:** integrate T82 corrections → full verify → 0.9.3. Then M16-T76 final poisoned gate and the pre-existing `auto-follow-live-edge` streaming thumb-drag threshold on an idle machine.
+**Recently done:** T81 earlier history (`569940a1`); T83 upward reading + honest scrollbar (`39af2b71`); T84 Markdown bodies + `MarkdownDocument` (`c7ca3f40`, `b586c5d1`); T75 Settings/Agents scope (`62145ee5`); mention Backspace/`@/` (`9c7966d3`, `4ec84dd8`).
 
-**Published:** v0.9.1 (`8183fd04`), verified release checkpoint. 0.9.2 not released. Autonomous completion/commits/push/release authorized; no live restart. Active history outranks soft cache targets (D-295); MCP forms stay modal (D-296); Agents mutations identify their location (D-297).
+**Published:** v0.9.2 (`dc7a8979`). Autonomous completion/commits/push/release authorized; no live restart. Active history outranks soft cache targets (D-295); MCP forms stay modal (D-296); Agents mutations name their location (D-297); project agent files are trust-gated (D-298); Backspace only deletes (D-299); the mention picker browses the machine (D-300); T82 deferred to 0.9.3 (D-301).
