@@ -142,11 +142,11 @@ export function awake<T extends SessionView>(view: T): T {
  * Release the **older settled part** of one view, keeping the newest turns
  * (RP-5b).
  *
- * This is what makes the per-view byte bound true for a conversation somebody
- * is using: a view that is pinned — current, running, holding a question,
- * holding a draft — is never dehydrated, so without this it could grow without
- * limit. It is not eviction: the session stays open, its transcript stays on
- * screen, and everything the person is doing with it is untouched.
+ * This keeps inactive or non-visible hydrated views inside their ordinary
+ * cache share. Current, main-destination, scoped-visible and user-owned views
+ * are excluded by the cache planner: their logical history outranks soft
+ * targets. The function also remains the deterministic fold for a legacy trim
+ * already in state. It is not eviction: the session stays open.
  *
  * Never released: the streaming turn, a row carrying a question or an
  * approval, the person's own unsent prompt, and the rows the caller names as
@@ -156,8 +156,9 @@ export function awake<T extends SessionView>(view: T): T {
  * `userOffset` rises by exactly the prompts that went, so ordinals, "the first
  * message of this conversation" and every message action keep their meaning;
  * the page cursor is dropped rather than invented, because only a producer can
- * mint one. What was released is read again through the ordinary bounded tail
- * read, exactly like re-entering a released conversation.
+ * mint one. Explicit upward recovery asks the producer for a bounded page
+ * ending before the retained anchor and prepends it; it never replaces this
+ * window with a recent tail.
  */
 export interface TrimOptions {
   /** Exact UTF-8 bytes of hydrated content this view may keep. */

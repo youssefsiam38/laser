@@ -8,7 +8,7 @@ const state: SessionState = { path: "/session", id: "s", cwd: "/project", model:
 const other: SessionState = { ...state, path: "/other", id: "o" };
 const entries = Array.from({ length: 80 }, (_, i) => ({ type: "message", id: `e${i}`, parentId: i ? `e${i - 1}` : null, message: { role: i % 2 ? "assistant" : "user", content: [{ type: "text", text: `Message ${i}` }] } }));
 const source = { entries, leafId: "e79" };
-const scope = { path: state.path, epoch: "one", seq: 4 };
+const scope = { sessionId: state.id, epoch: "one", seq: 4, revision: "r1.test.base", environmentKey: "e1.test" };
 const update = (seq: number, delta: string): SessionUpdateParams => ({ sessionPath: state.path, epoch: scope.epoch, seq, at: "2026-01-01T00:00:00Z", update: { kind: "text_delta", delta, contentIndex: 0 } });
 
 function fixture() {
@@ -48,7 +48,7 @@ describe("owner-local transcript windows", () => {
     expect(f.view(f.beam).leafId).toBe(f.view(f.main).leafId);
     // The peer pages its own window back without disturbing the other.
     const page = historyWindow(source, { before: tail.window!.before! }, scope);
-    f.beam.dispatch({ type: "historyPrepend", path: state.path, before: tail.window!.before!, revision: f.view(f.beam).historyRevision, entries: page.entries, window: page.window! });
+    f.beam.dispatch({ type: "historyPrepend", path: state.path, before: tail.window!.before!, anchor: tail.window!.anchor!, baseRevision: tail.window!.revision, ownerRevision: f.view(f.beam).historyRevision, entries: page.entries, window: page.window! });
     expect(f.view(f.beam).entries).toHaveLength(80);
     expect(new Set(f.view(f.beam).blocks.map(block => block.id)).size).toBe(80);
     expect(f.view(f.main).blocks).toHaveLength(80);

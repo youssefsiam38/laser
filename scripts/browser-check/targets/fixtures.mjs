@@ -3,11 +3,11 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export function fixturePlan(name) {
-  const counts = { empty: 0, short: 4, long: 240, huge: 2000, tools: 4, agents: 2, projects: 4, mcp: 2 };
+  const counts = { empty: 0, short: 4, long: 240, history: 0, huge: 2000, tools: 4, agents: 2, projects: 4, mcp: 2 };
   if (!(name in counts)) throw new Error(`Unknown fixture ${name}; choose ${Object.keys(counts).join(', ')}.`);
   return Array.from({ length: name === 'projects' ? 10 : 1 }, (_, project) => ({
     name: `project-${String(project + 1).padStart(2, '0')}`,
-    sessions: Array.from({ length: name === 'projects' ? 15 : name === 'empty' ? 0 : 1 }, (_, session) => ({
+    sessions: Array.from({ length: name === 'projects' ? 15 : name === 'empty' || name === 'history' ? 0 : 1 }, (_, session) => ({
       name: `${name} conversation ${session + 1}`,
       prompts: Array.from({ length: counts[name] / 2 }, (_, turn) => `Review checkpoint ${turn + 1}: verify the implementation and explain the next step.`),
     })),
@@ -60,6 +60,18 @@ export function answer(request) {
     return { toolCall: { name: 'bash', args: { command: `printf '${encoded}'`, activity_label: `reading-${caseLabel}-body` } } };
   }
   if (last?.role === 'user' && prompt === 'Run generic fixture tool' && names.includes('inspect_fleet')) return { toolCall: { name: 'inspect_fleet', args: {} } };
+  if (prompt === 'Run one tool-heavy history turn') {
+    const turn = request.messages.slice(request.messages.findLastIndex(message => message.role === 'user') + 1);
+    const step = turn.filter(message => message.role === 'tool').length;
+    if (step < 90) {
+      const number = String(step + 1).padStart(3, '0');
+      return { toolCall: { name: 'bash', args: {
+        command: `for i in $(seq 1 180); do printf 'History action ${number} output line %03d stays reachable after paging.\\n' "$i"; done`,
+        activity_label: `Running history ${number}`,
+      } } };
+    }
+    return { text: 'Tool-heavy history turn complete. Every intermediate action remains reachable.' };
+  }
   if (prompt === 'Run fixture activity sequence') {
     const turn = request.messages.slice(request.messages.findLastIndex(message => message.role === 'user') + 1);
     const step = turn.filter(message => message.role === 'tool').length;
@@ -117,7 +129,8 @@ export async function fixture(target, runtime, name) {
       }
       const { entries } = await target.rpc('pi/session/entries', { path });
       const messages = entries.filter(entry => entry.type === 'message').map(entry => entry.message);
-      if (!['tools', 'agents'].includes(name) && messages.length !== session.prompts.length * 2) throw new Error(`Fixture ${name}: expected ${session.prompts.length * 2} persisted messages, got ${messages.length}.`);
+      const expected = name === 'history' ? 182 : session.prompts.length * 2;
+      if (!['tools', 'agents'].includes(name) && messages.length !== expected) throw new Error(`Fixture ${name}: expected ${expected} persisted messages, got ${messages.length}.`);
       if (name === 'tools') {
         const reasoning = messages.some(message => message.content?.some(part => part.type === 'thinking'));
         const results = messages.filter(message => message.role === 'toolResult' && !message.isError).map(message => message.toolName);

@@ -5,7 +5,7 @@ import { projectSessionView, shareProjectedMessages } from "../../src/runtime/pr
 import { isUnstartedSession } from "../../src/runtime/new-session.js";
 
 const session: SessionState = { path: "/session", id: "s", cwd: "/project", model: null, thinkingLevel: "medium", isStreaming: false, isCompacting: false, steeringMode: "one-at-a-time", followUpMode: "one-at-a-time", autoCompactionEnabled: true, messageCount: 80, pendingMessageCount: 0 };
-const scope = { path: session.path, epoch: "one", seq: 5 };
+const scope = { sessionId: session.id, epoch: "one", seq: 5, revision: "r1.test.base", environmentKey: "e1.test" };
 const entries = Array.from({ length: 80 }, (_, i) => ({ type: "message", id: `e${i}`, parentId: i ? `e${i - 1}` : null, message: { role: i % 2 ? "assistant" : "user", content: [{ type: "text", text: `Message ${i}` }] } }));
 const snapshot = { entries, leafId: "e79" };
 const begin = (app: AppState, token = "read") => reduce(app, { type: "historyBegin", path: session.path, token });
@@ -19,7 +19,7 @@ describe("partial history integration", () => {
     const before = app.open[session.path]!;
     const messages = projectSessionView(before).messages;
     const older = historyWindow(snapshot, { before: before.history!.before! }, scope);
-    app = reduce(app, { type: "historyPrepend", path: session.path, before: before.history!.before!, entries: older.entries, window: older.window });
+    app = reduce(app, { type: "historyPrepend", path: session.path, before: before.history!.before!, anchor: before.history!.anchor!, baseRevision: before.history!.revision, ownerRevision: before.historyRevision, entries: older.entries, window: older.window });
     const after = app.open[session.path]!;
     expect(after.blocks.slice(-before.blocks.length)).toEqual(before.blocks);
     after.blocks.slice(-before.blocks.length).forEach((block, i) => expect(block).toBe(before.blocks[i]));
@@ -66,7 +66,7 @@ describe("partial history integration", () => {
     expect(same.open[session.path]).toBe(app.open[session.path]);
     const before = app.open[session.path]!.history!.before!;
     const older = historyWindow(snapshot, { before }, { ...scope, seq: 999 });
-    app = reduce(app, { type: "historyPrepend", path: session.path, before, entries: older.entries, window: older.window });
+    app = reduce(app, { type: "historyPrepend", path: session.path, before, anchor: app.open[session.path]!.history!.anchor!, baseRevision: app.open[session.path]!.history!.revision, ownerRevision: app.open[session.path]!.historyRevision, entries: older.entries, window: older.window });
     expect(app.open[session.path]!.lastSeq).toBe(6);
     expect(app.open[session.path]!.blocks.at(-1)).toMatchObject({ text: "before after", streaming: true });
   });
@@ -127,7 +127,7 @@ describe("partial history integration", () => {
     expect(reduce(pending, { type: "historyEnd", path: session.path, token: "old" })).toBe(pending);
     const app = hydrate(pending, tail(), "new");
     const page = historyWindow(snapshot, { before: app.open[session.path]!.history!.before! }, scope);
-    expect(reduce(app, { type: "historyPrepend", path: session.path, before: "another cursor", entries: page.entries, window: page.window })).toBe(app);
+    expect(reduce(app, { type: "historyPrepend", path: session.path, before: "another cursor", anchor: app.open[session.path]!.history!.anchor!, baseRevision: app.open[session.path]!.history!.revision, ownerRevision: app.open[session.path]!.historyRevision, entries: page.entries, window: page.window })).toBe(app);
   });
 
   it("does not reuse a reset branch with unloaded durable history as a fresh session", () => {

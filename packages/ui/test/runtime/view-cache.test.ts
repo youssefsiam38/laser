@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentRun, BackgroundTask, SessionState } from "@lasercode/protocol";
 
 import { createStateStore } from "../../src/runtime/LaserProvider.js";
-import { createViewCache, DELIVERY_FALLBACK_MS, holdsTranscript, PENDING_TAIL_MAX_BYTES, PENDING_TAIL_MAX_ENTRIES, pinReason, rendererViewsStore, type PinReason, type ViewCacheEnvironment, type ViewCacheLimits } from "../../src/runtime/view-cache.js";
+import { createViewCache, DELIVERY_FALLBACK_MS, holdsTranscript, PENDING_TAIL_MAX_BYTES, PENDING_TAIL_MAX_ENTRIES, pinReason, protectsLogicalHistory, rendererViewsStore, type PinReason, type ViewCacheEnvironment, type ViewCacheLimits } from "../../src/runtime/view-cache.js";
 import { VIEW_TAIL_MAX_ENTRIES, viewTailRetainedBytes, type ViewTailDto, type ViewTailSink } from "../../src/runtime/view-tail.js";
 import { initialState, isDormantView, reduce, type AppState } from "../../src/store.js";
 import { measurementWork, resetMeasurementWork } from "../../src/runtime/view-measure.js";
@@ -149,20 +149,42 @@ describe("what is never released", () => {
     expect(pinReason(state, pathOf(3), noDrafts)).toBe("task");
   });
 
-  it("keeps every pinned view, and brings each inside the per-view bound instead of releasing one", () => {
+  it("keeps visible logical history even when it exceeds ordinary cache targets", () => {
     const h = harness({ limits: { views: 1, bytes: 4096, viewBytes: 1024 }, environment: { scoped: () => [pathOf(2)], hasDraft: () => false } });
     for (const index of [1, 2]) load(h, pathOf(index), { entries: 6, size: 200 });
     h.store.dispatch({ type: "destination", destination: { phase: "ready-chat", intent: 1, chat: { kind: "session", path: pathOf(1) }, rememberedCode: { kind: "no-project-landing" } } as AppState["destination"] });
+    const before = [1, 2].map(index => h.store.getSnapshot().open[pathOf(index)]!.entries);
 
     const outcome = h.cache.maintain();
 
     expect(outcome.released).toEqual([]);
     expect(outcome.refused.map((row) => row.pin).sort()).toEqual(["current", "scope"]);
-    // RP-5b: no pinned conversation is evicted, and none settles over its
-    // share either — each released its older settled turns instead.
     expect(dormantPaths(h.store.getSnapshot())).toEqual([]);
-    for (const index of [1, 2]) expect(h.cache.measure(pathOf(index)).bytes).toBeLessThanOrEqual(1024);
-    expect(h.cache.counters().overflow).toBeUndefined();
+    for (const [offset, index] of [1, 2].entries()) {
+      expect(h.store.getSnapshot().open[pathOf(index)]!.entries).toBe(before[offset]);
+      expect(h.cache.measure(pathOf(index)).bytes).toBeGreaterThan(1024);
+    }
+    expect(h.cache.counters().overflow).toBe("protected");
+    // A second pass reports the same honest state without another trim.
+    expect(h.cache.maintain().released).toEqual([]);
+    expect(h.store.getSnapshot().open[pathOf(1)]!.entries).toBe(before[0]);
+    expect(h.store.getSnapshot().open[pathOf(2)]!.entries).toBe(before[1]);
+  });
+
+  it("protects visible and user-owned views, but not background work by itself", () => {
+    const protectedPins: PinReason[] = ["current", "destination", "scope", "draft", "unsent", "action"];
+    for (const pin of protectedPins) expect(protectsLogicalHistory(pin), pin).toBe(true);
+    for (const pin of ["running", "queued", "agent-run", "task", "question", "loading"] satisfies PinReason[]) {
+      expect(protectsLogicalHistory(pin), pin).toBe(false);
+    }
+    expect(protectsLogicalHistory(undefined)).toBe(false);
+
+    const h = harness({ limits: { views: 6, bytes: 1 << 20, viewBytes: 1024 } });
+    load(h, pathOf(7), { entries: 8, size: 300, over: { isStreaming: true } });
+    expect(pinReason(h.store.getSnapshot(), pathOf(7), noDrafts)).toBe("running");
+    h.cache.maintain();
+    expect(h.store.getSnapshot().open[pathOf(7)]!.trimmed).toBeDefined();
+    expect(h.cache.measure(pathOf(7)).bytes).toBeLessThanOrEqual(1024);
   });
 });
 

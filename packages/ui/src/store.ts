@@ -278,6 +278,8 @@ export interface SessionView {
     prompts: number;
     identities?: { anchorEntryId?: string; focusedEntryId?: string; actionTargetEntryIds?: readonly string[]; leafId?: string | null };
     deferred?: true;
+    /** The producer proved there is no earlier page, without proving gaps whole. */
+    earlierExhausted?: true;
   } | undefined;
   /**
    * Set while the transcript has been released and not read again. Its
@@ -685,6 +687,7 @@ export function reduce(state: AppState, action: Action): AppState {
     case "historyDelta":
     case "historyMetadata":
     case "historyPrepend":
+    case "historyRecover":
       return updateView(state, action.path, v => reduceHistory(v, action, historyFold));
     case "views/reconcile":
       return updateView(state, action.path, (v) => {

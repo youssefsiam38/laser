@@ -507,7 +507,7 @@ describe("A12 · images are references, never bytes", () => {
     expect(measured.bytes).toBeLessThanOrEqual(VIEW_CACHE_LIMITS.viewBytes);
   });
 
-  it("charges retained prompt stubs as held bytes and trims the real view under pressure", () => {
+  it("charges retained prompt stubs honestly without trimming the active logical view", () => {
     const text = "x".repeat(15 * 1024);
     const count = 100;
     const elided = Array.from({ length: count }, (_, index) => ({
@@ -532,12 +532,18 @@ describe("A12 · images are references, never bytes", () => {
     expect(before.referencedBytes).toBe(count * 30 * 1024 * 2);
     expect(before.bytes).toBeGreaterThan(VIEW_CACHE_LIMITS.viewBytes);
 
+    const heldEntries = state.open[path]!.entries;
+    const heldStubs = state.open[path]!.stubs;
     const h = cacheOver(state);
     h.store.dispatch({ type: "notification", method: "session/update", params: { sessionPath: path, seq: 2, at: "",
       update: { kind: "state", state: sessionState() } } } as never);
     h.run();
     h.cache.maintain();
-    expect(measureView(h.store.getSnapshot().open[path]!).bytes).toBeLessThanOrEqual(VIEW_CACHE_LIMITS.viewBytes);
+    const active = h.store.getSnapshot().open[path]!;
+    expect(active.entries).toBe(heldEntries);
+    expect(active.stubs).toBe(heldStubs);
+    expect(measureView(active).bytes).toBe(before.bytes);
+    expect(h.cache.counters().overflow).toBe("protected");
   });
 
   it("charges nothing for a referenced image and says how large it is", () => {

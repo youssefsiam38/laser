@@ -190,6 +190,12 @@ export function historyWindowPlan(
         typeof cursor.l !== "string" || !visited.has(cursor.l)) changed();
     end = branch.findIndex(index => nodes[index]!.id === cursor.b);
     if (end < 0) changed();
+  } else if ("beforeEntry" in request) {
+    // The entry is an exclusive producer-owned boundary. Unlike `from`, this
+    // request is bounded and can recover a retained old viewport anchor
+    // without asking for its potentially enormous suffix to the leaf.
+    end = branch.findIndex(index => nodes[index]!.id === request.beforeEntry);
+    if (end < 0) changed();
   }
 
   if (scope.selection?.kind === "delta") {
@@ -204,7 +210,7 @@ export function historyWindowPlan(
     start = branch.findIndex(index => nodes[index]!.id === request.from);
     if (start < 0) changed();
   } else if (!all) {
-    const limit = "tail" in request ? request.tail : "before" in request ? request.limit ?? 40 : 40;
+    const limit = "tail" in request ? request.tail : "before" in request || "beforeEntry" in request ? request.limit ?? 40 : 40;
     let messages = 0;
     start = end;
     while (start > 0 && messages < limit) if (nodes[branch[--start]!]!.isMessage) messages++;
@@ -284,7 +290,9 @@ export function fitHistoryWindowPlan(
     const candidate = historyWindowPlan(
       nodes,
       leafId,
-      "before" in request ? { before: request.before, limit } : { tail: limit },
+      "before" in request ? { before: request.before, limit }
+        : "beforeEntry" in request ? { beforeEntry: request.beforeEntry, limit }
+          : { tail: limit },
       scope,
     );
     if (fits(candidate)) {
@@ -305,7 +313,9 @@ export function fitHistoryWindowPlan(
     const candidate = historyWindowPlan(
       nodes,
       leafId,
-      "before" in request ? { before: request.before, limit } : { tail: limit },
+      "before" in request ? { before: request.before, limit }
+        : "beforeEntry" in request ? { beforeEntry: request.beforeEntry, limit }
+          : { tail: limit },
       scope,
       true,
     );

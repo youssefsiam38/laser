@@ -19,7 +19,9 @@ export type HistoryAction =
    * update that overtook it. Refused, whole, when the base has moved.
    */
   | { type: "historyDelta"; path: string; token: string; baseRevision: string; entries: unknown[]; leafId?: string | null | undefined; window: HistoryWindow }
-  | { type: "historyPrepend"; path: string; before: string; entries: unknown[]; window: HistoryWindow; revision?: string | undefined }
+  | { type: "historyPrepend"; path: string; before: string; anchor: string; baseRevision: string; entries: unknown[]; window: HistoryWindow; ownerRevision?: string | undefined }
+  /** Bounded recovery before a retained anchor; it extends and never replaces. */
+  | { type: "historyRecover"; path: string; anchor: string; baseRevision: string; expectedBefore?: string | undefined; trimAt?: string | undefined; entries: unknown[]; window: HistoryWindow; ownerRevision?: string | undefined }
   | { type: "historyMetadata"; path: string; from?: string | null | undefined; entries: unknown[]; leafId?: string | null | undefined; window: HistoryWindow; revision?: string | undefined };
 
 /**
@@ -41,6 +43,18 @@ function adopt(next: SessionView, previous: SessionView, window: Omit<HistoryWin
     return rest as SessionView;
   }
   return { ...next, validated: validatedOf(window, next) };
+}
+
+/** Adopt a newer revision only after the producer proved the held base prefix. */
+function adoptProvedPage(next: SessionView, previous: SessionView, window: Omit<HistoryWindow, "live">, baseRevision: string): SessionView {
+  if (previous.validated === undefined || previous.validated.revision !== baseRevision) {
+    const { validated: _stale, ...rest } = next;
+    return rest as SessionView;
+  }
+  // Prefix proof says the rows covered by the held baseline are unchanged; an
+  // older page at a newer producer revision does not carry that revision's
+  // unseen suffix. Keep the covered baseline until a delta acquires it.
+  return { ...next, validated: window.revision === baseRevision ? validatedOf(window, next) : previous.validated };
 }
 
 function validatedOf(window: Omit<HistoryWindow, "live">, view: SessionView): ValidatedRevision {
@@ -114,6 +128,42 @@ function keepValidated(before: SessionView, after: SessionView): SessionView {
   if (before.entries === after.entries && before.leafId === after.leafId) return after;
   const { validated: _stale, ...rest } = after;
   return rest as SessionView;
+}
+
+const entryId = (entry: unknown): string | undefined => {
+  const id = (entry as { id?: unknown } | null)?.id;
+  return typeof id === "string" ? id : undefined;
+};
+
+/** Insert a producer page at its exclusive boundary, preserving later islands. */
+function insertBefore<T>(held: readonly T[], incoming: readonly T[], boundary: string, idOf: (value: T) => string | undefined): T[] | undefined {
+  const at = held.findIndex(value => idOf(value) === boundary);
+  if (at < 0) return undefined;
+  return [...held.slice(0, at), ...incoming, ...held.slice(at)];
+}
+
+/** First missing parent on the loaded active ancestry, nearest the live edge. */
+function activeGapBoundary(view: Pick<SessionView, "entries" | "stubs" | "leafId">): string | undefined {
+  const records = new Map<string, { parentId: string | null }>();
+  for (const entry of view.entries) {
+    const value = entry as { id?: unknown; parentId?: unknown } | null;
+    if (typeof value?.id === "string") records.set(value.id, { parentId: typeof value.parentId === "string" ? value.parentId : null });
+  }
+  for (const stub of view.stubs ?? []) records.set(stub.id, { parentId: stub.parentId });
+  // Only the producer-owned leaf proves active ancestry. Never infer a gap
+  // from the last locally appended/live-only row.
+  let id = view.leafId;
+  const visited = new Set<string>();
+  while (typeof id === "string") {
+    if (visited.has(id)) return undefined;
+    visited.add(id);
+    const record = records.get(id);
+    if (!record) return undefined;
+    if (record.parentId === null) return undefined;
+    if (!records.has(record.parentId)) return id;
+    id = record.parentId;
+  }
+  return undefined;
 }
 
 /** Keep lower-sequence new-generation events until a snapshot can adopt them. */
@@ -214,8 +264,10 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
       // Every fence, and all of them: this view must still hold the exact
       // authoritative window the host proved the suffix against, in this
       // environment and this worker generation. Anything else is replaced.
-      if (!base || !held || base.revision !== action.baseRevision || held.revision !== action.baseRevision
-        || base.environmentKey !== action.window.environmentKey || held.epoch !== action.window.epoch) return v;
+      if (!base || !held || base.revision !== action.baseRevision
+        || (held.revision !== action.baseRevision && held.revision !== action.window.revision)
+        || base.environmentKey !== action.window.environmentKey || held.environmentKey !== action.window.environmentKey
+        || held.epoch !== action.window.epoch) return v;
       const known = new Set<string>();
       for (const entry of v.entries) {
         const id = (entry as { id?: unknown } | null)?.id;
@@ -265,17 +317,49 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
       // across revisions the tuple would name entries it does not cover.
       return adopt({ ...v, entries, stubs, leafId: action.leafId, history: merged }, v, action.window);
     }
-    case "historyPrepend": {
-      if (v.historyRevision !== action.revision || v.history?.before !== action.before || v.history.epoch !== action.window.epoch) return v;
-      const ids = new Set([...v.entries.map(e => (e as { id?: string }).id), ...(v.stubs ?? []).map(stub => stub.id)]);
-      const incoming = retainEntries(action.entries.filter(e => !ids.has((e as { id?: string }).id)));
-      const entries = incoming.entries;
-      const stubs = mergeStubs([...incoming.stubs, ...(action.window.elided ?? []).map(stubOfElided)], v.stubs ?? []);
-      const { live: _live, ...history } = action.window;
-      // The page plus the existing suffix covers the branch exactly when no
-      // earlier cursor remains. Alternative versions are a separate scope.
-      return adopt({ ...v, history: { ...history, complete: history.before === undefined }, entries: [...entries, ...v.entries], stubs,
-        blocks: [...blocksFromEntries(entries, undefined, modelNamesOf(v.state), { stubs: incoming.stubs, revision: action.window.revision }), ...v.blocks] }, v, action.window);
+    case "historyPrepend":
+    case "historyRecover": {
+      const held = v.history;
+      if (!held || v.historyRevision !== action.ownerRevision || held.revision !== action.baseRevision
+        || held.anchor !== action.anchor || held.epoch !== action.window.epoch
+        || held.environmentKey !== action.window.environmentKey) return v;
+      if (action.type === "historyPrepend" && held.before !== action.before) return v;
+      if (action.type === "historyRecover" && (held.before !== action.expectedBefore
+        || (action.trimAt !== undefined && v.trimmed?.at !== action.trimAt))) return v;
+      const ids = new Set([...v.entries.map(entryId), ...(v.stubs ?? []).map(stub => stub.id)]);
+      const retained = retainEntries(action.entries.filter(entry => !ids.has(entryId(entry))));
+      const wireStubs = (action.window.elided ?? []).map(stubOfElided).filter(stub => !ids.has(stub.id));
+      const incomingStubs = mergeStubs(retained.stubs, wireStubs);
+      const entries = insertBefore(v.entries, retained.entries, action.anchor, entryId);
+      if (!entries) return v;
+      const pageBlocks = blocksFromEntries(retained.entries, undefined, modelNamesOf(v.state), { stubs: incomingStubs, revision: action.window.revision });
+      let blocks = v.blocks;
+      if (pageBlocks.length > 0) {
+        // An invisible custom record or a tool result folded into its call can
+        // be the entry boundary without owning a block. Insert before the first
+        // rendered block at or after that boundary, not only an exact block id.
+        const boundary = v.entries.findIndex(entry => entryId(entry) === action.anchor);
+        const suffix = new Set(v.entries.slice(boundary).map(entryId));
+        const at = v.blocks.findIndex(block => "entryId" in block && suffix.has(block.entryId));
+        if (boundary < 0 || at < 0) return v;
+        blocks = [...v.blocks.slice(0, at), ...pageBlocks, ...v.blocks.slice(at)];
+      }
+      const stubs = mergeStubs(incomingStubs, v.stubs ?? []);
+      const { live: _live, ...answered } = action.window;
+      let history: HistoryWindow = {
+        ...answered,
+        complete: answered.before === undefined,
+        branchesUnloaded: held.branchesUnloaded || answered.branchesUnloaded,
+        hasHistory: held.hasHistory || answered.hasHistory,
+      };
+      let trimmed = v.trimmed;
+      const candidate = { ...v, entries, stubs, blocks };
+      if (answered.before === undefined) {
+        const gap = activeGapBoundary(candidate);
+        if (gap) history = { ...history, anchor: gap, complete: false };
+        else { history = { ...history, complete: true }; if (trimmed) trimmed = undefined; }
+      }
+      return adoptProvedPage({ ...v, ...(trimmed ? { trimmed } : { trimmed: undefined }), history, entries, stubs, blocks }, v, action.window, action.baseRevision);
     }
   }
 }
@@ -351,13 +435,15 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
       // that carry them — which is also what lets a page of a conversation with
       // one enormous turn still carry the turns around it.
       const result = await deps.request({ path, window, bodyLimit: BODY_EXCERPT_MAX_BYTES, ...(base ? { baseRevision: base } : {}) }).catch(error => {
-        // `from` and `all` cannot be split into pages. A retained anchor that
-        // no longer exists, or a range too large to send at once, reads the
-        // latest page instead: the conversation opens, earlier pages load on
-        // scroll.
+        // `from` and `all` are indivisible. An unopened/released view can still
+        // fall back to its bounded opening tail. A hydrated conversation on
+        // screen keeps its logical window instead: refresh failure is honest,
+        // while a tail replacement would erase what the person is reading.
         const code = (error as { code?: number }).code;
         const indivisible = "from" in window || "all" in window;
         if (!(("from" in window && code === ErrorCodes.InvalidParams) || (indivisible && code === ErrorCodes.RevisionUnavailable))) throw error;
+        const held = deps.get(path);
+        if (deps.isCurrent(path) && held?.hydrated && (held.entries.length > 0 || held.blocks.length > 0)) throw error;
         return deps.request({ path, window: { tail: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES });
       });
       const current = deps.get(path);
@@ -389,15 +475,14 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
   /**
    * The revision a delta may be proved against, or nothing.
    *
-   * Only a view that holds one whole authoritative window qualifies: the same
-   * durable revision on the light record and on the loaded window. A view
-   * painted from this device's cache (RP-11) holds a captured revision and no
-   * window, so it asks for — and receives — a replacement.
+   * A proved older page can know a newer producer revision without covering
+   * its suffix. In that case the validated record remains the older covered
+   * baseline and asks the producer for precisely that missing delta.
    */
   const deltaBaseOf = (view: SessionView | undefined): string | undefined => {
-    const revision = view?.validated?.revision;
-    return revision !== undefined && view?.history?.revision === revision && view.hydrated && view.provisional === undefined
-      ? revision : undefined;
+    if (!view?.validated || !view.history || view.history.environmentKey !== view.validated.environmentKey
+      || !view.hydrated || view.provisional !== undefined) return undefined;
+    return view.validated.revision;
   };
   const all = async (path: string, accepting: () => boolean): Promise<boolean> => {
     const active = fence(path, accepting);
@@ -406,32 +491,67 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     await read(path, true, active);
     return active() && hasCompleteTree(deps.get(path));
   };
+  /**
+   * Ask the producer for one bounded page ending before the retained entry.
+   * This is the only recovery for a lost or stale cursor: it extends the view
+   * in place and never exchanges the person's old window for a recent tail.
+   */
+  const recoverEarlier = async (path: string, accepting: () => boolean): Promise<boolean> => {
+    const view = deps.get(path);
+    const history = view?.history;
+    const anchor = history?.anchor;
+    if (!view || !history || !anchor || view.trimmed?.earlierExhausted) return false;
+    const expectedBefore = history.before;
+    const trimAt = view.trimmed?.at;
+    const ownerRevision = view.historyRevision;
+    const baseRevision = history.revision;
+    const epoch = history.epoch;
+    const active = fence(path, accepting);
+    if (!active()) return false;
+    const result = await deps.request({ path, window: { beforeEntry: anchor, limit: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES, baseRevision }).catch(error => {
+      if (!active()) return undefined;
+      const code = (error as { code?: number }).code;
+      if (code === ErrorCodes.InvalidParams || code === ErrorCodes.RevisionUnavailable) return undefined;
+      throw error;
+    });
+    if (!result?.window || !active()) return false;
+    const current = deps.get(path);
+    if (!current || current.historyRevision !== ownerRevision || current.history?.revision !== baseRevision
+      || current.history.anchor !== anchor || current.history.before !== expectedBefore || current.history.epoch !== epoch
+      || current.history.environmentKey !== result.window.environmentKey
+      || (trimAt !== undefined && current.trimmed?.at !== trimAt)) return false;
+    deps.dispatch({ type: "historyRecover", path, anchor, baseRevision, ownerRevision, entries: result.entries, window: result.window,
+      ...(expectedBefore !== undefined ? { expectedBefore } : {}), ...(trimAt !== undefined ? { trimAt } : {}) });
+    return deps.get(path) !== current;
+  };
   const earlier = async (path: string, accepting: () => boolean): Promise<boolean> => {
     if (!accepting()) return false;
-    let view = deps.get(path);
-    // A trim releases the producer-owned cursor along with the older rows. The
-    // person's one request first asks from the retained anchor, so rows kept
-    // for focus/actions survive cursor minting. Only an invalid/retired anchor
-    // falls back to the bounded tail in `read`.
-    if (!view?.history?.before && view?.trimmed) {
-      await read(path, false, accepting);
-      if (!accepting()) return false;
-      view = deps.get(path);
-    }
+    const view = deps.get(path);
+    // A trim releases the producer-owned cursor with the older rows. Recover
+    // directly before the retained anchor; asking for its suffix can exceed a
+    // page and a tail replacement would delete the window being read.
+    if (!view?.history?.before && (view?.trimmed || view?.history?.complete === false)) return recoverEarlier(path, accepting);
     const active = fence(path, accepting);
     const before = view?.history?.before;
-    const revision = view?.historyRevision;
-    if (!before || !active()) return false;
-    const result = await deps.request({ path, window: { before, limit: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES }).catch(async error => {
-      if (!active()) return undefined;
-      if ((error as { code?: number }).code !== ErrorCodes.InvalidParams) throw error;
-      await read(path, false, active); return undefined;
-    });
-    if (!result || !active() || !result.window) return false;
+    const anchor = view?.history?.anchor;
+    const ownerRevision = view?.historyRevision;
+    const baseRevision = view?.history?.revision;
+    if (!before || !anchor || !baseRevision || !active()) return false;
+    let result: ClientRequests["pi/session/entries"]["result"] | undefined;
+    try {
+      result = await deps.request({ path, window: { before, limit: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES, baseRevision });
+    } catch (error) {
+      if (!active()) return false;
+      const code = (error as { code?: number }).code;
+      if (code !== ErrorCodes.InvalidParams && code !== ErrorCodes.RevisionUnavailable) throw error;
+      return recoverEarlier(path, active);
+    }
+    if (!result.window || !active()) return false;
     const current = deps.get(path);
-    if (current?.history?.before !== before || current.historyRevision !== revision) return false;
-    deps.dispatch({ type: "historyPrepend", path, before, revision, entries: result.entries, window: result.window });
-    return deps.get(path) !== current && deps.get(path)?.history?.before !== before;
+    if (current?.history?.before !== before || current.history.anchor !== anchor
+      || current.history.revision !== baseRevision || current.historyRevision !== ownerRevision) return false;
+    deps.dispatch({ type: "historyPrepend", path, before, anchor, baseRevision, ownerRevision, entries: result.entries, window: result.window });
+    return deps.get(path) !== current;
   };
   const metadata = async (path: string, accepting: () => boolean): Promise<void> => {
     const active = fence(path, accepting);
