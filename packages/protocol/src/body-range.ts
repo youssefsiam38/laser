@@ -572,15 +572,18 @@ export function entryBodies(entry: unknown): EntryBody[] {
  * `entryBodies` is for an authority that is about to answer with the text; a
  * client deciding whether it may keep a record must not pay for the text to
  * find out. Strings are counted where they already are, and a structured value
- * is walked through the same bounded projection the excerpt uses, which writes
- * at most `maxBytes` and counts the rest.
+ * is walked through the bounded projection counter without retaining output.
+ * Only complete user prompt text at or below `promptTextMaxBytes` is returned.
  */
-export function entryBodyMetadata(entry: unknown, maxBytes = 0): Array<{ component: BodyComponent; totalBytes: number; unknown?: true }> {
+export function entryBodyMetadata(entry: unknown, promptTextMaxBytes = 0): Array<{ component: BodyComponent; totalBytes: number; text?: string; unknown?: true }> {
   const value = record(entry);
   const type = typeof value.type === "string" ? value.type : "";
-  const rows: Array<{ component: BodyComponent; totalBytes: number; unknown?: true }> = [];
+  const rows: Array<{ component: BodyComponent; totalBytes: number; text?: string; unknown?: true }> = [];
   const structured = (component: BodyComponent, node: unknown): void => {
-    const bounded = boundedBodyText(node, maxBytes);
+    // Classification needs the exact size, not an excerpt. In particular,
+    // asking to retain fitting prompt text must not allocate projections for
+    // unrelated structured tool/custom bodies.
+    const bounded = boundedBodyText(node, 0);
     // A body whose size cannot be predicted without building it is declared
     // unknown and treated as oversized: the view points at it rather than
     // guessing, and never records zero for it.
@@ -608,7 +611,12 @@ export function entryBodyMetadata(entry: unknown, maxBytes = 0): Array<{ compone
   const message = record(value.message);
   const role = typeof message.role === "string" ? message.role : "";
   if (role === "user") {
-    rows.push({ component: { kind: "user_text" }, totalBytes: partsSize(message.content, "text", "text") });
+    const totalBytes = partsSize(message.content, "text", "text");
+    rows.push({
+      component: { kind: "user_text" },
+      totalBytes,
+      ...(promptTextMaxBytes > 0 && totalBytes <= promptTextMaxBytes ? { text: textPartsOf(message.content, "text", "text") } : {}),
+    });
     const content = Array.isArray(message.content) ? message.content : [];
     let image = 0;
     for (const part of content) {
@@ -965,6 +973,8 @@ export function createBodyRangeReader(): BodyRangeReader {
  * An entry a page did not deliver because one of its bodies is larger than the
  * caller asked to receive. Identity and shape only: the record itself is never
  * rewritten, so nothing a client holds is a lossy copy of a canonical entry.
+ * A complete prompt-text component may accompany the identity when it fits the
+ * same per-body limit; oversized image bytes remain references only.
  */
 export interface ElidedEntry {
   id: string;
@@ -976,7 +986,14 @@ export interface ElidedEntry {
   /** The calls an assistant record made, so their rows survive the elision. */
   toolCalls?: Array<{ id: string; name: string }>;
   /** Exact size and digest of every body, so a client can address them. */
-  bodies: Array<{ component: BodyComponent; totalBytes: number; contentDigest: string; regions?: AttachmentRegions }>;
+  bodies: Array<{
+    component: BodyComponent;
+    totalBytes: number;
+    contentDigest: string;
+    /** Complete prompt text when it fits beside another oversized prompt component. */
+    text?: string;
+    regions?: AttachmentRegions;
+  }>;
 }
 
 /** A one-shot hasher around an authority's own digest function. */
@@ -1032,10 +1049,12 @@ export function elideOversizedEntries(
         const regions = body.component.kind === "user_text"
           ? attachmentRegions(body.text, () => hasherOf(digest))
           : undefined;
+        const totalBytes = utf8ByteLength(body.text);
         return {
           component: body.component,
-          totalBytes: utf8ByteLength(body.text),
+          totalBytes,
           contentDigest: digest(body.text),
+          ...(totalBytes <= bodyLimit && body.component.kind === "user_text" ? { text: body.text } : {}),
           ...(regions && (regions.items.length > 0 || regions.truncated || regions.omitted) ? { regions } : {}),
         };
       }),

@@ -15,14 +15,16 @@ import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { FileOpenerProvider } from "../../src/components/thread/FileOpener.js";
 import { LaserStoreProvider, createStateStore } from "../../src/runtime/LaserProvider.js";
 import { projectMessages } from "../../src/runtime/projection.js";
-import { initialState, reduce } from "../../src/store.js";
+import { blocksFromEntries, initialState, reduce } from "../../src/store.js";
 import { ThreadMessage } from "../../src/components/thread/messages.js";
 import { BODY_VIEWER_AGGREGATE_MAX_BYTES, BodyReplyRefused, BodyWindow, COPY_INFLIGHT_MAX_BYTES, copyWholeBody, FIND_QUERY_MAX_BYTES, findInBody, IMAGE_BLOB_MAX, IMAGE_SURFACE_MAX_BYTES, ImageBlobs, indexOfFolded, streamBody } from "../../src/runtime/body-reader.js";
-import { sliceUtf8RangeFrom, utf8ByteLength } from "@lasercode/protocol";
+import { elideOversizedEntries, sliceUtf8RangeFrom, utf8ByteLength } from "@lasercode/protocol";
 import { partial } from "../../src/components/thread/LargeBodyViewer.js";
 import { sessionState } from "../agents/fixtures.js";
 import { LIVE_TAIL_MAX_BYTES, MESSAGE_RENDER_MAX_BYTES } from "../../src/runtime/body-excerpt.js";
 import { measureView } from "../../src/runtime/view-measure.js";
+import { formatBytes } from "../../src/format.js";
+import { stubOfElided } from "../../src/runtime/retained-entries.js";
 
 const SESSION = "/project/session.jsonl";
 const BODY = "answer ".repeat(600_000); // ~4 MB, for the transcript rows
@@ -97,6 +99,64 @@ async function mount(entries: unknown[], leafId: string) {
   return view;
 }
 
+describe("a prompt with an oversized image", () => {
+  const attached = (prose: string) => {
+    const content = "attachment body must stay in its file chip";
+    const wrapper = `<attached-file name="notes.txt" type="text/plain" size="${utf8ByteLength(content)}">\n${content}\n</attached-file>`;
+    return { content, text: `${prose}\n\n${wrapper}` };
+  };
+  const entry = (text: string) => ({ id: "e0", parentId: null, type: "message", message: { role: "user", content: [
+    { type: "text", text },
+    { type: "image", mimeType: "image/png", data: "A".repeat(20_000) },
+  ] } });
+
+  it("renders its fitting text inline without a body fold", async () => {
+    const text = "Image prompt text is 28 B!!!";
+    const view = await mount([entry(text)], "e0");
+
+    const prompt = view.blocks[0] as { text: string; bodies?: { text?: { totalBytes: number; excerpt: { bytes: number } } } };
+    expect(prompt.text).toBe(text);
+    expect(prompt.bodies?.text?.totalBytes).toBe(28);
+    expect(prompt.bodies?.text?.excerpt.bytes).toBe(28);
+    expect(container.querySelector('[data-role="user"]')?.textContent).toContain(text);
+    expect(container.querySelector('[data-slot="body-overflow"]')).toBeNull();
+  });
+
+  it("parses one fitting attachment exactly once from a locally retained prompt", async () => {
+    const prompt = attached("Review the image and file.");
+    const view = await mount([entry(prompt.text)], "e0");
+    const block = view.blocks[0] as Extract<(typeof view.blocks)[number], { kind: "user" }>;
+
+    expect(block.text).toBe("Review the image and file.");
+    expect(block.files).toEqual([{ name: "notes.txt", mediaType: "text/plain", size: utf8ByteLength(prompt.content), content: prompt.content }]);
+    expect(container.textContent).not.toContain("<attached-file");
+    expect(container.textContent).not.toContain(prompt.content);
+    expect(container.textContent?.match(/notes\.txt/g)).toHaveLength(1);
+  });
+
+  it("parses one fitting attachment exactly once from a wire-elided prompt", () => {
+    const prompt = attached("Review the image and file.");
+    const elided = elideOversizedEntries([entry(prompt.text)], 16 * 1024, text => `digest-${utf8ByteLength(text)}`).elided[0]!;
+    const earlier = elideOversizedEntries([entry("old".repeat(100_000))], 16 * 1024, text => `digest-${utf8ByteLength(text)}`).elided[0]!;
+    earlier.id = "old-prompt";
+    earlier.parentId = "root";
+    elided.parentId = "middle";
+    const entries = [
+      { id: "root", parentId: null, type: "custom", content: "root" },
+      { id: "middle", parentId: "old-prompt", type: "message", message: { role: "assistant", content: [{ type: "text", text: "middle" }] } },
+      { id: "leaf", parentId: "e0", type: "message", message: { role: "assistant", content: [{ type: "text", text: "leaf" }] } },
+    ];
+    const blocks = blocksFromEntries(entries, "leaf", undefined, { stubs: [stubOfElided(earlier), stubOfElided(elided)], revision: "r1.env.1" });
+    const block = blocks.find(row => row.kind === "user" && row.entryId === "e0") as Extract<(typeof blocks)[number], { kind: "user" }>;
+
+    expect(block.text).toBe("Review the image and file.");
+    expect(block.files).toEqual([{ name: "notes.txt", mediaType: "text/plain", size: utf8ByteLength(prompt.content), content: prompt.content }]);
+    expect(block.text).not.toContain("<attached-file");
+    expect(block.files).toHaveLength(1);
+    expect(block.bodies?.images?.[0]?.totalBytes).toBe(20_000);
+  });
+});
+
 describe("a reply the window is holding an excerpt of", () => {
   it("folds into the reply with one action that says how much there is", async () => {
     await mount([
@@ -106,7 +166,7 @@ describe("a reply the window is holding an excerpt of", () => {
 
     const notice = container.querySelector('[data-slot="body-overflow"]');
     expect(notice).not.toBeNull();
-    expect(notice!.textContent).toMatch(/^Show full reply · \d+\.\d MB$/);
+    expect(notice!.textContent).toBe(`Show full reply · ${formatBytes(new TextEncoder().encode(BODY).byteLength)}`);
     const button = container.querySelector('[data-slot="body-overflow-open"]');
     expect(button).toBeDefined();
     // The row it belongs to renders only its excerpt, not four megabytes.

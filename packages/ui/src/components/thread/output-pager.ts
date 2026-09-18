@@ -185,8 +185,9 @@ export class OutputPager {
   }
 
   private async revision(generation: number): Promise<string> {
-    if (this.ref.revision) return this.ref.revision;
+    // A stale-read recovery supersedes the revision the original page carried.
     if (this.revisionValue !== undefined) return this.revisionValue;
+    if (this.ref.revision) return this.ref.revision;
     const answer = this.revisionOf ? await this.revisionOf(this.path) : "";
     if (generation === this.generation) this.revisionValue = answer;
     return answer;
@@ -194,18 +195,32 @@ export class OutputPager {
 
   /** One checked reply at an exact offset. */
   private async read(offset: number, generation: number): Promise<RangeResult> {
-    const revision = await this.revision(generation);
+    let revision = await this.revision(generation);
     const limit = ENTRY_RANGE_MAX_BYTES;
-    this.requests += 1;
-    const reply = await this.request({
-      path: this.path,
-      environmentKey: this.environmentKey,
-      revision,
-      entryId: this.ref.entryId,
-      component: this.ref.component,
-      offset,
-      limit,
-    });
+    const ask = async (): Promise<RangeResult> => {
+      this.requests += 1;
+      return this.request({
+        path: this.path,
+        environmentKey: this.environmentKey,
+        revision,
+        entryId: this.ref.entryId,
+        component: this.ref.component,
+        offset,
+        limit,
+      });
+    };
+    let reply: RangeResult;
+    try {
+      reply = await ask();
+    } catch (failure) {
+      // A page revision is only a consistency fence, not the body's identity.
+      // Refresh it once; the content digest below still refuses changed bytes.
+      if ((failure as { code?: number } | null)?.code !== -32007 || !this.revisionOf || !this.ref.contentDigest) throw failure;
+      revision = await this.revisionOf(this.path);
+      if (generation !== this.generation) throw failure;
+      this.revisionValue = revision;
+      reply = await ask();
+    }
     const current = generation === this.generation;
     const checked = await checkRangeReply(reply, {
       revision,

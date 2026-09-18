@@ -197,8 +197,8 @@ export interface SessionView {
   entries: unknown[];
   /**
    * Records this view points at rather than holds, by identity: their place in
-   * the tree and the exact size of every body they carry. Never a body, and
-   * never presented as an entry (RP-5b).
+   * the tree and the exact size of every body they carry. At most one complete,
+   * bounded prompt text is retained; they are never presented as entries (RP-5b).
    */
   stubs?: EntryStub[];
   history?: Omit<HistoryWindow, "live"> | undefined;
@@ -1801,7 +1801,8 @@ function boundUserContent(
 
 /**
  * The blocks of a record this view points at. Everything a row needs is here —
- * identity, place, kind, the exact size of every body — and no body is.
+ * identity, place, kind and exact body sizes — plus complete prompt text only
+ * when that component independently fits the admission bound.
  */
 function stubBlocks(stub: EntryStub, revision: string | undefined): { blocks: Block[]; toolResult?: { toolCallId: string; ref: BodyRef | undefined } } {
   const refOf = (component: BodyComponent): BodyRef | undefined => {
@@ -1814,7 +1815,7 @@ function stubBlocks(stub: EntryStub, revision: string | undefined): { blocks: Bl
       // against it rather than against the first answer that arrives.
       ...(body.contentDigest !== undefined ? { contentDigest: body.contentDigest } : {}),
       ...(revision !== undefined ? { revision } : {}),
-      excerpt: { offset: 0, bytes: 0 },
+      excerpt: { offset: 0, bytes: body.text === undefined ? 0 : utf8ByteLength(body.text) },
     };
   };
   const when = stub.at ? { at: stub.at } : {};
@@ -1824,9 +1825,10 @@ function stubBlocks(stub: EntryStub, revision: string | undefined): { blocks: Bl
     // reference to the exact stored bytes of one file, with that region's own
     // digest; nothing about them is worked out from an excerpt (RP-5b §2).
     const prose = stub.bodies.find((row) => row.component.kind === "user_text");
-    const regions = prose?.regions;
+    const retained = prose?.text === undefined ? undefined : splitAttached(prose.text);
+    const regions = retained ? undefined : prose?.regions;
     const fileRefs: Array<BodyRef | undefined> = [];
-    const files: AttachedFile[] = (regions?.items ?? []).map((item) => {
+    const files: AttachedFile[] = retained?.files ?? (regions?.items ?? []).map((item) => {
       const ref = refOf({ kind: "user_text" });
       fileRefs.push(ref ? { ...ref, region: { offset: item.offset, bytes: item.bytes }, contentDigest: item.contentDigest } : undefined);
       return { name: item.name, mediaType: item.mediaType, size: item.bytes, content: "" };
@@ -1845,7 +1847,7 @@ function stubBlocks(stub: EntryStub, revision: string | undefined): { blocks: Bl
     const fileOverflow: FileOverflow | undefined = regions && (regions.omitted || regions.truncated)
       ? (regions.truncated ? { unknown: true as const } : { omitted: regions.omitted! })
       : undefined;
-    return { blocks: [{ kind: "user", id: `entry:${stub.id}`, ...when, text: "", files, entryId: stub.id,
+    return { blocks: [{ kind: "user", id: `entry:${stub.id}`, ...when, text: retained?.text ?? prose?.text ?? "", files, entryId: stub.id,
       ...(fileOverflow ? { fileOverflow } : {}),
       images: images.map(() => ({ type: "image", mimeType: "image/*", data: "" }) as ImageContent),
       ...(bodies ? { bodies } : {}) }] };
