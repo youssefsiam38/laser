@@ -696,8 +696,8 @@ describe("images the window points at", () => {
   it("folds slices into the blob as they arrive instead of collecting them", async () => {
     const request = payload(40); // 2.5 MB of base64 in forty slices
     const blobs = new ImageBlobs(request as never, "env");
-    const url = await blobs.load("k", SESSION, refOf(1, 40 * 64 * 1024), "image/png");
-    expect(url).toBe("blob:1");
+    const loaded = await blobs.load("k", SESSION, refOf(1, 40 * 64 * 1024), "image/png");
+    expect(loaded).toEqual({ state: "ready", url: "blob:1" });
     // Never more than the in-flight allowance in hand: each fold takes a few
     // slices, so the parts array is short and bounded, not forty long.
     // Each fold is the blob so far plus the few slices that fit the in-flight
@@ -709,17 +709,17 @@ describe("images the window points at", () => {
   it("refuses an image larger than one window may rebuild", async () => {
     const blobs = new ImageBlobs(payload(1) as never, "env");
     const huge = { ...refOf(2, 64 * 1024 * 1024 + 1), image: surface(16 * 1024 * 1024) };
-    expect(await blobs.load("huge", SESSION, huge, "image/png")).toBeUndefined();
+    expect(await blobs.load("huge", SESSION, huge, "image/png")).toEqual({ state: "failed", reason: "too-large" });
     // …and one whose decoded surface alone would not fit the budget.
     const wide = { ...refOf(3, 4096), image: surface(IMAGE_SURFACE_MAX_BYTES + 1) };
-    expect(await blobs.load("wide", SESSION, wide, "image/png")).toBeUndefined();
+    expect(await blobs.load("wide", SESSION, wide, "image/png")).toEqual({ state: "failed", reason: "too-large" });
   });
 
   it("admits the unchanged twelve-image fixture and stays inside its surface budget", async () => {
     const blobs = new ImageBlobs(payload(2) as never, "env");
     const urls = await Promise.all(Array.from({ length: 12 }, (_, index) =>
       blobs.load(`fixture-${index}`, SESSION, refOf(index, 2 * 64 * 1024), "image/png")));
-    expect(urls.every(url => typeof url === "string")).toBe(true);
+    expect(urls.every(loaded => loaded.state === "ready")).toBe(true);
     expect(blobs.held.images).toBe(12);
     expect(blobs.held.surface).toBe(12 * 16 * 1024 * 1024);
     expect(blobs.held.surface).toBeLessThanOrEqual(IMAGE_SURFACE_MAX_BYTES);
@@ -761,7 +761,7 @@ describe("images the window points at", () => {
     const pending = blobs.load("late", SESSION, refOf(1, 4, 1024), "image/png");
     blobs.clear();
     release!();
-    expect(await pending).toBeUndefined();
+    expect(await pending).toEqual({ state: "waiting", reason: "retired" });
     expect(blobs.url("late")).toBeUndefined();
     // Whatever it built was revoked rather than published into the new environment.
     expect(revoked.length).toBe(created.length);
@@ -780,8 +780,8 @@ describe("images the window points at", () => {
         offset: 0, bytes: 4, truncated: false, sliceDigest: await digestOf(text), contentDigest: digest, text };
     });
     const blobs = new ImageBlobs(request as never, "env", async () => "r2.env.2");
-    const url = await blobs.load("stale", SESSION, { ...refOf(1, 4, 1024), revision: "r1.env.1", contentDigest: digest }, "image/png");
-    expect(url).toBe("blob:1");
+    const loaded = await blobs.load("stale", SESSION, { ...refOf(1, 4, 1024), revision: "r1.env.1", contentDigest: digest }, "image/png");
+    expect(loaded).toEqual({ state: "ready", url: "blob:1" });
     expect(revisions).toEqual(["r1.env.1", "r2.env.2"]);
     expect(blobs.committed).toEqual(blobs.held);
   });
@@ -793,10 +793,12 @@ describe("images the window points at", () => {
     const blobs = new ImageBlobs(request as never, "env", async () => refreshed);
     const digest = "a".repeat(64);
     const pending = blobs.load("late-refresh", SESSION, { ...refOf(1, 4, 1024), revision: "r1.env.1", contentDigest: digest }, "image/png");
-    await Promise.resolve();
+    // Let the queue start the read and reach the revision refresh it is now
+    // waiting on: the clear below lands in the middle of that refresh.
+    await new Promise(resolve => setTimeout(resolve, 0));
     blobs.clear();
     resolveRevision("r2.env.2");
-    expect(await pending).toBeUndefined();
+    expect(await pending).toEqual({ state: "waiting", reason: "retired" });
     expect(request).toHaveBeenCalledTimes(1);
     expect(blobs.committed).toEqual({ images: 0, bytes: 0, surface: 0 });
     expect(created).toHaveLength(0);
@@ -872,7 +874,7 @@ describe("images the window points at", () => {
         sliceDigest: await digestOf(text), contentDigest: await digestOf("something else"), text };
     });
     const blobs = new ImageBlobs(corrupt as never, "env");
-    expect(await blobs.load("corrupt", SESSION, refOf(1, total, 1024), "image/png")).toBeUndefined();
+    expect(await blobs.load("corrupt", SESSION, refOf(1, total, 1024), "image/png")).toEqual({ state: "failed", reason: "corrupt" });
     expect(blobs.held).toEqual({ images: 0, bytes: 0, surface: 0 });
     // Nothing was published, and whatever was built was given back.
     expect(revoked.length).toBe(created.length);
@@ -908,7 +910,7 @@ describe("images the window points at", () => {
     expect(peak).toBeLessThanOrEqual(IMAGE_BLOB_MAX);
     release!();
     const urls = await Promise.all(pending);
-    const admitted = urls.filter(url => typeof url === "string").length;
+    const admitted = urls.filter(loaded => loaded.state === "ready").length;
     expect(admitted).toBeGreaterThan(0);
     expect(admitted).toBeLessThanOrEqual(12);
     expect(blobs.held.images).toBe(admitted);
@@ -942,12 +944,13 @@ describe("images the window points at", () => {
     blobs.clear();
     // A new generation reads the same key and two rows show it.
     held = false;
-    const fresh = await blobs.load("same-key", SESSION, refOf(1, total, 1024), "image/png");
+    const first = await blobs.load("same-key", SESSION, refOf(1, total, 1024), "image/png");
     await blobs.load("same-key", SESSION, refOf(1, total, 1024), "image/png");
-    expect(typeof fresh).toBe("string");
+    expect(first.state).toBe("ready");
+    const fresh = first.state === "ready" ? first.url : undefined;
 
     release!();
-    expect(await old).toBeUndefined();
+    expect((await old).state).not.toBe("ready");
     // The successor is untouched: its URL still published, its holders intact,
     // its counters exact and never negative.
     expect(blobs.url("same-key")).toBe(fresh);
@@ -965,8 +968,9 @@ describe("images the window points at", () => {
 
   it("hands a rebuilt picture out from the pool, held and never copied", async () => {
     const blobs = new ImageBlobs(payload(1) as never, "env");
-    const url = await blobs.load("open-me", SESSION, refOf(1, 64 * 1024, 1024), "image/png");
-    expect(typeof url).toBe("string");
+    const loaded = await blobs.load("open-me", SESSION, refOf(1, 64 * 1024, 1024), "image/png");
+    expect(loaded.state).toBe("ready");
+    const url = loaded.state === "ready" ? loaded.url : undefined;
     const before = blobs.held;
     const fetchSpy = vi.spyOn(globalThis, "fetch" as never);
 
@@ -982,7 +986,7 @@ describe("images the window points at", () => {
     expect(revoked).not.toContain(url);
     expect(blobs.url("open-me")).toBe(url);
     // The viewer closes: now it goes.
-    blobs.release("open-me");
+    source.release();
     expect(revoked).toContain(url);
     expect(blobs.url("open-me")).toBeUndefined();
     expect(blobs.held).toEqual({ images: 0, bytes: 0, surface: 0 });
@@ -995,7 +999,7 @@ describe("images the window points at", () => {
       truncated: false, sliceDigest: await digestOf("!!not base64!!"), contentDigest: WHOLE_DIGEST, text: "!!not base64!!",
     }));
     const blobs = new ImageBlobs(malformed as never, "env");
-    expect(await blobs.load("bad", SESSION, refOf(1, 8, 1024), "image/png")).toBeUndefined();
+    expect(await blobs.load("bad", SESSION, refOf(1, 8, 1024), "image/png")).toEqual({ state: "failed", reason: "corrupt" });
     expect(created).toHaveLength(0);
   });
 });
