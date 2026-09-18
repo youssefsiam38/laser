@@ -14,7 +14,7 @@ patchedDependencies:
     hash: 39b992f6ae37908eefb1e1c7176c37ffc22e29cc6ccf13249d2dcc9f148fff77
     path: patches/@earendil-works__pi-coding-agent@0.85.0.patch
   '@narumitw/pi-goal@0.54.4':
-    hash: e0c51ceafcb920fa315374a1b73aa3735f052b053c7d7b867c76f7b689391524
+    hash: 43a4ec16db49455682fd9057c916e790be0fbb797a7e5de001a245b053990d4b
     path: patches/@narumitw__pi-goal@0.54.4.patch
   pi-mcp-adapter@2.33.0:
     hash: d256a81a2b5102cb7cf65ab70c472a00ef62fdefb8765e3fbfcba23003fad4cf
@@ -178,7 +178,7 @@ importers:
     dependencies:
       '@narumitw/pi-goal':
         specifier: 0.54.4
-        version: 0.54.4(patch_hash=e0c51ceafcb920fa315374a1b73aa3735f052b053c7d7b867c76f7b689391524)(@earendil-works/pi-ai@0.85.0(@modelcontextprotocol/sdk@1.30.0(zod@4.5.4))(ws@8.21.3)(zod@4.5.4))(@earendil-works/pi-coding-agent@0.85.0(patch_hash=39b992f6ae37908eefb1e1c7176c37ffc22e29cc6ccf13249d2dcc9f148fff77)(@modelcontextprotocol/sdk@1.30.0(zod@4.5.4))(ws@8.21.3)(zod@4.5.4))(@earendil-works/pi-tui@0.85.0)(typebox@1.3.7)
+        version: 0.54.4(patch_hash=43a4ec16db49455682fd9057c916e790be0fbb797a7e5de001a245b053990d4b)(@earendil-works/pi-ai@0.85.0(@modelcontextprotocol/sdk@1.30.0(zod@4.5.4))(ws@8.21.3)(zod@4.5.4))(@earendil-works/pi-coding-agent@0.85.0(patch_hash=39b992f6ae37908eefb1e1c7176c37ffc22e29cc6ccf13249d2dcc9f148fff77)(@modelcontextprotocol/sdk@1.30.0(zod@4.5.4))(ws@8.21.3)(zod@4.5.4))(@earendil-works/pi-tui@0.85.0)(typebox@1.3.7)
     devDependencies:
       '@earendil-works/pi-coding-agent':
         specifier: 0.85.0
@@ -8294,7 +8294,7 @@ snapshots:
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     optional: true
 
-  '@narumitw/pi-goal@0.54.4(patch_hash=e0c51ceafcb920fa315374a1b73aa3735f052b053c7d7b867c76f7b689391524)(@earendil-works/pi-ai@0.85.0(@modelcontextprotocol/sdk@1.30.0(zod@4.5.4))(ws@8.21.3)(zod@4.5.4))(@earendil-works/pi-coding-agent@0.85.0(patch_hash=39b992f6ae37908eefb1e1c7176c37ffc22e29cc6ccf13249d2dcc9f148fff77)(@modelcontextprotocol/sdk@1.30.0(zod@4.5.4))(ws@8.21.3)(zod@4.5.4))(@earendil-works/pi-tui@0.85.0)(typebox@1.3.7)':
+  '@narumitw/pi-goal@0.54.4(patch_hash=43a4ec16db49455682fd9057c916e790be0fbb797a7e5de001a245b053990d4b)(@earendil-works/pi-ai@0.85.0(@modelcontextprotocol/sdk@1.30.0(zod@4.5.4))(ws@8.21.3)(zod@4.5.4))(@earendil-works/pi-coding-agent@0.85.0(patch_hash=39b992f6ae37908eefb1e1c7176c37ffc22e29cc6ccf13249d2dcc9f148fff77)(@modelcontextprotocol/sdk@1.30.0(zod@4.5.4))(ws@8.21.3)(zod@4.5.4))(@earendil-works/pi-tui@0.85.0)(typebox@1.3.7)':
     dependencies:
       '@earendil-works/pi-ai': 0.85.0(@modelcontextprotocol/sdk@1.30.0(zod@4.5.4))(ws@8.21.3)(zod@4.5.4)
       '@earendil-works/pi-coding-agent': 0.85.0(patch_hash=39b992f6ae37908eefb1e1c7176c37ffc22e29cc6ccf13249d2dcc9f148fff77)(@modelcontextprotocol/sdk@1.30.0(zod@4.5.4))(ws@8.21.3)(zod@4.5.4)
