@@ -167,6 +167,19 @@ describe("leaving an oversized record out of a page", () => {
     ]);
   });
 
+  it("does not publish attachment regions beside complete retained prompt text", () => {
+    const content = "kept attachment";
+    const text = `<attached-file name="kept.txt" type="text/plain" size="${content.length}">\n${content}\n</attached-file>`;
+    const entry = { id: "image-attachment", parentId: null, type: "message", message: { role: "user", content: [
+      { type: "text", text },
+      { type: "image", mimeType: "image/png", data: "A".repeat(20_000) },
+    ] } };
+    const page = elideOversizedEntries([entry], 16 * 1024, digestOfText);
+    const prose = page.elided[0]!.bodies.find(body => body.component.kind === "user_text")!;
+    expect(prose.text).toBe(text);
+    expect(prose.regions).toBeUndefined();
+  });
+
   it("keeps a record with no identity rather than pointing at something unreadable", () => {
     const anonymous = { type: "message", message: { role: "assistant", content: [{ type: "text", text: "z".repeat(50_000) }] } };
     const page = elideOversizedEntries([anonymous], 1024, digest);
@@ -350,7 +363,7 @@ describe("the bounded canonical projection", () => {
       { type: "toolCall", id: "c3", name: "write", arguments: { content: "x".repeat(2_000_000) } },
     ] } };
     resetBodyProjectionWork();
-    const rows = entryBodyMetadata(entry, 16 * 1024);
+    const rows = entryBodyMetadata(entry, { retainUserTextUpTo: 16 * 1024 });
 
     expect(rows.every(row => row.text === undefined)).toBe(true);
     expect(rows.find(row => row.component.kind === "tool_args")!.totalBytes).toBeGreaterThan(2_000_000);

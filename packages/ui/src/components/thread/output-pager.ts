@@ -22,7 +22,7 @@
  */
 import { ENTRY_RANGE_MAX_BYTES, utf8ByteLength, type ClientRequests } from "@lasercode/protocol";
 import type { BodyRef } from "@/runtime/body-excerpt";
-import { bodyReadMessage, BodyReplyRefused, checkRangeReply, indexOfFolded, type RangeRequest, type RevisionRequest } from "@/runtime/body-reader";
+import { bodyReadMessage, BodyReplyRefused, BodyRevisionFence, checkRangeReply, indexOfFolded, type RangeRequest, type RevisionRequest } from "@/runtime/body-reader";
 
 type RangeResult = ClientRequests["session/entry_range"]["result"];
 
@@ -56,7 +56,7 @@ export class OutputPager {
   private generation = 0;
   private wanted: number[] = [];
   private pumping = false;
-  private revisionValue: string | undefined;
+  private readonly revisions: BodyRevisionFence;
   private seenTotal: number | undefined;
   private seenDigest: string | undefined;
   private seenAuthority: "live" | "durable" | undefined;
@@ -68,9 +68,10 @@ export class OutputPager {
     private readonly path: string,
     private readonly ref: BodyRef & { entryId: string },
     private readonly environmentKey = "",
-    private readonly revisionOf?: RevisionRequest,
+    revisionOf?: RevisionRequest,
   ) {
     this.state = { totalBytes: ref.totalBytes, segments: new Map(), loading: new Set() };
+    this.revisions = new BodyRevisionFence(path, ref.revision, ref.contentDigest, revisionOf);
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -127,7 +128,7 @@ export class OutputPager {
     this.generation += 1;
     this.wanted = [];
     this.pumping = false;
-    this.revisionValue = undefined;
+    this.revisions.reset();
     this.seenTotal = undefined;
     this.seenDigest = undefined;
     this.seenAuthority = undefined;
@@ -184,22 +185,12 @@ export class OutputPager {
     }
   }
 
-  private async revision(generation: number): Promise<string> {
-    // A stale-read recovery supersedes the revision the original page carried.
-    if (this.revisionValue !== undefined) return this.revisionValue;
-    if (this.ref.revision) return this.ref.revision;
-    const answer = this.revisionOf ? await this.revisionOf(this.path) : "";
-    if (generation === this.generation) this.revisionValue = answer;
-    return answer;
-  }
-
   /** One checked reply at an exact offset. */
   private async read(offset: number, generation: number): Promise<RangeResult> {
-    let revision = await this.revision(generation);
     const limit = ENTRY_RANGE_MAX_BYTES;
-    const ask = async (): Promise<RangeResult> => {
+    const checked = await this.revisions.read(async (revision) => {
       this.requests += 1;
-      return this.request({
+      const reply = await this.request({
         path: this.path,
         environmentKey: this.environmentKey,
         revision,
@@ -208,31 +199,19 @@ export class OutputPager {
         offset,
         limit,
       });
-    };
-    let reply: RangeResult;
-    try {
-      reply = await ask();
-    } catch (failure) {
-      // A page revision is only a consistency fence, not the body's identity.
-      // Refresh it once; the content digest below still refuses changed bytes.
-      if ((failure as { code?: number } | null)?.code !== -32007 || !this.revisionOf || !this.ref.contentDigest) throw failure;
-      revision = await this.revisionOf(this.path);
-      if (generation !== this.generation) throw failure;
-      this.revisionValue = revision;
-      reply = await ask();
-    }
-    const current = generation === this.generation;
-    const checked = await checkRangeReply(reply, {
-      revision,
-      entryId: this.ref.entryId,
-      component: this.ref.component,
-      offset,
-      limit,
-      ...(current && this.seenAuthority ? { authority: this.seenAuthority } : {}),
-      totalBytes: current ? this.seenTotal : undefined,
-      contentDigest: current ? (this.seenDigest ?? this.ref.contentDigest) : this.ref.contentDigest,
-    });
-    if (current) {
+      const current = generation === this.generation;
+      return checkRangeReply(reply, {
+        revision,
+        entryId: this.ref.entryId,
+        component: this.ref.component,
+        offset,
+        limit,
+        ...(current && this.seenAuthority ? { authority: this.seenAuthority } : {}),
+        totalBytes: current ? (this.seenTotal ?? this.ref.totalBytes) : this.ref.totalBytes,
+        contentDigest: current ? (this.seenDigest ?? this.ref.contentDigest) : this.ref.contentDigest,
+      });
+    }, () => generation === this.generation);
+    if (generation === this.generation) {
       this.seenTotal = checked.totalBytes;
       this.seenDigest = checked.contentDigest;
       this.seenAuthority = checked.authority;

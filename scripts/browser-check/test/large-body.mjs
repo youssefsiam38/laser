@@ -84,11 +84,28 @@ export default async function largeBody(check) {
   await page.getByRole('main').getByRole('button', { name: 'Send', exact: true }).click();
   await until(async () => (await check.rpc('session/load', { path })).state.isStreaming, 'the image turn to start', 20_000);
   const promptText = page.getByText(imagePrompt, { exact: true });
-  await page.waitForFunction(text => document.body.textContent?.includes(text), imagePrompt, { timeout: 30_000 });
-  assert.equal(await promptText.count(), 1, 'the image prompt text is retained once while streaming');
+  const assertImagePrompt = async label => {
+    await page.waitForFunction(text => document.body.textContent?.includes(text), imagePrompt, { timeout: 30_000 });
+    assert.equal(await promptText.count(), 1, `the image prompt text is retained exactly once ${label}`);
+    const row = page.locator('[data-role="user"]').filter({ hasText: imagePrompt }).last();
+    const picture = row.locator('[data-slot="message-image"]');
+    await until(async () => {
+      if (await picture.count() !== 1) return false;
+      return picture.evaluate(node => node.complete && node.naturalWidth > 0 && node.naturalHeight > 0);
+    }, `the prompt image to decode ${label}`, 30_000);
+    const decoded = await picture.evaluate(node => ({ complete: node.complete, width: node.naturalWidth, height: node.naturalHeight }));
+    assert.deepEqual(decoded, { complete: true, width: 768, height: 768 }, `the exact PNG decoded ${label}`);
+    assert.doesNotMatch(scrub(await row.textContent()), /Image not kept in this window/, `no unavailable image placeholder ${label}`);
+    assert.equal(await page.getByText('Show full message · 28 B', { exact: true }).count(), 0, `the fitting text does not fold ${label}`);
+  };
+  await assertImagePrompt('while streaming');
+  // Reload while this latest turn is still live: the bounded tail contains its
+  // prompt, and subsequent deltas advance the revision around the same image.
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await composer.waitFor();
+  await assertImagePrompt('after reload');
   await promptText.scrollIntoViewIfNeeded();
   await promptText.waitFor({ state: 'visible' });
-  assert.equal(await page.getByText('Show full message · 28 B', { exact: true }).count(), 0, 'the image did not fold its fitting prompt text');
 
   // Opening it: keyboard first, because every pointer path has one. The pager
   // refreshes the stale revision once and still verifies the body's digest.
@@ -141,9 +158,7 @@ export default async function largeBody(check) {
   const lastReply = page.locator('[data-role="assistant"]').last();
   await lastReply.evaluate(node => node.scrollIntoView({ block: 'start' }));
   await page.locator('[data-slot="thread-viewport"]').evaluate(node => { node.scrollTop = Math.max(0, node.scrollTop - node.clientHeight / 2); });
-  await page.waitForFunction(text => document.body.textContent?.includes(text), imagePrompt, { timeout: 30_000 });
-  assert.equal(await page.getByText(imagePrompt, { exact: true }).count(), 1, 'the fitting prompt text stays inline once after settlement');
-  assert.equal(await page.getByText('Show full message · 28 B', { exact: true }).count(), 0, 'the fitting prompt text stays inline after settlement');
+  await assertImagePrompt('after settlement');
   if (!phone) {
     const focused = await page.evaluate(() => document.activeElement?.getAttribute('data-slot') ?? '');
     assert.equal(focused, 'body-overflow-open', `focus returned to the control that opened it (${focused})`);

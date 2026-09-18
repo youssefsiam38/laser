@@ -104,7 +104,7 @@ export function retainEntries(entries: readonly unknown[], maxBytes = BODY_EXCER
   for (const entry of entries) {
     // Sizes, not bodies: classifying a twelve-megabyte structured result must
     // not build the twelve-megabyte projection of it first (RP-5b §3.2).
-    const bodies = entryBodyMetadata(entry, maxBytes);
+    const bodies = entryBodyMetadata(entry, { retainUserTextUpTo: maxBytes });
     let oversized = false;
     for (const body of bodies) {
       if (body.totalBytes > maxBytes) { oversized = true; break; }

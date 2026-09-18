@@ -105,6 +105,26 @@ describe("reading a large output a few segments at a time", () => {
     expect(pager.getSnapshot().segments.get(0)?.text.length).toBeGreaterThan(0);
   });
 
+  it("shares one revision refresh between concurrent pager reads", async () => {
+    const served = authority(body);
+    let release!: (revision: string) => void;
+    const gate = new Promise<string>(resolve => { release = resolve; });
+    const revisionOf = vi.fn(async () => gate);
+    const request = vi.fn(async (params: Record<string, unknown>) => {
+      if (params.revision === "r1.env.1") throw Object.assign(new Error("revision moved"), { code: -32007 });
+      return served(params);
+    });
+    const pager = new OutputPager(request as never, PATH, { ...outputRef(body), contentDigest: await digestOf(body) }, "env", revisionOf);
+    pager.show(0);
+    const finding = pager.find("line", 0);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    release("r2.env.2");
+    await finding;
+    await settle(pager);
+    expect(revisionOf).toHaveBeenCalledOnce();
+    expect(pager.getSnapshot().segments.get(0)).toBeDefined();
+  });
+
   it("does not move a digestless local reference to a newer revision", async () => {
     const request = vi.fn(async () => { throw Object.assign(new Error("revision moved"), { code: -32007 }); });
     const revisionOf = vi.fn(async () => "r2.env.2");
@@ -116,6 +136,32 @@ describe("reading a large output a few segments at a time", () => {
     expect(revisionOf).not.toHaveBeenCalled();
     expect(pager.getSnapshot().segments.size).toBe(0);
     expect(pager.getSnapshot().error).toMatch(/moved on/);
+  });
+
+  it("stops after the refreshed ask fails and lets an explicit retry recover", async () => {
+    const served = authority(body);
+    let recover = false;
+    const revisionOf = vi.fn(async () => "r2.env.2");
+    const request = vi.fn(async (params: Record<string, unknown>) => {
+      if (params.revision === "r1.env.1") throw Object.assign(new Error("revision moved"), { code: -32007 });
+      if (!recover) throw new Error("temporary failure");
+      return served(params);
+    });
+    const pager = new OutputPager(request as never, PATH, { ...outputRef(body), contentDigest: await digestOf(body) }, "env", revisionOf);
+    pager.show(0);
+    await settle(pager);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(pager.getSnapshot().error).toMatch(/Try again/);
+
+    recover = true;
+    pager.retry();
+    await settle(pager);
+    expect(request.mock.calls.slice(0, 4).map(([params]) => params.revision))
+      .toEqual(["r1.env.1", "r2.env.2", "r1.env.1", "r2.env.2"]);
+    expect(request.mock.calls.length).toBeGreaterThanOrEqual(4);
+    expect(revisionOf).toHaveBeenCalledTimes(2);
+    expect(pager.getSnapshot().error).toBeUndefined();
+    expect(pager.getSnapshot().segments.get(0)?.text.length).toBeGreaterThan(0);
   });
 
   it("refuses refreshed-revision bytes that do not match the original body digest", async () => {

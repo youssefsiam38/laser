@@ -573,9 +573,24 @@ export function entryBodies(entry: unknown): EntryBody[] {
  * client deciding whether it may keep a record must not pay for the text to
  * find out. Strings are counted where they already are, and a structured value
  * is walked through the bounded projection counter without retaining output.
- * Only complete user prompt text at or below `promptTextMaxBytes` is returned.
+ * Only complete user prompt text at or below `retainUserTextUpTo` is returned.
  */
-export function entryBodyMetadata(entry: unknown, promptTextMaxBytes = 0): Array<{ component: BodyComponent; totalBytes: number; text?: string; unknown?: true }> {
+export interface EntryBodyMetadataOptions {
+  retainUserTextUpTo?: number;
+}
+
+/** The one rule for retaining complete prompt prose beside referenced bodies. */
+export function completeUserTextIfFits(
+  component: BodyComponent,
+  totalBytes: number,
+  limit: number,
+  text: () => string,
+): string | undefined {
+  return component.kind === "user_text" && limit > 0 && totalBytes <= limit ? text() : undefined;
+}
+
+export function entryBodyMetadata(entry: unknown, options: EntryBodyMetadataOptions = {}): Array<{ component: BodyComponent; totalBytes: number; text?: string; unknown?: true }> {
+  const retainUserTextUpTo = options.retainUserTextUpTo ?? 0;
   const value = record(entry);
   const type = typeof value.type === "string" ? value.type : "";
   const rows: Array<{ component: BodyComponent; totalBytes: number; text?: string; unknown?: true }> = [];
@@ -611,12 +626,10 @@ export function entryBodyMetadata(entry: unknown, promptTextMaxBytes = 0): Array
   const message = record(value.message);
   const role = typeof message.role === "string" ? message.role : "";
   if (role === "user") {
+    const component = { kind: "user_text" } as const;
     const totalBytes = partsSize(message.content, "text", "text");
-    rows.push({
-      component: { kind: "user_text" },
-      totalBytes,
-      ...(promptTextMaxBytes > 0 && totalBytes <= promptTextMaxBytes ? { text: textPartsOf(message.content, "text", "text") } : {}),
-    });
+    const text = completeUserTextIfFits(component, totalBytes, retainUserTextUpTo, () => textPartsOf(message.content, "text", "text"));
+    rows.push({ component, totalBytes, ...(text !== undefined ? { text } : {}) });
     const content = Array.isArray(message.content) ? message.content : [];
     let image = 0;
     for (const part of content) {
@@ -1043,18 +1056,19 @@ export function elideOversizedEntries(
       ...(typeof record(value.message).toolCallId === "string" ? { toolCallId: record(value.message).toolCallId as string } : {}),
       ...(entryToolCalls(entry).length > 0 ? { toolCalls: entryToolCalls(entry) } : {}),
       bodies: bodies.map((body) => {
-        // A prompt's attachments are named here, bounded, so a surface holding
-        // only an excerpt still shows its file chips and can read one of them
-        // without scanning the body it does not have (RP-5b §2).
-        const regions = body.component.kind === "user_text"
+        const totalBytes = utf8ByteLength(body.text);
+        const text = completeUserTextIfFits(body.component, totalBytes, bodyLimit, () => body.text);
+        // A prompt's attachments are named only when its complete text is not
+        // present. Publishing both costs wire bytes and gives the client two
+        // representations of the same files, one of which it must discard.
+        const regions = text === undefined && body.component.kind === "user_text"
           ? attachmentRegions(body.text, () => hasherOf(digest))
           : undefined;
-        const totalBytes = utf8ByteLength(body.text);
         return {
           component: body.component,
           totalBytes,
           contentDigest: digest(body.text),
-          ...(totalBytes <= bodyLimit && body.component.kind === "user_text" ? { text: body.text } : {}),
+          ...(text !== undefined ? { text } : {}),
           ...(regions && (regions.items.length > 0 || regions.truncated || regions.omitted) ? { regions } : {}),
         };
       }),
