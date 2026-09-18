@@ -2,8 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { delimiter, join } from "node:path";
 import { constants as osConstants, tmpdir } from "node:os";
 import {
   ReleaseError,
@@ -27,7 +28,9 @@ import {
   verifyPublicRelease,
   waitForWorkflow,
 } from "../release.mjs";
-import { identity } from "../../identity/identity.mjs";
+import { identity, repoRoot } from "../../identity/identity.mjs";
+import { releaseInventory } from "../publish-github.mjs";
+import { APP_LAUNCH_ENVIRONMENT_NAMES } from "../../launch-environment.mjs";
 
 const SHA = "a".repeat(40);
 const MAIN = "b".repeat(40);
@@ -70,6 +73,100 @@ function dryRunExec({ apiError = false } = {}) {
   };
   return { calls, exec };
 }
+
+test("verification and release children drop only the installed app launch environment", () => {
+  for (const name of APP_LAUNCH_ENVIRONMENT_NAMES) assert.ok(Object.values(identity.env).includes(name));
+  for (const key of ["mcpLive", "node", "port", "uiUrl", "debug"]) {
+    assert.ok(!APP_LAUNCH_ENVIRONMENT_NAMES.includes(identity.env[key]));
+  }
+
+  const bin = temp("verify-environment");
+  const capture = join(bin, "children");
+  mkdirSync(capture);
+  const probe = join(bin, "probe.mjs");
+  writeFileSync(probe, `import { writeFileSync } from "node:fs";\nimport { join } from "node:path";\nwriteFileSync(join(process.env.VERIFY_ENV_CAPTURE, process.pid + ".json"), JSON.stringify(process.env));\nprocess.exit(Number(process.env.PROBE_EXIT ?? 0));\n`);
+  if (process.platform === "win32") {
+    writeFileSync(join(bin, "pnpm.cmd"), `@"${process.execPath}" "${probe}" %*\r\n`);
+  } else {
+    const command = join(bin, "pnpm");
+    writeFileSync(command, `#!/bin/sh\nexec "${process.execPath}" "${probe}" "$@"\n`);
+    chmodSync(command, 0o755);
+  }
+
+  const poisoned = {
+    ...process.env,
+    ...Object.fromEntries(APP_LAUNCH_ENVIRONMENT_NAMES.map((name) => [name, `poison:${name}`])),
+    [identity.env.mcpLive]: "1",
+    VERIFY_ENV_CAPTURE: capture,
+    PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
+  };
+  const verified = spawnSync(process.execPath, ["scripts/verify.mjs"], {
+    cwd: repoRoot,
+    env: poisoned,
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  assert.equal(verified.status, 0, verified.stderr || verified.stdout);
+  assert.match(verified.stderr, new RegExp(`^verify: removed inherited app launch environment: ${APP_LAUNCH_ENVIRONMENT_NAMES.join(", ")}\\n`));
+  const children = readdirSync(capture).map((name) => JSON.parse(readFileSync(join(capture, name), "utf8")));
+  // Every current gate command uses pnpm, stubbed above; do not run real gates here.
+  assert.ok(children.length > 0);
+  assert.equal((verified.stderr.match(/removed inherited app launch environment/g) ?? []).length, 1);
+  assert.ok(!verified.stderr.includes("poison:"));
+  for (const env of children) {
+    for (const name of APP_LAUNCH_ENVIRONMENT_NAMES) assert.equal(env[name], undefined, name);
+    assert.equal(env[identity.env.mcpLive], "1");
+  }
+
+  const releaseChild = systemExec(process.execPath, ["-e", "process.stdout.write(JSON.stringify(process.env))"], {
+    env: { ...poisoned, GIT_INDEX_FILE: "/tmp/wrong-index" },
+  });
+  const releaseEnv = JSON.parse(releaseChild.stdout);
+  for (const name of APP_LAUNCH_ENVIRONMENT_NAMES) assert.equal(releaseEnv[name], undefined, name);
+  assert.equal(releaseEnv[identity.env.mcpLive], "1");
+  assert.equal(releaseEnv.GIT_INDEX_FILE, undefined);
+  assert.equal(releaseEnv.GIT_OPTIONAL_LOCKS, "0");
+  // Node resolves import.meta.url through symlinks; the entry must still run.
+  const linked = join(bin, "checkout");
+  symlinkSync(repoRoot, linked, process.platform === "win32" ? "junction" : "dir");
+  const viaLink = spawnSync(process.execPath, [join(linked, "scripts/verify.mjs")], {
+    cwd: repoRoot, env: { ...poisoned, PROBE_EXIT: "9" }, encoding: "utf8", timeout: 30_000,
+  });
+  assert.equal(viaLink.status, 1, viaLink.stderr || viaLink.stdout);
+  assert.match(viaLink.stdout, /verify FAILED: direction/);
+
+  const releaseHelp = spawnSync(process.execPath, [join(linked, "scripts/release/release.mjs"), "--help"], {
+    cwd: repoRoot, env: poisoned, encoding: "utf8", timeout: 30_000,
+  });
+  assert.equal(releaseHelp.status, 0, releaseHelp.stderr);
+  assert.ok(releaseHelp.stdout.length > 0);
+  assert.equal((releaseHelp.stderr.match(/release: removed inherited app launch environment/g) ?? []).length, 1);
+  for (const name of APP_LAUNCH_ENVIRONMENT_NAMES) assert.ok(releaseHelp.stderr.includes(name));
+  assert.ok(!releaseHelp.stderr.includes("poison:"));
+
+  // Standalone publication uses a separate gh spawn path, not systemExec.
+  const gh = join(bin, process.platform === "win32" ? "gh.cmd" : "gh");
+  writeFileSync(gh, process.platform === "win32"
+    ? `@"${process.execPath}" "${probe}" %*\r\n`
+    : `#!/bin/sh\nexec "${process.execPath}" "${probe}" "$@"\n`);
+  chmodSync(gh, 0o755);
+  const assets = join(bin, "assets");
+  mkdirSync(assets);
+  for (const name of releaseInventory("0.9.2")) writeFileSync(join(assets, name), "fixture");
+  rmSync(capture, { recursive: true });
+  mkdirSync(capture);
+  const published = spawnSync(process.execPath, [join(linked, "scripts/release/publish-github.mjs"), "v0.9.2", "0.9.2", identity.repository, assets], {
+    cwd: repoRoot, env: { ...poisoned, PROBE_EXIT: "9", GIT_INDEX_FILE: "/tmp/wrong-index" }, encoding: "utf8", timeout: 30_000,
+  });
+  assert.notEqual(published.status, 0); // Fake gh fails; no GitHub operation is possible.
+  const publicationChildren = readdirSync(capture).map(name => JSON.parse(readFileSync(join(capture, name), "utf8")));
+  assert.equal(publicationChildren.length, 1);
+  for (const name of APP_LAUNCH_ENVIRONMENT_NAMES) assert.equal(publicationChildren[0][name], undefined, name);
+  assert.equal(publicationChildren[0].GIT_INDEX_FILE, undefined);
+  assert.equal(publicationChildren[0].GIT_OPTIONAL_LOCKS, "0");
+  assert.equal(publicationChildren[0][identity.env.mcpLive], "1");
+  rmSync(bin, { recursive: true, force: true });
+});
 
 test("argument contract keeps dry-run read-only and publish explicit", () => {
   assert.equal(parseArgs(["--help"]).help, true);

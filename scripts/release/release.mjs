@@ -9,6 +9,7 @@ import {
   mkdtempSync,
   openSync,
   readFileSync,
+  realpathSync,
   readSync,
   readdirSync,
   renameSync,
@@ -20,6 +21,8 @@ import { dirname, join, resolve } from "node:path";
 import { constants as osConstants, tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { identity } from "../identity/identity.mjs";
+import { appLaunchEnvironmentScrubMessage, scrubAppLaunchEnvironment } from "../launch-environment.mjs";
+import { sanitizedReleaseEnvironment } from "./environment.mjs";
 import { inspectReleaseByTag, isExplicitMissingRelease, releaseInventory, verifyInventory } from "./publish-github.mjs";
 
 const MAIN_REF = "refs/heads/main";
@@ -105,7 +108,7 @@ function commandText(command, args) {
 export function systemExec(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd,
-    env: sanitizedEnvironment(options.env ?? process.env),
+    env: sanitizedReleaseEnvironment(options.env ?? process.env),
     timeout: options.timeoutMs ?? (command === "pnpm" || args.includes("download") ? 30 * 60_000 : 5 * 60_000),
     maxBuffer: 16 * 1024 * 1024,
     encoding: "utf8",
@@ -383,20 +386,6 @@ function assertCleanStatus(exec, cwd) {
   if (status) fail(`Isolated release worktree is not clean:\n${status}`);
 }
 
-export function sanitizedEnvironment(input = process.env) {
-  const env = { ...input };
-  // Repository/index/config selection must not escape into linked worktrees or
-  // the temporary repositories created by verification tests.
-  for (const key of Object.keys(env)) {
-    if (key.startsWith("GIT_")) delete env[key];
-  }
-  env.GIT_TERMINAL_PROMPT = "0";
-  env.GIT_OPTIONAL_LOCKS = "0";
-  return env;
-}
-
-function withoutAlternateIndex() { return sanitizedEnvironment(); }
-
 function assertSynchronizedVersions(worktree, paths, version) {
   const manifests = paths.filter((path) => path.endsWith("package.json"));
   for (const path of manifests) {
@@ -437,8 +426,8 @@ export function prepareCandidate({ exec = systemExec, worktree, version, offline
     if (existingUntracked) fail(`Resumed release checkpoint has untracked files:\n${existingUntracked}`);
   }
   const installArgs = ["install", "--frozen-lockfile", ...(offline ? ["--offline"] : [])];
-  checked(exec, "pnpm", installArgs, { cwd: worktree, env: withoutAlternateIndex() });
-  checked(exec, "bash", ["scripts/release/set-version.sh", version], { cwd: worktree, env: withoutAlternateIndex() });
+  checked(exec, "pnpm", installArgs, { cwd: worktree });
+  checked(exec, "bash", ["scripts/release/set-version.sh", version], { cwd: worktree });
   const changed = changedFromHead(exec, worktree);
   ensureExactPaths(changed, allowed, "Version synchronization");
   assertVersionOnlyDiff(exec, worktree, changed, version);
@@ -446,8 +435,8 @@ export function prepareCandidate({ exec = systemExec, worktree, version, offline
   const untracked = checked(exec, "git", ["ls-files", "--others", "--exclude-standard"], { cwd: worktree });
   if (untracked) fail(`Version synchronization created untracked files:\n${untracked}`);
   if (changed.length > 0) checked(exec, "git", ["add", "--", ...changed], { cwd: worktree });
-  checked(exec, "pnpm", ["identity:check"], { cwd: worktree, env: withoutAlternateIndex() });
-  checked(exec, "pnpm", ["verify"], { cwd: worktree, env: withoutAlternateIndex() });
+  checked(exec, "pnpm", ["identity:check"], { cwd: worktree });
+  checked(exec, "pnpm", ["verify"], { cwd: worktree });
   const staged = changedPaths(exec, worktree, true);
   ensureExactPaths(staged, allowed, "Staged verification");
   if (JSON.stringify(staged) !== JSON.stringify(changed)) {
@@ -1032,6 +1021,7 @@ export async function runRelease(options, dependencies = {}) {
 }
 
 async function main() {
+  process.stderr.write(appLaunchEnvironmentScrubMessage("release", scrubAppLaunchEnvironment(process.env).removed));
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
     process.stdout.write(help());
@@ -1057,7 +1047,7 @@ async function main() {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   main().catch((error) => {
     process.stderr.write(`release: ${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;

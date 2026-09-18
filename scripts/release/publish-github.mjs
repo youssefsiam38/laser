@@ -1,10 +1,12 @@
-import { createReadStream } from "node:fs";
+import { createReadStream, realpathSync } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { basename, join, resolve } from "node:path";
+import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
 import { identity } from "../identity/identity.mjs";
+import { appLaunchEnvironmentScrubMessage, scrubAppLaunchEnvironment } from "../launch-environment.mjs";
+import { sanitizedReleaseEnvironment } from "./environment.mjs";
 
 // The public page is the commit point. Never expose partially uploaded assets.
 export function verifyAssets(expected, remote) {
@@ -81,7 +83,7 @@ export function publishRelease({ tag, version, repo, assets, notes = "", draft =
 function github(args, allowMissing = false) {
   let output;
   try {
-    output = execFileSync("gh", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    output = execFileSync("gh", args, { env: sanitizedReleaseEnvironment(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   } catch (error) {
     if (allowMissing && isExplicitMissingRelease(error.stderr)) return null;
     throw error;
@@ -89,7 +91,8 @@ function github(args, allowMissing = false) {
   return args[0] === "api" || args.includes("--json") ? JSON.parse(output) : output;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
+  process.stderr.write(appLaunchEnvironmentScrubMessage("publish", scrubAppLaunchEnvironment(process.env).removed));
   const [tag, version, repo, dir, provenance, draft, notes] = process.argv.slice(2);
   const paths = (await readdir(dir, { withFileTypes: true })).filter((file) => file.isFile()).map((file) => join(dir, file.name));
   // Kept outside the manifest: the provenance bundle cannot attest itself.
