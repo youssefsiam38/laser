@@ -8,35 +8,78 @@
  * stays put, Escape returns you to the session you were reading, and the
  * transcript behind keeps streaming.
  */
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
+
+import { deviceStore } from "@/runtime/device-storage";
+import {
+  normalizeSettingsScope,
+  sameSettingsScope,
+  settingsScopeStore,
+  type SettingsScopeState,
+} from "@/runtime/settings-scope";
 
 export type WorkbenchPage = "settings" | "logs" | "agents";
 
-/**
- * Which settings tab to land on. Only ever passed by something that already
- * knows the fix — a rejected credential opening "Providers and models" — so the
- * plain `open("settings")` still lands where it always did.
- */
+/** Which settings tab to land on when a caller knows the useful destination. */
 export type SettingsTab = "general" | "advanced" | "appearance" | "features" | "models" | "usage" | "keyboard" | "trust" | "device";
+
+/**
+ * A Settings deep link may carry an explicit target. Omitting `scope` is
+ * deliberately scope-neutral: no caller gets to infer one from app navigation.
+ */
+export interface SettingsTarget {
+  tab?: SettingsTab | undefined;
+  scope?: SettingsScopeState | undefined;
+}
 
 /**
  * A deep link into the Agents page: the agent to open, and the field to land
  * on (an `AgentWarning.field` or `AgentIssue.field`, e.g. `skills`,
- * `allowedAgents`, `model`). Passed by a warning badge or a run's refusal;
- * the plain `open("agents")` lands on the list.
+ * `allowedAgents`, `model`).
  */
 export interface AgentsTarget {
   agent: string;
   field?: string | undefined;
 }
 
+export type SettingsScopeChangeReason = "control" | "deep-link";
+
+export interface SettingsScopeChangeRequest {
+  current: SettingsScopeState;
+  next: SettingsScopeState;
+  reason: SettingsScopeChangeReason;
+}
+
 /**
- * `open` keeps its original two-argument shape for Settings and adds the
- * agents form beside it: `open("settings", tab?)`, `open("agents", target?)`,
- * `open("logs")`. A page opened without its argument clears the previous one.
+ * The one guarded scope editor currently mounted in Settings/Agents.
+ *
+ * Callers must memoize this callback. If it accepts after a newer navigation,
+ * its save/discard still belongs to the original editor target, while the
+ * sequence fence keeps that older destination from replacing the newer one.
+ * Same-scope page/tab navigation is intentionally outside this scope seam;
+ * the future Agent editor owns that separate protection.
+ */
+export type SettingsScopeNavigationGuard = (
+  request: SettingsScopeChangeRequest,
+) => boolean | Promise<boolean>;
+
+/**
+ * Structured scope-changing Settings links return their acceptance. All plain
+ * navigation keeps the original synchronous behavior.
  */
 export interface WorkbenchOpen {
-  (page: "settings", tab?: SettingsTab): void;
+  (page: "settings", target: SettingsTarget & { scope: SettingsScopeState }): Promise<boolean>;
+  (page: "settings", target?: SettingsTab | SettingsTarget): void | Promise<boolean>;
   (page: "agents", target?: AgentsTarget): void;
   (page: "logs"): void;
   (page: WorkbenchPage): void;
@@ -46,11 +89,16 @@ export interface Workbench {
   page: WorkbenchPage | null;
   /** Set only when the caller asked for a specific settings tab. */
   tab: SettingsTab | undefined;
-  /**
-   * Set only when the caller asked for a specific agent. A fresh object per
-   * request, so asking for the same field twice re-runs the scroll and focus.
-   */
+  /** A fresh object for every explicit Settings target. */
+  settings: SettingsTarget | undefined;
+  /** A fresh object for every explicit Agents target. */
   agents: AgentsTarget | undefined;
+  settingsScope: SettingsScopeState;
+  requestSettingsScope: (
+    next: SettingsScopeState,
+    reason?: SettingsScopeChangeReason,
+  ) => Promise<boolean>;
+  registerSettingsScopeGuard: (guard: SettingsScopeNavigationGuard) => () => void;
   open: WorkbenchOpen;
   close: () => void;
 }
@@ -63,17 +111,121 @@ export function useWorkbench(): Workbench {
   return value;
 }
 
+/** Register the one memoized Settings-scope guard, and nothing broader. */
+export function useSettingsScopeNavigationGuard(
+  guard: SettingsScopeNavigationGuard | undefined,
+): void {
+  const { registerSettingsScopeGuard } = useWorkbench();
+  useEffect(() => {
+    if (!guard) return undefined;
+    return registerSettingsScopeGuard(guard);
+  }, [guard, registerSettingsScopeGuard]);
+}
+
 export function WorkbenchProvider({ children }: { children: ReactNode }) {
   const [page, setPage] = useState<WorkbenchPage | null>(null);
   const [tab, setTab] = useState<SettingsTab>();
+  const [settings, setSettings] = useState<SettingsTarget>();
   const [agents, setAgents] = useState<AgentsTarget>();
+  const settingsScope = useSyncExternalStore(settingsScopeStore.subscribe, settingsScopeStore.getSnapshot);
+  const requestSequence = useRef(0);
+  const guardRef = useRef<{
+    guard: SettingsScopeNavigationGuard;
+    environmentKey: string | undefined;
+  } | undefined>(undefined);
 
-  const open = useCallback((next: WorkbenchPage, arg?: SettingsTab | AgentsTarget) => {
+  // Same-environment reconnects preserve the mounted editor and its guard.
+  // Every real namespace/lifecycle transition fences pending navigation and
+  // discards a guard whose anchored draft cannot belong to the next namespace.
+  useEffect(() => deviceStore.subscribe((event) => {
+    if (event.kind === "activated" && event.transition === "same") return;
+    requestSequence.current += 1;
+    guardRef.current = undefined;
+  }), []);
+
+  const registerSettingsScopeGuard = useCallback((guard: SettingsScopeNavigationGuard) => {
+    const registration = { guard, environmentKey: deviceStore.status().environmentKey };
+    guardRef.current = registration;
+    return () => {
+      if (guardRef.current === registration) guardRef.current = undefined;
+    };
+  }, []);
+
+  const requestSettingsScope = useCallback(async (
+    requested: SettingsScopeState,
+    reason: SettingsScopeChangeReason = "control",
+  ): Promise<boolean> => {
+    const next = normalizeSettingsScope(requested);
+    if (!next) return false;
+    // Even a no-op scope request is newer navigation and fences an older guard
+    // that is still waiting for a decision.
+    const sequence = ++requestSequence.current;
+    const current = settingsScopeStore.getSnapshot();
+    if (sameSettingsScope(current, next)) return true;
+
+    const environmentKey = deviceStore.status().environmentKey;
+    const registration = guardRef.current;
+    let accepted = true;
+    if (registration && registration.environmentKey === environmentKey) {
+      try {
+        accepted = await registration.guard({ current, next, reason });
+      } catch {
+        accepted = false;
+      }
+    }
+
+    if (
+      !accepted
+      || sequence !== requestSequence.current
+      || environmentKey !== deviceStore.status().environmentKey
+    ) return false;
+    return settingsScopeStore.set(next);
+  }, []);
+
+  const commitOpen = useCallback((next: WorkbenchPage, arg?: SettingsTab | SettingsTarget | AgentsTarget) => {
     setPage(next);
-    setTab(next === "settings" && typeof arg === "string" ? arg : undefined);
-    setAgents(next === "agents" && arg !== undefined && typeof arg === "object" ? { ...arg } : undefined);
-  }, []) as WorkbenchOpen;
-  const close = useCallback(() => setPage(null), []);
+    const settingsTarget = next === "settings"
+      ? typeof arg === "string"
+        ? { tab: arg }
+        : arg && typeof arg === "object"
+          ? { ...arg } as SettingsTarget
+          : undefined
+      : undefined;
+    setSettings(settingsTarget);
+    setTab(settingsTarget?.tab);
+    setAgents(next === "agents" && arg !== undefined && typeof arg === "object" ? { ...arg } as AgentsTarget : undefined);
+  }, []);
+
+  const open = useCallback((next: WorkbenchPage, arg?: SettingsTab | SettingsTarget | AgentsTarget) => {
+    const explicitScope = next === "settings" && typeof arg === "object" && arg !== null
+      ? (arg as SettingsTarget).scope
+      : undefined;
+    if (explicitScope !== undefined) {
+      // Nothing about the destination changes before the guard settles. This
+      // keeps a dirty source editor mounted when the person chooses Keep editing.
+      const request = requestSettingsScope(explicitScope, "deep-link");
+      const sequence = requestSequence.current;
+      const environmentKey = deviceStore.status().environmentKey;
+      return request.then((accepted) => {
+        if (
+          !accepted
+          || sequence !== requestSequence.current
+          || environmentKey !== deviceStore.status().environmentKey
+        ) return false;
+        commitOpen(next, arg);
+        return true;
+      });
+    }
+
+    // Any immediate navigation supersedes an older pending guarded link.
+    requestSequence.current += 1;
+    commitOpen(next, arg);
+  }, [commitOpen, requestSettingsScope]) as WorkbenchOpen;
+
+  const close = useCallback(() => {
+    requestSequence.current += 1;
+    setPage(null);
+  }, []);
 
   // Escape closes the workbench, but never while a dialog, popover or a
   // focused text field is using Escape for its own purpose.
@@ -82,9 +234,6 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       const target = event.target instanceof Element ? event.target : null;
-      // A text field owns Escape while it is focused (clearing a search box,
-      // dismissing a completion): typing in Settings or Logs must not throw the
-      // person back to the transcript. Same selector as the fullscreen map.
       if (target?.closest("[role='dialog'],[data-radix-popper-content-wrapper],input,textarea,[contenteditable='true']")) return;
       close();
     };
@@ -92,6 +241,16 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
     return () => document.removeEventListener("keydown", onKey);
   }, [page, close]);
 
-  const value = useMemo<Workbench>(() => ({ page, tab, agents, open, close }), [page, tab, agents, open, close]);
+  const value = useMemo<Workbench>(() => ({
+    page,
+    tab,
+    settings,
+    agents,
+    settingsScope,
+    requestSettingsScope,
+    registerSettingsScopeGuard,
+    open,
+    close,
+  }), [page, tab, settings, agents, settingsScope, requestSettingsScope, registerSettingsScopeGuard, open, close]);
   return <WorkbenchContext.Provider value={value}>{children}</WorkbenchContext.Provider>;
 }

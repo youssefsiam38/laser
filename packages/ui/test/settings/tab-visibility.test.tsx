@@ -3,15 +3,23 @@ import { act } from "react";
 import type { Root } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 
-const runtime = vi.hoisted(() => ({ request: vi.fn(async () => ({})), denied: new Set<string>() }));
+const runtime = vi.hoisted(() => {
+  const request = vi.fn(async () => ({}));
+  return {
+    request,
+    denied: new Set<string>(),
+    stable: { client: { request }, actions: {}, projects: [], projectInfo: {} },
+  };
+});
 vi.mock("@/runtime", () => ({
   useCapability: (method: string) => runtime.denied.has(method) ? { state: "hidden" } : { state: "available" },
-  useLaserStable: () => ({ client: { request: runtime.request }, actions: {} }),
+  useLaserStable: () => runtime.stable,
 }));
 vi.mock("../../src/components/settings/resources/ResourceDiagnostics.js", () => ({
   ResourceDiagnostics: () => <div>Resource diagnostics</div>,
 }));
 import { SettingsScreen } from "../../src/components/settings/SettingsScreen.js";
+import { WorkbenchProvider } from "../../src/components/workbench/index.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { click, render } from "./mcp/harness.js";
 
@@ -35,7 +43,7 @@ it("reveals the active tab on selection and whenever its strip narrows, without 
     disconnect() { for (const [element, callback] of callbacks) if (callback === this.callback) callbacks.delete(element); }
   });
   const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
-  ({ root } = await render(<TooltipProvider><SettingsScreen cwd={undefined} initialTab="mcp" /></TooltipProvider>));
+  ({ root } = await render(<TooltipProvider><WorkbenchProvider><SettingsScreen initialTab="mcp" /></WorkbenchProvider></TooltipProvider>));
   const active = () => document.querySelector<HTMLElement>('[aria-current="page"]')!;
   expect(scroll.mock.instances.at(-1)).toBe(active());
   const strip = active().parentElement!;
@@ -58,7 +66,7 @@ it("hides host-backed settings sections before they can issue a denied request",
     "pi/account-usage/refresh", "pi/project/list", "resource/snapshot",
   ]);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
-  ({ root } = await render(<TooltipProvider><SettingsScreen cwd="/project" initialTab="general" /></TooltipProvider>));
+  ({ root } = await render(<TooltipProvider><WorkbenchProvider><SettingsScreen ambientCwd="/project" initialTab="general" /></WorkbenchProvider></TooltipProvider>));
   await act(async () => { await Promise.resolve(); });
   const tabs = [...document.querySelectorAll('[aria-current], button')].map((node) => node.textContent?.trim()).filter(Boolean);
   expect(tabs).toContain("Appearance");

@@ -4,6 +4,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { WorkbenchProvider, useWorkbench, type WorkbenchState } from "../../../src/components/workbench/index.js";
+import { deviceStore } from "../../../src/runtime/device-storage.js";
+import { OTHER_ENVIRONMENT_KEY, testDescriptor } from "../../runtime/environment-fixture.js";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -20,6 +22,9 @@ function escapeFrom(element: Element): void {
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  deviceStore.deactivate();
+  localStorage.clear();
+  deviceStore.activate(testDescriptor());
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -27,6 +32,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
+  deviceStore.deactivate();
   latest = undefined;
 });
 
@@ -56,6 +62,143 @@ describe("workbench.open", () => {
     expect(latest?.page).toBe("logs");
     await act(async () => latest!.close());
     expect(latest?.page).toBeNull();
+  });
+});
+
+describe("Settings scope navigation", () => {
+  it("keeps plain links scope-neutral and gates the whole explicit deep link", async () => {
+    await act(async () => root.render(<WorkbenchProvider><Probe /></WorkbenchProvider>));
+    await act(async () => latest!.open("agents", { agent: "reviewer", field: "skills" }));
+    await act(async () => { expect(await latest!.requestSettingsScope({ view: "project", projectCwd: "/one" })).toBe(true); });
+    expect(latest?.settingsScope).toEqual({ view: "project", projectCwd: "/one" });
+
+    const sourceAgents = latest?.agents;
+    const unregister = latest!.registerSettingsScopeGuard(() => false);
+    let accepted = true;
+    await act(async () => {
+      accepted = await latest!.open("settings", {
+        tab: "features",
+        scope: { view: "effective", projectCwd: "/two" },
+      });
+    });
+    expect(accepted).toBe(false);
+    expect(latest?.page).toBe("agents");
+    expect(latest?.agents).toBe(sourceAgents);
+    expect(latest?.tab).toBeUndefined();
+    expect(latest?.settingsScope).toEqual({ view: "project", projectCwd: "/one" });
+    unregister();
+
+    await act(async () => latest!.open("settings", "models"));
+    expect(latest?.page).toBe("settings");
+    expect(latest?.tab).toBe("models");
+    expect(latest?.settingsScope).toEqual({ view: "project", projectCwd: "/one" });
+  });
+
+  it("fences a delayed guard decision when a newer same-scope link wins", async () => {
+    await act(async () => root.render(<WorkbenchProvider><Probe /></WorkbenchProvider>));
+    await act(async () => latest!.open("agents", { agent: "reviewer" }));
+    let settle: ((accepted: boolean) => void) | undefined;
+    latest!.registerSettingsScopeGuard(() => new Promise<boolean>((resolve) => { settle = resolve; }));
+
+    const pending = latest!.open("settings", {
+      tab: "features",
+      scope: { view: "project", projectCwd: "/older" },
+    });
+    await act(async () => {
+      expect(await latest!.open("settings", { tab: "models", scope: { view: "global" } })).toBe(true);
+    });
+    await act(async () => { settle?.(true); });
+    await expect(pending).resolves.toBe(false);
+    expect(latest?.page).toBe("settings");
+    expect(latest?.tab).toBe("models");
+    expect(latest?.settingsScope).toEqual({ view: "global" });
+  });
+
+  it("keeps the mounted guard on a same-environment reconnect and clears it on deactivation", async () => {
+    await act(async () => root.render(<WorkbenchProvider><Probe /></WorkbenchProvider>));
+    let guarded = 0;
+    latest!.registerSettingsScopeGuard(() => {
+      guarded += 1;
+      return false;
+    });
+
+    await act(async () => { deviceStore.activate(testDescriptor()); });
+    await act(async () => {
+      expect(await latest!.requestSettingsScope({ view: "project", projectCwd: "/guarded" })).toBe(false);
+    });
+    expect(guarded).toBe(1);
+
+    await act(async () => { deviceStore.deactivate(); });
+    await act(async () => { deviceStore.activate(testDescriptor()); });
+    await act(async () => {
+      expect(await latest!.requestSettingsScope({ view: "project", projectCwd: "/after-reconnect" })).toBe(true);
+    });
+    expect(guarded).toBe(1);
+  });
+
+  it("fences delayed guard decisions on environment changes", async () => {
+    await act(async () => root.render(<WorkbenchProvider><Probe /></WorkbenchProvider>));
+    await act(async () => latest!.open("agents", { agent: "reviewer" }));
+    let settle: ((accepted: boolean) => void) | undefined;
+    latest!.registerSettingsScopeGuard(() => new Promise<boolean>((resolve) => { settle = resolve; }));
+
+    const pending = latest!.open("settings", {
+      tab: "features",
+      scope: { view: "project", projectCwd: "/old-environment" },
+    });
+    await act(async () => { deviceStore.activate(testDescriptor({ environmentKey: OTHER_ENVIRONMENT_KEY })); });
+    await act(async () => { settle?.(true); });
+    await expect(pending).resolves.toBe(false);
+    expect(latest?.page).toBe("agents");
+    expect(latest?.settingsScope).toEqual({ view: "global" });
+
+    // The environment transition discarded the stale registration. A fresh
+    // request in the new namespace is not held by the source draft.
+    await act(async () => { expect(await latest!.requestSettingsScope({ view: "effective" })).toBe(true); });
+    expect(latest?.settingsScope).toEqual({ view: "effective" });
+  });
+
+  it("does not commit an explicit link after a same-tick close or newer navigation", async () => {
+    await act(async () => root.render(<WorkbenchProvider><Probe /></WorkbenchProvider>));
+    await act(async () => latest!.open("agents", { agent: "reviewer" }));
+
+    let closed: Promise<boolean> | undefined;
+    await act(async () => {
+      closed = latest!.open("settings", { tab: "features", scope: { view: "global" } });
+      latest!.close();
+    });
+    await expect(closed).resolves.toBe(false);
+    expect(latest?.page).toBeNull();
+
+    await act(async () => latest!.open("agents", { agent: "reviewer" }));
+    let superseded: Promise<boolean> | undefined;
+    await act(async () => {
+      superseded = latest!.open("settings", { tab: "features", scope: { view: "global" } });
+      latest!.open("logs");
+    });
+    await expect(superseded).resolves.toBe(false);
+    expect(latest?.page).toBe("logs");
+  });
+
+  it("rechecks the environment in the microtask between scope acceptance and opening", async () => {
+    await act(async () => root.render(<WorkbenchProvider><Probe /></WorkbenchProvider>));
+    await act(async () => latest!.open("agents", { agent: "reviewer" }));
+    let accept: (() => void) | undefined;
+    latest!.registerSettingsScopeGuard(() => new Promise<boolean>((resolve) => {
+      accept = () => {
+        resolve(true);
+        queueMicrotask(() => deviceStore.activate(testDescriptor({ environmentKey: OTHER_ENVIRONMENT_KEY })));
+      };
+    }));
+
+    const pending = latest!.open("settings", {
+      tab: "features",
+      scope: { view: "project", projectCwd: "/old-environment" },
+    });
+    await act(async () => { accept?.(); await pending; });
+    await expect(pending).resolves.toBe(false);
+    expect(latest?.page).toBe("agents");
+    expect(latest?.settingsScope).toEqual({ view: "global" });
   });
 });
 

@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => {
   const calls: string[] = [];
   const request = vi.fn(async (method: string, params: { cwd?: string } = {}) => {
     calls.push(method);
+    if (method === "pi/setup/state") return { cwd: "/setup" };
     if (method === "pi/settings/list") return { catalog: { sections: [], fields: [] } };
     if (method === "pi/settings/get") return { snapshot: { global: { values: {} }, project: { values: {} }, effective: {}, projectTrust: { writable: true } } };
     if (method === "pi/models/catalog") return { models: [], enabledPatterns: null, refreshedAt: "", errors: [] };
@@ -33,6 +34,7 @@ vi.mock("@/runtime", async (original) => ({
   useLaserStable: () => mocks.stable,
 }));
 import { SettingsScreen } from "../../src/components/settings/SettingsScreen.js";
+import { WorkbenchProvider } from "../../src/components/workbench/index.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { createStateStore, LaserStoreProvider, type StateStore } from "../../src/runtime/LaserProvider.js";
 import { initialState, type AppState } from "../../src/store.js";
@@ -60,7 +62,7 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 async function mount(tab: Tab) {
-  act(() => root.render(<LaserStoreProvider store={store}><TooltipProvider><SettingsScreen cwd="/repo" initialTab={tab} /></TooltipProvider></LaserStoreProvider>));
+  act(() => root.render(<LaserStoreProvider store={store}><TooltipProvider><WorkbenchProvider><SettingsScreen ambientCwd="/repo" initialTab={tab} /></WorkbenchProvider></TooltipProvider></LaserStoreProvider>));
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
 }
 

@@ -68,7 +68,7 @@ export function Workbench() {
             </Button>
           ))}
         </nav>
-        {cwd && (
+        {shownPage !== "settings" && cwd && (
           <span className="ms-2 min-w-0 truncate font-mono text-xs text-ink-3" title={cwd}>
             {shortCwd(cwd)}
           </span>
@@ -87,7 +87,7 @@ export function Workbench() {
       <div className="min-h-0 flex-1">
         <Suspense fallback={<ScreenSkeleton />}>
           {shownPage === "settings" ? (
-            <SettingsScreen cwd={cwd} initialTab={settingsTab} />
+            <SettingsScreen ambientCwd={cwd} initialTab={settingsTab} />
           ) : shownPage === "agents" ? (
             <AgentsScreen cwd={cwd} target={agentsTarget} />
           ) : (

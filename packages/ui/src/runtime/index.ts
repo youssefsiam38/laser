@@ -85,6 +85,15 @@ export {
   type DeviceStorageStatus,
   type DeviceStore,
 } from "./device-storage.js";
+export {
+  DEFAULT_SETTINGS_SCOPE,
+  createSettingsScopeStore,
+  parseSettingsScope,
+  settingsScopeStore,
+  type SettingsScopeState,
+  type SettingsScopeStore,
+  type SettingsScopeView,
+} from "./settings-scope.js";
 export { THEME_PREFS_NAMESPACE, useThemeSync } from "./prefs.js";
 export { createSessionLauncher, isUnstartedSession, type NewSessionOptions, type SessionLauncher } from "./new-session.js";
 export {

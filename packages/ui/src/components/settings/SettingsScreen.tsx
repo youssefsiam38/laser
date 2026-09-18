@@ -1,25 +1,14 @@
 "use client";
-/**
- * Settings (M4-T2, M4-T3, M4-T4).
- *
- * Laser-owned settings behind one header. Engine plumbing is intentionally
- * absent; specialist product controls live in Advanced and bundled
- * capabilities live in Features.
- *
- * The first three are per project, because Pi's settings are per project: the
- * scope switch is not decoration, it decides which of the two files a change
- * lands in. "This device" is the exception and says so — a notification
- * permission belongs to the browser on this phone or laptop, not to a project,
- * and pretending otherwise would put a per-device switch behind a project
- * scope that has nothing to do with it.
- */
+/** Settings, with one explicit scope shared by migrated surfaces. */
 import { PRODUCT_NAME } from "@lasercode/protocol";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AlertTriangle, RefreshCw, Search, Sparkles } from "lucide-react";
 
+import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
 import { Badge } from "@/components/ui/badge";
 import { useWorkbench } from "@/components/workbench";
+import { SettingsScopeControls } from "@/components/workbench/SettingsScopeControls";
 import { rememberStep, requestSetupAgain } from "@/components/onboarding";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -46,23 +35,39 @@ import { AdvancedTab, type AdvancedView } from "./AdvancedTab.js";
 
 type Tab = "general" | "advanced" | "appearance" | "features" | "mcp" | "models" | "usage" | "keyboard" | "projects" | "trust" | "device";
 
-/**
- * `PROJECTLESS` lists tabs that do not require a selected project, keeping
- * appearance, shortcuts, account usage and browser permissions reachable
- * before a project is chosen.
- */
-const PROJECTLESS: readonly Tab[] = ["advanced", "appearance", "keyboard", "projects", "trust", "device", "usage"];
+type TabRoute = "scope" | "legacy" | "none";
+type NeutralRouteUse = "global-scope" | "legacy-fallback" | "feature-write" | "none";
+interface TabPolicy {
+  route: TabRoute;
+  settingsData: boolean;
+  scopeControls: boolean;
+  neutralRoute: NeutralRouteUse;
+  needsProject: boolean;
+}
 
-/**
- * Extensions "for every project" and the provider/model settings are global —
- * they are only *routed* by directory, because every settings method is. So
- * before a project exists they go through the directory the host keeps for
- * exactly that purpose (`pi/setup/state`, the same one the first-run flow
- * uses). Without this, the person most likely to want them — someone who has
- * just installed laser and has no project yet — is the one person who
- * cannot reach them.
- */
-const GLOBAL_THROUGH_SETUP: readonly Tab[] = ["general", "advanced", "features", "mcp", "models"];
+const NO_ROUTE: TabPolicy = {
+  route: "none",
+  settingsData: false,
+  scopeControls: false,
+  neutralRoute: "none",
+  needsProject: false,
+};
+
+// Stage one migrates General, Advanced Configuration and Features. Legacy
+// routes remain explicit here so each later migration is one policy change,
+// not another ambient-project fallback hidden in render logic.
+const TAB_POLICY: Record<Exclude<Tab, "advanced">, TabPolicy> = {
+  general: { route: "scope", settingsData: true, scopeControls: true, neutralRoute: "global-scope", needsProject: false },
+  appearance: NO_ROUTE,
+  features: { route: "none", settingsData: false, scopeControls: true, neutralRoute: "feature-write", needsProject: false },
+  mcp: { route: "legacy", settingsData: false, scopeControls: false, neutralRoute: "legacy-fallback", needsProject: true },
+  models: { route: "legacy", settingsData: true, scopeControls: false, neutralRoute: "legacy-fallback", needsProject: true },
+  usage: NO_ROUTE,
+  keyboard: { route: "legacy", settingsData: false, scopeControls: false, neutralRoute: "none", needsProject: false },
+  projects: NO_ROUTE,
+  trust: NO_ROUTE,
+  device: NO_ROUTE,
+};
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "general", label: "General" },
@@ -78,8 +83,15 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "device", label: "This device" },
 ];
 
-export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | undefined; initialTab?: Tab | undefined }) {
-  const { client, actions } = useLaserStable();
+export interface SettingsScreenProps {
+  /** Ambient app project retained only for not-yet-migrated Settings tabs. */
+  ambientCwd?: string | undefined;
+  initialTab?: Tab | undefined;
+}
+
+export function SettingsScreen({ ambientCwd, initialTab }: SettingsScreenProps) {
+  const { client, actions, projects } = useLaserStable();
+  const { settingsScope } = useWorkbench();
   const settingsRead = useCapability("pi/settings/get");
   const settingsWrite = useCapability("pi/settings/set", { presentation: "explained" });
   const featureWrite = useCapability("feature/set", { presentation: "explained" });
@@ -90,18 +102,25 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
   const mcp = useCapability("mcp/list");
   const providers = useCapability("pi/providers/list");
   const usage = useCapability("pi/account-usage/refresh");
-  const projects = useCapability("pi/project/list");
+  const projectsCapability = useCapability("pi/project/list");
   const diagnostics = useCapability("resource/snapshot");
-  // `initialTab` is only ever set by something that already knows the fix — a
-  // rejected credential sending the person straight to Providers and models.
   const [tab, setTab] = useState<Tab>(initialTab ?? "general");
-  const [setupCwd, setSetupCwd] = useState<string>();
+  const [neutralRouteCwd, setNeutralRouteCwd] = useState<string>();
+  const [neutralRouteLoading, setNeutralRouteLoading] = useState(false);
+  const [neutralRouteError, setNeutralRouteError] = useState<string>();
+  const [neutralRouteRetry, setNeutralRouteRetry] = useState(0);
   const [catalog, setCatalog] = useState<SettingsCatalog>();
   const [snapshot, setSnapshot] = useState<SettingsSnapshot>();
-  const [snapshotCwd, setSnapshotCwd] = useState<string>();
+  const [snapshotKey, setSnapshotKey] = useState<string>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
   const [advancedView, setAdvancedView] = useState<AdvancedView>("resources");
+  const loadGeneration = useRef(0);
+
+  useEffect(() => {
+    if (initialTab) setTab(initialTab);
+  }, [initialTab]);
+
   const visibleTabs = TABS.filter((entry) => {
     if (entry.id === "general") return settingsRead.state === "available";
     if (entry.id === "features") return features.state === "available";
@@ -109,7 +128,7 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
     if (entry.id === "models") return providers.state === "available";
     if (entry.id === "usage") return usage.state === "available";
     if (entry.id === "advanced") return settingsRead.state === "available" || diagnostics.state === "available";
-    if (entry.id === "projects" || entry.id === "trust") return projects.state === "available";
+    if (entry.id === "projects" || entry.id === "trust") return projectsCapability.state === "available";
     return true;
   });
   const shownTab = visibleTabs.some((entry) => entry.id === tab) ? tab : (visibleTabs[0]?.id ?? "general");
@@ -118,105 +137,182 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
   useEffect(() => {
     const strip = tabStrip.current;
     if (!strip) return;
-    const reveal = () => {
-      // Instant restoration avoids a resize animation fighting the next resize;
-      // it also respects reduced motion without a separate preference branch.
-      strip.querySelector<HTMLElement>('[aria-current="page"]')?.scrollIntoView({
-        block: "nearest", inline: "nearest", behavior: "auto",
-      });
-    };
+    const reveal = () => strip.querySelector<HTMLElement>('[aria-current="page"]')?.scrollIntoView({
+      block: "nearest", inline: "nearest", behavior: "auto",
+    });
     reveal();
     const observer = new ResizeObserver(reveal);
     observer.observe(strip);
     return () => observer.disconnect();
   }, [shownTab]);
 
-  // The host's project-less directory, fetched once and only when it is needed.
-  useEffect(() => {
-    if (project || setupCwd || settingsRead.state !== "available") return;
-    let cancelled = false;
-    void client
-      .request("pi/setup/state", {})
-      .then((state) => {
-        if (!cancelled) setSetupCwd(state.cwd);
-      })
-      .catch(() => {
-        // An older host has no setup state; the tabs then say a project is needed.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, project, setupCwd, settingsRead.state]);
+  const resolvedAdvancedView: AdvancedView = advancedView === "resources" && diagnostics.state !== "available"
+    ? "configuration"
+    : advancedView === "configuration" && settingsRead.state !== "available"
+      ? "resources"
+      : advancedView;
+  const policy: TabPolicy = shownTab === "advanced"
+    ? resolvedAdvancedView === "configuration"
+      ? { route: "scope", settingsData: true, scopeControls: true, neutralRoute: "global-scope", needsProject: false }
+      : NO_ROUTE
+    : TAB_POLICY[shownTab];
 
-  const cwd = shownTab === "usage" || shownTab === "projects" ? undefined : project ?? (GLOBAL_THROUGH_SETUP.includes(shownTab) ? setupCwd : undefined);
-  const cwdRef = useRef(cwd);
-  cwdRef.current = cwd;
+  const selectedProjectKnown = settingsScope.projectCwd !== undefined && projects.includes(settingsScope.projectCwd);
+  const explicitProjectCwd = selectedProjectKnown ? settingsScope.projectCwd : undefined;
+  const scopedCwd = settingsScope.view === "global" ? neutralRouteCwd : explicitProjectCwd;
+  const routeCwd = policy.route === "scope"
+    ? scopedCwd
+    : policy.route === "legacy"
+      ? ambientCwd ?? neutralRouteCwd
+      : undefined;
+  const settingsCwd = policy.settingsData ? routeCwd : undefined;
+  const currentLoadKey = policy.settingsData && settingsCwd
+    ? `${policy.route === "scope" ? `scope:${settingsScope.view}` : "legacy"}:${settingsCwd}`
+    : "";
+  const needsNeutralRoute = policy.neutralRoute === "global-scope"
+    ? settingsScope.view === "global"
+    : policy.neutralRoute === "legacy-fallback"
+      ? !ambientCwd
+      : policy.neutralRoute === "feature-write"
+        ? settingsScope.view === "global" && featureWrite.state === "available"
+        : false;
+
+  // This route is worker plumbing, never the Settings target. Fetch it only
+  // while the active tab has a capability that can use it.
+  useEffect(() => {
+    if (!needsNeutralRoute || neutralRouteCwd) {
+      setNeutralRouteLoading(false);
+      return undefined;
+    }
+    let live = true;
+    setNeutralRouteLoading(true);
+    setNeutralRouteError(undefined);
+    void client.request("pi/setup/state", {}).then((state) => {
+      if (live) setNeutralRouteCwd(state.cwd);
+    }).catch((routeError) => {
+      if (live) setNeutralRouteError(routeError instanceof Error ? routeError.message : String(routeError));
+    }).finally(() => {
+      if (live) setNeutralRouteLoading(false);
+    });
+    return () => { live = false; };
+  }, [client, needsNeutralRoute, neutralRouteCwd, neutralRouteRetry]);
 
   const load = useCallback(async () => {
-    if (!cwd || settingsRead.state !== "available") return;
-    if (snapshotCwd !== cwd) {
-      setSnapshotCwd(undefined);
-    }
+    if (!policy.settingsData || !settingsCwd || settingsRead.state !== "available") return;
+    const key = currentLoadKey;
+    const generation = ++loadGeneration.current;
+    if (snapshotKey !== key) setSnapshotKey(undefined);
     setLoading(true);
     setError(undefined);
     try {
-      // The catalogue is fixed per pinned Pi, so it is fetched once per project
-      // open; the snapshot is what changes.
       const [cat, snap] = await Promise.all([
-        catalog ? Promise.resolve({ catalog }) : client.request("pi/settings/list", { cwd }),
-        client.request("pi/settings/get", { cwd }),
+        catalog ? Promise.resolve({ catalog }) : client.request("pi/settings/list", { cwd: settingsCwd }),
+        client.request("pi/settings/get", { cwd: settingsCwd }),
       ]);
-      if (cwdRef.current !== cwd) return;
+      if (generation !== loadGeneration.current) return;
       setCatalog(cat.catalog);
       setSnapshot(snap.snapshot);
-      setSnapshotCwd(cwd);
+      setSnapshotKey(key);
     } catch (loadError) {
-      if (cwdRef.current === cwd) {
+      if (generation === loadGeneration.current) {
         setSnapshot(undefined);
-        setSnapshotCwd(undefined);
+        setSnapshotKey(undefined);
         setError(loadError instanceof Error ? loadError.message : String(loadError));
       }
     } finally {
-      if (cwdRef.current === cwd) setLoading(false);
+      if (generation === loadGeneration.current) setLoading(false);
     }
-  }, [client, cwd, catalog, snapshotCwd, settingsRead.state]);
+  }, [catalog, client, currentLoadKey, policy.settingsData, settingsCwd, settingsRead.state, snapshotKey]);
 
-  useEffect(() => {
+  // Invalidate the old target during commit, before a stale promise can settle
+  // in the render-to-effect gap. Abandoned renders never mutate the fence.
+  useLayoutEffect(() => {
+    loadGeneration.current += 1;
+    if (!currentLoadKey) {
+      setLoading(false);
+      setError(undefined);
+      setSnapshotKey(undefined);
+      return;
+    }
     void load();
-    // Re-running on `load` would loop: it changes identity when the catalogue
-    // arrives. The project is the only input that should refetch.
+    // `load` changes when catalogue/snapshot state arrives; the target key is
+    // the only input that should start a fresh request.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cwd]);
+  }, [currentLoadKey]);
 
-  /** One place where a write happens, so every screen reports failure the same way. */
-  const apply = useCallback(
-    async (scope: SettingsScope, changes: Parameters<typeof client.request<"pi/settings/set">>[1]["changes"]) => {
-      if (!cwd) return false;
-      try {
-        const { snapshot: next } = await client.request("pi/settings/set", { cwd, scope, changes });
+  const apply = useCallback(async (
+    scope: SettingsScope,
+    changes: Parameters<typeof client.request<"pi/settings/set">>[1]["changes"],
+  ) => {
+    if (!settingsCwd) return false;
+    if (policy.route === "scope") {
+      if (settingsScope.view === "effective") return false;
+      const expected: SettingsScope = settingsScope.view === "project" ? "project" : "global";
+      if (scope !== expected) return false;
+    }
+    const key = currentLoadKey;
+    const generation = loadGeneration.current;
+    try {
+      const { snapshot: next } = await client.request("pi/settings/set", { cwd: settingsCwd, scope, changes });
+      if (generation === loadGeneration.current) {
         setSnapshot(next);
-        setSnapshotCwd(cwd);
-        return true;
-      } catch (writeError) {
-        actions.toast("error", writeError instanceof Error ? writeError.message : String(writeError));
-        return false;
+        setSnapshotKey(key);
       }
-    },
-    [client, cwd, actions],
+      return true;
+    } catch (writeError) {
+      actions.toast("error", writeError instanceof Error ? writeError.message : String(writeError));
+      return false;
+    }
+  }, [actions, client, currentLoadKey, policy.route, settingsCwd, settingsScope.view]);
+
+  const retryNeutralRoute = useCallback(() => {
+    setNeutralRouteCwd(undefined);
+    setNeutralRouteError(undefined);
+    setNeutralRouteRetry((value) => value + 1);
+  }, []);
+  const reload = useCallback(() => {
+    if (needsNeutralRoute && !neutralRouteCwd) {
+      retryNeutralRoute();
+      return;
+    }
+    void load();
+  }, [load, needsNeutralRoute, neutralRouteCwd, retryNeutralRoute]);
+
+  const explicitScopeMissing = policy.scopeControls
+    && settingsScope.view !== "global"
+    && !selectedProjectKnown;
+  const legacyNeedsProject = policy.needsProject && !routeCwd && !neutralRouteLoading && !neutralRouteError;
+  const neutralRoutePending = needsNeutralRoute
+    && policy.neutralRoute !== "feature-write"
+    && !routeCwd
+    && !neutralRouteError;
+  const neutralRouteFailure = needsNeutralRoute
+    && policy.neutralRoute !== "feature-write"
+    && !routeCwd
+    ? neutralRouteError
+    : undefined;
+  const switchingTarget = Boolean(
+    currentLoadKey
+    && snapshot
+    && snapshotKey !== currentLoadKey
+    && policy.route === "scope",
   );
 
-  // "No project" is a state of one tab, not of the screen: the tab strip has
-  // to stay on screen or Appearance, Help and shortcuts, Trust and This device become
-  // unreachable on a machine with no project yet — which is every first run.
-  const needsProject = !cwd && !PROJECTLESS.includes(shownTab);
-  const switchingProject = Boolean(cwd && snapshot && snapshotCwd !== cwd && (shownTab !== "advanced" || advancedView === "configuration"));
-  const settingsControlsVisible = shownTab !== "advanced" || advancedView === "configuration";
+  const scopeEmpty = explicitScopeMissing
+    ? settingsScope.projectCwd
+      ? {
+          title: "This project is unavailable",
+          body: "The selected project is no longer in this environment. Choose another project above. Nothing will be read or written until you do.",
+        }
+      : {
+          title: `Choose a project for ${settingsScope.view === "effective" ? "Effective" : "Project"} settings`,
+          body: "Use the project picker above. Settings never borrow the project open in Code or choose the first project for you.",
+        }
+    : undefined;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 items-center gap-1 px-3 py-2 hairline-b">
-        {/* Seven tabs do not fit a phone. The strip scrolls inside itself
-            rather than the page scrolling sideways (DESIGN.md, the floor). */}
         <div ref={tabStrip} className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
           {visibleTabs.map((entry) => (
             <Button
@@ -231,88 +327,106 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
             </Button>
           ))}
         </div>
-        {shownTab !== "usage" && shownTab !== "projects" && settingsControlsVisible && settingsRead.state === "available" && <div className="ms-auto flex items-center gap-2">
-          {loading && <GenerationLoader label="Loading settings" layout="inline" />}
-          <TooltipIconButton tooltip="Reload settings" onClick={() => void load()}>
-            <RefreshCw />
-          </TooltipIconButton>
-        </div>}
+        {policy.settingsData && settingsRead.state === "available" ? (
+          <div className="ms-auto flex items-center gap-2">
+            {loading || neutralRouteLoading ? <GenerationLoader label="Loading settings" layout="inline" /> : null}
+            <TooltipIconButton tooltip={neutralRouteFailure ? "Retry global settings" : "Reload settings"} onClick={reload}>
+              <RefreshCw />
+            </TooltipIconButton>
+          </div>
+        ) : null}
       </div>
 
-      {error && !needsProject && shownTab !== "advanced" && shownTab !== "usage" && shownTab !== "projects" && (
+      {policy.scopeControls ? (
+        <div className="flex shrink-0 items-center px-3 py-2 hairline-b">
+          <SettingsScopeControls />
+        </div>
+      ) : null}
+
+      {error && !explicitScopeMissing && shownTab !== "advanced" && shownTab !== "usage" && shownTab !== "projects" ? (
         <div className="m-3 flex items-start gap-2 rounded-lg bg-[color-mix(in_oklab,var(--danger)_10%,transparent)] px-3 py-2 text-sm text-danger">
           <AlertTriangle className="mt-0.5 size-4 shrink-0" />
           <div className="min-w-0">
-            <p className="font-medium">Could not read settings for this project.</p>
+            <p className="font-medium">Could not read settings for this target.</p>
             <p className="mt-0.5 font-mono text-xs leading-4 break-words opacity-90">{error}</p>
           </div>
         </div>
-      )}
+      ) : null}
 
       <div className="relative min-h-0 flex-1">
-        <div className="h-full" inert={switchingProject ? true : undefined}>
-        {needsProject ? (
-          <Empty
-            title="Open a project first"
-            body={`These settings can be overridden per project, so ${PRODUCT_NAME} needs to know which project you mean. Pick one in the rail, or add one. Features, Providers and models, Appearance, Help and shortcuts, Trust and This device all work without one.`}
-          />
-        ) : (
-          <>
-            {shownTab === "general" && cwd && catalog && snapshot && (
-              <>
-                {settingsWrite.state === "explained" ? <div className="p-4 pb-0"><CapabilityNotice explanation={settingsWrite.explanation} /></div> : null}
-                <SettingsForm audience="general" cwd={cwd} catalog={catalog} snapshot={snapshot} decision={settingsWrite} onApply={apply} />
-              </>
-            )}
-            {shownTab === "advanced" && (
-              <AdvancedTab
-                view={advancedView}
-                onViewChange={setAdvancedView}
-                {...(cwd ? { cwd } : {})}
-                {...(catalog ? { catalog } : {})}
-                {...(snapshot && snapshotCwd === cwd ? { snapshot } : {})}
-                loading={loading}
-                {...(error ? { error } : {})}
-                onReload={() => void load()}
-                onApply={apply}
+        <div className="h-full" inert={switchingTarget ? true : undefined}>
+          {scopeEmpty ? (
+            <Empty title={scopeEmpty.title} body={scopeEmpty.body} />
+          ) : neutralRoutePending ? (
+            <div className="flex h-full items-start justify-center pt-16">
+              <GenerationLoader label="Preparing global settings" layout="block" />
+            </div>
+          ) : neutralRouteFailure ? (
+            <div className="mx-auto max-w-160 px-6 py-6">
+              <ErrorState
+                title={policy.route === "scope" ? "Could not prepare Global settings" : "Could not prepare this Settings tab"}
+                detail={neutralRouteFailure}
+                onRetry={retryNeutralRoute}
               />
-            )}
-            {shownTab === "appearance" && <AppearanceTab />}
-            {shownTab === "features" && <FeaturesScreen {...(cwd ? { cwd } : {})} decision={featureWrite} {...(mcp.state === "available" ? { onManageServers: () => setTab("mcp") } : {})} />}
-            {/* Without a project this is the every-project list; the project
-                filter simply has nothing to show. */}
-            {shownTab === "mcp" && cwd && <McpServersTab cwd={cwd} projectOpen={Boolean(project)} decision={mcpWrite} />}
-            {shownTab === "models" && cwd && <ModelsTab cwd={cwd} snapshot={snapshot} onApply={apply} />}
-            {shownTab === "usage" && <UsageTab />}
-            {shownTab === "keyboard" && <KeyboardTab cwd={cwd} decision={keybindingsWrite} />}
-            {shownTab === "projects" && <ProjectsTab activeCwd={project} />}
-            {shownTab === "trust" && <TrustTab decision={trustWrite} />}
-            {shownTab === "device" && <DeviceTab />}
-          </>
-        )}
+            </div>
+          ) : legacyNeedsProject ? (
+            <Empty
+              title="Open a project first"
+              body={`This tab has not moved to the explicit Settings target yet. Pick a project in the rail, or add one. General, Features, Appearance, Help and shortcuts, Trust and This device remain available without one.`}
+            />
+          ) : (
+            <>
+              {shownTab === "general" && settingsCwd && catalog && snapshot && snapshotKey === currentLoadKey ? (
+                <>
+                  {settingsWrite.state === "explained" ? <div className="p-4 pb-0"><CapabilityNotice explanation={settingsWrite.explanation} /></div> : null}
+                  <SettingsForm audience="general" view={settingsScope.view} cwd={settingsCwd} catalog={catalog} snapshot={snapshot} decision={settingsWrite} onApply={apply} />
+                </>
+              ) : null}
+              {shownTab === "advanced" ? (
+                <AdvancedTab
+                  view={advancedView}
+                  onViewChange={setAdvancedView}
+                  scopeView={settingsScope.view}
+                  {...(settingsCwd ? { cwd: settingsCwd } : {})}
+                  {...(catalog ? { catalog } : {})}
+                  {...(snapshot && snapshotKey === currentLoadKey ? { snapshot } : {})}
+                  loading={loading}
+                  {...(error ? { error } : {})}
+                  onReload={reload}
+                  onApply={apply}
+                />
+              ) : null}
+              {shownTab === "appearance" ? <AppearanceTab /> : null}
+              {shownTab === "features" ? (
+                <FeaturesScreen
+                  view={settingsScope.view}
+                  {...(explicitProjectCwd ? { projectCwd: explicitProjectCwd } : {})}
+                  {...(neutralRouteCwd ? { neutralRouteCwd } : {})}
+                  decision={featureWrite}
+                  {...(mcp.state === "available" ? { onManageServers: () => setTab("mcp") } : {})}
+                />
+              ) : null}
+              {shownTab === "mcp" && routeCwd ? <McpServersTab cwd={routeCwd} projectOpen={Boolean(ambientCwd)} decision={mcpWrite} /> : null}
+              {shownTab === "models" && settingsCwd ? <ModelsTab cwd={settingsCwd} snapshot={snapshotKey === currentLoadKey ? snapshot : undefined} onApply={apply} /> : null}
+              {shownTab === "usage" ? <UsageTab /> : null}
+              {shownTab === "keyboard" ? <KeyboardTab cwd={routeCwd} decision={keybindingsWrite} /> : null}
+              {shownTab === "projects" ? <ProjectsTab activeCwd={ambientCwd} /> : null}
+              {shownTab === "trust" ? <TrustTab decision={trustWrite} /> : null}
+              {shownTab === "device" ? <DeviceTab /> : null}
+            </>
+          )}
         </div>
-        {switchingProject && (
+        {switchingTarget ? (
           <div className="absolute inset-0 z-20 flex items-start justify-center bg-bg pt-16" aria-live="polite">
-            <GenerationLoader label="Loading the selected project’s settings" layout="block" />
+            <GenerationLoader label="Loading the selected settings target" layout="block" />
           </div>
-        )}
+        ) : null}
       </div>
     </div>
   );
 }
 
-/**
- * Settings that belong to this installation rather than to a project:
- * notifications for this browser, the disk the log store is taking on the
- * machine running the host, and the way back into first-run setup.
- *
- * The log store is the one setting here that is not per browser — it lives on
- * the computer running {PRODUCT_NAME}, which a phone is connected to rather
- * than running. Advanced now also contains machine-wide resource diagnostics,
- * but those report state and route lifecycle actions; they do not configure
- * retention. The log store remains here because its setting belongs to the
- * whole machine. Its copy names the computer for that reason.
- */
+/** Settings that belong to this device or host installation, never a project. */
 export function DeviceTab() {
   const push = useCapability("pi/push/config");
   const logs = useCapability("pi/logs/stats");
@@ -329,20 +443,6 @@ export function DeviceTab() {
   );
 }
 
-/**
- * The way back in. "Skip setup" on the welcome screen used to be permanent —
- * the flow is gated on one flag on the host and nothing in the app ever
- * cleared it — so one mis-click meant a new person never saw the onboarding
- * again.
- *
- * Pressing this starts setup **now**. It used to clear the host's flag and say
- * setup would run "the next time" the app opened with no session, which was
- * two promises the app did not keep: the shell holds its own copy of the
- * host's answer and never re-read it, and a reload reopens the remembered
- * session, so "no session open" never came around. The button now clears the
- * flag, forgets the step the flow last stopped on (a fresh run, not a resume)
- * and hands the request to the shell, which owns the flow.
- */
 function RunSetupAgain() {
   const { client, actions } = useLaserStable();
   const workbench = useWorkbench();
@@ -366,9 +466,7 @@ function RunSetupAgain() {
     <section data-slot="run-setup-again" aria-labelledby="setup-again-title" className="flex flex-col gap-2">
       <div className="flex items-center gap-2">
         <Sparkles aria-hidden="true" className="size-4 text-ink-3" />
-        <h3 id="setup-again-title" className="text-base font-medium text-ink">
-          Setup
-        </h3>
+        <h3 id="setup-again-title" className="text-base font-medium text-ink">Setup</h3>
       </div>
       <p className="text-sm leading-6 text-ink-2">
         The steps you saw the first time {PRODUCT_NAME} opened: connect a provider, choose a model, open a project. They start
@@ -376,8 +474,6 @@ function RunSetupAgain() {
         them again — anything already set up is skipped.
       </p>
       <div>
-        {/* A button, not a line of text: this is the only way back to first run,
-            and a ghost control on a page of prose reads as a caption. */}
         <Button type="button" size="sm" variant="secondary" disabled={running} onClick={() => void run()}>
           Run setup again
         </Button>
@@ -397,7 +493,6 @@ export function Empty({ title, body }: { title: string; body: string }) {
   );
 }
 
-/** Shared little bits the three tabs use. */
 export function SearchInput({
   value,
   onChange,

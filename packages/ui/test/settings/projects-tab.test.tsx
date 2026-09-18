@@ -29,6 +29,7 @@ vi.mock("@/runtime", () => ({
 }));
 
 import { SettingsScreen } from "../../src/components/settings/SettingsScreen.js";
+import { WorkbenchProvider } from "../../src/components/workbench/index.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { click, field, render, text, type } from "./mcp/harness.js";
 
@@ -55,7 +56,7 @@ it("shows blocked, trust and legacy resolver state without exposing saved argume
   });
 
   ({ root } = await render(
-    <TooltipProvider><SettingsScreen cwd="/workspace/api" initialTab="projects" /></TooltipProvider>,
+    <TooltipProvider><WorkbenchProvider><SettingsScreen ambientCwd="/workspace/api" initialTab="projects" /></WorkbenchProvider></TooltipProvider>,
   ));
   await act(async () => { await Promise.resolve(); });
 
@@ -86,7 +87,7 @@ it("replaces Environment with collapsible Projects and saves exactly one Bash pr
   });
 
   ({ root } = await render(
-    <TooltipProvider><SettingsScreen cwd="/workspace/api" initialTab="projects" /></TooltipProvider>,
+    <TooltipProvider><WorkbenchProvider><SettingsScreen ambientCwd="/workspace/api" initialTab="projects" /></WorkbenchProvider></TooltipProvider>,
   ));
   await act(async () => { await Promise.resolve(); });
 
