@@ -29,11 +29,18 @@ import { dismissInstallPrompt, scrub, watchPage } from './support.mjs';
  *
  * `UAT_IMAGES` sets the size of the prompt: 24 is the old admission ceiling,
  * 25 is the reported defect, 40 is well past it.
+ *
+ * `UAT_IMAGE_FAILURE=1` runs one more phase, for the one state the product
+ * cannot reach on its own: a picture whose bytes come back wrong. The reply for
+ * the last image is rewritten in the page, so the row renders its real failure
+ * tile — which must fit inside a 112 px tile at a phone width, in both themes,
+ * carry its sentence under the grid, and recover when the person retries.
  */
 export default async function imageAccessibility(check) {
   const { page } = check;
   await check.touch(check.state.width <= 600);
   const count = Number(process.env.UAT_IMAGES ?? 25);
+  const failureLane = process.env.UAT_IMAGE_FAILURE === '1';
   const caption = `Image acceptance: ${count} requested images remain accessible.`;
   const files = Array.from({ length: count }, (_, index) => ({
     name: `image-${index + 1}.png`, mimeType: 'image/png', buffer: syntheticPng(768, index + 1),
@@ -82,6 +89,37 @@ export default async function imageAccessibility(check) {
   const heap = () => page.evaluate(() => {
     const measure = performance.memory;
     return measure ? { usedJSHeapSize: measure.usedJSHeapSize, totalJSHeapSize: measure.totalJSHeapSize } : null;
+  });
+
+  // A conversation cannot corrupt its own image on request, so the lane does:
+  // one reply, rewritten where it arrives, is the only way to see the tile a
+  // person sees when bytes come back that are not the picture.
+  await page.addInitScript(() => {
+    const Native = window.WebSocket;
+    window.__corruptImage = Number(localStorage.getItem('uat-corrupt-image') ?? '-1');
+    const rewrite = (text) => {
+      if (window.__corruptImage < 0) return undefined;
+      let message;
+      try { message = JSON.parse(text); } catch { return undefined; }
+      const result = message?.result;
+      if (!result || result.component?.kind !== 'image' || result.component?.index !== window.__corruptImage) return undefined;
+      if (typeof result.text !== 'string' || result.text.length === 0) return undefined;
+      // Valid base64, different bytes: the whole-image digest refuses it.
+      result.text = result.text.startsWith('Q') ? `R${result.text.slice(1)}` : `Q${result.text.slice(1)}`;
+      return JSON.stringify(message);
+    };
+    class Rewritten extends Native {
+      set onmessage(handler) {
+        super.onmessage = handler
+          ? (event) => {
+              const changed = typeof event.data === 'string' ? rewrite(event.data) : undefined;
+              handler(changed === undefined ? event : new MessageEvent('message', { data: changed }));
+            }
+          : handler;
+      }
+      get onmessage() { return super.onmessage; }
+    }
+    window.WebSocket = Rewritten;
   });
 
   await page.reload({ waitUntil: 'domcontentloaded' });
@@ -141,6 +179,11 @@ export default async function imageAccessibility(check) {
           const image = tile.querySelector('[data-slot="message-image"]');
           return image && image.complete && image.naturalWidth === size && image.naturalHeight === size;
         }).length,
+        // What the window is not holding decoded right now, and where it is:
+        // the residue policy is only meaningful next to these two numbers.
+        waiting: tiles.filter(tile => !tile.querySelector('[data-slot="message-image"]')).length,
+        waitingVisible: tiles.filter(seen).filter(tile => !tile.querySelector('[data-slot="message-image"]')).length,
+        offscreenDecoded: tiles.filter(tile => !seen(tile)).filter(tile => tile.querySelector('[data-slot="message-image"]')).length,
         placeholders: [...node.querySelectorAll('[data-slot="message-image-placeholder"]')].map(item => item.textContent),
       };
     }, 768);
@@ -189,14 +232,16 @@ export default async function imageAccessibility(check) {
   await page.reload({ waitUntil: 'domcontentloaded' });
   await composer.waitFor();
   await observe('reopened');
+  // The one state the conversation cannot reach on its own.
+  const failure = failureLane ? await failureTile(check, { count, caption, composer, quiet }) : undefined;
 
   writeFileSync(join(check.root, `image-accessibility-${count}.json`), JSON.stringify({
     count,
     encodedFileBytes: files.reduce((sum, file) => sum + file.buffer.length, 0),
     decodedSurfaceBytes: count * 768 * 768 * 4,
-    writes, events, settledAt, heapBefore, observations,
+    writes, events, settledAt, heapBefore, observations, failure,
   }, null, 2));
-  console.log(JSON.stringify({ count, observations }));
+  console.log(JSON.stringify({ count, observations, failure }));
 
   for (const result of observations) {
     assert.equal(result.caption, true, `${result.phase}: the caption stays visible`);
@@ -221,4 +266,66 @@ export default async function imageAccessibility(check) {
   }
 
   await watch.assertClean();
+}
+
+/**
+ * The tile a person sees when an image's bytes really are wrong.
+ *
+ * A multi-image tile is 112 px. A failure there shows the icon and the way out
+ * of it; the sentence that explains it belongs under the grid, where there is
+ * room for it. This phase proves the tile fits its own content at the width
+ * this case is running at, that the sentence is on screen, and that trying
+ * again actually brings the picture back.
+ */
+async function failureTile(check, { count, caption, composer, quiet }) {
+  const { page } = check;
+  await page.evaluate(index => localStorage.setItem('uat-corrupt-image', String(index)), count - 1);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await composer.waitFor();
+  const row = page.locator('[data-role="user"]').filter({ hasText: caption }).last();
+  await row.waitFor();
+  const retry = row.getByRole('button', { name: new RegExp(`^Try image ${count} again`) });
+  await retry.waitFor({ timeout: 30000 });
+  await retry.scrollIntoViewIfNeeded();
+  await quiet();
+
+  const tile = row.locator('[data-slot="message-image-tile"]').nth(count - 1);
+  const fit = await retry.evaluate(node => {
+    const box = node.getBoundingClientRect();
+    const style = getComputedStyle(node);
+    return {
+      width: Math.round(box.width), height: Math.round(box.height),
+      // A component that cannot fit its content shows less content, never
+      // smaller text and never overflow.
+      overflowX: node.scrollWidth - node.clientWidth,
+      overflowY: node.scrollHeight - node.clientHeight,
+      fontSize: style.fontSize,
+      label: node.getAttribute('aria-label'),
+      text: node.textContent,
+    };
+  });
+  const problem = await row.locator('[data-slot="image-problem"]').textContent();
+  const tileBox = await tile.boundingBox();
+  await check.shot('image-failure');
+
+  assert.ok(fit.overflowY <= 1, `the failure tile must not overflow its 112 px tile (${fit.overflowY} px below the fold, ${JSON.stringify(fit)})`);
+  assert.ok(fit.overflowX <= 1, `the failure tile must not overflow sideways (${fit.overflowX} px, ${JSON.stringify(fit)})`);
+  assert.equal(fit.text.trim(), 'Try again', 'the 112 px tile shows the way out, not a wrapped sentence');
+  assert.match(scrub(fit.label), /^Try image \d+ again: .+/, 'the accessible name carries the sentence the tile has no room for');
+  assert.match(scrub(problem ?? ''), new RegExp(`^Image ${count} `), 'the sentence itself is under the grid');
+  assert.equal(parseFloat(fit.fontSize) >= 12, true, `data never goes below 12 px (${fit.fontSize})`);
+
+  // Trying again is not decoration: with the bytes intact, the picture comes
+  // back into the same tile.
+  await page.evaluate(() => { window.__corruptImage = -1; localStorage.removeItem('uat-corrupt-image'); });
+  if (check.state.touch) await retry.tap(); else await retry.click();
+  const picture = tile.locator('[data-slot="message-image"]');
+  await picture.waitFor({ timeout: 20000 });
+  const recovered = await picture.evaluate(async (image, size) => {
+    await image.decode();
+    return image.naturalWidth === size && image.naturalHeight === size;
+  }, 768);
+  await check.shot('image-retried');
+  assert.equal(recovered, true, 'the retried image comes back at its own size');
+  return { phase: 'failure', fit, problem, tileBox, recovered };
 }

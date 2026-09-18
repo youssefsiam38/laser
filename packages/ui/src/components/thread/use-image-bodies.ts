@@ -19,8 +19,8 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { ImageContent } from "@lasercode/protocol";
 import { useLaserStable, useLaserState } from "@/runtime";
-import { ImageBlobs } from "@/runtime/body-reader";
-import { IMAGE_PRIORITY, type ImageFailure, type ImagePriority } from "@/runtime/image-blobs";
+import { registerEphemeralCache } from "@/runtime/pressure";
+import { IMAGE_PRIORITY, ImageBlobs, type ImageFailure, type ImagePriority } from "@/runtime/image-blobs";
 import { isReadable, type BodyRef } from "@/runtime/body-excerpt";
 import type { BlockBodies } from "@/store";
 
@@ -31,6 +31,8 @@ export interface ImageSource {
   message?: string | undefined;
   /** Whether its bytes can be opened at all, decoded here or not. */
   openable: boolean;
+  /** A read this person's own click started, still in flight. */
+  pending?: boolean | undefined;
   /** Present only when trying again is the thing that helps. */
   onRetry?: (() => void) | undefined;
 }
@@ -47,6 +49,9 @@ const WAITING_COPY = {
   room: "Shown when this window has room",
   retired: "Loading image…",
 } as const;
+
+/** A picture a person asked for, being read for them right now. */
+const OPENING_COPY = "Opening…";
 
 const FAILURE_COPY: Record<ImageFailure, string> = {
   "too-large": "Too large to show here",
@@ -66,23 +71,36 @@ const FAILURE_SENTENCE: Record<ImageFailure, string> = {
 /**
  * One bounded pool per window and per environment: a device that switches
  * environments never reads with the key of the one it just left (RP-13), and
- * the pool it held is dropped with its object URLs.
+ * the pool it held is dropped with its object URLs. The live pool is a
+ * releasable cache for the window's memory-pressure controller: its offscreen
+ * residue goes back on demand (RP-8 step 1).
  */
-let pool: { key: string; blobs: ImageBlobs } | undefined;
+let pool: { key: string; blobs: ImageBlobs; forget: () => void } | undefined;
 
 /**
- * An image's identity, not its moment: the entry, the component, and the
- * digest of the bytes themselves. A conversation that advances its revision
- * around an unchanged picture keeps the picture — only bytes that are actually
- * different are read again. A reference with no published digest falls back to
- * the revision it was read at, which is the only identity it has.
+ * An image's identity, not its moment: the conversation it belongs to, the
+ * entry, the component, and the digest of the bytes themselves. A conversation
+ * that advances its revision around an unchanged picture keeps the picture —
+ * only bytes that are actually different are read again. A reference with no
+ * published digest falls back to the revision it was read at, which is the
+ * only identity it has.
+ *
+ * The pool is one per window, so the session's own path is part of the key:
+ * nothing rests on entry ids being unique across every conversation a person
+ * opens.
  */
-function imageKey(ref: BodyRef & { entryId: string }): string {
-  return `${ref.entryId}:${ref.component.kind}:${ref.component.index ?? 0}:${ref.contentDigest ?? `r${ref.revision ?? ""}`}`;
+function imageKey(path: string, ref: BodyRef & { entryId: string }): string {
+  return `${path}\u0000${ref.entryId}:${ref.component.kind}:${ref.component.index ?? 0}:${ref.contentDigest ?? `r${ref.revision ?? ""}`}`;
 }
 
-/** Where each picture is: on screen, close to it, or neither. */
-function useImageVisibility() {
+/**
+ * Where each picture is: on screen, close to it, or neither.
+ *
+ * `enabled` is whether this row points at any picture at all. Most messages
+ * point at none, and a transcript keeps many rows mounted: observers are built
+ * for the rows that actually carry images, never for every message on screen.
+ */
+function useImageVisibility(enabled: boolean) {
   const nodes = useRef(new Map<number, HTMLElement>());
   const flags = useRef(new Map<HTMLElement, { visible: boolean; nearby: boolean }>());
   const observers = useRef<IntersectionObserver[]>([]);
@@ -106,7 +124,7 @@ function useImageVisibility() {
   }, []);
 
   useEffect(() => {
-    if (typeof IntersectionObserver === "undefined") return;
+    if (!enabled || typeof IntersectionObserver === "undefined") return;
     const mark = (field: "visible" | "nearby") => (entries: IntersectionObserverEntry[]) => {
       for (const entry of entries) {
         const element = entry.target as HTMLElement;
@@ -127,7 +145,7 @@ function useImageVisibility() {
       observers.current = [];
       flags.current.clear();
     };
-  }, [apply]);
+  }, [apply, enabled]);
 
   /** A stable ref callback per picture, so React does not re-register it. */
   const observe = useCallback((index: number) => {
@@ -158,18 +176,19 @@ export function useImageBodies(path: string | undefined, images: readonly ImageC
   const refs = bodies?.images;
   const [version, changed] = useReducer((count: number) => count + 1, 0);
   const [problem, setProblem] = useState<string>();
-  const { observe, ranks } = useImageVisibility();
   const blobs = useMemo(() => {
     if (pool?.key !== environmentKey) {
+      pool?.forget();
       pool?.blobs.clear();
-      pool = {
-        key: environmentKey,
-        blobs: new ImageBlobs(
-          (params) => client.request("session/entry_range", params),
-          environmentKey,
-          async (candidate) => (await client.request("session/revision", { path: candidate })).revision,
-        ),
-      };
+      const blobs = new ImageBlobs(
+        (params) => client.request("session/entry_range", params),
+        environmentKey,
+        async (candidate) => (await client.request("session/revision", { path: candidate })).revision,
+      );
+      // Under memory pressure this window gives back the pictures it is
+      // keeping for rows nobody is looking at: they cost a re-read to get
+      // back, and nothing on screen is drawn from them (RP-8 step 1).
+      pool = { key: environmentKey, blobs, forget: registerEphemeralCache({ clear: () => blobs.releaseIdle() }) };
     }
     return pool.blobs;
   }, [client, environmentKey]);
@@ -177,13 +196,19 @@ export function useImageBodies(path: string | undefined, images: readonly ImageC
   /** Every picture this row points at rather than holds, by its identity. */
   const keys = useMemo(() => {
     const found = new Map<number, string>();
-    if (!refs) return found;
+    if (!refs || path === undefined) return found;
     for (const [index, ref] of refs.entries()) {
       if (!ref || !isReadable(ref) || images[index]?.data) continue;
-      found.set(index, imageKey(ref));
+      found.set(index, imageKey(path, ref));
     }
     return found;
-  }, [images, refs]);
+  }, [images, path, refs]);
+  // Only a row that carries pictures watches where they are.
+  const { observe, ranks } = useImageVisibility(keys.size > 0);
+  /** Pictures a click is reading right now, so a second click joins nothing. */
+  const [opening, setOpening] = useState<ReadonlySet<number>>(() => new Set());
+  const openingNow = useRef<ReadonlySet<number>>(opening);
+  openingNow.current = opening;
 
   /**
    * The identities this row is holding, as one string. A store update that
@@ -234,12 +259,13 @@ export function useImageBodies(path: string | undefined, images: readonly ImageC
       return { state: "failed", message: "Not kept in this window", openable: false };
     }
     const status = blobs.stateOf(key);
-    if (status.state === "ready") return { src: status.url, state: "ready", openable: true };
-    if (status.state === "loading") return { state: "loading", message: "Loading image…", openable: true };
+    const pending = opening.has(index);
+    if (status.state === "ready") return { src: status.url, state: "ready", openable: true, pending };
+    if (status.state === "loading") return { state: "loading", message: "Loading image…", openable: true, pending };
     if (status.state === "waiting") {
       return status.reason === "retired"
-        ? { state: "loading", message: WAITING_COPY.retired, openable: true }
-        : { state: "waiting", message: WAITING_COPY[status.reason], openable: true };
+        ? { state: "loading", message: WAITING_COPY.retired, openable: true, pending }
+        : { state: "waiting", message: pending ? OPENING_COPY : WAITING_COPY[status.reason], openable: true, pending };
     }
     return {
       state: "failed",
@@ -248,7 +274,22 @@ export function useImageBodies(path: string | undefined, images: readonly ImageC
       onRetry: status.reason === "too-large" ? undefined : () => { blobs.retry(key); changed(); },
     };
     // `version` is what makes this recompute when the pool moves underneath.
-  }, [blobs, keys, refs, version]);
+  }, [blobs, keys, opening, refs, version]);
+
+  /**
+   * What went wrong with this row's pictures, written out once under the grid.
+   * A tile is 112 px in a multi-image prompt: it shows the state and the way
+   * out, and the sentence explaining it belongs where there is room for it.
+   */
+  const failures = useMemo(() => {
+    const lines: string[] = [];
+    for (const [index, key] of keys) {
+      const status = blobs.stateOf(key);
+      if (status.state === "failed") lines.push(`Image ${index + 1} ${FAILURE_SENTENCE[status.reason]}`);
+    }
+    return lines;
+    // `version` is what makes this recompute when the pool moves underneath.
+  }, [blobs, keys, version]);
 
   /**
    * The picture itself, for opening, copying or saving it: the pool's own blob
@@ -265,18 +306,36 @@ export function useImageBodies(path: string | undefined, images: readonly ImageC
       setProblem(`Image ${index + 1} cannot be opened from here. Open the conversation again.`);
       return undefined;
     }
+    // One read per picture, however impatient the clicking: the pool coalesces
+    // the read itself, and the tile says it is busy meanwhile.
+    if (openingNow.current.has(index)) return undefined;
     setProblem(undefined);
-    const opened = await blobs.open(key, path, ref, image.mimeType ?? "image/png");
-    changed();
-    if ("failed" in opened) {
-      setProblem(`Image ${index + 1} ${FAILURE_SENTENCE[opened.failed]}`);
-      return undefined;
+    setOpening(current => new Set(current).add(index));
+    try {
+      const opened = await blobs.open(key, path, ref, image.mimeType ?? "image/png");
+      changed();
+      if ("failed" in opened) {
+        setProblem(`Image ${index + 1} ${FAILURE_SENTENCE[opened.failed]}`);
+        return undefined;
+      }
+      return {
+        picture: { url: opened.url, blob: opened.blob, name, mediaType: image.mimeType ?? "image/png", bytes: opened.bytes },
+        release: opened.release,
+      };
+    } finally {
+      setOpening(current => {
+        if (!current.has(index)) return current;
+        const next = new Set(current);
+        next.delete(index);
+        return next;
+      });
     }
-    return {
-      picture: { url: opened.url, blob: opened.blob, name, mediaType: image.mimeType ?? "image/png", bytes: opened.bytes },
-      release: opened.release,
-    };
   }, [blobs, images, keys, path, refs]);
 
-  return useMemo(() => ({ sourceFor, openFor, observe, problem }), [observe, openFor, problem, sourceFor]);
+  /** The openable problem a person is told about: their click first, then the row's. */
+  const told = problem ?? (failures.length === 0 ? undefined
+    : failures.length === 1 ? failures[0]
+    : `${failures.length} images could not be shown. ${failures[0]}`);
+
+  return useMemo(() => ({ sourceFor, openFor, observe, problem: told }), [observe, openFor, sourceFor, told]);
 }

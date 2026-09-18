@@ -17,7 +17,7 @@ import { LaserStoreProvider, createStateStore } from "../../src/runtime/LaserPro
 import { projectMessages } from "../../src/runtime/projection.js";
 import { blocksFromEntries, initialState, reduce } from "../../src/store.js";
 import { ThreadMessage } from "../../src/components/thread/messages.js";
-import { BODY_VIEWER_AGGREGATE_MAX_BYTES, BodyReplyRefused, BodyWindow, COPY_INFLIGHT_MAX_BYTES, copyWholeBody, FIND_QUERY_MAX_BYTES, findInBody, IMAGE_BLOB_MAX, IMAGE_SURFACE_MAX_BYTES, ImageBlobs, indexOfFolded, streamBody } from "../../src/runtime/body-reader.js";
+import { BODY_VIEWER_AGGREGATE_MAX_BYTES, BodyReplyRefused, BodyWindow, COPY_INFLIGHT_MAX_BYTES, copyWholeBody, FIND_QUERY_MAX_BYTES, findInBody, IMAGE_BLOB_MAX, IMAGE_READS_MAX, IMAGE_SURFACE_MAX_BYTES, ImageBlobs, indexOfFolded, streamBody } from "../../src/runtime/body-reader.js";
 import { elideOversizedEntries, sliceUtf8RangeFrom, utf8ByteLength } from "@lasercode/protocol";
 import { partial } from "../../src/components/thread/LargeBodyViewer.js";
 import { sessionState } from "../agents/fixtures.js";
@@ -906,8 +906,12 @@ describe("images the window points at", () => {
     const claim = Math.floor(IMAGE_SURFACE_MAX_BYTES / 12);
     const pending = Array.from({ length: 60 }, (_, index) =>
       blobs.load(`race-${index}`, SESSION, { ...refOf(index, total), image: surface(claim) }, "image/png"));
-    // Never more reads in flight than the pool may ever hold.
-    expect(peak).toBeLessThanOrEqual(IMAGE_BLOB_MAX);
+    // The decision is taken one microtask after the asking, so the reads must
+    // be given the chance to start before the bound means anything: never more
+    // of them in flight at once than the pool allows, whatever mounted.
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(peak).toBeGreaterThan(0);
+    expect(peak).toBeLessThanOrEqual(IMAGE_READS_MAX);
     release!();
     const urls = await Promise.all(pending);
     const admitted = urls.filter(loaded => loaded.state === "ready").length;
@@ -974,7 +978,9 @@ describe("images the window points at", () => {
     const before = blobs.held;
     const fetchSpy = vi.spyOn(globalThis, "fetch" as never);
 
-    const source = blobs.source("open-me")!;
+    const handed = await blobs.open("open-me", SESSION, refOf(1, 64 * 1024, 1024), "image/png");
+    if ("failed" in handed) throw new Error("the window was holding this picture");
+    const source = handed;
     // The pool's own blob and URL, and not one byte more charged for opening it.
     expect(source.url).toBe(url);
     expect(source.bytes).toBe(before.bytes);

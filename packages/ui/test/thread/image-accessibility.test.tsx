@@ -55,6 +55,9 @@ const refOf = (index: number, decoded = PICTURE_SURFACE) => ({
   excerpt: { offset: 0, bytes: 0 }, image: { decodedBytes: decoded },
 });
 
+/** Let the pool's deferred pass run: it decides what to read one microtask later. */
+const settled = () => new Promise(resolve => setTimeout(resolve, 0));
+
 /** Wait for one image to reach a state, through the pool's own notifications. */
 function reaches(blobs: ImageBlobs, key: string, matches: (state: ImageState) => boolean): Promise<ImageState> {
   return new Promise((resolve, reject) => {
@@ -133,9 +136,10 @@ describe("the order a window decodes pictures in", () => {
   });
 });
 
+/** Two of these fill the whole surface budget; a third needs room made. */
+const HALF = Math.floor(IMAGE_SURFACE_MAX_BYTES / 2);
+
 describe("a window that cannot decode everything at once", () => {
-  /** Two of these fill the whole surface budget; a third needs room made. */
-  const HALF = Math.floor(IMAGE_SURFACE_MAX_BYTES / 2);
 
   it("takes room from the least recently visible picture, not from one on screen", async () => {
     const blobs = new ImageBlobs(authority() as never, "env");
@@ -193,8 +197,10 @@ describe("a window that cannot decode everything at once", () => {
     expect(blobs.held.surface).toBeLessThanOrEqual(IMAGE_SURFACE_MAX_BYTES);
 
     // The conversation scrolls away: the offscreen residue returns to its own,
-    // smaller budget, and what it gave up is waiting, never failed.
+    // smaller budget, and what it gave up is waiting, never failed. Trimming
+    // happens once for the whole batch, a microtask after the asking.
     for (const key of keys) blobs.prioritize(key, IMAGE_PRIORITY.background);
+    await settled();
     expect(blobs.held.images).toBe(IMAGE_BLOB_MAX);
     const given = keys.filter(key => blobs.stateOf(key).state !== "ready");
     expect(given).toHaveLength(25 - IMAGE_BLOB_MAX);
@@ -203,6 +209,74 @@ describe("a window that cannot decode everything at once", () => {
     // Scrolling back to it reads it again; nothing needed a reload.
     blobs.prioritize(given[0]!, IMAGE_PRIORITY.visible);
     expect(await reaches(blobs, given[0]!, state => state.state === "ready")).toMatchObject({ state: "ready" });
+  });
+
+  it("keeps its lookahead working beside a screenful of pictures", async () => {
+    // The residue budget bounds what nobody is looking at. A screen full of
+    // pictures must not spend it, or the lookahead is dead in exactly the
+    // conversation it exists for.
+    const blobs = new ImageBlobs(authority() as never, "env");
+    const visible = Array.from({ length: IMAGE_BLOB_MAX + 1 }, (_, index) => `seen-${index}`);
+    const states = await Promise.all(visible.map((key, index) =>
+      blobs.load(key, SESSION, refOf(index), "image/png", IMAGE_PRIORITY.visible)));
+    expect(states.filter(state => state.state === "ready")).toHaveLength(IMAGE_BLOB_MAX + 1);
+
+    const ahead = await blobs.load("ahead", SESSION, refOf(99), "image/png", IMAGE_PRIORITY.nearby);
+    expect(ahead.state).toBe("ready");
+    expect(blobs.held.images).toBe(IMAGE_BLOB_MAX + 2);
+    // And the residue itself is still bounded: the screenful scrolls away, and
+    // what is left behind is the residue budget, not the whole prompt.
+    for (const key of visible) blobs.prioritize(key, IMAGE_PRIORITY.background);
+    await settled();
+    expect(blobs.held.images).toBe(IMAGE_BLOB_MAX);
+  });
+
+  it("gives the pictures nobody is looking at back under memory pressure", async () => {
+    const blobs = new ImageBlobs(authority() as never, "env");
+    await blobs.load("seen", SESSION, refOf(1), "image/png", IMAGE_PRIORITY.visible);
+    await blobs.load("ahead", SESSION, refOf(2), "image/png", IMAGE_PRIORITY.nearby);
+    await blobs.load("gone", SESSION, refOf(3), "image/png", IMAGE_PRIORITY.background);
+    const held = await blobs.open("held-by-a-viewer", SESSION, refOf(4), "image/png");
+    if ("failed" in held) throw new Error("the viewer's picture must be readable");
+    expect(blobs.held.images).toBe(4);
+
+    // Step 1 of the pressure pass: the offscreen residue, exactly counted.
+    const released = blobs.releaseIdle();
+    expect(released).toEqual({ count: 2, bytes: 2 * PICTURE_SURFACE });
+    expect(blobs.held.images).toBe(2);
+    // What a row is showing and what a viewer is holding are untouched.
+    expect(blobs.stateOf("seen").state).toBe("ready");
+    expect(blobs.url("held-by-a-viewer")).toBe(held.url);
+    // What it gave up says it will come back, and does.
+    expect(blobs.stateOf("ahead")).toEqual({ state: "waiting", reason: "offscreen" });
+    blobs.prioritize("ahead", IMAGE_PRIORITY.visible);
+    expect(await reaches(blobs, "ahead", state => state.state === "ready")).toMatchObject({ state: "ready" });
+    // Nothing left to give is nothing, not a guess.
+    held.release();
+    blobs.release("seen");
+    blobs.release("ahead");
+    blobs.release("gone");
+    await settled();
+    expect(blobs.releaseIdle()).toEqual({ count: 0, bytes: 0 });
+  });
+
+  it("lets go of a picture again once the person closes it", async () => {
+    const blobs = new ImageBlobs(authority() as never, "env");
+    await blobs.load("opened", SESSION, refOf(1, HALF), "image/png", IMAGE_PRIORITY.background);
+    const viewer = await blobs.open("opened", SESSION, refOf(1, HALF), "image/png");
+    if ("failed" in viewer) throw new Error("the window was holding this picture");
+    blobs.release("opened"); // the row scrolls away while the viewer is open
+
+    // While it is open nothing may take it, however much room is wanted.
+    await blobs.load("one", SESSION, refOf(2, HALF), "image/png", IMAGE_PRIORITY.visible);
+    expect((await blobs.load("two", SESSION, refOf(3, HALF), "image/png", IMAGE_PRIORITY.visible)).state).toBe("waiting");
+    expect(blobs.url("opened")).toBe(viewer.url);
+
+    // The person closes it: it is an ordinary offscreen picture again, and the
+    // one that was waiting takes its room. Nothing stays `requested` for ever.
+    viewer.release();
+    expect(await reaches(blobs, "two", state => state.state === "ready")).toMatchObject({ state: "ready" });
+    expect(revoked).toContain(viewer.url);
   });
 
   it("gives every object URL back and never drives its counters negative", async () => {
@@ -223,7 +297,6 @@ describe("a window that cannot decode everything at once", () => {
 });
 
 describe("opening an image a person asked for", () => {
-  const HALF = Math.floor(IMAGE_SURFACE_MAX_BYTES / 2);
 
   it("reads its bytes even when the pool has no room to decode it", async () => {
     const request = authority();
@@ -238,14 +311,61 @@ describe("opening an image a person asked for", () => {
     if ("failed" in opened) return;
     expect(opened.url).toMatch(/^blob:/);
     expect(opened.bytes).toBeGreaterThan(0);
-    // The pool is untouched: nothing a row is showing was taken for the viewer.
+    // It is charged like every other picture: the window's own accounting
+    // sees it, and the documented ceiling is the real one.
+    expect(blobs.stateOf("wanted")).toEqual({ state: "ready", url: opened.url });
     expect(blobs.held.images).toBe(2);
-    expect(blobs.stateOf("shown").state).toBe("ready");
-    // Closing the viewer gives its bytes back.
+    expect(blobs.held.surface).toBeLessThanOrEqual(IMAGE_SURFACE_MAX_BYTES);
+    expect(blobs.committed.surface).toBeLessThanOrEqual(IMAGE_SURFACE_MAX_BYTES);
+    // The room came from a picture on screen — the last resort, and only for
+    // the one the person asked for by name. It says it will come back.
+    expect(blobs.stateOf("shown")).toEqual({ state: "waiting", reason: "room" });
+
+    // Closing the viewer gives the viewer's hold back and nothing else: the
+    // row is still showing this picture. A second close takes nothing from it.
     opened.release();
-    expect(revoked).toContain(opened.url);
     opened.release();
+    expect(revoked).not.toContain(opened.url);
+    expect(blobs.stateOf("wanted")).toEqual({ state: "ready", url: opened.url });
+    // The row goes too: now the URL goes, exactly once, and the picture this
+    // open displaced comes back without anyone asking for it again.
+    blobs.release("wanted");
     expect(revoked.filter(url => url === opened.url)).toHaveLength(1);
+    expect(await reaches(blobs, "shown", state => state.state === "ready")).toMatchObject({ state: "ready" });
+  });
+
+  it("reads a picture for a viewer once, however many times a person clicks", async () => {
+    const request = authority();
+    const blobs = new ImageBlobs(request as never, "env");
+    await blobs.load("shown", SESSION, refOf(1, HALF), "image/png", IMAGE_PRIORITY.visible);
+    await blobs.load("also-shown", SESSION, refOf(2, HALF), "image/png", IMAGE_PRIORITY.visible);
+    await blobs.load("wanted", SESSION, refOf(3, HALF), "image/png", IMAGE_PRIORITY.visible);
+    const reads = request.mock.calls.length;
+
+    const clicks = await Promise.all([
+      blobs.open("wanted", SESSION, refOf(3, HALF), "image/png"),
+      blobs.open("wanted", SESSION, refOf(3, HALF), "image/png"),
+      blobs.open("wanted", SESSION, refOf(3, HALF), "image/png"),
+    ]);
+    for (const click of clicks) if ("failed" in click) throw new Error(`impatient clicking must not fail: ${click.failed}`);
+    const handles = clicks as Exclude<(typeof clicks)[number], { failed: unknown }>[];
+    // One read of the bytes, one blob, one URL — three holds on it.
+    expect(request.mock.calls.length).toBe(reads + 1);
+    expect(new Set(handles.map(handle => handle.url)).size).toBe(1);
+    expect(blobs.held.images).toBe(2);
+
+    // Closing every viewer leaves the picture with the row that is showing it;
+    // releasing a handle twice does not consume the row's hold.
+    for (const handle of handles) { handle.release(); handle.release(); }
+    expect(revoked).not.toContain(handles[0]!.url);
+    expect(blobs.stateOf("wanted")).toEqual({ state: "ready", url: handles[0]!.url });
+    blobs.release("wanted");
+    expect(revoked.filter(url => url === handles[0]!.url)).toHaveLength(1);
+    // Leave nothing in flight behind this test: the picture displaced by the
+    // open is read again as soon as there is room for it.
+    blobs.release("shown");
+    blobs.release("also-shown");
+    await settled();
   });
 
   it("hands over the picture the window already has, without reading it again", async () => {
@@ -373,7 +493,10 @@ describe("what the row says while a picture is not on screen", () => {
     const retried = vi.fn();
     await render(() => {}, retried);
     const retry = container.querySelector('[data-slot="message-image-retry"]') as HTMLButtonElement;
-    expect(retry.getAttribute("aria-label")).toBe("Try image 4 again");
+    // The tile is 112 px in a multi-image prompt: it shows the way out, and
+    // its accessible name carries the sentence that will not fit beside it.
+    expect(retry.getAttribute("aria-label")).toBe("Try image 4 again: Could not be read just now");
+    expect(retry.textContent).toBe("Try again");
     expect(container.querySelector('button[aria-label="Open Image 4"]')).toBeNull();
     await act(async () => { retry.click(); });
     expect(retried).toHaveBeenCalledTimes(1);
