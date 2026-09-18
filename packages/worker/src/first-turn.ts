@@ -1,5 +1,6 @@
 import { ErrorCodes, ProtocolError, SESSION_AGENT_ENTRY_TYPE, SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE, type SessionState } from "@lasercode/protocol";
 import type { SessionAdmissionLease } from "./driver.js";
+import { isSetupOnlyFallbackEntry } from "./fallback/state.js";
 
 export interface FirstTurnAdmission {
   state: SessionState;
@@ -20,6 +21,7 @@ export function assertFirstTurnAdmission(input: FirstTurnAdmission): void {
     if (!entry || typeof entry !== "object") return true;
     const item = entry as { type?: unknown; customType?: unknown };
     if (item.type === "custom" && (item.customType === SESSION_AGENT_ENTRY_TYPE || item.customType === SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE)) return false;
+    if (isSetupOnlyFallbackEntry(entry)) return false;
     return typeof item.type !== "string" || !ALLOWED_ENTRY_TYPES.has(item.type);
   });
   const pristine = input.roleKind === "root"

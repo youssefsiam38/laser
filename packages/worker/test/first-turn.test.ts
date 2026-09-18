@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import { SESSION_AGENT_ENTRY_TYPE, SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE, type SessionState } from "@lasercode/protocol";
+import {
+  modelKey,
+  SESSION_AGENT_ENTRY_TYPE,
+  SESSION_FALLBACK_ENTRY_TYPE,
+  SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE,
+  type FallbackModelRef,
+  type SessionFallbackEntry,
+  type SessionState,
+} from "@lasercode/protocol";
 import { assertFirstTurnAdmission, FirstTurnLock, type FirstTurnAdmission } from "../src/first-turn.js";
 
 const state = (over: Partial<SessionState> = {}): SessionState => ({
@@ -29,8 +37,42 @@ const admission = (over: Partial<FirstTurnAdmission> = {}): FirstTurnAdmission =
   ...over,
 });
 
+const A: FallbackModelRef = { provider: "stub", id: "a" };
+const B: FallbackModelRef = { provider: "stub", id: "b" };
+const AT = "2026-09-18T08:00:00.000Z";
+const activation = {
+  id: "activation",
+  chainKey: modelKey(A),
+  models: [A, B],
+  position: 0,
+  startedAt: AT,
+};
+const fallbackEntry = (data: SessionFallbackEntry): unknown => ({
+  type: "custom",
+  customType: SESSION_FALLBACK_ENTRY_TYPE,
+  data,
+});
+const activatedSetup = (over: Partial<SessionFallbackEntry> = {}): unknown => fallbackEntry({
+  version: 1,
+  event: "activated",
+  at: AT,
+  to: A,
+  activation,
+  models: {},
+  ...over,
+});
+const clearedSetup = (over: Partial<SessionFallbackEntry> = {}): unknown => fallbackEntry({
+  version: 1,
+  event: "cleared",
+  at: AT,
+  to: B,
+  activation: null,
+  models: {},
+  ...over,
+});
+
 describe("first-turn admission", () => {
-  it("accepts empty memory and saved-empty metadata without treating choices as history", () => {
+  it("accepts empty memory and validated saved-empty metadata without treating choices as history", () => {
     expect(() => assertFirstTurnAdmission(admission({ entries: [] }))).not.toThrow();
     expect(() => assertFirstTurnAdmission(admission({ entries: [
       { type: "custom", customType: SESSION_AGENT_ENTRY_TYPE },
@@ -38,7 +80,44 @@ describe("first-turn admission", () => {
       { type: "model_change" },
       { type: "thinking_level_change" },
       { type: "session_info" },
+      activatedSetup(),
+      clearedSetup(),
     ] }))).not.toThrow();
+  });
+
+  it.each([
+    ["attempt failure", activatedSetup({ event: "attempt_failed", from: A, failure: { class: "provider_down", at: AT } })],
+    ["switch", activatedSetup({ event: "switched", from: A, to: B, failure: { class: "provider_down", at: AT } })],
+    ["return", activatedSetup({ event: "returned", from: B, to: A, failure: { class: "provider_down", at: AT } })],
+    ["exhaustion", activatedSetup({ event: "exhausted", from: B, failure: { class: "provider_down", at: AT } })],
+    ["failure on activation", activatedSetup({ failure: { class: "provider_down", at: AT } })],
+    ["failover on activation", activatedSetup({ failover: { id: "event", startedAt: AT, attempts: [] } })],
+    ["model memory on activation", activatedSetup({ models: { [modelKey(A)]: { cooldownUntil: AT } } })],
+    ["prior model on activation", activatedSetup({ from: B })],
+    ["moved activation", activatedSetup({ activation: { ...activation, position: 1 } })],
+    ["one-model non-chain", activatedSetup({ activation: { ...activation, models: [A] } })],
+    ["duplicate-model chain", activatedSetup({ activation: { ...activation, models: [A, A] } })],
+    ["mismatched first model", activatedSetup({ activation: { ...activation, models: [B, A] } })],
+    ["mismatched chain key", activatedSetup({ activation: { ...activation, chainKey: modelKey(B) } })],
+    ["mismatched target", activatedSetup({ to: B })],
+    ["missing activation", activatedSetup({ activation: null })],
+    ["activation on clear", clearedSetup({ activation })],
+    ["model memory on clear", clearedSetup({ models: { [modelKey(A)]: { cooldownUntil: AT } } })],
+    ["failure on clear", clearedSetup({ failure: { class: "provider_down", at: AT } })],
+    ["malformed fallback", { type: "custom", customType: SESSION_FALLBACK_ENTRY_TYPE, data: { event: "activated" } }],
+  ])("rejects fallback history shaped as %s", (_label, entry) => {
+    expect(() => assertFirstTurnAdmission(admission({ entries: [entry] }))).toThrow("already started");
+  });
+
+  it.each(["attempt_failed", "switched"] as const)("does not let a later clean setup record hide an earlier %s record", (event) => {
+    const earlier = activatedSetup({
+      event,
+      from: A,
+      to: event === "switched" ? B : undefined,
+      failure: { class: "provider_down", at: AT },
+    });
+    expect(() => assertFirstTurnAdmission(admission({ entries: [earlier, clearedSetup(), activatedSetup()] })))
+      .toThrow("already started");
   });
 
   it.each([
@@ -49,9 +128,12 @@ describe("first-turn admission", () => {
     { label: "pending tray", over: { pendingTrayCount: 1 } },
     { label: "dialog", over: { dialogCount: 1 } },
     { label: "goal", over: { hasGoal: true } },
-    { label: "child work", over: { hasLiveWork: true } },
-    { label: "custom history", over: { entries: [{ type: "custom", customType: "other" }] } },
-    { label: "message history", over: { entries: [{ type: "message" }] } },
+    { label: "live child work", over: { hasLiveWork: true } },
+    { label: "unknown custom history", over: { entries: [{ type: "custom", customType: "other" }] } },
+    { label: "user history", over: { entries: [{ type: "message", message: { role: "user" } }] } },
+    { label: "assistant history", over: { entries: [{ type: "message", message: { role: "assistant" } }] } },
+    { label: "tool history", over: { entries: [{ type: "message", message: { role: "toolResult" } }] } },
+    { label: "compaction history", over: { entries: [{ type: "compaction" }] } },
     { label: "child role", over: { roleKind: "child" as const } },
     { label: "Beam role", over: { roleKind: "beam" as const } },
     { label: "Chat role", over: { roleKind: "chat" as const } },
