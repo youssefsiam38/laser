@@ -132,13 +132,59 @@ export function SettingsScreen({ initialTab }: SettingsScreenProps) {
   useEffect(() => {
     const strip = tabStrip.current;
     if (!strip) return;
-    const reveal = () => strip.querySelector<HTMLElement>('[aria-current="page"]')?.scrollIntoView({
+    let keepSelectedVisible = true;
+    let activating = false;
+    let releaseActivation: number | undefined;
+    const selectedTab = () => strip.querySelector<HTMLElement>('[aria-current="page"]');
+    const selectedIsVisible = () => {
+      const selected = selectedTab();
+      if (!selected) return false;
+      const stripRect = strip.getBoundingClientRect();
+      const selectedRect = selected.getBoundingClientRect();
+      return selectedRect.left >= stripRect.left && selectedRect.right <= stripRect.right;
+    };
+    const reveal = () => selectedTab()?.scrollIntoView({
       block: "nearest", inline: "nearest", behavior: "auto",
     });
+    const beginActivation = () => {
+      if (releaseActivation !== undefined) window.clearTimeout(releaseActivation);
+      releaseActivation = undefined;
+      activating = true;
+    };
+    const releaseAfterActivation = () => {
+      if (releaseActivation !== undefined) window.clearTimeout(releaseActivation);
+      releaseActivation = window.setTimeout(() => {
+        releaseActivation = undefined;
+        activating = false;
+      }, 0);
+    };
+    const finishActivation = () => {
+      if (releaseActivation !== undefined) window.clearTimeout(releaseActivation);
+      releaseActivation = undefined;
+      activating = false;
+    };
+    const trackSelectedVisibility = () => {
+      keepSelectedVisible = selectedIsVisible();
+    };
     reveal();
-    const observer = new ResizeObserver(reveal);
+    const observer = new ResizeObserver(() => {
+      if (!activating && keepSelectedVisible) reveal();
+    });
     observer.observe(strip);
-    return () => observer.disconnect();
+    strip.addEventListener("scroll", trackSelectedVisibility, { passive: true });
+    strip.addEventListener("pointerdown", beginActivation, true);
+    strip.addEventListener("pointerup", releaseAfterActivation, true);
+    strip.addEventListener("pointercancel", finishActivation, true);
+    strip.addEventListener("click", finishActivation, true);
+    return () => {
+      observer.disconnect();
+      if (releaseActivation !== undefined) window.clearTimeout(releaseActivation);
+      strip.removeEventListener("scroll", trackSelectedVisibility);
+      strip.removeEventListener("pointerdown", beginActivation, true);
+      strip.removeEventListener("pointerup", releaseAfterActivation, true);
+      strip.removeEventListener("pointercancel", finishActivation, true);
+      strip.removeEventListener("click", finishActivation, true);
+    };
   }, [shownTab]);
 
   const resolvedAdvancedView: AdvancedView = advancedView === "resources" && diagnostics.state !== "available"

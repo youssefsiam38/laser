@@ -18,7 +18,7 @@ vi.mock("../../../src/runtime/index.js", () => {
 import { McpServersTab } from "../../../src/components/settings/mcp/McpServersTab.js";
 import { TooltipProvider } from "../../../src/components/ui/tooltip.js";
 import { useWorkbench, type Workbench } from "../../../src/components/workbench/workbench-context.js";
-import { click, expectFocus, field, findButton, inspection, manyTools, renderInWorkbench as render, text, tool, type as typeInto } from "./harness.js";
+import { click, expectFocus, field, findButton, inspection, manyTools, renderInWorkbench as render, serverState, text, tool, type as typeInto } from "./harness.js";
 
 let root: Root;
 let servers: McpServerState[];
@@ -102,6 +102,26 @@ it("returns focus to the gallery card that opened its dialog", async () => {
   await click("Add Playwright");
   await click("Cancel");
   await expectFocus(trigger);
+});
+
+it("uses the same-target Add trigger when the first gallery save replaces its opener", async () => {
+  mocks.request.mockImplementation(async (method: string, params: Record<string, unknown>) => {
+    if (method === "mcp/list") return { servers };
+    if (method === "mcp/import/detect") return { sources: [] };
+    if (method === "mcp/save") {
+      const config = params["server"] as McpServerConfigInput;
+      servers = [serverState({ scope: "global", status: "unknown", config: config as McpServerState["config"] })];
+      return { servers };
+    }
+    throw new Error(`unexpected ${method}`);
+  });
+  await mount();
+  const galleryTrigger = findButton("Add Playwright")!;
+  await click("Add Playwright");
+  await click("Add");
+
+  expect(galleryTrigger.isConnected).toBe(false);
+  await expectFocus(findButton("Add a server")!);
 });
 
 it("lets a blank real dialog switch without a guard, then guards a meaningful draft", async () => {

@@ -6,6 +6,7 @@ import { afterEach, expect, it } from "vitest";
 import { Dialog, DialogContent, DialogTitle } from "../../../src/components/ui/dialog.js";
 import {
   createMcpDialogFocusTarget,
+  restoreMcpDialogFocusFallback,
   useMcpDialogFocusReturn,
   type McpDialogFocusTarget,
 } from "../../../src/components/settings/mcp/dialog-focus.js";
@@ -25,6 +26,7 @@ function Fixture() {
       setOpen(true);
     }}>Open form</button>
     <button type="button">Successor action</button>
+    <button type="button">Fallback action</button>
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent onCloseAutoFocus={restoreFocus}>
         <DialogTitle>Owned form</DialogTitle>
@@ -51,4 +53,28 @@ it("does not restore focus to an opener whose target departed", async () => {
   await act(async () => { await new Promise<void>((resolve) => setTimeout(resolve, 0)); });
 
   expect(document.activeElement).not.toBe(origin);
+});
+
+it("does not restore a disconnected opener after its target departs", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  ({ root } = await render(<Fixture />));
+  const fallback = [...document.querySelectorAll<HTMLButtonElement>("button")].at(-1)!;
+  const disconnected = document.createElement("button");
+  const target = createMcpDialogFocusTarget(disconnected, () => true);
+  target.invalidate();
+
+  expect(restoreMcpDialogFocusFallback(target, fallback)).toBe(false);
+  expect(document.activeElement).toBe(document.body);
+});
+
+it("does not let a disconnected opener fallback steal focus from a successor", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  ({ root } = await render(<Fixture />));
+  const [, successor, fallback] = [...document.querySelectorAll<HTMLButtonElement>("button")];
+  const disconnected = document.createElement("button");
+  const target = createMcpDialogFocusTarget(disconnected, () => true);
+  successor!.focus();
+
+  expect(restoreMcpDialogFocusFallback(target, fallback!)).toBe(false);
+  expect(document.activeElement).toBe(successor);
 });

@@ -118,7 +118,34 @@ it("returns focus to Import after Cancel and a successful import", async () => {
   await click("Import");
   await clickElement(document.querySelector<HTMLInputElement>('[aria-label="Import memory"]')!);
   await click("Import 1 server");
+  expect(document.querySelectorAll('[data-slot="mcp-server-row"]')).toHaveLength(1);
+  expect(trigger.isConnected).toBe(true);
   await expectFocus(trigger);
+});
+
+it("uses Look again when a successful import consumes its banner opener", async () => {
+  mocks.request.mockImplementation(async (method: string, params: Record<string, unknown>) => {
+    if (method === "mcp/list") return { servers };
+    if (method === "mcp/import/detect") return { sources };
+    if (method === "mcp/import/apply") {
+      servers = [serverState({
+        scope: params["scope"] as "global" | "project",
+        status: "unknown",
+        config: { name: "memory", transport: { kind: "stdio", command: "memory" } },
+      })];
+      sources[0]!.servers = [];
+      return { servers, imported: ["memory"] };
+    }
+    throw new Error(`unexpected ${method}`);
+  });
+  await mount();
+  const trigger = findButton("Import")!;
+  await click("Import");
+  await clickElement(document.querySelector<HTMLInputElement>('[aria-label="Import memory"]')!);
+  await click("Import 1 server");
+
+  expect(trigger.isConnected).toBe(false);
+  await expectFocus(findButton("Look again")!);
 });
 
 it("imports the servers a person chose into the visible Project scope", async () => {

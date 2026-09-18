@@ -67,6 +67,7 @@ export function McpImportDialog({
   scope,
   onDraftChange,
   focusReturn,
+  focusFallback,
   onImported,
 }: {
   cwd: string;
@@ -76,10 +77,11 @@ export function McpImportDialog({
   scope: McpScope;
   onDraftChange?: ((draft: ScopeDraft | undefined) => void) | undefined;
   focusReturn?: McpDialogFocusTarget | undefined;
+  focusFallback?: (() => HTMLElement | null) | undefined;
   onImported: (servers: McpServerState[], imported: string[]) => void;
 }) {
   const { client } = useLaserStable();
-  const restoreFocus = useMcpDialogFocusReturn(open, focusReturn);
+  const restoreFocus = useMcpDialogFocusReturn(open, focusReturn, focusFallback);
   const available = useMemo(() => sources.filter((source) => source.servers.length > 0), [sources]);
   const [sourceId, setSourceId] = useState<string>();
   const [chosen, setChosen] = useState<Set<string>>(() => new Set());

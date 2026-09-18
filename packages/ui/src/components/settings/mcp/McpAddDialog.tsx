@@ -63,6 +63,7 @@ export interface McpAddDialogProps {
   edit?: { scope: McpScope; config: McpServerConfig } | undefined;
   onDraftChange?: ((draft: ScopeDraft | undefined) => void) | undefined;
   focusReturn?: McpDialogFocusTarget | undefined;
+  focusFallback?: (() => HTMLElement | null) | undefined;
   onSaved: (servers: McpServerState[], saved: { scope: McpScope; name: string; needsAuth: boolean }) => void;
 }
 
@@ -74,9 +75,9 @@ function formSignature(form: ServerForm): string {
   });
 }
 
-export function McpAddDialog({ cwd, open, onOpenChange, mode, scope, entry, edit, onDraftChange, focusReturn, onSaved }: McpAddDialogProps) {
+export function McpAddDialog({ cwd, open, onOpenChange, mode, scope, entry, edit, onDraftChange, focusReturn, focusFallback, onSaved }: McpAddDialogProps) {
   const { client } = useLaserStable();
-  const restoreFocus = useMcpDialogFocusReturn(open, focusReturn);
+  const restoreFocus = useMcpDialogFocusReturn(open, focusReturn, focusFallback);
   const [form, setForm] = useState<ServerForm>(() => emptyForm());
   const [baseline, setBaseline] = useState(() => formSignature(emptyForm()));
   const [options, setOptions] = useState<Set<string>>(() => new Set());

@@ -26,7 +26,7 @@ import { McpImportBanner, McpImportDialog } from "./McpImportDialog.js";
 import { McpInspector } from "./McpInspector.js";
 import { McpServerList } from "./McpServerList.js";
 import { McpSignInDialog, McpSignOutDialog } from "./McpSignIn.js";
-import { createMcpDialogFocusTarget, type McpDialogFocusTarget } from "./dialog-focus.js";
+import { createMcpDialogFocusTarget, restoreMcpDialogFocusFallback, type McpDialogFocusTarget } from "./dialog-focus.js";
 import { rowKey, serverTitle } from "./model.js";
 import { ScopeDraftGuard, type ScopeDraft } from "../ScopeDraftGuard.js";
 import { useCommittedTargetLifetime } from "../useCommittedTargetLifetime.js";
@@ -61,6 +61,11 @@ export function McpServersTab({ routeCwd, view, decision }: {
   const [drafts, setDrafts] = useState<Record<string, ScopeDraft>>({});
   const generation = useRef(0);
   const detectGeneration = useRef(0);
+  const addFallback = useRef<HTMLButtonElement>(null);
+  const importFallback = useRef<HTMLButtonElement>(null);
+  const pendingFocusFallback = useRef<{ target: McpDialogFocusTarget; kind: "add" | "import" } | undefined>(undefined);
+  const addFocusFallback = useCallback(() => addFallback.current, []);
+  const importFocusFallback = useCallback(() => importFallback.current, []);
   const reportDraft = useCallback((slot: string, draft: ScopeDraft | undefined) => {
     setDrafts((current) => {
       if (!draft && !(slot in current)) return current;
@@ -183,6 +188,13 @@ export function McpServersTab({ routeCwd, view, decision }: {
     if (state?.scope === mutationScope) setSignIn({ scope: state.scope, name: state.config.name, title: serverTitle(state.config) });
   };
 
+  useEffect(() => {
+    const pending = pendingFocusFallback.current;
+    if (!pending || pending.target.element.isConnected) return;
+    restoreMcpDialogFocusFallback(pending.target, pending.kind === "add" ? addFallback.current : importFallback.current);
+    pendingFocusFallback.current = undefined;
+  }, [servers, sources]);
+
   if (!servers) {
     return (
       <div className="p-4">
@@ -212,13 +224,13 @@ export function McpServersTab({ routeCwd, view, decision }: {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {writable ? <Button type="button" size="sm" onClick={(event) => openAdd({ mode: "new" }, event.currentTarget)}>
+            {writable ? <Button ref={addFallback} type="button" size="sm" onClick={(event) => openAdd({ mode: "new" }, event.currentTarget)}>
               <Plus aria-hidden="true" /> Add a server
             </Button> : null}
             <Button type="button" variant="ghost" size="sm" aria-label="Reload servers" onClick={() => void load()}>
               <RefreshCw aria-hidden="true" />
             </Button>
-            {writable ? <Button type="button" variant="ghost" size="sm" onClick={() => void detect()}>
+            {writable ? <Button ref={importFallback} type="button" variant="ghost" size="sm" onClick={() => void detect()}>
               <FolderSearch aria-hidden="true" /> Look again
             </Button> : null}
           </div>
@@ -283,9 +295,11 @@ export function McpServersTab({ routeCwd, view, decision }: {
         {...(adding?.mode === "edit" || adding?.mode === "override" ? { edit: adding.edit } : {})}
         scope={defaultScope}
         focusReturn={adding?.focusReturn}
+        focusFallback={addFocusFallback}
         onDraftChange={reportCurrentAddDraft}
         onSaved={(next, saved) => {
           if (!target.capture()) return;
+          if (adding?.mode === "gallery") pendingFocusFallback.current = { target: adding.focusReturn, kind: "add" };
           reloadProjected();
           setAdding(undefined);
           actions.toast("info", `${saved.name} is saved. Conversations you start from now on can use it.`);
@@ -308,9 +322,11 @@ export function McpServersTab({ routeCwd, view, decision }: {
         sources={sources}
         scope={defaultScope}
         focusReturn={importing}
+        focusFallback={importFocusFallback}
         onDraftChange={reportCurrentImportDraft}
         onImported={(_next, imported) => {
           if (!target.capture()) return;
+          if (importing) pendingFocusFallback.current = { target: importing, kind: "import" };
           setImporting(undefined);
           actions.toast("info", imported.length ? `Imported ${imported.join(", ")}.` : "Nothing was imported.");
           reloadProjected();
