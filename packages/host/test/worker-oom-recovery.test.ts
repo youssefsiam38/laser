@@ -127,7 +127,10 @@ describe("a real worker old-space failure", () => {
     expect(sawFatalMarker).toBe(true);
     expect(delays.filter((delay) => delay < 60_000)).toEqual([1_000]);
     expect(reopened).toEqual([[parentPath]]);
-    expect(existsSync(recoveryMarker)).toBe(true);
+    // `onReopened` records the reopening before it awaits the recovery call,
+    // so the marker the successor writes lands slightly later on a loaded
+    // machine: wait for the work, not for the callback that started it.
+    await waitFor(() => existsSync(recoveryMarker));
     expect((await pool.get(project)).generation).not.toBe(first.generation);
     expect(registry.get("run-1")).toMatchObject({
       status: "failed",
