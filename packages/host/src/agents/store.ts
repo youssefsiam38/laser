@@ -32,6 +32,7 @@ import {
   type AgentDefinition,
   type AgentDefinitionInput,
   type AgentIssue,
+  type AgentLocation,
   type AgentModelChoice,
   type AgentPolicy,
   type AgentWarning,
@@ -265,17 +266,13 @@ export class AgentStore {
     return structuredClone(agent);
   }
 
-  delete(name: string): void {
+  delete(name: string, requestedLocation: AgentLocation): void {
     if (isBuiltinAgentName(name)) throw new ProtocolError(ErrorCodes.InvalidParams, `"${name}" is a built-in agent and cannot be deleted.`);
-    let agent = this.custom.get(keyOf({ scope: "global" }, name));
-    if (!agent) {
-      const matches = [...this.custom.values()].filter((candidate) => candidate.name === name);
-      if (matches.length > 1) {
-        throw new ProtocolError(ErrorCodes.InvalidParams, `More than one project has an agent named "${name}". Open its definition file and remove that file instead.`);
-      }
-      agent = matches[0];
-    }
-    if (!agent) throw new ProtocolError(ErrorCodes.InvalidParams, `There is no agent named "${name}".`);
+    const location: Location = requestedLocation.scope === "project"
+      ? { scope: "project", projectCwd: canonical(requestedLocation.projectCwd) }
+      : { scope: "global" };
+    const agent = this.custom.get(keyOf(location, name));
+    if (!agent) throw new ProtocolError(ErrorCodes.InvalidParams, `There is no agent named "${name}" in this scope.`);
     if (agent.scope === "global" && name === this.defaultAgent) throw new ProtocolError(ErrorCodes.InvalidParams, DELETE_DEFAULT_MESSAGE);
     if (agent.path) this.unlinkDefinition(agent.path, false);
     this.removeDefinition(agent, false);

@@ -64,26 +64,31 @@ function useRequest<T>(key: string | undefined, enabled: boolean, fetcher: (key:
   };
 }
 
-/** The catalog is over a thousand rows; one fetch per directory for the life of the page. `reload` asks again. */
+/** The catalog is over a thousand rows; one fetch per explicit Settings target for the life of the page. `reload` asks again. */
 const catalogCache = new Map<string, Promise<ModelCatalogEntry[]>>();
 
-/** Enabled models of the catalog routed through `cwd`. */
-export function useModelCatalog(cwd: string | undefined, enabled = true): Loaded<ModelCatalogEntry[]> {
+/** Enabled models of the catalog routed through the explicit Settings target. */
+export function useModelCatalog(
+  cwd: string | undefined,
+  settingsView: "global" | "effective",
+  enabled = true,
+): Loaded<ModelCatalogEntry[]> {
   const { client } = useLaserStable();
-  return useRequest(cwd, enabled, (key, fresh) => {
+  const requestKey = cwd === undefined ? undefined : `${settingsView}\0${cwd}`;
+  return useRequest(requestKey, enabled, (key, fresh) => {
     if (fresh) catalogCache.delete(key);
     let pending = catalogCache.get(key);
-    if (!pending) {
+    if (!pending && cwd !== undefined) {
       // Only providers the person has connected (D-145): an agent set to a
       // model nobody can call is a refusal waiting to happen.
       pending = Promise.all([
-        client.request("pi/models/catalog", { cwd: key, settingsView: "effective" }),
-        client.request("pi/providers/list", { cwd: key }).then(({ providers }) => providers, () => undefined),
+        client.request("pi/models/catalog", { cwd, settingsView }),
+        client.request("pi/providers/list", { cwd }).then(({ providers }) => providers, () => undefined),
       ]).then(([catalog, providers]) => narrowToConnected(catalog.models, providers).models);
       pending.catch(() => catalogCache.delete(key));
       catalogCache.set(key, pending);
     }
-    return pending;
+    return pending!;
   });
 }
 

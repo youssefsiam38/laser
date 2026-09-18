@@ -8,6 +8,7 @@
  * stays put, Escape returns you to the session you were reading, and the
  * transcript behind keeps streaming.
  */
+import type { AgentLocation } from "@lasercode/protocol";
 import {
   createContext,
   useCallback,
@@ -49,6 +50,8 @@ export interface SettingsTarget {
  */
 export interface AgentsTarget {
   agent: string;
+  /** Exact source when a source-aware surface knows it. Name-only links resolve Global only. */
+  location?: AgentLocation | undefined;
   field?: string | undefined;
 }
 
@@ -80,9 +83,10 @@ export type SettingsScopeNavigationGuard = (
 export interface WorkbenchOpen {
   (page: "settings", target: SettingsTarget & { scope: SettingsScopeState }): Promise<boolean>;
   (page: "settings", target?: SettingsTab | SettingsTarget): void | Promise<boolean>;
-  (page: "agents", target?: AgentsTarget): void;
-  (page: "logs"): void;
-  (page: WorkbenchPage): void;
+  (page: "agents", target: AgentsTarget & { location: AgentLocation }): Promise<boolean>;
+  (page: "agents", target?: AgentsTarget): void | Promise<boolean>;
+  (page: "logs"): void | Promise<boolean>;
+  (page: WorkbenchPage): void | Promise<boolean>;
 }
 
 export interface Workbench {
@@ -196,11 +200,48 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
     setAgents(next === "agents" && arg !== undefined && typeof arg === "object" ? { ...arg } as AgentsTarget : undefined);
   }, []);
 
+  const guardSameScopeNavigation = useCallback(async (): Promise<boolean> => {
+    const sequence = ++requestSequence.current;
+    const current = settingsScopeStore.getSnapshot();
+    const environmentKey = deviceStore.status().environmentKey;
+    const registration = guardRef.current;
+    let accepted = true;
+    if (registration && registration.environmentKey === environmentKey) {
+      try {
+        accepted = await registration.guard({ current, next: current, reason: "deep-link" });
+      } catch {
+        accepted = false;
+      }
+    }
+    // Even an unguarded same-scope link commits in a microtask. Recheck there
+    // so a same-tick close or newer destination fences it.
+    await Promise.resolve();
+    return accepted
+      && sequence === requestSequence.current
+      && environmentKey === deviceStore.status().environmentKey;
+  }, []);
+
   const open = useCallback((next: WorkbenchPage, arg?: SettingsTab | SettingsTarget | AgentsTarget) => {
+    const agentLocation = next === "agents" && typeof arg === "object" && arg !== null
+      ? (arg as AgentsTarget).location
+      : undefined;
     const explicitScope = next === "settings" && typeof arg === "object" && arg !== null
       ? (arg as SettingsTarget).scope
-      : undefined;
+      : agentLocation?.scope === "global"
+        ? { view: "global" as const }
+        : agentLocation?.scope === "project"
+          ? { view: "project" as const, projectCwd: agentLocation.projectCwd }
+          : undefined;
     if (explicitScope !== undefined) {
+      // An exact same-scope link can still replace the editor, so it passes
+      // through the same owning-screen guard without rewriting the scope.
+      if (sameSettingsScope(settingsScopeStore.getSnapshot(), explicitScope)) {
+        return guardSameScopeNavigation().then((accepted) => {
+          if (!accepted) return false;
+          commitOpen(next, arg);
+          return true;
+        });
+      }
       // Nothing about the destination changes before the guard settles. This
       // keeps a dirty source editor mounted when the person chooses Keep editing.
       const request = requestSettingsScope(explicitScope, "deep-link");
@@ -217,15 +258,31 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
       });
     }
 
+    const registration = guardRef.current;
+    if (page !== null && registration && registration.environmentKey === deviceStore.status().environmentKey) {
+      return guardSameScopeNavigation().then((accepted) => {
+        if (!accepted) return false;
+        commitOpen(next, arg);
+        return true;
+      });
+    }
+
     // Any immediate navigation supersedes an older pending guarded link.
     requestSequence.current += 1;
     commitOpen(next, arg);
-  }, [commitOpen, requestSettingsScope]) as WorkbenchOpen;
+  }, [commitOpen, guardSameScopeNavigation, page, requestSettingsScope]) as WorkbenchOpen;
 
   const close = useCallback(() => {
-    requestSequence.current += 1;
-    setPage(null);
-  }, []);
+    const registration = guardRef.current;
+    if (!registration || registration.environmentKey !== deviceStore.status().environmentKey) {
+      requestSequence.current += 1;
+      setPage(null);
+      return;
+    }
+    void guardSameScopeNavigation().then((accepted) => {
+      if (accepted) setPage(null);
+    });
+  }, [guardSameScopeNavigation]);
 
   // Escape closes the workbench, but never while a dialog, popover or a
   // focused text field is using Escape for its own purpose.

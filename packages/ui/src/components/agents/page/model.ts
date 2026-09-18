@@ -16,6 +16,7 @@ import {
   isBuiltinAgentName,
   type AgentDefinition,
   type AgentDefinitionInput,
+  type AgentLocation,
   type AgentModelChoice,
   type AgentSkillRef,
   type AgentSkillScope,
@@ -34,13 +35,42 @@ import { agentIssueRoot, customAgentsForProject, isBuiltinAgent } from "@/agents
 // Selection and routing
 // ---------------------------------------------------------------------------
 
-/** What the editor column shows. `null` is the overview. */
-export type AgentsSelection = { kind: "agent"; name: string } | { kind: "new" } | { kind: "harness" } | null;
+/** What the editor column shows. Definition identity is name + exact source. */
+export type AgentsSelection =
+  | { kind: "agent"; name: string; location: AgentLocation }
+  | { kind: "new"; location: AgentLocation; token: number }
+  | { kind: "harness" }
+  | null;
+
+export function locationOfAgent(agent: Pick<AgentDefinition, "scope" | "projectCwd">): AgentLocation {
+  return agent.scope === "project"
+    ? { scope: "project", projectCwd: agent.projectCwd ?? "" }
+    : { scope: "global" };
+}
+
+export function sameAgentLocation(left: AgentLocation, right: AgentLocation): boolean {
+  return left.scope === right.scope
+    && (left.scope === "global" || (right.scope === "project" && left.projectCwd === right.projectCwd));
+}
+
+export function selectionOfAgent(agent: AgentDefinition): Extract<AgentsSelection, { kind: "agent" }> {
+  return { kind: "agent", name: agent.name, location: locationOfAgent(agent) };
+}
+
+export function agentAtLocation(
+  snapshot: AgentsSnapshot | null | undefined,
+  name: string,
+  location: AgentLocation,
+): AgentDefinition | undefined {
+  return snapshot?.agents.find((agent) => agent.name === name && sameAgentLocation(locationOfAgent(agent), location));
+}
 
 export const sameSelection = (a: AgentsSelection, b: AgentsSelection): boolean => {
   if (a === b) return true;
   if (!a || !b || a.kind !== b.kind) return false;
-  return a.kind === "agent" && b.kind === "agent" ? a.name === b.name : true;
+  if (a.kind === "agent" && b.kind === "agent") return a.name === b.name && sameAgentLocation(a.location, b.location);
+  if (a.kind === "new" && b.kind === "new") return a.token === b.token && sameAgentLocation(a.location, b.location);
+  return a.kind === "harness" && b.kind === "harness";
 };
 
 /** The form sections, in the order the editor draws them. */
@@ -311,9 +341,9 @@ export interface Deletability {
   reason?: string;
 }
 
-export function deletability(agent: Pick<AgentDefinition, "name" | "kind">, snapshot: Pick<AgentsSnapshot, "defaultAgent"> | null | undefined): Deletability {
+export function deletability(agent: Pick<AgentDefinition, "name" | "kind" | "scope">, snapshot: Pick<AgentsSnapshot, "defaultAgent"> | null | undefined): Deletability {
   if (isBuiltinAgent(agent)) return { ok: false, reason: `${agent.name} is built in and cannot be deleted.` };
-  if (snapshot && agent.name === snapshot.defaultAgent) {
+  if (snapshot && agent.scope === "global" && agent.name === snapshot.defaultAgent) {
     return { ok: false, reason: "This is the default agent for new sessions. Make another agent the default first, then delete this one." };
   }
   return { ok: true };

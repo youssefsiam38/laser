@@ -17,6 +17,7 @@ import {
   type AgentDefinition,
   type AgentDefinitionInput,
   type AgentIssue,
+  type AgentLocation,
   type AgentSkillRef,
   type AgentWarning,
   type AgentsSnapshot,
@@ -44,7 +45,7 @@ import { useLogicalArrowKeys } from "@/hooks/use-direction";
 import { cn } from "@/lib/utils";
 import { prefersReducedMotion } from "@/motion";
 
-import { DefinitionLocation, ScopeField } from "./DefinitionFileSection.js";
+import { DefinitionLocation, DefinitionDestination } from "./DefinitionFileSection.js";
 import { DeleteAgentDialog } from "./dialogs.js";
 import { CheckRow, Hint, IssueNotice, Section, WarningNotice } from "./fields.js";
 import { InstructionTemplateEditor, InstructionTemplateSourceView } from "./InstructionTemplateEditor.js";
@@ -58,6 +59,7 @@ import {
   describeThinking,
   groupSkills,
   missingSkills,
+  locationOfAgent,
   modelChoiceId,
   parseModelChoice,
   projectFolderName,
@@ -73,7 +75,9 @@ import {
   SKILL_SCOPE_LABEL,
   type EditorSection,
 } from "./model.js";
-import { useEngineInstructions, useModelCatalog, useSkillsListing, useWebSearchFeature } from "./use-page-data.js";
+import type { ScopeDraft } from "@/components/settings/ScopeDraftGuard";
+import { useCommittedTargetLifetime } from "@/components/settings/useCommittedTargetLifetime.js";
+import { useEngineInstructions, useModelCatalog, useSkillsListing } from "./use-page-data.js";
 
 /** Typing pause before the host is asked to validate. */
 const VALIDATE_DEBOUNCE_MS = 350;
@@ -96,24 +100,38 @@ export interface AgentEditorProps {
   /** `undefined` creates a new agent. */
   agent: AgentDefinition | undefined;
   snapshot: AgentsSnapshot;
-  /** Where host reads are routed: the project, or a built-in workspace when none is open. */
+  /** Captured destination for a new definition; existing definitions use their source. */
+  destination: AgentLocation;
+  /** Explicit copy/override seed. It is still saved as a new definition. */
+  seed?: AgentDefinitionInput | undefined;
+  /** Where host reads are routed: neutral for Global, explicit project otherwise. */
   routeCwd: string | undefined;
-  /** The open project, for Start chat. */
+  settingsView: "global" | "effective";
+  /** The explicit Project target, for Start chat. */
   projectCwd: string | undefined;
   warnings: readonly AgentWarning[];
   focus: EditorFocus | undefined;
   writable?: boolean;
   onDirtyChange(dirty: boolean): void;
+  onDraftChange?: ((draft: ScopeDraft | undefined) => void) | undefined;
+  onMutationPending?: ((pending: boolean) => void) | undefined;
   onSaved(agent: AgentDefinition): void;
   onDeleted(): void;
   onStartChat(name: string): void;
 }
 
-export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, focus, writable = true, onDirtyChange, onSaved, onDeleted, onStartChat }: AgentEditorProps) {
+export function AgentEditor({ agent, snapshot, destination, seed, routeCwd, settingsView, projectCwd, warnings, focus, writable = true, onDirtyChange, onDraftChange, onMutationPending, onSaved, onDeleted, onStartChat }: AgentEditorProps) {
   const agents = useAgentsActions();
   const isNew = agent === undefined;
-  const isDefaultAgent = agent?.name === DEFAULT_AGENT_NAME;
-  const [base, setBase] = useState<AgentDefinitionInput>(() => (agent ? agentDefinitionInputOf(agent) : defaultAgentDefinitionInput(snapshot)));
+  const isDefaultAgent = agent?.scope === "global" && agent.name === DEFAULT_AGENT_NAME;
+  const initial = (): AgentDefinitionInput => {
+    if (agent) return agentDefinitionInputOf(agent);
+    const blank = seed ? structuredClone(seed) : defaultAgentDefinitionInput(snapshot);
+    return destination.scope === "project"
+      ? { ...blank, scope: "project", projectCwd: destination.projectCwd }
+      : { ...blank, scope: "global" };
+  };
+  const [base, setBase] = useState<AgentDefinitionInput>(initial);
   const [draft, setDraft] = useState<AgentDefinitionInput>(base);
   const [issues, setIssues] = useState<AgentIssue[]>([]);
   const [saving, setSaving] = useState(false);
@@ -121,7 +139,9 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [settingDefault, setSettingDefault] = useState(false);
+  useEffect(() => () => onMutationPending?.(false), [onMutationPending]);
   const formRef = useRef<HTMLFormElement>(null);
+  const target = useCommittedTargetLifetime(`${agent ? "saved" : "new"}:${destination.scope}:${destination.scope === "project" ? destination.projectCwd : ""}:${agent?.name ?? ""}`);
 
   // A save elsewhere (another view, the host) moved the stored definition:
   // follow it when nothing here is unsaved, so the form never shows stale text.
@@ -135,7 +155,7 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
     });
   }, [agent]);
 
-  const dirty = !sameDefinitionInput(draft, base);
+  const dirty = (isNew && seed !== undefined) || !sameDefinitionInput(draft, base);
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
 
   const byField = useMemo(() => agentIssuesByField(issues), [issues]);
@@ -144,31 +164,23 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
     setServerError(undefined);
     setDraft((current) => ({ ...current, ...changes }));
   }, []);
-  const patchScope = useCallback((scope: AgentDefinitionInput["scope"]) => {
-    setServerError(undefined);
-    setDraft((current) => {
-      if (scope === "project" && projectCwd) return { ...current, scope, projectCwd };
-      const globalNames = new Set(startableAgents(snapshot, { scope: "global" }).map((candidate) => candidate.name));
-      const { projectCwd: _projectCwd, ...global } = current;
-      return { ...global, scope: "global", allowedAgents: global.allowedAgents.filter((name) => globalNames.has(name)) };
-    });
-  }, [projectCwd, snapshot]);
-
   // --- validation -----------------------------------------------------------
   const validateSeq = useRef(0);
   const validate = useCallback(
     async (input: AgentDefinitionInput): Promise<AgentIssue[] | undefined> => {
       const seq = ++validateSeq.current;
+      const lease = target.capture();
+      if (!lease) return undefined;
       try {
         const result = await agents.validate(input, agent?.name ?? null);
-        if (seq === validateSeq.current) setIssues(result);
-        return result;
+        if (seq === validateSeq.current && target.isCurrent(lease)) setIssues(result);
+        return target.isCurrent(lease) ? result : undefined;
       } catch {
         // The host could not be asked; the save will say so where it matters.
         return undefined;
       }
     },
-    [agent?.name, agents],
+    [agent?.name, agents, target],
   );
   useEffect(() => {
     if (!dirty) return undefined;
@@ -181,20 +193,26 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
 
   // --- save -----------------------------------------------------------------
   const canSave = dirty && !byField.any && !localTemplateIssue && !saving;
-  const save = useCallback(async () => {
-    if (saving) return;
+  const save = useCallback(async (): Promise<boolean> => {
+    if (saving) return false;
+    const lease = target.capture();
+    if (!lease) return false;
     setServerError(undefined);
     const fresh = await validate(draft);
-    if (fresh && fresh.length > 0) return;
+    if (!target.isCurrent(lease) || (fresh && fresh.length > 0)) return false;
     setSaving(true);
+    onMutationPending?.(true);
     try {
       const saved = await agents.save(draft, agent?.name ?? null);
+      if (!target.isCurrent(lease)) return false;
       const next = agentDefinitionInputOf(saved);
       setBase(next);
       setDraft(next);
       setIssues([]);
       onSaved(saved);
+      return true;
     } catch (error) {
+      if (!target.isCurrent(lease)) return false;
       const carried = issuesOf(error);
       if (carried && carried.length > 0) {
         setIssues(carried);
@@ -202,12 +220,30 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
         // The transport keeps only the message; ask once more so a field-level
         // refusal still lands at its field rather than as a sentence.
         const again = await validate(draft);
-        if (!again || again.length === 0) setServerError({ message: messageOf(error), action: "save" });
+        if (target.isCurrent(lease) && (!again || again.length === 0)) setServerError({ message: messageOf(error), action: "save" });
       }
+      return false;
     } finally {
-      setSaving(false);
+      onMutationPending?.(false);
+      if (target.isCurrent(lease)) setSaving(false);
     }
-  }, [agent?.name, agents, draft, onSaved, saving, validate]);
+  }, [agent?.name, agents, draft, onMutationPending, onSaved, saving, target, validate]);
+
+  const discardDraft = useCallback(() => {
+    setDraft(base);
+    setIssues([]);
+    setServerError(undefined);
+  }, [base]);
+  const guardedDraft = useMemo<ScopeDraft | undefined>(() => dirty ? {
+    id: `agent:${destination.scope}:${destination.scope === "project" ? destination.projectCwd : "global"}:${agent?.name ?? "new"}`,
+    label: `${agent ? agentDisplayName(agent.name) : "New agent"} changes`,
+    discard: discardDraft,
+    save,
+  } : undefined, [agent, destination.scope, destination.scope === "project" ? destination.projectCwd : undefined, dirty, discardDraft, save]);
+  useEffect(() => {
+    onDraftChange?.(guardedDraft);
+    return () => onDraftChange?.(undefined);
+  }, [guardedDraft, onDraftChange]);
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
@@ -241,11 +277,10 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
   }, [focus]);
 
   // --- data ------------------------------------------------------------------
-  const catalog = useModelCatalog(routeCwd);
+  const catalog = useModelCatalog(routeCwd, settingsView);
   const models = catalog.data ?? [];
-  const webSearch = useWebSearchFeature(routeCwd);
   const startable = useMemo(() => startableAgents(snapshot, draft), [draft.projectCwd, draft.scope, snapshot]);
-  const isDefault = agent !== undefined && snapshot.defaultAgent === agent.name;
+  const isDefault = agent?.scope === "global" && snapshot.defaultAgent === agent.name;
   const deletable = agent ? deletability(agent, snapshot) : { ok: false, reason: "Save the agent first." };
   const sectionWarnings = (section: EditorSection) => warningsInSection(warnings, section);
   const ids = useId();
@@ -260,26 +295,33 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
   ];
 
   const setDefault = async () => {
-    if (!agent || isDefault) return;
+    if (!agent || agent.scope !== "global" || isDefault) return;
+    const lease = target.capture();
+    if (!lease) return;
     setSettingDefault(true);
     try {
       await agents.setDefault(agent.name);
     } catch (error) {
-      setServerError({ message: messageOf(error), action: "default" });
+      if (target.isCurrent(lease)) setServerError({ message: messageOf(error), action: "default" });
     } finally {
-      setSettingDefault(false);
+      if (target.isCurrent(lease)) setSettingDefault(false);
     }
   };
 
   const remove = async () => {
     if (!agent) return;
+    const lease = target.capture();
+    if (!lease) return;
     setDeleting(true);
+    onMutationPending?.(true);
     try {
-      await agents.remove(agent.name);
+      await agents.remove(agent.name, locationOfAgent(agent));
+      if (!target.isCurrent(lease)) return;
       setConfirmDelete(false);
       onDeleted();
     } finally {
-      setDeleting(false);
+      onMutationPending?.(false);
+      if (target.isCurrent(lease)) setDeleting(false);
     }
   };
 
@@ -317,11 +359,11 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
           }
         />
 
-        {/* Definition file and immutable scope */}
+        {/* Definition file and immutable captured destination */}
         <Section
           id="file"
           title="Where it lives"
-          description={isNew ? "Choose who can use this agent. Its location is fixed after you create it." : "Scope is fixed after creation."}
+          description={isNew ? "This destination was captured when you started the draft." : "Scope is fixed after creation."}
           notices={
             <>
               <WarningNotice warnings={sectionWarnings("file")} />
@@ -329,15 +371,7 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
             </>
           }
         >
-          {isNew ? (
-            <ScopeField
-              scope={draft.scope}
-              projectCwd={projectCwd}
-              onChange={patchScope}
-            />
-          ) : (
-            <DefinitionLocation agent={agent} />
-          )}
+          {isNew ? <DefinitionDestination location={destination} /> : <DefinitionLocation agent={agent} />}
         </Section>
 
         {/* Name */}
@@ -560,8 +594,8 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
       </div>
 
       {/* Footer */}
-      {writable ? <div data-slot="agent-editor-footer" className="sticky bottom-0 z-10 mt-auto bg-bg hairline-t">
-        {serverError ? (
+      <div data-slot="agent-editor-footer" className="sticky bottom-0 z-10 mt-auto bg-bg hairline-t">
+        {writable && serverError ? (
           <div className="px-4 pt-3 md:px-6">
             <ErrorState
               title={serverError.action === "default" ? "Couldn’t make this the default agent" : "Couldn’t save the agent"}
@@ -572,23 +606,18 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
           </div>
         ) : null}
         <div className="mx-auto flex w-full max-w-180 flex-wrap items-center gap-2 px-4 py-3 md:px-6">
-          <Button type="submit" disabled={!canSave} aria-busy={saving || undefined} className="min-w-24">
-            {saving ? <RotateCw className="motion-safe:animate-busy" /> : <Save />}
-            {saving ? "Saving…" : isNew ? "Create agent" : "Save"}
-          </Button>
-          {dirty ? (
-            <Button
-              type="button"
-              variant="ghost"
-              disabled={saving}
-              onClick={() => {
-                setDraft(base);
-                setIssues([]);
-                setServerError(undefined);
-              }}
-            >
-              Discard changes
-            </Button>
+          {writable ? (
+            <>
+              <Button type="submit" disabled={!canSave} aria-busy={saving || undefined} className="min-w-24">
+                {saving ? <RotateCw className="motion-safe:animate-busy" /> : <Save />}
+                {saving ? "Saving…" : isNew ? "Create agent" : "Save"}
+              </Button>
+              {dirty ? (
+                <Button type="button" variant="ghost" disabled={saving} onClick={discardDraft}>
+                  Discard changes
+                </Button>
+              ) : null}
+            </>
           ) : null}
           <span className="ms-auto flex flex-wrap items-center gap-2">
             {!isNew ? (
@@ -611,7 +640,7 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
                 </Tooltip>
               )
             ) : null}
-            {!isNew ? (
+            {!isNew && writable ? (
               <Button
                 type="button"
                 variant="destructive-ghost"
@@ -625,12 +654,12 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
             ) : null}
           </span>
         </div>
-        {!isNew && !deletable.ok ? (
+        {writable && !isNew && !deletable.ok ? (
           <p id={`${ids}-delete-why`} data-slot="agent-delete-reason" className="mx-auto w-full max-w-180 px-4 pb-3 text-xs leading-5 text-ink-3 md:px-6">
             {deletable.reason}
           </p>
         ) : null}
-      </div> : null}
+      </div>
 
       {agent && writable ? (
         <DeleteAgentDialog

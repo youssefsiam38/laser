@@ -94,21 +94,37 @@ describe("Settings scope navigation", () => {
     expect(latest?.settingsScope).toEqual({ view: "project", projectCwd: "/one" });
   });
 
+  it("moves an exact Agents source and Settings scope as one guarded destination", async () => {
+    await act(async () => root.render(<WorkbenchProvider><Probe /></WorkbenchProvider>));
+    const exact = { agent: "reviewer", location: { scope: "project" as const, projectCwd: "/p" }, field: "skills" };
+    await act(async () => { expect(await latest!.open("agents", exact)).toBe(true); });
+    expect(latest?.page).toBe("agents");
+    expect(latest?.agents).toEqual(exact);
+    expect(latest?.settingsScope).toEqual({ view: "project", projectCwd: "/p" });
+
+    const unregister = latest!.registerSettingsScopeGuard(() => false);
+    const previous = latest?.agents;
+    await act(async () => { expect(await latest!.open("agents", { agent: "default", location: { scope: "global" } })).toBe(false); });
+    expect(latest?.agents).toBe(previous);
+    expect(latest?.settingsScope).toEqual({ view: "project", projectCwd: "/p" });
+    unregister();
+  });
+
   it("fences a delayed guard decision when a newer same-scope link wins", async () => {
     await act(async () => root.render(<WorkbenchProvider><Probe /></WorkbenchProvider>));
     await act(async () => latest!.open("agents", { agent: "reviewer" }));
-    let settle: ((accepted: boolean) => void) | undefined;
-    latest!.registerSettingsScopeGuard(() => new Promise<boolean>((resolve) => { settle = resolve; }));
+    const decisions: Array<(accepted: boolean) => void> = [];
+    latest!.registerSettingsScopeGuard(() => new Promise<boolean>((resolve) => { decisions.push(resolve); }));
 
-    const pending = latest!.open("settings", {
+    const older = latest!.open("settings", {
       tab: "features",
       scope: { view: "project", projectCwd: "/older" },
     });
-    await act(async () => {
-      expect(await latest!.open("settings", { tab: "models", scope: { view: "global" } })).toBe(true);
-    });
-    await act(async () => { settle?.(true); });
-    await expect(pending).resolves.toBe(false);
+    const newer = latest!.open("settings", { tab: "models", scope: { view: "global" } });
+    await act(async () => { decisions[1]?.(true); await newer; });
+    await expect(newer).resolves.toBe(true);
+    await act(async () => { decisions[0]?.(true); });
+    await expect(older).resolves.toBe(false);
     expect(latest?.page).toBe("settings");
     expect(latest?.tab).toBe("models");
     expect(latest?.settingsScope).toEqual({ view: "global" });

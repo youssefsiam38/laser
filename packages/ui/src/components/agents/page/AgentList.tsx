@@ -4,7 +4,7 @@
  * bottom, and the harness policy row last. A listbox: arrows and Home/End
  * move between rows, Enter or Space (or a click) selects one.
  */
-import type { AgentDefinition, AgentWarning, AgentsSnapshot } from "@lasercode/protocol";
+import { effectiveAgents, type AgentDefinition, type AgentWarning, type AgentsSnapshot } from "@lasercode/protocol";
 import { Bot, FileWarning, MessageSquare, SlidersHorizontal, Sparkles, Tag } from "lucide-react";
 import { useMemo, type KeyboardEvent, type ReactNode } from "react";
 
@@ -12,7 +12,7 @@ import { agentDisplayName } from "@/agents";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
-import { agentMark, orderAgents, sameSelection, type AgentMark, type AgentsSelection } from "./model.js";
+import { agentForWarning, agentMark, orderAgents, sameSelection, selectionOfAgent, type AgentMark, type AgentsSelection } from "./model.js";
 
 const MARK_ICON: Record<AgentMark, typeof Bot> = {
   default: Bot,
@@ -29,6 +29,7 @@ export function AgentMarkIcon({ mark, className }: { mark: AgentMark; className?
 
 export interface AgentListProps {
   snapshot: AgentsSnapshot;
+  view: "global" | "project" | "effective";
   projectCwd?: string | undefined;
   warnings: readonly AgentWarning[];
   selection: AgentsSelection;
@@ -38,21 +39,34 @@ export interface AgentListProps {
   className?: string | undefined;
 }
 
-export function AgentList({ snapshot, projectCwd, warnings, selection, onSelect, lead, className }: AgentListProps) {
+export function AgentList({ snapshot, view, projectCwd, warnings, selection, onSelect, lead, className }: AgentListProps) {
   const { custom, builtin, warningCounts, fileWarnings } = useMemo(() => {
     const ordered = orderAgents(snapshot, projectCwd);
-    const agents = [...ordered.custom, ...ordered.builtin];
+    const globals = snapshot.agents.filter((agent) => agent.kind === "custom" && agent.scope === "global");
+    const projects = snapshot.agents.filter((agent) => agent.kind === "custom" && agent.scope === "project" && agent.projectCwd === projectCwd);
+    const compareByName = (left: AgentDefinition, right: AgentDefinition) =>
+      left.scope === "global" && left.name === snapshot.defaultAgent
+        ? -1
+        : right.scope === "global" && right.name === snapshot.defaultAgent
+          ? 1
+          : left.name.localeCompare(right.name);
+    const custom = view === "global"
+      ? globals.sort(compareByName)
+      : view === "project"
+        ? [...projects.sort(compareByName), ...globals.sort(compareByName)]
+        : effectiveAgents(snapshot.agents, projectCwd).filter((agent) => agent.kind === "custom").sort(compareByName);
+    const builtin = view === "global" ? ordered.builtin : [];
+    const agents = [...custom, ...builtin];
     const byPath = new Map(agents.flatMap((agent) => agent.path ? [[agent.path, agent] as const] : []));
-    const byName = new Map(agents.map((agent) => [agent.name, agent] as const));
     const counts = new Map<AgentDefinition, number>();
     const unlinked: AgentWarning[] = [];
     for (const warning of warnings) {
-      const linked = warning.path ? byPath.get(warning.path) : byName.get(warning.agentName);
+      const linked = warning.path ? byPath.get(warning.path) : agentForWarning(snapshot, warning, projectCwd);
       if (linked) counts.set(linked, (counts.get(linked) ?? 0) + 1);
       else if (warning.field === "file") unlinked.push(warning);
     }
-    return { ...ordered, warningCounts: counts, fileWarnings: unlinked };
-  }, [projectCwd, snapshot, warnings]);
+    return { custom, builtin, warningCounts: counts, fileWarnings: unlinked };
+  }, [projectCwd, snapshot, view, warnings]);
   const warningCount = (agent: AgentDefinition) => warningCounts.get(agent) ?? 0;
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -84,14 +98,15 @@ export function AgentList({ snapshot, projectCwd, warnings, selection, onSelect,
       <Group label="Your agents">
         {custom.map((agent, i) => (
           <AgentRow
-            key={agent.name}
+            key={agent.scope === "project" ? `project:${agent.projectCwd}:${agent.name}` : `global:${agent.name}`}
             agent={agent}
-            isDefault={agent.name === snapshot.defaultAgent}
+            isDefault={agent.scope === "global" && agent.name === snapshot.defaultAgent}
             warnings={warningCount(agent)}
             shadowsGlobal={agent.scope === "project" && snapshot.agents.some((candidate) => candidate.scope === "global" && candidate.name === agent.name)}
-            selected={sameSelection(selection, { kind: "agent", name: agent.name })}
-            tabIndex={focusable({ kind: "agent", name: agent.name }, i === 0)}
-            onSelect={() => onSelect({ kind: "agent", name: agent.name })}
+            showGlobalBadge={view === "project" && agent.scope === "global"}
+            selected={sameSelection(selection, selectionOfAgent(agent))}
+            tabIndex={focusable(selectionOfAgent(agent), i === 0)}
+            onSelect={() => onSelect(selectionOfAgent(agent))}
           />
         ))}
         {fileWarnings.map((warning) => (
@@ -106,37 +121,42 @@ export function AgentList({ snapshot, projectCwd, warnings, selection, onSelect,
             tabIndex={0}
             data-slot="agent-row"
             data-agent=""
-            onSelect={() => onSelect({ kind: "new" })}
+            onSelect={() => selection?.kind === "new" && onSelect(selection)}
           />
         ) : null}
       </Group>
-      <Group label="Built in" quiet>
-        {builtin.map((agent) => (
-          <AgentRow
-            key={agent.name}
-            agent={agent}
-            isDefault={false}
-            warnings={warningCount(agent)}
-            shadowsGlobal={false}
-            selected={sameSelection(selection, { kind: "agent", name: agent.name })}
-            tabIndex={focusable({ kind: "agent", name: agent.name }, false)}
-            quiet
-            onSelect={() => onSelect({ kind: "agent", name: agent.name })}
-          />
-        ))}
-      </Group>
-      <Group label="Harness" quiet>
-        <Row
-          icon={<SlidersHorizontal aria-hidden="true" />}
-          title="Limits"
-          detail={`Depth ${snapshot.policy.maxDepth} · commands ${snapshot.policy.foregroundCommandSeconds}s`}
-          selected={selection?.kind === "harness"}
-          tabIndex={focusable({ kind: "harness" }, false)}
-          quiet
-          data-slot="harness-row"
-          onSelect={() => onSelect({ kind: "harness" })}
-        />
-      </Group>
+      {view === "global" ? (
+        <>
+          <Group label="Built in" quiet>
+            {builtin.map((agent) => (
+              <AgentRow
+                key={agent.name}
+                agent={agent}
+                isDefault={false}
+                warnings={warningCount(agent)}
+                shadowsGlobal={false}
+                showGlobalBadge={false}
+                selected={sameSelection(selection, selectionOfAgent(agent))}
+                tabIndex={focusable(selectionOfAgent(agent), false)}
+                quiet
+                onSelect={() => onSelect(selectionOfAgent(agent))}
+              />
+            ))}
+          </Group>
+          <Group label="Harness" quiet>
+            <Row
+              icon={<SlidersHorizontal aria-hidden="true" />}
+              title="Limits"
+              detail={`Depth ${snapshot.policy.maxDepth} · commands ${snapshot.policy.foregroundCommandSeconds}s`}
+              selected={selection?.kind === "harness"}
+              tabIndex={focusable({ kind: "harness" }, false)}
+              quiet
+              data-slot="harness-row"
+              onSelect={() => onSelect({ kind: "harness" })}
+            />
+          </Group>
+        </>
+      ) : null}
     </div>
   );
 }
@@ -155,6 +175,7 @@ function AgentRow({
   isDefault,
   warnings,
   shadowsGlobal,
+  showGlobalBadge,
   selected,
   tabIndex,
   quiet = false,
@@ -164,6 +185,7 @@ function AgentRow({
   isDefault: boolean;
   warnings: number;
   shadowsGlobal: boolean;
+  showGlobalBadge: boolean;
   selected: boolean;
   tabIndex: number;
   quiet?: boolean;
@@ -175,16 +197,19 @@ function AgentRow({
     <Row
       icon={<AgentMarkIcon mark={mark} />}
       title={name}
-      label={`${name}${agent.scope === "project" ? shadowsGlobal ? ", project agent that replaces the global agent in this project" : ", project agent" : ""}${isDefault ? ", default for new sessions" : ""}${warnings > 0 ? `, ${warnings} warning${warnings === 1 ? "" : "s"}` : ""}`}
+      label={`${name}${agent.scope === "project" ? shadowsGlobal ? ", project agent that replaces the global agent in this project" : ", project agent" : showGlobalBadge ? ", read-only global source" : ""}${isDefault ? ", default for new sessions" : ""}${warnings > 0 ? `, ${warnings} warning${warnings === 1 ? "" : "s"}` : ""}`}
       detail={agent.description || (mark === "custom" ? "No description yet" : undefined)}
       selected={selected}
       tabIndex={tabIndex}
       quiet={quiet}
       data-slot="agent-row"
       data-agent={agent.name}
+      data-scope={agent.scope}
+      data-project-cwd={agent.projectCwd}
       data-warnings={warnings > 0 ? warnings : undefined}
       badges={
         <>
+          {showGlobalBadge ? <Badge variant="outline" data-slot="agent-global-badge">Global</Badge> : null}
           {agent.scope === "project" ? (
             <Badge
               variant="outline"

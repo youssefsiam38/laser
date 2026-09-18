@@ -100,7 +100,7 @@ export function BuiltinModelDialog({
   /** Back to the default model (for Namer, to the next qualification). */
   onClear?: (() => void) | undefined;
 }) {
-  const catalog = useModelCatalog(cwd, open);
+  const catalog = useModelCatalog(cwd, "global", open);
   const [choice, setChoice] = useState<AgentModelChoice | null>(current);
   const [portalContainer, setPortalContainer] = useState<HTMLDivElement | null>(null);
   useEffect(() => {

@@ -1,4 +1,5 @@
 export { Workbench } from "./Workbench.js";
+export { SettingsScopeControls } from "./SettingsScopeControls.js";
 export {
   WorkbenchProvider,
   useWorkbench,

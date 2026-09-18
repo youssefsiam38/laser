@@ -18,6 +18,7 @@ import type {
   AgentDefinition,
   AgentDefinitionInput,
   AgentIssue,
+  AgentLocation,
   AgentModelChoice,
   AgentPolicy,
   AgentRun,
@@ -37,8 +38,8 @@ export interface AgentsActions {
   validate(agent: AgentDefinitionInput, originalName: string | null): Promise<AgentIssue[]>;
   /** `agents/save`; the snapshot in the result updates the store. Rejects on failure. */
   save(agent: AgentDefinitionInput, originalName: string | null): Promise<AgentDefinition>;
-  /** `agents/delete`. Toasts on failure. */
-  remove(name: string): Promise<void>;
+  /** `agents/delete` at one exact storage location. Toasts on failure. */
+  remove(name: string, location: AgentLocation): Promise<void>;
   /** `agents/set-default`. Toasts on failure. */
   setDefault(name: string): Promise<void>;
   /** `agents/set-policy`. Toasts on failure. */
@@ -116,9 +117,9 @@ export function createAgentsActions({ client, dispatch, guard, authority = OPEN_
       dispatch({ type: "agents/updated", snapshot });
       return saved;
     },
-    remove: (name) =>
+    remove: (name, location) =>
       settle(async () => {
-        const { snapshot } = await client.request("agents/delete", { name });
+        const { snapshot } = await client.request("agents/delete", { name, location });
         dispatch({ type: "agents/updated", snapshot });
       }),
     setDefault: (name) =>

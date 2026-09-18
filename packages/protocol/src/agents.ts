@@ -130,6 +130,8 @@ export type AgentKind = "custom" | "builtin";
  * and carry `global`.
  */
 export type AgentScope = "global" | "project";
+/** Exact storage location of one custom definition. Mutations never infer it. */
+export type AgentLocation = { scope: "global" } | { scope: "project"; projectCwd: string };
 /** The directory, under the project root, project-scoped agent files live in. */
 export const PROJECT_AGENTS_DIR = `${PROJECT_DIR_NAME}/agents`;
 /** The directory, under the host state dir, global agent files live in. */
@@ -553,7 +555,7 @@ declare module "./messages.js" {
     "agents/list": { params: {}; result: AgentsSnapshot };
     "agents/validate": { params: { agent: AgentDefinitionInput; originalName: string | null }; result: { issues: AgentIssue[] } };
     "agents/save": { params: { agent: AgentDefinitionInput; originalName: string | null }; result: { agent: AgentDefinition; snapshot: AgentsSnapshot } };
-    "agents/delete": { params: { name: string }; result: { snapshot: AgentsSnapshot } };
+    "agents/delete": { params: { name: string; location: AgentLocation }; result: { snapshot: AgentsSnapshot } };
     "agents/set-default": { params: { name: string }; result: { snapshot: AgentsSnapshot } };
     "agents/set-policy": { params: { policy: Partial<AgentPolicy> }; result: { snapshot: AgentsSnapshot } };
     /** Skills the engine discovers for `cwd` (global and project sources). Routed by cwd. */

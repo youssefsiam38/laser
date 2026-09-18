@@ -54,6 +54,17 @@ booleans are false and omitted lists are empty. The host watches global files
 and every currently trusted project's files; an invalid hand edit produces a
 `file` warning and leaves the last valid definition running until it is fixed.
 
+The Agents page uses Settings' single explicit target. **Global** shows global
+custom definitions plus built-ins and owns the default and harness policy;
+**Project** shows that project's definitions plus read-only Global sources;
+**Effective** shows the resolved catalog and permits no writes. It never borrows
+Code's project or a first project. New definitions capture Global or the exact
+Project destination before their draft opens; a Project override is an explicit
+new-definition action. Selection, deep links and mutation targets include the
+exact source location, so same-name Global and Project definitions stay distinct.
+A scope change, page exit or source-aware deep link is guarded by the shared
+Settings draft decision before either scope or editor identity changes.
+
 The ordinary new-session composer exposes custom definitions as a searchable
 selector immediately before the model, preselects `defaultAgent`, and removes
 the control after the first prompt. Before that prompt, a different choice is
@@ -740,7 +751,7 @@ Requests (client → host unless noted):
 | `agents/list` | `{}` → `AgentsSnapshot` |
 | `agents/validate` | `{ agent, originalName }` → `{ issues }` (`originalName: null` means create) |
 | `agents/save` | `{ agent, originalName }` → `{ agent, snapshot }` (an edited name is an atomic rename) |
-| `agents/delete` | `{ name }` → `{ snapshot }` |
+| `agents/delete` | `{ name, location: { scope: "global" } \| { scope: "project", projectCwd } }` → `{ snapshot }` (exact source only) |
 | `agents/set-default` | `{ name }` → `{ snapshot }` |
 | `agents/set-policy` | `{ policy }` → `{ snapshot }` |
 | `agents/skills` | `{ cwd }` → `AgentSkillsListing` (routed by cwd) |

@@ -959,7 +959,7 @@ export class Router {
       }
       case "agents/delete": {
         const store = this.agents();
-        store.delete(req.params.name);
+        store.delete(req.params.name, req.params.location);
         return { snapshot: store.snapshot() };
       }
       case "agents/set-default": {

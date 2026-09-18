@@ -4,11 +4,12 @@ import { basename, dirname, join } from "node:path";
 import {
   PROJECT_DIR_NAME,
   type AgentDefinition,
+  type AgentLocation,
   type AgentWarning,
 } from "@lasercode/protocol";
 import { parseAgentFile } from "./agent-file.js";
 
-export type AgentFileLocation = { scope: "global" } | { scope: "project"; projectCwd: string };
+export type AgentFileLocation = AgentLocation;
 
 export interface AgentFilesWatchOptions {
   globalDirectory(): string;
