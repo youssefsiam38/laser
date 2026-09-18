@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-18T12:07:27+03:00 · orchestrator-2026-09-18 · HEAD: 300fbf06
-**Current focus:** M16 — user acceptance and active-chat continuity first; finish agreed repairs before 0.9.2. 0.9.1 is public.
+**Last updated:** 2026-09-18T12:45:31+03:00 · orchestrator-2026-09-18 · HEAD: d44226f5
+**Current focus:** M16 — independent user acceptance and active-chat continuity first; finish agreed repairs before 0.9.2.
 
 | Milestone | State |
 | --- | --- |
@@ -28,9 +28,9 @@
 | M19 Runtime recovery/update activation | done |
 | MX Cross-cutting | in-progress |
 
-**Blockers:** worker-session resumption is unreliable; explicit checkpoint transfers preserve progress. No external release blocker.
-**In flight:** T81 bounded paging + active-window retention approved; T82 parent UAT reproduced 24/25 image admission failure. T75 Settings corrections ready5b920569 for parent verification; Agents still follows.
-**Next up:** T81 causal repair/UAT; T82 image accessibility + existing disk-cache assessment; T75 Agents after service integration. Then T76 poisoned full gate and T79 publication.
+**Blockers:** terminal worker-session resumption is unreliable; explicit checkpoint transfers preserve progress. No external release blocker.
+**In flight:** T81 owner4e5b5b3c implements active retention/bounded paging. T82 parent UAT: one-image passes;25-image fails even after settlement/reload. Online hydration research recorded. T75 candidate5a009840 passed parent316 focused tests; independent user journeys db51b319 run before integration; Agents still pending.
+**Next up:** T81 causal repair/UAT; T82 recoverable image hydration and permitted disk-cache plan; T75 Agents after service integration. Then T76 final poisoned gate and T79 publication.
 **Recently done:** T78 pristine agent choice (`107e5ecc`, worker1089 + real route tests); T70 selectable activity (`e7ad7c34`, UI2472 + matrix); T74 image/text recovery (`b703f3bf`, UI2436 + matrix); T77 goal-tool recovery (`a0a698ee`, 54 focused + real engine); T73 packaged spelling (`d0bbc680`).
 
-**Published:** v0.9.1 (`8183fd04`), `.git/lasercode-release/v0.9.1.json` verified. Autonomous completion/commits/push/release authorized; no live app restart. Active logical history outranks ordinary cache targets (D-295); preserve real safety and privacy boundaries.
+**Published:** v0.9.1 (`8183fd04`), verified release checkpoint. 0.9.2 not released. Autonomous completion/commits/push/release authorized; no live restart. Active logical history outranks ordinary cache shares (D-295); safety, identity and privacy remain mandatory.
