@@ -12,7 +12,7 @@
  * approval, an interrupt or a declared decision goes, outside the collapsible
  * so a question is never hidden behind a chevron.
  */
-import { createContext, useContext, type ComponentType, type ReactNode, type SVGProps } from "react";
+import type { ComponentType, ReactNode, SVGProps } from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -24,9 +24,6 @@ import {
 } from "./tool-fallback.aui.js";
 
 export type { ToolRowState } from "./tool-fallback.aui.js";
-
-/** Lets a specialized row reuse ToolCall without duplicating its search projection prop. */
-export const ToolSearchBodyContext = createContext<(() => readonly string[]) | undefined>(undefined);
 
 export interface ToolCallProps {
   icon?: ComponentType<SVGProps<SVGSVGElement>> | undefined;
@@ -76,7 +73,6 @@ export function ToolCall({
   bodySearchText,
   className,
 }: ToolCallProps) {
-  const inheritedBodySearchText = useContext(ToolSearchBodyContext);
   const expandable = children !== undefined && children !== null && children !== false;
   // No tone for a failure of any kind. A rail down the side of the row reads
   // as "the app is broken" for what is usually an agent probing — a file it
@@ -93,7 +89,7 @@ export function ToolCall({
       onOpenChange={onOpenChange}
       tone={tone}
       visibleSearchText={label}
-      bodySearchText={bodySearchText ?? inheritedBodySearchText}
+      bodySearchText={bodySearchText}
       className={cn(className)}
     >
       <ToolFallbackTrigger

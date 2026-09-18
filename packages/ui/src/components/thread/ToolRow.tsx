@@ -7,7 +7,7 @@ import { lazy, memo, Suspense, useCallback, useMemo, type ReactNode } from "reac
 import { useSessionMcpServers } from "@/agents/hooks";
 import { CodeDiff, DiffStat, diffStatDescription } from "@/components/assistant-ui/elements/code-diff";
 import { TerminalBlock } from "@/components/assistant-ui/elements/terminal-block";
-import { ToolCall, ToolSearchBodyContext } from "@/components/assistant-ui/elements/tool-call";
+import { ToolCall } from "@/components/assistant-ui/elements/tool-call";
 import { ToolError } from "@/components/assistant-ui/elements/tool-error";
 import {
   ToolFallback,
@@ -176,23 +176,22 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
   // composed from the same parts, with the server's content as its body.
   if (mcp) {
     return (
-      <ToolSearchBodyContext value={bodySearchText}>
-        <McpToolRow
-          info={mcp}
-          toolName={toolName}
-          args={visibleArgs}
-          argsText={visibleArgsText}
-          result={result}
-          text={text}
-          details={details}
-          state={state}
-          elapsedMs={elapsed}
-          open={open}
-          onOpenChange={rememberOpen}
-          footer={<>{footerFolds}{footer}</>}
-          label={agentLabel}
-        />
-      </ToolSearchBodyContext>
+      <McpToolRow
+        info={mcp}
+        toolName={toolName}
+        args={visibleArgs}
+        argsText={visibleArgsText}
+        result={result}
+        text={text}
+        details={details}
+        state={state}
+        elapsedMs={elapsed}
+        open={open}
+        onOpenChange={rememberOpen}
+        footer={<>{footerFolds}{footer}</>}
+        label={agentLabel}
+        bodySearchText={bodySearchText}
+      />
     );
   }
 
