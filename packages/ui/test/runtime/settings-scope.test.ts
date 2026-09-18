@@ -4,7 +4,9 @@ import { createDeviceStore, type DeviceStore } from "../../src/runtime/device-st
 import {
   DEFAULT_SETTINGS_SCOPE,
   createSettingsScopeStore,
+  normalizeSettingsScope,
   parseSettingsScope,
+  sameSettingsScope,
   type SettingsScopeStore,
 } from "../../src/runtime/settings-scope.js";
 import { OTHER_ENVIRONMENT_KEY, testDescriptor } from "./environment-fixture.js";
@@ -68,6 +70,15 @@ describe("Settings scope persistence", () => {
     scope.set({ view: "effective", projectCwd: "/other" });
     device.deactivate();
     expect(scope.getSnapshot()).toEqual({ view: "global" });
+  });
+});
+
+describe("Settings scope domain", () => {
+  it("normalizes and compares domain values without a persistence version", () => {
+    expect(normalizeSettingsScope({ view: "project", projectCwd: "/one" })).toEqual({ view: "project", projectCwd: "/one" });
+    expect(normalizeSettingsScope({ view: "global", projectCwd: "/not-global" })).toBeUndefined();
+    expect(sameSettingsScope({ view: "effective" }, { view: "effective" })).toBe(true);
+    expect(sameSettingsScope({ view: "project", projectCwd: "/one" }, { view: "project", projectCwd: "/two" })).toBe(false);
   });
 });
 

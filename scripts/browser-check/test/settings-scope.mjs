@@ -33,6 +33,9 @@ export default async function settingsScope(check) {
     if (window.__settingsScopeDelayInstalled) return;
     window.__settingsScopeDelayInstalled = true;
     window.__settingsScopeDelay = null;
+    window.__settingsScopeFailSetup = localStorage.getItem('__settings-scope-fail-setup') === '1';
+    window.__settingsScopeFailedSetupRequests = 0;
+    localStorage.removeItem('__settings-scope-fail-setup');
     const NativeWebSocket = window.WebSocket;
     window.WebSocket = class SettingsScopeWebSocket extends NativeWebSocket {
       constructor(...args) {
@@ -46,6 +49,17 @@ export default async function settingsScope(check) {
           const delay = window.__settingsScopeDelay;
           if (delay && request.method === delay.method && request.params?.cwd === delay.cwd) {
             this.__settingsScopeDelayedIds.add(request.id);
+          }
+          if (window.__settingsScopeFailSetup && request.method === 'pi/setup/state') {
+            window.__settingsScopeFailedSetupRequests += 1;
+            queueMicrotask(() => this.dispatchEvent(new MessageEvent('message', {
+              data: JSON.stringify({
+                jsonrpc: '2.0',
+                id: request.id,
+                error: { code: -32000, message: 'Settings service unavailable for browser test' },
+              }),
+            })));
+            return;
           }
         } catch {
           // Non-JSON frames are the native socket's concern.
@@ -82,7 +96,12 @@ export default async function settingsScope(check) {
       if (key?.endsWith(':settings-scope')) localStorage.removeItem(key);
     }
   });
+  await page.evaluate(() => localStorage.setItem('__settings-scope-fail-setup', '1'));
   await page.reload({ waitUntil: 'domcontentloaded' });
+  assert.deepEqual(await page.evaluate(() => ({
+    installed: window.__settingsScopeDelayInstalled,
+    armed: window.__settingsScopeFailSetup,
+  })), { installed: true, armed: true }, 'the route-failure transport shim is armed before Settings opens');
 
   const settings = page.getByRole('button', { name: 'Settings', exact: true });
   const openSettings = async () => {
@@ -101,13 +120,20 @@ export default async function settingsScope(check) {
     .map(key => [key, localStorage.getItem(key)]));
 
   await openSettings();
-  const globalScope = page.getByRole('tab', { name: /^Global\./ });
+  await page.getByText('Could not prepare Global settings', { exact: true }).waitFor();
+  await page.getByText('Settings service unavailable for browser test', { exact: true }).waitFor();
+  assert.ok(await page.evaluate(() => window.__settingsScopeFailedSetupRequests) > 0,
+    'the route-failure transport shim saw pi/setup/state');
+  await page.evaluate(() => { window.__settingsScopeFailSetup = false; });
+  await activate(page.getByRole('button', { name: 'Retry global settings', exact: true }));
+
+  const globalScope = page.getByRole('radio', { name: /^Global\./ });
   await globalScope.waitFor();
-  assert.equal(await globalScope.getAttribute('aria-selected'), 'true', 'Settings opens Global even while a project is open in Code');
+  assert.equal(await globalScope.getAttribute('aria-checked'), 'true', 'Settings opens Global even while a project is open in Code');
   assert.equal(await page.getByRole('button', { name: /settings project/i }).count(), 0, 'Global has no borrowed project target');
 
   await activate(page.getByRole('button', { name: 'Features', exact: true }));
-  await activate(page.getByRole('tab', { name: /^Project\./ }));
+  await activate(page.getByRole('radio', { name: /^Project\./ }));
   await page.getByText('Choose a project for Project settings', { exact: true }).waitFor();
 
   const choose = async (cwd) => {
@@ -148,17 +174,43 @@ export default async function settingsScope(check) {
   await page.getByRole('button', { name: new RegExp(`Project settings target:.*${basename(second)}`) }).waitFor();
   await activate(page.getByRole('button', { name: 'Features', exact: true }));
 
-  // Keyboard scope selection and Effective's read-only contract.
-  const effective = page.getByRole('tab', { name: /^Effective\./ });
-  await effective.focus();
-  await effective.press('Enter');
+  // The Radix radio group owns genuine roving focus and selection.
+  const projectScope = page.getByRole('radio', { name: /^Project\./ });
+  const effective = page.getByRole('radio', { name: /^Effective\./ });
+  await projectScope.focus();
+  await projectScope.press('ArrowRight');
   await page.getByText(/Resolved feature choices are read-only here/).waitFor();
+  assert.equal(await effective.getAttribute('aria-checked'), 'true', 'ArrowRight selects the next LTR scope');
   assert.equal(await page.getByRole('button', { name: 'Disable Goals', exact: true }).isDisabled(), true);
+  await effective.press('Home');
+  assert.equal(await globalScope.getAttribute('aria-checked'), 'true', 'Home selects Global');
+  await activate(projectScope);
+  await choose(second);
+  await projectScope.focus();
+  await projectScope.press('End');
+  assert.equal(await effective.getAttribute('aria-checked'), 'true', 'End selects Effective');
+
+  // Direction comes from the real Appearance setting and Radix provider.
+  await activate(page.getByRole('button', { name: 'Appearance', exact: true }));
+  await activate(page.getByRole('radio', { name: 'Right to left', exact: true }));
+  await activate(page.getByRole('button', { name: 'Features', exact: true }));
+  await activate(page.getByRole('radio', { name: /^Project\./ }));
+  const rtlProject = page.getByRole('radio', { name: /^Project\./ });
+  await rtlProject.focus();
+  await rtlProject.press('ArrowRight');
+  assert.equal(await page.getByRole('radio', { name: /^Global\./ }).getAttribute('aria-checked'), 'true',
+    'ArrowRight selects the visually next scope in RTL');
+  await activate(page.getByRole('button', { name: 'Appearance', exact: true }));
+  await activate(page.getByRole('radio', { name: 'Follow system', exact: true }));
+  await activate(page.getByRole('button', { name: 'Features', exact: true }));
+  await activate(page.getByRole('radio', { name: /^Project\./ }));
+  await choose(second);
+  await activate(page.getByRole('radio', { name: /^Effective\./ }));
 
   await activate(page.getByRole('button', { name: 'Back to the session', exact: true }));
   await openSettings();
   await activate(page.getByRole('button', { name: 'Features', exact: true }));
-  assert.equal(await page.getByRole('tab', { name: /^Effective\./ }).getAttribute('aria-selected'), 'true', 'scope persisted after closing Settings');
+  assert.equal(await page.getByRole('radio', { name: /^Effective\./ }).getAttribute('aria-checked'), 'true', 'scope persisted after closing Settings');
   await page.getByRole('button', { name: new RegExp(`Effective settings project:.*${basename(second)}`) }).waitFor();
 
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);

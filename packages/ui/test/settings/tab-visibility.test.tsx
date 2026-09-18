@@ -77,5 +77,5 @@ it("hides host-backed settings sections before they can issue a denied request",
   expect(tabs).not.toContain("Features");
   expect(tabs).not.toContain("MCP servers");
   expect(tabs).not.toContain("Providers and models");
-  expect(runtime.request.mock.calls).toEqual([["pi/setup/state", {}]]);
+  expect(runtime.request).not.toHaveBeenCalled();
 });

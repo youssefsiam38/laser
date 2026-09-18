@@ -41,9 +41,9 @@ const snapshot = (cwd: string, reason = cwd) => ({
   effective: {},
   projectTrust: { trusted: true, writable: true, reason },
 });
-const feature = (name: string) => ({
+const feature = (name: string, id = "goals", globalEnabled = true) => ({
   manifest: {
-    id: "goals",
+    id,
     name,
     description: `${name} description`,
     defaultEnabled: true,
@@ -52,9 +52,9 @@ const feature = (name: string) => ({
     capabilities: ["planning"],
     restart: "worker",
   },
-  globalEnabled: true,
+  globalEnabled,
   globalSource: "default",
-  enabled: true,
+  enabled: globalEnabled,
   source: "default",
   health: "ready",
 });
@@ -146,6 +146,32 @@ describe("shared explicit Settings scope", () => {
     expect(calls("pi/settings/get")).not.toContainEqual({ cwd: "/removed" });
   });
 
+  it("keeps keyboard focus on the requested scope while its guard is pending", async () => {
+    await mount();
+    let settle: ((accepted: boolean) => void) | undefined;
+    workbench!.registerSettingsScopeGuard(() => new Promise<boolean>((resolve) => { settle = resolve; }));
+    const global = container.querySelector<HTMLButtonElement>('[role="radio"][data-scope-view="global"]')!;
+    const project = container.querySelector<HTMLButtonElement>('[role="radio"][data-scope-view="project"]')!;
+    await act(async () => {
+      global.focus();
+      global.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(document.activeElement).toBe(project);
+    expect(project.disabled).toBe(false);
+    expect(project.closest('[role="radiogroup"]')?.getAttribute("aria-busy")).toBe("true");
+    await act(async () => { settle?.(false); await Promise.resolve(); });
+  });
+
+  it("shows the connection state instead of letting an inactive scope control snap back", async () => {
+    await mount();
+    await act(async () => { deviceStore.deactivate(); });
+    expect(container.textContent).toContain("Settings scope is unavailable while this environment reconnects.");
+    const radios = [...container.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
+    expect(radios).toHaveLength(3);
+    expect(radios.every((radio) => radio.disabled)).toBe(true);
+  });
+
   it("keeps a delayed old settings response from replacing the newer target", async () => {
     let resolveOld: ((value: { snapshot: ReturnType<typeof snapshot> }) => void) | undefined;
     mocks.request.mockImplementation(async (method: string, params: { cwd?: string } = {}) => {
@@ -171,6 +197,32 @@ describe("shared explicit Settings scope", () => {
     expect(container.textContent).not.toContain("FIRST TARGET");
   });
 
+  it("shows a route failure and retries the real setup request", async () => {
+    let setupAttempts = 0;
+    mocks.request.mockImplementation(async (method: string, params: { cwd?: string } = {}) => {
+      if (method === "pi/setup/state") {
+        setupAttempts += 1;
+        if (setupAttempts === 1) throw new Error("Settings service unavailable");
+        return { cwd: "/neutral-settings-route" };
+      }
+      if (method === "pi/settings/list") return { catalog };
+      if (method === "pi/settings/get") return { snapshot: snapshot(params.cwd ?? "missing") };
+      if (method === "pi/models/catalog") return { models: [], enabledPatterns: null, refreshedAt: "", errors: [] };
+      if (method === "pi/providers/list") return { providers: [] };
+      return {};
+    });
+
+    await mount();
+    expect(container.textContent).toContain("Could not prepare Global settings");
+    expect(container.textContent).toContain("Settings service unavailable");
+    const retry = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Retry"));
+    expect(retry).toBeDefined();
+    await act(async () => { retry!.click(); });
+    await flush();
+    expect(setupAttempts).toBe(2);
+    expect(calls("pi/settings/get")).toContainEqual({ cwd: "/neutral-settings-route" });
+  });
+
   it("routes a Global Feature write through the neutral service route", async () => {
     await mount("features");
     const toggle = container.querySelector<HTMLButtonElement>('button[aria-label="Disable Global feature"]');
@@ -183,6 +235,24 @@ describe("shared explicit Settings scope", () => {
       cwd: "/neutral-settings-route",
     });
     expect(mocks.stable.setCurrentProject).not.toHaveBeenCalled();
+  });
+
+  it("turns Global Web Search off without a neutral route", async () => {
+    mocks.request.mockImplementation(async (method: string, params: { cwd?: string } = {}) => {
+      if (method === "pi/setup/state") throw new Error("No Settings service route");
+      if (method === "feature/list") return { features: [feature("Web Search", "web-search", true)] };
+      if (method === "feature/set") return { restartPending: false };
+      return {};
+    });
+    await mount("features");
+    const toggle = container.querySelector<HTMLButtonElement>('button[aria-label="Disable Web Search"]');
+    expect(toggle?.disabled).toBe(false);
+    await act(async () => { toggle!.click(); await Promise.resolve(); });
+    expect(calls("feature/set")).toContainEqual({
+      id: "web-search",
+      enabled: false,
+      scope: "global",
+    });
   });
 
   it("loads Features through the same scope and makes Effective read-only", async () => {

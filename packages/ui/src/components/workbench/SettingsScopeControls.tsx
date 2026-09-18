@@ -1,9 +1,10 @@
 "use client";
 
 import { ChevronsUpDown, FolderGit2 } from "lucide-react";
-import { useState } from "react";
+import { RadioGroup } from "radix-ui";
+import { useState, useSyncExternalStore } from "react";
 
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -13,8 +14,11 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { shortCwd } from "@/format";
+import { useLogicalArrowKeys } from "@/hooks/use-direction";
 import { cn } from "@/lib/utils";
+import { deviceStore } from "@/runtime/device-storage";
 import { useLaserStable, type SettingsScopeView } from "@/runtime";
 
 import { useWorkbench } from "./workbench-context.js";
@@ -28,7 +32,9 @@ const OPTIONS: Array<{ id: SettingsScopeView; label: string; description: string
 /** The one visible Settings-scope control, shared by every migrated surface. */
 export function SettingsScopeControls() {
   const { projects, projectInfo } = useLaserStable();
+  const logicalKey = useLogicalArrowKeys();
   const { settingsScope, requestSettingsScope } = useWorkbench();
+  const deviceStatus = useSyncExternalStore(deviceStore.subscribe, deviceStore.status, deviceStore.status);
   const [busy, setBusy] = useState(false);
   const selected = settingsScope.projectCwd;
   const available = selected !== undefined && projects.includes(selected);
@@ -37,7 +43,7 @@ export function SettingsScopeControls() {
     : projectInfo[selected]?.name ?? shortCwd(selected);
 
   const changeView = async (view: SettingsScopeView) => {
-    if (view === settingsScope.view || busy) return;
+    if (view === settingsScope.view || busy || !deviceStatus.active) return;
     setBusy(true);
     try {
       await requestSettingsScope(
@@ -51,7 +57,7 @@ export function SettingsScopeControls() {
   };
 
   const changeProject = async (projectCwd: string) => {
-    if (busy || settingsScope.view === "global") return;
+    if (busy || !deviceStatus.active || settingsScope.view === "global") return;
     setBusy(true);
     try {
       await requestSettingsScope({ view: settingsScope.view, projectCwd });
@@ -62,27 +68,56 @@ export function SettingsScopeControls() {
 
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-2">
-      <div role="tablist" aria-label="Settings scope" className="flex items-center gap-0.5 rounded-lg bg-surface-2 p-0.5">
+      <RadioGroup.Root
+        value={settingsScope.view}
+        onValueChange={(value) => void changeView(value as SettingsScopeView)}
+        disabled={!deviceStatus.active}
+        orientation="horizontal"
+        loop
+        aria-label="Settings scope"
+        aria-busy={busy || undefined}
+        onKeyDownCapture={(event) => {
+          const key = logicalKey(event.key);
+          if (key !== "ArrowRight" && key !== "ArrowLeft" && key !== "ArrowDown" && key !== "ArrowUp" && key !== "Home" && key !== "End") return;
+          const radios = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("[data-scope-view]")];
+          const current = radios.indexOf(event.target as HTMLButtonElement);
+          if (current < 0) return;
+          const next = key === "Home"
+            ? 0
+            : key === "End"
+              ? radios.length - 1
+              : key === "ArrowRight" || key === "ArrowDown"
+                ? (current + 1) % radios.length
+                : (current - 1 + radios.length) % radios.length;
+          const radio = radios[next];
+          const option = OPTIONS[next];
+          if (!radio || !option) return;
+          event.preventDefault();
+          event.stopPropagation();
+          radio.focus();
+          void changeView(option.id);
+        }}
+        className="flex items-center gap-0.5 rounded-lg bg-surface-2 p-0.5"
+      >
         {OPTIONS.map((option) => (
-          <Button
-            key={option.id}
-            type="button"
-            role="tab"
-            variant="ghost"
-            size="sm"
-            aria-selected={settingsScope.view === option.id}
-            aria-label={`${option.label}. ${option.description}`}
-            disabled={busy}
-            onClick={() => void changeView(option.id)}
-            className={cn(
-              "pointer-coarse:min-h-11",
-              settingsScope.view === option.id && "bg-surface text-ink",
-            )}
-          >
-            {option.label}
-          </Button>
+          <Tooltip key={option.id}>
+            <TooltipTrigger asChild>
+              <RadioGroup.Item
+                value={option.id}
+                data-scope-view={option.id}
+                aria-label={`${option.label}. ${option.description}`}
+                className={cn(
+                  buttonVariants({ variant: "ghost", size: "sm" }),
+                  "pointer-coarse:min-h-11 data-[state=checked]:bg-surface data-[state=checked]:text-ink",
+                )}
+              >
+                {option.label}
+              </RadioGroup.Item>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="pointer-events-none">{option.description}</TooltipContent>
+          </Tooltip>
         ))}
-      </div>
+      </RadioGroup.Root>
 
       {settingsScope.view !== "global" ? (
         <DropdownMenu>
@@ -91,7 +126,7 @@ export function SettingsScopeControls() {
               type="button"
               variant="secondary"
               size="sm"
-              disabled={busy}
+              disabled={!deviceStatus.active}
               className="min-w-0 max-w-72 gap-1.5 pointer-coarse:min-h-11"
               aria-label={`${settingsScope.view === "project" ? "Project settings target" : "Effective settings project"}: ${selectedName}${selected !== undefined && !available ? ", unavailable" : ""}`}
               title={selected}
@@ -127,6 +162,12 @@ export function SettingsScopeControls() {
             </DropdownMenuRadioGroup>
           </DropdownMenuContent>
         </DropdownMenu>
+      ) : null}
+
+      {!deviceStatus.active ? (
+        <p className="basis-full text-xs leading-5 text-attention" role="status">
+          Settings scope is unavailable while this environment reconnects.
+        </p>
       ) : null}
     </div>
   );

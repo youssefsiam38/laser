@@ -22,7 +22,8 @@ import {
 
 import { deviceStore } from "@/runtime/device-storage";
 import {
-  parseSettingsScope,
+  normalizeSettingsScope,
+  sameSettingsScope,
   settingsScopeStore,
   type SettingsScopeState,
 } from "@/runtime/settings-scope";
@@ -59,7 +60,15 @@ export interface SettingsScopeChangeRequest {
   reason: SettingsScopeChangeReason;
 }
 
-/** The narrow future seam for a dirty scope-bound editor. */
+/**
+ * The one guarded scope editor currently mounted in Settings/Agents.
+ *
+ * Callers must memoize this callback. If it accepts after a newer navigation,
+ * its save/discard still belongs to the original editor target, while the
+ * sequence fence keeps that older destination from replacing the newer one.
+ * Same-scope page/tab navigation is intentionally outside this scope seam;
+ * the future Agent editor owns that separate protection.
+ */
 export type SettingsScopeNavigationGuard = (
   request: SettingsScopeChangeRequest,
 ) => boolean | Promise<boolean>;
@@ -102,7 +111,7 @@ export function useWorkbench(): Workbench {
   return value;
 }
 
-/** Register only a Settings-scope navigation guard, and nothing broader. */
+/** Register the one memoized Settings-scope guard, and nothing broader. */
 export function useSettingsScopeNavigationGuard(
   guard: SettingsScopeNavigationGuard | undefined,
 ): void {
@@ -111,17 +120,6 @@ export function useSettingsScopeNavigationGuard(
     if (!guard) return undefined;
     return registerSettingsScopeGuard(guard);
   }, [guard, registerSettingsScopeGuard]);
-}
-
-const sameScope = (left: SettingsScopeState, right: SettingsScopeState): boolean =>
-  left.view === right.view && left.projectCwd === right.projectCwd;
-
-function validatedScope(value: SettingsScopeState): SettingsScopeState | undefined {
-  return parseSettingsScope({
-    v: 1,
-    view: value.view,
-    ...(value.projectCwd === undefined ? {} : { projectCwd: value.projectCwd }),
-  });
 }
 
 export function WorkbenchProvider({ children }: { children: ReactNode }) {
@@ -136,10 +134,11 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
     environmentKey: string | undefined;
   } | undefined>(undefined);
 
-  // A decision begun in one namespace cannot navigate or write in another.
-  // The old registration is discarded too: a source-environment draft must
-  // never become the guard for the environment that replaced it.
-  useEffect(() => deviceStore.subscribe(() => {
+  // Same-environment reconnects preserve the mounted editor and its guard.
+  // Every real namespace/lifecycle transition fences pending navigation and
+  // discards a guard whose anchored draft cannot belong to the next namespace.
+  useEffect(() => deviceStore.subscribe((event) => {
+    if (event.kind === "activated" && event.transition === "same") return;
     requestSequence.current += 1;
     guardRef.current = undefined;
   }), []);
@@ -156,13 +155,13 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
     requested: SettingsScopeState,
     reason: SettingsScopeChangeReason = "control",
   ): Promise<boolean> => {
-    const next = validatedScope(requested);
+    const next = normalizeSettingsScope(requested);
     if (!next) return false;
     // Even a no-op scope request is newer navigation and fences an older guard
     // that is still waiting for a decision.
     const sequence = ++requestSequence.current;
     const current = settingsScopeStore.getSnapshot();
-    if (sameScope(current, next)) return true;
+    if (sameSettingsScope(current, next)) return true;
 
     const environmentKey = deviceStore.status().environmentKey;
     const registration = guardRef.current;
@@ -204,9 +203,17 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
     if (explicitScope !== undefined) {
       // Nothing about the destination changes before the guard settles. This
       // keeps a dirty source editor mounted when the person chooses Keep editing.
-      return requestSettingsScope(explicitScope, "deep-link").then((accepted) => {
-        if (accepted) commitOpen(next, arg);
-        return accepted;
+      const request = requestSettingsScope(explicitScope, "deep-link");
+      const sequence = requestSequence.current;
+      const environmentKey = deviceStore.status().environmentKey;
+      return request.then((accepted) => {
+        if (
+          !accepted
+          || sequence !== requestSequence.current
+          || environmentKey !== deviceStore.status().environmentKey
+        ) return false;
+        commitOpen(next, arg);
+        return true;
       });
     }
 

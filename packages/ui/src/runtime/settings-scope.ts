@@ -24,17 +24,30 @@ interface StoredSettingsScope {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-/** Strictly parse the one persisted Settings-scope record. */
+/** Canonicalize one domain value without involving its storage envelope. */
+export function normalizeSettingsScope(value: SettingsScopeState): SettingsScopeState | undefined {
+  if (!isRecord(value)) return undefined;
+  const view: unknown = value.view;
+  if (view !== "global" && view !== "project" && view !== "effective") return undefined;
+  const projectCwd: unknown = value.projectCwd;
+  if (projectCwd !== undefined && (typeof projectCwd !== "string" || projectCwd.trim() === "")) return undefined;
+  if (view === "global" && projectCwd !== undefined) return undefined;
+  return projectCwd === undefined ? { view } : { view, projectCwd };
+}
+
+export function sameSettingsScope(left: SettingsScopeState, right: SettingsScopeState): boolean {
+  return left.view === right.view && left.projectCwd === right.projectCwd;
+}
+
+/** Parse only the versioned persistence envelope, then delegate the domain rules. */
 export function parseSettingsScope(value: unknown): SettingsScopeState | undefined {
   if (!isRecord(value) || value["v"] !== 1) return undefined;
   const keys = Object.keys(value);
   if (keys.some((key) => key !== "v" && key !== "view" && key !== "projectCwd")) return undefined;
-  const view = value["view"];
-  if (view !== "global" && view !== "project" && view !== "effective") return undefined;
-  const projectCwd = value["projectCwd"];
-  if (projectCwd !== undefined && (typeof projectCwd !== "string" || projectCwd.trim() === "")) return undefined;
-  if (view === "global" && projectCwd !== undefined) return undefined;
-  return projectCwd === undefined ? { view } : { view, projectCwd };
+  return normalizeSettingsScope({
+    view: value["view"],
+    ...(value["projectCwd"] === undefined ? {} : { projectCwd: value["projectCwd"] }),
+  } as SettingsScopeState);
 }
 
 export interface SettingsScopeStore {
@@ -44,9 +57,6 @@ export interface SettingsScopeStore {
   /** Test/lifecycle seam; the app-owned singleton lives for the page. */
   dispose(): void;
 }
-
-const sameScope = (left: SettingsScopeState, right: SettingsScopeState): boolean =>
-  left.view === right.view && left.projectCwd === right.projectCwd;
 
 function stored(next: SettingsScopeState): StoredSettingsScope {
   return next.projectCwd === undefined
@@ -60,7 +70,7 @@ export function createSettingsScopeStore(storage: DeviceStore): SettingsScopeSto
   const listeners = new Set<() => void>();
 
   const publish = (next: SettingsScopeState): void => {
-    if (sameScope(snapshot, next)) return;
+    if (sameSettingsScope(snapshot, next)) return;
     snapshot = next;
     for (const listener of [...listeners]) listener();
   };
@@ -79,10 +89,10 @@ export function createSettingsScopeStore(storage: DeviceStore): SettingsScopeSto
       return () => listeners.delete(listener);
     },
     set(next) {
-      const parsed = parseSettingsScope(stored(next));
-      if (!parsed || !storage.status().active) return false;
-      storage.writeJson(DEVICE_KEYS.settingsScope, stored(parsed));
-      publish(parsed);
+      const normalized = normalizeSettingsScope(next);
+      if (!normalized || !storage.status().active) return false;
+      storage.writeJson(DEVICE_KEYS.settingsScope, stored(normalized));
+      publish(normalized);
       return true;
     },
     dispose() {

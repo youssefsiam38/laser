@@ -4,7 +4,7 @@ import type { SettingsScopeView } from "@/runtime/settings-scope";
 
 import { PRODUCT_DISPLAY_NAME, type FeatureScope, type FeatureState } from "@lasercode/protocol";
 import { Bot, Check, CircleDot, Globe, Plug, RotateCw, Target } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
 import { CapabilityNotice } from "@/components/capability-gate";
@@ -34,8 +34,6 @@ export function FeaturesScreen({ view, projectCwd, neutralRouteCwd, onManageServ
   const [busy, setBusy] = useState<string>();
   const generation = useRef(0);
   const targetKey = `${view}:${projectCwd ?? ""}`;
-  const targetKeyRef = useRef(targetKey);
-  targetKeyRef.current = targetKey;
   const worker = useLaserState(state => projectCwd ? state.workers[projectCwd] : undefined);
 
   const load = useCallback(async () => {
@@ -49,31 +47,34 @@ export function FeaturesScreen({ view, projectCwd, neutralRouteCwd, onManageServ
     try {
       const routeCwd = view === "global" ? undefined : projectCwd;
       const next = (await client.request("feature/list", routeCwd ? { cwd: routeCwd } : {})).features;
-      if (request === generation.current && targetKeyRef.current === targetKey) setFeatures(next);
+      if (request === generation.current) setFeatures(next);
     } catch (error) {
-      if (request === generation.current && targetKeyRef.current === targetKey) {
+      if (request === generation.current) {
         actions.toast("error", error instanceof Error ? error.message : String(error));
       }
     } finally {
-      if (request === generation.current && targetKeyRef.current === targetKey) setLoading(false);
+      if (request === generation.current) setLoading(false);
     }
   }, [actions, client, projectCwd, targetKey, view]);
 
+  // Invalidate the old target at commit time, before a stale promise can
+  // settle in the render-to-effect gap. Abandoned renders never touch refs.
+  useLayoutEffect(() => {
+    generation.current += 1;
+  }, [targetKey]);
+
   useEffect(() => {
     void load();
-    return () => {
-      generation.current += 1;
-    };
   }, [load]);
 
   const change = async (feature: FeatureState, enabled: boolean | null) => {
     if (view === "effective") return;
     if (view === "project" && !projectCwd) return;
-    if (view === "global" && feature.manifest.id === "web-search" && !neutralRouteCwd) {
-      actions.toast("error", "Global Web Search needs the Settings service route. Reload Settings, then try again.");
+    if (needsNeutralRoute(feature, view, enabled) && !neutralRouteCwd) {
+      actions.toast("error", "Global Web Search needs the Settings service connection before it can be enabled.");
       return;
     }
-    const mutationTarget = targetKey;
+    const mutationGeneration = generation.current;
     const scope: FeatureScope = view;
     setBusy(feature.manifest.id);
     try {
@@ -92,7 +93,7 @@ export function FeaturesScreen({ view, projectCwd, neutralRouteCwd, onManageServ
             ? `${feature.manifest.name} now follows your every-project choice.`
             : `${feature.manifest.name} is ${enabled ? "enabled" : "disabled"}.`,
       );
-      if (targetKeyRef.current === mutationTarget) await load();
+      if (generation.current === mutationGeneration) await load();
     } catch (error) {
       actions.toast("error", error instanceof Error ? error.message : String(error));
     } finally {
@@ -141,7 +142,7 @@ export function FeaturesScreen({ view, projectCwd, neutralRouteCwd, onManageServ
                 : view === "project"
                   ? feature.projectEnabled ?? feature.globalEnabled
                   : feature.enabled;
-              const routeUnavailable = view === "global" && feature.manifest.id === "web-search" && !neutralRouteCwd;
+              const routeUnavailable = !neutralRouteCwd && needsNeutralRoute(feature, view, !selected);
               return (
                 <article key={feature.manifest.id} className="group flex min-h-56 flex-col rounded-xl border border-line bg-surface p-4 transition-colors duration-(--motion-fast) hover:border-line-strong">
                   <div className="flex items-start justify-between gap-3">
@@ -172,7 +173,7 @@ export function FeaturesScreen({ view, projectCwd, neutralRouteCwd, onManageServ
                     {feature.manifest.restart === "worker" ? " · Changing this restarts the affected project" : ""}
                   </p>
                   {routeUnavailable ? (
-                    <p className="mt-2 text-xs leading-5 text-attention">Reload Settings before testing this connection.</p>
+                    <p className="mt-2 text-xs leading-5 text-attention">Reconnect the Settings service before enabling Web Search.</p>
                   ) : null}
                   {feature.manifest.id === "mcp" && onManageServers ? (
                     <Button type="button" variant="link" size="sm" className="mt-2 h-auto self-start p-0 text-xs" onClick={onManageServers}>
@@ -192,6 +193,12 @@ export function FeaturesScreen({ view, projectCwd, neutralRouteCwd, onManageServ
       </div>
     </ScrollArea>
   );
+}
+
+function needsNeutralRoute(feature: FeatureState, view: SettingsScopeView, enabled: boolean | null): boolean {
+  return view === "global"
+    && feature.manifest.id === "web-search"
+    && (enabled === true || (enabled === null && feature.globalEnabled));
 }
 
 function featureSource(feature: FeatureState, view: SettingsScopeView): string {

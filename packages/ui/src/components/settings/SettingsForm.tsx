@@ -91,22 +91,20 @@ export function SettingsForm({ audience, view, cwd, catalog, snapshot, decision,
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 flex-wrap items-center gap-2 px-3 py-2 hairline-b">
-        {view !== "effective" && (
-          <>
-            <SearchInput value={query} onChange={setQuery} placeholder="Search settings" className="w-56" />
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setShowFull((v) => !v)}
-              aria-pressed={showFull}
-              className={cn(showFull && "bg-surface-2 text-ink")}
-            >
-              Full configuration
-            </Button>
-          </>
-        )}
-      </div>
+      {view !== "effective" ? (
+        <div className="flex shrink-0 flex-wrap items-center gap-2 px-3 py-2 hairline-b">
+          <SearchInput value={query} onChange={setQuery} placeholder="Search settings" className="w-56" />
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setShowFull((v) => !v)}
+            aria-pressed={showFull}
+            className={cn(showFull && "bg-surface-2 text-ink")}
+          >
+            Full configuration
+          </Button>
+        </div>
+      ) : null}
 
       {view === "project" && <ProjectTrustNotice snapshot={snapshot} />}
 

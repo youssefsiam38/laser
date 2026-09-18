@@ -1,9 +1,10 @@
 "use client";
 /** Settings, with one explicit scope shared by migrated surfaces. */
 import { PRODUCT_NAME } from "@lasercode/protocol";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AlertTriangle, RefreshCw, Search, Sparkles } from "lucide-react";
 
+import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
 import { Badge } from "@/components/ui/badge";
 import { useWorkbench } from "@/components/workbench";
@@ -34,8 +35,39 @@ import { AdvancedTab, type AdvancedView } from "./AdvancedTab.js";
 
 type Tab = "general" | "advanced" | "appearance" | "features" | "mcp" | "models" | "usage" | "keyboard" | "projects" | "trust" | "device";
 
-const PROJECTLESS: readonly Tab[] = ["advanced", "appearance", "keyboard", "projects", "trust", "device", "usage"];
-const GLOBAL_THROUGH_SETUP: readonly Tab[] = ["general", "advanced", "features", "mcp", "models"];
+type TabRoute = "scope" | "legacy" | "none";
+type NeutralRouteUse = "global-scope" | "legacy-fallback" | "feature-write" | "none";
+interface TabPolicy {
+  route: TabRoute;
+  settingsData: boolean;
+  scopeControls: boolean;
+  neutralRoute: NeutralRouteUse;
+  needsProject: boolean;
+}
+
+const NO_ROUTE: TabPolicy = {
+  route: "none",
+  settingsData: false,
+  scopeControls: false,
+  neutralRoute: "none",
+  needsProject: false,
+};
+
+// Stage one migrates General, Advanced Configuration and Features. Legacy
+// routes remain explicit here so each later migration is one policy change,
+// not another ambient-project fallback hidden in render logic.
+const TAB_POLICY: Record<Exclude<Tab, "advanced">, TabPolicy> = {
+  general: { route: "scope", settingsData: true, scopeControls: true, neutralRoute: "global-scope", needsProject: false },
+  appearance: NO_ROUTE,
+  features: { route: "none", settingsData: false, scopeControls: true, neutralRoute: "feature-write", needsProject: false },
+  mcp: { route: "legacy", settingsData: false, scopeControls: false, neutralRoute: "legacy-fallback", needsProject: true },
+  models: { route: "legacy", settingsData: true, scopeControls: false, neutralRoute: "legacy-fallback", needsProject: true },
+  usage: NO_ROUTE,
+  keyboard: { route: "legacy", settingsData: false, scopeControls: false, neutralRoute: "none", needsProject: false },
+  projects: NO_ROUTE,
+  trust: NO_ROUTE,
+  device: NO_ROUTE,
+};
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "general", label: "General" },
@@ -74,7 +106,9 @@ export function SettingsScreen({ ambientCwd, initialTab }: SettingsScreenProps) 
   const diagnostics = useCapability("resource/snapshot");
   const [tab, setTab] = useState<Tab>(initialTab ?? "general");
   const [neutralRouteCwd, setNeutralRouteCwd] = useState<string>();
-  const [neutralRouteLoading, setNeutralRouteLoading] = useState(true);
+  const [neutralRouteLoading, setNeutralRouteLoading] = useState(false);
+  const [neutralRouteError, setNeutralRouteError] = useState<string>();
+  const [neutralRouteRetry, setNeutralRouteRetry] = useState(0);
   const [catalog, setCatalog] = useState<SettingsCatalog>();
   const [snapshot, setSnapshot] = useState<SettingsSnapshot>();
   const [snapshotKey, setSnapshotKey] = useState<string>();
@@ -82,7 +116,6 @@ export function SettingsScreen({ ambientCwd, initialTab }: SettingsScreenProps) 
   const [error, setError] = useState<string>();
   const [advancedView, setAdvancedView] = useState<AdvancedView>("resources");
   const loadGeneration = useRef(0);
-  const loadKeyRef = useRef("");
 
   useEffect(() => {
     if (initialTab) setTab(initialTab);
@@ -113,42 +146,59 @@ export function SettingsScreen({ ambientCwd, initialTab }: SettingsScreenProps) 
     return () => observer.disconnect();
   }, [shownTab]);
 
-  // This route is worker plumbing, never the Settings target. Fetch it even
-  // when an unrelated project is open so Global never borrows that project.
-  useEffect(() => {
-    let live = true;
-    setNeutralRouteLoading(true);
-    setNeutralRouteCwd(undefined);
-    void client.request("pi/setup/state", {}).then((state) => {
-      if (live) setNeutralRouteCwd(state.cwd);
-    }).catch(() => {
-      // The affected controls explain that Settings must be reloaded.
-    }).finally(() => {
-      if (live) setNeutralRouteLoading(false);
-    });
-    return () => { live = false; };
-  }, [client]);
+  const resolvedAdvancedView: AdvancedView = advancedView === "resources" && diagnostics.state !== "available"
+    ? "configuration"
+    : advancedView === "configuration" && settingsRead.state !== "available"
+      ? "resources"
+      : advancedView;
+  const policy: TabPolicy = shownTab === "advanced"
+    ? resolvedAdvancedView === "configuration"
+      ? { route: "scope", settingsData: true, scopeControls: true, neutralRoute: "global-scope", needsProject: false }
+      : NO_ROUTE
+    : TAB_POLICY[shownTab];
 
   const selectedProjectKnown = settingsScope.projectCwd !== undefined && projects.includes(settingsScope.projectCwd);
   const explicitProjectCwd = selectedProjectKnown ? settingsScope.projectCwd : undefined;
   const scopedCwd = settingsScope.view === "global" ? neutralRouteCwd : explicitProjectCwd;
-  const scopeControlsVisible = shownTab === "general"
-    || shownTab === "features"
-    || (shownTab === "advanced" && advancedView === "configuration");
-  const scopedSettingsSurface = shownTab === "general"
-    || (shownTab === "advanced" && advancedView === "configuration");
-  const legacyCwd = shownTab === "usage" || shownTab === "projects"
-    ? undefined
-    : ambientCwd ?? (GLOBAL_THROUGH_SETUP.includes(shownTab) ? neutralRouteCwd : undefined);
-  const settingsCwd = scopedSettingsSurface ? scopedCwd : legacyCwd;
-  const needsSettingsData = scopedSettingsSurface || shownTab === "models";
-  const currentLoadKey = needsSettingsData && settingsCwd
-    ? `${scopedSettingsSurface ? `scope:${settingsScope.view}` : "legacy"}:${settingsCwd}`
+  const routeCwd = policy.route === "scope"
+    ? scopedCwd
+    : policy.route === "legacy"
+      ? ambientCwd ?? neutralRouteCwd
+      : undefined;
+  const settingsCwd = policy.settingsData ? routeCwd : undefined;
+  const currentLoadKey = policy.settingsData && settingsCwd
+    ? `${policy.route === "scope" ? `scope:${settingsScope.view}` : "legacy"}:${settingsCwd}`
     : "";
-  loadKeyRef.current = currentLoadKey;
+  const needsNeutralRoute = policy.neutralRoute === "global-scope"
+    ? settingsScope.view === "global"
+    : policy.neutralRoute === "legacy-fallback"
+      ? !ambientCwd
+      : policy.neutralRoute === "feature-write"
+        ? settingsScope.view === "global" && featureWrite.state === "available"
+        : false;
+
+  // This route is worker plumbing, never the Settings target. Fetch it only
+  // while the active tab has a capability that can use it.
+  useEffect(() => {
+    if (!needsNeutralRoute || neutralRouteCwd) {
+      setNeutralRouteLoading(false);
+      return undefined;
+    }
+    let live = true;
+    setNeutralRouteLoading(true);
+    setNeutralRouteError(undefined);
+    void client.request("pi/setup/state", {}).then((state) => {
+      if (live) setNeutralRouteCwd(state.cwd);
+    }).catch((routeError) => {
+      if (live) setNeutralRouteError(routeError instanceof Error ? routeError.message : String(routeError));
+    }).finally(() => {
+      if (live) setNeutralRouteLoading(false);
+    });
+    return () => { live = false; };
+  }, [client, needsNeutralRoute, neutralRouteCwd, neutralRouteRetry]);
 
   const load = useCallback(async () => {
-    if (!needsSettingsData || !settingsCwd || settingsRead.state !== "available") return;
+    if (!policy.settingsData || !settingsCwd || settingsRead.state !== "available") return;
     const key = currentLoadKey;
     const generation = ++loadGeneration.current;
     if (snapshotKey !== key) setSnapshotKey(undefined);
@@ -159,22 +209,24 @@ export function SettingsScreen({ ambientCwd, initialTab }: SettingsScreenProps) 
         catalog ? Promise.resolve({ catalog }) : client.request("pi/settings/list", { cwd: settingsCwd }),
         client.request("pi/settings/get", { cwd: settingsCwd }),
       ]);
-      if (generation !== loadGeneration.current || loadKeyRef.current !== key) return;
+      if (generation !== loadGeneration.current) return;
       setCatalog(cat.catalog);
       setSnapshot(snap.snapshot);
       setSnapshotKey(key);
     } catch (loadError) {
-      if (generation === loadGeneration.current && loadKeyRef.current === key) {
+      if (generation === loadGeneration.current) {
         setSnapshot(undefined);
         setSnapshotKey(undefined);
         setError(loadError instanceof Error ? loadError.message : String(loadError));
       }
     } finally {
-      if (generation === loadGeneration.current && loadKeyRef.current === key) setLoading(false);
+      if (generation === loadGeneration.current) setLoading(false);
     }
-  }, [catalog, client, currentLoadKey, needsSettingsData, settingsCwd, settingsRead.state, snapshotKey]);
+  }, [catalog, client, currentLoadKey, policy.settingsData, settingsCwd, settingsRead.state, snapshotKey]);
 
-  useEffect(() => {
+  // Invalidate the old target during commit, before a stale promise can settle
+  // in the render-to-effect gap. Abandoned renders never mutate the fence.
+  useLayoutEffect(() => {
     loadGeneration.current += 1;
     if (!currentLoadKey) {
       setLoading(false);
@@ -193,15 +245,16 @@ export function SettingsScreen({ ambientCwd, initialTab }: SettingsScreenProps) 
     changes: Parameters<typeof client.request<"pi/settings/set">>[1]["changes"],
   ) => {
     if (!settingsCwd) return false;
-    if (scopedSettingsSurface) {
+    if (policy.route === "scope") {
       if (settingsScope.view === "effective") return false;
       const expected: SettingsScope = settingsScope.view === "project" ? "project" : "global";
       if (scope !== expected) return false;
     }
     const key = currentLoadKey;
+    const generation = loadGeneration.current;
     try {
       const { snapshot: next } = await client.request("pi/settings/set", { cwd: settingsCwd, scope, changes });
-      if (loadKeyRef.current === key) {
+      if (generation === loadGeneration.current) {
         setSnapshot(next);
         setSnapshotKey(key);
       }
@@ -210,21 +263,39 @@ export function SettingsScreen({ ambientCwd, initialTab }: SettingsScreenProps) 
       actions.toast("error", writeError instanceof Error ? writeError.message : String(writeError));
       return false;
     }
-  }, [actions, client, currentLoadKey, scopedSettingsSurface, settingsCwd, settingsScope.view]);
+  }, [actions, client, currentLoadKey, policy.route, settingsCwd, settingsScope.view]);
 
-  const explicitScopeMissing = scopeControlsVisible
+  const retryNeutralRoute = useCallback(() => {
+    setNeutralRouteCwd(undefined);
+    setNeutralRouteError(undefined);
+    setNeutralRouteRetry((value) => value + 1);
+  }, []);
+  const reload = useCallback(() => {
+    if (needsNeutralRoute && !neutralRouteCwd) {
+      retryNeutralRoute();
+      return;
+    }
+    void load();
+  }, [load, needsNeutralRoute, neutralRouteCwd, retryNeutralRoute]);
+
+  const explicitScopeMissing = policy.scopeControls
     && settingsScope.view !== "global"
     && !selectedProjectKnown;
-  const legacyNeedsProject = !scopeControlsVisible && !legacyCwd && !PROJECTLESS.includes(shownTab);
-  const neutralRoutePending = scopedSettingsSurface
-    && settingsScope.view === "global"
-    && !scopedCwd
-    && neutralRouteLoading;
+  const legacyNeedsProject = policy.needsProject && !routeCwd && !neutralRouteLoading && !neutralRouteError;
+  const neutralRoutePending = needsNeutralRoute
+    && policy.neutralRoute !== "feature-write"
+    && !routeCwd
+    && !neutralRouteError;
+  const neutralRouteFailure = needsNeutralRoute
+    && policy.neutralRoute !== "feature-write"
+    && !routeCwd
+    ? neutralRouteError
+    : undefined;
   const switchingTarget = Boolean(
     currentLoadKey
     && snapshot
     && snapshotKey !== currentLoadKey
-    && scopedSettingsSurface,
+    && policy.route === "scope",
   );
 
   const scopeEmpty = explicitScopeMissing
@@ -256,17 +327,17 @@ export function SettingsScreen({ ambientCwd, initialTab }: SettingsScreenProps) 
             </Button>
           ))}
         </div>
-        {needsSettingsData && settingsRead.state === "available" ? (
+        {policy.settingsData && settingsRead.state === "available" ? (
           <div className="ms-auto flex items-center gap-2">
-            {loading ? <GenerationLoader label="Loading settings" layout="inline" /> : null}
-            <TooltipIconButton tooltip="Reload settings" onClick={() => void load()}>
+            {loading || neutralRouteLoading ? <GenerationLoader label="Loading settings" layout="inline" /> : null}
+            <TooltipIconButton tooltip={neutralRouteFailure ? "Retry global settings" : "Reload settings"} onClick={reload}>
               <RefreshCw />
             </TooltipIconButton>
           </div>
         ) : null}
       </div>
 
-      {scopeControlsVisible ? (
+      {policy.scopeControls ? (
         <div className="flex shrink-0 items-center px-3 py-2 hairline-b">
           <SettingsScopeControls />
         </div>
@@ -289,6 +360,14 @@ export function SettingsScreen({ ambientCwd, initialTab }: SettingsScreenProps) 
           ) : neutralRoutePending ? (
             <div className="flex h-full items-start justify-center pt-16">
               <GenerationLoader label="Preparing global settings" layout="block" />
+            </div>
+          ) : neutralRouteFailure ? (
+            <div className="mx-auto max-w-160 px-6 py-6">
+              <ErrorState
+                title={policy.route === "scope" ? "Could not prepare Global settings" : "Could not prepare this Settings tab"}
+                detail={neutralRouteFailure}
+                onRetry={retryNeutralRoute}
+              />
             </div>
           ) : legacyNeedsProject ? (
             <Empty
@@ -313,7 +392,7 @@ export function SettingsScreen({ ambientCwd, initialTab }: SettingsScreenProps) 
                   {...(snapshot && snapshotKey === currentLoadKey ? { snapshot } : {})}
                   loading={loading}
                   {...(error ? { error } : {})}
-                  onReload={() => void load()}
+                  onReload={reload}
                   onApply={apply}
                 />
               ) : null}
@@ -327,10 +406,10 @@ export function SettingsScreen({ ambientCwd, initialTab }: SettingsScreenProps) 
                   {...(mcp.state === "available" ? { onManageServers: () => setTab("mcp") } : {})}
                 />
               ) : null}
-              {shownTab === "mcp" && legacyCwd ? <McpServersTab cwd={legacyCwd} projectOpen={Boolean(ambientCwd)} decision={mcpWrite} /> : null}
+              {shownTab === "mcp" && routeCwd ? <McpServersTab cwd={routeCwd} projectOpen={Boolean(ambientCwd)} decision={mcpWrite} /> : null}
               {shownTab === "models" && settingsCwd ? <ModelsTab cwd={settingsCwd} snapshot={snapshotKey === currentLoadKey ? snapshot : undefined} onApply={apply} /> : null}
               {shownTab === "usage" ? <UsageTab /> : null}
-              {shownTab === "keyboard" ? <KeyboardTab cwd={legacyCwd} decision={keybindingsWrite} /> : null}
+              {shownTab === "keyboard" ? <KeyboardTab cwd={routeCwd} decision={keybindingsWrite} /> : null}
               {shownTab === "projects" ? <ProjectsTab activeCwd={ambientCwd} /> : null}
               {shownTab === "trust" ? <TrustTab decision={trustWrite} /> : null}
               {shownTab === "device" ? <DeviceTab /> : null}
