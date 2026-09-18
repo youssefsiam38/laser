@@ -198,7 +198,7 @@ describe("a trim while somebody is reading", () => {
     expect(stable.actions.loadEarlierEntries).toHaveBeenCalledOnce();
   });
 
-  it("keeps focus, place, draft and action identity, and never shows an empty transcript", async () => {
+  it("keeps the active logical transcript, focus, place, draft and action identity above soft targets", async () => {
     const store = createStateStore(opened());
     const presentation = store.presentation;
     // The conversation is read in before the cache is watching, so nothing is
@@ -268,11 +268,13 @@ describe("a trim while somebody is reading", () => {
     observer.disconnect();
 
     const after = store.getSnapshot().open[SESSION]!;
-    if (!after.trimmed) throw new Error(`no trim: blocks=${after.blocks.length} counters=${JSON.stringify(cache.counters().bytes)} limit=${12 * 1024}`);
-    expect(after.trimmed).toBeDefined();
-    expect(after.blocks.length).toBeLessThan(beforeTrim.blocks.length);
+    expect(after.trimmed).toBeUndefined();
+    expect(after.blocks).toBe(beforeTrim.blocks);
+    expect(after.entries).toBe(beforeTrim.entries);
+    expect(cache.counters().bytes).toBeGreaterThan(12 * 1024);
+    expect(cache.counters().overflow).toBe("protected");
     expect(frames.every(count => count > 0)).toBe(true);
-    expect(rowIds().length).toBeGreaterThan(0);
+    expect(rowIds().length).toBe(rowsBefore.length);
 
     // The row the viewport was holding is still here, and has not moved by
     // more than a line.
@@ -288,17 +290,13 @@ describe("a trim while somebody is reading", () => {
     expect(draft.getSnapshot().draft).toBe("half an edit");
     expect(presentation.hasEditDraft(SESSION)).toBe(true);
 
-    // The action still names the same entry, and prompt ordinals still mean
-    // what they meant: the offset rose by exactly the prompts released.
-    const releasedPrompts = beforeTrim.blocks.filter(block => block.kind === "user").length
-      - after.blocks.filter(block => block.kind === "user").length;
-    expect(after.history!.userOffset).toBe(offsetBefore + releasedPrompts);
+    // The action still names the same entry, and no prompt ordinal moved.
+    expect(after.history!.userOffset).toBe(offsetBefore);
     expect(after.blocks.some(block => "entryId" in block && block.entryId === knownEntry)).toBe(true);
     expect(after.entries.some(record => (record as { id: string }).id === knownEntry)).toBe(true);
     for (const id of rowIds()) expect(rowsBefore).toContain(id);
 
-    // The stamp carries what the surface was standing on, as entry ids.
-    expect(after.trimmed?.identities?.focusedEntryId).toBe(knownEntry);
+    expect(standingRows(SESSION)?.focusedEntryId).toBe(knownEntry);
 
     cache.dispose();
   });
@@ -314,11 +312,9 @@ describe("a trim while somebody is reading", () => {
     const action = rowOf(knownId)!.querySelector("button")!;
     await act(async () => { action.focus(); action.dispatchEvent(new FocusEvent("focusin", { bubbles: true })); });
     await act(async () => {
-      const seen = store.getSnapshot();
-      const update = { type: "notification", method: "session/update", params: { sessionPath: SESSION, seq: 25, at: "", update: { kind: "state", state: seen.open[SESSION]!.state } } };
-      store.dispatch(update as never);
-      cache.observeTransaction(update as never, seen, store.getSnapshot());
-      cache.maintain();
+      const standing = standingRows(SESSION);
+      store.dispatch({ type: "views/trim", paths: [SESSION], keepBytes: 12 * 1024, at: "2026-09-18T00:00:00.000Z",
+        anchored: knownId ? [knownId.slice("entry:".length)] : [], ...(standing ? { standing } : {}) } as never);
     });
     await act(async () => { await Promise.resolve(); });
     const stamp = store.getSnapshot().open[SESSION]!.trimmed!.at;

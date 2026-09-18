@@ -3,13 +3,16 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export function fixturePlan(name) {
-  const counts = { empty: 0, short: 4, long: 240, huge: 2000, tools: 4, agents: 2, projects: 4, mcp: 2 };
+  const counts = { empty: 0, short: 4, long: 240, history: 240, huge: 2000, tools: 4, agents: 2, projects: 4, mcp: 2 };
   if (!(name in counts)) throw new Error(`Unknown fixture ${name}; choose ${Object.keys(counts).join(', ')}.`);
   return Array.from({ length: name === 'projects' ? 10 : 1 }, (_, project) => ({
     name: `project-${String(project + 1).padStart(2, '0')}`,
     sessions: Array.from({ length: name === 'projects' ? 15 : name === 'empty' ? 0 : 1 }, (_, session) => ({
       name: `${name} conversation ${session + 1}`,
-      prompts: Array.from({ length: counts[name] / 2 }, (_, turn) => `Review checkpoint ${turn + 1}: verify the implementation and explain the next step.`),
+      prompts: Array.from({ length: counts[name] / 2 }, (_, turn) => {
+        const marker = `Review checkpoint ${turn + 1}: verify the implementation and explain the next step.`;
+        return name === 'history' ? `${marker}\n\nSynthetic retained body ${turn + 1}: ${'bounded history evidence. '.repeat(320)}` : marker;
+      }),
     })),
   }));
 }
@@ -126,5 +129,5 @@ export async function fixture(target, runtime, name) {
       verified.push({ path, messages: messages.length });
     }
   }
-  return { name, project: projects[0], path: sessions[0], projects, sessions, verified, expectedMessages: name === 'long' ? 240 : name === 'huge' ? 2000 : undefined };
+  return { name, project: projects[0], path: sessions[0], projects, sessions, verified, expectedMessages: ['long', 'history'].includes(name) ? 240 : name === 'huge' ? 2000 : undefined };
 }

@@ -364,6 +364,7 @@ describe("WorkerServer", () => {
       const shapes = [
         { name: "tail", window: { tail: 2 }, current: [] as unknown[] },
         { name: "before", window: { before: initial.window.before, limit: 2 }, current: rows.slice(2, 4) },
+        { name: "beforeEntry", window: { beforeEntry: "e4", limit: 2 }, current: rows.slice(2, 4) },
         { name: "from", window: { from: "e2" }, current: rows.slice(2) },
         { name: "all", window: { all: true }, current: rows },
       ];
@@ -375,6 +376,7 @@ describe("WorkerServer", () => {
         expect(result.entries, `${shape.name} current entries`).toEqual(shape.current);
         expect(result.window.mode, `${shape.name} current mode`).toBe(shape.name === "tail" ? "delta" : "replace");
         if (shape.name === "tail") expect(result.window).not.toHaveProperty("before");
+        if (shape.name === "before" || shape.name === "beforeEntry") expect(result.window).not.toHaveProperty("live");
       }
 
       const appended = [
@@ -387,7 +389,7 @@ describe("WorkerServer", () => {
           path: "/tmp/fake/s1.jsonl", window: shape.window, baseRevision: initial.window.revision,
         })).result as { entries: unknown[]; window: { mode: string; anchor?: string; before?: string } };
         const expected = shape.name === "tail" ? appended
-          : shape.name === "before" ? rows.slice(2, 4)
+          : shape.name === "before" || shape.name === "beforeEntry" ? rows.slice(2, 4)
             : shape.name === "from" ? [...rows, ...appended].slice(2)
               : [...rows, ...appended];
         expect(result.entries, `${shape.name} prefix entries`).toEqual(expected);

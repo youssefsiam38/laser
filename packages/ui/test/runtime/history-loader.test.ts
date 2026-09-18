@@ -1,6 +1,6 @@
 import { BODY_EXCERPT_MAX_BYTES } from "@/runtime/body-excerpt";
 import { describe, expect, it, vi } from "vitest";
-import { ErrorCodes, historyWindow, type ClientRequests, type SessionState } from "@lasercode/protocol";
+import { ErrorCodes, boundedHistoryWindow, historyWindow, type ClientRequests, type SessionState } from "@lasercode/protocol";
 import { initialState, reduce, type Action } from "../../src/store.js";
 import { createHistoryLoader } from "../../src/runtime/history-loader.js";
 
@@ -51,13 +51,11 @@ describe("history request ownership", () => {
 
     expect(await f.loader.earlier(state.path, () => true)).toBe(true);
 
-    const anchored = historyWindow(source, { from: "e79" }, scope);
     expect(request.mock.calls.map(([params]) => params.window)).toEqual([
       { tail: 40 },
-      { from: "e79" },
-      { before: anchored.window!.before, limit: 40 },
+      { beforeEntry: "e79", limit: 40 },
     ]);
-    expect(f.view().trimmed).toBeUndefined();
+    expect(f.view().trimmed).toBeDefined();
     expect(f.view().entries.map(row => (row as { id?: string }).id)).toEqual(entries.slice(38).map(row => row.id));
     expect(f.view().history?.before).toBeDefined();
   });
@@ -73,9 +71,131 @@ describe("history request ownership", () => {
 
     expect(await f.loader.earlier(state.path, () => true)).toBe(true);
 
-    expect(request.mock.calls[1]![0].window).toEqual({ from: "e10" });
+    expect(request.mock.calls[1]![0].window).toEqual({ beforeEntry: "e10", limit: 40 });
+    expect(f.view().trimmed?.earlierExhausted).toBe(true);
     expect(f.view().blocks.some(block => "entryId" in block && block.entryId === "e10")).toBe(true);
     expect(f.view().entries.some(row => (row as { id?: string }).id === "e10")).toBe(true);
+    expect(f.view().history?.complete).toBe(false);
+    const calls = request.mock.calls.length;
+    expect(await f.loader.earlier(state.path, () => true)).toBe(false);
+    expect(request).toHaveBeenCalledTimes(calls);
+  });
+
+  it("keeps a body-heavy retained window when its old anchor-to-live suffix exceeds the page ceiling", async () => {
+    const heavyEntries = Array.from({ length: 320 }, (_, index) => ({
+      type: "message", id: `heavy-${index}`, parentId: index ? `heavy-${index - 1}` : null,
+      message: { role: index % 2 ? "assistant" : "user", content: [{ type: "text", text: `${index}:${"x".repeat(8 * 1024)}` }] },
+    }));
+    const heavySource = { entries: heavyEntries, leafId: "heavy-319" };
+    const heavyScope = { ...scope, seq: 44 };
+    const request = vi.fn(async (params: Params) => {
+      const page = boundedHistoryWindow(heavySource, params.window!, heavyScope);
+      if (!page) throw { code: ErrorCodes.RevisionUnavailable };
+      return page;
+    });
+    const f = fixture(request);
+    f.dispatch({ type: "historyBegin", path: state.path, token: "loaded-pages" });
+    f.dispatch({ type: "historySnapshot", path: state.path, token: "loaded-pages", ...historyWindow(heavySource, { all: true }, heavyScope) });
+    f.dispatch({ type: "views/trim", paths: [state.path], keepBytes: 32 * 1024, at: "2026-09-18T00:00:00.000Z",
+      anchored: ["heavy-40"], standing: { anchorEntryId: "heavy-40", focusedEntryId: "heavy-40" } });
+    const retained = f.view();
+    const retainedIds = retained.entries.map(row => (row as { id: string }).id);
+    expect(retained.trimmed).toBeDefined();
+    expect(retainedIds).toContain("heavy-40");
+    expect(boundedHistoryWindow(heavySource, { from: "heavy-40" }, heavyScope)).toBeUndefined();
+    f.dispatch({ type: "optimisticUser", path: state.path, id: "pending-user", text: "keep my prompt", images: [] });
+    f.dispatch({ type: "notification", method: "session/update", params: { sessionPath: state.path, epoch: heavyScope.epoch, seq: 45, at: "2026-09-18T00:00:01.000Z", update: { kind: "message_start", role: "assistant" } } } as never);
+    f.dispatch({ type: "notification", method: "session/update", params: { sessionPath: state.path, epoch: heavyScope.epoch, seq: 46, at: "2026-09-18T00:00:02.000Z", update: { kind: "text_delta", delta: "live output", contentIndex: 0 } } } as never);
+    const optimistic = f.view().blocks.find(block => block.id === "pending-user");
+    const streaming = f.view().blocks.find(block => block.kind === "assistant" && block.streaming);
+
+    expect(await f.loader.earlier(state.path, () => true)).toBe(true);
+
+    expect(request.mock.calls.map(([params]) => params.window)).not.toContainEqual({ from: "heavy-40" });
+    expect(request.mock.calls.map(([params]) => params.window)).not.toContainEqual({ tail: 40 });
+    expect(request.mock.calls[0]![0].window).toEqual({ beforeEntry: "heavy-40", limit: 40 });
+    const afterIds = f.view().entries.map(row => (row as { id: string }).id);
+    for (const id of retainedIds) expect(afterIds).toContain(id);
+    expect(afterIds).toContain("heavy-0");
+    expect(f.view().blocks.some(block => "entryId" in block && block.entryId === "heavy-40")).toBe(true);
+    expect(f.view().blocks.find(block => block.id === "pending-user")).toBe(optimistic);
+    expect(f.view().blocks.find(block => block.kind === "assistant" && block.streaming)).toBe(streaming);
+  });
+
+  it("recovers a stale opaque cursor by prepending before the retained anchor", async () => {
+    const request = vi.fn(async (params: Params) => {
+      if (params.window && "before" in params.window) throw { code: ErrorCodes.InvalidParams };
+      return historyWindow(source, params.window!, scope);
+    });
+    const f = fixture(request);
+    await f.loader.read(state.path);
+    const retained = f.view().entries;
+
+    expect(await f.loader.earlier(state.path, () => true)).toBe(true);
+
+    expect(request.mock.calls.map(([params]) => params.window)).toEqual([
+      { tail: 40 },
+      { before: expect.any(String), limit: 40 },
+      { beforeEntry: "e40", limit: 40 },
+    ]);
+    expect(f.view().entries.slice(-retained.length)).toEqual(retained);
+    expect(f.view().entries).toEqual(entries);
+    expect(f.view().history).toMatchObject({ complete: true, userOffset: 0 });
+  });
+
+  it("keeps the retained window when both its cursor and anchor are stale", async () => {
+    const request = vi.fn(async (params: Params) => {
+      if (params.window && ("before" in params.window || "beforeEntry" in params.window)) throw { code: ErrorCodes.InvalidParams };
+      return historyWindow(source, params.window!, scope);
+    });
+    const f = fixture(request);
+    await f.loader.read(state.path);
+    const retained = f.view();
+
+    expect(await f.loader.earlier(state.path, () => true)).toBe(false);
+
+    expect(request.mock.calls.map(([params]) => params.window)).toEqual([
+      { tail: 40 },
+      { before: expect.any(String), limit: 40 },
+      { beforeEntry: "e40", limit: 40 },
+    ]);
+    expect(f.view().entries).toBe(retained.entries);
+    expect(f.view().blocks).toBe(retained.blocks);
+  });
+
+  it("fences a retained-anchor recovery that a recent replacement overtakes", async () => {
+    const pending = deferred<Result>();
+    let recovering = false;
+    const request = vi.fn(async (params: Params) => recovering && params.window && "beforeEntry" in params.window
+      ? pending.promise : historyWindow(source, params.window!, scope));
+    const f = fixture(request);
+    await f.loader.read(state.path, true);
+    f.dispatch({ type: "views/trim", paths: [state.path], keepBytes: 1, at: "2026-09-18T00:00:00.000Z",
+      anchored: ["e10"], standing: { anchorEntryId: "e10", focusedEntryId: "e10" } });
+    recovering = true;
+    const old = f.loader.earlier(state.path, () => true);
+    await Promise.resolve();
+    recovering = false;
+    await f.loader.recent(state.path, () => true);
+    const accepted = f.view();
+    pending.resolve(historyWindow(source, { beforeEntry: "e10", limit: 40 }, scope));
+
+    expect(await old).toBe(false);
+    expect(f.view()).toBe(accepted);
+  });
+
+  it("rejects retained-anchor recovery from another producer revision", async () => {
+    let recovering = false;
+    const request = vi.fn(async (params: Params) => historyWindow(source, params.window!, recovering ? { ...scope, revision: "other-revision" } : scope));
+    const f = fixture(request);
+    await f.loader.read(state.path, true);
+    f.dispatch({ type: "views/trim", paths: [state.path], keepBytes: 1, at: "2026-09-18T00:00:00.000Z",
+      anchored: ["e10"], standing: { anchorEntryId: "e10", focusedEntryId: "e10" } });
+    const held = f.view();
+    recovering = true;
+
+    expect(await f.loader.earlier(state.path, () => true)).toBe(false);
+    expect(f.view()).toBe(held);
   });
 
   it("drops an older page when a trim overtakes it, then the same control path still works", async () => {
@@ -97,7 +217,7 @@ describe("history request ownership", () => {
 
     holdOlder = false;
     expect(await f.loader.earlier(state.path, () => true)).toBe(true);
-    expect(f.view().trimmed).toBeUndefined();
+    expect(f.view().trimmed).toBeDefined();
     expect(f.view().entries.map(row => (row as { id?: string }).id)).toEqual(entries.slice(38).map(row => row.id));
   });
 
@@ -270,41 +390,42 @@ describe("history request ownership", () => {
     expect(request).toHaveBeenLastCalledWith({ path: state.path, window: { from: "e0" }, bodyLimit: BODY_EXCERPT_MAX_BYTES });
   });
 
-  it("retains a known tree after an invalid branch anchor falls back to a tail, but drops it on epoch change", async () => {
+  it("keeps an active known tree after an invalid refresh anchor; an explicit recent read can replace it", async () => {
     let snapshot: { entries: unknown[]; leafId: string } = source;
     let epoch = scope.epoch;
     const request = vi.fn(async (params: Params) => historyWindow(snapshot, params.window!, { ...scope, epoch }));
     const f = fixture(request);
     await f.loader.read(state.path, true);
+    const held = f.view();
     // A sibling before the old root makes that root an invalid active anchor.
     const other = { type: "message", id: "root-sibling", parentId: null, message: { role: "user", content: "Other root" } };
     snapshot = { entries: [...entries, other], leafId: other.id };
-    await f.loader.read(state.path);
-    expect(request.mock.calls.slice(1).map(([params]) => params.window)).toEqual([{ from: "e0" }, { tail: 40 }]);
-    expect(f.view().entries).toHaveLength(81);
-    expect(f.view().blocks).toHaveLength(1);
-    expect(f.view().history).toMatchObject({ complete: true, branchesUnloaded: false, userOffset: 0 });
-    expect(f.view().history?.before).toBeUndefined();
+    await expect(f.loader.read(state.path)).rejects.toMatchObject({ code: ErrorCodes.InvalidParams });
+    expect(request.mock.calls.slice(1).map(([params]) => params.window)).toEqual([{ from: "e0" }]);
+    expect(f.view().entries).toBe(held.entries);
+    expect(f.view().blocks).toBe(held.blocks);
     epoch = "replacement";
-    await f.loader.read(state.path);
+    await f.loader.recent(state.path, () => true);
     expect(f.view().entries).toEqual([other]);
     expect(f.view().history).toMatchObject({ epoch, complete: true, branchesUnloaded: true });
   });
 
-  it("recovers an invalid retained anchor through a fresh tail", async () => {
+  it("keeps an active window when its refresh anchor is invalid", async () => {
     const request = vi.fn(async (params: Params) => {
       if (params.window && "from" in params.window) throw { code: ErrorCodes.InvalidParams };
       return historyWindow(source, params.window!, scope);
     });
     const f = fixture(request);
     await f.loader.read(state.path);
-    await f.loader.read(state.path);
-    expect(request.mock.calls.map(([params]) => params.window)).toEqual([{ tail: 40 }, { from: "e40" }, { tail: 40 }]);
-    expect(f.view().blocks).toHaveLength(40);
+    const held = f.view();
+    await expect(f.loader.read(state.path)).rejects.toMatchObject({ code: ErrorCodes.InvalidParams });
+    expect(request.mock.calls.map(([params]) => params.window)).toEqual([{ tail: 40 }, { from: "e40" }]);
+    expect(f.view().entries).toBe(held.entries);
+    expect(f.view().blocks).toBe(held.blocks);
     expect(f.view().historyPending).toBeUndefined();
   });
 
-  it("opens at the latest page when a from or all range is too large to send at once", async () => {
+  it("keeps an active window when a from or all range is too large to send at once", async () => {
     for (const all of [false, true]) {
       const request = vi.fn(async (params: Params) => {
         if (params.window && ("from" in params.window || "all" in params.window)) throw { code: ErrorCodes.RevisionUnavailable };
@@ -312,9 +433,11 @@ describe("history request ownership", () => {
       });
       const f = fixture(request);
       await f.loader.read(state.path);
-      await f.loader.read(state.path, all);
-      expect(request.mock.calls.map(([params]) => params.window)).toEqual([{ tail: 40 }, all ? { all: true } : { from: "e40" }, { tail: 40 }]);
-      expect(f.view().blocks).toHaveLength(40);
+      const held = f.view();
+      await expect(f.loader.read(state.path, all)).rejects.toMatchObject({ code: ErrorCodes.RevisionUnavailable });
+      expect(request.mock.calls.map(([params]) => params.window)).toEqual([{ tail: 40 }, all ? { all: true } : { from: "e40" }]);
+      expect(f.view().entries).toBe(held.entries);
+      expect(f.view().blocks).toBe(held.blocks);
       expect(f.view().historyPending).toBeUndefined();
       expect(f.view().historyError).toBeUndefined();
     }

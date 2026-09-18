@@ -122,6 +122,11 @@ describe("worker-free session projection", () => {
       const older = await project(projection, f.path, { before: tail.window!.before! });
       expect(older.entries).toEqual(entries.slice(-80, -40));
       expect(reads).toEqual(entries.slice(-80, -40).map(entry => (entry as { id: string }).id));
+      reads.length = 0;
+      const recovered = await project(projection, f.path, { beforeEntry: "e200", limit: 40 });
+      expect(recovered.entries).toEqual(older.entries);
+      expect(recovered.window?.before).toBe(older.window?.before);
+      expect(reads).toEqual(entries.slice(-80, -40).map(entry => (entry as { id: string }).id));
       expect(readFileSync(f.path)).toEqual(before);
     } finally {
       f.cleanup();
@@ -136,9 +141,11 @@ describe("worker-free session projection", () => {
       appendFileSync(f.path, `${JSON.stringify(message("e12", "e11", 12))}\n`);
       const older = await project(projection, f.path, { before: tail.window!.before!, limit: 4 });
       expect(older.entries).toEqual(messages(12).slice(4, 8));
+      expect((await project(projection, f.path, { beforeEntry: "e8", limit: 4 })).entries).toEqual(older.entries);
 
       appendFileSync(f.path, `${JSON.stringify(message("fork", "e1", 14))}\n`);
       await expect(projection.read(f.path, { before: tail.window!.before!, limit: 4 })).rejects.toThrow("history changed");
+      await expect(projection.read(f.path, { beforeEntry: "e8", limit: 4 })).rejects.toThrow("history changed");
     } finally {
       f.cleanup();
     }
