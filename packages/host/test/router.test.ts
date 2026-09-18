@@ -15,7 +15,7 @@ import { describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { AgentRun, SessionState, SessionSummary } from "@lasercode/protocol";
 import { AgentRunRegistry } from "../src/agents/runs.js";
 import { AgentStore } from "../src/agents/store.js";
@@ -1048,8 +1048,9 @@ it("routes explorer opt-in without opening workers and keeps legacy browse shape
     expect(explorer).toMatchObject({ result: { entries: [{ name: "node.txt", kind: "file" }], commonPrefix: "node.txt", truncated: false } });
     const relative = await rpc(h.router, 'pi/project/browse', { path: '.\\', explorer: { mode: 'explorer', cwd: root, prefix: '.hidden' } });
     expect(relative).toMatchObject({ result: { path: root, entries: [{ name: '.hidden.txt', path: join(root, '.hidden.txt'), kind: 'file' }] } });
-    const refused = await rpc(h.router, 'pi/project/browse', { path: join(root, '..', '..'), explorer: { mode: 'explorer', cwd: root, prefix: '' } });
-    expect(refused).toMatchObject({ result: { entries: [], errorKind: 'refusal', error: 'That path is outside this project and your home folder.' } });
+    const above = await rpc(h.router, 'pi/project/browse', { path: join(root, '..', '..'), explorer: { mode: 'explorer', cwd: root, prefix: '' } });
+    expect(above).toMatchObject({ result: { path: resolve(root, '..', '..') } });
+    expect((above as { result: { error?: string } }).result.error).toBeUndefined();
     expect(h.workerRequests).toHaveLength(0);
   } finally { h.cleanup(); rmSync(root, { recursive: true, force: true }); }
 });

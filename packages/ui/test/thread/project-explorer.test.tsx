@@ -96,10 +96,10 @@ it('does not hijack deletion or Tab traversal of a selected text range', async (
   await act(async () => { input().dispatchEvent(tab); });
   expect(tab.defaultPrevented).toBe(false); expect(inserted).not.toHaveBeenCalled();
 });
-it('a host boundary refusal has no retry or no-match advice; a read failure recovers through retry', async () => {
-  request.mockResolvedValueOnce({ path: '/outside', home: '/home/test', entries: [], truncated: false, commonPrefix: '', error: 'That path is outside this project and your home folder.', errorKind: 'refusal' });
+it('a host refusal has no retry or no-match advice; a read failure recovers through retry', async () => {
+  request.mockResolvedValueOnce({ path: '/outside', home: '/home/test', entries: [], truncated: false, commonPrefix: '', error: 'You do not have permission to open this folder.', errorKind: 'refusal' });
   await type('@/outside/'); await tick();
-  expect(container.textContent).toContain('outside this project'); expect(container.textContent).not.toContain('No matches');
+  expect(container.textContent).toContain('permission to open this folder'); expect(container.textContent).not.toContain('No matches');
   expect([...container.querySelectorAll('button')].some(button => button.textContent === 'Try again')).toBe(false);
   request.mockRejectedValueOnce(new Error('transport'));
   await type('@server/'); await tick();

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join, parse } from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import { browseExplorer, explorerProjectArea, resolveExplorerPath } from "../src/directory-explorer.js";
+import { browseExplorer, resolveExplorerPath } from "../src/directory-explorer.js";
 
 let base: string, root: string;
 beforeEach(() => { base = mkdtempSync(join(tmpdir(), "directory-explorer-")); root = join(base, "home", "project"); mkdirSync(root, { recursive: true }); });
@@ -55,7 +55,7 @@ it("includes git-ignored, generated and dot entries without recursive traversal"
   expect((await list(root, "node")).entries.map((entry) => entry.name)).toEqual(["node_modules"]);
   expect((await list("node_modules")).entries.map((entry) => entry.name)).toEqual(["nested.txt"]);
 });
-it("lists relative and absolute paths within the project or home, including contained symlinks", async () => {
+it("lists relative and absolute paths anywhere on the machine, including symlinks (D-300)", async () => {
   const sibling = join(base, "home", "sibling"); mkdirSync(sibling);
   writeFileSync(join(sibling, "guide.md"), "safe fixture");
   symlinkSync(sibling, join(root, "outside-link"));
@@ -67,7 +67,9 @@ it("lists relative and absolute paths within the project or home, including cont
   }
   expect((await list()).entries.map((entry) => [entry.name, entry.kind])).toEqual([["outside-link", "directory"], ["outside-file", "file"]]);
   const filesystemRoot = await list(parse(root).root);
-  expect(filesystemRoot).toMatchObject({ entries: [], errorKind: "refusal", error: "That path is outside this project and your home folder." });
+  expect(filesystemRoot.error).toBeUndefined();
+  expect(filesystemRoot.parent).toBeUndefined();
+  expect(filesystemRoot.entries.length).toBeGreaterThan(0);
 });
 it("resolves home, env and backslash spellings on the host and returns canonical separators", async () => {
   const home = join(base, "home");
@@ -82,19 +84,17 @@ it("resolves home, env and backslash spellings on the host and returns canonical
     expect(listing.entries.every(entry => !entry.path.includes("\\"))).toBe(true);
   }
 });
-it("never widens a project at home or on home's parent chain", async () => {
+it("browses above home and above a project's ancestors (D-300)", async () => {
   const home = join(base, "home");
-  expect(explorerProjectArea(home, home)).toBe(home);
-  expect(explorerProjectArea(parse(home).root, home)).toBe(parse(home).root);
-  expect(explorerProjectArea(base, home)).toBe(base);
   const aboveHome = await browseExplorer(join(home, ".."), { mode: "explorer", cwd: home, prefix: "", limit: 80 }, home);
-  expect(aboveHome).toMatchObject({ entries: [], errorKind: "refusal" });
+  expect(aboveHome.error).toBeUndefined();
+  expect(aboveHome.entries.map((entry) => entry.name)).toContain("home");
   const aboveAncestor = await browseExplorer(join(base, ".."), { mode: "explorer", cwd: base, prefix: "", limit: 80 }, home);
-  expect(aboveAncestor).toMatchObject({ entries: [], errorKind: "refusal" });
+  expect(aboveAncestor.error).toBeUndefined();
 });
-it("refuses a resolved path outside both allowed roots with one sentence", async () => {
-  const outside = join(base, "outside"); mkdirSync(outside);
-  expect(await list(outside)).toMatchObject({ entries: [], errorKind: "refusal", error: "That path is outside this project and your home folder." });
+it("lists a folder outside the project and home like any other (D-300)", async () => {
+  const outside = join(base, "outside"); mkdirSync(outside); writeFileSync(join(outside, "note.md"), "");
+  expect((await list(outside)).entries.map((entry) => entry.name)).toEqual(["note.md"]);
 });
 it.skipIf(process.platform === "win32")("omits special files and symlinks to them without reading them", async () => {
   execFileSync("mkfifo", [join(root, "pipe")]);

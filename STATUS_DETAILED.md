@@ -3997,6 +3997,11 @@ Consequences: no RP-2 requirement is dropped. T4–T8 may start only after T2's 
 **Why.** The person typed `@../`, pressed Backspace and got `@../../`. A key every person uses hundreds of times a day must do exactly one thing; folder navigation belongs to the list (arrows, `/`, Tab, Enter), not to deletion.
 **Consequences.** `parentProjectQuery` removed; `explorerNavigation` returns null for Backspace; tests assert Backspace is never prevented after separators, `..` and roots; `docs/project-mentions.md` updated. Coordinator-owned small fix.
 
+### D-300 · 2026-09-18 · The mention picker browses the whole machine
+**Decision.** `pi/project/browse` in explorer mode lists any absolute path, `~`, any `../` chain and the filesystem root. The former project-area ∪ home boundary and its refusal are removed.
+**Why.** `@/` answered "outside this project and your home folder" — an operating system without a root. The picker returns names and kinds only, and the agent it feeds already reads whatever the person can; the boundary protected nothing and blocked real work. Laser is built for people who know their machine.
+**Consequences.** `explorerProjectArea` deleted; permission/ENOENT errors keep their sentences; `docs/project-mentions.md` and host/router/UI tests updated. Supersedes the "bounded to project area ∪ home" note under M16-T65. Coordinator-owned small fix; the person does browser acceptance.
+
 ## Open questions
 
 | ID | Question | Blocks | Asked of |

@@ -29,7 +29,7 @@ UI/DOM keys are separately typed and cannot collide with filenames or pagination
 
 ## Listing contract
 
-The existing method accepts optional strict `explorer: { mode: "explorer", cwd, prefix, offset?, limit? }`. `cwd` is an absolute resolution context, not a sandbox. Without explorer options, the existing directory-only, non-hidden, 500-cap response stays byte-identical. Explorer entries require `kind`, validated at the renderer's opt-in response boundary; `nextOffset` is a continuation and `commonPrefix` is computed across the filtered listing before pagination. No second method exists. The unshipped checkpoint's `root` field was replaced with `cwd` to remove its incorrect containment promise.
+The existing method accepts optional strict `explorer: { mode: "explorer", cwd, prefix, offset?, limit? }`. `cwd` is an absolute resolution context, not a sandbox: any absolute path, `~`, `../` chain or `/` lists (D-300); the host answers with names and kinds only. Without explorer options, the existing directory-only, non-hidden, 500-cap response stays byte-identical. Explorer entries require `kind`, validated at the renderer's opt-in response boundary; `nextOffset` is a continuation and `commonPrefix` is computed across the filtered listing before pagination. No second method exists. The unshipped checkpoint's `root` field was replaced with `cwd` to remove its incorrect containment promise.
 
 The host applies case-insensitive name-prefix filtering, then sorts visible directories, visible files, hidden directories, hidden files; each group uses alphabetical/numeric name order. Ignored/generated and dot entries are included, including `node_modules`, `dist` and `.git`. Special files and broken symlinks are not candidates. No git subprocess is involved.
 

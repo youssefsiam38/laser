@@ -4,7 +4,6 @@ import { isAbsolute, join, resolve, sep } from "node:path";
 import { setImmediate as yieldHost } from "node:timers/promises";
 import type { ExplorerEntry, DirectoryExplorerOptions, ExplorerListing } from "@lasercode/protocol";
 import { expandHomePath } from "./home-path.js";
-import { isWithinDirectory } from "./paths.js";
 
 const names = new Intl.Collator("en", { sensitivity: "base", numeric: true });
 const ties = new Intl.Collator("en");
@@ -85,31 +84,18 @@ export function resolveExplorerPath(path: string | undefined, cwd: string, home 
   return resolve(nativeSeparators(cwd), spelling);
 }
 
-/** The project-side browse boundary, without widening a home/root ancestor. */
-export function explorerProjectArea(cwd: string, home: string): string {
-  if (isWithinDirectory(home, cwd)) return cwd;
-  const parent = resolve(cwd, "..");
-  return isWithinDirectory(cwd, home) && !isWithinDirectory(parent, home) ? home : parent;
-}
-
 /** Immediate metadata only: no recursive traversal, file reads, or worker. */
 export async function browseExplorer(path: string | undefined, options: DirectoryExplorerOptions, accountHome = homedir()): Promise<ExplorerListing> {
   const cwd = resolve(nativeSeparators(options.cwd));
   const home = resolve(nativeSeparators(accountHome));
   const target = resolveExplorerPath(path, cwd, home);
-  // The picker has always supported `../`: keep the project's containing
-  // folder available alongside the project itself, but never widen a project
-  // at/above home to the account's parent (or root to the whole filesystem).
-  const projectArea = explorerProjectArea(cwd, home);
+  // The whole filesystem is browsable (D-300): the picker lists names only,
+  // and the agent it feeds can already read anything the person can.
   const parent = resolve(target, "..");
   const base = { path: displayPath(target), home: displayPath(home), ...(target !== parent ? { parent: displayPath(parent) } : {}) };
   const failure = (error: string, errorKind?: "refusal"): ExplorerListing => ({ ...base, entries: [], commonPrefix: "", truncated: false, error, ...(errorKind ? { errorKind } : {}) });
   try {
     if (!isAbsolute(nativeSeparators(options.cwd))) return failure("Choose a conversation directory before browsing.");
-    // Resolution, including home tokens and symlinks, happens before the boundary check.
-    if (!isWithinDirectory(target, projectArea) && !isWithinDirectory(target, home)) {
-      return failure("That path is outside this project and your home folder.", "refusal");
-    }
     const { entries, commonPrefix } = await scan(target, options.prefix.toLocaleLowerCase());
     const start = options.offset ?? 0;
     const end = start + Math.max(1, Math.min(100, options.limit ?? 80));
