@@ -15,6 +15,7 @@ import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import { ProviderLogo } from "@/components/assistant-ui/elements/logos";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useCommittedTargetLifetime } from "@/components/settings/useCommittedTargetLifetime";
 
 import { AgentMarkIcon } from "./AgentList.js";
 import { BuiltinModelDialog } from "./dialogs.js";
@@ -27,7 +28,7 @@ const messageOf = (error: unknown): string => (error instanceof Error ? error.me
 export interface BuiltinPanelProps {
   name: BuiltinAgentName;
   snapshot: AgentsSnapshot;
-  /** Where host work is routed: the project, or the Beam workspace when none is open. */
+  /** Explicit project backing the Settings target; absent for Global. */
   routeCwd: string | undefined;
   writable?: boolean;
 }
@@ -166,6 +167,7 @@ function useBuiltinModel(name: BuiltinAgentName): {
   clear: () => void;
 } {
   const agents = useAgentsActions();
+  const lifetime = useCommittedTargetLifetime(`builtin-model:${name}`);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   // The save settles either way: a failure toasts where the person can read
@@ -173,13 +175,19 @@ function useBuiltinModel(name: BuiltinAgentName): {
   // shows what actually happened.
   const apply = useCallback(
     (model: AgentModelChoice | null) => {
+      const lease = lifetime.capture();
+      if (!lease) return;
       setBusy(true);
       void agents
         .setBuiltinModel(name, model)
-        .then(() => setOpen(false))
-        .finally(() => setBusy(false));
+        .then(() => {
+          if (lifetime.isCurrent(lease)) setOpen(false);
+        })
+        .finally(() => {
+          if (lifetime.isCurrent(lease)) setBusy(false);
+        });
     },
-    [agents, name],
+    [agents, lifetime, name],
   );
   return {
     open,
@@ -194,9 +202,16 @@ function useBuiltinModel(name: BuiltinAgentName): {
 }
 
 /** The button every built-in card carries, worded by whether a model is chosen. */
-function ChangeModelButton({ model, onOpen }: { model: AgentModelChoice | null; onOpen(): void }) {
+function ChangeModelButton({ model, routeCwd, onOpen }: { model: AgentModelChoice | null; routeCwd: string | undefined; onOpen(): void }) {
   return (
-    <Button type="button" variant="secondary" size="sm" onClick={onOpen}>
+    <Button
+      type="button"
+      variant="secondary"
+      size="sm"
+      disabled={!routeCwd}
+      title={routeCwd ? undefined : "Choose a project scope to load models"}
+      onClick={onOpen}
+    >
       {model ? "Change model" : "Choose a model"}
     </Button>
   );
@@ -220,12 +235,12 @@ function BeamCard({ snapshot, routeCwd }: { snapshot: AgentsSnapshot; routeCwd: 
         icon={<AgentMarkIcon mark="beam" />}
         description={builtinBlurb("beam")}
         facts={[modelFact(model, resting, "attention")]}
-        actions={<ChangeModelButton model={model} onOpen={control.show} />}
+        actions={<ChangeModelButton model={model} routeCwd={routeCwd} onOpen={control.show} />}
       />
       <BuiltinModelDialog
         name="beam"
         open={control.open}
-        cwd={routeCwd ?? snapshot.workspaces.beam}
+        cwd={routeCwd}
         current={model}
         busy={control.busy}
         onOpenChange={control.onOpenChange}
@@ -248,12 +263,12 @@ function ChatCard({ snapshot, routeCwd }: { snapshot: AgentsSnapshot; routeCwd: 
         icon={<AgentMarkIcon mark="chat" />}
         description={builtinBlurb("chat")}
         facts={[modelFact(model, "Follows the default model"), { label: "where", value: "The Chat tab of the sessions list" }]}
-        actions={<ChangeModelButton model={model} onOpen={control.show} />}
+        actions={<ChangeModelButton model={model} routeCwd={routeCwd} onOpen={control.show} />}
       />
       <BuiltinModelDialog
         name="chat"
         open={control.open}
-        cwd={routeCwd ?? snapshot.workspaces.chat}
+        cwd={routeCwd}
         current={model}
         busy={control.busy}
         onOpenChange={control.onOpenChange}
@@ -310,9 +325,10 @@ function NamerCard({ snapshot, routeCwd }: { snapshot: AgentsSnapshot; routeCwd:
   useEffect(() => setLocal(undefined), [snapshot.revision]);
   const state: NamerState = running ? { ...(local ?? snapshot.namer), status: "qualifying" } : (local ?? snapshot.namer);
   const summary = namerSummary(state);
-  const cwd = routeCwd ?? snapshot.workspaces.beam;
+  const cwd = routeCwd;
 
   const qualify = async () => {
+    if (!cwd) return;
     setRunning(true);
     setError(undefined);
     try {
@@ -349,8 +365,16 @@ function NamerCard({ snapshot, routeCwd }: { snapshot: AgentsSnapshot; routeCwd:
         ]}
         actions={
           <>
-            <ChangeModelButton model={state.model} onOpen={control.show} />
-            <Button type="button" variant="ghost" size="sm" disabled={running} aria-busy={running || undefined} onClick={() => void qualify()}>
+            <ChangeModelButton model={state.model} routeCwd={routeCwd} onOpen={control.show} />
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={running || !cwd}
+              aria-busy={running || undefined}
+              title={cwd ? undefined : "Choose a project scope to run qualification"}
+              onClick={() => void qualify()}
+            >
               {running ? <RotateCw className="motion-safe:animate-busy" /> : <Zap />}
               {running ? "Qualifying…" : state.status === "unqualified" ? "Run qualification" : "Run qualification again"}
             </Button>

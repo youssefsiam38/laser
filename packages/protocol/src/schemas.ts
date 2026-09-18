@@ -475,9 +475,10 @@ export const agentNameSchema = z.string().regex(AGENT_NAME_PATTERN, {
 });
 export const agentModelChoiceSchema = z.object({ provider: z.string().min(1).max(100), id: z.string().min(1).max(200) }).strict();
 export const agentMessageModeSchema = z.enum(AGENT_MESSAGE_MODES).default("interrupt");
+const agentProjectCwdSchema = z.string().min(1).max(4096);
 export const agentLocationSchema = z.discriminatedUnion("scope", [
   z.object({ scope: z.literal("global") }).strict(),
-  z.object({ scope: z.literal("project"), projectCwd: cwd }).strict(),
+  z.object({ scope: z.literal("project"), projectCwd: agentProjectCwdSchema }).strict(),
 ]);
 export const builtinAgentNameSchema = z.enum(BUILTIN_AGENT_NAMES);
 export const agentSkillRefSchema = z
@@ -487,7 +488,7 @@ export const agentDefinitionInputSchema = z
   .object({
     name: agentNameSchema,
     scope: z.enum(["global", "project"]),
-    projectCwd: z.string().min(1).max(4096).optional(),
+    projectCwd: agentProjectCwdSchema.optional(),
     description: z.string().max(AGENT_DESCRIPTION_MAX),
     instructions: z.string().max(AGENT_INSTRUCTIONS_MAX),
     engineInstructions: z.boolean(),

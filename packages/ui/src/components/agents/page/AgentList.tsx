@@ -4,7 +4,7 @@
  * bottom, and the harness policy row last. A listbox: arrows and Home/End
  * move between rows, Enter or Space (or a click) selects one.
  */
-import { effectiveAgents, type AgentDefinition, type AgentWarning, type AgentsSnapshot } from "@lasercode/protocol";
+import type { AgentDefinition, AgentWarning, AgentsSnapshot } from "@lasercode/protocol";
 import { Bot, FileWarning, MessageSquare, SlidersHorizontal, Sparkles, Tag } from "lucide-react";
 import { useMemo, type KeyboardEvent, type ReactNode } from "react";
 
@@ -12,7 +12,15 @@ import { agentDisplayName } from "@/agents";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
-import { agentForWarning, agentMark, orderAgents, sameSelection, selectionOfAgent, type AgentMark, type AgentsSelection } from "./model.js";
+import {
+  agentForWarning,
+  agentMark,
+  agentsInScope,
+  sameSelection,
+  selectionOfAgent,
+  type AgentMark,
+  type AgentsSelection,
+} from "./model.js";
 
 const MARK_ICON: Record<AgentMark, typeof Bot> = {
   default: Bot,
@@ -41,27 +49,15 @@ export interface AgentListProps {
 
 export function AgentList({ snapshot, view, projectCwd, warnings, selection, onSelect, lead, className }: AgentListProps) {
   const { custom, builtin, warningCounts, fileWarnings } = useMemo(() => {
-    const ordered = orderAgents(snapshot, projectCwd);
-    const globals = snapshot.agents.filter((agent) => agent.kind === "custom" && agent.scope === "global");
-    const projects = snapshot.agents.filter((agent) => agent.kind === "custom" && agent.scope === "project" && agent.projectCwd === projectCwd);
-    const compareByName = (left: AgentDefinition, right: AgentDefinition) =>
-      left.scope === "global" && left.name === snapshot.defaultAgent
-        ? -1
-        : right.scope === "global" && right.name === snapshot.defaultAgent
-          ? 1
-          : left.name.localeCompare(right.name);
-    const custom = view === "global"
-      ? globals.sort(compareByName)
-      : view === "project"
-        ? [...projects.sort(compareByName), ...globals.sort(compareByName)]
-        : effectiveAgents(snapshot.agents, projectCwd).filter((agent) => agent.kind === "custom").sort(compareByName);
-    const builtin = view === "global" ? ordered.builtin : [];
+    const { custom, builtin } = agentsInScope(snapshot, view, projectCwd);
     const agents = [...custom, ...builtin];
     const byPath = new Map(agents.flatMap((agent) => agent.path ? [[agent.path, agent] as const] : []));
     const counts = new Map<AgentDefinition, number>();
     const unlinked: AgentWarning[] = [];
     for (const warning of warnings) {
-      const linked = warning.path ? byPath.get(warning.path) : agentForWarning(snapshot, warning, projectCwd);
+      const linked = warning.path
+        ? byPath.get(warning.path)
+        : agentForWarning(snapshot, warning, view, projectCwd);
       if (linked) counts.set(linked, (counts.get(linked) ?? 0) + 1);
       else if (warning.field === "file") unlinked.push(warning);
     }

@@ -195,6 +195,42 @@ describe("AgentStore · delete and default", () => {
     expect(s.snapshot().agents.some((agent) => agent.name === "reviewer")).toBe(false);
   });
 
+  it("prunes references only when the deleted exact source has no remaining effective target", () => {
+    const projectCwd = join(dir, "project");
+    mkdirSync(projectCwd, { recursive: true });
+    let writes = 0;
+    const s = store({
+      storePath: join(dir, "state", "agents.json"),
+      trustedProjects: () => [projectCwd],
+      writeFile: (path, text) => {
+        writes += 1;
+        writeFileSync(path, text, "utf8");
+      },
+    });
+    s.save(custom("reviewer"));
+    s.save(custom("reviewer", { scope: "project", projectCwd, description: "Project shadow" }));
+    s.save(custom("global-lead", { supportsSubagents: true, allowedAgents: ["reviewer"] }));
+    s.save(custom("project-lead", {
+      scope: "project",
+      projectCwd,
+      supportsSubagents: true,
+      allowedAgents: ["reviewer"],
+    }));
+
+    writes = 0;
+    s.delete("reviewer", { scope: "project", projectCwd });
+    expect(s.get("global-lead")?.allowedAgents).toEqual(["reviewer"]);
+    expect(s.get("project-lead", projectCwd)?.allowedAgents).toEqual(["reviewer"]);
+    expect(writes).toBe(0);
+
+    s.save(custom("reviewer", { scope: "project", projectCwd, description: "Project shadow" }));
+    writes = 0;
+    s.delete("reviewer", { scope: "global" });
+    expect(s.get("global-lead")?.allowedAgents).toEqual([]);
+    expect(s.get("project-lead", projectCwd)?.allowedAgents).toEqual(["reviewer"]);
+    expect(writes).toBe(1);
+  });
+
   it("only a custom agent can be the default", () => {
     const s = store();
     expect(() => s.setDefault("beam")).toThrow('"beam" is a built-in agent and cannot start project sessions.');

@@ -14,10 +14,19 @@ import { AgentCard } from "@/components/assistant-ui/elements/agent-card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-import { agentAtLocation, agentForWarning, isFirstRun, orderAgents, selectionOfAgent, type AgentsSelection } from "./model.js";
+import {
+  agentAtLocation,
+  agentForWarning,
+  agentsInScope,
+  isFirstRun,
+  selectionOfAgent,
+  type AgentsScopeView,
+  type AgentsSelection,
+} from "./model.js";
 
 export interface AgentsOverviewProps {
   snapshot: AgentsSnapshot;
+  view: AgentsScopeView;
   projectCwd?: string | undefined;
   warnings: readonly AgentWarning[];
   onNew(): void;
@@ -27,11 +36,11 @@ export interface AgentsOverviewProps {
   className?: string | undefined;
 }
 
-export function AgentsOverview({ snapshot, projectCwd, warnings, onNew, onOpen, compact = false, className }: AgentsOverviewProps) {
-  const firstRun = isFirstRun(snapshot, projectCwd);
-  const { custom } = orderAgents(snapshot, projectCwd);
+export function AgentsOverview({ snapshot, view, projectCwd, warnings, onNew, onOpen, compact = false, className }: AgentsOverviewProps) {
+  const firstRun = isFirstRun(snapshot, view, projectCwd);
+  const { custom } = agentsInScope(snapshot, view, projectCwd);
   const linkedWarnings = warnings.flatMap((warning) => {
-    const agent = agentForWarning(snapshot, warning, projectCwd);
+    const agent = agentForWarning(snapshot, warning, view, projectCwd);
     return agent ? [{ warning, agent }] : [];
   });
   const own = custom.filter((agent) => agent.name !== "default");

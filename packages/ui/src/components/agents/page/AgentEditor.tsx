@@ -18,21 +18,25 @@ import {
   type AgentDefinitionInput,
   type AgentIssue,
   type AgentLocation,
-  type AgentSkillRef,
   type AgentWarning,
   type AgentsSnapshot,
-  type ModelCatalogEntry,
-  type ThinkingLevel,
   instructionTemplateIssue,
 } from "@lasercode/protocol";
 import { Bot, Info, MessageSquarePlus, RotateCw, Save, Trash2, Undo2 } from "lucide-react";
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+} from "react";
 
 import { agentDefinitionInputOf, agentDisplayName, agentIssuesByField, defaultAgentDefinitionInput, useAgentsActions } from "@/agents";
 import { AgentCard, type AgentCardFact } from "@/components/assistant-ui/elements/agent-card";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
-import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
-import { ProviderModelPicker } from "@/components/assistant-ui/elements/model-selector";
 import { SettingsToggleRow } from "@/components/assistant-ui/elements/settings-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -41,43 +45,38 @@ import { Popover, PopoverContent, PopoverDescription, PopoverHeader, PopoverTitl
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
-import { useLogicalArrowKeys } from "@/hooks/use-direction";
 import { cn } from "@/lib/utils";
 import { prefersReducedMotion } from "@/motion";
 
 import { DefinitionLocation, DefinitionDestination } from "./DefinitionFileSection.js";
 import { DeleteAgentDialog } from "./dialogs.js";
 import { CheckRow, Hint, IssueNotice, Section, WarningNotice } from "./fields.js";
-import { InstructionTemplateEditor, InstructionTemplateSourceView } from "./InstructionTemplateEditor.js";
+import { InstructionTemplateEditor } from "./InstructionTemplateEditor.js";
+import { AllowedAgentsField, ModelField, ThinkingField } from "./AgentEditorFields.js";
+import { EngineInstructions, SkillsField } from "./AgentEditorResources.js";
 import {
-  THINKING_LABEL,
   checkRange,
   deletability,
   describeModel,
   describeSkills,
   describeStarts,
   describeThinking,
-  groupSkills,
-  missingSkills,
   locationOfAgent,
   modelChoiceId,
-  parseModelChoice,
   projectFolderName,
   sameDefinitionInput,
   sectionDomId,
   sectionOfField,
   shapeAgentName,
-  skillKey,
   startableAgents,
   thinkingLevelsFor,
   toolLabel,
   warningsInSection,
-  SKILL_SCOPE_LABEL,
   type EditorSection,
 } from "./model.js";
 import type { ScopeDraft } from "@/components/settings/ScopeDraftGuard";
 import { useCommittedTargetLifetime } from "@/components/settings/useCommittedTargetLifetime.js";
-import { useEngineInstructions, useModelCatalog, useSkillsListing } from "./use-page-data.js";
+import { useModelCatalog } from "./use-page-data.js";
 
 /** Typing pause before the host is asked to validate. */
 const VALIDATE_DEBOUNCE_MS = 350;
@@ -114,7 +113,7 @@ export interface AgentEditorProps {
   writable?: boolean;
   onDirtyChange(dirty: boolean): void;
   onDraftChange?: ((draft: ScopeDraft | undefined) => void) | undefined;
-  onMutationPending?: ((pending: boolean) => void) | undefined;
+  onMutationPending?: ((operation: symbol, pending: boolean) => void) | undefined;
   onSaved(agent: AgentDefinition): void;
   onDeleted(): void;
   onStartChat(name: string): void;
@@ -133,14 +132,17 @@ export function AgentEditor({ agent, snapshot, destination, seed, routeCwd, sett
   };
   const [base, setBase] = useState<AgentDefinitionInput>(initial);
   const [draft, setDraft] = useState<AgentDefinitionInput>(base);
+  const baseRef = useRef(base);
+  baseRef.current = base;
   const [issues, setIssues] = useState<AgentIssue[]>([]);
   const [saving, setSaving] = useState(false);
   const [serverError, setServerError] = useState<{ message: string; action: "save" | "default" }>();
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleteError, setDeleteError] = useState<string>();
   const [deleting, setDeleting] = useState(false);
   const [settingDefault, setSettingDefault] = useState(false);
-  useEffect(() => () => onMutationPending?.(false), [onMutationPending]);
   const formRef = useRef<HTMLFormElement>(null);
+  const mutation = useRef<symbol | undefined>(undefined);
   const target = useCommittedTargetLifetime(`${agent ? "saved" : "new"}:${destination.scope}:${destination.scope === "project" ? destination.projectCwd : ""}:${agent?.name ?? ""}`);
 
   // A save elsewhere (another view, the host) moved the stored definition:
@@ -197,14 +199,16 @@ export function AgentEditor({ agent, snapshot, destination, seed, routeCwd, sett
     if (saving) return false;
     const lease = target.capture();
     if (!lease) return false;
+    const operation = Symbol("save-agent");
+    mutation.current = operation;
+    onMutationPending?.(operation, true);
     setServerError(undefined);
     const fresh = await validate(draft);
-    if (!target.isCurrent(lease) || (fresh && fresh.length > 0)) return false;
+    if (mutation.current !== operation || !target.isCurrent(lease) || (fresh && fresh.length > 0)) return false;
     setSaving(true);
-    onMutationPending?.(true);
     try {
       const saved = await agents.save(draft, agent?.name ?? null);
-      if (!target.isCurrent(lease)) return false;
+      if (mutation.current !== operation || !target.isCurrent(lease)) return false;
       const next = agentDefinitionInputOf(saved);
       setBase(next);
       setDraft(next);
@@ -212,7 +216,7 @@ export function AgentEditor({ agent, snapshot, destination, seed, routeCwd, sett
       onSaved(saved);
       return true;
     } catch (error) {
-      if (!target.isCurrent(lease)) return false;
+      if (mutation.current !== operation || !target.isCurrent(lease)) return false;
       const carried = issuesOf(error);
       if (carried && carried.length > 0) {
         setIssues(carried);
@@ -220,20 +224,26 @@ export function AgentEditor({ agent, snapshot, destination, seed, routeCwd, sett
         // The transport keeps only the message; ask once more so a field-level
         // refusal still lands at its field rather than as a sentence.
         const again = await validate(draft);
-        if (target.isCurrent(lease) && (!again || again.length === 0)) setServerError({ message: messageOf(error), action: "save" });
+        if (
+          mutation.current === operation
+          && target.isCurrent(lease)
+          && (!again || again.length === 0)
+        ) {
+          setServerError({ message: messageOf(error), action: "save" });
+        }
       }
       return false;
     } finally {
-      onMutationPending?.(false);
-      if (target.isCurrent(lease)) setSaving(false);
+      onMutationPending?.(operation, false);
+      if (mutation.current === operation && target.isCurrent(lease)) setSaving(false);
     }
   }, [agent?.name, agents, draft, onMutationPending, onSaved, saving, target, validate]);
 
   const discardDraft = useCallback(() => {
-    setDraft(base);
+    setDraft(baseRef.current);
     setIssues([]);
     setServerError(undefined);
-  }, [base]);
+  }, []);
   const guardedDraft = useMemo<ScopeDraft | undefined>(() => dirty ? {
     id: `agent:${destination.scope}:${destination.scope === "project" ? destination.projectCwd : "global"}:${agent?.name ?? "new"}`,
     label: `${agent ? agentDisplayName(agent.name) : "New agent"} changes`,
@@ -312,16 +322,21 @@ export function AgentEditor({ agent, snapshot, destination, seed, routeCwd, sett
     if (!agent) return;
     const lease = target.capture();
     if (!lease) return;
+    const operation = Symbol("delete-agent");
+    mutation.current = operation;
+    onMutationPending?.(operation, true);
     setDeleting(true);
-    onMutationPending?.(true);
+    setDeleteError(undefined);
     try {
       await agents.remove(agent.name, locationOfAgent(agent));
-      if (!target.isCurrent(lease)) return;
+      if (mutation.current !== operation || !target.isCurrent(lease)) return;
       setConfirmDelete(false);
       onDeleted();
+    } catch (error) {
+      if (mutation.current === operation && target.isCurrent(lease)) setDeleteError(messageOf(error));
     } finally {
-      onMutationPending?.(false);
-      if (target.isCurrent(lease)) setDeleting(false);
+      onMutationPending?.(operation, false);
+      if (mutation.current === operation && target.isCurrent(lease)) setDeleting(false);
     }
   };
 
@@ -666,299 +681,14 @@ export function AgentEditor({ agent, snapshot, destination, seed, routeCwd, sett
           name={agentDisplayName(agent.name)}
           open={confirmDelete}
           busy={deleting}
-          onOpenChange={setConfirmDelete}
+          error={deleteError}
+          onOpenChange={(open) => {
+            setConfirmDelete(open);
+            if (!open) setDeleteError(undefined);
+          }}
           onConfirm={() => void remove()}
         />
       ) : null}
     </form>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Product default instructions, read-only until customised
-// ---------------------------------------------------------------------------
-
-function EngineInstructions({ draft, cwd, onCustomize }: { draft: AgentDefinitionInput; cwd: string | undefined; onCustomize(text: string): void }) {
-  const engine = useEngineInstructions(cwd, cwd !== undefined);
-  return (
-    <div data-slot="engine-instructions" className="flex flex-col gap-2">
-      <div className="flex items-center gap-2">
-        <Badge variant="outline">Using {PRODUCT_DISPLAY_NAME}'s default instructions</Badge>
-        <Hint>Customize to make this prompt your own.</Hint>
-      </div>
-      {cwd === undefined ? (
-        <Hint>Open a project to read {PRODUCT_DISPLAY_NAME}'s default instructions.</Hint>
-      ) : engine.error !== undefined ? (
-        <ErrorState title={`Couldn’t read ${PRODUCT_DISPLAY_NAME}'s default instructions`} detail={engine.error} onRetry={engine.reload} />
-      ) : engine.data === undefined ? (
-        <GenerationLoader label={`Loading ${PRODUCT_DISPLAY_NAME}'s default instructions`} layout="inline" />
-      ) : (
-        <InstructionTemplateSourceView
-          target="agent"
-          value={engine.data}
-          ariaLabel={`${PRODUCT_DISPLAY_NAME}'s default instructions highlighted source`}
-          context={{
-            agentName: draft.name,
-            agentDescription: draft.description,
-            model: draft.model,
-            thinkingLevel: draft.thinkingLevel,
-            provenance: "Current agent setting",
-          }}
-          className="max-h-80 min-h-0 text-xs text-ink-2"
-        />
-      )}
-      <div>
-        <Button type="button" variant="secondary" size="sm" disabled={engine.data === undefined} onClick={() => onCustomize(engine.data ?? "")}>
-          Customize
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Model and thinking
-// ---------------------------------------------------------------------------
-
-function ModelField({
-  value,
-  models,
-  loading,
-  error,
-  onRetry,
-  onChange,
-}: {
-  value: AgentDefinitionInput["model"];
-  models: readonly ModelCatalogEntry[];
-  loading: boolean;
-  error: string | undefined;
-  onRetry(): void;
-  onChange(model: AgentDefinitionInput["model"]): void;
-}) {
-  const [choosing, setChoosing] = useState(value !== null);
-  useEffect(() => {
-    if (value !== null) setChoosing(true);
-  }, [value]);
-  const id = useId();
-  const picked = value ? modelChoiceId(value) : undefined;
-  return (
-    <div className="flex flex-col gap-2">
-      <SettingsToggleRow
-        id={id}
-        label="Follow the default model"
-        detail={choosing ? "Off: this agent always uses the model chosen below." : "On: this agent uses the model new sessions use."}
-        checked={!choosing}
-        onCheckedChange={(follow) => {
-          setChoosing(!follow);
-          if (follow) onChange(null);
-        }}
-      />
-      {choosing ? (
-        <div className="flex flex-col gap-1.5">
-          <ProviderModelPicker
-            models={models}
-            {...(picked !== undefined ? { value: picked } : {})}
-            loading={loading}
-            {...(error !== undefined ? { error } : {})}
-            placeholder="Choose a model"
-            onValueChange={(next) => {
-              const choice = parseModelChoice(next);
-              if (choice) onChange(choice);
-            }}
-          />
-          {error !== undefined ? (
-            <ErrorState title="Couldn’t load the model list" detail={error} onRetry={onRetry} />
-          ) : value === null ? (
-            <Hint>No model chosen yet: the default applies until you pick one.</Hint>
-          ) : null}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function ThinkingField({ value, levels, onChange }: { value: ThinkingLevel | null; levels: readonly ThinkingLevel[]; onChange(level: ThinkingLevel | null): void }) {
-  const logicalKey = useLogicalArrowKeys();
-  const options: Array<{ id: string; level: ThinkingLevel | null; label: string }> = [
-    { id: "default", level: null, label: "Follow the default" },
-    ...levels.map((level) => ({ id: level, level, label: THINKING_LABEL[level] })),
-  ];
-  const current = options.findIndex((option) => option.level === value);
-  const move = (event: KeyboardEvent<HTMLDivElement>) => {
-    const key = logicalKey(event.key);
-    const delta = key === "ArrowRight" || key === "ArrowDown" ? 1 : key === "ArrowLeft" || key === "ArrowUp" ? -1 : 0;
-    if (delta === 0) return;
-    event.preventDefault();
-    const next = options[(Math.max(current, 0) + delta + options.length) % options.length];
-    if (!next) return;
-    onChange(next.level);
-    (event.currentTarget.querySelector<HTMLElement>(`[data-level="${next.id}"]`))?.focus();
-  };
-  return (
-    <div role="radiogroup" aria-label="Thinking level" className="flex flex-wrap gap-1" onKeyDown={move}>
-      {options.map((option, i) => {
-        const selected = i === (current === -1 ? 0 : current);
-        return (
-          <button
-            key={option.id}
-            type="button"
-            role="radio"
-            aria-checked={selected}
-            data-level={option.id}
-            tabIndex={selected ? 0 : -1}
-            onClick={() => onChange(option.level)}
-            className={cn(
-              "inline-flex h-8 items-center rounded-md border px-2.5 text-sm leading-none select-none pointer-coarse:h-11",
-              "transition-[background-color,color,border-color] duration-(--motion-instant) outline-none active:translate-y-px",
-              "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-live",
-              selected ? "border-live bg-[color-mix(in_oklab,var(--live)_12%,transparent)] text-live" : "border-line text-ink-2 hover:bg-surface-2 hover:text-ink",
-            )}
-          >
-            {option.label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Allowed agents
-// ---------------------------------------------------------------------------
-
-function AllowedAgentsField({
-  value,
-  options,
-  self,
-  flagged,
-  onChange,
-}: {
-  value: readonly string[];
-  options: readonly AgentDefinition[];
-  self: string | undefined;
-  flagged: ReadonlySet<string>;
-  onChange(next: string[]): void;
-}) {
-  const unknown = value.filter((name) => !options.some((option) => option.name === name));
-  const toggle = (name: string, on: boolean) => onChange(on ? [...value.filter((n) => n !== name), name] : value.filter((n) => n !== name));
-  return (
-    <div role="group" aria-label="Agents it may start" data-slot="allowed-agents" className="flex flex-col gap-0.5">
-      {unknown.map((name) => (
-        <div key={name} data-slot="allowed-agent-missing" className="flex items-center gap-2 rounded-md bg-[color-mix(in_oklab,var(--attention)_10%,transparent)] px-2 py-1.5">
-          <span className="min-w-0 flex-1">
-            <span className="typed text-ink">{name}</span>
-            <span className="block text-xs text-ink-2">No agent has this name any more. Remove it, or create the agent again.</span>
-          </span>
-          <Button type="button" variant="ghost" size="xs" onClick={() => toggle(name, false)}>
-            Remove
-          </Button>
-        </div>
-      ))}
-      {options.length === 0 ? (
-        <Hint>No other agents to start yet. Create one and it appears here.</Hint>
-      ) : (
-        options.map((option) => (
-          <CheckRow
-            key={option.name}
-            name={`allowed:${option.name}`}
-            checked={value.includes(option.name)}
-            flagged={flagged.has(option.name)}
-            label={option.name === self ? `${agentDisplayName(option.name)} · Same agent` : agentDisplayName(option.name)}
-            detail={option.name === self ? "Starts another instance with these same settings." : option.description || option.name}
-            onChange={(event) => toggle(option.name, event.target.checked)}
-          />
-        ))
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Skills
-// ---------------------------------------------------------------------------
-
-function SkillsField({
-  cwd,
-  value,
-  flaggedNames,
-  flaggedIndices,
-  onChange,
-}: {
-  cwd: string | undefined;
-  value: readonly AgentSkillRef[];
-  flaggedNames: ReadonlySet<string>;
-  flaggedIndices: ReadonlySet<number>;
-  onChange(next: AgentSkillRef[]): void;
-}) {
-  const listing = useSkillsListing(cwd, cwd !== undefined);
-  const groups = useMemo(() => groupSkills(listing.data), [listing.data]);
-  const missing = useMemo(() => missingSkills(value, listing.data), [value, listing.data]);
-  const chosenKeys = useMemo(() => new Set(value.map(skillKey)), [value]);
-  const flaggedKeys = useMemo(() => {
-    const keys = new Set<string>();
-    value.forEach((skill, i) => {
-      if (flaggedNames.has(skill.name) || flaggedIndices.has(i)) keys.add(skillKey(skill));
-    });
-    return keys;
-  }, [value, flaggedNames, flaggedIndices]);
-  const toggle = (skill: AgentSkillRef, on: boolean) =>
-    onChange(on ? [...value.filter((s) => skillKey(s) !== skillKey(skill)), { name: skill.name, path: skill.path, scope: skill.scope }] : value.filter((s) => skillKey(s) !== skillKey(skill)));
-
-  if (cwd === undefined) return <Hint>Open a project to see which skills it offers.</Hint>;
-  if (listing.error !== undefined) return <ErrorState title="Couldn’t list the skills" detail={listing.error} onRetry={listing.reload} />;
-  if (listing.data === undefined) return <GenerationLoader label="Looking for skills" layout="inline" />;
-
-  return (
-    <div data-slot="skills-picker" className="flex flex-col gap-3">
-      {missing.length > 0 ? (
-        <ul aria-label="Skills that could not be found" className="flex flex-col gap-1">
-          {missing.map((skill) => (
-            <li
-              key={skillKey(skill)}
-              data-slot="skill-missing"
-              data-skill={skill.name}
-              className="flex items-center gap-2 rounded-md bg-[color-mix(in_oklab,var(--attention)_10%,transparent)] px-2 py-1.5"
-            >
-              <span className="min-w-0 flex-1">
-                <span className="text-sm text-ink">{skill.name}</span>
-                <span className="typed block truncate text-ink-3" title={skill.path}>
-                  {skill.path}
-                </span>
-                <span className="block text-xs text-attention">Not found any more. Choose it again or remove it.</span>
-              </span>
-              <Button type="button" variant="ghost" size="xs" onClick={() => toggle(skill, false)}>
-                Remove
-              </Button>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      {groups.length === 0 ? (
-        <Hint>No skills found in this project or globally. Add a skill folder and it appears here.</Hint>
-      ) : (
-        groups.map((group) => (
-          <div key={group.scope} role="group" aria-label={SKILL_SCOPE_LABEL[group.scope]} className="flex flex-col gap-0.5">
-            <span className="eyebrow px-2">{SKILL_SCOPE_LABEL[group.scope]}</span>
-            {group.skills.map((skill) => (
-              <CheckRow
-                key={skillKey(skill)}
-                name={`skill:${skill.path}`}
-                data-skill={skill.name}
-                checked={chosenKeys.has(skillKey(skill))}
-                flagged={flaggedKeys.has(skillKey(skill))}
-                label={skill.name}
-                detail={skill.path}
-                onChange={(event) => toggle(skill, event.target.checked)}
-              />
-            ))}
-          </div>
-        ))
-      )}
-      {listing.data.roots.every((root) => !root.exists) ? <Hint>None of the skill folders exist yet.</Hint> : null}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Timeout
-// ---------------------------------------------------------------------------

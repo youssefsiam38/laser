@@ -6,7 +6,6 @@ export {
   RUN_STATUS_LABEL,
   RUN_STATUS_TONE,
   agentByName,
-  agentByNameForProject,
   agentDefinitionInputOf,
   agentDisplayName,
   agentIssueRoot,

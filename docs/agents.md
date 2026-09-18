@@ -35,7 +35,7 @@ characters. There is no separate agent id, type or profile name.
 | Agents page field | Protocol field | Notes |
 | --- | --- | --- |
 | Name | `name` | Comes from the Markdown filename; lower-case and unique within its scope. A project agent may shadow a global one of the same name. Built-in names (`beam`, `chat`, `namer`), current names and global historical rename aliases are refused |
-| Scope | `scope`, `projectCwd`, `path` | `global` lives under `<stateDir>/agents/`; `project` lives under a trusted project's `.laser/agents/`. `projectCwd` is canonical and present only for project agents; the host reports the absolute `path` |
+| Scope | `scope`, `projectCwd`, `path` | `global` lives under `<stateDir>/agents/`; `project` lives under a trusted project's `.laser/agents/`. A project that ships this directory requires the person's trust before its definitions are read; the first definition written through Laser records trust because the person authored it. `projectCwd` is canonical and present only for project agents; the host reports the absolute `path` |
 | Description | `description` | ≤ 300 chars. Answers "when should another agent start this one?" — it is the compact catalog text |
 | Instructions | `instructions`, `engineInstructions`, `excludeCoreInstructions` | The Markdown body, byte-preserved and interpreted as a Handlebars template, answers "how should this agent work?" Every custom agent first gets the shared `packages/worker/src/agents/core-instructions.md` unless `excludeCoreInstructions` is on; built-ins never do. The shipped `default` agent starts with `engineInstructions: true`: Laser's own neutral coding prompt, readable through `agents/engine-instructions`; a person may replace it with their own text |
 | Model | `model` | `{ provider, id }` or `null` to follow the configured default model |
@@ -51,8 +51,11 @@ names (`description`, `model` as `provider/id` or null, `thinkingLevel`,
 `engineInstructions`, `excludeCoreInstructions`, `createdAt`, `updatedAt`) and
 the text after the closing `---` line is `instructions` verbatim. Omitted
 booleans are false and omitted lists are empty. The host watches global files
-and every currently trusted project's files; an invalid hand edit produces a
-`file` warning and leaves the last valid definition running until it is fixed.
+and every currently trusted project's files. A registered project with no
+trust-gated content remains a valid destination; its first definition written
+through Laser records trust before the file is created. An untrusted project is
+neither read nor written. An invalid hand edit produces a `file` warning and
+leaves the last valid definition running until it is fixed.
 
 The Agents page uses Settings' single explicit target. **Global** shows global
 custom definitions plus built-ins and owns the default and harness policy;
@@ -730,7 +733,7 @@ result records `NamerState { status, model, candidates, qualifiedAt, reason }`;
 | Where | What |
 | --- | --- |
 | `<stateDir>/agents/<name>.md` | one global custom definition: YAML frontmatter plus the byte-preserved instructions body. The seeded `default` is global |
-| `<project>/.laser/agents/<name>.md` | one project custom definition, read and watched only while the registry lists that canonical project root as trusted; it shadows a same-named global definition for that project |
+| `<project>/.laser/agents/<name>.md` | one project custom definition. The directory is trust-gated: shipped definitions are read and watched only after the registry lists that canonical project root as trusted; the first definition a person writes through Laser records that trust before creating the file. An untrusted project is neither read nor written. A project definition shadows a same-named global definition for that project |
 | `<stateDir>/agents.json` | version 2 metadata only: `defaultAgent` (always global), policy, revision, durable global rename aliases, and every built-in's instruction override and model choice. On first load, version 1 definitions migrate to Markdown files after an exact `agents.json.v1.bak` is made; existing Markdown names win |
 | `<stateDir>/agent-runs.json` | every `AgentRun` the host has heard of, fed by `agents/run` notifications; terminal runs kept 30 days and at most 500 per project; non-terminal runs are failed on host load and on worker loss |
 | session custom entry `lasercode/agent` (`SESSION_AGENT_ENTRY_TYPE`) | the first custom entry of every agent-started or agent-defined session: `SessionAgentRecord { agentName, kind, subagentName, parentPath, parentSessionId, rootPath, runId, worktree? }` — `worktree` is absent for a child started with `worktree: false`, and that absence is what a reloaded session reads back — so a catalog that only reads files can attribute it |

@@ -212,15 +212,6 @@ export function customAgentsForProject(snapshot: AgentsSnapshot | null | undefin
   return effectiveAgents(snapshot?.agents ?? [], projectCwd).filter((agent) => !isBuiltinAgent(agent));
 }
 
-/** The effective definition named `name` in the current project view. */
-export function agentByNameForProject(
-  snapshot: AgentsSnapshot | null | undefined,
-  name: string,
-  projectCwd: string | undefined,
-): AgentDefinition | undefined {
-  return effectiveAgents(snapshot?.agents ?? [], projectCwd).find((agent) => agent.name === name);
-}
-
 const EMPTY_WARNINGS: readonly AgentWarning[] = Object.freeze([]);
 
 /** Periodic-validation warnings for one definition, oldest first. */

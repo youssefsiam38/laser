@@ -170,7 +170,7 @@ it("saves the draft snapshot captured by the original target", async () => {
   expect(saved).toEqual(["global"]);
 });
 
-it("keeps drafts on same-environment reconnect and abandons them on environment replacement", async () => {
+it("keeps drafts on same-environment reconnect and preserves them on environment replacement", async () => {
   const discard = vi.fn();
   await mount([{ id: "mcp", label: "MCP server", discard }]);
 
@@ -178,7 +178,7 @@ it("keeps drafts on same-environment reconnect and abandons them on environment 
   expect(discard).not.toHaveBeenCalled();
 
   await act(async () => { deviceStore.activate(testDescriptor({ environmentKey: OTHER_ENVIRONMENT_KEY })); });
-  expect(discard).toHaveBeenCalledOnce();
+  expect(discard).not.toHaveBeenCalled();
 });
 
 it("lets the newer scope request win while the first confirmation is open", async () => {

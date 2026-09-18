@@ -81,10 +81,11 @@ export function ScopeDraftGuard({
       }
       if (next === environment) return;
       environment = next;
+      // Environment activation never means “discard”. Refuse an in-flight
+      // navigation decision, but preserve draft state for the owning screen to
+      // present or restore explicitly.
       const request = pendingRef.current;
       if (request) settle(request, false);
-      const abandoned = [...draftsRef.current];
-      if (abandoned.length > 0) void Promise.allSettled(abandoned.map((draft) => draft.discard()));
     });
   }, [settle]);
 

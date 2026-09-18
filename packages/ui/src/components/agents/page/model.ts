@@ -122,30 +122,57 @@ export function sectionOfField(field: string): EditorSection {
 // ---------------------------------------------------------------------------
 
 export type AgentMark = "default" | "custom" | BuiltinAgentName;
+export type AgentsScopeView = "global" | "project" | "effective";
 
 export function agentMark(agent: Pick<AgentDefinition, "name" | "kind">): AgentMark {
   if (isBuiltinAgentName(agent.name)) return agent.name;
   return agent.name === DEFAULT_AGENT_NAME ? "default" : "custom";
 }
 
-/** The rows of the list: effective agents for this project, then the built-ins in their fixed order. */
-export function orderAgents(snapshot: AgentsSnapshot | null | undefined, projectCwd?: string): { custom: AgentDefinition[]; builtin: AgentDefinition[] } {
+export function compareAgents(
+  snapshot: Pick<AgentsSnapshot, "defaultAgent"> | null | undefined,
+  left: AgentDefinition,
+  right: AgentDefinition,
+): number {
+  if (left.scope === "global" && left.name === snapshot?.defaultAgent) return -1;
+  if (right.scope === "global" && right.name === snapshot?.defaultAgent) return 1;
+  if (left.name === DEFAULT_AGENT_NAME) return -1;
+  if (right.name === DEFAULT_AGENT_NAME) return 1;
+  return left.name.localeCompare(right.name);
+}
+
+/** The one scope projection used by the list, overview, counts and warnings. */
+export function agentsInScope(
+  snapshot: AgentsSnapshot | null | undefined,
+  view: AgentsScopeView,
+  projectCwd?: string,
+): { custom: AgentDefinition[]; builtin: AgentDefinition[] } {
   const all = snapshot?.agents ?? [];
-  const custom = customAgentsForProject(snapshot, projectCwd)
-    .sort((a, b) => {
-      if (a.name === snapshot?.defaultAgent) return -1;
-      if (b.name === snapshot?.defaultAgent) return 1;
-      if (a.name === DEFAULT_AGENT_NAME) return -1;
-      if (b.name === DEFAULT_AGENT_NAME) return 1;
-      return a.name.localeCompare(b.name);
-    });
-  const builtin = BUILTIN_AGENT_NAMES.map((name) => all.find((agent) => agent.name === name)).filter((agent): agent is AgentDefinition => agent !== undefined);
+  const sort = (agents: AgentDefinition[]) => agents.sort((left, right) => compareAgents(snapshot, left, right));
+  const globals = sort(all.filter((agent) => agent.kind === "custom" && agent.scope === "global"));
+  const projects = sort(all.filter(
+    (agent) => agent.kind === "custom" && agent.scope === "project" && agent.projectCwd === projectCwd,
+  ));
+  const custom = view === "global"
+    ? globals
+    : view === "project"
+      ? [...projects, ...globals]
+      : sort(customAgentsForProject(snapshot, projectCwd));
+  const builtin = view === "global"
+    ? BUILTIN_AGENT_NAMES
+        .map((name) => all.find((agent) => agent.name === name))
+        .filter((agent): agent is AgentDefinition => agent !== undefined)
+    : [];
   return { custom, builtin };
 }
 
-/** True when the person has not made an agent of their own yet. */
-export function isFirstRun(snapshot: AgentsSnapshot | null | undefined, projectCwd?: string): boolean {
-  return orderAgents(snapshot, projectCwd).custom.every((agent) => agent.name === DEFAULT_AGENT_NAME);
+/** True when the person has not made an agent of their own yet in this scope. */
+export function isFirstRun(
+  snapshot: AgentsSnapshot | null | undefined,
+  view: AgentsScopeView,
+  projectCwd?: string,
+): boolean {
+  return agentsInScope(snapshot, view, projectCwd).custom.every((agent) => agent.name === DEFAULT_AGENT_NAME);
 }
 
 /**
@@ -157,8 +184,11 @@ export function startableAgents(
   snapshot: AgentsSnapshot | null | undefined,
   owner?: Pick<AgentDefinitionInput, "scope" | "projectCwd">,
 ): AgentDefinition[] {
-  return orderAgents(snapshot, owner?.scope === "project" ? owner.projectCwd : undefined).custom
-    .filter((candidate) => owner === undefined || canReferenceAgent(owner, candidate));
+  return agentsInScope(
+    snapshot,
+    owner?.scope === "project" ? "effective" : "global",
+    owner?.scope === "project" ? owner.projectCwd : undefined,
+  ).custom.filter((candidate) => owner === undefined || canReferenceAgent(owner, candidate));
 }
 
 const normalizedPath = (path: string): string => path.replaceAll("\\", "/").replace(/\/+$/, "");
@@ -172,47 +202,64 @@ export function projectFolderName(projectCwd: string): string {
 /** Whether an unlinked file warning belongs in the current global/project view. */
 export function fileWarningIsVisible(
   warning: AgentWarning,
-  projectCwd: string | undefined,
-  snapshot?: AgentsSnapshot | null,
+  snapshot: AgentsSnapshot | null | undefined,
+  view: AgentsScopeView,
+  projectCwd?: string,
+  knownProjectCwds: readonly string[] = [],
 ): boolean {
   if (warning.field !== "file") return false;
   if (!warning.path) return true;
 
-  const visible = orderAgents(snapshot, projectCwd);
+  const visible = agentsInScope(snapshot, view, projectCwd);
   if ([...visible.custom, ...visible.builtin].some((agent) => agent.path === warning.path)) return true;
-  // A known definition outside the effective catalog is shadowed or belongs
-  // to another project, so its warning must not attach to the visible twin.
+  // A known definition outside this exact scope projection must not attach to
+  // a same-name source that happens to be visible here.
   if (snapshot?.agents.some((agent) => agent.path === warning.path)) return false;
 
-  // A broken file has no loaded definition. Infer only from the project roots
-  // the snapshot already carries, rather than guessing from a directory name.
-  if (projectCwd && pathIsWithin(warning.path, projectCwd)) return true;
-  const belongsToKnownProject = snapshot?.agents.some(
-    (agent) => agent.scope === "project" && agent.projectCwd !== undefined && pathIsWithin(warning.path!, agent.projectCwd),
-  ) ?? false;
-  return !belongsToKnownProject;
-}
-
-/** Warnings that can be acted on from the current catalog, including broken files with no definition. */
-export function visibleAgentWarnings(snapshot: AgentsSnapshot | null | undefined, projectCwd: string | undefined): AgentWarning[] {
-  if (!snapshot) return [];
-  return snapshot.warnings.filter((warning) =>
-    agentForWarning(snapshot, warning, projectCwd) !== undefined
-      || (warning.field === "file" && fileWarningIsVisible(warning, projectCwd, snapshot)),
+  const projectRoots = new Set([
+    ...knownProjectCwds,
+    ...(snapshot?.agents
+      .filter((agent) => agent.scope === "project" && agent.projectCwd !== undefined)
+      .map((agent) => agent.projectCwd!) ?? []),
+  ]);
+  const owningProject = [...projectRoots].find((root) => pathIsWithin(warning.path!, root));
+  if (owningProject) return view !== "global" && owningProject === projectCwd;
+  if (view !== "effective") return true;
+  return !snapshot?.agents.some(
+    (agent) => agent.kind === "custom"
+      && agent.scope === "project"
+      && agent.projectCwd === projectCwd
+      && agent.name === warning.agentName,
   );
 }
 
-/** The loaded definition a warning belongs to, if there is one in this view. */
+/** Warnings that can be acted on from this exact scope projection. */
+export function visibleAgentWarnings(
+  snapshot: AgentsSnapshot | null | undefined,
+  view: AgentsScopeView,
+  projectCwd?: string,
+  knownProjectCwds: readonly string[] = [],
+): AgentWarning[] {
+  if (!snapshot) return [];
+  return snapshot.warnings.filter((warning) =>
+    agentForWarning(snapshot, warning, view, projectCwd) !== undefined
+      || fileWarningIsVisible(warning, snapshot, view, projectCwd, knownProjectCwds),
+  );
+}
+
+/** The loaded definition a warning belongs to, if there is one in this scope. */
 export function agentForWarning(
   snapshot: AgentsSnapshot | null | undefined,
   warning: AgentWarning,
-  projectCwd: string | undefined,
+  view: AgentsScopeView,
+  projectCwd?: string,
 ): AgentDefinition | undefined {
   if (!snapshot) return undefined;
-  const visible = orderAgents(snapshot, projectCwd);
+  const visible = agentsInScope(snapshot, view, projectCwd);
   const agents = [...visible.custom, ...visible.builtin];
   if (warning.path) return agents.find((agent) => agent.path === warning.path);
-  return agents.find((agent) => agent.name === warning.agentName);
+  const named = agents.filter((agent) => agent.name === warning.agentName);
+  return named.length === 1 ? named[0] : undefined;
 }
 
 // ---------------------------------------------------------------------------

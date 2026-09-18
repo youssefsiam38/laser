@@ -15,6 +15,7 @@ import { pathToFileURL } from "node:url";
 import WebSocket from "ws";
 import type { JsonRpcMessage, SessionState, SessionUpdateParams } from "@lasercode/protocol";
 import { HostServer, defaultWorkerMain } from "../src/index.js";
+import { serializeAgentFile } from "../src/agents/agent-file.js";
 
 const REPLY = ["Hi ", "from ", "host"];
 
@@ -535,12 +536,44 @@ await import(${JSON.stringify(pathToFileURL(defaultWorkerMain()).href)});
     const client = new Client();
     await client.connect(url);
     const project = join(base, "project");
+    const shippedProject = join(base, "shipped-project");
     try {
+      mkdirSync(join(shippedProject, PROJECT_DIR_NAME, "agents"), { recursive: true });
+      writeFileSync(join(shippedProject, PROJECT_DIR_NAME, "agents", "shipped.md"), serializeAgentFile({
+        name: "shipped",
+        kind: "custom",
+        scope: "project",
+        projectCwd: shippedProject,
+        path: join(shippedProject, PROJECT_DIR_NAME, "agents", "shipped.md"),
+        description: "Shipped definition",
+        instructions: "Inspect this project.",
+        engineInstructions: false,
+        excludeCoreInstructions: false,
+        model: null,
+        thinkingLevel: null,
+        supportsSubagents: false,
+        allowedAgents: [],
+        scopedSkills: false,
+        skills: [],
+        createdAt: "2026-09-08T00:00:00.000Z",
+        updatedAt: "2026-09-08T00:00:00.000Z",
+      }));
+      await client.request("pi/project/add", { cwd: shippedProject });
+      expect((await client.request<{ projects: Array<{ cwd: string; trust: string }> }>("pi/project/list", {})).projects)
+        .toContainEqual(expect.objectContaining({ cwd: shippedProject, trust: "unknown" }));
+      expect((await client.request<{ agents: Array<{ name: string }> }>("agents/list", {})).agents.some((agent) => agent.name === "shipped")).toBe(false);
+      await expect(client.request("agents/save", {
+        agent: { name: "blocked", scope: "project", projectCwd: shippedProject, description: "Blocked", instructions: "Blocked.", engineInstructions: false, excludeCoreInstructions: false, model: null, thinkingLevel: null, supportsSubagents: false, allowedAgents: [], scopedSkills: false, skills: [] },
+        originalName: null,
+      })).rejects.toThrow("Choose Trust in Settings");
+      await client.request("pi/project/trust", { cwd: shippedProject, trusted: true });
+      expect((await client.request<{ agents: Array<{ name: string }> }>("agents/list", {})).agents.some((agent) => agent.name === "shipped")).toBe(true);
+
       // The workspaces live under the host's own state dir, and are not projects.
       expect(existsSync(join(base, "state", "workspaces", "beam"))).toBe(true);
       expect(existsSync(join(base, "state", "workspaces", "chat"))).toBe(true);
       const listed = await client.request<{ agents: Array<{ name: string; kind: string }>; defaultAgent: string; workspaces: { beam: string; chat: string } }>("agents/list", {});
-      expect(listed.agents.map((a) => `${a.name}:${a.kind}`)).toEqual(["default:custom", "beam:builtin", "chat:builtin", "namer:builtin"]);
+      expect(listed.agents.map((a) => `${a.name}:${a.kind}`)).toEqual(["default:custom", "shipped:custom", "beam:builtin", "chat:builtin", "namer:builtin"]);
       expect(listed.workspaces).toEqual({ beam: join(base, "state", "workspaces", "beam"), chat: join(base, "state", "workspaces", "chat") });
       await expect(client.request("agents/sync", { snapshot: listed })).rejects.toThrow("The app sends this to its own workers.");
 
@@ -556,6 +589,8 @@ await import(${JSON.stringify(pathToFileURL(defaultWorkerMain()).href)});
       // The real worker is primed with the definitions before its first
       // answer; whether or not it knows the method yet, it still runs sessions.
       await client.request("pi/project/add", { cwd: project });
+      expect((await client.request<{ projects: Array<{ cwd: string; trust: string }> }>("pi/project/list", {})).projects)
+        .toContainEqual(expect.objectContaining({ cwd: project, trust: "not_required" }));
       const { state } = await client.request<{ state: SessionState }>("session/new", { cwd: project });
       expect(state.cwd).toBe(project);
       const projectSaved = await client.request<{ snapshot: { agents: Array<{ name: string; scope: string; projectCwd?: string }> } }>("agents/save", {
@@ -563,6 +598,12 @@ await import(${JSON.stringify(pathToFileURL(defaultWorkerMain()).href)});
         originalName: null,
       });
       expect(projectSaved.snapshot.agents.filter((agent) => agent.name === "reviewer")).toHaveLength(2);
+      expect((await client.request<{ projects: Array<{ cwd: string; trust: string }> }>("pi/project/list", {})).projects)
+        .toContainEqual(expect.objectContaining({ cwd: project, trust: "trusted" }));
+      const storedProjects = JSON.parse(readFileSync(join(base, "state", "projects.json"), "utf8")) as {
+        projects: Record<string, { trust?: string }>;
+      };
+      expect(storedProjects.projects[project]?.trust).toBe("trusted");
       const afterProjectDelete = await client.request<{ snapshot: { agents: Array<{ name: string; scope: string }> } }>("agents/delete", {
         name: "reviewer",
         location: { scope: "project", projectCwd: project },
@@ -572,7 +613,7 @@ await import(${JSON.stringify(pathToFileURL(defaultWorkerMain()).href)});
       ]);
       expect(await client.request("agents/runs/list", { path: state.path })).toEqual({ runs: [] });
       const projects = await client.request<{ projects: Array<{ cwd: string }> }>("pi/project/list", {});
-      expect(projects.projects.map((p) => p.cwd)).toEqual([project]);
+      expect(projects.projects.map((p) => p.cwd).sort()).toEqual([project, shippedProject].sort());
       await expect(client.request("session/new", { cwd: project, agentName: "beam" })).rejects.toThrow(/Beam sessions start in/);
       await expect(client.request("session/new", { cwd: project, agentName: "namer" })).rejects.toThrow(/does not run a session/);
 

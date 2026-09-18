@@ -66,9 +66,9 @@ export function validateAgentInput(input: AgentDefinitionInput, context: Validat
 
   // ---- scope
   if (input.scope === "project") {
-    if (!input.projectCwd) push("projectCwd", "Choose the trusted project this agent belongs to.");
+    if (!input.projectCwd) push("projectCwd", "Choose the project this agent belongs to.");
     else if (!context.trustedProjectCwds.has(canonical(input.projectCwd))) {
-      push("projectCwd", "This agent's project must be open and trusted before its definition can be saved.");
+      push("projectCwd", "Choose Trust in Settings before saving an agent in this project.");
     }
   } else if (input.projectCwd !== undefined) {
     push("projectCwd", "A global agent does not belong to a project. Remove its project folder.");

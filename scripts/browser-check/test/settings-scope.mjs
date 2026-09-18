@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
+import { identity } from '../../identity/identity.mjs';
 
 export default async function settingsScope(check) {
   const { page } = check;
@@ -14,21 +15,21 @@ export default async function settingsScope(check) {
   });
 
   // This case owns both projects. Common fixtures stay untouched.
-  const first = join(check.root, 'settings-scope-project-one');
-  const second = join(check.root, 'settings-scope-project-two');
+  const caseSuffix = `${check.state.width}-${check.state.theme}-${check.state.touch ? 'touch' : 'pointer'}`;
+  const first = join(check.root, `settings-scope-project-one-${caseSuffix}`);
+  const second = join(check.root, `settings-scope-project-two-${caseSuffix}`);
   mkdirSync(first, { recursive: true });
   mkdirSync(second, { recursive: true });
-  for (const cwd of [first, second]) {
-    await check.rpc('pi/project/add', { cwd });
-    await check.rpc('pi/project/trust', { cwd, trusted: true, remember: true });
-  }
+  await check.rpc('pi/project/add', { cwd: first });
+  await check.rpc('pi/project/trust', { cwd: first, trusted: true, remember: true });
+  await check.rpc('pi/project/add', { cwd: second });
   const registered = await check.rpc('pi/project/list', {});
-  assert.ok(['trusted', 'not_required'].includes(registered.projects.find(project => project.cwd === second)?.trust),
-    'the Agents fixture project is registered and safe to write');
-  // Distinct resolved values make an out-of-order response visible: the old
-  // project's Goals card is Off, while the selected project's card is On.
+  assert.equal(registered.projects.find(project => project.cwd === second)?.trust, 'not_required',
+    'Project B starts without trust-gated content');
+  // Distinct resolved values make an out-of-order response visible without
+  // pre-trusting Project B: A overrides Goals Off, while B inherits Global On.
+  await check.rpc('feature/set', { id: 'goals', enabled: true, scope: 'global' });
   await check.rpc('feature/set', { id: 'goals', enabled: false, scope: 'project', cwd: first });
-  await check.rpc('feature/set', { id: 'goals', enabled: true, scope: 'project', cwd: second });
   const definition = (name, scope, description) => ({
     name, scope, ...(scope === 'project' ? { projectCwd: second } : {}), description,
     instructions: `Work as ${name}.`, engineInstructions: false, excludeCoreInstructions: false,
@@ -38,17 +39,6 @@ export default async function settingsScope(check) {
   if (!agentsBefore.some(agent => agent.name === 'scope-shared' && agent.scope === 'global')) {
     await check.rpc('agents/save', { agent: definition('scope-shared', 'global', 'Global shared source'), originalName: null });
   }
-  let projectDefinitionSaved = agentsBefore.some(agent => agent.name === 'scope-shared' && agent.scope === 'project' && agent.projectCwd === second);
-  for (let attempt = 0; attempt < 30 && !projectDefinitionSaved; attempt += 1) {
-    try {
-      await check.rpc('agents/save', { agent: definition('scope-shared', 'project', 'Project resolved source'), originalName: null });
-      projectDefinitionSaved = true;
-    } catch (error) {
-      if (!String(error).includes('project must be open and trusted') || attempt === 29) throw error;
-      await new Promise(resolve => setTimeout(resolve, 100));
-    }
-  }
-  assert.equal(projectDefinitionSaved, true, 'trusted Project agent definition became writable');
   if (!agentsBefore.some(agent => agent.name === 'scope-global-only' && agent.scope === 'global')) {
     await check.rpc('agents/save', { agent: definition('scope-global-only', 'global', 'Global source ready to override'), originalName: null });
   }
@@ -335,9 +325,9 @@ export default async function settingsScope(check) {
   await activate(agentsButton);
   assert.equal(await page.getByRole('radio', { name: /^Effective\./ }).getAttribute('aria-checked'), 'true',
     'Agents inherited the one Settings scope');
-  await page.locator('[data-slot="agent-row"][data-agent="scope-shared"][data-scope="project"]').waitFor();
+  await page.locator('[data-slot="agent-row"][data-agent="scope-shared"][data-scope="global"]').waitFor();
   assert.equal(await page.locator('[data-slot="agent-row"][data-agent="scope-shared"]').count(), 1,
-    'Effective resolved the Project source over its same-name Global source');
+    'Effective initially resolves the Global source because Project B has no override');
   assert.equal(await page.getByRole('button', { name: 'New agent', exact: true }).count(), 0,
     'Effective Agents has zero write affordances');
   assert.equal(await page.getByText('Built in', { exact: true }).count(), 0, 'Effective hides Global-only built-ins');
@@ -346,26 +336,86 @@ export default async function settingsScope(check) {
 
   await activate(page.getByRole('radio', { name: /^Project\./ }));
   await page.locator('[data-slot="agent-row"][data-agent="scope-shared"][data-scope="global"]').waitFor();
-  assert.equal(await page.locator('[data-slot="agent-row"][data-agent="scope-shared"]').count(), 2,
-    'Project shows its definition and the read-only Global source separately');
-  assert.equal(await page.locator('[data-slot="agent-row"][data-agent="scope-shared"][data-scope="global"] [data-slot="agent-global-badge"]').innerText(), 'Global');
+  assert.equal(await page.locator('[data-slot="agent-row"][data-agent="scope-shared"]').count(), 1,
+    'Project shows the read-only Global source before an override exists');
+  assert.equal(await page.locator('[data-slot="agent-row"][data-agent="scope-shared"] [data-slot="agent-global-badge"]').innerText(), 'Global');
   await page.waitForTimeout(400);
   await check.shot('settings-scope-agents-project');
 
-  await activate(page.locator('[data-slot="agent-row"][data-agent="scope-global-only"][data-scope="global"]'));
+  await activate(page.locator('[data-slot="agent-row"][data-agent="scope-shared"][data-scope="global"]'));
   await activate(page.getByRole('button', { name: 'Create Project override', exact: true }));
   await page.locator('[data-slot="agent-definition-destination"]').getByText(`Project · ${basename(second)}`, { exact: true }).waitFor();
-  await page.waitForTimeout(500);
-  await check.shot('settings-scope-agents-draft');
+  await page.locator('textarea[name="description"]').fill('Project B resolved source');
+  await activate(page.getByRole('button', { name: /^(?:Create agent|Save)$/ }));
+
+  let projectTrust;
+  let savedOverride;
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const [projects, agents] = await Promise.all([
+      check.rpc('pi/project/list', {}),
+      check.rpc('agents/list', {}),
+    ]);
+    projectTrust = projects.projects.find(project => project.cwd === second)?.trust;
+    savedOverride = agents.agents.find(agent => agent.name === 'scope-shared' && agent.scope === 'project' && agent.projectCwd === second);
+    if (projectTrust === 'trusted' && savedOverride) break;
+    await page.waitForTimeout(100);
+  }
+  assert.equal(projectTrust, 'trusted', 'the first person-authored Project definition persisted trust');
+  assert.equal(savedOverride?.description, 'Project B resolved source', 'the saved definition belongs to Project B');
+  const overridePath = join(second, `.${identity.name}`, 'agents', 'scope-shared.md');
+  assert.equal(existsSync(overridePath), true, 'the Project override was written at its exact location');
+  assert.match(readFileSync(overridePath, 'utf8'), /Project B resolved source/);
+  await check.shot('settings-scope-agents-saved-override');
+
+  await activate(page.getByRole('radio', { name: /^Effective\./ }));
+  const effectiveProjectRow = page.locator('[data-slot="agent-row"][data-agent="scope-shared"][data-scope="project"]');
+  if (await effectiveProjectRow.count()) {
+    await effectiveProjectRow.waitFor();
+    assert.equal(await page.locator('[data-slot="agent-row"][data-agent="scope-shared"]').count(), 1,
+      'Effective resolves the newly persisted Project shadow');
+  } else {
+    assert.equal(await page.locator('textarea[name="description"]').inputValue(), 'Project B resolved source',
+      'Effective keeps the resolved Project shadow open on a phone');
+  }
+  await check.shot('settings-scope-agents-effective-shadow');
+
+  await activate(page.getByRole('radio', { name: /^Project\./ }));
+  const persistedProjectRow = page.locator('[data-slot="agent-row"][data-agent="scope-shared"][data-scope="project"]');
+  if (await persistedProjectRow.isVisible()) await activate(persistedProjectRow);
+  else await page.locator('[data-slot="agent-definition-destination"]').getByText(`Project · ${basename(second)}`, { exact: true }).waitFor();
+  await page.locator('textarea[name="description"]').fill('Unsaved guard check');
   await activate(page.getByRole('radio', { name: /^Global\./ }));
   await page.getByRole('dialog', { name: 'Keep these unsaved changes?' }).waitFor();
   await activate(page.getByRole('button', { name: 'Keep editing', exact: true }));
   assert.equal(await page.getByRole('radio', { name: /^Project\./ }).getAttribute('aria-checked'), 'true',
-    'the copied override draft refused the scope change');
+    'the dirty persisted override refused the scope change');
+  await check.shot('settings-scope-agents-draft');
   await activate(page.getByRole('radio', { name: /^Global\./ }));
   await activate(page.getByRole('button', { name: 'Discard and switch', exact: true }));
   await page.getByText('Built in', { exact: true }).waitFor();
+
+  await activate(page.getByRole('radio', { name: /^Project\./ }));
+  await choose(second);
+  await activate(page.locator('[data-slot="agent-row"][data-agent="scope-shared"][data-scope="project"]'));
+  await activate(page.getByRole('button', { name: 'Delete', exact: true }));
+  const deleteDialog = page.getByRole('dialog', { name: 'Delete scope-shared?' });
+  await deleteDialog.waitFor();
+  await activate(deleteDialog.getByRole('button', { name: 'Delete', exact: true }));
+  await page.locator('[data-slot="agent-row"][data-agent="scope-shared"][data-scope="global"]').waitFor({ state: 'attached' });
+  assert.equal(existsSync(overridePath), false, 'deleting the Project shadow removed only its exact file');
+  const afterDelete = (await check.rpc('agents/list', {})).agents.filter(agent => agent.name === 'scope-shared');
+  assert.deepEqual(afterDelete.map(agent => agent.scope), ['global'], 'the Global source survived Project shadow deletion');
   await check.shot('settings-scope-agents');
+
+  await check.reducedMotion(true);
+  const backToAgents = page.locator('[data-slot="agents-back"]');
+  if (await backToAgents.isVisible()) await activate(backToAgents);
+  await activate(page.locator('[data-slot="agent-row"][data-agent="scope-shared"][data-scope="global"]'));
+  const editorAnimation = await page.locator('[data-slot="agents-editor-column"]').evaluate(element =>
+    getComputedStyle(element).animationName);
+  assert.equal(editorAnimation, 'none', 'the Agents transition is removed under reduced motion');
+  await check.shot('settings-scope-agents-reduced-motion');
+  await check.reducedMotion(false);
 
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   assert.ok(overflow <= 1, `Settings and Agents scope overflowed horizontally by ${overflow}px`);

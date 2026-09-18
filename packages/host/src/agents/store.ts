@@ -516,7 +516,7 @@ export class AgentStore {
     if (agent.scope === "global") this.renamedAgents = Object.fromEntries(Object.entries(this.renamedAgents).filter(([, target]) => target !== agent.name));
     const at = this.now().toISOString();
     for (const [key, other] of this.custom) {
-      if (!other.allowedAgents.includes(agent.name) || !referenceTargets(other, agent, this.custom)) continue;
+      if (!other.allowedAgents.includes(agent.name) || referenceResolves(other, agent.name, this.custom)) continue;
       const changed = { ...other, allowedAgents: other.allowedAgents.filter((child) => child !== agent.name), updatedAt: at };
       this.custom.set(key, changed);
       this.writeDefinition(changed);
@@ -670,6 +670,17 @@ function keyOf(location: Location, name: string): string {
 
 function referenceTargets(parent: AgentDefinition, target: AgentDefinition, definitions: ReadonlyMap<string, AgentDefinition>): boolean {
   return effectiveAgents([...definitions.values(), target], parent.scope === "project" ? parent.projectCwd : undefined).includes(target);
+}
+
+function referenceResolves(
+  parent: AgentDefinition,
+  name: string,
+  definitions: ReadonlyMap<string, AgentDefinition>,
+): boolean {
+  return effectiveAgents(
+    [...definitions.values()],
+    parent.scope === "project" ? parent.projectCwd : undefined,
+  ).some((candidate) => candidate.name === name);
 }
 
 function nextMigrationBackupPath(file: string): string {

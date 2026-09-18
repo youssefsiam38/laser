@@ -17,9 +17,21 @@ describe("project setup trust", () => {
     expect(trustReasons(project)).toEqual({ required: true, reasons: [`${PROJECT_DIR_NAME}/worktree-setup`] });
   });
 
-  it("retains settings as a separate reason", () => {
-    mkdirSync(join(project, PROJECT_DIR_NAME));
+  it("requires trust for shipped agent definitions", () => {
+    mkdirSync(join(project, PROJECT_DIR_NAME, "agents"), { recursive: true });
+    expect(trustReasons(project)).toEqual({ required: true, reasons: [`${PROJECT_DIR_NAME}/agents`] });
+  });
+
+  it("retains settings, setup and agents as separate reasons", () => {
+    mkdirSync(join(project, PROJECT_DIR_NAME, "agents"), { recursive: true });
     for (const file of ["settings.json", "worktree-setup"]) writeFileSync(join(project, PROJECT_DIR_NAME, file), "");
-    expect(trustReasons(project)).toEqual({ required: true, reasons: [`${PROJECT_DIR_NAME}/settings.json`, `${PROJECT_DIR_NAME}/worktree-setup`] });
+    expect(trustReasons(project)).toEqual({
+      required: true,
+      reasons: [
+        `${PROJECT_DIR_NAME}/settings.json`,
+        `${PROJECT_DIR_NAME}/worktree-setup`,
+        `${PROJECT_DIR_NAME}/agents`,
+      ],
+    });
   });
 });

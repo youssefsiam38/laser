@@ -66,7 +66,7 @@ describe("workbench.open", () => {
 });
 
 describe("Settings scope navigation", () => {
-  it("keeps plain links scope-neutral and gates the whole explicit deep link", async () => {
+  it("lands name-only agent links in Global and gates the whole explicit deep link", async () => {
     await act(async () => root.render(<WorkbenchProvider><Probe /></WorkbenchProvider>));
     await act(async () => latest!.open("agents", { agent: "reviewer", field: "skills" }));
     await act(async () => { expect(await latest!.requestSettingsScope({ view: "project", projectCwd: "/one" })).toBe(true); });
@@ -88,10 +88,13 @@ describe("Settings scope navigation", () => {
     expect(latest?.settingsScope).toEqual({ view: "project", projectCwd: "/one" });
     unregister();
 
+    await act(async () => { expect(await latest!.open("agents", { agent: "reviewer" })).toBe(true); });
+    expect(latest?.settingsScope).toEqual({ view: "global" });
+
     await act(async () => latest!.open("settings", "models"));
     expect(latest?.page).toBe("settings");
     expect(latest?.tab).toBe("models");
-    expect(latest?.settingsScope).toEqual({ view: "project", projectCwd: "/one" });
+    expect(latest?.settingsScope).toEqual({ view: "global" });
   });
 
   it("moves an exact Agents source and Settings scope as one guarded destination", async () => {

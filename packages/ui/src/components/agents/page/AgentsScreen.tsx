@@ -6,9 +6,24 @@
  */
 import type { AgentDefinition, AgentDefinitionInput, AgentLocation } from "@lasercode/protocol";
 import { ChevronLeft, Plus } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type KeyboardEvent,
+} from "react";
 
-import { agentDefinitionInputOf, agentDisplayName, isBuiltinAgent, useAgentsActions, useAgentsSnapshot, useAgentsStatus } from "@/agents";
+import {
+  agentDefinitionInputOf,
+  agentDisplayName,
+  useAgentsActions,
+  useAgentsSnapshot,
+  useAgentsStatus,
+} from "@/agents";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import { CapabilityNotice } from "@/components/capability-gate";
 import { ScopeDraftGuard, type ScopeDraft, type ScopeDraftNavigationGuard } from "@/components/settings/ScopeDraftGuard";
@@ -22,21 +37,21 @@ import { cn } from "@/lib/utils";
 import { deviceStore } from "@/runtime/device-storage";
 import { useCapability, useLaserStable } from "@/runtime";
 
-import { AgentEditor, type EditorFocus } from "./AgentEditor.js";
+import type { EditorFocus } from "./AgentEditor.js";
+import { AgentsEditorColumn, ReadonlyIntro } from "./AgentsEditorColumn.js";
 import { AgentList } from "./AgentList.js";
-import { BuiltinPanel } from "./BuiltinPanel.js";
-import { HarnessPanel } from "./HarnessPanel.js";
 import { AgentsOverview } from "./Overview.js";
 import {
   agentAtLocation,
   agentForWarning,
+  agentsInScope,
   isFirstRun,
-  locationOfAgent,
   sameSelection,
   selectionOfAgent,
   visibleAgentWarnings,
   type AgentsSelection,
 } from "./model.js";
+import { useSettingsScopeTarget } from "./useSettingsScopeTarget.js";
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
@@ -48,21 +63,22 @@ export function AgentsScreen({ target }: AgentsScreenProps) {
   const snapshot = useAgentsSnapshot();
   const status = useAgentsStatus();
   const agents = useAgentsActions();
-  const { client, actions, projects } = useLaserStable();
+  const { actions, projects } = useLaserStable();
   const workbench = useWorkbench();
   const mobile = useIsMobile();
   const device = useSyncExternalStore(deviceStore.subscribe, deviceStore.status, deviceStore.status);
   const write = useCapability("agents/save", { presentation: "explained" });
   const environmentWritable = write.state === "available";
   const { settingsScope } = workbench;
-
-  const [neutralRouteCwd, setNeutralRouteCwd] = useState<string>();
-  const [neutralRouteError, setNeutralRouteError] = useState<string>();
-  const [neutralRouteAttempt, setNeutralRouteAttempt] = useState(0);
+  const scoped = useSettingsScopeTarget(settingsScope, projects);
   const [selection, setSelection] = useState<AgentsSelection>(null);
   const [focus, setFocus] = useState<EditorFocus>();
   const [editorDraft, setEditorDraft] = useState<ScopeDraft>();
-  const [editorMutationPending, setEditorMutationPending] = useState(false);
+  const [editorMutation, setEditorMutation] = useState<{
+    operation: symbol;
+    identity: string;
+    agent: AgentDefinition;
+  }>();
   const [newSeed, setNewSeed] = useState<AgentDefinitionInput>();
   const [newToken, setNewToken] = useState(0);
   const guardRef = useRef<ScopeDraftNavigationGuard | undefined>(undefined);
@@ -73,30 +89,17 @@ export function AgentsScreen({ target }: AgentsScreenProps) {
     if (!status.loaded && !status.loading) void agents.refresh();
   }, [agents, status.loaded, status.loading]);
 
-  // Global reads run through the projectless Settings service, never Code or
-  // the first project. It exists even when the project registry is empty.
-  useEffect(() => {
-    if (settingsScope.view !== "global" || neutralRouteCwd) return undefined;
-    let live = true;
-    setNeutralRouteError(undefined);
-    void client.request("pi/setup/state", {}).then((state) => {
-      if (live) setNeutralRouteCwd(state.cwd);
-    }).catch((error) => {
-      if (live) setNeutralRouteError(messageOf(error));
-    });
-    return () => { live = false; };
-  }, [client, neutralRouteAttempt, neutralRouteCwd, settingsScope.view]);
-
-  const selectedProjectKnown = settingsScope.projectCwd !== undefined && projects.includes(settingsScope.projectCwd);
-  const projectCwd = selectedProjectKnown ? settingsScope.projectCwd : undefined;
-  const routeCwd = settingsScope.view === "global" ? neutralRouteCwd : projectCwd;
-  const settingsView = settingsScope.view === "global" ? "global" as const : "effective" as const;
-  const destination: AgentLocation | undefined = settingsScope.view === "global"
+  const scopeTarget = scoped.target;
+  const scopeView = scopeTarget?.view ?? settingsScope.view;
+  const projectCwd = scopeTarget?.projectCwd;
+  const routeCwd = scopeTarget?.routeCwd;
+  const settingsView = scopeView === "global" ? "global" as const : "effective" as const;
+  const destination: AgentLocation | undefined = scopeView === "global"
     ? { scope: "global" }
-    : settingsScope.view === "project" && projectCwd
+    : scopeView === "project" && projectCwd
       ? { scope: "project", projectCwd }
       : undefined;
-  const scopeKey = `${settingsScope.view}:${settingsScope.projectCwd ?? ""}`;
+  const scopeKey = `${scopeView}:${projectCwd ?? ""}`;
   const previousScopeKey = useRef(scopeKey);
 
   // The shared scope guard has already settled before this commit. A scope
@@ -108,12 +111,13 @@ export function AgentsScreen({ target }: AgentsScreenProps) {
     setSelection(null);
     setFocus(undefined);
     setEditorDraft(undefined);
+    setEditorMutation(undefined);
     setNewSeed(undefined);
   }, [scopeKey]);
 
   const apply = useCallback((next: AgentsSelection, field?: string, seed?: AgentDefinitionInput) => {
     setSelection(next);
-    setEditorMutationPending(false);
+    setEditorMutation(undefined);
     setNewSeed(next?.kind === "new" ? seed : undefined);
     setFocus(field ? { field, seq: ++focusSeq.current } : undefined);
   }, []);
@@ -152,7 +156,10 @@ export function AgentsScreen({ target }: AgentsScreenProps) {
     void select(null);
   };
 
-  const warnings = useMemo(() => visibleAgentWarnings(snapshot, projectCwd), [snapshot, projectCwd]);
+  const warnings = useMemo(
+    () => visibleAgentWarnings(snapshot, scopeView, projectCwd, projects),
+    [projectCwd, projects, scopeView, snapshot],
+  );
   const selectedAgent = useMemo(
     () => selection?.kind === "agent" ? agentAtLocation(snapshot, selection.name, selection.location) : undefined,
     [snapshot, selection],
@@ -160,13 +167,21 @@ export function AgentsScreen({ target }: AgentsScreenProps) {
   const selectedIdentity = selection?.kind === "agent"
     ? `${selection.location.scope}:${selection.location.scope === "project" ? selection.location.projectCwd : ""}:${selection.name}`
     : undefined;
-  const retainedAgent = useRef<{ identity: string; agent: AgentDefinition } | undefined>(undefined);
-  if (selectedAgent && selectedIdentity) retainedAgent.current = { identity: selectedIdentity, agent: selectedAgent };
-  const retained = retainedAgent.current;
-  const displayedAgent = selectedAgent ?? (editorMutationPending && retained && retained.identity === selectedIdentity ? retained.agent : undefined);
+  const displayedAgent = selectedAgent ?? (
+    editorMutation && editorMutation.identity === selectedIdentity ? editorMutation.agent : undefined
+  );
+  const onMutationPending = useCallback((operation: symbol, pending: boolean) => {
+    if (pending) {
+      if (selectedAgent && selectedIdentity) {
+        setEditorMutation({ operation, identity: selectedIdentity, agent: selectedAgent });
+      }
+      return;
+    }
+    setEditorMutation((current) => current?.operation === operation ? undefined : current);
+  }, [selectedAgent, selectedIdentity]);
   const selectedWarnings = useMemo(() => displayedAgent
-    ? warnings.filter((warning) => agentForWarning(snapshot, warning, projectCwd) === displayedAgent)
-    : [], [displayedAgent, projectCwd, snapshot, warnings]);
+    ? warnings.filter((warning) => agentForWarning(snapshot, warning, scopeView, projectCwd) === displayedAgent)
+    : [], [displayedAgent, projectCwd, scopeView, snapshot, warnings]);
 
   const onSaved = useCallback((saved: AgentDefinition) => {
     setEditorDraft(undefined);
@@ -182,13 +197,21 @@ export function AgentsScreen({ target }: AgentsScreenProps) {
   }, [actions, selection]);
   const startChat = useCallback(async (name: string) => {
     if (!projectCwd) return;
+    const navigationGuard = guardRef.current;
+    if (navigationGuard && !(await navigationGuard())) return;
+    const environmentKey = device.environmentKey;
     try {
       await actions.newSession(projectCwd, { agentName: name });
-      workbench.close();
+      if (
+        previousScopeKey.current === scopeKey
+        && deviceStore.status().environmentKey === environmentKey
+      ) {
+        workbench.close();
+      }
     } catch (error) {
       actions.toast("error", messageOf(error));
     }
-  }, [actions, projectCwd, workbench]);
+  }, [actions, device.environmentKey, projectCwd, scopeKey, workbench]);
 
   const startNew = useCallback(() => {
     if (!destination) return;
@@ -215,18 +238,22 @@ export function AgentsScreen({ target }: AgentsScreenProps) {
     );
   }
 
-  const scopeMissing = settingsScope.view !== "global" && !projectCwd;
+  if (!scopeTarget) {
+    return (
+      <div className="flex h-full min-h-0 flex-col" data-slot="agents-screen" data-state={scoped.error ? "error" : "loading"}>
+        <Header count={undefined} warnings={0} mobile={mobile} editing={false} canCreate={false} onNew={() => undefined} onBack={() => undefined} />
+        <div className="flex shrink-0 items-center px-3 py-2 hairline-b"><SettingsScopeControls /></div>
+        <RouteError error={scoped.error} onRetry={scoped.reload} />
+      </div>
+    );
+  }
+
+  const scopeMissing = scopeView !== "global" && !projectCwd;
   const editing = selection !== null;
   const showList = !mobile || !editing;
   const showEditor = !mobile || editing;
-  const canCreate = environmentWritable && destination !== undefined && settingsScope.view !== "effective";
-  const visibleCustom = snapshot.agents.filter((agent) => {
-    if (agent.kind !== "custom") return false;
-    if (settingsScope.view === "global") return agent.scope === "global";
-    if (settingsScope.view === "project") return agent.scope === "global" || (agent.scope === "project" && agent.projectCwd === projectCwd);
-    if (agent.scope === "project") return agent.projectCwd === projectCwd;
-    return !snapshot.agents.some((candidate) => candidate.scope === "project" && candidate.projectCwd === projectCwd && candidate.name === agent.name);
-  });
+  const canCreate = environmentWritable && destination !== undefined && scopeView !== "effective";
+  const visibleCustom = agentsInScope(snapshot, scopeView, projectCwd).custom;
   const editorKey = selection === null
     ? "overview"
     : selection.kind === "new"
@@ -234,14 +261,20 @@ export function AgentsScreen({ target }: AgentsScreenProps) {
       : selection.kind === "harness"
         ? "harness"
         : `agent:${selection.location.scope}:${selection.location.scope === "project" ? selection.location.projectCwd : ""}:${selection.name}`;
-  const inheritedGlobal = settingsScope.view === "project" && displayedAgent?.kind === "custom" && displayedAgent.scope === "global";
-  const editableDefinition = environmentWritable && settingsScope.view !== "effective" && !inheritedGlobal;
+  const inheritedGlobal = scopeView === "project" && displayedAgent?.kind === "custom" && displayedAgent.scope === "global";
+  const editableDefinition = environmentWritable && scopeView !== "effective" && !inheritedGlobal;
   const projectAlreadyHasName = displayedAgent?.scope === "global" && projectCwd
     ? snapshot.agents.some((candidate) => candidate.kind === "custom" && candidate.scope === "project" && candidate.projectCwd === projectCwd && candidate.name === displayedAgent.name)
     : false;
 
   return (
-    <div className="flex h-full min-h-0 flex-col" data-slot="agents-screen" data-state="ready" data-settings-view={settingsScope.view} onKeyDown={onKeyDown}>
+    <div
+      className="flex h-full min-h-0 flex-col"
+      data-slot="agents-screen"
+      data-state="ready"
+      data-settings-view={scopeView}
+      onKeyDown={onKeyDown}
+    >
       <ScopeDraftGuard drafts={editorDraft ? [editorDraft] : []} onGuardChange={setGuard} />
       <Header
         count={visibleCustom.length}
@@ -256,86 +289,78 @@ export function AgentsScreen({ target }: AgentsScreenProps) {
       <div className="flex shrink-0 items-center px-3 py-2 hairline-b"><SettingsScopeControls /></div>
       {write.state === "explained" ? <div className="px-4 pt-4 md:px-6"><CapabilityNotice explanation={write.explanation} /></div> : null}
       {scopeMissing ? (
-        <ScopeEmpty unavailable={settingsScope.projectCwd !== undefined} view={settingsScope.view === "effective" ? "effective" : "project"} />
+        <ScopeEmpty
+          unavailable={settingsScope.projectCwd !== undefined}
+          view={scopeView === "effective" ? "effective" : "project"}
+        />
       ) : (
         <div className="flex min-h-0 flex-1">
           {showList ? (
             <ScrollArea className={cn("min-h-0 shrink-0", mobile ? "w-full" : "w-72 hairline-e")}>
               <AgentList
                 snapshot={snapshot}
-                view={settingsScope.view}
+                view={scopeView}
                 projectCwd={projectCwd}
                 warnings={warnings}
                 selection={selection}
                 onSelect={(next) => void select(next)}
-                lead={mobile && canCreate && isFirstRun(snapshot, projectCwd) ? <AgentsOverview compact snapshot={snapshot} projectCwd={projectCwd} warnings={warnings} onNew={startNew} onOpen={(next, field) => void select(next, field)} /> : undefined}
+                lead={mobile && canCreate && isFirstRun(snapshot, scopeView, projectCwd) ? (
+                  <AgentsOverview
+                    compact
+                    snapshot={snapshot}
+                    view={scopeView}
+                    projectCwd={projectCwd}
+                    warnings={warnings}
+                    onNew={startNew}
+                    onOpen={(next, field) => void select(next, field)}
+                  />
+                ) : undefined}
               />
             </ScrollArea>
           ) : null}
           {showEditor ? (
-            <div
-              key={`${device.environmentKey ?? "inactive"}:${editorKey}`}
-              data-slot="agents-editor-column"
-              className={cn("min-h-0 min-w-0 flex-1 overflow-y-auto", mobile && "animate-in fade-in-0 ltr:slide-in-from-right-2 rtl:slide-in-from-left-2 fill-mode-both duration-(--motion-slow) motion-reduce:animate-none")}
-            >
-              {selection === null ? (
-                settingsScope.view === "effective"
-                  ? <ReadonlyIntro title="Effective agents" detail="This is the resolved agent catalog for the selected project. Choose a definition to inspect it; switch to Global or Project to make changes." />
-                  : <AgentsOverview snapshot={snapshot} projectCwd={projectCwd} warnings={warnings} onNew={startNew} onOpen={(next, field) => void select(next, field)} />
-              ) : selection.kind === "harness" ? (
-                <HarnessPanel snapshot={snapshot} writable={environmentWritable && settingsScope.view === "global"} />
-              ) : selection.kind === "new" ? (
-                routeCwd ? <AgentEditor
-                  agent={undefined}
-                  seed={newSeed}
+            <AgentsEditorColumn
+              environmentKey={device.environmentKey}
+              editorKey={editorKey}
+              mobile={mobile}
+              selection={selection}
+              displayedAgent={displayedAgent}
+              newSeed={newSeed}
+              snapshot={snapshot}
+              scopeView={scopeView}
+              routeCwd={routeCwd}
+              settingsView={settingsView}
+              projectCwd={projectCwd}
+              warnings={selectedWarnings}
+              focus={focus}
+              canCreate={canCreate}
+              environmentWritable={environmentWritable}
+              inheritedGlobal={inheritedGlobal}
+              projectAlreadyHasName={projectAlreadyHasName}
+              editableDefinition={editableDefinition}
+              overview={scopeView === "effective" ? (
+                <ReadonlyIntro
+                  title="Effective agents"
+                  detail="This is the resolved catalog for the selected project. Choose a definition to inspect it, or choose Global or Project above to edit its source."
+                />
+              ) : (
+                <AgentsOverview
                   snapshot={snapshot}
-                  destination={selection.location}
-                  routeCwd={routeCwd}
-                  settingsView={settingsView}
+                  view={scopeView}
                   projectCwd={projectCwd}
-                  warnings={[]}
-                  focus={focus}
-                  writable={canCreate}
-                  onDirtyChange={() => undefined}
-                  onDraftChange={setEditorDraft}
-                  onSaved={onSaved}
-                  onDeleted={onDeleted}
-                  onStartChat={(name) => void startChat(name)}
-                /> : <RouteError error={neutralRouteError} onRetry={() => setNeutralRouteAttempt((value) => value + 1)} />
-              ) : displayedAgent === undefined ? (
-                <div className="p-4"><ErrorState title={`There is no agent named "${selection.name}" at that location any more`} detail="It may have been deleted from another view." onRetry={() => void select(null)} retryLabel="Back to the list" /></div>
-              ) : isBuiltinAgent(displayedAgent) ? (
-                <BuiltinPanel name={displayedAgent.name as "beam" | "chat" | "namer"} snapshot={snapshot} routeCwd={routeCwd} writable={environmentWritable && settingsScope.view === "global"} />
-              ) : routeCwd ? (
-                <>
-                  {inheritedGlobal ? (
-                    <div className="mx-auto flex w-full max-w-180 items-center justify-between gap-3 px-4 pt-5 md:px-6" data-slot="agent-inherited-notice">
-                      <p className="text-sm text-ink-2">This is the read-only Global source used by this project.</p>
-                      {!projectAlreadyHasName && environmentWritable ? <Button type="button" size="sm" onClick={() => startOverride(displayedAgent)}>Create Project override</Button> : null}
-                    </div>
-                  ) : settingsScope.view === "effective" ? (
-                    <ReadonlyIntro compact title="Resolved definition" detail="Effective is read-only. Switch to its Global or Project source to make changes." />
-                  ) : null}
-                  <AgentEditor
-                    agent={displayedAgent}
-                    snapshot={snapshot}
-                    destination={locationOfAgent(displayedAgent)}
-                    routeCwd={routeCwd}
-                    settingsView={settingsView}
-                    projectCwd={projectCwd}
-                    warnings={selectedWarnings}
-                    focus={focus}
-                    writable={editableDefinition}
-                    onDirtyChange={() => undefined}
-                    onDraftChange={setEditorDraft}
-                    onMutationPending={setEditorMutationPending}
-                    onSaved={onSaved}
-                    onDeleted={onDeleted}
-                    onStartChat={(name) => void startChat(name)}
-                  />
-                </>
-              ) : <RouteError error={neutralRouteError} onRetry={() => setNeutralRouteAttempt((value) => value + 1)} />}
-            </div>
+                  warnings={warnings}
+                  onNew={startNew}
+                  onOpen={(next, field) => void select(next, field)}
+                />
+              )}
+              onBack={() => void select(null)}
+              onStartOverride={startOverride}
+              onDraftChange={setEditorDraft}
+              onMutationPending={onMutationPending}
+              onSaved={onSaved}
+              onDeleted={onDeleted}
+              onStartChat={(name) => void startChat(name)}
+            />
           ) : null}
         </div>
       )}
@@ -349,10 +374,6 @@ function ScopeEmpty({ unavailable, view }: { unavailable: boolean; view: "projec
 
 function RouteError({ error, onRetry }: { error: string | undefined; onRetry(): void }) {
   return <div className="p-4">{error ? <ErrorState title="Couldn’t open the Global settings service" detail={error} onRetry={onRetry} /> : <p className="text-sm text-ink-2" role="status">Loading Global agent details…</p>}</div>;
-}
-
-function ReadonlyIntro({ title, detail, compact = false }: { title: string; detail: string; compact?: boolean }) {
-  return <div className={cn("mx-auto flex w-full max-w-180 flex-col gap-1", compact ? "px-4 pt-5 md:px-6" : "px-4 py-5 md:px-6")} data-slot="agents-readonly-intro"><h3 className="text-sm font-semibold text-ink">{title}</h3><p className="text-sm leading-6 text-ink-2">{detail}</p></div>;
 }
 
 function Header({ count, warnings, mobile, editing, title, canCreate, onNew, onBack }: { count: number | undefined; warnings: number; mobile: boolean; editing: boolean; title?: string | undefined; canCreate: boolean; onNew(): void; onBack(): void }) {

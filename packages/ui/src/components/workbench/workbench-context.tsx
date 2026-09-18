@@ -227,11 +227,13 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
       : undefined;
     const explicitScope = next === "settings" && typeof arg === "object" && arg !== null
       ? (arg as SettingsTarget).scope
-      : agentLocation?.scope === "global"
+      : next === "agents" && typeof arg === "object" && arg !== null && agentLocation === undefined
         ? { view: "global" as const }
-        : agentLocation?.scope === "project"
-          ? { view: "project" as const, projectCwd: agentLocation.projectCwd }
-          : undefined;
+        : agentLocation?.scope === "global"
+          ? { view: "global" as const }
+          : agentLocation?.scope === "project"
+            ? { view: "project" as const, projectCwd: agentLocation.projectCwd }
+            : undefined;
     if (explicitScope !== undefined) {
       // An exact same-scope link can still replace the editor, so it passes
       // through the same owning-screen guard without rewriting the scope.

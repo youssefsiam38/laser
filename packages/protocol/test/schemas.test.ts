@@ -466,6 +466,8 @@ describe("client request schemas", () => {
     expect(remove.safeParse({ name: "reviewer" }).success).toBe(false);
     expect(remove.safeParse({ name: "reviewer", location: { scope: "project" } }).success).toBe(false);
     expect(remove.safeParse({ name: "reviewer", location: { scope: "global", projectCwd: "/repo" } }).success).toBe(false);
+    expect(remove.safeParse({ name: "reviewer", location: { scope: "project", projectCwd: "/repo", extra: true } }).success).toBe(false);
+    expect(remove.safeParse({ name: "reviewer", location: { scope: "project", projectCwd: "x".repeat(4097) } }).success).toBe(false);
     expect(remove.safeParse({ name: "reviewer", location: { scope: "project", projectCwd: "/repo" } }).success).toBe(true);
   });
 

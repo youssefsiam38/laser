@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   agentForWarning,
+  agentsInScope,
   checkRange,
   deletability,
   describeStarts,
@@ -10,7 +11,6 @@ import {
   isFirstRun,
   missingSkills,
   namerSummary,
-  orderAgents,
   parseModelChoice,
   sameDefinitionInput,
   sameSelection,
@@ -27,12 +27,41 @@ import { agent, snapshot } from "../fixtures.js";
 describe("agents page model", () => {
   it("orders your agents first (the default on top) and the built-ins in their fixed order", () => {
     const snap = snapshot({ agents: [agent({ name: "zeta" }), agent({ name: "namer", kind: "builtin" }), agent({ name: "alpha" }), agent({ name: "beam", kind: "builtin" }), agent({ name: "default" }), agent({ name: "chat", kind: "builtin" })] });
-    const { custom, builtin } = orderAgents(snap);
+    const { custom, builtin } = agentsInScope(snap, "global");
     expect(custom.map((a) => a.name)).toEqual(["default", "alpha", "zeta"]);
     expect(builtin.map((a) => a.name)).toEqual(["beam", "chat", "namer"]);
-    expect(orderAgents(snapshot({ ...snap, defaultAgent: "zeta" })).custom.map((a) => a.name)).toEqual(["zeta", "default", "alpha"]);
-    expect(isFirstRun(snapshot({ agents: [agent({ name: "default" })] }))).toBe(true);
-    expect(isFirstRun(snap)).toBe(false);
+    expect(agentsInScope(snapshot({ ...snap, defaultAgent: "zeta" }), "global").custom.map((a) => a.name)).toEqual(["zeta", "default", "alpha"]);
+    expect(isFirstRun(snapshot({ agents: [agent({ name: "default" })] }), "global")).toBe(true);
+    expect(isFirstRun(snap, "global")).toBe(false);
+  });
+
+  it("projects Global, Project and Effective from one exact scope model", () => {
+    const snap = snapshot({
+      agents: [
+        ...snapshot().agents,
+        agent({ name: "reviewer", scope: "project", projectCwd: "/p", description: "Project shadow" }),
+        agent({ name: "project-only", scope: "project", projectCwd: "/p" }),
+        agent({ name: "other-project", scope: "project", projectCwd: "/q" }),
+      ],
+    });
+    expect(agentsInScope(snap, "global").custom.map((candidate) => `${candidate.scope}:${candidate.name}`)).toEqual([
+      "global:default",
+      "global:reviewer",
+    ]);
+    expect(agentsInScope(snap, "global").builtin.map((candidate) => candidate.name)).toEqual(["beam", "chat", "namer"]);
+    expect(agentsInScope(snap, "project", "/p").custom.map((candidate) => `${candidate.scope}:${candidate.name}`)).toEqual([
+      "project:project-only",
+      "project:reviewer",
+      "global:default",
+      "global:reviewer",
+    ]);
+    expect(agentsInScope(snap, "project", "/p").builtin).toEqual([]);
+    expect(agentsInScope(snap, "effective", "/p").custom.map((candidate) => `${candidate.scope}:${candidate.name}`)).toEqual([
+      "global:default",
+      "project:project-only",
+      "project:reviewer",
+    ]);
+    expect(agentsInScope(snap, "effective", "/p").builtin).toEqual([]);
   });
 
   it("offers definitions from the owner's scope, including itself, and never another project", () => {
@@ -72,14 +101,14 @@ describe("agents page model", () => {
     const sameNameDifferentFile = { ...projectWarning, field: "model" as const, path: "/state/agents/reviewer.md", target: "missing-model" };
     const legacyWithoutPath = { ...projectWarning, field: "model" as const, path: undefined, target: "missing-model" };
     const snap = snapshot({ agents: [...snapshot().agents, loaded, foreign], warnings: [projectWarning, broken, other, global, sameNameDifferentFile] });
-    expect(fileWarningIsVisible(projectWarning, "/p", snap)).toBe(true);
-    expect(fileWarningIsVisible(other, "/p", snap)).toBe(false);
-    expect(visibleAgentWarnings(snap, "/p")).toEqual([projectWarning, broken, global]);
-    expect(visibleAgentWarnings(snap, undefined)).toEqual([global]);
-    expect(agentForWarning(snap, projectWarning, "/p")).toBe(loaded);
-    expect(agentForWarning(snap, sameNameDifferentFile, "/p")).toBeUndefined();
-    expect(agentForWarning(snap, legacyWithoutPath, "/p")).toBe(loaded);
-    expect(agentForWarning(snap, broken, "/p")).toBeUndefined();
+    expect(fileWarningIsVisible(projectWarning, snap, "project", "/p", ["/p", "/q"])).toBe(true);
+    expect(fileWarningIsVisible(other, snap, "project", "/p", ["/p", "/q"])).toBe(false);
+    expect(visibleAgentWarnings(snap, "project", "/p", ["/p", "/q"])).toEqual([projectWarning, broken, global, legacyWithoutPath].filter((warning) => snap.warnings.includes(warning)));
+    expect(visibleAgentWarnings(snap, "global", undefined, ["/p", "/q"])).toEqual([global]);
+    expect(agentForWarning(snap, projectWarning, "project", "/p")).toBe(loaded);
+    expect(agentForWarning(snap, sameNameDifferentFile, "project", "/p")).toBeUndefined();
+    expect(agentForWarning(snap, legacyWithoutPath, "project", "/p")).toBeUndefined();
+    expect(agentForWarning(snap, broken, "project", "/p")).toBeUndefined();
   });
 
   it("keys selection and default protection by exact source location", () => {

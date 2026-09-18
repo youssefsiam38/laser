@@ -168,6 +168,7 @@ async function mount(props: { scope?: SettingsScopeState | undefined; target?: A
     await act(async () => { expect(await workbench!.requestSettingsScope(props.scope!)).toBe(true); });
     if (props.target) await act(async () => render(props.target));
   }
+  await settle();
 }
 
 const q = <T extends Element = HTMLElement>(selector: string): T => {
@@ -328,6 +329,30 @@ describe("Agents page", () => {
     expect(mocks.agents.save).toHaveBeenCalledWith(expect.objectContaining({ name: "implementer" }), "reviewer");
     expect(q('[data-slot="agent-editor"]').getAttribute("data-agent")).toBe("implementer");
     expect(row("implementer")).toBeTruthy();
+  });
+
+  it("lets only the newest overlapping save validation commit", async () => {
+    const original = mocks.agents.validate.getMockImplementation()!;
+    const validations: Array<(issues: AgentIssue[]) => void> = [];
+    mocks.agents.validate.mockImplementation(() => new Promise<AgentIssue[]>((resolve) => validations.push(resolve)));
+    try {
+      await mount();
+      await click(row("reviewer"));
+      await type(q<HTMLTextAreaElement>('textarea[name="description"]'), "Newest save");
+      await click(button("Save"));
+      await click(button("Save"));
+      expect(validations).toHaveLength(2);
+      await act(async () => {
+        validations[0]!([]);
+        validations[1]!([]);
+        await Promise.resolve();
+      });
+      await settle();
+      expect(mocks.agents.save).toHaveBeenCalledTimes(1);
+      expect(mocks.agents.save).toHaveBeenCalledWith(expect.objectContaining({ description: "Newest save" }), "reviewer");
+    } finally {
+      mocks.agents.validate.mockImplementation(original);
+    }
   });
 
   it("creates an agent from the form and sends the definition to save", async () => {
@@ -521,7 +546,7 @@ describe("Agents page", () => {
     const editor = q<HTMLFormElement>('[data-slot="agent-editor"]');
     await type(editor.querySelector<HTMLTextAreaElement>('textarea[name="description"]')!, "Changed");
     await blur(editor.querySelector('textarea[name="description"]')!);
-    await settle();
+    await settle(400);
     // The host refuses with a field: the message lands there, not in a toast.
     mocks.agents.save.mockRejectedValueOnce(Object.assign(new Error("That agent definition is not valid."), { data: { issues: [{ field: "description", message: "Too long." }] } }));
     await click(button("Save"));
@@ -555,6 +580,24 @@ describe("Agents page", () => {
     expect(mocks.agents.remove).toHaveBeenCalledWith("duplicate", { scope: "project", projectCwd: "/p" });
     expect(qa('[data-slot="agent-row"][data-agent="duplicate"]')).toHaveLength(1);
     expect(q('[data-slot="agent-row"][data-agent="duplicate"]').dataset.scope).toBe("global");
+  });
+
+  it("keeps the editor and delete dialog open when deletion is refused", async () => {
+    const original = mocks.agents.remove.getMockImplementation()!;
+    mocks.agents.remove.mockRejectedValueOnce(new Error("The definition is still in use."));
+    try {
+      await mount();
+      await click(row("reviewer"));
+      await click(button("Delete"));
+      const dialog = q('[data-slot="delete-agent-dialog"]');
+      await click([...dialog.querySelectorAll("button")].find((candidate) => candidate.textContent?.trim() === "Delete")!);
+      await settle();
+      expect(q('[data-slot="delete-agent-dialog"]').textContent).toContain("The definition is still in use.");
+      expect(q('[data-slot="agent-editor"]').dataset.agent).toBe("reviewer");
+      expect(row("reviewer")).toBeTruthy();
+    } finally {
+      mocks.agents.remove.mockImplementation(original);
+    }
   });
 
   it("keeps the default agent undeletable with the reason, until another agent is the default", async () => {
@@ -638,6 +681,29 @@ describe("Agents page", () => {
     expect(q('[data-slot="agent-editor"]').dataset.agent).toBe("default");
   });
 
+  it("discards to the latest host base rather than the base captured before an external update", async () => {
+    await mount();
+    await click(row("reviewer"));
+    await type(q<HTMLTextAreaElement>('textarea[name="description"]'), "Local edit");
+    const current = (store.getSnapshot() as AppState).agents.snapshot!;
+    await act(async () => store.dispatch({
+      type: "agents/updated",
+      snapshot: {
+        ...current,
+        revision: current.revision + 1,
+        agents: current.agents.map((candidate) => candidate.name === "reviewer"
+          ? { ...candidate, description: "Latest host description" }
+          : candidate),
+      },
+    }));
+    expect(q<HTMLTextAreaElement>('textarea[name="description"]').value).toBe("Local edit");
+
+    await click(row("default"));
+    await click([...q('[role="dialog"]').querySelectorAll("button")].find((candidate) => candidate.textContent?.trim() === "Discard and switch")!);
+    await click(row("reviewer"));
+    expect(q<HTMLTextAreaElement>('textarea[name="description"]').value).toBe("Latest host description");
+  });
+
   it("guards shared scope changes and workbench exits with the same owned draft", async () => {
     await mount();
     await act(async () => workbench!.open("agents"));
@@ -675,12 +741,50 @@ describe("Agents page", () => {
     expect(mocks.agents.save).toHaveBeenCalledTimes(1);
 
     await act(async () => { deviceStore.activate(testDescriptor({ environmentKey: OTHER_ENVIRONMENT_KEY })); });
-    await settle();
+    await settle(100);
     await click(row("default"));
     await act(async () => { resolveSave(agent({ name: "reviewer", description: "Pending save" })); await Promise.resolve(); });
     await settle();
     expect(q('[data-slot="agent-editor"]').dataset.agent).toBe("default");
     expect(mocks.stable.actions.toast).not.toHaveBeenCalledWith("info", "reviewer saved.");
+  });
+
+  it("does not issue built-in route reads before setup resolves", async () => {
+    const original = mocks.request.getMockImplementation()!;
+    let resolveSetup!: (value: { cwd: string }) => void;
+    mocks.request.mockImplementation((method: string) => method === "pi/setup/state"
+      ? new Promise((resolve) => { resolveSetup = resolve; })
+      : original(method));
+    try {
+      await mount({ target: { agent: "beam", location: { scope: "global" } } });
+      expect(mocks.request.mock.calls.some(([method]) => method === "pi/models/catalog" || method === "pi/providers/list")).toBe(false);
+      expect(container.querySelector('[data-slot="agent-card"][data-agent="beam"]')).toBeNull();
+
+      await act(async () => { resolveSetup({ cwd: "/neutral/settings" }); await Promise.resolve(); });
+      await settle();
+      expect(q('[data-slot="agent-card"][data-agent="beam"]')).toBeTruthy();
+      await click(button("Choose a model"));
+      await settle();
+      expect(mocks.request).toHaveBeenCalledWith("pi/models/catalog", { cwd: "/neutral/settings", settingsView: "global" });
+      expect(mocks.request.mock.calls.some(([, params]) => JSON.stringify(params).includes("/state/beam"))).toBe(false);
+    } finally {
+      mocks.request.mockImplementation(original);
+    }
+  });
+
+  it("does not reuse a model catalog across environment activations", async () => {
+    await mount();
+    await click(row("beam"));
+    await click(button("Choose a model"));
+    await settle();
+    await click([...q('[data-slot="builtin-model-dialog"]').querySelectorAll("button")].find((candidate) => candidate.textContent?.trim() === "Cancel")!);
+    const beforeSwitch = mocks.request.mock.calls.filter(([method]) => method === "pi/models/catalog").length;
+
+    await act(async () => { deviceStore.activate(testDescriptor({ environmentKey: "e1.CCCCCCCCCCCCCCCCCCCCCC" })); });
+    await settle(100);
+    await click(button("Choose a model"));
+    await settle();
+    expect(mocks.request.mock.calls.filter(([method]) => method === "pi/models/catalog")).toHaveLength(beforeSwitch + 1);
   });
 
   it("edits the default agent from the product's instructions", async () => {
@@ -734,6 +838,45 @@ describe("Agents page", () => {
     await settle();
     expect(mocks.stable.actions.newSession).toHaveBeenCalledWith("/p", { agentName: "reviewer" });
     expect(workbench?.page).toBeNull();
+  });
+
+  it("does not create a chat when a dirty Project editor keeps editing", async () => {
+    const base = snapshot();
+    const projectReviewer = agent({ name: "reviewer", scope: "project", projectCwd: "/p" });
+    store = createStateStore(seed(snapshot({ agents: [base.agents[0]!, projectReviewer, ...base.agents.slice(2)] })));
+    mocks.state.store = store;
+    await mount({
+      scope: { view: "project", projectCwd: "/p" },
+      target: { agent: "reviewer", location: { scope: "project", projectCwd: "/p" } },
+    });
+    const description = q<HTMLTextAreaElement>('textarea[name="description"]');
+    await type(description, "Dirty project draft");
+    await click(button("Start chat"));
+    const dialog = q('[role="dialog"]');
+    await click([...dialog.querySelectorAll("button")].find((candidate) => candidate.textContent === "Keep editing")!);
+    await settle();
+    expect(mocks.stable.actions.newSession).not.toHaveBeenCalled();
+    expect(description.value).toBe("Dirty project draft");
+  });
+
+  it("does not close a newer workbench target when Start chat resolves late", async () => {
+    const original = mocks.stable.actions.newSession.getMockImplementation()!;
+    let resolveStart!: (path: string) => void;
+    mocks.stable.actions.newSession.mockImplementationOnce(() => new Promise<string>((resolve) => { resolveStart = resolve; }));
+    try {
+      await mount({ scope: { view: "project", projectCwd: "/p" } });
+      await act(async () => workbench!.open("agents"));
+      await click(q('[data-slot="agent-row"][data-agent="reviewer"][data-scope="global"]'));
+      await click(button("Start chat"));
+      await act(async () => { expect(await workbench!.requestSettingsScope({ view: "global" })).toBe(true); });
+      await settle();
+      await act(async () => { resolveStart("/p/new.jsonl"); await Promise.resolve(); });
+      await settle();
+      expect(workbench?.page).toBe("agents");
+      expect(workbench?.settingsScope).toEqual({ view: "global" });
+    } finally {
+      mocks.stable.actions.newSession.mockImplementation(original);
+    }
   });
 
   it("shows a noneditable Project state with no selection and keeps Global reads projectless", async () => {
