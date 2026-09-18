@@ -3992,6 +3992,11 @@ Consequences: no RP-2 requirement is dropped. T4–T8 may start only after T2's 
 **Why.** Stage three (M16-T75) admitted `not_required` projects to the agent store through `projectEnvTrustAllows` while `.laser/agents` was not trust-gated, so adding any directory would load and offer whatever definitions it carried (instructions, model, children, skills) with no decision — a permission expansion D-297 forbade. Reverting to `trusted`-only would leave every ordinary project unable to hold agents without an unrelated trust prompt. Gating the content and treating the person's own write as the trust decision keeps one trust model.
 **Consequences.** Trust reasons name `.laser/agents`; the registration/trust prompt appears for projects that ship definitions; `docs/agents.md` and `validate.ts` copy stay true. Reference cleanup on exact deletion must resolve against the remaining catalog (a Global source keeps a sibling reference valid). Recorded by the coordinator; implemented in the M16-T75 stage-three correction batch.
 
+### D-299 · 2026-09-18 · Backspace in the mention picker only deletes
+**Decision.** Backspace in the composer is always the input's own deletion. The `@` picker never reinterprets it (no "go to parent folder", no rewriting `../` to `../../`, no special case at roots).
+**Why.** The person typed `@../`, pressed Backspace and got `@../../`. A key every person uses hundreds of times a day must do exactly one thing; folder navigation belongs to the list (arrows, `/`, Tab, Enter), not to deletion.
+**Consequences.** `parentProjectQuery` removed; `explorerNavigation` returns null for Backspace; tests assert Backspace is never prevented after separators, `..` and roots; `docs/project-mentions.md` updated. Coordinator-owned small fix.
+
 ## Open questions
 
 | ID | Question | Blocks | Asked of |

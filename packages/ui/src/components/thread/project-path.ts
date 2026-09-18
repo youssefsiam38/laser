@@ -138,14 +138,3 @@ export const projectMentionFormatter: Unstable_DirectiveFormatter = {
   ),
 };
 
-/** The parent spelling for Backspace after a separator, preserving its anchor. */
-export function parentProjectQuery(query: string): string | null {
-  query = query.replaceAll("\\", "/");
-  if (!query.endsWith("/")) return null;
-  if (query === "/" || /^[a-z]:\/$/iu.test(query) || /^\/\/[^/]+\/[^/]+\/$/u.test(query) || query === "~/" || /^%USERPROFILE%\/$/iu.test(query)) return null;
-  const withoutSlash = query.slice(0, -1);
-  if (withoutSlash === ".." || withoutSlash.endsWith("/..")) return `${query}../`;
-  const slash = withoutSlash.lastIndexOf("/");
-  if (slash < 0) return "";
-  return withoutSlash.slice(0, slash + 1);
-}

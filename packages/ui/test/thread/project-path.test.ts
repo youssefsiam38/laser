@@ -1,7 +1,6 @@
 import { expect, it } from "vitest";
 import {
   matchProjectMention,
-  parentProjectQuery,
   projectMentionFormatter,
   quotedProjectMentionPath,
   replaceProjectQuery,
@@ -38,13 +37,7 @@ it("keeps inner-space queries active and treats quoted insertions as finished", 
   expect(matchProjectMention("@server/ ", "@", 9)).toBeNull();
   expect(replaceProjectQuery("Read @ser then", 9, "server/")).toEqual({ text: "Read @server/ then", caret: 13 });
 });
-it.each([
-  ["a/b/", "a/"], ["server/", ""], ["./server/", "./"], ["../", "../../"],
-  ["..\\sibling\\", "../"], ["~/server/", "~/"], ["%USERPROFILE%/server/", "%USERPROFILE%/"],
-  ["/sibling/", "/"], ["C:\\code\\server\\", "C:/code/"],
-])("backs up from %s to %s", (query, parent) => expect(parentProjectQuery(query)).toBe(parent));
-it.each(["/", "C:/", "//server/share/", "~/", "%USERPROFILE%/"])("leaves root deletion to the input at %s", query => {
-  expect(parentProjectQuery(query)).toBeNull();
+it.each(["/", "C:/", "//server/share/", "~/", "%USERPROFILE%/", "server/", "../", "a/b/"])("leaves Backspace to the input at %s (D-299)", query => {
   const nav = explorerNavigation({ cwd: "/project", query, head: query, commonPrefix: "", loading: false, next: undefined, previous: undefined });
   expect(nav.key("Backspace", [], undefined, "@" + query, query.length + 1)).toBeNull();
 });
@@ -61,14 +54,14 @@ it("projects canonical host paths and anchors in-session insertions", () => {
   expect(nav.select(items[0]!, "@ser", 4)).toBeNull();
   expect(nav.select(items[1]!, "@a", 2)).toBeNull();
   expect(nav.key("/", items, items[0], "@ser", 4)).toEqual({ text: "@server/", caret: 8 });
-  expect(nav.key("Backspace", items, items[0], "@server/", 8)).toEqual({ text: "@", caret: 1 });
+  expect(nav.key("Backspace", items, items[0], "@server/", 8)).toBeNull();
 });
-it("keeps slash, Tab and Backspace navigation working for inner-space queries", () => {
+it("keeps slash and Tab navigation working for inner-space queries", () => {
   const item = explorerItems([{ name: "my folder", path: "/project/my folder", project: false, kind: "directory" }], "/project")[0]!;
   const nav = explorerNavigation({ cwd: "/project", query: "my fo", head: "", commonPrefix: "my folder", loading: false, next: undefined, previous: undefined });
   expect(nav.key("Tab", [item], item, "@my fo", 6)).toEqual({ text: "@my folder", caret: 10 });
   expect(nav.key("/", [item], item, "@my fo", 6)).toEqual({ text: "@my folder/", caret: 11 });
-  expect(nav.key("Backspace", [item], item, "@my folder/", 11)).toEqual({ text: "@", caret: 1 });
+  expect(nav.key("Backspace", [item], item, "@my folder/", 11)).toBeNull();
 });
 it("malformed folder metadata cannot be used for slash navigation", () => {
   const nav = explorerNavigation({ cwd: "/project", query: "folder", head: "", commonPrefix: "", loading: false, next: undefined, previous: undefined });

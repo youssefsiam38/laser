@@ -2,7 +2,7 @@ import type { ExplorerEntry } from "@lasercode/protocol";
 import type { Unstable_TriggerItem } from "@assistant-ui/react";
 import type { PickerNavigation } from "../assistant-ui/elements/composer-trigger-popover.aui.js";
 import type { ExplorerNavigationState } from "./use-directory-page.js";
-import { matchProjectMention, parentProjectQuery, projectMentionFormatter, replaceProjectQuery } from "./project-path.js";
+import { matchProjectMention, projectMentionFormatter, replaceProjectQuery } from "./project-path.js";
 
 /**
  * Explorer choices are path references, not uploaded contents. A selected
@@ -48,10 +48,9 @@ export function explorerNavigation(options: ExplorerNavigationState): PickerNavi
   return { select, key: (key, items, selected, text, caret) => {
     const match = matchProjectMention(text, "@", caret);
     if (!match) return null;
-    if (key === "Backspace") {
-      const parent = parentProjectQuery(match.query);
-      return parent === null || parent === match.query ? null : replaceProjectQuery(text, caret, parent);
-    }
+    // Backspace is deletion, nothing else (D-299): the input removes one
+    // character, whatever the query looks like.
+    if (key === "Backspace") return null;
     if (key === "/" && selected?.type === "directory" && match.query && !/(?:[\\/]$|(?:^|[\\/])\.{1,2}$)/u.test(match.query)) {
       const name = selected.metadata?.name;
       if (typeof name !== "string" || !name || /[\r\n\0/]/u.test(name)) return { text, caret };

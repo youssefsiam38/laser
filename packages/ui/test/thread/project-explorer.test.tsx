@@ -69,7 +69,6 @@ it('Enter and click insert readable paths while slash still descends', async () 
   await type('@ser'); await tick(); await key('/'); expect(input().value).toBe('@server/');
   await tick(); expect(options()[0]?.textContent).toContain('index.ts');
   await key('Enter'); expect(input().value).toBe('@./server/index.ts ');
-  await type('@server/'); await tick(); await key('Backspace'); expect(input().value).toBe('@');
 });
 it('Tab completes the common prefix without choosing a folder', async () => {
   await type('@node'); await tick(); await key('Tab'); expect(input().value).toBe('@node-'); expect(inserted).not.toHaveBeenCalled();
@@ -116,13 +115,14 @@ it.each(['a]b.md', 'a\nb.md', ':file[a].md', 'my folder.md', 'quote"name.md'])('
   expect(projectMentionFormatter.parse(input().value)[0]).toEqual({ kind: 'mention', type: 'file', id: name, label: name });
   expect(sent).not.toHaveBeenCalled(); expect(inserted).toHaveBeenCalledOnce();
 });
-it('root Backspace is not prevented, while folder-up still is', async () => {
-  await type('@/'); await tick();
-  const event = new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true, cancelable: true });
-  await act(async () => { input().dispatchEvent(event); }); expect(event.defaultPrevented).toBe(false);
-  await type('@server/'); await tick();
-  const up = new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true, cancelable: true });
-  await act(async () => { input().dispatchEvent(up); }); expect(up.defaultPrevented).toBe(true); expect(input().value).toBe('@');
+it('Backspace is never prevented: after a separator, after .., and at a root it deletes one character (D-299)', async () => {
+  for (const query of ['@/', '@server/', '@../', '@./server/']) {
+    await type(query); await tick();
+    const event = new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true, cancelable: true });
+    await act(async () => { input().dispatchEvent(event); });
+    expect(event.defaultPrevented).toBe(false);
+    expect(input().value).toBe(query);
+  }
 });
 it('literal pagination and sentinel-like filenames keep unique React/DOM identities and keyboard selection', async () => {
   const names = ['next', 'previous', '__page:next', 'action:006e006500780074'];
