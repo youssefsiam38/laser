@@ -1,35 +1,32 @@
-# Laser 0.9.1
+# Laser 0.9.2
 
-A repair release. Everything here came from using Laser for real work and finding it wanting.
+A repair release for long conversations and for Settings. Everything here came from using Laser for real work and finding it wanting.
 
-## The conversation follows you again
+## Reading upwards no longer loops
 
-If you were sitting at the bottom of a conversation, new work did not always scroll into view. The cause was small and unkind: nudging the wheel or tapping at the very bottom — where nothing can scroll — was treated as *you walking away*, and nothing ever brought the view back. One dead wheel notch and the conversation quietly left you 2,000 pixels behind for the rest of the session.
+In a long, tool-heavy conversation, scrolling up used to reach the top of what was loaded, then throw you back to the bottom of the same section — over and over. The older page had actually arrived; the transcript then re-placed you from an estimate that happened to equal the bottom of the loaded window. Sometimes the whole window you had built was replaced by the newest messages instead.
 
-Now the live edge is decided by where the view actually is, not by what your fingers did. Anything that arrives while you are at the bottom keeps you there: the agent's reply, a message from a child agent, a result appearing inside an actions group you already opened, a row that grows as an image or a diff finishes rendering. Scroll away deliberately — wheel, touch, keyboard or the scrollbar, even in the middle of a streaming answer — and your place is kept exactly.
+Now an older page arrives above you and you stay exactly where you were reading. Older history occupies real scroll range before it loads, so the scrollbar thumb reflects the size of the conversation, and dragging it deep into the past loads pages in order. There is no loading card: unloaded history is drawn as quiet placeholder rows that become the real messages in place. Paging keeps working while the agent is still writing, through compaction, and after a device trimmed the view under memory pressure; the only time you see text and a button is when a compaction invalidated the page you held and you need to reload the recent messages.
 
-## Goals no longer pause themselves
+## Full replies and reasoning read as documents
 
-A long autonomous goal could stop overnight with no explanation. It was not the agent deciding to stop: any interrupted request — a cancelled turn, a provider hiccup, a child agent ending badly — was being read as an instruction to pause the whole goal. On top of that, an inherited safety limit paused goals after 25 automatic turns.
+"Full reply", "Full reasoning" and "Full message" now render Markdown the way the transcript does — headings, lists, code with highlighting, tables, links, math — in a reading column, with Find on the rendered text, whole-body Copy and Download unchanged, and a Plain text switch. Very long bodies open as plain text and say so. Tool output and requests keep the plain reader.
 
-Now only a real decision stops a goal. An interruption cancels that one step and the goal stays active, and Laser's own limits are off by default, so long autonomous work runs as long as the work takes. Every stop that was not the agent's own choice records what caused it, so the next one explains itself.
+## Settings have one scope, and it is yours to choose
 
-## Mentioning a file looks like a path
+Settings, MCP servers, Web Search, Features and Agents now share one explicit scope — Global, Project or Effective — chosen once at the top of Settings. Nothing infers a project from the open conversation any more. Project shows a project's own definitions beside its inherited Global ones, with an explicit Override; Effective is a read-only preview of what applies. Unsaved edits are guarded when you switch scope, follow a link, or close. Deleting an agent removes exactly the definition you are looking at, and a project that ships its own agent definitions asks for trust before Laser reads them, like project settings.
 
-Picking a file or folder with `@` used to insert `:directory[/home/you/projects/thing/]`. It now inserts `@./server/index.ts` — what you would have typed. Package names and handles in ordinary prose (`@lasercode/protocol`) stay as written, and conversations saved before this release still render their file links.
+## Images keep their words
 
-## The transcript behaves like a web page
+A prompt with an image and a caption showed only the image, and "Show full message" opened empty. The caption stays with the image now, and the full message opens.
 
-Double-click selects a word, triple-click selects a block, right-click opens the menu your browser or system actually provides — including spelling suggestions and Look Up. The composer spellchecks like any text box you type in. Quoting is now a "Quote selection" item in a message's menu, so it works with touch as well as a keyboard shortcut (Ctrl/Cmd+Shift+9).
+## Small things that were very annoying
 
-## Actions say what they were doing
+- `@/` in the composer lists the root of your machine; any path browses. Backspace in the mention picker only deletes a character — it no longer rewrites `@../` into `@../../`.
+- Spelling suggestions in the packaged app on Linux.
+- A conversation started by picking an agent, before typing anything, still lets you change the agent.
+- The agent's tool rows remain selectable text.
 
-The short line an agent writes for each thing it does now titles the row wherever it appears — while it runs and after it finishes, on its own and inside a group of actions. A finished group reads as a list of intentions instead of eighteen truncated shell commands, with the exact command a line below, still searchable. Search now highlights those lines correctly, in live conversations and in saved history.
+## Not in this release
 
-## Agents get names people can read
-
-An agent naming its helper now writes "Mention format" rather than `mention-format`. Names recorded before this release read that way too, everywhere they appear.
-
-## Fallback chains work with agent-chosen models
-
-If a model came from the agent you picked rather than from the model selector, its fallback chain never activated, so a provider outage ended the turn instead of moving to the next model. Chains now follow the model the conversation is actually on, whoever chose it.
+Under heavy memory pressure the last of many images in one conversation can still show as unavailable until you reopen it; that repair (M16-T82) follows in 0.9.3.

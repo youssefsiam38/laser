@@ -4003,6 +4003,11 @@ Consequences: no RP-2 requirement is dropped. T4–T8 may start only after T2's 
 **Why.** `@/` answered "outside this project and your home folder" — an operating system without a root. The picker returns names and kinds only, and the agent it feeds already reads whatever the person can; the boundary protected nothing and blocked real work. Laser is built for people who know their machine.
 **Consequences.** `explorerProjectArea` deleted; permission/ENOENT errors keep their sentences; `docs/project-mentions.md` and host/router/UI tests updated. Supersedes the "bounded to project area ∪ home" note under M16-T65. Coordinator-owned small fix; the person does browser acceptance.
 
+### D-301 · 2026-09-18 · 0.9.2 ships without the 25-image admission repair
+**Decision.** M16-T82 (every requested image accessible under cache pressure) is removed from M16-T79's prerequisites; 0.9.2 ships the history, viewport, Settings/Agents, Markdown viewer, mention and caption repairs. T82 stays open for 0.9.3.
+**Why.** The person asked for the release right away after the reasoning-segment fix; the measured state (24 of 25 images decoded after settlement, the 25th recoverable by reopening) is disclosed in the notes rather than blocking the repairs people are waiting for.
+**Consequences.** PLAN.md T79 dependency line drops T82; release notes carry a "Not in this release" section; T82 keeps its plan row and evidence. Supersedes the T82 prerequisite in D-294/D-295 planning notes for 0.9.2 only.
+
 ## Open questions
 
 | ID | Question | Blocks | Asked of |
