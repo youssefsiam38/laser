@@ -572,15 +572,33 @@ export function entryBodies(entry: unknown): EntryBody[] {
  * `entryBodies` is for an authority that is about to answer with the text; a
  * client deciding whether it may keep a record must not pay for the text to
  * find out. Strings are counted where they already are, and a structured value
- * is walked through the same bounded projection the excerpt uses, which writes
- * at most `maxBytes` and counts the rest.
+ * is walked through the bounded projection counter without retaining output.
+ * Only complete user prompt text at or below `retainUserTextUpTo` is returned.
  */
-export function entryBodyMetadata(entry: unknown, maxBytes = 0): Array<{ component: BodyComponent; totalBytes: number; unknown?: true }> {
+export interface EntryBodyMetadataOptions {
+  retainUserTextUpTo?: number;
+}
+
+/** The one rule for retaining complete prompt prose beside referenced bodies. */
+export function completeUserTextIfFits(
+  component: BodyComponent,
+  totalBytes: number,
+  limit: number,
+  text: () => string,
+): string | undefined {
+  return component.kind === "user_text" && limit > 0 && totalBytes <= limit ? text() : undefined;
+}
+
+export function entryBodyMetadata(entry: unknown, options: EntryBodyMetadataOptions = {}): Array<{ component: BodyComponent; totalBytes: number; text?: string; unknown?: true }> {
+  const retainUserTextUpTo = options.retainUserTextUpTo ?? 0;
   const value = record(entry);
   const type = typeof value.type === "string" ? value.type : "";
-  const rows: Array<{ component: BodyComponent; totalBytes: number; unknown?: true }> = [];
+  const rows: Array<{ component: BodyComponent; totalBytes: number; text?: string; unknown?: true }> = [];
   const structured = (component: BodyComponent, node: unknown): void => {
-    const bounded = boundedBodyText(node, maxBytes);
+    // Classification needs the exact size, not an excerpt. In particular,
+    // asking to retain fitting prompt text must not allocate projections for
+    // unrelated structured tool/custom bodies.
+    const bounded = boundedBodyText(node, 0);
     // A body whose size cannot be predicted without building it is declared
     // unknown and treated as oversized: the view points at it rather than
     // guessing, and never records zero for it.
@@ -608,7 +626,10 @@ export function entryBodyMetadata(entry: unknown, maxBytes = 0): Array<{ compone
   const message = record(value.message);
   const role = typeof message.role === "string" ? message.role : "";
   if (role === "user") {
-    rows.push({ component: { kind: "user_text" }, totalBytes: partsSize(message.content, "text", "text") });
+    const component = { kind: "user_text" } as const;
+    const totalBytes = partsSize(message.content, "text", "text");
+    const text = completeUserTextIfFits(component, totalBytes, retainUserTextUpTo, () => textPartsOf(message.content, "text", "text"));
+    rows.push({ component, totalBytes, ...(text !== undefined ? { text } : {}) });
     const content = Array.isArray(message.content) ? message.content : [];
     let image = 0;
     for (const part of content) {
@@ -965,6 +986,8 @@ export function createBodyRangeReader(): BodyRangeReader {
  * An entry a page did not deliver because one of its bodies is larger than the
  * caller asked to receive. Identity and shape only: the record itself is never
  * rewritten, so nothing a client holds is a lossy copy of a canonical entry.
+ * A complete prompt-text component may accompany the identity when it fits the
+ * same per-body limit; oversized image bytes remain references only.
  */
 export interface ElidedEntry {
   id: string;
@@ -976,7 +999,14 @@ export interface ElidedEntry {
   /** The calls an assistant record made, so their rows survive the elision. */
   toolCalls?: Array<{ id: string; name: string }>;
   /** Exact size and digest of every body, so a client can address them. */
-  bodies: Array<{ component: BodyComponent; totalBytes: number; contentDigest: string; regions?: AttachmentRegions }>;
+  bodies: Array<{
+    component: BodyComponent;
+    totalBytes: number;
+    contentDigest: string;
+    /** Complete prompt text when it fits beside another oversized prompt component. */
+    text?: string;
+    regions?: AttachmentRegions;
+  }>;
 }
 
 /** A one-shot hasher around an authority's own digest function. */
@@ -1026,16 +1056,19 @@ export function elideOversizedEntries(
       ...(typeof record(value.message).toolCallId === "string" ? { toolCallId: record(value.message).toolCallId as string } : {}),
       ...(entryToolCalls(entry).length > 0 ? { toolCalls: entryToolCalls(entry) } : {}),
       bodies: bodies.map((body) => {
-        // A prompt's attachments are named here, bounded, so a surface holding
-        // only an excerpt still shows its file chips and can read one of them
-        // without scanning the body it does not have (RP-5b §2).
-        const regions = body.component.kind === "user_text"
+        const totalBytes = utf8ByteLength(body.text);
+        const text = completeUserTextIfFits(body.component, totalBytes, bodyLimit, () => body.text);
+        // A prompt's attachments are named only when its complete text is not
+        // present. Publishing both costs wire bytes and gives the client two
+        // representations of the same files, one of which it must discard.
+        const regions = text === undefined && body.component.kind === "user_text"
           ? attachmentRegions(body.text, () => hasherOf(digest))
           : undefined;
         return {
           component: body.component,
-          totalBytes: utf8ByteLength(body.text),
+          totalBytes,
           contentDigest: digest(body.text),
+          ...(text !== undefined ? { text } : {}),
           ...(regions && (regions.items.length > 0 || regions.truncated || regions.omitted) ? { regions } : {}),
         };
       }),

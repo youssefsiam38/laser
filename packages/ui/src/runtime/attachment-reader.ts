@@ -11,7 +11,7 @@
 import { ATTACHMENT_MAX_BYTES, BODY_REGION_MAX_ITEMS, BODY_REGION_METADATA_MAX_BYTES, createAttachmentScanner, sameBodyComponent, utf8ByteLength, type AttachmentRegions, type ClientRequests } from "@lasercode/protocol";
 
 import type { BodyRef } from "./body-excerpt.js";
-import { BODY_SLICE_BYTES, BodyReplyRefused, DIGEST, checkRangeReply, streamBody, type RangeRequest, type RevisionRequest } from "./body-reader.js";
+import { BODY_SLICE_BYTES, BodyReplyRefused, BodyRevisionFence, DIGEST, checkRangeReply, streamBody, type RangeRequest, type RevisionRequest } from "./body-reader.js";
 import { Sha256Stream } from "./sha256.js";
 
 /**
@@ -37,17 +37,17 @@ export async function readAttachment(
     return { ok: false, reason: "malformed" };
   }
   if (ref.region.bytes > ATTACHMENT_STORED_MAX_BYTES) return { ok: false, reason: "too-large" };
-  const revision = ref.revision ?? options.revision ?? (options.revisionOf ? await options.revisionOf(path) : "");
+  const revisions = new BodyRevisionFence(path, ref.revision ?? options.revision, ref.contentDigest, options.revisionOf);
   const running = new Sha256Stream();
   const parts: string[] = [];
   let bytes = 0;
   let offset = ref.region.offset;
-  let seenTotal: number | undefined;
+  let seenTotal: number | undefined = ref.totalBytes;
   let seenAuthority: "live" | "durable" | undefined;
   let digest: string | undefined = ref.contentDigest;
   for (;;) {
     if (options.signal?.aborted) return { ok: false, reason: "short" };
-    const reply = await checkRangeReply(
+    const reply = await revisions.read(async (revision) => checkRangeReply(
       await request({
         path,
         environmentKey: options.environmentKey ?? "",
@@ -59,7 +59,7 @@ export async function readAttachment(
         region: ref.region,
       }),
       { revision, entryId: ref.entryId, component: ref.component, offset, limit: BODY_SLICE_BYTES, totalBytes: seenTotal, region: ref.region, regionDigest: digest, ...(seenAuthority ? { authority: seenAuthority } : {}) },
-    );
+    ), () => !options.signal?.aborted);
     seenTotal = reply.totalBytes;
     seenAuthority = reply.authority;
     digest = reply.regionDigest ?? digest;
@@ -86,9 +86,10 @@ export async function readAttachment(
  *
  * The fallback is deliberately narrow: only a refusal that means "this
  * authority does not know about attachment regions" — an unknown method, or
- * invalid params naming that capability — leads to it. A stale revision, a
- * refusal to authorize, a digest that did not match, a network failure: each of
- * those is the answer, and is returned as it is.
+ * invalid params naming that capability — leads to it. A stale regions page
+ * may also fall back only when the body has an original digest, because the
+ * range stream can prove that identity; authorization, digest and network
+ * failures remain final.
  *
  * The fallback itself holds nothing: the parent is streamed through ordinary
  * range replies, each one verified, into the shared recogniser, which keeps a
@@ -120,10 +121,14 @@ export async function readAttachmentRegions(
       ...(options.limit !== undefined ? { limit: options.limit } : {}),
     });
   } catch (error) {
-    if (!lacksRegionSupport(error)) throw error;
+    const stale = (error as { code?: number } | null)?.code === -32007;
+    // A regions page carries item digests but no whole-body digest echo, so it
+    // cannot safely cross revisions itself. On a stale page, scan the body
+    // through digest-fenced range replies instead. Digestless refs still fail.
+    if (!lacksRegionSupport(error) && !(stale && options.revisionOf && ref.contentDigest && DIGEST.test(ref.contentDigest))) throw error;
   }
-  // An authority from before this existed: read the body and look, holding a
-  // bounded carry and nothing else.
+  // An authority from before this existed, or a stale regions page: read the
+  // body and look, holding a bounded carry and nothing else.
   const scanner = createAttachmentScanner(
     () => { const running = new Sha256Stream(); return { update: (chunk: string) => running.updateText(chunk), digest: () => running.digest() }; },
     {
@@ -133,7 +138,7 @@ export async function readAttachmentRegions(
       ...(options.from !== undefined ? { from: options.from } : {}),
     },
   );
-  const outcome = await streamBody(request, path, ref, { ...options, revision }, (slice) => { scanner.push(slice); });
+  const outcome = await streamBody(request, path, ref, options, (slice) => { scanner.push(slice); });
   const found = scanner.end();
   // The parent was verified as a whole before anything found in it is used.
   if (!outcome.verified) throw new BodyReplyRefused("content-digest");

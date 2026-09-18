@@ -15,14 +15,16 @@ import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { FileOpenerProvider } from "../../src/components/thread/FileOpener.js";
 import { LaserStoreProvider, createStateStore } from "../../src/runtime/LaserProvider.js";
 import { projectMessages } from "../../src/runtime/projection.js";
-import { initialState, reduce } from "../../src/store.js";
+import { blocksFromEntries, initialState, reduce } from "../../src/store.js";
 import { ThreadMessage } from "../../src/components/thread/messages.js";
 import { BODY_VIEWER_AGGREGATE_MAX_BYTES, BodyReplyRefused, BodyWindow, COPY_INFLIGHT_MAX_BYTES, copyWholeBody, FIND_QUERY_MAX_BYTES, findInBody, IMAGE_BLOB_MAX, IMAGE_SURFACE_MAX_BYTES, ImageBlobs, indexOfFolded, streamBody } from "../../src/runtime/body-reader.js";
-import { sliceUtf8RangeFrom, utf8ByteLength } from "@lasercode/protocol";
+import { elideOversizedEntries, sliceUtf8RangeFrom, utf8ByteLength } from "@lasercode/protocol";
 import { partial } from "../../src/components/thread/LargeBodyViewer.js";
 import { sessionState } from "../agents/fixtures.js";
 import { LIVE_TAIL_MAX_BYTES, MESSAGE_RENDER_MAX_BYTES } from "../../src/runtime/body-excerpt.js";
 import { measureView } from "../../src/runtime/view-measure.js";
+import { formatBytes } from "../../src/format.js";
+import { stubOfElided } from "../../src/runtime/retained-entries.js";
 
 const SESSION = "/project/session.jsonl";
 const BODY = "answer ".repeat(600_000); // ~4 MB, for the transcript rows
@@ -97,6 +99,64 @@ async function mount(entries: unknown[], leafId: string) {
   return view;
 }
 
+describe("a prompt with an oversized image", () => {
+  const attached = (prose: string) => {
+    const content = "attachment body must stay in its file chip";
+    const wrapper = `<attached-file name="notes.txt" type="text/plain" size="${utf8ByteLength(content)}">\n${content}\n</attached-file>`;
+    return { content, text: `${prose}\n\n${wrapper}` };
+  };
+  const entry = (text: string) => ({ id: "e0", parentId: null, type: "message", message: { role: "user", content: [
+    { type: "text", text },
+    { type: "image", mimeType: "image/png", data: "A".repeat(20_000) },
+  ] } });
+
+  it("renders its fitting text inline without a body fold", async () => {
+    const text = "Image prompt text is 28 B!!!";
+    const view = await mount([entry(text)], "e0");
+
+    const prompt = view.blocks[0] as { text: string; bodies?: { text?: { totalBytes: number; excerpt: { bytes: number } } } };
+    expect(prompt.text).toBe(text);
+    expect(prompt.bodies?.text?.totalBytes).toBe(28);
+    expect(prompt.bodies?.text?.excerpt.bytes).toBe(28);
+    expect(container.querySelector('[data-role="user"]')?.textContent).toContain(text);
+    expect(container.querySelector('[data-slot="body-overflow"]')).toBeNull();
+  });
+
+  it("parses one fitting attachment exactly once from a locally retained prompt", async () => {
+    const prompt = attached("Review the image and file.");
+    const view = await mount([entry(prompt.text)], "e0");
+    const block = view.blocks[0] as Extract<(typeof view.blocks)[number], { kind: "user" }>;
+
+    expect(block.text).toBe("Review the image and file.");
+    expect(block.files).toEqual([{ name: "notes.txt", mediaType: "text/plain", size: utf8ByteLength(prompt.content), content: prompt.content }]);
+    expect(container.textContent).not.toContain("<attached-file");
+    expect(container.textContent).not.toContain(prompt.content);
+    expect(container.textContent?.match(/notes\.txt/g)).toHaveLength(1);
+  });
+
+  it("parses one fitting attachment exactly once from a wire-elided prompt", () => {
+    const prompt = attached("Review the image and file.");
+    const elided = elideOversizedEntries([entry(prompt.text)], 16 * 1024, text => `digest-${utf8ByteLength(text)}`).elided[0]!;
+    const earlier = elideOversizedEntries([entry("old".repeat(100_000))], 16 * 1024, text => `digest-${utf8ByteLength(text)}`).elided[0]!;
+    earlier.id = "old-prompt";
+    earlier.parentId = "root";
+    elided.parentId = "middle";
+    const entries = [
+      { id: "root", parentId: null, type: "custom", content: "root" },
+      { id: "middle", parentId: "old-prompt", type: "message", message: { role: "assistant", content: [{ type: "text", text: "middle" }] } },
+      { id: "leaf", parentId: "e0", type: "message", message: { role: "assistant", content: [{ type: "text", text: "leaf" }] } },
+    ];
+    const blocks = blocksFromEntries(entries, "leaf", undefined, { stubs: [stubOfElided(earlier), stubOfElided(elided)], revision: "r1.env.1" });
+    const block = blocks.find(row => row.kind === "user" && row.entryId === "e0") as Extract<(typeof blocks)[number], { kind: "user" }>;
+
+    expect(block.text).toBe("Review the image and file.");
+    expect(block.files).toEqual([{ name: "notes.txt", mediaType: "text/plain", size: utf8ByteLength(prompt.content), content: prompt.content }]);
+    expect(block.text).not.toContain("<attached-file");
+    expect(block.files).toHaveLength(1);
+    expect(block.bodies?.images?.[0]?.totalBytes).toBe(20_000);
+  });
+});
+
 describe("a reply the window is holding an excerpt of", () => {
   it("folds into the reply with one action that says how much there is", async () => {
     await mount([
@@ -106,7 +166,7 @@ describe("a reply the window is holding an excerpt of", () => {
 
     const notice = container.querySelector('[data-slot="body-overflow"]');
     expect(notice).not.toBeNull();
-    expect(notice!.textContent).toMatch(/^Show full reply · \d+\.\d MB$/);
+    expect(notice!.textContent).toBe(`Show full reply · ${formatBytes(new TextEncoder().encode(BODY).byteLength)}`);
     const button = container.querySelector('[data-slot="body-overflow-open"]');
     expect(button).toBeDefined();
     // The row it belongs to renders only its excerpt, not four megabytes.
@@ -300,6 +360,48 @@ describe("the bounded window over one body", () => {
     await expect(window.more()).rejects.toThrow(BodyReplyRefused);
   });
 
+  it("allows explicit retry after the initial live revision lookup fails", async () => {
+    const text = "same body";
+    const digest = await digestOf(text);
+    const revisionOf = vi.fn()
+      .mockRejectedValueOnce(new Error("Connection interrupted"))
+      .mockResolvedValue("r2.env.2");
+    const request = vi.fn(async (params: Record<string, unknown>) => ({
+      authority: "durable", revision: params.revision, entryId: params.entryId,
+      component: params.component, totalBytes: text.length, offset: 0,
+      bytes: text.length, truncated: false, sliceDigest: digest, contentDigest: digest, text,
+    }));
+    const window = new BodyWindow(request as never, SESSION,
+      { entryId: "e1", component: { kind: "assistant_text" }, totalBytes: text.length,
+        contentDigest: digest, excerpt: { offset: 0, bytes: 0 } } as never,
+      128 * 1024, "env", revisionOf);
+    await expect(window.more()).rejects.toThrow("Connection interrupted");
+    expect(request).not.toHaveBeenCalled();
+    await window.more();
+    expect(revisionOf).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(window.getSnapshot().slices[0]?.text).toBe(text);
+  });
+
+  it("refreshes one stale revision and validates the original body identity", async () => {
+    const text = "same body";
+    const digest = await digestOf(text);
+    const seen: string[] = [];
+    const request = vi.fn(async (params: Record<string, unknown>) => {
+      const revision = params.revision as string;
+      seen.push(revision);
+      if (revision === "r1.env.1") throw Object.assign(new Error("revision moved"), { code: -32007 });
+      return { authority: "durable", revision, entryId: params.entryId, component: params.component, totalBytes: text.length,
+        offset: 0, bytes: text.length, truncated: false, sliceDigest: await digestOf(text), contentDigest: digest, text };
+    });
+    const window = new BodyWindow(request as never, SESSION,
+      { entryId: "e1", component: { kind: "assistant_text" }, totalBytes: text.length, revision: "r1.env.1", contentDigest: digest, excerpt: { offset: 0, bytes: 0 } } as never,
+      128 * 1024, "env", async () => "r2.env.2");
+    await window.more();
+    expect(seen).toEqual(["r1.env.1", "r2.env.2"]);
+    expect(window.getSnapshot().slices[0]?.text).toBe(text);
+  });
+
   it("lets a read that lands after a clear touch nothing of the next one", async () => {
     let release: (() => void) | undefined;
     const gate = new Promise<void>(resolve => { release = resolve; });
@@ -307,12 +409,12 @@ describe("the bounded window over one body", () => {
     const request = vi.fn(async (params: Record<string, unknown>) => {
       const old = phase === "old";
       if (old) await gate;
-      // The successor reads a different body entirely: another revision,
-      // another size, another digest.
+      // The successor reads at another revision with the reference's same
+      // declared size; this test isolates generation fencing, not identity.
       const text = old ? "oldold88" : "newnew88";
       return {
         authority: "durable", revision: old ? "r1.env.1" : "r2.env.9", entryId: params.entryId as string, component: params.component,
-        totalBytes: old ? HUGE_TOTAL : HUGE_TOTAL + 4096, offset: params.offset as number, bytes: 8,
+        totalBytes: HUGE_TOTAL, offset: params.offset as number, bytes: 8,
         next: (params.offset as number) + 8, truncated: true,
         sliceDigest: await digestOf(text), contentDigest: old ? "a".repeat(64) : "b".repeat(64), text,
       } as never;
@@ -330,7 +432,7 @@ describe("the bounded window over one body", () => {
     await window.more();
     const after = window.getSnapshot();
     expect(after.slices.map(slice => slice.text)).toEqual(["newnew88"]);
-    expect(after.totalBytes).toBe(HUGE_TOTAL + 4096);
+    expect(after.totalBytes).toBe(HUGE_TOTAL);
 
     release!();
     // Whether the late read finishes or is refused, it is silent.
@@ -342,7 +444,7 @@ describe("the bounded window over one body", () => {
     await window.more();
     const next = window.getSnapshot();
     expect(next.slices.at(-1)!.text).toBe("newnew88");
-    expect(next.totalBytes).toBe(HUGE_TOTAL + 4096);
+    expect(next.totalBytes).toBe(HUGE_TOTAL);
   });
 
   it("reads a newly settled body at one current revision, and refuses another body served at a newer one", async () => {
@@ -484,6 +586,29 @@ describe("finding and copying what the window does not hold", () => {
     expect(request.mock.calls.length).toBeGreaterThan(3);
     const absent = await findInBody(request as never, SESSION, { entryId: "e1", component: { kind: "tool_result" }, totalBytes: body.length, revision: "r", excerpt: { offset: 0, bytes: 0 } }, "not-in-there");
     expect(absent).toBeUndefined();
+  });
+
+  it("refreshes stale stream and find reads once without changing their identity", async () => {
+    const body = "prefix needle suffix";
+    const digest = await digestOf(body);
+    const makeRequest = () => vi.fn(async (params: Record<string, unknown>) => {
+      const revision = params.revision as string;
+      if (revision === "r1.env.1") throw Object.assign(new Error("revision moved"), { code: -32007 });
+      return { authority: "durable", revision, entryId: params.entryId, component: params.component, totalBytes: body.length,
+        offset: 0, bytes: body.length, truncated: false, sliceDigest: await digestOf(body), contentDigest: digest, text: body };
+    });
+    const ref = { entryId: "e1", component: { kind: "tool_result" as const }, totalBytes: body.length,
+      revision: "r1.env.1", contentDigest: digest, excerpt: { offset: 0, bytes: 0 } };
+    const streamed: string[] = [];
+    const streamRequest = makeRequest();
+    const outcome = await streamBody(streamRequest as never, SESSION, ref, { revisionOf: async () => "r2.env.2" }, slice => { streamed.push(slice); });
+    expect(outcome.verified).toBe(true);
+    expect(streamed.join("")).toBe(body);
+    expect(streamRequest).toHaveBeenCalledTimes(2);
+
+    const findRequest = makeRequest();
+    await expect(findInBody(findRequest as never, SESSION, ref, "needle", { revisionOf: async () => "r2.env.2" })).resolves.toBe(7);
+    expect(findRequest).toHaveBeenCalledTimes(2);
   });
 
   it("streams a whole body to a consumer without keeping it", async () => {
@@ -637,6 +762,40 @@ describe("images the window points at", () => {
     // Whatever it built was revoked rather than published into the new environment.
     expect(revoked.length).toBe(created.length);
     expect(blobs.held.images).toBe(0);
+  });
+
+  it("rebuilds an unchanged image after its published revision goes stale", async () => {
+    const text = "QUJD";
+    const digest = await digestOf(text);
+    const revisions: string[] = [];
+    const request = vi.fn(async (params: Record<string, unknown>) => {
+      const revision = params.revision as string;
+      revisions.push(revision);
+      if (revision === "r1.env.1") throw Object.assign(new Error("revision moved"), { code: -32007 });
+      return { authority: "durable", revision, entryId: params.entryId, component: params.component, totalBytes: 4,
+        offset: 0, bytes: 4, truncated: false, sliceDigest: await digestOf(text), contentDigest: digest, text };
+    });
+    const blobs = new ImageBlobs(request as never, "env", async () => "r2.env.2");
+    const url = await blobs.load("stale", SESSION, { ...refOf(1, 4, 1024), revision: "r1.env.1", contentDigest: digest }, "image/png");
+    expect(url).toBe("blob:1");
+    expect(revisions).toEqual(["r1.env.1", "r2.env.2"]);
+    expect(blobs.committed).toEqual(blobs.held);
+  });
+
+  it("releases a reservation when clearing during a late revision refresh", async () => {
+    let resolveRevision!: (revision: string) => void;
+    const refreshed = new Promise<string>(resolve => { resolveRevision = resolve; });
+    const request = vi.fn(async () => { throw Object.assign(new Error("revision moved"), { code: -32007 }); });
+    const blobs = new ImageBlobs(request as never, "env", async () => refreshed);
+    const digest = "a".repeat(64);
+    const pending = blobs.load("late-refresh", SESSION, { ...refOf(1, 4, 1024), revision: "r1.env.1", contentDigest: digest }, "image/png");
+    await Promise.resolve();
+    blobs.clear();
+    resolveRevision("r2.env.2");
+    expect(await pending).toBeUndefined();
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(blobs.committed).toEqual({ images: 0, bytes: 0, surface: 0 });
+    expect(created).toHaveLength(0);
   });
 
   it("does not read the same image twice while one read is in flight", async () => {

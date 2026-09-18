@@ -152,6 +152,34 @@ describe("leaving an oversized record out of a page", () => {
     }]);
   });
 
+  it("keeps a fitting prompt body beside an oversized image", () => {
+    const text = "Image prompt text is 28 B!!!";
+    const image = "A".repeat(20_000);
+    const entry = { id: "image-prompt", parentId: null, type: "message", message: { role: "user", content: [
+      { type: "text", text },
+      { type: "image", mimeType: "image/png", data: image },
+    ] } };
+    const page = elideOversizedEntries([entry], 16 * 1024, digest);
+    expect(page.entries).toEqual([]);
+    expect(page.elided[0]!.bodies).toEqual([
+      { component: { kind: "user_text" }, totalBytes: 28, contentDigest: "d28", text },
+      { component: { kind: "image", index: 0 }, totalBytes: 20_000, contentDigest: "d20000" },
+    ]);
+  });
+
+  it("does not publish attachment regions beside complete retained prompt text", () => {
+    const content = "kept attachment";
+    const text = `<attached-file name="kept.txt" type="text/plain" size="${content.length}">\n${content}\n</attached-file>`;
+    const entry = { id: "image-attachment", parentId: null, type: "message", message: { role: "user", content: [
+      { type: "text", text },
+      { type: "image", mimeType: "image/png", data: "A".repeat(20_000) },
+    ] } };
+    const page = elideOversizedEntries([entry], 16 * 1024, digestOfText);
+    const prose = page.elided[0]!.bodies.find(body => body.component.kind === "user_text")!;
+    expect(prose.text).toBe(text);
+    expect(prose.regions).toBeUndefined();
+  });
+
   it("keeps a record with no identity rather than pointing at something unreadable", () => {
     const anonymous = { type: "message", message: { role: "assistant", content: [{ type: "text", text: "z".repeat(50_000) }] } };
     const page = elideOversizedEntries([anonymous], 1024, digest);
@@ -326,6 +354,20 @@ describe("the bounded canonical projection", () => {
     const args = entryBodyMetadata(unpredictable).find(row => row.component.kind === "tool_args");
     expect(args?.unknown).toBe(true);
     expect(args?.totalBytes).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it("retains no projection for non-user bodies when prompt retention is enabled", () => {
+    const entry = { id: "e3", parentId: null, type: "message", message: { role: "assistant", content: [
+      { type: "text", text: "answer".repeat(2_000) },
+      { type: "thinking", thinking: "reasoning".repeat(30_000) },
+      { type: "toolCall", id: "c3", name: "write", arguments: { content: "x".repeat(2_000_000) } },
+    ] } };
+    resetBodyProjectionWork();
+    const rows = entryBodyMetadata(entry, { retainUserTextUpTo: 16 * 1024 });
+
+    expect(rows.every(row => row.text === undefined)).toBe(true);
+    expect(rows.find(row => row.component.kind === "tool_args")!.totalBytes).toBeGreaterThan(2_000_000);
+    expect(bodyProjectionWork().emittedChars).toBe(0);
   });
 });
 

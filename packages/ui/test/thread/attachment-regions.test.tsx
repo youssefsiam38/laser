@@ -163,6 +163,23 @@ describe("an authority that has never heard of attachment regions", () => {
     }
   });
 
+  it("handles a stale regions page by scanning digest-fenced body ranges", async () => {
+    const pageRequest = vi.fn(async () => { throw Object.assign(new Error("revision moved"), { code: -32007 }); });
+    const honest = authority();
+    const range = vi.fn(async (params: Record<string, unknown>) => {
+      if (params.revision === "r1.env.2") throw Object.assign(new Error("revision moved"), { code: -32007 });
+      return { ...await honest(params), revision: params.revision };
+    });
+    const revisionOf = vi.fn(async () => "r2.env.3");
+    const found = await readAttachmentRegions(pageRequest as never, range as never, SESSION, ref as never, { revisionOf });
+    expect(found.items.map(item => item.name)).toEqual(["app.ts"]);
+    // `entry_regions` has no whole-body digest echo, so it is not retried at
+    // the new revision; verified range reads perform the safe recovery.
+    expect(pageRequest).toHaveBeenCalledTimes(1);
+    expect(range.mock.calls.slice(0, 2).map(([params]) => params.revision)).toEqual(["r1.env.2", "r2.env.3"]);
+    expect(revisionOf).toHaveBeenCalledOnce();
+  });
+
   it("refuses what it found when the body it read was not this body", async () => {
     const wrong = authority({ contentDigest: "e".repeat(64) });
     await expect(readAttachmentRegions(refuse(-32601, "unknown method") as never, wrong as never, SESSION, ref as never, {}))
@@ -204,6 +221,21 @@ describe("a prompt the view only points at", () => {
       expect((params as { region: unknown }).region).toEqual({ offset: item.offset, bytes: item.bytes });
       expect((params as { revision: string }).revision).toBe("r1.env.2");
     }
+  });
+
+  it("refreshes a stale region read against the original region digest", async () => {
+    const item = regions.items[0]!;
+    const honest = authority();
+    const request = vi.fn(async (params: Record<string, unknown>) => {
+      if (params.revision === "r1.env.2") throw Object.assign(new Error("revision moved"), { code: -32007 });
+      return { ...await honest(params), revision: params.revision };
+    });
+    const outcome = await readAttachment(request as never, SESSION,
+      { entryId: "u1", component: { kind: "user_text" }, totalBytes: utf8ByteLength(prompt), revision: "r1.env.2",
+        contentDigest: item.contentDigest, region: { offset: item.offset, bytes: item.bytes }, excerpt: { offset: 0, bytes: 0 } } as never,
+      { revisionOf: async () => "r2.env.3" });
+    expect(outcome).toMatchObject({ ok: true, text: fileText });
+    expect(request.mock.calls.slice(0, 2).map(([params]) => params.revision)).toEqual(["r1.env.2", "r2.env.3"]);
   });
 
   it("refuses bytes that are not this file's, an echo that does not match, and a region it cannot address", async () => {

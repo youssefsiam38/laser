@@ -342,10 +342,13 @@ function bodyRefsOf(block: Block): BodyRef[] {
  * What one pointer costs to hold: its identity, its place in the tree and one
  * small row per body. Counted exactly, like everything else here.
  */
-function stubBytes(stub: EntryStub): number {
+export function entryStubBytes(stub: EntryStub): number {
   let bytes = byteLength(stub.id) + byteLength(stub.parentId ?? "") + byteLength(stub.type)
     + byteLength(stub.role ?? "") + byteLength(stub.toolCallId ?? "") + byteLength(stub.at ?? "");
-  for (const body of stub.bodies) bytes += byteLength(body.component.kind) + 16 + byteLength(body.contentDigest ?? "");
+  for (const body of stub.bodies) {
+    bytes += byteLength(body.component.kind) + 16 + byteLength(body.contentDigest ?? "");
+    if (body.text !== undefined) bytes += byteLength(body.text);
+  }
   return bytes;
 }
 
@@ -377,11 +380,12 @@ export function measureView(view: SessionView): ViewMeasure {
     referencedImageBytes += measure.referencedImages;
   }
   for (const entry of view.history?.context ?? []) entriesBytes += entryBytes(entry);
-  // What a pointer costs: identity and one row per body, never a body.
+  // A stub normally holds pointers; complete retained prompt prose is charged
+  // exactly here and is not also described as referenced/absent.
   let stubsBytes = 0;
   for (const stub of view.stubs ?? []) {
-    stubsBytes += stubBytes(stub);
-    for (const body of stub.bodies) referencedBytes += body.totalBytes;
+    stubsBytes += entryStubBytes(stub);
+    for (const body of stub.bodies) if (body.text === undefined) referencedBytes += body.totalBytes;
   }
   return { entriesBytes, blocksBytes, imagesBytes, imagesEstimated, images, stubsBytes, referencedBytes, referencedImageBytes, largestBlockBytes, largestBodyBytes,
     bytes: entriesBytes + blocksBytes + imagesBytes + stubsBytes };

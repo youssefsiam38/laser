@@ -35,8 +35,8 @@ function services(options: ConstructorParameters<typeof SessionIndexCache>[0] = 
   return { index, revisions, projection };
 }
 
-async function project(projection: SessionProjection, path: string, window?: HistoryWindowRequest, baseRevision?: string) {
-  const answer = await projection.read(path, window, baseRevision);
+async function project(projection: SessionProjection, path: string, window?: HistoryWindowRequest, baseRevision?: string, bodyLimit?: number) {
+  const answer = await projection.read(path, window, baseRevision, bodyLimit);
   if (answer.kind === "refuse") throw answer.error;
   if (answer.kind === "route-live") throw new Error(`unexpected live route: ${answer.reason.reason}`);
   return answer.result;
@@ -266,6 +266,39 @@ describe("worker-free session projection", () => {
       expect(historyContentSerializedBytes(before.entries, before.window?.context ?? [])).toBeLessThanOrEqual(HISTORY_PAGE_BYTE_LIMIT);
     } finally {
       f.cleanup();
+    }
+  });
+
+  it("plans retained prompt text by its escaped wire cost and returns a bounded useful page", async () => {
+    const retainedPrompt = (index: number, text: string, imageBytes: number) => ({
+      type: "message", id: `image-${index}`, parentId: index ? `image-${index - 1}` : null,
+      message: { role: "user", content: [
+        { type: "text", text },
+        { type: "image", mimeType: "image/png", data: "A".repeat(imageBytes) },
+      ] },
+    });
+    const cases = [
+      { name: "ordinary", entries: Array.from({ length: 80 }, (_, index) => retainedPrompt(index, "p".repeat(15 * 1024), 30 * 1024)), limit: 16 * 1024 },
+      // One byte in the body becomes six bytes in JSON; UTF-8 body bytes alone
+      // are therefore not a safe estimate of this retained row's wire cost.
+      { name: "escaped", entries: Array.from({ length: 40 }, (_, index) => retainedPrompt(index, "\u0001".repeat(15 * 1024), 30 * 1024)), limit: 16 * 1024 },
+      // At the schema maximum, an image may make the source row larger than a
+      // page even though its elided identity plus a small prompt fits easily.
+      { name: "maximum bodyLimit", entries: [retainedPrompt(0, "small prompt", HISTORY_PAGE_BYTE_LIMIT + 1)], limit: HISTORY_PAGE_BYTE_LIMIT },
+    ];
+    for (const scenario of cases) {
+      const f = fixture(scenario.entries);
+      try {
+        const page = await project(services().projection, f.path, { tail: scenario.entries.length }, undefined, scenario.limit);
+        const elided = page.window?.elided ?? [];
+        expect(elided.length, scenario.name).toBeGreaterThan(0);
+        expect(elided.length, scenario.name).toBeLessThanOrEqual(scenario.entries.length);
+        expect(historyContentSerializedBytes(page.entries, page.window?.context ?? [])
+          + historyContentSerializedBytes(elided, []), scenario.name).toBeLessThanOrEqual(HISTORY_PAGE_BYTE_LIMIT);
+        expect(elided.at(-1)?.id, scenario.name).toBe(`image-${scenario.entries.length - 1}`);
+      } finally {
+        f.cleanup();
+      }
     }
   });
 

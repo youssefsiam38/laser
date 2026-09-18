@@ -79,6 +79,106 @@ describe("reading a large output a few segments at a time", () => {
     expect(rebuilt === body).toBe(true);
   });
 
+  it("recovers a stale page revision at the current revision before showing an error", async () => {
+    const served = authority(body);
+    const revisions: string[] = [];
+    const request = vi.fn(async (params: Record<string, unknown>) => {
+      revisions.push(params.revision as string);
+      if (params.revision === "r1.env.1") throw Object.assign(new Error("revision moved"), { code: -32007 });
+      return served(params);
+    });
+    const pager = new OutputPager(request as never, PATH, { ...outputRef(body), contentDigest: await digestOf(body) }, "env", async () => "r2.env.2");
+    pager.show(0);
+    await settle(pager);
+
+    expect(revisions.slice(0, 2)).toEqual(["r1.env.1", "r2.env.2"]);
+    expect(request.mock.calls.slice(0, 2).map(([params]) => ({
+      path: params.path,
+      entryId: params.entryId,
+      component: params.component,
+      offset: params.offset,
+    }))).toEqual([
+      { path: PATH, entryId: "e1", component: { kind: "tool_output" }, offset: 0 },
+      { path: PATH, entryId: "e1", component: { kind: "tool_output" }, offset: 0 },
+    ]);
+    expect(pager.getSnapshot().error).toBeUndefined();
+    expect(pager.getSnapshot().segments.get(0)?.text.length).toBeGreaterThan(0);
+  });
+
+  it("shares one revision refresh between concurrent pager reads", async () => {
+    const served = authority(body);
+    let release!: (revision: string) => void;
+    const gate = new Promise<string>(resolve => { release = resolve; });
+    const revisionOf = vi.fn(async () => gate);
+    const request = vi.fn(async (params: Record<string, unknown>) => {
+      if (params.revision === "r1.env.1") throw Object.assign(new Error("revision moved"), { code: -32007 });
+      return served(params);
+    });
+    const pager = new OutputPager(request as never, PATH, { ...outputRef(body), contentDigest: await digestOf(body) }, "env", revisionOf);
+    pager.show(0);
+    const finding = pager.find("line", 0);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    release("r2.env.2");
+    await finding;
+    await settle(pager);
+    expect(revisionOf).toHaveBeenCalledOnce();
+    expect(pager.getSnapshot().segments.get(0)).toBeDefined();
+  });
+
+  it("does not move a digestless local reference to a newer revision", async () => {
+    const request = vi.fn(async () => { throw Object.assign(new Error("revision moved"), { code: -32007 }); });
+    const revisionOf = vi.fn(async () => "r2.env.2");
+    const pager = new OutputPager(request as never, PATH, outputRef(body), "env", revisionOf);
+    pager.show(0);
+    await settle(pager);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(revisionOf).not.toHaveBeenCalled();
+    expect(pager.getSnapshot().segments.size).toBe(0);
+    expect(pager.getSnapshot().error).toMatch(/moved on/);
+  });
+
+  it("stops after the refreshed ask fails and lets an explicit retry recover", async () => {
+    const served = authority(body);
+    let recover = false;
+    const revisionOf = vi.fn(async () => "r2.env.2");
+    const request = vi.fn(async (params: Record<string, unknown>) => {
+      if (params.revision === "r1.env.1") throw Object.assign(new Error("revision moved"), { code: -32007 });
+      if (!recover) throw new Error("temporary failure");
+      return served(params);
+    });
+    const pager = new OutputPager(request as never, PATH, { ...outputRef(body), contentDigest: await digestOf(body) }, "env", revisionOf);
+    pager.show(0);
+    await settle(pager);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(pager.getSnapshot().error).toMatch(/Try again/);
+
+    recover = true;
+    pager.retry();
+    await settle(pager);
+    expect(request.mock.calls.slice(0, 4).map(([params]) => params.revision))
+      .toEqual(["r1.env.1", "r2.env.2", "r1.env.1", "r2.env.2"]);
+    expect(request.mock.calls.length).toBeGreaterThanOrEqual(4);
+    expect(revisionOf).toHaveBeenCalledTimes(2);
+    expect(pager.getSnapshot().error).toBeUndefined();
+    expect(pager.getSnapshot().segments.get(0)?.text.length).toBeGreaterThan(0);
+  });
+
+  it("refuses refreshed-revision bytes that do not match the original body digest", async () => {
+    const changed = `${body}changed`;
+    const served = authority(changed);
+    const request = vi.fn(async (params: Record<string, unknown>) => {
+      if (params.revision === "r1.env.1") throw Object.assign(new Error("revision moved"), { code: -32007 });
+      return served(params);
+    });
+    const pager = new OutputPager(request as never, PATH, { ...outputRef(body), contentDigest: await digestOf(body) }, "env", async () => "r2.env.2");
+    pager.show(0);
+    await settle(pager);
+
+    expect(pager.getSnapshot().segments.size).toBe(0);
+    expect(pager.getSnapshot().error).toMatch(/does not belong|did not arrive/);
+  });
+
   it("holds the segment in view and its neighbours, evicts the rest, and reads again on return", async () => {
     const request = authority(body);
     const pager = new OutputPager(request as never, PATH, outputRef(body), "env");

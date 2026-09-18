@@ -495,6 +495,51 @@ describe("A5 · identity, ordinals and actions are untouched", () => {
 });
 
 describe("A12 · images are references, never bytes", () => {
+  it("keeps fitting prompt text inline when its image is oversized", () => {
+    const view = heavyView().open[path]!;
+    const prompt = view.blocks.find(block => block.kind === "user" && block.images.length > 0) as Extract<Block, { kind: "user" }>;
+    expect(prompt.text).toBe("look");
+    expect(prompt.bodies?.text?.totalBytes).toBe(4);
+    expect(prompt.bodies?.text?.excerpt.bytes).toBe(4);
+    expect(omittedBytes(prompt.bodies?.text)).toBe(0);
+    const measured = measureView(view);
+    expect(measured.bytes).toBeGreaterThanOrEqual(4);
+    expect(measured.bytes).toBeLessThanOrEqual(VIEW_CACHE_LIMITS.viewBytes);
+  });
+
+  it("charges retained prompt stubs as held bytes and trims the real view under pressure", () => {
+    const text = "x".repeat(15 * 1024);
+    const count = 100;
+    const elided = Array.from({ length: count }, (_, index) => ({
+      id: `retained-${index}`, parentId: index ? `retained-${index - 1}` : null, type: "message", role: "user",
+      bodies: [
+        { component: { kind: "user_text" as const }, totalBytes: text.length, contentDigest: "a".repeat(64), text },
+        { component: { kind: "image" as const, index: 0 }, totalBytes: 30 * 1024, contentDigest: "b".repeat(64) },
+      ],
+    }));
+    let state = reduce({ ...initialState, connection: "open" }, { type: "opened", state: sessionState() });
+    state = { ...state, current: path };
+    state = reduce(state, { type: "historyBegin", path, token: "retained" });
+    state = reduce(state, { type: "historySnapshot", path, token: "retained", entries: [], leafId: `retained-${count - 1}`, window: {
+      epoch: "w1", seq: 1, revision: "r1", environmentKey: "e1", userOffset: 0, complete: true,
+      branchesUnloaded: false, hasHistory: true, context: [], priorGoalIds: [], elided,
+    } } as never);
+
+    const before = measureView(state.open[path]!);
+    expect(before.stubsBytes).toBeGreaterThanOrEqual(count * text.length);
+    // Only the absent image bytes are referenced (once by the rendered block,
+    // once by its retained stub); retained prompt prose is not counted absent.
+    expect(before.referencedBytes).toBe(count * 30 * 1024 * 2);
+    expect(before.bytes).toBeGreaterThan(VIEW_CACHE_LIMITS.viewBytes);
+
+    const h = cacheOver(state);
+    h.store.dispatch({ type: "notification", method: "session/update", params: { sessionPath: path, seq: 2, at: "",
+      update: { kind: "state", state: sessionState() } } } as never);
+    h.run();
+    h.cache.maintain();
+    expect(measureView(h.store.getSnapshot().open[path]!).bytes).toBeLessThanOrEqual(VIEW_CACHE_LIMITS.viewBytes);
+  });
+
   it("charges nothing for a referenced image and says how large it is", () => {
     const view = heavyView().open[path]!;
     const prompt = view.blocks.find(block => block.kind === "user" && block.images.length > 0) as Extract<Block, { kind: "user" }>;

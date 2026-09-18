@@ -188,6 +188,90 @@ export async function checkRangeReply(reply: RangeResult, expected: ReplyExpecta
 }
 
 /**
+ * One logical reader's revision fence. It never crosses a revision without an
+ * original digest, never retries more than once, and commits a refreshed
+ * revision only after the consumer has validated the reply against that
+ * original identity. Refresh sharing is local to this instance, never global.
+ */
+export class BodyRevisionFence {
+  private currentValue: string | undefined;
+  private initial: Promise<string> | undefined;
+  private refreshing: { from: string; promise: Promise<string> } | undefined;
+  private generation = 0;
+
+  constructor(
+    private readonly path: string,
+    private readonly publishedRevision: string | undefined,
+    private readonly originalDigest: string | undefined,
+    private readonly revisionOf?: RevisionRequest,
+  ) {}
+
+  async read<T>(
+    askAndValidate: (revision: string) => Promise<T>,
+    active: () => boolean = () => true,
+  ): Promise<T> {
+    const revision = await this.current();
+    if (!active()) throw new BodyReplyRefused("read-retired");
+    try {
+      return await askAndValidate(revision);
+    } catch (failure) {
+      if ((failure as { code?: number } | null)?.code !== -32007 || !this.revisionOf || !this.originalDigest || !DIGEST.test(this.originalDigest)) throw failure;
+      const refreshed = await this.refresh(revision);
+      if (!active()) throw failure;
+      try {
+        const result = await askAndValidate(refreshed);
+        if (active()) this.currentValue = refreshed;
+        this.finishRefresh(revision);
+        return result;
+      } catch (retryFailure) {
+        this.finishRefresh(revision);
+        throw retryFailure;
+      }
+    }
+  }
+
+  reset(): void {
+    this.generation += 1;
+    this.currentValue = undefined;
+    this.initial = undefined;
+    this.refreshing = undefined;
+  }
+
+  private async current(): Promise<string> {
+    if (this.currentValue !== undefined) return this.currentValue;
+    if (this.publishedRevision !== undefined) return this.publishedRevision;
+    if (!this.initial) this.initial = this.revisionOf ? this.revisionOf(this.path) : Promise.resolve("");
+    const pending = this.initial;
+    const generation = this.generation;
+    try {
+      const revision = await pending;
+      if (generation === this.generation && this.initial === pending) this.currentValue = revision;
+      return revision;
+    } catch (failure) {
+      // A failed lookup is not a revision. Keep an explicit retry possible,
+      // without letting an old generation clear a successor's in-flight ask.
+      if (generation === this.generation && this.initial === pending) this.initial = undefined;
+      throw failure;
+    }
+  }
+
+  private refresh(from: string): Promise<string> {
+    if (this.currentValue !== undefined && this.currentValue !== from) return Promise.resolve(this.currentValue);
+    if (this.refreshing?.from === from) return this.refreshing.promise;
+    const promise = this.revisionOf!(this.path).catch((failure) => {
+      if (this.refreshing?.promise === promise) this.refreshing = undefined;
+      throw failure;
+    });
+    this.refreshing = { from, promise };
+    return promise;
+  }
+
+  private finishRefresh(from: string): void {
+    if (this.refreshing?.from === from) this.refreshing = undefined;
+  }
+}
+
+/**
  * A bounded window over one body. Never more than
  * {@link BODY_VIEWER_AGGREGATE_MAX_BYTES} in hand, whatever the body's size,
  * and never two reads at once.
@@ -198,7 +282,7 @@ export class BodyWindow {
   private generation = 0;
   private inflight: Promise<void> | undefined;
   private token: symbol | undefined;
-  private resolved: string | undefined;
+  private readonly revisions: BodyRevisionFence;
   private seenTotal: number | undefined;
   private seenDigest: string | undefined = undefined;
   /** Which authority answered this window; it may not change mid-read. */
@@ -210,22 +294,9 @@ export class BodyWindow {
     private readonly ref: BodyRef & { entryId: string },
     private readonly aggregate = BODY_VIEWER_AGGREGATE_MAX_BYTES,
     private readonly environmentKey = "",
-    private readonly revisionOf?: RevisionRequest,
-  ) {}
-
-  /**
-   * The revision to read at: the one the excerpt was taken at when it has one,
-   * otherwise the one the host is serving right now. A body that arrived live
-   * carries no revision, and inventing one would be a lie.
-   */
-  private async revision(generation: number): Promise<string> {
-    if (this.ref.revision) return this.ref.revision;
-    if (this.resolved !== undefined) return this.resolved;
-    const answer = this.revisionOf ? await this.revisionOf(this.path) : "";
-    // What a read of a retired generation learned is its own business: it is
-    // used to finish that read and never written where a successor reads it.
-    if (generation === this.generation) this.resolved = answer;
-    return answer;
+    revisionOf?: RevisionRequest,
+  ) {
+    this.revisions = new BodyRevisionFence(path, ref.revision, ref.contentDigest, revisionOf);
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -326,9 +397,7 @@ export class BodyWindow {
     this.generation += 1;
     this.inflight = undefined;
     this.token = undefined;
-    // Everything this window believed about the body it was reading goes with
-    // it: the next read starts from what its own reference says.
-    this.resolved = undefined;
+    this.revisions.reset();
     this.seenTotal = undefined;
     this.seenDigest = undefined;
     this.seenAuthority = undefined;
@@ -363,9 +432,8 @@ export class BodyWindow {
   }
 
   private async slice(offset: number, generation = this.generation): Promise<RangeResult> {
-    const revision = await this.revision(generation);
     const limit = Math.min(BODY_SLICE_BYTES, ENTRY_RANGE_MAX_BYTES);
-    const reply = await this.request({
+    const checked = await this.revisions.read(async (revision) => checkRangeReply(await this.request({
       path: this.path,
       environmentKey: this.environmentKey,
       revision,
@@ -373,17 +441,16 @@ export class BodyWindow {
       component: this.ref.component,
       offset,
       limit,
-    });
-    const checked = await checkRangeReply(reply, {
+    }), {
       revision,
       entryId: this.ref.entryId,
       ...(generation === this.generation && this.seenAuthority ? { authority: this.seenAuthority } : {}),
       component: this.ref.component,
       offset,
       limit,
-      totalBytes: generation === this.generation ? this.seenTotal : undefined,
+      totalBytes: generation === this.generation ? (this.seenTotal ?? this.ref.totalBytes) : this.ref.totalBytes,
       contentDigest: generation === this.generation ? (this.seenDigest ?? this.ref.contentDigest) : this.ref.contentDigest,
-    });
+    }), () => generation === this.generation);
     // The same fence on what this read *learned*: a late reply must not tell a
     // successor what size or digest to expect.
     if (generation === this.generation) {
@@ -421,12 +488,12 @@ export async function streamBody(
   options: { environmentKey?: string; revision?: string; revisionOf?: RevisionRequest; signal?: { aborted: boolean } },
   sink: (slice: string) => void | Promise<void>,
 ): Promise<{ bytes: number; totalBytes: number; contentDigest?: string; verified: boolean }> {
-  const revision = ref.revision ?? options.revision ?? (options.revisionOf ? await options.revisionOf(path) : "");
+  const revisions = new BodyRevisionFence(path, ref.revision ?? options.revision, ref.contentDigest, options.revisionOf);
   let offset = 0;
   let bytes = 0;
   let totalBytes = 0;
   let contentDigest: string | undefined = ref.contentDigest;
-  let seenTotal: number | undefined;
+  let seenTotal: number | undefined = ref.totalBytes;
   let seenAuthority: "live" | "durable" | undefined;
   // The whole body's digest, computed as it goes by: a reconstruction that
   // matched every slice can still be the wrong body, and a stream that was cut
@@ -435,10 +502,10 @@ export async function streamBody(
   let complete = true;
   for (;;) {
     if (options.signal?.aborted) { complete = false; break; }
-    const reply = await checkRangeReply(
+    const reply = await revisions.read(async (revision) => checkRangeReply(
       await request({ path, environmentKey: options.environmentKey ?? "", revision, entryId: ref.entryId, component: ref.component, offset, limit: BODY_SLICE_BYTES }),
       { revision, entryId: ref.entryId, component: ref.component, offset, limit: BODY_SLICE_BYTES, totalBytes: seenTotal, contentDigest, ...(seenAuthority ? { authority: seenAuthority } : {}) },
-    );
+    ), () => !options.signal?.aborted);
     seenTotal = reply.totalBytes;
     seenAuthority = reply.authority;
     contentDigest = reply.contentDigest;
@@ -475,11 +542,11 @@ export async function findInBody(
   if (utf8ByteLength(query) > FIND_QUERY_MAX_BYTES) {
     throw new BodyReplyRefused("This search is too long to look for in a message this size. Try a shorter phrase.");
   }
-  const revision = ref.revision ?? (options.revisionOf ? await options.revisionOf(path) : "");
+  const revisions = new BodyRevisionFence(path, ref.revision, ref.contentDigest, options.revisionOf);
   let offset = 0;
   let carry = "";
   let carryOffset = 0;
-  let seenTotal: number | undefined;
+  let seenTotal: number | undefined = ref.totalBytes;
   let seenAuthority: "live" | "durable" | undefined;
   let digest: string | undefined = ref.contentDigest;
   // Case folding can change length — `İ` lowercases to two code units — so a
@@ -491,10 +558,10 @@ export async function findInBody(
   const carryChars = Math.min(Math.max(query.length * 2 + 8, 64), FIND_CARRY_MAX_CHARS);
   for (;;) {
     if (options.signal?.aborted) return undefined;
-    const reply = await checkRangeReply(
+    const reply = await revisions.read(async (revision) => checkRangeReply(
       await request({ path, environmentKey: options.environmentKey ?? "", revision, entryId: ref.entryId, component: ref.component, offset, limit: BODY_SLICE_BYTES }),
       { revision, entryId: ref.entryId, component: ref.component, offset, limit: BODY_SLICE_BYTES, totalBytes: seenTotal, contentDigest: digest, ...(seenAuthority ? { authority: seenAuthority } : {}) },
-    );
+    ), () => !options.signal?.aborted);
     seenTotal = reply.totalBytes;
     seenAuthority = reply.authority;
     digest = reply.contentDigest;

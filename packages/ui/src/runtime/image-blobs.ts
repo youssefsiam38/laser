@@ -9,7 +9,7 @@
  */
 import { imageDimensions, UNKNOWN_IMAGE_DECODED_BYTES } from "./view-measure.js";
 import type { BodyRef } from "./body-excerpt.js";
-import { BODY_SLICE_BYTES, checkRangeReply, type RangeRequest, type RevisionRequest } from "./body-reader.js";
+import { BODY_SLICE_BYTES, BodyRevisionFence, checkRangeReply, type RangeRequest, type RevisionRequest } from "./body-reader.js";
 import { Sha256Stream } from "./sha256.js";
 
 /**
@@ -43,7 +43,6 @@ interface BlobEntry { url: string; blob: Blob; bytes: number; holders: number; s
 export class ImageBlobs {
   private readonly entries = new Map<string, BlobEntry>();
   private readonly inflight = new Map<string, Promise<string | undefined>>();
-  private readonly revisions = new Map<string, Promise<string>>();
   /**
    * How many rows are showing each image, counted from the moment one asks —
    * including while the read is still in flight, so two rows that share a read
@@ -97,16 +96,6 @@ export class ImageBlobs {
     entry.holders += 1;
     this.holds.set(key, (this.holds.get(key) ?? 0) + 1);
     return { url: entry.url, blob: entry.blob, bytes: entry.bytes };
-  }
-
-  private revision(path: string, ref: BodyRef): Promise<string> {
-    if (ref.revision) return Promise.resolve(ref.revision);
-    let pending = this.revisions.get(path);
-    if (!pending) {
-      pending = this.revisionOf ? this.revisionOf(path) : Promise.resolve("");
-      this.revisions.set(path, pending);
-    }
-    return pending;
   }
 
   /** Load one image's bytes into a blob URL, or `undefined` when it cannot be read. */
@@ -235,7 +224,6 @@ export class ImageBlobs {
     for (const entry of this.entries.values()) URL.revokeObjectURL(entry.url);
     this.entries.clear();
     this.inflight.clear();
-    this.revisions.clear();
     this.holds.clear();
     this.bytes = 0;
     this.surface = 0;
@@ -281,7 +269,7 @@ export class ImageBlobs {
     claim: (surface: number) => boolean,
   ): Promise<{ url: string; blob: Blob; bytes: number; surface: number } | undefined> {
     if (ref.totalBytes > IMAGE_MAX_ENCODED_BYTES) return undefined;
-    const revision = await this.revision(path, ref);
+    const revisions = new BodyRevisionFence(path, ref.revision, ref.contentDigest, this.revisionOf);
     let digest: string | undefined = ref.contentDigest;
     // Decoded chunks go into the blob as they arrive: at most one slice's
     // worth of bytes is ever in the JavaScript heap.
@@ -290,7 +278,7 @@ export class ImageBlobs {
     let pendingBytes = 0;
     let bytes = 0;
     let offset = 0;
-    let seenTotal: number | undefined;
+    let seenTotal: number | undefined = ref.totalBytes;
     let seenAuthority: "live" | "durable" | undefined;
     let surface: number | undefined;
     const running = new Sha256Stream();
@@ -302,10 +290,10 @@ export class ImageBlobs {
     };
     for (;;) {
       if (generation !== this.generation) return undefined;
-      const reply = await checkRangeReply(
+      const reply = await revisions.read(async (revision) => checkRangeReply(
         await this.request({ path, environmentKey: this.environmentKey, revision, entryId: ref.entryId, component: ref.component, offset, limit: BODY_SLICE_BYTES }),
         { revision, entryId: ref.entryId, component: ref.component, offset, limit: BODY_SLICE_BYTES, totalBytes: seenTotal, contentDigest: digest, ...(seenAuthority ? { authority: seenAuthority } : {}) },
-      );
+      ), () => generation === this.generation);
       seenTotal = reply.totalBytes;
       seenAuthority = reply.authority;
       digest = reply.contentDigest;

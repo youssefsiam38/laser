@@ -4,9 +4,10 @@
  * A record whose every body fits the excerpt bound is kept exactly as it came:
  * an opaque, complete entry, the same bytes the authority produced. A record
  * carrying a larger body is **not rewritten** — it is not kept at all. What
- * stays is a {@link EntryStub}: its identity, its place in the tree, and the
- * exact size of every body it has. That is the whole difference between a
- * bounded cache and a lossy second copy of somebody else's transcript.
+ * stays is a {@link EntryStub}: its identity, its place in the tree, the exact
+ * size of every body it has, and complete prompt text only when that component
+ * fits the same bound. That is the difference between a bounded cache and a
+ * lossy second copy of somebody else's transcript.
  *
  * The producer can do the same thing on the wire (`bodyLimit` and
  * `window.elided`), and this module folds those in identically — so a page
@@ -19,8 +20,9 @@ import { entryBodyMetadata, entryToolCalls, type AttachmentRegions, type BodyCom
 import { BODY_EXCERPT_MAX_BYTES } from "./body-excerpt.js";
 
 /**
- * A record this view points at instead of holding. Identity and shape only:
- * there is no body here, and nothing here is presented as an entry.
+ * A record this view points at instead of holding. Identity and bounded shape:
+ * it may carry one complete fitting prompt-text component, but never oversized
+ * image bytes, and nothing here is presented as a canonical entry.
  */
 export interface EntryStub {
   id: string;
@@ -32,7 +34,7 @@ export interface EntryStub {
   /** The calls an assistant record made, so their rows survive the elision. */
   toolCalls?: Array<{ id: string; name: string }>;
   at?: string;
-  bodies: Array<{ component: BodyComponent; totalBytes: number; contentDigest?: string; regions?: AttachmentRegions }>;
+  bodies: Array<{ component: BodyComponent; totalBytes: number; contentDigest?: string; text?: string; regions?: AttachmentRegions }>;
 }
 
 const record = (value: unknown): Record<string, unknown> =>
@@ -43,7 +45,7 @@ const timestampOf = (value: Record<string, unknown>): string | undefined => {
   return typeof at === "string" ? at : undefined;
 };
 
-/** The stub for one oversized record. Sizes only: no body is ever built. */
+/** The stub for one oversized record. Only already-small prompt text is retained. */
 export function stubOf(entry: unknown, bodies = entryBodyMetadata(entry)): EntryStub | undefined {
   const value = record(entry);
   if (typeof value.id !== "string" || value.id === "") return undefined;
@@ -56,7 +58,11 @@ export function stubOf(entry: unknown, bodies = entryBodyMetadata(entry)): Entry
     ...(typeof message.toolCallId === "string" ? { toolCallId: message.toolCallId } : {}),
     ...(entryToolCalls(entry).length > 0 ? { toolCalls: entryToolCalls(entry) } : {}),
     ...(timestampOf(value) ? { at: timestampOf(value)! } : {}),
-    bodies: bodies.map((body) => ({ component: body.component, totalBytes: body.totalBytes })),
+    bodies: bodies.map((body) => ({
+      component: body.component,
+      totalBytes: body.totalBytes,
+      ...(body.text !== undefined ? { text: body.text } : {}),
+    })),
   };
 }
 
@@ -73,6 +79,7 @@ export function stubOfElided(elided: ElidedEntry): EntryStub {
       component: body.component,
       totalBytes: body.totalBytes,
       contentDigest: body.contentDigest,
+      ...(body.text !== undefined ? { text: body.text } : {}),
       // The attachments the authority found inside this body, as it published
       // them: a view never works out for itself what a prompt it does not have
       // contains (RP-5b §2).
@@ -97,7 +104,7 @@ export function retainEntries(entries: readonly unknown[], maxBytes = BODY_EXCER
   for (const entry of entries) {
     // Sizes, not bodies: classifying a twelve-megabyte structured result must
     // not build the twelve-megabyte projection of it first (RP-5b §3.2).
-    const bodies = entryBodyMetadata(entry);
+    const bodies = entryBodyMetadata(entry, { retainUserTextUpTo: maxBytes });
     let oversized = false;
     for (const body of bodies) {
       if (body.totalBytes > maxBytes) { oversized = true; break; }
