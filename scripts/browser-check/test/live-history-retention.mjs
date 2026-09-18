@@ -125,7 +125,7 @@ export default async function liveHistoryRetention(check) {
       return '';
     }, { path });
     const before = await historySignature();
-    if (mode !== 'programmatic') await control.scrollIntoViewIfNeeded();
+    if (mode !== 'programmatic') await control.scrollIntoViewIfNeeded().catch(() => undefined);
     await settleRender();
     if (ready) await ready();
     const actualMode = mode === 'tap' && !mobile ? 'keyboard' : mode;
@@ -151,8 +151,8 @@ export default async function liveHistoryRetention(check) {
     }, { path, before }, { timeout });
     if (actualMode === 'wheel') {
       const changed = await waitForChange(3_000).then(() => true, () => false);
-      if (!changed) { await control.click(); await waitForChange(30_000); }
-    } else await waitForChange(30_000);
+      if (!changed && !await rereadControl().count()) { await control.click(); await waitForChange(30_000); }
+    } else if (!await rereadControl().count()) await waitForChange(30_000);
     await loadingEarlier().waitFor({ state: 'hidden', timeout: 30_000 });
     await settleRender();
   };
@@ -189,10 +189,27 @@ export default async function liveHistoryRetention(check) {
       mounted: [...element.querySelectorAll('[data-window-message]')].map(row => row.getAttribute('data-window-message')) }));
     return { windows, viewportState };
   };
+  // The producer can refuse this window's base while the journey is under way
+  // (a compaction, a branch). The person's route past that is the re-read the
+  // history controls offer in place of the paging control; this lane takes the
+  // same route, through the same visible button.
+  const rereadControl = () => page.getByRole('main').getByRole('button', { name: 'Reload recent messages', exact: true });
+  let refusalsCleared = 0;
+  const clearRefusal = async (mode) => {
+    if (!await rereadControl().count()) return false;
+    const control = rereadControl();
+    if (mode === 'tap') await control.tap(); else { await control.focus(); await control.press('Enter'); }
+    await page.getByRole('main').locator('[role="status"]').filter({ hasText: 'Recent messages reloaded.' }).waitFor({ timeout: 30_000 });
+    await control.waitFor({ state: 'detached', timeout: 30_000 });
+    await settleRender();
+    refusalsCleared += 1;
+    return true;
+  };
   let pages = 0;
   const pageToRoot = async (mode) => {
     for (let attempt = 0; attempt < 30; attempt += 1) {
       await driveViewportToRoot();
+      if (await clearRefusal(mode)) continue;
       if (await earlier().count()) { await activateEarlier(mode); pages += 1; continue; }
       if (await rootPrompt.count()) { await rootPrompt.scrollIntoViewIfNeeded(); await rootPrompt.waitFor(); return; }
       if (await loadingEarlier().count()) { await loadingEarlier().waitFor({ state: 'hidden', timeout: 30_000 }); continue; }
@@ -483,6 +500,7 @@ export default async function liveHistoryRetention(check) {
     producerSplitPages,
     boundary,
     activation,
+    refusalsCleared,
     concurrentAnchorDelta,
     renderedOutputs: [1, 45, 90],
     compactionAnchorDelta,
