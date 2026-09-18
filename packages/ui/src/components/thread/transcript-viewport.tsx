@@ -85,6 +85,13 @@ export class TranscriptViewport {
   private earlierLoadingTimer: ReturnType<typeof setTimeout> | undefined;
   /** Only this arrived prefix may exchange later first-frame measurements. */
   private arrivedPage: { ids: readonly string[]; removedHeight: number; exchangedHeight: number; refine: boolean } | undefined;
+  /**
+   * A row that survived an arriving page, and where it was on screen when the
+   * page was projected. Estimated and measured heights can disagree with the
+   * DOM by a page's worth of pixels in one commit; this is the reader's own
+   * evidence, spent in the two frames that commit and measure that page.
+   */
+  private pageHold: { id: string; screenTop: number; frames: number } | undefined;
   /** Disclosure anchoring starts at animationstart, after the open state committed. */
   private disclosureTargets = new Set<Element>();
   private disclosureFrame = 0;
@@ -191,6 +198,22 @@ export class TranscriptViewport {
     const anchor = !this.place.following ? this.place.anchor : undefined;
     const anchorIndex = anchor ? this.positions.get(anchor.messageId) : undefined;
     const anchorBefore = anchorIndex !== undefined ? this.globalOffset(anchorIndex) : undefined;
+    // While a page is arriving, hold the reader by a row that survives it.
+    // Its recorded screen position is taken from the geometry on screen now,
+    // including anything above the transcript, and is honoured for the frames
+    // in which the page commits and its rows are measured. Estimates alone can
+    // be a page's worth of pixels wrong at the commit.
+    if (this.earlierPage && this.viewport && !this.place.following) {
+      const kept = new Set(ids);
+      const index = previous.findIndex(id => kept.has(id));
+      this.pageHold = index < 0 ? undefined : {
+        id: previous[index]!,
+        screenTop: (this.viewport.scrollTop - this.top()) + this.reserve.height + previousHeights.offset(index) - this.viewport.scrollTop,
+        // Rows of an arrived page mount and measure over several frames; the
+        // hold lasts until they settle, and any input by the person ends it.
+        frames: 30,
+      };
+    }
     this.ids = ids;
     this.positions = new Map(ids.map((id, i) => [id, i]));
     this.rebuild();
@@ -367,12 +390,14 @@ export class TranscriptViewport {
     if (this.frame) cancelAnimationFrame(this.frame);
     this.frame = 0;
     if (this.disposed) return;
-    let changed = this.layout();
-    // Where the anchor sits before this pass. When measured rows replace
-    // estimates above it, the person must not feel it: shift by exactly what
-    // changed above the anchor, never re-place it from a fresh absolute.
+    // Where the anchor sits before this pass, taken before anything in it can
+    // move: type/spacing relayout and the reserve estimate change the same
+    // coordinate that measured rows do. When any of them replace estimates
+    // above the anchor, the person must not feel it: shift by exactly what
+    // changed above it, never re-place it from a fresh absolute.
     const anchorIndex = !this.place.following && this.place.anchor ? this.positions.get(this.place.anchor.messageId) : undefined;
     const anchorBefore = anchorIndex !== undefined ? this.globalOffset(anchorIndex) : undefined;
+    let changed = this.layout();
     for (const [id, node] of this.nodes) {
       const index = this.positions.get(id);
       if (index === undefined) continue;
@@ -404,18 +429,32 @@ export class TranscriptViewport {
     this.configureReserve();
     // A global measurement budget, including layouts and previously visited sessions.
     while (this.measured.size > 20_000) this.measured.delete(this.measured.keys().next().value!);
+    // Measurement above the reader is a relative change, never a placement:
+    // shift by exactly what grew, on every pass rather than only when the
+    // window changes, so no model change reaches paint uncompensated. An
+    // absolute restore is right only when the anchor's own row is mounted and
+    // the person is not moving.
+    const anchorRow = this.place.anchor ? this.nodes.get(this.place.anchor.messageId) : undefined;
+    const readerHeld = this.viewport && !this.target && !this.place.following;
+    let compensated = this.holdArrivedPage();
+    if (compensated) { /* the reader's own row is the authority for this frame */ }
+    else if (readerHeld && pageRefinementShift !== undefined) {
+      compensated = true;
+      if (Math.abs(pageRefinementShift) >= 0.5) this.scroll(this.viewport!.scrollTop + pageRefinementShift);
+    } else if (readerHeld && anchorIndex !== undefined && anchorBefore !== undefined
+      && (Boolean(this.reading) || !anchorRow || this.arrivedPage !== undefined)) {
+      compensated = true;
+      const shift = this.globalOffset(anchorIndex) - anchorBefore;
+      if (Math.abs(shift) >= 0.5) this.scroll(this.viewport!.scrollTop + shift);
+    }
     if (changed || this.windowDirty) {
       this.windowDirty = false;
-      const mounted = this.reading && anchorIndex !== undefined && anchorBefore !== undefined && this.viewport && !this.target && this.nodes.has(this.place.anchor!.messageId);
-      if (pageRefinementShift !== undefined && !this.place.following && this.viewport && !this.target) {
-        if (Math.abs(pageRefinementShift) >= 0.5) this.scroll(this.viewport.scrollTop + pageRefinementShift);
-      } else if (mounted) {
-        const shift = this.globalOffset(anchorIndex) - anchorBefore;
-        if (Math.abs(shift) >= 0.5) this.scroll(this.viewport!.scrollTop + shift);
-      } else this.restore();
+      if (!compensated) this.restore();
       this.publish();
     }
-    this.capture();
+    // A page that is still settling must not have its own displacement recorded
+    // as the place the person chose; the hold above is still correcting it.
+    if (!this.pageHold) this.capture();
   };
   schedule = () => { if (!this.frame && !this.disposed) this.frame = requestAnimationFrame(this.measure); };
   private configureReserve() {
@@ -470,7 +509,21 @@ export class TranscriptViewport {
     if (this.earlierFallbackFrame) cancelAnimationFrame(this.earlierFallbackFrame);
     this.earlierFallbackFrame = 0;
     this.arrivedPage = undefined;
+    this.pageHold = undefined;
     if (released) { this.publish(); this.schedule(); }
+  }
+  /** Put the held row back where the reader had it, once per settling frame. */
+  private holdArrivedPage() {
+    const hold = this.pageHold;
+    if (!hold || !this.viewport || this.target || this.place.following) return false;
+    const index = this.positions.get(hold.id);
+    if (index === undefined) { this.pageHold = undefined; return false; }
+    const contentOffset = this.viewport.scrollTop - this.top();
+    const target = contentOffset + this.globalOffset(index) - hold.screenTop;
+    if (Math.abs(target - this.viewport.scrollTop) >= 0.5) this.scroll(Math.max(0, target));
+    hold.frames -= 1;
+    if (hold.frames <= 0) this.pageHold = undefined;
+    return true;
   }
   beginEarlierPage() {
     this.capture();
@@ -515,6 +568,7 @@ export class TranscriptViewport {
     // now, before anyone sees the frame. `measure` refines that estimate; an
     // absolute `restore` is safe only after active input has settled.
     if (shift !== undefined && this.viewport && !this.target) this.scroll(this.viewport.scrollTop + shift);
+    this.holdArrivedPage();
     // Browser default scrolling updates scrollTop before its scroll event lets
     // capture() move the anchor. A layout commit can land in that gap. Never
     // restore the stale mounted anchor over active wheel/touch/key movement;
@@ -727,6 +781,8 @@ export class TranscriptViewport {
     };
     const user = (direction?: "up" | "down") => {
       if (direction === undefined || !this.canMove(direction)) return false;
+      // Movement the person just made outranks a page hold from the frame before.
+      this.pageHold = undefined;
       this.cancel(); this.arriving = false; this.expectedTop = undefined;
       this.place.following = false;
       this.stopDisclosureHold();

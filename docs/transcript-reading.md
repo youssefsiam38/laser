@@ -18,6 +18,20 @@ merges the page into the oldest turn, replaces ids or produces no new message.
 A one-frame fallback prevents a broken producer contract from wedging the
 viewport; acceptance tests require that fallback count to remain zero.
 
+## Holding the reader while a page arrives
+
+The row a person is reading is the topmost one on screen. When a page arrives
+above it, that row must not move: rows further down may move when a row between
+them grows, but the reader's own row may not.
+
+Projected heights are estimates until the arrived rows mount, so a commit can
+disagree with the rendered document by a page's worth of pixels. The viewport
+therefore records, at the moment the page is projected, the screen position of a
+row that survives it, including whatever sits above the transcript, and puts
+that row back for the frames in which the page commits and its rows measure.
+Any movement by the person ends the hold immediately, and the reading place is
+not re-recorded while a hold is still correcting.
+
 ## What the scrollbar means
 
 A virtual reserve above the loaded rows represents history that still has a

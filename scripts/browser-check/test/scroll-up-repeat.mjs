@@ -127,23 +127,44 @@ export default async function scrollUpRepeat(check) {
   const slow = process.env.SLOW === '1';
   for (let round = 0; round < (slow || real ? 400 : 120) && !pageErrors.length; round++) {
     if (slow || real) {
-      const before = await viewport.evaluate(el => ({ top: el.scrollTop, height: el.scrollHeight }));
-      await upward(500);
-      const samples = [await viewport.evaluate(el => ({ top: el.scrollTop, height: el.scrollHeight }))];
-      for (const wait of [60, 150, 250, 200]) { await page.waitForTimeout(wait); samples.push(await viewport.evaluate(el => ({ top: el.scrollTop, height: el.scrollHeight })); }
-      for (let index = 0; index < samples.length; index += 1) {
-        const sample = samples[index];
-        if (real) assert.ok(sample.height + 1 >= priorRange, `scroll range collapsed ${Math.round(priorRange)}→${Math.round(sample.height)} during upward reading`);
-        const previous = index > 0 ? samples[index - 1] : undefined;
-        if (previous && sample.height > previous.height + 0.5) {
-          const rangeDelta = sample.height - previous.height;
-          const topDelta = sample.top - previous.top;
-          arrivals.push({ rangeDelta, topDelta });
-          if (real) assert.ok(Math.abs(topDelta - rangeDelta) <= 1, `arrived page moved the reading anchor by ${Math.round(topDelta - rangeDelta)}px (${Math.round(previous.top)}/${Math.round(previous.height)}→${Math.round(sample.top)}/${Math.round(sample.height)})`);
+      // The reader's own row, and where it sits on screen. Growth anywhere may
+      // change the scroll range; the section being read must not move for it.
+      const sample = () => viewport.evaluate(el => {
+        const top = el.getBoundingClientRect().top;
+        const rows = {};
+        for (const node of el.querySelectorAll('[data-window-message]')) {
+          const box = node.getBoundingClientRect();
+          if (box.bottom > top && box.top < el.getBoundingClientRect().bottom) rows[node.getAttribute('data-window-message')] = box.top - top;
         }
-        priorRange = sample.height;
+        const reserve = document.querySelector('[data-slot="history-reserve"]');
+        const messages = document.querySelector('[data-slot="thread-messages"]');
+        return { top: el.scrollTop, height: el.scrollHeight, rows,
+          reserve: reserve ? reserve.getBoundingClientRect().height : 0,
+          messages: messages ? messages.getBoundingClientRect().height : 0,
+          controls: el.querySelector('[data-slot="thread-messages"]')?.previousElementSibling?.getBoundingClientRect().height ?? 0 };
+      });
+      const before = await sample();
+      await upward(500);
+      const samples = [await sample()];
+      for (const wait of [60, 150, 250, 200]) { await page.waitForTimeout(wait); samples.push(await sample()); }
+      if (process.env.TRACE) console.log(`wheel ${round}: before ${Math.round(before.top)}/${Math.round(before.height)} → ${samples.map(value => `${Math.round(value.top)}/${Math.round(value.height)} r${Math.round(value.reserve)} m${Math.round(value.messages)} c${Math.round(value.controls)}×${Object.keys(value.rows).length}`).join(' → ')}`);
+      for (let index = 0; index < samples.length; index += 1) {
+        const current = samples[index];
+        if (real) assert.ok(current.height + 1 >= priorRange, `scroll range collapsed ${Math.round(priorRange)}→${Math.round(current.height)} during upward reading`);
+        const previous = index > 0 ? samples[index - 1] : undefined;
+        // Between two settle samples the person is not moving, so a changed
+        // range is the app's own work: their row must stay exactly where it is.
+        if (previous && current.height > previous.height + 0.5) {
+          // The row the person is reading is the topmost one on screen. Rows
+          // further down may legitimately move when a row between them grows;
+          // the reader's own row may not move for anything arriving above it.
+          const anchor = Object.keys(previous.rows).find(id => current.rows[id] !== undefined);
+          const moved = anchor === undefined ? undefined : current.rows[anchor] - previous.rows[anchor];
+          arrivals.push({ rangeDelta: current.height - previous.height, moved: moved ?? null });
+          if (real && moved !== undefined) assert.ok(Math.abs(moved) <= 1, `an arriving page moved the row being read by ${Math.round(moved)}px (range ${Math.round(previous.height)}→${Math.round(current.height)})`);
+        }
+        priorRange = current.height;
       }
-      if (process.env.TRACE) console.log(`wheel ${round}: before ${Math.round(before.top)}/${Math.round(before.height)} → ${samples.map(sample => `${Math.round(sample.top)}/${Math.round(sample.height)}`).join(' → ')} · top row ${await visible()}`);
     }
     else { for (let step = 0; step < 12; step++) { await upward(900); await page.waitForTimeout(30); } await page.waitForTimeout(250); }
     const mounted = await rows();
@@ -186,6 +207,7 @@ export default async function scrollUpRepeat(check) {
     assert.equal(finalGeometry.reserve, 0, 'the real conversation claimed unloaded range at its root');
     assert.equal(finalGeometry.statusSeen, true, 'the real conversation never exposed an earlier-page busy status');
     assert.ok(arrivals.length > 0, 'the real conversation observed no earlier-page arrival to verify');
+    assert.ok(arrivals.some(arrival => arrival.moved !== null), 'no arrival could be checked against a row that stayed on screen');
     assert.ok(initialGeometry.height > finalGeometry.height * 0.2, `real initial range ${initialGeometry.height}px understated loaded history ${finalGeometry.height}px beyond the documented bound`);
     assert.ok(initialGeometry.height < finalGeometry.height * 8, `real initial range ${initialGeometry.height}px overstated loaded history ${finalGeometry.height}px beyond the documented bound`);
   }
