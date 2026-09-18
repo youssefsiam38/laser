@@ -1,32 +1,13 @@
-# Laser 0.9.2
+# Laser 0.9.3
 
-A repair release for long conversations and for Settings. Everything here came from using Laser for real work and finding it wanting.
+One repair, finished properly: the images in a conversation.
 
-## Reading upwards no longer loops
+## Every image you asked for is there
 
-In a long, tool-heavy conversation, scrolling up used to reach the top of what was loaded, then throw you back to the bottom of the same section — over and over. The older page had actually arrived; the transcript then re-placed you from an estimate that happened to equal the bottom of the loaded window. Sometimes the whole window you had built was replaced by the newest messages instead.
+In a conversation with many pictures, the last ones used to go grey — "Image not kept in this window" — and stay that way. Opening them was impossible too, because the button was tied to the same small pool of decoded pictures. Twenty-four was the whole budget, and the twenty-fifth image was refused once and never asked about again.
 
-Now an older page arrives above you and you stay exactly where you were reading. Older history occupies real scroll range before it loads, so the scrollbar thumb reflects the size of the conversation, and dragging it deep into the past loads pages in order. There is no loading card: unloaded history is drawn as quiet placeholder rows that become the real messages in place. Paging keeps working while the agent is still writing, through compaction, and after a device trimmed the view under memory pressure; the only time you see text and a button is when a compaction invalidated the page you held and you need to reload the recent messages.
+Now a picture that cannot be decoded right now is *waiting*, not failed. Whatever is on screen is drawn; scrolling towards a waiting picture loads it before you reach it; and opening any picture always works — it reads the bytes from the conversation itself, verified against the image's own fingerprint, whether or not it happens to be decoded. A picture that genuinely could not be rebuilt says so in words and offers Try again.
 
-## Full replies and reasoning read as documents
+Memory is still bounded, and now honestly: only pictures nobody is looking at count against the limit, and when the window comes under memory pressure those are the first thing released. A conversation with forty images stays around 50 MB while you read it.
 
-"Full reply", "Full reasoning" and "Full message" now render Markdown the way the transcript does — headings, lists, code with highlighting, tables, links, math — in a reading column, with Find on the rendered text, whole-body Copy and Download unchanged, and a Plain text switch. Very long bodies open as plain text and say so. Tool output and requests keep the plain reader.
-
-## Settings have one scope, and it is yours to choose
-
-Settings, MCP servers, Web Search, Features and Agents now share one explicit scope — Global, Project or Effective — chosen once at the top of Settings. Nothing infers a project from the open conversation any more. Project shows a project's own definitions beside its inherited Global ones, with an explicit Override; Effective is a read-only preview of what applies. Unsaved edits are guarded when you switch scope, follow a link, or close. Deleting an agent removes exactly the definition you are looking at, and a project that ships its own agent definitions asks for trust before Laser reads them, like project settings.
-
-## Images keep their words
-
-A prompt with an image and a caption showed only the image, and "Show full message" opened empty. The caption stays with the image now, and the full message opens.
-
-## Small things that were very annoying
-
-- `@/` in the composer lists the root of your machine; any path browses. Backspace in the mention picker only deletes a character — it no longer rewrites `@../` into `@../../`.
-- Spelling suggestions in the packaged app on Linux.
-- A conversation started by picking an agent, before typing anything, still lets you change the agent.
-- The agent's tool rows remain selectable text.
-
-## Not in this release
-
-Under heavy memory pressure the last of many images in one conversation can still show as unavailable until you reopen it; that repair (M16-T82) follows in 0.9.3.
+Two supporting repairs: a picture is now identified by its own content, so a conversation that is still being written no longer re-reads every image each time it changes; and images stay attached to the conversation they belong to.
