@@ -6,7 +6,12 @@ import { motionMs } from "@/motion";
 import { HeightIndex, windowRanges } from "./transcript-window.js";
 import { clearAnchoredMessages, setAnchoredMessages, setAtLiveEdge, setStandingRows } from "@/runtime/anchored-messages";
 import { ThreadMessage } from "./messages.js";
-import { HistoryReserve } from "./history-reserve.js";
+import { HistoryReserve } from "./history-reserve-view.js";
+import {
+  HistoryReserveModel,
+  transitionEarlierPage,
+  type EarlierPageTransaction,
+} from "./history-reserve.js";
 
 export interface TranscriptTarget { messageId: string; toolCallId?: string; leafId?: string | null }
 export interface LocateOptions {
@@ -67,16 +72,19 @@ export class TranscriptViewport {
   /** The person is moving the viewport right now; layout may shift it, never re-place it. */
   private reading: ReturnType<typeof setTimeout> | undefined;
   /** Unloaded earlier turns occupy honest scroll range above the loaded window. */
-  reserveHeight = 0;
-  private reserveReady = false;
-  private reserveLocked = false;
+  private reserve = new HistoryReserveModel();
   private historyUserOffset = 0;
   private loadedUserTurns = 0;
-  private historyComplete = true;
-  /** An earlier page owns placement until its React layout commit. */
-  private earlierPage = false;
-  private earlierPageChanged = false;
-  private finishEarlierRequested = false;
+  private historyBefore: string | undefined;
+  /** An earlier page owns estimate-based placement until its store commit. */
+  private earlierPage: EarlierPageTransaction | undefined;
+  private earlierFallbackFrame = 0;
+  private earlierFallbacks = 0;
+  /** Keep a completed busy state legible for one motion token; geometry is free. */
+  private earlierLoadingVisible = false;
+  private earlierLoadingTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Only this arrived prefix may exchange later first-frame measurements. */
+  private arrivedPage: { ids: readonly string[]; removedHeight: number; exchangedHeight: number; refine: boolean } | undefined;
   /** Disclosure anchoring starts at animationstart, after the open state committed. */
   private disclosureTargets = new Set<Element>();
   private disclosureFrame = 0;
@@ -140,15 +148,11 @@ export class TranscriptViewport {
       clearAnchoredMessages(this.path);
     }
     this.path = path;
-    this.reserveHeight = 0;
-    this.reserveReady = false;
-    this.reserveLocked = false;
+    this.reserve.reset();
     this.historyUserOffset = 0;
     this.loadedUserTurns = 0;
-    this.historyComplete = true;
-    this.earlierPage = false;
-    this.earlierPageChanged = false;
-    this.finishEarlierRequested = false;
+    this.historyBefore = undefined;
+    this.releaseEarlierPage("path");
     const saved = this.places.get(path);
     // The revision stamp proves whether a saved place belongs to this accepted
     // history window. Leaving the path also ended the visit that captured it,
@@ -177,6 +181,7 @@ export class TranscriptViewport {
   setIds(ids: readonly string[]) {
     if (this.ids === ids || (this.ids.length === ids.length && this.ids.every((id, i) => ids[i] === id))) return;
     const previous = this.ids;
+    const previousHeights = this.heights;
     // Where the person's anchor sits before the list changes under it. Rows
     // inserted above it (an earlier page) move it by their estimated height;
     // the viewport must move by exactly that before the next paint, or the
@@ -189,18 +194,29 @@ export class TranscriptViewport {
     this.ids = ids;
     this.positions = new Map(ids.map((id, i) => [id, i]));
     this.rebuild();
-    // A prepend converts estimated unloaded space into loaded rows. Exchange
-    // them one-for-one so scrollHeight and the reader's global anchor do not
-    // jump when a page arrives.
-    if (previous.length && ids.length > previous.length) {
-      const firstOld = ids.indexOf(previous[0]!);
-      const preserved = firstOld >= 0 && previous.every((id, index) => ids[firstOld + index] === id);
-      if (preserved && firstOld > 0) {
-        if (this.earlierPage) this.earlierPageChanged = true;
-        this.reserveHeight = Math.max(0, this.reserveHeight - this.heights.offset(firstOld));
+    // A page may preserve its cursor while replacing or merging rows. The
+    // changed store, not cursor inequality alone, is the
+    // transaction signal; loading-only renders never enter setIds.
+    if (this.earlierPage) this.applyEarlierTransition({ type: "store-change" });
+    // A page can prepend cleanly or merge into the oldest projected group. Find
+    // the preserved suffix and exchange only the positive height inserted above
+    // it; a replacement with no preserved suffix is not attributed to history.
+    if (this.earlierPage && previous.length && ids.length) {
+      let previousStart = -1, nextStart = -1;
+      for (let old = 0; old < previous.length && nextStart < 0; old++) {
+        for (let next = 0; next < ids.length; next++) {
+          if (previous.length - old !== ids.length - next) continue;
+          if (!previous.slice(old).every((id, offset) => ids[next + offset] === id)) continue;
+          previousStart = old; nextStart = next; break;
+        }
+      }
+      if (nextStart > 0) {
+        const removedHeight = previousHeights.offset(previousStart);
+        const insertedHeight = Math.max(0, this.heights.offset(nextStart) - removedHeight);
+        this.reserve.arrived(insertedHeight);
+        this.arrivedPage = { ids: ids.slice(0, nextStart), removedHeight, exchangedHeight: insertedHeight, refine: true };
       }
     }
-    if (this.historyComplete) this.reserveHeight = 0;
     if (anchor && anchorBefore !== undefined) {
       const index = this.positions.get(anchor.messageId);
       const shift = index === undefined ? 0 : this.globalOffset(index) - anchorBefore;
@@ -210,9 +226,10 @@ export class TranscriptViewport {
     if (previous.length && previous.some(id => !this.positions.has(id))) this.cancel("structure");
   }
   private rebuild() { this.heights = new HeightIndex(this.ids.map(id => this.measured.get(this.cacheKey(id)) ?? this.estimate)); }
+  get reserveHeight() { return this.reserve.height; }
   /** Loaded-row coordinate at the viewport top; negative means the reader is in the reserve. */
-  private loadedTop() { return this.top() - this.reserveHeight; }
-  private globalOffset(index: number) { return this.reserveHeight + this.heights.offset(index); }
+  private loadedTop() { return this.top() - this.reserve.height; }
+  private globalOffset(index: number) { return this.reserve.height + this.heights.offset(index); }
   private top() {
     if (!this.viewport || !this.content) return 0;
     return this.viewport.getBoundingClientRect().top - this.content.getBoundingClientRect().top;
@@ -295,7 +312,7 @@ export class TranscriptViewport {
     // While an earlier page is committing, only structural/measurement deltas
     // may move the viewport. An absolute estimate or latest fallback here is
     // the root-to-bottom loop this controller exists to prevent.
-    if (!viewport || this.target || this.earlierPage) return;
+    if (!viewport || this.target || (this.earlierPage && !this.place.following)) return;
     if (this.place.following) {
       const placeTail = this.pendingTailPlacement || this.edgeGap() > 2;
       this.pendingTailPlacement = false;
@@ -338,11 +355,7 @@ export class TranscriptViewport {
     this.estimate = line * 6 + spacing * 5;
     if (signature === this.signature) return false;
     this.signature = signature; this.rebuild();
-    if (!this.reserveReady && !this.historyComplete && this.historyUserOffset > 0) {
-      const averageTurn = this.loadedUserTurns > 0 ? this.heights.total / this.loadedUserTurns : this.estimate;
-      this.reserveHeight = Math.max(0, averageTurn * this.historyUserOffset);
-      this.reserveReady = true;
-    }
+    this.configureReserve();
     return true;
   }
   private measure = () => {
@@ -355,7 +368,6 @@ export class TranscriptViewport {
     // changed above the anchor, never re-place it from a fresh absolute.
     const anchorIndex = !this.place.following && this.place.anchor ? this.positions.get(this.place.anchor.messageId) : undefined;
     const anchorBefore = anchorIndex !== undefined ? this.globalOffset(anchorIndex) : undefined;
-    const totalBefore = this.heights.total;
     for (const [id, node] of this.nodes) {
       const index = this.positions.get(id);
       if (index === undefined) continue;
@@ -367,17 +379,19 @@ export class TranscriptViewport {
       this.measured.delete(key); this.measured.set(key, height);
       changed = true;
     }
-    // Before the person starts reading, refine the unloaded estimate from the
-    // measured loaded turns. Once reading starts, exchange every loaded-height
-    // correction with reserve space so the thumb and anchor remain stationary.
-    const measuredDelta = this.heights.total - totalBefore;
-    if (!this.historyComplete && this.reserveReady && Math.abs(measuredDelta) >= 0.5) {
-      if (this.reserveLocked) this.reserveHeight = Math.max(0, this.reserveHeight - measuredDelta);
-      else {
-        const averageTurn = this.loadedUserTurns > 0 ? this.heights.total / this.loadedUserTurns : this.estimate;
-        this.reserveHeight = Math.max(0, averageTurn * this.historyUserOffset);
-      }
+    // Refine only the prefix this page inserted, and only on its first measured
+    // frame. Streaming, disclosure, image and font growth elsewhere cannot
+    // become fictitious unloaded history.
+    if (this.arrivedPage?.refine) {
+      const pageHeight = Math.max(0, this.arrivedPage.ids.reduce((sum, id) => {
+        const index = this.positions.get(id);
+        return sum + (index === undefined ? 0 : this.heights.height(index));
+      }, 0) - this.arrivedPage.removedHeight);
+      this.reserve.refineArrived(pageHeight - this.arrivedPage.exchangedHeight);
+      this.arrivedPage.exchangedHeight = pageHeight;
+      this.arrivedPage.refine = false;
     }
+    this.configureReserve();
     // A global measurement budget, including layouts and previously visited sessions.
     while (this.measured.size > 20_000) this.measured.delete(this.measured.keys().next().value!);
     if (changed || this.windowDirty) {
@@ -392,42 +406,95 @@ export class TranscriptViewport {
     this.capture();
   };
   schedule = () => { if (!this.frame && !this.disposed) this.frame = requestAnimationFrame(this.measure); };
-  setHistoryWindow(userOffset: number, loadedUserTurns: number, complete: boolean) {
-    const changed = this.historyUserOffset !== userOffset || this.loadedUserTurns !== loadedUserTurns || this.historyComplete !== complete;
+  private configureReserve() {
+    this.reserve.configure({
+      hasBefore: this.historyBefore !== undefined,
+      userOffset: this.historyUserOffset,
+      loadedUserTurns: this.loadedUserTurns,
+      loadedHeight: this.heights.total,
+      rowEstimate: this.estimate,
+      rows: this.ids.length,
+    });
+  }
+  setHistoryWindow(userOffset: number, loadedUserTurns: number, before: string | undefined) {
+    const changed = this.historyUserOffset !== userOffset || this.loadedUserTurns !== loadedUserTurns || this.historyBefore !== before;
+    const pageChanged = Boolean(this.earlierPage && changed);
+    const anchorIndex = !this.place.following && this.place.anchor ? this.positions.get(this.place.anchor.messageId) : undefined;
+    const anchorBefore = anchorIndex !== undefined ? this.globalOffset(anchorIndex) : undefined;
     this.historyUserOffset = Math.max(0, userOffset);
     this.loadedUserTurns = Math.max(0, loadedUserTurns);
-    this.historyComplete = complete;
-    if (complete && !this.earlierPage) this.reserveHeight = 0;
-    if (!complete && userOffset > 0 && !this.reserveReady && this.estimate > 0) {
-      const averageTurn = loadedUserTurns > 0 ? this.heights.total / loadedUserTurns : this.estimate;
-      this.reserveHeight = Math.max(0, averageTurn * userOffset);
-      this.reserveReady = true;
+    this.historyBefore = before;
+    this.configureReserve();
+    if (anchorIndex !== undefined && anchorBefore !== undefined) {
+      const shift = this.globalOffset(anchorIndex) - anchorBefore;
+      if (Math.abs(shift) >= 0.5) this.structuralShift = (this.structuralShift ?? 0) + shift;
     }
+    if (pageChanged) this.applyEarlierTransition({ type: "store-change" });
     if (changed) this.windowDirty = true;
+  }
+  private applyEarlierTransition(event: Parameters<typeof transitionEarlierPage>[1]) {
+    const result = transitionEarlierPage(this.earlierPage, event);
+    this.earlierPage = result.state;
+    if (result.released && this.earlierFallbackFrame) {
+      cancelAnimationFrame(this.earlierFallbackFrame);
+      this.earlierFallbackFrame = 0;
+    }
+    if (result.released) {
+      if (this.earlierLoadingTimer) clearTimeout(this.earlierLoadingTimer);
+      this.earlierLoadingTimer = setTimeout(() => {
+        this.earlierLoadingTimer = undefined;
+        if (!this.earlierLoadingVisible) return;
+        this.earlierLoadingVisible = false;
+        if (!this.disposed) this.publish();
+      }, motionMs("--motion-fast"));
+    }
+    return result.released;
+  }
+  private releaseEarlierPage(_reason: "cancel" | "path" | "unmount" | "fallback") {
+    const released = this.applyEarlierTransition({ type: "cancel" });
+    if (this.earlierLoadingTimer) clearTimeout(this.earlierLoadingTimer);
+    this.earlierLoadingTimer = undefined;
+    this.earlierLoadingVisible = false;
+    if (this.earlierFallbackFrame) cancelAnimationFrame(this.earlierFallbackFrame);
+    this.earlierFallbackFrame = 0;
+    this.arrivedPage = undefined;
+    if (released) { this.publish(); this.schedule(); }
   }
   beginEarlierPage() {
     this.capture();
-    this.earlierPage = true;
-    this.earlierPageChanged = false;
-    this.finishEarlierRequested = false;
-    this.reserveLocked = true;
+    if (this.earlierLoadingTimer) clearTimeout(this.earlierLoadingTimer);
+    this.earlierLoadingTimer = undefined;
+    this.earlierLoadingVisible = true;
+    this.reserve.startReading();
+    this.applyEarlierTransition({ type: "begin", before: this.historyBefore });
+    this.arrivedPage = undefined;
     this.arriving = false;
     this.expectedTop = undefined;
-    this.place.following = false;
+    // Keep following intact: its geometric placement remains authoritative
+    // while only estimate-based reading restoration is fenced.
     this.publish();
   }
-  finishEarlierPage() { this.finishEarlierRequested = true; }
-  cancelEarlierPage() {
-    this.earlierPage = false;
-    this.earlierPageChanged = false;
-    this.finishEarlierRequested = false;
-    this.publish();
-    this.schedule();
+  finishEarlierPage() {
+    if (!this.earlierPage) return;
+    const released = this.applyEarlierTransition({ type: "settled" });
+    if (released) { this.publish(); this.schedule(); return; }
+    const transaction = this.earlierPage;
+    if (this.earlierFallbackFrame) cancelAnimationFrame(this.earlierFallbackFrame);
+    this.earlierFallbackFrame = requestAnimationFrame(() => {
+      this.earlierFallbackFrame = 0;
+      if (this.earlierPage !== transaction || !transaction?.settled) return;
+      this.earlierFallbacks++;
+      this.releaseEarlierPage("fallback");
+    });
   }
-  isInHistoryReserve() {
-    return Boolean(this.viewport && this.reserveHeight > 0 && this.loadedTop() < this.viewport.clientHeight / 2);
+  cancelEarlierPage() { this.releaseEarlierPage("cancel"); }
+  /** True only after the person has crossed above loaded rows into the estimate. */
+  isReadingHistoryReserve() {
+    return Boolean(this.viewport && this.reserve.height > 0 && this.loadedTop() < 0);
   }
-  get loadingEarlier() { return this.earlierPage; }
+  get loadingEarlier() { return this.earlierPage !== undefined; }
+  get showEarlierLoading() { return this.earlierPage !== undefined || this.earlierLoadingVisible; }
+  get earlierPageFallbackCount() { return this.earlierFallbacks; }
   committed() {
     if (this.layout()) this.windowDirty = true;
     const shift = this.structuralShift;
@@ -441,12 +508,7 @@ export class TranscriptViewport {
     // restore the stale mounted anchor over active wheel/touch/key movement;
     // structural and measured-height deltas above are the only safe changes.
     if (!this.reading || this.place.following) this.restore();
-    if (this.earlierPage && this.earlierPageChanged && this.finishEarlierRequested) {
-      this.earlierPage = false;
-      this.earlierPageChanged = false;
-      this.finishEarlierRequested = false;
-      this.publish();
-    }
+    if (this.earlierPage && this.applyEarlierTransition({ type: "commit" })) this.publish();
     this.schedule();
   }
   cancel = (reason?: unknown) => {
@@ -591,7 +653,7 @@ export class TranscriptViewport {
     });
     if (this.content) this.mutation.observe(this.content, { subtree: true, childList: true, characterData: true });
     const markReading = () => {
-      this.reserveLocked = true;
+      this.reserve.startReading();
       if (this.reading) clearTimeout(this.reading);
       this.reading = setTimeout(() => { this.reading = undefined; this.schedule(); }, 400);
     };
@@ -786,7 +848,7 @@ export class TranscriptViewport {
     document.fonts?.addEventListener("loadingdone", this.schedule);
     this.schedule();
     return () => {
-      this.cancel(); this.disposed = true; this.earlierPage = false; this.earlierPageChanged = false; this.finishEarlierRequested = false; clearAnchoredMessages(this.path); cancelAnimationFrame(this.frame); this.frame = 0; this.stopDisclosureHold(); if (this.reading) { clearTimeout(this.reading); this.reading = undefined; }
+      this.cancel(); this.disposed = true; this.releaseEarlierPage("unmount"); clearAnchoredMessages(this.path); cancelAnimationFrame(this.frame); this.frame = 0; this.stopDisclosureHold(); if (this.reading) { clearTimeout(this.reading); this.reading = undefined; }
       this.observer?.disconnect(); this.observer = undefined; this.mutation?.disconnect(); this.mutation = undefined; theme.disconnect();
       viewport.removeEventListener("scroll", scroll); viewport.removeEventListener("wheel", wheel); viewport.removeEventListener("touchstart", touchstart); viewport.removeEventListener("touchmove", touchmove); viewport.removeEventListener("touchend", touchend); viewport.removeEventListener("touchcancel", touchend);
       viewport.removeEventListener("animationstart", disclosure); viewport.removeEventListener("animationend", disclosure); viewport.removeEventListener("animationcancel", disclosure);
@@ -843,16 +905,17 @@ export function WindowedMessages() {
   const controller = useTranscriptViewport();
   const ids = unstable_useThreadMessageIds();
   const userOffset = useLaserState(s => { const path = visibleSessionPath(s); return path ? s.open[path]?.history?.userOffset ?? 0 : 0; });
-  const complete = useLaserState(s => { const path = visibleSessionPath(s); return path ? s.open[path]?.history?.complete ?? true : true; });
+  const before = useLaserState(s => { const path = visibleSessionPath(s); return path ? s.open[path]?.history?.before : undefined; });
   const loadedUserTurns = useLaserState(s => { const path = visibleSessionPath(s); return path ? s.open[path]?.blocks.filter(block => block.kind === "user" && !block.optimistic).length ?? 0 : 0; });
-  controller.setHistoryWindow(userOffset, loadedUserTurns, complete);
+  // Ids/heights must exist before unloaded-history geometry can become ready.
   controller.setIds(ids);
+  controller.setHistoryWindow(userOffset, loadedUserTurns, before);
   useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   const ranges = controller.ranges();
   useLayoutEffect(() => { controller.committed(); });
   let cursor = 0;
   return <div ref={node => { controller.setContent(node); }} data-slot="thread-messages" className="flex flex-col pt-5 empty:hidden" style={{ overflowAnchor: "none" }}>
-    <HistoryReserve height={controller.reserveHeight} loading={controller.loadingEarlier} />
+    <HistoryReserve height={controller.reserveHeight} loading={controller.showEarlierLoading} />
     {ranges.flatMap(range => {
       const gap = controller.heights.offset(range.start) - controller.heights.offset(cursor); cursor = range.end;
       return [
