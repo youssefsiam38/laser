@@ -6,26 +6,17 @@
  */
 import { PRODUCT_NAME } from "@lasercode/protocol";
 import { useEffect, useId, useMemo, useState } from "react";
-import { ChevronRight, ChevronsUpDown, FolderGit2, RotateCcw, ShieldAlert, Terminal, X } from "lucide-react";
+import { ChevronRight, RotateCcw, ShieldAlert, Terminal, X } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ProviderModelMultiPicker, ProviderModelPicker, ProviderPicker, modelProvenance, modelOptionId } from "@/components/assistant-ui/elements/model-selector";
 import { narrowToConnected } from "@/components/assistant-ui/elements/connected-models";
 import { ProviderLogo } from "@/components/assistant-ui/elements/logos";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { shortCwd } from "@/format";
-import { useLaserStable } from "@/runtime";
+import { useLaserStable, type SettingsScopeView } from "@/runtime";
 import type { ModelCatalogEntry, SettingChange, SettingDescriptor, SettingsCatalog, SettingsScope, SettingsSnapshot, ThinkingLevel } from "@lasercode/protocol";
 
 import type { CapabilityDecision } from "@/runtime/environment-capabilities";
@@ -33,10 +24,9 @@ import { SettingField } from "./fields.js";
 import { effectiveDiff, getAtPath, rowFor, searchFields, sectionsWithFields, type FieldRow } from "./model.js";
 import { OriginBadge, SearchInput } from "./SettingsScreen.js";
 
-type View = SettingsScope | "effective";
-
 export interface SettingsFormProps {
   audience: "general" | "advanced";
+  view: SettingsScopeView;
   cwd: string;
   catalog: SettingsCatalog;
   snapshot: SettingsSnapshot;
@@ -44,10 +34,9 @@ export interface SettingsFormProps {
   onApply: (scope: SettingsScope, changes: SettingChange[]) => Promise<boolean>;
 }
 
-export function SettingsForm({ audience, cwd, catalog, snapshot, decision, onApply }: SettingsFormProps) {
+export function SettingsForm({ audience, view, cwd, catalog, snapshot, decision, onApply }: SettingsFormProps) {
   const writable = decision?.state === "available" || decision === undefined;
-  const { client, projects, projectInfo, setCurrentProject } = useLaserStable();
-  const [view, setView] = useState<View>("global");
+  const { client } = useLaserStable();
   const [section, setSection] = useState<string>(catalog.sections[0]?.id ?? "model");
   const [query, setQuery] = useState("");
   const [showFull, setShowFull] = useState(false);
@@ -103,16 +92,6 @@ export function SettingsForm({ audience, cwd, catalog, snapshot, decision, onApp
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 flex-wrap items-center gap-2 px-3 py-2 hairline-b">
-        <ScopeSwitch view={view} onChange={setView} />
-        {view !== "global" && (
-          <ProjectTarget
-            cwd={cwd}
-            projects={projects}
-            names={projectInfo}
-            mode={view}
-            onChange={setCurrentProject}
-          />
-        )}
         {view !== "effective" && (
           <>
             <SearchInput value={query} onChange={setQuery} placeholder="Search settings" className="w-56" />
@@ -224,93 +203,6 @@ export function SettingsForm({ audience, cwd, catalog, snapshot, decision, onApp
           </ScrollArea>
         </div>
       )}
-    </div>
-  );
-}
-
-function ProjectTarget({
-  cwd,
-  projects,
-  names,
-  mode,
-  onChange,
-}: {
-  cwd: string;
-  projects: string[];
-  names: Readonly<Record<string, { name: string }>>;
-  mode: "project" | "effective";
-  onChange: (cwd: string) => void;
-}) {
-  const name = names[cwd]?.name ?? shortCwd(cwd);
-  return (
-    <div className="flex min-w-0 items-center gap-1.5">
-      <span className="eyebrow hidden lg:inline">{mode === "project" ? "Override" : "Resolve"} for</span>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            className="min-w-0 max-w-64 gap-1.5"
-            aria-label={`${mode === "project" ? "Project settings target" : "Effective settings project"}: ${name}`}
-            title={cwd}
-          >
-            <FolderGit2 className="shrink-0" />
-            <span className="min-w-0 truncate">{name}</span>
-            <ChevronsUpDown className="shrink-0 text-ink-3" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-80 max-w-[calc(100vw-var(--spacing-6))]">
-          <DropdownMenuLabel>
-            {mode === "project" ? "Project settings to override" : "Project whose effective settings to inspect"}
-          </DropdownMenuLabel>
-          <DropdownMenuRadioGroup value={cwd} onValueChange={onChange}>
-            {projects.map((project) => {
-              const projectName = names[project]?.name ?? shortCwd(project);
-              return (
-                <DropdownMenuRadioItem key={project} value={project} className="items-start">
-                  <span className="flex min-w-0 flex-col gap-0.5">
-                    <span className="font-medium text-ink">{projectName}</span>
-                    <span className="font-mono text-xs leading-4 break-all text-ink-3">{project}</span>
-                  </span>
-                </DropdownMenuRadioItem>
-              );
-            })}
-          </DropdownMenuRadioGroup>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </div>
-  );
-}
-
-function ScopeSwitch({ view, onChange }: { view: View; onChange: (view: View) => void }) {
-  const options: Array<{ id: View; label: string; hint: string }> = [
-    { id: "global", label: "Global", hint: "Your settings, in every project on this machine" },
-    { id: "project", label: "Project", hint: "Settings that ship with this directory, and apply only here" },
-    { id: "effective", label: "Effective", hint: "What the agent will use, and which file it came from" },
-  ];
-  return (
-    <div role="tablist" aria-label="Settings scope" className="flex items-center gap-0.5 rounded-lg bg-surface-2 p-0.5">
-      {options.map((option) => (
-        <Tooltip key={option.id}>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={view === option.id}
-              onClick={() => onChange(option.id)}
-              className={cn(
-                "rounded-md px-2.5 py-1 text-xs font-medium outline-none transition-colors duration-(--motion-instant)",
-                "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-live",
-                view === option.id ? "bg-surface text-ink" : "text-ink-2 hover:text-ink",
-              )}
-            >
-              {option.label}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{option.hint}</TooltipContent>
-        </Tooltip>
-      ))}
     </div>
   );
 }

@@ -874,8 +874,8 @@ export class Router {
         return { features: this.features().list(req.params.cwd) };
       case "feature/set": {
         if (req.params.id === "web-search" && (req.params.enabled === true || (req.params.enabled === null && this.features().list().find((f) => f.manifest.id === "web-search")?.globalEnabled))) {
-          const cwd = req.params.cwd ?? this.pool.cwds()[0];
-          if (!cwd) throw new Error("Open a project to test your search connection before enabling web search.");
+          const cwd = req.params.cwd;
+          if (!cwd) throw new Error("No Settings target was supplied for the Web Search connection test. Reopen Settings, choose Global or a project, then try again.");
           await (await this.pool.get(cwd)).request("web-search/configure", { cwd, change: { action: "test" } });
         }
         const features = this.features().set(req.params.id, req.params.enabled, req.params.scope, req.params.cwd);

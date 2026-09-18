@@ -6,7 +6,7 @@ import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { useCapability } from "@/runtime";
+import { useCapability, type SettingsScopeView } from "@/runtime";
 import { CapabilityNotice } from "@/components/capability-gate";
 
 import { SettingsForm } from "./SettingsForm.js";
@@ -17,6 +17,7 @@ export type AdvancedView = "resources" | "configuration";
 export interface AdvancedTabProps {
   view: AdvancedView;
   onViewChange: (view: AdvancedView) => void;
+  scopeView: SettingsScopeView;
   cwd?: string | undefined;
   catalog?: SettingsCatalog | undefined;
   snapshot?: SettingsSnapshot | undefined;
@@ -27,7 +28,7 @@ export interface AdvancedTabProps {
 }
 
 /** Machine-wide resource truth beside, but never confused with, project-scoped engine configuration. */
-export function AdvancedTab({ view, onViewChange, cwd, catalog, snapshot, loading, error, onReload, onApply }: AdvancedTabProps) {
+export function AdvancedTab({ view, onViewChange, scopeView, cwd, catalog, snapshot, loading, error, onReload, onApply }: AdvancedTabProps) {
   const resources = useCapability("resource/snapshot");
   const configuration = useCapability("pi/settings/get");
   const settingsWrite = useCapability("pi/settings/set", { presentation: "explained" });
@@ -87,16 +88,16 @@ export function AdvancedTab({ view, onViewChange, cwd, catalog, snapshot, loadin
       ) : null}
       {!error && !loading && !cwd ? (
         <div className="mx-auto max-w-120 px-6 py-16 text-center">
-          <h2 className="text-base font-semibold text-ink">Configuration needs a project</h2>
+          <h2 className="text-base font-semibold text-ink">Configuration target unavailable</h2>
           <p className="mt-1 text-sm leading-6 text-ink-2">
-            Resource diagnostics remain available without one. Open a project to inspect global, project and effective specialist configuration.
+            Resource diagnostics remain available. Choose an explicit Settings project above, or switch to Global configuration.
           </p>
         </div>
       ) : null}
       {!error && cwd && catalog && snapshot ? (
         <>
           {settingsWrite.state === "explained" ? <div className="p-4 pb-0"><CapabilityNotice explanation={settingsWrite.explanation} /></div> : null}
-          <SettingsForm audience="advanced" cwd={cwd} catalog={catalog} snapshot={snapshot} decision={settingsWrite} onApply={onApply} />
+          <SettingsForm audience="advanced" view={scopeView} cwd={cwd} catalog={catalog} snapshot={snapshot} decision={settingsWrite} onApply={onApply} />
         </>
       ) : null}
     </div>

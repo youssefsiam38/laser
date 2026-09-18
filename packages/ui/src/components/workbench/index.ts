@@ -2,7 +2,12 @@ export { Workbench } from "./Workbench.js";
 export {
   WorkbenchProvider,
   useWorkbench,
+  useSettingsScopeNavigationGuard,
   type AgentsTarget,
+  type SettingsScopeChangeReason,
+  type SettingsScopeChangeRequest,
+  type SettingsScopeNavigationGuard,
+  type SettingsTarget,
   type Workbench as WorkbenchState,
   type WorkbenchOpen,
   type WorkbenchPage,
