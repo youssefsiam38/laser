@@ -31,6 +31,7 @@ import { createViewCache, VIEW_CACHE_LIMITS } from "../../src/runtime/view-cache
 import { resetAnchoredMessages, standingRows } from "../../src/runtime/anchored-messages.js";
 import { MessageEditPresentation, TranscriptPresentation } from "../../src/runtime/transcript-presentation.js";
 import { sessionState } from "../agents/fixtures.js";
+import { motionMs } from "../../src/motion.js";
 
 const SESSION = "/project/session.jsonl";
 /** One line of the transcript, for the geometry seam below. */
@@ -42,6 +43,7 @@ const stable = vi.hoisted(() => ({
   actions: {
     listModels: vi.fn(async () => []), send: vi.fn(), openSession: vi.fn(),
     loadEarlierEntries: vi.fn(async () => true), loadAllEntries: vi.fn(async () => true),
+    rereadHistory: vi.fn(async () => {}),
   },
 }));
 vi.mock("@/runtime", async original => ({
@@ -192,10 +194,70 @@ describe("a trim while somebody is reading", () => {
     const store = createStateStore(opened());
     hydrateThrough(store, undefined);
     await mount(store, store.presentation);
+    // The unloaded range is placeholder rows and nothing else: no words, no
+    // card, no promise to read. Only the explicit control carries copy.
+    const reserve = container.querySelector('[data-slot="history-reserve"]');
+    expect(reserve).not.toBeNull();
+    expect(reserve!.textContent?.trim()).toBe("");
+    expect(reserve!.getAttribute("aria-hidden")).toBe("true");
+    expect(reserve!.querySelectorAll('[data-slot="history-reserve-turn"]').length).toBeGreaterThan(0);
     const button = [...container.querySelectorAll("button")].find(node => node.textContent?.trim() === "Load earlier messages");
     expect(button).toBeDefined();
     await act(async () => { button!.click(); await Promise.resolve(); });
     expect(stable.actions.loadEarlierEntries).toHaveBeenCalledOnce();
+  });
+
+  it("says a page is in flight once, for screen readers only, and marks the region busy", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = createStateStore(opened());
+      hydrateThrough(store, undefined);
+      let settle!: (loaded: boolean) => void;
+      stable.actions.loadEarlierEntries.mockImplementationOnce(() => new Promise<boolean>(resolve => { settle = resolve; }));
+      const controller = await mount(store, store.presentation);
+      const button = [...container.querySelectorAll("button")].find(node => node.textContent?.trim() === "Load earlier messages")!;
+
+      await act(async () => { button.click(); await Promise.resolve(); });
+      // One exposed status, and it is not on screen.
+      const exposed = [...container.querySelectorAll('[role="status"]')].filter(node => !node.closest('[aria-hidden="true"]'));
+      expect(exposed).toHaveLength(1);
+      expect(exposed[0]!.textContent).toBe("Loading earlier messages");
+      expect(exposed[0]!.classList.contains("sr-only")).toBe(true);
+      expect(container.querySelector('[data-slot="thread-messages"]')!.getAttribute("aria-busy")).toBe("true");
+      // Nothing visible says so: no card, no copy in the transcript region.
+      expect(container.querySelector('[data-slot="history-reserve-loading"]')).toBeNull();
+      const visibleCopy = [...container.querySelectorAll('[data-slot="thread-messages"] *')]
+        .filter(node => node.childElementCount === 0 && /loading/i.test(node.textContent ?? "") && !node.closest(".sr-only"));
+      expect(visibleCopy).toHaveLength(0);
+      // The overdue mark appears only past one slow motion step, only while
+      // the person is inside the estimated range, and goes on arrival.
+      vi.spyOn(controller, "isReadingHistoryReserve").mockReturnValue(true);
+      expect(container.querySelector('[data-slot="history-reserve-indicator"]')).toBeNull();
+      await act(async () => { vi.advanceTimersByTime(motionMs("--motion-slow") + 1); });
+      const indicator = container.querySelector('[data-slot="history-reserve-indicator"]');
+      expect(indicator).not.toBeNull();
+      expect(indicator!.getAttribute("aria-hidden")).toBe("true");
+      expect(indicator!.textContent?.trim()).toBe("");
+      await act(async () => { settle(false); await Promise.resolve(); await Promise.resolve(); });
+      expect(container.querySelector('[data-slot="history-reserve-indicator"]')).toBeNull();
+      expect(container.querySelector('[data-slot="thread-messages"]')!.getAttribute("aria-busy")).toBeNull();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("releases failed and rejected earlier-page requests so the person can retry", async () => {
+    const store = createStateStore(opened());
+    hydrateThrough(store, undefined);
+    const controller = await mount(store, store.presentation);
+    const button = [...container.querySelectorAll("button")].find(node => node.textContent?.trim() === "Load earlier messages")!;
+
+    stable.actions.loadEarlierEntries.mockResolvedValueOnce(false);
+    await act(async () => { button.click(); await Promise.resolve(); await Promise.resolve(); });
+    expect(controller.loadingEarlier).toBe(false);
+
+    stable.actions.loadEarlierEntries.mockRejectedValueOnce(new Error("fixture transport refusal"));
+    await act(async () => { button.click(); await Promise.resolve(); await Promise.resolve(); });
+    expect(controller.loadingEarlier).toBe(false);
+    expect(stable.actions.loadEarlierEntries).toHaveBeenCalledTimes(2);
   });
 
   it("keeps the active logical transcript, focus, place, draft and action identity above soft targets", async () => {
@@ -299,6 +361,56 @@ describe("a trim while somebody is reading", () => {
     expect(standingRows(SESSION)?.focusedEntryId).toBe(knownEntry);
 
     cache.dispose();
+  });
+
+  it("offers the producer's sentence and one re-read when a page base is refused", async () => {
+    const store = createStateStore(opened());
+    hydrateThrough(store, undefined);
+    await mount(store, store.presentation);
+    expect(container.textContent).toContain("Load earlier messages");
+
+    // The conversation moved past the base this window holds: the producer
+    // refuses its earlier pages and says why, for a person.
+    const message = "This conversation changed since that page was read. Re-read recent messages to continue.";
+    await act(async () => {
+      store.dispatch({ type: "historyPageRefused", path: SESSION, cause: "stale-base", message } as never);
+    });
+
+    expect(container.textContent).toContain(message);
+    expect(container.textContent).not.toContain("Load earlier messages");
+    const actions = [...container.querySelectorAll("button")].filter(node => /reload recent messages/i.test(node.textContent ?? ""));
+    expect(actions).toHaveLength(1);
+
+    // Reading upwards no longer asks the producer the question it just refused.
+    const viewport = container.querySelector<HTMLElement>('[data-slot="thread-viewport"]')!;
+    Object.defineProperty(viewport, "scrollTop", { value: 0, configurable: true, writable: true });
+    await act(async () => { viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true })); await Promise.resolve(); });
+    expect(stable.actions.loadEarlierEntries).not.toHaveBeenCalled();
+
+    // The keyboard path is the same path: focus the control and press Enter.
+    const control = actions[0]!;
+    await act(async () => {
+      control.focus();
+      control.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      control.click();
+      await Promise.resolve();
+    });
+    expect(stable.actions.rereadHistory).toHaveBeenCalledOnce();
+    await act(async () => { await Promise.resolve(); });
+    const status = container.querySelector('[role="status"]')!;
+    expect(status.textContent).toContain("Recent messages reloaded.");
+
+    // An accepted window carries no refusal, so the ordinary control returns.
+    await act(async () => {
+      store.dispatch({ type: "historyBegin", path: SESSION, token: "after" } as never);
+      store.dispatch({ type: "historySnapshot", path: SESSION, token: "after", leafId: "e23",
+        entries: Array.from({ length: 24 }, (_, index) => entry(index)), window: {
+          epoch: "w1", seq: 40, revision: "r3.env.40", environmentKey: "k", userOffset: 0, complete: false,
+          branchesUnloaded: false, hasHistory: true, context: [], priorGoalIds: [], anchor: "e0", before: "cursor-older",
+        } } as never);
+    });
+    expect(container.textContent).not.toContain(message);
+    expect(container.textContent).toContain("Load earlier messages");
   });
 
   it("refuses an unsafe replacement and keeps every route to Load earlier messages working", async () => {

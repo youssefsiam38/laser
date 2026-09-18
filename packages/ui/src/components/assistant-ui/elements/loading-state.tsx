@@ -37,6 +37,12 @@ export interface GenerationLoaderProps extends Omit<ComponentProps<"div">, "chil
   variant?: GenerationLoaderVariant;
   /** `inline` fits a row (a menu, a table cell); `block` stands alone. */
   layout?: "inline" | "block";
+  /**
+   * The matrix alone, with no words and no status of its own: for a surface
+   * whose one announcement is made elsewhere, where a second live region
+   * would say the same thing twice (the history reserve's overdue mark).
+   */
+  quiet?: boolean;
 }
 
 const CELL_SHAPES: Record<GenerationLoaderVariant, string> = {
@@ -45,7 +51,7 @@ const CELL_SHAPES: Record<GenerationLoaderVariant, string> = {
   rounded: "rounded-xs",
 };
 
-export function GenerationLoader({ label, tick, variant = "dots", layout = "block", className, ...props }: GenerationLoaderProps) {
+export function GenerationLoader({ label, tick, variant = "dots", layout = "block", quiet = false, className, ...props }: GenerationLoaderProps) {
   const step = motionMs("--motion-fast");
   const own = useTick(tick === undefined && step > 0, Math.max(step, 50) * 2);
   const frame = tick ?? own;
@@ -54,9 +60,7 @@ export function GenerationLoader({ label, tick, variant = "dots", layout = "bloc
   return (
     <div
       data-slot="generation-loader"
-      role="status"
-      aria-busy="true"
-      aria-label={label}
+      {...(quiet ? { "aria-hidden": true } : { role: "status", "aria-busy": true, "aria-label": label })}
       className={cn(layout === "block" ? "flex flex-col items-start gap-3" : "flex items-center gap-2.5", className)}
       {...props}
     >
@@ -76,16 +80,16 @@ export function GenerationLoader({ label, tick, variant = "dots", layout = "bloc
           );
         })}
       </div>
-      <ShimmerLabel className="relative inline-block text-sm">{label}</ShimmerLabel>
+      {!quiet && <ShimmerLabel className="relative inline-block text-sm">{label}</ShimmerLabel>}
     </div>
   );
 }
 
 /** Conversation-shaped form of the installed Loader: no invented text or progress. */
-export function ConversationSkeleton() {
+export function ConversationSkeleton({ label = "Loading the conversation", className }: { label?: string; className?: string } = {}) {
   return (
-    <div data-slot="conversation-skeleton" role="status" aria-label="Loading the conversation" aria-busy="true" className="flex flex-col gap-8 pt-6 pb-8">
-      <span className="sr-only">Loading the conversation</span>
+    <div data-slot="conversation-skeleton" role="status" aria-label={label} aria-busy="true" className={cn("flex flex-col gap-8 pt-6 pb-8", className)}>
+      <span className="sr-only">{label}</span>
       <div aria-hidden="true" className="conversation-breathe motion-reduce:animate-none flex flex-col gap-8">
         <div className="ms-auto w-3/5 rounded-xl bg-surface-2 p-4">
           <div className="h-2 w-full rounded-full bg-line" />

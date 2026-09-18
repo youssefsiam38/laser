@@ -125,7 +125,7 @@ export default async function liveHistoryRetention(check) {
       return '';
     }, { path });
     const before = await historySignature();
-    if (mode !== 'programmatic') await control.scrollIntoViewIfNeeded();
+    if (mode !== 'programmatic') await control.scrollIntoViewIfNeeded().catch(() => undefined);
     await settleRender();
     if (ready) await ready();
     const actualMode = mode === 'tap' && !mobile ? 'keyboard' : mode;
@@ -151,8 +151,8 @@ export default async function liveHistoryRetention(check) {
     }, { path, before }, { timeout });
     if (actualMode === 'wheel') {
       const changed = await waitForChange(3_000).then(() => true, () => false);
-      if (!changed) { await control.click(); await waitForChange(30_000); }
-    } else await waitForChange(30_000);
+      if (!changed && !await rereadControl().count()) { await control.click(); await waitForChange(30_000); }
+    } else if (!await rereadControl().count()) await waitForChange(30_000);
     await loadingEarlier().waitFor({ state: 'hidden', timeout: 30_000 });
     await settleRender();
   };
@@ -189,10 +189,27 @@ export default async function liveHistoryRetention(check) {
       mounted: [...element.querySelectorAll('[data-window-message]')].map(row => row.getAttribute('data-window-message')) }));
     return { windows, viewportState };
   };
+  // The producer can refuse this window's base while the journey is under way
+  // (a compaction, a branch). The person's route past that is the re-read the
+  // history controls offer in place of the paging control; this lane takes the
+  // same route, through the same visible button.
+  const rereadControl = () => page.getByRole('main').getByRole('button', { name: 'Reload recent messages', exact: true });
+  let refusalsCleared = 0;
+  const clearRefusal = async (mode) => {
+    if (!await rereadControl().count()) return false;
+    const control = rereadControl();
+    if (mode === 'tap') await control.tap(); else { await control.focus(); await control.press('Enter'); }
+    await page.getByRole('main').locator('[role="status"]').filter({ hasText: 'Recent messages reloaded.' }).waitFor({ timeout: 30_000 });
+    await control.waitFor({ state: 'detached', timeout: 30_000 });
+    await settleRender();
+    refusalsCleared += 1;
+    return true;
+  };
   let pages = 0;
   const pageToRoot = async (mode) => {
     for (let attempt = 0; attempt < 30; attempt += 1) {
       await driveViewportToRoot();
+      if (await clearRefusal(mode)) continue;
       if (await earlier().count()) { await activateEarlier(mode); pages += 1; continue; }
       if (await rootPrompt.count()) { await rootPrompt.scrollIntoViewIfNeeded(); await rootPrompt.waitFor(); return; }
       if (await loadingEarlier().count()) { await loadingEarlier().waitFor({ state: 'hidden', timeout: 30_000 }); continue; }
@@ -226,16 +243,44 @@ export default async function liveHistoryRetention(check) {
   let concurrentAnchor;
   let concurrentMarker;
   await activateEarlier(activation, async () => {
-    concurrentMarker = page.getByText(/Checkpoint 10\d+ is complete\./).last();
-    await concurrentMarker.waitFor();
-    concurrentAnchor = await concurrentMarker.evaluate(node => ({ top: node.getBoundingClientRect().top, text: node.textContent }));
+    // What the reader is looking at when the page is asked for. At the top of
+    // the window that is usually the estimated range above the loaded rows,
+    // where the page must appear in place of the loading state with the
+    // viewport unmoved (M16-T83 invariant 2); when a row is on screen it is the
+    // topmost one, and that row must hold its place. The newest checkpoint is
+    // pages below either and virtualises out as the page arrives, so it is not
+    // a measure of anything.
+    concurrentAnchor = await viewport.evaluate(element => {
+      const top = element.getBoundingClientRect().top, bottom = element.getBoundingClientRect().bottom;
+      for (const node of element.querySelectorAll('[data-window-message]')) {
+        const box = node.getBoundingClientRect();
+        if (box.bottom <= top || box.top >= bottom) continue;
+        const marker = /Checkpoint 10\d+ is complete\./.exec(node.innerText)?.[0];
+        if (marker) return { top: box.top, text: marker, scrollTop: element.scrollTop };
+      }
+      return { scrollTop: element.scrollTop, scrollHeight: element.scrollHeight, inReserve: Boolean(document.querySelector('[data-slot="history-reserve"]')) };
+    });
+    concurrentMarker = concurrentAnchor.text ? page.locator('[data-window-message]').filter({ hasText: concurrentAnchor.text }).first() : undefined;
   });
   pages += 1;
-  await concurrentMarker.waitFor();
-  const concurrentAfter = await concurrentMarker.evaluate(node => ({ top: node.getBoundingClientRect().top, text: node.textContent }));
-  const concurrentAnchorDelta = concurrentAfter.top - concurrentAnchor.top;
-  assert.equal(concurrentAfter.text, concurrentAnchor.text, 'concurrent prepend preserves the anchored visible content');
-  assert(Math.abs(concurrentAnchorDelta) <= 48, `concurrent prepend moved the visible anchor more than one control row: ${concurrentAnchorDelta}px`);
+  let concurrentAnchorDelta;
+  if (concurrentMarker) {
+    await concurrentMarker.waitFor({ state: 'attached' });
+    const concurrentAfter = await concurrentMarker.evaluate(node => ({ top: node.getBoundingClientRect().top, text: /Checkpoint 10\d+ is complete\./.exec(node.innerText)?.[0] }));
+    concurrentAnchorDelta = concurrentAfter.top - concurrentAnchor.top;
+    assert.equal(concurrentAfter.text, concurrentAnchor.text, 'concurrent prepend preserves the anchored visible content');
+    assert(Math.abs(concurrentAnchorDelta) <= 1, `concurrent prepend moved the row being read: ${concurrentAnchorDelta}px`);
+  } else {
+    assert(concurrentAnchor.inReserve, 'with no row on screen the reader is inside the estimated range');
+    // The page takes the estimate's place; only what it needs beyond the
+    // estimate is inserted above the reader, and that is exactly how much the
+    // range grew, so the reader's pixels are unchanged.
+    const after = await viewport.evaluate(element => ({ scrollTop: element.scrollTop, scrollHeight: element.scrollHeight, gap: element.scrollHeight - element.clientHeight - element.scrollTop }));
+    const surplus = after.scrollHeight - concurrentAnchor.scrollHeight;
+    concurrentAnchorDelta = after.scrollTop - concurrentAnchor.scrollTop - Math.max(0, surplus);
+    assert(Math.abs(concurrentAnchorDelta) <= 1, `a page arriving inside the estimated range moved the reader: ${concurrentAnchorDelta}px (viewport ${after.scrollTop - concurrentAnchor.scrollTop}px, range ${surplus}px)`);
+    assert(after.gap > 2, 'a page arriving inside the estimated range did not throw the reader to the live edge');
+  }
   assert.equal((await check.rpc('session/load', { path })).state.isStreaming, true, 'the anchored prepend completes while output still appends');
   const live = await liveRequest;
   assert.equal(live.accepted, true, 'the live append is accepted');
@@ -398,7 +443,36 @@ export default async function liveHistoryRetention(check) {
   await check.rpc('pi/session/rename', { path: holding.state.path, name: holdingTitle });
   await selectSession(holdingTitle);
   await selectSession(title);
-  const explicitRereadInvoked = await page.evaluate(async () => {
+  // Compaction moves the conversation past the base this window holds, so the
+  // producer refuses its earlier pages. The person's way back is the control
+  // that says so; this lane presses the visible control rather than calling the
+  // action behind it, and only falls back when no refusal was raised.
+  const refusalRegion = page.locator('[data-slot="history-refusal"]');
+  const refusalControl = page.getByRole('main').getByRole('button', { name: 'Reload recent messages', exact: true });
+  await refusalControl.waitFor({ timeout: 30_000 }).catch(() => undefined);
+  let refusalControlUsed = false;
+  let refusalSentence;
+  let refusalControlHeight;
+  if (await refusalControl.count()) {
+    refusalSentence = (await refusalRegion.innerText()).trim();
+    assert(refusalSentence.length > 0 && !/-?\d{4,}|stale-base/.test(refusalSentence),
+      `the refusal is written for a person: ${JSON.stringify(refusalSentence)}`);
+    const controlBox = await refusalControl.boundingBox();
+    assert(controlBox, 'the re-read control is on screen');
+    refusalControlHeight = Math.round(controlBox.height);
+    if (touch) {
+      assert(controlBox.height >= 44, `the re-read control keeps a 44px touch target: ${controlBox.height}px`);
+      await refusalControl.tap();
+    } else {
+      await refusalControl.focus();
+      assert.equal(await refusalControl.evaluate(node => node === document.activeElement), true, 'the re-read control takes keyboard focus');
+      await refusalControl.press('Enter');
+    }
+    await page.getByRole('main').locator('[role="status"]').filter({ hasText: 'Recent messages reloaded.' }).waitFor({ timeout: 30_000 });
+    await refusalRegion.waitFor({ state: 'detached', timeout: 30_000 });
+    refusalControlUsed = true;
+  }
+  const explicitRereadInvoked = refusalControlUsed || await page.evaluate(async () => {
     const element = document.querySelector('[data-slot="thread-viewport"]');
     const key = element && Object.keys(element).find(name => name.startsWith('__reactFiber$'));
     let fiber = key ? element[key] : undefined;
@@ -414,7 +488,7 @@ export default async function liveHistoryRetention(check) {
     }
     return false;
   });
-  assert.equal(explicitRereadInvoked, true, 'the mounted history action performs the bounded explicit re-read');
+  assert.equal(explicitRereadInvoked, true, 'the bounded explicit re-read runs, through the visible control when one is offered');
   await page.getByText('Streaming line 40:', { exact: false }).first().waitFor();
   await viewport.evaluate(element => { element.scrollTop = 0; });
   await settleRender();
@@ -454,12 +528,16 @@ export default async function liveHistoryRetention(check) {
     producerSplitPages,
     boundary,
     activation,
+    refusalsCleared,
     concurrentAnchorDelta,
     renderedOutputs: [1, 45, 90],
     compactionAnchorDelta,
     compactionPreserved: true,
     postCompactionWithoutReload: true,
     explicitRereadInvoked,
+    refusalControlUsed,
+    refusalSentence,
+    refusalControlHeight,
     retainedBytes,
     cacheText,
     viewport: check.state.width,
